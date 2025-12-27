@@ -7,6 +7,10 @@
 #include <cmath>
 #include <filesystem>
 #include <atomic>
+#include <array>
+#include <map>
+#include <algorithm>
+#include <mutex>
 
 #include <sys/wait.h>
 #include <unistd.h>
@@ -17,6 +21,10 @@
 #include "apps/host_controller.h"
 #include "apps/watchdog.h"
 #include "apps/latency_manager.h"
+#include "apps/time_base.h"
+#include "apps/musical_structures.h"
+#include "apps/automation_clip.h"
+#include "apps/uid_hash.h"
 
 namespace {
 
@@ -49,6 +57,7 @@ int main(int argc, char** argv) {
   config.sampleRate = 48000.0;
   config.numChannelsIn = 2;
   config.numBlocks = 4; // Increase block count for deeper pipeline/safety
+  config.ringUiCapacity = 128;
 
   daw::HostController controller;
   bool connected = false;
@@ -70,6 +79,52 @@ int main(int argc, char** argv) {
             << " samples (" << (config.numBlocks > 0 ? config.numBlocks - 1 : 0)
             << " blocks)" << std::endl;
 
+  daw::StaticTempoProvider tempoProvider(120.0);
+  daw::NanotickConverter tickConverter(
+      tempoProvider, static_cast<uint32_t>(config.sampleRate));
+  const uint64_t ticksPerBeat = daw::NanotickConverter::kNanoticksPerQuarter;
+  const uint64_t blockTicks =
+      tickConverter.samplesToNanoticks(static_cast<int64_t>(config.blockSize));
+
+  struct Track {
+    daw::MusicalClip clip;
+    std::vector<daw::AutomationClip> automationClips;
+  };
+
+  std::vector<Track> tracks;
+  tracks.emplace_back();
+  const uint32_t maxUiTracks = daw::kUiMaxTracks;
+  for (uint32_t beat = 0; beat < 8; ++beat) {
+    daw::MusicalEvent event;
+    event.nanotickOffset = ticksPerBeat * beat;
+    event.type = daw::MusicalEventType::Note;
+    event.payload.note.pitch = 60;
+    event.payload.note.velocity = 100;
+    event.payload.note.durationNanoticks = ticksPerBeat / 2;
+    tracks.front().clip.addEvent(std::move(event));
+  }
+  {
+    daw::AutomationClip automation("index:0", false);
+    automation.addPoint({0, 0.0f});
+    automation.addPoint({ticksPerBeat * 4, 1.0f});
+    tracks.front().automationClips.push_back(std::move(automation));
+  }
+
+  uint64_t globalNanotickPlayhead = 0;
+  std::atomic<bool> resetTimeline{false};
+
+  struct ParamKeyLess {
+    bool operator()(const std::array<uint8_t, 16>& a,
+                    const std::array<uint8_t, 16>& b) const {
+      return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end());
+    }
+  };
+
+  std::map<std::array<uint8_t, 16>, float, ParamKeyLess> paramMirror;
+  std::mutex paramMirrorMutex;
+  std::atomic<bool> mirrorPending{false};
+  std::atomic<uint64_t> mirrorGateSampleTime{0};
+
   // Need to grab these freshly after connect/reconnect
   auto getRingStd = [&]() {
       return daw::makeEventRing(reinterpret_cast<void*>(
@@ -80,6 +135,37 @@ int main(int argc, char** argv) {
       return daw::makeEventRing(reinterpret_cast<void*>(
                                      const_cast<daw::ShmHeader*>(controller.shmHeader())),
                                  controller.shmHeader()->ringCtrlOffset);
+  };
+  auto getRingUi = [&]() {
+      return daw::makeEventRing(reinterpret_cast<void*>(
+                                     const_cast<daw::ShmHeader*>(controller.shmHeader())),
+                                 controller.shmHeader()->ringUiOffset);
+  };
+
+  auto sendMirrorParams = [&](uint64_t sampleTime) {
+    auto ringStd = getRingStd();
+    std::lock_guard<std::mutex> lock(paramMirrorMutex);
+    for (const auto& entry : paramMirror) {
+      daw::EventEntry paramEntry;
+      paramEntry.sampleTime = sampleTime;
+      paramEntry.blockId = 0;
+      paramEntry.type = static_cast<uint16_t>(daw::EventType::Param);
+      paramEntry.size = sizeof(daw::ParamPayload);
+      daw::ParamPayload payload{};
+      std::memcpy(payload.uid16, entry.first.data(), entry.first.size());
+      payload.value = entry.second;
+      std::memcpy(paramEntry.payload, &payload, sizeof(payload));
+      daw::ringWrite(ringStd, paramEntry);
+    }
+
+    daw::EventEntry gateEntry;
+    gateEntry.sampleTime = sampleTime;
+    gateEntry.blockId = 0;
+    gateEntry.type = static_cast<uint16_t>(daw::EventType::ReplayComplete);
+    gateEntry.size = 0;
+    daw::ringWrite(ringStd, gateEntry);
+    mirrorGateSampleTime.store(sampleTime, std::memory_order_release);
+    mirrorPending.store(true, std::memory_order_release);
   };
 
   if (getRingStd().mask == 0 || getRingCtrl().mask == 0) {
@@ -97,15 +183,33 @@ int main(int argc, char** argv) {
       needsRestart.store(true);
   });
 
-  const int64_t noteOnSample = static_cast<int64_t>(config.sampleRate * 0.5);
-  const int64_t noteOffSample = static_cast<int64_t>(config.sampleRate * 1.5);
-
   std::thread producer([&] {
     while (running.load()) {
       if (needsRestart.load()) {
           // Pause producer while restarting
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
           continue;
+      }
+      if (resetTimeline.exchange(false)) {
+        globalNanotickPlayhead = 0;
+      }
+      auto ringUi = getRingUi();
+      daw::EventEntry uiEntry;
+      while (daw::ringPop(ringUi, uiEntry)) {
+      }
+      if (mirrorPending.load(std::memory_order_acquire) &&
+          nextBlockId.load(std::memory_order_relaxed) > 1) {
+        const uint64_t gateTime =
+            mirrorGateSampleTime.load(std::memory_order_acquire);
+        while (mirrorPending.load(std::memory_order_acquire)) {
+          const uint64_t ack =
+              controller.mailbox()->replayAckSampleTime.load(std::memory_order_acquire);
+          if (ack >= gateTime) {
+            mirrorPending.store(false, std::memory_order_release);
+            break;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
       }
 
       // We rely on the watchdog/consumer to advance the safe point.
@@ -128,7 +232,8 @@ int main(int argc, char** argv) {
 
       // Calculate Plugin Time (PDC)
       const uint64_t pluginSampleStart = latencyMgr.getCompensatedStart(sampleStart);
-
+      const uint64_t blockStartTicks = globalNanotickPlayhead;
+      const uint64_t blockEndTicks = blockStartTicks + blockTicks;
       auto ringCtrl = getRingCtrl();
       auto ringStd = getRingStd();
 
@@ -147,36 +252,126 @@ int main(int argc, char** argv) {
         // std::cout << "Control ring full." << std::endl;
       }
 
-      if (noteOnSample >= static_cast<int64_t>(sampleStart) &&
-          noteOnSample < static_cast<int64_t>(blockEnd)) {
-        daw::EventEntry midiEntry;
-        // Check when to Trigger (Engine Time) vs Payload Timestamp (Plugin Time)
-        midiEntry.sampleTime = latencyMgr.getCompensatedStart(static_cast<uint64_t>(noteOnSample));
-        midiEntry.blockId = blockId;
-        midiEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-        midiEntry.size = sizeof(daw::MidiPayload);
-        daw::MidiPayload midiPayload;
-        midiPayload.status = 0x90;
-        midiPayload.data1 = 60;
-        midiPayload.data2 = 100;
-        std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
-        daw::ringWrite(ringStd, midiEntry);
-      }
+      auto renderTracks = [&](uint64_t windowStartTicks,
+                              uint64_t windowEndTicks,
+                              uint64_t blockSampleStart,
+                              uint32_t currentBlockId) {
+        std::vector<const daw::MusicalEvent*> events;
+        for (const auto& track : tracks) {
+          for (const auto& automationClip : track.automationClips) {
+            const auto uid16 = daw::hashStableId16(automationClip.paramId());
+            if (automationClip.discreteOnly()) {
+              std::vector<const daw::AutomationPoint*> points;
+              automationClip.getPointsInRange(windowStartTicks, windowEndTicks, points);
+              for (const auto* point : points) {
+                const int64_t eventSample =
+                    tickConverter.nanoticksToSamples(point->nanotick);
+                const int64_t offset =
+                    eventSample - static_cast<int64_t>(blockSampleStart);
+                if (offset < 0 ||
+                    offset >= static_cast<int64_t>(config.blockSize)) {
+                  continue;
+                }
+                daw::EventEntry paramEntry;
+                paramEntry.sampleTime = latencyMgr.getCompensatedStart(
+                    static_cast<uint64_t>(eventSample));
+                paramEntry.blockId = currentBlockId;
+                paramEntry.type = static_cast<uint16_t>(daw::EventType::Param);
+                paramEntry.size = sizeof(daw::ParamPayload);
+                daw::ParamPayload payload{};
+                std::memcpy(payload.uid16, uid16.data(), uid16.size());
+                payload.value = point->value;
+                std::memcpy(paramEntry.payload, &payload, sizeof(payload));
+                {
+                  std::lock_guard<std::mutex> lock(paramMirrorMutex);
+                  paramMirror[uid16] = point->value;
+                }
+                daw::ringWrite(ringStd, paramEntry);
+              }
+            } else {
+              for (uint32_t offset = 0; offset < config.blockSize; ++offset) {
+                const int64_t eventSample =
+                    static_cast<int64_t>(blockSampleStart) +
+                    static_cast<int64_t>(offset);
+                const uint64_t tick =
+                    tickConverter.samplesToNanoticks(eventSample);
+                if (tick < windowStartTicks || tick >= windowEndTicks) {
+                  continue;
+                }
+                const float value = automationClip.valueAt(tick);
+                daw::EventEntry paramEntry;
+                paramEntry.sampleTime = latencyMgr.getCompensatedStart(
+                    static_cast<uint64_t>(eventSample));
+                paramEntry.blockId = currentBlockId;
+                paramEntry.type = static_cast<uint16_t>(daw::EventType::Param);
+                paramEntry.size = sizeof(daw::ParamPayload);
+                daw::ParamPayload payload{};
+                std::memcpy(payload.uid16, uid16.data(), uid16.size());
+                payload.value = value;
+                std::memcpy(paramEntry.payload, &payload, sizeof(payload));
+                {
+                  std::lock_guard<std::mutex> lock(paramMirrorMutex);
+                  paramMirror[uid16] = value;
+                }
+                daw::ringWrite(ringStd, paramEntry);
+              }
+            }
+          }
 
-      if (noteOffSample >= static_cast<int64_t>(sampleStart) &&
-          noteOffSample < static_cast<int64_t>(blockEnd)) {
-        daw::EventEntry midiEntry;
-        midiEntry.sampleTime = latencyMgr.getCompensatedStart(static_cast<uint64_t>(noteOffSample));
-        midiEntry.blockId = blockId;
-        midiEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-        midiEntry.size = sizeof(daw::MidiPayload);
-        daw::MidiPayload midiPayload;
-        midiPayload.status = 0x80;
-        midiPayload.data1 = 60;
-        midiPayload.data2 = 0;
-        std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
-        daw::ringWrite(ringStd, midiEntry);
-      }
+          track.clip.getEventsInRange(windowStartTicks, windowEndTicks, events);
+          for (const auto* event : events) {
+            if (event->type != daw::MusicalEventType::Note) {
+              continue;
+            }
+            const int64_t eventSample =
+                tickConverter.nanoticksToSamples(event->nanotickOffset);
+            const int64_t offset =
+                eventSample - static_cast<int64_t>(blockSampleStart);
+            if (offset < 0 || offset >= static_cast<int64_t>(config.blockSize)) {
+              continue;
+            }
+            daw::EventEntry midiEntry;
+            midiEntry.sampleTime =
+                latencyMgr.getCompensatedStart(static_cast<uint64_t>(eventSample));
+            midiEntry.blockId = currentBlockId;
+            midiEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
+            midiEntry.size = sizeof(daw::MidiPayload);
+            daw::MidiPayload midiPayload;
+            midiPayload.status = 0x90;
+            midiPayload.data1 = event->payload.note.pitch;
+            midiPayload.data2 = event->payload.note.velocity;
+            std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
+            daw::ringWrite(ringStd, midiEntry);
+
+            if (event->payload.note.durationNanoticks > 0) {
+              const uint64_t offTick =
+                  event->nanotickOffset + event->payload.note.durationNanoticks;
+              const int64_t offSample =
+                  tickConverter.nanoticksToSamples(offTick);
+              const int64_t offOffset =
+                  offSample - static_cast<int64_t>(blockSampleStart);
+              if (offOffset >= 0 &&
+                  offOffset < static_cast<int64_t>(config.blockSize)) {
+                daw::EventEntry noteOffEntry;
+                noteOffEntry.sampleTime =
+                    latencyMgr.getCompensatedStart(static_cast<uint64_t>(offSample));
+                noteOffEntry.blockId = currentBlockId;
+                noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
+                noteOffEntry.size = sizeof(daw::MidiPayload);
+                daw::MidiPayload offPayload;
+                offPayload.status = 0x80;
+                offPayload.data1 = event->payload.note.pitch;
+                offPayload.data2 = 0;
+                std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
+                daw::ringWrite(ringStd, noteOffEntry);
+              }
+            }
+          }
+        }
+      };
+
+      renderTracks(blockStartTicks, blockEndTicks, sampleStart, blockId);
+      globalNanotickPlayhead += blockTicks;
 
       // Fill Input Buffer (Test Signal)
       const uint32_t blockIndex = blockId % config.numBlocks;
@@ -207,9 +402,11 @@ int main(int argc, char** argv) {
           std::cout << "Consumer: Restarting Host..." << std::endl;
           if (controller.launch(config)) {
               std::cout << "Consumer: Restarted successfully." << std::endl;
+              sendMirrorParams(0);
               watchdog.reset();
               currentBlockId = 1; // Reset Engine's view of time
               nextBlockId.store(1); // Reset Producer's view of time
+              resetTimeline.store(true);
               needsRestart.store(false);
           } else {
               std::cerr << "Consumer: Failed to restart host." << std::endl;
@@ -228,7 +425,14 @@ int main(int argc, char** argv) {
           latencyMgr.getCompensatedStart(engineSampleStart);
       auto* header = const_cast<daw::ShmHeader*>(controller.shmHeader());
       if (header) {
+        const uint64_t blockStartTicks =
+            static_cast<uint64_t>(currentBlockId - 1) * blockTicks;
+        header->uiVersion.fetch_add(1, std::memory_order_release);
         header->uiVisualSampleCount = uiSampleCount;
+        header->uiGlobalNanotickPlayhead = blockStartTicks;
+        header->uiTrackCount = static_cast<uint32_t>(
+            std::min<size_t>(tracks.size(), maxUiTracks));
+        header->uiVersion.fetch_add(1, std::memory_order_release);
       }
 
       // Check Watchdog
@@ -256,6 +460,14 @@ int main(int argc, char** argv) {
           const double rms = samples > 0 ? std::sqrt(sumSquares / samples) : 0.0;
           if (completed % 50 == 0) {
             std::cout << "RMS: " << rms << std::endl;
+          }
+          if (auto* header = const_cast<daw::ShmHeader*>(controller.shmHeader())) {
+            header->uiVersion.fetch_add(1, std::memory_order_release);
+            header->uiTrackPeakRms[0] = static_cast<float>(rms);
+            for (uint32_t i = 1; i < daw::kUiMaxTracks; ++i) {
+              header->uiTrackPeakRms[i] = 0.0f;
+            }
+            header->uiVersion.fetch_add(1, std::memory_order_release);
           }
 
       } else {

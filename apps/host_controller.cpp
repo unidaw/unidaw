@@ -125,6 +125,7 @@ bool HostController::connect(const HostConfig& config) {
   request.numBlocks = config.numBlocks;
   request.ringStdCapacity = config.ringStdCapacity;
   request.ringCtrlCapacity = config.ringCtrlCapacity;
+  request.ringUiCapacity = config.ringUiCapacity;
   request.sampleRate = config.sampleRate;
 
   if (!sendMessage(socketFd_, ControlMessageType::Hello, &request, sizeof(request))) {

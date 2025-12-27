@@ -24,7 +24,7 @@
 #include "apps/ipc_io.h"
 #include "apps/shared_memory.h"
 #include "platform_juce/juce_wrapper.h"
-#include "platform_juce/uid_utils.h"
+#include "apps/uid_hash.h"
 
 namespace {
 
@@ -133,7 +133,8 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
 
   const size_t shmSize = daw::sharedMemorySize(header,
                                                request.ringStdCapacity,
-                                               request.ringCtrlCapacity);
+                                               request.ringCtrlCapacity,
+                                               request.ringUiCapacity);
   if (::ftruncate(state.shmFd, static_cast<off_t>(shmSize)) != 0) {
     return false;
   }
@@ -163,10 +164,17 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
   offset += daw::alignUp(daw::ringBytes(request.ringStdCapacity), 64);
   header.ringCtrlOffset = offset;
   offset += daw::alignUp(daw::ringBytes(request.ringCtrlCapacity), 64);
+  header.ringUiOffset = offset;
+  offset += daw::alignUp(daw::ringBytes(request.ringUiCapacity), 64);
   header.mailboxOffset = offset;
 
   std::memcpy(state.header, &header, sizeof(header));
   state.header->uiVisualSampleCount = 0;
+  state.header->uiGlobalNanotickPlayhead = 0;
+  state.header->uiTrackCount = 0;
+  for (uint32_t i = 0; i < daw::kUiMaxTracks; ++i) {
+    state.header->uiTrackPeakRms[i] = 0.0f;
+  }
 
   auto* ringStd = reinterpret_cast<daw::RingHeader*>(
       reinterpret_cast<uint8_t*>(state.shmBase) + header.ringStdOffset);
@@ -182,10 +190,18 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
   ringCtrl->readIndex.store(0);
   ringCtrl->writeIndex.store(0);
 
+  auto* ringUi = reinterpret_cast<daw::RingHeader*>(
+      reinterpret_cast<uint8_t*>(state.shmBase) + header.ringUiOffset);
+  ringUi->capacity = request.ringUiCapacity;
+  ringUi->entrySize = sizeof(daw::EventEntry);
+  ringUi->readIndex.store(0);
+  ringUi->writeIndex.store(0);
+
   state.mailbox = reinterpret_cast<daw::BlockMailbox*>(
       reinterpret_cast<uint8_t*>(state.shmBase) + header.mailboxOffset);
   state.mailbox->completedBlockId.store(0);
   state.mailbox->completedSampleTime.store(0);
+  state.mailbox->replayAckSampleTime.store(0);
 
   state.ringStd = daw::makeEventRing(state.shmBase, header.ringStdOffset);
   state.ringCtrl = daw::makeEventRing(state.shmBase, header.ringCtrlOffset);
@@ -205,7 +221,7 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
                             static_cast<int>(request.numChannelsOut));
       state.paramIdByUid16.clear();
       for (const auto& param : state.plugin->parameters()) {
-        const auto uid16 = daw::md5Uid16FromIdentifier(param.stableId);
+        const auto uid16 = daw::hashStableId16(param.stableId);
         state.paramIdByUid16.emplace(
             uid16Key(uid16.data()), param.stableId);
       }
@@ -304,8 +320,13 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
             });
 
   daw::MidiEvents events;
+  uint64_t replaySeenSampleTime = 0;
   for (const auto& event : pending) {
     if (event.type == static_cast<uint16_t>(daw::EventType::Transport)) {
+      continue;
+    }
+    if (event.type == static_cast<uint16_t>(daw::EventType::ReplayComplete)) {
+      replaySeenSampleTime = event.sampleTime;
       continue;
     }
     if (event.type == static_cast<uint16_t>(daw::EventType::Param) &&
@@ -344,6 +365,12 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
                                              std::memory_order_release);
     state.mailbox->completedBlockId.store(request.blockId,
                                           std::memory_order_release);
+    if (replaySeenSampleTime > 0) {
+      const uint64_t current =
+          state.mailbox->replayAckSampleTime.load(std::memory_order_relaxed);
+      const uint64_t next = replaySeenSampleTime > current ? replaySeenSampleTime : current;
+      state.mailbox->replayAckSampleTime.store(next, std::memory_order_release);
+    }
   }
   return true;
 }

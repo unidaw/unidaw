@@ -6,7 +6,9 @@
 namespace daw {
 
 constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
-constexpr uint16_t kShmVersion = 1;
+constexpr uint16_t kShmVersion = 2;
+
+constexpr uint32_t kUiMaxTracks = 8;
 
 struct alignas(64) ShmHeader {
   uint32_t magic = kShmMagic;
@@ -22,8 +24,14 @@ struct alignas(64) ShmHeader {
   uint64_t audioOutOffset = 0;
   uint64_t ringStdOffset = 0;
   uint64_t ringCtrlOffset = 0;
+  uint64_t ringUiOffset = 0;
   uint64_t mailboxOffset = 0;
+  std::atomic<uint64_t> uiVersion{0};
   uint64_t uiVisualSampleCount = 0;
+  uint64_t uiGlobalNanotickPlayhead = 0;
+  uint32_t uiTrackCount = 0;
+  uint32_t reservedUi = 0;
+  float uiTrackPeakRms[kUiMaxTracks]{};
 };
 
 struct alignas(64) RingHeader {
@@ -47,12 +55,14 @@ enum class EventType : uint16_t {
   Midi = 1,
   Param = 2,
   Transport = 3,
+  ReplayComplete = 4,
 };
 
 struct alignas(64) BlockMailbox {
   std::atomic<uint32_t> completedBlockId{0};
   std::atomic<uint64_t> completedSampleTime{0};
-  uint32_t reserved[13]{};
+  std::atomic<uint64_t> replayAckSampleTime{0};
+  uint32_t reserved[11]{};
 };
 
 size_t alignUp(size_t value, size_t alignment);
@@ -60,6 +70,7 @@ size_t channelStrideBytes(uint32_t blockSize);
 size_t ringBytes(uint32_t capacity);
 size_t sharedMemorySize(const ShmHeader& header,
                         uint32_t ringStdCapacity,
-                        uint32_t ringCtrlCapacity);
+                        uint32_t ringCtrlCapacity,
+                        uint32_t ringUiCapacity);
 
 }  // namespace daw

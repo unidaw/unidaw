@@ -143,3 +143,60 @@ add_test(NAME phase2_ui_visual
           --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
 )
 set_tests_properties(phase2_ui_visual PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_executable(phase3_tests
+  apps/phase3_tests_main.cpp
+  apps/audio_shm.cpp
+  apps/event_ring.cpp
+  apps/host_controller.cpp
+  apps/ipc_io.cpp
+  apps/shared_memory.cpp
+)
+
+target_include_directories(phase3_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(phase3_tests PRIVATE platform_juce)
+
+add_test(NAME phase3_timebase
+  COMMAND phase3_tests --test timebase
+          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+)
+set_tests_properties(phase3_timebase PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_scheduler_ring
+  COMMAND phase3_tests --test scheduler_ring
+          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+)
+set_tests_properties(phase3_scheduler_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_automation_ring
+  COMMAND phase3_tests --test automation_ring
+          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+)
+set_tests_properties(phase3_automation_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_pulse_full
+  COMMAND phase3_tests --test pulse_full
+          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+)
+set_tests_properties(phase3_pulse_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_note_off_full
+  COMMAND phase3_tests --test note_off_full
+          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+)
+set_tests_properties(phase3_note_off_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_resurrection_full
+  COMMAND phase3_tests --test resurrection_full
+          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+)
+set_tests_properties(phase3_resurrection_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_composition_full
+  COMMAND phase3_tests --test composition_full
+          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+)
+set_tests_properties(phase3_composition_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})

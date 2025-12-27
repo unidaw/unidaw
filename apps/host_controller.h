@@ -19,6 +19,7 @@ struct HostConfig {
   uint32_t numBlocks = 3;
   uint32_t ringStdCapacity = 1024;
   uint32_t ringCtrlCapacity = 128;
+  uint32_t ringUiCapacity = 128;
 };
 
 class HostController {

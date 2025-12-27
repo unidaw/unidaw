@@ -21,7 +21,8 @@ size_t ringBytes(uint32_t capacity) {
 
 size_t sharedMemorySize(const ShmHeader& header,
                         uint32_t ringStdCapacity,
-                        uint32_t ringCtrlCapacity) {
+                        uint32_t ringCtrlCapacity,
+                        uint32_t ringUiCapacity) {
   size_t offset = alignUp(sizeof(ShmHeader), 64);
   const size_t stride = header.channelStrideBytes;
   const size_t inBlockBytes = static_cast<size_t>(header.numChannelsIn) * stride;
@@ -30,6 +31,7 @@ size_t sharedMemorySize(const ShmHeader& header,
   offset += alignUp(outBlockBytes * header.numBlocks, 64);
   offset += alignUp(ringBytes(ringStdCapacity), 64);
   offset += alignUp(ringBytes(ringCtrlCapacity), 64);
+  offset += alignUp(ringBytes(ringUiCapacity), 64);
   offset += alignUp(sizeof(BlockMailbox), 64);
   return alignUp(offset, 64);
 }

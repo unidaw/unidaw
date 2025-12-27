@@ -16,7 +16,7 @@
 #include "apps/host_controller.h"
 #include "apps/latency_manager.h"
 #include "apps/watchdog.h"
-#include "platform_juce/uid_utils.h"
+#include "apps/uid_hash.h"
 
 namespace {
 
@@ -119,7 +119,7 @@ bool writeParamChange(daw::EventRingView& ring,
   entry.size = sizeof(daw::ParamPayload);
 
   daw::ParamPayload payload{};
-  const auto uid16 = daw::md5Uid16FromIdentifier(stableId);
+  const auto uid16 = daw::hashStableId16(stableId);
   std::memcpy(payload.uid16, uid16.data(), uid16.size());
   payload.value = value;
   std::memcpy(entry.payload, &payload, sizeof(payload));

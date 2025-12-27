@@ -28,6 +28,7 @@ struct HelloRequest {
   uint32_t numBlocks = 0;
   uint32_t ringStdCapacity = 0;
   uint32_t ringCtrlCapacity = 0;
+  uint32_t ringUiCapacity = 0;
   double sampleRate = 0.0;
 };
 
