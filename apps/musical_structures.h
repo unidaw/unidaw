@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -14,11 +15,24 @@ enum class MusicalEventType {
   Note,
   Param,
   Meta,
+  Chord,
 };
 
 struct NotePayload {
   uint8_t pitch = 0;
   uint8_t velocity = 0;
+  uint64_t durationNanoticks = 0;
+};
+
+struct ChordPayload {
+  uint32_t chordId = 0;
+  uint8_t degree = 0;
+  uint8_t quality = 0;
+  uint8_t inversion = 0;
+  uint8_t baseOctave = 0;
+  uint32_t spreadNanoticks = 0;
+  uint16_t humanizeTiming = 0;
+  uint16_t humanizeVelocity = 0;
   uint64_t durationNanoticks = 0;
 };
 
@@ -30,6 +44,7 @@ struct MusicalParamPayload {
 struct MusicalEventPayload {
   NotePayload note;
   MusicalParamPayload param;
+  ChordPayload chord;
 };
 
 struct MusicalEvent {
@@ -64,6 +79,93 @@ class MusicalClip {
   }
 
   const std::vector<MusicalEvent>& events() const { return events_; }
+
+  struct RemovedNote {
+    uint64_t nanotick = 0;
+    uint64_t duration = 0;
+    uint8_t pitch = 0;
+    uint8_t velocity = 0;
+  };
+
+  std::optional<RemovedNote> removeNoteAt(uint64_t nanotick, uint8_t pitch) {
+    auto it = std::find_if(events_.begin(), events_.end(),
+                           [&](const MusicalEvent& event) {
+                             return event.type == MusicalEventType::Note &&
+                                 event.nanotickOffset == nanotick &&
+                                 event.payload.note.pitch == pitch;
+                           });
+    if (it == events_.end()) {
+      return std::nullopt;
+    }
+    RemovedNote removed;
+    removed.nanotick = it->nanotickOffset;
+    removed.duration = it->payload.note.durationNanoticks;
+    removed.pitch = it->payload.note.pitch;
+    removed.velocity = it->payload.note.velocity;
+    events_.erase(it);
+    return removed;
+  }
+
+  // Remove ALL notes at a specific nanotick (used for note replacement in tracker)
+  void removeNotesAt(uint64_t nanotick) {
+    events_.erase(
+        std::remove_if(events_.begin(), events_.end(),
+                       [&](const MusicalEvent& event) {
+                         return event.type == MusicalEventType::Note &&
+                                event.nanotickOffset == nanotick;
+                       }),
+        events_.end());
+  }
+
+  // Remove ALL events (notes and chords) at a specific nanotick
+  // Used to ensure only one event exists at a position in tracker
+  void removeAllEventsAt(uint64_t nanotick) {
+    events_.erase(
+        std::remove_if(events_.begin(), events_.end(),
+                       [&](const MusicalEvent& event) {
+                         return event.nanotickOffset == nanotick &&
+                                (event.type == MusicalEventType::Note ||
+                                 event.type == MusicalEventType::Chord);
+                       }),
+        events_.end());
+  }
+
+  struct RemovedChord {
+    uint64_t nanotick = 0;
+    uint64_t duration = 0;
+    uint32_t chordId = 0;
+    uint8_t degree = 0;
+    uint8_t quality = 0;
+    uint8_t inversion = 0;
+    uint8_t baseOctave = 0;
+    uint32_t spreadNanoticks = 0;
+    uint16_t humanizeTiming = 0;
+    uint16_t humanizeVelocity = 0;
+  };
+
+  std::optional<RemovedChord> removeChordById(uint32_t chordId) {
+    auto it = std::find_if(events_.begin(), events_.end(),
+                           [&](const MusicalEvent& event) {
+                             return event.type == MusicalEventType::Chord &&
+                                 event.payload.chord.chordId == chordId;
+                           });
+    if (it == events_.end()) {
+      return std::nullopt;
+    }
+    RemovedChord removed;
+    removed.nanotick = it->nanotickOffset;
+    removed.duration = it->payload.chord.durationNanoticks;
+    removed.chordId = it->payload.chord.chordId;
+    removed.degree = it->payload.chord.degree;
+    removed.quality = it->payload.chord.quality;
+    removed.inversion = it->payload.chord.inversion;
+    removed.baseOctave = it->payload.chord.baseOctave;
+    removed.spreadNanoticks = it->payload.chord.spreadNanoticks;
+    removed.humanizeTiming = it->payload.chord.humanizeTiming;
+    removed.humanizeVelocity = it->payload.chord.humanizeVelocity;
+    events_.erase(it);
+    return removed;
+  }
 
  private:
   std::vector<MusicalEvent> events_;

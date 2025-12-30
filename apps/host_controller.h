@@ -12,6 +12,7 @@ namespace daw {
 struct HostConfig {
   std::string socketPath;
   std::string pluginPath; // Added plugin path
+  std::string shmName;
   uint32_t blockSize = 512;
   double sampleRate = 48000.0;
   uint32_t numChannelsIn = 0;
@@ -45,7 +46,7 @@ class HostController {
 
  private:
   bool mapSharedMemory(const HelloResponse& response, const HostConfig& config);
-  pid_t spawnHostProcess(const std::string& socketPath, const std::string& pluginPath);
+  pid_t spawnHostProcess(const HostConfig& config);
   void killHostProcess();
   bool waitForSocket(const std::string& path, int attempts);
 

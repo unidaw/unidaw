@@ -10,13 +10,18 @@
 #include <vector>
 
 #include "apps/audio_shm.h"
+#include "apps/chord_resolver.h"
+#include "apps/clip_edit.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
 #include "apps/host_controller.h"
 #include "apps/latency_manager.h"
 #include "apps/automation_clip.h"
+#include "apps/harmony_timeline.h"
 #include "apps/musical_structures.h"
+#include "apps/scale_library.h"
 #include "apps/time_base.h"
+#include "apps/ui_snapshot.h"
 #include "apps/uid_hash.h"
 
 namespace {
@@ -101,10 +106,12 @@ bool writeMidiNoteOn(daw::EventRingView& ring,
   entry.blockId = 0;
   entry.type = static_cast<uint16_t>(daw::EventType::Midi);
   entry.size = sizeof(daw::MidiPayload);
-  daw::MidiPayload payload;
+  daw::MidiPayload payload{};
   payload.status = 0x90;
   payload.data1 = note;
   payload.data2 = velocity;
+  payload.channel = 0;
+  payload.tuningCents = 0.0f;
   std::memcpy(entry.payload, &payload, sizeof(payload));
   return daw::ringWrite(ring, entry);
 }
@@ -283,6 +290,228 @@ bool runAutomationRingTest() {
 
   if (samplesPerBeat <= 0) {
     std::cerr << "Invalid samples per beat." << std::endl;
+    return false;
+  }
+  return true;
+}
+
+bool runHarmonyQuantizeTest() {
+  const auto& registry = daw::ScaleRegistry::instance();
+  const auto* major = registry.find(1);
+  const auto* minor = registry.find(2);
+  if (!major || !minor) {
+    std::cerr << "Missing builtin scales" << std::endl;
+    return false;
+  }
+
+  const auto quantizedMajorRootC = daw::quantizeToScale(61, 0, *major);
+  if (quantizedMajorRootC.midi != 60) {
+    std::cerr << "Quantize major root C mismatch: expected=60 actual="
+              << quantizedMajorRootC.midi << std::endl;
+    return false;
+  }
+
+  const auto quantizedMajorRootD = daw::quantizeToScale(61, 2, *major);
+  if (quantizedMajorRootD.midi != 61) {
+    std::cerr << "Quantize major root D mismatch: expected=61 actual="
+              << quantizedMajorRootD.midi << std::endl;
+    return false;
+  }
+
+  const auto quantizedMajor = daw::quantizeToScale(63, 0, *major);
+  const auto quantizedMinor = daw::quantizeToScale(63, 0, *minor);
+  if (quantizedMajor.midi != 62 || quantizedMinor.midi != 63) {
+    std::cerr << "Quantize major/minor mismatch: expected=62/63 actual="
+              << quantizedMajor.midi << "/" << quantizedMinor.midi << std::endl;
+    return false;
+  }
+
+  return true;
+}
+
+bool runChordExpansionTest() {
+  const auto& registry = daw::ScaleRegistry::instance();
+  const auto* major = registry.find(1);
+  if (!major) {
+    std::cerr << "Missing major scale" << std::endl;
+    return false;
+  }
+
+  auto pitches = daw::resolveChordPitches(1, 1, 0, 4, 0, *major);
+  if (pitches.size() != 3) {
+    std::cerr << "Chord pitch count mismatch: expected=3 actual="
+              << pitches.size() << std::endl;
+    return false;
+  }
+  if (pitches[0].midi != 60 || pitches[1].midi != 64 || pitches[2].midi != 67) {
+    std::cerr << "Chord pitches mismatch: expected=60/64/67 actual="
+              << pitches[0].midi << "/" << pitches[1].midi << "/"
+              << pitches[2].midi << std::endl;
+    return false;
+  }
+
+  pitches = daw::resolveChordPitches(1, 1, 1, 4, 0, *major);
+  if (pitches.size() != 3 ||
+      pitches[0].midi != 64 || pitches[1].midi != 67 || pitches[2].midi != 72) {
+    std::cerr << "Chord inversion mismatch: expected=64/67/72 actual="
+              << pitches[0].midi << "/" << pitches[1].midi << "/"
+              << pitches[2].midi << std::endl;
+    return false;
+  }
+  return true;
+}
+
+bool runDeterministicJitterTest() {
+  const int jitter = daw::deterministicJitter(42, 5);
+  if (jitter != daw::deterministicJitter(42, 5)) {
+    std::cerr << "Jitter determinism mismatch" << std::endl;
+    return false;
+  }
+  if (daw::deterministicJitter(7, 0) != 0) {
+    std::cerr << "Jitter zero range mismatch" << std::endl;
+    return false;
+  }
+  if (jitter < -5 || jitter > 5) {
+    std::cerr << "Jitter range mismatch: " << jitter << std::endl;
+    return false;
+  }
+  return true;
+}
+
+bool runHarmonyOrderTest() {
+  std::vector<daw::HarmonyEvent> events;
+  events.push_back({0, 0, 1, 0});
+  events.push_back({480, 2, 1, 0});
+
+  const auto before = daw::harmonyAt(events, 479);
+  const auto atChange = daw::harmonyAt(events, 480);
+  if (!before || !atChange) {
+    std::cerr << "Harmony lookup failed" << std::endl;
+    return false;
+  }
+  if (before->root != 0 || atChange->root != 2) {
+    std::cerr << "Harmony order mismatch: expected=0/2 actual="
+              << before->root << "/" << atChange->root << std::endl;
+    return false;
+  }
+  return true;
+}
+
+bool runSnapshotTest() {
+  daw::MusicalClip clip;
+  daw::MusicalEvent note;
+  note.nanotickOffset = 0;
+  note.type = daw::MusicalEventType::Note;
+  note.payload.note.pitch = 60;
+  note.payload.note.velocity = 100;
+  note.payload.note.durationNanoticks = 480;
+  clip.addEvent(note);
+
+  daw::MusicalEvent chord;
+  chord.nanotickOffset = 240;
+  chord.type = daw::MusicalEventType::Chord;
+  chord.payload.chord.chordId = 7;
+  chord.payload.chord.degree = 1;
+  chord.payload.chord.quality = 1;
+  chord.payload.chord.inversion = 0;
+  chord.payload.chord.baseOctave = 4;
+  chord.payload.chord.durationNanoticks = 960;
+  clip.addEvent(chord);
+
+  daw::UiClipSnapshot snapshot;
+  daw::initUiClipSnapshot(snapshot, 1);
+  daw::ClipSnapshotCursor cursor;
+  daw::appendClipToSnapshot(clip, 0, 2, snapshot, cursor);
+
+  if (snapshot.trackCount != 1 || snapshot.noteCount != 1 || snapshot.chordCount != 1) {
+    std::cerr << "Snapshot counts mismatch: tracks=" << snapshot.trackCount
+              << " notes=" << snapshot.noteCount
+              << " chords=" << snapshot.chordCount << std::endl;
+    return false;
+  }
+  if (snapshot.tracks[0].noteOffset != 0 || snapshot.tracks[0].chordOffset != 0 ||
+      snapshot.tracks[0].noteCount != 1 || snapshot.tracks[0].chordCount != 1) {
+    std::cerr << "Snapshot offsets mismatch" << std::endl;
+    return false;
+  }
+  if (snapshot.chords[0].chordId != 7 || snapshot.chords[0].degree != 1) {
+    std::cerr << "Snapshot chord payload mismatch" << std::endl;
+    return false;
+  }
+  if (snapshot.tracks[0].clipEndNanotick != 1200) {
+    std::cerr << "Snapshot clip end mismatch: expected=1200 actual="
+              << snapshot.tracks[0].clipEndNanotick << std::endl;
+    return false;
+  }
+
+  std::vector<daw::HarmonyEvent> harmonyEvents = {
+      {0, 0, 1, 0},
+      {960, 5, 2, 0},
+  };
+  daw::UiHarmonySnapshot harmonySnapshot;
+  daw::buildUiHarmonySnapshot(harmonyEvents, harmonySnapshot);
+  if (harmonySnapshot.eventCount != 2 ||
+      harmonySnapshot.events[1].root != 5 ||
+      harmonySnapshot.events[1].scaleId != 2) {
+    std::cerr << "Harmony snapshot mismatch" << std::endl;
+    return false;
+  }
+  return true;
+}
+
+bool runUndoStackTest() {
+  daw::MusicalClip clip;
+  std::vector<daw::UndoEntry> undoStack;
+  std::atomic<uint32_t> clipVersion{0};
+
+  const auto addResult = daw::addNoteToClip(
+      clip, 1, 120, 240, 60, 90, clipVersion, true);
+  if (!addResult.undo || addResult.undo->type != daw::UndoType::RemoveNote) {
+    std::cerr << "Undo entry missing for add note" << std::endl;
+    return false;
+  }
+  undoStack.push_back(*addResult.undo);
+
+  auto removeResult = daw::removeNoteFromClip(
+      clip, 1, 120, 60, clipVersion, true);
+  if (!removeResult || !removeResult->undo ||
+      removeResult->undo->type != daw::UndoType::AddNote) {
+    std::cerr << "Undo entry missing for remove note" << std::endl;
+    return false;
+  }
+  undoStack.push_back(*removeResult->undo);
+
+  if (clip.events().size() != 0) {
+    std::cerr << "Clip removal failed" << std::endl;
+    return false;
+  }
+
+  const auto undo = undoStack.back();
+  undoStack.pop_back();
+  if (undo.type != daw::UndoType::AddNote) {
+    std::cerr << "Undo order mismatch" << std::endl;
+    return false;
+  }
+  daw::addNoteToClip(
+      clip, undo.trackId, undo.nanotick, undo.duration,
+      undo.pitch, undo.velocity, clipVersion, false);
+  if (clip.events().size() != 1) {
+    std::cerr << "Undo add note failed" << std::endl;
+    return false;
+  }
+  return true;
+}
+
+bool runResyncMismatchTest() {
+  daw::UiDiffPayload diff{};
+  const bool matches = daw::requireMatchingClipVersion(2, 5, diff);
+  if (matches) {
+    std::cerr << "Resync mismatch not detected" << std::endl;
+    return false;
+  }
+  if (diff.diffType != static_cast<uint16_t>(daw::UiDiffType::ResyncNeeded) ||
+      diff.clipVersion != 5) {
+    std::cerr << "Resync diff payload mismatch" << std::endl;
     return false;
   }
   return true;
@@ -607,6 +836,13 @@ int runAllTests(const std::string& pluginPath) {
       {"timebase", [](const std::string&) { return runTimebaseTest(); }},
       {"scheduler_ring", [](const std::string&) { return runSchedulerRingTest(); }},
       {"automation_ring", [](const std::string&) { return runAutomationRingTest(); }},
+      {"harmony_quantize", [](const std::string&) { return runHarmonyQuantizeTest(); }},
+      {"chord_expansion", [](const std::string&) { return runChordExpansionTest(); }},
+      {"humanize_determinism", [](const std::string&) { return runDeterministicJitterTest(); }},
+      {"harmony_order", [](const std::string&) { return runHarmonyOrderTest(); }},
+      {"snapshot", [](const std::string&) { return runSnapshotTest(); }},
+      {"undo_stack", [](const std::string&) { return runUndoStackTest(); }},
+      {"resync_mismatch", [](const std::string&) { return runResyncMismatchTest(); }},
       {"pulse_full", runPulseFullTest},
       {"note_off_full", runNoteOffFullTest},
       {"resurrection_full", runResurrectionFullTest},
@@ -644,9 +880,12 @@ int main(int argc, char** argv) {
   }
 
   if (testName != "timebase" && testName != "scheduler_ring" &&
-      testName != "automation_ring" && testName != "pulse_full" &&
-      testName != "note_off_full" && testName != "resurrection_full" &&
-      testName != "composition_full" &&
+      testName != "automation_ring" && testName != "harmony_quantize" &&
+      testName != "chord_expansion" && testName != "humanize_determinism" &&
+      testName != "harmony_order" && testName != "snapshot" &&
+      testName != "undo_stack" && testName != "resync_mismatch" &&
+      testName != "pulse_full" && testName != "note_off_full" &&
+      testName != "resurrection_full" && testName != "composition_full" &&
       testName != "all") {
     std::cerr << "Unknown test: " << testName << std::endl;
     return 1;
@@ -660,6 +899,27 @@ int main(int argc, char** argv) {
   }
   if (testName == "automation_ring") {
     return runAutomationRingTest() ? 0 : 1;
+  }
+  if (testName == "harmony_quantize") {
+    return runHarmonyQuantizeTest() ? 0 : 1;
+  }
+  if (testName == "chord_expansion") {
+    return runChordExpansionTest() ? 0 : 1;
+  }
+  if (testName == "humanize_determinism") {
+    return runDeterministicJitterTest() ? 0 : 1;
+  }
+  if (testName == "harmony_order") {
+    return runHarmonyOrderTest() ? 0 : 1;
+  }
+  if (testName == "snapshot") {
+    return runSnapshotTest() ? 0 : 1;
+  }
+  if (testName == "undo_stack") {
+    return runUndoStackTest() ? 0 : 1;
+  }
+  if (testName == "resync_mismatch") {
+    return runResyncMismatchTest() ? 0 : 1;
   }
 
   if (pluginPath.empty()) {

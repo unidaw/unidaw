@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <cstdlib>
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -31,12 +32,15 @@ void closeFd(int& fd) {
 bool connectSocket(int& fd, const std::string& path) {
   fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) {
+    std::cerr << "HostController: socket() failed: " << std::strerror(errno) << std::endl;
     return false;
   }
   sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
   std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path.c_str());
   if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+    std::cerr << "HostController: connect(" << path
+              << ") failed: " << std::strerror(errno) << std::endl;
     closeFd(fd);
     return false;
   }
@@ -53,12 +57,14 @@ bool HostController::launch(const HostConfig& config) {
   // Ensure old socket is gone so waitForSocket actually waits for the new one
   ::unlink(config.socketPath.c_str());
 
-  hostPid_ = spawnHostProcess(config.socketPath, config.pluginPath);
+  hostPid_ = spawnHostProcess(config);
   if (hostPid_ < 0) {
     return false;
   }
 
   if (!waitForSocket(config.socketPath, 100)) {
+    std::cerr << "HostController: waitForSocket(" << config.socketPath
+              << ") timed out." << std::endl;
     killHostProcess();
     return false;
   }
@@ -71,7 +77,7 @@ bool HostController::launch(const HostConfig& config) {
   return true;
 }
 
-pid_t HostController::spawnHostProcess(const std::string& socketPath, const std::string& pluginPath) {
+pid_t HostController::spawnHostProcess(const HostConfig& config) {
   pid_t pid = ::fork();
   if (pid == 0) {
     // Child process
@@ -80,12 +86,15 @@ pid_t HostController::spawnHostProcess(const std::string& socketPath, const std:
     // but let's try to be relative to current dir.
     std::string exe = "./juce_host_process"; 
     
-    if (!pluginPath.empty()) {
+    if (!config.shmName.empty()) {
+      ::setenv("DAW_SHM_NAME", config.shmName.c_str(), 1);
+    }
+    if (!config.pluginPath.empty()) {
       ::execl(exe.c_str(), exe.c_str(), "--socket",
-              socketPath.c_str(), "--plugin", pluginPath.c_str(), nullptr);
+              config.socketPath.c_str(), "--plugin", config.pluginPath.c_str(), nullptr);
     } else {
       ::execl(exe.c_str(), exe.c_str(), "--socket",
-              socketPath.c_str(), nullptr);
+              config.socketPath.c_str(), nullptr);
     }
     // If execl fails:
     std::perror("execl");
@@ -129,28 +138,34 @@ bool HostController::connect(const HostConfig& config) {
   request.sampleRate = config.sampleRate;
 
   if (!sendMessage(socketFd_, ControlMessageType::Hello, &request, sizeof(request))) {
+    std::cerr << "HostController: failed to send Hello." << std::endl;
     disconnect();
     return false;
   }
 
   ControlHeader header;
   if (!recvHeader(socketFd_, header)) {
+    std::cerr << "HostController: failed to receive Hello header." << std::endl;
     disconnect();
     return false;
   }
   if (header.type != static_cast<uint16_t>(ControlMessageType::Hello) ||
       header.size != sizeof(HelloResponse)) {
+    std::cerr << "HostController: invalid Hello response (type=" << header.type
+              << " size=" << header.size << ")." << std::endl;
     disconnect();
     return false;
   }
 
   HelloResponse response;
   if (!readAll(socketFd_, &response, sizeof(response))) {
+    std::cerr << "HostController: failed to read Hello response." << std::endl;
     disconnect();
     return false;
   }
 
   if (!mapSharedMemory(response, config)) {
+    std::cerr << "HostController: failed to map shared memory." << std::endl;
     disconnect();
     return false;
   }
@@ -162,6 +177,8 @@ bool HostController::mapSharedMemory(const HelloResponse& response,
                                      const HostConfig& config) {
   shmFd_ = ::shm_open(response.shmName, O_RDWR, 0600);
   if (shmFd_ < 0) {
+    std::cerr << "HostController: shm_open(" << response.shmName
+              << ") failed: " << std::strerror(errno) << std::endl;
     return false;
   }
 
@@ -169,11 +186,15 @@ bool HostController::mapSharedMemory(const HelloResponse& response,
   shmBase_ = ::mmap(nullptr, shmSize_, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd_, 0);
   if (shmBase_ == MAP_FAILED) {
     shmBase_ = nullptr;
+    std::cerr << "HostController: mmap failed: " << std::strerror(errno) << std::endl;
     return false;
   }
 
   shmHeader_ = reinterpret_cast<ShmHeader*>(shmBase_);
   if (shmHeader_->magic != kShmMagic || shmHeader_->version != kShmVersion) {
+    std::cerr << "HostController: shm header mismatch (magic="
+              << std::hex << shmHeader_->magic << " version=" << std::dec
+              << shmHeader_->version << ")." << std::endl;
     return false;
   }
   if (shmHeader_->blockSize != config.blockSize ||
@@ -181,6 +202,11 @@ bool HostController::mapSharedMemory(const HelloResponse& response,
       shmHeader_->numChannelsIn != config.numChannelsIn ||
       shmHeader_->numChannelsOut != config.numChannelsOut ||
       shmHeader_->numBlocks != config.numBlocks) {
+    std::cerr << "HostController: shm config mismatch (blockSize="
+              << shmHeader_->blockSize << " sampleRate=" << shmHeader_->sampleRate
+              << " numChannelsIn=" << shmHeader_->numChannelsIn
+              << " numChannelsOut=" << shmHeader_->numChannelsOut
+              << " numBlocks=" << shmHeader_->numBlocks << ")." << std::endl;
     return false;
   }
 

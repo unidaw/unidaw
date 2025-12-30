@@ -51,6 +51,7 @@ add_executable(juce_host_process
   apps/event_ring.cpp
   apps/ipc_io.cpp
   apps/shared_memory.cpp
+  apps/scale_library.cpp
 )
 
 target_include_directories(juce_host_process PRIVATE
@@ -59,18 +60,26 @@ target_include_directories(juce_host_process PRIVATE
 
 target_link_libraries(juce_host_process PRIVATE platform_juce)
 
-add_executable(juce_engine_process
-  apps/juce_engine_process_main.cpp
+add_executable(daw_engine
+  apps/daw_engine_main.cpp
   apps/audio_shm.cpp
+  apps/clip_edit.cpp
+  apps/chord_resolver.cpp
   apps/event_ring.cpp
   apps/host_controller.cpp
   apps/ipc_io.cpp
+  apps/plugin_cache.cpp
+  apps/harmony_timeline.cpp
+  apps/scale_library.cpp
+  apps/ui_snapshot.cpp
   apps/shared_memory.cpp
 )
 
-target_include_directories(juce_engine_process PRIVATE
+target_include_directories(daw_engine PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
+
+target_link_libraries(daw_engine PRIVATE platform_juce)
 
 juce_add_plugin(identity_plugin
   COMPANY_NAME "daw"
@@ -106,9 +115,14 @@ target_compile_definitions(identity_plugin_VST3 PRIVATE
 add_executable(phase2_tests
   apps/phase2_tests_main.cpp
   apps/audio_shm.cpp
+  apps/clip_edit.cpp
+  apps/chord_resolver.cpp
   apps/event_ring.cpp
   apps/host_controller.cpp
   apps/ipc_io.cpp
+  apps/harmony_timeline.cpp
+  apps/scale_library.cpp
+  apps/ui_snapshot.cpp
   apps/shared_memory.cpp
 )
 
@@ -147,9 +161,14 @@ set_tests_properties(phase2_ui_visual PROPERTIES WORKING_DIRECTORY ${CMAKE_BINAR
 add_executable(phase3_tests
   apps/phase3_tests_main.cpp
   apps/audio_shm.cpp
+  apps/clip_edit.cpp
+  apps/chord_resolver.cpp
   apps/event_ring.cpp
   apps/host_controller.cpp
   apps/ipc_io.cpp
+  apps/harmony_timeline.cpp
+  apps/scale_library.cpp
+  apps/ui_snapshot.cpp
   apps/shared_memory.cpp
 )
 
@@ -176,6 +195,41 @@ add_test(NAME phase3_automation_ring
           --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
 )
 set_tests_properties(phase3_automation_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_harmony_quantize
+  COMMAND phase3_tests --test harmony_quantize
+)
+set_tests_properties(phase3_harmony_quantize PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_chord_expansion
+  COMMAND phase3_tests --test chord_expansion
+)
+set_tests_properties(phase3_chord_expansion PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_humanize_determinism
+  COMMAND phase3_tests --test humanize_determinism
+)
+set_tests_properties(phase3_humanize_determinism PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_harmony_order
+  COMMAND phase3_tests --test harmony_order
+)
+set_tests_properties(phase3_harmony_order PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_snapshot
+  COMMAND phase3_tests --test snapshot
+)
+set_tests_properties(phase3_snapshot PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_undo_stack
+  COMMAND phase3_tests --test undo_stack
+)
+set_tests_properties(phase3_undo_stack PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_resync_mismatch
+  COMMAND phase3_tests --test resync_mismatch
+)
+set_tests_properties(phase3_resync_mismatch PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase3_pulse_full
   COMMAND phase3_tests --test pulse_full

@@ -1,0 +1,9 @@
+[package]
+name = "daw-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libc = "0.2"
+memmap2 = "0.9"
+daw-bridge = { path = "../daw-bridge" }

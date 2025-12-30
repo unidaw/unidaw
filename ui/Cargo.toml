@@ -1,0 +1,3 @@
+[workspace]
+members = ["daw-bridge", "daw-cli", "daw-app"]
+resolver = "2"

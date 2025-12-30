@@ -100,10 +100,12 @@ bool writeMidiNoteOn(daw::EventRingView& ring,
   entry.blockId = 0;
   entry.type = static_cast<uint16_t>(daw::EventType::Midi);
   entry.size = sizeof(daw::MidiPayload);
-  daw::MidiPayload payload;
+  daw::MidiPayload payload{};
   payload.status = 0x90;
   payload.data1 = note;
   payload.data2 = velocity;
+  payload.channel = 0;
+  payload.tuningCents = 0.0f;
   std::memcpy(entry.payload, &payload, sizeof(payload));
   return daw::ringWrite(ring, entry);
 }

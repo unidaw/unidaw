@@ -46,6 +46,7 @@ struct HostState {
   std::vector<float*> outputPtrs;
   std::string pluginPath;
   std::unordered_map<std::string, std::string> paramIdByUid16;
+  bool testMode = false;
 };
 
 std::string uid16Key(const uint8_t* uid16) {
@@ -70,6 +71,9 @@ int eventPriority(const daw::EventEntry& entry) {
   if (entry.type == static_cast<uint16_t>(daw::EventType::Param)) {
     return 1;
   }
+  if (entry.type == static_cast<uint16_t>(daw::EventType::ReplayComplete)) {
+    return 2;
+  }
   if (entry.type == static_cast<uint16_t>(daw::EventType::Midi) &&
       entry.size >= sizeof(daw::MidiPayload)) {
     daw::MidiPayload payload{};
@@ -87,8 +91,14 @@ void closeFd(int& fd) {
 }
 
 std::string makeShmName() {
-  const int pid = static_cast<int>(::getpid());
-  return "/daw_host_" + std::to_string(pid);
+  if (const char* envName = std::getenv("DAW_SHM_NAME")) {
+    std::string name(envName);
+    if (!name.empty() && name.front() != '/') {
+      name.insert(name.begin(), '/');
+    }
+    return name;
+  }
+  return "/daw_engine_shared";
 }
 
 int createServerSocket(const std::string& path) {
@@ -117,10 +127,18 @@ int createServerSocket(const std::string& path) {
 
 bool handleHello(HostState& state, const daw::HelloRequest& request) {
   state.shmName = makeShmName();
-  state.shmFd = ::shm_open(state.shmName.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+  const int shmFlags = O_CREAT | O_EXCL | O_RDWR;
+  state.shmFd = ::shm_open(state.shmName.c_str(), shmFlags, 0600);
+  if (state.shmFd < 0 && errno == EEXIST) {
+    ::shm_unlink(state.shmName.c_str());
+    state.shmFd = ::shm_open(state.shmName.c_str(), shmFlags, 0600);
+  }
   if (state.shmFd < 0) {
+    std::cerr << "shm_open failed for " << state.shmName
+              << ": " << std::strerror(errno) << std::endl;
     return false;
   }
+  std::cout << "SHM name: " << state.shmName << std::endl;
 
   daw::ShmHeader header;
   header.blockSize = request.blockSize;
@@ -136,6 +154,7 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
                                                request.ringCtrlCapacity,
                                                request.ringUiCapacity);
   if (::ftruncate(state.shmFd, static_cast<off_t>(shmSize)) != 0) {
+    std::cerr << "ftruncate failed: " << std::strerror(errno) << std::endl;
     return false;
   }
 
@@ -143,6 +162,7 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
                          state.shmFd, 0);
   if (state.shmBase == MAP_FAILED) {
     state.shmBase = nullptr;
+    std::cerr << "mmap failed: " << std::strerror(errno) << std::endl;
     return false;
   }
 
@@ -304,7 +324,9 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
   };
 
   collectEvents(state.ringCtrl);
-  collectEvents(state.ringStd);
+  if (!state.testMode) {
+    collectEvents(state.ringStd);
+  }
 
   std::sort(pending.begin(), pending.end(),
             [](const daw::EventEntry& a, const daw::EventEntry& b) {
@@ -344,7 +366,15 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
       daw::MidiPayload payload{};
       std::memcpy(&payload, event.payload, sizeof(payload));
       const int offset = static_cast<int>(event.sampleTime - blockStart);
-      events.push_back({offset, payload.status, payload.data1, payload.data2});
+      daw::MidiEvent noteEvent;
+      noteEvent.sampleOffset = offset;
+      noteEvent.status = payload.status;
+      noteEvent.data1 = payload.data1;
+      noteEvent.data2 = payload.data2;
+      noteEvent.channel = payload.channel;
+      noteEvent.tuningCents = payload.tuningCents;
+      noteEvent.noteId = static_cast<int32_t>(payload.noteId);
+      events.push_back(noteEvent);
     }
   }
 
@@ -394,6 +424,9 @@ void cleanup(HostState& state, const std::string& socketPath) {
 int main(int argc, char** argv) {
   std::string socketPath = "/tmp/daw_host.sock";
   HostState state;
+  if (const char* env = std::getenv("DAW_ENGINE_TEST_MODE")) {
+    state.testMode = std::string(env) == "1";
+  }
   for (int i = 1; i + 1 < argc; ++i) {
     if (std::string(argv[i]) == "--socket") {
       socketPath = argv[i + 1];
@@ -419,6 +452,7 @@ int main(int argc, char** argv) {
   while (true) {
     daw::ControlHeader header;
     if (!daw::recvHeader(state.clientFd, header)) {
+      std::cerr << "Failed to receive control header." << std::endl;
       break;
     }
 

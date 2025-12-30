@@ -313,20 +313,22 @@ int main(int argc, char** argv) {
     }
 
     if (blockStart == 0) {
-      events.push_back({0, static_cast<uint8_t>(0xC0 | channel), 0, 0});
+      events.push_back({0, static_cast<uint8_t>(0xC0 | channel), 0, 0, 0, 0.0f, 0});
     }
 
     if (!schedule.noteOnSent && schedule.noteOnSample >= blockStart &&
         schedule.noteOnSample < blockEnd) {
       const int offset = static_cast<int>(schedule.noteOnSample - blockStart);
-      events.push_back({offset, static_cast<uint8_t>(0x90 | channel), note, velocity});
+      events.push_back({offset, static_cast<uint8_t>(0x90 | channel), note, velocity,
+                        static_cast<uint8_t>(channel), 0.0f, 0});
       schedule.noteOnSent = true;
     }
 
     if (!schedule.noteOffSent && schedule.noteOffSample >= blockStart &&
         schedule.noteOffSample < blockEnd) {
       const int offset = static_cast<int>(schedule.noteOffSample - blockStart);
-      events.push_back({offset, static_cast<uint8_t>(0x80 | channel), note, 0});
+      events.push_back({offset, static_cast<uint8_t>(0x80 | channel), note, 0,
+                        static_cast<uint8_t>(channel), 0.0f, 0});
       schedule.noteOffSent = true;
     }
 
@@ -359,9 +361,6 @@ int main(int argc, char** argv) {
 
     const double rms = samples > 0 ? std::sqrt(sumSquares / samples) : 0.0;
     const int blockIndex = blockCounter.fetch_add(1);
-    if (blockIndex % 50 == 0) {
-      std::cout << "RMS: " << rms << std::endl;
-    }
 
     sampleCounter.store(blockStart + numFrames);
   };

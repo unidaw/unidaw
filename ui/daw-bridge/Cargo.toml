@@ -1,0 +1,14 @@
+[package]
+name = "daw-bridge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libc = "0.2"
+memmap2 = "0.9"
+static_assertions = "1.1"
+memoffset = "0.9"
+
+[lib]
+name = "daw_bridge"
+path = "src/lib.rs"

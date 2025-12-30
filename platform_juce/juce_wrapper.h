@@ -14,6 +14,9 @@ struct MidiEvent {
   uint8_t status = 0;
   uint8_t data1 = 0;
   uint8_t data2 = 0;
+  uint8_t channel = 0;
+  float tuningCents = 0.0f;
+  int32_t noteId = 0;
 };
 
 using MidiEvents = std::vector<MidiEvent>;

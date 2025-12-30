@@ -8,6 +8,10 @@
 #include <unordered_map>
 
 #include <juce_audio_utils/juce_audio_utils.h>
+#define JUCE_VST3HEADERS_INCLUDE_HEADERS_ONLY 1
+#include <juce_audio_processors_headless/format_types/juce_VST3Headers.h>
+#include <juce_audio_processors_headless/format_types/juce_VST3Utilities.h>
+#include <juce_audio_processors_headless/format_types/juce_VST3Common.h>
 
 #if JUCE_MAC
 #include <CoreFoundation/CoreFoundation.h>
@@ -392,13 +396,16 @@ class JucePluginInstance final : public IPluginInstance {
       }
     }
 
-    juce::MidiBuffer midi;
-    for (const auto& ev : events) {
-      juce::MidiMessage message(ev.status, ev.data1, ev.data2);
-      midi.addEvent(message, ev.sampleOffset);
+    if (!processWithVst3Events(*bufferToProcess, inputs, numInputs,
+                               numOutputs, numFrames, events)) {
+      juce::MidiBuffer midi;
+      for (const auto& ev : events) {
+        const uint8_t status = static_cast<uint8_t>(ev.status | (ev.channel & 0x0F));
+        juce::MidiMessage message(status, ev.data1, ev.data2);
+        midi.addEvent(message, ev.sampleOffset);
+      }
+      instance_->processBlock(*bufferToProcess, midi);
     }
-
-    instance_->processBlock(*bufferToProcess, midi);
 
     if (bufferToProcess != &buffer) {
       for (int ch = 0; ch < numOutputs; ++ch) {
@@ -592,6 +599,94 @@ class JucePluginInstance final : public IPluginInstance {
         lastApplied_[i] = value;
       }
     }
+  }
+
+  bool processWithVst3Events(juce::AudioBuffer<float>& buffer,
+                             const float* const* inputs,
+                             int numInputs,
+                             int numOutputs,
+                             int numFrames,
+                             const MidiEvents& events) {
+    auto* component =
+        static_cast<Steinberg::Vst::IComponent*>(instance_->getPlatformSpecificData());
+    if (!component) {
+      return false;
+    }
+    Steinberg::FUnknownPtr<Steinberg::Vst::IAudioProcessor> processor(component);
+    if (processor == nullptr) {
+      return false;
+    }
+
+    std::vector<float*> inputPtrs;
+    if (inputs != nullptr && numInputs > 0) {
+      inputPtrs.reserve(static_cast<size_t>(numInputs));
+      for (int ch = 0; ch < numInputs; ++ch) {
+        inputPtrs.push_back(const_cast<float*>(inputs[ch]));
+      }
+    }
+
+    std::vector<float*> outputPtrs;
+    outputPtrs.reserve(static_cast<size_t>(numOutputs));
+    for (int ch = 0; ch < numOutputs; ++ch) {
+      outputPtrs.push_back(buffer.getWritePointer(ch));
+    }
+
+    Steinberg::Vst::AudioBusBuffers inputBus{};
+    Steinberg::Vst::AudioBusBuffers outputBus{};
+    if (!inputPtrs.empty()) {
+      inputBus.numChannels = static_cast<Steinberg::int32>(inputPtrs.size());
+      inputBus.channelBuffers32 = inputPtrs.data();
+    }
+    outputBus.numChannels = static_cast<Steinberg::int32>(outputPtrs.size());
+    outputBus.channelBuffers32 = outputPtrs.data();
+
+    juce::MidiEventList inputEvents;
+    juce::MidiEventList outputEvents;
+
+    for (const auto& ev : events) {
+      const uint8_t type = ev.status & 0xF0u;
+      Steinberg::Vst::Event e{};
+      e.busIndex = 0;
+      e.sampleOffset = ev.sampleOffset;
+      if (type == 0x90u) {
+        e.type = Steinberg::Vst::Event::kNoteOnEvent;
+        e.noteOn.channel = static_cast<Steinberg::int16>(ev.channel & 0x0F);
+        e.noteOn.pitch = static_cast<Steinberg::int16>(ev.data1);
+        e.noteOn.velocity = static_cast<float>(ev.data2) / 127.0f;
+        e.noteOn.tuning = ev.tuningCents;
+        e.noteOn.noteId = ev.noteId > 0 ? ev.noteId : -1;
+        inputEvents.addEvent(e);
+      } else if (type == 0x80u || (type == 0x90u && ev.data2 == 0)) {
+        e.type = Steinberg::Vst::Event::kNoteOffEvent;
+        e.noteOff.channel = static_cast<Steinberg::int16>(ev.channel & 0x0F);
+        e.noteOff.pitch = static_cast<Steinberg::int16>(ev.data1);
+        e.noteOff.velocity = static_cast<float>(ev.data2) / 127.0f;
+        e.noteOff.tuning = ev.tuningCents;
+        e.noteOff.noteId = ev.noteId > 0 ? ev.noteId : -1;
+        inputEvents.addEvent(e);
+      } else if (type == 0xA0u) {
+        e.type = Steinberg::Vst::Event::kPolyPressureEvent;
+        e.polyPressure.channel = static_cast<Steinberg::int16>(ev.channel & 0x0F);
+        e.polyPressure.pitch = static_cast<Steinberg::int16>(ev.data1);
+        e.polyPressure.pressure = static_cast<float>(ev.data2) / 127.0f;
+        e.polyPressure.noteId = ev.noteId > 0 ? ev.noteId : -1;
+        inputEvents.addEvent(e);
+      }
+    }
+
+    Steinberg::Vst::ProcessData data{};
+    data.processMode = Steinberg::Vst::kRealtime;
+    data.symbolicSampleSize = Steinberg::Vst::kSample32;
+    data.numSamples = static_cast<Steinberg::int32>(numFrames);
+    data.numInputs = inputPtrs.empty() ? 0 : 1;
+    data.numOutputs = 1;
+    data.inputs = inputPtrs.empty() ? nullptr : &inputBus;
+    data.outputs = &outputBus;
+    data.inputEvents = &inputEvents;
+    data.outputEvents = &outputEvents;
+
+    const auto result = processor->process(data);
+    return result == Steinberg::kResultOk || result == Steinberg::kResultTrue;
   }
 
   std::unique_ptr<juce::AudioPluginInstance> instance_;
