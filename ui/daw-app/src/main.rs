@@ -5834,6 +5834,152 @@ mod tests {
         assert_eq!(mask & 0b11, 0b11, "should include columns 0 and 1");
         assert_eq!(view.cursor_col, 1);
     }
+
+    #[test]
+    fn test_copy_selection_without_range_shows_toast() {
+        struct TestNotify;
+        impl super::UiNotify for TestNotify {
+            fn notify(&mut self) {}
+        }
+
+        let mut view = super::EngineView::new_state();
+        let mut notify = TestNotify;
+
+        view.copy_selection(&mut notify);
+
+        assert_eq!(view.toast_message.as_deref(), Some("No selection"));
+    }
+
+    #[test]
+    fn test_page_copy_cut_paste_roundtrip() {
+        struct TestNotify;
+        impl super::UiNotify for TestNotify {
+            fn notify(&mut self) {}
+        }
+
+        let mut view = super::EngineView::new_state();
+        view.focused_track_index = 0;
+        view.track_columns[0] = 2;
+        let row = view.row_nanoticks();
+        let (page_start, page_end) = view.page_range();
+        let outside = page_end + row;
+
+        view.clip_notes[0].push(super::ClipNote {
+            nanotick: page_start,
+            duration: row,
+            pitch: 60,
+            velocity: 100,
+            column: 0,
+        });
+        view.clip_notes[0].push(super::ClipNote {
+            nanotick: page_start + row,
+            duration: row,
+            pitch: 62,
+            velocity: 100,
+            column: 1,
+        });
+        view.clip_notes[0].push(super::ClipNote {
+            nanotick: outside,
+            duration: row,
+            pitch: 64,
+            velocity: 100,
+            column: 0,
+        });
+
+        let mut notify = TestNotify;
+        view.copy_page(&mut notify);
+        let clipboard = view.clipboard.clone().expect("clipboard should be set");
+        assert_eq!(clipboard.notes.len(), 2);
+
+        view.cut_page(&mut notify);
+        assert_eq!(view.clip_notes[0].len(), 1);
+        assert_eq!(view.clip_notes[0][0].nanotick, outside);
+
+        view.scroll_nanotick_offset = (row * 4) as i64;
+        view.paste_page(&mut notify);
+
+        let target = view.page_range().0;
+        let mut pasted = view.clip_notes[0]
+            .iter()
+            .filter(|note| note.nanotick == target || note.nanotick == target + row)
+            .map(|note| (note.nanotick, note.column))
+            .collect::<Vec<_>>();
+        pasted.sort();
+        assert_eq!(pasted, vec![(target, 0), (target + row, 1)]);
+    }
+
+    #[test]
+    fn test_mouse_paint_selection_sets_mask_and_range() {
+        struct TestNotify;
+        impl super::UiNotify for TestNotify {
+            fn notify(&mut self) {}
+        }
+
+        let mut view = super::EngineView::new_state();
+        let row = view.row_nanoticks();
+        let mut notify = TestNotify;
+
+        view.start_selection(row / 2, Some(1), Some(1), false, false, &mut notify);
+        view.update_selection_end(row * 3 + row / 4, &mut notify);
+
+        let (start, end) = view.selection_bounds().expect("selection should exist");
+        assert_eq!(start, 0);
+        assert_eq!(end, row * 3);
+        let mask = view.selection_mask.tracks[1];
+        assert!(mask & (1u8 << 1) != 0, "column mask should include col 1");
+    }
+
+    #[test]
+    fn test_minimap_bins_counts_items_in_range() {
+        let mut view = super::EngineView::new_state();
+        let row = view.row_nanoticks();
+
+        view.clip_notes[0].push(super::ClipNote {
+            nanotick: 0,
+            duration: row,
+            pitch: 60,
+            velocity: 100,
+            column: 0,
+        });
+        view.pending_notes.push(super::PendingNote {
+            track_id: 0,
+            nanotick: row * 2,
+            duration: row,
+            pitch: 62,
+            velocity: 100,
+            column: 0,
+        });
+        view.clip_chords[0].push(super::ClipChord {
+            chord_id: 1,
+            nanotick: row * 3,
+            duration: row,
+            spread: 0,
+            humanize_timing: 0,
+            humanize_velocity: 0,
+            degree: 1,
+            quality: 0,
+            inversion: 0,
+            base_octave: 4,
+            column: 0,
+        });
+        view.harmony_events.push(super::HarmonyEntry {
+            nanotick: row * 4,
+            root: 0,
+            scale_id: 1,
+        });
+        view.clip_notes[0].push(super::ClipNote {
+            nanotick: row * 20,
+            duration: row,
+            pitch: 64,
+            velocity: 100,
+            column: 0,
+        });
+
+        let bins = view.minimap_bins(0, row * 8, 8);
+        assert_eq!(bins.len(), 8);
+        let total: usize = bins.iter().sum();
+        assert_eq!(total, 4);
+    }
 }
 
 fn harmony_root_name(root: u32) -> &'static str {
