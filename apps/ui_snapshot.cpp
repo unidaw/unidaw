@@ -43,7 +43,8 @@ void appendClipToSnapshot(const MusicalClip& clip,
       note.tOff = event.nanotickOffset + event.payload.note.durationNanoticks;
       note.pitch = event.payload.note.pitch;
       note.velocity = event.payload.note.velocity;
-      note.flags = 0;
+      note.column = event.payload.note.column;
+      note.reserved = 0;
 
       ++trackEntry.noteCount;
       ++cursor.totalNotes;
@@ -63,7 +64,7 @@ void appendClipToSnapshot(const MusicalClip& clip,
       chord.quality = event.payload.chord.quality;
       chord.inversion = event.payload.chord.inversion;
       chord.baseOctave = event.payload.chord.baseOctave;
-      chord.flags = 0;
+      chord.flags = static_cast<uint32_t>(event.payload.chord.column);
 
       ++trackEntry.chordCount;
       ++cursor.totalChords;

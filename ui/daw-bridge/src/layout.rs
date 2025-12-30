@@ -101,7 +101,8 @@ pub struct UiClipNote {
     pub note_id: u32,
     pub pitch: u8,
     pub velocity: u8,
-    pub flags: u16,
+    pub column: u8,
+    pub reserved: u8,
 }
 
 #[repr(C)]
@@ -176,6 +177,8 @@ pub enum UiCommandType {
     WriteChord = 8,
     DeleteChord = 9,
     SetTrackHarmonyQuantize = 10,
+    Redo = 11,
+    SetLoopRange = 12,
 }
 
 #[repr(u16)]
@@ -258,7 +261,7 @@ pub struct UiDiffPayload {
     pub note_duration_hi: u32,
     pub note_pitch: u32,
     pub note_velocity: u32,
-    pub reserved: u32,
+    pub note_column: u32,
 }
 
 #[repr(C)]
@@ -302,7 +305,7 @@ mod tests {
 
     #[test]
     fn shm_header_layout_matches_cpp() {
-        const_assert_eq!(size_of::<ShmHeader>(), 320);
+        const_assert_eq!(size_of::<ShmHeader>(), 256);
         const_assert_eq!(align_of::<ShmHeader>(), 64);
         assert_eq!(offset_of!(ShmHeader, ring_std_offset), 56);
         assert_eq!(offset_of!(ShmHeader, ring_ctrl_offset), 64);

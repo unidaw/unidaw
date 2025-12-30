@@ -7,6 +7,7 @@
 #include <thread>
 #include <chrono>
 #include <filesystem>
+#include <vector>
 
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -16,8 +17,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <signal.h>
+#include <spawn.h>
 
 #include "apps/ipc_io.h"
+
+extern "C" char** environ;
 
 namespace daw {
 namespace {
@@ -62,14 +66,30 @@ bool HostController::launch(const HostConfig& config) {
     return false;
   }
 
-  if (!waitForSocket(config.socketPath, 100)) {
+  int waitAttempts = 100;
+  if (const char* env = std::getenv("DAW_HOST_SOCKET_WAIT_ATTEMPTS")) {
+    char* end = nullptr;
+    const long value = std::strtol(env, &end, 10);
+    if (end != env && value > 0) {
+      waitAttempts = static_cast<int>(value);
+    }
+  }
+  if (!waitForSocket(config.socketPath, waitAttempts)) {
     std::cerr << "HostController: waitForSocket(" << config.socketPath
               << ") timed out." << std::endl;
     killHostProcess();
     return false;
   }
 
-  if (!connect(config)) {
+  bool connected = false;
+  for (int attempt = 0; attempt < waitAttempts; ++attempt) {
+    if (connect(config)) {
+      connected = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  if (!connected) {
     killHostProcess();
     return false;
   }
@@ -78,27 +98,46 @@ bool HostController::launch(const HostConfig& config) {
 }
 
 pid_t HostController::spawnHostProcess(const HostConfig& config) {
-  pid_t pid = ::fork();
-  if (pid == 0) {
-    // Child process
-    // We assume the executable is in the current directory or PATH.
-    // For this environment, we know it's ./juce_host_process in build dir usually,
-    // but let's try to be relative to current dir.
-    std::string exe = "./juce_host_process"; 
-    
-    if (!config.shmName.empty()) {
-      ::setenv("DAW_SHM_NAME", config.shmName.c_str(), 1);
-    }
-    if (!config.pluginPath.empty()) {
-      ::execl(exe.c_str(), exe.c_str(), "--socket",
-              config.socketPath.c_str(), "--plugin", config.pluginPath.c_str(), nullptr);
-    } else {
-      ::execl(exe.c_str(), exe.c_str(), "--socket",
-              config.socketPath.c_str(), nullptr);
-    }
-    // If execl fails:
-    std::perror("execl");
-    std::_Exit(127);
+  // We assume the executable is in the current directory or PATH.
+  // For this environment, we know it's ./juce_host_process in build dir usually,
+  // but let's try to be relative to current dir.
+  const std::string exe = "./juce_host_process";
+
+  std::vector<std::string> args;
+  args.emplace_back(exe);
+  args.emplace_back("--socket");
+  args.emplace_back(config.socketPath);
+  if (!config.pluginPath.empty()) {
+    args.emplace_back("--plugin");
+    args.emplace_back(config.pluginPath);
+  }
+
+  std::vector<char*> argv;
+  argv.reserve(args.size() + 1);
+  for (auto& arg : args) {
+    argv.push_back(const_cast<char*>(arg.c_str()));
+  }
+  argv.push_back(nullptr);
+
+  std::vector<std::string> env;
+  if (!config.shmName.empty()) {
+    env.emplace_back("DAW_SHM_NAME=" + config.shmName);
+  }
+  std::vector<char*> envp;
+  for (char** current = environ; *current != nullptr; ++current) {
+    envp.push_back(*current);
+  }
+  for (auto& entry : env) {
+    envp.push_back(const_cast<char*>(entry.c_str()));
+  }
+  envp.push_back(nullptr);
+
+  pid_t pid = -1;
+  const int spawnResult =
+      ::posix_spawnp(&pid, exe.c_str(), nullptr, nullptr, argv.data(), envp.data());
+  if (spawnResult != 0) {
+    std::cerr << "posix_spawnp failed: " << std::strerror(spawnResult) << std::endl;
+    return -1;
   }
   return pid;
 }
@@ -139,34 +178,34 @@ bool HostController::connect(const HostConfig& config) {
 
   if (!sendMessage(socketFd_, ControlMessageType::Hello, &request, sizeof(request))) {
     std::cerr << "HostController: failed to send Hello." << std::endl;
-    disconnect();
+    disconnectInternal(false);
     return false;
   }
 
   ControlHeader header;
   if (!recvHeader(socketFd_, header)) {
     std::cerr << "HostController: failed to receive Hello header." << std::endl;
-    disconnect();
+    disconnectInternal(false);
     return false;
   }
   if (header.type != static_cast<uint16_t>(ControlMessageType::Hello) ||
       header.size != sizeof(HelloResponse)) {
     std::cerr << "HostController: invalid Hello response (type=" << header.type
               << " size=" << header.size << ")." << std::endl;
-    disconnect();
+    disconnectInternal(false);
     return false;
   }
 
   HelloResponse response;
   if (!readAll(socketFd_, &response, sizeof(response))) {
     std::cerr << "HostController: failed to read Hello response." << std::endl;
-    disconnect();
+    disconnectInternal(false);
     return false;
   }
 
   if (!mapSharedMemory(response, config)) {
     std::cerr << "HostController: failed to map shared memory." << std::endl;
-    disconnect();
+    disconnectInternal(false);
     return false;
   }
 
@@ -216,6 +255,10 @@ bool HostController::mapSharedMemory(const HelloResponse& response,
 }
 
 void HostController::disconnect() {
+  disconnectInternal(true);
+}
+
+void HostController::disconnectInternal(bool killHost) {
   if (shmBase_ && shmBase_ != MAP_FAILED) {
     ::munmap(shmBase_, shmSize_);
     shmBase_ = nullptr;
@@ -224,7 +267,9 @@ void HostController::disconnect() {
   closeFd(socketFd_);
   // We assume that if we are disconnecting, we should also clean up the child process
   // if we launched it.
-  killHostProcess();
+  if (killHost) {
+    killHostProcess();
+  }
 }
 
 bool HostController::sendProcessBlock(uint32_t blockId,

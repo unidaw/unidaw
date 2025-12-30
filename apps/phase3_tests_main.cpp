@@ -465,7 +465,7 @@ bool runUndoStackTest() {
   std::atomic<uint32_t> clipVersion{0};
 
   const auto addResult = daw::addNoteToClip(
-      clip, 1, 120, 240, 60, 90, clipVersion, true);
+      clip, 1, 120, 240, 60, 90, 0, clipVersion, true);
   if (!addResult.undo || addResult.undo->type != daw::UndoType::RemoveNote) {
     std::cerr << "Undo entry missing for add note" << std::endl;
     return false;
@@ -473,7 +473,7 @@ bool runUndoStackTest() {
   undoStack.push_back(*addResult.undo);
 
   auto removeResult = daw::removeNoteFromClip(
-      clip, 1, 120, 60, clipVersion, true);
+      clip, 1, 120, 60, 0, clipVersion, true);
   if (!removeResult || !removeResult->undo ||
       removeResult->undo->type != daw::UndoType::AddNote) {
     std::cerr << "Undo entry missing for remove note" << std::endl;
@@ -494,7 +494,7 @@ bool runUndoStackTest() {
   }
   daw::addNoteToClip(
       clip, undo.trackId, undo.nanotick, undo.duration,
-      undo.pitch, undo.velocity, clipVersion, false);
+      undo.pitch, undo.velocity, undo.flags, clipVersion, false);
   if (clip.events().size() != 1) {
     std::cerr << "Undo add note failed" << std::endl;
     return false;

@@ -452,7 +452,9 @@ int main(int argc, char** argv) {
   while (true) {
     daw::ControlHeader header;
     if (!daw::recvHeader(state.clientFd, header)) {
-      std::cerr << "Failed to receive control header." << std::endl;
+      if (!state.testMode) {
+        std::cerr << "Failed to receive control header." << std::endl;
+      }
       break;
     }
 

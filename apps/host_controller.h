@@ -45,10 +45,11 @@ class HostController {
   const BlockMailbox* mailbox() const { return mailbox_; }
 
  private:
-  bool mapSharedMemory(const HelloResponse& response, const HostConfig& config);
+ bool mapSharedMemory(const HelloResponse& response, const HostConfig& config);
   pid_t spawnHostProcess(const HostConfig& config);
   void killHostProcess();
   bool waitForSocket(const std::string& path, int attempts);
+  void disconnectInternal(bool killHost);
 
   int socketFd_ = -1;
   int shmFd_ = -1;

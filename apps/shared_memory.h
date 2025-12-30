@@ -98,7 +98,8 @@ struct UiClipNote {
   uint32_t noteId = 0;
   uint8_t pitch = 0;
   uint8_t velocity = 0;
-  uint16_t flags = 0;
+  uint8_t column = 0;
+  uint8_t reserved = 0;
 };
 
 struct UiClipChord {

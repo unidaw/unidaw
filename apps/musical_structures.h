@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <utility>
@@ -21,6 +22,8 @@ enum class MusicalEventType {
 struct NotePayload {
   uint8_t pitch = 0;
   uint8_t velocity = 0;
+  uint8_t column = 0;
+  uint8_t reserved = 0;
   uint64_t durationNanoticks = 0;
 };
 
@@ -30,6 +33,8 @@ struct ChordPayload {
   uint8_t quality = 0;
   uint8_t inversion = 0;
   uint8_t baseOctave = 0;
+  uint8_t column = 0;
+  uint8_t reserved = 0;
   uint32_t spreadNanoticks = 0;
   uint16_t humanizeTiming = 0;
   uint16_t humanizeVelocity = 0;
@@ -85,14 +90,15 @@ class MusicalClip {
     uint64_t duration = 0;
     uint8_t pitch = 0;
     uint8_t velocity = 0;
+    uint8_t column = 0;
   };
 
-  std::optional<RemovedNote> removeNoteAt(uint64_t nanotick, uint8_t pitch) {
+  std::optional<RemovedNote> removeNoteAt(uint64_t nanotick, uint8_t column) {
     auto it = std::find_if(events_.begin(), events_.end(),
                            [&](const MusicalEvent& event) {
                              return event.type == MusicalEventType::Note &&
                                  event.nanotickOffset == nanotick &&
-                                 event.payload.note.pitch == pitch;
+                                 event.payload.note.column == column;
                            });
     if (it == events_.end()) {
       return std::nullopt;
@@ -102,6 +108,7 @@ class MusicalClip {
     removed.duration = it->payload.note.durationNanoticks;
     removed.pitch = it->payload.note.pitch;
     removed.velocity = it->payload.note.velocity;
+    removed.column = it->payload.note.column;
     events_.erase(it);
     return removed;
   }
@@ -116,6 +123,18 @@ class MusicalClip {
                        }),
         events_.end());
   }
+
+  // Remove ALL chords at a specific nanotick.
+  void removeChordsAt(uint64_t nanotick) {
+    events_.erase(
+        std::remove_if(events_.begin(), events_.end(),
+                       [&](const MusicalEvent& event) {
+                         return event.type == MusicalEventType::Chord &&
+                                event.nanotickOffset == nanotick;
+                       }),
+        events_.end());
+  }
+
 
   // Remove ALL events (notes and chords) at a specific nanotick
   // Used to ensure only one event exists at a position in tracker
@@ -138,10 +157,37 @@ class MusicalClip {
     uint8_t quality = 0;
     uint8_t inversion = 0;
     uint8_t baseOctave = 0;
+    uint8_t column = 0;
     uint32_t spreadNanoticks = 0;
     uint16_t humanizeTiming = 0;
     uint16_t humanizeVelocity = 0;
   };
+
+  std::optional<RemovedChord> removeChordAt(uint64_t nanotick, uint8_t column) {
+    auto it = std::find_if(events_.begin(), events_.end(),
+                           [&](const MusicalEvent& event) {
+                             return event.type == MusicalEventType::Chord &&
+                                 event.nanotickOffset == nanotick &&
+                                 event.payload.chord.column == column;
+                           });
+    if (it == events_.end()) {
+      return std::nullopt;
+    }
+    RemovedChord removed;
+    removed.nanotick = it->nanotickOffset;
+    removed.duration = it->payload.chord.durationNanoticks;
+    removed.chordId = it->payload.chord.chordId;
+    removed.degree = it->payload.chord.degree;
+    removed.quality = it->payload.chord.quality;
+    removed.inversion = it->payload.chord.inversion;
+    removed.baseOctave = it->payload.chord.baseOctave;
+    removed.column = it->payload.chord.column;
+    removed.spreadNanoticks = it->payload.chord.spreadNanoticks;
+    removed.humanizeTiming = it->payload.chord.humanizeTiming;
+    removed.humanizeVelocity = it->payload.chord.humanizeVelocity;
+    events_.erase(it);
+    return removed;
+  }
 
   std::optional<RemovedChord> removeChordById(uint32_t chordId) {
     auto it = std::find_if(events_.begin(), events_.end(),
@@ -160,11 +206,105 @@ class MusicalClip {
     removed.quality = it->payload.chord.quality;
     removed.inversion = it->payload.chord.inversion;
     removed.baseOctave = it->payload.chord.baseOctave;
+    removed.column = it->payload.chord.column;
     removed.spreadNanoticks = it->payload.chord.spreadNanoticks;
     removed.humanizeTiming = it->payload.chord.humanizeTiming;
     removed.humanizeVelocity = it->payload.chord.humanizeVelocity;
     events_.erase(it);
     return removed;
+  }
+
+  void removeNoteOffsAfter(uint64_t nanotick, uint8_t column) {
+    uint64_t nextNoteOn = std::numeric_limits<uint64_t>::max();
+    for (const auto& event : events_) {
+      if (event.type != MusicalEventType::Note) {
+        continue;
+      }
+      if (event.payload.note.column != column) {
+        continue;
+      }
+      if (event.nanotickOffset <= nanotick) {
+        continue;
+      }
+      if (event.payload.note.velocity > 0) {
+        nextNoteOn = event.nanotickOffset;
+        break;
+      }
+    }
+
+    events_.erase(
+        std::remove_if(events_.begin(), events_.end(),
+                       [&](const MusicalEvent& event) {
+                         if (event.type != MusicalEventType::Note) {
+                           return false;
+                         }
+                         const auto& note = event.payload.note;
+                         if (note.column != column) {
+                           return false;
+                         }
+                         if (event.nanotickOffset <= nanotick) {
+                           return false;
+                         }
+                         if (event.nanotickOffset >= nextNoteOn) {
+                           return false;
+                         }
+        return note.velocity == 0 && note.durationNanoticks == 0;
+      }),
+        events_.end());
+  }
+
+  void removeNoteOffsInSpan(uint64_t nanotick, uint8_t column) {
+    uint64_t prevBoundary = 0;
+    bool hasPrev = false;
+    uint64_t nextBoundary = std::numeric_limits<uint64_t>::max();
+
+    for (const auto& event : events_) {
+      bool isBoundary = false;
+      if (event.type == MusicalEventType::Note) {
+        if (event.payload.note.column == column &&
+            event.payload.note.velocity > 0) {
+          isBoundary = true;
+        }
+      } else if (event.type == MusicalEventType::Chord &&
+                 event.payload.chord.column == column) {
+        isBoundary = true;
+      }
+      if (!isBoundary) {
+        continue;
+      }
+      if (event.nanotickOffset < nanotick &&
+          (!hasPrev || event.nanotickOffset > prevBoundary)) {
+        prevBoundary = event.nanotickOffset;
+        hasPrev = true;
+      }
+      if (event.nanotickOffset > nanotick &&
+          event.nanotickOffset < nextBoundary) {
+        nextBoundary = event.nanotickOffset;
+      }
+    }
+
+    const uint64_t lower = hasPrev ? prevBoundary : 0;
+    const uint64_t upper = nextBoundary;
+    events_.erase(
+        std::remove_if(events_.begin(), events_.end(),
+                       [&](const MusicalEvent& event) {
+                         if (event.type != MusicalEventType::Note) {
+                           return false;
+                         }
+                         const auto& note = event.payload.note;
+                         if (note.column != column) {
+                           return false;
+                         }
+                         if (note.velocity != 0 || note.durationNanoticks != 0) {
+                           return false;
+                         }
+                         if (event.nanotickOffset == nanotick) {
+                           return false;
+                         }
+                         return event.nanotickOffset > lower &&
+                                event.nanotickOffset < upper;
+                       }),
+        events_.end());
   }
 
  private:

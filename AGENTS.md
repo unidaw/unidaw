@@ -106,6 +106,14 @@ arrays. No conversion between representations.
 - Harmony is global; tracker can author harmony events and chord tokens resolve
   against the active harmony at schedule time.
 
+## Tracker editing invariants
+- One entry per cell; multiple columns per row are allowed and independent.
+- Chord/degree entries are column-specific and must never overwrite other columns.
+- Note-offs terminate the most recent note in the same column; new notes in the
+  same column end the previous note automatically.
+- UI is optimistic: local edits apply immediately and reconcile with engine diffs
+  without visible flicker or stale data.
+
 ## Milestones
 
 ### Milestone 0 (done)

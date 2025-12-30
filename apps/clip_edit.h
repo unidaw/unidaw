@@ -13,6 +13,11 @@ namespace daw {
 enum class UndoType : uint8_t {
   AddNote,
   RemoveNote,
+  AddHarmony,
+  RemoveHarmony,
+  UpdateHarmony,
+  AddChord,
+  RemoveChord,
 };
 
 struct UndoEntry {
@@ -22,6 +27,20 @@ struct UndoEntry {
   uint64_t duration = 0;
   uint8_t pitch = 0;
   uint8_t velocity = 0;
+  uint16_t flags = 0;
+  uint32_t harmonyRoot = 0;
+  uint32_t harmonyScaleId = 0;
+  uint32_t harmonyRoot2 = 0;
+  uint32_t harmonyScaleId2 = 0;
+  uint32_t chordId = 0;
+  uint8_t chordDegree = 0;
+  uint8_t chordQuality = 0;
+  uint8_t chordInversion = 0;
+  uint8_t chordBaseOctave = 0;
+  uint8_t chordColumn = 0;
+  uint32_t chordSpreadNanoticks = 0;
+  uint16_t chordHumanizeTiming = 0;
+  uint16_t chordHumanizeVelocity = 0;
 };
 
 struct ClipEditResult {
@@ -40,6 +59,7 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
                              uint64_t duration,
                              uint8_t pitch,
                              uint8_t velocity,
+                             uint16_t flags,
                              std::atomic<uint32_t>& clipVersion,
                              bool recordUndo);
 
@@ -47,6 +67,7 @@ std::optional<ClipEditResult> removeNoteFromClip(MusicalClip& clip,
                                                  uint32_t trackId,
                                                  uint64_t nanotick,
                                                  uint8_t pitch,
+                                                 uint16_t flags,
                                                  std::atomic<uint32_t>& clipVersion,
                                                  bool recordUndo);
 

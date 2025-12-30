@@ -360,6 +360,7 @@ class GrooveTemplate {
 - [x] Tracker display with harmony column
 - [x] Tracker harmony lane input (global)
 - [x] Tracker multi-column input with free-text tokens (notes, degrees, chords)
+- [x] Column-specific chord/degree editing and diffs
 - [x] UI<->engine baseVersion checks with resync on mismatch
 - [x] Undo for tracker note add/remove (global stack)
 - [x] Microtonal scale model (Scala-style intervals: ratio + cents) + VST3 per-note tuning
@@ -367,7 +368,21 @@ class GrooveTemplate {
 - [x] Per-track harmony quantization toggle
 - [x] Scale browser UI (palette command + browser overlay)
 - [ ] Chromatic override mechanisms
+- [x] Tracker rapid-edit integration tests (multi-column, chords, degrees, note-offs)
 - [ ] Phase 1 automated tests (engine + SHM + UI parsing)
+
+### Tracker Scrolling + Editing (UI milestone)
+- [ ] Infinite tracker viewport: cursor snaps to grid, viewport scrolls in nanoticks.
+- [ ] Zoom: `Cmd+Wheel` changes nanoticks-per-row; no quantization on zoom.
+- [ ] Micro-scroll: `Shift+Wheel` scrolls view without row snap.
+- [ ] Cmd+G jump: numeric input jumps to bar (e.g., `24` -> `24:1:0`).
+- [ ] Selection model: time range + column mask; supports keyboard and mouse paint.
+- [ ] Page ops: visible rows define Page; `Shift-F3/F4/F5` cut/copy/paste Page.
+- [ ] Selection ops: `Cmd+C/X/V` operate only on selection; no selection -> toast.
+- [ ] Loop: `Cmd+L` loops selection or Page if no selection.
+- [ ] Semantic zoom: aggregate only when rows with data would overlap.
+- [ ] Minimap: density strip ends at last data point; click to jump.
+- [ ] Tests: page ops, selection vs page, Cmd+G parsing, zoom aggregation.
 
 ### Phase 2: Patcher Core (4-6 weeks)
 - [ ] Node graph UI with pan/zoom
@@ -446,6 +461,7 @@ class GrooveTemplate {
 5. **Quantization Always On** - Per-track toggle, not a node
 6. **Fractal Operations** - Every operation works at every scale
 7. **Zoomable Tracker** - Time resolution changes with zoom
+8. **Tracker Column Semantics** - One entry per cell; columns are independent.
 
 ## Open Questions
 

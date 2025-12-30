@@ -35,6 +35,7 @@ fn test_bug_delete_note_wasnt_working() {
     // wasn't being called properly from the UI command handler
 
     #[derive(Debug, Clone)]
+    #[allow(dead_code)]
     struct Note {
         nanotick: u64,
         pitch: u8,
@@ -133,7 +134,7 @@ fn test_ui_apply_diff_chain() {
     let mut clip_notes: Vec<Vec<(u64, u8)>> = vec![Vec::new(); 8]; // 8 tracks
 
     // User presses 'q' (C-4)
-    let diff1 = UiDiffPayload {
+    let _diff1 = UiDiffPayload {
         diff_type: UiDiffType::AddNote as u16,
         track_id: 0,
         clip_version: 1,
@@ -155,7 +156,7 @@ fn test_ui_apply_diff_chain() {
     assert_eq!(notes[0].1, 60);
 
     // User presses 'w' (D-4) at same position
-    let diff2 = UiDiffPayload {
+    let _diff2 = UiDiffPayload {
         diff_type: UiDiffType::AddNote as u16,
         track_id: 0,
         clip_version: 2,

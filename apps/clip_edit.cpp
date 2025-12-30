@@ -5,7 +5,7 @@ namespace daw {
 bool requireMatchingClipVersion(uint32_t baseVersion,
                                 uint32_t currentVersion,
                                 UiDiffPayload& diffOut) {
-  if (baseVersion == currentVersion) {
+  if (baseVersion >= currentVersion) {
     return true;
   }
   diffOut = UiDiffPayload{};
@@ -20,17 +20,22 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
                              uint64_t duration,
                              uint8_t pitch,
                              uint8_t velocity,
+                             uint16_t flags,
                              std::atomic<uint32_t>& clipVersion,
                              bool recordUndo) {
-  // First, remove ALL existing events (notes and chords) at this position
-  // This ensures we replace rather than stack events in tracker mode
-  clip.removeAllEventsAt(nanotick);
+  const uint8_t column = static_cast<uint8_t>(flags & 0xffu);
+  clip.removeChordAt(nanotick, column);
+  clip.removeNoteAt(nanotick, column);
+  if (velocity == 0 && duration == 0) {
+    clip.removeNoteOffsInSpan(nanotick, column);
+  }
 
   MusicalEvent event;
   event.nanotickOffset = nanotick;
   event.type = MusicalEventType::Note;
   event.payload.note.pitch = pitch;
   event.payload.note.velocity = velocity;
+  event.payload.note.column = column;
   event.payload.note.durationNanoticks = duration;
   clip.addEvent(std::move(event));
 
@@ -45,9 +50,17 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
   result.diff.noteDurationHi = static_cast<uint32_t>((duration >> 32) & 0xffffffffu);
   result.diff.notePitch = pitch;
   result.diff.noteVelocity = velocity;
+  result.diff.noteColumn = column;
   if (recordUndo) {
-    result.undo = UndoEntry{
-        UndoType::RemoveNote, trackId, nanotick, duration, pitch, velocity};
+    UndoEntry undo{};
+    undo.type = UndoType::RemoveNote;
+    undo.trackId = trackId;
+    undo.nanotick = nanotick;
+    undo.duration = duration;
+    undo.pitch = pitch;
+    undo.velocity = velocity;
+    undo.flags = column;
+    result.undo = undo;
   }
   return result;
 }
@@ -56,9 +69,11 @@ std::optional<ClipEditResult> removeNoteFromClip(MusicalClip& clip,
                                                  uint32_t trackId,
                                                  uint64_t nanotick,
                                                  uint8_t pitch,
+                                                 uint16_t flags,
                                                  std::atomic<uint32_t>& clipVersion,
                                                  bool recordUndo) {
-  const auto removed = clip.removeNoteAt(nanotick, pitch);
+  const uint8_t column = static_cast<uint8_t>(flags & 0xffu);
+  const auto removed = clip.removeNoteAt(nanotick, column);
   if (!removed) {
     return std::nullopt;
   }
@@ -76,14 +91,17 @@ std::optional<ClipEditResult> removeNoteFromClip(MusicalClip& clip,
       static_cast<uint32_t>((removed->duration >> 32) & 0xffffffffu);
   result.diff.notePitch = removed->pitch;
   result.diff.noteVelocity = removed->velocity;
+  result.diff.noteColumn = removed->column;
   if (recordUndo) {
-    result.undo = UndoEntry{
-        UndoType::AddNote,
-        trackId,
-        removed->nanotick,
-        removed->duration,
-        removed->pitch,
-        removed->velocity};
+    UndoEntry undo{};
+    undo.type = UndoType::AddNote;
+    undo.trackId = trackId;
+    undo.nanotick = removed->nanotick;
+    undo.duration = removed->duration;
+    undo.pitch = removed->pitch;
+    undo.velocity = removed->velocity;
+    undo.flags = removed->column;
+    result.undo = undo;
   }
   return result;
 }

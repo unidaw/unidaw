@@ -73,7 +73,7 @@ Offsets within `ShmHeader` (aligned to 64 bytes overall):
 - `uiHarmonyBytes`: 168
 - `uiTrackPeakRms`: 176
 
-`sizeof(ShmHeader)` = 320 bytes (aligned to 64).
+`sizeof(ShmHeader)` = 256 bytes (aligned to 64).
 
 ## UI Version Gating (Seqlock)
 

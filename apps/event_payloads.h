@@ -41,6 +41,8 @@ enum class UiCommandType : uint16_t {
   WriteChord = 8,
   DeleteChord = 9,
   SetTrackHarmonyQuantize = 10,
+  Redo = 11,
+  SetLoopRange = 12,
 };
 
 enum class UiDiffType : uint16_t {
@@ -111,7 +113,7 @@ struct UiDiffPayload {
   uint32_t noteDurationHi = 0;
   uint32_t notePitch = 0;
   uint32_t noteVelocity = 0;
-  uint32_t reserved = 0;
+  uint32_t noteColumn = 0;
 };
 
 struct UiHarmonyDiffPayload {
