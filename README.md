@@ -24,14 +24,14 @@ cmake --build build
 cd ui
 cargo build -p daw-app
 ```
+- Scan plugins (creates/updates cache):
+```sh
+./build/juce_scan --out build/plugin_cache.json --paths /path/to/VST3
+```
 - Start UI (spawns `build/daw_engine` by default):
 ```sh
 cd ui
 cargo run -p daw-app
-```
-- Scan plugins (creates/updates cache):
-```sh
-./build/juce_scan --out build/plugin_cache.json --paths /path/to/VST3
 ```
 
 ## Tests
