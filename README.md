@@ -14,6 +14,21 @@ Status: very early. Do not use.
 - Build system: CMake for C++ targets; Cargo for Rust UI.
 - Example host binary: `build/juce_host`.
 - UI app: `ui/daw-app` (spawns `build/daw_engine` by default; override with `DAW_ENGINE_PATH`).
+- C++ build (JUCE defaults to `$HOME/src/juce/JUCE`; override with `-DJUCE_DIR=...`):
+```sh
+cmake -S . -B build
+cmake --build build
+```
+- Rust UI build:
+```sh
+cd ui
+cargo build -p daw-app
+```
+- Start UI (spawns `build/daw_engine` by default):
+```sh
+cd ui
+cargo run -p daw-app
+```
 
 ## Tests
 - C++: `ctest --output-on-failure` (Phase 2 + Phase 3 suites).
