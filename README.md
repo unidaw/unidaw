@@ -29,6 +29,10 @@ cargo build -p daw-app
 cd ui
 cargo run -p daw-app
 ```
+- Scan plugins (creates/updates cache):
+```sh
+./build/juce_scan --out build/plugin_cache.json --paths /path/to/VST3
+```
 
 ## Tests
 - C++: `ctest --output-on-failure` (Phase 2 + Phase 3 suites).
