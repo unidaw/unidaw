@@ -10,6 +10,7 @@
 #include <array>
 #include <map>
 #include <algorithm>
+#include <tuple>
 #include <mutex>
 #include <optional>
 #include <limits>
@@ -28,6 +29,8 @@
 #include "apps/event_ring.h"
 #include "apps/host_controller.h"
 #include "apps/plugin_cache.h"
+#include "apps/patcher_abi.h"
+#include "apps/patcher_graph.h"
 #include "apps/watchdog.h"
 #include "apps/latency_manager.h"
 #include "apps/time_base.h"
@@ -81,6 +84,75 @@ std::string defaultPluginCachePath() {
     return "../build/plugin_cache.json";
   }
   return "plugin_cache.json";
+}
+
+constexpr uint32_t kPatcherScratchpadCapacity = 1024;
+constexpr uint32_t kPatcherNodeCapacity = 1024;
+
+struct PatcherNodeBuffer {
+  std::array<daw::EventEntry, kPatcherNodeCapacity> events{};
+  uint32_t count = 0;
+};
+
+inline void dispatchRustKernel(daw::PatcherNodeType type, daw::PatcherContext& ctx) {
+  switch (type) {
+    case daw::PatcherNodeType::RustKernel:
+      if (daw::patcher_process) {
+        daw::patcher_process(&ctx);
+      }
+      break;
+    case daw::PatcherNodeType::Euclidean:
+      if (daw::patcher_process_euclidean) {
+        daw::patcher_process_euclidean(&ctx);
+      } else if (daw::patcher_process) {
+        daw::patcher_process(&ctx);
+      }
+      break;
+    case daw::PatcherNodeType::Passthrough:
+      if (daw::patcher_process_passthrough) {
+        daw::patcher_process_passthrough(&ctx);
+      }
+      break;
+    case daw::PatcherNodeType::AudioPassthrough:
+      if (daw::patcher_process_audio_passthrough) {
+        daw::patcher_process_audio_passthrough(&ctx);
+      }
+      break;
+  }
+}
+
+inline uint8_t priorityForEvent(const daw::EventEntry& entry) {
+  const auto type = static_cast<daw::EventType>(entry.type);
+  switch (type) {
+    case daw::EventType::Transport:
+      return 0;
+    case daw::EventType::Param:
+      return 1;
+    case daw::EventType::Midi: {
+      daw::MidiPayload payload{};
+      std::memcpy(&payload, entry.payload, sizeof(payload));
+      if (payload.status == 0x80) {
+        return 2;
+      }
+      if (payload.status == 0x90) {
+        return 4;
+      }
+      return 4;
+    }
+    case daw::EventType::MusicalLogic:
+      return 3;
+    default:
+      return 4;
+  }
+}
+
+inline uint8_t musicalLogicPriorityHint(const daw::EventEntry& entry) {
+  if (static_cast<daw::EventType>(entry.type) != daw::EventType::MusicalLogic) {
+    return 0;
+  }
+  daw::MusicalLogicPayload payload{};
+  std::memcpy(&payload, entry.payload, sizeof(payload));
+  return payload.priority_hint;
 }
 
 // Audio callback for mixing and outputting audio from all tracks
@@ -276,6 +348,10 @@ int main(int argc, char** argv) {
       testThrottleMs = static_cast<int>(value);
     }
   }
+  bool patcherParallel = false;
+  if (const char* env = std::getenv("DAW_PATCHER_PARALLEL")) {
+    patcherParallel = std::string(env) == "1";
+  }
 
   if (testMode) {
     pluginPath.clear();
@@ -346,7 +422,7 @@ int main(int argc, char** argv) {
     bool hasScheduledEnd = false;
   };
 
-  struct TrackRuntime {
+struct TrackRuntime {
     uint32_t trackId = 0;
     Track track;
     std::mutex trackMutex;
@@ -367,6 +443,9 @@ int main(int argc, char** argv) {
     std::map<uint32_t, ActiveNote> activeNotes;  // Key is noteId
     std::map<uint8_t, std::vector<uint32_t>> activeNoteByColumn;
     std::mutex activeNotesMutex;
+
+    std::vector<float> patcherAudioBuffer;
+    std::vector<float*> patcherAudioChannels;
   };
 
   auto setupTrackRuntime = [&](uint32_t trackId,
@@ -398,6 +477,15 @@ int main(int argc, char** argv) {
           ptr->needsRestart.store(true);
         });
     runtime->hostReady.store(true, std::memory_order_release);
+
+    runtime->patcherAudioBuffer.resize(
+        static_cast<size_t>(baseConfig.blockSize) * baseConfig.numChannelsOut, 0.0f);
+    runtime->patcherAudioChannels.resize(baseConfig.numChannelsOut);
+    for (uint32_t ch = 0; ch < baseConfig.numChannelsOut; ++ch) {
+      runtime->patcherAudioChannels[ch] =
+          runtime->patcherAudioBuffer.data() +
+          static_cast<size_t>(ch) * baseConfig.blockSize;
+    }
 
     return runtime;
   };
@@ -504,6 +592,44 @@ int main(int argc, char** argv) {
   const uint32_t maxUiTracks = daw::kUiMaxTracks;
   // No test notes - wait for user input from the tracker
   std::cout << "Engine: Ready for tracker input" << std::endl;
+
+  daw::PatcherGraphState patcherGraphState;
+  {
+    std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+    daw::PatcherNode euclid;
+    euclid.id = 0;
+    euclid.type = daw::PatcherNodeType::Euclidean;
+    euclid.hasEuclideanConfig = true;
+    euclid.euclideanConfig.steps = 16;
+    euclid.euclideanConfig.hits = 5;
+    euclid.euclideanConfig.offset = 0;
+    euclid.euclideanConfig.duration_ticks = 0;
+    euclid.euclideanConfig.degree = 1;
+    euclid.euclideanConfig.octave_offset = 0;
+    euclid.euclideanConfig.velocity = 100;
+    euclid.euclideanConfig.base_octave = 4;
+    patcherGraphState.graph.nodes.push_back(euclid);
+
+    daw::PatcherNode passthrough;
+    passthrough.id = 1;
+    passthrough.type = daw::PatcherNodeType::Passthrough;
+    passthrough.inputs.push_back(0);
+    patcherGraphState.graph.nodes.push_back(passthrough);
+
+    daw::PatcherNode audioNode;
+    audioNode.id = 2;
+    audioNode.type = daw::PatcherNodeType::AudioPassthrough;
+    audioNode.inputs.push_back(0);
+    patcherGraphState.graph.nodes.push_back(audioNode);
+  }
+  if (!daw::buildPatcherGraph(patcherGraphState.graph)) {
+    std::cerr << "Patcher graph invalid; disabling patcher kernels." << std::endl;
+    std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+    patcherGraphState.graph.nodes.clear();
+    patcherGraphState.graph.topoOrder.clear();
+    patcherGraphState.graph.depths.clear();
+    patcherGraphState.graph.maxDepth = 0;
+  }
 
   {
     daw::ShmHeader header{};
@@ -747,6 +873,7 @@ int main(int argc, char** argv) {
     return static_cast<uint8_t>(pitch);
   };
 
+  std::atomic<uint64_t> lastOverflowTick{0};
   std::atomic<bool> running{true};
   std::atomic<uint32_t> nextBlockId{1};
   
@@ -1839,6 +1966,137 @@ int main(int argc, char** argv) {
           return static_cast<uint64_t>(std::llround(
               static_cast<long double>(tickDelta) * samplesPerTick));
         };
+        std::array<daw::EventEntry, kPatcherScratchpadCapacity> scratchpad{};
+        uint32_t scratchpadCount = 0;
+        auto pushScratchpad = [&](const daw::EventEntry& entry,
+                                  uint64_t overflowTick) -> bool {
+          if (scratchpadCount < scratchpad.size()) {
+            scratchpad[scratchpadCount++] = entry;
+            return true;
+          }
+          daw::atomic_store_u64(
+              reinterpret_cast<uint64_t*>(&lastOverflowTick), overflowTick);
+          return false;
+        };
+        daw::PatcherGraph graphSnapshot;
+        {
+          std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+          graphSnapshot = patcherGraphState.graph;
+        }
+        std::array<PatcherNodeBuffer, daw::kPatcherMaxNodes> nodeBuffers{};
+        const uint32_t nodeCount =
+            static_cast<uint32_t>(graphSnapshot.nodes.size());
+        const uint8_t maxDepth = graphSnapshot.maxDepth;
+        auto mergeNodeBuffers = [&]() {
+          for (uint32_t orderIndex = 0;
+               orderIndex < graphSnapshot.topoOrder.size();
+               ++orderIndex) {
+            const uint32_t nodeIndex = graphSnapshot.topoOrder[orderIndex];
+            const auto& buffer = nodeBuffers[nodeIndex];
+            for (uint32_t i = 0; i < buffer.count; ++i) {
+              const auto& entry = buffer.events[i];
+              const int64_t offsetSamples =
+                  static_cast<int64_t>(entry.sampleTime) -
+                  static_cast<int64_t>(blockSampleStart);
+              uint64_t overflowTick = windowStartTicks;
+              if (offsetSamples >= 0) {
+                const uint64_t tickDelta = static_cast<uint64_t>(std::llround(
+                    static_cast<long double>(offsetSamples) / samplesPerTick));
+                overflowTick = wrapTick(windowStartTicks + tickDelta);
+              }
+              pushScratchpad(entry, overflowTick);
+            }
+          }
+        };
+        std::array<daw::HarmonyEvent, daw::kUiMaxHarmonyEvents> harmonySnapshot{};
+        uint32_t harmonyCount = 0;
+        {
+          std::lock_guard<std::mutex> lock(harmonyMutex);
+          harmonyCount = static_cast<uint32_t>(
+              std::min<size_t>(harmonyEvents.size(), harmonySnapshot.size()));
+          for (uint32_t i = 0; i < harmonyCount; ++i) {
+            harmonySnapshot[i] = harmonyEvents[i];
+          }
+        }
+        auto runNode = [&](uint32_t nodeIndex) {
+          if (nodeIndex >= nodeCount) {
+            return;
+          }
+          const auto& node = graphSnapshot.nodes[nodeIndex];
+          auto& buffer = nodeBuffers[nodeIndex];
+          buffer.count = 0;
+          daw::PatcherContext ctx{};
+          ctx.abi_version = 1;
+          ctx.block_start_tick = windowStartTicks;
+          ctx.block_end_tick = windowEndTicks;
+          ctx.sample_rate = static_cast<float>(engineConfig.sampleRate);
+          ctx.num_frames = engineConfig.blockSize;
+          ctx.event_buffer = buffer.events.data();
+          ctx.event_capacity = static_cast<uint32_t>(buffer.events.size());
+          ctx.event_count = &buffer.count;
+          ctx.last_overflow_tick =
+              reinterpret_cast<uint64_t*>(&lastOverflowTick);
+          ctx.audio_channels = nullptr;
+          ctx.num_channels = 0;
+          ctx.node_config = nullptr;
+          ctx.node_config_size = 0;
+          if (node.type == daw::PatcherNodeType::Euclidean && node.hasEuclideanConfig) {
+            ctx.node_config = &node.euclideanConfig;
+            ctx.node_config_size = sizeof(node.euclideanConfig);
+          }
+          if (node.type == daw::PatcherNodeType::AudioPassthrough) {
+            const uint32_t channels = engineConfig.numChannelsOut;
+            if (runtime.patcherAudioChannels.size() != channels) {
+              runtime.patcherAudioChannels.resize(channels);
+            }
+            if (runtime.patcherAudioBuffer.size() !=
+                static_cast<size_t>(channels) * engineConfig.blockSize) {
+              runtime.patcherAudioBuffer.assign(
+                  static_cast<size_t>(channels) * engineConfig.blockSize, 0.0f);
+            } else {
+              std::fill(runtime.patcherAudioBuffer.begin(),
+                        runtime.patcherAudioBuffer.end(), 0.0f);
+            }
+            for (uint32_t ch = 0; ch < channels; ++ch) {
+              runtime.patcherAudioChannels[ch] =
+                  runtime.patcherAudioBuffer.data() +
+                  static_cast<size_t>(ch) * engineConfig.blockSize;
+            }
+            ctx.audio_channels = runtime.patcherAudioChannels.data();
+            ctx.num_channels = channels;
+          }
+          ctx.harmony_snapshot = harmonySnapshot.data();
+          ctx.harmony_count = harmonyCount;
+          dispatchRustKernel(node.type, ctx);
+        };
+
+        for (uint8_t depth = 0; depth <= maxDepth; ++depth) {
+          std::array<uint32_t, daw::kPatcherMaxNodes> depthNodes{};
+          uint32_t depthCount = 0;
+          for (uint32_t i = 0; i < nodeCount; ++i) {
+            if (graphSnapshot.depths[i] == depth) {
+              depthNodes[depthCount++] = i;
+            }
+          }
+          if (patcherParallel && depthCount > 1) {
+            std::array<std::thread, daw::kPatcherMaxNodes> threads;
+            for (uint32_t i = 0; i < depthCount; ++i) {
+              const uint32_t nodeIndex = depthNodes[i];
+              threads[i] = std::thread([&, nodeIndex]() { runNode(nodeIndex); });
+            }
+            for (uint32_t i = 0; i < depthCount; ++i) {
+              if (threads[i].joinable()) {
+                threads[i].join();
+              }
+            }
+          } else {
+            for (uint32_t i = 0; i < depthCount; ++i) {
+              runNode(depthNodes[i]);
+            }
+          }
+        }
+
+        mergeNodeBuffers();
         auto emitAutomationPoints = [&](const daw::AutomationClip& automationClip,
                                         uint64_t rangeStart,
                                         uint64_t rangeEnd,
@@ -1859,8 +2117,8 @@ int main(int argc, char** argv) {
               continue;
             }
             daw::EventEntry paramEntry;
-            paramEntry.sampleTime = latencyMgr.getCompensatedStart(eventSample);
-            paramEntry.blockId = currentBlockId;
+            paramEntry.sampleTime = eventSample;
+            paramEntry.blockId = 0;
             paramEntry.type = static_cast<uint16_t>(daw::EventType::Param);
             paramEntry.size = sizeof(daw::ParamPayload);
             daw::ParamPayload payload{};
@@ -1871,25 +2129,12 @@ int main(int argc, char** argv) {
               std::lock_guard<std::mutex> lock(runtime.paramMirrorMutex);
               runtime.paramMirror[uid16] = point->value;
             }
-            daw::ringWrite(ringStd, paramEntry);
+            pushScratchpad(paramEntry, point->nanotick);
           }
         };
         auto emitNotes = [&](uint64_t rangeStart,
                              uint64_t rangeEnd,
                              uint64_t baseTickDelta) {
-          auto ringWriteNoteOff = [&](const daw::EventEntry& entry) {
-            if (daw::ringWrite(ringStd, entry)) {
-              return true;
-            }
-            if (!ringStd.header || ringStd.mask == 0) {
-              return false;
-            }
-            const uint32_t read =
-                ringStd.header->readIndex.load(std::memory_order_relaxed);
-            ringStd.header->readIndex.store((read + 1) & ringStd.mask,
-                                            std::memory_order_release);
-            return daw::ringWrite(ringStd, entry);
-          };
           auto removeNoteIdFromColumn = [&](uint8_t column, uint32_t noteId) {
             auto columnIt = runtime.activeNoteByColumn.find(column);
             if (columnIt == runtime.activeNoteByColumn.end()) {
@@ -1926,8 +2171,8 @@ int main(int argc, char** argv) {
               }
               const ActiveNote activeNote = noteIt->second;
               daw::EventEntry noteOffEntry;
-              noteOffEntry.sampleTime = latencyMgr.getCompensatedStart(eventSample);
-              noteOffEntry.blockId = currentBlockId;
+              noteOffEntry.sampleTime = eventSample;
+              noteOffEntry.blockId = 0;
               noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
               noteOffEntry.size = sizeof(daw::MidiPayload);
               daw::MidiPayload offPayload{};
@@ -1938,7 +2183,7 @@ int main(int argc, char** argv) {
               offPayload.tuningCents = activeNote.tuningCents;
               offPayload.noteId = activeNote.noteId;
               std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
-              ringWriteNoteOff(noteOffEntry);
+              pushScratchpad(noteOffEntry, activeNote.endNanotick);
               runtime.activeNotes.erase(noteIt);
               removeNoteIdFromColumn(column, noteId);
             }
@@ -1962,8 +2207,8 @@ int main(int argc, char** argv) {
               }
               const ActiveNote activeNote = noteIt->second;
               daw::EventEntry noteOffEntry;
-              noteOffEntry.sampleTime = latencyMgr.getCompensatedStart(eventSample);
-              noteOffEntry.blockId = currentBlockId;
+              noteOffEntry.sampleTime = eventSample;
+              noteOffEntry.blockId = 0;
               noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
               noteOffEntry.size = sizeof(daw::MidiPayload);
               daw::MidiPayload offPayload{};
@@ -1974,7 +2219,7 @@ int main(int argc, char** argv) {
               offPayload.tuningCents = activeNote.tuningCents;
               offPayload.noteId = activeNote.noteId;
               std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
-              ringWriteNoteOff(noteOffEntry);
+              pushScratchpad(noteOffEntry, activeNote.endNanotick);
               runtime.activeNotes.erase(noteIt);
               removeNoteIdFromColumn(activeNote.column, noteId);
             }
@@ -2001,8 +2246,8 @@ int main(int argc, char** argv) {
 
                 if (offOffset >= 0 && offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
                   daw::EventEntry noteOffEntry;
-                  noteOffEntry.sampleTime = latencyMgr.getCompensatedStart(offSample);
-                  noteOffEntry.blockId = currentBlockId;
+                  noteOffEntry.sampleTime = offSample;
+                  noteOffEntry.blockId = 0;
                   noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
                   noteOffEntry.size = sizeof(daw::MidiPayload);
                   daw::MidiPayload offPayload{};
@@ -2013,7 +2258,7 @@ int main(int argc, char** argv) {
                   offPayload.tuningCents = activeNote.tuningCents;
                   offPayload.noteId = activeNote.noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
-                  ringWriteNoteOff(noteOffEntry);
+                  pushScratchpad(noteOffEntry, activeNote.endNanotick);
                   std::cout << "Scheduler: Emitted MIDI Note-Off (from active notes) - pitch "
                             << (int)activeNote.pitch << ", blockId " << currentBlockId
                             << ", endNanotick=" << activeNote.endNanotick << std::endl;
@@ -2113,8 +2358,8 @@ int main(int argc, char** argv) {
                 const uint32_t noteId = nextNoteId.fetch_add(1, std::memory_order_acq_rel);
 
                 daw::EventEntry midiEntry;
-                midiEntry.sampleTime = latencyMgr.getCompensatedStart(eventSample);
-                midiEntry.blockId = currentBlockId;
+                midiEntry.sampleTime = eventSample;
+                midiEntry.blockId = 0;
                 midiEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
                 midiEntry.size = sizeof(daw::MidiPayload);
                 daw::MidiPayload midiPayload{};
@@ -2125,7 +2370,7 @@ int main(int argc, char** argv) {
                 midiPayload.tuningCents = tuningCents;
                 midiPayload.noteId = noteId;
                 std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
-                daw::ringWrite(ringStd, midiEntry);
+                pushScratchpad(midiEntry, event->nanotickOffset);
 
                 if (duration == 0) {
                   std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
@@ -2152,8 +2397,8 @@ int main(int argc, char** argv) {
                     if (offOffset >= 0 &&
                         offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
                       daw::EventEntry noteOffEntry;
-                      noteOffEntry.sampleTime = latencyMgr.getCompensatedStart(offSample);
-                      noteOffEntry.blockId = currentBlockId;
+                      noteOffEntry.sampleTime = offSample;
+                      noteOffEntry.blockId = 0;
                       noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
                       noteOffEntry.size = sizeof(daw::MidiPayload);
                       daw::MidiPayload offPayload{};
@@ -2164,7 +2409,7 @@ int main(int argc, char** argv) {
                       offPayload.tuningCents = tuningCents;
                       offPayload.noteId = noteId;
                       std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
-                      ringWriteNoteOff(noteOffEntry);
+                      pushScratchpad(noteOffEntry, noteEndTick);
                     }
                   } else if (duration > 0) {
                     std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
@@ -2217,9 +2462,8 @@ int main(int argc, char** argv) {
 
             // Emit note-on
             daw::EventEntry midiEntry;
-            midiEntry.sampleTime =
-                latencyMgr.getCompensatedStart(eventSample);
-            midiEntry.blockId = currentBlockId;
+            midiEntry.sampleTime = eventSample;
+            midiEntry.blockId = 0;
             midiEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
             midiEntry.size = sizeof(daw::MidiPayload);
             daw::MidiPayload midiPayload{};
@@ -2230,7 +2474,7 @@ int main(int argc, char** argv) {
             midiPayload.tuningCents = tuningCents;
             midiPayload.noteId = noteId;
             std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
-            daw::ringWrite(ringStd, midiEntry);
+            pushScratchpad(midiEntry, event->nanotickOffset);
             std::cout << "Scheduler: Emitted MIDI Note-On - pitch "
                       << (int)scheduledPitch
                       << ", vel " << (int)event->payload.note.velocity
@@ -2253,8 +2497,8 @@ int main(int argc, char** argv) {
 
                 if (offOffset >= 0 && offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
                   daw::EventEntry noteOffEntry;
-                  noteOffEntry.sampleTime = latencyMgr.getCompensatedStart(offSample);
-                  noteOffEntry.blockId = currentBlockId;
+                  noteOffEntry.sampleTime = offSample;
+                  noteOffEntry.blockId = 0;
                   noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
                   noteOffEntry.size = sizeof(daw::MidiPayload);
                   daw::MidiPayload offPayload{};
@@ -2265,7 +2509,7 @@ int main(int argc, char** argv) {
                   offPayload.tuningCents = tuningCents;
                   offPayload.noteId = noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
-                  ringWriteNoteOff(noteOffEntry);
+                  pushScratchpad(noteOffEntry, noteEndTick);
                   std::cout << "Scheduler: Emitted MIDI Note-Off (immediate) - pitch "
                             << (int)scheduledPitch
                             << ", blockId " << currentBlockId << std::endl;
@@ -2343,9 +2587,8 @@ int main(int argc, char** argv) {
                 continue;
               }
               daw::EventEntry paramEntry;
-              paramEntry.sampleTime = latencyMgr.getCompensatedStart(
-                  blockSampleStart + offset);
-              paramEntry.blockId = currentBlockId;
+              paramEntry.sampleTime = blockSampleStart + offset;
+              paramEntry.blockId = 0;
               paramEntry.type = static_cast<uint16_t>(daw::EventType::Param);
               paramEntry.size = sizeof(daw::ParamPayload);
               daw::ParamPayload payload{};
@@ -2356,7 +2599,7 @@ int main(int argc, char** argv) {
                 std::lock_guard<std::mutex> lock(runtime.paramMirrorMutex);
                 runtime.paramMirror[uid16] = value;
               }
-              daw::ringWrite(ringStd, paramEntry);
+              pushScratchpad(paramEntry, tick);
               lastValue = value;
               hasLast = true;
             }
@@ -2371,6 +2614,139 @@ int main(int argc, char** argv) {
           emitNotes(loopStartTicks,
                     loopStartTicks + (windowEndTicks - loopEndTicks),
                     firstLen);
+        }
+
+        for (uint32_t i = 0; i < scratchpadCount; ++i) {
+          auto& entry = scratchpad[i];
+          if (static_cast<daw::EventType>(entry.type) != daw::EventType::MusicalLogic) {
+            continue;
+          }
+          daw::MusicalLogicPayload logic{};
+          std::memcpy(&logic, entry.payload, sizeof(logic));
+          const int64_t offsetSamples =
+              static_cast<int64_t>(entry.sampleTime) -
+              static_cast<int64_t>(blockSampleStart);
+          if (offsetSamples < 0 ||
+              offsetSamples >= static_cast<int64_t>(engineConfig.blockSize)) {
+            continue;
+          }
+          const uint64_t tickDelta = static_cast<uint64_t>(std::llround(
+              static_cast<long double>(offsetSamples) / samplesPerTick));
+          uint64_t eventTick = windowStartTicks + tickDelta;
+          eventTick = wrapTick(eventTick);
+          const auto harmony = getHarmonyAt(eventTick);
+          if (!harmony) {
+            continue;
+          }
+          const auto* scale = getScaleForHarmony(*harmony);
+          if (!scale) {
+            continue;
+          }
+          const uint8_t rootPc = static_cast<uint8_t>(harmony->root % 12);
+          const uint8_t baseOctaveHint =
+              logic.base_octave != 0 ? logic.base_octave : 4;
+          int baseOctaveInt =
+              static_cast<int>(baseOctaveHint) + static_cast<int>(logic.octave_offset);
+          if (baseOctaveInt < 0) {
+            baseOctaveInt = 0;
+          } else if (baseOctaveInt > 10) {
+            baseOctaveInt = 10;
+          }
+          const uint8_t baseOctave = static_cast<uint8_t>(baseOctaveInt);
+          const daw::ResolvedPitch resolved =
+              daw::resolveDegree(logic.degree, baseOctave, rootPc, *scale);
+          const uint8_t velocity = logic.velocity != 0 ? logic.velocity : 100;
+          const uint8_t pitch = clampMidi(resolved.midi);
+          const float tuningCents = resolved.cents;
+          const uint8_t channel = 0;
+          const uint32_t noteId =
+              nextNoteId.fetch_add(1, std::memory_order_acq_rel);
+
+          daw::MidiPayload onPayload{};
+          onPayload.status = 0x90;
+          onPayload.data1 = pitch;
+          onPayload.data2 = velocity;
+          onPayload.channel = channel;
+          onPayload.tuningCents = tuningCents;
+          onPayload.noteId = noteId;
+          entry.type = static_cast<uint16_t>(daw::EventType::Midi);
+          entry.size = sizeof(daw::MidiPayload);
+          std::memcpy(entry.payload, &onPayload, sizeof(onPayload));
+
+          if (logic.duration_ticks > 0) {
+            const uint64_t noteEndTick = eventTick + logic.duration_ticks;
+            uint64_t offTick = wrapTick(noteEndTick);
+            if (offTick >= windowStartTicks && offTick < windowEndTicks) {
+              const uint64_t offDelta = offTick - windowStartTicks;
+              const uint64_t offSample =
+                  blockSampleStart + tickDeltaToSamples(offDelta);
+              const int64_t offOffset =
+                  static_cast<int64_t>(offSample) -
+                  static_cast<int64_t>(blockSampleStart);
+              if (offOffset >= 0 &&
+                  offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
+                daw::EventEntry noteOffEntry;
+                noteOffEntry.sampleTime = offSample;
+                noteOffEntry.blockId = 0;
+                noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
+                noteOffEntry.size = sizeof(daw::MidiPayload);
+                daw::MidiPayload offPayload{};
+                offPayload.status = 0x80;
+                offPayload.data1 = pitch;
+                offPayload.data2 = 0;
+                offPayload.channel = channel;
+                offPayload.tuningCents = tuningCents;
+                offPayload.noteId = noteId;
+                std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
+                pushScratchpad(noteOffEntry, noteEndTick);
+              }
+            } else {
+              std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+              ActiveNote activeNote;
+              activeNote.noteId = noteId;
+              activeNote.pitch = pitch;
+              activeNote.column = 0;
+              activeNote.startNanotick = eventTick;
+              activeNote.endNanotick = noteEndTick;
+              activeNote.tuningCents = tuningCents;
+              activeNote.hasScheduledEnd = true;
+              runtime.activeNotes[activeNote.noteId] = activeNote;
+              runtime.activeNoteByColumn[activeNote.column].push_back(activeNote.noteId);
+            }
+          } else {
+            std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+            ActiveNote activeNote;
+            activeNote.noteId = noteId;
+            activeNote.pitch = pitch;
+            activeNote.column = 0;
+            activeNote.startNanotick = eventTick;
+            activeNote.endNanotick = eventTick;
+            activeNote.tuningCents = tuningCents;
+            activeNote.hasScheduledEnd = false;
+            runtime.activeNotes[activeNote.noteId] = activeNote;
+            runtime.activeNoteByColumn[activeNote.column].push_back(activeNote.noteId);
+          }
+        }
+
+        if (scratchpadCount == 0) {
+          return;
+        }
+
+        std::stable_sort(scratchpad.begin(), scratchpad.begin() + scratchpadCount,
+                         [&](const daw::EventEntry& a, const daw::EventEntry& b) {
+                           const auto pa = priorityForEvent(a);
+                           const auto pb = priorityForEvent(b);
+                           const auto ha = musicalLogicPriorityHint(a);
+                           const auto hb = musicalLogicPriorityHint(b);
+                           return std::tie(a.sampleTime, pa, ha) <
+                               std::tie(b.sampleTime, pb, hb);
+                         });
+
+        for (uint32_t i = 0; i < scratchpadCount; ++i) {
+          auto entry = scratchpad[i];
+          entry.blockId = currentBlockId;
+          entry.sampleTime = latencyMgr.getCompensatedStart(entry.sampleTime);
+          daw::ringWrite(ringStd, entry);
         }
       };
 
@@ -2464,11 +2840,20 @@ int main(int argc, char** argv) {
 
   std::thread consumer([&] {
     uint32_t currentBlockId = 1;
+    uint64_t lastOverflowLogged = 0;
     const auto blockDuration =
         std::chrono::duration<double>(
             static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
 
     while (running.load()) {
+      const uint64_t overflowTick =
+          lastOverflowTick.load(std::memory_order_relaxed);
+      if (overflowTick != 0 && overflowTick != lastOverflowLogged) {
+        std::cout << "Patcher overflow: dropped event at nanotick "
+                  << overflowTick << std::endl;
+        lastOverflowLogged = overflowTick;
+      }
+
       auto trackSnapshot = snapshotTracks();
 
       // Update audio callback with current track info

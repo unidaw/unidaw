@@ -5,6 +5,8 @@ project(daw VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(DAW_BUILD_PATCHER_RUST "Build Rust patcher staticlib" ON)
+
 set(JUCE_DIR "$ENV{HOME}/src/juce/JUCE" CACHE PATH "Path to JUCE")
 add_subdirectory(${JUCE_DIR} juce)
 
@@ -68,6 +70,8 @@ add_executable(daw_engine
   apps/event_ring.cpp
   apps/host_controller.cpp
   apps/ipc_io.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
   apps/plugin_cache.cpp
   apps/harmony_timeline.cpp
   apps/scale_library.cpp
@@ -80,6 +84,30 @@ target_include_directories(daw_engine PRIVATE
 )
 
 target_link_libraries(daw_engine PRIVATE platform_juce)
+
+if (DAW_BUILD_PATCHER_RUST)
+  set(PATCHER_RUST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/patcher_rust)
+  set(PATCHER_RUST_TARGET_DIR ${CMAKE_CURRENT_BINARY_DIR}/patcher_rust)
+  set(PATCHER_RUST_LIB ${PATCHER_RUST_TARGET_DIR}/release/libpatcher_rust.a)
+
+  add_custom_command(
+    OUTPUT ${PATCHER_RUST_LIB}
+    COMMAND cargo build --release --manifest-path ${PATCHER_RUST_DIR}/Cargo.toml
+            --target-dir ${PATCHER_RUST_TARGET_DIR}
+    WORKING_DIRECTORY ${PATCHER_RUST_DIR}
+    DEPENDS ${PATCHER_RUST_DIR}/Cargo.toml
+            ${PATCHER_RUST_DIR}/src/lib.rs
+    COMMENT "Building patcher_rust staticlib"
+  )
+
+  add_custom_target(patcher_rust_build DEPENDS ${PATCHER_RUST_LIB})
+
+  add_library(patcher_rust STATIC IMPORTED)
+  set_target_properties(patcher_rust PROPERTIES IMPORTED_LOCATION ${PATCHER_RUST_LIB})
+  add_dependencies(patcher_rust patcher_rust_build)
+
+  target_link_libraries(daw_engine PRIVATE patcher_rust)
+endif()
 
 juce_add_plugin(identity_plugin
   COMPANY_NAME "daw"
@@ -132,7 +160,47 @@ target_include_directories(phase2_tests PRIVATE
 
 target_link_libraries(phase2_tests PRIVATE platform_juce)
 
+add_executable(patcher_tests
+  apps/patcher_tests_main.cpp
+  apps/chord_resolver.cpp
+  apps/harmony_timeline.cpp
+  apps/patcher_abi.cpp
+  apps/patcher_graph.cpp
+  apps/scale_library.cpp
+)
+
+target_include_directories(patcher_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(patcher_tests PRIVATE platform_juce)
+
+if (DAW_BUILD_PATCHER_RUST)
+  target_link_libraries(patcher_tests PRIVATE patcher_rust)
+endif()
+
+add_executable(patcher_graph_tests
+  apps/patcher_graph_tests_main.cpp
+  apps/patcher_graph.cpp
+)
+
+target_include_directories(patcher_graph_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(patcher_graph_tests PRIVATE platform_juce)
+
 enable_testing()
+
+add_test(NAME patcher_resolution
+  COMMAND patcher_tests
+)
+set_tests_properties(patcher_resolution PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME patcher_graph_edits
+  COMMAND patcher_graph_tests
+)
+set_tests_properties(patcher_graph_edits PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase2_impulse
   COMMAND phase2_tests --test impulse

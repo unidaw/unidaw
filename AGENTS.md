@@ -170,11 +170,20 @@ Rust/GPUI projection UI:
 - UI command ring usage for play/stop and param edits.
 - Cmd+P plugin palette reads `plugin_cache.json` and sends `LoadPluginOnTrack` UI commands.
 - Scale browser (Cmd+Shift+S / palette command).
+Patcher engine backend:
+- `patcher_abi.h` + Rust staticlib bridge (MusicalLogic payload).
+- Deterministic DAG merge + node-local buffers (parallel-ready).
+- Euclidean kernel + Bjorklund cache + config via node config blob.
+- Patcher tests: resolution, sort priority, overflow, graph edits.
+- Device-chain spec: `DEVICE_CHAIN.md` (dual-rail interleaved chain + VST segmentation).
 
 ## Build/run notes
 - CMake-based build.
 - Always build after code changes.
 - Tests: `ctest --output-on-failure` (Phase 2 + Phase 3 suites).
+- Patcher Rust staticlib builds by default (`DAW_BUILD_PATCHER_RUST=ON`).
+- Patcher tests: `ctest -R patcher_ --output-on-failure`.
+- Device chain spec: `DEVICE_CHAIN.md`.
 - Current host binary: `build/juce_host`.
 - UI app (`daw-app`) spawns `build/daw_engine` automatically; override with `DAW_ENGINE_PATH`.
 - Example run:
@@ -192,6 +201,8 @@ Rust/GPUI projection UI:
 - Phase 2: `phase2_impulse`, `phase2_param_priority`, `phase2_chaos`, `phase2_ui_visual`
 - Phase 3: `phase3_timebase`, `phase3_scheduler_ring`, `phase3_automation_ring`, `phase3_pulse_full`,
   `phase3_note_off_full`, `phase3_resurrection_full`, `phase3_composition_full`
+- Patcher: `patcher_resolution`, `patcher_graph_edits`
+- UI integration (Rust): `cargo test -p daw-app --test engine_integration` (may skip track SHM-dependent checks if `/daw_engine_shared` is unavailable; latency checks use optimistic UI/pending state).
 
 ## Coding constraints
 - Keep JUCE confined to `platform_juce/`.

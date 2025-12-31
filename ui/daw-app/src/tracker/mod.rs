@@ -1,0 +1,10 @@
+pub const COLUMN_WIDTH: f32 = 52.0;
+pub const TIME_COLUMN_WIDTH: f32 = 105.0;
+pub const HARMONY_COLUMN_WIDTH: f32 = COLUMN_WIDTH;
+pub const ROW_HEIGHT: f32 = 16.0;
+pub const FOLLOW_PLAYHEAD_LOWER: f32 = 0.25;
+pub const FOLLOW_PLAYHEAD_UPPER: f32 = 0.75;
+pub const HEADER_HEIGHT: f32 = 24.0;
+pub const MINIMAP_WIDTH: f32 = 16.0;
+pub const VISIBLE_ROWS: usize = 32;
+pub const MAX_NOTE_COLUMNS: usize = 8;

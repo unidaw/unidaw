@@ -370,6 +370,8 @@ class GrooveTemplate {
 - [ ] Chromatic override mechanisms
 - [x] Tracker rapid-edit integration tests (multi-column, chords, degrees, note-offs)
 - [ ] Phase 1 automated tests (engine + SHM + UI parsing)
+  - [x] UI integration tests tolerate missing `/daw_engine_shared` by skipping track SHM assertions.
+  - [x] UI latency checks measure optimistic UI/pending state rather than engine commit.
 
 ### Tracker Scrolling + Editing (UI milestone)
 - [ ] Infinite tracker viewport: cursor snaps to grid, viewport scrolls in nanoticks.
@@ -386,9 +388,12 @@ class GrooveTemplate {
 
 ### Phase 2: Patcher Core (4-6 weeks)
 - [ ] Node graph UI with pan/zoom
-- [ ] Basic node types (generators, processors, routers)
-- [ ] Patcher execution engine
-- [ ] Harmony-aware nodes
+- [x] Patcher execution engine
+- [x] Deterministic DAG + node-local buffers (parallel-ready)
+- [x] Basic node types (Euclidean trigger + passthrough)
+- [x] Harmony-aware nodes (degree->pitch resolution via harmony timeline)
+- [x] Patcher ABI + Rust kernel bridge
+- [x] Device-chain interleaved spec (dual-rail + VST segmentation)
 - [ ] Clip manipulation nodes
 - [ ] Real-time preview
 - [ ] Fractal operations

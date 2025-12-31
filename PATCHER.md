@@ -39,7 +39,9 @@ The `payload[40]` bytes inside `EventEntry` are reinterpreted for
 | 4      | uint32_t   | chord_id       | Global chord index. |
 | 8      | uint64_t   | duration_ticks | Note length for note-off scheduling. |
 | 16     | uint8_t    | priority_hint  | Fine-grained ordering (0-255). |
-| 17-39  | uint8_t[23]| metadata       | Reserved (velocity, probability, timbre). |
+| 17     | uint8_t    | velocity       | Note-on velocity (0 -> default 100). |
+| 18     | uint8_t    | base_octave    | Base octave (0 -> default 4). |
+| 19-39  | uint8_t[21]| metadata       | Reserved (probability, timbre). |
 
 C++ definition (payload must fit in 40 bytes):
 
@@ -51,7 +53,9 @@ struct MusicalLogicPayload {
   uint32_t chord_id = 0;
   uint64_t duration_ticks = 0;
   uint8_t priority_hint = 0;
-  uint8_t metadata[23]{};
+  uint8_t velocity = 0;
+  uint8_t base_octave = 0;
+  uint8_t metadata[21]{};
 };
 
 static_assert(sizeof(MusicalLogicPayload) <= 40,
@@ -71,11 +75,18 @@ struct alignas(64) PatcherContext {
   uint64_t block_start_tick = 0;
   uint64_t block_end_tick = 0;
   float sample_rate = 0.0f;
+  uint32_t num_frames = 0;
 
   EventEntry* event_buffer = nullptr;
   uint32_t event_capacity = 0;
   uint32_t* event_count = nullptr;
   uint64_t* last_overflow_tick = nullptr;  // Updated via atomic_store_u64 shim.
+
+  float** audio_channels = nullptr;  // Optional audio buffers.
+  uint32_t num_channels = 0;
+
+  const void* node_config = nullptr;  // Optional per-node config blob.
+  uint32_t node_config_size = 0;
 
   const HarmonyEvent* harmony_snapshot = nullptr;
   uint32_t harmony_count = 0;
@@ -91,11 +102,18 @@ pub struct PatcherContext {
     pub block_start_tick: u64,
     pub block_end_tick: u64,
     pub sample_rate: f32,
+    pub num_frames: u32,
 
     pub event_buffer: *mut EventEntry,
     pub event_capacity: u32,
     pub event_count: *mut u32,
     pub last_overflow_tick: *mut u64,
+
+    pub audio_channels: *mut *mut f32,
+    pub num_channels: u32,
+
+    pub node_config: *const core::ffi::c_void,
+    pub node_config_size: u32,
 
     pub harmony_snapshot: *const HarmonyEvent,
     pub harmony_count: u32,
@@ -137,6 +155,8 @@ After merging, the host performs a resolution pass:
 1. Resolve scale degree to MIDI pitch using the immutable harmony snapshot.
 2. Convert each `EventType::MusicalLogic` entry to `EventType::Midi` with
    `MidiPayload` NoteOn status.
+   - Default velocity: 100 when `velocity == 0`.
+   - Default base octave: 4 when `base_octave == 0`.
 3. If `duration_ticks > 0`, insert a NoteOff event at
    `nanotick + duration_ticks`.
 
@@ -184,6 +204,25 @@ Notes:
 - A Bjorklund bitset is precomputed when steps/hits/offset change.
 - During processing, the kernel maps block nanotick range to step indices and
   emits hits when `bitset[index] == 1`.
+
+### Node Config (Optional)
+
+`PatcherContext.node_config` may point to a per-node config blob. For the
+Euclidean kernel, it is interpreted as:
+
+```cpp
+struct PatcherEuclideanConfig {
+  uint32_t steps = 16;
+  uint32_t hits = 5;
+  uint32_t offset = 0;
+  uint64_t duration_ticks = 0;  // 0 -> step_ticks / 2
+  uint8_t degree = 1;
+  int8_t octave_offset = 0;
+  uint8_t velocity = 100;
+  uint8_t base_octave = 4;
+  uint8_t _pad0[2]{};
+};
+```
 
 ### Event Emission
 

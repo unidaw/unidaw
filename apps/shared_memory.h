@@ -72,6 +72,7 @@ enum class EventType : uint16_t {
   UiDiff = 6,
   UiHarmonyDiff = 7,
   UiChordDiff = 8,
+  MusicalLogic = 9,
 };
 
 struct alignas(64) BlockMailbox {
