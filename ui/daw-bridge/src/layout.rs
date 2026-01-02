@@ -4,6 +4,9 @@ pub const K_UI_MAX_TRACKS: usize = 8;
 pub const K_UI_MAX_CLIP_NOTES: usize = 4096;
 pub const K_UI_MAX_CLIP_CHORDS: usize = 1024;
 pub const K_UI_MAX_HARMONY_EVENTS: usize = 512;
+pub const K_CHAIN_DEVICE_ID_AUTO: u32 = 0xFFFF_FFFF;
+pub const UI_CLIP_WINDOW_FLAG_COMPLETE: u32 = 1 << 0;
+pub const UI_CLIP_WINDOW_FLAG_RESYNC: u32 = 1 << 1;
 
 #[repr(C, align(64))]
 pub struct ShmHeader {
@@ -123,12 +126,18 @@ pub struct UiClipChord {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct UiClipSnapshot {
-    pub track_count: u32,
+pub struct UiClipWindowSnapshot {
+    pub track_id: u32,
+    pub clip_version: u32,
+    pub window_start_nanotick: u64,
+    pub window_end_nanotick: u64,
+    pub request_id: u32,
+    pub cursor_event_index: u32,
+    pub next_event_index: u32,
     pub note_count: u32,
     pub chord_count: u32,
+    pub flags: u32,
     pub reserved: u32,
-    pub tracks: [UiClipTrack; K_UI_MAX_TRACKS],
     pub notes: [UiClipNote; K_UI_MAX_CLIP_NOTES],
     pub chords: [UiClipChord; K_UI_MAX_CLIP_CHORDS],
 }
@@ -151,7 +160,7 @@ pub struct UiHarmonySnapshot {
     pub events: [UiHarmonyEvent; K_UI_MAX_HARMONY_EVENTS],
 }
 
-impl Default for UiClipSnapshot {
+impl Default for UiClipWindowSnapshot {
     fn default() -> Self {
         unsafe { std::mem::zeroed() }
     }
@@ -161,6 +170,69 @@ impl Default for UiHarmonySnapshot {
     fn default() -> Self {
         unsafe { std::mem::zeroed() }
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiPatcherGraphCommandPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub node_id: u32,
+    pub node_type: u32,
+    pub src_node_id: u32,
+    pub dst_node_id: u32,
+    pub reserved: [u8; 12],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiPatcherNodeConfigPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub node_id: u32,
+    pub config_type: u32,
+    pub config: [u8; 16],
+    pub reserved: [u8; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiPatcherGraphDiffPayload {
+    pub diff_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub graph_version: u32,
+    pub node_id: u32,
+    pub node_type: u32,
+    pub src_node_id: u32,
+    pub dst_node_id: u32,
+    pub reserved: [u8; 12],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiPatcherGraphErrorPayload {
+    pub diff_type: u16,
+    pub error_code: u16,
+    pub track_id: u32,
+    pub node_id: u32,
+    pub src_node_id: u32,
+    pub dst_node_id: u32,
+    pub reserved: [u8; 20],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiPatcherPresetCommandPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub name: [u8; 28],
 }
 
 #[repr(C)]
@@ -179,6 +251,24 @@ pub enum UiCommandType {
     SetTrackHarmonyQuantize = 10,
     Redo = 11,
     SetLoopRange = 12,
+    SetAutomationTarget = 13,
+    AddDevice = 14,
+    RemoveDevice = 15,
+    MoveDevice = 16,
+    UpdateDevice = 17,
+    SetDeviceEuclideanConfig = 18,
+    SetTrackRouting = 19,
+    AddModLink = 20,
+    RemoveModLink = 21,
+    SetModLinkUid16 = 22,
+    SetModSourceValue = 23,
+    OpenPluginEditor = 24,
+    AddPatcherNode = 25,
+    RemovePatcherNode = 26,
+    ConnectPatcherNodes = 27,
+    SetPatcherNodeConfig = 28,
+    SavePatcherPreset = 29,
+    RequestClipWindow = 30,
 }
 
 #[repr(u16)]
@@ -189,6 +279,15 @@ pub enum UiDiffType {
     RemoveNote = 2,
     UpdateNote = 3,
     ResyncNeeded = 4,
+    ChainSnapshot = 5,
+    ChainError = 6,
+    RoutingSnapshot = 7,
+    RoutingError = 8,
+    ModSnapshot = 9,
+    ModError = 10,
+    ModLinkUid16 = 11,
+    PatcherGraphDelta = 12,
+    PatcherGraphError = 13,
 }
 
 #[repr(u16)]
@@ -225,6 +324,77 @@ pub struct UiCommandPayload {
     pub note_duration_lo: u32,
     pub note_duration_hi: u32,
     pub base_version: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiClipWindowCommandPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub request_id: u32,
+    pub window_start_lo: u32,
+    pub window_start_hi: u32,
+    pub window_end_lo: u32,
+    pub window_end_hi: u32,
+    pub cursor_event_index: u32,
+    pub reserved: u32,
+    pub reserved2: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UiClipWindowCommandPayload;
+    use std::mem::size_of;
+
+    #[test]
+    fn clip_window_command_payload_size() {
+        assert_eq!(size_of::<UiClipWindowCommandPayload>(), 40);
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiChainCommandPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub device_id: u32,
+    pub device_kind: u32,
+    pub insert_index: u32,
+    pub patcher_node_id: u32,
+    pub host_slot_index: u32,
+    pub bypass: u32,
+    pub reserved: [u8; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiChainDiffPayload {
+    pub diff_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub chain_version: u32,
+    pub device_id: u32,
+    pub device_kind: u32,
+    pub position: u32,
+    pub patcher_node_id: u32,
+    pub host_slot_index: u32,
+    pub capability_mask: u32,
+    pub bypass: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiChainErrorPayload {
+    pub diff_type: u16,
+    pub error_code: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub device_kind: u32,
+    pub insert_index: u32,
+    pub reserved: [u32; 5],
 }
 
 #[repr(C)]

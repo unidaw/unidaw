@@ -5,8 +5,9 @@ mod integration_tests {
         use anyhow::Context as AnyhowContext;
         use daw_app::*;
         use daw_bridge::layout::{
-            EventEntry, EventType, ShmHeader, UiChordDiffType, UiCommandPayload, UiCommandType,
-            UiDiffType, UiHarmonyDiffType,
+            EventEntry, EventType, ShmHeader, UiChordDiffType, UiClipWindowCommandPayload,
+            UiCommandPayload, UiCommandType, UiDiffType, UiHarmonyDiffType,
+            UI_CLIP_WINDOW_FLAG_COMPLETE, UI_CLIP_WINDOW_FLAG_RESYNC,
         };
         use memmap2::{MmapMut, MmapOptions};
         use std::ffi::CString;
@@ -23,6 +24,15 @@ mod integration_tests {
         }
 
         const TRACK_SHM_TIMEOUT: Duration = Duration::from_secs(60);
+        const TEST_CLIP_WINDOW_START: u64 = 0;
+        const TEST_CLIP_WINDOW_END: u64 = NANOTICKS_PER_QUARTER * 4096;
+
+        #[derive(Clone, Copy, Debug, Default)]
+        struct ClipWindowRequestState {
+            request_id: u32,
+            cursor_event_index: u32,
+            clip_version: u32,
+        }
 
         struct EngineProcess {
             child: Option<Child>,
@@ -71,10 +81,12 @@ mod integration_tests {
         struct TestHarness {
             _guard: MutexGuard<'static, ()>,
             _engine: EngineProcess,
-            bridge: Arc<EngineBridge>,
+            bridge: Option<Arc<EngineBridge>>,
             view: EngineView,
             notify: NoopNotify,
             shm_name: String,
+            clip_window_requests: Vec<ClipWindowRequestState>,
+            next_clip_window_request_id: u32,
         }
 
         #[repr(C)]
@@ -99,7 +111,13 @@ mod integration_tests {
         impl TestHarness {
             fn new(test_name: &str) -> anyhow::Result<Self> {
                 let guard = test_lock();
-                let shm_name = format!("/daw_ui_test_{}", std::process::id());
+                let shm_name = {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    test_name.hash(&mut hasher);
+                    let short = hasher.finish() as u32;
+                    format!("/daw_ui_test_{}_{:08x}", std::process::id(), short)
+                };
                 let socket_prefix = {
                     use std::hash::{Hash, Hasher};
                     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -108,6 +126,7 @@ mod integration_tests {
                     format!("/tmp/daw_host_{}_{}", std::process::id(), short)
                 };
                 cleanup_shm(&shm_name);
+                cleanup_track_shm(3);
                 for track_id in 0..3 {
                     let socket = format!("{socket_prefix}_{track_id}.sock");
                     cleanup_socket(&socket);
@@ -128,27 +147,41 @@ mod integration_tests {
                 let mut harness = Self {
                     _guard: guard,
                     _engine: engine,
-                    bridge,
+                    bridge: Some(bridge),
                     view,
                     notify: NoopNotify,
                     shm_name,
+                    clip_window_requests: vec![ClipWindowRequestState::default(); TRACK_COUNT],
+                    next_clip_window_request_id: 1,
                 };
                 harness.wait_for_initial_snapshots(Duration::from_secs(2))?;
                 Ok(harness)
             }
 
+            fn bridge(&self) -> &Arc<EngineBridge> {
+                self.bridge
+                    .as_ref()
+                    .expect("TestHarness bridge missing")
+            }
+
             fn wait_for_initial_snapshots(&mut self, timeout: Duration) -> anyhow::Result<()> {
                 let start = Instant::now();
+                let mut have_clip_window = false;
+                let mut have_harmony_snapshot = false;
                 loop {
-                    if let Some(snapshot) = self.bridge.read_snapshot() {
+                    if let Some(snapshot) = self.bridge().read_snapshot() {
                         self.view.snapshot = snapshot;
                     }
-                    let clip_snapshot = self.bridge.read_clip_snapshot();
-                    let harmony_snapshot = self.bridge.read_harmony_snapshot();
-                    if let (Some(clip_snapshot), Some(harmony_snapshot)) =
-                        (clip_snapshot, harmony_snapshot) {
-                        self.view.apply_clip_snapshot(clip_snapshot);
+                    let harmony_snapshot = self.bridge().read_harmony_snapshot();
+                    if self.view.snapshot.ui_track_count > 0 && !have_clip_window {
+                        self.refresh_clip_window(Duration::from_secs(1))?;
+                        have_clip_window = true;
+                    }
+                    if let Some(harmony_snapshot) = harmony_snapshot {
                         self.view.apply_harmony_snapshot(harmony_snapshot);
+                        have_harmony_snapshot = true;
+                    }
+                    if have_clip_window && have_harmony_snapshot {
                         self.view.pending_notes.clear();
                         return Ok(());
                     }
@@ -209,7 +242,7 @@ mod integration_tests {
                     note_duration_hi: 0,
                     base_version: 0,
                 };
-                self.bridge.send_ui_command(payload);
+                self.bridge().send_ui_command(payload);
             }
 
             fn set_loop_range(&mut self, start: u64, end: u64) {
@@ -238,7 +271,7 @@ mod integration_tests {
                 loop {
                     let mut processed_loop = false;
                     self.view.flush_queued_commands();
-                    while let Some(entry) = self.bridge.pop_ui_event() {
+                    while let Some(entry) = self.bridge().pop_ui_event() {
                         if let Some(diff) = decode_ui_diff(&entry) {
                             if diff.diff_type == UiDiffType::ResyncNeeded as u16 {
                                 clip_resync = true;
@@ -283,29 +316,149 @@ mod integration_tests {
                 }
                 self.view.flush_queued_commands();
                 if processed_any {
-                    if let Some(snapshot) = self.bridge.read_snapshot() {
+                    if let Some(snapshot) = self.bridge().read_snapshot() {
                         self.view.snapshot = snapshot;
                     }
                 }
                 if clip_resync {
-                    if let Some(snapshot) = self.bridge.read_snapshot() {
+                    if let Some(snapshot) = self.bridge().read_snapshot() {
                         self.view.snapshot = snapshot;
                     }
-                    if let Some(clip_snapshot) = self.bridge.read_clip_snapshot() {
-                        self.view.apply_clip_snapshot(clip_snapshot);
-                    }
+                    let _ = self.refresh_clip_window(Duration::from_secs(1));
                 }
                 if harmony_resync {
-                    if let Some(snapshot) = self.bridge.read_snapshot() {
+                    if let Some(snapshot) = self.bridge().read_snapshot() {
                         self.view.snapshot = snapshot;
                     }
-                    if let Some(harmony_snapshot) = self.bridge.read_harmony_snapshot() {
+                    if let Some(harmony_snapshot) = self.bridge().read_harmony_snapshot() {
                         self.view.apply_harmony_snapshot(harmony_snapshot);
                     }
                 }
                 PumpResult {
                     clip_resync,
                     harmony_resync,
+                }
+            }
+
+            fn wait_for_track_count(
+                &mut self,
+                min_tracks: u32,
+                timeout: Duration,
+            ) -> anyhow::Result<u32> {
+                let start = Instant::now();
+                loop {
+                    if let Some(snapshot) = self.bridge().read_snapshot() {
+                        self.view.snapshot = snapshot;
+                    }
+                    if self.view.snapshot.ui_track_count >= min_tracks {
+                        return Ok(self.view.snapshot.ui_track_count);
+                    }
+                    if start.elapsed() > timeout {
+                        return Err(anyhow::anyhow!(
+                            "expected at least {} tracks, got {}",
+                            min_tracks,
+                            self.view.snapshot.ui_track_count
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+            }
+
+            fn split_u64(value: u64) -> (u32, u32) {
+                let lo = value as u32;
+                let hi = (value >> 32) as u32;
+                (lo, hi)
+            }
+
+            fn next_clip_window_request_id(&mut self) -> u32 {
+                let request_id = self.next_clip_window_request_id;
+                self.next_clip_window_request_id = self
+                    .next_clip_window_request_id
+                    .wrapping_add(1)
+                    .max(1);
+                request_id
+            }
+
+            fn refresh_clip_window(&mut self, timeout: Duration) -> anyhow::Result<()> {
+                let track_count = self.view.snapshot.ui_track_count.min(TRACK_COUNT as u32) as usize;
+                if track_count == 0 {
+                    return Ok(());
+                }
+                let clip_version = self.view.snapshot.ui_clip_version;
+                for track_index in 0..track_count {
+                    self.fetch_clip_window_track(track_index, clip_version, timeout)?;
+                }
+                Ok(())
+            }
+
+            fn fetch_clip_window_track(
+                &mut self,
+                track_index: usize,
+                clip_version: u32,
+                timeout: Duration,
+            ) -> anyhow::Result<()> {
+                let mut cursor_event_index = 0;
+                let request_id = self.next_clip_window_request_id();
+                let deadline = Instant::now() + timeout;
+                loop {
+                    let (start_lo, start_hi) = Self::split_u64(TEST_CLIP_WINDOW_START);
+                    let (end_lo, end_hi) = Self::split_u64(TEST_CLIP_WINDOW_END);
+                    let payload = UiClipWindowCommandPayload {
+                        command_type: UiCommandType::RequestClipWindow as u16,
+                        flags: 0,
+                        track_id: track_index as u32,
+                        request_id,
+                        window_start_lo: start_lo,
+                        window_start_hi: start_hi,
+                        window_end_lo: end_lo,
+                        window_end_hi: end_hi,
+                        cursor_event_index,
+                        reserved: 0,
+                        reserved2: 0,
+                    };
+                    self.bridge().send_ui_clip_window_command(payload);
+
+                    let mut received = false;
+                    while Instant::now() < deadline {
+                        if let Some(snapshot) = self.bridge().read_clip_window_snapshot() {
+                            if snapshot.track_id as usize != track_index ||
+                                snapshot.request_id != request_id ||
+                                snapshot.cursor_event_index != cursor_event_index ||
+                                snapshot.window_start_nanotick != TEST_CLIP_WINDOW_START ||
+                                snapshot.window_end_nanotick != TEST_CLIP_WINDOW_END {
+                                continue;
+                            }
+                            if (snapshot.flags & UI_CLIP_WINDOW_FLAG_RESYNC) != 0 {
+                                return Err(anyhow::anyhow!("clip window resync requested"));
+                            }
+                            if snapshot.clip_version != clip_version {
+                                return Err(anyhow::anyhow!(
+                                    "clip window version mismatch (expected {}, got {})",
+                                    clip_version,
+                                    snapshot.clip_version
+                                ));
+                            }
+                            let reset = cursor_event_index == 0;
+                            self.view.apply_clip_window_page(snapshot, reset);
+                            cursor_event_index = snapshot.next_event_index;
+                            received = true;
+                            if (snapshot.flags & UI_CLIP_WINDOW_FLAG_COMPLETE) != 0 {
+                                self.clip_window_requests[track_index] = ClipWindowRequestState {
+                                    request_id,
+                                    cursor_event_index,
+                                    clip_version,
+                                };
+                                return Ok(());
+                            }
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    if !received {
+                        return Err(anyhow::anyhow!(
+                            "timed out waiting for clip window snapshot"
+                        ));
+                    }
                 }
             }
 
@@ -322,7 +475,7 @@ mod integration_tests {
                 let deadline = Instant::now() + timeout;
                 let mut last_error: Option<anyhow::Error> = None;
                 loop {
-                    if let Some(snapshot) = self.bridge.read_snapshot() {
+                    if let Some(snapshot) = self.bridge().read_snapshot() {
                         self.view.snapshot = snapshot;
                     }
                     let playing = self.view.snapshot.ui_transport_state != 0;
@@ -335,7 +488,7 @@ mod integration_tests {
                     match open_track_shm(Duration::from_millis(200)) {
                         Ok(track_shm) => {
                         if started_playback {
-                            if let Some(snapshot) = self.bridge.read_snapshot() {
+                            if let Some(snapshot) = self.bridge().read_snapshot() {
                                 self.view.snapshot = snapshot;
                             }
                             if self.view.snapshot.ui_transport_state != 0 {
@@ -494,23 +647,78 @@ mod integration_tests {
                 Ok(())
             }
 
+            fn fetch_clip_window_row_notes(
+                &mut self,
+                track: usize,
+                row: i64,
+                timeout: Duration,
+            ) -> anyhow::Result<Vec<(u8, u8)>> {
+                let row_start = self.nanotick_for_row(row);
+                let row_end = self.nanotick_for_row(row + 1);
+                let mut cursor_event_index = 0;
+                let request_id = self.next_clip_window_request_id();
+                let deadline = Instant::now() + timeout;
+                let mut notes = Vec::new();
+                loop {
+                    let (start_lo, start_hi) = Self::split_u64(row_start);
+                    let (end_lo, end_hi) = Self::split_u64(row_end);
+                    let payload = UiClipWindowCommandPayload {
+                        command_type: UiCommandType::RequestClipWindow as u16,
+                        flags: 0,
+                        track_id: track as u32,
+                        request_id,
+                        window_start_lo: start_lo,
+                        window_start_hi: start_hi,
+                        window_end_lo: end_lo,
+                        window_end_hi: end_hi,
+                        cursor_event_index,
+                        reserved: 0,
+                        reserved2: 0,
+                    };
+                    self.bridge().send_ui_clip_window_command(payload);
+                    let mut received = false;
+                    while Instant::now() < deadline {
+                        if let Some(snapshot) = self.bridge().read_clip_window_snapshot() {
+                            if snapshot.track_id as usize != track ||
+                                snapshot.request_id != request_id ||
+                                snapshot.cursor_event_index != cursor_event_index ||
+                                snapshot.window_start_nanotick != row_start ||
+                                snapshot.window_end_nanotick != row_end {
+                                continue;
+                            }
+                            if (snapshot.flags & UI_CLIP_WINDOW_FLAG_RESYNC) != 0 {
+                                return Err(anyhow::anyhow!("clip window resync requested"));
+                            }
+                            for note_index in 0..(snapshot.note_count as usize) {
+                                let note = snapshot.notes[note_index];
+                                if note.t_on == row_start {
+                                    notes.push((note.column, note.pitch));
+                                }
+                            }
+                            cursor_event_index = snapshot.next_event_index;
+                            received = true;
+                            if (snapshot.flags & UI_CLIP_WINDOW_FLAG_COMPLETE) != 0 {
+                                notes.sort();
+                                return Ok(notes);
+                            }
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    if !received {
+                        return Err(anyhow::anyhow!(
+                            "timed out waiting for clip window row snapshot"
+                        ));
+                    }
+                }
+            }
+
             fn assert_view_matches_snapshot_row(
-                &self,
+                &mut self,
                 track: usize,
                 row: i64,
             ) -> anyhow::Result<()> {
-                let snapshot = self.bridge.read_clip_snapshot()
-                    .ok_or_else(|| anyhow::anyhow!("missing clip snapshot"))?;
-                let nanotick = self.nanotick_for_row(row);
-                let track_entry = snapshot.tracks[track];
-                let note_start = track_entry.note_offset as usize;
-                let note_end = note_start + track_entry.note_count as usize;
-                let mut snap_notes = snapshot.notes[note_start..note_end]
-                    .iter()
-                    .filter(|note| note.t_on == nanotick)
-                    .map(|note| (note.column, note.pitch))
-                    .collect::<Vec<_>>();
-                snap_notes.sort();
+                let snap_notes = self.fetch_clip_window_row_notes(track, row, Duration::from_millis(200))?;
                 let mut view_notes = self.notes_at_row(track, row)
                     .into_iter()
                     .map(|note| (note.column, note.pitch))
@@ -528,7 +736,7 @@ mod integration_tests {
             }
 
             fn assert_harmony_matches_snapshot_row(&self, row: i64) -> anyhow::Result<()> {
-                let snapshot = self.bridge.read_harmony_snapshot()
+                let snapshot = self.bridge().read_harmony_snapshot()
                     .ok_or_else(|| anyhow::anyhow!("missing harmony snapshot"))?;
                 let nanotick = self.nanotick_for_row(row);
                 let snap_event = snapshot.events[..snapshot.event_count as usize]
@@ -586,6 +794,8 @@ mod integration_tests {
 
         impl Drop for TestHarness {
             fn drop(&mut self) {
+                self.view.bridge = None;
+                let _ = self.bridge.take();
                 self._engine.stop();
                 cleanup_shm(&self.shm_name);
             }
@@ -603,6 +813,13 @@ mod integration_tests {
                 unsafe {
                     libc::shm_unlink(c_name.as_ptr());
                 }
+            }
+        }
+
+        fn cleanup_track_shm(track_count: u32) {
+            cleanup_shm("/daw_engine_shared");
+            for track_id in 1..track_count {
+                cleanup_shm(&format!("/daw_engine_shared_{}", track_id));
             }
         }
 
@@ -666,6 +883,137 @@ mod integration_tests {
                 }
                 thread::sleep(Duration::from_millis(20));
             }
+        }
+
+        #[test]
+        fn live_transport_advances() -> anyhow::Result<()> {
+            run_with_large_stack(|| {
+                let _guard = test_lock();
+                let shm_name = format!("/daw_ui_live_{}", std::process::id());
+                let socket_prefix = {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    "live_transport_advances".hash(&mut hasher);
+                    let short = hasher.finish();
+                    format!("/tmp/daw_host_live_{}_{}", std::process::id(), short)
+                };
+                let prev_test_mode = env::var("DAW_ENGINE_TEST_MODE").ok();
+                let prev_ui_shm = env::var("DAW_UI_SHM_NAME").ok();
+                let prev_socket_prefix = env::var("DAW_HOST_SOCKET_PREFIX").ok();
+                struct EnvRestore {
+                    test_mode: Option<String>,
+                    ui_shm: Option<String>,
+                    socket_prefix: Option<String>,
+                }
+                impl Drop for EnvRestore {
+                    fn drop(&mut self) {
+                        if let Some(value) = &self.test_mode {
+                            env::set_var("DAW_ENGINE_TEST_MODE", value);
+                        } else {
+                            env::remove_var("DAW_ENGINE_TEST_MODE");
+                        }
+                        if let Some(value) = &self.ui_shm {
+                            env::set_var("DAW_UI_SHM_NAME", value);
+                        } else {
+                            env::remove_var("DAW_UI_SHM_NAME");
+                        }
+                        if let Some(value) = &self.socket_prefix {
+                            env::set_var("DAW_HOST_SOCKET_PREFIX", value);
+                        } else {
+                            env::remove_var("DAW_HOST_SOCKET_PREFIX");
+                        }
+                    }
+                }
+                let _env_restore = EnvRestore {
+                    test_mode: prev_test_mode,
+                    ui_shm: prev_ui_shm,
+                    socket_prefix: prev_socket_prefix,
+                };
+                cleanup_shm(&shm_name);
+                cleanup_track_shm(1);
+                for track_id in 0..1 {
+                    let socket = format!("{socket_prefix}_{track_id}.sock");
+                    cleanup_socket(&socket);
+                }
+                env::set_var("DAW_UI_SHM_NAME", &shm_name);
+                env::set_var("DAW_HOST_SOCKET_PREFIX", &socket_prefix);
+                env::remove_var("DAW_ENGINE_TEST_MODE");
+
+                let mut engine = EngineProcess::start()?;
+                let bridge = Arc::new(connect_bridge_with_retry(Duration::from_secs(5))?);
+                let mut view = EngineView::new_for_tests();
+                view.bridge = Some(bridge.clone());
+                view.status = "SHM: connected".into();
+
+                let start = Instant::now();
+                loop {
+                    if let Some(snapshot) = bridge.read_snapshot() {
+                        view.snapshot = snapshot;
+                        if snapshot.ui_clip_version == 0 && snapshot.ui_harmony_version == 0 {
+                            break;
+                        }
+                    }
+                    if start.elapsed() > Duration::from_secs(2) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+
+                let load_payload = UiCommandPayload {
+                    command_type: UiCommandType::LoadPluginOnTrack as u16,
+                    flags: 0,
+                    track_id: 0,
+                    plugin_index: 0,
+                    note_pitch: 0,
+                    value0: 0,
+                    note_nanotick_lo: 0,
+                    note_nanotick_hi: 0,
+                    note_duration_lo: 0,
+                    note_duration_hi: 0,
+                    base_version: 0,
+                };
+                bridge.send_ui_command(load_payload);
+                thread::sleep(Duration::from_millis(200));
+                let play_payload = UiCommandPayload {
+                    command_type: UiCommandType::TogglePlay as u16,
+                    flags: 0,
+                    track_id: 0,
+                    plugin_index: 0,
+                    note_pitch: 0,
+                    value0: 0,
+                    note_nanotick_lo: 0,
+                    note_nanotick_hi: 0,
+                    note_duration_lo: 0,
+                    note_duration_hi: 0,
+                    base_version: 0,
+                };
+                bridge.send_ui_command(play_payload);
+
+                let start_tick = bridge
+                    .read_snapshot()
+                    .map(|s| s.ui_global_nanotick_playhead)
+                    .unwrap_or(0);
+                let mut advanced = false;
+                let deadline = Instant::now() + Duration::from_secs(2);
+                while Instant::now() < deadline {
+                    if let Some(snapshot) = bridge.read_snapshot() {
+                        if snapshot.ui_transport_state != 0 &&
+                            snapshot.ui_global_nanotick_playhead > start_tick {
+                            advanced = true;
+                            break;
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+                engine.assert_running()?;
+                engine.stop();
+                cleanup_shm(&shm_name);
+                cleanup_track_shm(1);
+                if !advanced {
+                    return Err(anyhow::anyhow!("playhead did not advance in live mode"));
+                }
+                Ok(())
+            })
         }
 
         fn read_midi_payload(entry: &EventEntry) -> Option<MidiPayload> {
@@ -845,23 +1193,7 @@ mod integration_tests {
                 harness.view.cursor_col = 0;
                 harness.view.harmony_focus = false;
 
-                let start = Instant::now();
-                let mut clip_snapshot = harness.bridge.read_clip_snapshot()
-                    .ok_or_else(|| anyhow::anyhow!("missing clip snapshot"))?;
-                while clip_snapshot.track_count < 2 && start.elapsed() < Duration::from_secs(1) {
-                    if let Some(snapshot) = harness.bridge.read_clip_snapshot() {
-                        clip_snapshot = snapshot;
-                        if clip_snapshot.track_count >= 2 {
-                            break;
-                        }
-                    }
-                    thread::sleep(Duration::from_millis(20));
-                }
-                assert!(
-                    clip_snapshot.track_count >= 2,
-                    "expected at least 2 tracks, got {}",
-                    clip_snapshot.track_count
-                );
+                harness.wait_for_track_count(2, Duration::from_secs(1))?;
 
                 let pattern = ["q", "w", "e"];
                 let rows = 24;
@@ -1875,24 +2207,7 @@ mod integration_tests {
                 harness.view.focused_track_index = 0;
                 harness.view.cursor_col = 0;
 
-                let clip_snapshot = harness.bridge.read_clip_snapshot()
-                    .ok_or_else(|| anyhow::anyhow!("missing clip snapshot"))?;
-                let start = Instant::now();
-                let mut clip_snapshot = clip_snapshot;
-                while clip_snapshot.track_count < 2 && start.elapsed() < Duration::from_secs(1) {
-                    if let Some(snapshot) = harness.bridge.read_clip_snapshot() {
-                        clip_snapshot = snapshot;
-                        if clip_snapshot.track_count >= 2 {
-                            break;
-                        }
-                    }
-                    thread::sleep(Duration::from_millis(20));
-                }
-                assert!(
-                    clip_snapshot.track_count >= 2,
-                    "expected at least 2 tracks, got {}",
-                    clip_snapshot.track_count
-                );
+                harness.wait_for_track_count(2, Duration::from_secs(1))?;
 
                 harness.adjust_columns(0, 1);
                 harness.adjust_columns(1, 1);
@@ -1974,23 +2289,7 @@ mod integration_tests {
                 harness.view.focused_track_index = 0;
                 harness.view.cursor_col = 0;
 
-                let start = Instant::now();
-                let mut clip_snapshot = harness.bridge.read_clip_snapshot()
-                    .ok_or_else(|| anyhow::anyhow!("missing clip snapshot"))?;
-                while clip_snapshot.track_count < 3 && start.elapsed() < Duration::from_secs(1) {
-                    if let Some(snapshot) = harness.bridge.read_clip_snapshot() {
-                        clip_snapshot = snapshot;
-                        if clip_snapshot.track_count >= 3 {
-                            break;
-                        }
-                    }
-                    thread::sleep(Duration::from_millis(20));
-                }
-                assert!(
-                    clip_snapshot.track_count >= 3,
-                    "expected at least 3 tracks, got {}",
-                    clip_snapshot.track_count
-                );
+                harness.wait_for_track_count(3, Duration::from_secs(1))?;
 
                 for track in 0..3 {
                     harness.adjust_columns(track, 1);
@@ -2052,11 +2351,19 @@ mod integration_tests {
                 assert!(harness.view.pending_chords.is_empty());
                 assert!(harness.view.harmony_events.is_empty());
 
-                let clip_snapshot = harness.bridge.read_clip_snapshot()
-                    .ok_or_else(|| anyhow::anyhow!("missing clip snapshot"))?;
-                assert_eq!(clip_snapshot.note_count, 0);
-                assert_eq!(clip_snapshot.chord_count, 0);
-                let harmony_snapshot = harness.bridge.read_harmony_snapshot()
+                harness.refresh_clip_window(Duration::from_secs(1))?;
+                let track_count = harness.view.snapshot.ui_track_count.min(TRACK_COUNT as u32) as usize;
+                for track in 0..track_count {
+                    assert!(
+                        harness.view.clip_notes[track].is_empty(),
+                        "expected empty notes on track {track}"
+                    );
+                    assert!(
+                        harness.view.clip_chords[track].is_empty(),
+                        "expected empty chords on track {track}"
+                    );
+                }
+                let harmony_snapshot = harness.bridge().read_harmony_snapshot()
                     .ok_or_else(|| anyhow::anyhow!("missing harmony snapshot"))?;
                 assert_eq!(harmony_snapshot.event_count, 0);
 

@@ -117,12 +117,21 @@ struct UiClipChord {
   uint32_t flags = 0;
 };
 
-struct UiClipSnapshot {
-  uint32_t trackCount = 0;
+constexpr uint32_t kUiClipWindowFlagComplete = 1u << 0;
+constexpr uint32_t kUiClipWindowFlagResync = 1u << 1;
+
+struct UiClipWindowSnapshot {
+  uint32_t trackId = 0;
+  uint32_t clipVersion = 0;
+  uint64_t windowStartNanotick = 0;
+  uint64_t windowEndNanotick = 0;
+  uint32_t requestId = 0;
+  uint32_t cursorEventIndex = 0;
+  uint32_t nextEventIndex = 0;
   uint32_t noteCount = 0;
   uint32_t chordCount = 0;
+  uint32_t flags = 0;
   uint32_t reserved = 0;
-  UiClipTrack tracks[kUiMaxTracks]{};
   UiClipNote notes[kUiMaxClipNotes]{};
   UiClipChord chords[kUiMaxClipChords]{};
 };

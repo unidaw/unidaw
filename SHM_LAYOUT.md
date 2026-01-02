@@ -11,6 +11,10 @@ and the UI projection protocol for the Rust process.
 The Rust UI reads only the engine UI SHM. Host SHM is private to the engine
 and host processes for audio/event rings.
 
+Engine note: host SHM mappings are ref-counted on the engine side so the
+audio callback can safely read through restarts; unmap occurs only when the
+last reader releases its view.
+
 ## Layout Order
 
 All regions are 64-byte aligned in this order:
@@ -23,7 +27,7 @@ All regions are 64-byte aligned in this order:
 6. UI Command Ring (`ringUiOffset`)
 7. UI Diff Ring (`ringUiOutOffset`)
 8. `BlockMailbox`
-9. `UiClipSnapshot` (`uiClipOffset`)
+9. `UiClipWindowSnapshot` (`uiClipOffset`)
 10. `UiHarmonySnapshot` (`uiHarmonyOffset`)
 
 Offsets are computed via `alignUp(...)` and recorded in `ShmHeader`.
@@ -34,7 +38,7 @@ Offsets are computed via `alignUp(...)` and recorded in `ShmHeader`.
 
 - `magic`, `version`, `blockSize`, `sampleRate`, `numChannelsIn/Out`, `numBlocks`
 - `channelStrideBytes`, `audioInOffset`, `audioOutOffset`
-- `ringStdOffset`, `ringCtrlOffset`, `ringUiOffset`, `mailboxOffset`
+- `ringStdOffset`, `ringCtrlOffset`, `ringUiOffset`, `ringUiOutOffset`, `mailboxOffset`
 
 ### UI Projection (Read by Rust)
 
@@ -44,8 +48,8 @@ Offsets are computed via `alignUp(...)` and recorded in `ShmHeader`.
 - `uiTrackCount`
 - `uiTransportState` (0 = stopped, 1 = playing)
 - `uiClipVersion` (increments on clip mutations)
-- `uiClipOffset` (byte offset to `UiClipSnapshot`)
-- `uiClipBytes` (byte size of `UiClipSnapshot`)
+- `uiClipOffset` (byte offset to `UiClipWindowSnapshot`)
+- `uiClipBytes` (byte size of `UiClipWindowSnapshot`)
 - `uiHarmonyVersion` (increments on harmony mutations)
 - `uiHarmonyOffset` (byte offset to `UiHarmonySnapshot`)
 - `uiHarmonyBytes` (byte size of `UiHarmonySnapshot`)
@@ -98,7 +102,8 @@ Each ring is an SPSC `EventEntry` ring with cache-line entries.
 - Control Ring: Transport events
 - UI Ring: UI commands (EventEntry with `UiCommandPayload`, `EventType::UiCommand`)
 - UI Diff Ring: engine -> UI diffs (EventEntry with `UiDiffPayload`, `EventType::UiDiff`)
-- UI Harmony Diff Ring: engine -> UI diffs (EventEntry with `UiHarmonyDiffPayload`, `EventType::UiHarmonyDiff`)
+  and harmony/chord diffs (EventEntry with `UiHarmonyDiffPayload` or
+  `UiChordDiffPayload`, `EventType::UiHarmonyDiff` / `EventType::UiChordDiff`)
 
 ### UI Command Payload
 
@@ -138,28 +143,27 @@ After a host restart, the engine:
 The host sets `replayAckSampleTime` when it consumes `ReplayComplete`
 while processing a block.
 
-## UiClipSnapshot
+## UiClipWindowSnapshot
 
-The UI reads canonical clip data from `UiClipSnapshot` and performs its own
+The UI requests windowed clip data from the engine and performs its own
 projection (tracker viewport, zoom, scroll). The engine is authoritative and
 bumps `uiClipVersion` when clip data changes.
 
 Layout:
-- `trackCount`
+- `trackId`
+- `clipVersion`
+- `windowStartNanotick` (inclusive)
+- `windowEndNanotick` (exclusive)
+- `requestId`
+- `cursorEventIndex`
+- `reserved`
+- `reserved2`
+- `nextEventIndex`
 - `noteCount`
 - `chordCount`
-- `tracks[kUiMaxTracks]`: `UiClipTrack` entries with note/chord ranges per track.
+- `flags` (`kUiClipWindowFlagComplete`, `kUiClipWindowFlagResync`)
 - `notes[kUiMaxClipNotes]`: canonical note data.
 - `chords[kUiMaxClipChords]`: chord-degree events.
-
-`UiClipTrack`:
-- `trackId`
-- `noteOffset` (index into `notes`)
-- `noteCount`
-- `chordOffset` (index into `chords`)
-- `chordCount`
-- `clipStartNanotick`
-- `clipEndNanotick`
 
 `UiClipNote`:
 - `tOn`
@@ -180,6 +184,29 @@ Layout:
 - `quality` (0=single, 1=triad, 2=7th)
 - `inversion`
 - `baseOctave`
+
+### Clip Window Requests
+
+The UI requests clip window pages via `UiCommandType::RequestClipWindow`.
+Requests are sent on the UI command ring and responses are written into
+`UiClipWindowSnapshot` in shared memory.
+
+`UiClipWindowCommandPayload`:
+- `commandType` = `RequestClipWindow`
+- `trackId`
+- `requestId`
+- `windowStartLo/Hi`
+- `windowEndLo/Hi`
+- `cursorEventIndex`
+
+Protocol:
+1. UI sends `RequestClipWindow` with `cursorEventIndex = 0`.
+2. Engine writes a `UiClipWindowSnapshot` page. If `flags` includes
+   `kUiClipWindowFlagComplete`, the window is done.
+3. If not complete, UI sends another request with `cursorEventIndex =
+   nextEventIndex` to fetch the next page.
+4. If the engine cannot honor the request (e.g. version mismatch), it sets
+   `kUiClipWindowFlagResync` and the UI must resync.
 
 ## UiDiffPayload
 

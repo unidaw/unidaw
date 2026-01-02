@@ -90,17 +90,20 @@ Clip {
 // NOTE
 Note {
   uint64_t nanotick;          // 960,000 per quarter note
-  float frequency_hz;         // For microtonal support
   uint8_t midi_pitch;         // For VST3 compatibility
   uint8_t velocity;
   uint64_t duration;
   bool harmony_override;      // Bypass quantization
 }
 
+// Notes are stored in ticks only. Microtonal tuning is resolved at schedule time
+// from the harmony/scale lane and emitted as (midi_pitch, tuning_cents).
+// Degree/chord intent lives in Chord/Harmony events, not per-note floats.
+
 // HARMONY
 HarmonyEvent {
   uint64_t nanotick;
-  uint8_t root;               // 0-11 for 12-TET, or frequency for microtonal
+  uint8_t root;               // Scale root index (0-11 in 12-TET)
   Scale scale;                // Can be standard or custom
   float quantize_strength;   // Usually 0 or 100%
 }
@@ -400,11 +403,23 @@ class GrooveTemplate {
 
 ### Phase 3: Mixer & Routing (3-4 weeks)
 - [ ] Mixer view UI
-- [ ] Plugin chains per track
+- [x] Plugin chains per track (engine core, interleaved VST/Patcher execution)
+- [ ] Explicit param targeting per device (UI + commands)
+- [ ] Device chain persistence (save/load)
+- [ ] Track routing: audio + MIDI I/O, pre/post routing toggle
+- [ ] Track routing data model + processing order (engine)
+- [ ] Modulation registry (sources/targets, ordered links)
+- [ ] Modulation evaluation (block-rate VST targets, sample-rate internal)
 - [ ] Sends/returns
 - [ ] Bus routing
 - [ ] Sidechain support
 - [ ] Basic effects (EQ, Comp, Reverb)
+
+### Engine Alignment: Device Chain UX
+- [ ] Modulation registry (sources/targets, ordered links, sample-accurate internal modulation)
+- [ ] Macro binding layer (8 macros per patcher, mapping curves)
+- [ ] Device copy/cut/paste/duplicate across tracks
+- [ ] Chain edit commands: validate + emit diffs for UI
 
 ### Phase 4: Sample Layer (3-4 weeks)
 - [ ] Audio recording

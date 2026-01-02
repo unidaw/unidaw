@@ -558,6 +558,7 @@ impl EngineView {
         div()
             .flex()
             .gap_0()
+            .h(px(HEADER_HEIGHT + ROW_HEIGHT * VISIBLE_ROWS as f32))
             .child(self.render_minimap(cx))
             .child(grid)
     }

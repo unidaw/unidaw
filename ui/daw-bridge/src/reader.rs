@@ -55,19 +55,19 @@ impl SeqlockReader {
             if v0 == v1 && v0 % 2 == 0 {
                 return Some(UiSnapshot {
                     version: v1,
-                ui_visual_sample_count,
-                ui_global_nanotick_playhead,
-                ui_track_count,
-                ui_transport_state,
-                ui_clip_version,
-                ui_clip_offset,
-                ui_clip_bytes,
-                ui_harmony_version,
-                ui_harmony_offset,
-                ui_harmony_bytes,
-                ui_track_peak_rms,
-            });
+                    ui_visual_sample_count,
+                    ui_global_nanotick_playhead,
+                    ui_track_count,
+                    ui_transport_state,
+                    ui_clip_version,
+                    ui_clip_offset,
+                    ui_clip_bytes,
+                    ui_harmony_version,
+                    ui_harmony_offset,
+                    ui_harmony_bytes,
+                    ui_track_peak_rms,
+                });
+            }
         }
     }
-}
 }

@@ -17,7 +17,7 @@ This document defines the test plan for the Patcher subsystem described in
 
 Purpose: validate deterministic pattern generation and event emission.
 
-Tests:
+Tests (post-resolution event rail only; no MusicalLogic entries should remain):
 
 - Fixed pattern generation
   - Inputs: hits=5, steps=16, offset=0, block_start_tick=0
@@ -55,13 +55,14 @@ Purpose: validate deterministic ordering with computed priorities.
 
 Tests:
 
-- Same nanotick ordering
-  - Inputs: Transport, Param, MIDI NoteOff, MusicalLogic, MIDI NoteOn events
-    all at the same nanotick
-  - Expect: order is Transport -> Param -> NoteOff -> MusicalLogic -> NoteOn.
-- MusicalLogic priority_hint
+- Same nanotick ordering (post-resolution)
+  - Inputs: Transport, Param, MIDI NoteOff, MIDI NoteOn events all at the same
+    nanotick
+  - Expect: order is Transport -> Param -> NoteOff -> NoteOn.
+- MusicalLogic resolution ordering
   - Inputs: multiple MusicalLogic events at same nanotick with differing hints
-  - Expect: sorted by hint ascending; non-MusicalLogic uses hint=0.
+  - Expect: resolution pass converts to MIDI in ascending `priority_hint` order;
+    final sort preserves that order among NoteOns at the same nanotick.
 - Stability
   - Inputs: identical events with identical keys in stable order
   - Expect: stable_sort preserves original order.

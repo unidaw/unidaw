@@ -39,7 +39,11 @@ class NanotickConverter {
   }
 
   uint64_t samplesToNanoticks(int64_t samples) const {
-    const long double bpm = tempoProvider_.bpmAtNanotick(0);
+    return samplesToNanoticks(samples, 0);
+  }
+
+  uint64_t samplesToNanoticks(int64_t samples, uint64_t atNanotick) const {
+    const long double bpm = tempoProvider_.bpmAtNanotick(atNanotick);
     const long double ticksPerQuarter =
         static_cast<long double>(kNanoticksPerQuarter);
     const long double ticks =

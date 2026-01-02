@@ -11,13 +11,19 @@ use gpui::{
 };
 
 use daw_bridge::layout::{
-    K_UI_MAX_TRACKS, UiClipSnapshot, UiCommandPayload, UiCommandType, UiDiffType,
+    K_CHAIN_DEVICE_ID_AUTO, K_UI_MAX_TRACKS, UiChainCommandPayload,
+    UiClipWindowCommandPayload, UiCommandPayload, UiCommandType, UiDiffType,
     UiHarmonyDiffType, UiChordCommandPayload, UiChordDiffType,
+    UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
+    UiPatcherPresetCommandPayload, UI_CLIP_WINDOW_FLAG_COMPLETE,
+    UI_CLIP_WINDOW_FLAG_RESYNC,
 };
 use daw_bridge::reader::UiSnapshot;
 
 use crate::engine::bridge::{
-    decode_chord_diff, decode_harmony_diff, decode_ui_diff, log_last_ui_command, EngineBridge,
+    decode_chord_diff, decode_harmony_diff, decode_ui_chain_diff, decode_ui_chain_error,
+    decode_ui_diff, decode_ui_patcher_graph_diff, decode_ui_patcher_graph_error,
+    log_last_ui_command, ui_diff_type, EngineBridge,
 };
 use crate::engine::supervisor::{
     default_engine_path, spawn_engine_process, stop_engine_process, EngineSupervisor,
@@ -44,12 +50,71 @@ pub const ZOOM_LEVELS: [u64; 7] = [1, 2, 4, 8, 16, 32, 64];
 pub const DEFAULT_ZOOM_INDEX: usize = 2;
 pub const TRACK_COUNT: usize = 8;
 const EDIT_STEP_ROWS: i64 = 1;
+const CLIP_WINDOW_MARGIN_ROWS: i64 = 4;
+pub(crate) const PATCHER_NODE_EUCLIDEAN: u32 = 1;
+pub(crate) const PATCHER_NODE_RANDOM_DEGREE: u32 = 5;
+pub(crate) const PATCHER_NODE_EVENT_OUT: u32 = 6;
+
+#[derive(Clone, Debug, Default)]
+pub struct ChainDevice {
+    pub id: u32,
+    pub kind: u32,
+    pub position: u32,
+    pub patcher_node_id: u32,
+    pub host_slot_index: u32,
+    pub capability_mask: u32,
+    pub bypass: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChainClipboard {
+    pub kind: u32,
+    pub patcher_node_id: u32,
+    pub host_slot_index: u32,
+    pub bypass: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PatcherNodeUi {
+    pub id: u32,
+    pub node_type: u32,
+    pub inputs: Vec<u32>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ChainAddMode {
+    Instrument,
+    Effect,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ClipWindowState {
+    pub request_id: u32,
+    pub cursor_event_index: u32,
+    pub next_event_index: u32,
+    pub window_start: u64,
+    pub window_end: u64,
+    pub clip_version: u32,
+    pub complete: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ClipWindowRequestState {
+    window_start: u64,
+    window_end: u64,
+    request_id: u32,
+    cursor_event_index: u32,
+    in_flight_cursor: u32,
+    clip_version: u32,
+    complete: bool,
+    in_flight: bool,
+}
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct EngineView {
     pub bridge: Option<Arc<EngineBridge>>,
     pub snapshot: UiSnapshot,
-    pub clip_snapshot: Option<UiClipSnapshot>,
+    pub clip_window: Vec<ClipWindowState>,
     pub status: SharedString,
     pub plugins: Vec<PluginEntry>,
     pub palette_open: bool,
@@ -92,6 +157,22 @@ pub struct EngineView {
     pub track_columns: Vec<usize>,
     pub track_quantize: Vec<bool>,
     pub track_names: Vec<Option<String>>,
+    pub chain_versions: Vec<u32>,
+    pub chain_devices: Vec<Vec<ChainDevice>>,
+    pub chain_focus: bool,
+    pub focused_chain_device_id: Option<u32>,
+    pub chain_clipboard: Option<ChainClipboard>,
+    pub chain_add_open: bool,
+    pub chain_add_mode: Option<ChainAddMode>,
+    pub patcher_open: bool,
+    pub patcher_track_id: u32,
+    pub patcher_versions: Vec<u32>,
+    pub patcher_nodes: Vec<Vec<PatcherNodeUi>>,
+    pub patcher_link_source: Option<u32>,
+    pub patcher_link_target: Option<u32>,
+    pub preset_save_open: bool,
+    pub preset_save_text: String,
+    pub ui_debug: bool,
 }
 
 pub trait UiNotify {
@@ -122,7 +203,7 @@ impl EngineView {
                 ui_harmony_bytes: 0,
                 ui_track_peak_rms: [0.0; K_UI_MAX_TRACKS],
             },
-            clip_snapshot: None,
+            clip_window: vec![ClipWindowState::default(); TRACK_COUNT],
             status: "SHM: disconnected".into(),
             plugins,
             palette_open: false,
@@ -165,6 +246,22 @@ impl EngineView {
             track_columns: vec![1; TRACK_COUNT],
             track_quantize: vec![true; TRACK_COUNT],
             track_names: vec![None; TRACK_COUNT],
+            chain_versions: vec![0; TRACK_COUNT],
+            chain_devices: vec![Vec::new(); TRACK_COUNT],
+            chain_focus: false,
+            focused_chain_device_id: None,
+            chain_clipboard: None,
+            chain_add_open: false,
+            chain_add_mode: None,
+            patcher_open: false,
+            patcher_track_id: 0,
+            patcher_versions: vec![0; TRACK_COUNT],
+            patcher_nodes: vec![Vec::new(); TRACK_COUNT],
+            patcher_link_source: None,
+            patcher_link_target: None,
+            preset_save_open: false,
+            preset_save_text: String::new(),
+            ui_debug: std::env::var("DAW_UI_DEBUG").map_or(false, |v| v == "1"),
         }
     }
 
@@ -205,10 +302,21 @@ impl EngineView {
         cx.notify();
     }
 
+    pub(crate) fn open_plugin_palette_for_chain(
+        &mut self,
+        mode: ChainAddMode,
+        cx: &mut impl UiNotify,
+    ) {
+        self.chain_add_mode = Some(mode);
+        self.chain_add_open = false;
+        self.open_plugin_palette(cx);
+    }
+
     fn close_palette(&mut self, cx: &mut impl UiNotify) {
         if self.palette_open {
             self.palette_open = false;
             self.palette_empty_logged = false;
+            self.chain_add_mode = None;
             cx.notify();
         }
     }
@@ -331,28 +439,49 @@ impl EngineView {
                 let plugin = self.plugins[index].clone();
 
                 if self.bridge.is_some() {
-                    let payload = UiCommandPayload {
-                        command_type: UiCommandType::LoadPluginOnTrack as u16,
-                        flags: 0,
-                        track_id: self.focused_track_index as u32,
-                        plugin_index: plugin.index as u32,
-                        note_pitch: 0,
-                        value0: 0,
-                        note_nanotick_lo: 0,
-                        note_nanotick_hi: 0,
-                        note_duration_lo: 0,
-                        note_duration_hi: 0,
-                        base_version: 0,
-                    };
-                    self.enqueue_ui_command(payload);
-                    if self.focused_track_index < self.track_names.len() {
-                        self.track_names[self.focused_track_index] =
-                            Some(plugin.name.clone());
+                    match self.chain_add_mode {
+                        Some(ChainAddMode::Effect) => {
+                            let payload = UiChainCommandPayload {
+                                command_type: UiCommandType::AddDevice as u16,
+                                flags: 0,
+                                track_id: self.focused_track_index as u32,
+                                base_version: self.chain_versions[self.focused_track_index],
+                                device_id: K_CHAIN_DEVICE_ID_AUTO,
+                                device_kind: 4,
+                                insert_index: K_CHAIN_DEVICE_ID_AUTO,
+                                patcher_node_id: 0,
+                                host_slot_index: plugin.index as u32,
+                                bypass: 0,
+                                reserved: [0; 4],
+                            };
+                            self.enqueue_chain_payload(payload);
+                        }
+                        _ => {
+                            let payload = UiCommandPayload {
+                                command_type: UiCommandType::LoadPluginOnTrack as u16,
+                                flags: 0,
+                                track_id: self.focused_track_index as u32,
+                                plugin_index: plugin.index as u32,
+                                note_pitch: 0,
+                                value0: 0,
+                                note_nanotick_lo: 0,
+                                note_nanotick_hi: 0,
+                                note_duration_lo: 0,
+                                note_duration_hi: 0,
+                                base_version: 0,
+                            };
+                            self.enqueue_ui_command(payload);
+                            if self.focused_track_index < self.track_names.len() {
+                                self.track_names[self.focused_track_index] =
+                                    Some(plugin.name.clone());
+                            }
+                        }
                     }
                 } else {
                     // No-op until engine reconnects.
                 }
 
+                self.chain_add_mode = None;
                 self.palette_open = false;
                 cx.notify();
             }
@@ -387,6 +516,15 @@ impl EngineView {
             }
             return;
         }
+        if self.preset_save_open {
+            if let Some(key_char) = key_char {
+                if key_char.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
+                    self.preset_save_text.push_str(key_char);
+                    cx.notify();
+                }
+            }
+            return;
+        }
         if self.edit_active {
             if let Some(key_char) = key_char {
                 self.edit_text.push_str(key_char);
@@ -397,6 +535,9 @@ impl EngineView {
         if let Some(key_char) = key_char {
             if self.palette_open {
                 self.append_query(key_char, cx);
+                return;
+            }
+            if self.chain_focus {
                 return;
             }
             if self.harmony_focus {
@@ -463,6 +604,8 @@ impl EngineView {
                 self.cancel_cell_edit(cx);
                 if self.harmony_focus {
                     self.delete_harmony(cx);
+                } else if self.chain_focus {
+                    self.delete_selected_chain_device(cx);
                 } else {
                     self.delete_note(cx);
                 }
@@ -477,10 +620,20 @@ impl EngineView {
                 self.jump_text.pop();
                 cx.notify();
             }
+        } else if self.preset_save_open {
+            if self.preset_save_text.is_empty() {
+                self.preset_save_open = false;
+                cx.notify();
+            } else {
+                self.preset_save_text.pop();
+                cx.notify();
+            }
         } else if self.scale_browser_open {
             self.backspace_scale_query(cx);
         } else if self.palette_open {
             self.backspace_query(cx);
+        } else if self.chain_focus {
+            self.delete_selected_chain_device(cx);
         } else if self.harmony_focus {
             self.delete_harmony(cx);
         } else {
@@ -493,6 +646,8 @@ impl EngineView {
             self.commit_cell_edit(cx);
         } else if self.jump_open {
             self.confirm_jump(cx);
+        } else if self.preset_save_open {
+            self.commit_preset_save(cx);
         } else if self.scale_browser_open {
             self.confirm_scale_browser(cx);
         } else if self.palette_open {
@@ -645,7 +800,7 @@ impl EngineView {
         }
     }
 
-    fn show_toast(&mut self, message: &str, cx: &mut impl UiNotify) {
+    pub(crate) fn show_toast(&mut self, message: &str, cx: &mut impl UiNotify) {
         self.toast_message = Some(message.to_string());
         self.toast_deadline = Some(Instant::now() + Duration::from_millis(1200));
         cx.notify();
@@ -1214,6 +1369,8 @@ impl EngineView {
         let row = row.min(VISIBLE_ROWS - 1) as i64;
         self.cursor_nanotick = self.view_row_nanotick(row);
         self.harmony_focus = true;
+        self.chain_focus = false;
+        self.focused_chain_device_id = None;
         self.edit_active = false;
         self.edit_text.clear();
         cx.notify();
@@ -1233,7 +1390,361 @@ impl EngineView {
             .saturating_sub(1);
         self.cursor_col = column.min(max_column);
         self.harmony_focus = false;
+        self.chain_focus = false;
+        self.focused_chain_device_id = None;
         self.clear_edit_state();
+        cx.notify();
+    }
+
+    fn chain_selected_device(&self) -> Option<ChainDevice> {
+        let track = self.focused_track_index;
+        let device_id = self.focused_chain_device_id?;
+        self.chain_devices
+            .get(track)
+            .and_then(|devices| devices.iter().find(|d| d.id == device_id))
+            .cloned()
+    }
+
+    pub(crate) fn select_chain_device(&mut self, device_id: u32, cx: &mut impl UiNotify) {
+        self.chain_focus = true;
+        self.focused_chain_device_id = Some(device_id);
+        self.harmony_focus = false;
+        self.clear_edit_state();
+        self.chain_add_open = false;
+        cx.notify();
+    }
+
+    pub(crate) fn open_patcher_view(&mut self, cx: &mut impl UiNotify) {
+        self.patcher_open = true;
+        self.patcher_track_id = self.focused_track_index as u32;
+        self.patcher_link_source = None;
+        self.patcher_link_target = None;
+        self.preset_save_open = false;
+        self.preset_save_text.clear();
+        cx.notify();
+    }
+
+    pub(crate) fn close_patcher_view(&mut self, cx: &mut impl UiNotify) {
+        self.patcher_open = false;
+        self.patcher_link_source = None;
+        self.patcher_link_target = None;
+        self.preset_save_open = false;
+        self.preset_save_text.clear();
+        cx.notify();
+    }
+
+    fn enqueue_patcher_graph_payload(&mut self, payload: UiPatcherGraphCommandPayload) {
+        self.enqueue_patcher_graph_command(payload);
+    }
+
+    fn enqueue_patcher_config_payload(&mut self, payload: UiPatcherNodeConfigPayload) {
+        self.enqueue_patcher_node_config(payload);
+    }
+
+    fn enqueue_patcher_preset_payload(&mut self, payload: UiPatcherPresetCommandPayload) {
+        self.enqueue_patcher_preset(payload);
+    }
+
+    pub(crate) fn add_patcher_node(&mut self, node_type: u32, cx: &mut impl UiNotify) {
+        let track = self.patcher_track_id.min((TRACK_COUNT - 1) as u32);
+        let payload = UiPatcherGraphCommandPayload {
+            command_type: UiCommandType::AddPatcherNode as u16,
+            flags: 0,
+            track_id: track,
+            base_version: self.patcher_versions[track as usize],
+            node_id: 0,
+            node_type,
+            src_node_id: 0,
+            dst_node_id: 0,
+            reserved: [0; 12],
+        };
+        self.enqueue_patcher_graph_payload(payload);
+        cx.notify();
+    }
+
+    pub(crate) fn remove_patcher_node(&mut self, node_id: u32, cx: &mut impl UiNotify) {
+        let track = self.patcher_track_id.min((TRACK_COUNT - 1) as u32);
+        let payload = UiPatcherGraphCommandPayload {
+            command_type: UiCommandType::RemovePatcherNode as u16,
+            flags: 0,
+            track_id: track,
+            base_version: self.patcher_versions[track as usize],
+            node_id,
+            node_type: 0,
+            src_node_id: 0,
+            dst_node_id: 0,
+            reserved: [0; 12],
+        };
+        self.enqueue_patcher_graph_payload(payload);
+        cx.notify();
+    }
+
+    pub(crate) fn connect_patcher_nodes(&mut self, cx: &mut impl UiNotify) {
+        let Some(src) = self.patcher_link_source else {
+            self.show_toast("Select a source node", cx);
+            return;
+        };
+        let Some(dst) = self.patcher_link_target else {
+            self.show_toast("Select a target node", cx);
+            return;
+        };
+        let track = self.patcher_track_id.min((TRACK_COUNT - 1) as u32);
+        let payload = UiPatcherGraphCommandPayload {
+            command_type: UiCommandType::ConnectPatcherNodes as u16,
+            flags: 0,
+            track_id: track,
+            base_version: self.patcher_versions[track as usize],
+            node_id: 0,
+            node_type: 0,
+            src_node_id: src,
+            dst_node_id: dst,
+            reserved: [0; 12],
+        };
+        self.enqueue_patcher_graph_payload(payload);
+        cx.notify();
+    }
+
+    fn send_random_degree_config(&mut self, node_id: u32) {
+        let track = self.patcher_track_id.min((TRACK_COUNT - 1) as u32);
+        let mut config = [0u8; 16];
+        let degree: u8 = 8;
+        let velocity: u8 = 100;
+        let duration: u64 = 0;
+        config[0] = degree;
+        config[1] = velocity;
+        config[4..12].copy_from_slice(&duration.to_le_bytes());
+        let payload = UiPatcherNodeConfigPayload {
+            command_type: UiCommandType::SetPatcherNodeConfig as u16,
+            flags: 0,
+            track_id: track,
+            base_version: self.patcher_versions[track as usize],
+            node_id,
+            config_type: PATCHER_NODE_RANDOM_DEGREE,
+            config,
+            reserved: [0; 4],
+        };
+        self.enqueue_patcher_config_payload(payload);
+    }
+
+    pub(crate) fn open_preset_save(&mut self, cx: &mut impl UiNotify) {
+        self.preset_save_open = true;
+        self.preset_save_text.clear();
+        cx.notify();
+    }
+
+    pub(crate) fn commit_preset_save(&mut self, cx: &mut impl UiNotify) {
+        if !self.preset_save_open {
+            return;
+        }
+        let name = self.preset_save_text.trim().to_string();
+        self.preset_save_open = false;
+        self.preset_save_text.clear();
+        if name.is_empty() {
+            self.show_toast("Preset name empty", cx);
+            return;
+        }
+        let track = self.patcher_track_id.min((TRACK_COUNT - 1) as u32);
+        let mut payload = UiPatcherPresetCommandPayload::default();
+        payload.command_type = UiCommandType::SavePatcherPreset as u16;
+        payload.track_id = track;
+        let bytes = name.as_bytes();
+        let len = bytes.len().min(payload.name.len());
+        payload.name[..len].copy_from_slice(&bytes[..len]);
+        self.enqueue_patcher_preset_payload(payload);
+        self.show_toast("Saved patcher preset", cx);
+    }
+
+    fn enqueue_chain_payload(&mut self, payload: UiChainCommandPayload) {
+        self.enqueue_chain_command(payload);
+    }
+
+    pub(crate) fn toggle_chain_add_menu(&mut self, cx: &mut impl UiNotify) {
+        self.chain_add_open = !self.chain_add_open;
+        self.chain_focus = false;
+        cx.notify();
+    }
+
+    pub(crate) fn add_chain_device(
+        &mut self,
+        device_kind: u32,
+        patcher_node_id: u32,
+        host_slot_index: u32,
+        cx: &mut impl UiNotify,
+    ) {
+        let payload = UiChainCommandPayload {
+            command_type: UiCommandType::AddDevice as u16,
+            flags: 0,
+            track_id: self.focused_track_index as u32,
+            base_version: self.chain_versions[self.focused_track_index],
+            device_id: K_CHAIN_DEVICE_ID_AUTO,
+            device_kind,
+            insert_index: K_CHAIN_DEVICE_ID_AUTO,
+            patcher_node_id,
+            host_slot_index,
+            bypass: 0,
+            reserved: [0; 4],
+        };
+        self.enqueue_chain_payload(payload);
+        self.chain_add_open = false;
+        cx.notify();
+    }
+
+    fn delete_selected_chain_device(&mut self, cx: &mut impl UiNotify) {
+        let Some(device) = self.chain_selected_device() else {
+            self.show_toast("No device selected", cx);
+            return;
+        };
+        let payload = UiChainCommandPayload {
+            command_type: UiCommandType::RemoveDevice as u16,
+            flags: 0,
+            track_id: self.focused_track_index as u32,
+            base_version: self.chain_versions[self.focused_track_index],
+            device_id: device.id,
+            device_kind: device.kind,
+            insert_index: K_CHAIN_DEVICE_ID_AUTO,
+            patcher_node_id: device.patcher_node_id,
+            host_slot_index: device.host_slot_index,
+            bypass: device.bypass as u32,
+            reserved: [0; 4],
+        };
+        self.enqueue_chain_payload(payload);
+        self.focused_chain_device_id = None;
+        cx.notify();
+    }
+
+    fn copy_selected_chain_device(&mut self, cx: &mut impl UiNotify) {
+        let Some(device) = self.chain_selected_device() else {
+            self.show_toast("No device selected", cx);
+            return;
+        };
+        self.chain_clipboard = Some(ChainClipboard {
+            kind: device.kind,
+            patcher_node_id: device.patcher_node_id,
+            host_slot_index: device.host_slot_index,
+            bypass: device.bypass,
+        });
+        cx.notify();
+    }
+
+    fn cut_selected_chain_device(&mut self, cx: &mut impl UiNotify) {
+        self.copy_selected_chain_device(cx);
+        self.delete_selected_chain_device(cx);
+    }
+
+    fn paste_chain_device(&mut self, cx: &mut impl UiNotify) {
+        let Some(clipboard) = self.chain_clipboard.clone() else {
+            self.show_toast("Chain clipboard empty", cx);
+            return;
+        };
+        let insert_index = self
+            .chain_selected_device()
+            .map(|device| device.position)
+            .unwrap_or(K_CHAIN_DEVICE_ID_AUTO);
+        let payload = UiChainCommandPayload {
+            command_type: UiCommandType::AddDevice as u16,
+            flags: 0,
+            track_id: self.focused_track_index as u32,
+            base_version: self.chain_versions[self.focused_track_index],
+            device_id: K_CHAIN_DEVICE_ID_AUTO,
+            device_kind: clipboard.kind,
+            insert_index,
+            patcher_node_id: clipboard.patcher_node_id,
+            host_slot_index: clipboard.host_slot_index,
+            bypass: clipboard.bypass as u32,
+            reserved: [0; 4],
+        };
+        self.enqueue_chain_payload(payload);
+    }
+
+    fn duplicate_selected_chain_device(&mut self, cx: &mut impl UiNotify) {
+        let Some(device) = self.chain_selected_device() else {
+            self.show_toast("No device selected", cx);
+            return;
+        };
+        let payload = UiChainCommandPayload {
+            command_type: UiCommandType::AddDevice as u16,
+            flags: 0,
+            track_id: self.focused_track_index as u32,
+            base_version: self.chain_versions[self.focused_track_index],
+            device_id: K_CHAIN_DEVICE_ID_AUTO,
+            device_kind: device.kind,
+            insert_index: device.position.saturating_add(1),
+            patcher_node_id: device.patcher_node_id,
+            host_slot_index: device.host_slot_index,
+            bypass: device.bypass as u32,
+            reserved: [0; 4],
+        };
+        self.enqueue_chain_payload(payload);
+    }
+
+    pub(crate) fn toggle_chain_device_bypass(
+        &mut self,
+        device_id: u32,
+        cx: &mut impl UiNotify,
+    ) {
+        let track = self.focused_track_index;
+        let devices = match self.chain_devices.get_mut(track) {
+            Some(devices) => devices,
+            None => {
+                self.show_toast("No chain for track", cx);
+                return;
+            }
+        };
+        let Some(device) = devices.iter_mut().find(|d| d.id == device_id) else {
+            self.show_toast("Device not found", cx);
+            return;
+        };
+        device.bypass = !device.bypass;
+        let payload = UiChainCommandPayload {
+            command_type: UiCommandType::UpdateDevice as u16,
+            flags: 0x1,
+            track_id: track as u32,
+            base_version: self.chain_versions[track],
+            device_id: device.id,
+            device_kind: device.kind,
+            insert_index: K_CHAIN_DEVICE_ID_AUTO,
+            patcher_node_id: device.patcher_node_id,
+            host_slot_index: device.host_slot_index,
+            bypass: device.bypass as u32,
+            reserved: [0; 4],
+        };
+        self.enqueue_chain_payload(payload);
+        cx.notify();
+    }
+
+    pub(crate) fn open_vst_editor(&mut self, device_id: u32, cx: &mut impl UiNotify) {
+        let track = self.focused_track_index;
+        let Some(device) = self
+            .chain_devices
+            .get(track)
+            .and_then(|devices| devices.iter().find(|d| d.id == device_id))
+            .cloned()
+        else {
+            self.show_toast("Device not found", cx);
+            return;
+        };
+        if device.kind != 3 && device.kind != 4 {
+            self.show_toast("Editor only available for VSTs", cx);
+            return;
+        }
+        if self.bridge.is_none() {
+            self.show_toast("Engine not connected", cx);
+            return;
+        }
+        let payload = UiCommandPayload {
+            command_type: UiCommandType::OpenPluginEditor as u16,
+            flags: 0,
+            track_id: track as u32,
+            plugin_index: 0,
+            note_pitch: 0,
+            value0: device_id,
+            note_nanotick_lo: 0,
+            note_nanotick_hi: 0,
+            note_duration_lo: 0,
+            note_duration_hi: 0,
+            base_version: 0,
+        };
+        self.enqueue_ui_command(payload);
         cx.notify();
     }
 
@@ -1469,6 +1980,26 @@ impl EngineView {
 
     pub(crate) fn row_nanoticks(&self) -> u64 {
         NANOTICKS_PER_QUARTER / self.lines_per_beat()
+    }
+
+    pub(crate) fn desired_clip_window_range(&self) -> (u64, u64) {
+        let row_nanoticks = self.row_nanoticks() as i64;
+        if row_nanoticks <= 0 {
+            return (0, 0);
+        }
+        let visible_start = self.scroll_nanotick_offset.max(0);
+        let visible_end =
+            visible_start + row_nanoticks.saturating_mul(VISIBLE_ROWS as i64);
+        let mut start = visible_start;
+        let mut end = visible_end;
+        if let Some((sel_start, sel_end)) = self.selection_bounds() {
+            start = start.min(sel_start as i64);
+            end = end.max((sel_end + row_nanoticks as u64) as i64);
+        }
+        let margin = row_nanoticks.saturating_mul(CLIP_WINDOW_MARGIN_ROWS);
+        start = (start - margin).max(0);
+        end = end.saturating_add(margin);
+        (start as u64, end as u64)
     }
 
     fn snap_nanotick_to_row(&self, nanotick: u64) -> u64 {
@@ -2631,7 +3162,7 @@ impl Render for EngineView {
             "Quantize:Off"
         };
 
-        div()
+        let mut root = div()
             .relative()
             .flex()
             .flex_col()
@@ -2671,7 +3202,16 @@ impl Render for EngineView {
                             .child(transport_label),
                     ),
             )
-            .child(self.render_tracker_grid(cx))
+            ;
+
+        if self.patcher_open {
+            root = root.child(self.render_patcher_view(cx));
+        } else {
+            root = root.child(self.render_tracker_grid(cx));
+        }
+
+        root
+            .child(self.render_device_chain_strip(cx))
             .child(
                 div()
                     .text_sm()
@@ -2690,6 +3230,8 @@ impl Render for EngineView {
             .child(self.render_palette(cx))
             .child(self.render_scale_browser(cx))
             .child(self.render_jump_overlay(cx))
+            .child(self.render_preset_save_overlay(cx))
+            .child(self.render_debug_overlay(cx))
             .child(self.render_toast(cx))
     }
 }
@@ -3124,7 +3666,6 @@ fn is_cell_edit_start(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::SharedString;
 
     #[test]
     fn test_parse_note_token() {
@@ -3542,66 +4083,36 @@ mod tests {
         use daw_bridge::layout::{UiDiffPayload, UiDiffType, K_UI_MAX_TRACKS};
         use daw_bridge::reader::UiSnapshot;
 
-        let mut engine_view = EngineView {
-            bridge: None,
-            snapshot: UiSnapshot {
-                version: 0,
-                ui_visual_sample_count: 0,
-                ui_global_nanotick_playhead: 0,
-                ui_track_count: 0,
-                ui_transport_state: 0,
-                ui_clip_version: 0,
-                ui_clip_offset: 0,
-                ui_clip_bytes: 0,
-                ui_harmony_version: 0,
-                ui_harmony_offset: 0,
-                ui_harmony_bytes: 0,
-                ui_track_peak_rms: [0.0; K_UI_MAX_TRACKS],
-            },
-            clip_snapshot: None,
-            status: SharedString::default(),
-            plugins: Vec::new(),
-            palette_open: false,
-            palette_mode: PaletteMode::Commands,
-            palette_query: String::new(),
-            palette_selection: 0,
-            palette_empty_logged: false,
-            scale_browser_open: false,
-            scale_browser_query: String::new(),
-            scale_browser_selection: 0,
-            track_columns: vec![1; TRACK_COUNT],
-            focused_track_index: 0,
-            cursor_nanotick: 0,
-            cursor_col: 0,
-            scroll_nanotick_offset: 0,
-            zoom_index: DEFAULT_ZOOM_INDEX,
-            follow_playhead: false,
-            harmony_focus: false,
-            harmony_scale_id: 1,
-            edit_active: false,
-            edit_text: String::new(),
-            jump_open: false,
-            jump_text: String::new(),
-            selection: None,
-            selection_mask: SelectionMask::empty(TRACK_COUNT),
-            selection_anchor_nanotick: None,
-            loop_range: None,
-            clipboard: None,
-            toast_message: None,
-            toast_deadline: None,
-            pending_notes: Vec::new(),
-            pending_chords: Vec::new(),
-            clip_notes: vec![Vec::new(); TRACK_COUNT],
-            clip_version_local: 0,
-            harmony_version_local: 0,
-            clip_chords: vec![Vec::new(); TRACK_COUNT],
-            harmony_events: Vec::new(),
-            queued_commands: VecDeque::new(),
-            track_quantize: vec![false; TRACK_COUNT],
-            track_names: vec![None; TRACK_COUNT],
-            clip_resync_pending: false,
-            harmony_resync_pending: false,
+        let mut engine_view = EngineView::new_state();
+        engine_view.bridge = None;
+        engine_view.snapshot = UiSnapshot {
+            version: 0,
+            ui_visual_sample_count: 0,
+            ui_global_nanotick_playhead: 0,
+            ui_track_count: 0,
+            ui_transport_state: 0,
+            ui_clip_version: 0,
+            ui_clip_offset: 0,
+            ui_clip_bytes: 0,
+            ui_harmony_version: 0,
+            ui_harmony_offset: 0,
+            ui_harmony_bytes: 0,
+            ui_track_peak_rms: [0.0; K_UI_MAX_TRACKS],
         };
+        if let Some(state) = engine_view.clip_window.get_mut(0) {
+            state.window_start = 0;
+            state.window_end = NANOTICKS_PER_QUARTER * 4;
+        }
+        engine_view.track_columns = vec![1; TRACK_COUNT];
+        engine_view.track_quantize = vec![false; TRACK_COUNT];
+        engine_view.track_names = vec![None; TRACK_COUNT];
+        engine_view.clip_notes = vec![Vec::new(); TRACK_COUNT];
+        engine_view.clip_chords = vec![Vec::new(); TRACK_COUNT];
+        engine_view.queued_commands = VecDeque::new();
+        engine_view.chain_versions = vec![0; TRACK_COUNT];
+        engine_view.chain_devices = vec![Vec::new(); TRACK_COUNT];
+        engine_view.patcher_versions = vec![0; TRACK_COUNT];
+        engine_view.patcher_nodes = vec![Vec::new(); TRACK_COUNT];
 
         // Add initial note at position 0
         engine_view.clip_notes[0].push(ClipNote {
@@ -4187,6 +4698,8 @@ pub fn run_app() -> Result<()> {
                     if view.edit_active {
                         view.edit_text.pop();
                         cx.notify();
+                    } else if view.chain_focus {
+                        view.delete_selected_chain_device(cx);
                     } else if view.harmony_focus {
                         view.delete_harmony(cx);
                     } else {
@@ -4198,19 +4711,43 @@ pub fn run_app() -> Result<()> {
         cx.on_action({
             let view = view.clone();
             move |_: &CopySelection, cx| {
-                view.update(cx, |view, cx| view.copy_selection(cx));
+                view.update(cx, |view, cx| {
+                    if view.chain_focus {
+                        view.copy_selected_chain_device(cx);
+                    } else {
+                        view.copy_selection(cx);
+                    }
+                });
             }
         });
         cx.on_action({
             let view = view.clone();
             move |_: &CutSelection, cx| {
-                view.update(cx, |view, cx| view.cut_selection(cx));
+                view.update(cx, |view, cx| {
+                    if view.chain_focus {
+                        view.cut_selected_chain_device(cx);
+                    } else {
+                        view.cut_selection(cx);
+                    }
+                });
             }
         });
         cx.on_action({
             let view = view.clone();
             move |_: &PasteSelection, cx| {
-                view.update(cx, |view, cx| view.paste_selection(cx));
+                view.update(cx, |view, cx| {
+                    if view.chain_focus {
+                        view.paste_chain_device(cx);
+                    } else {
+                        view.paste_selection(cx);
+                    }
+                });
+            }
+        });
+        cx.on_action({
+            let view = view.clone();
+            move |_: &DuplicateDevice, cx| {
+                view.update(cx, |view, cx| view.duplicate_selected_chain_device(cx));
             }
         });
         cx.on_action({
@@ -4252,7 +4789,12 @@ pub fn run_app() -> Result<()> {
                 let mut last_version: u64 = 0;
                 let mut last_clip_version: u32 = 0;
                 let mut needs_clip_resync = false;
-                let mut have_clip_snapshot = false;
+                let mut clip_window_requests =
+                    vec![ClipWindowRequestState::default(); TRACK_COUNT];
+                let mut next_clip_window_request_id: u32 = 1;
+                let mut last_window_start: u64 = 0;
+                let mut last_window_end: u64 = 0;
+                let mut last_window_clip_version: u32 = 0;
                 let mut last_harmony_version: u32 = 0;
                 let mut needs_harmony_resync = false;
                 let mut have_harmony_snapshot = false;
@@ -4339,7 +4881,12 @@ pub fn run_app() -> Result<()> {
                                 // Always reset these when a new bridge is created
                                 last_version = 0;
                                 last_clip_version = 0;
-                                have_clip_snapshot = false;
+                                clip_window_requests =
+                                    vec![ClipWindowRequestState::default(); TRACK_COUNT];
+                                next_clip_window_request_id = 1;
+                                last_window_start = 0;
+                                last_window_end = 0;
+                                last_window_clip_version = 0;
                                 last_harmony_version = 0;
                                 have_harmony_snapshot = false;
                                 last_change = std::time::Instant::now();
@@ -4393,6 +4940,48 @@ pub fn run_app() -> Result<()> {
                                 let Some(entry) = bridge_ref.pop_ui_event() else {
                                     break;
                                 };
+                                if let Some(diff_type) = ui_diff_type(&entry) {
+                                    if diff_type == UiDiffType::ChainSnapshot as u16 {
+                                        if let Some(diff) = decode_ui_chain_diff(&entry) {
+                                            let _ = window.update(&mut async_cx, |view, _, cx| {
+                                                view.apply_chain_diff(diff);
+                                                cx.notify();
+                                            });
+                                        }
+                                        continue;
+                                    }
+                                    if diff_type == UiDiffType::ChainError as u16 {
+                                        if let Some(diff) = decode_ui_chain_error(&entry) {
+                                            let _ = window.update(&mut async_cx, |view, _, cx| {
+                                                let message = view.chain_error_message(diff);
+                                                view.show_toast(&message, cx);
+                                            });
+                                        }
+                                        continue;
+                                    }
+                                    if diff_type == UiDiffType::PatcherGraphDelta as u16 {
+                                        if let Some(diff) = decode_ui_patcher_graph_diff(&entry) {
+                                            let _ = window.update(&mut async_cx, |view, _, cx| {
+                                                view.apply_patcher_graph_diff(diff);
+                                                if diff.flags == 0 &&
+                                                    diff.node_type == PATCHER_NODE_RANDOM_DEGREE {
+                                                    view.send_random_degree_config(diff.node_id);
+                                                }
+                                                cx.notify();
+                                            });
+                                        }
+                                        continue;
+                                    }
+                                    if diff_type == UiDiffType::PatcherGraphError as u16 {
+                                        if let Some(diff) = decode_ui_patcher_graph_error(&entry) {
+                                            let _ = window.update(&mut async_cx, |view, _, cx| {
+                                                let message = view.patcher_error_message(diff);
+                                                view.show_toast(&message, cx);
+                                            });
+                                        }
+                                        continue;
+                                    }
+                                }
                                 if let Some(diff) = decode_ui_diff(&entry) {
                                     if diff.diff_type == UiDiffType::ResyncNeeded as u16 {
                                         eprintln!(
@@ -4486,42 +5075,122 @@ pub fn run_app() -> Result<()> {
                                     continue;
                                 }
                             }
-                            if needs_clip_resync {
-                                if let Some(clip_snapshot) = bridge_ref.read_clip_snapshot() {
-                                    let new_version = current_snapshot.as_ref().map(|s| s.ui_clip_version).unwrap_or(0);
-                                    eprintln!(
-                                        "daw-app: Clip resync applied (version {})",
-                                        new_version
-                                    );
-                                    last_clip_version = new_version;
-                                    needs_clip_resync = false;
-                                    have_clip_snapshot = true;
+                            if let Some(snapshot) = current_snapshot.as_ref() {
+                                let track_count = snapshot.ui_track_count.min(TRACK_COUNT as u32) as usize;
+                                let desired_range = window
+                                    .update(&mut async_cx, |view, _, _| {
+                                        view.desired_clip_window_range()
+                                    })
+                                    .unwrap_or((0, 0));
+                                let window_start = desired_range.0;
+                                let window_end = desired_range.1;
+                                let clip_version = snapshot.ui_clip_version;
+                                let window_changed = window_start != last_window_start ||
+                                    window_end != last_window_end ||
+                                    clip_version != last_window_clip_version;
+
+                                if needs_clip_resync || window_changed {
+                                    last_window_start = window_start;
+                                    last_window_end = window_end;
+                                    last_window_clip_version = clip_version;
+                                    for track_index in 0..track_count {
+                                        let request_id = next_clip_window_request_id;
+                                        next_clip_window_request_id = next_clip_window_request_id.wrapping_add(1).max(1);
+                                        clip_window_requests[track_index] = ClipWindowRequestState {
+                                            window_start,
+                                            window_end,
+                                            request_id,
+                                            cursor_event_index: 0,
+                                            in_flight_cursor: 0,
+                                            clip_version,
+                                            complete: false,
+                                            in_flight: false,
+                                        };
+                                    }
                                     let _ = window.update(&mut async_cx, |view, _, cx| {
-                                        view.apply_clip_snapshot(clip_snapshot);
+                                        for track_index in 0..track_count {
+                                            if let Some(notes) = view.clip_notes.get_mut(track_index) {
+                                                notes.clear();
+                                            }
+                                            if let Some(chords) = view.clip_chords.get_mut(track_index) {
+                                                chords.clear();
+                                            }
+                                            if let Some(state) = view.clip_window.get_mut(track_index) {
+                                                state.request_id = clip_window_requests[track_index].request_id;
+                                                state.cursor_event_index = 0;
+                                                state.next_event_index = 0;
+                                                state.window_start = window_start;
+                                                state.window_end = window_end;
+                                                state.clip_version = clip_version;
+                                                state.complete = false;
+                                            }
+                                        }
                                         view.pending_notes.clear();
                                         view.pending_chords.clear();
                                         view.clip_resync_pending = false;
-                                        view.rebase_clip_queue(new_version);
+                                        view.rebase_clip_queue(clip_version);
                                         cx.notify();
                                     });
+                                    needs_clip_resync = false;
                                 }
-                            } else if !have_clip_snapshot && last_clip_version == 0 {
-                                // Only read initial snapshot once when first connecting
-                                if let Some(clip_snapshot) = bridge_ref.read_clip_snapshot() {
-                                    let new_version = current_snapshot.as_ref().map(|s| s.ui_clip_version).unwrap_or(0);
-                                    eprintln!(
-                                        "daw-app: Initial clip snapshot loaded (version {})",
-                                        new_version
-                                    );
-                                    last_clip_version = new_version;
-                                    have_clip_snapshot = true;
-                                    let _ = window.update(&mut async_cx, |view, _, cx| {
-                                        view.apply_clip_snapshot(clip_snapshot);
-                                        view.pending_notes.clear();
-                                        view.pending_chords.clear();
-                                        view.rebase_clip_queue(new_version);
-                                        cx.notify();
-                                    });
+
+                                if let Some(window_snapshot) = bridge_ref.read_clip_window_snapshot() {
+                                    let track_index = window_snapshot.track_id as usize;
+                                    if track_index < track_count {
+                                        let state = &mut clip_window_requests[track_index];
+                                        if state.in_flight &&
+                                            window_snapshot.request_id == state.request_id &&
+                                            window_snapshot.cursor_event_index == state.in_flight_cursor &&
+                                            window_snapshot.window_start_nanotick == state.window_start &&
+                                            window_snapshot.window_end_nanotick == state.window_end {
+                                            if (window_snapshot.flags & UI_CLIP_WINDOW_FLAG_RESYNC) != 0 ||
+                                                window_snapshot.clip_version != state.clip_version {
+                                                needs_clip_resync = true;
+                                                let _ = window.update(&mut async_cx, |view, _, _| {
+                                                    view.clip_resync_pending = true;
+                                                });
+                                            } else {
+                                                let reset = window_snapshot.cursor_event_index == 0;
+                                                let _ = window.update(&mut async_cx, |view, _, cx| {
+                                                    view.apply_clip_window_page(window_snapshot, reset);
+                                                    cx.notify();
+                                                });
+                                                state.cursor_event_index = window_snapshot.next_event_index;
+                                                state.complete =
+                                                    (window_snapshot.flags & UI_CLIP_WINDOW_FLAG_COMPLETE) != 0;
+                                            }
+                                            state.in_flight = false;
+                                        }
+                                    }
+                                }
+
+                                if !clip_window_requests.iter().any(|state| state.in_flight) {
+                                    for track_index in 0..track_count {
+                                        let state = &mut clip_window_requests[track_index];
+                                        if state.complete {
+                                            continue;
+                                        }
+                                        let (start_lo, start_hi) = split_u64(state.window_start);
+                                        let (end_lo, end_hi) = split_u64(state.window_end);
+                                        let payload = UiClipWindowCommandPayload {
+                                            command_type: UiCommandType::RequestClipWindow as u16,
+                                            flags: 0,
+                                            track_id: track_index as u32,
+                                            request_id: state.request_id,
+                                            window_start_lo: start_lo,
+                                            window_start_hi: start_hi,
+                                            window_end_lo: end_lo,
+                                            window_end_hi: end_hi,
+                                            cursor_event_index: state.cursor_event_index,
+                                            reserved: 0,
+                                            reserved2: 0,
+                                        };
+                                        if bridge_ref.send_ui_clip_window_command(payload) {
+                                            state.in_flight = true;
+                                            state.in_flight_cursor = state.cursor_event_index;
+                                        }
+                                        break;
+                                    }
                                 }
                             }
                             if needs_harmony_resync {

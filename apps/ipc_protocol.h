@@ -11,6 +11,8 @@ enum class ControlMessageType : uint16_t {
   Hello = 1,
   ProcessBlock = 2,
   Shutdown = 3,
+  OpenEditor = 4,
+  SetBypass = 5,
 };
 
 struct ControlHeader {
@@ -41,6 +43,19 @@ struct ProcessBlockRequest {
   uint32_t blockId = 0;
   uint64_t engineSampleStart = 0;
   uint64_t pluginSampleStart = 0;
+  uint16_t segmentStart = 0;
+  uint16_t segmentLength = 0;
+  uint32_t reserved = 0;
+};
+
+struct OpenEditorRequest {
+  uint32_t pluginIndex = 0;
+  uint32_t reserved = 0;
+};
+
+struct SetBypassRequest {
+  uint32_t pluginIndex = 0;
+  uint32_t bypass = 0;
 };
 
 }  // namespace daw

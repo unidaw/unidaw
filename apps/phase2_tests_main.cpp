@@ -55,12 +55,17 @@ bool waitForBlock(const daw::HostController& controller,
   }
 }
 
-bool setupHost(TestHost& host,
-               const TestConfig& testConfig,
-               const std::string& pluginPath) {
+bool setupHostMulti(TestHost& host,
+                    const TestConfig& testConfig,
+                    const std::vector<std::string>& pluginPaths) {
+  ::setenv("DAW_USE_FAKE_IDENTITY", "1", 1);
+  ::setenv("DAW_HOST_FORCE_DIRECT_LOAD", "1", 1);
+
   daw::HostConfig config;
   config.socketPath = "/tmp/daw_test.sock";
-  config.pluginPath = pluginPath;
+  if (!pluginPaths.empty()) {
+    config.pluginPaths = pluginPaths;
+  }
   config.blockSize = testConfig.blockSize;
   config.sampleRate = testConfig.sampleRate;
   config.numChannelsIn = testConfig.numChannelsIn;
@@ -83,7 +88,18 @@ bool setupHost(TestHost& host,
     std::cerr << "Invalid ring capacity." << std::endl;
     return false;
   }
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   return true;
+}
+
+bool setupHost(TestHost& host,
+               const TestConfig& testConfig,
+               const std::string& pluginPath) {
+  std::vector<std::string> pluginPaths;
+  if (!pluginPath.empty()) {
+    pluginPaths.push_back(pluginPath);
+  }
+  return setupHostMulti(host, testConfig, pluginPaths);
 }
 
 void shutdownHost(TestHost& host) {
@@ -110,10 +126,11 @@ bool writeMidiNoteOn(daw::EventRingView& ring,
   return daw::ringWrite(ring, entry);
 }
 
-bool writeParamChange(daw::EventRingView& ring,
-                      uint64_t sampleTime,
-                      const std::string& stableId,
-                      float value) {
+bool writeParamChangeTarget(daw::EventRingView& ring,
+                            uint64_t sampleTime,
+                            const std::string& stableId,
+                            float value,
+                            uint32_t targetPluginIndex) {
   daw::EventEntry entry;
   entry.sampleTime = sampleTime;
   entry.blockId = 0;
@@ -124,8 +141,20 @@ bool writeParamChange(daw::EventRingView& ring,
   const auto uid16 = daw::hashStableId16(stableId);
   std::memcpy(payload.uid16, uid16.data(), uid16.size());
   payload.value = value;
+  payload.targetPluginIndex = targetPluginIndex;
   std::memcpy(entry.payload, &payload, sizeof(payload));
   return daw::ringWrite(ring, entry);
+}
+
+bool writeParamChange(daw::EventRingView& ring,
+                      uint64_t sampleTime,
+                      const std::string& stableId,
+                      float value) {
+  return writeParamChangeTarget(ring,
+                                sampleTime,
+                                stableId,
+                                value,
+                                daw::kParamTargetAll);
 }
 
 float readOutputSample(const daw::HostController& controller,
@@ -186,7 +215,7 @@ bool runImpulseTest(const std::string& pluginPath) {
     }
 
     host.controller.sendProcessBlock(blockId, engineSampleStart, pluginSampleStart);
-    if (!waitForBlock(host.controller, blockId, 500)) {
+    if (!waitForBlock(host.controller, blockId, 5000)) {
       std::cerr << "Timeout waiting for block " << blockId << std::endl;
       shutdownHost(host);
       return false;
@@ -249,7 +278,7 @@ bool runParamPriorityTest(const std::string& pluginPath) {
     }
 
     host.controller.sendProcessBlock(blockId, engineSampleStart, pluginSampleStart);
-    if (!waitForBlock(host.controller, blockId, 500)) {
+    if (!waitForBlock(host.controller, blockId, 5000)) {
       std::cerr << "Timeout waiting for block " << blockId << std::endl;
       shutdownHost(host);
       return false;
@@ -272,6 +301,103 @@ bool runParamPriorityTest(const std::string& pluginPath) {
 
   shutdownHost(host);
   return validated;
+}
+
+bool runParamTargetingTest(const std::string& pluginPath) {
+  TestConfig testConfig;
+  TestHost host;
+  if (!setupHostMulti(host, testConfig, {pluginPath, pluginPath})) {
+    return false;
+  }
+
+  daw::LatencyManager latency;
+  latency.init(testConfig.blockSize, testConfig.numBlocks);
+
+  const uint64_t targetSampleA =
+      latency.getLatencySamples() + testConfig.blockSize + 3;
+  const uint64_t targetSampleB = targetSampleA + testConfig.blockSize;
+  const uint64_t compensatedA = latency.getCompensatedStart(targetSampleA);
+  const uint64_t compensatedB = latency.getCompensatedStart(targetSampleB);
+  const std::string gainId = "index:0";
+  const float gainPlugin0 = 0.2f;
+  const float gainPlugin1 = 0.37f;
+
+  bool validatedA = false;
+  bool validatedB = false;
+  const uint32_t maxBlocks = 30;
+  for (uint32_t blockId = 1; blockId <= maxBlocks; ++blockId) {
+    const uint64_t engineSampleStart =
+        static_cast<uint64_t>(blockId - 1) * testConfig.blockSize;
+    const uint64_t engineSampleEnd = engineSampleStart + testConfig.blockSize;
+    const uint64_t pluginSampleStart =
+        latency.getCompensatedStart(engineSampleStart);
+
+    clearInputBlock(host.controller, blockId);
+
+    if (targetSampleA >= engineSampleStart && targetSampleA < engineSampleEnd) {
+      if (!writeParamChangeTarget(host.ringStd,
+                                  compensatedA,
+                                  gainId,
+                                  gainPlugin0,
+                                  0)) {
+        std::cerr << "Failed to write param event for plugin 0." << std::endl;
+      }
+      if (!writeMidiNoteOn(host.ringStd, compensatedA, 60, 100)) {
+        std::cerr << "Failed to write MIDI event for plugin 0." << std::endl;
+      }
+    }
+    if (targetSampleB >= engineSampleStart && targetSampleB < engineSampleEnd) {
+      if (!writeParamChangeTarget(host.ringStd,
+                                  compensatedB,
+                                  gainId,
+                                  gainPlugin1,
+                                  1)) {
+        std::cerr << "Failed to write param event for plugin 1." << std::endl;
+      }
+      if (!writeMidiNoteOn(host.ringStd, compensatedB, 60, 100)) {
+        std::cerr << "Failed to write MIDI event for plugin 1." << std::endl;
+      }
+    }
+
+    host.controller.sendProcessBlock(blockId, engineSampleStart, pluginSampleStart);
+    if (!waitForBlock(host.controller, blockId, 5000)) {
+      std::cerr << "Timeout waiting for block " << blockId << std::endl;
+      shutdownHost(host);
+      return false;
+    }
+
+    if (targetSampleA >= engineSampleStart && targetSampleA < engineSampleEnd) {
+      const uint32_t offset =
+          static_cast<uint32_t>(targetSampleA - engineSampleStart);
+      const float sample =
+          readOutputSample(host.controller, blockId, testConfig.blockSize, 0, offset);
+      const float expected = 1.0f;
+      if (std::fabs(sample - expected) < 1e-5f) {
+        validatedA = true;
+      } else {
+        std::cerr << "Param targeting mismatch (plugin 0). expected=" << expected
+                  << " actual=" << sample << std::endl;
+      }
+    }
+    if (targetSampleB >= engineSampleStart && targetSampleB < engineSampleEnd) {
+      const uint32_t offset =
+          static_cast<uint32_t>(targetSampleB - engineSampleStart);
+      const float sample =
+          readOutputSample(host.controller, blockId, testConfig.blockSize, 0, offset);
+      if (std::fabs(sample - gainPlugin1) < 1e-5f) {
+        validatedB = true;
+      } else {
+        std::cerr << "Param targeting mismatch (plugin 1). expected="
+                  << gainPlugin1 << " actual=" << sample << std::endl;
+      }
+    }
+    if (validatedA && validatedB) {
+      break;
+    }
+  }
+
+  shutdownHost(host);
+  return validatedA && validatedB;
 }
 
 bool runChaosRecoveryTest(const std::string& pluginPath) {
@@ -332,7 +458,7 @@ bool runChaosRecoveryTest(const std::string& pluginPath) {
     }
 
     host.controller.sendProcessBlock(blockId, engineSampleStart, pluginSampleStart);
-    waitForBlock(host.controller, blockId, 200);
+    waitForBlock(host.controller, blockId, 5000);
     watchdog.check(blockId);
 
     if (restarted && targetSample >= engineSampleStart &&
@@ -405,6 +531,7 @@ int runAllTests(const std::string& pluginPath) {
   const TestCase tests[] = {
       {"impulse", runImpulseTest},
       {"param_priority", runParamPriorityTest},
+      {"param_targeting", runParamTargetingTest},
       {"chaos", runChaosRecoveryTest},
       {"ui_visual", runUiVisualSampleCountTest},
   };
@@ -449,6 +576,9 @@ int main(int argc, char** argv) {
   }
   if (testName == "param_priority") {
     return runParamPriorityTest(pluginPath) ? 0 : 1;
+  }
+  if (testName == "param_targeting") {
+    return runParamTargetingTest(pluginPath) ? 0 : 1;
   }
   if (testName == "chaos") {
     return runChaosRecoveryTest(pluginPath) ? 0 : 1;

@@ -2,7 +2,9 @@
 
 #include <sys/types.h>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "apps/ipc_protocol.h"
 #include "apps/shared_memory.h"
@@ -11,7 +13,7 @@ namespace daw {
 
 struct HostConfig {
   std::string socketPath;
-  std::string pluginPath; // Added plugin path
+  std::vector<std::string> pluginPaths;
   std::string shmName;
   uint32_t blockSize = 512;
   double sampleRate = 48000.0;
@@ -21,6 +23,15 @@ struct HostConfig {
   uint32_t ringStdCapacity = 1024;
   uint32_t ringCtrlCapacity = 128;
   uint32_t ringUiCapacity = 128;
+};
+
+struct SharedMemoryView {
+  void* base = nullptr;
+  size_t size = 0;
+  ShmHeader* header = nullptr;
+  BlockMailbox* mailbox = nullptr;
+  std::atomic<uint32_t>* completedBlockId = nullptr;
+  ~SharedMemoryView();
 };
 
 class HostController {
@@ -37,12 +48,18 @@ class HostController {
   void disconnect();
   bool sendProcessBlock(uint32_t blockId,
                         uint64_t engineSampleStart,
-                        uint64_t pluginSampleStart);
+                        uint64_t pluginSampleStart,
+                        uint16_t segmentStart = 0,
+                        uint16_t segmentLength = 0);
+  bool sendOpenEditor(uint32_t pluginIndex);
+  bool sendSetBypass(uint32_t pluginIndex, bool bypass);
   bool sendShutdown();
   pid_t hostPid() const { return hostPid_; }
 
   const ShmHeader* shmHeader() const { return shmHeader_; }
   const BlockMailbox* mailbox() const { return mailbox_; }
+  size_t shmSize() const { return shmSize_; }
+  std::shared_ptr<const SharedMemoryView> sharedMemory() const { return shmView_; }
 
  private:
  bool mapSharedMemory(const HelloResponse& response, const HostConfig& config);
@@ -57,6 +74,7 @@ class HostController {
   size_t shmSize_ = 0;
   ShmHeader* shmHeader_ = nullptr;
   BlockMailbox* mailbox_ = nullptr;
+  std::shared_ptr<SharedMemoryView> shmView_;
   pid_t hostPid_ = -1;
 };
 

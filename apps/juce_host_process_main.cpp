@@ -6,7 +6,10 @@
 #include <filesystem>
 #include <thread>
 #include <chrono>
+#include <atomic>
 #include <array>
+#include <mutex>
+#include <memory>
 #include <unordered_map>
 #include <algorithm>
 
@@ -16,6 +19,8 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <unistd.h>
+
+#include <juce_events/juce_events.h>
 
 #include "apps/audio_shm.h"
 #include "apps/event_payloads.h"
@@ -41,12 +46,23 @@ struct HostState {
   daw::EventRingView ringCtrl;
   std::unique_ptr<daw::IRuntime> runtime;
   std::unique_ptr<daw::IPluginHost> pluginHost;
-  std::unique_ptr<daw::IPluginInstance> plugin;
+  struct PluginSlot {
+    std::unique_ptr<daw::IPluginInstance> instance;
+    std::unordered_map<std::string, std::string> paramIdByUid16;
+    bool bypass = false;
+  };
+  std::vector<PluginSlot> plugins;
+  std::mutex pluginsMutex;
   std::vector<float*> inputPtrs;
   std::vector<float*> outputPtrs;
-  std::string pluginPath;
-  std::unordered_map<std::string, std::string> paramIdByUid16;
+  std::vector<std::string> pluginPaths;
+  std::vector<float> chainBufferA;
+  std::vector<float> chainBufferB;
+  std::vector<float*> chainPtrsA;
+  std::vector<float*> chainPtrsB;
   bool testMode = false;
+  std::atomic<bool> pluginsLoading{false};
+  std::atomic<bool> pluginsReady{false};
 };
 
 std::string uid16Key(const uint8_t* uid16) {
@@ -123,6 +139,81 @@ int createServerSocket(const std::string& path) {
   }
 
   return fd;
+}
+
+void loadPlugins(HostState& state,
+                 const std::vector<std::string>& pluginPaths,
+                 double sampleRate,
+                 uint32_t blockSize,
+                 uint32_t numChannelsOut) {
+  state.pluginsLoading.store(true, std::memory_order_release);
+  state.pluginsReady.store(false, std::memory_order_release);
+  const bool logLoad = std::getenv("DAW_HOST_LOG_LOAD") != nullptr;
+  if (logLoad) {
+    std::cerr << "Host: begin load (" << pluginPaths.size()
+              << " paths)" << std::endl;
+  }
+  auto pluginHost = daw::createPluginHost();
+  std::vector<HostState::PluginSlot> plugins;
+
+  for (const auto& path : pluginPaths) {
+    if (!std::filesystem::exists(path)) {
+      std::cerr << "Plugin path not found: " << path << std::endl;
+      continue;
+    }
+    if (logLoad) {
+      std::cerr << "Host: loading plugin " << path << std::endl;
+    }
+    auto instance = pluginHost->loadVst3FromPath(path, sampleRate, blockSize);
+    if (!instance) {
+      std::cerr << "Failed to load plugin in host process: " << path << std::endl;
+      continue;
+    }
+    if (logLoad) {
+      std::cerr << "Host: loaded instance " << instance->name() << std::endl;
+    }
+    instance->prepare(sampleRate, blockSize,
+                      static_cast<int>(numChannelsOut));
+    HostState::PluginSlot slot;
+    slot.instance = std::move(instance);
+    for (const auto& param : slot.instance->parameters()) {
+      const auto uid16 = daw::hashStableId16(param.stableId);
+      slot.paramIdByUid16.emplace(uid16Key(uid16.data()), param.stableId);
+    }
+    plugins.push_back(std::move(slot));
+  }
+
+  std::vector<float> chainBufferA;
+  std::vector<float> chainBufferB;
+  std::vector<float*> chainPtrsA;
+  std::vector<float*> chainPtrsB;
+  if (plugins.size() > 1) {
+    const size_t bufferSamples =
+        static_cast<size_t>(numChannelsOut) * blockSize;
+    chainBufferA.assign(bufferSamples, 0.0f);
+    chainBufferB.assign(bufferSamples, 0.0f);
+    chainPtrsA.resize(numChannelsOut);
+    chainPtrsB.resize(numChannelsOut);
+    for (uint32_t ch = 0; ch < numChannelsOut; ++ch) {
+      chainPtrsA[ch] =
+          chainBufferA.data() + static_cast<size_t>(ch) * blockSize;
+      chainPtrsB[ch] =
+          chainBufferB.data() + static_cast<size_t>(ch) * blockSize;
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(state.pluginsMutex);
+  state.pluginHost = std::move(pluginHost);
+  state.plugins = std::move(plugins);
+  state.chainBufferA = std::move(chainBufferA);
+  state.chainBufferB = std::move(chainBufferB);
+  state.chainPtrsA = std::move(chainPtrsA);
+  state.chainPtrsB = std::move(chainPtrsB);
+  std::cerr << "Host: loaded " << state.plugins.size()
+            << " plugin(s) from " << pluginPaths.size()
+            << " path(s)" << std::endl;
+  state.pluginsReady.store(true, std::memory_order_release);
+  state.pluginsLoading.store(false, std::memory_order_release);
 }
 
 bool handleHello(HostState& state, const daw::HelloRequest& request) {
@@ -228,35 +319,44 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
   state.outputPtrs.resize(header.numChannelsOut, nullptr);
   state.inputPtrs.resize(header.numChannelsIn, nullptr);
 
-  if (!state.pluginPath.empty()) {
-    if (!std::filesystem::exists(state.pluginPath)) {
-      std::cerr << "Plugin path not found: " << state.pluginPath << std::endl;
-    }
-    state.runtime = daw::createJuceRuntime();
-    state.pluginHost = daw::createPluginHost();
-    state.plugin = state.pluginHost->loadVst3FromPath(
-        state.pluginPath, request.sampleRate, request.blockSize);
-    if (state.plugin) {
-      state.plugin->prepare(request.sampleRate, request.blockSize,
-                            static_cast<int>(request.numChannelsOut));
-      state.paramIdByUid16.clear();
-      for (const auto& param : state.plugin->parameters()) {
-        const auto uid16 = daw::hashStableId16(param.stableId);
-        state.paramIdByUid16.emplace(
-            uid16Key(uid16.data()), param.stableId);
-      }
-    } else {
-      std::cerr << "Failed to load plugin in host process: " << state.pluginPath
-                << std::endl;
-    }
-  }
-
   daw::HelloResponse response;
   response.shmSizeBytes = shmSize;
   std::snprintf(response.shmName, sizeof(response.shmName), "%s", state.shmName.c_str());
 
-  return daw::sendMessage(state.clientFd, daw::ControlMessageType::Hello,
-                          &response, sizeof(response));
+  if (!state.runtime) {
+    state.runtime = daw::createJuceRuntime();
+  }
+
+  // Plugins are pre-loaded on the message thread in main() before the control loop starts.
+  // This is necessary because JUCE's createPluginInstance and prepareToPlay require
+  // the message thread. We do NOT re-prepare here because prepareToPlay would block
+  // waiting for the message thread (which causes a deadlock from the control thread).
+  // The plugins were prepared with default values (48000Hz, 512 samples) which match
+  // the typical engine configuration.
+  if (state.pluginPaths.empty()) {
+    std::lock_guard<std::mutex> lock(state.pluginsMutex);
+    state.pluginHost.reset();
+    state.plugins.clear();
+    state.chainBufferA.clear();
+    state.chainBufferB.clear();
+    state.chainPtrsA.clear();
+    state.chainPtrsB.clear();
+    state.pluginsReady.store(true, std::memory_order_release);
+    state.pluginsLoading.store(false, std::memory_order_release);
+  }
+  // Note: if sample rate/block size differ from defaults, plugins may need to be
+  // re-prepared. For now we trust the defaults match. A proper solution would be
+  // to queue the prepare on the message thread and wait for completion.
+
+  std::cerr << "Host: sending Hello response..." << std::endl;
+  const bool sent = daw::sendMessage(state.clientFd, daw::ControlMessageType::Hello,
+                                     &response, sizeof(response));
+  std::cerr << "Host: Hello response sent=" << sent << std::endl;
+  if (!sent) {
+    return false;
+  }
+
+  return true;
 }
 
 bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& request) {
@@ -281,27 +381,25 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
                                                  ch);
   }
 
-        if (!state.plugin) {
+  std::unique_lock<std::mutex> pluginLock(state.pluginsMutex);
+  const size_t pluginCount = state.plugins.size();
+  const bool pluginsReady = state.pluginsReady.load(std::memory_order_acquire);
+  const bool havePlugins = pluginCount > 0 && pluginsReady;
 
-          const uint32_t channelsToCopy = std::min(state.header->numChannelsOut,
-
-                                                   state.header->numChannelsIn);
-
-          if (channelsToCopy > 0) {
-
-            for (uint32_t ch = 0; ch < channelsToCopy; ++ch) {
-
-              std::memcpy(state.outputPtrs[ch],
-
-                          state.inputPtrs[ch],
-
-                          static_cast<size_t>(state.header->blockSize) * sizeof(float));
-
-            }      for (uint32_t ch = channelsToCopy; ch < state.header->numChannelsOut; ++ch) {
-        std::fill(state.outputPtrs[ch],
-                  state.outputPtrs[ch] + state.header->blockSize,
-                  0.0f);
+  if (!havePlugins) {
+    const uint32_t channelsToCopy = std::min(state.header->numChannelsOut,
+                                             state.header->numChannelsIn);
+    if (channelsToCopy > 0) {
+      for (uint32_t ch = 0; ch < channelsToCopy; ++ch) {
+        std::memcpy(state.outputPtrs[ch],
+                    state.inputPtrs[ch],
+                    static_cast<size_t>(state.header->blockSize) * sizeof(float));
       }
+    }
+    for (uint32_t ch = channelsToCopy; ch < state.header->numChannelsOut; ++ch) {
+      std::fill(state.outputPtrs[ch],
+                state.outputPtrs[ch] + state.header->blockSize,
+                0.0f);
     }
   }
 
@@ -342,6 +440,9 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
             });
 
   daw::MidiEvents events;
+  const bool logMidi = std::getenv("DAW_HOST_LOG_MIDI") != nullptr;
+  const bool logAudio = std::getenv("DAW_HOST_LOG_AUDIO") != nullptr;
+  int midiEventCount = 0;
   uint64_t replaySeenSampleTime = 0;
   for (const auto& event : pending) {
     if (event.type == static_cast<uint16_t>(daw::EventType::Transport)) {
@@ -355,9 +456,25 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
         event.size >= sizeof(daw::ParamPayload)) {
       daw::ParamPayload payload{};
       std::memcpy(&payload, event.payload, sizeof(payload));
-      const auto it = state.paramIdByUid16.find(uid16Key(payload.uid16));
-      if (it != state.paramIdByUid16.end() && state.plugin) {
-        state.plugin->setParameterValueNormalizedById(it->second, payload.value);
+      if (havePlugins) {
+        const auto uidKey = uid16Key(payload.uid16);
+        if (payload.targetPluginIndex != daw::kParamTargetAll) {
+          const uint32_t target = payload.targetPluginIndex;
+          if (target < pluginCount) {
+            auto& slot = state.plugins[target];
+            const auto it = slot.paramIdByUid16.find(uidKey);
+            if (it != slot.paramIdByUid16.end()) {
+              slot.instance->setParameterValueNormalizedById(it->second, payload.value);
+            }
+          }
+        } else {
+          for (auto& slot : state.plugins) {
+            const auto it = slot.paramIdByUid16.find(uidKey);
+            if (it != slot.paramIdByUid16.end()) {
+              slot.instance->setParameterValueNormalizedById(it->second, payload.value);
+            }
+          }
+        }
       }
       continue;
     }
@@ -375,26 +492,126 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
       noteEvent.tuningCents = payload.tuningCents;
       noteEvent.noteId = static_cast<int32_t>(payload.noteId);
       events.push_back(noteEvent);
+      ++midiEventCount;
+    }
+  }
+  if (logMidi && midiEventCount > 0) {
+    std::cerr << "Host: block " << request.blockId
+              << " midiEvents=" << midiEventCount
+              << " start=" << blockStart << std::endl;
+  }
+  if (logAudio && havePlugins && midiEventCount > 0) {
+    float peak = 0.0f;
+    const int channels =
+        std::min(static_cast<int>(state.header->numChannelsOut),
+                 static_cast<int>(state.outputPtrs.size()));
+    for (int ch = 0; ch < channels; ++ch) {
+      const float* data = state.outputPtrs[ch];
+      if (!data) {
+        continue;
+      }
+      for (uint32_t i = 0; i < state.header->blockSize; ++i) {
+        const float v = std::abs(data[i]);
+        if (v > peak) {
+          peak = v;
+        }
+      }
+    }
+    std::cerr << "Host: block " << request.blockId
+              << " audioPeak=" << peak << std::endl;
+  }
+
+  if (havePlugins) {
+    const uint32_t totalPlugins = static_cast<uint32_t>(pluginCount);
+    uint32_t segmentStart = request.segmentStart;
+    uint32_t segmentLength = request.segmentLength;
+    if (segmentLength == 0 || segmentStart + segmentLength > totalPlugins) {
+      segmentStart = 0;
+      segmentLength = totalPlugins;
+    }
+    if (segmentStart >= totalPlugins || segmentLength == 0) {
+      segmentStart = 0;
+      segmentLength = totalPlugins;
+    }
+    const uint32_t segmentEnd = segmentStart + segmentLength;
+    const float* const* inputPtrs =
+        state.header->numChannelsIn > 0 ? state.inputPtrs.data() : nullptr;
+    int numInputs = static_cast<int>(state.header->numChannelsIn);
+    const uint32_t channelsOut = state.header->numChannelsOut;
+    for (uint32_t index = segmentStart; index < segmentEnd; ++index) {
+      auto& slot = state.plugins[index];
+      const bool isLast = (index + 1 == segmentEnd);
+      float* const* outputPtrs = isLast ? state.outputPtrs.data()
+                                        : ((index - segmentStart) % 2 == 0
+                                               ? state.chainPtrsA.data()
+                                               : state.chainPtrsB.data());
+      const int numOutputs = static_cast<int>(channelsOut);
+      const int pluginInputs = slot.instance->inputChannels();
+      const float* const* pluginInputPtrs =
+          pluginInputs > 0 ? inputPtrs : nullptr;
+      const int pluginInputCount =
+          pluginInputPtrs ? std::min(pluginInputs, numInputs) : 0;
+      if (!isLast) {
+        const size_t bufferSamples =
+            static_cast<size_t>(channelsOut) * state.header->blockSize;
+        if (((index - segmentStart) % 2) == 0) {
+          std::fill(state.chainBufferA.begin(), state.chainBufferA.end(), 0.0f);
+        } else {
+          std::fill(state.chainBufferB.begin(), state.chainBufferB.end(), 0.0f);
+        }
+      }
+      if (slot.bypass) {
+        if (pluginInputPtrs && pluginInputCount > 0) {
+          const int channelsToCopy = std::min(pluginInputCount, numOutputs);
+          for (int ch = 0; ch < channelsToCopy; ++ch) {
+            const float* src = pluginInputPtrs[ch];
+            float* dst = outputPtrs[ch];
+            std::copy(src, src + state.header->blockSize, dst);
+          }
+          for (int ch = channelsToCopy; ch < numOutputs; ++ch) {
+            std::fill(outputPtrs[ch], outputPtrs[ch] + state.header->blockSize, 0.0f);
+          }
+        } else {
+          for (int ch = 0; ch < numOutputs; ++ch) {
+            std::fill(outputPtrs[ch], outputPtrs[ch] + state.header->blockSize, 0.0f);
+          }
+        }
+      } else {
+        slot.instance->process(pluginInputPtrs,
+                               pluginInputCount,
+                               outputPtrs,
+                               numOutputs,
+                               static_cast<int>(state.header->blockSize),
+                               events,
+                               static_cast<int64_t>(blockStart));
+      }
+      inputPtrs = outputPtrs;
+      numInputs = numOutputs;
     }
   }
 
-  if (state.plugin) {
-    const float* const* inputPtrs =
-        state.header->numChannelsIn > 0 ? state.inputPtrs.data() : nullptr;
-    state.plugin->process(inputPtrs,
-                          static_cast<int>(state.header->numChannelsIn),
-                          state.outputPtrs.data(),
-                          static_cast<int>(state.header->numChannelsOut),
-                          static_cast<int>(state.header->blockSize),
-                          events,
-                          static_cast<int64_t>(blockStart));
-  }
-
   if (state.mailbox) {
-    state.mailbox->completedSampleTime.store(request.engineSampleStart,
-                                             std::memory_order_release);
-    state.mailbox->completedBlockId.store(request.blockId,
-                                          std::memory_order_release);
+    bool isLastSegment = true;
+    if (havePlugins) {
+      const uint32_t totalPlugins = static_cast<uint32_t>(pluginCount);
+      uint32_t segmentStart = request.segmentStart;
+      uint32_t segmentLength = request.segmentLength;
+      if (segmentLength == 0 || segmentStart + segmentLength > totalPlugins) {
+        segmentStart = 0;
+        segmentLength = totalPlugins;
+      }
+      if (segmentStart >= totalPlugins || segmentLength == 0) {
+        segmentStart = 0;
+        segmentLength = totalPlugins;
+      }
+      isLastSegment = (segmentStart + segmentLength >= totalPlugins);
+    }
+    if (isLastSegment) {
+      state.mailbox->completedSampleTime.store(request.engineSampleStart,
+                                               std::memory_order_release);
+      state.mailbox->completedBlockId.store(request.blockId,
+                                            std::memory_order_release);
+    }
     if (replaySeenSampleTime > 0) {
       const uint64_t current =
           state.mailbox->replayAckSampleTime.load(std::memory_order_relaxed);
@@ -402,6 +619,32 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
       state.mailbox->replayAckSampleTime.store(next, std::memory_order_release);
     }
   }
+  return true;
+}
+
+bool handleOpenEditor(HostState& state, const daw::OpenEditorRequest& request) {
+  std::lock_guard<std::mutex> lock(state.pluginsMutex);
+  if (request.pluginIndex >= state.plugins.size()) {
+    std::cerr << "Host: invalid plugin index " << request.pluginIndex << std::endl;
+    return true;
+  }
+  auto& slot = state.plugins[request.pluginIndex];
+  if (!slot.instance) {
+    return true;
+  }
+  if (!slot.instance->openEditor()) {
+    std::cerr << "Host: failed to open editor for plugin "
+              << request.pluginIndex << std::endl;
+  }
+  return true;
+}
+
+bool handleSetBypass(HostState& state, const daw::SetBypassRequest& request) {
+  std::lock_guard<std::mutex> lock(state.pluginsMutex);
+  if (request.pluginIndex >= state.plugins.size()) {
+    return true;
+  }
+  state.plugins[request.pluginIndex].bypass = request.bypass != 0;
   return true;
 }
 
@@ -419,36 +662,19 @@ void cleanup(HostState& state, const std::string& socketPath) {
   ::unlink(socketPath.c_str());
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
-  std::string socketPath = "/tmp/daw_host.sock";
-  HostState state;
-  if (const char* env = std::getenv("DAW_ENGINE_TEST_MODE")) {
-    state.testMode = std::string(env) == "1";
+void requestStopDispatchLoop() {
+  auto* manager = juce::MessageManager::getInstanceWithoutCreating();
+  if (!manager) {
+    return;
   }
-  for (int i = 1; i + 1 < argc; ++i) {
-    if (std::string(argv[i]) == "--socket") {
-      socketPath = argv[i + 1];
-      ++i;
-    } else if (std::string(argv[i]) == "--plugin") {
-      state.pluginPath = argv[i + 1];
-      ++i;
+  juce::MessageManager::callAsync([]() {
+    if (auto* inner = juce::MessageManager::getInstanceWithoutCreating()) {
+      inner->stopDispatchLoop();
     }
-  }
-  state.serverFd = createServerSocket(socketPath);
-  if (state.serverFd < 0) {
-    std::cerr << "Failed to create server socket: " << socketPath << std::endl;
-    return 1;
-  }
+  });
+}
 
-  state.clientFd = ::accept(state.serverFd, nullptr, nullptr);
-  if (state.clientFd < 0) {
-    std::cerr << "Failed to accept client connection." << std::endl;
-    cleanup(state, socketPath);
-    return 1;
-  }
-
+void runControlLoop(HostState& state) {
   while (true) {
     daw::ControlHeader header;
     if (!daw::recvHeader(state.clientFd, header)) {
@@ -480,10 +706,85 @@ int main(int argc, char** argv) {
             break;
           }
         }
+      } else if (type == daw::ControlMessageType::OpenEditor) {
+        if (payload.size() == sizeof(daw::OpenEditorRequest)) {
+          const auto* request =
+              reinterpret_cast<const daw::OpenEditorRequest*>(payload.data());
+          if (!handleOpenEditor(state, *request)) {
+            break;
+          }
+        }
+      } else if (type == daw::ControlMessageType::SetBypass) {
+        if (payload.size() == sizeof(daw::SetBypassRequest)) {
+          const auto* request =
+              reinterpret_cast<const daw::SetBypassRequest*>(payload.data());
+          if (!handleSetBypass(state, *request)) {
+            break;
+          }
+        }
       } else if (type == daw::ControlMessageType::Shutdown) {
         break;
       }
     }
+  }
+  requestStopDispatchLoop();
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+  std::string socketPath = "/tmp/daw_host.sock";
+  HostState state;
+  if (const char* env = std::getenv("DAW_ENGINE_TEST_MODE")) {
+    state.testMode = std::string(env) == "1";
+  }
+  for (int i = 1; i + 1 < argc; ++i) {
+    if (std::string(argv[i]) == "--socket") {
+      socketPath = argv[i + 1];
+      ++i;
+    } else if (std::string(argv[i]) == "--plugin") {
+      state.pluginPaths.push_back(argv[i + 1]);
+      ++i;
+    }
+  }
+  std::cerr << "Host: plugin paths=" << state.pluginPaths.size() << std::endl;
+  state.serverFd = createServerSocket(socketPath);
+  if (state.serverFd < 0) {
+    std::cerr << "Failed to create server socket: " << socketPath << std::endl;
+    return 1;
+  }
+
+  state.clientFd = ::accept(state.serverFd, nullptr, nullptr);
+  if (state.clientFd < 0) {
+    std::cerr << "Failed to accept client connection." << std::endl;
+    cleanup(state, socketPath);
+    return 1;
+  }
+
+  state.runtime = daw::createJuceRuntime();
+  auto* manager = juce::MessageManager::getInstance();
+  if (!manager) {
+    runControlLoop(state);
+    cleanup(state, socketPath);
+    return 0;
+  }
+  manager->setCurrentThreadAsMessageThread();
+
+  // Pre-load plugins on the message thread BEFORE starting the control loop.
+  // JUCE's createPluginInstance requires the message thread, so we can't load
+  // from the control thread without blocking. Load now while we're on main thread.
+  if (!state.pluginPaths.empty()) {
+    // Default audio params - will be updated when Hello arrives
+    const double defaultSampleRate = 48000.0;
+    const uint32_t defaultBlockSize = 512;
+    const uint32_t defaultChannels = 2;
+    loadPlugins(state, state.pluginPaths, defaultSampleRate, defaultBlockSize, defaultChannels);
+  }
+
+  std::thread controlThread([&state]() { runControlLoop(state); });
+  manager->runDispatchLoop();
+  if (controlThread.joinable()) {
+    controlThread.join();
   }
 
   cleanup(state, socketPath);

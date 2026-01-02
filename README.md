@@ -40,8 +40,8 @@ cargo run -p daw-app
 - UI integration: `cargo test -p daw-app --test engine_integration`.
 
 ## IPC and shared memory
-- UI reads engine snapshots from shared memory; protocol details in `SHM_LAYOUT.md`.
-- Control-plane messages use fixed headers and typed payloads; see `apps/ipc_protocol.h`.
+- UI reads engine snapshots and sends commands via shared memory rings; see `SHM_LAYOUT.md`.
+- Engine/host control-plane messages use fixed headers and typed payloads; see `apps/ipc_protocol.h`.
 
 ## Repository layout
 - `apps/`: engine, host, IPC, shared memory, scheduling, tests.

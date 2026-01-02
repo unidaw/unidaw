@@ -337,16 +337,21 @@ class JucePluginInstance final : public IPluginInstance {
 
     instance_->setNonRealtime(false);
     juce::AudioProcessor::BusesLayout layout;
+    const int inputChannels = instance_->getTotalNumInputChannels();
     if (numOutputs == 1) {
       layout.outputBuses.add(juce::AudioChannelSet::mono());
-      layout.inputBuses.add(juce::AudioChannelSet::mono());
+      if (inputChannels > 0) {
+        layout.inputBuses.add(juce::AudioChannelSet::mono());
+      }
     } else if (numOutputs >= 2) {
       layout.outputBuses.add(juce::AudioChannelSet::stereo());
-      layout.inputBuses.add(juce::AudioChannelSet::stereo());
+      if (inputChannels > 0) {
+        layout.inputBuses.add(juce::AudioChannelSet::stereo());
+      }
     }
     instance_->enableAllBuses();
     instance_->setBusesLayout(layout);
-    instance_->setPlayConfigDetails(0, numOutputs, sampleRate, blockSize);
+    instance_->setPlayConfigDetails(inputChannels, numOutputs, sampleRate, blockSize);
     if (instance_->getNumPrograms() > 0) {
       instance_->setCurrentProgram(0);
     }
@@ -396,7 +401,20 @@ class JucePluginInstance final : public IPluginInstance {
       }
     }
 
-    if (!processWithVst3Events(*bufferToProcess, inputs, numInputs,
+    bool useVst3Events = false;
+    if (const char* env = std::getenv("DAW_FORCE_VST3_EVENTS")) {
+      useVst3Events = std::string(env) == "1";
+    } else {
+      for (const auto& ev : events) {
+        if (ev.tuningCents != 0.0f) {
+          useVst3Events = true;
+          break;
+        }
+      }
+    }
+
+    if (!useVst3Events ||
+        !processWithVst3Events(*bufferToProcess, inputs, numInputs,
                                numOutputs, numFrames, events)) {
       juce::MidiBuffer midi;
       for (const auto& ev : events) {
@@ -434,6 +452,13 @@ class JucePluginInstance final : public IPluginInstance {
 
   int numParameters() const override {
     return instance_ ? instance_->getParameters().size() : 0;
+  }
+
+  int inputChannels() const override {
+    if (!instance_) {
+      return 0;
+    }
+    return instance_->getTotalNumInputChannels();
   }
 
   int outputChannels() const override { return pluginOutputs_; }
@@ -531,7 +556,81 @@ class JucePluginInstance final : public IPluginInstance {
 
   void flushParameterChanges() override { applyPendingParameterChanges(); }
 
+  bool openEditor() override {
+    if (!instance_ || !instance_->hasEditor()) {
+      std::cerr << "JucePluginInstance: no editor available" << std::endl;
+      return false;
+    }
+    auto* manager = juce::MessageManager::getInstance();
+    if (!manager) {
+      std::cerr << "JucePluginInstance: message manager unavailable" << std::endl;
+      return false;
+    }
+    if (manager->isThisTheMessageThread()) {
+      return openEditorOnMessageThread();
+    }
+    const bool queued = juce::MessageManager::callAsync([this]() {
+      openEditorOnMessageThread();
+    });
+    if (!queued) {
+      std::cerr << "JucePluginInstance: failed to queue editor open" << std::endl;
+    }
+    return queued;
+  }
+
  private:
+  bool openEditorOnMessageThread() {
+    if (!instance_) {
+      return false;
+    }
+#if JUCE_MAC
+    juce::Process::setDockIconVisible(true);
+#endif
+    if (editorWindow_) {
+      editorWindow_->toFront(true);
+      return true;
+    }
+    std::unique_ptr<juce::AudioProcessorEditor> editor(instance_->createEditor());
+    if (!editor) {
+      std::cerr << "JucePluginInstance: createEditor returned null for "
+                << instance_->getName().toStdString() << std::endl;
+      return false;
+    }
+    struct EditorWindow final : public juce::DocumentWindow {
+      explicit EditorWindow(const juce::String& name, JucePluginInstance* ownerIn)
+          : juce::DocumentWindow(name, juce::Colours::black,
+                                 juce::DocumentWindow::closeButton),
+            owner(ownerIn) {
+        setUsingNativeTitleBar(true);
+        setResizable(true, true);
+      }
+      void closeButtonPressed() override {
+        if (owner) {
+          owner->closeEditorWindow();
+        }
+      }
+      JucePluginInstance* owner = nullptr;
+    };
+    editorWindow_ =
+        std::make_unique<EditorWindow>(instance_->getName(), this);
+    editorWindow_->setContentOwned(editor.release(), true);
+    const int width = std::max(200, editorWindow_->getWidth());
+    const int height = std::max(200, editorWindow_->getHeight());
+    editorWindow_->setSize(width, height);
+    editorWindow_->centreWithSize(width, height);
+    editorWindow_->setVisible(true);
+    editorWindow_->toFront(true);
+    return true;
+  }
+
+  void closeEditorWindow() {
+    if (!editorWindow_) {
+      return;
+    }
+    editorWindow_->setVisible(false);
+    editorWindow_.reset();
+  }
+
   void buildParameterCache() {
     if (!instance_) {
       return;
@@ -702,6 +801,111 @@ class JucePluginInstance final : public IPluginInstance {
   std::unique_ptr<std::atomic<float>[]> paramTargets_;
   int paramTargetCount_ = 0;
   std::unordered_map<std::string, int> paramIdToIndex_;
+  std::unique_ptr<juce::DocumentWindow> editorWindow_;
+};
+
+class FakeIdentityPluginInstance final : public IPluginInstance {
+ public:
+  FakeIdentityPluginInstance() {
+    ParamInfo gainInfo;
+    gainInfo.stableId = "index:0";
+    gainInfo.index = 0;
+    gainInfo.name = "Gain";
+    gainInfo.defaultNormalized = 1.0f;
+    gainInfo.minValue = 0.0f;
+    gainInfo.maxValue = 1.0f;
+    gainInfo.isAutomatable = true;
+    params_.push_back(std::move(gainInfo));
+  }
+
+  void prepare(double, int, int numOutputs) override {
+    outputChannels_ = numOutputs;
+  }
+
+  void process(const float* const*,
+               int,
+               float* const* outputs,
+               int numOutputs,
+               int numFrames,
+               const MidiEvents& events,
+               int64_t) override {
+    for (int ch = 0; ch < numOutputs; ++ch) {
+      std::fill(outputs[ch], outputs[ch] + numFrames, 0.0f);
+    }
+
+    const float gain = gain_;
+    for (const auto& event : events) {
+      const uint8_t status = event.status & 0xF0u;
+      if (status != 0x90u || event.data2 == 0) {
+        continue;
+      }
+      const int start = std::max(0, event.sampleOffset);
+      const int end = std::min(numFrames, start + 10);
+      for (int ch = 0; ch < numOutputs; ++ch) {
+        for (int i = start; i < end; ++i) {
+          outputs[ch][i] += gain;
+        }
+      }
+    }
+  }
+
+  std::string name() const override { return "Identity"; }
+  std::string vendor() const override { return "Unidaw"; }
+  std::string identifier() const override { return "identity.fake"; }
+  std::string version() const override { return "1.0"; }
+  std::array<uint8_t, 16> pluginUid16() const override { return {}; }
+  int numParameters() const override { return static_cast<int>(params_.size()); }
+  int inputChannels() const override { return 0; }
+  int outputChannels() const override { return outputChannels_; }
+  bool loadVst3PresetFile(const std::string&) override { return false; }
+
+  const std::vector<ParamInfo>& parameters() const override { return params_; }
+
+  float getParameterValueNormalizedById(const std::string& stableId) const override {
+    if (stableId == params_[0].stableId) {
+      return gain_;
+    }
+    return 0.0f;
+  }
+
+  bool setParameterValueNormalizedById(const std::string& stableId, float value) override {
+    if (stableId == params_[0].stableId) {
+      gain_ = std::clamp(value, 0.0f, 1.0f);
+      return true;
+    }
+    return false;
+  }
+
+  std::string getParameterTextById(const std::string& stableId,
+                                   float normalized) const override {
+    if (stableId == params_[0].stableId) {
+      return std::to_string(normalized);
+    }
+    return {};
+  }
+
+  std::vector<uint8_t> getState() const override {
+    std::vector<uint8_t> data(sizeof(float), 0);
+    std::memcpy(data.data(), &gain_, sizeof(float));
+    return data;
+  }
+
+  bool setState(const std::vector<uint8_t>& data) override {
+    if (data.size() != sizeof(float)) {
+      return false;
+    }
+    std::memcpy(&gain_, data.data(), sizeof(float));
+    gain_ = std::clamp(gain_, 0.0f, 1.0f);
+    return true;
+  }
+
+  void flushParameterChanges() override {}
+  bool openEditor() override { return false; }
+
+ private:
+  std::vector<ParamInfo> params_;
+  float gain_ = 1.0f;
+  int outputChannels_ = 2;
 };
 
 class JucePluginHost final : public IPluginHost {
@@ -713,12 +917,28 @@ class JucePluginHost final : public IPluginHost {
   std::unique_ptr<IPluginInstance> loadVst3FromPath(const std::string& path,
                                                     double sampleRate,
                                                     int blockSize) override {
+    const bool logLoad = std::getenv("DAW_HOST_LOG_LOAD") != nullptr;
+    if (const char* env = std::getenv("DAW_USE_FAKE_IDENTITY")) {
+      if (std::string(env) == "1") {
+        const auto filename = juce::File(path).getFileName();
+        if (filename == "Identity.vst3") {
+          return std::make_unique<FakeIdentityPluginInstance>();
+        }
+      }
+    }
+
     juce::String error;
     juce::OwnedArray<juce::PluginDescription> types;
 
     for (int i = 0; i < formatManager_.getNumFormats(); ++i) {
       auto* format = formatManager_.getFormat(i);
+      if (logLoad) {
+        std::cerr << "Host: scanning VST3 types for " << path << std::endl;
+      }
       format->findAllTypesForFile(types, path);
+    }
+    if (logLoad) {
+      std::cerr << "Host: VST3 scan found " << types.size() << " type(s)" << std::endl;
     }
 
     if (types.isEmpty()) {
@@ -727,8 +947,16 @@ class JucePluginHost final : public IPluginHost {
     }
 
     const auto* description = types.getFirst();
-    auto instance = formatManager_.createPluginInstance(*description, sampleRate, blockSize,
-                                                        error);
+    std::unique_ptr<juce::AudioPluginInstance> instance;
+    if (logLoad) {
+      std::cerr << "Host: creating VST3 instance for " << path << std::endl;
+    }
+    // Create instance directly - avoid callAsync+wait pattern which can deadlock
+    // when called from the control thread while message thread is busy.
+    instance = formatManager_.createPluginInstance(*description,
+                                                   sampleRate,
+                                                   blockSize,
+                                                   error);
     if (instance == nullptr) {
       std::cerr << "Failed to create plugin instance: " << error << std::endl;
 #if JUCE_MAC

@@ -7,6 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(DAW_BUILD_PATCHER_RUST "Build Rust patcher staticlib" ON)
 
+find_package(Boost REQUIRED)
+
 set(JUCE_DIR "$ENV{HOME}/src/juce/JUCE" CACHE PATH "Path to JUCE")
 add_subdirectory(${JUCE_DIR} juce)
 
@@ -67,10 +69,13 @@ add_executable(daw_engine
   apps/audio_shm.cpp
   apps/clip_edit.cpp
   apps/chord_resolver.cpp
+  apps/device_chain.cpp
   apps/event_ring.cpp
   apps/host_controller.cpp
   apps/ipc_io.cpp
   apps/patcher_graph.cpp
+  apps/patcher_preset_library.cpp
+  apps/patcher_preset.cpp
   apps/patcher_abi.cpp
   apps/plugin_cache.cpp
   apps/harmony_timeline.cpp
@@ -81,6 +86,7 @@ add_executable(daw_engine
 
 target_include_directories(daw_engine PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
 )
 
 target_link_libraries(daw_engine PRIVATE platform_juce)
@@ -171,6 +177,7 @@ add_executable(patcher_tests
 
 target_include_directories(patcher_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
 )
 
 target_link_libraries(patcher_tests PRIVATE platform_juce)
@@ -182,13 +189,57 @@ endif()
 add_executable(patcher_graph_tests
   apps/patcher_graph_tests_main.cpp
   apps/patcher_graph.cpp
+  apps/patcher_preset_library.cpp
+  apps/patcher_preset.cpp
 )
 
 target_include_directories(patcher_graph_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
 )
 
 target_link_libraries(patcher_graph_tests PRIVATE platform_juce)
+
+add_executable(device_chain_tests
+  apps/device_chain_tests_main.cpp
+  apps/device_chain.cpp
+)
+
+target_include_directories(device_chain_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(device_chain_tests PRIVATE platform_juce)
+
+add_executable(device_chain_ui_tests
+  apps/device_chain_ui_tests_main.cpp
+  apps/device_chain.cpp
+  apps/event_ring.cpp
+  apps/shared_memory.cpp
+  apps/ipc_io.cpp
+  apps/plugin_cache.cpp
+)
+
+target_include_directories(device_chain_ui_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(device_chain_ui_tests PRIVATE platform_juce)
+
+add_executable(device_chain_ui_live_tests
+  apps/device_chain_ui_live_tests_main.cpp
+  apps/audio_shm.cpp
+  apps/event_ring.cpp
+  apps/shared_memory.cpp
+  apps/ipc_io.cpp
+  apps/plugin_cache.cpp
+)
+
+target_include_directories(device_chain_ui_live_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(device_chain_ui_live_tests PRIVATE platform_juce)
 
 enable_testing()
 
@@ -202,6 +253,21 @@ add_test(NAME patcher_graph_edits
 )
 set_tests_properties(patcher_graph_edits PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_test(NAME device_chain_defaults
+  COMMAND device_chain_tests
+)
+set_tests_properties(device_chain_defaults PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME device_chain_ui
+  COMMAND device_chain_ui_tests
+)
+set_tests_properties(device_chain_ui PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME device_chain_ui_live
+  COMMAND device_chain_ui_live_tests
+)
+set_tests_properties(device_chain_ui_live PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME phase2_impulse
   COMMAND phase2_tests --test impulse
           --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
@@ -213,6 +279,12 @@ add_test(NAME phase2_param_priority
           --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
 )
 set_tests_properties(phase2_param_priority PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase2_param_targeting
+  COMMAND phase2_tests --test param_targeting
+          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+)
+set_tests_properties(phase2_param_targeting PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase2_chaos
   COMMAND phase2_tests --test chaos

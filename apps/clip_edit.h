@@ -27,6 +27,7 @@ struct UndoEntry {
   uint64_t duration = 0;
   uint8_t pitch = 0;
   uint8_t velocity = 0;
+  uint32_t noteId = 0;
   uint16_t flags = 0;
   uint32_t harmonyRoot = 0;
   uint32_t harmonyScaleId = 0;
@@ -61,7 +62,8 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
                              uint8_t velocity,
                              uint16_t flags,
                              std::atomic<uint32_t>& clipVersion,
-                             bool recordUndo);
+                             bool recordUndo,
+                             std::optional<uint32_t> noteIdOverride = std::nullopt);
 
 std::optional<ClipEditResult> removeNoteFromClip(MusicalClip& clip,
                                                  uint32_t trackId,

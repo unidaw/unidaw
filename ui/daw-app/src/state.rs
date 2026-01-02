@@ -1,9 +1,16 @@
-use daw_bridge::layout::{UiChordCommandPayload, UiCommandPayload};
+use daw_bridge::layout::{
+    UiChainCommandPayload, UiChordCommandPayload, UiCommandPayload,
+    UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload, UiPatcherPresetCommandPayload,
+};
 
 #[derive(Clone, Debug)]
 pub enum QueuedCommand {
     Ui(UiCommandPayload),
     Chord(UiChordCommandPayload),
+    Chain(UiChainCommandPayload),
+    PatcherGraph(UiPatcherGraphCommandPayload),
+    PatcherConfig(UiPatcherNodeConfigPayload),
+    PatcherPreset(UiPatcherPresetCommandPayload),
 }
 
 #[derive(Clone, Debug)]

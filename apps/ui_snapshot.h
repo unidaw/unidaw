@@ -9,18 +9,23 @@
 
 namespace daw {
 
-struct ClipSnapshotCursor {
-  uint32_t totalNotes = 0;
-  uint32_t totalChords = 0;
+struct ClipWindowRequest {
+  uint32_t trackId = 0;
+  uint64_t windowStartNanotick = 0;
+  uint64_t windowEndNanotick = 0;
+  uint32_t cursorEventIndex = 0;
+  uint32_t requestId = 0;
 };
 
-void initUiClipSnapshot(UiClipSnapshot& snapshot, uint32_t trackCount);
+struct ClipWindowResult {
+  uint32_t nextEventIndex = 0;
+  bool complete = false;
+};
 
-void appendClipToSnapshot(const MusicalClip& clip,
-                          uint32_t trackIndex,
-                          uint32_t trackId,
-                          UiClipSnapshot& snapshot,
-                          ClipSnapshotCursor& cursor);
+ClipWindowResult buildUiClipWindowSnapshot(const MusicalClip& clip,
+                                           const ClipWindowRequest& request,
+                                           uint32_t clipVersion,
+                                           UiClipWindowSnapshot& snapshot);
 
 void buildUiHarmonySnapshot(const std::vector<HarmonyEvent>& events,
                             UiHarmonySnapshot& snapshot);

@@ -9,11 +9,16 @@
 #include <atomic>
 #include <array>
 #include <map>
+#include <memory>
 #include <algorithm>
 #include <tuple>
 #include <mutex>
+#include <condition_variable>
+#include <deque>
+#include <functional>
 #include <optional>
 #include <limits>
+#include <unordered_map>
 
 #include <sys/wait.h>
 #include <sys/mman.h>
@@ -21,9 +26,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include <juce_audio_devices/juce_audio_devices.h>
-#include <juce_audio_basics/juce_audio_basics.h>
-
+#include "platform_juce/juce_wrapper.h"
 #include "apps/audio_shm.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
@@ -31,6 +34,11 @@
 #include "apps/plugin_cache.h"
 #include "apps/patcher_abi.h"
 #include "apps/patcher_graph.h"
+#include "apps/patcher_preset.h"
+#include "apps/patcher_preset_library.h"
+#include "apps/device_chain.h"
+#include "apps/modulation.h"
+#include "apps/track_routing.h"
 #include "apps/watchdog.h"
 #include "apps/latency_manager.h"
 #include "apps/time_base.h"
@@ -73,6 +81,78 @@ std::string uiShmName() {
   return "/daw_engine_ui";
 }
 
+class WorkerPool {
+ public:
+  explicit WorkerPool(size_t threadCount) {
+    if (threadCount == 0) {
+      threadCount = 1;
+    }
+    workers_.reserve(threadCount);
+    for (size_t i = 0; i < threadCount; ++i) {
+      workers_.emplace_back([this]() { workerLoop(); });
+    }
+  }
+
+  ~WorkerPool() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stopping_ = true;
+    }
+    cv_.notify_all();
+    for (auto& thread : workers_) {
+      if (thread.joinable()) {
+        thread.join();
+      }
+    }
+  }
+
+  void enqueue(std::function<void()> task) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      tasks_.push_back(std::move(task));
+      pending_++;
+    }
+    cv_.notify_one();
+  }
+
+  void wait() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    done_.wait(lock, [&]() { return pending_ == 0; });
+  }
+
+ private:
+  void workerLoop() {
+    for (;;) {
+      std::function<void()> task;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [&]() { return stopping_ || !tasks_.empty(); });
+        if (stopping_ && tasks_.empty()) {
+          return;
+        }
+        task = std::move(tasks_.front());
+        tasks_.pop_front();
+      }
+      task();
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pending_--;
+        if (pending_ == 0) {
+          done_.notify_all();
+        }
+      }
+    }
+  }
+
+  std::vector<std::thread> workers_;
+  std::deque<std::function<void()>> tasks_;
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::condition_variable done_;
+  size_t pending_ = 0;
+  bool stopping_ = false;
+};
+
 std::string defaultPluginCachePath() {
   if (const char* env = std::getenv("DAW_PLUGIN_CACHE")) {
     return env;
@@ -88,6 +168,7 @@ std::string defaultPluginCachePath() {
 
 constexpr uint32_t kPatcherScratchpadCapacity = 1024;
 constexpr uint32_t kPatcherNodeCapacity = 1024;
+constexpr uint32_t kPatcherMaxModOutputs = 8;
 
 struct PatcherNodeBuffer {
   std::array<daw::EventEntry, kPatcherNodeCapacity> events{};
@@ -108,6 +189,18 @@ inline void dispatchRustKernel(daw::PatcherNodeType type, daw::PatcherContext& c
         daw::patcher_process(&ctx);
       }
       break;
+    case daw::PatcherNodeType::RandomDegree:
+      if (daw::patcher_process_random_degree) {
+        daw::patcher_process_random_degree(&ctx);
+      } else if (daw::patcher_process) {
+        daw::patcher_process(&ctx);
+      }
+      break;
+    case daw::PatcherNodeType::EventOut:
+      if (daw::patcher_process_event_out) {
+        daw::patcher_process_event_out(&ctx);
+      }
+      break;
     case daw::PatcherNodeType::Passthrough:
       if (daw::patcher_process_passthrough) {
         daw::patcher_process_passthrough(&ctx);
@@ -118,8 +211,17 @@ inline void dispatchRustKernel(daw::PatcherNodeType type, daw::PatcherContext& c
         daw::patcher_process_audio_passthrough(&ctx);
       }
       break;
+    case daw::PatcherNodeType::Lfo:
+      if (daw::patcher_process_lfo) {
+        daw::patcher_process_lfo(&ctx);
+      } else if (daw::patcher_process) {
+        daw::patcher_process(&ctx);
+      }
+      break;
   }
 }
+
+constexpr uint32_t kEventFlagMusicalLogic = 1u << 0;
 
 inline uint8_t priorityForEvent(const daw::EventEntry& entry) {
   const auto type = static_cast<daw::EventType>(entry.type);
@@ -135,6 +237,9 @@ inline uint8_t priorityForEvent(const daw::EventEntry& entry) {
         return 2;
       }
       if (payload.status == 0x90) {
+        if (entry.flags & kEventFlagMusicalLogic) {
+          return 3;
+        }
         return 4;
       }
       return 4;
@@ -146,22 +251,17 @@ inline uint8_t priorityForEvent(const daw::EventEntry& entry) {
   }
 }
 
-inline uint8_t musicalLogicPriorityHint(const daw::EventEntry& entry) {
-  if (static_cast<daw::EventType>(entry.type) != daw::EventType::MusicalLogic) {
-    return 0;
-  }
-  daw::MusicalLogicPayload payload{};
-  std::memcpy(&payload, entry.payload, sizeof(payload));
-  return payload.priority_hint;
-}
-
 // Audio callback for mixing and outputting audio from all tracks
-class EngineAudioCallback : public juce::AudioIODeviceCallback {
+class EngineAudioCallback {
 public:
   struct TrackInfo {
+    std::shared_ptr<const daw::SharedMemoryView> shmView;
     void* shmBase = nullptr;
     const daw::ShmHeader* header = nullptr;
     const std::atomic<uint32_t>* completedBlockId = nullptr;
+    const std::atomic<bool>* hostReady = nullptr;
+    const std::atomic<bool>* active = nullptr;
+    size_t shmSize = 0;
     uint32_t trackId = 0;
   };
 
@@ -175,12 +275,9 @@ public:
         m_startTime(std::chrono::steady_clock::now()),
         m_lastPlayedBlockId(0) {}
 
-  void audioDeviceIOCallbackWithContext(const float* const* inputChannelData,
-                                        int numInputChannels,
-                                        float* const* outputChannelData,
-                                        int numOutputChannels,
-                                        int numSamples,
-                                        const juce::AudioIODeviceCallbackContext& context) override {
+  void process(float* const* outputChannelData,
+               int numOutputChannels,
+               int numSamples) {
     // Clear output buffers
     for (int ch = 0; ch < numOutputChannels; ++ch) {
       if (outputChannelData[ch]) {
@@ -188,11 +285,8 @@ public:
       }
     }
 
-    // Debug: Check if callback block size matches our engine block size
-    if (numSamples != (int)m_blockSize && !m_warnedBlockSize) {
-      std::cerr << "WARNING: Audio callback block size (" << numSamples
-                << ") doesn't match engine block size (" << m_blockSize << ")" << std::endl;
-      m_warnedBlockSize = true;
+    if (numSamples != (int)m_blockSize) {
+      return;
     }
 
     // Determine which block we should play next
@@ -203,17 +297,26 @@ public:
       m_playbackBlockId->store(nextBlockToPlay, std::memory_order_release);
     }
 
-    // Mix audio from all active tracks
-    std::lock_guard<std::mutex> lock(m_tracksMutex);
+    auto tracks = std::atomic_load_explicit(&m_tracks, std::memory_order_acquire);
+    if (!tracks) {
+      return;
+    }
 
     int activeTrackCount = 0;
-    static uint32_t callbackCount = 0;
-    callbackCount++;
-
     bool playedBlock = false;
 
-    for (const auto& track : m_tracks) {
-      if (!track.shmBase || !track.header || !track.completedBlockId) {
+    for (const auto& track : *tracks) {
+      if (!track.shmView || !track.shmBase || !track.header || !track.completedBlockId) {
+        continue;
+      }
+      if (track.hostReady && !track.hostReady->load(std::memory_order_acquire)) {
+        continue;
+      }
+      if (track.active && !track.active->load(std::memory_order_acquire)) {
+        continue;
+      }
+      if (track.header->numBlocks == 0 || track.header->numChannelsOut == 0 ||
+          track.header->channelStrideBytes == 0 || track.shmSize == 0) {
         continue;
       }
 
@@ -228,11 +331,7 @@ public:
 
       // Check if the block we want is ready
       if (completed < nextBlockToPlay) {
-        if (callbackCount % 100 == 0) {
-          std::cout << "AudioCallback: Waiting for block " << nextBlockToPlay
-                    << " (completed=" << completed << ")" << std::endl;
-        }
-        continue;  // Block not ready yet
+        continue;
       }
 
       activeTrackCount++;
@@ -245,33 +344,38 @@ public:
       // Mix this track's audio into output
       for (int ch = 0; ch < std::min(numOutputChannels, (int)track.header->numChannelsOut); ++ch) {
         // Extra safety checks
-        if (!track.shmBase || !track.header) {
+        if (!track.shmView || !track.shmBase || !track.header) {
           break;
         }
 
-        try {
-          float* trackChannel = daw::audioOutChannelPtr(
-              track.shmBase, *track.header, blockToRead, ch);
+        const uint64_t stride = track.header->channelStrideBytes;
+        const uint64_t blockBytes =
+            static_cast<uint64_t>(track.header->numChannelsOut) * stride;
+        const uint64_t block = track.header->numBlocks > 0
+            ? static_cast<uint64_t>(blockToRead % track.header->numBlocks)
+            : 0;
+        const uint64_t offset = track.header->audioOutOffset + block * blockBytes +
+                                static_cast<uint64_t>(ch) * stride;
+        if (offset + stride > track.shmSize) {
+          continue;
+        }
+        float* trackChannel = reinterpret_cast<float*>(
+            reinterpret_cast<uint8_t*>(track.shmBase) + offset);
 
-          if (!trackChannel) continue;
+        if (!trackChannel) {
+          continue;
+        }
 
-          float* output = outputChannelData[ch];
-          if (!output) continue;
+        float* output = outputChannelData[ch];
+        if (!output) {
+          continue;
+        }
 
-          // Simple mixing - just add the signals
-          // TODO: Add proper gain staging/limiting
-          float maxSample = 0.0f;
-          for (int i = 0; i < std::min(numSamples, (int)m_blockSize); ++i) {
-            // Bounds check for safety
-            if (i >= (int)m_blockSize) break;
-            float sample = trackChannel[i];
-            maxSample = std::max(maxSample, std::abs(sample));
-            output[i] += sample * 0.5f; // Scale down to prevent clipping
-          }
-
-        } catch (...) {
-          // Silently skip this track if there's any exception
-          break;
+        // Simple mixing - just add the signals
+        // TODO: Add proper gain staging/limiting
+        for (int i = 0; i < std::min(numSamples, (int)m_blockSize); ++i) {
+          float sample = trackChannel[i];
+          output[i] += sample * 0.5f; // Scale down to prevent clipping
         }
       }
     }
@@ -282,7 +386,7 @@ public:
     }
   }
 
-  void audioDeviceAboutToStart(juce::AudioIODevice* device) override {
+  void resetForStart() {
     m_currentReadBlock = 0;
     m_totalSamplesProcessed = 0;
     m_lastPlayedBlockId = 0;
@@ -292,11 +396,9 @@ public:
     }
   }
 
-  void audioDeviceStopped() override {}
-
   void updateTracks(const std::vector<TrackInfo>& tracks) {
-    std::lock_guard<std::mutex> lock(m_tracksMutex);
-    m_tracks = tracks;
+    auto next = std::make_shared<std::vector<TrackInfo>>(tracks);
+    std::atomic_store_explicit(&m_tracks, std::move(next), std::memory_order_release);
   }
 
 private:
@@ -304,15 +406,47 @@ private:
   uint32_t m_blockSize;
   uint32_t m_numBlocks;
   std::atomic<uint32_t> m_currentReadBlock;
-  bool m_warnedBlockSize = false;
   std::atomic<uint32_t>* m_playbackBlockId;
   std::chrono::steady_clock::time_point m_startTime;
   uint64_t m_totalSamplesProcessed = 0;
   uint32_t m_lastPlayedBlockId = 0;  // Track which block we played last
 
-  std::vector<TrackInfo> m_tracks;
-  std::mutex m_tracksMutex;
+  std::shared_ptr<std::vector<TrackInfo>> m_tracks;
 };
+
+struct ClipSnapshot {
+  std::vector<daw::MusicalEvent> events;
+};
+
+struct TrackStateSnapshot {
+  std::vector<daw::Device> chainDevices;
+  std::vector<daw::ModLink> modLinks;
+  bool harmonyQuantize = true;
+};
+
+const TrackStateSnapshot kEmptyTrackState{};
+
+inline std::shared_ptr<const ClipSnapshot> buildClipSnapshot(const daw::MusicalClip& clip) {
+  auto snapshot = std::make_shared<ClipSnapshot>();
+  snapshot->events = clip.events();
+  return snapshot;
+}
+
+inline void getClipEventsInRange(const ClipSnapshot& snapshot,
+                                 uint64_t startTick,
+                                 uint64_t endTick,
+                                 std::vector<const daw::MusicalEvent*>& out) {
+  out.clear();
+  const auto& events = snapshot.events;
+  auto it = std::lower_bound(
+      events.begin(), events.end(), startTick,
+      [](const daw::MusicalEvent& lhs, uint64_t tick) {
+        return lhs.nanotickOffset < tick;
+      });
+  for (; it != events.end() && it->nanotickOffset < endTick; ++it) {
+    out.push_back(&*it);
+  }
+}
 
 }  // namespace
 
@@ -352,6 +486,22 @@ int main(int argc, char** argv) {
   if (const char* env = std::getenv("DAW_PATCHER_PARALLEL")) {
     patcherParallel = std::string(env) == "1";
   }
+  bool schedulerLog = false;
+  if (const char* env = std::getenv("DAW_SCHEDULER_LOG")) {
+    schedulerLog = std::string(env) == "1";
+  }
+  std::unique_ptr<WorkerPool> patcherPool;
+  if (patcherParallel) {
+    size_t threadCount = std::max<size_t>(1, std::thread::hardware_concurrency());
+    if (const char* env = std::getenv("DAW_PATCHER_PARALLEL_THREADS")) {
+      char* end = nullptr;
+      const long value = std::strtol(env, &end, 10);
+      if (end != env && value > 0) {
+        threadCount = static_cast<size_t>(value);
+      }
+    }
+    patcherPool = std::make_unique<WorkerPool>(threadCount);
+  }
 
   if (testMode) {
     pluginPath.clear();
@@ -371,7 +521,9 @@ int main(int argc, char** argv) {
 
   daw::HostConfig baseConfig;
   baseConfig.socketPath = socketPath;
-  baseConfig.pluginPath = pluginPath;
+  if (!pluginPath.empty()) {
+    baseConfig.pluginPaths = {pluginPath};
+  }
   baseConfig.sampleRate = 48000.0;
   baseConfig.numChannelsIn = 2;
   baseConfig.numBlocks = 4; // Increase block count for deeper pipeline/safety
@@ -383,6 +535,25 @@ int main(int argc, char** argv) {
   std::cout << "Plugin cache: " << pluginCachePath
             << " (" << pluginCache.entries.size() << " entries)" << std::endl;
 
+  auto resolvePluginIndex = [&](const std::string& path) -> std::optional<uint32_t> {
+    if (path.empty()) {
+      return std::nullopt;
+    }
+    std::error_code ec;
+    const auto target = std::filesystem::weakly_canonical(path, ec);
+    for (size_t i = 0; i < pluginCache.entries.size(); ++i) {
+      const auto& entry = pluginCache.entries[i];
+      if (entry.path.empty()) {
+        continue;
+      }
+      const auto entryPath = std::filesystem::weakly_canonical(entry.path, ec);
+      if (entryPath == target || entry.path == path) {
+        return static_cast<uint32_t>(i);
+      }
+    }
+    return std::nullopt;
+  };
+
   struct UiShmState {
     std::string name;
     int fd = -1;
@@ -392,11 +563,84 @@ int main(int argc, char** argv) {
   } uiShm;
 
   uiShm.name = uiShmName();
+  std::cerr << "UI SHM name (engine): " << uiShm.name << std::endl;
   ::shm_unlink(uiShm.name.c_str());
   uiShm.fd = ::shm_open(uiShm.name.c_str(), O_CREAT | O_RDWR, 0600);
   if (uiShm.fd < 0) {
     std::cerr << "Failed to create UI SHM: " << uiShm.name << std::endl;
     return 1;
+  }
+
+  {
+    daw::ShmHeader header{};
+    header.blockSize = baseConfig.blockSize;
+    header.sampleRate = baseConfig.sampleRate;
+    header.numChannelsIn = 0;
+    header.numChannelsOut = 0;
+    header.numBlocks = 0;
+    header.channelStrideBytes = 0;
+    size_t offset = daw::alignUp(sizeof(daw::ShmHeader), 64);
+    header.audioInOffset = offset;
+    header.audioOutOffset = offset;
+    header.ringStdOffset = offset;
+    offset += daw::alignUp(daw::ringBytes(0), 64);
+    header.ringCtrlOffset = offset;
+    offset += daw::alignUp(daw::ringBytes(0), 64);
+    header.ringUiOffset = offset;
+    offset += daw::alignUp(daw::ringBytes(baseConfig.ringUiCapacity), 64);
+    header.ringUiOutOffset = offset;
+    offset += daw::alignUp(daw::ringBytes(uiDiffRingCapacity), 64);
+    header.mailboxOffset = offset;
+    offset += daw::alignUp(sizeof(daw::BlockMailbox), 64);
+    header.uiClipOffset = offset;
+    header.uiClipBytes = sizeof(daw::UiClipWindowSnapshot);
+    offset += daw::alignUp(header.uiClipBytes, 64);
+    header.uiHarmonyOffset = offset;
+    header.uiHarmonyBytes = sizeof(daw::UiHarmonySnapshot);
+    offset += daw::alignUp(header.uiHarmonyBytes, 64);
+    uiShm.size = daw::alignUp(offset, 64);
+
+    if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
+      std::cerr << "Failed to size UI SHM: " << uiShm.name << std::endl;
+      return 1;
+    }
+    std::cerr << "UI SHM name: " << uiShm.name
+              << " size: " << uiShm.size << std::endl;
+    uiShm.base = ::mmap(nullptr, uiShm.size, PROT_READ | PROT_WRITE,
+                        MAP_SHARED, uiShm.fd, 0);
+    if (uiShm.base == MAP_FAILED) {
+      uiShm.base = nullptr;
+      std::cerr << "Failed to map UI SHM: " << uiShm.name << std::endl;
+      return 1;
+    }
+    std::cerr << "UI SHM mapped: " << uiShm.name << std::endl;
+    std::memset(uiShm.base, 0, uiShm.size);
+    std::memcpy(uiShm.base, &header, sizeof(header));
+    uiShm.header = reinterpret_cast<daw::ShmHeader*>(uiShm.base);
+    uiShm.header->uiVersion.store(0, std::memory_order_release);
+    uiShm.header->uiClipVersion = 0;
+    uiShm.header->uiHarmonyVersion = 0;
+
+    auto* ringUi = reinterpret_cast<daw::RingHeader*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + header.ringUiOffset);
+    ringUi->capacity = baseConfig.ringUiCapacity;
+    ringUi->entrySize = sizeof(daw::EventEntry);
+    ringUi->readIndex.store(0);
+    ringUi->writeIndex.store(0);
+
+    auto* ringUiOut = reinterpret_cast<daw::RingHeader*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + header.ringUiOutOffset);
+    ringUiOut->capacity = uiDiffRingCapacity;
+    ringUiOut->entrySize = sizeof(daw::EventEntry);
+    ringUiOut->readIndex.store(0);
+    ringUiOut->writeIndex.store(0);
+
+    std::cerr << "UI rings ready (ui_offset=" << header.ringUiOffset
+              << ", ui_capacity=" << ringUi->capacity
+              << ", ui_entry_size=" << ringUi->entrySize
+              << ", ui_out_offset=" << header.ringUiOutOffset
+              << ", ui_out_capacity=" << ringUiOut->capacity << ")"
+              << std::endl;
   }
 
   struct ParamKeyLess {
@@ -406,10 +650,26 @@ int main(int argc, char** argv) {
     }
   };
 
-  struct Track {
-    daw::MusicalClip clip;
-    std::vector<daw::AutomationClip> automationClips;
-    bool harmonyQuantize = true;
+  struct ParamMirrorEntry {
+    float value = 0.0f;
+    uint32_t targetPluginIndex = daw::kParamTargetAll;
+  };
+struct Track {
+  daw::MusicalClip clip;
+  std::vector<daw::AutomationClip> automationClips;
+  bool harmonyQuantize = true;
+  daw::TrackChain chain;
+  daw::TrackRouting routing;
+  daw::ModRegistry modRegistry;
+};
+
+  auto buildTrackSnapshot = [&](const Track& track)
+      -> std::shared_ptr<const TrackStateSnapshot> {
+    auto snapshot = std::make_shared<TrackStateSnapshot>();
+    snapshot->chainDevices = track.chain.devices;
+    snapshot->modLinks = track.modRegistry.links;
+    snapshot->harmonyQuantize = track.harmonyQuantize;
+    return snapshot;
   };
 
   struct ActiveNote {
@@ -426,12 +686,14 @@ struct TrackRuntime {
     uint32_t trackId = 0;
     Track track;
     std::mutex trackMutex;
+    std::shared_ptr<const ClipSnapshot> clipSnapshot;
+    std::shared_ptr<const TrackStateSnapshot> trackSnapshot;
     daw::HostController controller;
     daw::HostConfig config;
     std::atomic<bool> needsRestart{false};
     std::atomic<bool> hostReady{false};
     std::unique_ptr<daw::Watchdog> watchdog;
-    std::map<std::array<uint8_t, 16>, float, ParamKeyLess> paramMirror;
+    std::map<std::array<uint8_t, 16>, ParamMirrorEntry, ParamKeyLess> paramMirror;
     std::mutex paramMirrorMutex;
     std::mutex controllerMutex;
     std::atomic<bool> active{false};
@@ -446,37 +708,110 @@ struct TrackRuntime {
 
     std::vector<float> patcherAudioBuffer;
     std::vector<float*> patcherAudioChannels;
+    std::vector<daw::EventEntry> patcherScratchpad;
+    std::vector<PatcherNodeBuffer> patcherNodeBuffers;
+    std::vector<std::array<float, kPatcherMaxModOutputs>> patcherNodeModOutputs;
+    std::vector<float> patcherModOutputSamples;
+    std::vector<float> patcherModInputSamples;
+    std::vector<daw::ModSourceState> patcherModUpdates;
+    std::vector<bool> patcherNodeAllowed;
+    std::vector<bool> patcherNodeSeen;
+    std::vector<uint32_t> patcherNodeStack;
+    std::vector<uint32_t> patcherChainOrder;
+    std::vector<uint32_t> patcherNodeToDeviceId;
+    std::vector<daw::ModLink> patcherModLinks;
+    std::vector<daw::PatcherEuclideanConfig> patcherEuclidOverrides;
+    std::vector<bool> patcherHasEuclidOverride;
+
+    std::vector<float> inboundAudioBuffer;
+    std::vector<float> inputAudioBuffer;
+    std::vector<float*> inputAudioChannels;
+    std::vector<daw::EventEntry> inboundMidiEvents;
+    std::vector<daw::EventEntry> inboundMidiScratch;
+    std::mutex inboundMutex;
+
+    std::vector<float> modOutputSamples;
+    std::vector<uint32_t> modOutputDeviceIds;
+    std::vector<float*> audioOutputPtrs;
+    std::vector<float> audioModSamples;
+    std::vector<float> audioModInputSamples;
+    std::vector<daw::ModLink> audioModLinks;
+    std::atomic<uint64_t> ringStdDropCount{0};
+    std::atomic<uint64_t> ringStdDropSample{0};
+    std::atomic<bool> ringStdOverflowed{false};
+    std::atomic<bool> ringStdPanicPending{false};
   };
 
   auto setupTrackRuntime = [&](uint32_t trackId,
                                const std::string& trackPluginPath,
-                               bool allowConnect) -> std::unique_ptr<TrackRuntime> {
+                               bool allowConnect,
+                               bool startHost) -> std::unique_ptr<TrackRuntime> {
     auto runtime = std::make_unique<TrackRuntime>();
     runtime->trackId = trackId;
     runtime->config = baseConfig;
     runtime->config.socketPath =
         trackId == 0 ? baseConfig.socketPath : trackSocketPath(trackId);
-    runtime->config.pluginPath = trackPluginPath;
+    if (!trackPluginPath.empty()) {
+      runtime->config.pluginPaths = {trackPluginPath};
+    }
     runtime->config.shmName = trackShmName(trackId);
 
-    bool connected = false;
-    if (trackId == 0 && allowConnect) {
-      connected = runtime->controller.connect(runtime->config);
+    if (startHost) {
+      bool connected = false;
+      if (trackId == 0 && allowConnect) {
+        std::cerr << "Engine: connecting host for track " << trackId << std::endl;
+        connected = runtime->controller.connect(runtime->config);
+      } else {
+        std::cerr << "Engine: launching host for track " << trackId << std::endl;
+        connected = runtime->controller.launch(runtime->config);
+      }
+      if (!connected) {
+        std::cerr << "Engine: host connect/launch failed for track " << trackId << std::endl;
+        return nullptr;
+      }
+      if (!runtime->controller.shmHeader()) {
+        std::cerr << "Engine: host SHM missing for track " << trackId << std::endl;
+        return nullptr;
+      }
+      std::cerr << "Engine: host ready for track " << trackId << std::endl;
+
+      runtime->watchdog = std::make_unique<daw::Watchdog>(
+          runtime->controller.mailbox(), 500, [ptr = runtime.get()]() {
+            ptr->needsRestart.store(true);
+          });
+      runtime->hostReady.store(true, std::memory_order_release);
     } else {
-      connected = runtime->controller.launch(runtime->config);
-    }
-    if (!connected) {
-      return nullptr;
-    }
-    if (!runtime->controller.shmHeader()) {
-      return nullptr;
+      runtime->hostReady.store(false, std::memory_order_release);
     }
 
-    runtime->watchdog = std::make_unique<daw::Watchdog>(
-        runtime->controller.mailbox(), 500, [ptr = runtime.get()]() {
-          ptr->needsRestart.store(true);
-        });
-    runtime->hostReady.store(true, std::memory_order_release);
+    runtime->track.chain = daw::defaultTrackChain();
+    if (runtime->track.chain.devices.empty() && !trackPluginPath.empty()) {
+      const auto pluginIndex = resolvePluginIndex(trackPluginPath);
+      if (pluginIndex) {
+        daw::Device instrument;
+        instrument.id = daw::kDeviceIdAuto;
+        instrument.kind = daw::DeviceKind::VstInstrument;
+        instrument.capabilityMask =
+            static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
+                                 daw::DeviceCapabilityProcessesAudio);
+        instrument.hostSlotIndex = *pluginIndex;
+        daw::addDevice(runtime->track.chain, instrument, daw::kDeviceIdAuto);
+      } else {
+        daw::Device instrument;
+        instrument.id = daw::kDeviceIdAuto;
+        instrument.kind = daw::DeviceKind::VstInstrument;
+        instrument.capabilityMask =
+            static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
+                                 daw::DeviceCapabilityProcessesAudio);
+        instrument.hostSlotIndex = daw::kHostSlotIndexDirect;
+        daw::addDevice(runtime->track.chain, instrument, daw::kDeviceIdAuto);
+        std::cerr << "Engine: using direct host slot for default plugin path "
+                  << trackPluginPath << std::endl;
+      }
+    }
+    runtime->track.routing = daw::defaultTrackRouting();
+    runtime->clipSnapshot = std::make_shared<ClipSnapshot>();
+    runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
 
     runtime->patcherAudioBuffer.resize(
         static_cast<size_t>(baseConfig.blockSize) * baseConfig.numChannelsOut, 0.0f);
@@ -486,6 +821,41 @@ struct TrackRuntime {
           runtime->patcherAudioBuffer.data() +
           static_cast<size_t>(ch) * baseConfig.blockSize;
     }
+    runtime->patcherScratchpad.resize(kPatcherScratchpadCapacity);
+    runtime->patcherNodeBuffers.clear();
+    runtime->patcherNodeModOutputs.clear();
+    runtime->patcherModOutputSamples.clear();
+    runtime->patcherModInputSamples.clear();
+    runtime->patcherModUpdates.clear();
+    runtime->patcherNodeAllowed.clear();
+    runtime->patcherNodeSeen.clear();
+    runtime->patcherNodeStack.clear();
+    runtime->patcherChainOrder.clear();
+    runtime->patcherNodeToDeviceId.clear();
+    runtime->patcherModLinks.clear();
+    runtime->patcherEuclidOverrides.clear();
+    runtime->patcherHasEuclidOverride.clear();
+
+    const size_t inputSamples =
+        static_cast<size_t>(baseConfig.blockSize) * baseConfig.numChannelsOut;
+    runtime->inboundAudioBuffer.assign(inputSamples, 0.0f);
+    runtime->inputAudioBuffer.assign(inputSamples, 0.0f);
+    runtime->inputAudioChannels.resize(baseConfig.numChannelsOut);
+    for (uint32_t ch = 0; ch < baseConfig.numChannelsOut; ++ch) {
+      runtime->inputAudioChannels[ch] =
+          runtime->inputAudioBuffer.data() +
+          static_cast<size_t>(ch) * baseConfig.blockSize;
+    }
+    runtime->audioOutputPtrs.assign(baseConfig.numChannelsOut, nullptr);
+    runtime->audioModSamples.assign(
+        static_cast<size_t>(kPatcherMaxModOutputs) *
+            static_cast<size_t>(baseConfig.blockSize),
+        0.0f);
+    runtime->audioModInputSamples.assign(
+        static_cast<size_t>(kPatcherMaxModOutputs) *
+            static_cast<size_t>(baseConfig.blockSize),
+        0.0f);
+    runtime->audioModLinks.clear();
 
     return runtime;
   };
@@ -495,7 +865,7 @@ struct TrackRuntime {
   std::mutex tracksMutex;
   TrackRuntime* uiTrack = nullptr;
   {
-    auto runtime = setupTrackRuntime(0, pluginPath, !spawnHost);
+    auto runtime = setupTrackRuntime(0, pluginPath, !spawnHost, true);
     if (!runtime) {
       std::cerr << "Failed to connect to host." << std::endl;
       return 1;
@@ -503,10 +873,11 @@ struct TrackRuntime {
     uiTrack = runtime.get();
     tracks.push_back(std::move(runtime));
   }
+  std::cerr << "Engine: track runtime(s) ready, starting threads" << std::endl;
   if (testMode) {
     constexpr uint32_t kTestTrackCount = 3;
     for (uint32_t trackId = 1; trackId < kTestTrackCount; ++trackId) {
-      auto runtime = setupTrackRuntime(trackId, pluginPath, true);
+      auto runtime = setupTrackRuntime(trackId, pluginPath, true, false);
       if (!runtime) {
         std::cerr << "Failed to launch test track " << trackId << "." << std::endl;
         return 1;
@@ -525,75 +896,34 @@ struct TrackRuntime {
   // Track audio playback position for synchronization
   std::atomic<uint32_t> audioPlaybackBlockId{0};
 
-  std::unique_ptr<juce::AudioDeviceManager> audioDeviceManager;
+  std::unique_ptr<daw::IRuntime> audioRuntime;
+  std::unique_ptr<daw::IAudioBackend> audioBackend;
   std::unique_ptr<EngineAudioCallback> audioCallback;
-  if (!testMode) {
-    // Initialize JUCE for audio output
-    juce::initialiseJuce_GUI();
-
-    // Create audio device manager
-    audioDeviceManager = std::make_unique<juce::AudioDeviceManager>();
-
-    // Initialize with default audio device (2 in, 2 out)
-    juce::String audioError = audioDeviceManager->initialiseWithDefaultDevices(0, 2);
-    if (audioError.isNotEmpty()) {
-      std::cerr << "Failed to initialize audio device: "
-                << audioError.toStdString() << std::endl;
-      // Continue without audio output for now
-    } else {
-      std::cout << "Audio device initialized successfully" << std::endl;
-    }
-
-    // Create audio callback
-    audioCallback = std::make_unique<EngineAudioCallback>(
-        engineConfig.sampleRate,
-        engineConfig.blockSize,
-        engineConfig.numBlocks,
-        &audioPlaybackBlockId);
-
-    // Configure and start audio callback
-    if (audioDeviceManager->getCurrentAudioDevice()) {
-      auto* device = audioDeviceManager->getCurrentAudioDevice();
-
-      // Report actual settings (device is already opened by initialiseWithDefaultDevices)
-      std::cout << "Audio device: " << device->getName().toStdString() << std::endl;
-      std::cout << "  Sample rate: " << device->getCurrentSampleRate()
-                << " (engine expects: " << engineConfig.sampleRate << ")" << std::endl;
-      std::cout << "  Buffer size: " << device->getCurrentBufferSizeSamples()
-                << " (engine expects: " << engineConfig.blockSize << ")" << std::endl;
-      std::cout << "  Latency: " << device->getOutputLatencyInSamples()
-                << " samples" << std::endl;
-
-      // Update audio callback with actual device settings
-      audioCallback = std::make_unique<EngineAudioCallback>(
-          device->getCurrentSampleRate(),
-          device->getCurrentBufferSizeSamples(),
-          engineConfig.numBlocks,
-          &audioPlaybackBlockId);
-
-      audioDeviceManager->addAudioCallback(audioCallback.get());
-      std::cout << "Audio output started" << std::endl;
-    }
-  }
 
   daw::StaticTempoProvider tempoProvider(120.0);
   daw::NanotickConverter tickConverter(
       tempoProvider, static_cast<uint32_t>(engineConfig.sampleRate));
   const uint64_t ticksPerBeat = daw::NanotickConverter::kNanoticksPerQuarter;
-  const uint64_t blockTicks =
-      tickConverter.samplesToNanoticks(static_cast<int64_t>(engineConfig.blockSize));
   const uint64_t patternRows = 16;  // Loop first bar until loop range is configurable
   const uint64_t rowNanoticks = ticksPerBeat / 4;
   const uint64_t patternTicks = rowNanoticks * patternRows;
-  const long double samplesPerTick =
-      static_cast<long double>(engineConfig.blockSize) /
-      static_cast<long double>(blockTicks);
 
   const uint32_t maxUiTracks = daw::kUiMaxTracks;
   // No test notes - wait for user input from the tracker
   std::cout << "Engine: Ready for tracker input" << std::endl;
 
   daw::PatcherGraphState patcherGraphState;
+  std::shared_ptr<daw::PatcherGraph> patcherGraphSnapshot;
+  auto updatePatcherGraphSnapshot = [&]() {
+    auto snapshot = std::make_shared<daw::PatcherGraph>();
+    {
+      std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+      *snapshot = patcherGraphState.graph;
+    }
+    std::atomic_store_explicit(&patcherGraphSnapshot,
+                               std::move(snapshot),
+                               std::memory_order_release);
+  };
   {
     std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
     daw::PatcherNode euclid;
@@ -628,70 +958,12 @@ struct TrackRuntime {
     patcherGraphState.graph.nodes.clear();
     patcherGraphState.graph.topoOrder.clear();
     patcherGraphState.graph.depths.clear();
+    patcherGraphState.graph.resolvedInputs.clear();
+    patcherGraphState.graph.idToIndex.clear();
     patcherGraphState.graph.maxDepth = 0;
+    patcherGraphState.nextNodeId = 0;
   }
-
-  {
-    daw::ShmHeader header{};
-    header.blockSize = engineConfig.blockSize;
-    header.sampleRate = engineConfig.sampleRate;
-    header.numChannelsIn = 0;
-    header.numChannelsOut = 0;
-    header.numBlocks = 0;
-    header.channelStrideBytes = 0;
-    size_t offset = daw::alignUp(sizeof(daw::ShmHeader), 64);
-    header.audioInOffset = offset;
-    header.audioOutOffset = offset;
-    header.ringStdOffset = offset;
-    offset += daw::alignUp(daw::ringBytes(0), 64);
-    header.ringCtrlOffset = offset;
-    offset += daw::alignUp(daw::ringBytes(0), 64);
-    header.ringUiOffset = offset;
-    offset += daw::alignUp(daw::ringBytes(engineConfig.ringUiCapacity), 64);
-    header.ringUiOutOffset = offset;
-    offset += daw::alignUp(daw::ringBytes(uiDiffRingCapacity), 64);
-    header.mailboxOffset = offset;
-    offset += daw::alignUp(sizeof(daw::BlockMailbox), 64);
-    header.uiClipOffset = offset;
-    header.uiClipBytes = sizeof(daw::UiClipSnapshot);
-    offset += daw::alignUp(header.uiClipBytes, 64);
-    header.uiHarmonyOffset = offset;
-    header.uiHarmonyBytes = sizeof(daw::UiHarmonySnapshot);
-    offset += daw::alignUp(header.uiHarmonyBytes, 64);
-    uiShm.size = daw::alignUp(offset, 64);
-
-    if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
-      std::cerr << "Failed to size UI SHM: " << uiShm.name << std::endl;
-      return 1;
-    }
-    uiShm.base = ::mmap(nullptr, uiShm.size, PROT_READ | PROT_WRITE,
-                        MAP_SHARED, uiShm.fd, 0);
-    if (uiShm.base == MAP_FAILED) {
-      uiShm.base = nullptr;
-      std::cerr << "Failed to map UI SHM: " << uiShm.name << std::endl;
-      return 1;
-    }
-    std::memset(uiShm.base, 0, uiShm.size);
-    std::memcpy(uiShm.base, &header, sizeof(header));
-    uiShm.header = reinterpret_cast<daw::ShmHeader*>(uiShm.base);
-    uiShm.header->uiVersion.store(0, std::memory_order_release);
-    uiShm.header->uiClipVersion = 0;
-    uiShm.header->uiHarmonyVersion = 0;
-
-    auto* ringUi = reinterpret_cast<daw::RingHeader*>(
-        reinterpret_cast<uint8_t*>(uiShm.base) + header.ringUiOffset);
-    ringUi->capacity = engineConfig.ringUiCapacity;
-    ringUi->entrySize = sizeof(daw::EventEntry);
-    ringUi->readIndex.store(0);
-    ringUi->writeIndex.store(0);
-
-    auto* ringUiOut = reinterpret_cast<daw::RingHeader*>(
-        reinterpret_cast<uint8_t*>(uiShm.base) + header.ringUiOutOffset);
-    ringUiOut->capacity = uiDiffRingCapacity;
-    ringUiOut->entrySize = sizeof(daw::EventEntry);
-    ringUiOut->readIndex.store(0);
-    ringUiOut->writeIndex.store(0);
-  }
+  updatePatcherGraphSnapshot();
 
   std::atomic<uint64_t> transportNanotick{0};
   std::atomic<uint64_t> loopStartNanotick{0};
@@ -701,10 +973,14 @@ struct TrackRuntime {
   std::atomic<bool> clipDirty{true};
   std::atomic<bool> playing{false};
   std::atomic<uint32_t> clipVersion{0};
+  std::atomic<uint32_t> chainVersion{0};
+  std::atomic<uint32_t> routingVersion{0};
+  std::atomic<uint32_t> modVersion{0};
   std::atomic<uint32_t> nextNoteId{1};
   std::atomic<uint32_t> nextChordId{1};
   std::atomic<bool> harmonyDirty{true};
   std::atomic<uint32_t> harmonyVersion{0};
+  std::atomic<uint32_t> patcherGraphVersion{0};
   std::mutex undoMutex;
   std::vector<daw::UndoEntry> undoStack;
   std::vector<daw::UndoEntry> redoStack;
@@ -749,6 +1025,20 @@ struct TrackRuntime {
       return;
     }
 
+    uint32_t targetPluginIndex = daw::kParamTargetAll;
+    {
+      std::lock_guard<std::mutex> lockTrack(runtime.trackMutex);
+      uint32_t hostIndex = 0;
+      for (const auto& device : runtime.track.chain.devices) {
+        if (device.kind != daw::DeviceKind::VstInstrument &&
+            device.kind != daw::DeviceKind::VstEffect) {
+          continue;
+        }
+        targetPluginIndex = hostIndex;
+        break;
+      }
+    }
+
     std::lock_guard<std::mutex> lockMirror(runtime.paramMirrorMutex);
 
     std::cout << "WriteMirrorParams: track " << runtime.trackId
@@ -762,7 +1052,11 @@ struct TrackRuntime {
       paramEntry.size = sizeof(daw::ParamPayload);
       daw::ParamPayload payload{};
       std::memcpy(payload.uid16, entry.first.data(), entry.first.size());
-      payload.value = entry.second;
+      payload.value = entry.second.value;
+      payload.targetPluginIndex = entry.second.targetPluginIndex;
+      if (payload.targetPluginIndex == daw::kParamTargetAll) {
+        payload.targetPluginIndex = targetPluginIndex;
+      }
       std::memcpy(paramEntry.payload, &payload, sizeof(payload));
       daw::ringWrite(ringStd, paramEntry);
     }
@@ -803,26 +1097,52 @@ struct TrackRuntime {
     return snapshot;
   };
 
-  auto writeUiClipSnapshot = [&](const std::vector<TrackRuntime*>& trackSnapshot) {
+  struct ClipWindowPending {
+    daw::ClipWindowRequest request;
+  };
+  std::mutex clipWindowMutex;
+  std::optional<ClipWindowPending> clipWindowPending;
+
+  auto writeUiClipWindowSnapshot = [&](const std::vector<TrackRuntime*>& trackSnapshot) {
     if (!uiShm.header || uiShm.header->uiClipOffset == 0) {
       return;
     }
-    auto* snapshot = reinterpret_cast<daw::UiClipSnapshot*>(
-        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiClipOffset);
-    const uint32_t maxTracks = daw::kUiMaxTracks;
-    const uint32_t trackCount =
-        static_cast<uint32_t>(std::min<size_t>(trackSnapshot.size(), maxTracks));
-    daw::initUiClipSnapshot(*snapshot, trackCount);
-    daw::ClipSnapshotCursor cursor;
-    for (uint32_t trackIndex = 0; trackIndex < trackCount; ++trackIndex) {
-      auto* runtime = trackSnapshot[trackIndex];
-      std::lock_guard<std::mutex> lock(runtime->trackMutex);
-      daw::appendClipToSnapshot(runtime->track.clip,
-                                trackIndex,
-                                runtime->trackId,
-                                *snapshot,
-                                cursor);
+    std::optional<ClipWindowPending> pending;
+    {
+      std::lock_guard<std::mutex> lock(clipWindowMutex);
+      if (clipWindowPending) {
+        pending = clipWindowPending;
+        clipWindowPending.reset();
+      }
     }
+    if (!pending) {
+      return;
+    }
+    auto* snapshot = reinterpret_cast<daw::UiClipWindowSnapshot*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiClipOffset);
+    TrackRuntime* runtime = nullptr;
+    for (auto* candidate : trackSnapshot) {
+      if (candidate && candidate->trackId == pending->request.trackId) {
+        runtime = candidate;
+        break;
+      }
+    }
+    if (!runtime) {
+      std::memset(snapshot, 0, sizeof(daw::UiClipWindowSnapshot));
+      snapshot->trackId = pending->request.trackId;
+      snapshot->requestId = pending->request.requestId;
+      snapshot->windowStartNanotick = pending->request.windowStartNanotick;
+      snapshot->windowEndNanotick = pending->request.windowEndNanotick;
+      snapshot->clipVersion = clipVersion.load(std::memory_order_acquire);
+      snapshot->flags = daw::kUiClipWindowFlagResync;
+      return;
+    }
+    const uint32_t clipVersionValue = clipVersion.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(runtime->trackMutex);
+    daw::buildUiClipWindowSnapshot(runtime->track.clip,
+                                   pending->request,
+                                   clipVersionValue,
+                                   *snapshot);
   };
 
   auto writeUiHarmonySnapshot = [&]() {
@@ -888,14 +1208,23 @@ struct TrackRuntime {
     return entry.path;
   };
 
+  auto resolveDevicePluginPath =
+      [&](const TrackRuntime& runtime,
+          uint32_t hostSlotIndex) -> std::optional<std::string> {
+    if (hostSlotIndex == daw::kHostSlotIndexDirect) {
+      if (!runtime.config.pluginPaths.empty()) {
+        return runtime.config.pluginPaths.front();
+      }
+      return std::nullopt;
+    }
+    return resolvePluginPath(hostSlotIndex);
+  };
+
   auto restartTrackHost = [&](TrackRuntime& runtime,
-                              const std::string& pluginPath) -> bool {
+                              const std::vector<std::string>& pluginPaths) -> bool {
     // Mark as inactive immediately to stop audio callback from reading
     runtime.active.store(false, std::memory_order_release);
     runtime.hostReady.store(false, std::memory_order_release);
-
-    // Give audio callback time to stop reading this track
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     std::lock_guard<std::mutex> lock(runtime.controllerMutex);
     runtime.controller.disconnect();
@@ -906,7 +1235,7 @@ struct TrackRuntime {
       runtime.paramMirror.clear();
     }
 
-    runtime.config.pluginPath = pluginPath;
+    runtime.config.pluginPaths = pluginPaths;
     const bool connected = runtime.controller.launch(runtime.config);
     if (!connected) {
       return false;
@@ -951,8 +1280,10 @@ struct TrackRuntime {
       }
     }
     if (runtime) {
-      if (runtime->config.pluginPath != pluginPath) {
-        if (!restartTrackHost(*runtime, pluginPath)) {
+      const std::vector<std::string> desiredPaths{
+          pluginPath.empty() ? std::vector<std::string>() : std::vector<std::string>{pluginPath}};
+      if (runtime->config.pluginPaths != desiredPaths) {
+        if (!restartTrackHost(*runtime, desiredPaths)) {
           return nullptr;
         }
       }
@@ -969,7 +1300,7 @@ struct TrackRuntime {
         break;
       }
       auto newRuntime =
-          setupTrackRuntime(static_cast<uint32_t>(currentSize), pluginPath, true);
+          setupTrackRuntime(static_cast<uint32_t>(currentSize), pluginPath, true, true);
       if (!newRuntime) {
         return nullptr;
       }
@@ -985,6 +1316,88 @@ struct TrackRuntime {
       }
     }
     return nullptr;
+  };
+
+  auto applyHostBypassStates = [&](TrackRuntime& runtime) {
+    if (!runtime.hostReady.load(std::memory_order_acquire)) {
+      return;
+    }
+    std::vector<daw::Device> devices;
+    {
+      std::lock_guard<std::mutex> lock(runtime.trackMutex);
+      devices = runtime.track.chain.devices;
+    }
+    uint32_t hostIndex = 0;
+    std::lock_guard<std::mutex> lock(runtime.controllerMutex);
+    for (const auto& device : devices) {
+      if (device.kind != daw::DeviceKind::VstInstrument &&
+          device.kind != daw::DeviceKind::VstEffect) {
+        continue;
+      }
+      runtime.controller.sendSetBypass(hostIndex, device.bypass);
+      hostIndex++;
+    }
+  };
+
+  auto rebuildHostForChain = [&](TrackRuntime& runtime) {
+    std::vector<std::string> pluginPaths;
+    {
+      std::lock_guard<std::mutex> lock(runtime.trackMutex);
+      const auto& devices = runtime.track.chain.devices;
+      pluginPaths.reserve(devices.size());
+      for (const auto& device : devices) {
+        if (device.kind != daw::DeviceKind::VstInstrument &&
+            device.kind != daw::DeviceKind::VstEffect) {
+          continue;
+        }
+        const auto path = resolveDevicePluginPath(runtime, device.hostSlotIndex);
+        if (!path) {
+          std::cerr << "Engine: missing plugin path for device "
+                    << device.id << std::endl;
+          continue;
+        }
+        pluginPaths.push_back(*path);
+      }
+    }
+    if (runtime.config.pluginPaths != pluginPaths) {
+      {
+        std::lock_guard<std::mutex> lock(runtime.controllerMutex);
+        runtime.config.pluginPaths = pluginPaths;
+      }
+      runtime.needsRestart.store(true, std::memory_order_release);
+      std::cerr << "Engine: queued host restart for track "
+                << runtime.trackId << std::endl;
+      return;
+    }
+    applyHostBypassStates(runtime);
+  };
+
+  auto updateTrackChainForInstrument = [&](TrackRuntime& runtime,
+                                           uint32_t pluginIndex) {
+    {
+      std::lock_guard<std::mutex> lock(runtime.trackMutex);
+      auto& devices = runtime.track.chain.devices;
+      auto it = std::find_if(devices.begin(), devices.end(),
+                             [&](const daw::Device& device) {
+                               return device.kind == daw::DeviceKind::VstInstrument;
+                             });
+      if (it == devices.end()) {
+        daw::Device instrument;
+        instrument.id = daw::kDeviceIdAuto;
+        instrument.kind = daw::DeviceKind::VstInstrument;
+        instrument.capabilityMask =
+            static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
+                                 daw::DeviceCapabilityProcessesAudio);
+        instrument.hostSlotIndex = pluginIndex;
+        daw::addDevice(runtime.track.chain, instrument, daw::kDeviceIdAuto);
+      } else {
+        it->hostSlotIndex = pluginIndex;
+        it->capabilityMask =
+            static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
+                                 daw::DeviceCapabilityProcessesAudio);
+      }
+    }
+    rebuildHostForChain(runtime);
   };
 
   std::atomic<uint64_t> uiDiffSent{0};
@@ -1027,6 +1440,269 @@ struct TrackRuntime {
       uiDiffDropped.fetch_add(1, std::memory_order_relaxed);
       logUiDiffDrop();
     }
+  };
+
+  auto emitChainSnapshot = [&](TrackRuntime& runtime) {
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    std::vector<daw::Device> devices;
+    {
+      std::lock_guard<std::mutex> lock(runtime.trackMutex);
+      devices = runtime.track.chain.devices;
+    }
+    const uint32_t version =
+        chainVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (devices.empty()) {
+      daw::UiChainDiffPayload diffPayload{};
+      diffPayload.diffType = static_cast<uint16_t>(daw::UiDiffType::ChainSnapshot);
+      diffPayload.trackId = runtime.trackId;
+      diffPayload.chainVersion = version;
+      diffPayload.deviceId = daw::kDeviceIdAuto;
+      daw::EventEntry diffEntry;
+      diffEntry.sampleTime = 0;
+      diffEntry.blockId = 0;
+      diffEntry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+      diffEntry.size = sizeof(daw::UiChainDiffPayload);
+      std::memcpy(diffEntry.payload, &diffPayload, sizeof(diffPayload));
+      daw::ringWrite(ringUiOut, diffEntry);
+      return;
+    }
+    for (uint32_t i = 0; i < devices.size(); ++i) {
+      const auto& device = devices[i];
+      daw::UiChainDiffPayload diffPayload{};
+      diffPayload.diffType = static_cast<uint16_t>(daw::UiDiffType::ChainSnapshot);
+      diffPayload.trackId = runtime.trackId;
+      diffPayload.chainVersion = version;
+      diffPayload.deviceId = device.id;
+      diffPayload.deviceKind = static_cast<uint32_t>(device.kind);
+      diffPayload.position = i;
+      diffPayload.patcherNodeId = device.patcherNodeId;
+      diffPayload.hostSlotIndex = device.hostSlotIndex;
+      diffPayload.capabilityMask = device.capabilityMask;
+      diffPayload.bypass = device.bypass ? 1u : 0u;
+      daw::EventEntry diffEntry;
+      diffEntry.sampleTime = 0;
+      diffEntry.blockId = 0;
+      diffEntry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+      diffEntry.size = sizeof(daw::UiChainDiffPayload);
+      std::memcpy(diffEntry.payload, &diffPayload, sizeof(diffPayload));
+      daw::ringWrite(ringUiOut, diffEntry);
+    }
+  };
+
+  auto emitChainError = [&](uint16_t errorCode,
+                            uint32_t trackId,
+                            uint32_t deviceId,
+                            uint32_t deviceKind,
+                            uint32_t insertIndex) {
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::UiChainErrorPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ChainError);
+    payload.errorCode = errorCode;
+    payload.trackId = trackId;
+    payload.deviceId = deviceId;
+    payload.deviceKind = deviceKind;
+    payload.insertIndex = insertIndex;
+    daw::EventEntry entry;
+    entry.sampleTime = 0;
+    entry.blockId = 0;
+    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+    entry.size = sizeof(payload);
+    std::memcpy(entry.payload, &payload, sizeof(payload));
+    daw::ringWrite(ringUiOut, entry);
+  };
+
+  auto emitRoutingSnapshot = [&](TrackRuntime& runtime) {
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::TrackRouting routing;
+    {
+      std::lock_guard<std::mutex> lock(runtime.trackMutex);
+      routing = runtime.track.routing;
+    }
+    const uint32_t version =
+        routingVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    daw::UiTrackRoutingDiffPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::RoutingSnapshot);
+    payload.trackId = runtime.trackId;
+    payload.routingVersion = version;
+    payload.midiInKind = static_cast<uint8_t>(routing.midiIn.kind);
+    payload.midiOutKind = static_cast<uint8_t>(routing.midiOut.kind);
+    payload.audioInKind = static_cast<uint8_t>(routing.audioIn.kind);
+    payload.audioOutKind = static_cast<uint8_t>(routing.audioOut.kind);
+    payload.midiInTrackId = routing.midiIn.trackId;
+    payload.midiOutTrackId = routing.midiOut.trackId;
+    payload.audioInTrackId = routing.audioIn.trackId;
+    payload.audioOutTrackId = routing.audioOut.trackId;
+    payload.midiInInputId = routing.midiIn.inputId;
+    payload.audioInInputId = routing.audioIn.inputId;
+    if (routing.preFaderSend) {
+      payload.flags |= 0x1u;
+    }
+    daw::EventEntry entry{};
+    entry.sampleTime = 0;
+    entry.blockId = 0;
+    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+    entry.size = sizeof(payload);
+    std::memcpy(entry.payload, &payload, sizeof(payload));
+    daw::ringWrite(ringUiOut, entry);
+  };
+
+  auto emitRoutingError = [&](uint16_t errorCode, uint32_t trackId) {
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::UiRoutingErrorPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::RoutingError);
+    payload.errorCode = errorCode;
+    payload.trackId = trackId;
+    daw::EventEntry entry{};
+    entry.sampleTime = 0;
+    entry.blockId = 0;
+    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+    entry.size = sizeof(payload);
+    std::memcpy(entry.payload, &payload, sizeof(payload));
+    daw::ringWrite(ringUiOut, entry);
+  };
+
+  auto emitModSnapshot = [&](TrackRuntime& runtime) {
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::ModRegistry registry;
+    {
+      std::lock_guard<std::mutex> lock(runtime.trackMutex);
+      registry = runtime.track.modRegistry;
+    }
+    const uint32_t version =
+        modVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    auto encodeFlags = [&](const daw::ModLink& link) -> uint16_t {
+      uint16_t flags = 0;
+      flags |= static_cast<uint16_t>(link.source.kind) & 0x0Fu;
+      flags |= (static_cast<uint16_t>(link.target.kind) & 0x0Fu) << 4;
+      flags |= (static_cast<uint16_t>(link.rate) & 0x03u) << 8;
+      flags |= (link.enabled ? 1u : 0u) << 10;
+      return flags;
+    };
+    for (const auto& link : registry.links) {
+      daw::UiModLinkDiffPayload payload{};
+      payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ModSnapshot);
+      payload.flags = encodeFlags(link);
+      payload.trackId = runtime.trackId;
+      payload.modVersion = version;
+      payload.linkId = link.linkId;
+      payload.sourceDeviceId = link.source.deviceId;
+      payload.sourceId = link.source.sourceId;
+      payload.targetDeviceId = link.target.deviceId;
+      payload.targetId = link.target.targetId;
+      payload.depth = link.depth;
+      payload.bias = link.bias;
+      daw::EventEntry entry{};
+      entry.sampleTime = 0;
+      entry.blockId = 0;
+      entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+      entry.size = sizeof(payload);
+      std::memcpy(entry.payload, &payload, sizeof(payload));
+      daw::ringWrite(ringUiOut, entry);
+      if (link.target.kind == daw::ModTargetKind::VstParam) {
+        daw::UiModLinkUid16DiffPayload uidPayload{};
+        uidPayload.diffType = static_cast<uint16_t>(daw::UiDiffType::ModLinkUid16);
+        uidPayload.trackId = runtime.trackId;
+        uidPayload.modVersion = version;
+        uidPayload.linkId = link.linkId;
+        std::memcpy(uidPayload.uid16, link.target.uid16, sizeof(uidPayload.uid16));
+        daw::EventEntry uidEntry{};
+        uidEntry.sampleTime = 0;
+        uidEntry.blockId = 0;
+        uidEntry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+        uidEntry.size = sizeof(uidPayload);
+        std::memcpy(uidEntry.payload, &uidPayload, sizeof(uidPayload));
+        daw::ringWrite(ringUiOut, uidEntry);
+      }
+    }
+  };
+
+  auto emitModError = [&](uint16_t errorCode, uint32_t trackId, uint32_t linkId) {
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::UiModErrorPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ModError);
+    payload.errorCode = errorCode;
+    payload.trackId = trackId;
+    payload.linkId = linkId;
+    daw::EventEntry entry{};
+    entry.sampleTime = 0;
+    entry.blockId = 0;
+    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+    entry.size = sizeof(payload);
+    std::memcpy(entry.payload, &payload, sizeof(payload));
+    daw::ringWrite(ringUiOut, entry);
+  };
+
+  auto emitPatcherGraphDelta = [&](uint32_t trackId,
+                                   uint16_t flags,
+                                   uint32_t nodeId,
+                                   uint32_t nodeType,
+                                   uint32_t srcNodeId,
+                                   uint32_t dstNodeId) {
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    const uint32_t version =
+        patcherGraphVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    daw::UiPatcherGraphDiffPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::PatcherGraphDelta);
+    payload.flags = flags;
+    payload.trackId = trackId;
+    payload.graphVersion = version;
+    payload.nodeId = nodeId;
+    payload.nodeType = nodeType;
+    payload.srcNodeId = srcNodeId;
+    payload.dstNodeId = dstNodeId;
+    daw::EventEntry entry{};
+    entry.sampleTime = 0;
+    entry.blockId = 0;
+    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+    entry.size = sizeof(payload);
+    std::memcpy(entry.payload, &payload, sizeof(payload));
+    daw::ringWrite(ringUiOut, entry);
+  };
+
+  auto emitPatcherGraphError = [&](uint16_t errorCode,
+                                   uint32_t trackId,
+                                   uint32_t nodeId,
+                                   uint32_t srcNodeId,
+                                   uint32_t dstNodeId) {
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::UiPatcherGraphErrorPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::PatcherGraphError);
+    payload.errorCode = errorCode;
+    payload.trackId = trackId;
+    payload.nodeId = nodeId;
+    payload.srcNodeId = srcNodeId;
+    payload.dstNodeId = dstNodeId;
+    daw::EventEntry entry{};
+    entry.sampleTime = 0;
+    entry.blockId = 0;
+    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+    entry.size = sizeof(payload);
+    std::memcpy(entry.payload, &payload, sizeof(payload));
+    daw::ringWrite(ringUiOut, entry);
   };
 
   auto emitHarmonyDiff = [&](const daw::UiHarmonyDiffPayload& diffPayload) {
@@ -1236,7 +1912,9 @@ struct TrackRuntime {
                           uint8_t pitch,
                           uint8_t velocity,
                           uint16_t flags,
-                          bool recordUndo) -> bool {
+                          bool recordUndo,
+                          std::optional<uint32_t> noteIdOverride =
+                              std::nullopt) -> bool {
     TrackRuntime* runtime = nullptr;
     {
       std::lock_guard<std::mutex> lock(tracksMutex);
@@ -1249,6 +1927,7 @@ struct TrackRuntime {
       return false;
     }
     std::optional<daw::ClipEditResult> result;
+    std::shared_ptr<const ClipSnapshot> snapshot;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       result = daw::addNoteToClip(runtime->track.clip,
@@ -1259,11 +1938,16 @@ struct TrackRuntime {
                                   velocity,
                                   flags,
                                   clipVersion,
-                                  recordUndo);
+                                  recordUndo,
+                                  noteIdOverride);
+      if (result) {
+        snapshot = buildClipSnapshot(runtime->track.clip);
+      }
     }
     if (!result) {
       return false;
     }
+    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
     clipDirty.store(true, std::memory_order_release);
     emitUiDiff(result->diff);
 
@@ -1291,6 +1975,7 @@ struct TrackRuntime {
     }
 
     std::optional<daw::ClipEditResult> result;
+    std::shared_ptr<const ClipSnapshot> snapshot;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       result = daw::removeNoteFromClip(runtime->track.clip,
@@ -1300,6 +1985,9 @@ struct TrackRuntime {
                                        flags,
                                        clipVersion,
                                        recordUndo);
+      if (result) {
+        snapshot = buildClipSnapshot(runtime->track.clip);
+      }
     }
     if (!result) {
       std::cerr << "UI: RemoveNote - note not found (track " << trackId
@@ -1308,6 +1996,7 @@ struct TrackRuntime {
       return false;
     }
 
+    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
     clipDirty.store(true, std::memory_order_release);
     emitUiDiff(result->diff);
 
@@ -1370,13 +2059,16 @@ struct TrackRuntime {
     event.payload.chord.humanizeTiming = humanizeTiming;
     event.payload.chord.humanizeVelocity = humanizeVelocity;
     event.payload.chord.durationNanoticks = duration;
+    std::shared_ptr<const ClipSnapshot> snapshot;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       runtime->track.clip.removeChordAt(nanotick, column);
       runtime->track.clip.removeNoteAt(nanotick, column);
       runtime->track.clip.addEvent(std::move(event));
+      snapshot = buildClipSnapshot(runtime->track.clip);
     }
 
+    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
     clipDirty.store(true, std::memory_order_release);
     const uint32_t nextClipVersion =
         clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -1479,15 +2171,20 @@ struct TrackRuntime {
       return false;
     }
     std::optional<daw::MusicalClip::RemovedChord> removed;
+    std::shared_ptr<const ClipSnapshot> snapshot;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       removed = runtime->track.clip.removeChordById(chordId);
+      if (removed) {
+        snapshot = buildClipSnapshot(runtime->track.clip);
+      }
     }
     if (!removed) {
       std::cerr << "UI: RemoveChord - chord not found (track "
                 << trackId << ", id " << chordId << ")" << std::endl;
       return false;
     }
+    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
     return emitRemoveChordDiff(trackId, *removed, recordUndo);
   };
 
@@ -1507,9 +2204,13 @@ struct TrackRuntime {
       return false;
     }
     std::optional<daw::MusicalClip::RemovedChord> removed;
+    std::shared_ptr<const ClipSnapshot> snapshot;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       removed = runtime->track.clip.removeChordAt(nanotick, column);
+      if (removed) {
+        snapshot = buildClipSnapshot(runtime->track.clip);
+      }
     }
     if (!removed) {
       std::cerr << "UI: RemoveChord - chord not found (track "
@@ -1517,6 +2218,7 @@ struct TrackRuntime {
                 << ", col " << static_cast<int>(column) << ")" << std::endl;
       return false;
     }
+    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
     return emitRemoveChordDiff(trackId, *removed, recordUndo);
   };
 
@@ -1530,7 +2232,8 @@ struct TrackRuntime {
                             entry.pitch,
                             entry.velocity,
                             entry.flags,
-                            recordUndo);
+                            recordUndo,
+                            entry.noteId);
       case daw::UndoType::RemoveNote:
         return applyRemoveNote(entry.trackId,
                                entry.nanotick,
@@ -1573,11 +2276,750 @@ struct TrackRuntime {
     if (entry.type != static_cast<uint16_t>(daw::EventType::UiCommand)) {
       return;
     }
+    if (entry.size < sizeof(daw::UiCommandPayload)) {
+      return;
+    }
+    daw::UiCommandPayload header{};
+    std::memcpy(&header, entry.payload, sizeof(header));
+    const auto commandType =
+        static_cast<daw::UiCommandType>(header.commandType);
+    if (entry.size == sizeof(daw::UiAutomationCommandPayload) &&
+        commandType == daw::UiCommandType::SetAutomationTarget) {
+      daw::UiAutomationCommandPayload autoPayload{};
+      std::memcpy(&autoPayload, entry.payload, sizeof(autoPayload));
+      if (autoPayload.commandType !=
+          static_cast<uint16_t>(daw::UiCommandType::SetAutomationTarget)) {
+        return;
+      }
+      if (!requireMatchingClipVersion(autoPayload.baseVersion,
+                                      daw::UiCommandType::SetAutomationTarget,
+                                      autoPayload.trackId)) {
+        return;
+      }
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (autoPayload.trackId < tracks.size()) {
+          runtime = tracks[autoPayload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        std::cerr << "UI: SetAutomationTarget failed - track "
+                  << autoPayload.trackId << " not found" << std::endl;
+        return;
+      }
+      bool updated = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& clip : runtime->track.automationClips) {
+          const auto uid16 = daw::hashStableId16(clip.paramId());
+          if (std::memcmp(uid16.data(), autoPayload.uid16, uid16.size()) == 0) {
+            clip.setTargetPluginIndex(autoPayload.targetPluginIndex);
+            updated = true;
+            break;
+          }
+        }
+      }
+      if (!updated) {
+        std::cerr << "UI: SetAutomationTarget - automation clip not found (track "
+                  << autoPayload.trackId << ")" << std::endl;
+      }
+      return;
+    }
+    if (entry.size == sizeof(daw::UiTrackRoutingPayload) &&
+        commandType == daw::UiCommandType::SetTrackRouting) {
+      daw::UiTrackRoutingPayload routingPayload{};
+      std::memcpy(&routingPayload, entry.payload, sizeof(routingPayload));
+      if (routingPayload.commandType !=
+          static_cast<uint16_t>(daw::UiCommandType::SetTrackRouting)) {
+        return;
+      }
+      constexpr uint16_t kRoutingErrTrackMissing = 1;
+      constexpr uint16_t kRoutingErrInvalidKind = 2;
+      constexpr uint16_t kRoutingErrInvalidTarget = 3;
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (routingPayload.trackId < tracks.size()) {
+          runtime = tracks[routingPayload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        emitRoutingError(kRoutingErrTrackMissing, routingPayload.trackId);
+        return;
+      }
+      auto validRouteKind = [](uint8_t kind) -> bool {
+        return kind <= static_cast<uint8_t>(daw::TrackRouteKind::ExternalInput);
+      };
+      if (!validRouteKind(routingPayload.midiInKind) ||
+          !validRouteKind(routingPayload.midiOutKind) ||
+          !validRouteKind(routingPayload.audioInKind) ||
+          !validRouteKind(routingPayload.audioOutKind)) {
+        emitRoutingError(kRoutingErrInvalidKind, routingPayload.trackId);
+        return;
+      }
+      auto validateTrackRoute = [&](uint8_t kind,
+                                    uint32_t targetTrackId) -> bool {
+        if (kind != static_cast<uint8_t>(daw::TrackRouteKind::Track)) {
+          return true;
+        }
+        if (targetTrackId >= tracks.size()) {
+          return false;
+        }
+        return targetTrackId != routingPayload.trackId;
+      };
+      if (!validateTrackRoute(routingPayload.midiInKind,
+                              routingPayload.midiInTrackId) ||
+          !validateTrackRoute(routingPayload.midiOutKind,
+                              routingPayload.midiOutTrackId) ||
+          !validateTrackRoute(routingPayload.audioInKind,
+                              routingPayload.audioInTrackId) ||
+          !validateTrackRoute(routingPayload.audioOutKind,
+                              routingPayload.audioOutTrackId)) {
+        emitRoutingError(kRoutingErrInvalidTarget, routingPayload.trackId);
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        runtime->track.routing.midiIn.kind =
+            static_cast<daw::TrackRouteKind>(routingPayload.midiInKind);
+        runtime->track.routing.midiOut.kind =
+            static_cast<daw::TrackRouteKind>(routingPayload.midiOutKind);
+        runtime->track.routing.audioIn.kind =
+            static_cast<daw::TrackRouteKind>(routingPayload.audioInKind);
+        runtime->track.routing.audioOut.kind =
+            static_cast<daw::TrackRouteKind>(routingPayload.audioOutKind);
+        runtime->track.routing.midiIn.trackId = routingPayload.midiInTrackId;
+        runtime->track.routing.midiOut.trackId = routingPayload.midiOutTrackId;
+        runtime->track.routing.audioIn.trackId = routingPayload.audioInTrackId;
+        runtime->track.routing.audioOut.trackId = routingPayload.audioOutTrackId;
+        runtime->track.routing.midiIn.inputId = routingPayload.midiInInputId;
+        runtime->track.routing.audioIn.inputId = routingPayload.audioInInputId;
+        runtime->track.routing.preFaderSend = (routingPayload.flags & 0x1u) != 0;
+      }
+      emitRoutingSnapshot(*runtime);
+      return;
+    }
+    if (entry.size == sizeof(daw::UiModLinkCommandPayload) &&
+        (commandType == daw::UiCommandType::AddModLink ||
+         commandType == daw::UiCommandType::RemoveModLink)) {
+      daw::UiModLinkCommandPayload modPayload{};
+      std::memcpy(&modPayload, entry.payload, sizeof(modPayload));
+      const auto commandType =
+          static_cast<daw::UiCommandType>(modPayload.commandType);
+      if (commandType != daw::UiCommandType::AddModLink &&
+          commandType != daw::UiCommandType::RemoveModLink) {
+        return;
+      }
+      constexpr uint16_t kModErrTrackMissing = 1;
+      constexpr uint16_t kModErrLinkMissing = 2;
+      constexpr uint16_t kModErrInvalidKind = 3;
+      constexpr uint16_t kModErrInvalidDevice = 4;
+      constexpr uint16_t kModErrOrderViolation = 5;
+      constexpr uint16_t kModErrLinkExists = 6;
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (modPayload.trackId < tracks.size()) {
+          runtime = tracks[modPayload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        emitModError(kModErrTrackMissing, modPayload.trackId, modPayload.linkId);
+        return;
+      }
+      auto decodeSourceKind = [&](uint16_t flags) -> std::optional<daw::ModSourceKind> {
+        const uint8_t raw = static_cast<uint8_t>(flags & 0x0Fu);
+        if (raw > static_cast<uint8_t>(daw::ModSourceKind::PatcherNodeOutput)) {
+          return std::nullopt;
+        }
+        return static_cast<daw::ModSourceKind>(raw);
+      };
+      auto decodeTargetKind = [&](uint16_t flags) -> std::optional<daw::ModTargetKind> {
+        const uint8_t raw = static_cast<uint8_t>((flags >> 4) & 0x0Fu);
+        if (raw > static_cast<uint8_t>(daw::ModTargetKind::PatcherMacro)) {
+          return std::nullopt;
+        }
+        return static_cast<daw::ModTargetKind>(raw);
+      };
+      auto decodeRate = [&](uint16_t flags) -> std::optional<daw::ModRate> {
+        const uint8_t raw = static_cast<uint8_t>((flags >> 8) & 0x03u);
+        if (raw > static_cast<uint8_t>(daw::ModRate::SampleRate)) {
+          return std::nullopt;
+        }
+        return static_cast<daw::ModRate>(raw);
+      };
+      const bool enabled = ((modPayload.flags >> 10) & 0x1u) != 0;
+      auto sourceKind = decodeSourceKind(modPayload.flags);
+      auto targetKind = decodeTargetKind(modPayload.flags);
+      auto rate = decodeRate(modPayload.flags);
+      if (!sourceKind || !targetKind || !rate) {
+        emitModError(kModErrInvalidKind, modPayload.trackId, modPayload.linkId);
+        return;
+      }
+      std::vector<daw::Device> devices;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        devices = runtime->track.chain.devices;
+      }
+      auto findDevicePos = [&](uint32_t deviceId) -> std::optional<size_t> {
+        for (size_t i = 0; i < devices.size(); ++i) {
+          if (devices[i].id == deviceId) {
+            return i;
+          }
+        }
+        return std::nullopt;
+      };
+      auto sourcePos = findDevicePos(modPayload.sourceDeviceId);
+      auto targetPos = findDevicePos(modPayload.targetDeviceId);
+      if (!sourcePos || !targetPos) {
+        emitModError(kModErrInvalidDevice, modPayload.trackId, modPayload.linkId);
+        return;
+      }
+      if (*sourcePos >= *targetPos) {
+        emitModError(kModErrOrderViolation, modPayload.trackId, modPayload.linkId);
+        return;
+      }
+      bool updated = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        if (commandType == daw::UiCommandType::RemoveModLink) {
+          auto& links = runtime->track.modRegistry.links;
+          const auto before = links.size();
+          links.erase(std::remove_if(links.begin(),
+                                     links.end(),
+                                     [&](const daw::ModLink& link) {
+                                       return link.linkId == modPayload.linkId;
+                                     }),
+                      links.end());
+          updated = links.size() != before;
+        } else {
+          auto& links = runtime->track.modRegistry.links;
+          if (modPayload.linkId == daw::kModLinkIdAuto) {
+            uint32_t nextId = 1;
+            for (const auto& link : links) {
+              nextId = std::max(nextId, link.linkId + 1);
+            }
+            modPayload.linkId = nextId;
+          } else {
+            const bool exists =
+                std::any_of(links.begin(),
+                            links.end(),
+                            [&](const daw::ModLink& link) {
+                              return link.linkId == modPayload.linkId;
+                            });
+            if (exists) {
+              emitModError(kModErrLinkExists, modPayload.trackId,
+                           modPayload.linkId);
+              return;
+            }
+          }
+          daw::ModLink link{};
+          link.linkId = modPayload.linkId;
+          link.source.deviceId = modPayload.sourceDeviceId;
+          link.source.sourceId = modPayload.sourceId;
+          link.source.kind = *sourceKind;
+          link.target.deviceId = modPayload.targetDeviceId;
+          link.target.targetId = modPayload.targetId;
+          link.target.kind = *targetKind;
+          link.depth = modPayload.depth;
+          link.bias = modPayload.bias;
+          link.rate = *rate;
+          link.enabled = enabled;
+          links.push_back(link);
+          updated = true;
+        }
+      }
+      if (updated) {
+        std::shared_ptr<const TrackStateSnapshot> snapshot;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snapshot = buildTrackSnapshot(runtime->track);
+        }
+        std::atomic_store_explicit(&runtime->trackSnapshot,
+                                   snapshot,
+                                   std::memory_order_release);
+        emitModSnapshot(*runtime);
+      } else if (commandType == daw::UiCommandType::RemoveModLink) {
+        emitModError(kModErrLinkMissing, modPayload.trackId, modPayload.linkId);
+      }
+      return;
+    }
+    if (entry.size == sizeof(daw::UiModLinkUid16Payload) &&
+        commandType == daw::UiCommandType::SetModLinkUid16) {
+      daw::UiModLinkUid16Payload modPayload{};
+      std::memcpy(&modPayload, entry.payload, sizeof(modPayload));
+      if (modPayload.commandType !=
+          static_cast<uint16_t>(daw::UiCommandType::SetModLinkUid16)) {
+        return;
+      }
+      constexpr uint16_t kModErrTrackMissing = 1;
+      constexpr uint16_t kModErrLinkMissing = 2;
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (modPayload.trackId < tracks.size()) {
+          runtime = tracks[modPayload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        emitModError(kModErrTrackMissing, modPayload.trackId, modPayload.linkId);
+        return;
+      }
+      bool updated = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& link : runtime->track.modRegistry.links) {
+          if (link.linkId != modPayload.linkId) {
+            continue;
+          }
+          std::memcpy(link.target.uid16,
+                      modPayload.uid16,
+                      sizeof(link.target.uid16));
+          updated = true;
+          break;
+        }
+      }
+      if (updated) {
+        std::shared_ptr<const TrackStateSnapshot> snapshot;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snapshot = buildTrackSnapshot(runtime->track);
+        }
+        std::atomic_store_explicit(&runtime->trackSnapshot,
+                                   snapshot,
+                                   std::memory_order_release);
+        emitModSnapshot(*runtime);
+      } else {
+        emitModError(kModErrLinkMissing, modPayload.trackId, modPayload.linkId);
+      }
+      return;
+    }
+    if (entry.size == sizeof(daw::UiModSourceValuePayload) &&
+        commandType == daw::UiCommandType::SetModSourceValue) {
+      daw::UiModSourceValuePayload modPayload{};
+      std::memcpy(&modPayload, entry.payload, sizeof(modPayload));
+      if (modPayload.commandType !=
+          static_cast<uint16_t>(daw::UiCommandType::SetModSourceValue)) {
+        return;
+      }
+      constexpr uint16_t kModErrTrackMissing = 1;
+      constexpr uint16_t kModErrInvalidKind = 3;
+      constexpr uint16_t kModErrInvalidDevice = 4;
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (modPayload.trackId < tracks.size()) {
+          runtime = tracks[modPayload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        emitModError(kModErrTrackMissing, modPayload.trackId, 0);
+        return;
+      }
+      const uint8_t rawKind = static_cast<uint8_t>(modPayload.flags & 0x0Fu);
+      if (rawKind > static_cast<uint8_t>(daw::ModSourceKind::PatcherNodeOutput)) {
+        emitModError(kModErrInvalidKind, modPayload.trackId, 0);
+        return;
+      }
+      const auto kind = static_cast<daw::ModSourceKind>(rawKind);
+      bool deviceFound = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (const auto& device : runtime->track.chain.devices) {
+          if (device.id == modPayload.sourceDeviceId) {
+            deviceFound = true;
+            break;
+          }
+        }
+      }
+      if (!deviceFound) {
+        emitModError(kModErrInvalidDevice, modPayload.trackId, 0);
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        auto& sources = runtime->track.modRegistry.sources;
+        bool updated = false;
+        for (auto& source : sources) {
+          if (source.ref.deviceId == modPayload.sourceDeviceId &&
+              source.ref.sourceId == modPayload.sourceId &&
+              source.ref.kind == kind) {
+            source.value = modPayload.value;
+            updated = true;
+            break;
+          }
+        }
+        if (!updated) {
+          daw::ModSourceState state{};
+          state.ref.deviceId = modPayload.sourceDeviceId;
+          state.ref.sourceId = modPayload.sourceId;
+          state.ref.kind = kind;
+          state.value = modPayload.value;
+          sources.push_back(state);
+        }
+      }
+      return;
+    }
+    if (entry.size == sizeof(daw::UiPatcherGraphCommandPayload) &&
+        (commandType == daw::UiCommandType::AddPatcherNode ||
+         commandType == daw::UiCommandType::RemovePatcherNode ||
+         commandType == daw::UiCommandType::ConnectPatcherNodes)) {
+      daw::UiPatcherGraphCommandPayload graphPayload{};
+      std::memcpy(&graphPayload, entry.payload, sizeof(graphPayload));
+      constexpr uint16_t kGraphErrInvalidType = 1;
+      constexpr uint16_t kGraphErrInvalidNode = 2;
+      constexpr uint16_t kGraphErrCycle = 3;
+      constexpr uint16_t kGraphErrAddFailed = 4;
+      if (commandType == daw::UiCommandType::AddPatcherNode) {
+        if (graphPayload.nodeType >
+            static_cast<uint32_t>(daw::PatcherNodeType::EventOut)) {
+          emitPatcherGraphError(kGraphErrInvalidType,
+                                graphPayload.trackId,
+                                graphPayload.nodeId,
+                                0,
+                                0);
+          return;
+        }
+        const auto nodeId = addPatcherNode(
+            patcherGraphState,
+            static_cast<daw::PatcherNodeType>(graphPayload.nodeType));
+        if (nodeId == std::numeric_limits<uint32_t>::max()) {
+          emitPatcherGraphError(kGraphErrAddFailed,
+                                graphPayload.trackId,
+                                graphPayload.nodeId,
+                                0,
+                                0);
+          return;
+        }
+        updatePatcherGraphSnapshot();
+        emitPatcherGraphDelta(graphPayload.trackId,
+                              0,
+                              nodeId,
+                              graphPayload.nodeType,
+                              0,
+                              0);
+        return;
+      }
+      if (commandType == daw::UiCommandType::RemovePatcherNode) {
+        if (!removePatcherNode(patcherGraphState, graphPayload.nodeId)) {
+          emitPatcherGraphError(kGraphErrInvalidNode,
+                                graphPayload.trackId,
+                                graphPayload.nodeId,
+                                0,
+                                0);
+          return;
+        }
+        updatePatcherGraphSnapshot();
+        emitPatcherGraphDelta(graphPayload.trackId,
+                              1,
+                              graphPayload.nodeId,
+                              0,
+                              0,
+                              0);
+        return;
+      }
+      if (commandType == daw::UiCommandType::ConnectPatcherNodes) {
+        if (graphPayload.srcNodeId == graphPayload.dstNodeId) {
+          emitPatcherGraphError(kGraphErrInvalidNode,
+                                graphPayload.trackId,
+                                0,
+                                graphPayload.srcNodeId,
+                                graphPayload.dstNodeId);
+          return;
+        }
+        if (!connectPatcherNodes(patcherGraphState,
+                                 graphPayload.srcNodeId,
+                                 graphPayload.dstNodeId)) {
+          emitPatcherGraphError(kGraphErrCycle,
+                                graphPayload.trackId,
+                                0,
+                                graphPayload.srcNodeId,
+                                graphPayload.dstNodeId);
+          return;
+        }
+        updatePatcherGraphSnapshot();
+        emitPatcherGraphDelta(graphPayload.trackId,
+                              2,
+                              0,
+                              0,
+                              graphPayload.srcNodeId,
+                              graphPayload.dstNodeId);
+        return;
+      }
+    }
+    if (entry.size == sizeof(daw::UiPatcherNodeConfigPayload) &&
+        commandType == daw::UiCommandType::SetPatcherNodeConfig) {
+      daw::UiPatcherNodeConfigPayload configPayload{};
+      std::memcpy(&configPayload, entry.payload, sizeof(configPayload));
+      constexpr uint16_t kGraphErrInvalidType = 1;
+      constexpr uint16_t kGraphErrInvalidNode = 2;
+      bool updated = false;
+      if (configPayload.configType ==
+          static_cast<uint32_t>(daw::PatcherNodeType::Euclidean)) {
+        daw::PatcherEuclideanConfig config{};
+        const size_t copySize =
+            std::min(sizeof(config), sizeof(configPayload.config));
+        std::memcpy(&config, configPayload.config, copySize);
+        updated = setEuclideanConfig(patcherGraphState,
+                                     configPayload.nodeId,
+                                     config);
+      } else if (configPayload.configType ==
+                 static_cast<uint32_t>(daw::PatcherNodeType::RandomDegree)) {
+        daw::PatcherRandomDegreeConfig config{};
+        const size_t copySize =
+            std::min(sizeof(config), sizeof(configPayload.config));
+        std::memcpy(&config, configPayload.config, copySize);
+        updated = setRandomDegreeConfig(patcherGraphState,
+                                        configPayload.nodeId,
+                                        config);
+      } else if (configPayload.configType ==
+                 static_cast<uint32_t>(daw::PatcherNodeType::Lfo)) {
+        daw::PatcherLfoConfig config{};
+        const size_t copySize =
+            std::min(sizeof(config), sizeof(configPayload.config));
+        std::memcpy(&config, configPayload.config, copySize);
+        updated = setLfoConfig(patcherGraphState,
+                               configPayload.nodeId,
+                               config);
+      } else {
+        emitPatcherGraphError(kGraphErrInvalidType,
+                              configPayload.trackId,
+                              configPayload.nodeId,
+                              0,
+                              0);
+        return;
+      }
+      if (!updated) {
+        emitPatcherGraphError(kGraphErrInvalidNode,
+                              configPayload.trackId,
+                              configPayload.nodeId,
+                              0,
+                              0);
+        return;
+      }
+      updatePatcherGraphSnapshot();
+      emitPatcherGraphDelta(configPayload.trackId,
+                            3,
+                            configPayload.nodeId,
+                            configPayload.configType,
+                            0,
+                            0);
+      return;
+    }
+    if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
+        commandType == daw::UiCommandType::SavePatcherPreset) {
+      daw::UiPatcherPresetCommandPayload presetPayload{};
+      std::memcpy(&presetPayload, entry.payload, sizeof(presetPayload));
+      std::string name(presetPayload.name,
+                       strnlen(presetPayload.name, sizeof(presetPayload.name)));
+      if (name.empty()) {
+        std::cerr << "UI: SavePatcherPreset failed - empty name" << std::endl;
+        return;
+      }
+      const std::string dir = daw::defaultPatcherPresetDir();
+      std::error_code ec;
+      std::filesystem::create_directories(dir, ec);
+      if (ec) {
+        std::cerr << "UI: SavePatcherPreset failed - cannot create dir "
+                  << dir << std::endl;
+        return;
+      }
+      const std::filesystem::path path =
+          std::filesystem::path(dir) / (name + ".json");
+      std::string error;
+      if (!daw::savePatcherPreset(patcherGraphState,
+                                  path.string(),
+                                  &error)) {
+        std::cerr << "UI: SavePatcherPreset failed - " << error << std::endl;
+      } else {
+        std::cerr << "UI: Saved patcher preset " << path.string() << std::endl;
+      }
+      return;
+    }
+    if (entry.size == sizeof(daw::UiDeviceEuclideanConfigPayload) &&
+        commandType == daw::UiCommandType::SetDeviceEuclideanConfig) {
+      daw::UiDeviceEuclideanConfigPayload configPayload{};
+      std::memcpy(&configPayload, entry.payload, sizeof(configPayload));
+      if (configPayload.commandType !=
+          static_cast<uint16_t>(daw::UiCommandType::SetDeviceEuclideanConfig)) {
+        return;
+      }
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (configPayload.trackId < tracks.size()) {
+          runtime = tracks[configPayload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        std::cerr << "UI: SetDeviceEuclideanConfig failed - track "
+                  << configPayload.trackId << " not found" << std::endl;
+        return;
+      }
+      daw::PatcherEuclideanConfig config{};
+      config.steps = configPayload.steps;
+      config.hits = configPayload.hits;
+      config.offset = configPayload.offset;
+      config.duration_ticks = configPayload.durationTicks;
+      config.degree = configPayload.degree;
+      config.octave_offset = configPayload.octaveOffset;
+      config.velocity = configPayload.velocity;
+      config.base_octave = configPayload.baseOctave;
+      bool updated = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        updated = daw::setDeviceEuclideanConfig(runtime->track.chain,
+                                                configPayload.deviceId,
+                                                config);
+      }
+      if (updated) {
+        std::shared_ptr<const TrackStateSnapshot> snapshot;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snapshot = buildTrackSnapshot(runtime->track);
+        }
+        std::atomic_store_explicit(&runtime->trackSnapshot,
+                                   snapshot,
+                                   std::memory_order_release);
+      } else {
+        std::cerr << "UI: SetDeviceEuclideanConfig failed - device "
+                  << configPayload.deviceId << " not found" << std::endl;
+      }
+      return;
+    }
+    if (entry.size == sizeof(daw::UiChainCommandPayload) &&
+        (commandType == daw::UiCommandType::AddDevice ||
+         commandType == daw::UiCommandType::RemoveDevice ||
+         commandType == daw::UiCommandType::MoveDevice ||
+         commandType == daw::UiCommandType::UpdateDevice)) {
+      daw::UiChainCommandPayload chainPayload{};
+      std::memcpy(&chainPayload, entry.payload, sizeof(chainPayload));
+      const auto commandType =
+          static_cast<daw::UiCommandType>(chainPayload.commandType);
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (chainPayload.trackId < tracks.size()) {
+          runtime = tracks[chainPayload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        std::cerr << "UI: Chain command failed - track "
+                  << chainPayload.trackId << " not found" << std::endl;
+        return;
+      }
+      auto capabilityMaskForKind = [&](daw::DeviceKind kind) -> uint8_t {
+        switch (kind) {
+          case daw::DeviceKind::PatcherEvent:
+            return daw::DeviceCapabilityProducesMidi;
+          case daw::DeviceKind::PatcherInstrument:
+            return static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
+                                        daw::DeviceCapabilityProcessesAudio);
+          case daw::DeviceKind::PatcherAudio:
+            return daw::DeviceCapabilityProcessesAudio;
+          case daw::DeviceKind::VstInstrument:
+            return static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
+                                        daw::DeviceCapabilityProcessesAudio);
+          case daw::DeviceKind::VstEffect:
+            return daw::DeviceCapabilityProcessesAudio;
+        }
+        return daw::DeviceCapabilityNone;
+      };
+      bool chainChanged = false;
+      bool emitError = false;
+      uint16_t errorCode = 0;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        if (commandType == daw::UiCommandType::AddDevice) {
+          daw::Device device;
+          device.id = chainPayload.deviceId;
+          device.kind = static_cast<daw::DeviceKind>(chainPayload.deviceKind);
+          device.patcherNodeId = chainPayload.patcherNodeId;
+          device.hostSlotIndex = chainPayload.hostSlotIndex;
+          device.bypass = chainPayload.bypass != 0;
+          device.capabilityMask = capabilityMaskForKind(device.kind);
+          chainChanged = daw::addDevice(runtime->track.chain,
+                                        device,
+                                        chainPayload.insertIndex);
+          if (!chainChanged) {
+            emitError = true;
+            errorCode = 1;
+          }
+        } else if (commandType == daw::UiCommandType::RemoveDevice) {
+          chainChanged = daw::removeDeviceById(runtime->track.chain,
+                                               chainPayload.deviceId);
+          if (!chainChanged) {
+            emitError = true;
+            errorCode = 2;
+          }
+        } else if (commandType == daw::UiCommandType::MoveDevice) {
+          chainChanged = daw::moveDeviceById(runtime->track.chain,
+                                             chainPayload.deviceId,
+                                             chainPayload.insertIndex);
+          if (!chainChanged) {
+            emitError = true;
+            errorCode = 3;
+          }
+        } else if (commandType == daw::UiCommandType::UpdateDevice) {
+          const uint16_t flags = chainPayload.flags;
+          if (flags & 0x1u) {
+            chainChanged |= daw::setDeviceBypass(runtime->track.chain,
+                                                 chainPayload.deviceId,
+                                                 chainPayload.bypass != 0);
+          }
+          if (flags & 0x2u) {
+            chainChanged |= daw::setDevicePatcherNodeId(runtime->track.chain,
+                                                        chainPayload.deviceId,
+                                                        chainPayload.patcherNodeId);
+          }
+          if (flags & 0x4u) {
+            chainChanged |= daw::setDeviceHostSlotIndex(runtime->track.chain,
+                                                        chainPayload.deviceId,
+                                                        chainPayload.hostSlotIndex);
+          }
+          if (!chainChanged) {
+            emitError = true;
+            errorCode = 4;
+          }
+        }
+      }
+      if (chainChanged) {
+        std::shared_ptr<const TrackStateSnapshot> snapshot;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snapshot = buildTrackSnapshot(runtime->track);
+        }
+        std::atomic_store_explicit(&runtime->trackSnapshot,
+                                   snapshot,
+                                   std::memory_order_release);
+        rebuildHostForChain(*runtime);
+        emitChainSnapshot(*runtime);
+      } else if (emitError) {
+        emitChainError(errorCode,
+                       chainPayload.trackId,
+                       chainPayload.deviceId,
+                       chainPayload.deviceKind,
+                       chainPayload.insertIndex);
+      }
+      return;
+    }
     if (entry.size != sizeof(daw::UiCommandPayload)) {
+      std::cerr << "UI: bad UiCommand size " << entry.size
+                << " (expected " << sizeof(daw::UiCommandPayload) << ")"
+                << std::endl;
       return;
     }
     daw::UiCommandPayload payload{};
     std::memcpy(&payload, entry.payload, sizeof(payload));
+    if (payload.commandType ==
+            static_cast<uint16_t>(daw::UiCommandType::LoadPluginOnTrack) ||
+        payload.commandType ==
+            static_cast<uint16_t>(daw::UiCommandType::TogglePlay)) {
+      std::cerr << "UI: cmd " << payload.commandType
+                << " track " << payload.trackId
+                << " plugin " << payload.pluginIndex << std::endl;
+    }
     if (payload.commandType ==
         static_cast<uint16_t>(daw::UiCommandType::LoadPluginOnTrack)) {
       const uint32_t trackId = payload.trackId;
@@ -1587,11 +3029,70 @@ struct TrackRuntime {
         std::cerr << "UI: invalid plugin index " << pluginIndex << std::endl;
         return;
       }
-      if (!ensureTrack(trackId, *pluginPath)) {
-        std::cerr << "UI: failed to load plugin for track " << trackId << std::endl;
-      } else {
+      if (auto* runtime = ensureTrack(trackId, *pluginPath)) {
+        updateTrackChainForInstrument(*runtime, pluginIndex);
+        emitChainSnapshot(*runtime);
         std::cout << "UI: loaded plugin on track " << trackId
                   << " from " << *pluginPath << std::endl;
+      } else {
+        std::cerr << "UI: failed to load plugin for track " << trackId << std::endl;
+      }
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::OpenPluginEditor)) {
+      const uint32_t trackId = payload.trackId;
+      const uint32_t deviceId = payload.value0;
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (trackId < tracks.size()) {
+          runtime = tracks[trackId].get();
+        }
+      }
+      if (!runtime) {
+        std::cerr << "UI: OpenPluginEditor failed - track "
+                  << trackId << " not found" << std::endl;
+        return;
+      }
+      std::vector<daw::Device> devices;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        devices = runtime->track.chain.devices;
+      }
+      auto resolveHostIndexForDevice =
+          [&](uint32_t targetDeviceId) -> std::optional<uint32_t> {
+            uint32_t hostIndex = 0;
+            for (const auto& device : devices) {
+              if (device.kind != daw::DeviceKind::VstInstrument &&
+                  device.kind != daw::DeviceKind::VstEffect) {
+                continue;
+              }
+              if (!resolveDevicePluginPath(*runtime, device.hostSlotIndex)) {
+                continue;
+              }
+              if (device.id == targetDeviceId) {
+                return hostIndex;
+              }
+              ++hostIndex;
+            }
+            return std::nullopt;
+          };
+      const auto hostIndex = resolveHostIndexForDevice(deviceId);
+      if (!hostIndex) {
+        std::cerr << "UI: OpenPluginEditor failed - device "
+                  << deviceId << " not found" << std::endl;
+        return;
+      }
+      if (!runtime->hostReady.load(std::memory_order_acquire)) {
+        std::cerr << "UI: OpenPluginEditor failed - host not ready for track "
+                  << trackId << std::endl;
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+        if (!runtime->controller.sendOpenEditor(*hostIndex)) {
+          std::cerr << "UI: OpenPluginEditor failed - host IPC error (track "
+                    << trackId << ")" << std::endl;
+        }
       }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::WriteNote)) {
@@ -1631,6 +3132,24 @@ struct TrackRuntime {
       const bool next = !playing.load(std::memory_order_acquire);
       playing.store(next, std::memory_order_release);
       std::cout << "UI: Transport " << (next ? "Play" : "Stop") << std::endl;
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::RequestClipWindow)) {
+      daw::UiClipWindowCommandPayload windowPayload{};
+      std::memcpy(&windowPayload, entry.payload, sizeof(windowPayload));
+      daw::ClipWindowRequest request{};
+      request.trackId = windowPayload.trackId;
+      request.requestId = windowPayload.requestId;
+      request.cursorEventIndex = windowPayload.cursorEventIndex;
+      request.windowStartNanotick =
+          static_cast<uint64_t>(windowPayload.windowStartLo) |
+          (static_cast<uint64_t>(windowPayload.windowStartHi) << 32);
+      request.windowEndNanotick =
+          static_cast<uint64_t>(windowPayload.windowEndLo) |
+          (static_cast<uint64_t>(windowPayload.windowEndHi) << 32);
+      {
+        std::lock_guard<std::mutex> lock(clipWindowMutex);
+        clipWindowPending = ClipWindowPending{request};
+      }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::Undo)) {
       if (!requireMatchingClipVersion(payload.baseVersion,
@@ -1766,6 +3285,10 @@ struct TrackRuntime {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         runtime->track.harmonyQuantize = enable;
       }
+      std::atomic_store_explicit(
+          &runtime->trackSnapshot,
+          buildTrackSnapshot(runtime->track),
+          std::memory_order_release);
       std::cout << "UI: Track " << payload.trackId
                 << " harmony quantize " << (enable ? "on" : "off") << std::endl;
     } else if (payload.commandType ==
@@ -1794,6 +3317,8 @@ struct TrackRuntime {
   };
 
   std::thread uiThread([&] {
+    std::cerr << "UI: command thread started" << std::endl;
+    uint64_t lastIdleLogMs = 0;
     while (running.load()) {
       auto ringUi = getRingUi();
       if (ringUi.mask == 0) {
@@ -1803,33 +3328,52 @@ struct TrackRuntime {
       daw::EventEntry uiEntry;
       bool handled = false;
       while (daw::ringPop(ringUi, uiEntry)) {
+        std::cerr << "UI: received command entry size "
+                  << uiEntry.size << " type " << uiEntry.type << std::endl;
         handleUiEntry(uiEntry);
         handled = true;
       }
       if (!handled) {
+        const uint64_t nowMs = uiDiffNowMs();
+        if (nowMs - lastIdleLogMs >= 1000) {
+          lastIdleLogMs = nowMs;
+          const uint32_t read =
+              ringUi.header ? ringUi.header->readIndex.load(std::memory_order_relaxed) : 0;
+          const uint32_t write =
+              ringUi.header ? ringUi.header->writeIndex.load(std::memory_order_relaxed) : 0;
+          std::cerr << "UI: command ring idle (read " << read
+                    << ", write " << write << ")" << std::endl;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
+    std::cerr << "UI: command thread exiting" << std::endl;
   });
+  std::cerr << "UI: command thread launched" << std::endl;
 
   std::thread producer([&] {
+    const auto blockDuration =
+        std::chrono::duration<double>(
+            static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
+    auto blockTicksFor = [&](uint64_t atNanotick) -> uint64_t {
+      return tickConverter.samplesToNanoticks(
+          static_cast<int64_t>(engineConfig.blockSize), atNanotick);
+    };
     while (running.load()) {
       if (testThrottleMs > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(testThrottleMs));
       }
       auto trackSnapshot = snapshotTracks();
-      if (trackSnapshot.empty()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        continue;
-      }
-      bool anyReady = false;
-      for (auto* runtime : trackSnapshot) {
-        if (runtime->hostReady.load(std::memory_order_acquire)) {
-          anyReady = true;
-          break;
+
+      auto findTrackRuntime = [&](uint32_t trackId) -> TrackRuntime* {
+        for (auto* runtime : trackSnapshot) {
+          if (runtime && runtime->trackId == trackId) {
+            return runtime;
+          }
         }
-      }
-      if (!anyReady) {
+        return nullptr;
+      };
+      if (trackSnapshot.empty()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
@@ -1840,8 +3384,46 @@ struct TrackRuntime {
           break;
         }
       }
+      const bool isPlaying = playing.load(std::memory_order_acquire);
+      auto advanceTransport = [&]() {
+        uint64_t loopStartTicks =
+            loopStartNanotick.load(std::memory_order_acquire);
+        uint64_t loopEndTicks =
+            loopEndNanotick.load(std::memory_order_acquire);
+        if (loopEndTicks <= loopStartTicks) {
+          loopStartTicks = 0;
+          loopEndTicks = patternTicks;
+        }
+        const uint64_t loopLen =
+            loopEndTicks > loopStartTicks ? loopEndTicks - loopStartTicks : 0;
+        const uint64_t currentTicks =
+            transportNanotick.load(std::memory_order_acquire);
+        const uint64_t blockTicks = blockTicksFor(currentTicks);
+        uint64_t nextTicks = currentTicks + blockTicks;
+        if (loopLen > 0 && nextTicks >= loopEndTicks) {
+          nextTicks = loopStartTicks + ((nextTicks - loopStartTicks) % loopLen);
+        }
+        transportNanotick.store(nextTicks, std::memory_order_release);
+      };
+      bool anyReady = false;
+      for (auto* runtime : trackSnapshot) {
+        if (runtime->hostReady.load(std::memory_order_acquire)) {
+          anyReady = true;
+          break;
+        }
+      }
+      if (!anyReady) {
+        if (isPlaying) {
+          advanceTransport();
+        }
+        std::this_thread::sleep_for(blockDuration);
+        continue;
+      }
       if (restartPending) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (isPlaying) {
+          advanceTransport();
+        }
+        std::this_thread::sleep_for(blockDuration);
         continue;
       }
       if (resetTimeline.exchange(false)) {
@@ -1860,8 +3442,11 @@ struct TrackRuntime {
           uint64_t ack = 0;
           {
             std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-            ack = runtime->controller.mailbox()->replayAckSampleTime.load(
-                std::memory_order_acquire);
+            const auto* mailbox = runtime->controller.mailbox();
+            if (!mailbox) {
+              continue;
+            }
+            ack = mailbox->replayAckSampleTime.load(std::memory_order_acquire);
           }
           std::cout << "Mirror check: track " << runtime->trackId
                     << ", gateTime=" << gateTime
@@ -1881,8 +3466,11 @@ struct TrackRuntime {
         }
         const uint32_t completed = [&]() {
           std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-          return runtime->controller.mailbox()->completedBlockId.load(
-              std::memory_order_acquire);
+          const auto* mailbox = runtime->controller.mailbox();
+          if (!mailbox) {
+            return 0u;
+          }
+          return mailbox->completedBlockId.load(std::memory_order_acquire);
         }();
         if (completed > 0) {
           runtime->active.store(true, std::memory_order_release);
@@ -1893,6 +3481,7 @@ struct TrackRuntime {
         anyActive = true;
         minCompleted = std::min(minCompleted, completed);
       }
+      const bool throttleInactive = !anyActive;
       if (!anyActive) {
         const uint32_t fallback =
             nextBlockId.load(std::memory_order_relaxed) > 0
@@ -1914,12 +3503,18 @@ struct TrackRuntime {
       // Also check that we're not getting too far ahead of audio playback
       // Allow producer to be ahead by at most 10 blocks for buffering
       uint32_t currentPlayback = audioPlaybackBlockId.load(std::memory_order_acquire);
+      bool throttlePlayback = false;
       if (currentPlayback > 0) {  // Only throttle once playback has started
-        const uint32_t aheadOfPlayback = nextBlockId.load() - currentPlayback;
-        if (aheadOfPlayback > 10) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-          continue;
+        const uint32_t nextId = nextBlockId.load(std::memory_order_relaxed);
+        if (currentPlayback <= nextId) {
+          const uint32_t aheadOfPlayback = nextId - currentPlayback;
+          if (aheadOfPlayback > 10) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+          }
         }
+      } else {
+        throttlePlayback = true;
       }
 
       const uint32_t blockId = nextBlockId.fetch_add(1);
@@ -1954,6 +3549,7 @@ struct TrackRuntime {
       uint64_t blockStartTicks =
           transportNanotick.load(std::memory_order_acquire);
       blockStartTicks = wrapTick(blockStartTicks);
+      const uint64_t blockTicks = blockTicksFor(blockStartTicks);
       const uint64_t blockEndTicks = blockStartTicks + blockTicks;
 
       auto renderTrack = [&](TrackRuntime& runtime,
@@ -1961,12 +3557,52 @@ struct TrackRuntime {
                              uint64_t windowEndTicks,
                              uint64_t blockSampleStart,
                              uint32_t currentBlockId,
-                             daw::EventRingView& ringStd) {
+                             daw::EventRingView& ringStd,
+                             std::vector<daw::EventEntry>* routedMidi) -> bool {
+        auto trackStatePtr = std::atomic_load_explicit(&runtime.trackSnapshot,
+                                                       std::memory_order_acquire);
+        const auto& trackState = trackStatePtr ? *trackStatePtr : kEmptyTrackState;
+        auto chainConsumesMidi = [&]() -> bool {
+          for (const auto& device : trackState.chainDevices) {
+            if (device.kind != daw::DeviceKind::VstInstrument &&
+                device.kind != daw::DeviceKind::VstEffect) {
+              continue;
+            }
+            if (device.bypass) {
+              continue;
+            }
+            if (device.capabilityMask & daw::DeviceCapabilityConsumesMidi) {
+              return true;
+            }
+          }
+          return false;
+        };
+        const long double bpm = tempoProvider.bpmAtNanotick(windowStartTicks);
+        const long double safeBpm = bpm > 0.0 ? bpm : 120.0;
+        const long double ticksPerQuarter =
+            static_cast<long double>(daw::NanotickConverter::kNanoticksPerQuarter);
+        const long double samplesPerTick =
+            (static_cast<long double>(engineConfig.sampleRate) * 60.0L) /
+            (safeBpm * ticksPerQuarter);
         auto tickDeltaToSamples = [&](uint64_t tickDelta) -> uint64_t {
           return static_cast<uint64_t>(std::llround(
               static_cast<long double>(tickDelta) * samplesPerTick));
         };
-        std::array<daw::EventEntry, kPatcherScratchpadCapacity> scratchpad{};
+        auto removeNoteIdFromColumn = [&](uint8_t column, uint32_t noteId) {
+          auto columnIt = runtime.activeNoteByColumn.find(column);
+          if (columnIt == runtime.activeNoteByColumn.end()) {
+            return;
+          }
+          auto& notes = columnIt->second;
+          notes.erase(std::remove(notes.begin(), notes.end(), noteId), notes.end());
+          if (notes.empty()) {
+            runtime.activeNoteByColumn.erase(columnIt);
+          }
+        };
+        auto& scratchpad = runtime.patcherScratchpad;
+        if (scratchpad.size() < kPatcherScratchpadCapacity) {
+          scratchpad.resize(kPatcherScratchpadCapacity);
+        }
         uint32_t scratchpadCount = 0;
         auto pushScratchpad = [&](const daw::EventEntry& entry,
                                   uint64_t overflowTick) -> bool {
@@ -1978,15 +3614,229 @@ struct TrackRuntime {
               reinterpret_cast<uint64_t*>(&lastOverflowTick), overflowTick);
           return false;
         };
-        daw::PatcherGraph graphSnapshot;
+        const uint64_t blockSampleEnd =
+            blockSampleStart + static_cast<uint64_t>(engineConfig.blockSize);
+        auto& inboundEvents = runtime.inboundMidiScratch;
         {
-          std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
-          graphSnapshot = patcherGraphState.graph;
+          std::lock_guard<std::mutex> lock(runtime.inboundMutex);
+          runtime.inboundMidiEvents.swap(inboundEvents);
+          runtime.inboundMidiEvents.clear();
         }
-        std::array<PatcherNodeBuffer, daw::kPatcherMaxNodes> nodeBuffers{};
+        if (!inboundEvents.empty()) {
+          for (const auto& entry : inboundEvents) {
+            if (entry.sampleTime < blockSampleStart ||
+                entry.sampleTime >= blockSampleEnd) {
+              continue;
+            }
+            const int64_t offsetSamples =
+                static_cast<int64_t>(entry.sampleTime) -
+                static_cast<int64_t>(blockSampleStart);
+            if (offsetSamples < 0 ||
+                offsetSamples >= static_cast<int64_t>(engineConfig.blockSize)) {
+              continue;
+            }
+            const uint64_t tickDelta = static_cast<uint64_t>(std::llround(
+                static_cast<long double>(offsetSamples) / samplesPerTick));
+            const uint64_t eventTick = wrapTick(windowStartTicks + tickDelta);
+            pushScratchpad(entry, eventTick);
+          }
+        }
+        static const daw::PatcherGraph kEmptyGraph{};
+        auto graphPtr = std::atomic_load_explicit(&patcherGraphSnapshot,
+                                                  std::memory_order_acquire);
+        const daw::PatcherGraph& graphSnapshot =
+            graphPtr ? *graphPtr : kEmptyGraph;
         const uint32_t nodeCount =
             static_cast<uint32_t>(graphSnapshot.nodes.size());
-        const uint8_t maxDepth = graphSnapshot.maxDepth;
+        auto& nodeBuffers = runtime.patcherNodeBuffers;
+        auto& nodeModOutputs = runtime.patcherNodeModOutputs;
+        if (nodeBuffers.size() < nodeCount) {
+          nodeBuffers.resize(nodeCount);
+        }
+        if (nodeModOutputs.size() < nodeCount) {
+          nodeModOutputs.resize(nodeCount);
+        }
+        auto& modOutputSamples = runtime.patcherModOutputSamples;
+        auto& modInputSamples = runtime.patcherModInputSamples;
+        auto& modUpdates = runtime.patcherModUpdates;
+        if (nodeCount > 0) {
+          const size_t sampleCount =
+              static_cast<size_t>(nodeCount) *
+              static_cast<size_t>(kPatcherMaxModOutputs) *
+              static_cast<size_t>(engineConfig.blockSize);
+          if (modOutputSamples.size() != sampleCount) {
+            modOutputSamples.assign(sampleCount, 0.0f);
+          } else {
+            std::fill(modOutputSamples.begin(), modOutputSamples.end(), 0.0f);
+          }
+          if (modInputSamples.size() != sampleCount) {
+            modInputSamples.assign(sampleCount, 0.0f);
+          } else {
+            std::fill(modInputSamples.begin(), modInputSamples.end(), 0.0f);
+          }
+        } else {
+          modOutputSamples.clear();
+          modInputSamples.clear();
+        }
+        modUpdates.clear();
+        if (modUpdates.capacity() < static_cast<size_t>(nodeCount) * kPatcherMaxModOutputs) {
+          modUpdates.reserve(static_cast<size_t>(nodeCount) * kPatcherMaxModOutputs);
+        }
+        if (nodeCount > 0) {
+          if (runtime.modOutputSamples.size() != modOutputSamples.size()) {
+            runtime.modOutputSamples.resize(modOutputSamples.size());
+          }
+          std::fill(runtime.modOutputSamples.begin(),
+                    runtime.modOutputSamples.end(),
+                    0.0f);
+          if (runtime.modOutputDeviceIds.size() != nodeCount) {
+            runtime.modOutputDeviceIds.resize(nodeCount);
+          }
+          std::fill(runtime.modOutputDeviceIds.begin(),
+                    runtime.modOutputDeviceIds.end(),
+                    daw::kDeviceIdAuto);
+        } else {
+          runtime.modOutputSamples.clear();
+          runtime.modOutputDeviceIds.clear();
+        }
+        auto& nodeAllowed = runtime.patcherNodeAllowed;
+        auto& nodeSeen = runtime.patcherNodeSeen;
+        auto& nodeStack = runtime.patcherNodeStack;
+        auto& chainOrder = runtime.patcherChainOrder;
+        auto& nodeToDeviceId = runtime.patcherNodeToDeviceId;
+        auto& modLinks = runtime.patcherModLinks;
+        auto nodeIndexForId = [&](uint32_t nodeId) -> std::optional<uint32_t> {
+          if (nodeId >= graphSnapshot.idToIndex.size()) {
+            return std::nullopt;
+          }
+          const uint32_t index = graphSnapshot.idToIndex[nodeId];
+          if (index == daw::kPatcherInvalidNodeIndex) {
+            return std::nullopt;
+          }
+          return index;
+        };
+        chainOrder.clear();
+        bool useNodeFilter = false;
+        if (nodeToDeviceId.size() != nodeCount) {
+          nodeToDeviceId.resize(nodeCount);
+        }
+        std::fill(nodeToDeviceId.begin(), nodeToDeviceId.end(), daw::kDeviceIdAuto);
+        if (modLinks.capacity() < trackState.modLinks.size()) {
+          modLinks.reserve(trackState.modLinks.size());
+        }
+        modLinks.assign(trackState.modLinks.begin(), trackState.modLinks.end());
+        for (const auto& device : trackState.chainDevices) {
+          if (device.bypass) {
+            continue;
+          }
+          if (device.kind == daw::DeviceKind::PatcherEvent ||
+              device.kind == daw::DeviceKind::PatcherInstrument ||
+              device.kind == daw::DeviceKind::PatcherAudio) {
+            useNodeFilter = true;
+            break;
+          }
+        }
+        if (useNodeFilter) {
+          if (nodeAllowed.size() != nodeCount) {
+            nodeAllowed.resize(nodeCount);
+          }
+          std::fill(nodeAllowed.begin(), nodeAllowed.end(), false);
+          if (nodeSeen.size() != nodeCount) {
+            nodeSeen.resize(nodeCount);
+          }
+          std::fill(nodeSeen.begin(), nodeSeen.end(), false);
+          nodeStack.clear();
+          if (nodeStack.capacity() < nodeCount) {
+            nodeStack.reserve(nodeCount);
+          }
+          for (const auto& device : trackState.chainDevices) {
+            if (device.bypass) {
+              continue;
+            }
+            if (device.kind == daw::DeviceKind::PatcherEvent ||
+                device.kind == daw::DeviceKind::PatcherInstrument ||
+                device.kind == daw::DeviceKind::PatcherAudio) {
+              if (auto nodeIndex = nodeIndexForId(device.patcherNodeId)) {
+                nodeAllowed[*nodeIndex] = true;
+                if (nodeToDeviceId[*nodeIndex] == daw::kDeviceIdAuto) {
+                  nodeToDeviceId[*nodeIndex] = device.id;
+                }
+                if (!nodeSeen[*nodeIndex]) {
+                  chainOrder.push_back(*nodeIndex);
+                  nodeSeen[*nodeIndex] = true;
+                }
+              }
+            }
+          }
+          for (uint32_t nodeIndex = 0; nodeIndex < nodeCount; ++nodeIndex) {
+            if (!nodeAllowed[nodeIndex]) {
+              continue;
+            }
+            nodeStack.push_back(nodeIndex);
+            while (!nodeStack.empty()) {
+              const uint32_t current = nodeStack.back();
+              nodeStack.pop_back();
+              if (current >= graphSnapshot.nodes.size()) {
+                continue;
+              }
+              for (uint32_t inputIndex : graphSnapshot.resolvedInputs[current]) {
+                if (inputIndex < nodeCount && !nodeAllowed[inputIndex]) {
+                  nodeAllowed[inputIndex] = true;
+                  nodeStack.push_back(inputIndex);
+                }
+              }
+            }
+          }
+        }
+        if (!useNodeFilter) {
+          for (const auto& device : trackState.chainDevices) {
+            if (device.bypass) {
+              continue;
+            }
+            if (device.kind == daw::DeviceKind::PatcherEvent ||
+                device.kind == daw::DeviceKind::PatcherInstrument ||
+                device.kind == daw::DeviceKind::PatcherAudio) {
+              if (auto nodeIndex = nodeIndexForId(device.patcherNodeId)) {
+                if (nodeToDeviceId[*nodeIndex] == daw::kDeviceIdAuto) {
+                  nodeToDeviceId[*nodeIndex] = device.id;
+                }
+              }
+            }
+          }
+        }
+        auto& euclidOverrides = runtime.patcherEuclidOverrides;
+        auto& hasEuclidOverride = runtime.patcherHasEuclidOverride;
+        if (euclidOverrides.size() != nodeCount) {
+          euclidOverrides.resize(nodeCount);
+        }
+        std::fill(euclidOverrides.begin(),
+                  euclidOverrides.end(),
+                  daw::PatcherEuclideanConfig{});
+        if (hasEuclidOverride.size() != nodeCount) {
+          hasEuclidOverride.resize(nodeCount);
+        }
+        std::fill(hasEuclidOverride.begin(),
+                  hasEuclidOverride.end(),
+                  false);
+        for (const auto& device : trackState.chainDevices) {
+          if (device.bypass) {
+            continue;
+          }
+          if (!device.hasEuclideanConfig) {
+            continue;
+          }
+          auto nodeIndex = nodeIndexForId(device.patcherNodeId);
+          if (!nodeIndex) {
+            continue;
+          }
+          if (graphSnapshot.nodes[*nodeIndex].type !=
+              daw::PatcherNodeType::Euclidean) {
+            continue;
+          }
+          euclidOverrides[*nodeIndex] = device.euclideanConfig;
+          hasEuclidOverride[*nodeIndex] = true;
+        }
+        const uint16_t maxDepth = graphSnapshot.maxDepth;
         auto mergeNodeBuffers = [&]() {
           for (uint32_t orderIndex = 0;
                orderIndex < graphSnapshot.topoOrder.size();
@@ -2018,18 +3868,59 @@ struct TrackRuntime {
             harmonySnapshot[i] = harmonyEvents[i];
           }
         }
+        uint32_t paramTargetIndex = daw::kParamTargetAll;
+        uint32_t hostIndex = 0;
+        for (const auto& device : trackState.chainDevices) {
+          if (device.kind != daw::DeviceKind::VstInstrument &&
+              device.kind != daw::DeviceKind::VstEffect) {
+            continue;
+          }
+          if (device.bypass) {
+            continue;
+          }
+          if (resolveDevicePluginPath(runtime, device.hostSlotIndex)) {
+            paramTargetIndex = hostIndex;
+            break;
+          }
+          hostIndex++;
+        }
+        std::atomic<bool> patcherAudioWritten{false};
         auto runNode = [&](uint32_t nodeIndex) {
           if (nodeIndex >= nodeCount) {
+            return;
+          }
+          if (useNodeFilter && (nodeIndex >= nodeAllowed.size() ||
+                                !nodeAllowed[nodeIndex])) {
             return;
           }
           const auto& node = graphSnapshot.nodes[nodeIndex];
           auto& buffer = nodeBuffers[nodeIndex];
           buffer.count = 0;
+          if (!node.inputs.empty()) {
+            for (uint32_t inputIndex : graphSnapshot.resolvedInputs[nodeIndex]) {
+              if (inputIndex >= nodeCount) {
+                continue;
+              }
+              const auto& inputBuffer = nodeBuffers[inputIndex];
+              for (uint32_t i = 0; i < inputBuffer.count; ++i) {
+                if (buffer.count < buffer.events.size()) {
+                  buffer.events[buffer.count++] = inputBuffer.events[i];
+                } else {
+                  daw::atomic_store_u64(
+                      reinterpret_cast<uint64_t*>(&lastOverflowTick),
+                      windowStartTicks);
+                  break;
+                }
+              }
+            }
+          }
           daw::PatcherContext ctx{};
-          ctx.abi_version = 1;
+          ctx.abi_version = 2;
           ctx.block_start_tick = windowStartTicks;
           ctx.block_end_tick = windowEndTicks;
           ctx.sample_rate = static_cast<float>(engineConfig.sampleRate);
+          const double bpm = tempoProvider.bpmAtNanotick(windowStartTicks);
+          ctx.tempo_bpm = static_cast<float>(bpm > 0.0 ? bpm : 120.0);
           ctx.num_frames = engineConfig.blockSize;
           ctx.event_buffer = buffer.events.data();
           ctx.event_capacity = static_cast<uint32_t>(buffer.events.size());
@@ -2038,11 +3929,56 @@ struct TrackRuntime {
               reinterpret_cast<uint64_t*>(&lastOverflowTick);
           ctx.audio_channels = nullptr;
           ctx.num_channels = 0;
+          auto& modOut = nodeModOutputs[nodeIndex];
+          std::fill(modOut.begin(), modOut.end(), 0.0f);
+          ctx.mod_outputs = modOut.data();
+          ctx.mod_output_count = kPatcherMaxModOutputs;
+          ctx.mod_output_samples = nullptr;
+          ctx.mod_output_stride = 0;
+          if (!modOutputSamples.empty()) {
+            ctx.mod_output_samples =
+                modOutputSamples.data() +
+                static_cast<size_t>(nodeIndex) *
+                    static_cast<size_t>(kPatcherMaxModOutputs) *
+                    static_cast<size_t>(engineConfig.blockSize);
+            ctx.mod_output_stride = engineConfig.blockSize;
+          }
+          ctx.mod_inputs = nullptr;
+          ctx.mod_input_count = 0;
+          ctx.mod_input_stride = 0;
+          if (!modInputSamples.empty()) {
+            ctx.mod_inputs = modInputSamples.data() +
+                static_cast<size_t>(nodeIndex) *
+                    static_cast<size_t>(kPatcherMaxModOutputs) *
+                    static_cast<size_t>(engineConfig.blockSize);
+            ctx.mod_input_count = kPatcherMaxModOutputs;
+            ctx.mod_input_stride = engineConfig.blockSize;
+            const size_t stride = static_cast<size_t>(engineConfig.blockSize);
+            std::fill(ctx.mod_inputs,
+                      ctx.mod_inputs +
+                          static_cast<size_t>(kPatcherMaxModOutputs) * stride,
+                      0.0f);
+          }
           ctx.node_config = nullptr;
           ctx.node_config_size = 0;
-          if (node.type == daw::PatcherNodeType::Euclidean && node.hasEuclideanConfig) {
-            ctx.node_config = &node.euclideanConfig;
-            ctx.node_config_size = sizeof(node.euclideanConfig);
+          if (node.type == daw::PatcherNodeType::Euclidean) {
+            if (nodeIndex < hasEuclidOverride.size() && hasEuclidOverride[nodeIndex]) {
+              ctx.node_config = &euclidOverrides[nodeIndex];
+              ctx.node_config_size = sizeof(daw::PatcherEuclideanConfig);
+            } else if (node.hasEuclideanConfig) {
+              ctx.node_config = &node.euclideanConfig;
+              ctx.node_config_size = sizeof(node.euclideanConfig);
+            }
+          } else if (node.type == daw::PatcherNodeType::RandomDegree) {
+            if (node.hasRandomDegreeConfig) {
+              ctx.node_config = &node.randomDegreeConfig;
+              ctx.node_config_size = sizeof(node.randomDegreeConfig);
+            }
+          } else if (node.type == daw::PatcherNodeType::Lfo) {
+            if (node.hasLfoConfig) {
+              ctx.node_config = &node.lfoConfig;
+              ctx.node_config_size = sizeof(node.lfoConfig);
+            }
           }
           if (node.type == daw::PatcherNodeType::AudioPassthrough) {
             const uint32_t channels = engineConfig.numChannelsOut;
@@ -2064,36 +4000,147 @@ struct TrackRuntime {
             }
             ctx.audio_channels = runtime.patcherAudioChannels.data();
             ctx.num_channels = channels;
+            patcherAudioWritten.store(true, std::memory_order_relaxed);
           }
           ctx.harmony_snapshot = harmonySnapshot.data();
           ctx.harmony_count = harmonyCount;
-          dispatchRustKernel(node.type, ctx);
-        };
-
-        for (uint8_t depth = 0; depth <= maxDepth; ++depth) {
-          std::array<uint32_t, daw::kPatcherMaxNodes> depthNodes{};
-          uint32_t depthCount = 0;
-          for (uint32_t i = 0; i < nodeCount; ++i) {
-            if (graphSnapshot.depths[i] == depth) {
-              depthNodes[depthCount++] = i;
-            }
-          }
-          if (patcherParallel && depthCount > 1) {
-            std::array<std::thread, daw::kPatcherMaxNodes> threads;
-            for (uint32_t i = 0; i < depthCount; ++i) {
-              const uint32_t nodeIndex = depthNodes[i];
-              threads[i] = std::thread([&, nodeIndex]() { runNode(nodeIndex); });
-            }
-            for (uint32_t i = 0; i < depthCount; ++i) {
-              if (threads[i].joinable()) {
-                threads[i].join();
+          if (ctx.mod_inputs && !modLinks.empty()) {
+            const uint32_t deviceId =
+                nodeIndex < nodeToDeviceId.size()
+                    ? nodeToDeviceId[nodeIndex]
+                    : daw::kDeviceIdAuto;
+            if (deviceId != daw::kDeviceIdAuto) {
+              for (const auto& link : modLinks) {
+                if (!link.enabled || link.rate != daw::ModRate::SampleRate) {
+                  continue;
+                }
+                if (link.target.deviceId != deviceId) {
+                  continue;
+                }
+                if (link.target.kind != daw::ModTargetKind::PatcherParam &&
+                    link.target.kind != daw::ModTargetKind::PatcherMacro) {
+                  continue;
+                }
+                if (link.source.kind != daw::ModSourceKind::PatcherNodeOutput) {
+                  continue;
+                }
+                if (link.target.targetId >= kPatcherMaxModOutputs ||
+                    link.source.sourceId >= kPatcherMaxModOutputs) {
+                  continue;
+                }
+                uint32_t sourceIndex = daw::kDeviceIdAuto;
+                for (uint32_t i = 0; i < nodeToDeviceId.size(); ++i) {
+                  if (nodeToDeviceId[i] == link.source.deviceId) {
+                    sourceIndex = i;
+                    break;
+                  }
+                }
+                if (sourceIndex == daw::kDeviceIdAuto ||
+                    modOutputSamples.empty()) {
+                  continue;
+                }
+                const size_t stride =
+                    static_cast<size_t>(engineConfig.blockSize);
+                const size_t sourceBase =
+                    (static_cast<size_t>(sourceIndex) *
+                         static_cast<size_t>(kPatcherMaxModOutputs) +
+                     link.source.sourceId) *
+                    stride;
+                const size_t targetBase =
+                    (static_cast<size_t>(link.target.targetId)) * stride;
+                const float* source = modOutputSamples.data() + sourceBase;
+                float* target = ctx.mod_inputs + targetBase;
+                for (size_t i = 0; i < stride; ++i) {
+                  target[i] += link.bias + link.depth * source[i];
+                }
               }
             }
-          } else {
-            for (uint32_t i = 0; i < depthCount; ++i) {
-              runNode(depthNodes[i]);
+          }
+          dispatchRustKernel(node.type, ctx);
+          const uint32_t deviceId =
+              nodeIndex < nodeToDeviceId.size()
+                  ? nodeToDeviceId[nodeIndex]
+                  : daw::kDeviceIdAuto;
+          if (deviceId != daw::kDeviceIdAuto) {
+            for (uint32_t i = 0; i < ctx.mod_output_count; ++i) {
+              daw::ModSourceState state{};
+              state.ref.deviceId = deviceId;
+              state.ref.sourceId = i;
+              state.ref.kind = daw::ModSourceKind::PatcherNodeOutput;
+              state.value = modOut[i];
+              modUpdates.push_back(state);
             }
           }
+        };
+
+        if (useNodeFilter && !chainOrder.empty()) {
+          std::vector<uint8_t> visitState(nodeCount, 0);
+          std::vector<uint32_t> stack;
+          std::vector<uint32_t> nodeIter;
+          stack.reserve(nodeCount);
+          nodeIter.reserve(nodeCount);
+          auto runNodeWithDeps = [&](uint32_t startNode) {
+            stack.push_back(startNode);
+            while (!stack.empty()) {
+              const uint32_t current = stack.back();
+              if (current >= nodeCount) {
+                stack.pop_back();
+                continue;
+              }
+              const uint8_t state = visitState[current];
+              if (state == 2) {
+                stack.pop_back();
+                continue;
+              }
+              if (state == 1) {
+                visitState[current] = 2;
+                stack.pop_back();
+                runNode(current);
+                continue;
+              }
+              visitState[current] = 1;
+              const auto& inputs = graphSnapshot.resolvedInputs[current];
+              for (auto it = inputs.rbegin(); it != inputs.rend(); ++it) {
+                const uint32_t input = *it;
+                if (input < nodeCount && visitState[input] == 0) {
+                  stack.push_back(input);
+                }
+              }
+            }
+          };
+          for (uint32_t nodeIndex : chainOrder) {
+            runNodeWithDeps(nodeIndex);
+          }
+        } else {
+          for (uint16_t depth = 0; depth <= maxDepth; ++depth) {
+            std::vector<uint32_t> depthNodes;
+            for (uint32_t i = 0; i < nodeCount; ++i) {
+              if (graphSnapshot.depths[i] == depth) {
+                depthNodes.push_back(i);
+              }
+            }
+            if (patcherParallel && depthNodes.size() > 1 && patcherPool) {
+              for (uint32_t nodeIndex : depthNodes) {
+                patcherPool->enqueue([&, nodeIndex]() { runNode(nodeIndex); });
+              }
+              patcherPool->wait();
+            } else {
+              for (uint32_t nodeIndex : depthNodes) {
+                runNode(nodeIndex);
+              }
+            }
+          }
+        }
+
+        if (!modOutputSamples.empty() &&
+            runtime.modOutputSamples.size() == modOutputSamples.size()) {
+          std::memcpy(runtime.modOutputSamples.data(),
+                      modOutputSamples.data(),
+                      modOutputSamples.size() * sizeof(float));
+        }
+        if (!nodeToDeviceId.empty() &&
+            runtime.modOutputDeviceIds.size() == nodeToDeviceId.size()) {
+          runtime.modOutputDeviceIds = nodeToDeviceId;
         }
 
         mergeNodeBuffers();
@@ -2102,6 +4149,10 @@ struct TrackRuntime {
                                         uint64_t rangeEnd,
                                         uint64_t baseTickDelta,
                                         const std::array<uint8_t, 16>& uid16) {
+          uint32_t targetIndex = automationClip.targetPluginIndex();
+          if (targetIndex == daw::kParamTargetAll) {
+            targetIndex = paramTargetIndex;
+          }
           std::vector<const daw::AutomationPoint*> points;
           automationClip.getPointsInRange(rangeStart, rangeEnd, points);
           for (const auto* point : points) {
@@ -2124,10 +4175,11 @@ struct TrackRuntime {
             daw::ParamPayload payload{};
             std::memcpy(payload.uid16, uid16.data(), uid16.size());
             payload.value = point->value;
+            payload.targetPluginIndex = targetIndex;
             std::memcpy(paramEntry.payload, &payload, sizeof(payload));
             {
               std::lock_guard<std::mutex> lock(runtime.paramMirrorMutex);
-              runtime.paramMirror[uid16] = point->value;
+              runtime.paramMirror[uid16] = ParamMirrorEntry{point->value, targetIndex};
             }
             pushScratchpad(paramEntry, point->nanotick);
           }
@@ -2135,18 +4187,6 @@ struct TrackRuntime {
         auto emitNotes = [&](uint64_t rangeStart,
                              uint64_t rangeEnd,
                              uint64_t baseTickDelta) {
-          auto removeNoteIdFromColumn = [&](uint8_t column, uint32_t noteId) {
-            auto columnIt = runtime.activeNoteByColumn.find(column);
-            if (columnIt == runtime.activeNoteByColumn.end()) {
-              return;
-            }
-            auto& notes = columnIt->second;
-            notes.erase(std::remove(notes.begin(), notes.end(), noteId), notes.end());
-            if (notes.empty()) {
-              runtime.activeNoteByColumn.erase(columnIt);
-            }
-          };
-
           auto cutActiveNoteInColumn = [&](uint8_t column,
                                            uint64_t eventSample,
                                            uint32_t currentBlockId) {
@@ -2259,9 +4299,11 @@ struct TrackRuntime {
                   offPayload.noteId = activeNote.noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                   pushScratchpad(noteOffEntry, activeNote.endNanotick);
-                  std::cout << "Scheduler: Emitted MIDI Note-Off (from active notes) - pitch "
-                            << (int)activeNote.pitch << ", blockId " << currentBlockId
-                            << ", endNanotick=" << activeNote.endNanotick << std::endl;
+                  if (schedulerLog) {
+                    std::cout << "Scheduler: Emitted MIDI Note-Off (from active notes) - pitch "
+                              << (int)activeNote.pitch << ", blockId " << currentBlockId
+                              << ", endNanotick=" << activeNote.endNanotick << std::endl;
+                  }
                   notesToRemove.push_back(noteId);
                 }
               }
@@ -2279,14 +4321,49 @@ struct TrackRuntime {
 
           // Now process new notes starting in this range
           std::vector<const daw::MusicalEvent*> events;
-          runtime.track.clip.getEventsInRange(rangeStart, rangeEnd, events);
-          if (!events.empty()) {
+          if (auto snapshot = std::atomic_load_explicit(&runtime.clipSnapshot,
+                                                        std::memory_order_acquire)) {
+            getClipEventsInRange(*snapshot, rangeStart, rangeEnd, events);
+          }
+          if (!events.empty() && schedulerLog) {
             std::cout << "Scheduler: Found " << events.size()
                       << " events in range [" << rangeStart
                       << ", " << rangeEnd << ") for track "
                       << runtime.trackId << std::endl;
           }
           for (const auto* event : events) {
+            if (event->type == daw::MusicalEventType::Param) {
+              const uint64_t tickDelta =
+                  baseTickDelta + (event->nanotickOffset - rangeStart);
+              const uint64_t eventSample =
+                  blockSampleStart + tickDeltaToSamples(tickDelta);
+              const int64_t offset =
+                  static_cast<int64_t>(eventSample) -
+                  static_cast<int64_t>(blockSampleStart);
+              if (offset < 0 ||
+                  offset >= static_cast<int64_t>(engineConfig.blockSize)) {
+                continue;
+              }
+              daw::EventEntry paramEntry;
+              paramEntry.sampleTime = eventSample;
+              paramEntry.blockId = 0;
+              paramEntry.type = static_cast<uint16_t>(daw::EventType::Param);
+              paramEntry.size = sizeof(daw::ParamPayload);
+              daw::ParamPayload payload{};
+              std::memcpy(payload.uid16,
+                          event->payload.param.uid16.data(),
+                          sizeof(payload.uid16));
+              payload.value = event->payload.param.value;
+              payload.targetPluginIndex = paramTargetIndex;
+              std::memcpy(paramEntry.payload, &payload, sizeof(payload));
+              {
+                std::lock_guard<std::mutex> lock(runtime.paramMirrorMutex);
+                runtime.paramMirror[event->payload.param.uid16] =
+                    ParamMirrorEntry{payload.value, payload.targetPluginIndex};
+              }
+              pushScratchpad(paramEntry, event->nanotickOffset);
+              continue;
+            }
             if (event->type != daw::MusicalEventType::Note) {
               if (event->type != daw::MusicalEventType::Chord) {
                 continue;
@@ -2451,7 +4528,7 @@ struct TrackRuntime {
             daw::ResolvedPitch resolved =
                 daw::resolvedPitchFromCents(static_cast<double>(event->payload.note.pitch) * 100.0);
             if (auto harmony = getHarmonyAt(event->nanotickOffset)) {
-              if (runtime.track.harmonyQuantize) {
+              if (trackState.harmonyQuantize) {
                 resolved = quantizePitch(event->payload.note.pitch, *harmony);
               }
             }
@@ -2475,10 +4552,12 @@ struct TrackRuntime {
             midiPayload.noteId = noteId;
             std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
             pushScratchpad(midiEntry, event->nanotickOffset);
-            std::cout << "Scheduler: Emitted MIDI Note-On - pitch "
-                      << (int)scheduledPitch
-                      << ", vel " << (int)event->payload.note.velocity
-                      << ", blockId " << currentBlockId << std::endl;
+            if (schedulerLog) {
+              std::cout << "Scheduler: Emitted MIDI Note-On - pitch "
+                        << (int)scheduledPitch
+                        << ", vel " << (int)event->payload.note.velocity
+                        << ", blockId " << currentBlockId << std::endl;
+            }
 
             // Track this note if it has a duration
             const uint64_t noteDuration = event->payload.note.durationNanoticks;
@@ -2510,9 +4589,11 @@ struct TrackRuntime {
                   offPayload.noteId = noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                   pushScratchpad(noteOffEntry, noteEndTick);
-                  std::cout << "Scheduler: Emitted MIDI Note-Off (immediate) - pitch "
-                            << (int)scheduledPitch
-                            << ", blockId " << currentBlockId << std::endl;
+                  if (schedulerLog) {
+                    std::cout << "Scheduler: Emitted MIDI Note-Off (immediate) - pitch "
+                              << (int)scheduledPitch
+                              << ", blockId " << currentBlockId << std::endl;
+                  }
                 }
               } else {
                 // Note extends beyond this block - track it for later
@@ -2527,10 +4608,12 @@ struct TrackRuntime {
                 activeNote.hasScheduledEnd = true;
                 runtime.activeNotes[activeNote.noteId] = activeNote;
                 runtime.activeNoteByColumn[column].push_back(activeNote.noteId);
-                std::cout << "Scheduler: Tracking active note - pitch "
-                          << (int)scheduledPitch
-                          << ", endNanotick=" << noteEndTick
-                          << " (will end in future block)" << std::endl;
+                if (schedulerLog) {
+                  std::cout << "Scheduler: Tracking active note - pitch "
+                            << (int)scheduledPitch
+                            << ", endNanotick=" << noteEndTick
+                            << " (will end in future block)" << std::endl;
+                }
               }
             } else {
               std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
@@ -2546,6 +4629,74 @@ struct TrackRuntime {
               runtime.activeNoteByColumn[column].push_back(activeNote.noteId);
             }
           }
+        };
+        auto flagRingOverflow = [&](uint64_t sampleTime,
+                                    uint32_t droppedCount,
+                                    bool midiDropped) {
+          if (droppedCount > 0) {
+            runtime.ringStdDropCount.fetch_add(droppedCount, std::memory_order_relaxed);
+          }
+          runtime.ringStdDropSample.store(sampleTime, std::memory_order_relaxed);
+          runtime.ringStdOverflowed.store(true, std::memory_order_relaxed);
+          if (midiDropped) {
+            runtime.ringStdPanicPending.store(true, std::memory_order_release);
+          }
+          if (!runtime.mirrorPending.load(std::memory_order_acquire)) {
+            enqueueMirrorReplay(runtime);
+          }
+        };
+        auto flushPendingNoteOffs = [&](uint64_t sampleTime,
+                                        uint32_t currentBlockId) {
+          if (!runtime.ringStdPanicPending.load(std::memory_order_acquire)) {
+            return;
+          }
+          std::vector<ActiveNote> pendingNotes;
+          {
+            std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+            pendingNotes.reserve(runtime.activeNotes.size());
+            for (const auto& [noteId, activeNote] : runtime.activeNotes) {
+              pendingNotes.push_back(activeNote);
+            }
+          }
+          if (pendingNotes.empty()) {
+            runtime.ringStdPanicPending.store(false, std::memory_order_release);
+            return;
+          }
+          std::vector<uint32_t> clearedNotes;
+          clearedNotes.reserve(pendingNotes.size());
+          for (const auto& activeNote : pendingNotes) {
+            daw::EventEntry noteOffEntry;
+            noteOffEntry.sampleTime = sampleTime;
+            noteOffEntry.blockId = currentBlockId;
+            noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
+            noteOffEntry.size = sizeof(daw::MidiPayload);
+            daw::MidiPayload offPayload{};
+            offPayload.status = 0x80;
+            offPayload.data1 = activeNote.pitch;
+            offPayload.data2 = 0;
+            offPayload.channel = 0;
+            offPayload.tuningCents = activeNote.tuningCents;
+            offPayload.noteId = activeNote.noteId;
+            std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
+            if (!daw::ringWrite(ringStd, noteOffEntry)) {
+              runtime.ringStdOverflowed.store(true, std::memory_order_relaxed);
+              return;
+            }
+            clearedNotes.push_back(activeNote.noteId);
+          }
+          if (!clearedNotes.empty()) {
+            std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+            for (uint32_t noteId : clearedNotes) {
+              auto noteIt = runtime.activeNotes.find(noteId);
+              if (noteIt == runtime.activeNotes.end()) {
+                continue;
+              }
+              const uint8_t column = noteIt->second.column;
+              runtime.activeNotes.erase(noteIt);
+              removeNoteIdFromColumn(column, noteId);
+            }
+          }
+          runtime.ringStdPanicPending.store(false, std::memory_order_release);
         };
 
         for (const auto& automationClip : runtime.track.automationClips) {
@@ -2565,11 +4716,18 @@ struct TrackRuntime {
           } else {
             float lastValue = 0.0f;
             bool hasLast = false;
+            uint32_t targetIndex = automationClip.targetPluginIndex();
+            if (targetIndex == daw::kParamTargetAll) {
+              targetIndex = paramTargetIndex;
+            }
             {
               std::lock_guard<std::mutex> lock(runtime.paramMirrorMutex);
               const auto it = runtime.paramMirror.find(uid16);
               if (it != runtime.paramMirror.end()) {
-                lastValue = it->second;
+                lastValue = it->second.value;
+                if (it->second.targetPluginIndex != daw::kParamTargetAll) {
+                  targetIndex = it->second.targetPluginIndex;
+                }
                 hasLast = true;
               }
             }
@@ -2594,10 +4752,11 @@ struct TrackRuntime {
               daw::ParamPayload payload{};
               std::memcpy(payload.uid16, uid16.data(), uid16.size());
               payload.value = value;
+              payload.targetPluginIndex = targetIndex;
               std::memcpy(paramEntry.payload, &payload, sizeof(payload));
               {
                 std::lock_guard<std::mutex> lock(runtime.paramMirrorMutex);
-                runtime.paramMirror[uid16] = value;
+                runtime.paramMirror[uid16] = ParamMirrorEntry{value, targetIndex};
               }
               pushScratchpad(paramEntry, tick);
               lastValue = value;
@@ -2616,89 +4775,238 @@ struct TrackRuntime {
                     firstLen);
         }
 
-        for (uint32_t i = 0; i < scratchpadCount; ++i) {
-          auto& entry = scratchpad[i];
-          if (static_cast<daw::EventType>(entry.type) != daw::EventType::MusicalLogic) {
-            continue;
+        auto applyModUpdates = [&]() {
+          if (modUpdates.empty()) {
+            return;
           }
-          daw::MusicalLogicPayload logic{};
-          std::memcpy(&logic, entry.payload, sizeof(logic));
-          const int64_t offsetSamples =
-              static_cast<int64_t>(entry.sampleTime) -
-              static_cast<int64_t>(blockSampleStart);
-          if (offsetSamples < 0 ||
-              offsetSamples >= static_cast<int64_t>(engineConfig.blockSize)) {
-            continue;
+          std::lock_guard<std::mutex> lock(runtime.trackMutex);
+          auto& sources = runtime.track.modRegistry.sources;
+          for (const auto& update : modUpdates) {
+            bool updated = false;
+            for (auto& source : sources) {
+              if (source.ref.deviceId == update.ref.deviceId &&
+                  source.ref.sourceId == update.ref.sourceId &&
+                  source.ref.kind == update.ref.kind) {
+                source.value = update.value;
+                updated = true;
+                break;
+              }
+            }
+            if (!updated) {
+              sources.push_back(update);
+            }
           }
-          const uint64_t tickDelta = static_cast<uint64_t>(std::llround(
-              static_cast<long double>(offsetSamples) / samplesPerTick));
-          uint64_t eventTick = windowStartTicks + tickDelta;
-          eventTick = wrapTick(eventTick);
-          const auto harmony = getHarmonyAt(eventTick);
-          if (!harmony) {
-            continue;
-          }
-          const auto* scale = getScaleForHarmony(*harmony);
-          if (!scale) {
-            continue;
-          }
-          const uint8_t rootPc = static_cast<uint8_t>(harmony->root % 12);
-          const uint8_t baseOctaveHint =
-              logic.base_octave != 0 ? logic.base_octave : 4;
-          int baseOctaveInt =
-              static_cast<int>(baseOctaveHint) + static_cast<int>(logic.octave_offset);
-          if (baseOctaveInt < 0) {
-            baseOctaveInt = 0;
-          } else if (baseOctaveInt > 10) {
-            baseOctaveInt = 10;
-          }
-          const uint8_t baseOctave = static_cast<uint8_t>(baseOctaveInt);
-          const daw::ResolvedPitch resolved =
-              daw::resolveDegree(logic.degree, baseOctave, rootPc, *scale);
-          const uint8_t velocity = logic.velocity != 0 ? logic.velocity : 100;
-          const uint8_t pitch = clampMidi(resolved.midi);
-          const float tuningCents = resolved.cents;
-          const uint8_t channel = 0;
-          const uint32_t noteId =
-              nextNoteId.fetch_add(1, std::memory_order_acq_rel);
+        };
 
-          daw::MidiPayload onPayload{};
-          onPayload.status = 0x90;
-          onPayload.data1 = pitch;
-          onPayload.data2 = velocity;
-          onPayload.channel = channel;
-          onPayload.tuningCents = tuningCents;
-          onPayload.noteId = noteId;
-          entry.type = static_cast<uint16_t>(daw::EventType::Midi);
-          entry.size = sizeof(daw::MidiPayload);
-          std::memcpy(entry.payload, &onPayload, sizeof(onPayload));
+        applyModUpdates();
 
-          if (logic.duration_ticks > 0) {
-            const uint64_t noteEndTick = eventTick + logic.duration_ticks;
-            uint64_t offTick = wrapTick(noteEndTick);
-            if (offTick >= windowStartTicks && offTick < windowEndTicks) {
-              const uint64_t offDelta = offTick - windowStartTicks;
-              const uint64_t offSample =
-                  blockSampleStart + tickDeltaToSamples(offDelta);
-              const int64_t offOffset =
-                  static_cast<int64_t>(offSample) -
-                  static_cast<int64_t>(blockSampleStart);
-              if (offOffset >= 0 &&
-                  offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
-                daw::EventEntry noteOffEntry;
-                noteOffEntry.sampleTime = offSample;
-                noteOffEntry.blockId = 0;
-                noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-                noteOffEntry.size = sizeof(daw::MidiPayload);
-                daw::MidiPayload offPayload{};
-                offPayload.status = 0x80;
-                offPayload.data1 = pitch;
-                offPayload.data2 = 0;
-                offPayload.channel = channel;
-                offPayload.tuningCents = tuningCents;
-                offPayload.noteId = noteId;
-                std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
-                pushScratchpad(noteOffEntry, noteEndTick);
+        auto applyBlockRateModulation = [&]() {
+          std::vector<daw::ModLink> modLinks;
+          std::vector<daw::ModSourceState> modSources;
+          std::vector<daw::Device> chainDevices;
+          {
+            std::lock_guard<std::mutex> lock(runtime.trackMutex);
+            modLinks = runtime.track.modRegistry.links;
+            modSources = runtime.track.modRegistry.sources;
+            chainDevices = runtime.track.chain.devices;
+          }
+          if (modLinks.empty() || modSources.empty()) {
+            return;
+          }
+          std::unordered_map<uint32_t, size_t> chainPos;
+          chainPos.reserve(chainDevices.size());
+          for (size_t i = 0; i < chainDevices.size(); ++i) {
+            chainPos.emplace(chainDevices[i].id, i);
+          }
+          auto findSourceValue = [&](const daw::ModSourceRef& source) -> std::optional<float> {
+            for (const auto& state : modSources) {
+              if (state.ref.deviceId == source.deviceId &&
+                  state.ref.sourceId == source.sourceId &&
+                  state.ref.kind == source.kind) {
+                return state.value;
+              }
+            }
+            return std::nullopt;
+          };
+          auto resolveHostIndexForDevice = [&](uint32_t deviceId) -> std::optional<uint32_t> {
+            uint32_t hostIndex = 0;
+            for (const auto& device : chainDevices) {
+              if (device.kind != daw::DeviceKind::VstInstrument &&
+                  device.kind != daw::DeviceKind::VstEffect) {
+                continue;
+              }
+              if (!resolveDevicePluginPath(runtime, device.hostSlotIndex)) {
+                continue;
+              }
+              if (device.id == deviceId) {
+                return hostIndex;
+              }
+              ++hostIndex;
+            }
+            return std::nullopt;
+          };
+          auto clamp01 = [](float value) {
+            return std::max(0.0f, std::min(1.0f, value));
+          };
+          for (const auto& link : modLinks) {
+            if (!link.enabled || link.rate != daw::ModRate::BlockRate) {
+              continue;
+            }
+            const auto srcPos = chainPos.find(link.source.deviceId);
+            const auto dstPos = chainPos.find(link.target.deviceId);
+            if (srcPos == chainPos.end() || dstPos == chainPos.end()) {
+              continue;
+            }
+            if (srcPos->second >= dstPos->second) {
+              continue;
+            }
+            if (link.target.kind != daw::ModTargetKind::VstParam) {
+              continue;
+            }
+            const auto sourceValue = findSourceValue(link.source);
+            if (!sourceValue) {
+              continue;
+            }
+            const auto hostIndex = resolveHostIndexForDevice(link.target.deviceId);
+            if (!hostIndex) {
+              continue;
+            }
+            daw::EventEntry paramEntry;
+            paramEntry.sampleTime = blockSampleStart;
+            paramEntry.blockId = 0;
+            paramEntry.type = static_cast<uint16_t>(daw::EventType::Param);
+            paramEntry.size = sizeof(daw::ParamPayload);
+            daw::ParamPayload payload{};
+            std::memcpy(payload.uid16, link.target.uid16, sizeof(payload.uid16));
+            payload.value = clamp01(link.bias + link.depth * (*sourceValue));
+            payload.targetPluginIndex = *hostIndex;
+            std::memcpy(paramEntry.payload, &payload, sizeof(payload));
+            pushScratchpad(paramEntry, windowStartTicks);
+          }
+        };
+
+        applyBlockRateModulation();
+
+        const bool eventDirty = scratchpadCount > 0;
+        bool resolvedEvents = false;
+        auto resolveAndSort = [&]() {
+          if (resolvedEvents) {
+            return;
+          }
+          uint32_t outCount = 0;
+          auto appendScratchpad = [&](const daw::EventEntry& entry,
+                                      uint64_t overflowTick) -> bool {
+            if (outCount < scratchpad.size()) {
+              scratchpad[outCount++] = entry;
+              return true;
+            }
+            daw::atomic_store_u64(
+                reinterpret_cast<uint64_t*>(&lastOverflowTick), overflowTick);
+            return false;
+          };
+          for (uint32_t i = 0; i < scratchpadCount; ++i) {
+            auto entry = scratchpad[i];
+            if (static_cast<daw::EventType>(entry.type) != daw::EventType::MusicalLogic) {
+              scratchpad[outCount++] = entry;
+              continue;
+            }
+            daw::MusicalLogicPayload logic{};
+            std::memcpy(&logic, entry.payload, sizeof(logic));
+            if (logic.metadata[0] == daw::kMusicalLogicKindGate) {
+              continue;
+            }
+            const int64_t offsetSamples =
+                static_cast<int64_t>(entry.sampleTime) -
+                static_cast<int64_t>(blockSampleStart);
+            if (offsetSamples < 0 ||
+                offsetSamples >= static_cast<int64_t>(engineConfig.blockSize)) {
+              continue;
+            }
+            const uint64_t tickDelta = static_cast<uint64_t>(std::llround(
+                static_cast<long double>(offsetSamples) / samplesPerTick));
+            uint64_t eventTick = windowStartTicks + tickDelta;
+            eventTick = wrapTick(eventTick);
+            const auto harmony = getHarmonyAt(eventTick);
+            if (!harmony) {
+              continue;
+            }
+            const auto* scale = getScaleForHarmony(*harmony);
+            if (!scale) {
+              continue;
+            }
+            const uint8_t rootPc = static_cast<uint8_t>(harmony->root % 12);
+            const uint8_t baseOctaveHint =
+                logic.base_octave != 0 ? logic.base_octave : 4;
+            int baseOctaveInt =
+                static_cast<int>(baseOctaveHint) + static_cast<int>(logic.octave_offset);
+            if (baseOctaveInt < 0) {
+              baseOctaveInt = 0;
+            } else if (baseOctaveInt > 10) {
+              baseOctaveInt = 10;
+            }
+            const uint8_t baseOctave = static_cast<uint8_t>(baseOctaveInt);
+            const daw::ResolvedPitch resolved =
+                daw::resolveDegree(logic.degree, baseOctave, rootPc, *scale);
+            const uint8_t velocity = logic.velocity != 0 ? logic.velocity : 100;
+            const uint8_t pitch = clampMidi(resolved.midi);
+            const float tuningCents = resolved.cents;
+            const uint8_t channel = 0;
+            const uint32_t noteId =
+                nextNoteId.fetch_add(1, std::memory_order_acq_rel);
+
+            daw::MidiPayload onPayload{};
+            onPayload.status = 0x90;
+            onPayload.data1 = pitch;
+            onPayload.data2 = velocity;
+            onPayload.channel = channel;
+            onPayload.tuningCents = tuningCents;
+            onPayload.noteId = noteId;
+            entry.type = static_cast<uint16_t>(daw::EventType::Midi);
+            entry.size = sizeof(daw::MidiPayload);
+            entry.flags = kEventFlagMusicalLogic;
+            std::memcpy(entry.payload, &onPayload, sizeof(onPayload));
+            scratchpad[outCount++] = entry;
+
+            if (logic.duration_ticks > 0) {
+              const uint64_t noteEndTick = eventTick + logic.duration_ticks;
+              uint64_t offTick = wrapTick(noteEndTick);
+              if (offTick >= windowStartTicks && offTick < windowEndTicks) {
+                const uint64_t offDelta = offTick - windowStartTicks;
+                const uint64_t offSample =
+                    blockSampleStart + tickDeltaToSamples(offDelta);
+                const int64_t offOffset =
+                    static_cast<int64_t>(offSample) -
+                    static_cast<int64_t>(blockSampleStart);
+                if (offOffset >= 0 &&
+                    offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
+                  daw::EventEntry noteOffEntry;
+                  noteOffEntry.sampleTime = offSample;
+                  noteOffEntry.blockId = 0;
+                  noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
+                  noteOffEntry.size = sizeof(daw::MidiPayload);
+                  noteOffEntry.flags = kEventFlagMusicalLogic;
+                  daw::MidiPayload offPayload{};
+                  offPayload.status = 0x80;
+                  offPayload.data1 = pitch;
+                  offPayload.data2 = 0;
+                  offPayload.channel = channel;
+                  offPayload.tuningCents = tuningCents;
+                  offPayload.noteId = noteId;
+                  std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
+                  appendScratchpad(noteOffEntry, noteEndTick);
+                }
+              } else {
+                std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+                ActiveNote activeNote;
+                activeNote.noteId = noteId;
+                activeNote.pitch = pitch;
+                activeNote.column = 0;
+                activeNote.startNanotick = eventTick;
+                activeNote.endNanotick = noteEndTick;
+                activeNote.tuningCents = tuningCents;
+                activeNote.hasScheduledEnd = true;
+                runtime.activeNotes[activeNote.noteId] = activeNote;
+                runtime.activeNoteByColumn[activeNote.column].push_back(activeNote.noteId);
               }
             } else {
               std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
@@ -2707,47 +5015,240 @@ struct TrackRuntime {
               activeNote.pitch = pitch;
               activeNote.column = 0;
               activeNote.startNanotick = eventTick;
-              activeNote.endNanotick = noteEndTick;
+              activeNote.endNanotick = eventTick;
               activeNote.tuningCents = tuningCents;
-              activeNote.hasScheduledEnd = true;
+              activeNote.hasScheduledEnd = false;
               runtime.activeNotes[activeNote.noteId] = activeNote;
               runtime.activeNoteByColumn[activeNote.column].push_back(activeNote.noteId);
             }
-          } else {
-            std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-            ActiveNote activeNote;
-            activeNote.noteId = noteId;
-            activeNote.pitch = pitch;
-            activeNote.column = 0;
-            activeNote.startNanotick = eventTick;
-            activeNote.endNanotick = eventTick;
-            activeNote.tuningCents = tuningCents;
-            activeNote.hasScheduledEnd = false;
-            runtime.activeNotes[activeNote.noteId] = activeNote;
-            runtime.activeNoteByColumn[activeNote.column].push_back(activeNote.noteId);
+          }
+          scratchpadCount = outCount;
+          std::stable_sort(scratchpad.begin(), scratchpad.begin() + scratchpadCount,
+                           [&](const daw::EventEntry& a, const daw::EventEntry& b) {
+                             const auto pa = priorityForEvent(a);
+                             const auto pb = priorityForEvent(b);
+                             return std::tie(a.sampleTime, pa) <
+                                 std::tie(b.sampleTime, pb);
+                           });
+          resolvedEvents = true;
+        };
+
+        if (eventDirty) {
+          resolveAndSort();
+        }
+
+        if (routedMidi) {
+          routedMidi->clear();
+          routedMidi->reserve(scratchpadCount);
+          for (uint32_t i = 0; i < scratchpadCount; ++i) {
+            const auto& entry = scratchpad[i];
+            if (entry.type == static_cast<uint16_t>(daw::EventType::Midi)) {
+              routedMidi->push_back(entry);
+            }
           }
         }
 
-        if (scratchpadCount == 0) {
-          return;
+        const uint64_t panicSampleTime =
+            latencyMgr.getCompensatedStart(blockSampleStart);
+        flushPendingNoteOffs(panicSampleTime, currentBlockId);
+        if (scratchpadCount > 0) {
+          for (uint32_t i = 0; i < scratchpadCount; ++i) {
+            auto entry = scratchpad[i];
+            entry.blockId = currentBlockId;
+            entry.sampleTime = latencyMgr.getCompensatedStart(entry.sampleTime);
+            if (entry.type == static_cast<uint16_t>(daw::EventType::Param) &&
+                entry.size >= sizeof(daw::ParamPayload) &&
+                paramTargetIndex != daw::kParamTargetAll) {
+              daw::ParamPayload payload{};
+              std::memcpy(&payload, entry.payload, sizeof(payload));
+              if (payload.targetPluginIndex == daw::kParamTargetAll) {
+                payload.targetPluginIndex = paramTargetIndex;
+                std::memcpy(entry.payload, &payload, sizeof(payload));
+              }
+            }
+            if (!daw::ringWrite(ringStd, entry)) {
+              bool midiDropped = false;
+              for (uint32_t j = i; j < scratchpadCount; ++j) {
+                const auto& dropped = scratchpad[j];
+                if (dropped.type != static_cast<uint16_t>(daw::EventType::Midi)) {
+                  continue;
+                }
+                if (dropped.size < sizeof(daw::MidiPayload)) {
+                  continue;
+                }
+                daw::MidiPayload payload{};
+                std::memcpy(&payload, dropped.payload, sizeof(payload));
+                const uint8_t type = payload.status & 0xF0u;
+                if (type == 0x80u || type == 0x90u) {
+                  midiDropped = true;
+                  break;
+                }
+              }
+              flagRingOverflow(entry.sampleTime,
+                               scratchpadCount - i,
+                               midiDropped);
+              break;
+            }
+          }
         }
+        return patcherAudioWritten.load(std::memory_order_relaxed);
+      };
 
-        std::stable_sort(scratchpad.begin(), scratchpad.begin() + scratchpadCount,
-                         [&](const daw::EventEntry& a, const daw::EventEntry& b) {
-                           const auto pa = priorityForEvent(a);
-                           const auto pb = priorityForEvent(b);
-                           const auto ha = musicalLogicPriorityHint(a);
-                           const auto hb = musicalLogicPriorityHint(b);
-                           return std::tie(a.sampleTime, pa, ha) <
-                               std::tie(b.sampleTime, pb, hb);
-                         });
-
-        for (uint32_t i = 0; i < scratchpadCount; ++i) {
-          auto entry = scratchpad[i];
-          entry.blockId = currentBlockId;
-          entry.sampleTime = latencyMgr.getCompensatedStart(entry.sampleTime);
-          daw::ringWrite(ringStd, entry);
+      auto runAudioPatcherNode = [&](TrackRuntime& runtime,
+                                     const daw::PatcherGraph& graphSnapshot,
+                                     uint32_t nodeId,
+                                     uint32_t deviceId,
+                                     const float* const* inputChannels,
+                                     float* modOutputsBuffer,
+                                     float* modSamplesBuffer) -> bool {
+        if (nodeId >= graphSnapshot.nodes.size()) {
+          return false;
         }
+        const auto& node = graphSnapshot.nodes[nodeId];
+        if (node.type != daw::PatcherNodeType::AudioPassthrough) {
+          return false;
+        }
+        const uint32_t channels = engineConfig.numChannelsOut;
+        if (runtime.patcherAudioChannels.size() != channels) {
+          runtime.patcherAudioChannels.resize(channels);
+        }
+        if (runtime.patcherAudioBuffer.size() !=
+            static_cast<size_t>(channels) * engineConfig.blockSize) {
+          runtime.patcherAudioBuffer.assign(
+              static_cast<size_t>(channels) * engineConfig.blockSize, 0.0f);
+        }
+        for (uint32_t ch = 0; ch < channels; ++ch) {
+          runtime.patcherAudioChannels[ch] =
+              runtime.patcherAudioBuffer.data() +
+              static_cast<size_t>(ch) * engineConfig.blockSize;
+          if (inputChannels && inputChannels[ch]) {
+            std::memcpy(runtime.patcherAudioChannels[ch], inputChannels[ch],
+                        static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
+          } else {
+            std::fill(runtime.patcherAudioChannels[ch],
+                      runtime.patcherAudioChannels[ch] + engineConfig.blockSize, 0.0f);
+          }
+        }
+        daw::PatcherContext ctx{};
+        ctx.abi_version = 2;
+        ctx.block_start_tick = 0;
+        ctx.block_end_tick = 0;
+        ctx.sample_rate = static_cast<float>(engineConfig.sampleRate);
+        const double bpm = tempoProvider.bpmAtNanotick(blockStartTicks);
+        ctx.tempo_bpm = static_cast<float>(bpm > 0.0 ? bpm : 120.0);
+        ctx.num_frames = engineConfig.blockSize;
+        ctx.event_buffer = nullptr;
+        ctx.event_capacity = 0;
+        ctx.event_count = nullptr;
+        ctx.last_overflow_tick =
+            reinterpret_cast<uint64_t*>(&lastOverflowTick);
+        ctx.audio_channels = runtime.patcherAudioChannels.data();
+        ctx.num_channels = channels;
+        if (modOutputsBuffer) {
+          std::fill(modOutputsBuffer,
+                    modOutputsBuffer + kPatcherMaxModOutputs,
+                    0.0f);
+        }
+        ctx.mod_outputs = modOutputsBuffer;
+        ctx.mod_output_count = kPatcherMaxModOutputs;
+        ctx.mod_output_samples = modSamplesBuffer;
+        ctx.mod_output_stride = engineConfig.blockSize;
+        ctx.mod_inputs = nullptr;
+        ctx.mod_input_count = 0;
+        ctx.mod_input_stride = 0;
+        if (deviceId != daw::kDeviceIdAuto) {
+          auto& modLinks = runtime.audioModLinks;
+          {
+            std::lock_guard<std::mutex> lock(runtime.trackMutex);
+            modLinks = runtime.track.modRegistry.links;
+          }
+          if (!modLinks.empty()) {
+            auto& modInputs = runtime.audioModInputSamples;
+            const size_t sampleCount =
+                static_cast<size_t>(kPatcherMaxModOutputs) *
+                static_cast<size_t>(engineConfig.blockSize);
+            if (modInputs.size() != sampleCount) {
+              modInputs.assign(sampleCount, 0.0f);
+            } else {
+              std::fill(modInputs.begin(), modInputs.end(), 0.0f);
+            }
+            const size_t stride = static_cast<size_t>(engineConfig.blockSize);
+            for (const auto& link : modLinks) {
+              if (!link.enabled || link.rate != daw::ModRate::SampleRate) {
+                continue;
+              }
+              if (link.target.deviceId != deviceId) {
+                continue;
+              }
+              if (link.target.kind != daw::ModTargetKind::PatcherParam &&
+                  link.target.kind != daw::ModTargetKind::PatcherMacro) {
+                continue;
+              }
+              if (link.source.kind != daw::ModSourceKind::PatcherNodeOutput) {
+                continue;
+              }
+              if (link.target.targetId >= kPatcherMaxModOutputs ||
+                  link.source.sourceId >= kPatcherMaxModOutputs) {
+                continue;
+              }
+              uint32_t sourceIndex = daw::kDeviceIdAuto;
+              for (uint32_t i = 0; i < runtime.modOutputDeviceIds.size(); ++i) {
+                if (runtime.modOutputDeviceIds[i] == link.source.deviceId) {
+                  sourceIndex = i;
+                  break;
+                }
+              }
+              if (sourceIndex == daw::kDeviceIdAuto ||
+                  runtime.modOutputSamples.empty()) {
+                continue;
+              }
+              const size_t sourceBase =
+                  (static_cast<size_t>(sourceIndex) *
+                       static_cast<size_t>(kPatcherMaxModOutputs) +
+                   link.source.sourceId) *
+                  stride;
+              const float* source = runtime.modOutputSamples.data() + sourceBase;
+              float* target =
+                  modInputs.data() + static_cast<size_t>(link.target.targetId) * stride;
+              for (size_t i = 0; i < stride; ++i) {
+                target[i] += link.bias + link.depth * source[i];
+              }
+            }
+            ctx.mod_inputs = modInputs.data();
+            ctx.mod_input_count = kPatcherMaxModOutputs;
+            ctx.mod_input_stride = engineConfig.blockSize;
+          }
+        }
+        ctx.node_config = nullptr;
+        ctx.node_config_size = 0;
+        ctx.harmony_snapshot = nullptr;
+        ctx.harmony_count = 0;
+        dispatchRustKernel(node.type, ctx);
+        if (deviceId != daw::kDeviceIdAuto) {
+          std::lock_guard<std::mutex> lock(runtime.trackMutex);
+          auto& sources = runtime.track.modRegistry.sources;
+          for (uint32_t i = 0; i < ctx.mod_output_count; ++i) {
+            bool updated = false;
+            for (auto& source : sources) {
+              if (source.ref.deviceId == deviceId &&
+                  source.ref.sourceId == i &&
+                  source.ref.kind == daw::ModSourceKind::PatcherNodeOutput) {
+                source.value = modOutputsBuffer ? modOutputsBuffer[i] : 0.0f;
+                updated = true;
+                break;
+              }
+            }
+            if (!updated) {
+              daw::ModSourceState state{};
+              state.ref.deviceId = deviceId;
+              state.ref.sourceId = i;
+              state.ref.kind = daw::ModSourceKind::PatcherNodeOutput;
+              state.value = modOutputsBuffer ? modOutputsBuffer[i] : 0.0f;
+              sources.push_back(state);
+            }
+          }
+        }
+        return true;
       };
 
       bool mirrorOnly = false;
@@ -2760,8 +5261,6 @@ struct TrackRuntime {
           break;
         }
       }
-
-      const bool isPlaying = playing.load(std::memory_order_acquire);
 
       for (auto* runtime : trackSnapshot) {
         if (!runtime->hostReady.load(std::memory_order_acquire)) {
@@ -2801,39 +5300,376 @@ struct TrackRuntime {
                     << runtime->mirrorGateSampleTime.load() << std::endl;
         }
 
-        if (!mirrorOnly && isPlaying) {
+        daw::TrackRouting routingSnapshot;
+        {
           std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          renderTrack(*runtime, blockStartTicks, blockEndTicks, sampleStart,
-                      blockId, ringStd);
+          routingSnapshot = runtime->track.routing;
+        }
+
+        auto enqueueInboundAudio = [&](TrackRuntime& dst,
+                                       const float* const* channels) {
+          if (!channels) {
+            return;
+          }
+          const size_t expectedSamples =
+              static_cast<size_t>(engineConfig.blockSize) *
+              static_cast<size_t>(engineConfig.numChannelsOut);
+          std::lock_guard<std::mutex> lock(dst.inboundMutex);
+          if (dst.inboundAudioBuffer.size() != expectedSamples) {
+            dst.inboundAudioBuffer.assign(expectedSamples, 0.0f);
+          }
+          for (uint32_t ch = 0; ch < engineConfig.numChannelsOut; ++ch) {
+            const float* input = channels[ch];
+            if (!input) {
+              continue;
+            }
+            float* dest = dst.inboundAudioBuffer.data() +
+                static_cast<size_t>(ch) * engineConfig.blockSize;
+            for (uint32_t i = 0; i < engineConfig.blockSize; ++i) {
+              dest[i] += input[i];
+            }
+          }
+        };
+
+        auto enqueueInboundMidi = [&](TrackRuntime& dst,
+                                      const std::vector<daw::EventEntry>& events,
+                                      uint64_t blockSampleStart,
+                                      uint64_t nextBlockSampleStart) {
+          if (events.empty()) {
+            return;
+          }
+          std::lock_guard<std::mutex> lock(dst.inboundMutex);
+          for (const auto& entry : events) {
+            if (entry.type != static_cast<uint16_t>(daw::EventType::Midi)) {
+              continue;
+            }
+            if (entry.sampleTime < blockSampleStart) {
+              continue;
+            }
+            const uint64_t offset = entry.sampleTime - blockSampleStart;
+            daw::EventEntry routed = entry;
+            routed.sampleTime = nextBlockSampleStart + offset;
+            routed.blockId = 0;
+            dst.inboundMidiEvents.push_back(routed);
+          }
+        };
+
+        {
+          std::lock_guard<std::mutex> lock(runtime->inboundMutex);
+          const size_t expectedSamples =
+              static_cast<size_t>(engineConfig.blockSize) *
+              static_cast<size_t>(engineConfig.numChannelsOut);
+          if (runtime->inputAudioBuffer.size() != expectedSamples) {
+            runtime->inputAudioBuffer.assign(expectedSamples, 0.0f);
+            runtime->inputAudioChannels.resize(engineConfig.numChannelsOut);
+            for (uint32_t ch = 0; ch < engineConfig.numChannelsOut; ++ch) {
+              runtime->inputAudioChannels[ch] =
+                  runtime->inputAudioBuffer.data() +
+                  static_cast<size_t>(ch) * engineConfig.blockSize;
+            }
+          }
+          if (runtime->inboundAudioBuffer.size() == expectedSamples) {
+            std::copy(runtime->inboundAudioBuffer.begin(),
+                      runtime->inboundAudioBuffer.end(),
+                      runtime->inputAudioBuffer.begin());
+            std::fill(runtime->inboundAudioBuffer.begin(),
+                      runtime->inboundAudioBuffer.end(),
+                      0.0f);
+          } else {
+            std::fill(runtime->inputAudioBuffer.begin(),
+                      runtime->inputAudioBuffer.end(),
+                      0.0f);
+          }
+        }
+
+        bool patcherAudioWritten = false;
+        std::vector<daw::EventEntry> routedMidi;
+        if (!mirrorOnly && isPlaying) {
+          patcherAudioWritten = renderTrack(*runtime, blockStartTicks, blockEndTicks,
+                                            sampleStart, blockId, ringStd,
+                                            routingSnapshot.midiOut.kind ==
+                                                    daw::TrackRouteKind::Track
+                                                ? &routedMidi
+                                                : nullptr);
         } else if (mirrorOnly) {
           std::cout << "Producer: Skipping renderTrack for track "
                     << runtime->trackId << " (mirrorOnly)" << std::endl;
         }
 
-        const uint32_t blockIndex = blockId % engineConfig.numBlocks;
-        for (uint32_t ch = 0; ch < engineConfig.numChannelsIn; ++ch) {
-          float* input = daw::audioInChannelPtr(
-              reinterpret_cast<void*>(
-                  const_cast<daw::ShmHeader*>(runtime->controller.shmHeader())),
-              *runtime->controller.shmHeader(), blockIndex, ch);
-          for (uint32_t i = 0; i < engineConfig.blockSize; ++i) {
-            const float value = static_cast<float>(
-                (static_cast<double>(blockId) * 0.001) +
-                (static_cast<double>(ch) * 0.01) +
-                (static_cast<double>(i) * 0.0001));
-            input[i] = value;
+        struct SegmentInfo {
+          uint16_t start = 0;
+          uint16_t length = 0;
+          struct AudioNodeInfo {
+            uint32_t nodeId = 0;
+            uint32_t deviceId = 0;
+          };
+          std::vector<AudioNodeInfo> audioNodeIds;
+        };
+        std::vector<SegmentInfo> segments;
+        segments.reserve(runtime->track.chain.devices.size());
+        std::vector<SegmentInfo::AudioNodeInfo> pendingAudioNodes;
+        pendingAudioNodes.reserve(runtime->track.chain.devices.size());
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          uint16_t hostIndex = 0;
+          bool inSegment = false;
+          uint16_t segmentStart = 0;
+          uint16_t segmentLength = 0;
+          for (const auto& device : runtime->track.chain.devices) {
+            const bool isVst = device.kind == daw::DeviceKind::VstInstrument ||
+                device.kind == daw::DeviceKind::VstEffect;
+            if (isVst) {
+              if (!resolveDevicePluginPath(*runtime, device.hostSlotIndex)) {
+                continue;
+              }
+              if (!inSegment) {
+                if (!segments.empty() && !pendingAudioNodes.empty()) {
+                  segments.back().audioNodeIds.insert(
+                      segments.back().audioNodeIds.end(),
+                      pendingAudioNodes.begin(),
+                      pendingAudioNodes.end());
+                  pendingAudioNodes.clear();
+                }
+                inSegment = true;
+                segmentStart = hostIndex;
+                segmentLength = 0;
+              }
+              segmentLength++;
+              hostIndex++;
+            } else {
+              if (inSegment) {
+                SegmentInfo info;
+                info.start = segmentStart;
+                info.length = segmentLength;
+                segments.push_back(info);
+                inSegment = false;
+                segmentLength = 0;
+              }
+              if (!device.bypass && device.kind == daw::DeviceKind::PatcherAudio) {
+                SegmentInfo::AudioNodeInfo info{};
+                info.nodeId = device.patcherNodeId;
+                info.deviceId = device.id;
+                pendingAudioNodes.push_back(info);
+              }
+            }
+          }
+          if (inSegment) {
+            SegmentInfo info;
+            info.start = segmentStart;
+            info.length = segmentLength;
+            segments.push_back(info);
+          }
+          if (!segments.empty() && !pendingAudioNodes.empty()) {
+            segments.back().audioNodeIds.insert(
+                segments.back().audioNodeIds.end(),
+                pendingAudioNodes.begin(),
+                pendingAudioNodes.end());
+            pendingAudioNodes.clear();
+          }
+          if (segments.empty()) {
+            SegmentInfo info;
+            info.start = 0;
+            info.length = 0;
+            segments.push_back(info);
           }
         }
 
-        runtime->controller.sendProcessBlock(blockId, sampleStart, pluginSampleStart);
+        auto audioGraphPtr = std::atomic_load_explicit(&patcherGraphSnapshot,
+                                                       std::memory_order_acquire);
+        static const daw::PatcherGraph kEmptyAudioGraph{};
+        const daw::PatcherGraph& audioGraphSnapshot =
+            audioGraphPtr ? *audioGraphPtr : kEmptyAudioGraph;
+
+        const uint32_t blockIndex = blockId % engineConfig.numBlocks;
+        bool patcherAudioValid = patcherAudioWritten;
+        if (patcherAudioValid && !runtime->inputAudioChannels.empty()) {
+          const uint32_t channels =
+              static_cast<uint32_t>(runtime->inputAudioChannels.size());
+          for (uint32_t ch = 0; ch < channels; ++ch) {
+            const float* input = runtime->inputAudioChannels[ch];
+            float* output =
+                ch < runtime->patcherAudioChannels.size()
+                    ? runtime->patcherAudioChannels[ch]
+                    : nullptr;
+            if (!input || !output) {
+              continue;
+            }
+            for (uint32_t i = 0; i < engineConfig.blockSize; ++i) {
+              output[i] += input[i];
+            }
+          }
+        }
+        auto& outputPtrs = runtime->audioOutputPtrs;
+        if (outputPtrs.size() != engineConfig.numChannelsOut) {
+          outputPtrs.resize(engineConfig.numChannelsOut, nullptr);
+        } else {
+          std::fill(outputPtrs.begin(), outputPtrs.end(), nullptr);
+        }
+        std::array<float, kPatcherMaxModOutputs> audioModOutputs{};
+        auto& audioModSamples = runtime->audioModSamples;
+        const size_t audioModSampleCount =
+            static_cast<size_t>(kPatcherMaxModOutputs) *
+            static_cast<size_t>(engineConfig.blockSize);
+        if (audioModSamples.size() != audioModSampleCount) {
+          audioModSamples.assign(audioModSampleCount, 0.0f);
+        } else {
+          std::fill(audioModSamples.begin(), audioModSamples.end(), 0.0f);
+        }
+        const auto* header = runtime->controller.shmHeader();
+        const size_t shmSize = runtime->controller.shmSize();
+        auto safeAudioInPtr = [&](uint32_t blockIndex, uint32_t channel) -> float* {
+          if (!header || header->numChannelsIn == 0 || header->numBlocks == 0 ||
+              header->channelStrideBytes == 0) {
+            return nullptr;
+          }
+          const uint64_t stride = header->channelStrideBytes;
+          const uint64_t blockBytes =
+              static_cast<uint64_t>(header->numChannelsIn) * stride;
+          const uint64_t block =
+              static_cast<uint64_t>(blockIndex % header->numBlocks);
+          const uint64_t offset = header->audioInOffset + block * blockBytes +
+                                  static_cast<uint64_t>(channel) * stride;
+          if (offset + stride > shmSize) {
+            return nullptr;
+          }
+          return reinterpret_cast<float*>(
+              reinterpret_cast<uint8_t*>(
+                  const_cast<daw::ShmHeader*>(header)) +
+              offset);
+        };
+        auto safeAudioOutPtr = [&](uint32_t blockIndex, uint32_t channel) -> float* {
+          if (!header || header->numChannelsOut == 0 || header->numBlocks == 0 ||
+              header->channelStrideBytes == 0) {
+            return nullptr;
+          }
+          const uint64_t stride = header->channelStrideBytes;
+          const uint64_t blockBytes =
+              static_cast<uint64_t>(header->numChannelsOut) * stride;
+          const uint64_t block =
+              static_cast<uint64_t>(blockIndex % header->numBlocks);
+          const uint64_t offset = header->audioOutOffset + block * blockBytes +
+                                  static_cast<uint64_t>(channel) * stride;
+          if (offset + stride > shmSize) {
+            return nullptr;
+          }
+          return reinterpret_cast<float*>(
+              reinterpret_cast<uint8_t*>(
+                  const_cast<daw::ShmHeader*>(header)) +
+              offset);
+        };
+        for (size_t segIndex = 0; segIndex < segments.size(); ++segIndex) {
+          const auto& segment = segments[segIndex];
+          const uint16_t segmentStart = segment.start;
+          const uint16_t segmentLength = segment.length;
+          for (uint32_t ch = 0; ch < engineConfig.numChannelsIn; ++ch) {
+            float* input = safeAudioInPtr(blockIndex, ch);
+            if (!input) {
+              continue;
+            }
+            if (segIndex == 0) {
+              if (patcherAudioValid && ch < runtime->patcherAudioChannels.size() &&
+                  runtime->patcherAudioChannels[ch]) {
+                std::memcpy(input, runtime->patcherAudioChannels[ch],
+                            static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
+              } else if (ch < runtime->inputAudioChannels.size() &&
+                         runtime->inputAudioChannels[ch]) {
+                std::memcpy(input, runtime->inputAudioChannels[ch],
+                            static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
+              } else {
+                std::fill(input, input + engineConfig.blockSize, 0.0f);
+              }
+              continue;
+            }
+            if (patcherAudioValid && ch < runtime->patcherAudioChannels.size() &&
+                runtime->patcherAudioChannels[ch]) {
+              std::memcpy(input, runtime->patcherAudioChannels[ch],
+                          static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
+              continue;
+            }
+            float* output = safeAudioOutPtr(blockIndex, ch);
+            if (output) {
+              std::memcpy(input, output,
+                          static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
+            } else {
+              std::fill(input, input + engineConfig.blockSize, 0.0f);
+            }
+          }
+
+          if (!runtime->controller.sendProcessBlock(blockId,
+                                                    sampleStart,
+                                                    pluginSampleStart,
+                                                    segmentStart,
+                                                    segmentLength)) {
+            runtime->hostReady.store(false, std::memory_order_release);
+            runtime->active.store(false, std::memory_order_release);
+            runtime->needsRestart.store(true, std::memory_order_release);
+            break;
+          }
+          patcherAudioValid = false;
+          if (!segment.audioNodeIds.empty()) {
+            for (uint32_t ch = 0; ch < engineConfig.numChannelsOut; ++ch) {
+              outputPtrs[ch] = safeAudioOutPtr(blockIndex, ch);
+            }
+            const float* const* currentInput = outputPtrs.data();
+            for (const auto& nodeInfo : segment.audioNodeIds) {
+              if (runAudioPatcherNode(*runtime,
+                                      audioGraphSnapshot,
+                                      nodeInfo.nodeId,
+                                      nodeInfo.deviceId,
+                                      currentInput,
+                                      audioModOutputs.data(),
+                                      audioModSamples.data())) {
+                patcherAudioValid = true;
+                currentInput = const_cast<const float* const*>(
+                    runtime->patcherAudioChannels.data());
+              }
+            }
+          }
+        }
+
+        const uint64_t nextBlockSampleStart =
+            sampleStart + static_cast<uint64_t>(engineConfig.blockSize);
+        if (routingSnapshot.audioOut.kind == daw::TrackRouteKind::Track) {
+          TrackRuntime* dst = findTrackRuntime(routingSnapshot.audioOut.trackId);
+          if (dst && dst != runtime) {
+            std::vector<const float*> routePtrs;
+            const float* const* routeChannels = nullptr;
+            if (segments.size() == 1 && segments[0].length == 0) {
+              if (patcherAudioValid) {
+                routeChannels = const_cast<const float* const*>(
+                    runtime->patcherAudioChannels.data());
+              } else {
+                routeChannels = const_cast<const float* const*>(
+                    runtime->inputAudioChannels.data());
+              }
+            } else {
+              routePtrs.resize(engineConfig.numChannelsOut, nullptr);
+              for (uint32_t ch = 0; ch < engineConfig.numChannelsOut; ++ch) {
+                routePtrs[ch] = safeAudioOutPtr(blockIndex, ch);
+              }
+              routeChannels = routePtrs.data();
+            }
+            enqueueInboundAudio(*dst, routeChannels);
+          }
+        }
+
+        if (routingSnapshot.midiOut.kind == daw::TrackRouteKind::Track) {
+          TrackRuntime* dst = findTrackRuntime(routingSnapshot.midiOut.trackId);
+          if (dst && dst != runtime) {
+            enqueueInboundMidi(*dst, routedMidi, sampleStart, nextBlockSampleStart);
+          }
+        }
       }
 
-      if (!mirrorOnly && isPlaying) {
+      if (isPlaying) {
         uint64_t nextTicks = blockStartTicks + blockTicks;
         if (loopLen > 0 && nextTicks >= loopEndTicks) {
           nextTicks = loopStartTicks + ((nextTicks - loopStartTicks) % loopLen);
         }
         transportNanotick.store(nextTicks, std::memory_order_release);
+      }
+      if (throttleInactive || throttlePlayback) {
+        std::this_thread::sleep_for(blockDuration);
       }
     }
   });
@@ -2841,6 +5677,7 @@ struct TrackRuntime {
   std::thread consumer([&] {
     uint32_t currentBlockId = 1;
     uint64_t lastOverflowLogged = 0;
+    std::unordered_map<uint32_t, uint64_t> ringStdDropLogged;
     const auto blockDuration =
         std::chrono::duration<double>(
             static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
@@ -2855,6 +5692,20 @@ struct TrackRuntime {
       }
 
       auto trackSnapshot = snapshotTracks();
+      for (auto* runtime : trackSnapshot) {
+        const uint64_t drops = runtime->ringStdDropCount.load(std::memory_order_relaxed);
+        const uint64_t lastDrops = ringStdDropLogged[runtime->trackId];
+        if (drops > lastDrops) {
+          const uint64_t sampleTime =
+              runtime->ringStdDropSample.load(std::memory_order_relaxed);
+          std::cout << "Engine: track " << runtime->trackId
+                    << " event ring full, dropped "
+                    << (drops - lastDrops) << " events (total "
+                    << drops << ", sample " << sampleTime << ")"
+                    << std::endl;
+          ringStdDropLogged[runtime->trackId] = drops;
+        }
+      }
 
       // Update audio callback with current track info
       if (audioCallback) {
@@ -2865,13 +5716,18 @@ struct TrackRuntime {
             {
               std::lock_guard<std::mutex> lock(runtime->controllerMutex);
               // Validate pointers before passing to audio callback
-              if (!runtime->controller.shmHeader() || !runtime->controller.mailbox()) {
+              auto shmView = runtime->controller.sharedMemory();
+              if (!shmView || !shmView->header || !shmView->mailbox) {
                 continue;
               }
+              info.shmView = shmView;
               info.shmBase = reinterpret_cast<void*>(
-                  const_cast<daw::ShmHeader*>(runtime->controller.shmHeader()));
-              info.header = runtime->controller.shmHeader();
-              info.completedBlockId = &runtime->controller.mailbox()->completedBlockId;
+                  const_cast<daw::ShmHeader*>(shmView->header));
+              info.header = shmView->header;
+              info.completedBlockId = shmView->completedBlockId;
+              info.hostReady = &runtime->hostReady;
+              info.active = &runtime->active;
+              info.shmSize = shmView->size;
               info.trackId = runtime->trackId;
             }
             // Only add if all pointers are valid
@@ -2904,7 +5760,18 @@ struct TrackRuntime {
               runtime->controller.mailbox(), 500, [ptr = runtime]() {
                 ptr->needsRestart.store(true);
               });
-          enqueueMirrorReplay(*runtime);
+          runtime->hostReady.store(true, std::memory_order_release);
+          applyHostBypassStates(*runtime);
+          {
+            std::lock_guard<std::mutex> lockMirror(runtime->paramMirrorMutex);
+            if (!runtime->paramMirror.empty()) {
+              enqueueMirrorReplay(*runtime);
+            } else {
+              runtime->mirrorPending.store(false, std::memory_order_release);
+              runtime->mirrorPrimed.store(false, std::memory_order_release);
+              runtime->mirrorGateSampleTime.store(0, std::memory_order_release);
+            }
+          }
           if (runtime->watchdog) {
             runtime->watchdog->reset();
           }
@@ -2941,10 +5808,7 @@ struct TrackRuntime {
       const uint64_t uiBlockStartTicks =
           transportNanotick.load(std::memory_order_acquire);
 
-      std::array<float, daw::kUiMaxTracks> trackRms{};
-
       if (uiShm.header) {
-        const bool writeClip = clipDirty.exchange(false, std::memory_order_acq_rel);
         const bool writeHarmony = harmonyDirty.exchange(false, std::memory_order_acq_rel);
         uiShm.header->uiVersion.fetch_add(1, std::memory_order_release);
         uiShm.header->uiVisualSampleCount = uiSampleCount;
@@ -2955,16 +5819,11 @@ struct TrackRuntime {
             playing.load(std::memory_order_acquire) ? 1 : 0;
         uiShm.header->uiClipVersion =
             clipVersion.load(std::memory_order_acquire);
-        if (writeClip) {
-          writeUiClipSnapshot(trackSnapshot);
-        }
+        writeUiClipWindowSnapshot(trackSnapshot);
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);
         if (writeHarmony) {
           writeUiHarmonySnapshot();
-        }
-        for (uint32_t i = 0; i < daw::kUiMaxTracks; ++i) {
-          uiShm.header->uiTrackPeakRms[i] = trackRms[i];
         }
         uiShm.header->uiVersion.fetch_add(1, std::memory_order_release);
       }
@@ -2972,6 +5831,33 @@ struct TrackRuntime {
       currentBlockId++;
     }
   });
+  if (!testMode) {
+    audioRuntime = daw::createJuceRuntime();
+    audioBackend = daw::createAudioBackend();
+    if (!audioBackend || !audioBackend->openDefaultDevice(2)) {
+      std::cerr << "Failed to initialize audio device" << std::endl;
+    } else {
+      std::cout << "Audio device initialized successfully" << std::endl;
+      std::cout << "Audio device: " << audioBackend->deviceName() << std::endl;
+      std::cout << "  Sample rate: " << audioBackend->sampleRate()
+                << " (engine expects: " << engineConfig.sampleRate << ")" << std::endl;
+      std::cout << "  Buffer size: " << audioBackend->blockSize()
+                << " (engine expects: " << engineConfig.blockSize << ")" << std::endl;
+      audioCallback = std::make_unique<EngineAudioCallback>(
+          audioBackend->sampleRate(),
+          static_cast<uint32_t>(audioBackend->blockSize()),
+          engineConfig.numBlocks,
+          &audioPlaybackBlockId);
+      audioCallback->resetForStart();
+      if (audioBackend->start([&](float* const* outputs, int numChannels, int numFrames) {
+            audioCallback->process(outputs, numChannels, numFrames);
+          })) {
+        std::cout << "Audio output started" << std::endl;
+      } else {
+        std::cerr << "Failed to start audio output" << std::endl;
+      }
+    }
+  }
 
   if (runSeconds >= 0) {
     std::this_thread::sleep_for(std::chrono::seconds(runSeconds));
@@ -2982,9 +5868,8 @@ struct TrackRuntime {
   consumer.join();
 
   // Stop audio output
-  if (audioDeviceManager && audioCallback) {
-    audioDeviceManager->removeAudioCallback(audioCallback.get());
-    audioDeviceManager->closeAudioDevice();
+  if (audioBackend && audioCallback) {
+    audioBackend->stop();
     std::cout << "Audio output stopped" << std::endl;
   }
 
@@ -3002,11 +5887,6 @@ struct TrackRuntime {
   }
   if (!uiShm.name.empty()) {
     ::shm_unlink(uiShm.name.c_str());
-  }
-
-  // Shutdown JUCE
-  if (!testMode) {
-    juce::shutdownJuce_GUI();
   }
 
   return 0;

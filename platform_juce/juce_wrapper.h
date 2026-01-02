@@ -88,6 +88,7 @@ class IPluginInstance {
   virtual std::string version() const = 0;
   virtual std::array<uint8_t, 16> pluginUid16() const = 0;
   virtual int numParameters() const = 0;
+  virtual int inputChannels() const = 0;
   virtual int outputChannels() const = 0;
   virtual bool loadVst3PresetFile(const std::string& path) = 0;
 
@@ -99,6 +100,7 @@ class IPluginInstance {
   virtual std::vector<uint8_t> getState() const = 0;
   virtual bool setState(const std::vector<uint8_t>& data) = 0;
   virtual void flushParameterChanges() = 0;
+  virtual bool openEditor() = 0;
 };
 
 class IPluginHost {

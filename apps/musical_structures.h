@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <string>
+#include <array>
 #include <utility>
 #include <vector>
 
@@ -25,6 +25,7 @@ struct NotePayload {
   uint8_t column = 0;
   uint8_t reserved = 0;
   uint64_t durationNanoticks = 0;
+  uint32_t noteId = 0;
 };
 
 struct ChordPayload {
@@ -42,7 +43,7 @@ struct ChordPayload {
 };
 
 struct MusicalParamPayload {
-  std::string paramId;
+  std::array<uint8_t, 16> uid16{};
   float value = 0.0f;
 };
 
@@ -58,15 +59,30 @@ struct MusicalEvent {
   MusicalEventPayload payload;
 };
 
-class MusicalClip {
+ class MusicalClip {
  public:
   void addEvent(MusicalEvent event) {
+    if (event.type == MusicalEventType::Note) {
+      if (event.payload.note.noteId == 0) {
+        event.payload.note.noteId = allocateNoteId();
+      } else {
+        reserveNoteId(event.payload.note.noteId);
+      }
+    }
     const auto it = std::lower_bound(
         events_.begin(), events_.end(), event.nanotickOffset,
         [](const MusicalEvent& lhs, uint64_t tick) {
           return lhs.nanotickOffset < tick;
         });
     events_.insert(it, std::move(event));
+  }
+
+  uint32_t allocateNoteId(std::optional<uint32_t> overrideId = std::nullopt) {
+    if (overrideId && *overrideId > 0) {
+      reserveNoteId(*overrideId);
+      return *overrideId;
+    }
+    return nextNoteId_++;
   }
 
   void getEventsInRange(uint64_t startTick,
@@ -91,6 +107,7 @@ class MusicalClip {
     uint8_t pitch = 0;
     uint8_t velocity = 0;
     uint8_t column = 0;
+    uint32_t noteId = 0;
   };
 
   std::optional<RemovedNote> removeNoteAt(uint64_t nanotick, uint8_t column) {
@@ -109,6 +126,7 @@ class MusicalClip {
     removed.pitch = it->payload.note.pitch;
     removed.velocity = it->payload.note.velocity;
     removed.column = it->payload.note.column;
+    removed.noteId = it->payload.note.noteId;
     events_.erase(it);
     return removed;
   }
@@ -308,7 +326,14 @@ class MusicalClip {
   }
 
  private:
+  void reserveNoteId(uint32_t noteId) {
+    if (noteId >= nextNoteId_) {
+      nextNoteId_ = noteId + 1;
+    }
+  }
+
   std::vector<MusicalEvent> events_;
+  uint32_t nextNoteId_ = 1;
 };
 
 class PatternView {

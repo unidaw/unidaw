@@ -7,9 +7,12 @@ use anyhow::{Context as AnyhowContext, Result};
 use memmap2::{MmapMut, MmapOptions};
 
 use daw_bridge::layout::{
-    EventEntry, EventType, RingHeader, ShmHeader, UiClipSnapshot, UiCommandPayload,
-    UiChordCommandPayload, UiChordDiffPayload, UiDiffPayload, UiHarmonyDiffPayload,
-    UiHarmonySnapshot,
+    EventEntry, EventType, RingHeader, ShmHeader, UiChainCommandPayload, UiChainDiffPayload,
+    UiChainErrorPayload, UiClipWindowCommandPayload, UiClipWindowSnapshot, UiCommandPayload,
+    UiChordCommandPayload,
+    UiChordDiffPayload, UiDiffPayload, UiHarmonyDiffPayload, UiHarmonySnapshot,
+    UiPatcherGraphDiffPayload, UiPatcherGraphErrorPayload, UiPatcherGraphCommandPayload,
+    UiPatcherNodeConfigPayload, UiPatcherPresetCommandPayload, UiCommandType,
 };
 use daw_bridge::reader::{SeqlockReader, UiSnapshot};
 
@@ -93,6 +96,7 @@ pub fn log_last_ui_command() {
     );
 }
 
+#[derive(Clone, Copy)]
 pub struct RingView {
     header: *mut RingHeader,
     entries: *mut EventEntry,
@@ -111,21 +115,83 @@ pub struct EngineBridge {
 impl EngineBridge {
     pub fn open() -> Result<Self> {
         let name = default_shm_name();
+        eprintln!("daw-app: UI SHM name: {name}");
         let c_name = CString::new(name.clone())
             .with_context(|| format!("invalid SHM name: {name}"))?;
         let fd = unsafe { libc::shm_open(c_name.as_ptr(), libc::O_RDWR, 0) };
         if fd < 0 {
-            return Err(std::io::Error::last_os_error())
-                .with_context(|| format!("failed to open SHM {name}"));
+            let err = std::io::Error::last_os_error();
+            eprintln!("daw-app: shm_open({name}) failed: {err}");
+            return Err(err).with_context(|| format!("failed to open SHM {name}"));
         }
 
         let file = unsafe { std::fs::File::from_raw_fd(fd) };
-        let mmap = unsafe { MmapOptions::new().map_mut(&file) }?;
+        let size = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+        if size < std::mem::size_of::<ShmHeader>() as u64 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("UI SHM size {} bytes (not ready)", size),
+            ))
+            .with_context(|| format!("failed to open SHM {name}"));
+        }
+        let mmap = unsafe { MmapOptions::new().len(size as usize).map_mut(&file) }?;
         let base = mmap.as_ptr() as *const u8;
         let header = base as *const ShmHeader;
         let reader = SeqlockReader::new(header);
-        let ring_ui = ring_view(base as *mut u8, unsafe { (*header).ring_ui_offset });
-        let ring_ui_out = ring_view(base as *mut u8, unsafe { (*header).ring_ui_out_offset });
+        let ring_ui_offset = unsafe { (*header).ring_ui_offset };
+        let ring_ui_out_offset = unsafe { (*header).ring_ui_out_offset };
+        let ring_ui = ring_view(base as *mut u8, ring_ui_offset);
+        let ring_ui_out = ring_view(base as *mut u8, ring_ui_out_offset);
+        if ring_ui.is_none() || ring_ui_out.is_none() {
+            let ui_capacity = unsafe {
+                if ring_ui_offset == 0 {
+                    0
+                } else {
+                    let ring_header = base.add(ring_ui_offset as usize) as *const RingHeader;
+                    (*ring_header).capacity
+                }
+            };
+            let ui_out_capacity = unsafe {
+                if ring_ui_out_offset == 0 {
+                    0
+                } else {
+                    let ring_header = base.add(ring_ui_out_offset as usize) as *const RingHeader;
+                    (*ring_header).capacity
+                }
+            };
+            eprintln!(
+                "daw-app: UI rings not ready (ui_offset={}, ui_capacity={}, ui_out_offset={}, ui_out_capacity={})",
+                ring_ui_offset,
+                ui_capacity,
+                ring_ui_out_offset,
+                ui_out_capacity
+            );
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "UI command rings not ready",
+            ))
+            .with_context(|| format!("failed to open SHM {name}"));
+        }
+        let ui_capacity = unsafe {
+            let ring_header = base.add(ring_ui_offset as usize) as *const RingHeader;
+            (*ring_header).capacity
+        };
+        let ui_out_capacity = unsafe {
+            let ring_header = base.add(ring_ui_out_offset as usize) as *const RingHeader;
+            (*ring_header).capacity
+        };
+        let ui_entry_size = unsafe {
+            let ring_header = base.add(ring_ui_offset as usize) as *const RingHeader;
+            (*ring_header).entry_size
+        };
+        eprintln!(
+            "daw-app: UI rings ready (ui_offset={}, ui_capacity={}, ui_entry_size={}, ui_out_offset={}, ui_out_capacity={})",
+            ring_ui_offset,
+            ui_capacity,
+            ui_entry_size,
+            ring_ui_out_offset,
+            ui_out_capacity
+        );
         Ok(Self {
             _mmap: mmap,
             base,
@@ -140,9 +206,31 @@ impl EngineBridge {
         self.reader.read_snapshot()
     }
 
+    fn ring_ui_view(&self) -> Option<RingView> {
+        if let Some(ring) = self.ring_ui {
+            return Some(ring);
+        }
+        if self.header.is_null() {
+            return None;
+        }
+        let offset = unsafe { (*self.header).ring_ui_offset };
+        ring_view(self.base as *mut u8, offset)
+    }
+
+    fn ring_ui_out_view(&self) -> Option<RingView> {
+        if let Some(ring) = self.ring_ui_out {
+            return Some(ring);
+        }
+        if self.header.is_null() {
+            return None;
+        }
+        let offset = unsafe { (*self.header).ring_ui_out_offset };
+        ring_view(self.base as *mut u8, offset)
+    }
+
     #[allow(dead_code)]
     pub fn send_ui_command(&self, payload: UiCommandPayload) -> bool {
-        let Some(ring) = self.ring_ui.as_ref() else {
+        let Some(ring) = self.ring_ui_view() else {
             return false;
         };
         record_ui_command(payload.command_type, payload.track_id);
@@ -161,7 +249,127 @@ impl EngineBridge {
             )
         };
         entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
-        let ok = ring_write_with_retry(ring, entry, Duration::from_millis(20));
+        let ok = ring_write_with_retry(&ring, entry, Duration::from_millis(20));
+        if ok {
+            bump_ui_sent();
+        } else {
+            bump_ui_send_fail();
+            log_ui_send_fail();
+        }
+        ok
+    }
+
+    pub fn send_ui_clip_window_command(&self, payload: UiClipWindowCommandPayload) -> bool {
+        let Some(ring) = self.ring_ui_view() else {
+            return false;
+        };
+        record_ui_command(payload.command_type, payload.track_id);
+        let mut entry = EventEntry {
+            sample_time: 0,
+            block_id: 0,
+            event_type: EventType::UiCommand as u16,
+            size: std::mem::size_of::<UiClipWindowCommandPayload>() as u16,
+            flags: 0,
+            payload: [0u8; 40],
+        };
+        let payload_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &payload as *const UiClipWindowCommandPayload as *const u8,
+                std::mem::size_of::<UiClipWindowCommandPayload>(),
+            )
+        };
+        entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
+        let ok = ring_write_with_retry(&ring, entry, Duration::from_millis(20));
+        if ok {
+            bump_ui_sent();
+        } else {
+            bump_ui_send_fail();
+            log_ui_send_fail();
+        }
+        ok
+    }
+
+    pub fn send_ui_patcher_graph_command(&self, payload: UiPatcherGraphCommandPayload) -> bool {
+        let Some(ring) = self.ring_ui_view() else {
+            return false;
+        };
+        record_ui_command(payload.command_type, payload.track_id);
+        let mut entry = EventEntry {
+            sample_time: 0,
+            block_id: 0,
+            event_type: EventType::UiCommand as u16,
+            size: std::mem::size_of::<UiPatcherGraphCommandPayload>() as u16,
+            flags: 0,
+            payload: [0u8; 40],
+        };
+        let payload_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &payload as *const UiPatcherGraphCommandPayload as *const u8,
+                std::mem::size_of::<UiPatcherGraphCommandPayload>(),
+            )
+        };
+        entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
+        let ok = ring_write_with_retry(&ring, entry, Duration::from_millis(20));
+        if ok {
+            bump_ui_sent();
+        } else {
+            bump_ui_send_fail();
+            log_ui_send_fail();
+        }
+        ok
+    }
+
+    pub fn send_ui_patcher_node_config(&self, payload: UiPatcherNodeConfigPayload) -> bool {
+        let Some(ring) = self.ring_ui_view() else {
+            return false;
+        };
+        record_ui_command(payload.command_type, payload.track_id);
+        let mut entry = EventEntry {
+            sample_time: 0,
+            block_id: 0,
+            event_type: EventType::UiCommand as u16,
+            size: std::mem::size_of::<UiPatcherNodeConfigPayload>() as u16,
+            flags: 0,
+            payload: [0u8; 40],
+        };
+        let payload_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &payload as *const UiPatcherNodeConfigPayload as *const u8,
+                std::mem::size_of::<UiPatcherNodeConfigPayload>(),
+            )
+        };
+        entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
+        let ok = ring_write_with_retry(&ring, entry, Duration::from_millis(20));
+        if ok {
+            bump_ui_sent();
+        } else {
+            bump_ui_send_fail();
+            log_ui_send_fail();
+        }
+        ok
+    }
+
+    pub fn send_ui_patcher_preset(&self, payload: UiPatcherPresetCommandPayload) -> bool {
+        let Some(ring) = self.ring_ui_view() else {
+            return false;
+        };
+        record_ui_command(payload.command_type, payload.track_id);
+        let mut entry = EventEntry {
+            sample_time: 0,
+            block_id: 0,
+            event_type: EventType::UiCommand as u16,
+            size: std::mem::size_of::<UiPatcherPresetCommandPayload>() as u16,
+            flags: 0,
+            payload: [0u8; 40],
+        };
+        let payload_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &payload as *const UiPatcherPresetCommandPayload as *const u8,
+                std::mem::size_of::<UiPatcherPresetCommandPayload>(),
+            )
+        };
+        entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
+        let ok = ring_write_with_retry(&ring, entry, Duration::from_millis(20));
         if ok {
             bump_ui_sent();
         } else {
@@ -173,7 +381,7 @@ impl EngineBridge {
 
     #[allow(dead_code)]
     pub fn send_ui_chord_command(&self, payload: UiChordCommandPayload) -> bool {
-        let Some(ring) = self.ring_ui.as_ref() else {
+        let Some(ring) = self.ring_ui_view() else {
             return false;
         };
         record_ui_command(payload.command_type, payload.track_id);
@@ -192,7 +400,7 @@ impl EngineBridge {
             )
         };
         entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
-        let ok = ring_write_with_retry(ring, entry, Duration::from_millis(20));
+        let ok = ring_write_with_retry(&ring, entry, Duration::from_millis(20));
         if ok {
             bump_ui_sent();
         } else {
@@ -203,7 +411,12 @@ impl EngineBridge {
     }
 
     pub fn try_send_ui_command(&self, payload: UiCommandPayload) -> bool {
-        let Some(ring) = self.ring_ui.as_ref() else {
+        let Some(ring) = self.ring_ui_view() else {
+            eprintln!(
+                "daw-app: UI ring unavailable; cmd {} track {}",
+                payload.command_type,
+                payload.track_id
+            );
             return false;
         };
         record_ui_command(payload.command_type, payload.track_id);
@@ -222,11 +435,54 @@ impl EngineBridge {
             )
         };
         entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
-        ring_write(ring, entry)
+        let ok = ring_write(&ring, entry);
+        if ok {
+            if payload.command_type == UiCommandType::LoadPluginOnTrack as u16 ||
+                payload.command_type == UiCommandType::TogglePlay as u16 {
+                eprintln!(
+                    "daw-app: sent ui cmd {} track {}",
+                    payload.command_type,
+                    payload.track_id
+                );
+            }
+        } else {
+            if payload.command_type == UiCommandType::LoadPluginOnTrack as u16 ||
+                payload.command_type == UiCommandType::TogglePlay as u16 {
+                eprintln!(
+                    "daw-app: ui cmd send failed {} track {}",
+                    payload.command_type,
+                    payload.track_id
+                );
+            }
+        }
+        ok
+    }
+
+    pub fn try_send_ui_chain_command(&self, payload: UiChainCommandPayload) -> bool {
+        let Some(ring) = self.ring_ui_view() else {
+            return false;
+        };
+        record_ui_command(payload.command_type, payload.track_id);
+        let mut entry = EventEntry {
+            sample_time: 0,
+            block_id: 0,
+            event_type: EventType::UiCommand as u16,
+            size: std::mem::size_of::<UiChainCommandPayload>() as u16,
+            flags: 0,
+            payload: [0u8; 40],
+        };
+        let payload_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &payload as *const UiChainCommandPayload as *const u8,
+                std::mem::size_of::<UiChainCommandPayload>(),
+            )
+        };
+        entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
+        ring_write(&ring, entry)
     }
 
     pub fn try_send_ui_chord_command(&self, payload: UiChordCommandPayload) -> bool {
-        let Some(ring) = self.ring_ui.as_ref() else {
+        let Some(ring) = self.ring_ui_view() else {
             return false;
         };
         record_ui_command(payload.command_type, payload.track_id);
@@ -245,17 +501,95 @@ impl EngineBridge {
             )
         };
         entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
-        ring_write(ring, entry)
+        ring_write(&ring, entry)
+    }
+
+    pub fn try_send_ui_patcher_graph_command(
+        &self,
+        payload: UiPatcherGraphCommandPayload,
+    ) -> bool {
+        let Some(ring) = self.ring_ui_view() else {
+            return false;
+        };
+        record_ui_command(payload.command_type, payload.track_id);
+        let mut entry = EventEntry {
+            sample_time: 0,
+            block_id: 0,
+            event_type: EventType::UiCommand as u16,
+            size: std::mem::size_of::<UiPatcherGraphCommandPayload>() as u16,
+            flags: 0,
+            payload: [0u8; 40],
+        };
+        let payload_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &payload as *const UiPatcherGraphCommandPayload as *const u8,
+                std::mem::size_of::<UiPatcherGraphCommandPayload>(),
+            )
+        };
+        entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
+        ring_write(&ring, entry)
+    }
+
+    pub fn try_send_ui_patcher_node_config(
+        &self,
+        payload: UiPatcherNodeConfigPayload,
+    ) -> bool {
+        let Some(ring) = self.ring_ui_view() else {
+            return false;
+        };
+        record_ui_command(payload.command_type, payload.track_id);
+        let mut entry = EventEntry {
+            sample_time: 0,
+            block_id: 0,
+            event_type: EventType::UiCommand as u16,
+            size: std::mem::size_of::<UiPatcherNodeConfigPayload>() as u16,
+            flags: 0,
+            payload: [0u8; 40],
+        };
+        let payload_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &payload as *const UiPatcherNodeConfigPayload as *const u8,
+                std::mem::size_of::<UiPatcherNodeConfigPayload>(),
+            )
+        };
+        entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
+        ring_write(&ring, entry)
+    }
+
+    pub fn try_send_ui_patcher_preset(
+        &self,
+        payload: UiPatcherPresetCommandPayload,
+    ) -> bool {
+        let Some(ring) = self.ring_ui_view() else {
+            return false;
+        };
+        record_ui_command(payload.command_type, payload.track_id);
+        let mut entry = EventEntry {
+            sample_time: 0,
+            block_id: 0,
+            event_type: EventType::UiCommand as u16,
+            size: std::mem::size_of::<UiPatcherPresetCommandPayload>() as u16,
+            flags: 0,
+            payload: [0u8; 40],
+        };
+        let payload_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &payload as *const UiPatcherPresetCommandPayload as *const u8,
+                std::mem::size_of::<UiPatcherPresetCommandPayload>(),
+            )
+        };
+        entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
+        ring_write(&ring, entry)
     }
 
     pub fn pop_ui_event(&self) -> Option<EventEntry> {
-        let Some(ring) = self.ring_ui_out.as_ref() else {
+        let Some(ring) = self.ring_ui_out_view() else {
             return None;
         };
-        ring_pop(ring)
+        ring_pop(&ring)
     }
 
-    pub fn read_clip_snapshot(&self) -> Option<UiClipSnapshot> {
+    pub fn read_clip_window_snapshot(&self) -> Option<UiClipWindowSnapshot> {
         if self.header.is_null() {
             return None;
         }
@@ -266,11 +600,11 @@ impl EngineBridge {
             }
             let clip_offset = unsafe { (*self.header).ui_clip_offset };
             let clip_bytes = unsafe { (*self.header).ui_clip_bytes };
-            if clip_offset == 0 || clip_bytes < std::mem::size_of::<UiClipSnapshot>() as u64 {
+            if clip_offset == 0 || clip_bytes < std::mem::size_of::<UiClipWindowSnapshot>() as u64 {
                 return None;
             }
             let snapshot_ptr =
-                unsafe { self.base.add(clip_offset as usize) as *const UiClipSnapshot };
+                unsafe { self.base.add(clip_offset as usize) as *const UiClipWindowSnapshot };
             let snapshot = unsafe { *snapshot_ptr };
 
             fence(Ordering::Acquire);
@@ -312,12 +646,6 @@ impl EngineBridge {
 
 fn default_shm_name() -> String {
     if let Ok(name) = std::env::var("DAW_UI_SHM_NAME") {
-        if name.starts_with('/') {
-            return name;
-        }
-        return format!("/{}", name);
-    }
-    if let Ok(name) = std::env::var("DAW_SHM_NAME") {
         if name.starts_with('/') {
             return name;
         }
@@ -369,6 +697,15 @@ fn ring_write(ring: &RingView, entry: EventEntry) -> bool {
             .write_index
             .store(next, Ordering::Release);
     }
+    let read_after = unsafe { (*ring.header).read_index.load(Ordering::Relaxed) };
+    let write_after = unsafe { (*ring.header).write_index.load(Ordering::Relaxed) };
+    eprintln!(
+        "daw-app: ui ring write (read {} -> {}, write {} -> {})",
+        read,
+        read_after,
+        write,
+        write_after
+    );
     true
 }
 
@@ -424,6 +761,96 @@ pub fn decode_ui_diff(entry: &EventEntry) -> Option<UiDiffPayload> {
     };
     payload_bytes.copy_from_slice(&entry.payload[..payload_bytes.len()]);
     Some(payload)
+}
+
+pub fn decode_ui_chain_diff(entry: &EventEntry) -> Option<UiChainDiffPayload> {
+    if entry.event_type != EventType::UiDiff as u16 {
+        return None;
+    }
+    if entry.size as usize != std::mem::size_of::<UiChainDiffPayload>() {
+        return None;
+    }
+    let mut payload = UiChainDiffPayload::default();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            entry.payload.as_ptr(),
+            &mut payload as *mut UiChainDiffPayload as *mut u8,
+            std::mem::size_of::<UiChainDiffPayload>(),
+        );
+    }
+    Some(payload)
+}
+
+pub fn decode_ui_chain_error(entry: &EventEntry) -> Option<UiChainErrorPayload> {
+    if entry.event_type != EventType::UiDiff as u16 {
+        return None;
+    }
+    if entry.size as usize != std::mem::size_of::<UiChainErrorPayload>() {
+        return None;
+    }
+    let mut payload = UiChainErrorPayload::default();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            entry.payload.as_ptr(),
+            &mut payload as *mut UiChainErrorPayload as *mut u8,
+            std::mem::size_of::<UiChainErrorPayload>(),
+        );
+    }
+    Some(payload)
+}
+
+pub fn decode_ui_patcher_graph_diff(entry: &EventEntry) -> Option<UiPatcherGraphDiffPayload> {
+    if entry.event_type != EventType::UiDiff as u16 {
+        return None;
+    }
+    if entry.size as usize != std::mem::size_of::<UiPatcherGraphDiffPayload>() {
+        return None;
+    }
+    let mut payload = UiPatcherGraphDiffPayload::default();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            entry.payload.as_ptr(),
+            &mut payload as *mut UiPatcherGraphDiffPayload as *mut u8,
+            std::mem::size_of::<UiPatcherGraphDiffPayload>(),
+        );
+    }
+    Some(payload)
+}
+
+pub fn decode_ui_patcher_graph_error(entry: &EventEntry) -> Option<UiPatcherGraphErrorPayload> {
+    if entry.event_type != EventType::UiDiff as u16 {
+        return None;
+    }
+    if entry.size as usize != std::mem::size_of::<UiPatcherGraphErrorPayload>() {
+        return None;
+    }
+    let mut payload = UiPatcherGraphErrorPayload::default();
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            entry.payload.as_ptr(),
+            &mut payload as *mut UiPatcherGraphErrorPayload as *mut u8,
+            std::mem::size_of::<UiPatcherGraphErrorPayload>(),
+        );
+    }
+    Some(payload)
+}
+
+pub fn ui_diff_type(entry: &EventEntry) -> Option<u16> {
+    if entry.event_type != EventType::UiDiff as u16 {
+        return None;
+    }
+    if entry.size as usize != 40 {
+        return None;
+    }
+    let mut diff_type: u16 = 0;
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            entry.payload.as_ptr(),
+            &mut diff_type as *mut u16 as *mut u8,
+            std::mem::size_of::<u16>(),
+        );
+    }
+    Some(diff_type)
 }
 
 pub fn decode_harmony_diff(entry: &EventEntry) -> Option<UiHarmonyDiffPayload> {

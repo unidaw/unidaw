@@ -1,10 +1,13 @@
 use daw_bridge::layout::{
-    UiChordCommandPayload, UiChordDiffPayload, UiChordDiffType, UiClipSnapshot, UiCommandPayload,
-    UiCommandType, UiDiffPayload, UiDiffType, UiHarmonyDiffPayload, UiHarmonyDiffType,
-    UiHarmonySnapshot,
+    K_CHAIN_DEVICE_ID_AUTO, UiChainCommandPayload, UiChainDiffPayload, UiChainErrorPayload,
+    UiChordCommandPayload, UiChordDiffPayload, UiChordDiffType, UiClipWindowSnapshot,
+    UiCommandPayload, UiCommandType, UiDiffPayload, UiDiffType, UiHarmonyDiffPayload,
+    UiHarmonyDiffType, UiHarmonySnapshot, UiPatcherGraphCommandPayload,
+    UiPatcherGraphDiffPayload, UiPatcherNodeConfigPayload, UiPatcherPresetCommandPayload,
+    UiPatcherGraphErrorPayload, UI_CLIP_WINDOW_FLAG_COMPLETE,
 };
 
-use crate::app::{EngineView, TRACK_COUNT};
+use crate::app::{ChainDevice, EngineView, PatcherNodeUi, TRACK_COUNT};
 use crate::engine::bridge::{
     bump_ui_enqueued, bump_ui_send_fail, bump_ui_sent, log_ui_send_fail,
 };
@@ -12,6 +15,16 @@ use crate::state::{ClipChord, ClipNote, HarmonyEntry, QueuedCommand};
 use crate::util::{unpack_chord_packed, unpack_chord_spread};
 
 impl EngineView {
+    fn clip_window_contains(&self, track_index: usize, nanotick: u64) -> bool {
+        let Some(state) = self.clip_window.get(track_index) else {
+            return false;
+        };
+        if state.window_end <= state.window_start {
+            return false;
+        }
+        nanotick >= state.window_start && nanotick < state.window_end
+    }
+
     fn note_key(payload: &UiCommandPayload) -> Option<(u32, u64, u8)> {
         let command = payload.command_type;
         if command == UiCommandType::WriteNote as u16 ||
@@ -35,6 +48,14 @@ impl EngineView {
     }
 
     pub(crate) fn enqueue_ui_command(&mut self, payload: UiCommandPayload) {
+        if payload.command_type == UiCommandType::LoadPluginOnTrack as u16 ||
+            payload.command_type == UiCommandType::TogglePlay as u16 {
+            eprintln!(
+                "daw-app: enqueue ui cmd {} track {}",
+                payload.command_type,
+                payload.track_id
+            );
+        }
         if let Some(last) = self.queued_commands.back() {
             if let QueuedCommand::Ui(prev) = last {
                 if let (Some(prev_key), Some(next_key)) =
@@ -61,6 +82,35 @@ impl EngineView {
             }
         }
         self.queued_commands.push_back(QueuedCommand::Chord(payload));
+        bump_ui_enqueued();
+    }
+
+    pub(crate) fn enqueue_chain_command(&mut self, payload: UiChainCommandPayload) {
+        self.queued_commands.push_back(QueuedCommand::Chain(payload));
+        bump_ui_enqueued();
+    }
+
+    pub(crate) fn enqueue_patcher_graph_command(
+        &mut self,
+        payload: UiPatcherGraphCommandPayload,
+    ) {
+        self.queued_commands.push_back(QueuedCommand::PatcherGraph(payload));
+        bump_ui_enqueued();
+    }
+
+    pub(crate) fn enqueue_patcher_node_config(
+        &mut self,
+        payload: UiPatcherNodeConfigPayload,
+    ) {
+        self.queued_commands.push_back(QueuedCommand::PatcherConfig(payload));
+        bump_ui_enqueued();
+    }
+
+    pub(crate) fn enqueue_patcher_preset(
+        &mut self,
+        payload: UiPatcherPresetCommandPayload,
+    ) {
+        self.queued_commands.push_back(QueuedCommand::PatcherPreset(payload));
         bump_ui_enqueued();
     }
 
@@ -92,6 +142,10 @@ impl EngineView {
                         }
                     }
                     QueuedCommand::Chord(_) => self.clip_resync_pending,
+                    QueuedCommand::Chain(_) => false,
+                    QueuedCommand::PatcherGraph(_) => false,
+                    QueuedCommand::PatcherConfig(_) => false,
+                    QueuedCommand::PatcherPreset(_) => false,
                 };
                 if should_pause {
                     break;
@@ -100,6 +154,13 @@ impl EngineView {
             let sent = match entry {
                 QueuedCommand::Ui(payload) => bridge.try_send_ui_command(*payload),
                 QueuedCommand::Chord(payload) => bridge.try_send_ui_chord_command(*payload),
+                QueuedCommand::Chain(payload) => bridge.try_send_ui_chain_command(*payload),
+                QueuedCommand::PatcherGraph(payload) =>
+                    bridge.try_send_ui_patcher_graph_command(*payload),
+                QueuedCommand::PatcherConfig(payload) =>
+                    bridge.try_send_ui_patcher_node_config(*payload),
+                QueuedCommand::PatcherPreset(payload) =>
+                    bridge.try_send_ui_patcher_preset(*payload),
             };
             if sent {
                 bump_ui_sent();
@@ -134,6 +195,10 @@ impl EngineView {
                         next = next.saturating_add(1);
                     }
                 }
+                QueuedCommand::Chain(_) => {}
+                QueuedCommand::PatcherGraph(_) => {}
+                QueuedCommand::PatcherConfig(_) => {}
+                QueuedCommand::PatcherPreset(_) => {}
             }
         }
         self.clip_version_local = next;
@@ -154,52 +219,65 @@ impl EngineView {
         self.harmony_version_local = next;
     }
 
-    pub fn apply_clip_snapshot(&mut self, snapshot: UiClipSnapshot) {
-        self.clip_notes = vec![Vec::new(); TRACK_COUNT];
-        self.clip_chords = vec![Vec::new(); TRACK_COUNT];
-        self.pending_notes.clear();
-        self.pending_chords.clear();
-        let track_count = snapshot.track_count.min(TRACK_COUNT as u32) as usize;
-        for track_index in 0..track_count {
-            let track = snapshot.tracks[track_index];
-            let note_start = track.note_offset as usize;
-            let note_end = note_start + track.note_count as usize;
-            let notes = &mut self.clip_notes[track_index];
-            notes.reserve(note_end.saturating_sub(note_start));
-            for note_index in note_start..note_end {
-                let note = snapshot.notes[note_index];
-                notes.push(ClipNote {
-                    nanotick: note.t_on,
-                    duration: note.t_off.saturating_sub(note.t_on),
-                    pitch: note.pitch,
-                    velocity: note.velocity,
-                    column: note.column,
-                });
-            }
-            let chord_start = track.chord_offset as usize;
-            let chord_end = chord_start + track.chord_count as usize;
-            let chords = &mut self.clip_chords[track_index];
-            chords.clear();
-            chords.reserve(chord_end.saturating_sub(chord_start));
-            for chord_index in chord_start..chord_end {
-                let chord = snapshot.chords[chord_index];
-                chords.push(ClipChord {
-                    chord_id: chord.chord_id,
-                    nanotick: chord.nanotick,
-                    duration: chord.duration_nanoticks,
-                    spread: chord.spread_nanoticks,
-                    humanize_timing: chord.humanize_timing,
-                    humanize_velocity: chord.humanize_velocity,
-                    degree: chord.degree,
-                    quality: chord.quality,
-                    inversion: chord.inversion,
-                    base_octave: chord.base_octave,
-                    column: (chord.flags & 0xff) as u8,
-                });
-            }
+    pub fn apply_clip_window_page(&mut self, snapshot: UiClipWindowSnapshot, reset: bool) {
+        let track_index = snapshot.track_id as usize;
+        if track_index >= TRACK_COUNT {
+            return;
         }
-        self.clip_version_local = self.snapshot.ui_clip_version;
-        self.clip_snapshot = Some(snapshot);
+        if reset {
+            if let Some(notes) = self.clip_notes.get_mut(track_index) {
+                notes.clear();
+            }
+            if let Some(chords) = self.clip_chords.get_mut(track_index) {
+                chords.clear();
+            }
+            self.pending_notes.retain(|note| note.track_id as usize != track_index);
+            self.pending_chords.retain(|chord| chord.track_id as usize != track_index);
+        }
+        let notes = &mut self.clip_notes[track_index];
+        notes.reserve(snapshot.note_count as usize);
+        for note_index in 0..(snapshot.note_count as usize) {
+            let note = snapshot.notes[note_index];
+            notes.push(ClipNote {
+                nanotick: note.t_on,
+                duration: note.t_off.saturating_sub(note.t_on),
+                pitch: note.pitch,
+                velocity: note.velocity,
+                column: note.column,
+            });
+        }
+        let chords = &mut self.clip_chords[track_index];
+        chords.reserve(snapshot.chord_count as usize);
+        for chord_index in 0..(snapshot.chord_count as usize) {
+            let chord = snapshot.chords[chord_index];
+            chords.push(ClipChord {
+                chord_id: chord.chord_id,
+                nanotick: chord.nanotick,
+                duration: chord.duration_nanoticks,
+                spread: chord.spread_nanoticks,
+                humanize_timing: chord.humanize_timing,
+                humanize_velocity: chord.humanize_velocity,
+                degree: chord.degree,
+                quality: chord.quality,
+                inversion: chord.inversion,
+                base_octave: chord.base_octave,
+                column: (chord.flags & 0xff) as u8,
+            });
+        }
+
+        if let Some(state) = self.clip_window.get_mut(track_index) {
+            state.request_id = snapshot.request_id;
+            state.cursor_event_index = snapshot.cursor_event_index;
+            state.next_event_index = snapshot.next_event_index;
+            state.window_start = snapshot.window_start_nanotick;
+            state.window_end = snapshot.window_end_nanotick;
+            state.clip_version = snapshot.clip_version;
+            state.complete = (snapshot.flags & UI_CLIP_WINDOW_FLAG_COMPLETE) != 0;
+        }
+
+        if self.clip_version_local < snapshot.clip_version {
+            self.clip_version_local = snapshot.clip_version;
+        }
     }
 
     pub fn apply_harmony_snapshot(&mut self, snapshot: UiHarmonySnapshot) {
@@ -218,6 +296,100 @@ impl EngineView {
         self.harmony_version_local = self.snapshot.ui_harmony_version;
     }
 
+    pub fn apply_chain_diff(&mut self, diff: UiChainDiffPayload) {
+        if diff.diff_type != UiDiffType::ChainSnapshot as u16 {
+            return;
+        }
+        let track_index = diff.track_id as usize;
+        if track_index >= self.chain_devices.len() {
+            return;
+        }
+        let version = diff.chain_version;
+        if self.chain_versions[track_index] != version {
+            self.chain_versions[track_index] = version;
+            self.chain_devices[track_index].clear();
+        }
+        if diff.device_id == K_CHAIN_DEVICE_ID_AUTO {
+            return;
+        }
+        let device = ChainDevice {
+            id: diff.device_id,
+            kind: diff.device_kind,
+            position: diff.position,
+            patcher_node_id: diff.patcher_node_id,
+            host_slot_index: diff.host_slot_index,
+            capability_mask: diff.capability_mask,
+            bypass: diff.bypass != 0,
+        };
+        let devices = &mut self.chain_devices[track_index];
+        if let Some(existing) = devices.iter_mut().find(|d| d.id == device.id) {
+            *existing = device;
+        } else {
+            devices.push(device);
+        }
+    }
+
+    pub fn apply_patcher_graph_diff(&mut self, diff: UiPatcherGraphDiffPayload) {
+        if diff.diff_type != UiDiffType::PatcherGraphDelta as u16 {
+            return;
+        }
+        let track_index = diff.track_id as usize;
+        if track_index >= self.patcher_nodes.len() {
+            return;
+        }
+        if self.patcher_versions[track_index] != diff.graph_version {
+            self.patcher_versions[track_index] = diff.graph_version;
+        }
+        let nodes = &mut self.patcher_nodes[track_index];
+        match diff.flags {
+            0 => {
+                nodes.push(PatcherNodeUi {
+                    id: diff.node_id,
+                    node_type: diff.node_type,
+                    inputs: Vec::new(),
+                });
+            }
+            1 => {
+                if let Some(index) = nodes.iter().position(|node| node.id == diff.node_id) {
+                    nodes.remove(index);
+                    for (new_id, node) in nodes.iter_mut().enumerate() {
+                        node.id = new_id as u32;
+                        node.inputs.retain(|input| *input != diff.node_id);
+                        for input in node.inputs.iter_mut() {
+                            if *input > diff.node_id {
+                                *input -= 1;
+                            }
+                        }
+                    }
+                }
+            }
+            2 => {
+                if let Some(node) = nodes.iter_mut().find(|node| node.id == diff.dst_node_id) {
+                    if !node.inputs.contains(&diff.src_node_id) {
+                        node.inputs.push(diff.src_node_id);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn chain_error_message(&self, diff: UiChainErrorPayload) -> String {
+        format!(
+            "Chain error {} on track {}",
+            diff.error_code,
+            diff.track_id + 1
+        )
+    }
+
+    pub fn patcher_error_message(&self, diff: UiPatcherGraphErrorPayload) -> String {
+        format!(
+            "Patcher error {} on track {}",
+            diff.error_code,
+            diff.track_id + 1
+        )
+    }
+
     pub fn apply_diff(&mut self, diff: UiDiffPayload) {
         let track_index = diff.track_id as usize;
         if track_index >= self.clip_notes.len() {
@@ -225,6 +397,12 @@ impl EngineView {
         }
         let nanotick =
             (diff.note_nanotick_lo as u64) | ((diff.note_nanotick_hi as u64) << 32);
+        if !self.clip_window_contains(track_index, nanotick) {
+            if self.clip_version_local < diff.clip_version {
+                self.clip_version_local = diff.clip_version;
+            }
+            return;
+        }
         let duration =
             (diff.note_duration_lo as u64) | ((diff.note_duration_hi as u64) << 32);
         let pitch = diff.note_pitch.min(127) as u8;
@@ -334,6 +512,12 @@ impl EngineView {
             return;
         }
         let nanotick = (diff.nanotick_lo as u64) | ((diff.nanotick_hi as u64) << 32);
+        if !self.clip_window_contains(track_index, nanotick) {
+            if self.clip_version_local < diff.clip_version {
+                self.clip_version_local = diff.clip_version;
+            }
+            return;
+        }
         let duration = (diff.duration_lo as u64) | ((diff.duration_hi as u64) << 32);
         let (degree, quality, inversion, base_octave) = unpack_chord_packed(diff.packed);
         let (spread, column) = unpack_chord_spread(diff.spread_nanoticks);

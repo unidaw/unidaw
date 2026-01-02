@@ -5,7 +5,7 @@ namespace daw {
 bool requireMatchingClipVersion(uint32_t baseVersion,
                                 uint32_t currentVersion,
                                 UiDiffPayload& diffOut) {
-  if (baseVersion >= currentVersion) {
+  if (baseVersion == currentVersion) {
     return true;
   }
   diffOut = UiDiffPayload{};
@@ -22,7 +22,8 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
                              uint8_t velocity,
                              uint16_t flags,
                              std::atomic<uint32_t>& clipVersion,
-                             bool recordUndo) {
+                             bool recordUndo,
+                             std::optional<uint32_t> noteIdOverride) {
   const uint8_t column = static_cast<uint8_t>(flags & 0xffu);
   clip.removeChordAt(nanotick, column);
   clip.removeNoteAt(nanotick, column);
@@ -33,10 +34,12 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
   MusicalEvent event;
   event.nanotickOffset = nanotick;
   event.type = MusicalEventType::Note;
+  const uint32_t noteId = clip.allocateNoteId(noteIdOverride);
   event.payload.note.pitch = pitch;
   event.payload.note.velocity = velocity;
   event.payload.note.column = column;
   event.payload.note.durationNanoticks = duration;
+  event.payload.note.noteId = noteId;
   clip.addEvent(std::move(event));
 
   ClipEditResult result;
@@ -59,6 +62,7 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
     undo.duration = duration;
     undo.pitch = pitch;
     undo.velocity = velocity;
+    undo.noteId = noteId;
     undo.flags = column;
     result.undo = undo;
   }
@@ -100,6 +104,7 @@ std::optional<ClipEditResult> removeNoteFromClip(MusicalClip& clip,
     undo.duration = removed->duration;
     undo.pitch = removed->pitch;
     undo.velocity = removed->velocity;
+    undo.noteId = removed->noteId;
     undo.flags = removed->column;
     result.undo = undo;
   }

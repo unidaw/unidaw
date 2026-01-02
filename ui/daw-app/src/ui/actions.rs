@@ -42,7 +42,8 @@ actions!(
         PasteSelection,
         PageCut,
         PageCopy,
-        PagePaste
+        PagePaste,
+        DuplicateDevice
     ]
 );
 
@@ -75,6 +76,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-c", CopySelection, None),
         KeyBinding::new("cmd-x", CutSelection, None),
         KeyBinding::new("cmd-v", PasteSelection, None),
+        KeyBinding::new("cmd-d", DuplicateDevice, None),
         KeyBinding::new("shift-f3", PageCut, None),
         KeyBinding::new("shift-f4", PageCopy, None),
         KeyBinding::new("shift-f5", PagePaste, None),

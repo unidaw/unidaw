@@ -107,22 +107,11 @@ uint8_t priorityFor(const daw::EventEntry& entry) {
       if (payload.status == 0x80) {
         return 2;
       }
-      return 4;
-    }
-    case daw::EventType::MusicalLogic:
       return 3;
+    }
     default:
-      return 4;
+      return 3;
   }
-}
-
-uint8_t priorityHintFor(const daw::EventEntry& entry) {
-  if (static_cast<daw::EventType>(entry.type) != daw::EventType::MusicalLogic) {
-    return 0;
-  }
-  daw::MusicalLogicPayload logic{};
-  std::memcpy(&logic, entry.payload, sizeof(logic));
-  return logic.priority_hint;
 }
 
 }  // namespace
@@ -174,14 +163,6 @@ int main() {
   std::memcpy(noteOff.payload, &noteOffPayload, sizeof(noteOffPayload));
   events.push_back(noteOff);
 
-  daw::EventEntry logicEntry2{};
-  logicEntry2.sampleTime = 0;
-  logicEntry2.type = static_cast<uint16_t>(daw::EventType::MusicalLogic);
-  daw::MusicalLogicPayload logic2{};
-  logic2.priority_hint = 5;
-  std::memcpy(logicEntry2.payload, &logic2, sizeof(logic2));
-  events.push_back(logicEntry2);
-
   daw::EventEntry noteOn{};
   noteOn.sampleTime = 0;
   noteOn.type = static_cast<uint16_t>(daw::EventType::Midi);
@@ -194,16 +175,19 @@ int main() {
                    [&](const daw::EventEntry& a, const daw::EventEntry& b) {
                      const auto pa = priorityFor(a);
                      const auto pb = priorityFor(b);
-                     const auto ha = priorityHintFor(a);
-                     const auto hb = priorityHintFor(b);
-                     return std::tie(a.sampleTime, pa, ha) <
-                         std::tie(b.sampleTime, pb, hb);
+                     return std::tie(a.sampleTime, pa) <
+                         std::tie(b.sampleTime, pb);
                    });
   assert(static_cast<daw::EventType>(events[0].type) == daw::EventType::Transport);
   assert(static_cast<daw::EventType>(events[1].type) == daw::EventType::Param);
   assert(priorityFor(events[2]) == 2);
-  assert(static_cast<daw::EventType>(events[3].type) == daw::EventType::MusicalLogic);
-  assert(priorityFor(events[4]) == 4);
+  MidiPayload sortedOff{};
+  std::memcpy(&sortedOff, events[2].payload, sizeof(sortedOff));
+  assert(sortedOff.status == 0x80);
+  assert(priorityFor(events[3]) == 3);
+  MidiPayload sortedOn{};
+  std::memcpy(&sortedOn, events[3].payload, sizeof(sortedOn));
+  assert(sortedOn.status == 0x90);
 
   uint64_t overflowTick = 0;
   auto pushWithOverflow = [&](uint32_t& count,
@@ -292,6 +276,55 @@ int main() {
     daw::patcher_process_audio_passthrough(&audioCtx);
     assert(ch0[0] == 1.0f);
     assert(ch1[0] == 1.0f);
+  }
+
+  if (daw::patcher_process_audio_passthrough) {
+    float ch0[8];
+    float ch1[8];
+    for (int i = 0; i < 8; ++i) {
+      ch0[i] = 1.0f;
+      ch1[i] = 1.0f;
+    }
+    float* channels[2]{ch0, ch1};
+    float modInputs[8]{};
+    for (int i = 0; i < 8; ++i) {
+      modInputs[i] = 0.5f;
+    }
+    daw::PatcherContext audioCtx{};
+    audioCtx.abi_version = 1;
+    audioCtx.num_frames = 8;
+    audioCtx.audio_channels = channels;
+    audioCtx.num_channels = 2;
+    audioCtx.mod_inputs = modInputs;
+    audioCtx.mod_input_count = 1;
+    audioCtx.mod_input_stride = 8;
+    daw::patcher_process_audio_passthrough(&audioCtx);
+    assert(ch0[0] == 0.5f);
+    assert(ch1[0] == 0.5f);
+  }
+
+  if (daw::patcher_process_lfo) {
+    daw::PatcherLfoConfig lfoConfig{};
+    lfoConfig.frequency_hz = 2.0f;
+    lfoConfig.depth = 0.75f;
+    lfoConfig.bias = 0.1f;
+    lfoConfig.phase_offset = 0.0f;
+    float modOutputs[2]{};
+    float modSamples[16]{};
+    daw::PatcherContext lfoCtx{};
+    lfoCtx.abi_version = 1;
+    lfoCtx.block_start_tick = 0;
+    lfoCtx.block_end_tick = 0;
+    lfoCtx.sample_rate = 48000.0f;
+    lfoCtx.num_frames = 8;
+    lfoCtx.mod_outputs = modOutputs;
+    lfoCtx.mod_output_count = 2;
+    lfoCtx.mod_output_samples = modSamples;
+    lfoCtx.mod_output_stride = 8;
+    lfoCtx.node_config = &lfoConfig;
+    lfoCtx.node_config_size = sizeof(lfoConfig);
+    daw::patcher_process_lfo(&lfoCtx);
+    assert(modOutputs[0] != 0.0f || modOutputs[1] != 0.0f);
   }
 
   std::cout << "patcher_tests_main: ok" << std::endl;

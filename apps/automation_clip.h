@@ -6,6 +6,8 @@
 #include <utility>
 #include <vector>
 
+#include "apps/event_payloads.h"
+
 namespace daw {
 
 struct AutomationPoint {
@@ -15,8 +17,12 @@ struct AutomationPoint {
 
 class AutomationClip {
  public:
-  explicit AutomationClip(std::string paramId, bool discreteOnly = false)
-      : paramId_(std::move(paramId)), discreteOnly_(discreteOnly) {}
+  explicit AutomationClip(std::string paramId,
+                          bool discreteOnly = false,
+                          uint32_t targetPluginIndex = kParamTargetAll)
+      : paramId_(std::move(paramId)),
+        discreteOnly_(discreteOnly),
+        targetPluginIndex_(targetPluginIndex) {}
 
   void addPoint(AutomationPoint point) {
     const auto it = std::lower_bound(
@@ -51,6 +57,12 @@ class AutomationClip {
     if (upper.nanotick == lower.nanotick) {
       return upper.value;
     }
+    if (discreteOnly_) {
+      if (tick == upper.nanotick) {
+        return upper.value;
+      }
+      return lower.value;
+    }
 
     const double span =
         static_cast<double>(upper.nanotick - lower.nanotick);
@@ -77,10 +89,13 @@ class AutomationClip {
 
   const std::string& paramId() const { return paramId_; }
   bool discreteOnly() const { return discreteOnly_; }
+  uint32_t targetPluginIndex() const { return targetPluginIndex_; }
+  void setTargetPluginIndex(uint32_t target) { targetPluginIndex_ = target; }
 
  private:
   std::string paramId_;
   bool discreteOnly_ = false;
+  uint32_t targetPluginIndex_ = kParamTargetAll;
   std::vector<AutomationPoint> points_;
 };
 

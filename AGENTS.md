@@ -39,8 +39,13 @@ repo. It should be kept up to date as the project evolves.
      1. tempo/time-sig
      2. harmony changes
      3. pitch mapping (if enabled)
-     4. note-ons
-     5. other events/automation
+     4. transport
+     5. params/automation
+     6. note-offs
+     7. musical logic
+     8. note-ons
+   - Scheduler reads immutable clip snapshots (pre-sorted event arrays) published
+     by the engine; UI edits rebuild snapshots and swap atomically.
    - Groove as a time-warp layer at render time; optional "commit groove".
    - Audio graph (tracks/devices/sends/master).
    - Patcher runtime (DSP graph + event/control graph).
@@ -86,7 +91,8 @@ arrays. No conversion between representations.
   - Optional commit-to-clip edits (authoring, undoable)
 
 ## UI/engine protocol
-- Control plane: structured commands/diffs (protobuf is OK).
+- Control plane: binary `EventEntry` rings in shared memory with typed payloads
+  (see `SHM_LAYOUT.md`). No protobuf in the UI control plane.
 - Hot data: bulk binary buffers (viewport notes, peaks, meters) with small
   headers. Prefer shared memory for zero-copy.
 - Versioned documents (clip/patch/project) so edits are transactional and
@@ -111,6 +117,9 @@ arrays. No conversion between representations.
 - Chord/degree entries are column-specific and must never overwrite other columns.
 - Note-offs terminate the most recent note in the same column; new notes in the
   same column end the previous note automatically.
+- Note-offs are encoded as Note events with velocity=0 and duration=0; they
+  occupy the cell and replace any note/chord at that cell (never both a note-on
+  and note-off in the same cell).
 - UI is optimistic: local edits apply immediately and reconcile with engine diffs
   without visible flicker or stale data.
 
@@ -148,7 +157,7 @@ Out-of-process plugin hosting:
 - State + params routed via IPC.
 - Account for bridge latency (typically 1 block).
 - PDC/latency manager applies the 1-block "sandbox tax" and anchors UI time.
-- Host event mapping enforces priority order: transport, params, note-offs, note-ons.
+- Host event mapping enforces priority order: transport, params, note-offs, musical logic, note-ons.
 
 ### Milestone 3 (done)
 Musical engine core:

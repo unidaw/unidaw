@@ -71,10 +71,11 @@ Rust mutates only the provided buffers.
 
 ```cpp
 struct alignas(64) PatcherContext {
-  uint32_t abi_version = 1;
+  uint32_t abi_version = 2;
   uint64_t block_start_tick = 0;
   uint64_t block_end_tick = 0;
   float sample_rate = 0.0f;
+  float tempo_bpm = 120.0f;
   uint32_t num_frames = 0;
 
   EventEntry* event_buffer = nullptr;
@@ -90,6 +91,16 @@ struct alignas(64) PatcherContext {
 
   const HarmonyEvent* harmony_snapshot = nullptr;
   uint32_t harmony_count = 0;
+
+  float* mod_outputs = nullptr;
+  uint32_t mod_output_count = 0;
+  float* mod_output_samples = nullptr;
+  uint32_t mod_output_stride = 0;
+
+  float* mod_inputs = nullptr;
+  uint32_t mod_input_count = 0;
+  float* mod_input_samples = nullptr;
+  uint32_t mod_input_stride = 0;
 };
 ```
 
@@ -102,6 +113,7 @@ pub struct PatcherContext {
     pub block_start_tick: u64,
     pub block_end_tick: u64,
     pub sample_rate: f32,
+    pub tempo_bpm: f32,
     pub num_frames: u32,
 
     pub event_buffer: *mut EventEntry,
@@ -117,6 +129,16 @@ pub struct PatcherContext {
 
     pub harmony_snapshot: *const HarmonyEvent,
     pub harmony_count: u32,
+
+    pub mod_outputs: *mut f32,
+    pub mod_output_count: u32,
+    pub mod_output_samples: *mut f32,
+    pub mod_output_stride: u32,
+
+    pub mod_inputs: *mut f32,
+    pub mod_input_count: u32,
+    pub mod_input_samples: *mut f32,
+    pub mod_input_stride: u32,
 }
 ```
 
@@ -150,7 +172,8 @@ This prevents thread scheduling from affecting event ordering.
 
 ## Resolution Pass (MusicalLogic -> MIDI)
 
-After merging, the host performs a resolution pass:
+After merging, the host performs a resolution pass. `EventType::MusicalLogic`
+is a transient pre-sort form and must not remain in the final event list.
 
 1. Resolve scale degree to MIDI pitch using the immutable harmony snapshot.
 2. Convert each `EventType::MusicalLogic` entry to `EventType::Midi` with
@@ -159,6 +182,11 @@ After merging, the host performs a resolution pass:
    - Default base octave: 4 when `base_octave == 0`.
 3. If `duration_ticks > 0`, insert a NoteOff event at
    `nanotick + duration_ticks`.
+   - If the NoteOff lands on the same nanotick as other NoteOns, it must sort
+     before those NoteOns to avoid overlap/stuck notes.
+   - NoteOff insertion must not bypass the final priority sort; it should
+     enter the same scratchpad so transport/param events at that nanotick
+     still sort ahead of NoteOns.
 
 ## Final Sort and Priority
 
@@ -166,13 +194,12 @@ The scratchpad is sorted before dispatch to the host using a stable sort and a
 computed priority map. Priority is derived from `EventType` and (for MIDI) the
 status byte.
 
-Priority map:
+Priority map (after resolution):
 
 - Transport: 0
 - Param/Automation: 1
 - MIDI NoteOff: 2 (EventType::Midi with status 0x80)
-- MusicalLogic: 3 (EventType::MusicalLogic)
-- MIDI NoteOn: 4 (EventType::Midi with status 0x90)
+- MIDI NoteOn: 3 (EventType::Midi with status 0x90)
 
 Sort key is tuple-based to avoid overflow:
 
@@ -181,17 +208,15 @@ std::stable_sort(events.begin(), events.end(), [](const EventEntry& a,
                                                   const EventEntry& b) {
   const auto pa = priorityFor(a);
   const auto pb = priorityFor(b);
-  const auto ha = musicalLogicPriorityHint(a);
-  const auto hb = musicalLogicPriorityHint(b);
-  return std::tie(a.sampleTime, pa, ha) < std::tie(b.sampleTime, pb, hb);
+  return std::tie(a.sampleTime, pa) < std::tie(b.sampleTime, pb);
 });
 ```
 
 Notes:
 
 - `priorityFor` computes priority from `EventType` and MIDI status.
-- `musicalLogicPriorityHint` reads `priority_hint` only when
-  `EventType::MusicalLogic`, else 0.
+- MusicalLogic ordering is resolved during the conversion pass
+  (use `priority_hint` to order generated NoteOns/NoteOffs).
 - `priorityFor` should be a small inline/constexpr switch to keep the sort
   hot-path fast (`O(N log N)` calls per block).
 - `sampleTime` should correspond to the event nanotick converted to sample time

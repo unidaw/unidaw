@@ -39,6 +39,12 @@ bool connectSocket(int& fd, const std::string& path) {
     std::cerr << "HostController: socket() failed: " << std::strerror(errno) << std::endl;
     return false;
   }
+  timeval timeout{};
+  // Use longer timeout for plugin loading - complex plugins like Zebra2 can take 10+ seconds
+  timeout.tv_sec = 60;
+  timeout.tv_usec = 0;
+  ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+  ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
   sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
   std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", path.c_str());
@@ -53,6 +59,12 @@ bool connectSocket(int& fd, const std::string& path) {
 
 }  // namespace
 
+SharedMemoryView::~SharedMemoryView() {
+  if (base && base != MAP_FAILED) {
+    ::munmap(base, size);
+  }
+}
+
 HostController::~HostController() { disconnect(); }
 
 bool HostController::launch(const HostConfig& config) {
@@ -61,6 +73,8 @@ bool HostController::launch(const HostConfig& config) {
   // Ensure old socket is gone so waitForSocket actually waits for the new one
   ::unlink(config.socketPath.c_str());
 
+  std::cerr << "HostController: launching host (socket "
+            << config.socketPath << ")" << std::endl;
   hostPid_ = spawnHostProcess(config);
   if (hostPid_ < 0) {
     return false;
@@ -74,12 +88,15 @@ bool HostController::launch(const HostConfig& config) {
       waitAttempts = static_cast<int>(value);
     }
   }
+  std::cerr << "HostController: waiting for socket (" << waitAttempts
+            << " attempts)" << std::endl;
   if (!waitForSocket(config.socketPath, waitAttempts)) {
     std::cerr << "HostController: waitForSocket(" << config.socketPath
               << ") timed out." << std::endl;
     killHostProcess();
     return false;
   }
+  std::cerr << "HostController: socket ready, connecting" << std::endl;
 
   bool connected = false;
   for (int attempt = 0; attempt < waitAttempts; ++attempt) {
@@ -107,9 +124,12 @@ pid_t HostController::spawnHostProcess(const HostConfig& config) {
   args.emplace_back(exe);
   args.emplace_back("--socket");
   args.emplace_back(config.socketPath);
-  if (!config.pluginPath.empty()) {
+  for (const auto& path : config.pluginPaths) {
+    if (path.empty()) {
+      continue;
+    }
     args.emplace_back("--plugin");
-    args.emplace_back(config.pluginPath);
+    args.emplace_back(path);
   }
 
   std::vector<char*> argv;
@@ -122,6 +142,16 @@ pid_t HostController::spawnHostProcess(const HostConfig& config) {
   std::vector<std::string> env;
   if (!config.shmName.empty()) {
     env.emplace_back("DAW_SHM_NAME=" + config.shmName);
+  }
+  for (const auto& path : config.pluginPaths) {
+    if (path.empty()) {
+      continue;
+    }
+    const std::filesystem::path pluginPath(path);
+    if (pluginPath.filename() == "Identity.vst3") {
+      env.emplace_back("DAW_USE_FAKE_IDENTITY=1");
+      break;
+    }
   }
   std::vector<char*> envp;
   for (char** current = environ; *current != nullptr; ++current) {
@@ -166,6 +196,7 @@ bool HostController::connect(const HostConfig& config) {
     return false;
   }
 
+  std::cerr << "HostController: sending Hello" << std::endl;
   HelloRequest request;
   request.blockSize = config.blockSize;
   request.numChannelsIn = config.numChannelsIn;
@@ -182,6 +213,7 @@ bool HostController::connect(const HostConfig& config) {
     return false;
   }
 
+  std::cerr << "HostController: waiting for Hello response" << std::endl;
   ControlHeader header;
   if (!recvHeader(socketFd_, header)) {
     std::cerr << "HostController: failed to receive Hello header." << std::endl;
@@ -222,14 +254,24 @@ bool HostController::mapSharedMemory(const HelloResponse& response,
   }
 
   shmSize_ = static_cast<size_t>(response.shmSizeBytes);
-  shmBase_ = ::mmap(nullptr, shmSize_, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd_, 0);
-  if (shmBase_ == MAP_FAILED) {
-    shmBase_ = nullptr;
+  void* mapped = ::mmap(nullptr, shmSize_, PROT_READ | PROT_WRITE, MAP_SHARED, shmFd_, 0);
+  if (mapped == MAP_FAILED) {
     std::cerr << "HostController: mmap failed: " << std::strerror(errno) << std::endl;
     return false;
   }
 
-  shmHeader_ = reinterpret_cast<ShmHeader*>(shmBase_);
+  auto view = std::make_shared<SharedMemoryView>();
+  view->base = mapped;
+  view->size = shmSize_;
+  view->header = reinterpret_cast<ShmHeader*>(mapped);
+  view->mailbox = reinterpret_cast<BlockMailbox*>(
+      reinterpret_cast<uint8_t*>(mapped) + view->header->mailboxOffset);
+  view->completedBlockId = &view->mailbox->completedBlockId;
+
+  shmView_ = view;
+  shmBase_ = mapped;
+  shmHeader_ = view->header;
+  mailbox_ = view->mailbox;
   if (shmHeader_->magic != kShmMagic || shmHeader_->version != kShmVersion) {
     std::cerr << "HostController: shm header mismatch (magic="
               << std::hex << shmHeader_->magic << " version=" << std::dec
@@ -249,8 +291,6 @@ bool HostController::mapSharedMemory(const HelloResponse& response,
     return false;
   }
 
-  mailbox_ = reinterpret_cast<BlockMailbox*>(
-      reinterpret_cast<uint8_t*>(shmBase_) + shmHeader_->mailboxOffset);
   return true;
 }
 
@@ -259,10 +299,11 @@ void HostController::disconnect() {
 }
 
 void HostController::disconnectInternal(bool killHost) {
-  if (shmBase_ && shmBase_ != MAP_FAILED) {
-    ::munmap(shmBase_, shmSize_);
-    shmBase_ = nullptr;
-  }
+  shmView_.reset();
+  shmBase_ = nullptr;
+  shmHeader_ = nullptr;
+  mailbox_ = nullptr;
+  shmSize_ = 0;
   closeFd(shmFd_);
   closeFd(socketFd_);
   // We assume that if we are disconnecting, we should also clean up the child process
@@ -274,12 +315,32 @@ void HostController::disconnectInternal(bool killHost) {
 
 bool HostController::sendProcessBlock(uint32_t blockId,
                                       uint64_t engineSampleStart,
-                                      uint64_t pluginSampleStart) {
+                                      uint64_t pluginSampleStart,
+                                      uint16_t segmentStart,
+                                      uint16_t segmentLength) {
   ProcessBlockRequest request;
   request.blockId = blockId;
   request.engineSampleStart = engineSampleStart;
   request.pluginSampleStart = pluginSampleStart;
-  return sendMessage(socketFd_, ControlMessageType::ProcessBlock, &request, sizeof(request));
+  request.segmentStart = segmentStart;
+  request.segmentLength = segmentLength;
+  return sendMessage(socketFd_,
+                     ControlMessageType::ProcessBlock,
+                     &request,
+                     sizeof(request));
+}
+
+bool HostController::sendOpenEditor(uint32_t pluginIndex) {
+  OpenEditorRequest request;
+  request.pluginIndex = pluginIndex;
+  return sendMessage(socketFd_, ControlMessageType::OpenEditor, &request, sizeof(request));
+}
+
+bool HostController::sendSetBypass(uint32_t pluginIndex, bool bypass) {
+  SetBypassRequest request;
+  request.pluginIndex = pluginIndex;
+  request.bypass = bypass ? 1u : 0u;
+  return sendMessage(socketFd_, ControlMessageType::SetBypass, &request, sizeof(request));
 }
 
 bool HostController::sendShutdown() {

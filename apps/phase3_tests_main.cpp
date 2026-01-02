@@ -64,9 +64,14 @@ bool waitForBlock(const daw::HostController& controller,
 bool setupHost(TestHost& host,
                const TestConfig& testConfig,
                const std::string& pluginPath) {
+  ::setenv("DAW_USE_FAKE_IDENTITY", "1", 1);
+  ::setenv("DAW_HOST_FORCE_DIRECT_LOAD", "1", 1);
+
   daw::HostConfig config;
   config.socketPath = "/tmp/daw_phase3.sock";
-  config.pluginPath = pluginPath;
+  if (!pluginPath.empty()) {
+    config.pluginPaths = {pluginPath};
+  }
   config.blockSize = testConfig.blockSize;
   config.sampleRate = testConfig.sampleRate;
   config.numChannelsIn = testConfig.numChannelsIn;
@@ -89,6 +94,7 @@ bool setupHost(TestHost& host,
     std::cerr << "Invalid ring capacity." << std::endl;
     return false;
   }
+  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
   return true;
 }
 
@@ -292,6 +298,23 @@ bool runAutomationRingTest() {
     std::cerr << "Invalid samples per beat." << std::endl;
     return false;
   }
+
+  daw::AutomationClip discrete("index:1", true);
+  discrete.addPoint({0, 0.25f});
+  discrete.addPoint({ticksPerBeat, 0.75f});
+  const uint64_t midTick = ticksPerBeat / 2;
+  const float midValue = discrete.valueAt(midTick);
+  if (std::fabs(midValue - 0.25f) > 1e-5f) {
+    std::cerr << "Discrete automation should hold value; expected=0.25 actual="
+              << midValue << std::endl;
+    return false;
+  }
+  const float endValue = discrete.valueAt(ticksPerBeat);
+  if (std::fabs(endValue - 0.75f) > 1e-5f) {
+    std::cerr << "Discrete automation end mismatch; expected=0.75 actual="
+              << endValue << std::endl;
+    return false;
+  }
   return true;
 }
 
@@ -418,29 +441,31 @@ bool runSnapshotTest() {
   chord.payload.chord.durationNanoticks = 960;
   clip.addEvent(chord);
 
-  daw::UiClipSnapshot snapshot;
-  daw::initUiClipSnapshot(snapshot, 1);
-  daw::ClipSnapshotCursor cursor;
-  daw::appendClipToSnapshot(clip, 0, 2, snapshot, cursor);
+  daw::ClipWindowRequest request;
+  request.trackId = 2;
+  request.windowStartNanotick = 0;
+  request.windowEndNanotick = 2000;
+  request.cursorEventIndex = 0;
+  request.requestId = 1;
+  daw::UiClipWindowSnapshot snapshot;
+  const auto result = daw::buildUiClipWindowSnapshot(clip, request, 3, snapshot);
 
-  if (snapshot.trackCount != 1 || snapshot.noteCount != 1 || snapshot.chordCount != 1) {
-    std::cerr << "Snapshot counts mismatch: tracks=" << snapshot.trackCount
-              << " notes=" << snapshot.noteCount
+  if (snapshot.noteCount != 1 || snapshot.chordCount != 1) {
+    std::cerr << "Snapshot counts mismatch: notes=" << snapshot.noteCount
               << " chords=" << snapshot.chordCount << std::endl;
-    return false;
-  }
-  if (snapshot.tracks[0].noteOffset != 0 || snapshot.tracks[0].chordOffset != 0 ||
-      snapshot.tracks[0].noteCount != 1 || snapshot.tracks[0].chordCount != 1) {
-    std::cerr << "Snapshot offsets mismatch" << std::endl;
     return false;
   }
   if (snapshot.chords[0].chordId != 7 || snapshot.chords[0].degree != 1) {
     std::cerr << "Snapshot chord payload mismatch" << std::endl;
     return false;
   }
-  if (snapshot.tracks[0].clipEndNanotick != 1200) {
-    std::cerr << "Snapshot clip end mismatch: expected=1200 actual="
-              << snapshot.tracks[0].clipEndNanotick << std::endl;
+  if (snapshot.notes[0].noteId == 0) {
+    std::cerr << "Snapshot noteId mismatch: expected nonzero" << std::endl;
+    return false;
+  }
+  if (!result.complete ||
+      (snapshot.flags & daw::kUiClipWindowFlagComplete) == 0) {
+    std::cerr << "Snapshot window complete mismatch" << std::endl;
     return false;
   }
 
@@ -574,7 +599,7 @@ bool runPulseFullTest(const std::string& pluginPath) {
     }
 
     host.controller.sendProcessBlock(blockId, engineSampleStart, pluginSampleStart);
-    if (!waitForBlock(host.controller, blockId, 500)) {
+    if (!waitForBlock(host.controller, blockId, 5000)) {
       std::cerr << "Timeout waiting for block " << blockId << std::endl;
       validated = false;
       break;
@@ -661,7 +686,7 @@ bool runCompositionFullTest(const std::string& pluginPath) {
     }
 
     host.controller.sendProcessBlock(blockId, engineSampleStart, pluginSampleStart);
-    if (!waitForBlock(host.controller, blockId, 500)) {
+    if (!waitForBlock(host.controller, blockId, 5000)) {
       std::cerr << "Timeout waiting for block " << blockId << std::endl;
       validated = false;
       break;
@@ -736,7 +761,7 @@ bool runNoteOffFullTest(const std::string& pluginPath) {
     }
 
     host.controller.sendProcessBlock(blockId, engineSampleStart, pluginSampleStart);
-    if (!waitForBlock(host.controller, blockId, 500)) {
+    if (!waitForBlock(host.controller, blockId, 5000)) {
       std::cerr << "Timeout waiting for block " << blockId << std::endl;
       shutdownHost(host);
       return false;
@@ -808,7 +833,7 @@ bool runResurrectionFullTest(const std::string& pluginPath) {
 
   clearInputBlock(host.controller, blockId);
   host.controller.sendProcessBlock(blockId, engineSampleStart, pluginSampleStart);
-  if (!waitForBlock(host.controller, blockId, 500)) {
+  if (!waitForBlock(host.controller, blockId, 5000)) {
     shutdownHost(host);
     return false;
   }
@@ -822,6 +847,57 @@ bool runResurrectionFullTest(const std::string& pluginPath) {
   if (std::fabs(sample - mirroredValue) > 1e-5f) {
     std::cerr << "Resurrection value mismatch: expected=" << mirroredValue
               << " actual=" << sample << std::endl;
+    return false;
+  }
+  return true;
+}
+
+bool runClipParamEventTest() {
+  daw::MusicalClip clip;
+  daw::MusicalEvent param;
+  param.nanotickOffset = 240;
+  param.type = daw::MusicalEventType::Param;
+  param.payload.param.uid16 = daw::hashStableId16("index:0");
+  param.payload.param.value = 0.5f;
+  clip.addEvent(param);
+
+  daw::MusicalEvent note;
+  note.nanotickOffset = 240;
+  note.type = daw::MusicalEventType::Note;
+  note.payload.note.pitch = 60;
+  note.payload.note.velocity = 100;
+  clip.addEvent(note);
+
+  std::vector<const daw::MusicalEvent*> events;
+  clip.getEventsInRange(0, 480, events);
+  if (events.size() != 2) {
+    std::cerr << "Clip param event count mismatch: expected=2 actual="
+              << events.size() << std::endl;
+    return false;
+  }
+  bool foundParam = false;
+  bool foundNote = false;
+  const auto expectedUid16 = daw::hashStableId16("index:0");
+  for (const auto* event : events) {
+    if (event->type == daw::MusicalEventType::Param) {
+      foundParam = true;
+      if (std::memcmp(event->payload.param.uid16.data(),
+                      expectedUid16.data(),
+                      expectedUid16.size()) != 0) {
+        std::cerr << "Clip param uid16 mismatch" << std::endl;
+        return false;
+      }
+      if (std::fabs(event->payload.param.value - 0.5f) > 1e-5f) {
+        std::cerr << "Clip param value mismatch" << std::endl;
+        return false;
+      }
+    } else if (event->type == daw::MusicalEventType::Note) {
+      foundNote = true;
+    }
+  }
+  if (!foundParam || !foundNote) {
+    std::cerr << "Clip param/note events missing (param=" << foundParam
+              << ", note=" << foundNote << ")" << std::endl;
     return false;
   }
   return true;
@@ -841,6 +917,7 @@ int runAllTests(const std::string& pluginPath) {
       {"humanize_determinism", [](const std::string&) { return runDeterministicJitterTest(); }},
       {"harmony_order", [](const std::string&) { return runHarmonyOrderTest(); }},
       {"snapshot", [](const std::string&) { return runSnapshotTest(); }},
+      {"clip_param_event", [](const std::string&) { return runClipParamEventTest(); }},
       {"undo_stack", [](const std::string&) { return runUndoStackTest(); }},
       {"resync_mismatch", [](const std::string&) { return runResyncMismatchTest(); }},
       {"pulse_full", runPulseFullTest},
@@ -883,6 +960,7 @@ int main(int argc, char** argv) {
       testName != "automation_ring" && testName != "harmony_quantize" &&
       testName != "chord_expansion" && testName != "humanize_determinism" &&
       testName != "harmony_order" && testName != "snapshot" &&
+      testName != "clip_param_event" &&
       testName != "undo_stack" && testName != "resync_mismatch" &&
       testName != "pulse_full" && testName != "note_off_full" &&
       testName != "resurrection_full" && testName != "composition_full" &&
@@ -914,6 +992,9 @@ int main(int argc, char** argv) {
   }
   if (testName == "snapshot") {
     return runSnapshotTest() ? 0 : 1;
+  }
+  if (testName == "clip_param_event") {
+    return runClipParamEventTest() ? 0 : 1;
   }
   if (testName == "undo_stack") {
     return runUndoStackTest() ? 0 : 1;

@@ -76,6 +76,139 @@ struct TrackRuntime {
 };
 ```
 
+## Param Targeting
+
+`EventType::Param` supports per-device targeting via `ParamPayload.targetPluginIndex`.
+
+- `kParamTargetAll` broadcasts the param change to every loaded plugin that
+  exposes the target UID16.
+- Otherwise, the value is treated as the host slot index for the target VST
+  in the current track chain order.
+- Automation clips store their target index so tracker automation can address
+  a specific VST when multiple plugins expose the same param UID16.
+
+## Modulation Registry (Engine Spec)
+
+The engine owns a track-local modulation registry that evaluates ordered links
+and applies modulation at the correct rate.
+
+### Data Model
+
+```cpp
+enum class ModRate : uint8_t {
+  BlockRate,
+  SampleRate,
+};
+
+enum class ModSourceKind : uint8_t {
+  Macro,
+  Lfo,
+  Envelope,
+  PatcherNodeOutput,
+};
+
+enum class ModTargetKind : uint8_t {
+  VstParam,
+  PatcherParam,
+  PatcherMacro,
+};
+
+struct ModSourceRef {
+  uint32_t deviceId = 0;
+  uint32_t sourceId = 0;   // Stable per device (e.g., macro index, node output).
+  ModSourceKind kind{};
+};
+
+struct ModTargetRef {
+  uint32_t deviceId = 0;
+  ModTargetKind kind{};
+  uint32_t targetId = 0;   // Patcher param id or macro index.
+  uint8_t uid16[16]{};     // VST param stable ID (uid16).
+};
+
+struct ModLink {
+  uint32_t linkId = 0;
+  ModSourceRef source{};
+  ModTargetRef target{};
+  float depth = 0.0f;
+  float bias = 0.0f;
+  ModRate rate = ModRate::BlockRate;
+  bool enabled = true;
+};
+
+struct ModSourceState {
+  ModSourceRef ref{};
+  float value = 0.0f;
+};
+
+struct ModRegistry {
+  std::vector<ModSourceState> sources;
+  std::vector<ModLink> links;
+};
+```
+
+### Rules
+
+- Links must respect chain order: `source.deviceId` must appear before
+  `target.deviceId` in the chain. Invalid links are rejected.
+- Cycles are not allowed. The registry validates against the chain order.
+- Sample-accurate modulation is allowed only when the source and target are
+  inside the same patcher instance (or when the target is a patcher node).
+- Cross-device modulation to VST parameters is block-rate to avoid per-sample
+  IPC overhead.
+
+### Execution Order
+
+1) Gather modulation sources during patcher execution.
+2) If entering a MIDI-consuming VST segment and event rail is dirty:
+   Merge → Resolve → Sort as usual.
+3) Apply block-rate modulation before processing each VST segment:
+   - Convert ModLinks targeting VST params into `EventType::Param` events.
+   - Use `targetPluginIndex` to hit the correct slot.
+
+## Track Routing (Engine Spec)
+
+Routing is defined per track for both MIDI and audio, with pre/post selection
+relative to the device chain.
+
+### Data Model
+
+```cpp
+enum class TrackRouteKind : uint8_t {
+  None,
+  Master,
+  Track,
+  ExternalInput,
+};
+
+struct TrackRoute {
+  TrackRouteKind kind{};
+  uint32_t trackId = 0;     // Used when kind == Track.
+  uint32_t inputId = 0;     // Used when kind == ExternalInput.
+};
+
+struct TrackRouting {
+  TrackRoute midiIn{};
+  TrackRoute midiOut{};
+  TrackRoute audioIn{};
+  TrackRoute audioOut{TrackRouteKind::Master, 0, 0};
+  bool preFaderSend = true;
+};
+```
+
+### Processing Order
+
+1) Resolve MIDI/audio inputs at block start (copy/accumulate into the track’s
+   event rail and audio buffers).
+2) Run the device chain (patcher/VST interleaved).
+3) Route track output:
+   - If `audioOut` is `Master`, sum into master bus.
+   - If `audioOut` is `Track`, sum into the destination track’s input buffer
+     for the next block (one-block latency).
+4) MIDI routing follows the same rules using the event rail:
+   - `midiOut` to another track appends to the destination track’s pre-chain
+     event rail for the next block (one-block latency).
+
 ## Dual-Rail Execution Model
 
 Every device in the chain is a dual-rail processor:
@@ -164,6 +297,19 @@ capability masks.
   - `audio_channels`, `num_channels`, `num_frames`
   - `node_config`, `node_config_size`
   - `harmony_snapshot`, `harmony_count`
+  - `tempo_bpm`
+  - `mod_outputs`, `mod_output_count`
+  - `mod_output_samples`, `mod_output_stride` (sample-rate modulation buffers)
+  - `mod_inputs`, `mod_input_count`
+  - `mod_input_samples`, `mod_input_stride` (sample-rate modulation inputs)
+
+## UX Alignment (Engine Work Remaining)
+
+- Modulation registry (ordered links, sample-accurate internal modulation).
+- Macro binding layer for patcher-backed devices (8 macros + mapping curves).
+- Track routing for audio + MIDI I/O with pre/post toggle.
+- Device chain persistence (save/load chain and per-device configs).
+- Device copy/cut/paste/duplicate across tracks (engine commands + diffs).
 
 ## Open Decisions
 
