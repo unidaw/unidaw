@@ -2,7 +2,7 @@
 
 Audio workstation: tracker-first UI, first-order harmony, microtonal support, patcher DAG for events & DSP, VST3 hosting; planned piano roll, mixer, and arrangement views.
 
-Status: very early. Do not use.
+Status: very early. Do not use. Not possible to save. But tracker and patcher PoC is somewhat working.
 
 ## Components
 - Engine (C++): scheduling, harmony, clip edits, audio graph, IPC.
