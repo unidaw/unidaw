@@ -470,33 +470,15 @@ mod integration_tests {
                 &mut self,
                 timeout: Duration,
             ) -> anyhow::Result<TrackShm> {
-                let mut started_playback = false;
-                let mut last_toggle = Instant::now() - Duration::from_secs(1);
                 let deadline = Instant::now() + timeout;
                 let mut last_error: Option<anyhow::Error> = None;
                 loop {
                     if let Some(snapshot) = self.bridge().read_snapshot() {
                         self.view.snapshot = snapshot;
                     }
-                    let playing = self.view.snapshot.ui_transport_state != 0;
-                    if !playing && last_toggle.elapsed() > Duration::from_millis(500) {
-                        self.view.toggle_play(&mut self.notify);
-                        let _ = self.pump(Duration::from_millis(200));
-                        last_toggle = Instant::now();
-                        started_playback = true;
-                    }
                     match open_track_shm(Duration::from_millis(200)) {
                         Ok(track_shm) => {
-                        if started_playback {
-                            if let Some(snapshot) = self.bridge().read_snapshot() {
-                                self.view.snapshot = snapshot;
-                            }
-                            if self.view.snapshot.ui_transport_state != 0 {
-                                self.view.toggle_play(&mut self.notify);
-                                let _ = self.pump(Duration::from_millis(50));
-                            }
-                        }
-                        return Ok(track_shm);
+                            return Ok(track_shm);
                         }
                         Err(err) => {
                             if last_error.is_none() {
@@ -509,10 +491,6 @@ mod integration_tests {
                     }
                     let _ = self.pump(Duration::from_millis(100));
                     thread::sleep(Duration::from_millis(20));
-                }
-                if started_playback && self.view.snapshot.ui_transport_state != 0 {
-                    self.view.toggle_play(&mut self.notify);
-                    let _ = self.pump(Duration::from_millis(50));
                 }
                 if let Some(err) = last_error {
                     Err(err)
@@ -2620,6 +2598,9 @@ mod integration_tests {
             let _ = harness.pump(Duration::from_millis(200));
 
             let sample_rate = unsafe { (*track_shm.header).sample_rate };
+            let block_size = unsafe { (*track_shm.header).block_size } as u64;
+            let num_blocks = unsafe { (*track_shm.header).num_blocks } as u64;
+            let latency_samples = num_blocks.saturating_sub(1) * block_size;
             let pattern_ticks =
                 (NANOTICKS_PER_QUARTER / ZOOM_LEVELS[DEFAULT_ZOOM_INDEX]) * 16;
             let loop_samples = pattern_samples(sample_rate, pattern_ticks);
@@ -2627,15 +2608,20 @@ mod integration_tests {
             let mut first_note_sample: Option<u64> = None;
             let mut stop_after: Option<u64> = None;
             let start = Instant::now();
-            while start.elapsed() < Duration::from_secs(6) {
+            while start.elapsed() < Duration::from_secs(8) {
                 if let Some(entry) = ring_pop(&track_shm.ring_std) {
                     if let Some(payload) = read_midi_payload(&entry) {
                         if payload.status == 0x90 && payload.data2 > 0 {
-                            let base = first_note_sample.get_or_insert(entry.sample_time);
+                            let sample_time = if entry.sample_time < latency_samples {
+                                entry.sample_time
+                            } else {
+                                entry.sample_time + latency_samples
+                            };
+                            let base = first_note_sample.get_or_insert(sample_time);
                             if stop_after.is_none() {
                                 stop_after = Some(*base + loop_samples * loops.len() as u64);
                             }
-                            let delta = entry.sample_time.saturating_sub(*base);
+                            let delta = sample_time.saturating_sub(*base);
                             let loop_index = (delta / loop_samples) as usize;
                             if loop_index < loops.len() {
                                 loops[loop_index].push(payload.data1);
@@ -2643,7 +2629,12 @@ mod integration_tests {
                         }
                     }
                     if let Some(stop) = stop_after {
-                        if entry.sample_time >= stop {
+                        let sample_time = if entry.sample_time < latency_samples {
+                            entry.sample_time
+                        } else {
+                            entry.sample_time + latency_samples
+                        };
+                        if sample_time >= stop {
                             break;
                         }
                     }

@@ -11,6 +11,19 @@ implementation reference for the Patcher subsystem.
 - C++ engine remains authoritative; Rust provides high-performance logic kernels.
 - Single canonical event format: `EventEntry` (C++ native).
 
+## Port Model
+
+Ports are typed and use stable port ids per node type so patches remain valid
+across versions.
+
+- Port kinds: Event, Audio, Control.
+- Event ports carry `EventEntry` streams.
+- Audio ports are multichannel buses with explicit `channel_count` (default stereo).
+- Control ports are float values with a declared rate:
+  - Block-rate (one value per block).
+  - Sample-rate (per-sample buffers).
+- Event list ports are deferred until nodes need them.
+
 ## Canonical Event Format
 
 All events in the chain are `EventEntry` and use the existing payload buffer.
@@ -71,9 +84,10 @@ Rust mutates only the provided buffers.
 
 ```cpp
 struct alignas(64) PatcherContext {
-  uint32_t abi_version = 2;
+  uint32_t abi_version = 3;
   uint64_t block_start_tick = 0;
   uint64_t block_end_tick = 0;
+  uint64_t block_start_sample = 0;
   float sample_rate = 0.0f;
   float tempo_bpm = 120.0f;
   uint32_t num_frames = 0;
@@ -112,6 +126,7 @@ pub struct PatcherContext {
     pub abi_version: u32,
     pub block_start_tick: u64,
     pub block_end_tick: u64,
+    pub block_start_sample: u64,
     pub sample_rate: f32,
     pub tempo_bpm: f32,
     pub num_frames: u32,

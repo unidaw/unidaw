@@ -7,7 +7,7 @@ use daw_bridge::layout::{
     UiPatcherGraphErrorPayload, UI_CLIP_WINDOW_FLAG_COMPLETE,
 };
 
-use crate::app::{ChainDevice, EngineView, PatcherNodeUi, TRACK_COUNT};
+use crate::app::{ChainDevice, EngineView, PatcherEdgeUi, PatcherNodeUi, PatcherPortKind, TRACK_COUNT};
 use crate::engine::bridge::{
     bump_ui_enqueued, bump_ui_send_fail, bump_ui_sent, log_ui_send_fail,
 };
@@ -48,14 +48,6 @@ impl EngineView {
     }
 
     pub(crate) fn enqueue_ui_command(&mut self, payload: UiCommandPayload) {
-        if payload.command_type == UiCommandType::LoadPluginOnTrack as u16 ||
-            payload.command_type == UiCommandType::TogglePlay as u16 {
-            eprintln!(
-                "daw-app: enqueue ui cmd {} track {}",
-                payload.command_type,
-                payload.track_id
-            );
-        }
         if let Some(last) = self.queued_commands.back() {
             if let QueuedCommand::Ui(prev) = last {
                 if let (Some(prev_key), Some(next_key)) =
@@ -231,9 +223,11 @@ impl EngineView {
             if let Some(chords) = self.clip_chords.get_mut(track_index) {
                 chords.clear();
             }
-            self.pending_notes.retain(|note| note.track_id as usize != track_index);
-            self.pending_chords.retain(|chord| chord.track_id as usize != track_index);
+            // DON'T clear pending notes here - we'll remove them below only when
+            // a confirmed note exists at the same position. This avoids visual flash.
         }
+
+        // First, add all confirmed notes from snapshot
         let notes = &mut self.clip_notes[track_index];
         notes.reserve(snapshot.note_count as usize);
         for note_index in 0..(snapshot.note_count as usize) {
@@ -246,6 +240,8 @@ impl EngineView {
                 column: note.column,
             });
         }
+
+        // Add all confirmed chords from snapshot
         let chords = &mut self.clip_chords[track_index];
         chords.reserve(snapshot.chord_count as usize);
         for chord_index in 0..(snapshot.chord_count as usize) {
@@ -265,6 +261,30 @@ impl EngineView {
             });
         }
 
+        // Now remove pending notes/chords that have matching confirmed entries
+        // This ensures we never have a frame where the note disappears
+        let confirmed_notes = &self.clip_notes[track_index];
+        self.pending_notes.retain(|pending| {
+            if pending.track_id as usize != track_index {
+                return true; // Keep pending notes for other tracks
+            }
+            // Remove if there's a confirmed note at the same position
+            !confirmed_notes.iter().any(|confirmed| {
+                confirmed.nanotick == pending.nanotick && confirmed.column == pending.column
+            })
+        });
+
+        let confirmed_chords = &self.clip_chords[track_index];
+        self.pending_chords.retain(|pending| {
+            if pending.track_id as usize != track_index {
+                return true; // Keep pending chords for other tracks
+            }
+            // Remove if there's a confirmed chord at the same position
+            !confirmed_chords.iter().any(|confirmed| {
+                confirmed.nanotick == pending.nanotick && confirmed.column == pending.column
+            })
+        });
+
         if let Some(state) = self.clip_window.get_mut(track_index) {
             state.request_id = snapshot.request_id;
             state.cursor_event_index = snapshot.cursor_event_index;
@@ -278,6 +298,7 @@ impl EngineView {
         if self.clip_version_local < snapshot.clip_version {
             self.clip_version_local = snapshot.clip_version;
         }
+        self.bump_clip_render_version();
     }
 
     pub fn apply_harmony_snapshot(&mut self, snapshot: UiHarmonySnapshot) {
@@ -294,6 +315,7 @@ impl EngineView {
             });
         }
         self.harmony_version_local = self.snapshot.ui_harmony_version;
+        self.bump_harmony_render_version();
     }
 
     pub fn apply_chain_diff(&mut self, diff: UiChainDiffPayload) {
@@ -334,40 +356,58 @@ impl EngineView {
             return;
         }
         let track_index = diff.track_id as usize;
-        if track_index >= self.patcher_nodes.len() {
+        if track_index >= self.patcher_nodes.len() ||
+            track_index >= self.patcher_edges.len() {
             return;
         }
         if self.patcher_versions[track_index] != diff.graph_version {
             self.patcher_versions[track_index] = diff.graph_version;
         }
         let nodes = &mut self.patcher_nodes[track_index];
+        let edges = &mut self.patcher_edges[track_index];
         match diff.flags {
             0 => {
+                let index = nodes.len();
+                let col = index % 4;
+                let row = index / 4;
                 nodes.push(PatcherNodeUi {
                     id: diff.node_id,
                     node_type: diff.node_type,
-                    inputs: Vec::new(),
+                    pos_x: 40.0 + (col as f32) * 220.0,
+                    pos_y: 40.0 + (row as f32) * 120.0,
                 });
             }
             1 => {
                 if let Some(index) = nodes.iter().position(|node| node.id == diff.node_id) {
                     nodes.remove(index);
-                    for (new_id, node) in nodes.iter_mut().enumerate() {
-                        node.id = new_id as u32;
-                        node.inputs.retain(|input| *input != diff.node_id);
-                        for input in node.inputs.iter_mut() {
-                            if *input > diff.node_id {
-                                *input -= 1;
-                            }
-                        }
-                    }
                 }
+                edges.retain(|edge| {
+                    edge.src_node_id != diff.node_id &&
+                        edge.dst_node_id != diff.node_id
+                });
             }
             2 => {
-                if let Some(node) = nodes.iter_mut().find(|node| node.id == diff.dst_node_id) {
-                    if !node.inputs.contains(&diff.src_node_id) {
-                        node.inputs.push(diff.src_node_id);
-                    }
+                let kind = match diff.edge_kind {
+                    0 => PatcherPortKind::Event,
+                    1 => PatcherPortKind::Audio,
+                    2 => PatcherPortKind::Control,
+                    _ => PatcherPortKind::Event,
+                };
+                let exists = edges.iter().any(|edge| {
+                    edge.src_node_id == diff.src_node_id &&
+                        edge.src_port_id == diff.src_port_id &&
+                        edge.dst_node_id == diff.dst_node_id &&
+                        edge.dst_port_id == diff.dst_port_id &&
+                        edge.kind == kind
+                });
+                if !exists {
+                    edges.push(PatcherEdgeUi {
+                        src_node_id: diff.src_node_id,
+                        src_port_id: diff.src_port_id,
+                        dst_node_id: diff.dst_node_id,
+                        dst_port_id: diff.dst_port_id,
+                        kind,
+                    });
                 }
             }
             _ => {}
@@ -383,11 +423,16 @@ impl EngineView {
     }
 
     pub fn patcher_error_message(&self, diff: UiPatcherGraphErrorPayload) -> String {
-        format!(
-            "Patcher error {} on track {}",
-            diff.error_code,
-            diff.track_id + 1
-        )
+        let message = match diff.error_code {
+            1 => "Invalid node type",
+            2 => "Invalid node",
+            3 => "Connection would create a cycle",
+            4 => "Failed to add node",
+            5 => "Invalid connection",
+            6 => "Invalid port",
+            _ => "Unknown patcher error",
+        };
+        format!("Patcher error: {} on track {}", message, diff.track_id + 1)
     }
 
     pub fn apply_diff(&mut self, diff: UiDiffPayload) {
@@ -465,6 +510,7 @@ impl EngineView {
         self.pending_chords.retain(|chord| {
             !(chord.track_id == diff.track_id && chord.nanotick == nanotick)
         });
+        self.bump_clip_render_version();
     }
 
     pub fn apply_harmony_diff(&mut self, diff: UiHarmonyDiffPayload) {
@@ -504,6 +550,7 @@ impl EngineView {
         if self.harmony_version_local < diff.harmony_version {
             self.harmony_version_local = diff.harmony_version;
         }
+        self.bump_harmony_render_version();
     }
 
     pub fn apply_chord_diff(&mut self, diff: UiChordDiffPayload) {
@@ -592,6 +639,7 @@ impl EngineView {
         if self.clip_version_local < diff.clip_version {
             self.clip_version_local = diff.clip_version;
         }
+        self.bump_clip_render_version();
     }
 
     pub(crate) fn current_clip_version(&self) -> u32 {
@@ -607,6 +655,10 @@ impl EngineView {
         self.clip_version_local = next;
     }
 
+    pub(crate) fn bump_clip_render_version(&mut self) {
+        self.clip_render_version = self.clip_render_version.saturating_add(1);
+    }
+
     pub(crate) fn current_harmony_version(&self) -> u32 {
         if self.harmony_version_local != 0 {
             self.harmony_version_local
@@ -618,5 +670,9 @@ impl EngineView {
     pub(crate) fn bump_harmony_version(&mut self) {
         let next = self.current_harmony_version().saturating_add(1);
         self.harmony_version_local = next;
+    }
+
+    pub(crate) fn bump_harmony_render_version(&mut self) {
+        self.harmony_render_version = self.harmony_render_version.saturating_add(1);
     }
 }

@@ -1,13 +1,125 @@
+#include <array>
 #include <cassert>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
 
+#include "apps/patcher_abi.h"
 #include "apps/patcher_graph.h"
 #include "apps/patcher_preset.h"
 #include "apps/patcher_preset_library.h"
+
+namespace {
+
+constexpr uint32_t kBufferCapacity = 256;
+constexpr uint64_t kNanoticksPerQuarter = 960000;
+
+struct NodeBuffer {
+  std::array<daw::EventEntry, kBufferCapacity> events{};
+  uint32_t count = 0;
+};
+
+uint32_t countDegreeEvents(const NodeBuffer& buffer) {
+  uint32_t count = 0;
+  for (uint32_t i = 0; i < buffer.count; ++i) {
+    const auto& entry = buffer.events[i];
+    if (entry.type != static_cast<uint16_t>(daw::EventType::MusicalLogic)) {
+      continue;
+    }
+    daw::MusicalLogicPayload payload{};
+    std::memcpy(&payload, entry.payload, sizeof(payload));
+    if (payload.metadata[0] == daw::kMusicalLogicKindDegree) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+uint32_t runGraphOnce(const daw::PatcherGraph& graph) {
+  const uint64_t blockStart = 0;
+  const uint64_t blockEnd = kNanoticksPerQuarter * 4;
+  std::vector<NodeBuffer> buffers(graph.nodes.size());
+  uint64_t overflowTick = 0;
+
+  auto runNode = [&](uint32_t nodeIndex) {
+    if (nodeIndex >= graph.nodes.size()) {
+      return;
+    }
+    auto& buffer = buffers[nodeIndex];
+    buffer.count = 0;
+    for (uint32_t inputIndex : graph.resolvedInputs[nodeIndex]) {
+      if (inputIndex >= buffers.size()) {
+        continue;
+      }
+      const auto& input = buffers[inputIndex];
+      for (uint32_t i = 0; i < input.count && buffer.count < buffer.events.size(); ++i) {
+        buffer.events[buffer.count++] = input.events[i];
+      }
+    }
+    daw::PatcherContext ctx{};
+    ctx.abi_version = 3;
+    ctx.block_start_tick = blockStart;
+    ctx.block_end_tick = blockEnd;
+    ctx.block_start_sample = 0;
+    ctx.sample_rate = 48000.0f;
+    ctx.tempo_bpm = 120.0f;
+    ctx.num_frames = 512;
+    ctx.event_buffer = buffer.events.data();
+    ctx.event_capacity = static_cast<uint32_t>(buffer.events.size());
+    ctx.event_count = &buffer.count;
+    ctx.last_overflow_tick = &overflowTick;
+
+    const auto& node = graph.nodes[nodeIndex];
+    if (node.type == daw::PatcherNodeType::Euclidean && node.hasEuclideanConfig) {
+      ctx.node_config = &node.euclideanConfig;
+      ctx.node_config_size = sizeof(node.euclideanConfig);
+    } else if (node.type == daw::PatcherNodeType::RandomDegree && node.hasRandomDegreeConfig) {
+      ctx.node_config = &node.randomDegreeConfig;
+      ctx.node_config_size = sizeof(node.randomDegreeConfig);
+    }
+
+    switch (node.type) {
+      case daw::PatcherNodeType::Euclidean:
+        if (daw::patcher_process_euclidean) {
+          daw::patcher_process_euclidean(&ctx);
+        }
+        break;
+      case daw::PatcherNodeType::RandomDegree:
+        if (daw::patcher_process_random_degree) {
+          daw::patcher_process_random_degree(&ctx);
+        }
+        break;
+      case daw::PatcherNodeType::Passthrough:
+        if (daw::patcher_process_passthrough) {
+          daw::patcher_process_passthrough(&ctx);
+        }
+        break;
+      case daw::PatcherNodeType::EventOut:
+        if (daw::patcher_process_event_out) {
+          daw::patcher_process_event_out(&ctx);
+        }
+        break;
+      default:
+        break;
+    }
+  };
+
+  for (uint32_t nodeIndex : graph.topoOrder) {
+    runNode(nodeIndex);
+  }
+
+  for (size_t i = 0; i < graph.nodes.size(); ++i) {
+    if (graph.nodes[i].type == daw::PatcherNodeType::EventOut) {
+      return countDegreeEvents(buffers[i]);
+    }
+  }
+  return 0;
+}
+
+}  // namespace
 
 int main() {
   daw::PatcherGraphState state;
@@ -19,8 +131,14 @@ int main() {
   assert(a == 0);
   assert(b == 1);
 
-  bool connected = daw::connectPatcherNodes(state, a, b);
-  assert(connected);
+  auto connected =
+      daw::connectPatcherNodes(state,
+                               a,
+                               daw::kPatcherEventOutputPort,
+                               b,
+                               daw::kPatcherEventInputPort,
+                               daw::PatcherPortKind::Event);
+  assert(connected == daw::PatcherConnectResult::Ok);
 
   daw::PatcherEuclideanConfig config{};
   config.steps = 8;
@@ -52,6 +170,32 @@ int main() {
   assert(c != a);
   assert(c != b);
 
+  const uint32_t d = daw::addPatcherNode(state, daw::PatcherNodeType::RustKernel);
+  assert(d != std::numeric_limits<uint32_t>::max());
+  assert(d != c);
+  assert(d != b);
+  assert(d != a);
+
+  assert(daw::connectPatcherNodes(state,
+                                  c,
+                                  daw::kPatcherControlOutputPort,
+                                  d,
+                                  daw::kPatcherControlInputPort,
+                                  daw::PatcherPortKind::Control) ==
+         daw::PatcherConnectResult::InvalidConnection);
+
+  const uint32_t audioIn = daw::addPatcherNode(state, daw::PatcherNodeType::AudioPassthrough);
+  const uint32_t audioOut = daw::addPatcherNode(state, daw::PatcherNodeType::AudioPassthrough);
+  assert(audioIn != std::numeric_limits<uint32_t>::max());
+  assert(audioOut != std::numeric_limits<uint32_t>::max());
+  assert(daw::connectPatcherNodes(state,
+                                  audioOut,
+                                  daw::kPatcherAudioOutputPort,
+                                  audioIn,
+                                  daw::kPatcherAudioInputPort,
+                                  daw::PatcherPortKind::Audio) ==
+         daw::PatcherConnectResult::Ok);
+
   {
     daw::PatcherGraphState saveState;
     const uint32_t e = daw::addPatcherNode(saveState, daw::PatcherNodeType::Euclidean);
@@ -62,9 +206,27 @@ int main() {
     assert(r == 1);
     assert(l == 2);
     assert(p == 3);
-    assert(daw::connectPatcherNodes(saveState, e, r));
-    assert(daw::connectPatcherNodes(saveState, r, p));
-    assert(daw::connectPatcherNodes(saveState, l, p));
+    assert(daw::connectPatcherNodes(saveState,
+                                    e,
+                                    daw::kPatcherEventOutputPort,
+                                    r,
+                                    daw::kPatcherEventInputPort,
+                                    daw::PatcherPortKind::Event) ==
+           daw::PatcherConnectResult::Ok);
+    assert(daw::connectPatcherNodes(saveState,
+                                    r,
+                                    daw::kPatcherEventOutputPort,
+                                    p,
+                                    daw::kPatcherEventInputPort,
+                                    daw::PatcherPortKind::Event) ==
+           daw::PatcherConnectResult::Ok);
+    assert(daw::connectPatcherNodes(saveState,
+                                    l,
+                                    daw::kPatcherEventOutputPort,
+                                    p,
+                                    daw::kPatcherEventInputPort,
+                                    daw::PatcherPortKind::Event) ==
+           daw::PatcherConnectResult::InvalidPort);
 
     daw::PatcherEuclideanConfig eCfg{};
     eCfg.steps = 12;
@@ -101,7 +263,17 @@ int main() {
       assert(loadState.graph.nodes[1].type == daw::PatcherNodeType::RandomDegree);
       assert(loadState.graph.nodes[2].type == daw::PatcherNodeType::Lfo);
       assert(loadState.graph.nodes[3].type == daw::PatcherNodeType::Passthrough);
-      assert(loadState.graph.nodes[3].inputs.size() == 2);
+      assert(loadState.graph.edges.size() == 2);
+      assert(loadState.graph.edges[0].src.nodeId == e);
+      assert(loadState.graph.edges[0].dst.nodeId == r);
+      assert(loadState.graph.edges[0].src.portId == daw::kPatcherEventOutputPort);
+      assert(loadState.graph.edges[0].dst.portId == daw::kPatcherEventInputPort);
+      assert(loadState.graph.edges[0].kind == daw::PatcherPortKind::Event);
+      assert(loadState.graph.edges[1].src.nodeId == r);
+      assert(loadState.graph.edges[1].dst.nodeId == p);
+      assert(loadState.graph.edges[1].src.portId == daw::kPatcherEventOutputPort);
+      assert(loadState.graph.edges[1].dst.portId == daw::kPatcherEventInputPort);
+      assert(loadState.graph.edges[1].kind == daw::PatcherPortKind::Event);
       assert(loadState.graph.nodes[0].euclideanConfig.steps == 12);
       assert(loadState.graph.nodes[0].euclideanConfig.hits == 7);
       assert(loadState.graph.nodes[0].euclideanConfig.degree == 3);
@@ -143,6 +315,22 @@ int main() {
 
     std::error_code ec;
     std::filesystem::remove_all(rootDir, ec);
+  }
+
+  {
+    std::filesystem::path presetPath =
+        std::filesystem::current_path() / "presets" / "patcher" /
+        "EuclideanRandomDegree.json";
+    if (!std::filesystem::exists(presetPath)) {
+      presetPath = std::filesystem::current_path() / ".." / "presets" / "patcher" /
+          "EuclideanRandomDegree.json";
+    }
+    std::string error;
+    daw::PatcherGraph graph;
+    assert(std::filesystem::exists(presetPath));
+    assert(daw::loadPatcherPreset(graph, presetPath.string(), &error));
+    const uint32_t degreeEvents = runGraphOnce(graph);
+    assert(degreeEvents > 0);
   }
 
   std::cout << "patcher_graph_tests_main: ok" << std::endl;

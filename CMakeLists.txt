@@ -188,6 +188,7 @@ endif()
 
 add_executable(patcher_graph_tests
   apps/patcher_graph_tests_main.cpp
+  apps/patcher_abi.cpp
   apps/patcher_graph.cpp
   apps/patcher_preset_library.cpp
   apps/patcher_preset.cpp
@@ -199,6 +200,10 @@ target_include_directories(patcher_graph_tests PRIVATE
 )
 
 target_link_libraries(patcher_graph_tests PRIVATE platform_juce)
+
+if (DAW_BUILD_PATCHER_RUST)
+  target_link_libraries(patcher_graph_tests PRIVATE patcher_rust)
+endif()
 
 add_executable(device_chain_tests
   apps/device_chain_tests_main.cpp

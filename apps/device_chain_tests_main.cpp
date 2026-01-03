@@ -31,6 +31,15 @@ int main() {
                "addDevice event failed")) {
     return 1;
   }
+  const uint32_t eventDeviceId = editChain.devices[0].id;
+  if (!require(daw::setDevicePatcherNodeId(editChain, eventDeviceId, 7),
+               "setDevicePatcherNodeId failed")) {
+    return 1;
+  }
+  if (!require(editChain.devices[0].patcherNodeId == 7,
+               "patcherNodeId not updated")) {
+    return 1;
+  }
 
   daw::Device instrument0;
   instrument0.id = daw::kDeviceIdAuto;

@@ -183,7 +183,9 @@ pub struct UiPatcherGraphCommandPayload {
     pub node_type: u32,
     pub src_node_id: u32,
     pub dst_node_id: u32,
-    pub reserved: [u8; 12],
+    pub src_port_id: u32,
+    pub dst_port_id: u32,
+    pub edge_kind: u32,
 }
 
 #[repr(C)]
@@ -210,7 +212,9 @@ pub struct UiPatcherGraphDiffPayload {
     pub node_type: u32,
     pub src_node_id: u32,
     pub dst_node_id: u32,
-    pub reserved: [u8; 12],
+    pub src_port_id: u32,
+    pub dst_port_id: u32,
+    pub edge_kind: u32,
 }
 
 #[repr(C)]
@@ -222,7 +226,10 @@ pub struct UiPatcherGraphErrorPayload {
     pub node_id: u32,
     pub src_node_id: u32,
     pub dst_node_id: u32,
-    pub reserved: [u8; 20],
+    pub src_port_id: u32,
+    pub dst_port_id: u32,
+    pub edge_kind: u32,
+    pub reserved: [u8; 8],
 }
 
 #[repr(C)]

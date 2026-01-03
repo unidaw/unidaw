@@ -80,6 +80,7 @@ arrays. No conversion between representations.
 - Scheduler ensures harmony is resolved before note dispatch.
 - Microtonal is first-class: scales may be non-12TET and must resolve deterministically.
 - VST3 tuning uses per-note tuning at note-on/off (VST3 NoteOn/NoteOff tuning in cents).
+ - If the harmony timeline is empty, the scheduler resolves against a default C major context.
 
 ## Patcher integration
 - Patcher is a device with:

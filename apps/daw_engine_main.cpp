@@ -81,6 +81,14 @@ std::string uiShmName() {
   return "/daw_engine_ui";
 }
 
+bool uiDebugEnabled() {
+  static const bool enabled = []() {
+    const char* env = std::getenv("DAW_UI_DEBUG");
+    return env && std::string(env) == "1";
+  }();
+  return enabled;
+}
+
 class WorkerPool {
  public:
   explicit WorkerPool(size_t threadCount) {
@@ -485,10 +493,6 @@ int main(int argc, char** argv) {
   bool patcherParallel = false;
   if (const char* env = std::getenv("DAW_PATCHER_PARALLEL")) {
     patcherParallel = std::string(env) == "1";
-  }
-  bool schedulerLog = false;
-  if (const char* env = std::getenv("DAW_SCHEDULER_LOG")) {
-    schedulerLog = std::string(env) == "1";
   }
   std::unique_ptr<WorkerPool> patcherPool;
   if (patcherParallel) {
@@ -943,19 +947,24 @@ struct TrackRuntime {
     daw::PatcherNode passthrough;
     passthrough.id = 1;
     passthrough.type = daw::PatcherNodeType::Passthrough;
-    passthrough.inputs.push_back(0);
     patcherGraphState.graph.nodes.push_back(passthrough);
 
     daw::PatcherNode audioNode;
     audioNode.id = 2;
     audioNode.type = daw::PatcherNodeType::AudioPassthrough;
-    audioNode.inputs.push_back(0);
     patcherGraphState.graph.nodes.push_back(audioNode);
+
+    daw::PatcherEdge edge{};
+    edge.src = {0, daw::kPatcherEventOutputPort};
+    edge.dst = {1, daw::kPatcherEventInputPort};
+    edge.kind = daw::PatcherPortKind::Event;
+    patcherGraphState.graph.edges.push_back(edge);
   }
   if (!daw::buildPatcherGraph(patcherGraphState.graph)) {
     std::cerr << "Patcher graph invalid; disabling patcher kernels." << std::endl;
     std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
     patcherGraphState.graph.nodes.clear();
+    patcherGraphState.graph.edges.clear();
     patcherGraphState.graph.topoOrder.clear();
     patcherGraphState.graph.depths.clear();
     patcherGraphState.graph.resolvedInputs.clear();
@@ -1162,15 +1171,15 @@ struct TrackRuntime {
 
   auto getHarmonyAt = [&](uint64_t nanotick) -> std::optional<daw::HarmonyEvent> {
     std::lock_guard<std::mutex> lock(harmonyMutex);
+    if (harmonyEvents.empty()) {
+      return daw::HarmonyEvent{0, 0, 1, 0};
+    }
     return daw::harmonyAt(harmonyEvents, nanotick);
   };
 
   const auto& scaleRegistry = daw::ScaleRegistry::instance();
 
   auto getScaleForHarmony = [&](const daw::HarmonyEvent& harmony) -> const daw::Scale* {
-    if (harmony.scaleId == 0) {
-      return nullptr;
-    }
     return scaleRegistry.find(harmony.scaleId);
   };
 
@@ -1655,7 +1664,10 @@ struct TrackRuntime {
                                    uint32_t nodeId,
                                    uint32_t nodeType,
                                    uint32_t srcNodeId,
-                                   uint32_t dstNodeId) {
+                                   uint32_t dstNodeId,
+                                   uint32_t srcPortId,
+                                   uint32_t dstPortId,
+                                   uint32_t edgeKind) {
     auto ringUiOut = getRingUiOut();
     if (ringUiOut.mask == 0) {
       return;
@@ -1671,6 +1683,9 @@ struct TrackRuntime {
     payload.nodeType = nodeType;
     payload.srcNodeId = srcNodeId;
     payload.dstNodeId = dstNodeId;
+    payload.srcPortId = srcPortId;
+    payload.dstPortId = dstPortId;
+    payload.edgeKind = edgeKind;
     daw::EventEntry entry{};
     entry.sampleTime = 0;
     entry.blockId = 0;
@@ -1684,7 +1699,10 @@ struct TrackRuntime {
                                    uint32_t trackId,
                                    uint32_t nodeId,
                                    uint32_t srcNodeId,
-                                   uint32_t dstNodeId) {
+                                   uint32_t dstNodeId,
+                                   uint32_t srcPortId,
+                                   uint32_t dstPortId,
+                                   uint32_t edgeKind) {
     auto ringUiOut = getRingUiOut();
     if (ringUiOut.mask == 0) {
       return;
@@ -1696,6 +1714,9 @@ struct TrackRuntime {
     payload.nodeId = nodeId;
     payload.srcNodeId = srcNodeId;
     payload.dstNodeId = dstNodeId;
+    payload.srcPortId = srcPortId;
+    payload.dstPortId = dstPortId;
+    payload.edgeKind = edgeKind;
     daw::EventEntry entry{};
     entry.sampleTime = 0;
     entry.blockId = 0;
@@ -2671,12 +2692,17 @@ struct TrackRuntime {
       constexpr uint16_t kGraphErrInvalidNode = 2;
       constexpr uint16_t kGraphErrCycle = 3;
       constexpr uint16_t kGraphErrAddFailed = 4;
+      constexpr uint16_t kGraphErrInvalidConnection = 5;
+      constexpr uint16_t kGraphErrInvalidPort = 6;
       if (commandType == daw::UiCommandType::AddPatcherNode) {
         if (graphPayload.nodeType >
             static_cast<uint32_t>(daw::PatcherNodeType::EventOut)) {
           emitPatcherGraphError(kGraphErrInvalidType,
                                 graphPayload.trackId,
                                 graphPayload.nodeId,
+                                0,
+                                0,
+                                0,
                                 0,
                                 0);
           return;
@@ -2689,6 +2715,9 @@ struct TrackRuntime {
                                 graphPayload.trackId,
                                 graphPayload.nodeId,
                                 0,
+                                0,
+                                0,
+                                0,
                                 0);
           return;
         }
@@ -2697,6 +2726,9 @@ struct TrackRuntime {
                               0,
                               nodeId,
                               graphPayload.nodeType,
+                              0,
+                              0,
+                              0,
                               0,
                               0);
         return;
@@ -2707,6 +2739,9 @@ struct TrackRuntime {
                                 graphPayload.trackId,
                                 graphPayload.nodeId,
                                 0,
+                                0,
+                                0,
+                                0,
                                 0);
           return;
         }
@@ -2716,26 +2751,60 @@ struct TrackRuntime {
                               graphPayload.nodeId,
                               0,
                               0,
+                              0,
+                              0,
+                              0,
                               0);
         return;
       }
       if (commandType == daw::UiCommandType::ConnectPatcherNodes) {
+        if (graphPayload.edgeKind >
+            static_cast<uint32_t>(daw::PatcherPortKind::Control)) {
+          emitPatcherGraphError(kGraphErrInvalidConnection,
+                                graphPayload.trackId,
+                                0,
+                                graphPayload.srcNodeId,
+                                graphPayload.dstNodeId,
+                                graphPayload.srcPortId,
+                                graphPayload.dstPortId,
+                                graphPayload.edgeKind);
+          return;
+        }
         if (graphPayload.srcNodeId == graphPayload.dstNodeId) {
           emitPatcherGraphError(kGraphErrInvalidNode,
                                 graphPayload.trackId,
                                 0,
                                 graphPayload.srcNodeId,
-                                graphPayload.dstNodeId);
+                                graphPayload.dstNodeId,
+                                graphPayload.srcPortId,
+                                graphPayload.dstPortId,
+                                graphPayload.edgeKind);
           return;
         }
-        if (!connectPatcherNodes(patcherGraphState,
-                                 graphPayload.srcNodeId,
-                                 graphPayload.dstNodeId)) {
-          emitPatcherGraphError(kGraphErrCycle,
+        const auto result = connectPatcherNodes(patcherGraphState,
+                                                graphPayload.srcNodeId,
+                                                graphPayload.srcPortId,
+                                                graphPayload.dstNodeId,
+                                                graphPayload.dstPortId,
+                                                static_cast<daw::PatcherPortKind>(
+                                                    graphPayload.edgeKind));
+        if (result != daw::PatcherConnectResult::Ok) {
+          const uint16_t errorCode =
+              result == daw::PatcherConnectResult::InvalidNode
+                  ? kGraphErrInvalidNode
+                  : (result == daw::PatcherConnectResult::InvalidPort
+                         ? kGraphErrInvalidPort
+                         : (result == daw::PatcherConnectResult::InvalidConnection
+                                ? kGraphErrInvalidConnection
+                                : kGraphErrCycle));
+          emitPatcherGraphError(errorCode,
                                 graphPayload.trackId,
                                 0,
                                 graphPayload.srcNodeId,
-                                graphPayload.dstNodeId);
+                                graphPayload.dstNodeId,
+                                graphPayload.srcPortId,
+                                graphPayload.dstPortId,
+                                graphPayload.edgeKind);
           return;
         }
         updatePatcherGraphSnapshot();
@@ -2744,7 +2813,10 @@ struct TrackRuntime {
                               0,
                               0,
                               graphPayload.srcNodeId,
-                              graphPayload.dstNodeId);
+                              graphPayload.dstNodeId,
+                              graphPayload.srcPortId,
+                              graphPayload.dstPortId,
+                              graphPayload.edgeKind);
         return;
       }
     }
@@ -2787,6 +2859,9 @@ struct TrackRuntime {
                               configPayload.trackId,
                               configPayload.nodeId,
                               0,
+                              0,
+                              0,
+                              0,
                               0);
         return;
       }
@@ -2794,6 +2869,9 @@ struct TrackRuntime {
         emitPatcherGraphError(kGraphErrInvalidNode,
                               configPayload.trackId,
                               configPayload.nodeId,
+                              0,
+                              0,
+                              0,
                               0,
                               0);
         return;
@@ -2803,6 +2881,9 @@ struct TrackRuntime {
                             3,
                             configPayload.nodeId,
                             configPayload.configType,
+                            0,
+                            0,
+                            0,
                             0,
                             0);
       return;
@@ -3012,14 +3093,6 @@ struct TrackRuntime {
     }
     daw::UiCommandPayload payload{};
     std::memcpy(&payload, entry.payload, sizeof(payload));
-    if (payload.commandType ==
-            static_cast<uint16_t>(daw::UiCommandType::LoadPluginOnTrack) ||
-        payload.commandType ==
-            static_cast<uint16_t>(daw::UiCommandType::TogglePlay)) {
-      std::cerr << "UI: cmd " << payload.commandType
-                << " track " << payload.trackId
-                << " plugin " << payload.pluginIndex << std::endl;
-    }
     if (payload.commandType ==
         static_cast<uint16_t>(daw::UiCommandType::LoadPluginOnTrack)) {
       const uint32_t trackId = payload.trackId;
@@ -3328,14 +3401,16 @@ struct TrackRuntime {
       daw::EventEntry uiEntry;
       bool handled = false;
       while (daw::ringPop(ringUi, uiEntry)) {
-        std::cerr << "UI: received command entry size "
-                  << uiEntry.size << " type " << uiEntry.type << std::endl;
+        if (uiDebugEnabled()) {
+          std::cerr << "UI: received command entry size "
+                    << uiEntry.size << " type " << uiEntry.type << std::endl;
+        }
         handleUiEntry(uiEntry);
         handled = true;
       }
       if (!handled) {
         const uint64_t nowMs = uiDiffNowMs();
-        if (nowMs - lastIdleLogMs >= 1000) {
+        if (uiDebugEnabled() && nowMs - lastIdleLogMs >= 1000) {
           lastIdleLogMs = nowMs;
           const uint32_t read =
               ringUi.header ? ringUi.header->readIndex.load(std::memory_order_relaxed) : 0;
@@ -3896,28 +3971,27 @@ struct TrackRuntime {
           const auto& node = graphSnapshot.nodes[nodeIndex];
           auto& buffer = nodeBuffers[nodeIndex];
           buffer.count = 0;
-          if (!node.inputs.empty()) {
-            for (uint32_t inputIndex : graphSnapshot.resolvedInputs[nodeIndex]) {
-              if (inputIndex >= nodeCount) {
-                continue;
-              }
-              const auto& inputBuffer = nodeBuffers[inputIndex];
-              for (uint32_t i = 0; i < inputBuffer.count; ++i) {
-                if (buffer.count < buffer.events.size()) {
-                  buffer.events[buffer.count++] = inputBuffer.events[i];
-                } else {
-                  daw::atomic_store_u64(
-                      reinterpret_cast<uint64_t*>(&lastOverflowTick),
-                      windowStartTicks);
-                  break;
-                }
+          for (uint32_t inputIndex : graphSnapshot.resolvedInputs[nodeIndex]) {
+            if (inputIndex >= nodeCount) {
+              continue;
+            }
+            const auto& inputBuffer = nodeBuffers[inputIndex];
+            for (uint32_t i = 0; i < inputBuffer.count; ++i) {
+              if (buffer.count < buffer.events.size()) {
+                buffer.events[buffer.count++] = inputBuffer.events[i];
+              } else {
+                daw::atomic_store_u64(
+                    reinterpret_cast<uint64_t*>(&lastOverflowTick),
+                    windowStartTicks);
+                break;
               }
             }
           }
           daw::PatcherContext ctx{};
-          ctx.abi_version = 2;
+          ctx.abi_version = 3;
           ctx.block_start_tick = windowStartTicks;
           ctx.block_end_tick = windowEndTicks;
+          ctx.block_start_sample = blockSampleStart;
           ctx.sample_rate = static_cast<float>(engineConfig.sampleRate);
           const double bpm = tempoProvider.bpmAtNanotick(windowStartTicks);
           ctx.tempo_bpm = static_cast<float>(bpm > 0.0 ? bpm : 120.0);
@@ -4299,11 +4373,6 @@ struct TrackRuntime {
                   offPayload.noteId = activeNote.noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                   pushScratchpad(noteOffEntry, activeNote.endNanotick);
-                  if (schedulerLog) {
-                    std::cout << "Scheduler: Emitted MIDI Note-Off (from active notes) - pitch "
-                              << (int)activeNote.pitch << ", blockId " << currentBlockId
-                              << ", endNanotick=" << activeNote.endNanotick << std::endl;
-                  }
                   notesToRemove.push_back(noteId);
                 }
               }
@@ -4324,12 +4393,6 @@ struct TrackRuntime {
           if (auto snapshot = std::atomic_load_explicit(&runtime.clipSnapshot,
                                                         std::memory_order_acquire)) {
             getClipEventsInRange(*snapshot, rangeStart, rangeEnd, events);
-          }
-          if (!events.empty() && schedulerLog) {
-            std::cout << "Scheduler: Found " << events.size()
-                      << " events in range [" << rangeStart
-                      << ", " << rangeEnd << ") for track "
-                      << runtime.trackId << std::endl;
           }
           for (const auto* event : events) {
             if (event->type == daw::MusicalEventType::Param) {
@@ -4382,7 +4445,7 @@ struct TrackRuntime {
               cutActiveNoteInColumn(column, chordSample, currentBlockId);
 
               const auto harmony = getHarmonyAt(event->nanotickOffset);
-              if (!harmony) {
+              if (!harmony.has_value()) {
                 continue;
               }
               const auto* scale = getScaleForHarmony(*harmony);
@@ -4552,12 +4615,6 @@ struct TrackRuntime {
             midiPayload.noteId = noteId;
             std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
             pushScratchpad(midiEntry, event->nanotickOffset);
-            if (schedulerLog) {
-              std::cout << "Scheduler: Emitted MIDI Note-On - pitch "
-                        << (int)scheduledPitch
-                        << ", vel " << (int)event->payload.note.velocity
-                        << ", blockId " << currentBlockId << std::endl;
-            }
 
             // Track this note if it has a duration
             const uint64_t noteDuration = event->payload.note.durationNanoticks;
@@ -4589,11 +4646,6 @@ struct TrackRuntime {
                   offPayload.noteId = noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                   pushScratchpad(noteOffEntry, noteEndTick);
-                  if (schedulerLog) {
-                    std::cout << "Scheduler: Emitted MIDI Note-Off (immediate) - pitch "
-                              << (int)scheduledPitch
-                              << ", blockId " << currentBlockId << std::endl;
-                  }
                 }
               } else {
                 // Note extends beyond this block - track it for later
@@ -4608,12 +4660,6 @@ struct TrackRuntime {
                 activeNote.hasScheduledEnd = true;
                 runtime.activeNotes[activeNote.noteId] = activeNote;
                 runtime.activeNoteByColumn[column].push_back(activeNote.noteId);
-                if (schedulerLog) {
-                  std::cout << "Scheduler: Tracking active note - pitch "
-                            << (int)scheduledPitch
-                            << ", endNanotick=" << noteEndTick
-                            << " (will end in future block)" << std::endl;
-                }
               }
             } else {
               std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
@@ -4927,7 +4973,7 @@ struct TrackRuntime {
             uint64_t eventTick = windowStartTicks + tickDelta;
             eventTick = wrapTick(eventTick);
             const auto harmony = getHarmonyAt(eventTick);
-            if (!harmony) {
+            if (!harmony.has_value()) {
               continue;
             }
             const auto* scale = getScaleForHarmony(*harmony);
@@ -5130,9 +5176,10 @@ struct TrackRuntime {
           }
         }
         daw::PatcherContext ctx{};
-        ctx.abi_version = 2;
-        ctx.block_start_tick = 0;
-        ctx.block_end_tick = 0;
+        ctx.abi_version = 3;
+        ctx.block_start_tick = blockStartTicks;
+        ctx.block_end_tick = blockEndTicks;
+        ctx.block_start_sample = sampleStart;
         ctx.sample_rate = static_cast<float>(engineConfig.sampleRate);
         const double bpm = tempoProvider.bpmAtNanotick(blockStartTicks);
         ctx.tempo_bpm = static_cast<float>(bpm > 0.0 ? bpm : 120.0);

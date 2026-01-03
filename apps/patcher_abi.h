@@ -51,9 +51,10 @@ struct PatcherLfoConfig {
 };
 
 struct alignas(64) PatcherContext {
-  uint32_t abi_version = 2;
+  uint32_t abi_version = 3;
   uint64_t block_start_tick = 0;
   uint64_t block_end_tick = 0;
+  uint64_t block_start_sample = 0;
   float sample_rate = 0.0f;
   float tempo_bpm = 120.0f;
   uint32_t num_frames = 0;

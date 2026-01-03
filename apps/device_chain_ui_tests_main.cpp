@@ -254,6 +254,9 @@ int main() {
   connectNode.trackId = 0;
   connectNode.srcNodeId = 0;
   connectNode.dstNodeId = 1;
+  connectNode.srcPortId = daw::kPatcherEventOutputPort;
+  connectNode.dstPortId = daw::kPatcherEventInputPort;
+  connectNode.edgeKind = static_cast<uint32_t>(daw::PatcherPortKind::Event);
   assert(sendPatcherGraphCommand(ringUi, connectNode));
 
   daw::PatcherLfoConfig lfoConfig{};

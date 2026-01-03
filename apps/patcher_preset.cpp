@@ -11,7 +11,7 @@
 namespace daw {
 namespace {
 
-constexpr uint32_t kPatcherPresetSchemaVersion = 1;
+constexpr uint32_t kPatcherPresetSchemaVersion = 2;
 
 void setError(std::string* error, const std::string& message) {
   if (error) {
@@ -66,6 +66,34 @@ bool stringToNodeType(const std::string& value, PatcherNodeType& out) {
   }
   if (value == "event_out") {
     out = PatcherNodeType::EventOut;
+    return true;
+  }
+  return false;
+}
+
+const char* edgeKindToString(PatcherPortKind kind) {
+  switch (kind) {
+    case PatcherPortKind::Event:
+      return "event";
+    case PatcherPortKind::Audio:
+      return "audio";
+    case PatcherPortKind::Control:
+      return "control";
+  }
+  return "event";
+}
+
+bool stringToEdgeKind(const std::string& value, PatcherPortKind& out) {
+  if (value == "event") {
+    out = PatcherPortKind::Event;
+    return true;
+  }
+  if (value == "audio") {
+    out = PatcherPortKind::Audio;
+    return true;
+  }
+  if (value == "control") {
+    out = PatcherPortKind::Control;
     return true;
   }
   return false;
@@ -142,14 +170,6 @@ bool savePatcherPreset(const PatcherGraph& graph,
     nodeTree.put("id", node.id);
     nodeTree.put("type", nodeTypeToString(node.type));
 
-    boost::property_tree::ptree inputsTree;
-    for (uint32_t input : node.inputs) {
-      boost::property_tree::ptree inputTree;
-      inputTree.put("", input);
-      inputsTree.push_back(std::make_pair("", inputTree));
-    }
-    nodeTree.add_child("inputs", inputsTree);
-
     if (node.hasEuclideanConfig) {
       nodeTree.add_child("euclidean", serializeEuclidean(node.euclideanConfig));
     }
@@ -163,6 +183,18 @@ bool savePatcherPreset(const PatcherGraph& graph,
     nodesTree.push_back(std::make_pair("", nodeTree));
   }
   root.add_child("nodes", nodesTree);
+
+  boost::property_tree::ptree edgesTree;
+  for (const auto& edge : graph.edges) {
+    boost::property_tree::ptree edgeTree;
+    edgeTree.put("src_node_id", edge.src.nodeId);
+    edgeTree.put("src_port_id", edge.src.portId);
+    edgeTree.put("dst_node_id", edge.dst.nodeId);
+    edgeTree.put("dst_port_id", edge.dst.portId);
+    edgeTree.put("kind", edgeKindToString(edge.kind));
+    edgesTree.push_back(std::make_pair("", edgeTree));
+  }
+  root.add_child("edges", edgesTree);
 
   try {
     boost::property_tree::write_json(path, root);
@@ -193,7 +225,7 @@ bool loadPatcherPreset(PatcherGraph& graph,
   }
 
   const uint32_t schemaVersion = root.get<uint32_t>("schema_version", 0);
-  if (schemaVersion != kPatcherPresetSchemaVersion) {
+  if (schemaVersion != kPatcherPresetSchemaVersion && schemaVersion != 1) {
     setError(error, "unsupported patcher preset schema version");
     return false;
   }
@@ -204,7 +236,11 @@ bool loadPatcherPreset(PatcherGraph& graph,
     return false;
   }
 
-  std::vector<PatcherNode> nodes;
+  struct PendingNode {
+    PatcherNode node;
+    std::vector<uint32_t> inputs;
+  };
+  std::vector<PendingNode> pendingNodes;
   std::unordered_set<uint32_t> seenIds;
   for (const auto& entry : *nodesOpt) {
     const auto& nodeTree = entry.second;
@@ -230,9 +266,12 @@ bool loadPatcherPreset(PatcherGraph& graph,
     node.id = nodeId;
     node.type = type;
 
-    if (auto inputsTree = nodeTree.get_child_optional("inputs")) {
-      for (const auto& inputEntry : *inputsTree) {
-        node.inputs.push_back(inputEntry.second.get_value<uint32_t>());
+    std::vector<uint32_t> inputs;
+    if (schemaVersion == 1) {
+      if (auto inputsTree = nodeTree.get_child_optional("inputs")) {
+        for (const auto& inputEntry : *inputsTree) {
+          inputs.push_back(inputEntry.second.get_value<uint32_t>());
+        }
       }
     }
 
@@ -249,10 +288,43 @@ bool loadPatcherPreset(PatcherGraph& graph,
       deserializeRandomDegree(*randomTree, node.randomDegreeConfig);
     }
 
-    nodes.push_back(node);
+    pendingNodes.push_back(PendingNode{node, std::move(inputs)});
   }
 
-  graph.nodes = std::move(nodes);
+  graph.nodes.clear();
+  graph.edges.clear();
+  graph.nodes.reserve(pendingNodes.size());
+  for (auto& pending : pendingNodes) {
+    graph.nodes.push_back(pending.node);
+  }
+  if (schemaVersion == 1) {
+    for (const auto& pending : pendingNodes) {
+      for (uint32_t inputId : pending.inputs) {
+        PatcherEdge edge{};
+        edge.src = {inputId, kPatcherEventOutputPort};
+        edge.dst = {pending.node.id, kPatcherEventInputPort};
+        edge.kind = PatcherPortKind::Event;
+        graph.edges.push_back(edge);
+      }
+    }
+  } else {
+    if (auto edgesTree = root.get_child_optional("edges")) {
+      for (const auto& edgeEntry : *edgesTree) {
+        const auto& edgeTree = edgeEntry.second;
+        PatcherEdge edge{};
+        edge.src.nodeId = edgeTree.get<uint32_t>("src_node_id", 0);
+        edge.src.portId = edgeTree.get<uint32_t>("src_port_id", 0);
+        edge.dst.nodeId = edgeTree.get<uint32_t>("dst_node_id", 0);
+        edge.dst.portId = edgeTree.get<uint32_t>("dst_port_id", 0);
+        const std::string kindStr = edgeTree.get<std::string>("kind", "event");
+        if (!stringToEdgeKind(kindStr, edge.kind)) {
+          setError(error, "patcher preset contains unknown edge kind");
+          return false;
+        }
+        graph.edges.push_back(edge);
+      }
+    }
+  }
   if (!buildPatcherGraph(graph)) {
     setError(error, "patcher preset graph is invalid");
     return false;

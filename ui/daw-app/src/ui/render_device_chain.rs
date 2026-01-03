@@ -1,7 +1,11 @@
 use gpui::{div, px, rgb, Context, FontWeight, IntoElement, MouseButton};
 use gpui::prelude::*;
 
-use crate::app::{ChainAddMode, ChainDevice, EngineView, TRACK_COUNT};
+use crate::app::{
+    ChainAddMode, ChainDevice, EngineView, TRACK_COUNT, PATCHER_NODE_AUDIO_PASSTHROUGH,
+    PATCHER_NODE_EUCLIDEAN, PATCHER_NODE_EVENT_OUT, PATCHER_NODE_LFO,
+    PATCHER_NODE_PASSTHROUGH, PATCHER_NODE_RANDOM_DEGREE, PATCHER_NODE_RUST,
+};
 
 fn device_kind_label(kind: u32) -> &'static str {
     match kind {
@@ -21,9 +25,31 @@ fn plugin_name_for_slot<'a>(view: &'a EngineView, slot: u32) -> Option<&'a str> 
         .map(|plugin| plugin.name.as_str())
 }
 
-fn device_subtitle(device: &ChainDevice) -> String {
+fn patcher_node_type_label(node_type: u32) -> &'static str {
+    match node_type {
+        PATCHER_NODE_RUST => "Rust",
+        PATCHER_NODE_EUCLIDEAN => "Euclidean",
+        PATCHER_NODE_PASSTHROUGH => "Passthrough",
+        PATCHER_NODE_AUDIO_PASSTHROUGH => "Audio Pass",
+        PATCHER_NODE_LFO => "LFO",
+        PATCHER_NODE_RANDOM_DEGREE => "Random Degree",
+        PATCHER_NODE_EVENT_OUT => "Event Out",
+        _ => "Node",
+    }
+}
+
+fn device_subtitle(view: &EngineView, track: usize, device: &ChainDevice) -> String {
     if device.kind <= 2 {
-        format!("Node {}", device.patcher_node_id)
+        let node_label = view
+            .patcher_nodes
+            .get(track)
+            .and_then(|nodes| nodes.iter().find(|node| node.id == device.patcher_node_id))
+            .map(|node| patcher_node_type_label(node.node_type));
+        if let Some(label) = node_label {
+            format!("Node {} · {}", device.patcher_node_id, label)
+        } else {
+            format!("Node {} (missing)", device.patcher_node_id)
+        }
     } else {
         device_kind_label(device.kind).to_string()
     }
@@ -123,7 +149,7 @@ impl EngineView {
                 } else {
                     device_kind_label(device.kind).to_string()
                 };
-                let subtitle = device_subtitle(device);
+                let subtitle = device_subtitle(self, track, device);
                 let muted = if device.bypass { rgb(0x6e7883) } else { rgb(0xe6eef5) };
                 let power_color = if device.bypass {
                     rgb(0xf36b6b)
@@ -212,20 +238,65 @@ impl EngineView {
                                             )
                                     } else {
                                         div()
-                                            .text_xs()
-                                            .text_color(rgb(0x93a1ad))
-                                            .border_1()
-                                            .border_color(rgb(0x2a3242))
-                                            .rounded(px(3.0))
-                                            .px_1()
-                                            .py(px(1.0))
-                                            .child("Open")
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                _cx.listener(move |view, _, _, cx| {
-                                                    view.select_chain_device(device_id, cx);
-                                                    view.open_patcher_view(cx);
-                                                }),
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(0x93a1ad))
+                                                    .border_1()
+                                                    .border_color(rgb(0x2a3242))
+                                                    .rounded(px(3.0))
+                                                    .px_1()
+                                                    .py(px(1.0))
+                                                    .child("Open")
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        _cx.listener(move |view, _, _, cx| {
+                                                            view.select_chain_device(
+                                                                device_id, cx,
+                                                            );
+                                                            view.open_patcher_view(cx);
+                                                        }),
+                                                    ),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(rgb(0x93a1ad))
+                                                    .border_1()
+                                                    .border_color(rgb(0x2a3242))
+                                                    .rounded(px(3.0))
+                                                    .px_1()
+                                                    .py(px(1.0))
+                                                    .child(format!("Node {}", device.patcher_node_id))
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        _cx.listener(move |view, _, _, cx| {
+                                                            view.select_chain_device(
+                                                                device_id, cx,
+                                                            );
+                                                            view.cycle_chain_device_patcher_node(
+                                                                device_id,
+                                                                true,
+                                                                cx,
+                                                            );
+                                                        }),
+                                                    )
+                                                    .on_mouse_down(
+                                                        MouseButton::Right,
+                                                        _cx.listener(move |view, _, _, cx| {
+                                                            view.select_chain_device(
+                                                                device_id, cx,
+                                                            );
+                                                            view.cycle_chain_device_patcher_node(
+                                                                device_id,
+                                                                false,
+                                                                cx,
+                                                            );
+                                                        }),
+                                                    ),
                                             )
                                     },
                                 ),
@@ -251,7 +322,7 @@ impl EngineView {
                         .on_mouse_down(
                             MouseButton::Left,
                             _cx.listener(|view, _, _, cx| {
-                                view.add_chain_device(0, 0, 0, cx);
+                                view.add_chain_patcher_device(0, cx);
                             }),
                         ),
                 )

@@ -684,6 +684,11 @@ pub fn ring_view(base: *mut u8, offset: u64) -> Option<RingView> {
     })
 }
 
+fn ui_ring_debug_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("DAW_UI_DEBUG").map_or(false, |v| v == "1"))
+}
+
 fn ring_write(ring: &RingView, entry: EventEntry) -> bool {
     let write = unsafe { (*ring.header).write_index.load(Ordering::Relaxed) };
     let read = unsafe { (*ring.header).read_index.load(Ordering::Acquire) };
@@ -697,15 +702,17 @@ fn ring_write(ring: &RingView, entry: EventEntry) -> bool {
             .write_index
             .store(next, Ordering::Release);
     }
-    let read_after = unsafe { (*ring.header).read_index.load(Ordering::Relaxed) };
-    let write_after = unsafe { (*ring.header).write_index.load(Ordering::Relaxed) };
-    eprintln!(
-        "daw-app: ui ring write (read {} -> {}, write {} -> {})",
-        read,
-        read_after,
-        write,
-        write_after
-    );
+    if ui_ring_debug_enabled() {
+        let read_after = unsafe { (*ring.header).read_index.load(Ordering::Relaxed) };
+        let write_after = unsafe { (*ring.header).write_index.load(Ordering::Relaxed) };
+        eprintln!(
+            "daw-app: ui ring write (read {} -> {}, write {} -> {})",
+            read,
+            read_after,
+            write,
+            write_after
+        );
+    }
     true
 }
 

@@ -61,6 +61,8 @@ and modulation mapping.
 - Patcher devices expose a "presentation" view:
   - If provided, show that presentation UI in the tile.
   - If not provided, show standard macro knobs.
+- Patcher device tiles show the selected patcher node id (Event/Audio sink) and
+  allow cycling to another valid node on the track.
 - Standard macro knobs: 8 knobs, float 0.0..1.0 (32-bit).
 
 ## Patcher UX (Graph View)
@@ -69,14 +71,15 @@ and modulation mapping.
 - Clean wires (no skeuomorphic cables).
 - Ports are typed and visually distinct:
   - Event ports (MIDI/logic)
-  - Audio ports
-  - Control/modulation ports (float, int, bool, enum, vector)
+  - Audio ports (multichannel bus with channel_count; default stereo)
+  - Control ports (float, block-rate or sample-rate)
   - Event list ports (note/degree/chord lists; tracker phrases later)
 - Connections are type-safe:
   - Event -> Event
   - Audio -> Audio
   - Control -> Parameter targets
 - Explicit convert nodes if a translation is needed (e.g., Event -> Control).
+  - Port ids are stable across node versions so patches survive upgrades.
 - Node palette:
   - Cmd+Shift+P opens a filtered node palette.
   - Drag nodes into the graph.
@@ -115,6 +118,7 @@ Add Tracker Column:
 - A modulation source must appear before its target in the device chain.
 - UI hard-blocks invalid links (source after target).
 - Sample-accurate modulation is required.
+  - Control ports declare rate; sample-rate implies per-sample buffers, block-rate is per-block.
 
 ### Source UI
 

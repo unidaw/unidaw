@@ -387,7 +387,9 @@ struct UiPatcherGraphCommandPayload {
   uint32_t nodeType = 0;
   uint32_t srcNodeId = 0;
   uint32_t dstNodeId = 0;
-  uint8_t reserved[12]{};
+  uint32_t srcPortId = 0;
+  uint32_t dstPortId = 0;
+  uint32_t edgeKind = 0;
 };
 
 static_assert(sizeof(UiPatcherGraphCommandPayload) == 40,
@@ -416,7 +418,9 @@ struct UiPatcherGraphDiffPayload {
   uint32_t nodeType = 0;
   uint32_t srcNodeId = 0;
   uint32_t dstNodeId = 0;
-  uint8_t reserved[12]{};
+  uint32_t srcPortId = 0;
+  uint32_t dstPortId = 0;
+  uint32_t edgeKind = 0;
 };
 
 static_assert(sizeof(UiPatcherGraphDiffPayload) == 40,
@@ -429,7 +433,10 @@ struct UiPatcherGraphErrorPayload {
   uint32_t nodeId = 0;
   uint32_t srcNodeId = 0;
   uint32_t dstNodeId = 0;
-  uint8_t reserved[20]{};
+  uint32_t srcPortId = 0;
+  uint32_t dstPortId = 0;
+  uint32_t edgeKind = 0;
+  uint8_t reserved[8]{};
 };
 
 static_assert(sizeof(UiPatcherGraphErrorPayload) == 40,

@@ -2,7 +2,7 @@
 
 use core::ffi::c_void;
 
-pub const PATCHER_ABI_VERSION: u32 = 2;
+pub const PATCHER_ABI_VERSION: u32 = 3;
 const NANOTICKS_PER_QUARTER: u64 = 960_000;
 const DEFAULT_BPM: f64 = 120.0;
 const EUCLIDEAN_STEPS: u32 = 16;
@@ -79,6 +79,7 @@ pub struct PatcherContext {
     pub abi_version: u32,
     pub block_start_tick: u64,
     pub block_end_tick: u64,
+    pub block_start_sample: u64,
     pub sample_rate: f32,
     pub tempo_bpm: f32,
     pub num_frames: u32,
@@ -204,6 +205,16 @@ fn bjorklund_pattern(steps: u32, hits: u32, pattern: &mut [u8; EUCLIDEAN_MAX_STE
     );
 }
 
+fn mix64(mut x: u64) -> u64 {
+    // SplitMix64 finalizer for stable, deterministic hashing.
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    x
+}
+
 #[no_mangle]
 pub extern "C" fn patcher_process(ctx: *mut PatcherContext) {
     patcher_process_euclidean(ctx);
@@ -260,8 +271,7 @@ pub extern "C" fn patcher_process_euclidean(ctx: *mut PatcherContext) {
         };
         let samples_per_tick =
             (ctx_ref.sample_rate as f64 * 60.0) / (tempo_bpm * NANOTICKS_PER_QUARTER as f64);
-        let block_start_sample =
-            (ctx_ref.block_start_tick as f64 * samples_per_tick).round() as u64;
+        let block_start_sample = ctx_ref.block_start_sample;
 
         let mut pattern: [u8; EUCLIDEAN_MAX_STEPS] = [0u8; EUCLIDEAN_MAX_STEPS];
         if steps as usize <= EUCLIDEAN_MAX_STEPS {
@@ -383,11 +393,10 @@ pub extern "C" fn patcher_process_random_degree(ctx: *mut PatcherContext) {
             if payload.metadata[0] != MUSICAL_LOGIC_KIND_GATE {
                 continue;
             }
-            let mut state = (ctx_ref.block_start_tick as u32)
-                ^ (entry.sample_time as u32)
-                ^ ((index as u32).wrapping_mul(0x9e37_79b9));
-            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
-            let random = (state % degree_max as u32) as u8;
+            let seed = (ctx_ref.block_start_tick as u64)
+                ^ (entry.sample_time as u64)
+                ^ (index as u64).wrapping_mul(0x9e37_79b9);
+            let random = (mix64(seed) % degree_max as u64) as u8;
             payload.degree = random.saturating_add(1);
             payload.velocity = if config.velocity != 0 {
                 config.velocity

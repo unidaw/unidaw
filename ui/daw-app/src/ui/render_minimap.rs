@@ -5,7 +5,16 @@ use crate::app::EngineView;
 use crate::tracker::{HEADER_HEIGHT, MINIMAP_WIDTH, ROW_HEIGHT, VISIBLE_ROWS};
 
 impl EngineView {
-    pub(crate) fn timeline_end_nanotick(&self) -> u64 {
+    pub(crate) fn timeline_end_nanotick(&mut self) -> u64 {
+        // Check if cache is valid
+        if self.minimap_cache_clip_version == self.clip_version_local
+            && self.minimap_cache_harmony_version == self.harmony_version_local
+            && self.cached_timeline_end > 0
+        {
+            return self.cached_timeline_end;
+        }
+
+        // Recompute
         let mut max_tick = 0_u64;
         for track_notes in &self.clip_notes {
             for note in track_notes {
@@ -27,15 +36,34 @@ impl EngineView {
             max_tick = max_tick.max(event.nanotick);
         }
         let row = self.row_nanoticks().max(1);
-        if max_tick == 0 {
+        let result = if max_tick == 0 {
             row.saturating_mul(VISIBLE_ROWS as u64)
         } else {
             max_tick.saturating_add(row)
-        }
+        };
+
+        // Update cache
+        self.cached_timeline_end = result;
+        self.minimap_cache_clip_version = self.clip_version_local;
+        self.minimap_cache_harmony_version = self.harmony_version_local;
+
+        result
     }
 
-    pub(crate) fn minimap_bins(&self, start: u64, end: u64, segments: usize) -> Vec<usize> {
+    pub(crate) fn minimap_bins(&mut self, start: u64, end: u64, segments: usize) -> Vec<usize> {
         let segments = segments.max(1);
+        let params = (end, segments);
+
+        // Check if cache is valid
+        if self.minimap_cache_clip_version == self.clip_version_local
+            && self.minimap_cache_harmony_version == self.harmony_version_local
+            && self.cached_minimap_params == params
+            && !self.cached_minimap_bins.is_empty()
+        {
+            return self.cached_minimap_bins.clone();
+        }
+
+        // Recompute
         let mut bins = vec![0usize; segments];
         let span = end.saturating_sub(start).max(1);
         let mut add_tick = |tick: u64| {
@@ -65,10 +93,15 @@ impl EngineView {
         for event in &self.harmony_events {
             add_tick(event.nanotick);
         }
+
+        // Update cache
+        self.cached_minimap_bins = bins.clone();
+        self.cached_minimap_params = params;
+
         bins
     }
 
-    pub(crate) fn render_minimap(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_minimap(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let row_nanoticks = self.row_nanoticks() as i64;
         let timeline_end = self.timeline_end_nanotick();
         let timeline_start = 0_u64;
