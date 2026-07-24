@@ -34,6 +34,8 @@ daw-cli — control surface for a running engine
   daw-cli do chord --force --track N --nanotick T --degree D
                    [--quality Q] [--inversion I] [--octave O] [--duration D]
   daw-cli do harmony --force --nanotick T --root R --scale S
+  daw-cli do mixer --force --track N [--gain-db X] [--pan Y]
+                   [--mute 0|1] [--solo 0|1]
 
 `get clip` needs --force too: reading a window means asking the engine for one,
 and any request is a write to the single-producer command ring.
@@ -242,6 +244,42 @@ fn write_notes(handle: &EngineHandle, args: &[String]) -> i32 {
     }
     println!("{{ \"sent\": {sent}, \"first_base_version\": {} }}", base - sent as u32);
     0
+}
+
+fn flag_f64(args: &[String], key: &str, default: f64) -> Result<f64, String> {
+    match flag(args, key) {
+        Some(raw) => raw
+            .parse::<f64>()
+            .map_err(|_| format!("{key} expects a number, got {raw:?}")),
+        None => Ok(default),
+    }
+}
+
+fn mixer_command(args: &[String]) -> Result<UiCommandPayload, String> {
+    let track = flag_u64(args, "--track", Some(0))? as u32;
+    let gain_db = flag_f64(args, "--gain-db", 0.0)?;
+    let pan = flag_f64(args, "--pan", 0.0)?.clamp(-1.0, 1.0);
+    let mut flags = 0u16;
+    if flag_u64(args, "--mute", Some(0))? != 0 {
+        flags |= daw_bridge::layout::MIXER_FLAG_MUTE;
+    }
+    if flag_u64(args, "--solo", Some(0))? != 0 {
+        flags |= daw_bridge::layout::MIXER_FLAG_SOLO;
+    }
+    Ok(UiCommandPayload {
+        command_type: UiCommandType::SetTrackMixer as u16,
+        flags,
+        track_id: track,
+        // Signed integers carried in unsigned fields; the engine casts back.
+        plugin_index: ((pan * 1000.0).round() as i32) as u32,
+        note_pitch: 0,
+        value0: ((gain_db * 100.0).round() as i32) as u32,
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    })
 }
 
 fn chord_command(
@@ -596,6 +634,22 @@ fn main() {
                     }
                 }
                 Some(&"notes") => write_notes(&handle, &args),
+                Some(&"mixer") => match mixer_command(&args) {
+                    Ok(payload) => match handle.send_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"mixer\" }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("daw-cli: {err}");
+                        2
+                    }
+                },
                 Some(&"chord") => {
                     let base = handle.clip_version();
                     match chord_command(&args, base) {

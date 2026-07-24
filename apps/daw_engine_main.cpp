@@ -318,6 +318,12 @@ public:
     const std::atomic<uint32_t>* completedBlockId = nullptr;
     const std::atomic<bool>* hostReady = nullptr;
     const std::atomic<bool>* active = nullptr;
+    // Mixer state lives in the track runtime and is read atomically here, so a
+    // fader move does not require rebuilding the track list.
+    const std::atomic<float>* gainLinear = nullptr;
+    const std::atomic<float>* pan = nullptr;
+    const std::atomic<bool>* mute = nullptr;
+    const std::atomic<bool>* solo = nullptr;
     size_t shmSize = 0;
     uint32_t trackId = 0;
   };
@@ -367,8 +373,23 @@ public:
     bool hasActiveTrack = false;
     bool playedBlock = false;
 
+    // Solo is exclusive across the whole bus, so it has to be resolved before
+    // any track is summed.
+    bool anySolo = false;
+    for (const auto& track : *tracks) {
+      if (track.solo && track.solo->load(std::memory_order_relaxed)) {
+        anySolo = true;
+        break;
+      }
+    }
+
     for (const auto& track : *tracks) {
       if (!track.shmView || !track.shmBase || !track.header || !track.completedBlockId) {
+        continue;
+      }
+      const bool muted = track.mute && track.mute->load(std::memory_order_relaxed);
+      const bool soloed = track.solo && track.solo->load(std::memory_order_relaxed);
+      if (muted || (anySolo && !soloed)) {
         continue;
       }
       if (track.hostReady && !track.hostReady->load(std::memory_order_acquire)) {
@@ -437,11 +458,25 @@ public:
           continue;
         }
 
-        // Simple mixing - just add the signals
-        // TODO: Add proper gain staging/limiting
+        const float gain =
+            track.gainLinear ? track.gainLinear->load(std::memory_order_relaxed) : 1.0f;
+        const float pan =
+            track.pan ? track.pan->load(std::memory_order_relaxed) : 0.0f;
+        // Constant power: a centred track is -3 dB per side rather than
+        // getting louder when panned hard.
+        const float angle = (std::clamp(pan, -1.0f, 1.0f) + 1.0f) * 0.25f *
+                            static_cast<float>(M_PI);
+        // cos/sin give the conventional -3 dB per side at centre, so total
+        // power is constant as the track is panned.
+        const float panGain = (ch == 0) ? std::cos(angle) : std::sin(angle);
+        const float channelGain = gain * (numOutputChannels >= 2 ? panGain : 1.0f);
+
+        // Per-track gain and constant-power pan. The old code multiplied every
+        // track by a fixed 0.5 to hide clipping, which made the summing bus a
+        // lie: levels were neither unity nor measurable. Tracks now sum at
+        // their own gain, so clipping is visible rather than pre-attenuated.
         for (int i = 0; i < std::min(numSamples, (int)m_blockSize); ++i) {
-          float sample = trackChannel[i];
-          output[i] += sample * 0.5f; // Scale down to prevent clipping
+          output[i] += trackChannel[i] * channelGain;
         }
       }
     }
@@ -843,6 +878,11 @@ struct Track {
 struct TrackRuntime {
     uint32_t trackId = 0;
     Track track;
+    // Read by the audio thread every block; written by the UI thread.
+    std::atomic<float> mixGainLinear{1.0f};
+    std::atomic<float> mixPan{0.0f};
+    std::atomic<bool> mixMute{false};
+    std::atomic<bool> mixSolo{false};
     std::mutex trackMutex;
     std::shared_ptr<const ClipSnapshot> clipSnapshot;
     std::shared_ptr<const TrackStateSnapshot> trackSnapshot;
@@ -2186,6 +2226,12 @@ struct TrackRuntime {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         track.harmonyQuantize = runtime->track.harmonyQuantize;
         track.routing = runtime->track.routing;
+        const float gainLinear = runtime->mixGainLinear.load(std::memory_order_relaxed);
+        track.mixer.gainDb =
+            gainLinear > 0.0f ? 20.0 * std::log10(static_cast<double>(gainLinear)) : -120.0;
+        track.mixer.pan = runtime->mixPan.load(std::memory_order_relaxed);
+        track.mixer.mute = runtime->mixMute.load(std::memory_order_relaxed);
+        track.mixer.solo = runtime->mixSolo.load(std::memory_order_relaxed);
         track.chain = runtime->track.chain;
         track.modLinks = runtime->track.modRegistry.links;
         track.clip = runtime->track.clip;
@@ -2324,6 +2370,13 @@ struct TrackRuntime {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         runtime->track.clip = source.clip;
         runtime->track.harmonyQuantize = source.harmonyQuantize;
+        runtime->mixGainLinear.store(
+            static_cast<float>(std::pow(10.0, source.mixer.gainDb / 20.0)),
+            std::memory_order_relaxed);
+        runtime->mixPan.store(static_cast<float>(source.mixer.pan),
+                              std::memory_order_relaxed);
+        runtime->mixMute.store(source.mixer.mute, std::memory_order_relaxed);
+        runtime->mixSolo.store(source.mixer.solo, std::memory_order_relaxed);
         snapshot = buildClipSnapshot(runtime->track.clip);
       }
       std::atomic_store_explicit(&runtime->clipSnapshot,
@@ -3847,6 +3900,35 @@ struct TrackRuntime {
         std::lock_guard<std::mutex> lock(undoMutex);
         undoStack.push_back(undoEntry);
       }
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetTrackMixer)) {
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        return;
+      }
+      const double gainDb = static_cast<double>(static_cast<int32_t>(payload.value0)) / 100.0;
+      const double pan =
+          static_cast<double>(static_cast<int32_t>(payload.pluginIndex)) / 1000.0;
+      const float gainLinear = static_cast<float>(std::pow(10.0, gainDb / 20.0));
+      runtime->mixGainLinear.store(gainLinear, std::memory_order_relaxed);
+      runtime->mixPan.store(static_cast<float>(std::clamp(pan, -1.0, 1.0)),
+                            std::memory_order_relaxed);
+      runtime->mixMute.store((payload.flags & daw::kMixerFlagMute) != 0,
+                             std::memory_order_relaxed);
+      runtime->mixSolo.store((payload.flags & daw::kMixerFlagSolo) != 0,
+                             std::memory_order_relaxed);
+      DAW_EVENT("mixer.set")
+          .field("track", payload.trackId)
+          .field("gain_db", gainDb)
+          .field("pan", pan)
+          .field("mute", (payload.flags & daw::kMixerFlagMute) != 0)
+          .field("solo", (payload.flags & daw::kMixerFlagSolo) != 0);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::WriteHarmony)) {
       if (!requireMatchingHarmonyVersion(payload.baseVersion,
@@ -6461,6 +6543,10 @@ struct TrackRuntime {
                 info.completedBlockId = shmView->completedBlockId;
                 info.hostReady = &runtime->hostReady;
                 info.active = &runtime->active;
+                info.gainLinear = &runtime->mixGainLinear;
+                info.pan = &runtime->mixPan;
+                info.mute = &runtime->mixMute;
+                info.solo = &runtime->mixSolo;
                 info.shmSize = shmView->size;
                 info.trackId = trackId;
                 trackInfoCache[trackId] = info;

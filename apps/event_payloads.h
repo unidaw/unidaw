@@ -70,7 +70,14 @@ enum class UiCommandType : uint16_t {
   // payload and a name keeps the wire format unchanged.
   SaveProject = 31,
   LoadProject = 32,
+  // Gain in millibels (value0, signed), pan in thousandths (plugin_index,
+  // signed), mute/solo in flags. Integers because UiCommandPayload has no
+  // float fields and rounding a fader is harmless.
+  SetTrackMixer = 33,
 };
+
+constexpr uint16_t kMixerFlagMute = 1u << 0;
+constexpr uint16_t kMixerFlagSolo = 1u << 1;
 
 enum class UiDiffType : uint16_t {
   None = 0,

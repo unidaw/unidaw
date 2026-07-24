@@ -14,10 +14,18 @@ namespace daw {
 
 // Serializable form of a track. This mirrors the engine's `Track` but holds
 // only what belongs in a saved document: no runtime state, no host handles.
+struct MixerSettings {
+  double gainDb = 0.0;
+  double pan = 0.0;  // -1 hard left, +1 hard right
+  bool mute = false;
+  bool solo = false;
+};
+
 struct ProjectTrack {
   uint32_t trackId = 0;
   std::string name;
   bool harmonyQuantize = false;
+  MixerSettings mixer{};
   TrackRouting routing{};
   TrackChain chain{};
   std::vector<ModLink> modLinks;

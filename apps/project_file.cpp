@@ -334,6 +334,13 @@ std::string serializeProject(const ProjectDocument& document) {
     writer.key("name", track.name);
     writer.key("harmony_quantize", track.harmonyQuantize);
 
+    writer.beginChildObject("mixer");
+    writer.key("gain_db", track.mixer.gainDb);
+    writer.key("pan", track.mixer.pan);
+    writer.key("mute", track.mixer.mute);
+    writer.key("solo", track.mixer.solo);
+    writer.endChildObject();
+
     writer.beginChildObject("routing");
     writeRoute(writer, "midi_in", track.routing.midiIn);
     writeRoute(writer, "midi_out", track.routing.midiOut);
@@ -511,7 +518,13 @@ bool deserializeProject(const std::string& json,
       ProjectTrack track;
       track.trackId = tree.get<uint32_t>("track_id", 0);
       track.name = tree.get<std::string>("name", "");
-      track.harmonyQuantize = tree.get<bool>("harmony_quantize", true);
+      track.harmonyQuantize = tree.get<bool>("harmony_quantize", false);
+      if (const auto mixer = tree.get_child_optional("mixer")) {
+        track.mixer.gainDb = mixer->get<double>("gain_db", 0.0);
+        track.mixer.pan = mixer->get<double>("pan", 0.0);
+        track.mixer.mute = mixer->get<bool>("mute", false);
+        track.mixer.solo = mixer->get<bool>("solo", false);
+      }
 
       if (const auto routing = tree.get_child_optional("routing")) {
         if (const auto child = routing->get_child_optional("midi_in")) {

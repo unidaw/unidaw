@@ -63,6 +63,10 @@ daw::ProjectDocument makeDocument() {
   track.trackId = 0;
   track.name = "Lead";
   track.harmonyQuantize = false;
+  track.mixer.gainDb = -6.5;
+  track.mixer.pan = -0.75;
+  track.mixer.mute = true;
+  track.mixer.solo = false;
   track.routing.audioOut = {daw::TrackRouteKind::Track, 3, 0};
   track.routing.preFaderSend = false;
 
@@ -165,6 +169,10 @@ int main() {
   const auto& track = roundTripped.tracks[0];
   require(track.name == "Lead", "track name lost");
   require(!track.harmonyQuantize, "harmony_quantize lost");
+  require(track.mixer.gainDb == -6.5, "mixer gain lost");
+  require(track.mixer.pan == -0.75, "mixer pan lost");
+  require(track.mixer.mute, "mixer mute lost");
+  require(!track.mixer.solo, "mixer solo lost");
   require(track.routing.audioOut.kind == daw::TrackRouteKind::Track,
           "routing kind lost");
   require(track.routing.audioOut.trackId == 3, "routing target lost");

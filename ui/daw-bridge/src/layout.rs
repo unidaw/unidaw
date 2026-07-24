@@ -297,7 +297,13 @@ pub enum UiCommandType {
     /// resolved against the engine's project directory.
     SaveProject = 31,
     LoadProject = 32,
+    /// Gain in millibels (`value0`, signed), pan in thousandths
+    /// (`plugin_index`, signed), mute/solo in `flags`.
+    SetTrackMixer = 33,
 }
+
+pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
+pub const MIXER_FLAG_SOLO: u16 = 1 << 1;
 
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
