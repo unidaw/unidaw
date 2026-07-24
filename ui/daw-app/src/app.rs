@@ -218,6 +218,12 @@ pub struct EngineView {
     /// Guards against re-entering the edit drain from `enqueue_ui_command`,
     /// which `commit_*` calls while the drain loop owns `pending_edit_ops`.
     edit_flush_active: bool,
+    /// Octaves to add to a typed note. The keyboard covers two fixed octaves;
+    /// this shifts them so the whole MIDI range is reachable.
+    pub octave_offset: i32,
+    /// Rows the cursor advances after writing a cell. 0 stacks entries on one
+    /// row (chords across columns); >1 writes on a coarser grid.
+    pub edit_step: i64,
     pub clip_version_local: u32,
     pub(crate) clip_render_version: u64,
     pub harmony_version_local: u32,
@@ -522,6 +528,8 @@ impl EngineView {
             fast_overlay: TrackerFastOverlay::new(TRACK_COUNT, MAX_NOTE_COLUMNS),
             pending_edit_ops: VecDeque::new(),
             edit_flush_active: false,
+            octave_offset: 0,
+            edit_step: EDIT_STEP_ROWS,
             clip_version_local: 0,
             clip_render_version: 0,
             harmony_version_local: 0,
@@ -877,6 +885,20 @@ impl EngineView {
                 self.append_query(key_char, cx);
                 return;
             }
+            // Brackets shift the keyboard octave, live in the tracker grid.
+            // (Edit step is set via set_edit_step; alt+digit is already taken
+            // by sharp/degree entry, so it has no keystroke binding yet.)
+            match key_char {
+                "[" => {
+                    self.adjust_octave(-1, cx);
+                    return;
+                }
+                "]" => {
+                    self.adjust_octave(1, cx);
+                    return;
+                }
+                _ => {}
+            }
             if self.chain_focus {
                 return;
             }
@@ -890,6 +912,7 @@ impl EngineView {
             if let Some(degree) = degree_for_digit(key_char) {
                 if keystroke.modifiers.alt {
                     if let Some(pitch) = pitch_for_key(key_char) {
+                        let pitch = self.shift_octave(pitch);
                         self.write_note(pitch, cx);
                     }
                     return;
@@ -903,11 +926,13 @@ impl EngineView {
             }
             // Check for MIDI notes (keyjazz letters).
             if let Some(pitch) = pitch_for_key(key_char) {
+                let pitch = self.shift_octave(pitch);
                 self.write_note(pitch, cx);
                 return;
             }
             // Check remaining letter keys for MIDI notes
             if let Some(pitch) = pitch_for_letter_key(key_char) {
+                let pitch = self.shift_octave(pitch);
                 self.write_note(pitch, cx);
                 return;
             }
@@ -3140,7 +3165,27 @@ impl EngineView {
             duration: None,
         };
         self.send_chord(chord, cx);
-        self.move_cursor_row(EDIT_STEP_ROWS, cx);
+        self.move_cursor_row(self.edit_step, cx);
+    }
+
+    /// Applies the current octave offset to a keyboard pitch, clamped to the
+    /// MIDI range so a shift near an edge saturates rather than wrapping.
+    pub(crate) fn shift_octave(&self, pitch: u8) -> u8 {
+        let shifted = pitch as i32 + self.octave_offset * 12;
+        shifted.clamp(0, 127) as u8
+    }
+
+    /// Moves the octave the keyboard writes into, within a range that keeps
+    /// even the highest key on the row inside the MIDI range.
+    pub fn adjust_octave(&mut self, delta: i32, cx: &mut impl UiNotify) {
+        self.octave_offset = (self.octave_offset + delta).clamp(-4, 4);
+        cx.notify();
+    }
+
+    /// Sets how many rows the cursor advances after an entry (0..=16).
+    pub fn set_edit_step(&mut self, step: i64, cx: &mut impl UiNotify) {
+        self.edit_step = step.clamp(0, 16);
+        cx.notify();
     }
 
     fn write_note(&mut self, pitch: u8, cx: &mut impl UiNotify) {
@@ -3154,7 +3199,7 @@ impl EngineView {
             // Nothing will ever drain the command queue without an engine, so
             // apply straight to the local store instead of queueing forever.
             self.write_note_at(track, column, nanotick, pitch, 100, 0, cx);
-            self.move_cursor_row(EDIT_STEP_ROWS, cx);
+            self.move_cursor_row(self.edit_step, cx);
             return;
         }
         self.fast_overlay.remove_cell(track, column, nanotick);
@@ -3171,7 +3216,7 @@ impl EngineView {
         };
         self.queue_edit_op(op);
         self.bump_clip_version();
-        self.move_cursor_row(EDIT_STEP_ROWS, cx);
+        self.move_cursor_row(self.edit_step, cx);
         cx.notify(); // Show pending note immediately
     }
 
@@ -3427,7 +3472,7 @@ impl EngineView {
         if (pitch == 0 && prev_boundary.is_none()) || self.bridge.is_none() {
             // An OFF is derived from engine-confirmed note spans, so there is
             // nothing meaningful to record while detached.
-            self.move_cursor_row(EDIT_STEP_ROWS, cx);
+            self.move_cursor_row(self.edit_step, cx);
             cx.notify();
             return;
         }
@@ -3442,7 +3487,7 @@ impl EngineView {
         };
         self.queue_edit_op(op);
         self.bump_clip_version();
-        self.move_cursor_row(EDIT_STEP_ROWS, cx);
+        self.move_cursor_row(self.edit_step, cx);
         cx.notify();
     }
 
@@ -4906,6 +4951,42 @@ mod tests {
             (2 - 1) * NANOTICKS_PER_QUARTER +
             5 * 10_000;
         assert_eq!(parse_jump_text("3:2:5"), Some(expected));
+    }
+
+    #[test]
+    fn test_octave_offset_shifts_and_clamps() {
+        struct N;
+        impl super::UiNotify for N {
+            fn notify(&mut self) {}
+        }
+        let mut view = super::EngineView::new_state();
+        assert_eq!(view.shift_octave(60), 60, "no shift at offset 0");
+        view.adjust_octave(1, &mut N);
+        assert_eq!(view.shift_octave(60), 72, "one octave up");
+        view.adjust_octave(-3, &mut N);
+        assert_eq!(view.octave_offset, -2, "offset accumulates");
+        assert_eq!(view.shift_octave(60), 36, "two octaves down");
+        // Saturates at the MIDI edges rather than wrapping.
+        for _ in 0..10 {
+            view.adjust_octave(1, &mut N);
+        }
+        assert_eq!(view.octave_offset, 4, "offset clamps to +4");
+        assert_eq!(view.shift_octave(120), 127, "high pitch saturates, not wraps");
+    }
+
+    #[test]
+    fn test_edit_step_clamps() {
+        struct N;
+        impl super::UiNotify for N {
+            fn notify(&mut self) {}
+        }
+        let mut view = super::EngineView::new_state();
+        view.set_edit_step(0, &mut N);
+        assert_eq!(view.edit_step, 0, "step 0 stacks entries on one row");
+        view.set_edit_step(99, &mut N);
+        assert_eq!(view.edit_step, 16, "step clamps to 16");
+        view.set_edit_step(-5, &mut N);
+        assert_eq!(view.edit_step, 0, "negative step clamps to 0");
     }
 
     #[test]

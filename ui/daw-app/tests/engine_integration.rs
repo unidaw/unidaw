@@ -1855,26 +1855,18 @@ mod integration_tests {
             harness.view.follow_playhead = false;
             harness.wait_for_track_count(2, Duration::from_secs(1))?;
 
-            // A realistic scene: harmony, a melody, a degree chord, and a
-            // second track — enough to judge the layout.
+            // A realistic scene: harmony, a melody with the octave shifted up,
+            // a wider edit step, and the state visible in the header.
             harness.view.focus_harmony_row(0, &mut harness.notify);
             harness.press_key("c");
             harness.view.focus_harmony_row(8, &mut harness.notify);
             harness.press_key("a");
             harness.view.focus_note_cell(0, 0, 0, &mut harness.notify);
+            harness.press_key("]"); // octave up
+            harness.view.set_edit_step(2, &mut harness.notify);
             for key in ["q", "w", "e", "r", "t", "y"] {
                 harness.press_key(key);
             }
-            harness.view.focus_note_cell(0, 1, 0, &mut harness.notify);
-            harness.press_key("1");
-            harness.view.focus_note_cell(4, 1, 0, &mut harness.notify);
-            harness.press_key("5");
-            harness.view.focused_track_index = 1;
-            harness.view.focus_note_cell(0, 0, 0, &mut harness.notify);
-            for key in ["z", "x", "c"] {
-                harness.press_key(key);
-            }
-            harness.view.focused_track_index = 0;
             harness.pump(Duration::from_millis(500));
             harness.view.focus_note_cell(2, 0, 0, &mut harness.notify);
 

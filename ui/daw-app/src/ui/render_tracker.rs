@@ -635,6 +635,8 @@ impl EngineView {
         let cursor_row = self.cursor_view_row();
         let cursor_col = self.cursor_col;
         let harmony_focus = self.harmony_focus;
+        let octave_offset = self.octave_offset;
+        let edit_step = self.edit_step;
         let playhead = self.snapshot.ui_global_nanotick_playhead;
         let Some(cache) = self.tracker_cache() else {
             return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" \
@@ -671,9 +673,11 @@ impl EngineView {
         // Header row: TIME, HARM, T1/T2..., matching render_tracker_header.
         svg.push_str(&rect(0.0, 0.0, width, HEADER_H, "#1a1f2b"));
         let header_baseline = HEADER_H / 2.0 + FONT / 3.0;
+        // Octave and edit step live in the time header, so the state you are
+        // typing into is always visible.
         svg.push_str(&format!(
             "<text x=\"8\" y=\"{header_baseline:.1}\" fill=\"#b0bac4\" \
-             font-weight=\"bold\">TIME</text>\n"
+             font-weight=\"bold\">oct{octave_offset:+} \u{2193}{edit_step}</text>\n"
         ));
         svg.push_str(&rect(TIME_W, 0.0, HARM_W, HEADER_H, "#151922"));
         svg.push_str(&format!(
@@ -1122,7 +1126,9 @@ impl EngineView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(rgb(0xb0bac4))
                     .px_2()
-                    .child("TIME"),
+                    // The octave the keyboard writes and the row advance per
+                    // entry, always visible where you type.
+                    .child(format!("oct{:+} \u{2193}{}", self.octave_offset, self.edit_step)),
             )
             .child(
                 div()
