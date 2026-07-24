@@ -19,6 +19,12 @@ daw-cli — control surface for a running engine
   daw-cli do save [name] --force   save the project (default name: default)
   daw-cli do load [name] --force   load the project
   daw-cli do play --force          toggle transport
+  daw-cli do note --force --track N --nanotick T --pitch P
+                  [--velocity V] [--duration D] [--column C]
+  daw-cli do delete-note --force --track N --nanotick T --pitch P [--column C]
+
+Reading a clip back: `do save` then read the project.json the engine wrote.
+That file is the query surface for musical content — see PROJECT_PERSISTENCE.md.
 
 Queries are read-only. `do` writes to the UI command ring, which allows a
 single producer: if the UI app is running it already owns that ring, so pass
@@ -31,6 +37,61 @@ Environment:
 
 fn escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Reads `--key value` from the argument list.
+fn flag(args: &[String], key: &str) -> Option<String> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == key {
+            return iter.next().cloned();
+        }
+        if let Some(rest) = arg.strip_prefix(&format!("{key}=")) {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+fn flag_u64(args: &[String], key: &str, default: Option<u64>) -> Result<u64, String> {
+    match flag(args, key) {
+        Some(raw) => raw
+            .parse::<u64>()
+            .map_err(|_| format!("{key} expects a number, got {raw:?}")),
+        None => default.ok_or_else(|| format!("{key} is required")),
+    }
+}
+
+/// Builds a note command. `base_version` must equal the engine's current clip
+/// version or the edit is rejected and a resync is requested — that is the
+/// concurrency control, and an agent is subject to it exactly like the UI.
+fn note_command(
+    command: UiCommandType,
+    args: &[String],
+    base_version: u32,
+) -> Result<UiCommandPayload, String> {
+    let track = flag_u64(args, "--track", Some(0))? as u32;
+    let nanotick = flag_u64(args, "--nanotick", None)?;
+    let pitch = flag_u64(args, "--pitch", None)?;
+    if pitch > 127 {
+        return Err(format!("--pitch must be 0..127, got {pitch}"));
+    }
+    let velocity = flag_u64(args, "--velocity", Some(100))?;
+    let duration = flag_u64(args, "--duration", Some(0))?;
+    let column = flag_u64(args, "--column", Some(0))?;
+    Ok(UiCommandPayload {
+        command_type: command as u16,
+        flags: column as u16,
+        track_id: track,
+        plugin_index: 0,
+        note_pitch: pitch as u32,
+        value0: velocity.min(127) as u32,
+        note_nanotick_lo: (nanotick & 0xffff_ffff) as u32,
+        note_nanotick_hi: (nanotick >> 32) as u32,
+        note_duration_lo: (duration & 0xffff_ffff) as u32,
+        note_duration_hi: (duration >> 32) as u32,
+        base_version,
+    })
 }
 
 fn get_transport(handle: &EngineHandle) -> i32 {
@@ -205,6 +266,36 @@ fn main() {
                         Err(err) => {
                             eprintln!("daw-cli: {err}");
                             1
+                        }
+                    }
+                }
+                Some(&"note") | Some(&"delete-note") => {
+                    let is_write = rest.first() == Some(&"note");
+                    let command = if is_write {
+                        UiCommandType::WriteNote
+                    } else {
+                        UiCommandType::DeleteNote
+                    };
+                    // The engine advances one version per applied edit, so read
+                    // the current one immediately before sending.
+                    let base = handle.clip_version();
+                    match note_command(command, &args, base) {
+                        Ok(payload) => match handle.send_command(payload) {
+                            Ok(()) => {
+                                let label = if is_write { "note" } else { "delete-note" };
+                                println!(
+                                    "{{ \"sent\": \"{label}\", \"base_version\": {base} }}"
+                                );
+                                0
+                            }
+                            Err(err) => {
+                                eprintln!("daw-cli: {err}");
+                                1
+                            }
+                        },
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            2
                         }
                     }
                 }
