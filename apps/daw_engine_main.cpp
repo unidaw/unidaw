@@ -263,6 +263,52 @@ inline uint8_t priorityForEvent(const daw::EventEntry& entry) {
 }
 
 // Audio callback for mixing and outputting audio from all tracks
+// Minimal 16-bit PCM RIFF writer. The engine has no audio file IO at all, and
+// a rendered take is the only way to check that what plays matches what the
+// document says.
+bool writeWav16(const std::string& path,
+                const std::vector<float>& interleaved,
+                size_t frames,
+                int channels,
+                uint32_t sampleRate) {
+  if (channels <= 0 || frames == 0) {
+    return false;
+  }
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  if (!out) {
+    return false;
+  }
+  const uint32_t dataBytes =
+      static_cast<uint32_t>(frames * static_cast<size_t>(channels) * 2);
+  const uint32_t byteRate = sampleRate * static_cast<uint32_t>(channels) * 2;
+  const uint16_t blockAlign = static_cast<uint16_t>(channels * 2);
+  auto u32 = [&out](uint32_t value) {
+    out.write(reinterpret_cast<const char*>(&value), 4);
+  };
+  auto u16 = [&out](uint16_t value) {
+    out.write(reinterpret_cast<const char*>(&value), 2);
+  };
+  out.write("RIFF", 4);
+  u32(36 + dataBytes);
+  out.write("WAVE", 4);
+  out.write("fmt ", 4);
+  u32(16);
+  u16(1);  // PCM
+  u16(static_cast<uint16_t>(channels));
+  u32(sampleRate);
+  u32(byteRate);
+  u16(blockAlign);
+  u16(16);
+  out.write("data", 4);
+  u32(dataBytes);
+  for (size_t i = 0; i < frames * static_cast<size_t>(channels); ++i) {
+    const float clamped = std::max(-1.0f, std::min(1.0f, interleaved[i]));
+    const int16_t sample = static_cast<int16_t>(std::lround(clamped * 32767.0f));
+    out.write(reinterpret_cast<const char*>(&sample), 2);
+  }
+  return static_cast<bool>(out);
+}
+
 class EngineAudioCallback {
 public:
   struct TrackInfo {
@@ -400,11 +446,79 @@ public:
       }
     }
 
+    captureMasterOutput(outputChannelData, numOutputChannels, numSamples);
+
     // Advance playback clock even if tracks are late to avoid global stalls.
     if (playedBlock || hasActiveTrack) {
       m_lastPlayedBlockId = nextBlockToPlay;
     }
   }
+
+  // Records the summed master output so a rendered passage can be analysed
+  // offline. The buffer is preallocated and the write index is plain
+  // arithmetic on the audio thread — no allocation, no locks, no IO here.
+  void enableCapture(size_t frames, int channels) {
+    m_captureChannels = channels;
+    m_capture.assign(frames * static_cast<size_t>(channels), 0.0f);
+    m_captureWritten = 0;
+  }
+
+  bool capturing() const { return !m_capture.empty(); }
+  int captureChannels() const { return m_captureChannels; }
+
+  /// The captured take in chronological order, oldest retained sample first.
+  std::vector<float> captureTake() const {
+    const size_t written = m_captureWritten.load(std::memory_order_acquire);
+    const size_t capacity = m_capture.size();
+    if (capacity == 0 || written == 0) {
+      return {};
+    }
+    if (written <= capacity) {
+      return std::vector<float>(m_capture.begin(),
+                                m_capture.begin() + static_cast<long>(written));
+    }
+    // Wrapped: the oldest retained sample sits at written % capacity.
+    const size_t start = written % capacity;
+    std::vector<float> take;
+    take.reserve(capacity);
+    take.insert(take.end(), m_capture.begin() + static_cast<long>(start),
+                m_capture.end());
+    take.insert(take.end(), m_capture.begin(),
+                m_capture.begin() + static_cast<long>(start));
+    return take;
+  }
+
+ private:
+  void captureMasterOutput(float* const* outputChannelData,
+                           int numOutputChannels,
+                           int numSamples) {
+    if (m_capture.empty() || numOutputChannels <= 0) {
+      return;
+    }
+    const size_t channels =
+        std::min<size_t>(static_cast<size_t>(numOutputChannels),
+                         static_cast<size_t>(m_captureChannels));
+    // Ring, keeping the most recent N seconds. Stopping when full instead made
+    // the capture useless whenever the interesting audio came after a slow
+    // plugin load — it silently recorded the silence and looked like a broken
+    // synth path.
+    size_t written = m_captureWritten.load(std::memory_order_relaxed);
+    const size_t capacity = m_capture.size();
+    for (int i = 0; i < numSamples; ++i) {
+      for (size_t ch = 0; ch < channels; ++ch) {
+        const float* src = outputChannelData[ch];
+        m_capture[(written + ch) % capacity] = src ? src[i] : 0.0f;
+      }
+      written += channels;
+    }
+    m_captureWritten.store(written, std::memory_order_release);
+  }
+
+  std::vector<float> m_capture;
+  std::atomic<size_t> m_captureWritten{0};
+  int m_captureChannels = 0;
+
+ public:
 
   void resetForStart() {
     m_currentReadBlock = 0;
@@ -6432,6 +6546,25 @@ struct TrackRuntime {
           engineConfig.numBlocks,
           &audioPlaybackBlockId);
       audioCallback->resetForStart();
+      // DAW_CAPTURE_WAV=<path> records the master output so a take can be
+      // analysed offline; DAW_CAPTURE_SECONDS bounds the preallocation.
+      if (const char* capturePath = std::getenv("DAW_CAPTURE_WAV")) {
+        if (*capturePath != '\0') {
+          double seconds = 30.0;
+          if (const char* secondsEnv = std::getenv("DAW_CAPTURE_SECONDS")) {
+            const double parsed = std::atof(secondsEnv);
+            if (parsed > 0.0) {
+              seconds = parsed;
+            }
+          }
+          const auto frames =
+              static_cast<size_t>(audioBackend->sampleRate() * seconds);
+          audioCallback->enableCapture(frames, 2);
+          DAW_EVENT("audio.capture_armed")
+              .field("path", std::string(capturePath))
+              .field("seconds", seconds);
+        }
+      }
       if (audioBackend->start([&](float* const* outputs, int numChannels, int numFrames) {
             audioCallback->process(outputs, numChannels, numFrames);
           })) {
@@ -6458,6 +6591,24 @@ struct TrackRuntime {
   if (audioBackend && audioCallback) {
     audioBackend->stop();
     std::cout << "Audio output stopped" << std::endl;
+    // Audio is stopped, so the capture buffer is quiescent and safe to write.
+    if (audioCallback->capturing()) {
+      const char* capturePath = std::getenv("DAW_CAPTURE_WAV");
+      const std::vector<float> take = audioCallback->captureTake();
+      const int channels = audioCallback->captureChannels();
+      const size_t frames =
+          channels > 0 ? take.size() / static_cast<size_t>(channels) : 0;
+      const bool ok = capturePath != nullptr &&
+                      writeWav16(capturePath,
+                                 take,
+                                 frames,
+                                 channels,
+                                 static_cast<uint32_t>(audioBackend->sampleRate()));
+      DAW_EVENT("audio.capture_written")
+          .field("path", std::string(capturePath ? capturePath : ""))
+          .field("frames", static_cast<uint64_t>(frames))
+          .field("ok", ok);
+    }
   }
 
   for (auto& runtime : tracks) {
