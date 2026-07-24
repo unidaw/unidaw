@@ -279,6 +279,7 @@ public:
         m_blockSize(blockSize),
         m_numBlocks(numBlocks),
         m_currentReadBlock(0),
+        m_resetPending(false),
         m_playbackBlockId(playbackBlockId),
         m_startTime(std::chrono::steady_clock::now()),
         m_lastPlayedBlockId(0) {}
@@ -297,6 +298,10 @@ public:
       return;
     }
 
+    if (m_resetPending.exchange(false, std::memory_order_acq_rel)) {
+      resetForStart();
+    }
+
     // Determine which block we should play next
     uint32_t nextBlockToPlay = m_lastPlayedBlockId + 1;
 
@@ -310,7 +315,7 @@ public:
       return;
     }
 
-    int activeTrackCount = 0;
+    bool hasActiveTrack = false;
     bool playedBlock = false;
 
     for (const auto& track : *tracks) {
@@ -323,6 +328,7 @@ public:
       if (track.active && !track.active->load(std::memory_order_acquire)) {
         continue;
       }
+      hasActiveTrack = true;
       if (track.header->numBlocks == 0 || track.header->numChannelsOut == 0 ||
           track.header->channelStrideBytes == 0 || track.shmSize == 0) {
         continue;
@@ -331,9 +337,13 @@ public:
       // Check if this track has the block we need
       uint32_t completed = track.completedBlockId->load(std::memory_order_acquire);
 
-      // If we haven't started yet, sync to the most recent block
+      // If we haven't started yet, sync to the most recent block.
       if (m_lastPlayedBlockId == 0 && completed > 0) {
-        // Start from a recent block, leave some buffer
+        nextBlockToPlay = completed > 2 ? completed - 2 : 1;
+      }
+      // If we're falling behind the ring, jump forward to the freshest block.
+      if (completed > m_lastPlayedBlockId &&
+          completed - m_lastPlayedBlockId > m_numBlocks) {
         nextBlockToPlay = completed > 2 ? completed - 2 : 1;
       }
 
@@ -342,7 +352,6 @@ public:
         continue;
       }
 
-      activeTrackCount++;
       playedBlock = true;
 
       // Calculate which slot in the circular buffer contains this block
@@ -388,8 +397,8 @@ public:
       }
     }
 
-    // Update last played block if we successfully played audio
-    if (playedBlock) {
+    // Advance playback clock even if tracks are late to avoid global stalls.
+    if (playedBlock || hasActiveTrack) {
       m_lastPlayedBlockId = nextBlockToPlay;
     }
   }
@@ -404,6 +413,10 @@ public:
     }
   }
 
+  void requestReset() {
+    m_resetPending.store(true, std::memory_order_release);
+  }
+
   void updateTracks(const std::vector<TrackInfo>& tracks) {
     auto next = std::make_shared<std::vector<TrackInfo>>(tracks);
     std::atomic_store_explicit(&m_tracks, std::move(next), std::memory_order_release);
@@ -414,6 +427,7 @@ private:
   uint32_t m_blockSize;
   uint32_t m_numBlocks;
   std::atomic<uint32_t> m_currentReadBlock;
+  std::atomic<bool> m_resetPending;
   std::atomic<uint32_t>* m_playbackBlockId;
   std::chrono::steady_clock::time_point m_startTime;
   uint64_t m_totalSamplesProcessed = 0;
@@ -429,6 +443,8 @@ struct ClipSnapshot {
 struct TrackStateSnapshot {
   std::vector<daw::Device> chainDevices;
   std::vector<daw::ModLink> modLinks;
+  daw::TrackRouting routing;
+  std::vector<daw::AutomationClip> automationClips;
   bool harmonyQuantize = true;
 };
 
@@ -594,6 +610,11 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(daw::ringBytes(baseConfig.ringUiCapacity), 64);
     header.ringUiOutOffset = offset;
     offset += daw::alignUp(daw::ringBytes(uiDiffRingCapacity), 64);
+    header.ringUiEditOffset = offset;
+    offset += daw::alignUp(
+        daw::ringBytesForEntrySize(daw::kUiEditBatchCapacity,
+                                   sizeof(daw::UiEditBatchEntry)),
+        64);
     header.mailboxOffset = offset;
     offset += daw::alignUp(sizeof(daw::BlockMailbox), 64);
     header.uiClipOffset = offset;
@@ -639,11 +660,20 @@ int main(int argc, char** argv) {
     ringUiOut->readIndex.store(0);
     ringUiOut->writeIndex.store(0);
 
+    auto* ringUiEdit = reinterpret_cast<daw::RingHeader*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + header.ringUiEditOffset);
+    ringUiEdit->capacity = daw::kUiEditBatchCapacity;
+    ringUiEdit->entrySize = sizeof(daw::UiEditBatchEntry);
+    ringUiEdit->readIndex.store(0);
+    ringUiEdit->writeIndex.store(0);
+
     std::cerr << "UI rings ready (ui_offset=" << header.ringUiOffset
               << ", ui_capacity=" << ringUi->capacity
               << ", ui_entry_size=" << ringUi->entrySize
               << ", ui_out_offset=" << header.ringUiOutOffset
-              << ", ui_out_capacity=" << ringUiOut->capacity << ")"
+              << ", ui_out_capacity=" << ringUiOut->capacity
+              << ", ui_edit_offset=" << header.ringUiEditOffset
+              << ", ui_edit_capacity=" << ringUiEdit->capacity << ")"
               << std::endl;
   }
 
@@ -669,12 +699,14 @@ struct Track {
 
   auto buildTrackSnapshot = [&](const Track& track)
       -> std::shared_ptr<const TrackStateSnapshot> {
-    auto snapshot = std::make_shared<TrackStateSnapshot>();
-    snapshot->chainDevices = track.chain.devices;
-    snapshot->modLinks = track.modRegistry.links;
-    snapshot->harmonyQuantize = track.harmonyQuantize;
-    return snapshot;
-  };
+  auto snapshot = std::make_shared<TrackStateSnapshot>();
+  snapshot->chainDevices = track.chain.devices;
+  snapshot->modLinks = track.modRegistry.links;
+  snapshot->routing = track.routing;
+  snapshot->automationClips = track.automationClips;
+  snapshot->harmonyQuantize = track.harmonyQuantize;
+  return snapshot;
+};
 
   struct ActiveNote {
     uint32_t noteId = 0;
@@ -695,6 +727,7 @@ struct TrackRuntime {
     daw::HostController controller;
     daw::HostConfig config;
     std::atomic<bool> needsRestart{false};
+    std::atomic<bool> restartInFlight{false};
     std::atomic<bool> hostReady{false};
     std::unique_ptr<daw::Watchdog> watchdog;
     std::map<std::array<uint8_t, 16>, ParamMirrorEntry, ParamKeyLess> paramMirror;
@@ -726,6 +759,8 @@ struct TrackRuntime {
     std::vector<daw::ModLink> patcherModLinks;
     std::vector<daw::PatcherEuclideanConfig> patcherEuclidOverrides;
     std::vector<bool> patcherHasEuclidOverride;
+    std::mutex modSourcesMutex;
+    std::vector<daw::ModSourceState> modSources;
 
     std::vector<float> inboundAudioBuffer;
     std::vector<float> inputAudioBuffer;
@@ -781,7 +816,9 @@ struct TrackRuntime {
 
       runtime->watchdog = std::make_unique<daw::Watchdog>(
           runtime->controller.mailbox(), 500, [ptr = runtime.get()]() {
-            ptr->needsRestart.store(true);
+            ptr->hostReady.store(false, std::memory_order_release);
+            ptr->active.store(false, std::memory_order_release);
+            ptr->needsRestart.store(true, std::memory_order_release);
           });
       runtime->hostReady.store(true, std::memory_order_release);
     } else {
@@ -978,6 +1015,9 @@ struct TrackRuntime {
   std::atomic<uint64_t> loopStartNanotick{0};
   std::atomic<uint64_t> loopEndNanotick{0};
   std::atomic<bool> resetTimeline{false};
+  std::mutex restartMutex;
+  std::condition_variable restartCv;
+  std::deque<TrackRuntime*> restartQueue;
   loopEndNanotick.store(patternTicks, std::memory_order_release);
   std::atomic<bool> clipDirty{true};
   std::atomic<bool> playing{false};
@@ -1019,10 +1059,17 @@ struct TrackRuntime {
       }
       return daw::makeEventRing(uiShm.base, uiShm.header->ringUiOutOffset);
   };
+  auto getRingUiEdit = [&]() {
+      if (!uiShm.header) {
+        return daw::UiEditRingView{};
+      }
+      return daw::makeUiEditRing(uiShm.base, uiShm.header->ringUiEditOffset);
+  };
 
-  auto writeMirrorParams = [&](TrackRuntime& runtime, uint64_t sampleTime) {
-    std::lock_guard<std::mutex> lockController(runtime.controllerMutex);
-
+  auto writeMirrorParams = [&](TrackRuntime& runtime,
+                               const TrackStateSnapshot& trackState,
+                               uint64_t sampleTime) {
+    // Caller must hold controllerMutex to avoid racing host restarts.
     if (!runtime.controller.shmHeader()) {
       std::cerr << "WriteMirrorParams: No SHM header for track " << runtime.trackId << std::endl;
       return;
@@ -1035,17 +1082,14 @@ struct TrackRuntime {
     }
 
     uint32_t targetPluginIndex = daw::kParamTargetAll;
-    {
-      std::lock_guard<std::mutex> lockTrack(runtime.trackMutex);
-      uint32_t hostIndex = 0;
-      for (const auto& device : runtime.track.chain.devices) {
-        if (device.kind != daw::DeviceKind::VstInstrument &&
-            device.kind != daw::DeviceKind::VstEffect) {
-          continue;
-        }
-        targetPluginIndex = hostIndex;
-        break;
+    uint32_t hostIndex = 0;
+    for (const auto& device : trackState.chainDevices) {
+      if (device.kind != daw::DeviceKind::VstInstrument &&
+          device.kind != daw::DeviceKind::VstEffect) {
+        continue;
       }
+      targetPluginIndex = hostIndex;
+      break;
     }
 
     std::lock_guard<std::mutex> lockMirror(runtime.paramMirrorMutex);
@@ -1254,7 +1298,9 @@ struct TrackRuntime {
     }
     runtime.watchdog = std::make_unique<daw::Watchdog>(
         runtime.controller.mailbox(), 500, [ptr = &runtime]() {
-          ptr->needsRestart.store(true);
+          ptr->hostReady.store(false, std::memory_order_release);
+          ptr->active.store(false, std::memory_order_release);
+          ptr->needsRestart.store(true, std::memory_order_release);
         });
     runtime.hostReady.store(true, std::memory_order_release);
 
@@ -1373,6 +1419,8 @@ struct TrackRuntime {
         std::lock_guard<std::mutex> lock(runtime.controllerMutex);
         runtime.config.pluginPaths = pluginPaths;
       }
+      runtime.hostReady.store(false, std::memory_order_release);
+      runtime.active.store(false, std::memory_order_release);
       runtime.needsRestart.store(true, std::memory_order_release);
       std::cerr << "Engine: queued host restart for track "
                 << runtime.trackId << std::endl;
@@ -1380,6 +1428,81 @@ struct TrackRuntime {
     }
     applyHostBypassStates(runtime);
   };
+
+  auto scheduleHostRestart = [&](TrackRuntime& runtime) {
+    bool expected = false;
+    if (!runtime.restartInFlight.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+      return;
+    }
+    runtime.hostReady.store(false, std::memory_order_release);
+    runtime.active.store(false, std::memory_order_release);
+    {
+      std::lock_guard<std::mutex> lock(restartMutex);
+      restartQueue.push_back(&runtime);
+    }
+    restartCv.notify_one();
+  };
+
+  std::thread restartWorker([&] {
+    while (running.load(std::memory_order_acquire)) {
+      TrackRuntime* runtime = nullptr;
+      {
+        std::unique_lock<std::mutex> lock(restartMutex);
+        restartCv.wait(lock, [&] {
+          return !running.load(std::memory_order_acquire) || !restartQueue.empty();
+        });
+        if (!running.load(std::memory_order_acquire)) {
+          break;
+        }
+        runtime = restartQueue.front();
+        restartQueue.pop_front();
+      }
+      if (!runtime) {
+        continue;
+      }
+      if (!runtime->needsRestart.load(std::memory_order_acquire)) {
+        runtime->restartInFlight.store(false, std::memory_order_release);
+        continue;
+      }
+      {
+        std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+        if (!runtime->controller.launch(runtime->config)) {
+          std::cerr << "Consumer: Failed to restart track "
+                    << runtime->trackId << std::endl;
+          runtime->hostReady.store(false, std::memory_order_release);
+          runtime->active.store(false, std::memory_order_release);
+          runtime->restartInFlight.store(false, std::memory_order_release);
+          continue;
+        }
+      }
+      std::cout << "Consumer: Restarted track " << runtime->trackId
+                << " successfully." << std::endl;
+      runtime->watchdog = std::make_unique<daw::Watchdog>(
+          runtime->controller.mailbox(), 500, [ptr = runtime]() {
+            ptr->hostReady.store(false, std::memory_order_release);
+            ptr->active.store(false, std::memory_order_release);
+            ptr->needsRestart.store(true, std::memory_order_release);
+          });
+      runtime->hostReady.store(true, std::memory_order_release);
+      applyHostBypassStates(*runtime);
+      {
+        std::lock_guard<std::mutex> lockMirror(runtime->paramMirrorMutex);
+        if (!runtime->paramMirror.empty()) {
+          enqueueMirrorReplay(*runtime);
+        } else {
+          runtime->mirrorPending.store(false, std::memory_order_release);
+          runtime->mirrorPrimed.store(false, std::memory_order_release);
+          runtime->mirrorGateSampleTime.store(0, std::memory_order_release);
+        }
+      }
+      if (runtime->watchdog) {
+        runtime->watchdog->reset();
+      }
+      runtime->needsRestart.store(false, std::memory_order_release);
+      runtime->restartInFlight.store(false, std::memory_order_release);
+    }
+  });
 
   auto updateTrackChainForInstrument = [&](TrackRuntime& runtime,
                                            uint32_t pluginIndex) {
@@ -1894,6 +2017,15 @@ struct TrackRuntime {
     return true;
   };
 
+  // The UI reserves one clip version per edit it queues, so an edit whose
+  // base version matched must advance the counter even when the edit turns out
+  // to be a no-op. Otherwise the UI stays permanently one ahead and every
+  // later edit is rejected — inside a batch that discards the whole remainder
+  // and emits a resync request per op.
+  auto consumeClipVersionForNoOp = [&]() {
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);
+  };
+
   auto requireMatchingClipVersion = [&](uint32_t baseVersion,
                                         daw::UiCommandType commandType,
                                         uint32_t trackId) -> bool {
@@ -2014,6 +2146,7 @@ struct TrackRuntime {
       std::cerr << "UI: RemoveNote - note not found (track " << trackId
                 << ", nanotick " << nanotick << ", pitch " << static_cast<int>(pitch)
                 << ")" << std::endl;
+      consumeClipVersionForNoOp();
       return false;
     }
 
@@ -2203,6 +2336,7 @@ struct TrackRuntime {
     if (!removed) {
       std::cerr << "UI: RemoveChord - chord not found (track "
                 << trackId << ", id " << chordId << ")" << std::endl;
+      consumeClipVersionForNoOp();
       return false;
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
@@ -2237,6 +2371,7 @@ struct TrackRuntime {
       std::cerr << "UI: RemoveChord - chord not found (track "
                 << trackId << ", tick " << nanotick
                 << ", col " << static_cast<int>(column) << ")" << std::endl;
+      consumeClipVersionForNoOp();
       return false;
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
@@ -2341,6 +2476,16 @@ struct TrackRuntime {
           }
         }
       }
+      if (updated) {
+        std::shared_ptr<const TrackStateSnapshot> snapshot;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snapshot = buildTrackSnapshot(runtime->track);
+        }
+        std::atomic_store_explicit(&runtime->trackSnapshot,
+                                   snapshot,
+                                   std::memory_order_release);
+      }
       if (!updated) {
         std::cerr << "UI: SetAutomationTarget - automation clip not found (track "
                   << autoPayload.trackId << ")" << std::endl;
@@ -2400,6 +2545,7 @@ struct TrackRuntime {
         emitRoutingError(kRoutingErrInvalidTarget, routingPayload.trackId);
         return;
       }
+      std::shared_ptr<const TrackStateSnapshot> snapshot;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         runtime->track.routing.midiIn.kind =
@@ -2417,7 +2563,11 @@ struct TrackRuntime {
         runtime->track.routing.midiIn.inputId = routingPayload.midiInInputId;
         runtime->track.routing.audioIn.inputId = routingPayload.audioInInputId;
         runtime->track.routing.preFaderSend = (routingPayload.flags & 0x1u) != 0;
+        snapshot = buildTrackSnapshot(runtime->track);
       }
+      std::atomic_store_explicit(&runtime->trackSnapshot,
+                                 snapshot,
+                                 std::memory_order_release);
       emitRoutingSnapshot(*runtime);
       return;
     }
@@ -2659,8 +2809,8 @@ struct TrackRuntime {
         return;
       }
       {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        auto& sources = runtime->track.modRegistry.sources;
+        std::lock_guard<std::mutex> lock(runtime->modSourcesMutex);
+        auto& sources = runtime->modSources;
         bool updated = false;
         for (auto& source : sources) {
           if (source.ref.deviceId == modPayload.sourceDeviceId &&
@@ -3394,12 +3544,26 @@ struct TrackRuntime {
     uint64_t lastIdleLogMs = 0;
     while (running.load()) {
       auto ringUi = getRingUi();
-      if (ringUi.mask == 0) {
+      auto ringUiEdit = getRingUiEdit();
+      if (ringUi.mask == 0 && ringUiEdit.mask == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
       daw::EventEntry uiEntry;
+      daw::UiEditBatchEntry editBatch{};
       bool handled = false;
+      while (daw::uiEditRingPop(ringUiEdit, editBatch)) {
+        if (uiDebugEnabled()) {
+          std::cerr << "UI: received edit batch id " << editBatch.batchId
+                    << " ops " << editBatch.opCount << std::endl;
+        }
+        const uint32_t opCount =
+            std::min<uint32_t>(editBatch.opCount, daw::kUiEditBatchMaxOps);
+        for (uint32_t i = 0; i < opCount; ++i) {
+          handleUiEntry(editBatch.ops[i]);
+        }
+        handled = true;
+      }
       while (daw::ringPop(ringUi, uiEntry)) {
         if (uiDebugEnabled()) {
           std::cerr << "UI: received command entry size "
@@ -3430,6 +3594,39 @@ struct TrackRuntime {
     const auto blockDuration =
         std::chrono::duration<double>(
             static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
+    const bool debugStall = std::getenv("DAW_ENGINE_DEBUG_STALL") != nullptr;
+    const auto stallStart = std::chrono::steady_clock::now();
+    uint64_t stallLogMs = 0;
+    uint32_t lastPlaybackBlock = 0;
+    auto lastPlaybackAdvance = std::chrono::steady_clock::now();
+    const auto playbackStallLimit = std::chrono::milliseconds(100);
+    bool aheadStalling = false;
+    auto aheadStallStart = std::chrono::steady_clock::now();
+    auto stallNowMs = [&]() -> uint64_t {
+      return static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::steady_clock::now() - stallStart)
+              .count());
+    };
+    auto logStall = [&](const char* reason,
+                        uint32_t nextId,
+                        uint32_t minCompleted,
+                        uint32_t currentPlayback,
+                        uint32_t extra) {
+      if (!debugStall) {
+        return;
+      }
+      const uint64_t nowMs = stallNowMs();
+      if (nowMs - stallLogMs < 500) {
+        return;
+      }
+      stallLogMs = nowMs;
+      std::cerr << "Engine: producer stall (" << reason
+                << ") next=" << nextId
+                << " minCompleted=" << minCompleted
+                << " playback=" << currentPlayback
+                << " extra=" << extra << std::endl;
+    };
     auto blockTicksFor = [&](uint64_t atNanotick) -> uint64_t {
       return tickConverter.samplesToNanoticks(
           static_cast<int64_t>(engineConfig.blockSize), atNanotick);
@@ -3451,13 +3648,6 @@ struct TrackRuntime {
       if (trackSnapshot.empty()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
-      }
-      bool restartPending = false;
-      for (auto* runtime : trackSnapshot) {
-        if (runtime->needsRestart.load()) {
-          restartPending = true;
-          break;
-        }
       }
       const bool isPlaying = playing.load(std::memory_order_acquire);
       auto advanceTransport = [&]() {
@@ -3488,13 +3678,6 @@ struct TrackRuntime {
         }
       }
       if (!anyReady) {
-        if (isPlaying) {
-          advanceTransport();
-        }
-        std::this_thread::sleep_for(blockDuration);
-        continue;
-      }
-      if (restartPending) {
         if (isPlaying) {
           advanceTransport();
         }
@@ -3539,14 +3722,18 @@ struct TrackRuntime {
         if (!runtime->hostReady.load(std::memory_order_acquire)) {
           continue;
         }
-        const uint32_t completed = [&]() {
-          std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+        uint32_t completed = 0;
+        {
+          std::unique_lock<std::mutex> lock(runtime->controllerMutex, std::try_to_lock);
+          if (!lock.owns_lock()) {
+            continue;
+          }
           const auto* mailbox = runtime->controller.mailbox();
           if (!mailbox) {
-            return 0u;
+            continue;
           }
-          return mailbox->completedBlockId.load(std::memory_order_acquire);
-        }();
+          completed = mailbox->completedBlockId.load(std::memory_order_acquire);
+        }
         if (completed > 0) {
           runtime->active.store(true, std::memory_order_release);
         }
@@ -3565,12 +3752,18 @@ struct TrackRuntime {
         minCompleted = fallback;
       }
       if (minCompleted == std::numeric_limits<uint32_t>::max()) {
+        if (isPlaying) {
+          logStall("minCompleted", nextBlockId.load(std::memory_order_relaxed), 0, 0, 0);
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
 
       const uint32_t inFlight = nextBlockId.load() - minCompleted;
       if (inFlight >= engineConfig.numBlocks) {
+        if (isPlaying) {
+          logStall("inFlight", nextBlockId.load(std::memory_order_relaxed), minCompleted, 0, inFlight);
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
@@ -3578,18 +3771,49 @@ struct TrackRuntime {
       // Also check that we're not getting too far ahead of audio playback
       // Allow producer to be ahead by at most 10 blocks for buffering
       uint32_t currentPlayback = audioPlaybackBlockId.load(std::memory_order_acquire);
+      const auto playbackNow = std::chrono::steady_clock::now();
+      if (currentPlayback != lastPlaybackBlock) {
+        lastPlaybackBlock = currentPlayback;
+        lastPlaybackAdvance = playbackNow;
+      } else if (isPlaying && currentPlayback > 0 &&
+                 playbackNow - lastPlaybackAdvance > playbackStallLimit) {
+        const uint32_t fallback =
+            minCompleted == std::numeric_limits<uint32_t>::max()
+                ? (nextBlockId.load(std::memory_order_relaxed) > 0
+                       ? nextBlockId.load(std::memory_order_relaxed) - 1
+                       : 0)
+                : minCompleted;
+        audioPlaybackBlockId.store(fallback, std::memory_order_release);
+        currentPlayback = fallback;
+        lastPlaybackBlock = fallback;
+        lastPlaybackAdvance = playbackNow;
+      }
       bool throttlePlayback = false;
       if (currentPlayback > 0) {  // Only throttle once playback has started
         const uint32_t nextId = nextBlockId.load(std::memory_order_relaxed);
         if (currentPlayback <= nextId) {
           const uint32_t aheadOfPlayback = nextId - currentPlayback;
           if (aheadOfPlayback > 10) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            continue;
+            if (!aheadStalling) {
+              aheadStalling = true;
+              aheadStallStart = playbackNow;
+            }
+            if (playbackNow - aheadStallStart < playbackStallLimit) {
+              if (isPlaying) {
+                logStall("ahead", nextId, minCompleted, currentPlayback, aheadOfPlayback);
+              }
+              std::this_thread::sleep_for(std::chrono::milliseconds(1));
+              continue;
+            }
+          } else {
+            aheadStalling = false;
           }
+        } else {
+          aheadStalling = false;
         }
       } else {
         throttlePlayback = true;
+        aheadStalling = false;
       }
 
       const uint32_t blockId = nextBlockId.fetch_add(1);
@@ -3628,15 +3852,13 @@ struct TrackRuntime {
       const uint64_t blockEndTicks = blockStartTicks + blockTicks;
 
       auto renderTrack = [&](TrackRuntime& runtime,
+                             const TrackStateSnapshot& trackState,
                              uint64_t windowStartTicks,
                              uint64_t windowEndTicks,
                              uint64_t blockSampleStart,
                              uint32_t currentBlockId,
                              daw::EventRingView& ringStd,
                              std::vector<daw::EventEntry>* routedMidi) -> bool {
-        auto trackStatePtr = std::atomic_load_explicit(&runtime.trackSnapshot,
-                                                       std::memory_order_acquire);
-        const auto& trackState = trackStatePtr ? *trackStatePtr : kEmptyTrackState;
         auto chainConsumesMidi = [&]() -> bool {
           for (const auto& device : trackState.chainDevices) {
             if (device.kind != daw::DeviceKind::VstInstrument &&
@@ -4745,7 +4967,7 @@ struct TrackRuntime {
           runtime.ringStdPanicPending.store(false, std::memory_order_release);
         };
 
-        for (const auto& automationClip : runtime.track.automationClips) {
+        for (const auto& automationClip : trackState.automationClips) {
           const auto uid16 = daw::hashStableId16(automationClip.paramId());
           if (automationClip.discreteOnly()) {
             if (loopLen == 0 || windowEndTicks <= loopEndTicks) {
@@ -4825,8 +5047,8 @@ struct TrackRuntime {
           if (modUpdates.empty()) {
             return;
           }
-          std::lock_guard<std::mutex> lock(runtime.trackMutex);
-          auto& sources = runtime.track.modRegistry.sources;
+          std::lock_guard<std::mutex> lock(runtime.modSourcesMutex);
+          auto& sources = runtime.modSources;
           for (const auto& update : modUpdates) {
             bool updated = false;
             for (auto& source : sources) {
@@ -4847,18 +5069,15 @@ struct TrackRuntime {
         applyModUpdates();
 
         auto applyBlockRateModulation = [&]() {
-          std::vector<daw::ModLink> modLinks;
           std::vector<daw::ModSourceState> modSources;
-          std::vector<daw::Device> chainDevices;
           {
-            std::lock_guard<std::mutex> lock(runtime.trackMutex);
-            modLinks = runtime.track.modRegistry.links;
-            modSources = runtime.track.modRegistry.sources;
-            chainDevices = runtime.track.chain.devices;
+            std::lock_guard<std::mutex> lock(runtime.modSourcesMutex);
+            modSources = runtime.modSources;
           }
-          if (modLinks.empty() || modSources.empty()) {
+          if (trackState.modLinks.empty() || modSources.empty()) {
             return;
           }
+          const auto& chainDevices = trackState.chainDevices;
           std::unordered_map<uint32_t, size_t> chainPos;
           chainPos.reserve(chainDevices.size());
           for (size_t i = 0; i < chainDevices.size(); ++i) {
@@ -4894,7 +5113,7 @@ struct TrackRuntime {
           auto clamp01 = [](float value) {
             return std::max(0.0f, std::min(1.0f, value));
           };
-          for (const auto& link : modLinks) {
+          for (const auto& link : trackState.modLinks) {
             if (!link.enabled || link.rate != daw::ModRate::BlockRate) {
               continue;
             }
@@ -5142,6 +5361,7 @@ struct TrackRuntime {
 
       auto runAudioPatcherNode = [&](TrackRuntime& runtime,
                                      const daw::PatcherGraph& graphSnapshot,
+                                     const std::vector<daw::ModLink>& modLinks,
                                      uint32_t nodeId,
                                      uint32_t deviceId,
                                      const float* const* inputChannels,
@@ -5204,11 +5424,6 @@ struct TrackRuntime {
         ctx.mod_input_count = 0;
         ctx.mod_input_stride = 0;
         if (deviceId != daw::kDeviceIdAuto) {
-          auto& modLinks = runtime.audioModLinks;
-          {
-            std::lock_guard<std::mutex> lock(runtime.trackMutex);
-            modLinks = runtime.track.modRegistry.links;
-          }
           if (!modLinks.empty()) {
             auto& modInputs = runtime.audioModInputSamples;
             const size_t sampleCount =
@@ -5272,8 +5487,8 @@ struct TrackRuntime {
         ctx.harmony_count = 0;
         dispatchRustKernel(node.type, ctx);
         if (deviceId != daw::kDeviceIdAuto) {
-          std::lock_guard<std::mutex> lock(runtime.trackMutex);
-          auto& sources = runtime.track.modRegistry.sources;
+          std::lock_guard<std::mutex> lock(runtime.modSourcesMutex);
+          auto& sources = runtime.modSources;
           for (uint32_t i = 0; i < ctx.mod_output_count; ++i) {
             bool updated = false;
             for (auto& source : sources) {
@@ -5313,7 +5528,13 @@ struct TrackRuntime {
         if (!runtime->hostReady.load(std::memory_order_acquire)) {
           continue;
         }
-        std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+        auto trackStatePtr = std::atomic_load_explicit(&runtime->trackSnapshot,
+                                                       std::memory_order_acquire);
+        const auto& trackState = trackStatePtr ? *trackStatePtr : kEmptyTrackState;
+        std::unique_lock<std::mutex> lock(runtime->controllerMutex, std::try_to_lock);
+        if (!lock.owns_lock()) {
+          continue;
+        }
         if (!runtime->controller.shmHeader()) {
           continue;
         }
@@ -5340,18 +5561,14 @@ struct TrackRuntime {
             !runtime->mirrorPrimed.load(std::memory_order_acquire)) {
           std::cout << "Priming mirror for track " << runtime->trackId
                     << " at sample " << pluginSampleStart << std::endl;
-          writeMirrorParams(*runtime, pluginSampleStart);
+          writeMirrorParams(*runtime, trackState, pluginSampleStart);
           runtime->mirrorPrimed.store(true, std::memory_order_release);
           std::cout << "Mirror primed for track " << runtime->trackId
                     << ", gate sample time = "
                     << runtime->mirrorGateSampleTime.load() << std::endl;
         }
 
-        daw::TrackRouting routingSnapshot;
-        {
-          std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          routingSnapshot = runtime->track.routing;
-        }
+        const auto& routingSnapshot = trackState.routing;
 
         auto enqueueInboundAudio = [&](TrackRuntime& dst,
                                        const float* const* channels) {
@@ -5432,7 +5649,8 @@ struct TrackRuntime {
         bool patcherAudioWritten = false;
         std::vector<daw::EventEntry> routedMidi;
         if (!mirrorOnly && isPlaying) {
-          patcherAudioWritten = renderTrack(*runtime, blockStartTicks, blockEndTicks,
+          patcherAudioWritten = renderTrack(*runtime, trackState,
+                                            blockStartTicks, blockEndTicks,
                                             sampleStart, blockId, ringStd,
                                             routingSnapshot.midiOut.kind ==
                                                     daw::TrackRouteKind::Track
@@ -5453,72 +5671,69 @@ struct TrackRuntime {
           std::vector<AudioNodeInfo> audioNodeIds;
         };
         std::vector<SegmentInfo> segments;
-        segments.reserve(runtime->track.chain.devices.size());
+        segments.reserve(trackState.chainDevices.size());
         std::vector<SegmentInfo::AudioNodeInfo> pendingAudioNodes;
-        pendingAudioNodes.reserve(runtime->track.chain.devices.size());
-        {
-          std::lock_guard<std::mutex> lock(runtime->trackMutex);
-          uint16_t hostIndex = 0;
-          bool inSegment = false;
-          uint16_t segmentStart = 0;
-          uint16_t segmentLength = 0;
-          for (const auto& device : runtime->track.chain.devices) {
-            const bool isVst = device.kind == daw::DeviceKind::VstInstrument ||
-                device.kind == daw::DeviceKind::VstEffect;
-            if (isVst) {
-              if (!resolveDevicePluginPath(*runtime, device.hostSlotIndex)) {
-                continue;
+        pendingAudioNodes.reserve(trackState.chainDevices.size());
+        uint16_t hostIndex = 0;
+        bool inSegment = false;
+        uint16_t segmentStart = 0;
+        uint16_t segmentLength = 0;
+        for (const auto& device : trackState.chainDevices) {
+          const bool isVst = device.kind == daw::DeviceKind::VstInstrument ||
+              device.kind == daw::DeviceKind::VstEffect;
+          if (isVst) {
+            if (!resolveDevicePluginPath(*runtime, device.hostSlotIndex)) {
+              continue;
+            }
+            if (!inSegment) {
+              if (!segments.empty() && !pendingAudioNodes.empty()) {
+                segments.back().audioNodeIds.insert(
+                    segments.back().audioNodeIds.end(),
+                    pendingAudioNodes.begin(),
+                    pendingAudioNodes.end());
+                pendingAudioNodes.clear();
               }
-              if (!inSegment) {
-                if (!segments.empty() && !pendingAudioNodes.empty()) {
-                  segments.back().audioNodeIds.insert(
-                      segments.back().audioNodeIds.end(),
-                      pendingAudioNodes.begin(),
-                      pendingAudioNodes.end());
-                  pendingAudioNodes.clear();
-                }
-                inSegment = true;
-                segmentStart = hostIndex;
-                segmentLength = 0;
-              }
-              segmentLength++;
-              hostIndex++;
-            } else {
-              if (inSegment) {
-                SegmentInfo info;
-                info.start = segmentStart;
-                info.length = segmentLength;
-                segments.push_back(info);
-                inSegment = false;
-                segmentLength = 0;
-              }
-              if (!device.bypass && device.kind == daw::DeviceKind::PatcherAudio) {
-                SegmentInfo::AudioNodeInfo info{};
-                info.nodeId = device.patcherNodeId;
-                info.deviceId = device.id;
-                pendingAudioNodes.push_back(info);
-              }
+              inSegment = true;
+              segmentStart = hostIndex;
+              segmentLength = 0;
+            }
+            segmentLength++;
+            hostIndex++;
+          } else {
+            if (inSegment) {
+              SegmentInfo info;
+              info.start = segmentStart;
+              info.length = segmentLength;
+              segments.push_back(info);
+              inSegment = false;
+              segmentLength = 0;
+            }
+            if (!device.bypass && device.kind == daw::DeviceKind::PatcherAudio) {
+              SegmentInfo::AudioNodeInfo info{};
+              info.nodeId = device.patcherNodeId;
+              info.deviceId = device.id;
+              pendingAudioNodes.push_back(info);
             }
           }
-          if (inSegment) {
-            SegmentInfo info;
-            info.start = segmentStart;
-            info.length = segmentLength;
-            segments.push_back(info);
-          }
-          if (!segments.empty() && !pendingAudioNodes.empty()) {
-            segments.back().audioNodeIds.insert(
-                segments.back().audioNodeIds.end(),
-                pendingAudioNodes.begin(),
-                pendingAudioNodes.end());
-            pendingAudioNodes.clear();
-          }
-          if (segments.empty()) {
-            SegmentInfo info;
-            info.start = 0;
-            info.length = 0;
-            segments.push_back(info);
-          }
+        }
+        if (inSegment) {
+          SegmentInfo info;
+          info.start = segmentStart;
+          info.length = segmentLength;
+          segments.push_back(info);
+        }
+        if (!segments.empty() && !pendingAudioNodes.empty()) {
+          segments.back().audioNodeIds.insert(
+              segments.back().audioNodeIds.end(),
+              pendingAudioNodes.begin(),
+              pendingAudioNodes.end());
+          pendingAudioNodes.clear();
+        }
+        if (segments.empty()) {
+          SegmentInfo info;
+          info.start = 0;
+          info.length = 0;
+          segments.push_back(info);
         }
 
         auto audioGraphPtr = std::atomic_load_explicit(&patcherGraphSnapshot,
@@ -5642,11 +5857,29 @@ struct TrackRuntime {
             }
           }
 
-          if (!runtime->controller.sendProcessBlock(blockId,
-                                                    sampleStart,
-                                                    pluginSampleStart,
-                                                    segmentStart,
-                                                    segmentLength)) {
+          bool sentOk = false;
+          if (debugStall) {
+            const auto sendStart = std::chrono::steady_clock::now();
+            sentOk = runtime->controller.sendProcessBlock(blockId,
+                                                          sampleStart,
+                                                          pluginSampleStart,
+                                                          segmentStart,
+                                                          segmentLength);
+            const auto sendMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - sendStart).count();
+            if (sendMs > 10) {
+              std::cerr << "Engine: sendProcessBlock slow (track "
+                        << runtime->trackId << ", " << sendMs
+                        << " ms)" << std::endl;
+            }
+          } else {
+            sentOk = runtime->controller.sendProcessBlock(blockId,
+                                                          sampleStart,
+                                                          pluginSampleStart,
+                                                          segmentStart,
+                                                          segmentLength);
+          }
+          if (!sentOk) {
             runtime->hostReady.store(false, std::memory_order_release);
             runtime->active.store(false, std::memory_order_release);
             runtime->needsRestart.store(true, std::memory_order_release);
@@ -5661,6 +5894,7 @@ struct TrackRuntime {
             for (const auto& nodeInfo : segment.audioNodeIds) {
               if (runAudioPatcherNode(*runtime,
                                       audioGraphSnapshot,
+                                      trackState.modLinks,
                                       nodeInfo.nodeId,
                                       nodeInfo.deviceId,
                                       currentInput,
@@ -5725,6 +5959,7 @@ struct TrackRuntime {
     uint32_t currentBlockId = 1;
     uint64_t lastOverflowLogged = 0;
     std::unordered_map<uint32_t, uint64_t> ringStdDropLogged;
+    std::unordered_map<uint32_t, EngineAudioCallback::TrackInfo> trackInfoCache;
     const auto blockDuration =
         std::chrono::duration<double>(
             static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
@@ -5758,84 +5993,50 @@ struct TrackRuntime {
       if (audioCallback) {
         std::vector<EngineAudioCallback::TrackInfo> trackInfos;
         for (auto* runtime : trackSnapshot) {
-          if (runtime->active.load(std::memory_order_acquire)) {
-            EngineAudioCallback::TrackInfo info;
-            {
-              std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-              // Validate pointers before passing to audio callback
+          const uint32_t trackId = runtime->trackId;
+          if (!runtime->hostReady.load(std::memory_order_acquire)) {
+            trackInfoCache.erase(trackId);
+            continue;
+          }
+          bool updated = false;
+          {
+            std::unique_lock<std::mutex> lock(runtime->controllerMutex, std::try_to_lock);
+            if (lock.owns_lock()) {
               auto shmView = runtime->controller.sharedMemory();
-              if (!shmView || !shmView->header || !shmView->mailbox) {
-                continue;
+              if (shmView && shmView->header && shmView->mailbox) {
+                EngineAudioCallback::TrackInfo info;
+                info.shmView = shmView;
+                info.shmBase = reinterpret_cast<void*>(
+                    const_cast<daw::ShmHeader*>(shmView->header));
+                info.header = shmView->header;
+                info.completedBlockId = shmView->completedBlockId;
+                info.hostReady = &runtime->hostReady;
+                info.active = &runtime->active;
+                info.shmSize = shmView->size;
+                info.trackId = trackId;
+                trackInfoCache[trackId] = info;
+                updated = true;
               }
-              info.shmView = shmView;
-              info.shmBase = reinterpret_cast<void*>(
-                  const_cast<daw::ShmHeader*>(shmView->header));
-              info.header = shmView->header;
-              info.completedBlockId = shmView->completedBlockId;
-              info.hostReady = &runtime->hostReady;
-              info.active = &runtime->active;
-              info.shmSize = shmView->size;
-              info.trackId = runtime->trackId;
             }
-            // Only add if all pointers are valid
-            if (info.shmBase && info.header && info.completedBlockId) {
-              trackInfos.push_back(info);
-            }
+          }
+          auto it = trackInfoCache.find(trackId);
+          if (it != trackInfoCache.end()) {
+            trackInfos.push_back(it->second);
+          } else if (updated) {
+            // Updated but invalid; ensure cache entry is removed.
+            trackInfoCache.erase(trackId);
           }
         }
         audioCallback->updateTracks(trackInfos);
       }
-      bool restartedAny = false;
       for (auto* runtime : trackSnapshot) {
-        if (!runtime->needsRestart.load()) {
-          continue;
-        }
-        std::cout << "Consumer: Restarting Host (track " << runtime->trackId << ")..." << std::endl;
-        runtime->active.store(false, std::memory_order_release);
-        {
-          std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-          if (!runtime->controller.launch(runtime->config)) {
-            std::cerr << "Consumer: Failed to restart track " << runtime->trackId << std::endl;
-            running.store(false);
-            continue;
-          }
-        }
-        {
-          std::cout << "Consumer: Restarted track " << runtime->trackId << " successfully."
-                    << std::endl;
-          runtime->watchdog = std::make_unique<daw::Watchdog>(
-              runtime->controller.mailbox(), 500, [ptr = runtime]() {
-                ptr->needsRestart.store(true);
-              });
-          runtime->hostReady.store(true, std::memory_order_release);
-          applyHostBypassStates(*runtime);
-          {
-            std::lock_guard<std::mutex> lockMirror(runtime->paramMirrorMutex);
-            if (!runtime->paramMirror.empty()) {
-              enqueueMirrorReplay(*runtime);
-            } else {
-              runtime->mirrorPending.store(false, std::memory_order_release);
-              runtime->mirrorPrimed.store(false, std::memory_order_release);
-              runtime->mirrorGateSampleTime.store(0, std::memory_order_release);
-            }
-          }
-          if (runtime->watchdog) {
-            runtime->watchdog->reset();
-          }
-          runtime->needsRestart.store(false);
-          restartedAny = true;
+        if (runtime->needsRestart.load(std::memory_order_acquire)) {
+          scheduleHostRestart(*runtime);
         }
       }
 
       if (!running.load()) {
         break;
-      }
-      if (restartedAny) {
-        currentBlockId = 1;
-        nextBlockId.store(1);
-        audioPlaybackBlockId.store(0);  // Reset audio playback position
-        resetTimeline.store(true);
-        continue;
       }
 
       std::this_thread::sleep_for(blockDuration);
@@ -5909,6 +6110,10 @@ struct TrackRuntime {
   if (runSeconds >= 0) {
     std::this_thread::sleep_for(std::chrono::seconds(runSeconds));
     running.store(false);
+  }
+  restartCv.notify_all();
+  if (restartWorker.joinable()) {
+    restartWorker.join();
   }
   uiThread.join();
   producer.join();

@@ -1,12 +1,12 @@
-use std::collections::{HashSet, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gpui::{
     div, px, rgb, size, App, Application, Bounds, Context, MouseButton,
-    ScrollWheelEvent, SharedString, Timer, Window, WindowBounds,
+    ScrollWheelEvent, ShapedLine, SharedString, Timer, Window, WindowBounds,
     WindowOptions, prelude::*,
 };
 
@@ -28,9 +28,10 @@ use crate::engine::bridge::{
 use crate::engine::supervisor::{
     default_engine_path, spawn_engine_process, stop_engine_process, EngineSupervisor,
 };
+use crate::clip_store::{ClipStore, PendingOverlay};
 use crate::clipboard::{ClipboardChord, ClipboardData, ClipboardHarmony, ClipboardNote};
 use crate::plugins::{load_plugin_cache, PluginEntry};
-use crate::harmony::{harmony_root_name, harmony_scale_name, SCALE_LIBRARY};
+use crate::harmony::{harmony_scale_name, SCALE_LIBRARY};
 use crate::palette::{PaletteCommandId, PaletteMode, PALETTE_COMMANDS};
 use crate::selection::{SelectionMask, SelectionRange};
 use crate::state::{
@@ -51,6 +52,10 @@ pub const DEFAULT_ZOOM_INDEX: usize = 2;
 pub const TRACK_COUNT: usize = 8;
 const EDIT_STEP_ROWS: i64 = 1;
 const CLIP_WINDOW_MARGIN_ROWS: i64 = 4;
+const MAX_KEYSTROKES_PER_FRAME: usize = 64;
+const KEYSTROKE_FLUSH_BUDGET: Duration = Duration::from_millis(2);
+const MAX_EDIT_OPS_PER_TICK: usize = 64;
+const EDIT_FLUSH_BUDGET: Duration = Duration::from_millis(2);
 pub(crate) const PATCHER_NODE_RUST: u32 = 0;
 pub(crate) const PATCHER_NODE_EUCLIDEAN: u32 = 1;
 pub(crate) const PATCHER_NODE_PASSTHROUGH: u32 = 2;
@@ -206,18 +211,25 @@ pub struct EngineView {
     pub clipboard: Option<ClipboardData>,
     pub toast_message: Option<String>,
     pub toast_deadline: Option<Instant>,
-    pub pending_notes: Vec<PendingNote>,
-    pub pending_chords: Vec<PendingChord>,
-    pub clip_notes: Vec<Vec<ClipNote>>,
+    pub clip_store: Arc<RwLock<ClipStore>>,
+    pub pending_overlay: PendingOverlay,
+    fast_overlay: TrackerFastOverlay,
+    pending_edit_ops: VecDeque<EditOp>,
+    /// Guards against re-entering the edit drain from `enqueue_ui_command`,
+    /// which `commit_*` calls while the drain loop owns `pending_edit_ops`.
+    edit_flush_active: bool,
     pub clip_version_local: u32,
     pub(crate) clip_render_version: u64,
     pub harmony_version_local: u32,
     pub(crate) harmony_render_version: u64,
     pub harmony_events: Vec<HarmonyEntry>,
-    pub clip_chords: Vec<Vec<ClipChord>>,
-    pub queued_commands: VecDeque<QueuedCommand>,
+    pub queued_edit_commands: VecDeque<QueuedCommand>,
+    pub queued_control_commands: VecDeque<QueuedCommand>,
+    pub next_edit_batch_id: u32,
     pub clip_resync_pending: bool,
     pub harmony_resync_pending: bool,
+    pub pending_keystrokes: VecDeque<gpui::Keystroke>,
+    pub pending_keystroke_flush: bool,
     pub track_columns: Vec<usize>,
     pub track_quantize: Vec<bool>,
     pub track_names: Vec<Option<String>>,
@@ -236,6 +248,8 @@ pub struct EngineView {
     pub patcher_link_source: Option<PatcherPortRef>,
     pub patcher_link_target: Option<PatcherPortRef>,
     pub patcher_canvas_origin: Option<(f32, f32)>,
+    pub tracker_canvas_origin: Option<(f32, f32)>,
+    pub(crate) tracker_text_cache: Arc<Mutex<TrackerTextCache>>,
     pub patcher_mouse_pos: Option<(f32, f32)>,
     pub patcher_drag_node: Option<u32>,
     pub patcher_drag_offset: (f32, f32),
@@ -244,20 +258,20 @@ pub struct EngineView {
     pub ui_debug: bool,
     pub render_count: u32,
     // Minimap cache fields for memoization
-    pub(crate) minimap_cache_clip_version: u32,
-    pub(crate) minimap_cache_harmony_version: u32,
+    pub(crate) minimap_cache_clip_version: u64,
+    pub(crate) minimap_cache_harmony_version: u64,
     pub(crate) cached_timeline_end: u64,
     pub(crate) cached_minimap_bins: Vec<usize>,
     pub(crate) cached_minimap_params: (u64, usize),
     pub(crate) tracker_cache: Option<Arc<TrackerCache>>,
+    pub(crate) tracker_cache_dirty_rows: Vec<usize>,
+    pub(crate) tracker_cache_dirty_all: bool,
 }
 
 #[derive(Clone, PartialEq)]
 pub(crate) struct TrackerCacheKey {
     pub window_start: u64,
     pub row_nanoticks: u64,
-    pub clip_render_version: u64,
-    pub harmony_render_version: u64,
     pub track_columns: Vec<usize>,
 }
 
@@ -275,11 +289,177 @@ pub(crate) struct TrackerCache {
     pub rows: Vec<TrackerRowCache>,
 }
 
+#[derive(Default)]
+pub(crate) struct TrackerTextCache {
+    pub cell: HashMap<SharedString, ShapedLine>,
+    pub time: HashMap<SharedString, ShapedLine>,
+    pub harmony: HashMap<SharedString, ShapedLine>,
+}
+
+#[derive(Clone)]
+pub(crate) enum FastCell {
+    Label(SharedString),
+}
+
+pub(crate) type FastOverlayGrid = Vec<Vec<Vec<Option<FastCell>>>>;
+
+#[derive(Clone)]
+pub(crate) struct TrackerFastOverlay {
+    cells: Vec<Vec<HashMap<u64, FastCell>>>,
+}
+
+impl TrackerFastOverlay {
+    fn new(track_count: usize, max_columns: usize) -> Self {
+        let mut cells = Vec::with_capacity(track_count);
+        for _ in 0..track_count {
+            let mut columns = Vec::with_capacity(max_columns);
+            for _ in 0..max_columns {
+                columns.push(HashMap::new());
+            }
+            cells.push(columns);
+        }
+        Self { cells }
+    }
+
+    fn set_label(&mut self, track: usize, column: u8, nanotick: u64, label: SharedString) {
+        let Some(map) = self
+            .cells
+            .get_mut(track)
+            .and_then(|cols| cols.get_mut(column as usize))
+        else {
+            return;
+        };
+        map.insert(nanotick, FastCell::Label(label));
+    }
+
+    fn remove_cell(&mut self, track: usize, column: u8, nanotick: u64) -> bool {
+        let Some(map) = self
+            .cells
+            .get_mut(track)
+            .and_then(|cols| cols.get_mut(column as usize))
+        else {
+            return false;
+        };
+        map.remove(&nanotick).is_some()
+    }
+
+    fn label(&self, track: usize, column: u8, nanotick: u64) -> Option<&SharedString> {
+        let map = self
+            .cells
+            .get(track)
+            .and_then(|cols| cols.get(column as usize))?;
+        match map.get(&nanotick)? {
+            FastCell::Label(label) => Some(label),
+        }
+    }
+
+    fn overlay_grid(&self, key: &TrackerCacheKey) -> FastOverlayGrid {
+        let track_columns = &key.track_columns;
+        let mut rows: FastOverlayGrid = Vec::with_capacity(VISIBLE_ROWS);
+        for _ in 0..VISIBLE_ROWS {
+            let mut row_tracks = Vec::with_capacity(track_columns.len());
+            for &columns in track_columns {
+                row_tracks.push(vec![None; columns]);
+            }
+            rows.push(row_tracks);
+        }
+        let row_nanoticks = key.row_nanoticks.max(1);
+        let visible_start = key.window_start;
+        let visible_end = visible_start.saturating_add(
+            row_nanoticks.saturating_mul(VISIBLE_ROWS as u64),
+        );
+        for (track_index, track) in self.cells.iter().enumerate() {
+            if track_index >= track_columns.len() {
+                break;
+            }
+            let columns = track_columns[track_index];
+            for (column_index, map) in track.iter().enumerate() {
+                if column_index >= columns {
+                    break;
+                }
+                for (&nanotick, cell) in map.iter() {
+                    if nanotick < visible_start || nanotick >= visible_end {
+                        continue;
+                    }
+                    // A cell inside row N belongs to row N, matching the
+                    // range-based row cache. Requiring exact row alignment
+                    // dropped every overlay label whenever the scroll offset
+                    // was off-grid (follow-playhead) or the row spanned many
+                    // ticks (semantic zoom).
+                    let row_index = ((nanotick - visible_start) / row_nanoticks) as usize;
+                    if row_index < VISIBLE_ROWS {
+                        rows[row_index][track_index][column_index] = Some(cell.clone());
+                    }
+                }
+            }
+        }
+        rows
+    }
+}
+
+#[derive(Clone)]
+enum EditOp {
+    WriteNote {
+        track: usize,
+        column: u8,
+        nanotick: u64,
+        pitch: u8,
+        velocity: u8,
+        duration: u64,
+        base_version: u32,
+    },
+    WriteNoteOff {
+        track: usize,
+        column: u8,
+        nanotick: u64,
+        base_version: u32,
+    },
+    WriteChord {
+        track: usize,
+        column: u8,
+        nanotick: u64,
+        duration: u64,
+        degree: u8,
+        quality: u8,
+        inversion: u8,
+        base_octave: u8,
+        spread: u32,
+        humanize_timing: u16,
+        humanize_velocity: u16,
+        base_version: u32,
+    },
+}
+
+impl EditOp {
+    fn base_version_mut(&mut self) -> Option<&mut u32> {
+        match self {
+            EditOp::WriteNote { base_version, .. } => Some(base_version),
+            EditOp::WriteNoteOff { base_version, .. } => Some(base_version),
+            EditOp::WriteChord { base_version, .. } => Some(base_version),
+        }
+    }
+}
+
 pub trait UiNotify {
     fn notify(&mut self);
     /// Notify only specific tracker rows. Default falls back to full notify.
     fn notify_rows(&mut self, _rows: &[usize]) {
         self.notify();
+    }
+}
+
+#[derive(Default)]
+struct BatchNotify {
+    dirty: bool,
+}
+
+impl UiNotify for BatchNotify {
+    fn notify(&mut self) {
+        self.dirty = true;
+    }
+
+    fn notify_rows(&mut self, _rows: &[usize]) {
+        self.dirty = true;
     }
 }
 
@@ -337,18 +517,23 @@ impl EngineView {
             clipboard: None,
             toast_message: None,
             toast_deadline: None,
-            pending_notes: Vec::new(),
-            pending_chords: Vec::new(),
-            clip_notes: vec![Vec::new(); TRACK_COUNT],
+            clip_store: Arc::new(RwLock::new(ClipStore::new(TRACK_COUNT, MAX_NOTE_COLUMNS))),
+            pending_overlay: PendingOverlay::new(TRACK_COUNT, MAX_NOTE_COLUMNS),
+            fast_overlay: TrackerFastOverlay::new(TRACK_COUNT, MAX_NOTE_COLUMNS),
+            pending_edit_ops: VecDeque::new(),
+            edit_flush_active: false,
             clip_version_local: 0,
             clip_render_version: 0,
             harmony_version_local: 0,
             harmony_render_version: 0,
             harmony_events: Vec::new(),
-            clip_chords: vec![Vec::new(); TRACK_COUNT],
-            queued_commands: VecDeque::new(),
+            queued_edit_commands: VecDeque::new(),
+            queued_control_commands: VecDeque::new(),
+            next_edit_batch_id: 1,
             clip_resync_pending: false,
             harmony_resync_pending: false,
+            pending_keystrokes: VecDeque::new(),
+            pending_keystroke_flush: false,
             track_columns: vec![1; TRACK_COUNT],
             track_quantize: vec![true; TRACK_COUNT],
             track_names: vec![None; TRACK_COUNT],
@@ -367,6 +552,8 @@ impl EngineView {
             patcher_link_source: None,
             patcher_link_target: None,
             patcher_canvas_origin: None,
+            tracker_canvas_origin: None,
+            tracker_text_cache: Arc::new(Mutex::new(TrackerTextCache::default())),
             patcher_mouse_pos: None,
             patcher_drag_node: None,
             patcher_drag_offset: (0.0, 0.0),
@@ -381,6 +568,8 @@ impl EngineView {
             cached_minimap_bins: Vec::new(),
             cached_minimap_params: (0, 0),
             tracker_cache: None,
+            tracker_cache_dirty_rows: Vec::new(),
+            tracker_cache_dirty_all: false,
         }
     }
 
@@ -411,7 +600,11 @@ impl EngineView {
         if playhead_view_row < lower || playhead_view_row > upper {
             let target = self.snapshot.ui_global_nanotick_playhead as i64
                 - (VISIBLE_ROWS as i64 / 2) * row_nanoticks;
-            self.scroll_nanotick_offset = target.max(0);
+            // Keep the window on the row grid: the harmony column matches
+            // `event.nanotick == row_start` exactly, so an off-grid offset
+            // blanks HARM on every row.
+            self.scroll_nanotick_offset =
+                self.snap_nanotick_to_row(target.max(0) as u64) as i64;
             return true;
         }
         false
@@ -723,6 +916,211 @@ impl EngineView {
                 return;
             }
         }
+    }
+
+    fn queue_keystroke(
+        &mut self,
+        keystroke: gpui::Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending_keystrokes.push_back(keystroke);
+        if self.pending_keystroke_flush {
+            return;
+        }
+        self.pending_keystroke_flush = true;
+        cx.on_next_frame(window, |view, window, cx| {
+            view.flush_pending_keystrokes(window, cx);
+        });
+    }
+
+    fn flush_pending_keystrokes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_keystroke_flush = false;
+        if self.pending_keystrokes.is_empty() {
+            return;
+        }
+        let mut notify = BatchNotify::default();
+        let start = Instant::now();
+        let mut processed = 0usize;
+        while processed < MAX_KEYSTROKES_PER_FRAME &&
+            start.elapsed() < KEYSTROKE_FLUSH_BUDGET {
+            let Some(keystroke) = self.pending_keystrokes.pop_front() else {
+                break;
+            };
+            self.handle_keystroke(&keystroke, &mut notify);
+            processed = processed.saturating_add(1);
+        }
+        if notify.dirty {
+            cx.notify();
+        }
+        if !self.pending_keystrokes.is_empty() {
+            self.pending_keystroke_flush = true;
+            cx.on_next_frame(window, |view, window, cx| {
+                view.flush_pending_keystrokes(window, cx);
+            });
+        }
+    }
+
+    pub(crate) fn fast_overlay_grid(&self, key: &TrackerCacheKey) -> FastOverlayGrid {
+        self.fast_overlay.overlay_grid(key)
+    }
+
+    /// The text the tracker paints for a cell before the engine confirms the
+    /// edit. This overlay is what makes an edit visible on the very next frame;
+    /// `entries_for_row` only reflects state that has been committed.
+    pub fn fast_overlay_label(
+        &self,
+        track: usize,
+        column: u8,
+        nanotick: u64,
+    ) -> Option<SharedString> {
+        self.fast_overlay.label(track, column, nanotick).cloned()
+    }
+
+    fn queue_edit_op(&mut self, op: EditOp) {
+        self.pending_edit_ops.push_back(op);
+    }
+
+    pub fn flush_pending_edits(&mut self, cx: &mut impl UiNotify) {
+        self.flush_pending_edits_limited(cx, MAX_EDIT_OPS_PER_TICK, Some(EDIT_FLUSH_BUDGET));
+    }
+
+    /// Drains queued edit ops so their engine commands are enqueued in the same
+    /// order their clip versions were allocated. Any clip edit that enqueues a
+    /// command directly must drain first: the engine requires
+    /// `base_version == current`, so a command that jumps ahead of a still-queued
+    /// op is rejected and forces a full resync.
+    pub(crate) fn drain_pending_edits_for_ordering(&mut self) {
+        if self.pending_edit_ops.is_empty() {
+            return;
+        }
+        let mut notify = BatchNotify::default();
+        self.flush_pending_edits_limited(&mut notify, usize::MAX, None);
+    }
+
+    fn flush_pending_edits_limited(
+        &mut self,
+        cx: &mut impl UiNotify,
+        max_ops: usize,
+        budget: Option<Duration>,
+    ) {
+        if self.pending_edit_ops.is_empty() ||
+            self.clip_resync_pending ||
+            self.edit_flush_active
+        {
+            return;
+        }
+        self.edit_flush_active = true;
+        let mut notify = BatchNotify::default();
+        let start = Instant::now();
+        let mut processed = 0usize;
+        while processed < max_ops &&
+            budget.is_none_or(|budget| start.elapsed() < budget)
+        {
+            let Some(op) = self.pending_edit_ops.pop_front() else {
+                break;
+            };
+            let emitted = match op {
+                EditOp::WriteNote {
+                    track,
+                    column,
+                    nanotick,
+                    pitch,
+                    velocity,
+                    duration,
+                    base_version,
+                } => {
+                    self.commit_write_note(
+                        track,
+                        column,
+                        nanotick,
+                        pitch,
+                        velocity,
+                        duration,
+                        base_version,
+                        &mut notify,
+                    )
+                }
+                EditOp::WriteNoteOff {
+                    track,
+                    column,
+                    nanotick,
+                    base_version,
+                } => {
+                    self.commit_write_note_off(
+                        track,
+                        column,
+                        nanotick,
+                        base_version,
+                        &mut notify,
+                    )
+                }
+                EditOp::WriteChord {
+                    track,
+                    column,
+                    nanotick,
+                    duration,
+                    degree,
+                    quality,
+                    inversion,
+                    base_octave,
+                    spread,
+                    humanize_timing,
+                    humanize_velocity,
+                    base_version,
+                } => {
+                    self.commit_write_chord(
+                        track,
+                        column,
+                        nanotick,
+                        duration,
+                        degree,
+                        quality,
+                        inversion,
+                        base_octave,
+                        spread,
+                        humanize_timing,
+                        humanize_velocity,
+                        base_version,
+                        &mut notify,
+                    )
+                }
+            };
+            if !emitted {
+                // The version was reserved when the op was queued. If the commit
+                // declined to emit, nothing will ever consume that version, so
+                // hand it back — otherwise the UI runs permanently ahead of the
+                // engine and every later edit is rejected.
+                self.release_reserved_clip_version();
+            }
+            processed = processed.saturating_add(1);
+        }
+        self.edit_flush_active = false;
+        if notify.dirty {
+            cx.notify();
+        }
+    }
+
+    /// Gives back a clip version reserved by an op that never produced a
+    /// command. Ops still queued were numbered after it, so they shift down too.
+    pub(crate) fn release_reserved_clip_version(&mut self) {
+        for op in self.pending_edit_ops.iter_mut() {
+            if let Some(base) = op.base_version_mut() {
+                *base = base.saturating_sub(1);
+            }
+        }
+        self.clip_version_local = self.clip_version_local.saturating_sub(1);
+    }
+
+    pub(crate) fn rebase_edit_queue(&mut self, base_version: u32) {
+        let mut next = base_version;
+        for op in self.pending_edit_ops.iter_mut() {
+            if let Some(base) = op.base_version_mut() {
+                *base = next;
+                next = next.saturating_add(1);
+            }
+        }
+        self.clip_version_local = next;
     }
 
     pub fn action_palette_up(&mut self, cx: &mut impl UiNotify) {
@@ -1163,7 +1561,7 @@ impl EngineView {
         let mut notes = Vec::new();
         let mut seen = HashSet::new();
         if include_pending {
-            for pending in &self.pending_notes {
+            for pending in self.pending_overlay.iter_notes() {
                 if pending.velocity == 0 {
                     continue;
                 }
@@ -1188,21 +1586,25 @@ impl EngineView {
                 }
             }
         }
-        for (track, track_notes) in self.clip_notes.iter().enumerate() {
-            if track >= mask.tracks.len() {
-                break;
-            }
-            for note in track_notes {
-                let column = note.column as usize;
-                if (mask.tracks[track] & (1u8 << column)) == 0 {
-                    continue;
+        if let Ok(store) = self.clip_store.read() {
+            for (track, track_notes) in store.tracks().iter().enumerate() {
+                if track >= mask.tracks.len() {
+                    break;
                 }
-                if note.nanotick < start || note.nanotick > end {
-                    continue;
-                }
-                let key = (track, note.nanotick, note.column);
-                if seen.insert(key) {
-                    notes.push((track, note.clone()));
+                for map in track_notes.notes().iter() {
+                    for note in map.values() {
+                        let column = note.column as usize;
+                        if (mask.tracks[track] & (1u8 << column)) == 0 {
+                            continue;
+                        }
+                        if note.nanotick < start || note.nanotick > end {
+                            continue;
+                        }
+                        let key = (track, note.nanotick, note.column);
+                        if seen.insert(key) {
+                            notes.push((track, note.clone()));
+                        }
+                    }
                 }
             }
         }
@@ -1219,7 +1621,7 @@ impl EngineView {
         let mut chords = Vec::new();
         let mut seen = HashSet::new();
         if include_pending {
-            for pending in &self.pending_chords {
+            for pending in self.pending_overlay.iter_chords() {
                 let track = pending.track_id as usize;
                 let column = pending.column as usize;
                 if track >= mask.tracks.len() ||
@@ -1247,21 +1649,25 @@ impl EngineView {
                 }
             }
         }
-        for (track, track_chords) in self.clip_chords.iter().enumerate() {
-            if track >= mask.tracks.len() {
-                break;
-            }
-            for chord in track_chords {
-                let column = chord.column as usize;
-                if (mask.tracks[track] & (1u8 << column)) == 0 {
-                    continue;
+        if let Ok(store) = self.clip_store.read() {
+            for (track, track_chords) in store.tracks().iter().enumerate() {
+                if track >= mask.tracks.len() {
+                    break;
                 }
-                if chord.nanotick < start || chord.nanotick > end {
-                    continue;
-                }
-                let key = (track, chord.nanotick, chord.column);
-                if seen.insert(key) {
-                    chords.push((track, chord.clone()));
+                for map in track_chords.chords().iter() {
+                    for chord in map.values() {
+                        let column = chord.column as usize;
+                        if (mask.tracks[track] & (1u8 << column)) == 0 {
+                            continue;
+                        }
+                        if chord.nanotick < start || chord.nanotick > end {
+                            continue;
+                        }
+                        let key = (track, chord.nanotick, chord.column);
+                        if seen.insert(key) {
+                            chords.push((track, chord.clone()));
+                        }
+                    }
                 }
             }
         }
@@ -1468,15 +1874,19 @@ impl EngineView {
         for harmony in harmonies {
             self.delete_harmony_at(harmony.nanotick, cx);
         }
-        self.pending_chords.retain(|pending| {
+        let overlay_changed = self.pending_overlay.remove_chords_where(|pending| {
             let track = pending.track_id as usize;
             let column = pending.column as usize;
             if track >= mask.tracks.len() ||
                 (mask.tracks[track] & (1u8 << column)) == 0 {
-                return true;
+                return false;
             }
-            pending.nanotick < start || pending.nanotick > end
+            pending.nanotick >= start && pending.nanotick <= end
         });
+        if overlay_changed {
+            self.bump_clip_render_version();
+        }
+        self.mark_tracker_rows_dirty_in_range(start, end);
         cx.notify();
     }
 
@@ -2109,6 +2519,7 @@ impl EngineView {
             base_version: 0,
         };
         self.enqueue_ui_command(payload);
+        self.flush_queued_commands();
         cx.notify();
     }
 
@@ -2253,6 +2664,7 @@ impl EngineView {
             self.harmony_events.sort_by_key(|event| event.nanotick);
             self.bump_harmony_version();
             self.bump_harmony_render_version();
+            self.mark_tracker_row_dirty_for_nanotick(nanotick);
             cx.notify();
             return;
         }
@@ -2280,6 +2692,7 @@ impl EngineView {
         });
         self.harmony_events.sort_by_key(|event| event.nanotick);
         self.bump_harmony_render_version();
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
         cx.notify();
     }
 
@@ -2455,6 +2868,9 @@ impl EngineView {
     }
 
     fn delete_note(&mut self, cx: &mut impl UiNotify) {
+        // Decides what to delete from committed state, so a note that is still
+        // queued must be committed first or backspace-after-typing is a no-op.
+        self.drain_pending_edits_for_ordering();
         let nanotick = self.current_row_nanotick();
         if let Some(entry) = self.cell_entry_at(
             nanotick,
@@ -2487,29 +2903,42 @@ impl EngineView {
                     } else {
                         return;
                     }
-                    if let Some(notes) = self.clip_notes.get_mut(self.focused_track_index) {
-                        let before = notes.len();
-                        notes.retain(|note| {
-                            !(note.nanotick == nanotick &&
-                                note.column == self.cursor_col as u8)
-                        });
-                        if notes.len() != before {
+                    if let Ok(mut store) = self.clip_store.write() {
+                        if store.remove_note_at(
+                            self.focused_track_index,
+                            self.cursor_col as u8,
+                            nanotick,
+                        ) {
                             clip_changed = true;
                         }
                     }
-                    self.pending_notes.retain(|note| {
-                        !(note.track_id == self.focused_track_index as u32 &&
-                            note.nanotick == nanotick &&
-                            note.column == self.cursor_col as u8)
-                    });
-                    self.pending_chords.retain(|chord| {
-                        !(chord.track_id == self.focused_track_index as u32 &&
-                            chord.nanotick == nanotick &&
-                            chord.column == self.cursor_col as u8)
-                    });
-                    if clip_changed {
+                    let mut overlay_changed = false;
+                    if self.pending_overlay.remove_note_at(
+                        self.focused_track_index,
+                        self.cursor_col as u8,
+                        nanotick,
+                    ) {
+                        overlay_changed = true;
+                    }
+                    if self.pending_overlay.remove_chord_at(
+                        self.focused_track_index,
+                        self.cursor_col as u8,
+                        nanotick,
+                    ) {
+                        overlay_changed = true;
+                    }
+                    if clip_changed || overlay_changed {
                         self.bump_clip_render_version();
                     }
+                    // The row cache is per-row; bumping the render version alone
+                    // does not rebuild this row, so the deleted note stays on
+                    // screen until something else dirties it.
+                    self.fast_overlay.remove_cell(
+                        self.focused_track_index,
+                        self.cursor_col as u8,
+                        nanotick,
+                    );
+                    self.mark_tracker_row_dirty_for_nanotick(nanotick);
                 }
                 CellKind::Chord => {
                     let Some(chord_id) = entry.chord_id else {
@@ -2560,21 +2989,16 @@ impl EngineView {
             self.bump_clip_version();
         }
         let mut clip_changed = false;
-        if let Some(notes) = self.clip_notes.get_mut(track) {
-            let before = notes.len();
-            notes.retain(|note| !(note.nanotick == nanotick && note.column == column));
-            if notes.len() != before {
+        if let Ok(mut store) = self.clip_store.write() {
+            if store.remove_note_at(track, column, nanotick) {
                 clip_changed = true;
             }
         }
-        self.pending_notes.retain(|note| {
-            !(note.track_id == track as u32 &&
-                note.nanotick == nanotick &&
-                note.column == column)
-        });
-        if clip_changed {
+        let overlay_changed = self.pending_overlay.remove_note_at(track, column, nanotick);
+        if clip_changed || overlay_changed {
             self.bump_clip_render_version();
         }
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
         if self.bridge.is_none() {
             self.bump_clip_version();
         }
@@ -2616,26 +3040,20 @@ impl EngineView {
             self.bump_clip_version();
         }
         let mut clip_changed = false;
-        if let Some(chords) = self.clip_chords.get_mut(track) {
-            let before = chords.len();
-            chords.retain(|chord| chord.chord_id != chord_id);
-            if chords.len() != before {
+        if let Ok(mut store) = self.clip_store.write() {
+            if chord_id == 0 {
+                if store.remove_chord_at(track, column, nanotick) {
+                    clip_changed = true;
+                }
+            } else if store.remove_chord_by_id(track, chord_id) {
                 clip_changed = true;
             }
         }
-        self.pending_chords.retain(|chord| {
-            if chord.track_id != track as u32 {
-                return true;
-            }
-            if chord_id == 0 {
-                !(chord.nanotick == nanotick && chord.column == column)
-            } else {
-                true
-            }
-        });
-        if clip_changed {
+        let overlay_changed = self.pending_overlay.remove_chord_at(track, column, nanotick);
+        if clip_changed || overlay_changed {
             self.bump_clip_render_version();
         }
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
         if self.bridge.is_none() {
             self.bump_clip_version();
         }
@@ -2666,6 +3084,7 @@ impl EngineView {
             self.bump_harmony_version();
         }
         self.bump_harmony_render_version();
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
         cx.notify();
     }
 
@@ -2729,80 +3148,29 @@ impl EngineView {
             eprintln!("[UI] write_note(pitch={})", pitch);
         }
         let nanotick = self.current_row_nanotick();
-        let (note_nanotick_lo, note_nanotick_hi) = split_u64(nanotick);
-        let (note_duration_lo, note_duration_hi) = split_u64(0);
-
-        // Clear any existing pending notes at this position
-        self.pending_notes.retain(|note| {
-            !(note.track_id == self.focused_track_index as u32 &&
-                note.nanotick == nanotick &&
-                note.column == self.cursor_col as u8)
-        });
-        self.pending_chords.retain(|chord| {
-            !(chord.track_id == self.focused_track_index as u32 &&
-                chord.nanotick == nanotick &&
-                chord.column == self.cursor_col as u8)
-        });
-
-        if self.bridge.is_some() {
-            let payload = UiCommandPayload {
-                command_type: UiCommandType::WriteNote as u16,
-                flags: self.cursor_col as u16,
-                track_id: self.focused_track_index as u32,
-                plugin_index: 0,
-                note_pitch: pitch as u32,
-                value0: 100,
-                note_nanotick_lo,
-                note_nanotick_hi,
-                note_duration_lo,
-                note_duration_hi,
-                base_version: self.current_clip_version(),
-            };
-            self.enqueue_ui_command(payload);
-            self.bump_clip_version();
-        } else {
+        let track = self.focused_track_index;
+        let column = self.cursor_col as u8;
+        if self.bridge.is_none() {
+            // Nothing will ever drain the command queue without an engine, so
+            // apply straight to the local store instead of queueing forever.
+            self.write_note_at(track, column, nanotick, pitch, 100, 0, cx);
+            self.move_cursor_row(EDIT_STEP_ROWS, cx);
             return;
         }
-        self.pending_notes.retain(|note| {
-            !(note.track_id == self.focused_track_index as u32 &&
-                note.nanotick == nanotick &&
-                note.column == self.cursor_col as u8)
-        });
-        self.pending_chords.retain(|chord| {
-            !(chord.track_id == self.focused_track_index as u32 &&
-                chord.nanotick == nanotick &&
-                chord.column == self.cursor_col as u8)
-        });
-        let mut clip_changed = false;
-        if let Some(notes) = self.clip_notes.get_mut(self.focused_track_index) {
-            let before = notes.len();
-            notes.retain(|note| {
-                !(note.nanotick == nanotick && note.column == self.cursor_col as u8)
-            });
-            if notes.len() != before {
-                clip_changed = true;
-            }
-        }
-        if let Some(chords) = self.clip_chords.get_mut(self.focused_track_index) {
-            let before = chords.len();
-            chords.retain(|chord| {
-                !(chord.nanotick == nanotick && chord.column == self.cursor_col as u8)
-            });
-            if chords.len() != before {
-                clip_changed = true;
-            }
-        }
-        if clip_changed {
-            self.bump_clip_render_version();
-        }
-        self.pending_notes.push(PendingNote {
-            track_id: self.focused_track_index as u32,
+        self.fast_overlay.remove_cell(track, column, nanotick);
+        self.fast_overlay
+            .set_label(track, column, nanotick, note_label_shared(pitch));
+        let op = EditOp::WriteNote {
+            track,
+            column,
             nanotick,
-            duration: 0,
             pitch,
             velocity: 100,
-            column: self.cursor_col as u8,
-        });
+            duration: 0,
+            base_version: self.current_clip_version(),
+        };
+        self.queue_edit_op(op);
+        self.bump_clip_version();
         self.move_cursor_row(EDIT_STEP_ROWS, cx);
         cx.notify(); // Show pending note immediately
     }
@@ -2822,29 +3190,23 @@ impl EngineView {
         }
         if self.bridge.is_none() {
             let mut clip_changed = false;
-            if let Some(notes) = self.clip_notes.get_mut(track) {
-                notes.retain(|note| !(note.nanotick == nanotick && note.column == column));
-                notes.push(ClipNote {
+            if let Ok(mut store) = self.clip_store.write() {
+                store.remove_note_at(track, column, nanotick);
+                store.remove_chord_at(track, column, nanotick);
+                store.insert_note(track, ClipNote {
                     nanotick,
                     duration,
                     pitch,
                     velocity,
                     column,
                 });
-                notes.sort_by_key(|note| (note.nanotick, note.column));
                 clip_changed = true;
-            }
-            if let Some(chords) = self.clip_chords.get_mut(track) {
-                let before = chords.len();
-                chords.retain(|chord| !(chord.nanotick == nanotick && chord.column == column));
-                if chords.len() != before {
-                    clip_changed = true;
-                }
             }
             if clip_changed {
                 self.bump_clip_render_version();
             }
             self.bump_clip_version();
+            self.mark_tracker_row_dirty_for_nanotick(nanotick);
             cx.notify();
             return;
         }
@@ -2866,73 +3228,57 @@ impl EngineView {
         self.enqueue_ui_command(payload);
         self.bump_clip_version();
 
-        self.pending_notes.retain(|note| {
-            !(note.track_id == track as u32 &&
-                note.nanotick == nanotick &&
-                note.column == column)
-        });
-        self.pending_chords.retain(|chord| {
-            !(chord.track_id == track as u32 &&
-                chord.nanotick == nanotick &&
-                chord.column == column)
-        });
-        let mut clip_changed = false;
-        if let Some(notes) = self.clip_notes.get_mut(track) {
-            let before = notes.len();
-            notes.retain(|note| !(note.nanotick == nanotick && note.column == column));
-            if notes.len() != before {
-                clip_changed = true;
-            }
+        self.pending_overlay.remove_note_at(track, column, nanotick);
+        self.pending_overlay.remove_chord_at(track, column, nanotick);
+        if let Ok(mut store) = self.clip_store.write() {
+            store.remove_note_at(track, column, nanotick);
+            store.remove_chord_at(track, column, nanotick);
         }
-        if let Some(chords) = self.clip_chords.get_mut(track) {
-            let before = chords.len();
-            chords.retain(|chord| !(chord.nanotick == nanotick && chord.column == column));
-            if chords.len() != before {
-                clip_changed = true;
-            }
-        }
-        if clip_changed {
-            self.bump_clip_render_version();
-        }
-        self.pending_notes.push(PendingNote {
-            track_id: track as u32,
-            nanotick,
-            duration,
-            pitch,
-            velocity,
+        self.pending_overlay.insert_note(
+            track,
             column,
-        });
+            PendingNote {
+                track_id: track as u32,
+                nanotick,
+                duration,
+                pitch,
+                velocity,
+                column,
+            },
+        );
+        self.bump_clip_render_version();
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
         cx.notify();
     }
 
     fn note_off_pitch(&self, track_index: usize, column: u8, nanotick: u64) -> Option<u8> {
         let mut best: Option<(u64, u8)> = None;
 
-        for note in self.pending_notes.iter() {
-            if note.track_id as usize != track_index || note.column != column {
-                continue;
-            }
-            if note.nanotick == nanotick && note.velocity > 0 {
+        if let Some(note) = self.pending_overlay.note_at(track_index, column, nanotick) {
+            if note.velocity > 0 {
                 return Some(note.pitch);
             }
-            if note.nanotick < nanotick && note.velocity > 0 {
-                if best.map_or(true, |(best_tick, _)| note.nanotick > best_tick) {
-                    best = Some((note.nanotick, note.pitch));
+        }
+        if let Ok(store) = self.clip_store.read() {
+            if let Some(note) = store.note_at(track_index, column, nanotick) {
+                if note.velocity > 0 {
+                    return Some(note.pitch);
                 }
             }
         }
 
-        if let Some(notes) = self.clip_notes.get(track_index) {
-            for note in notes.iter() {
-                if note.column != column {
-                    continue;
-                }
-                if note.nanotick == nanotick && note.velocity > 0 {
-                    return Some(note.pitch);
-                }
-                if note.nanotick < nanotick && note.velocity > 0 {
-                    if best.map_or(true, |(best_tick, _)| note.nanotick > best_tick) {
-                        best = Some((note.nanotick, note.pitch));
+        if let Some(prev_tick) =
+            self.pending_overlay.prev_note_on_nanotick(track_index, column, nanotick)
+        {
+            if let Some(note) = self.pending_overlay.note_at(track_index, column, prev_tick) {
+                best = Some((prev_tick, note.pitch));
+            }
+        }
+        if let Ok(store) = self.clip_store.read() {
+            if let Some(prev_tick) = store.prev_note_on_nanotick(track_index, column, nanotick) {
+                if let Some(note) = store.note_at(track_index, column, prev_tick) {
+                    if best.map_or(true, |(best_tick, _)| prev_tick > best_tick) {
+                        best = Some((prev_tick, note.pitch));
                     }
                 }
             }
@@ -2943,23 +3289,15 @@ impl EngineView {
         }
 
         let mut chord_tick: Option<u64> = None;
-        for chord in self.pending_chords.iter() {
-            if chord.track_id as usize != track_index || chord.column != column {
-                continue;
-            }
-            if chord.nanotick < nanotick &&
-                chord_tick.map_or(true, |best_tick| chord.nanotick > best_tick) {
-                chord_tick = Some(chord.nanotick);
-            }
+        if let Some(prev_tick) =
+            self.pending_overlay.prev_chord_nanotick(track_index, column, nanotick)
+        {
+            chord_tick = Some(prev_tick);
         }
-        if let Some(chords) = self.clip_chords.get(track_index) {
-            for chord in chords.iter() {
-                if chord.column != column {
-                    continue;
-                }
-                if chord.nanotick < nanotick &&
-                    chord_tick.map_or(true, |best_tick| chord.nanotick > best_tick) {
-                    chord_tick = Some(chord.nanotick);
+        if let Ok(store) = self.clip_store.read() {
+            if let Some(prev_tick) = store.prev_chord_nanotick(track_index, column, nanotick) {
+                if chord_tick.map_or(true, |best_tick| prev_tick > best_tick) {
+                    chord_tick = Some(prev_tick);
                 }
             }
         }
@@ -2971,27 +3309,15 @@ impl EngineView {
 
     fn next_note_on_nanotick(&self, track_index: usize, column: u8, nanotick: u64) -> Option<u64> {
         let mut next: Option<u64> = None;
-        for note in self.pending_notes.iter() {
-            if note.track_id as usize != track_index || note.column != column {
-                continue;
-            }
-            if note.nanotick <= nanotick || note.velocity == 0 {
-                continue;
-            }
-            if next.map_or(true, |best| note.nanotick < best) {
-                next = Some(note.nanotick);
-            }
+        if let Some(pending) =
+            self.pending_overlay.next_note_on_nanotick(track_index, column, nanotick)
+        {
+            next = Some(pending);
         }
-        if let Some(notes) = self.clip_notes.get(track_index) {
-            for note in notes.iter() {
-                if note.column != column || note.velocity == 0 {
-                    continue;
-                }
-                if note.nanotick <= nanotick {
-                    continue;
-                }
-                if next.map_or(true, |best| note.nanotick < best) {
-                    next = Some(note.nanotick);
+        if let Ok(store) = self.clip_store.read() {
+            if let Some(confirmed) = store.next_note_on_nanotick(track_index, column, nanotick) {
+                if next.map_or(true, |best| confirmed < best) {
+                    next = Some(confirmed);
                 }
             }
         }
@@ -3000,27 +3326,15 @@ impl EngineView {
 
     fn prev_note_on_nanotick(&self, track_index: usize, column: u8, nanotick: u64) -> Option<u64> {
         let mut prev: Option<u64> = None;
-        for note in self.pending_notes.iter() {
-            if note.track_id as usize != track_index || note.column != column {
-                continue;
-            }
-            if note.nanotick >= nanotick || note.velocity == 0 {
-                continue;
-            }
-            if prev.map_or(true, |best| note.nanotick > best) {
-                prev = Some(note.nanotick);
-            }
+        if let Some(pending) =
+            self.pending_overlay.prev_note_on_nanotick(track_index, column, nanotick)
+        {
+            prev = Some(pending);
         }
-        if let Some(notes) = self.clip_notes.get(track_index) {
-            for note in notes.iter() {
-                if note.column != column || note.velocity == 0 {
-                    continue;
-                }
-                if note.nanotick >= nanotick {
-                    continue;
-                }
-                if prev.map_or(true, |best| note.nanotick > best) {
-                    prev = Some(note.nanotick);
+        if let Ok(store) = self.clip_store.read() {
+            if let Some(confirmed) = store.prev_note_on_nanotick(track_index, column, nanotick) {
+                if prev.map_or(true, |best| confirmed > best) {
+                    prev = Some(confirmed);
                 }
             }
         }
@@ -3029,30 +3343,15 @@ impl EngineView {
 
     fn prev_chord_nanotick(&self, track_index: usize, column: u8, nanotick: u64) -> Option<u64> {
         let mut prev: Option<u64> = None;
-        for chord in self.pending_chords.iter() {
-            if chord.track_id as usize != track_index {
-                continue;
-            }
-            if chord.column != column {
-                continue;
-            }
-            if chord.nanotick >= nanotick {
-                continue;
-            }
-            if prev.map_or(true, |best| chord.nanotick > best) {
-                prev = Some(chord.nanotick);
-            }
+        if let Some(pending) =
+            self.pending_overlay.prev_chord_nanotick(track_index, column, nanotick)
+        {
+            prev = Some(pending);
         }
-        if let Some(chords) = self.clip_chords.get(track_index) {
-            for chord in chords.iter() {
-                if chord.column != column {
-                    continue;
-                }
-                if chord.nanotick >= nanotick {
-                    continue;
-                }
-                if prev.map_or(true, |best| chord.nanotick > best) {
-                    prev = Some(chord.nanotick);
+        if let Ok(store) = self.clip_store.read() {
+            if let Some(confirmed) = store.prev_chord_nanotick(track_index, column, nanotick) {
+                if prev.map_or(true, |best| confirmed > best) {
+                    prev = Some(confirmed);
                 }
             }
         }
@@ -3061,30 +3360,15 @@ impl EngineView {
 
     fn next_chord_nanotick(&self, track_index: usize, column: u8, nanotick: u64) -> Option<u64> {
         let mut next: Option<u64> = None;
-        for chord in self.pending_chords.iter() {
-            if chord.track_id as usize != track_index {
-                continue;
-            }
-            if chord.column != column {
-                continue;
-            }
-            if chord.nanotick <= nanotick {
-                continue;
-            }
-            if next.map_or(true, |best| chord.nanotick < best) {
-                next = Some(chord.nanotick);
-            }
+        if let Some(pending) =
+            self.pending_overlay.next_chord_nanotick(track_index, column, nanotick)
+        {
+            next = Some(pending);
         }
-        if let Some(chords) = self.clip_chords.get(track_index) {
-            for chord in chords.iter() {
-                if chord.column != column {
-                    continue;
-                }
-                if chord.nanotick <= nanotick {
-                    continue;
-                }
-                if next.map_or(true, |best| chord.nanotick < best) {
-                    next = Some(chord.nanotick);
+        if let Ok(store) = self.clip_store.read() {
+            if let Some(confirmed) = store.next_chord_nanotick(track_index, column, nanotick) {
+                if next.map_or(true, |best| confirmed < best) {
+                    next = Some(confirmed);
                 }
             }
         }
@@ -3098,166 +3382,282 @@ impl EngineView {
         nanotick: u64,
         prev_boundary: Option<u64>,
         next_boundary: Option<u64>,
-    ) -> bool {
-        let lower = prev_boundary.unwrap_or(0);
-        let upper = next_boundary.unwrap_or(u64::MAX);
-        let in_range = |note_nanotick: u64| {
-            if note_nanotick == nanotick {
-                return false;
-            }
-            note_nanotick > lower && note_nanotick < upper
-        };
-
-        self.pending_notes.retain(|note| {
-            if note.track_id as usize != track_index || note.column != column {
-                return true;
-            }
-            if note.velocity != 0 || note.duration != 0 {
-                return true;
-            }
-            !in_range(note.nanotick)
-        });
-
-        let mut removed = false;
-        if let Some(notes) = self.clip_notes.get_mut(track_index) {
-            let before = notes.len();
-            notes.retain(|note| {
-                if note.column != column {
-                    return true;
-                }
-                if note.velocity != 0 || note.duration != 0 {
-                    return true;
-                }
-                !in_range(note.nanotick)
-            });
-            if notes.len() != before {
-                removed = true;
-            }
+    ) -> Vec<u64> {
+        let mut removed = self.pending_overlay.remove_note_offs_in_span(
+            track_index,
+            column,
+            nanotick,
+            prev_boundary,
+            next_boundary,
+        );
+        if let Ok(mut store) = self.clip_store.write() {
+            let mut confirmed = store.remove_note_offs_in_span(
+                track_index,
+                column,
+                nanotick,
+                prev_boundary,
+                next_boundary,
+            );
+            removed.append(&mut confirmed);
         }
         removed
     }
 
     fn write_note_off(&mut self, cx: &mut impl UiNotify) {
+        // Reads the preceding note/chord boundary to decide whether an OFF is
+        // meaningful here, so queued writes must land first.
+        self.drain_pending_edits_for_ordering();
         let nanotick = self.current_row_nanotick();
         let column = self.cursor_col as u8;
+        let track = self.focused_track_index;
         let prev_note_on = self.prev_note_on_nanotick(
-            self.focused_track_index,
+            track,
             column,
             nanotick,
         );
-        let next_note_on = self.next_note_on_nanotick(
-            self.focused_track_index,
-            column,
-            nanotick,
-        );
-        let prev_chord = self.prev_chord_nanotick(self.focused_track_index, column, nanotick);
-        let next_chord = self.next_chord_nanotick(self.focused_track_index, column, nanotick);
-        let (prev_boundary, next_boundary) = (
-            match (prev_note_on, prev_chord) {
-                (Some(a), Some(b)) => Some(a.max(b)),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            },
-            match (next_note_on, next_chord) {
-                (Some(a), Some(b)) => Some(a.min(b)),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(b),
-                (None, None) => None,
-            },
-        );
+        let prev_chord = self.prev_chord_nanotick(track, column, nanotick);
+        let prev_boundary = match (prev_note_on, prev_chord) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
 
-        let pitch = self
-            .note_off_pitch(self.focused_track_index, column, nanotick)
-            .unwrap_or(0);
-        if pitch == 0 && prev_boundary.is_none() {
+        let pitch = self.note_off_pitch(track, column, nanotick).unwrap_or(0);
+        if (pitch == 0 && prev_boundary.is_none()) || self.bridge.is_none() {
+            // An OFF is derived from engine-confirmed note spans, so there is
+            // nothing meaningful to record while detached.
             self.move_cursor_row(EDIT_STEP_ROWS, cx);
             cx.notify();
             return;
         }
+        self.fast_overlay.remove_cell(track, column, nanotick);
+        self.fast_overlay
+            .set_label(track, column, nanotick, off_label_shared());
+        let op = EditOp::WriteNoteOff {
+            track,
+            column,
+            nanotick,
+            base_version: self.current_clip_version(),
+        };
+        self.queue_edit_op(op);
+        self.bump_clip_version();
+        self.move_cursor_row(EDIT_STEP_ROWS, cx);
+        cx.notify();
+    }
+
+    fn commit_write_note(
+        &mut self,
+        track: usize,
+        column: u8,
+        nanotick: u64,
+        pitch: u8,
+        velocity: u8,
+        duration: u64,
+        base_version: u32,
+        notify: &mut BatchNotify,
+    ) -> bool {
+        if track >= TRACK_COUNT || column as usize >= MAX_NOTE_COLUMNS {
+            return false;
+        }
+        self.fast_overlay.remove_cell(track, column, nanotick);
         let (note_nanotick_lo, note_nanotick_hi) = split_u64(nanotick);
-        let (note_duration_lo, note_duration_hi) = split_u64(0);
+        let (note_duration_lo, note_duration_hi) = split_u64(duration);
+        let payload = UiCommandPayload {
+            command_type: UiCommandType::WriteNote as u16,
+            flags: column as u16,
+            track_id: track as u32,
+            plugin_index: 0,
+            note_pitch: pitch as u32,
+            value0: velocity as u32,
+            note_nanotick_lo,
+            note_nanotick_hi,
+            note_duration_lo,
+            note_duration_hi,
+            base_version,
+        };
+        self.enqueue_ui_command(payload);
 
-        self.pending_notes.retain(|note| {
-            !(note.track_id == self.focused_track_index as u32 &&
-                note.nanotick == nanotick &&
-                note.column == self.cursor_col as u8)
-        });
-        self.pending_chords.retain(|chord| {
-            !(chord.track_id == self.focused_track_index as u32 &&
-                chord.nanotick == nanotick &&
-                chord.column == self.cursor_col as u8)
-        });
+        self.pending_overlay.remove_note_at(track, column, nanotick);
+        self.pending_overlay.remove_chord_at(track, column, nanotick);
+        if let Ok(mut store) = self.clip_store.write() {
+            store.remove_note_at(track, column, nanotick);
+            store.remove_chord_at(track, column, nanotick);
+        }
+        self.pending_overlay.insert_note(
+            track,
+            column,
+            PendingNote {
+                track_id: track as u32,
+                nanotick,
+                duration,
+                pitch,
+                velocity,
+                column,
+            },
+        );
+        self.bump_clip_render_version();
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
+        notify.notify();
+        true
+    }
 
-        if self.bridge.is_some() {
-            let payload = UiCommandPayload {
-                command_type: UiCommandType::WriteNote as u16,
-                flags: self.cursor_col as u16,
-                track_id: self.focused_track_index as u32,
-                plugin_index: 0,
-                note_pitch: pitch as u32,
-                value0: 0,
-                note_nanotick_lo,
-                note_nanotick_hi,
-                note_duration_lo,
-                note_duration_hi,
-                base_version: self.current_clip_version(),
-            };
-            self.enqueue_ui_command(payload);
-            self.bump_clip_version();
-        } else {
-            return;
+    fn commit_write_note_off(
+        &mut self,
+        track: usize,
+        column: u8,
+        nanotick: u64,
+        base_version: u32,
+        notify: &mut BatchNotify,
+    ) -> bool {
+        if track >= TRACK_COUNT || column as usize >= MAX_NOTE_COLUMNS {
+            return false;
         }
-        self.pending_notes.retain(|note| {
-            !(note.track_id == self.focused_track_index as u32 &&
-                note.nanotick == nanotick &&
-                note.column == self.cursor_col as u8)
-        });
-        self.pending_chords.retain(|chord| {
-            !(chord.track_id == self.focused_track_index as u32 &&
-                chord.nanotick == nanotick &&
-                chord.column == self.cursor_col as u8)
-        });
-        let mut clip_changed = false;
-        if let Some(notes) = self.clip_notes.get_mut(self.focused_track_index) {
-            let before = notes.len();
-            notes.retain(|note| {
-                !(note.nanotick == nanotick && note.column == self.cursor_col as u8)
-            });
-            if notes.len() != before {
-                clip_changed = true;
-            }
+        self.fast_overlay.remove_cell(track, column, nanotick);
+        let prev_note_on = self.prev_note_on_nanotick(track, column, nanotick);
+        let next_note_on = self.next_note_on_nanotick(track, column, nanotick);
+        let prev_chord = self.prev_chord_nanotick(track, column, nanotick);
+        let next_chord = self.next_chord_nanotick(track, column, nanotick);
+        let prev_boundary = match (prev_note_on, prev_chord) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        let next_boundary = match (next_note_on, next_chord) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        };
+        let pitch = self.note_off_pitch(track, column, nanotick).unwrap_or(0);
+        if pitch == 0 && prev_boundary.is_none() {
+            notify.notify();
+            return false;
         }
-        if let Some(chords) = self.clip_chords.get_mut(self.focused_track_index) {
-            let before = chords.len();
-            chords.retain(|chord| {
-                !(chord.nanotick == nanotick && chord.column == self.cursor_col as u8)
-            });
-            if chords.len() != before {
-                clip_changed = true;
-            }
+        let (note_nanotick_lo, note_nanotick_hi) = split_u64(nanotick);
+        let payload = UiCommandPayload {
+            command_type: UiCommandType::WriteNote as u16,
+            flags: column as u16,
+            track_id: track as u32,
+            plugin_index: 0,
+            note_pitch: pitch as u32,
+            value0: 0,
+            note_nanotick_lo,
+            note_nanotick_hi,
+            note_duration_lo: 0,
+            note_duration_hi: 0,
+            base_version,
+        };
+        self.enqueue_ui_command(payload);
+
+        self.pending_overlay.remove_note_at(track, column, nanotick);
+        self.pending_overlay.remove_chord_at(track, column, nanotick);
+        if let Ok(mut store) = self.clip_store.write() {
+            store.remove_note_at(track, column, nanotick);
+            store.remove_chord_at(track, column, nanotick);
         }
-        if self.remove_note_offs_in_span(
-            self.focused_track_index,
+        let removed_note_offs = self.remove_note_offs_in_span(
+            track,
             column,
             nanotick,
             prev_boundary,
             next_boundary,
-        ) {
-            clip_changed = true;
+        );
+        if !removed_note_offs.is_empty() {
+            for tick in removed_note_offs {
+                self.mark_tracker_row_dirty_for_nanotick(tick);
+            }
         }
-        if clip_changed {
-            self.bump_clip_render_version();
+        self.pending_overlay.insert_note(
+            track,
+            column,
+            PendingNote {
+                track_id: track as u32,
+                nanotick,
+                duration: 0,
+                pitch,
+                velocity: 0,
+                column,
+            },
+        );
+        self.bump_clip_render_version();
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
+        notify.notify();
+        true
+    }
+
+    fn commit_write_chord(
+        &mut self,
+        track: usize,
+        column: u8,
+        nanotick: u64,
+        duration: u64,
+        degree: u8,
+        quality: u8,
+        inversion: u8,
+        base_octave: u8,
+        spread: u32,
+        humanize_timing: u16,
+        humanize_velocity: u16,
+        base_version: u32,
+        notify: &mut BatchNotify,
+    ) -> bool {
+        if track >= TRACK_COUNT || column as usize >= MAX_NOTE_COLUMNS {
+            return false;
         }
-        self.pending_notes.push(PendingNote {
-            track_id: self.focused_track_index as u32,
-            nanotick,
-            duration: 0,
-            pitch,
-            velocity: 0,
-            column: self.cursor_col as u8,
-        });
-        self.move_cursor_row(EDIT_STEP_ROWS, cx);
+        self.fast_overlay.remove_cell(track, column, nanotick);
+        let (nanotick_lo, nanotick_hi) = split_u64(nanotick);
+        let (duration_lo, duration_hi) = split_u64(duration);
+        let timing = humanize_timing.min(u16::from(u8::MAX)) as u8;
+        let velocity = humanize_velocity.min(u16::from(u8::MAX)) as u8;
+        let payload = UiChordCommandPayload {
+            command_type: UiCommandType::WriteChord as u16,
+            flags: column as u16,
+            track_id: track as u32,
+            base_version,
+            nanotick_lo,
+            nanotick_hi,
+            duration_lo,
+            duration_hi,
+            degree: degree as u16,
+            quality,
+            inversion,
+            base_octave,
+            humanize_timing: timing,
+            humanize_velocity: velocity,
+            reserved: 0,
+            spread_nanoticks: spread,
+        };
+        self.enqueue_chord_command(payload);
+
+        self.pending_overlay.remove_note_at(track, column, nanotick);
+        self.pending_overlay.remove_chord_at(track, column, nanotick);
+        if let Ok(mut store) = self.clip_store.write() {
+            store.remove_note_at(track, column, nanotick);
+            store.remove_chord_at(track, column, nanotick);
+        }
+        self.pending_overlay.insert_chord(
+            track,
+            column,
+            PendingChord {
+                track_id: track as u32,
+                nanotick,
+                duration,
+                spread,
+                humanize_timing,
+                humanize_velocity,
+                degree,
+                quality,
+                inversion,
+                base_octave,
+                column,
+            },
+        );
+        self.bump_clip_render_version();
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
+        notify.notify();
+        true
     }
 
     pub fn toggle_play(&mut self, cx: &mut impl UiNotify) {
@@ -3296,8 +3696,14 @@ impl EngineView {
 
     pub fn entries_for_row(&self, nanotick: u64, track_index: usize) -> Vec<CellEntry> {
         let mut entries: Vec<CellEntry> = Vec::new();
-        if let Some(notes) = self.clip_notes.get(track_index) {
-            for note in notes.iter().filter(|note| note.nanotick == nanotick) {
+        let columns = self.track_columns.get(track_index).copied().unwrap_or(0);
+        let mut pending_note_columns = std::collections::HashSet::new();
+        let mut pending_chord_columns = std::collections::HashSet::new();
+
+        for column in 0..columns {
+            let column_u8 = column as u8;
+            if let Some(note) = self.pending_overlay.note_at(track_index, column_u8, nanotick) {
+                pending_note_columns.insert(column_u8);
                 let is_note_off = note.velocity == 0 && note.duration == 0;
                 entries.push(CellEntry {
                     kind: CellKind::Note,
@@ -3309,74 +3715,74 @@ impl EngineView {
                     nanotick,
                     note_pitch: Some(note.pitch),
                     chord_id: None,
-                    column: note.column as usize,
+                    column,
                     note_off: is_note_off,
                 });
             }
-        }
-        for note in self
-            .pending_notes
-            .iter()
-            .filter(|note| note.track_id as usize == track_index && note.nanotick == nanotick)
-        {
-            let is_note_off = note.velocity == 0 && note.duration == 0;
-            entries.push(CellEntry {
-                kind: CellKind::Note,
-                text: if is_note_off {
-                    String::new()
-                } else {
-                    pitch_to_note(note.pitch)
-                },
-                nanotick,
-                note_pitch: Some(note.pitch),
-                chord_id: None,
-                column: note.column as usize,
-                note_off: is_note_off,
-            });
-        }
-        let mut pending_chord_columns = std::collections::HashSet::new();
-        for chord in self.pending_chords.iter().filter(|chord| {
-            chord.track_id as usize == track_index && chord.nanotick == nanotick
-        }) {
-            pending_chord_columns.insert(chord.column);
-            let temp = ClipChord {
-                chord_id: 0,
-                nanotick,
-                duration: chord.duration,
-                spread: chord.spread,
-                humanize_timing: chord.humanize_timing,
-                humanize_velocity: chord.humanize_velocity,
-                degree: chord.degree,
-                quality: chord.quality,
-                inversion: chord.inversion,
-                base_octave: chord.base_octave,
-                column: chord.column,
-            };
-            entries.push(CellEntry {
-                kind: CellKind::Chord,
-                text: chord_token_text(&temp),
-                nanotick,
-                note_pitch: None,
-                chord_id: Some(0),
-                column: chord.column as usize,
-                note_off: false,
-            });
-        }
-        if let Some(chords) = self.clip_chords.get(track_index) {
-            for chord in chords.iter().filter(|chord| chord.nanotick == nanotick) {
-                if pending_chord_columns.contains(&chord.column) {
-                    continue;
-                }
-                let text = chord_token_text(chord);
+            if let Some(chord) = self.pending_overlay.chord_at(track_index, column_u8, nanotick) {
+                pending_chord_columns.insert(column_u8);
+                let temp = ClipChord {
+                    chord_id: 0,
+                    nanotick,
+                    duration: chord.duration,
+                    spread: chord.spread,
+                    humanize_timing: chord.humanize_timing,
+                    humanize_velocity: chord.humanize_velocity,
+                    degree: chord.degree,
+                    quality: chord.quality,
+                    inversion: chord.inversion,
+                    base_octave: chord.base_octave,
+                    column: chord.column,
+                };
                 entries.push(CellEntry {
                     kind: CellKind::Chord,
-                    text,
+                    text: chord_token_text(&temp),
                     nanotick,
                     note_pitch: None,
-                    chord_id: Some(chord.chord_id),
-                    column: chord.column as usize,
+                    chord_id: Some(0),
+                    column,
                     note_off: false,
                 });
+            }
+        }
+
+        if let Ok(store) = self.clip_store.read() {
+            if let Some(track) = store.track(track_index) {
+                for column in 0..columns {
+                    let column_u8 = column as u8;
+                    if !pending_note_columns.contains(&column_u8) {
+                        if let Some(note) = track.notes().get(column).and_then(|map| map.get(&nanotick)) {
+                            let is_note_off = note.velocity == 0 && note.duration == 0;
+                            entries.push(CellEntry {
+                                kind: CellKind::Note,
+                                text: if is_note_off {
+                                    String::new()
+                                } else {
+                                    pitch_to_note(note.pitch)
+                                },
+                                nanotick,
+                                note_pitch: Some(note.pitch),
+                                chord_id: None,
+                                column,
+                                note_off: is_note_off,
+                            });
+                        }
+                    }
+                    if !pending_chord_columns.contains(&column_u8) {
+                        if let Some(chord) = track.chords().get(column).and_then(|map| map.get(&nanotick)) {
+                            let text = chord_token_text(chord);
+                            entries.push(CellEntry {
+                                kind: CellKind::Chord,
+                                text,
+                                nanotick,
+                                note_pitch: None,
+                                chord_id: Some(chord.chord_id),
+                                column,
+                                note_off: false,
+                            });
+                        }
+                    }
+                }
             }
         }
         entries.sort_by(|a, b| {
@@ -3406,77 +3812,59 @@ impl EngineView {
     fn send_chord(&mut self, chord: ParsedChordToken, cx: &mut impl UiNotify) {
         let nanotick = self.current_row_nanotick();
         let duration = chord.duration.unwrap_or(0);
-        let degree = chord.degree.min(255) as u16;
-        let pending_degree = degree as u8;
         let column = self.cursor_col as u8;
+        let track = self.focused_track_index;
+        let degree = chord.degree.min(255) as u8;
 
-        if self.bridge.is_some() {
-            let (nanotick_lo, nanotick_hi) = split_u64(nanotick);
-            let (duration_lo, duration_hi) = split_u64(duration);
-            let payload = UiChordCommandPayload {
-                command_type: UiCommandType::WriteChord as u16,
-                flags: column as u16,
-                track_id: self.focused_track_index as u32,
-                base_version: self.current_clip_version(),
-                nanotick_lo,
-                nanotick_hi,
-                duration_lo,
-                duration_hi,
-                degree,
-                quality: chord.quality,
-                inversion: chord.inversion,
-                base_octave: chord.base_octave,
-                humanize_timing: chord.humanize_timing,
-                humanize_velocity: chord.humanize_velocity,
-                reserved: 0,
-                spread_nanoticks: chord.spread_nanoticks,
-            };
-            self.enqueue_chord_command(payload);
-            self.bump_clip_version();
-        } else {
-            return;
-        }
-        self.pending_notes.retain(|note| {
-            !(note.track_id == self.focused_track_index as u32 &&
-                note.nanotick == nanotick &&
-                note.column == column)
-        });
-        self.pending_chords.retain(|pending| {
-            !(pending.track_id == self.focused_track_index as u32 &&
-                pending.nanotick == nanotick &&
-                pending.column == column)
-        });
-        let mut clip_changed = false;
-        if let Some(notes) = self.clip_notes.get_mut(self.focused_track_index) {
-            let before = notes.len();
-            notes.retain(|note| !(note.nanotick == nanotick && note.column == column));
-            if notes.len() != before {
-                clip_changed = true;
-            }
-        }
-        if let Some(chords) = self.clip_chords.get_mut(self.focused_track_index) {
-            let before = chords.len();
-            chords.retain(|chord| !(chord.nanotick == nanotick && chord.column == column));
-            if chords.len() != before {
-                clip_changed = true;
-            }
-        }
-        if clip_changed {
-            self.bump_clip_render_version();
-        }
-        self.pending_chords.push(PendingChord {
-            track_id: self.focused_track_index as u32,
+        let label = chord_token_text(&ClipChord {
+            chord_id: 0,
             nanotick,
             duration,
             spread: chord.spread_nanoticks,
             humanize_timing: chord.humanize_timing as u16,
             humanize_velocity: chord.humanize_velocity as u16,
-            degree: pending_degree,
+            degree,
             quality: chord.quality,
             inversion: chord.inversion,
             base_octave: chord.base_octave,
             column,
         });
+        if self.bridge.is_none() {
+            self.write_chord_at(
+                track,
+                column,
+                nanotick,
+                duration,
+                degree,
+                chord.quality,
+                chord.inversion,
+                chord.base_octave,
+                chord.spread_nanoticks,
+                chord.humanize_timing as u16,
+                chord.humanize_velocity as u16,
+                cx,
+            );
+            return;
+        }
+        self.fast_overlay.remove_cell(track, column, nanotick);
+        self.fast_overlay
+            .set_label(track, column, nanotick, SharedString::from(label));
+        let op = EditOp::WriteChord {
+            track,
+            column,
+            nanotick,
+            duration,
+            degree,
+            quality: chord.quality,
+            inversion: chord.inversion,
+            base_octave: chord.base_octave,
+            spread: chord.spread_nanoticks,
+            humanize_timing: chord.humanize_timing as u16,
+            humanize_velocity: chord.humanize_velocity as u16,
+            base_version: self.current_clip_version(),
+        };
+        self.queue_edit_op(op);
+        self.bump_clip_version();
         cx.notify();
     }
 
@@ -3500,13 +3888,10 @@ impl EngineView {
         }
         if self.bridge.is_none() {
             let mut clip_changed = false;
-            if let Some(notes) = self.clip_notes.get_mut(track) {
-                notes.retain(|note| !(note.nanotick == nanotick && note.column == column));
-                clip_changed = true;
-            }
-            if let Some(chords) = self.clip_chords.get_mut(track) {
-                chords.retain(|chord| !(chord.nanotick == nanotick && chord.column == column));
-                chords.push(ClipChord {
+            if let Ok(mut store) = self.clip_store.write() {
+                store.remove_note_at(track, column, nanotick);
+                store.remove_chord_at(track, column, nanotick);
+                store.insert_chord(track, ClipChord {
                     chord_id: 0,
                     nanotick,
                     duration,
@@ -3519,13 +3904,13 @@ impl EngineView {
                     base_octave,
                     column,
                 });
-                chords.sort_by_key(|chord| (chord.nanotick, chord.column));
                 clip_changed = true;
             }
             if clip_changed {
                 self.bump_clip_render_version();
             }
             self.bump_clip_version();
+            self.mark_tracker_row_dirty_for_nanotick(nanotick);
             cx.notify();
             return;
         }
@@ -3554,47 +3939,31 @@ impl EngineView {
         self.enqueue_chord_command(payload);
         self.bump_clip_version();
 
-        self.pending_notes.retain(|note| {
-            !(note.track_id == track as u32 &&
-                note.nanotick == nanotick &&
-                note.column == column)
-        });
-        self.pending_chords.retain(|pending| {
-            !(pending.track_id == track as u32 &&
-                pending.nanotick == nanotick &&
-                pending.column == column)
-        });
-        let mut clip_changed = false;
-        if let Some(notes) = self.clip_notes.get_mut(track) {
-            let before = notes.len();
-            notes.retain(|note| !(note.nanotick == nanotick && note.column == column));
-            if notes.len() != before {
-                clip_changed = true;
-            }
+        self.pending_overlay.remove_note_at(track, column, nanotick);
+        self.pending_overlay.remove_chord_at(track, column, nanotick);
+        if let Ok(mut store) = self.clip_store.write() {
+            store.remove_note_at(track, column, nanotick);
+            store.remove_chord_at(track, column, nanotick);
         }
-        if let Some(chords) = self.clip_chords.get_mut(track) {
-            let before = chords.len();
-            chords.retain(|chord| !(chord.nanotick == nanotick && chord.column == column));
-            if chords.len() != before {
-                clip_changed = true;
-            }
-        }
-        if clip_changed {
-            self.bump_clip_render_version();
-        }
-        self.pending_chords.push(PendingChord {
-            track_id: track as u32,
-            nanotick,
-            duration,
-            spread,
-            humanize_timing,
-            humanize_velocity,
-            degree,
-            quality,
-            inversion,
-            base_octave,
+        self.pending_overlay.insert_chord(
+            track,
             column,
-        });
+            PendingChord {
+                track_id: track as u32,
+                nanotick,
+                duration,
+                spread,
+                humanize_timing,
+                humanize_velocity,
+                degree,
+                quality,
+                inversion,
+                base_octave,
+                column,
+            },
+        );
+        self.bump_clip_render_version();
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
         cx.notify();
     }
 
@@ -3722,18 +4091,6 @@ impl Render for EngineView {
             .child(self.render_preset_save_overlay(cx))
             .child(self.render_debug_overlay(cx))
             .child(self.render_toast(cx))
-    }
-}
-
-impl EngineView {
-    pub(crate) fn harmony_label_at_nanotick(&self, nanotick: u64) -> Option<String> {
-        let event = self
-            .harmony_events
-            .iter()
-            .find(|event| event.nanotick == nanotick)?;
-        let root = harmony_root_name(event.root);
-        let scale = harmony_scale_name(event.scale_id);
-        Some(format!("{root}:{scale}"))
     }
 }
 
@@ -3865,6 +4222,21 @@ pub(crate) fn pitch_to_note(pitch: u8) -> String {
     let name = NAMES[(pitch as usize) % 12];
     let octave = (pitch / 12) as i8 - 1;
     format!("{name}{octave}")
+}
+
+pub(crate) fn off_label_shared() -> SharedString {
+    static OFF: OnceLock<SharedString> = OnceLock::new();
+    OFF.get_or_init(|| SharedString::from("OFF")).clone()
+}
+
+pub(crate) fn note_label_shared(pitch: u8) -> SharedString {
+    static LABELS: OnceLock<Vec<SharedString>> = OnceLock::new();
+    let labels = LABELS.get_or_init(|| {
+        (0..128)
+            .map(|value| SharedString::from(pitch_to_note(value as u8)))
+            .collect()
+    });
+    labels[pitch.min(127) as usize].clone()
 }
 
 pub(crate) fn chord_token_text(chord: &ClipChord) -> String {
@@ -4466,11 +4838,11 @@ mod tests {
 
         // Simulate having 2 columns for track 0
         // Test entering notes in both columns
-        let mut pending_notes = Vec::new();
+        let mut pending = super::PendingOverlay::new(TRACK_COUNT, MAX_NOTE_COLUMNS);
         let nanotick = 0;
 
         // Add note to column 0
-        pending_notes.push(PendingNote {
+        pending.insert_note(TRACK_IDX, 0, PendingNote {
             track_id: TRACK_IDX as u32,
             nanotick,
             duration: 240000,
@@ -4480,10 +4852,8 @@ mod tests {
         });
 
         // Add note to same position (should replace)
-        pending_notes.retain(|note| {
-            !(note.track_id == TRACK_IDX as u32 && note.nanotick == nanotick)
-        });
-        pending_notes.push(PendingNote {
+        pending.remove_note_at(TRACK_IDX, 0, nanotick);
+        pending.insert_note(TRACK_IDX, 0, PendingNote {
             track_id: TRACK_IDX as u32,
             nanotick,
             duration: 240000,
@@ -4493,20 +4863,14 @@ mod tests {
         });
 
         // Verify only one note at position
-        let notes_at_position: Vec<_> = pending_notes.iter()
-            .filter(|n| n.track_id == TRACK_IDX as u32 && n.nanotick == nanotick)
-            .collect();
-        assert_eq!(notes_at_position.len(), 1);
-        assert_eq!(notes_at_position[0].pitch, 64);
+        let note_at = pending.note_at(TRACK_IDX, 0, nanotick).expect("note exists");
+        assert_eq!(pending.note_count(), 1);
+        assert_eq!(note_at.pitch, 64);
 
         // Test delete operation
-        pending_notes.retain(|note| {
-            !(note.track_id == TRACK_IDX as u32 && note.nanotick == nanotick)
-        });
-        let remaining: Vec<_> = pending_notes.iter()
-            .filter(|n| n.track_id == TRACK_IDX as u32 && n.nanotick == nanotick)
-            .collect();
-        assert_eq!(remaining.len(), 0);
+        pending.remove_note_at(TRACK_IDX, 0, nanotick);
+        assert!(pending.note_at(TRACK_IDX, 0, nanotick).is_none());
+        assert_eq!(pending.note_count(), 0);
     }
 
     #[test]
@@ -4569,7 +4933,7 @@ mod tests {
     fn test_apply_diff_replaces_notes() {
         // Test that applying an AddNote diff replaces existing notes at same position
         use super::{EngineView, ClipNote};
-        use daw_bridge::layout::{UiDiffPayload, UiDiffType, K_UI_MAX_TRACKS};
+        use daw_bridge::layout::{UiClipWindowSnapshot, UiDiffPayload, UiDiffType, K_UI_MAX_TRACKS};
         use daw_bridge::reader::UiSnapshot;
 
         let mut engine_view = EngineView::new_state();
@@ -4588,16 +4952,11 @@ mod tests {
             ui_harmony_bytes: 0,
             ui_track_peak_rms: [0.0; K_UI_MAX_TRACKS],
         };
-        if let Some(state) = engine_view.clip_window.get_mut(0) {
-            state.window_start = 0;
-            state.window_end = NANOTICKS_PER_QUARTER * 4;
-        }
         engine_view.track_columns = vec![1; TRACK_COUNT];
         engine_view.track_quantize = vec![false; TRACK_COUNT];
         engine_view.track_names = vec![None; TRACK_COUNT];
-        engine_view.clip_notes = vec![Vec::new(); TRACK_COUNT];
-        engine_view.clip_chords = vec![Vec::new(); TRACK_COUNT];
-        engine_view.queued_commands = VecDeque::new();
+        engine_view.queued_edit_commands = VecDeque::new();
+        engine_view.queued_control_commands = VecDeque::new();
         engine_view.chain_versions = vec![0; TRACK_COUNT];
         engine_view.chain_devices = vec![Vec::new(); TRACK_COUNT];
         engine_view.patcher_versions = vec![0; TRACK_COUNT];
@@ -4605,13 +4964,20 @@ mod tests {
         engine_view.patcher_edges = vec![Vec::new(); TRACK_COUNT];
 
         // Add initial note at position 0
-        engine_view.clip_notes[0].push(ClipNote {
-            nanotick: 0,
-            duration: 240000,
-            pitch: 60,  // C-4
-            velocity: 100,
-            column: 0,
-        });
+        if let Ok(mut store) = engine_view.clip_store.write() {
+            let mut snapshot = UiClipWindowSnapshot::default();
+            snapshot.track_id = 0;
+            snapshot.window_start_nanotick = 0;
+            snapshot.window_end_nanotick = NANOTICKS_PER_QUARTER * 4;
+            store.apply_clip_window_page(snapshot, true);
+            store.insert_note(0, ClipNote {
+                nanotick: 0,
+                duration: 240000,
+                pitch: 60,  // C-4
+                velocity: 100,
+                column: 0,
+            });
+        }
 
         // Apply diff to add D-4 at same position
         let diff = UiDiffPayload {
@@ -4631,10 +4997,14 @@ mod tests {
         engine_view.apply_diff(diff);
 
         // Should have only 1 note (D-4), not 2
-        assert_eq!(engine_view.clip_notes[0].len(), 1,
-                   "Should have replaced C-4 with D-4");
-        assert_eq!(engine_view.clip_notes[0][0].pitch, 62,
-                   "Note should be D-4");
+        let store = engine_view.clip_store.read().expect("clip store locked");
+        let note = store.note_at(0, 0, 0).expect("note should exist");
+        assert_eq!(note.pitch, 62, "Note should be D-4");
+        assert_eq!(
+            store.track(0).expect("track exists").notes()[0].len(),
+            1,
+            "Should have replaced C-4 with D-4"
+        );
     }
 
     #[test]
@@ -4642,13 +5012,13 @@ mod tests {
         // Test that pending notes are cleared when writing new note
         use super::PendingNote;
 
-        let mut pending_notes = Vec::new();
-        let track_id = 0_u32;
+        let mut pending = super::PendingOverlay::new(TRACK_COUNT, MAX_NOTE_COLUMNS);
+        let track_id = 0_usize;
         let nanotick = 0_u64;
 
         // Add first pending note
-        pending_notes.push(PendingNote {
-            track_id,
+        pending.insert_note(track_id, 0, PendingNote {
+            track_id: track_id as u32,
             nanotick,
             duration: 240000,
             pitch: 60,
@@ -4657,13 +5027,11 @@ mod tests {
         });
 
         // Simulate write_note clearing pending notes at position
-        pending_notes.retain(|note| {
-            !(note.track_id == track_id && note.nanotick == nanotick)
-        });
+        pending.remove_note_at(track_id, 0, nanotick);
 
         // Add new pending note
-        pending_notes.push(PendingNote {
-            track_id,
+        pending.insert_note(track_id, 0, PendingNote {
+            track_id: track_id as u32,
             nanotick,
             duration: 240000,
             pitch: 62,
@@ -4671,8 +5039,12 @@ mod tests {
             column: 0,
         });
 
-        assert_eq!(pending_notes.len(), 1, "Should have only new note");
-        assert_eq!(pending_notes[0].pitch, 62, "Should be D-4");
+        assert_eq!(pending.note_count(), 1, "Should have only new note");
+        assert_eq!(
+            pending.note_at(track_id, 0, nanotick).expect("note exists").pitch,
+            62,
+            "Should be D-4"
+        );
     }
 
     #[test]
@@ -4680,20 +5052,22 @@ mod tests {
         let mut view = super::EngineView::new_state();
         view.zoom_index = 0; // zoomed out -> aggregate
 
-        view.clip_notes[0].push(super::ClipNote {
-            nanotick: 0,
-            duration: 240000,
-            pitch: 60,
-            velocity: 100,
-            column: 0,
-        });
-        view.clip_notes[0].push(super::ClipNote {
-            nanotick: 240000,
-            duration: 240000,
-            pitch: 60,
-            velocity: 100,
-            column: 0,
-        });
+        if let Ok(mut store) = view.clip_store.write() {
+            store.insert_note(0, super::ClipNote {
+                nanotick: 0,
+                duration: 240000,
+                pitch: 60,
+                velocity: 100,
+                column: 0,
+            });
+            store.insert_note(0, super::ClipNote {
+                nanotick: 240000,
+                duration: 240000,
+                pitch: 60,
+                velocity: 100,
+                column: 0,
+            });
+        }
 
         let row_start = 0;
         let row_end = view.row_nanoticks();
@@ -4821,27 +5195,29 @@ mod tests {
         let (page_start, page_end) = view.page_range();
         let outside = page_end + row;
 
-        view.clip_notes[0].push(super::ClipNote {
-            nanotick: page_start,
-            duration: row,
-            pitch: 60,
-            velocity: 100,
-            column: 0,
-        });
-        view.clip_notes[0].push(super::ClipNote {
-            nanotick: page_start + row,
-            duration: row,
-            pitch: 62,
-            velocity: 100,
-            column: 1,
-        });
-        view.clip_notes[0].push(super::ClipNote {
-            nanotick: outside,
-            duration: row,
-            pitch: 64,
-            velocity: 100,
-            column: 0,
-        });
+        if let Ok(mut store) = view.clip_store.write() {
+            store.insert_note(0, super::ClipNote {
+                nanotick: page_start,
+                duration: row,
+                pitch: 60,
+                velocity: 100,
+                column: 0,
+            });
+            store.insert_note(0, super::ClipNote {
+                nanotick: page_start + row,
+                duration: row,
+                pitch: 62,
+                velocity: 100,
+                column: 1,
+            });
+            store.insert_note(0, super::ClipNote {
+                nanotick: outside,
+                duration: row,
+                pitch: 64,
+                velocity: 100,
+                column: 0,
+            });
+        }
 
         let mut notify = TestNotify;
         view.copy_page(&mut notify);
@@ -4849,20 +5225,33 @@ mod tests {
         assert_eq!(clipboard.notes.len(), 2);
 
         view.cut_page(&mut notify);
-        assert_eq!(view.clip_notes[0].len(), 1);
-        assert_eq!(view.clip_notes[0][0].nanotick, outside);
+        if let Ok(store) = view.clip_store.read() {
+            assert_eq!(store.track(0).expect("track exists").notes()[0].len(), 1);
+            let note = store.note_at(0, 0, outside).expect("outside note");
+            assert_eq!(note.nanotick, outside);
+        }
 
         view.scroll_nanotick_offset = (row * 4) as i64;
         view.paste_page(&mut notify);
 
         let target = view.page_range().0;
-        let mut pasted = view.clip_notes[0]
-            .iter()
-            .filter(|note| note.nanotick == target || note.nanotick == target + row)
-            .map(|note| (note.nanotick, note.column))
-            .collect::<Vec<_>>();
-        pasted.sort();
-        assert_eq!(pasted, vec![(target, 0), (target + row, 1)]);
+        if let Ok(store) = view.clip_store.read() {
+            let mut pasted = store.track(0)
+                .expect("track exists")
+                .notes()[0]
+                .values()
+                .chain(
+                    store.track(0)
+                        .expect("track exists")
+                        .notes()[1]
+                        .values()
+                )
+                .filter(|note| note.nanotick == target || note.nanotick == target + row)
+                .map(|note| (note.nanotick, note.column))
+                .collect::<Vec<_>>();
+            pasted.sort();
+            assert_eq!(pasted, vec![(target, 0), (target + row, 1)]);
+        };
     }
 
     #[test]
@@ -4891,14 +5280,29 @@ mod tests {
         let mut view = super::EngineView::new_state();
         let row = view.row_nanoticks();
 
-        view.clip_notes[0].push(super::ClipNote {
-            nanotick: 0,
-            duration: row,
-            pitch: 60,
-            velocity: 100,
-            column: 0,
-        });
-        view.pending_notes.push(super::PendingNote {
+        if let Ok(mut store) = view.clip_store.write() {
+            store.insert_note(0, super::ClipNote {
+                nanotick: 0,
+                duration: row,
+                pitch: 60,
+                velocity: 100,
+                column: 0,
+            });
+            store.insert_chord(0, super::ClipChord {
+                chord_id: 1,
+                nanotick: row * 3,
+                duration: row,
+                spread: 0,
+                humanize_timing: 0,
+                humanize_velocity: 0,
+                degree: 1,
+                quality: 0,
+                inversion: 0,
+                base_octave: 4,
+                column: 0,
+            });
+        }
+        view.pending_overlay.insert_note(0, 0, super::PendingNote {
             track_id: 0,
             nanotick: row * 2,
             duration: row,
@@ -4906,31 +5310,20 @@ mod tests {
             velocity: 100,
             column: 0,
         });
-        view.clip_chords[0].push(super::ClipChord {
-            chord_id: 1,
-            nanotick: row * 3,
-            duration: row,
-            spread: 0,
-            humanize_timing: 0,
-            humanize_velocity: 0,
-            degree: 1,
-            quality: 0,
-            inversion: 0,
-            base_octave: 4,
-            column: 0,
-        });
         view.harmony_events.push(super::HarmonyEntry {
             nanotick: row * 4,
             root: 0,
             scale_id: 1,
         });
-        view.clip_notes[0].push(super::ClipNote {
-            nanotick: row * 20,
-            duration: row,
-            pitch: 64,
-            velocity: 100,
-            column: 0,
-        });
+        if let Ok(mut store) = view.clip_store.write() {
+            store.insert_note(0, super::ClipNote {
+                nanotick: row * 20,
+                duration: row,
+                pitch: 64,
+                velocity: 100,
+                column: 0,
+            });
+        }
 
         let bins = view.minimap_bins(0, row * 8, 8);
         assert_eq!(bins.len(), 8);
@@ -5261,15 +5654,15 @@ pub fn run_app() -> Result<()> {
 
         cx.observe_keystrokes({
             let view = view.clone();
-            move |event, _, cx| {
-                let keystroke = &event.keystroke;
+            move |event, window, cx| {
+                let keystroke = event.keystroke.clone();
                 view.update(cx, |view, cx| {
                     if view.ui_debug {
                         eprintln!("[UI] keystroke: {:?}", keystroke.key);
                     }
-                    view.handle_keystroke(keystroke, cx);
+                    view.queue_keystroke(keystroke, window, cx);
                     if view.ui_debug {
-                        eprintln!("[UI] keystroke handler complete");
+                        eprintln!("[UI] keystroke queued");
                     }
                 });
             }
@@ -5296,6 +5689,7 @@ pub fn run_app() -> Result<()> {
                 let mut needs_harmony_resync = false;
                 let mut have_harmony_snapshot = false;
                 let mut last_change = std::time::Instant::now();
+                let mut clip_store_handle: Option<Arc<RwLock<ClipStore>>> = None;
                 loop {
                     if shutting_down.load(Ordering::Relaxed) {
                         break;
@@ -5374,6 +5768,13 @@ pub fn run_app() -> Result<()> {
                                     view.bridge = bridge_ref;
                                     cx.notify();
                                 });
+                                if clip_store_handle.is_none() {
+                                    if let Ok(handle) = window.update(&mut async_cx, |view, _, _| {
+                                        view.clip_store.clone()
+                                    }) {
+                                        clip_store_handle = Some(handle);
+                                    }
+                                }
                                 last_status = Some(status);
                                 // Always reset these when a new bridge is created
                                 last_version = 0;
@@ -5596,6 +5997,38 @@ pub fn run_app() -> Result<()> {
                             }
                             let needs_patcher_fix =
                                 !chain_diffs.is_empty() || !patcher_diffs.is_empty();
+                            let mut pending_note_clears: Vec<(usize, u8, u64)> = Vec::new();
+                            let mut pending_chord_clears: Vec<(usize, u8, u64)> = Vec::new();
+                            let mut clip_changed = false;
+                            if let Some(store) = clip_store_handle.as_ref() {
+                                if let Ok(mut store) = store.write() {
+                                    for diff in &note_diffs {
+                                        clip_changed |= store.apply_note_diff(diff);
+                                        let nanotick = (diff.note_nanotick_lo as u64) |
+                                            ((diff.note_nanotick_hi as u64) << 32);
+                                        let column = diff.note_column.min(255) as u8;
+                                        pending_note_clears
+                                            .push((diff.track_id as usize, column, nanotick));
+                                        pending_chord_clears
+                                            .push((diff.track_id as usize, column, nanotick));
+                                    }
+                                    for diff in &chord_diffs {
+                                        clip_changed |= store.apply_chord_diff(diff);
+                                        let nanotick = (diff.nanotick_lo as u64) |
+                                            ((diff.nanotick_hi as u64) << 32);
+                                        let (_, column) = crate::util::unpack_chord_spread(
+                                            diff.spread_nanoticks,
+                                        );
+                                        if diff.diff_type == UiChordDiffType::AddChord as u16 ||
+                                            diff.diff_type == UiChordDiffType::UpdateChord as u16 {
+                                            pending_note_clears
+                                                .push((diff.track_id as usize, column, nanotick));
+                                        }
+                                        pending_chord_clears
+                                            .push((diff.track_id as usize, column, nanotick));
+                                    }
+                                }
+                            }
                             if !chain_diffs.is_empty() ||
                                 !chain_errors.is_empty() ||
                                 !patcher_diffs.is_empty() ||
@@ -5622,14 +6055,27 @@ pub fn run_app() -> Result<()> {
                                         let message = view.patcher_error_message(diff);
                                         view.show_toast(&message, cx);
                                     }
-                                    for diff in note_diffs {
-                                        view.apply_diff(diff);
-                                    }
-                                    for diff in chord_diffs {
-                                        view.apply_chord_diff(diff);
-                                    }
                                     for diff in harmony_diffs {
                                         view.apply_harmony_diff(diff);
+                                    }
+                                    let mut overlay_changed = false;
+                                    for (track, column, nanotick) in pending_note_clears {
+                                        if view.pending_overlay.remove_note_at(track, column, nanotick) {
+                                            overlay_changed = true;
+                                        }
+                                        view.mark_tracker_row_dirty_for_nanotick(nanotick);
+                                    }
+                                    for (track, column, nanotick) in pending_chord_clears {
+                                        if view.pending_overlay.remove_chord_at(track, column, nanotick) {
+                                            overlay_changed = true;
+                                        }
+                                        view.mark_tracker_row_dirty_for_nanotick(nanotick);
+                                    }
+                                    if clip_changed || overlay_changed {
+                                        view.bump_clip_render_version();
+                                    }
+                                    if view.clip_version_local < last_clip_version {
+                                        view.clip_version_local = last_clip_version;
                                     }
                                     if needs_patcher_fix {
                                         view.auto_assign_missing_patcher_nodes(cx);
@@ -5679,10 +6125,12 @@ pub fn run_app() -> Result<()> {
                                                 state.complete = false;
                                             }
                                         }
-                                        // Defer clearing clip_notes/chords until the snapshot
+                                        // Defer clearing the clip store until the snapshot
                                         // page arrives so we never render an empty grid.
                                         view.clip_resync_pending = false;
                                         view.rebase_clip_queue(clip_version);
+                                        let next = view.clip_version_local;
+                                        view.rebase_edit_queue(next);
                                         cx.notify();
                                     });
                                     needs_clip_resync = false;
@@ -5705,8 +6153,66 @@ pub fn run_app() -> Result<()> {
                                                 });
                                             } else {
                                                 let reset = window_snapshot.cursor_event_index == 0;
+                                                let clip_changed = reset ||
+                                                    window_snapshot.note_count > 0 ||
+                                                    window_snapshot.chord_count > 0;
+                                                let mut pending_note_clears: Vec<(usize, u8, u64)> =
+                                                    Vec::with_capacity(window_snapshot.note_count as usize);
+                                                let mut pending_chord_clears: Vec<(usize, u8, u64)> =
+                                                    Vec::with_capacity(window_snapshot.chord_count as usize);
+                                                for note_index in 0..(window_snapshot.note_count as usize) {
+                                                    let note = window_snapshot.notes[note_index];
+                                                    pending_note_clears.push((
+                                                        track_index,
+                                                        note.column,
+                                                        note.t_on,
+                                                    ));
+                                                }
+                                                for chord_index in 0..(window_snapshot.chord_count as usize) {
+                                                    let chord = window_snapshot.chords[chord_index];
+                                                    let column = (chord.flags & 0xff) as u8;
+                                                    pending_chord_clears.push((
+                                                        track_index,
+                                                        column,
+                                                        chord.nanotick,
+                                                    ));
+                                                }
+                                                if let Some(store) = clip_store_handle.as_ref() {
+                                                    if let Ok(mut store) = store.write() {
+                                                        store.apply_clip_window_page(window_snapshot, reset);
+                                                    }
+                                                }
                                                 let _ = window.update(&mut async_cx, |view, _, cx| {
-                                                    view.apply_clip_window_page(window_snapshot, reset);
+                                                    if let Some(state) = view.clip_window.get_mut(track_index) {
+                                                        state.request_id = window_snapshot.request_id;
+                                                        state.cursor_event_index = window_snapshot.cursor_event_index;
+                                                        state.next_event_index = window_snapshot.next_event_index;
+                                                        state.window_start = window_snapshot.window_start_nanotick;
+                                                        state.window_end = window_snapshot.window_end_nanotick;
+                                                        state.clip_version = window_snapshot.clip_version;
+                                                        state.complete =
+                                                            (window_snapshot.flags & UI_CLIP_WINDOW_FLAG_COMPLETE) != 0;
+                                                    }
+                                                    let mut overlay_changed = false;
+                                                    for (track, column, nanotick) in pending_note_clears {
+                                                        if view.pending_overlay.remove_note_at(track, column, nanotick) {
+                                                            overlay_changed = true;
+                                                        }
+                                                    }
+                                                    for (track, column, nanotick) in pending_chord_clears {
+                                                        if view.pending_overlay.remove_chord_at(track, column, nanotick) {
+                                                            overlay_changed = true;
+                                                        }
+                                                    }
+                                                    if view.clip_version_local < window_snapshot.clip_version {
+                                                        view.clip_version_local = window_snapshot.clip_version;
+                                                    }
+                                                    if clip_changed {
+                                                        view.mark_tracker_cache_dirty_all();
+                                                    }
+                                                    if clip_changed || overlay_changed {
+                                                        view.bump_clip_render_version();
+                                                    }
                                                     cx.notify();
                                                 });
                                                 state.cursor_event_index = window_snapshot.next_event_index;
@@ -5796,7 +6302,8 @@ pub fn run_app() -> Result<()> {
                         continue;
                     }
 
-                    let _ = window.update(&mut async_cx, |view, _, _| {
+                    let _ = window.update(&mut async_cx, |view, _, cx| {
+                        view.flush_pending_edits(cx);
                         view.flush_queued_commands();
                     });
                     Timer::after(Duration::from_millis(8)).await;

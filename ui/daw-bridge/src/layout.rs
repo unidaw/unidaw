@@ -1,9 +1,17 @@
 use std::sync::atomic::{AtomicU32, AtomicU64};
 
+/// Must match `kShmMagic` / `kShmVersion` in apps/shared_memory.h. Bump both
+/// together whenever `ShmHeader`'s layout changes, so a stale binary on either
+/// side of the mapping is rejected instead of silently misreading fields.
+pub const K_SHM_MAGIC: u32 = 0x3041_5744;
+pub const K_SHM_VERSION: u16 = 7;
+
 pub const K_UI_MAX_TRACKS: usize = 8;
 pub const K_UI_MAX_CLIP_NOTES: usize = 4096;
 pub const K_UI_MAX_CLIP_CHORDS: usize = 1024;
 pub const K_UI_MAX_HARMONY_EVENTS: usize = 512;
+pub const K_UI_EDIT_BATCH_MAX_OPS: usize = 32;
+pub const K_UI_EDIT_BATCH_CAPACITY: usize = 64;
 pub const K_CHAIN_DEVICE_ID_AUTO: u32 = 0xFFFF_FFFF;
 pub const UI_CLIP_WINDOW_FLAG_COMPLETE: u32 = 1 << 0;
 pub const UI_CLIP_WINDOW_FLAG_RESYNC: u32 = 1 << 1;
@@ -25,6 +33,7 @@ pub struct ShmHeader {
     pub ring_ctrl_offset: u64,
     pub ring_ui_offset: u64,
     pub ring_ui_out_offset: u64,
+    pub ring_ui_edit_offset: u64,
     pub mailbox_offset: u64,
     pub ui_version: AtomicU64,
     pub ui_visual_sample_count: u64,
@@ -51,6 +60,14 @@ pub struct EventEntry {
     pub size: u16,
     pub flags: u32,
     pub payload: [u8; 40],
+}
+
+#[repr(C, align(64))]
+#[derive(Clone, Copy, Debug)]
+pub struct UiEditBatchEntry {
+    pub batch_id: u32,
+    pub op_count: u32,
+    pub ops: [EventEntry; K_UI_EDIT_BATCH_MAX_OPS],
 }
 
 #[repr(u16)]
@@ -349,16 +366,6 @@ pub struct UiClipWindowCommandPayload {
     pub reserved2: u32,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::UiClipWindowCommandPayload;
-    use std::mem::size_of;
-
-    #[test]
-    fn clip_window_command_payload_size() {
-        assert_eq!(size_of::<UiClipWindowCommandPayload>(), 40);
-    }
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -481,6 +488,21 @@ mod tests {
     use std::mem::{align_of, size_of};
 
     #[test]
+    fn clip_window_command_payload_size() {
+        assert_eq!(size_of::<UiClipWindowCommandPayload>(), 40);
+    }
+
+    #[test]
+    fn ui_edit_batch_entry_layout_matches_cpp() {
+        const_assert_eq!(size_of::<EventEntry>(), 64);
+        const_assert_eq!(size_of::<UiEditBatchEntry>(), 2112);
+        const_assert_eq!(align_of::<UiEditBatchEntry>(), 64);
+        assert_eq!(offset_of!(UiEditBatchEntry, batch_id), 0);
+        assert_eq!(offset_of!(UiEditBatchEntry, op_count), 4);
+        assert_eq!(offset_of!(UiEditBatchEntry, ops), 64);
+    }
+
+    #[test]
     fn shm_header_layout_matches_cpp() {
         const_assert_eq!(size_of::<ShmHeader>(), 256);
         const_assert_eq!(align_of::<ShmHeader>(), 64);
@@ -488,18 +510,19 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ring_ctrl_offset), 64);
         assert_eq!(offset_of!(ShmHeader, ring_ui_offset), 72);
         assert_eq!(offset_of!(ShmHeader, ring_ui_out_offset), 80);
-        assert_eq!(offset_of!(ShmHeader, mailbox_offset), 88);
-        assert_eq!(offset_of!(ShmHeader, ui_version), 96);
-        assert_eq!(offset_of!(ShmHeader, ui_visual_sample_count), 104);
-        assert_eq!(offset_of!(ShmHeader, ui_global_nanotick_playhead), 112);
-        assert_eq!(offset_of!(ShmHeader, ui_track_count), 120);
-        assert_eq!(offset_of!(ShmHeader, ui_transport_state), 124);
-        assert_eq!(offset_of!(ShmHeader, ui_clip_version), 128);
-        assert_eq!(offset_of!(ShmHeader, ui_clip_offset), 136);
-        assert_eq!(offset_of!(ShmHeader, ui_clip_bytes), 144);
-        assert_eq!(offset_of!(ShmHeader, ui_harmony_version), 152);
-        assert_eq!(offset_of!(ShmHeader, ui_harmony_offset), 160);
-        assert_eq!(offset_of!(ShmHeader, ui_harmony_bytes), 168);
-        assert_eq!(offset_of!(ShmHeader, ui_track_peak_rms), 176);
+        assert_eq!(offset_of!(ShmHeader, ring_ui_edit_offset), 88);
+        assert_eq!(offset_of!(ShmHeader, mailbox_offset), 96);
+        assert_eq!(offset_of!(ShmHeader, ui_version), 104);
+        assert_eq!(offset_of!(ShmHeader, ui_visual_sample_count), 112);
+        assert_eq!(offset_of!(ShmHeader, ui_global_nanotick_playhead), 120);
+        assert_eq!(offset_of!(ShmHeader, ui_track_count), 128);
+        assert_eq!(offset_of!(ShmHeader, ui_transport_state), 132);
+        assert_eq!(offset_of!(ShmHeader, ui_clip_version), 136);
+        assert_eq!(offset_of!(ShmHeader, ui_clip_offset), 144);
+        assert_eq!(offset_of!(ShmHeader, ui_clip_bytes), 152);
+        assert_eq!(offset_of!(ShmHeader, ui_harmony_version), 160);
+        assert_eq!(offset_of!(ShmHeader, ui_harmony_offset), 168);
+        assert_eq!(offset_of!(ShmHeader, ui_harmony_bytes), 176);
+        assert_eq!(offset_of!(ShmHeader, ui_track_peak_rms), 184);
     }
 }

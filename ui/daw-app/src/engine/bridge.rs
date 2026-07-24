@@ -7,12 +7,14 @@ use anyhow::{Context as AnyhowContext, Result};
 use memmap2::{MmapMut, MmapOptions};
 
 use daw_bridge::layout::{
-    EventEntry, EventType, RingHeader, ShmHeader, UiChainCommandPayload, UiChainDiffPayload,
+    EventEntry, EventType, RingHeader, ShmHeader, K_SHM_MAGIC, K_SHM_VERSION,
+    K_UI_EDIT_BATCH_CAPACITY, UiChainCommandPayload, UiChainDiffPayload,
     UiChainErrorPayload, UiClipWindowCommandPayload, UiClipWindowSnapshot, UiCommandPayload,
     UiChordCommandPayload,
     UiChordDiffPayload, UiDiffPayload, UiHarmonyDiffPayload, UiHarmonySnapshot,
-    UiPatcherGraphDiffPayload, UiPatcherGraphErrorPayload, UiPatcherGraphCommandPayload,
-    UiPatcherNodeConfigPayload, UiPatcherPresetCommandPayload, UiCommandType,
+    UiEditBatchEntry, UiPatcherGraphDiffPayload, UiPatcherGraphErrorPayload,
+    UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload, UiPatcherPresetCommandPayload,
+    UiCommandType,
 };
 use daw_bridge::reader::{SeqlockReader, UiSnapshot};
 
@@ -103,6 +105,13 @@ pub struct RingView {
     mask: u32,
 }
 
+#[derive(Clone, Copy)]
+pub struct EditRingView {
+    header: *mut RingHeader,
+    entries: *mut UiEditBatchEntry,
+    mask: u32,
+}
+
 pub struct EngineBridge {
     _mmap: MmapMut,
     base: *const u8,
@@ -110,6 +119,7 @@ pub struct EngineBridge {
     reader: SeqlockReader,
     ring_ui: Option<RingView>,
     ring_ui_out: Option<RingView>,
+    ring_ui_edit: Option<EditRingView>,
 }
 
 impl EngineBridge {
@@ -137,11 +147,29 @@ impl EngineBridge {
         let mmap = unsafe { MmapOptions::new().len(size as usize).map_mut(&file) }?;
         let base = mmap.as_ptr() as *const u8;
         let header = base as *const ShmHeader;
+        // Refuse a mapping written by a different build. Every field below is
+        // read at a hardcoded offset, so a layout change we do not recognise
+        // would be silently misread rather than reported.
+        let magic = unsafe { std::ptr::read_volatile(&(*header).magic) };
+        let version = unsafe { std::ptr::read_volatile(&(*header).version) };
+        if magic != K_SHM_MAGIC || version != K_SHM_VERSION {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "UI SHM header mismatch (magic 0x{magic:08x} want 0x{:08x}, \
+                     version {version} want {}) - engine and UI builds differ",
+                    K_SHM_MAGIC, K_SHM_VERSION
+                ),
+            ))
+            .with_context(|| format!("failed to open SHM {name}"));
+        }
         let reader = SeqlockReader::new(header);
         let ring_ui_offset = unsafe { (*header).ring_ui_offset };
         let ring_ui_out_offset = unsafe { (*header).ring_ui_out_offset };
+        let ring_ui_edit_offset = unsafe { (*header).ring_ui_edit_offset };
         let ring_ui = ring_view(base as *mut u8, ring_ui_offset);
         let ring_ui_out = ring_view(base as *mut u8, ring_ui_out_offset);
+        let ring_ui_edit = edit_ring_view(base as *mut u8, ring_ui_edit_offset);
         if ring_ui.is_none() || ring_ui_out.is_none() {
             let ui_capacity = unsafe {
                 if ring_ui_offset == 0 {
@@ -159,12 +187,22 @@ impl EngineBridge {
                     (*ring_header).capacity
                 }
             };
+            let ui_edit_capacity = unsafe {
+                if ring_ui_edit_offset == 0 {
+                    0
+                } else {
+                    let ring_header = base.add(ring_ui_edit_offset as usize) as *const RingHeader;
+                    (*ring_header).capacity
+                }
+            };
             eprintln!(
-                "daw-app: UI rings not ready (ui_offset={}, ui_capacity={}, ui_out_offset={}, ui_out_capacity={})",
+                "daw-app: UI rings not ready (ui_offset={}, ui_capacity={}, ui_out_offset={}, ui_out_capacity={}, ui_edit_offset={}, ui_edit_capacity={})",
                 ring_ui_offset,
                 ui_capacity,
                 ring_ui_out_offset,
-                ui_out_capacity
+                ui_out_capacity,
+                ring_ui_edit_offset,
+                ui_edit_capacity
             );
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Other,
@@ -184,13 +222,23 @@ impl EngineBridge {
             let ring_header = base.add(ring_ui_offset as usize) as *const RingHeader;
             (*ring_header).entry_size
         };
+        let ui_edit_capacity = unsafe {
+            if ring_ui_edit_offset == 0 {
+                0
+            } else {
+                let ring_header = base.add(ring_ui_edit_offset as usize) as *const RingHeader;
+                (*ring_header).capacity
+            }
+        };
         eprintln!(
-            "daw-app: UI rings ready (ui_offset={}, ui_capacity={}, ui_entry_size={}, ui_out_offset={}, ui_out_capacity={})",
+            "daw-app: UI rings ready (ui_offset={}, ui_capacity={}, ui_entry_size={}, ui_out_offset={}, ui_out_capacity={}, ui_edit_offset={}, ui_edit_capacity={})",
             ring_ui_offset,
             ui_capacity,
             ui_entry_size,
             ring_ui_out_offset,
-            ui_out_capacity
+            ui_out_capacity,
+            ring_ui_edit_offset,
+            ui_edit_capacity
         );
         Ok(Self {
             _mmap: mmap,
@@ -199,6 +247,7 @@ impl EngineBridge {
             reader,
             ring_ui,
             ring_ui_out,
+            ring_ui_edit,
         })
     }
 
@@ -226,6 +275,17 @@ impl EngineBridge {
         }
         let offset = unsafe { (*self.header).ring_ui_out_offset };
         ring_view(self.base as *mut u8, offset)
+    }
+
+    fn ring_ui_edit_view(&self) -> Option<EditRingView> {
+        if let Some(ring) = self.ring_ui_edit {
+            return Some(ring);
+        }
+        if self.header.is_null() {
+            return None;
+        }
+        let offset = unsafe { (*self.header).ring_ui_edit_offset };
+        edit_ring_view(self.base as *mut u8, offset)
     }
 
     #[allow(dead_code)]
@@ -408,6 +468,17 @@ impl EngineBridge {
             log_ui_send_fail();
         }
         ok
+    }
+
+    pub fn supports_edit_batches(&self) -> bool {
+        self.ring_ui_edit_view().is_some()
+    }
+
+    pub fn try_send_ui_edit_batch(&self, batch: UiEditBatchEntry) -> bool {
+        let Some(ring) = self.ring_ui_edit_view() else {
+            return false;
+        };
+        edit_ring_write(&ring, batch)
     }
 
     pub fn try_send_ui_command(&self, payload: UiCommandPayload) -> bool {
@@ -684,6 +755,44 @@ pub fn ring_view(base: *mut u8, offset: u64) -> Option<RingView> {
     })
 }
 
+pub fn edit_ring_view(base: *mut u8, offset: u64) -> Option<EditRingView> {
+    if offset == 0 {
+        return None;
+    }
+    let header = unsafe { base.add(offset as usize) as *mut RingHeader };
+    if header.is_null() {
+        return None;
+    }
+    let capacity = unsafe { (*header).capacity };
+    if !is_power_of_two(capacity) {
+        return None;
+    }
+    // The writer indexes this region with our stride. If the engine laid it out
+    // with a different entry size or capacity, every write would land at the
+    // wrong address, so treat the ring as absent instead.
+    let entry_size = unsafe { (*header).entry_size } as usize;
+    if entry_size != std::mem::size_of::<UiEditBatchEntry>() ||
+        capacity as usize != K_UI_EDIT_BATCH_CAPACITY
+    {
+        eprintln!(
+            "daw-app: UI edit ring stride mismatch (entry_size={} want {}, \
+             capacity={} want {}) - edit batching disabled",
+            entry_size,
+            std::mem::size_of::<UiEditBatchEntry>(),
+            capacity,
+            K_UI_EDIT_BATCH_CAPACITY
+        );
+        return None;
+    }
+    let entries_offset = align_up(std::mem::size_of::<RingHeader>(), 64);
+    let entries = unsafe { (header as *mut u8).add(entries_offset) as *mut UiEditBatchEntry };
+    Some(EditRingView {
+        header,
+        entries,
+        mask: capacity - 1,
+    })
+}
+
 fn ui_ring_debug_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("DAW_UI_DEBUG").map_or(false, |v| v == "1"))
@@ -712,6 +821,22 @@ fn ring_write(ring: &RingView, entry: EventEntry) -> bool {
             write,
             write_after
         );
+    }
+    true
+}
+
+fn edit_ring_write(ring: &EditRingView, entry: UiEditBatchEntry) -> bool {
+    let write = unsafe { (*ring.header).write_index.load(Ordering::Relaxed) };
+    let read = unsafe { (*ring.header).read_index.load(Ordering::Acquire) };
+    let next = (write + 1) & ring.mask;
+    if next == read {
+        return false;
+    }
+    unsafe {
+        *ring.entries.add(write as usize) = entry;
+        (*ring.header)
+            .write_index
+            .store(next, Ordering::Release);
     }
     true
 }

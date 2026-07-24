@@ -7,8 +7,8 @@ use crate::tracker::{HEADER_HEIGHT, MINIMAP_WIDTH, ROW_HEIGHT, VISIBLE_ROWS};
 impl EngineView {
     pub(crate) fn timeline_end_nanotick(&mut self) -> u64 {
         // Check if cache is valid
-        if self.minimap_cache_clip_version == self.clip_version_local
-            && self.minimap_cache_harmony_version == self.harmony_version_local
+        if self.minimap_cache_clip_version == self.clip_render_version
+            && self.minimap_cache_harmony_version == self.harmony_render_version
             && self.cached_timeline_end > 0
         {
             return self.cached_timeline_end;
@@ -16,20 +16,24 @@ impl EngineView {
 
         // Recompute
         let mut max_tick = 0_u64;
-        for track_notes in &self.clip_notes {
-            for note in track_notes {
-                max_tick = max_tick.max(note.nanotick);
+        if let Ok(store) = self.clip_store.read() {
+            for track in store.tracks() {
+                for map in track.notes() {
+                    for note in map.values() {
+                        max_tick = max_tick.max(note.nanotick);
+                    }
+                }
+                for map in track.chords() {
+                    for chord in map.values() {
+                        max_tick = max_tick.max(chord.nanotick);
+                    }
+                }
             }
         }
-        for note in &self.pending_notes {
+        for note in self.pending_overlay.iter_notes() {
             max_tick = max_tick.max(note.nanotick);
         }
-        for track_chords in &self.clip_chords {
-            for chord in track_chords {
-                max_tick = max_tick.max(chord.nanotick);
-            }
-        }
-        for chord in &self.pending_chords {
+        for chord in self.pending_overlay.iter_chords() {
             max_tick = max_tick.max(chord.nanotick);
         }
         for event in &self.harmony_events {
@@ -44,8 +48,8 @@ impl EngineView {
 
         // Update cache
         self.cached_timeline_end = result;
-        self.minimap_cache_clip_version = self.clip_version_local;
-        self.minimap_cache_harmony_version = self.harmony_version_local;
+        self.minimap_cache_clip_version = self.clip_render_version;
+        self.minimap_cache_harmony_version = self.harmony_render_version;
 
         result
     }
@@ -55,8 +59,8 @@ impl EngineView {
         let params = (end, segments);
 
         // Check if cache is valid
-        if self.minimap_cache_clip_version == self.clip_version_local
-            && self.minimap_cache_harmony_version == self.harmony_version_local
+        if self.minimap_cache_clip_version == self.clip_render_version
+            && self.minimap_cache_harmony_version == self.harmony_render_version
             && self.cached_minimap_params == params
             && !self.cached_minimap_bins.is_empty()
         {
@@ -74,20 +78,24 @@ impl EngineView {
             let index = index.min(segments - 1);
             bins[index] += 1;
         };
-        for track_notes in &self.clip_notes {
-            for note in track_notes {
-                add_tick(note.nanotick);
+        if let Ok(store) = self.clip_store.read() {
+            for track in store.tracks() {
+                for map in track.notes() {
+                    for note in map.values() {
+                        add_tick(note.nanotick);
+                    }
+                }
+                for map in track.chords() {
+                    for chord in map.values() {
+                        add_tick(chord.nanotick);
+                    }
+                }
             }
         }
-        for note in &self.pending_notes {
+        for note in self.pending_overlay.iter_notes() {
             add_tick(note.nanotick);
         }
-        for track_chords in &self.clip_chords {
-            for chord in track_chords {
-                add_tick(chord.nanotick);
-            }
-        }
-        for chord in &self.pending_chords {
+        for chord in self.pending_overlay.iter_chords() {
             add_tick(chord.nanotick);
         }
         for event in &self.harmony_events {

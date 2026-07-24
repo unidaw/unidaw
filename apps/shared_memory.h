@@ -1,17 +1,20 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 namespace daw {
 
 constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
-constexpr uint16_t kShmVersion = 6;
+constexpr uint16_t kShmVersion = 7;
 
 constexpr uint32_t kUiMaxTracks = 8;
 constexpr uint32_t kUiMaxClipNotes = 4096;
 constexpr uint32_t kUiMaxClipChords = 1024;
 constexpr uint32_t kUiMaxHarmonyEvents = 512;
+constexpr uint32_t kUiEditBatchMaxOps = 32;
+constexpr uint32_t kUiEditBatchCapacity = 64;
 
 struct alignas(64) ShmHeader {
   uint32_t magic = kShmMagic;
@@ -29,6 +32,7 @@ struct alignas(64) ShmHeader {
   uint64_t ringCtrlOffset = 0;
   uint64_t ringUiOffset = 0;
   uint64_t ringUiOutOffset = 0;
+  uint64_t ringUiEditOffset = 0;
   uint64_t mailboxOffset = 0;
   std::atomic<uint64_t> uiVersion{0};
   uint64_t uiVisualSampleCount = 0;
@@ -62,6 +66,23 @@ struct alignas(64) EventEntry {
   uint32_t flags = 0;
   uint8_t payload[40]{};
 };
+
+struct alignas(64) UiEditBatchEntry {
+  uint32_t batchId = 0;
+  uint32_t opCount = 0;
+  EventEntry ops[kUiEditBatchMaxOps]{};
+};
+
+// These sizes are the wire format shared with ui/daw-bridge/src/layout.rs.
+// Changing any of them requires bumping kShmVersion and updating the Rust
+// mirror plus its layout test.
+static_assert(sizeof(EventEntry) == 64, "EventEntry must be one cache line");
+static_assert(sizeof(UiEditBatchEntry) == 2112,
+              "UiEditBatchEntry must match the Rust mirror");
+static_assert(offsetof(UiEditBatchEntry, ops) == 64,
+              "UiEditBatchEntry::ops must start at offset 64");
+static_assert(alignof(UiEditBatchEntry) == 64,
+              "UiEditBatchEntry must be cache-line aligned");
 
 enum class EventType : uint16_t {
   Midi = 1,
@@ -153,6 +174,7 @@ struct UiHarmonySnapshot {
 size_t alignUp(size_t value, size_t alignment);
 size_t channelStrideBytes(uint32_t blockSize);
 size_t ringBytes(uint32_t capacity);
+size_t ringBytesForEntrySize(uint32_t capacity, size_t entrySize);
 size_t sharedMemorySize(const ShmHeader& header,
                         uint32_t ringStdCapacity,
                         uint32_t ringCtrlCapacity,

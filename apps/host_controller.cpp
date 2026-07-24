@@ -324,10 +324,10 @@ bool HostController::sendProcessBlock(uint32_t blockId,
   request.pluginSampleStart = pluginSampleStart;
   request.segmentStart = segmentStart;
   request.segmentLength = segmentLength;
-  return sendMessage(socketFd_,
-                     ControlMessageType::ProcessBlock,
-                     &request,
-                     sizeof(request));
+  return sendMessageNonBlocking(socketFd_,
+                                ControlMessageType::ProcessBlock,
+                                &request,
+                                sizeof(request));
 }
 
 bool HostController::sendOpenEditor(uint32_t pluginIndex) {

@@ -146,6 +146,7 @@ pub enum AggregateSingle {
     Chord(ClipChord),
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct HarmonyAggregate {
     pub count: usize,

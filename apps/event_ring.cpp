@@ -15,6 +15,12 @@ EventEntry* ringEntries(RingHeader* header) {
   return reinterpret_cast<EventEntry*>(base + offset);
 }
 
+UiEditBatchEntry* editRingEntries(RingHeader* header) {
+  auto* base = reinterpret_cast<uint8_t*>(header);
+  const size_t offset = alignUp(sizeof(RingHeader), 64);
+  return reinterpret_cast<UiEditBatchEntry*>(base + offset);
+}
+
 }  // namespace
 
 EventRingView makeEventRing(void* base, uint64_t offset) {
@@ -25,6 +31,21 @@ EventRingView makeEventRing(void* base, uint64_t offset) {
   view.mask = view.header && isPowerOfTwo(view.header->capacity)
                   ? (view.header->capacity - 1)
                   : 0;
+  return view;
+}
+
+UiEditRingView makeUiEditRing(void* base, uint64_t offset) {
+  UiEditRingView view;
+  view.header = reinterpret_cast<RingHeader*>(
+      reinterpret_cast<uint8_t*>(base) + offset);
+  view.entries = editRingEntries(view.header);
+  // A stride mismatch means the peer mapped this region with a different
+  // UiEditBatchEntry layout; mask 0 disables the ring rather than reading
+  // entries at the wrong addresses.
+  const bool ok = view.header != nullptr &&
+                  isPowerOfTwo(view.header->capacity) &&
+                  view.header->entrySize == sizeof(UiEditBatchEntry);
+  view.mask = ok ? (view.header->capacity - 1) : 0;
   return view;
 }
 
@@ -62,6 +83,21 @@ bool ringPop(EventRingView& ring, EventEntry& entry) {
   }
   const uint32_t read = ring.header->readIndex.load(std::memory_order_relaxed);
   ring.header->readIndex.store((read + 1) & ring.mask, std::memory_order_release);
+  return true;
+}
+
+bool uiEditRingPop(UiEditRingView& ring, UiEditBatchEntry& entry) {
+  if (!ring.header || ring.mask == 0) {
+    return false;
+  }
+  const uint32_t read = ring.header->readIndex.load(std::memory_order_relaxed);
+  const uint32_t write = ring.header->writeIndex.load(std::memory_order_acquire);
+  if (read == write) {
+    return false;
+  }
+  entry = ring.entries[read];
+  ring.header->readIndex.store((read + 1) & ring.mask,
+                               std::memory_order_release);
   return true;
 }
 

@@ -1,7 +1,10 @@
+use std::time::{Duration, Instant};
+
 use daw_bridge::layout::{
-    K_CHAIN_DEVICE_ID_AUTO, UiChainCommandPayload, UiChainDiffPayload, UiChainErrorPayload,
-    UiChordCommandPayload, UiChordDiffPayload, UiChordDiffType, UiClipWindowSnapshot,
-    UiCommandPayload, UiCommandType, UiDiffPayload, UiDiffType, UiHarmonyDiffPayload,
+    EventEntry, EventType, K_CHAIN_DEVICE_ID_AUTO, K_UI_EDIT_BATCH_MAX_OPS,
+    UiChainCommandPayload, UiChainDiffPayload, UiChainErrorPayload, UiChordCommandPayload,
+    UiChordDiffPayload, UiChordDiffType, UiClipWindowSnapshot, UiCommandPayload,
+    UiCommandType, UiDiffPayload, UiDiffType, UiEditBatchEntry, UiHarmonyDiffPayload,
     UiHarmonyDiffType, UiHarmonySnapshot, UiPatcherGraphCommandPayload,
     UiPatcherGraphDiffPayload, UiPatcherNodeConfigPayload, UiPatcherPresetCommandPayload,
     UiPatcherGraphErrorPayload, UI_CLIP_WINDOW_FLAG_COMPLETE,
@@ -9,22 +12,12 @@ use daw_bridge::layout::{
 
 use crate::app::{ChainDevice, EngineView, PatcherEdgeUi, PatcherNodeUi, PatcherPortKind, TRACK_COUNT};
 use crate::engine::bridge::{
-    bump_ui_enqueued, bump_ui_send_fail, bump_ui_sent, log_ui_send_fail,
+    bump_ui_enqueued, bump_ui_send_fail, bump_ui_sent, log_ui_send_fail, EngineBridge,
 };
-use crate::state::{ClipChord, ClipNote, HarmonyEntry, QueuedCommand};
-use crate::util::{unpack_chord_packed, unpack_chord_spread};
+use crate::state::{HarmonyEntry, QueuedCommand};
+use crate::util::unpack_chord_spread;
 
 impl EngineView {
-    fn clip_window_contains(&self, track_index: usize, nanotick: u64) -> bool {
-        let Some(state) = self.clip_window.get(track_index) else {
-            return false;
-        };
-        if state.window_end <= state.window_start {
-            return false;
-        }
-        nanotick >= state.window_start && nanotick < state.window_end
-    }
-
     fn note_key(payload: &UiCommandPayload) -> Option<(u32, u64, u8)> {
         let command = payload.command_type;
         if command == UiCommandType::WriteNote as u16 ||
@@ -47,38 +40,146 @@ impl EngineView {
         None
     }
 
-    pub(crate) fn enqueue_ui_command(&mut self, payload: UiCommandPayload) {
-        if let Some(last) = self.queued_commands.back() {
-            if let QueuedCommand::Ui(prev) = last {
+    fn is_clip_edit_payload(command_type: u16) -> bool {
+        matches!(
+            command_type,
+            x if x == UiCommandType::WriteNote as u16 ||
+                x == UiCommandType::DeleteNote as u16 ||
+                x == UiCommandType::Undo as u16 ||
+                x == UiCommandType::Redo as u16
+        )
+    }
+
+    fn is_harmony_edit_payload(command_type: u16) -> bool {
+        matches!(
+            command_type,
+            x if x == UiCommandType::WriteHarmony as u16 ||
+                x == UiCommandType::DeleteHarmony as u16
+        )
+    }
+
+    fn is_edit_payload(command_type: u16) -> bool {
+        Self::is_clip_edit_payload(command_type) || Self::is_harmony_edit_payload(command_type)
+    }
+
+    fn is_clip_edit_command(entry: &QueuedCommand) -> bool {
+        match entry {
+            QueuedCommand::Ui(payload) => Self::is_clip_edit_payload(payload.command_type),
+            QueuedCommand::Chord(payload) => payload.command_type == UiCommandType::WriteChord as u16 ||
+                payload.command_type == UiCommandType::DeleteChord as u16,
+            _ => false,
+        }
+    }
+
+    fn is_harmony_edit_command(entry: &QueuedCommand) -> bool {
+        match entry {
+            QueuedCommand::Ui(payload) => Self::is_harmony_edit_payload(payload.command_type),
+            _ => false,
+        }
+    }
+
+    fn entry_from_ui_payload(payload: &UiCommandPayload) -> EventEntry {
+        let mut entry = EventEntry {
+            sample_time: 0,
+            block_id: 0,
+            event_type: EventType::UiCommand as u16,
+            size: std::mem::size_of::<UiCommandPayload>() as u16,
+            flags: 0,
+            payload: [0u8; 40],
+        };
+        let payload_bytes = unsafe {
+            std::slice::from_raw_parts(
+                payload as *const UiCommandPayload as *const u8,
+                std::mem::size_of::<UiCommandPayload>(),
+            )
+        };
+        entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
+        entry
+    }
+
+    fn entry_from_chord_payload(payload: &UiChordCommandPayload) -> EventEntry {
+        let mut entry = EventEntry {
+            sample_time: 0,
+            block_id: 0,
+            event_type: EventType::UiCommand as u16,
+            size: std::mem::size_of::<UiChordCommandPayload>() as u16,
+            flags: 0,
+            payload: [0u8; 40],
+        };
+        let payload_bytes = unsafe {
+            std::slice::from_raw_parts(
+                payload as *const UiChordCommandPayload as *const u8,
+                std::mem::size_of::<UiChordCommandPayload>(),
+            )
+        };
+        entry.payload[..payload_bytes.len()].copy_from_slice(payload_bytes);
+        entry
+    }
+
+    pub(crate) fn enqueue_ui_command(&mut self, mut payload: UiCommandPayload) {
+        if Self::is_clip_edit_payload(payload.command_type) {
+            self.drain_pending_edits_for_ordering();
+        }
+        let is_edit = Self::is_edit_payload(payload.command_type);
+        let mut superseded_base = None;
+        {
+            let queue = if is_edit {
+                &mut self.queued_edit_commands
+            } else {
+                &mut self.queued_control_commands
+            };
+            if let Some(QueuedCommand::Ui(prev)) = queue.back() {
                 if let (Some(prev_key), Some(next_key)) =
                     (Self::note_key(prev), Self::note_key(&payload)) {
                     if prev_key == next_key {
-                        self.queued_commands.pop_back();
+                        superseded_base = Some(prev.base_version);
+                        queue.pop_back();
                     }
                 }
             }
         }
-        self.queued_commands.push_back(QueuedCommand::Ui(payload));
+        if let Some(base) = superseded_base {
+            // Dropping the superseded command leaves its reserved clip version
+            // unclaimed. The engine advances one version per command it
+            // applies, so the replacement must take the dropped command's slot
+            // instead of the next one, or it arrives a version ahead.
+            payload.base_version = base;
+            self.release_reserved_clip_version();
+        }
+        let queue = if is_edit {
+            &mut self.queued_edit_commands
+        } else {
+            &mut self.queued_control_commands
+        };
+        queue.push_back(QueuedCommand::Ui(payload));
         bump_ui_enqueued();
     }
 
-    pub(crate) fn enqueue_chord_command(&mut self, payload: UiChordCommandPayload) {
-        if let Some(last) = self.queued_commands.back() {
-            if let QueuedCommand::Chord(prev) = last {
-                if let (Some(prev_key), Some(next_key)) =
-                    (Self::chord_key(prev), Self::chord_key(&payload)) {
-                    if prev_key == next_key {
-                        self.queued_commands.pop_back();
-                    }
+    pub(crate) fn enqueue_chord_command(&mut self, mut payload: UiChordCommandPayload) {
+        self.drain_pending_edits_for_ordering();
+        let mut superseded_base = None;
+        if let Some(QueuedCommand::Chord(prev)) = self.queued_edit_commands.back() {
+            if let (Some(prev_key), Some(next_key)) =
+                (Self::chord_key(prev), Self::chord_key(&payload)) {
+                if prev_key == next_key {
+                    superseded_base = Some(prev.base_version);
+                    self.queued_edit_commands.pop_back();
                 }
             }
         }
-        self.queued_commands.push_back(QueuedCommand::Chord(payload));
+        if let Some(base) = superseded_base {
+            // See enqueue_ui_command: the replacement inherits the dropped
+            // command's reserved clip version.
+            payload.base_version = base;
+            self.release_reserved_clip_version();
+        }
+        self.queued_edit_commands.push_back(QueuedCommand::Chord(payload));
         bump_ui_enqueued();
     }
 
     pub(crate) fn enqueue_chain_command(&mut self, payload: UiChainCommandPayload) {
-        self.queued_commands.push_back(QueuedCommand::Chain(payload));
+        self.queued_control_commands
+            .push_back(QueuedCommand::Chain(payload));
         bump_ui_enqueued();
     }
 
@@ -86,7 +187,8 @@ impl EngineView {
         &mut self,
         payload: UiPatcherGraphCommandPayload,
     ) {
-        self.queued_commands.push_back(QueuedCommand::PatcherGraph(payload));
+        self.queued_control_commands
+            .push_back(QueuedCommand::PatcherGraph(payload));
         bump_ui_enqueued();
     }
 
@@ -94,7 +196,8 @@ impl EngineView {
         &mut self,
         payload: UiPatcherNodeConfigPayload,
     ) {
-        self.queued_commands.push_back(QueuedCommand::PatcherConfig(payload));
+        self.queued_control_commands
+            .push_back(QueuedCommand::PatcherConfig(payload));
         bump_ui_enqueued();
     }
 
@@ -102,44 +205,127 @@ impl EngineView {
         &mut self,
         payload: UiPatcherPresetCommandPayload,
     ) {
-        self.queued_commands.push_back(QueuedCommand::PatcherPreset(payload));
+        self.queued_control_commands
+            .push_back(QueuedCommand::PatcherPreset(payload));
         bump_ui_enqueued();
     }
 
-    pub fn flush_queued_commands(&mut self) {
-        let Some(bridge) = &self.bridge else {
-            return;
-        };
-        while let Some(entry) = self.queued_commands.front() {
-            if self.clip_resync_pending || self.harmony_resync_pending {
-                let should_pause = match entry {
-                    QueuedCommand::Ui(payload) => {
-                        let cmd = payload.command_type;
-                        if self.clip_resync_pending {
-                            matches!(
-                                cmd,
-                                x if x == UiCommandType::WriteNote as u16 ||
-                                    x == UiCommandType::DeleteNote as u16 ||
-                                    x == UiCommandType::Undo as u16 ||
-                                    x == UiCommandType::Redo as u16
-                            )
-                        } else if self.harmony_resync_pending {
-                            matches!(
-                                cmd,
-                                x if x == UiCommandType::WriteHarmony as u16 ||
-                                    x == UiCommandType::DeleteHarmony as u16
-                            )
-                        } else {
-                            false
-                        }
-                    }
-                    QueuedCommand::Chord(_) => self.clip_resync_pending,
-                    QueuedCommand::Chain(_) => false,
-                    QueuedCommand::PatcherGraph(_) => false,
-                    QueuedCommand::PatcherConfig(_) => false,
-                    QueuedCommand::PatcherPreset(_) => false,
+    fn should_pause_edit_entry(&self, entry: &QueuedCommand) -> bool {
+        if self.clip_resync_pending {
+            return match entry {
+                QueuedCommand::Ui(payload) =>
+                    Self::is_clip_edit_payload(payload.command_type),
+                QueuedCommand::Chord(_) => true,
+                _ => false,
+            };
+        }
+        if self.harmony_resync_pending {
+            return Self::is_harmony_edit_command(entry);
+        }
+        false
+    }
+
+    fn flush_control_queue(
+        &mut self,
+        bridge: &EngineBridge,
+        start: Instant,
+        budget: Duration,
+        max_ops: usize,
+    ) -> usize {
+        let mut sent_ops = 0usize;
+        while let Some(entry) = self.queued_control_commands.front() {
+            if sent_ops >= max_ops || start.elapsed() >= budget {
+                break;
+            }
+            let sent = match entry {
+                QueuedCommand::Ui(payload) => bridge.try_send_ui_command(*payload),
+                QueuedCommand::Chord(payload) => bridge.try_send_ui_chord_command(*payload),
+                QueuedCommand::Chain(payload) => bridge.try_send_ui_chain_command(*payload),
+                QueuedCommand::PatcherGraph(payload) =>
+                    bridge.try_send_ui_patcher_graph_command(*payload),
+                QueuedCommand::PatcherConfig(payload) =>
+                    bridge.try_send_ui_patcher_node_config(*payload),
+                QueuedCommand::PatcherPreset(payload) =>
+                    bridge.try_send_ui_patcher_preset(*payload),
+            };
+            if sent {
+                bump_ui_sent();
+                self.queued_control_commands.pop_front();
+                sent_ops = sent_ops.saturating_add(1);
+            } else {
+                bump_ui_send_fail();
+                log_ui_send_fail();
+                break;
+            }
+        }
+        sent_ops
+    }
+
+    fn flush_edit_queue(
+        &mut self,
+        bridge: &EngineBridge,
+        start: Instant,
+        budget: Duration,
+        max_ops: usize,
+    ) -> usize {
+        let mut sent_ops = 0usize;
+        while let Some(entry) = self.queued_edit_commands.front() {
+            if sent_ops >= max_ops || start.elapsed() >= budget {
+                break;
+            }
+            if self.should_pause_edit_entry(entry) {
+                break;
+            }
+            if Self::is_clip_edit_command(entry) && bridge.supports_edit_batches() {
+                let remaining = max_ops.saturating_sub(sent_ops).max(1);
+                let mut batch = UiEditBatchEntry {
+                    batch_id: self.next_edit_batch_id,
+                    op_count: 0,
+                    ops: [EventEntry {
+                        sample_time: 0,
+                        block_id: 0,
+                        event_type: EventType::UiCommand as u16,
+                        size: 0,
+                        flags: 0,
+                        payload: [0u8; 40],
+                    }; K_UI_EDIT_BATCH_MAX_OPS],
                 };
-                if should_pause {
+                let mut count = 0usize;
+                for queued in self.queued_edit_commands.iter() {
+                    if !Self::is_clip_edit_command(queued) ||
+                        count >= K_UI_EDIT_BATCH_MAX_OPS {
+                        break;
+                    }
+                    let entry = match queued {
+                        QueuedCommand::Ui(payload) => Self::entry_from_ui_payload(payload),
+                        QueuedCommand::Chord(payload) => Self::entry_from_chord_payload(payload),
+                        _ => break,
+                    };
+                    batch.ops[count] = entry;
+                    count = count.saturating_add(1);
+                    if count >= remaining {
+                        break;
+                    }
+                }
+                if count > 0 {
+                    batch.op_count = count as u32;
+                    if bridge.try_send_ui_edit_batch(batch) {
+                        for _ in 0..count {
+                            bump_ui_sent();
+                            self.queued_edit_commands.pop_front();
+                        }
+                        self.next_edit_batch_id =
+                            self.next_edit_batch_id.wrapping_add(1).max(1);
+                        sent_ops = sent_ops.saturating_add(count);
+                        continue;
+                    }
+                    // The edit ring is full. Do NOT fall through to the legacy
+                    // ring: the engine drains the edit ring to exhaustion first,
+                    // so a clip edit sent the old way would arrive after edits
+                    // queued behind it and be rejected on base_version. Leave it
+                    // queued and retry on the next flush.
+                    bump_ui_send_fail();
+                    log_ui_send_fail();
                     break;
                 }
             }
@@ -156,25 +342,60 @@ impl EngineView {
             };
             if sent {
                 bump_ui_sent();
-                self.queued_commands.pop_front();
+                self.queued_edit_commands.pop_front();
+                sent_ops = sent_ops.saturating_add(1);
             } else {
                 bump_ui_send_fail();
                 log_ui_send_fail();
                 break;
             }
         }
+        sent_ops
+    }
+
+    pub fn flush_queued_commands(&mut self) {
+        let Some(bridge) = self.bridge.clone() else {
+            return;
+        };
+        let start = Instant::now();
+        let budget = Duration::from_millis(2);
+        let max_ops = 64usize;
+        let edit_pending = !self.queued_edit_commands.is_empty();
+        let mut sent_ops = 0usize;
+        let mut control_budget = if edit_pending { max_ops / 4 } else { max_ops };
+        if control_budget == 0 && !self.queued_control_commands.is_empty() {
+            control_budget = 1;
+        }
+        sent_ops = sent_ops.saturating_add(self.flush_control_queue(
+            &bridge,
+            start,
+            budget,
+            control_budget,
+        ));
+        if sent_ops < max_ops && start.elapsed() < budget {
+            let remaining = max_ops.saturating_sub(sent_ops);
+            sent_ops = sent_ops.saturating_add(self.flush_edit_queue(
+                &bridge,
+                start,
+                budget,
+                remaining,
+            ));
+        }
+        if sent_ops < max_ops &&
+            start.elapsed() < budget &&
+            self.queued_edit_commands.is_empty() {
+            let remaining = max_ops.saturating_sub(sent_ops);
+            let _ = self.flush_control_queue(&bridge, start, budget, remaining);
+        }
     }
 
     pub(crate) fn rebase_clip_queue(&mut self, base_version: u32) {
         let mut next = base_version;
-        for entry in self.queued_commands.iter_mut() {
+        for entry in self.queued_edit_commands.iter_mut() {
             match entry {
                 QueuedCommand::Ui(payload) => {
                     let cmd = payload.command_type;
-                    if cmd == UiCommandType::WriteNote as u16 ||
-                        cmd == UiCommandType::DeleteNote as u16 ||
-                        cmd == UiCommandType::Undo as u16 ||
-                        cmd == UiCommandType::Redo as u16 {
+                    if Self::is_clip_edit_payload(cmd) {
                         payload.base_version = next;
                         next = next.saturating_add(1);
                     }
@@ -198,11 +419,9 @@ impl EngineView {
 
     pub(crate) fn rebase_harmony_queue(&mut self, base_version: u32) {
         let mut next = base_version;
-        for entry in self.queued_commands.iter_mut() {
+        for entry in self.queued_edit_commands.iter_mut() {
             if let QueuedCommand::Ui(payload) = entry {
-                let cmd = payload.command_type;
-                if cmd == UiCommandType::WriteHarmony as u16 ||
-                    cmd == UiCommandType::DeleteHarmony as u16 {
+                if Self::is_harmony_edit_payload(payload.command_type) {
                     payload.base_version = next;
                     next = next.saturating_add(1);
                 }
@@ -216,74 +435,28 @@ impl EngineView {
         if track_index >= TRACK_COUNT {
             return;
         }
-        if reset {
-            if let Some(notes) = self.clip_notes.get_mut(track_index) {
-                notes.clear();
-            }
-            if let Some(chords) = self.clip_chords.get_mut(track_index) {
-                chords.clear();
-            }
-            // DON'T clear pending notes here - we'll remove them below only when
-            // a confirmed note exists at the same position. This avoids visual flash.
+        if let Ok(mut store) = self.clip_store.write() {
+            store.apply_clip_window_page(snapshot, reset);
+        }
+        if reset && self.pending_overlay.clear_track(track_index) {
+            self.bump_clip_render_version();
         }
 
-        // First, add all confirmed notes from snapshot
-        let notes = &mut self.clip_notes[track_index];
-        notes.reserve(snapshot.note_count as usize);
-        for note_index in 0..(snapshot.note_count as usize) {
+        let note_count = (snapshot.note_count as usize).min(snapshot.notes.len());
+        let chord_count = (snapshot.chord_count as usize).min(snapshot.chords.len());
+        for note_index in 0..note_count {
             let note = snapshot.notes[note_index];
-            notes.push(ClipNote {
-                nanotick: note.t_on,
-                duration: note.t_off.saturating_sub(note.t_on),
-                pitch: note.pitch,
-                velocity: note.velocity,
-                column: note.column,
-            });
+            self.pending_overlay.remove_note_at(
+                track_index,
+                note.column,
+                note.t_on,
+            );
         }
-
-        // Add all confirmed chords from snapshot
-        let chords = &mut self.clip_chords[track_index];
-        chords.reserve(snapshot.chord_count as usize);
-        for chord_index in 0..(snapshot.chord_count as usize) {
+        for chord_index in 0..chord_count {
             let chord = snapshot.chords[chord_index];
-            chords.push(ClipChord {
-                chord_id: chord.chord_id,
-                nanotick: chord.nanotick,
-                duration: chord.duration_nanoticks,
-                spread: chord.spread_nanoticks,
-                humanize_timing: chord.humanize_timing,
-                humanize_velocity: chord.humanize_velocity,
-                degree: chord.degree,
-                quality: chord.quality,
-                inversion: chord.inversion,
-                base_octave: chord.base_octave,
-                column: (chord.flags & 0xff) as u8,
-            });
+            let column = (chord.flags & 0xff) as u8;
+            self.pending_overlay.remove_chord_at(track_index, column, chord.nanotick);
         }
-
-        // Now remove pending notes/chords that have matching confirmed entries
-        // This ensures we never have a frame where the note disappears
-        let confirmed_notes = &self.clip_notes[track_index];
-        self.pending_notes.retain(|pending| {
-            if pending.track_id as usize != track_index {
-                return true; // Keep pending notes for other tracks
-            }
-            // Remove if there's a confirmed note at the same position
-            !confirmed_notes.iter().any(|confirmed| {
-                confirmed.nanotick == pending.nanotick && confirmed.column == pending.column
-            })
-        });
-
-        let confirmed_chords = &self.clip_chords[track_index];
-        self.pending_chords.retain(|pending| {
-            if pending.track_id as usize != track_index {
-                return true; // Keep pending chords for other tracks
-            }
-            // Remove if there's a confirmed chord at the same position
-            !confirmed_chords.iter().any(|confirmed| {
-                confirmed.nanotick == pending.nanotick && confirmed.column == pending.column
-            })
-        });
 
         if let Some(state) = self.clip_window.get_mut(track_index) {
             state.request_id = snapshot.request_id;
@@ -299,6 +472,7 @@ impl EngineView {
             self.clip_version_local = snapshot.clip_version;
         }
         self.bump_clip_render_version();
+        self.mark_tracker_cache_dirty_all();
     }
 
     pub fn apply_harmony_snapshot(&mut self, snapshot: UiHarmonySnapshot) {
@@ -316,6 +490,7 @@ impl EngineView {
         }
         self.harmony_version_local = self.snapshot.ui_harmony_version;
         self.bump_harmony_render_version();
+        self.mark_tracker_cache_dirty_all();
     }
 
     pub fn apply_chain_diff(&mut self, diff: UiChainDiffPayload) {
@@ -436,80 +611,19 @@ impl EngineView {
     }
 
     pub fn apply_diff(&mut self, diff: UiDiffPayload) {
-        let track_index = diff.track_id as usize;
-        if track_index >= self.clip_notes.len() {
-            return;
-        }
         let nanotick =
             (diff.note_nanotick_lo as u64) | ((diff.note_nanotick_hi as u64) << 32);
-        if !self.clip_window_contains(track_index, nanotick) {
-            if self.clip_version_local < diff.clip_version {
-                self.clip_version_local = diff.clip_version;
-            }
-            return;
-        }
-        let duration =
-            (diff.note_duration_lo as u64) | ((diff.note_duration_hi as u64) << 32);
-        let pitch = diff.note_pitch.min(127) as u8;
-        let velocity = diff.note_velocity.min(127) as u8;
         let column = diff.note_column.min(255) as u8;
-
-        match diff.diff_type {
-            x if x == UiDiffType::AddNote as u16 => {
-                let notes = &mut self.clip_notes[track_index];
-                let chords = &mut self.clip_chords[track_index];
-
-                notes.retain(|note| {
-                    !(note.nanotick == nanotick && note.column == column)
-                });
-                chords.retain(|chord| chord.nanotick != nanotick);
-
-                let insert_at = notes
-                    .iter()
-                    .position(|note| note.nanotick > nanotick)
-                    .unwrap_or(notes.len());
-                notes.insert(
-                    insert_at,
-                    ClipNote {
-                        nanotick,
-                        duration,
-                        pitch,
-                        velocity,
-                        column,
-                    },
-                );
-
-                self.pending_notes.retain(|note| {
-                    !(note.track_id == track_index as u32 &&
-                        note.nanotick == nanotick &&
-                        note.column == column)
-                });
-                self.pending_chords.retain(|chord| {
-                    !(chord.track_id == track_index as u32 && chord.nanotick == nanotick)
-                });
-            }
-            x if x == UiDiffType::RemoveNote as u16 => {
-                let notes = &mut self.clip_notes[track_index];
-                if let Some(index) = notes.iter().position(|note| {
-                    note.nanotick == nanotick && note.column == column
-                }) {
-                    notes.remove(index);
-                }
-            }
-            _ => {}
+        if let Ok(mut store) = self.clip_store.write() {
+            store.apply_note_diff(&diff);
         }
         if self.clip_version_local < diff.clip_version {
             self.clip_version_local = diff.clip_version;
         }
-
-        self.pending_notes.retain(|note| {
-            !(note.track_id == diff.track_id &&
-                note.nanotick == nanotick &&
-                note.column == column)
-        });
-        self.pending_chords.retain(|chord| {
-            !(chord.track_id == diff.track_id && chord.nanotick == nanotick)
-        });
+        let track_index = diff.track_id as usize;
+        self.pending_overlay.remove_note_at(track_index, column, nanotick);
+        self.pending_overlay.remove_chord_at(track_index, column, nanotick);
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
         self.bump_clip_render_version();
     }
 
@@ -551,94 +665,25 @@ impl EngineView {
             self.harmony_version_local = diff.harmony_version;
         }
         self.bump_harmony_render_version();
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
     }
 
     pub fn apply_chord_diff(&mut self, diff: UiChordDiffPayload) {
         let track_index = diff.track_id as usize;
-        if track_index >= self.clip_chords.len() {
-            return;
-        }
         let nanotick = (diff.nanotick_lo as u64) | ((diff.nanotick_hi as u64) << 32);
-        if !self.clip_window_contains(track_index, nanotick) {
-            if self.clip_version_local < diff.clip_version {
-                self.clip_version_local = diff.clip_version;
-            }
-            return;
-        }
-        let duration = (diff.duration_lo as u64) | ((diff.duration_hi as u64) << 32);
-        let (degree, quality, inversion, base_octave) = unpack_chord_packed(diff.packed);
-        let (spread, column) = unpack_chord_spread(diff.spread_nanoticks);
-        let humanize_timing = (diff.flags & 0xff) as u16;
-        let humanize_velocity = ((diff.flags >> 8) & 0xff) as u16;
-
-        match diff.diff_type {
-            x if x == UiChordDiffType::AddChord as u16 ||
-                x == UiChordDiffType::UpdateChord as u16 => {
-                let notes = &mut self.clip_notes[track_index];
-                let chords = &mut self.clip_chords[track_index];
-
-                notes.retain(|note| !(note.nanotick == nanotick && note.column == column));
-                chords.retain(|chord| {
-                    chord.chord_id != diff.chord_id &&
-                        !(chord.nanotick == nanotick && chord.column == column)
-                });
-
-                let insert_at = chords
-                    .iter()
-                    .position(|chord| chord.nanotick > nanotick)
-                    .unwrap_or(chords.len());
-                chords.insert(
-                    insert_at,
-                    ClipChord {
-                        chord_id: diff.chord_id,
-                        nanotick,
-                        duration,
-                        spread,
-                        humanize_timing,
-                        humanize_velocity,
-                        degree,
-                        quality,
-                        inversion,
-                        base_octave,
-                        column,
-                    },
-                );
-
-                self.pending_notes.retain(|note| {
-                    !(note.track_id == diff.track_id &&
-                        note.nanotick == nanotick &&
-                        note.column == column)
-                });
-                self.pending_chords.retain(|chord| {
-                    !(chord.track_id == diff.track_id &&
-                        chord.nanotick == nanotick &&
-                        chord.column == column)
-                });
-            }
-            x if x == UiChordDiffType::RemoveChord as u16 => {
-                let chords = &mut self.clip_chords[track_index];
-                if let Some(index) = chords
-                    .iter()
-                    .position(|chord| chord.chord_id == diff.chord_id)
-                {
-                    chords.remove(index);
-                } else if let Some(index) = chords
-                    .iter()
-                    .position(|chord| chord.nanotick == nanotick && chord.column == column)
-                {
-                    chords.remove(index);
-                }
-                self.pending_chords.retain(|chord| {
-                    !(chord.track_id == diff.track_id &&
-                        chord.nanotick == nanotick &&
-                        chord.column == column)
-                });
-            }
-            _ => {}
+        let (_, column) = unpack_chord_spread(diff.spread_nanoticks);
+        if let Ok(mut store) = self.clip_store.write() {
+            store.apply_chord_diff(&diff);
         }
         if self.clip_version_local < diff.clip_version {
             self.clip_version_local = diff.clip_version;
         }
+        if diff.diff_type == UiChordDiffType::AddChord as u16 ||
+            diff.diff_type == UiChordDiffType::UpdateChord as u16 {
+            self.pending_overlay.remove_note_at(track_index, column, nanotick);
+        }
+        self.pending_overlay.remove_chord_at(track_index, column, nanotick);
+        self.mark_tracker_row_dirty_for_nanotick(nanotick);
         self.bump_clip_render_version();
     }
 

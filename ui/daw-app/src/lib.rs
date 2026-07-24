@@ -8,14 +8,17 @@ pub use crate::app::{
 };
 pub use crate::state::{ClipChord, ClipNote, HarmonyEntry, PendingChord, PendingNote};
 pub use crate::engine::bridge::{
-    decode_chord_diff, decode_harmony_diff, decode_ui_diff, log_last_ui_command, ring_pop,
-    ring_view, EngineBridge, RingView,
+    decode_chord_diff, decode_harmony_diff, decode_ui_chain_diff, decode_ui_chain_error,
+    decode_ui_diff, log_last_ui_command, ring_pop, ring_view, ui_diff_type, EngineBridge,
+    RingView,
 };
 pub use crate::engine::bridge::{reset_ui_counters, ui_cmd_counters};
 pub use crate::engine::supervisor::{default_engine_path, spawn_engine_process, stop_engine_process};
+pub use crate::clip_store::{ClipStore, PendingOverlay};
 
 mod app;
 mod clipboard;
+mod clip_store;
 mod commands;
 mod harmony;
 mod palette;

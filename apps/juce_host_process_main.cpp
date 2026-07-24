@@ -31,8 +31,13 @@
 #include "platform_juce/juce_wrapper.h"
 #include "apps/uid_hash.h"
 
-namespace {
+#if JUCE_MAC
+namespace juce {
+void initialiseNSApplication();
+}
+#endif
 
+namespace {
 struct HostState {
   int serverFd = -1;
   int clientFd = -1;
@@ -762,6 +767,9 @@ int main(int argc, char** argv) {
   }
 
   state.runtime = daw::createJuceRuntime();
+#if JUCE_MAC
+  juce::initialiseNSApplication();
+#endif
   auto* manager = juce::MessageManager::getInstance();
   if (!manager) {
     runControlLoop(state);

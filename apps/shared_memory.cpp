@@ -13,10 +13,14 @@ size_t channelStrideBytes(uint32_t blockSize) {
   return alignUp(bytes, 64);
 }
 
-size_t ringBytes(uint32_t capacity) {
+size_t ringBytesForEntrySize(uint32_t capacity, size_t entrySize) {
   const size_t header = alignUp(sizeof(RingHeader), 64);
-  const size_t entries = static_cast<size_t>(capacity) * sizeof(EventEntry);
+  const size_t entries = static_cast<size_t>(capacity) * entrySize;
   return header + alignUp(entries, 64);
+}
+
+size_t ringBytes(uint32_t capacity) {
+  return ringBytesForEntrySize(capacity, sizeof(EventEntry));
 }
 
 size_t sharedMemorySize(const ShmHeader& header,

@@ -26,9 +26,10 @@ All regions are 64-byte aligned in this order:
 5. Control Event Ring (`ringCtrlOffset`)
 6. UI Command Ring (`ringUiOffset`)
 7. UI Diff Ring (`ringUiOutOffset`)
-8. `BlockMailbox`
-9. `UiClipWindowSnapshot` (`uiClipOffset`)
-10. `UiHarmonySnapshot` (`uiHarmonyOffset`)
+8. UI Edit Batch Ring (`ringUiEditOffset`)
+9. `BlockMailbox`
+10. `UiClipWindowSnapshot` (`uiClipOffset`)
+11. `UiHarmonySnapshot` (`uiHarmonyOffset`)
 
 Offsets are computed via `alignUp(...)` and recorded in `ShmHeader`.
 
@@ -38,7 +39,8 @@ Offsets are computed via `alignUp(...)` and recorded in `ShmHeader`.
 
 - `magic`, `version`, `blockSize`, `sampleRate`, `numChannelsIn/Out`, `numBlocks`
 - `channelStrideBytes`, `audioInOffset`, `audioOutOffset`
-- `ringStdOffset`, `ringCtrlOffset`, `ringUiOffset`, `ringUiOutOffset`, `mailboxOffset`
+- `ringStdOffset`, `ringCtrlOffset`, `ringUiOffset`, `ringUiOutOffset`,
+  `ringUiEditOffset`, `mailboxOffset`
 
 ### UI Projection (Read by Rust)
 
@@ -63,19 +65,20 @@ Offsets within `ShmHeader` (aligned to 64 bytes overall):
 - `ringCtrlOffset`: 64
 - `ringUiOffset`: 72
 - `ringUiOutOffset`: 80
-- `mailboxOffset`: 88
-- `uiVersion`: 96
-- `uiVisualSampleCount`: 104
-- `uiGlobalNanotickPlayhead`: 112
-- `uiTrackCount`: 120
-- `uiTransportState`: 124
-- `uiClipVersion`: 128
-- `uiClipOffset`: 136
-- `uiClipBytes`: 144
-- `uiHarmonyVersion`: 152
-- `uiHarmonyOffset`: 160
-- `uiHarmonyBytes`: 168
-- `uiTrackPeakRms`: 176
+- `ringUiEditOffset`: 88
+- `mailboxOffset`: 96
+- `uiVersion`: 104
+- `uiVisualSampleCount`: 112
+- `uiGlobalNanotickPlayhead`: 120
+- `uiTrackCount`: 128
+- `uiTransportState`: 132
+- `uiClipVersion`: 136
+- `uiClipOffset`: 144
+- `uiClipBytes`: 152
+- `uiHarmonyVersion`: 160
+- `uiHarmonyOffset`: 168
+- `uiHarmonyBytes`: 176
+- `uiTrackPeakRms`: 184
 
 `sizeof(ShmHeader)` = 256 bytes (aligned to 64).
 
@@ -96,7 +99,7 @@ Rust UI must:
 
 ## Rings
 
-Each ring is an SPSC `EventEntry` ring with cache-line entries.
+Each ring is an SPSC ring with cache-line entries.
 
 - Standard Ring: MIDI/Param events
 - Control Ring: Transport events
@@ -104,6 +107,8 @@ Each ring is an SPSC `EventEntry` ring with cache-line entries.
 - UI Diff Ring: engine -> UI diffs (EventEntry with `UiDiffPayload`, `EventType::UiDiff`)
   and harmony/chord diffs (EventEntry with `UiHarmonyDiffPayload` or
   `UiChordDiffPayload`, `EventType::UiHarmonyDiff` / `EventType::UiChordDiff`)
+- UI Edit Batch Ring: UI -> engine clip edits (`UiEditBatchEntry`, batch of
+  `EventEntry` ops with `EventType::UiCommand` payloads)
 
 ### UI Command Payload
 
@@ -123,6 +128,13 @@ Each ring is an SPSC `EventEntry` ring with cache-line entries.
 `UiCommandType::SetTrackHarmonyQuantize` uses:
 - `trackId` (target track)
 - `value0` (0 = off, non-zero = on)
+
+### UI Edit Batch Entry
+
+`UiEditBatchEntry` contains:
+- `batchId` (monotonic batch identifier)
+- `opCount` (number of valid ops)
+- `ops[kUiEditBatchMaxOps]` (`EventEntry`, each entry is a UI command payload)
 
 ## BlockMailbox
 
@@ -156,12 +168,11 @@ Layout:
 - `windowEndNanotick` (exclusive)
 - `requestId`
 - `cursorEventIndex`
-- `reserved`
-- `reserved2`
 - `nextEventIndex`
 - `noteCount`
 - `chordCount`
 - `flags` (`kUiClipWindowFlagComplete`, `kUiClipWindowFlagResync`)
+- `reserved`
 - `notes[kUiMaxClipNotes]`: canonical note data.
 - `chords[kUiMaxClipChords]`: chord-degree events.
 

@@ -557,8 +557,8 @@ class JucePluginInstance final : public IPluginInstance {
   void flushParameterChanges() override { applyPendingParameterChanges(); }
 
   bool openEditor() override {
-    if (!instance_ || !instance_->hasEditor()) {
-      std::cerr << "JucePluginInstance: no editor available" << std::endl;
+    if (!instance_) {
+      std::cerr << "JucePluginInstance: no instance for editor" << std::endl;
       return false;
     }
     auto* manager = juce::MessageManager::getInstance();
@@ -585,14 +585,17 @@ class JucePluginInstance final : public IPluginInstance {
     }
 #if JUCE_MAC
     juce::Process::setDockIconVisible(true);
+    juce::Process::makeForegroundProcess();
 #endif
     if (editorWindow_) {
+      editorWindow_->setVisible(true);
       editorWindow_->toFront(true);
       return true;
     }
-    std::unique_ptr<juce::AudioProcessorEditor> editor(instance_->createEditor());
+    std::unique_ptr<juce::AudioProcessorEditor> editor(
+        instance_->createEditorIfNeeded());
     if (!editor) {
-      std::cerr << "JucePluginInstance: createEditor returned null for "
+      std::cerr << "JucePluginInstance: editor unavailable for "
                 << instance_->getName().toStdString() << std::endl;
       return false;
     }

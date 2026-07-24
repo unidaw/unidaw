@@ -5,8 +5,9 @@ mod integration_tests {
         use anyhow::Context as AnyhowContext;
         use daw_app::*;
         use daw_bridge::layout::{
-            EventEntry, EventType, ShmHeader, UiChordDiffType, UiClipWindowCommandPayload,
-            UiCommandPayload, UiCommandType, UiDiffType, UiHarmonyDiffType,
+            EventEntry, EventType, ShmHeader, UiChainCommandPayload, UiChainDiffPayload,
+            UiChordDiffType, UiClipWindowCommandPayload, UiCommandPayload, UiCommandType,
+            UiDiffType, UiHarmonyDiffType, K_CHAIN_DEVICE_ID_AUTO,
             UI_CLIP_WINDOW_FLAG_COMPLETE, UI_CLIP_WINDOW_FLAG_RESYNC,
         };
         use memmap2::{MmapMut, MmapOptions};
@@ -182,7 +183,14 @@ mod integration_tests {
                         have_harmony_snapshot = true;
                     }
                     if have_clip_window && have_harmony_snapshot {
-                        self.view.pending_notes.clear();
+                        let columns = self
+                            .view
+                            .pending_overlay
+                            .notes_for_track(0)
+                            .map(|cols| cols.len())
+                            .unwrap_or(1);
+                        self.view.pending_overlay =
+                            PendingOverlay::new(TRACK_COUNT, columns.max(1));
                         return Ok(());
                     }
                     if start.elapsed() > timeout {
@@ -270,8 +278,24 @@ mod integration_tests {
                 let mut processed_any = false;
                 loop {
                     let mut processed_loop = false;
+                    // Mirrors the GPUI frame loop: drain queued edit ops into
+                    // commands before flushing them to the engine.
+                    self.view.flush_pending_edits(&mut self.notify);
                     self.view.flush_queued_commands();
                     while let Some(entry) = self.bridge().pop_ui_event() {
+                        if let Some(diff_type) = ui_diff_type(&entry) {
+                            if diff_type == UiDiffType::ChainSnapshot as u16 {
+                                if let Some(diff) = decode_ui_chain_diff(&entry) {
+                                    self.view.apply_chain_diff(diff);
+                                }
+                                processed_loop = true;
+                                continue;
+                            }
+                            if diff_type == UiDiffType::ChainError as u16 {
+                                processed_loop = true;
+                                continue;
+                            }
+                        }
                         if let Some(diff) = decode_ui_diff(&entry) {
                             if diff.diff_type == UiDiffType::ResyncNeeded as u16 {
                                 clip_resync = true;
@@ -303,7 +327,9 @@ mod integration_tests {
                         processed_any = true;
                     }
                     if start.elapsed() > deadline {
-                        if !extended && !self.view.queued_commands.is_empty() {
+                        let pending_commands = !self.view.queued_edit_commands.is_empty() ||
+                            !self.view.queued_control_commands.is_empty();
+                        if !extended && pending_commands {
                             extended = true;
                             deadline += Duration::from_secs(2);
                         } else {
@@ -520,22 +546,100 @@ mod integration_tests {
                 self.view.nanotick_for_row(row)
             }
 
-            fn notes_at_row(&self, track: usize, row: i64) -> Vec<ClipNote> {
-                let nanotick = self.nanotick_for_row(row);
-                self.view.clip_notes[track]
+            fn clip_notes_at_nanotick(&self, track: usize, nanotick: u64) -> Vec<ClipNote> {
+                let store = match self.view.clip_store.read() {
+                    Ok(store) => store,
+                    Err(err) => err.into_inner(),
+                };
+                let Some(track_store) = store.track(track) else {
+                    return Vec::new();
+                };
+                track_store
+                    .notes()
                     .iter()
+                    .flat_map(|map| map.values())
                     .filter(|note| note.nanotick == nanotick)
                     .cloned()
                     .collect()
             }
 
-            fn chords_at_row(&self, track: usize, row: i64) -> Vec<ClipChord> {
-                let nanotick = self.nanotick_for_row(row);
-                self.view.clip_chords[track]
+            fn clip_chords_at_nanotick(&self, track: usize, nanotick: u64) -> Vec<ClipChord> {
+                let store = match self.view.clip_store.read() {
+                    Ok(store) => store,
+                    Err(err) => err.into_inner(),
+                };
+                let Some(track_store) = store.track(track) else {
+                    return Vec::new();
+                };
+                track_store
+                    .chords()
                     .iter()
+                    .flat_map(|map| map.values())
                     .filter(|chord| chord.nanotick == nanotick)
                     .cloned()
                     .collect()
+            }
+
+            fn pending_notes_at_nanotick(
+                &self,
+                track: usize,
+                nanotick: u64,
+            ) -> Vec<PendingNote> {
+                let Some(cols) = self.view.pending_overlay.notes_for_track(track) else {
+                    return Vec::new();
+                };
+                cols.iter()
+                    .flat_map(|map| map.values())
+                    .filter(|note| note.nanotick == nanotick)
+                    .cloned()
+                    .collect()
+            }
+
+            fn pending_chords_at_nanotick(
+                &self,
+                track: usize,
+                nanotick: u64,
+            ) -> Vec<PendingChord> {
+                let Some(cols) = self.view.pending_overlay.chords_for_track(track) else {
+                    return Vec::new();
+                };
+                cols.iter()
+                    .flat_map(|map| map.values())
+                    .filter(|chord| chord.nanotick == nanotick)
+                    .cloned()
+                    .collect()
+            }
+
+            fn clip_notes_empty(&self, track: usize) -> bool {
+                let store = match self.view.clip_store.read() {
+                    Ok(store) => store,
+                    Err(err) => err.into_inner(),
+                };
+                let Some(track_store) = store.track(track) else {
+                    return true;
+                };
+                track_store.notes().iter().all(|map| map.is_empty())
+            }
+
+            fn clip_chords_empty(&self, track: usize) -> bool {
+                let store = match self.view.clip_store.read() {
+                    Ok(store) => store,
+                    Err(err) => err.into_inner(),
+                };
+                let Some(track_store) = store.track(track) else {
+                    return true;
+                };
+                track_store.chords().iter().all(|map| map.is_empty())
+            }
+
+            fn notes_at_row(&self, track: usize, row: i64) -> Vec<ClipNote> {
+                let nanotick = self.nanotick_for_row(row);
+                self.clip_notes_at_nanotick(track, nanotick)
+            }
+
+            fn chords_at_row(&self, track: usize, row: i64) -> Vec<ClipChord> {
+                let nanotick = self.nanotick_for_row(row);
+                self.clip_chords_at_nanotick(track, nanotick)
             }
 
             fn entry_count_at_row(&self, track: usize, row: i64) -> usize {
@@ -549,22 +653,10 @@ mod integration_tests {
                 row: i64,
             ) -> anyhow::Result<()> {
                 let nanotick = self.nanotick_for_row(row);
-                let notes: Vec<_> = self.view.clip_notes[track]
-                    .iter()
-                    .filter(|note| note.nanotick == nanotick)
-                    .collect();
-                let chords: Vec<_> = self.view.clip_chords[track]
-                    .iter()
-                    .filter(|chord| chord.nanotick == nanotick)
-                    .collect();
-                let pending_notes: Vec<_> = self.view.pending_notes
-                    .iter()
-                    .filter(|note| note.track_id as usize == track && note.nanotick == nanotick)
-                    .collect();
-                let pending_chords: Vec<_> = self.view.pending_chords
-                    .iter()
-                    .filter(|chord| chord.track_id as usize == track && chord.nanotick == nanotick)
-                    .collect();
+                let notes = self.clip_notes_at_nanotick(track, nanotick);
+                let chords = self.clip_chords_at_nanotick(track, nanotick);
+                let pending_notes = self.pending_notes_at_nanotick(track, nanotick);
+                let pending_chords = self.pending_chords_at_nanotick(track, nanotick);
                 let note_count = notes.len();
                 let pending_note_count = pending_notes.len();
                 let total = note_count + chords.len() + pending_note_count + pending_chords.len();
@@ -749,11 +841,11 @@ mod integration_tests {
                     if notes.iter().any(|note| note.pitch == pitch) {
                         return Ok(start.elapsed());
                     }
-                    let pending = self.view.pending_notes.iter().any(|note| {
-                        note.track_id as usize == track
-                            && note.nanotick == self.nanotick_for_row(row)
-                            && note.pitch == pitch
-                    });
+                    let pending_notes = self.pending_notes_at_nanotick(
+                        track,
+                        self.nanotick_for_row(row),
+                    );
+                    let pending = pending_notes.iter().any(|note| note.pitch == pitch);
                     if pending {
                         return Ok(start.elapsed());
                     }
@@ -820,6 +912,144 @@ mod integration_tests {
                     }
                 }
             }
+        }
+
+        fn drain_ui_events(bridge: &EngineBridge) {
+            while bridge.pop_ui_event().is_some() {}
+        }
+
+        fn wait_for_chain_device(
+            bridge: &EngineBridge,
+            track_id: u32,
+            timeout: Duration,
+        ) -> anyhow::Result<UiChainDiffPayload> {
+            let deadline = Instant::now() + timeout;
+            while Instant::now() < deadline {
+                while let Some(entry) = bridge.pop_ui_event() {
+                    if let Some(diff_type) = ui_diff_type(&entry) {
+                        if diff_type == UiDiffType::ChainSnapshot as u16 {
+                            if let Some(diff) = decode_ui_chain_diff(&entry) {
+                                if diff.track_id == track_id &&
+                                    diff.device_id != K_CHAIN_DEVICE_ID_AUTO {
+                                    return Ok(diff);
+                                }
+                            }
+                            continue;
+                        }
+                        if diff_type == UiDiffType::ChainError as u16 {
+                            if let Some(err) = decode_ui_chain_error(&entry) {
+                                if err.track_id == track_id {
+                                    return Err(anyhow::anyhow!(
+                                        "chain error {} on track {}",
+                                        err.error_code,
+                                        track_id
+                                    ));
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(anyhow::anyhow!(
+                "timed out waiting for chain snapshot on track {}",
+                track_id
+            ))
+        }
+
+        fn wait_for_chain_empty(
+            bridge: &EngineBridge,
+            track_id: u32,
+            timeout: Duration,
+        ) -> anyhow::Result<()> {
+            let deadline = Instant::now() + timeout;
+            while Instant::now() < deadline {
+                while let Some(entry) = bridge.pop_ui_event() {
+                    if let Some(diff_type) = ui_diff_type(&entry) {
+                        if diff_type == UiDiffType::ChainSnapshot as u16 {
+                            if let Some(diff) = decode_ui_chain_diff(&entry) {
+                                if diff.track_id == track_id &&
+                                    diff.device_id == K_CHAIN_DEVICE_ID_AUTO {
+                                    return Ok(());
+                                }
+                            }
+                            continue;
+                        }
+                        if diff_type == UiDiffType::ChainError as u16 {
+                            if let Some(err) = decode_ui_chain_error(&entry) {
+                                if err.track_id == track_id {
+                                    return Err(anyhow::anyhow!(
+                                        "chain error {} on track {}",
+                                        err.error_code,
+                                        track_id
+                                    ));
+                                }
+                            }
+                            continue;
+                        }
+                    }
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(anyhow::anyhow!(
+                "timed out waiting for empty chain on track {}",
+                track_id
+            ))
+        }
+
+        fn wait_for_playhead_advance(
+            bridge: &EngineBridge,
+            baseline: u64,
+            timeout: Duration,
+        ) -> bool {
+            let deadline = Instant::now() + timeout;
+            while Instant::now() < deadline {
+                if let Some(snapshot) = bridge.read_snapshot() {
+                    if snapshot.ui_transport_state != 0 &&
+                        snapshot.ui_global_nanotick_playhead > baseline {
+                        return true;
+                    }
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            false
+        }
+
+        fn assert_playhead_continuous(
+            bridge: &EngineBridge,
+            duration: Duration,
+            stall_limit: Duration,
+        ) -> anyhow::Result<()> {
+            let start = Instant::now();
+            let mut last_tick = bridge
+                .read_snapshot()
+                .map(|s| s.ui_global_nanotick_playhead)
+                .unwrap_or(0);
+            let mut last_advance = Instant::now();
+            while start.elapsed() < duration {
+                if let Some(snapshot) = bridge.read_snapshot() {
+                    if snapshot.ui_transport_state == 0 {
+                        return Err(anyhow::anyhow!("transport stopped during playback"));
+                    }
+                    if snapshot.ui_global_nanotick_playhead > last_tick {
+                        last_tick = snapshot.ui_global_nanotick_playhead;
+                        last_advance = Instant::now();
+                    } else if snapshot.ui_global_nanotick_playhead < last_tick {
+                        // Loop wrap; reset the stall timer.
+                        last_tick = snapshot.ui_global_nanotick_playhead;
+                        last_advance = Instant::now();
+                    } else if last_advance.elapsed() > stall_limit {
+                        return Err(anyhow::anyhow!(
+                            "playhead stalled for {:?} (tick {})",
+                            last_advance.elapsed(),
+                            last_tick
+                        ));
+                    }
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Ok(())
         }
 
         fn run_with_large_stack<F>(f: F) -> anyhow::Result<()>
@@ -990,6 +1220,178 @@ mod integration_tests {
                 if !advanced {
                     return Err(anyhow::anyhow!("playhead did not advance in live mode"));
                 }
+                Ok(())
+            })
+        }
+
+        #[test]
+        fn live_remove_device_keeps_transport_playing() -> anyhow::Result<()> {
+            run_with_large_stack(|| {
+                let _guard = test_lock();
+                let shm_name = format!("/daw_ui_live_remove_{}", std::process::id());
+                let socket_prefix = {
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    "live_remove_device_keeps_transport_playing".hash(&mut hasher);
+                    let short = hasher.finish();
+                    format!("/tmp/daw_host_live_{}_{}", std::process::id(), short)
+                };
+                let prev_test_mode = env::var("DAW_ENGINE_TEST_MODE").ok();
+                let prev_ui_shm = env::var("DAW_UI_SHM_NAME").ok();
+                let prev_socket_prefix = env::var("DAW_HOST_SOCKET_PREFIX").ok();
+                let prev_socket_attempts = env::var("DAW_HOST_SOCKET_WAIT_ATTEMPTS").ok();
+                struct EnvRestore {
+                    test_mode: Option<String>,
+                    ui_shm: Option<String>,
+                    socket_prefix: Option<String>,
+                    socket_attempts: Option<String>,
+                }
+                impl Drop for EnvRestore {
+                    fn drop(&mut self) {
+                        if let Some(value) = &self.test_mode {
+                            env::set_var("DAW_ENGINE_TEST_MODE", value);
+                        } else {
+                            env::remove_var("DAW_ENGINE_TEST_MODE");
+                        }
+                        if let Some(value) = &self.ui_shm {
+                            env::set_var("DAW_UI_SHM_NAME", value);
+                        } else {
+                            env::remove_var("DAW_UI_SHM_NAME");
+                        }
+                        if let Some(value) = &self.socket_prefix {
+                            env::set_var("DAW_HOST_SOCKET_PREFIX", value);
+                        } else {
+                            env::remove_var("DAW_HOST_SOCKET_PREFIX");
+                        }
+                        if let Some(value) = &self.socket_attempts {
+                            env::set_var("DAW_HOST_SOCKET_WAIT_ATTEMPTS", value);
+                        } else {
+                            env::remove_var("DAW_HOST_SOCKET_WAIT_ATTEMPTS");
+                        }
+                    }
+                }
+                let _env_restore = EnvRestore {
+                    test_mode: prev_test_mode,
+                    ui_shm: prev_ui_shm,
+                    socket_prefix: prev_socket_prefix,
+                    socket_attempts: prev_socket_attempts,
+                };
+                cleanup_shm(&shm_name);
+                cleanup_track_shm(3);
+                for track_id in 0..3 {
+                    let socket = format!("{socket_prefix}_{track_id}.sock");
+                    cleanup_socket(&socket);
+                }
+                env::set_var("DAW_UI_SHM_NAME", &shm_name);
+                env::set_var("DAW_HOST_SOCKET_PREFIX", &socket_prefix);
+                env::set_var("DAW_HOST_SOCKET_WAIT_ATTEMPTS", "500");
+                env::remove_var("DAW_ENGINE_TEST_MODE");
+
+                let plugin_index = env::var("DAW_TEST_PLUGIN_INDEX")
+                    .ok()
+                    .and_then(|value| value.parse::<u32>().ok())
+                    .unwrap_or(0);
+
+                let mut engine = EngineProcess::start()?;
+                let bridge = Arc::new(connect_bridge_with_retry(Duration::from_secs(5))?);
+
+                let start = Instant::now();
+                loop {
+                    if let Some(snapshot) = bridge.read_snapshot() {
+                        if snapshot.ui_clip_version == 0 && snapshot.ui_harmony_version == 0 {
+                            break;
+                        }
+                    }
+                    if start.elapsed() > Duration::from_secs(2) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+
+                let load_track0 = UiCommandPayload {
+                    command_type: UiCommandType::LoadPluginOnTrack as u16,
+                    flags: 0,
+                    track_id: 0,
+                    plugin_index,
+                    note_pitch: 0,
+                    value0: 0,
+                    note_nanotick_lo: 0,
+                    note_nanotick_hi: 0,
+                    note_duration_lo: 0,
+                    note_duration_hi: 0,
+                    base_version: 0,
+                };
+                bridge.send_ui_command(load_track0);
+                let _ = wait_for_chain_device(&bridge, 0, Duration::from_secs(8))?;
+
+                let play_payload = UiCommandPayload {
+                    command_type: UiCommandType::TogglePlay as u16,
+                    flags: 0,
+                    track_id: 0,
+                    plugin_index: 0,
+                    note_pitch: 0,
+                    value0: 0,
+                    note_nanotick_lo: 0,
+                    note_nanotick_hi: 0,
+                    note_duration_lo: 0,
+                    note_duration_hi: 0,
+                    base_version: 0,
+                };
+                bridge.send_ui_command(play_payload);
+
+                let start_tick = bridge
+                    .read_snapshot()
+                    .map(|s| s.ui_global_nanotick_playhead)
+                    .unwrap_or(0);
+                if !wait_for_playhead_advance(&bridge, start_tick, Duration::from_secs(2)) {
+                    return Err(anyhow::anyhow!("playhead did not advance before removal"));
+                }
+
+                drain_ui_events(&bridge);
+                let load_track1 = UiCommandPayload {
+                    command_type: UiCommandType::LoadPluginOnTrack as u16,
+                    flags: 0,
+                    track_id: 1,
+                    plugin_index,
+                    note_pitch: 0,
+                    value0: 0,
+                    note_nanotick_lo: 0,
+                    note_nanotick_hi: 0,
+                    note_duration_lo: 0,
+                    note_duration_hi: 0,
+                    base_version: 0,
+                };
+                bridge.send_ui_command(load_track1);
+
+                let device = wait_for_chain_device(&bridge, 1, Duration::from_secs(12))?;
+                let remove_payload = UiChainCommandPayload {
+                    command_type: UiCommandType::RemoveDevice as u16,
+                    flags: 0,
+                    track_id: 1,
+                    base_version: device.chain_version,
+                    device_id: device.device_id,
+                    device_kind: device.device_kind,
+                    insert_index: K_CHAIN_DEVICE_ID_AUTO,
+                    patcher_node_id: device.patcher_node_id,
+                    host_slot_index: device.host_slot_index,
+                    bypass: device.bypass,
+                    reserved: [0; 4],
+                };
+                if !bridge.try_send_ui_chain_command(remove_payload) {
+                    return Err(anyhow::anyhow!("failed to send RemoveDevice"));
+                }
+
+                let _ = wait_for_chain_empty(&bridge, 1, Duration::from_secs(6))?;
+                assert_playhead_continuous(
+                    &bridge,
+                    Duration::from_secs(6),
+                    Duration::from_millis(1500),
+                )?;
+
+                engine.assert_running()?;
+                engine.stop();
+                cleanup_shm(&shm_name);
+                cleanup_track_shm(3);
                 Ok(())
             })
         }
@@ -1208,6 +1610,104 @@ mod integration_tests {
         }
 
         #[test]
+        fn test_backspace_immediately_after_typing_deletes_note() -> anyhow::Result<()> {
+            // Writes are queued and committed on a later flush, while deletes
+            // decide what to remove from committed state. Without draining the
+            // queue first, backspace here sees an empty cell and does nothing.
+            let mut harness = TestHarness::new("backspace_after_typing")?;
+            harness.view.cursor_nanotick = 0;
+            harness.view.scroll_nanotick_offset = 0;
+            harness.view.focused_track_index = 0;
+            harness.view.cursor_col = 0;
+
+            harness.press_key("q");
+            // Deliberately no pump: the write is still queued.
+            harness.view.focus_note_cell(0, 0, 0, &mut harness.notify);
+            harness.action_palette_backspace();
+
+            let pump = harness.pump(Duration::from_millis(500));
+            assert!(!pump.clip_resync, "unexpected clip resync on delete-after-write");
+            assert!(
+                harness.notes_at_row(0, 0).is_empty(),
+                "note typed then immediately deleted should be gone"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn test_interleaved_write_and_delete_keep_version_order() -> anyhow::Result<()> {
+            // Writes go through the deferred edit queue, deletes enqueue
+            // directly. Both reserve clip versions from one counter, so the
+            // engine rejects everything if they reach it out of order.
+            let mut harness = TestHarness::new("write_delete_version_order")?;
+            harness.view.cursor_nanotick = 0;
+            harness.view.scroll_nanotick_offset = 0;
+            harness.view.focused_track_index = 0;
+            harness.view.cursor_col = 0;
+            harness.wait_for_track_count(2, Duration::from_secs(1))?;
+
+            // Fill track 0 so the deletes below actually have something to
+            // remove; a delete that finds nothing never reaches the engine.
+            for row in 0..8 {
+                harness.view.focus_note_cell(row, 0, 0, &mut harness.notify);
+                harness.press_key("q");
+            }
+            let pump = harness.pump(Duration::from_millis(800));
+            assert!(!pump.clip_resync, "unexpected clip resync while filling");
+
+            for row in 0..8 {
+                harness.view.focus_note_cell(row, 1, 0, &mut harness.notify);
+                harness.press_key("w");
+                harness.view.focus_note_cell(row, 0, 0, &mut harness.notify);
+                harness.action_palette_backspace();
+            }
+
+            let pump = harness.pump(Duration::from_millis(800));
+            assert!(
+                !pump.clip_resync,
+                "interleaving queued writes with direct deletes must not resync"
+            );
+            for row in 0..8 {
+                assert!(
+                    harness.notes_at_row(0, row as i64).is_empty(),
+                    "expected row {row} on track 0 to be deleted"
+                );
+                assert_eq!(
+                    harness.notes_at_row(1, row as i64).len(),
+                    1,
+                    "expected the written note to survive at row {row}"
+                );
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn test_pending_overlay_retires_after_confirmation() -> anyhow::Result<()> {
+            // The overlay holds optimistic state only until the engine confirms
+            // it. An entry that is never retired renders as a permanent ghost.
+            let mut harness = TestHarness::new("pending_retires")?;
+            harness.view.cursor_nanotick = 0;
+            harness.view.scroll_nanotick_offset = 0;
+            harness.view.focused_track_index = 0;
+            harness.view.cursor_col = 0;
+
+            harness.press_key("q");
+            harness.pump(Duration::from_millis(500));
+
+            let nanotick = harness.nanotick_for_row(0);
+            assert_eq!(
+                harness.clip_notes_at_nanotick(0, nanotick).len(),
+                1,
+                "engine should have confirmed the note"
+            );
+            assert!(
+                harness.pending_notes_at_nanotick(0, nanotick).is_empty(),
+                "pending overlay entry should be retired once confirmed"
+            );
+            Ok(())
+        }
+
+        #[test]
         fn test_tracker_degree_and_chord_entries() -> anyhow::Result<()> {
             let mut harness = TestHarness::new("degree_and_chords")?;
             harness.view.cursor_nanotick = 0;
@@ -1253,8 +1753,15 @@ mod integration_tests {
             harness.press_key("@");
             harness.press_key("3");
             harness.action_palette_confirm();
-            let entry_count = harness.entry_count_at_row(0, 0);
-            assert_eq!(entry_count, 1, "expected pending chord immediately");
+            // The chord must be on screen before the engine confirms it. That
+            // instant feedback comes from the fast overlay, which the tracker
+            // paints over the cached cell; `entries_for_row` only catches up
+            // once the queued edit op is committed on the next flush.
+            let nanotick = harness.nanotick_for_row(0);
+            assert!(
+                harness.view.fast_overlay_label(0, 0, nanotick).is_some(),
+                "expected chord visible immediately in the tracker overlay"
+            );
             let pump = harness.pump(Duration::from_millis(300));
             assert!(!pump.clip_resync, "unexpected clip resync on chord entry");
             let chords = harness.chords_at_row(0, 0);
@@ -2322,22 +2829,22 @@ mod integration_tests {
                 }
 
                 for track in 0..3 {
-                    assert!(harness.view.clip_notes[track].is_empty());
-                    assert!(harness.view.clip_chords[track].is_empty());
+                    assert!(harness.clip_notes_empty(track));
+                    assert!(harness.clip_chords_empty(track));
                 }
-                assert!(harness.view.pending_notes.is_empty());
-                assert!(harness.view.pending_chords.is_empty());
+                assert_eq!(harness.view.pending_overlay.note_count(), 0);
+                assert_eq!(harness.view.pending_overlay.chord_count(), 0);
                 assert!(harness.view.harmony_events.is_empty());
 
                 harness.refresh_clip_window(Duration::from_secs(1))?;
                 let track_count = harness.view.snapshot.ui_track_count.min(TRACK_COUNT as u32) as usize;
                 for track in 0..track_count {
                     assert!(
-                        harness.view.clip_notes[track].is_empty(),
+                        harness.clip_notes_empty(track),
                         "expected empty notes on track {track}"
                     );
                     assert!(
-                        harness.view.clip_chords[track].is_empty(),
+                        harness.clip_chords_empty(track),
                         "expected empty chords on track {track}"
                     );
                 }

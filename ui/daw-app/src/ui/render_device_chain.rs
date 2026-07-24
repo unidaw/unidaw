@@ -232,6 +232,7 @@ impl EngineView {
                                             .on_mouse_down(
                                                 MouseButton::Left,
                                                 _cx.listener(move |view, _, _, cx| {
+                                                    cx.stop_propagation();
                                                     view.select_chain_device(device_id, cx);
                                                     view.open_vst_editor(device_id, cx);
                                                 }),
