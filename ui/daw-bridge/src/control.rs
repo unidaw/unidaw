@@ -13,8 +13,12 @@ use std::sync::atomic::Ordering;
 
 use memmap2::{Mmap, MmapMut, MmapOptions};
 
+use std::sync::atomic::fence;
+
 use crate::layout::{
-    EventEntry, EventType, RingHeader, ShmHeader, UiCommandPayload, K_SHM_MAGIC, K_SHM_VERSION,
+    EventEntry, EventType, RingHeader, ShmHeader, UiChordCommandPayload,
+    UiClipWindowCommandPayload, UiClipWindowSnapshot, UiCommandPayload, K_SHM_MAGIC,
+    K_SHM_VERSION,
 };
 use crate::reader::{SeqlockReader, UiSnapshot};
 
@@ -132,27 +136,81 @@ impl EngineHandle {
         unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) }
     }
 
+    /// Harmony edits are versioned against their own counter, not the clip one.
+    pub fn harmony_version(&self) -> u32 {
+        unsafe { std::ptr::read_volatile(&(*self.header).ui_harmony_version) }
+    }
+
+    /// Reads the clip window the engine last published, under the same seqlock
+    /// the UI uses. Returns None while a write is in progress or no window has
+    /// been requested yet.
+    pub fn read_clip_window(&self) -> Option<UiClipWindowSnapshot> {
+        loop {
+            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue;
+            }
+            let offset = unsafe { (*self.header).ui_clip_offset };
+            let bytes = unsafe { (*self.header).ui_clip_bytes };
+            if offset == 0 || bytes < std::mem::size_of::<UiClipWindowSnapshot>() as u64 {
+                return None;
+            }
+            let snapshot = unsafe {
+                *(self._mmap.as_ptr().add(offset as usize) as *const UiClipWindowSnapshot)
+            };
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                return Some(snapshot);
+            }
+        }
+    }
+
+    pub fn send_chord_command(&self, payload: UiChordCommandPayload) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const UiChordCommandPayload as *const u8,
+            std::mem::size_of::<UiChordCommandPayload>(),
+        )
+    }
+
+    pub fn send_clip_window_request(
+        &self,
+        payload: UiClipWindowCommandPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const UiClipWindowCommandPayload as *const u8,
+            std::mem::size_of::<UiClipWindowCommandPayload>(),
+        )
+    }
+
     /// Writes one command into the UI ring. Returns false when the ring is
     /// full, which means the engine is not draining and the caller should
     /// retry rather than treat the command as sent.
     pub fn send_command(&self, payload: UiCommandPayload) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const UiCommandPayload as *const u8,
+            std::mem::size_of::<UiCommandPayload>(),
+        )
+    }
+
+    /// The engine dispatches on the entry's payload size, so every command
+    /// shape shares one ring-write path.
+    fn write_entry(&self, payload: *const u8, size: usize) -> Result<(), String> {
         let Some(ring) = self.ring_ui.as_ref() else {
             return Err("handle was not opened for writing".to_string());
         };
+        if size > 40 {
+            return Err(format!("payload of {size} bytes does not fit an EventEntry"));
+        }
         let mut entry = EventEntry {
             sample_time: 0,
             block_id: 0,
             event_type: EventType::UiCommand as u16,
-            size: std::mem::size_of::<UiCommandPayload>() as u16,
+            size: size as u16,
             flags: 0,
             payload: [0u8; 40],
         };
-        let bytes = unsafe {
-            std::slice::from_raw_parts(
-                &payload as *const UiCommandPayload as *const u8,
-                std::mem::size_of::<UiCommandPayload>(),
-            )
-        };
+        let bytes = unsafe { std::slice::from_raw_parts(payload, size) };
         entry.payload[..bytes.len()].copy_from_slice(bytes);
 
         let write = unsafe { (*ring.header).write_index.load(Ordering::Relaxed) };

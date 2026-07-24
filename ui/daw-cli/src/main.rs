@@ -5,10 +5,13 @@
 //! ring, so `do` requires --force to acknowledge you are the only writer.
 
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
-use daw_bridge::layout::{UiCommandPayload, UiCommandType, UiPatcherPresetCommandPayload};
+use daw_bridge::layout::{
+    UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload, UiCommandType,
+    UiPatcherPresetCommandPayload,
+};
 
 const USAGE: &str = "\
 daw-cli — control surface for a running engine
@@ -16,15 +19,29 @@ daw-cli — control surface for a running engine
   daw-cli watch                    stream transport state (default)
   daw-cli get transport            transport + versions as JSON
   daw-cli get tracks               per-track state as JSON
+  daw-cli get clip --force [--track N] [--bars N] [--grid]
+                                   notes and chords in a window, as JSON or as
+                                   a tracker-style text grid
   daw-cli do save [name] --force   save the project (default name: default)
   daw-cli do load [name] --force   load the project
   daw-cli do play --force          toggle transport
   daw-cli do note --force --track N --nanotick T --pitch P
                   [--velocity V] [--duration D] [--column C]
   daw-cli do delete-note --force --track N --nanotick T --pitch P [--column C]
+  daw-cli do notes --force --track N --pitches 60,64,67 [--start T] [--step S]
+                   [--duration D] [--velocity V] [--column C]
+                                   writes a phrase in one invocation
+  daw-cli do chord --force --track N --nanotick T --degree D
+                   [--quality Q] [--inversion I] [--octave O] [--duration D]
+  daw-cli do harmony --force --nanotick T --root R --scale S
 
-Reading a clip back: `do save` then read the project.json the engine wrote.
-That file is the query surface for musical content — see PROJECT_PERSISTENCE.md.
+`get clip` needs --force too: reading a window means asking the engine for one,
+and any request is a write to the single-producer command ring.
+
+Write a phrase with `do notes`, not a shell loop over `do note`. The engine
+accepts one clip edit per version, and each invocation reads the version once
+at startup, so back-to-back processes all claim the same version and only the
+first survives. `do notes` numbers them itself.
 
 Queries are read-only. `do` writes to the UI command ring, which allows a
 single producer: if the UI app is running it already owns that ring, so pass
@@ -162,6 +179,267 @@ fn send_named(handle: &EngineHandle, command: UiCommandType, name: &str) -> i32 
     }
 }
 
+/// Writes a phrase in one invocation, numbering the base versions itself.
+/// The engine advances one clip version per applied edit and rejects anything
+/// stale, so a shell loop over `do note` loses every note after the first.
+fn write_notes(handle: &EngineHandle, args: &[String]) -> i32 {
+    let Some(raw) = flag(args, "--pitches") else {
+        eprintln!("daw-cli: --pitches is required, e.g. --pitches 60,64,67");
+        return 2;
+    };
+    let mut pitches = Vec::new();
+    for token in raw.split(',').filter(|t| !t.is_empty()) {
+        match token.trim().parse::<u32>() {
+            Ok(pitch) if pitch <= 127 => pitches.push(pitch),
+            _ => {
+                eprintln!("daw-cli: bad pitch {token:?} (expected 0..127)");
+                return 2;
+            }
+        }
+    }
+    if pitches.is_empty() {
+        eprintln!("daw-cli: --pitches listed no notes");
+        return 2;
+    }
+
+    let track = match flag_u64(args, "--track", Some(0)) {
+        Ok(value) => value as u32,
+        Err(err) => {
+            eprintln!("daw-cli: {err}");
+            return 2;
+        }
+    };
+    let start = flag_u64(args, "--start", Some(0)).unwrap_or(0);
+    let step = flag_u64(args, "--step", Some(NANOTICKS_PER_QUARTER))
+        .unwrap_or(NANOTICKS_PER_QUARTER);
+    let duration = flag_u64(args, "--duration", Some(step)).unwrap_or(step);
+    let velocity = flag_u64(args, "--velocity", Some(100)).unwrap_or(100).min(127);
+    let column = flag_u64(args, "--column", Some(0)).unwrap_or(0);
+
+    let mut base = handle.clip_version();
+    let mut sent = 0usize;
+    for (index, pitch) in pitches.iter().enumerate() {
+        let nanotick = start + step * index as u64;
+        let payload = UiCommandPayload {
+            command_type: UiCommandType::WriteNote as u16,
+            flags: column as u16,
+            track_id: track,
+            plugin_index: 0,
+            note_pitch: *pitch,
+            value0: velocity as u32,
+            note_nanotick_lo: (nanotick & 0xffff_ffff) as u32,
+            note_nanotick_hi: (nanotick >> 32) as u32,
+            note_duration_lo: (duration & 0xffff_ffff) as u32,
+            note_duration_hi: (duration >> 32) as u32,
+            base_version: base,
+        };
+        if let Err(err) = handle.send_command(payload) {
+            eprintln!("daw-cli: {err} after {sent} notes");
+            return 1;
+        }
+        sent += 1;
+        base = base.wrapping_add(1);
+    }
+    println!("{{ \"sent\": {sent}, \"first_base_version\": {} }}", base - sent as u32);
+    0
+}
+
+fn chord_command(
+    args: &[String],
+    base_version: u32,
+) -> Result<UiChordCommandPayload, String> {
+    let track = flag_u64(args, "--track", Some(0))? as u32;
+    let nanotick = flag_u64(args, "--nanotick", None)?;
+    let degree = flag_u64(args, "--degree", None)?;
+    let duration = flag_u64(args, "--duration", Some(0))?;
+    Ok(UiChordCommandPayload {
+        command_type: UiCommandType::WriteChord as u16,
+        flags: flag_u64(args, "--column", Some(0))? as u16,
+        track_id: track,
+        base_version,
+        nanotick_lo: (nanotick & 0xffff_ffff) as u32,
+        nanotick_hi: (nanotick >> 32) as u32,
+        duration_lo: (duration & 0xffff_ffff) as u32,
+        duration_hi: (duration >> 32) as u32,
+        degree: degree as u16,
+        quality: flag_u64(args, "--quality", Some(1))? as u8,
+        inversion: flag_u64(args, "--inversion", Some(0))? as u8,
+        base_octave: flag_u64(args, "--octave", Some(4))? as u8,
+        humanize_timing: 0,
+        humanize_velocity: 0,
+        reserved: 0,
+        spread_nanoticks: 0,
+    })
+}
+
+fn harmony_command(args: &[String], base_version: u32) -> Result<UiCommandPayload, String> {
+    let nanotick = flag_u64(args, "--nanotick", Some(0))?;
+    let root = flag_u64(args, "--root", None)?;
+    let scale = flag_u64(args, "--scale", None)?;
+    Ok(UiCommandPayload {
+        command_type: UiCommandType::WriteHarmony as u16,
+        flags: 0,
+        track_id: 0,
+        plugin_index: 0,
+        // The engine reads the root from note_pitch and the scale from value0.
+        note_pitch: (root % 12) as u32,
+        value0: scale as u32,
+        note_nanotick_lo: (nanotick & 0xffff_ffff) as u32,
+        note_nanotick_hi: (nanotick >> 32) as u32,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version,
+    })
+}
+
+const NANOTICKS_PER_QUARTER: u64 = 960_000;
+const NOTE_NAMES: [&str; 12] = [
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+];
+
+fn pitch_name(pitch: u8) -> String {
+    format!("{}{}", NOTE_NAMES[(pitch % 12) as usize], pitch as i32 / 12 - 1)
+}
+
+/// Asks the engine for a clip window and waits for the matching snapshot.
+fn get_clip(handle: &EngineHandle, args: &[String]) -> i32 {
+    let track = match flag_u64(args, "--track", Some(0)) {
+        Ok(value) => value as u32,
+        Err(err) => {
+            eprintln!("daw-cli: {err}");
+            return 2;
+        }
+    };
+    let bars = flag_u64(args, "--bars", Some(4)).unwrap_or(4).max(1);
+    let window_end = bars * 4 * NANOTICKS_PER_QUARTER;
+    // Any nonzero id works; it only has to match what comes back.
+    let request_id = 0x5ADD_u32;
+
+    let request = UiClipWindowCommandPayload {
+        command_type: UiCommandType::RequestClipWindow as u16,
+        flags: 0,
+        track_id: track,
+        request_id,
+        window_start_lo: 0,
+        window_start_hi: 0,
+        window_end_lo: (window_end & 0xffff_ffff) as u32,
+        window_end_hi: (window_end >> 32) as u32,
+        cursor_event_index: 0,
+        reserved: 0,
+        reserved2: 0,
+    };
+    if let Err(err) = handle.send_clip_window_request(request) {
+        eprintln!("daw-cli: {err}");
+        return 1;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut snapshot = None;
+    while Instant::now() < deadline {
+        if let Some(candidate) = handle.read_clip_window() {
+            if candidate.request_id == request_id && candidate.track_id == track {
+                snapshot = Some(candidate);
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    let Some(snapshot) = snapshot else {
+        eprintln!("daw-cli: timed out waiting for a clip window for track {track}");
+        return 1;
+    };
+
+    let note_count = (snapshot.note_count as usize).min(snapshot.notes.len());
+    let chord_count = (snapshot.chord_count as usize).min(snapshot.chords.len());
+
+    if args.iter().any(|a| a == "--grid") {
+        print_grid(&snapshot, note_count, chord_count, bars);
+        return 0;
+    }
+
+    println!("{{");
+    println!("  \"track_id\": {},", snapshot.track_id);
+    println!("  \"clip_version\": {},", snapshot.clip_version);
+    println!("  \"window_end_nanotick\": {},", snapshot.window_end_nanotick);
+    println!("  \"notes\": [");
+    for index in 0..note_count {
+        let note = snapshot.notes[index];
+        let comma = if index + 1 == note_count { "" } else { "," };
+        println!(
+            "    {{ \"nanotick\": {}, \"duration\": {}, \"pitch\": {}, \"name\": \"{}\", \
+             \"velocity\": {}, \"column\": {} }}{comma}",
+            note.t_on,
+            note.t_off.saturating_sub(note.t_on),
+            note.pitch,
+            pitch_name(note.pitch),
+            note.velocity,
+            note.column
+        );
+    }
+    println!("  ],");
+    println!("  \"chords\": [");
+    for index in 0..chord_count {
+        let chord = snapshot.chords[index];
+        let comma = if index + 1 == chord_count { "" } else { "," };
+        println!(
+            "    {{ \"nanotick\": {}, \"degree\": {}, \"quality\": {}, \"inversion\": {}, \
+             \"base_octave\": {} }}{comma}",
+            chord.nanotick, chord.degree, chord.quality, chord.inversion, chord.base_octave
+        );
+    }
+    println!("  ]");
+    println!("}}");
+    0
+}
+
+/// A tracker-style text grid of the window. Not the UI's view — no cursor, no
+/// pending edits — but the same shape, and readable in a terminal or a diff.
+fn print_grid(
+    snapshot: &daw_bridge::layout::UiClipWindowSnapshot,
+    note_count: usize,
+    chord_count: usize,
+    bars: u64,
+) {
+    let row = NANOTICKS_PER_QUARTER / 4; // 16th notes
+    let rows = (bars * 16) as usize;
+    let mut cells: Vec<Vec<String>> = vec![vec![".".to_string(); 4]; rows];
+
+    for index in 0..note_count {
+        let note = snapshot.notes[index];
+        let r = (note.t_on / row) as usize;
+        let c = (note.column as usize).min(3);
+        if r < rows {
+            cells[r][c] = pitch_name(note.pitch);
+        }
+    }
+    for index in 0..chord_count {
+        let chord = snapshot.chords[index];
+        let r = (chord.nanotick / row) as usize;
+        if r < rows {
+            cells[r][3] = format!("~{}", chord.degree);
+        }
+    }
+
+    println!("track {}  clip_version {}", snapshot.track_id, snapshot.clip_version);
+    println!("row |  bar.beat | c0     c1     c2     | chord");
+    println!("{}", "-".repeat(52));
+    for (index, cell) in cells.iter().enumerate() {
+        let beat = index / 4;
+        let sub = index % 4;
+        println!(
+            "{:03} | {:>3}.{}.{} | {:<6} {:<6} {:<6} | {}",
+            index,
+            beat / 4 + 1,
+            beat % 4 + 1,
+            sub,
+            cell[0],
+            cell[1],
+            cell[2],
+            cell[3]
+        );
+    }
+}
+
 fn watch(handle: &EngineHandle) -> i32 {
     loop {
         if let Some(snapshot) = handle.snapshot() {
@@ -194,6 +472,24 @@ fn main() {
                 1
             }
         },
+        // `get clip` has to ask the engine for a window, and a request is a
+        // ring write, so it needs the same acknowledgement as `do`.
+        Some((&"get", rest)) if rest.first() == Some(&"clip") => {
+            if !force {
+                eprintln!(
+                    "daw-cli: `get clip` asks the engine for a window, which writes to the\n\
+                     single-producer command ring. Pass --force when nothing else is writing."
+                );
+                std::process::exit(2);
+            }
+            match EngineHandle::attach(&name, true) {
+                Ok(handle) => get_clip(&handle, &args),
+                Err(err) => {
+                    eprintln!("daw-cli: {err}");
+                    1
+                }
+            }
+        }
         Some((&"get", rest)) => {
             let handle = match EngineHandle::attach(&name, false) {
                 Ok(handle) => handle,
@@ -286,6 +582,46 @@ fn main() {
                                 println!(
                                     "{{ \"sent\": \"{label}\", \"base_version\": {base} }}"
                                 );
+                                0
+                            }
+                            Err(err) => {
+                                eprintln!("daw-cli: {err}");
+                                1
+                            }
+                        },
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            2
+                        }
+                    }
+                }
+                Some(&"notes") => write_notes(&handle, &args),
+                Some(&"chord") => {
+                    let base = handle.clip_version();
+                    match chord_command(&args, base) {
+                        Ok(payload) => match handle.send_chord_command(payload) {
+                            Ok(()) => {
+                                println!("{{ \"sent\": \"chord\", \"base_version\": {base} }}");
+                                0
+                            }
+                            Err(err) => {
+                                eprintln!("daw-cli: {err}");
+                                1
+                            }
+                        },
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            2
+                        }
+                    }
+                }
+                Some(&"harmony") => {
+                    // Harmony has its own version counter, not the clip one.
+                    let base = handle.harmony_version();
+                    match harmony_command(&args, base) {
+                        Ok(payload) => match handle.send_command(payload) {
+                            Ok(()) => {
+                                println!("{{ \"sent\": \"harmony\", \"base_version\": {base} }}");
                                 0
                             }
                             Err(err) => {
