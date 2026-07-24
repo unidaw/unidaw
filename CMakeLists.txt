@@ -393,6 +393,11 @@ add_test(NAME phase3_undo_stack
 )
 set_tests_properties(phase3_undo_stack PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_test(NAME phase3_note_duration
+  COMMAND phase3_tests --test note_duration
+)
+set_tests_properties(phase3_note_duration PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME phase3_resync_mismatch
   COMMAND phase3_tests --test resync_mismatch
 )

@@ -107,6 +107,87 @@ struct MusicalEvent {
 
   const std::vector<MusicalEvent>& events() const { return events_; }
 
+  // Duration is the stored truth for note length, so the two questions the
+  // tracker used to answer implicitly at playback — "when does this note get
+  // cut off" and "what was sounding before here" — are answered at edit time
+  // instead. Both search the column, because a column is the monophonic unit.
+
+  /// First note or chord in `column` starting strictly after `tick`.
+  std::optional<uint64_t> nextEventTickInColumn(uint64_t tick, uint8_t column) const {
+    for (const auto& event : events_) {
+      if (event.nanotickOffset <= tick) {
+        continue;
+      }
+      if (event.type == MusicalEventType::Note &&
+          event.payload.note.column == column) {
+        return event.nanotickOffset;
+      }
+      if (event.type == MusicalEventType::Chord &&
+          event.payload.chord.column == column) {
+        return event.nanotickOffset;
+      }
+    }
+    return std::nullopt;
+  }
+
+  /// The note in `column` that is still sounding at `tick`, if any. Events are
+  /// kept sorted, so the last one starting before `tick` is the candidate.
+  MusicalEvent* soundingNoteInColumn(uint64_t tick, uint8_t column) {
+    MusicalEvent* found = nullptr;
+    for (auto& event : events_) {
+      if (event.nanotickOffset >= tick) {
+        break;
+      }
+      if (event.type == MusicalEventType::Note &&
+          event.payload.note.column == column) {
+        found = &event;
+      }
+    }
+    if (found == nullptr) {
+      return nullptr;
+    }
+    const uint64_t end =
+        found->nanotickOffset + found->payload.note.durationNanoticks;
+    return end > tick ? found : nullptr;
+  }
+
+  /// The note or chord in `column` still sounding at `tick`, if any. A chord
+  /// and a note are both length-bearing events in the column, so an OFF ends
+  /// whichever is sounding.
+  MusicalEvent* soundingEventInColumn(uint64_t tick, uint8_t column) {
+    MusicalEvent* found = nullptr;
+    for (auto& event : events_) {
+      if (event.nanotickOffset >= tick) {
+        break;
+      }
+      if (event.type == MusicalEventType::Note &&
+          event.payload.note.column == column) {
+        found = &event;
+      } else if (event.type == MusicalEventType::Chord &&
+                 event.payload.chord.column == column) {
+        found = &event;
+      }
+    }
+    if (found == nullptr) {
+      return nullptr;
+    }
+    const uint64_t duration = found->type == MusicalEventType::Note
+                                  ? found->payload.note.durationNanoticks
+                                  : found->payload.chord.durationNanoticks;
+    return found->nanotickOffset + duration > tick ? found : nullptr;
+  }
+
+  /// Sets the length of a note or chord event to end at `tick`.
+  static void truncateEventTo(MusicalEvent& event, uint64_t tick) {
+    const uint64_t duration =
+        tick > event.nanotickOffset ? tick - event.nanotickOffset : 0;
+    if (event.type == MusicalEventType::Note) {
+      event.payload.note.durationNanoticks = duration;
+    } else if (event.type == MusicalEventType::Chord) {
+      event.payload.chord.durationNanoticks = duration;
+    }
+  }
+
   struct RemovedNote {
     uint64_t nanotick = 0;
     uint64_t duration = 0;

@@ -23,12 +23,23 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
                              uint16_t flags,
                              std::atomic<uint32_t>& clipVersion,
                              bool recordUndo,
+                             uint64_t spanEndNanotick,
                              std::optional<EventId> noteIdOverride) {
   const uint8_t column = static_cast<uint8_t>(flags & 0xffu);
   clip.removeChordAt(nanotick, column);
   clip.removeNoteAt(nanotick, column);
-  if (velocity == 0 && duration == 0) {
-    clip.removeNoteOffsInSpan(nanotick, column);
+
+  // Cut-on-next, at edit time: whatever was sounding here (note or chord) now
+  // ends here.
+  if (MusicalEvent* sounding = clip.soundingEventInColumn(nanotick, column)) {
+    MusicalClip::truncateEventTo(*sounding, nanotick);
+  }
+
+  // Resolve an unspecified length to what a tracker would have played.
+  if (duration == 0) {
+    const auto next = clip.nextEventTickInColumn(nanotick, column);
+    const uint64_t end = next.value_or(spanEndNanotick);
+    duration = end > nanotick ? end - nanotick : 0;
   }
 
   MusicalEvent event;
@@ -106,6 +117,58 @@ std::optional<ClipEditResult> removeNoteFromClip(MusicalClip& clip,
     undo.velocity = removed->velocity;
     undo.noteId = removed->noteId;
     undo.flags = removed->column;
+    result.undo = undo;
+  }
+  return result;
+}
+
+std::optional<ClipEditResult> endNoteInColumn(MusicalClip& clip,
+                                              uint32_t trackId,
+                                              uint64_t nanotick,
+                                              uint8_t column,
+                                              std::atomic<uint32_t>& clipVersion,
+                                              bool recordUndo) {
+  MusicalEvent* sounding = clip.soundingEventInColumn(nanotick, column);
+  if (sounding == nullptr) {
+    // Nothing to end. Storing an OFF here would be a note that never sounds.
+    return std::nullopt;
+  }
+  const bool isChord = sounding->type == MusicalEventType::Chord;
+  const uint64_t previousDuration = isChord
+                                        ? sounding->payload.chord.durationNanoticks
+                                        : sounding->payload.note.durationNanoticks;
+  const uint64_t start = sounding->nanotickOffset;
+  MusicalClip::truncateEventTo(*sounding, nanotick);
+
+  ClipEditResult result;
+  result.nextClipVersion = clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+  // The note itself changed length; the UI mirrors that rather than learning
+  // about a separate OFF object.
+  result.diff.diffType = static_cast<uint16_t>(UiDiffType::UpdateNote);
+  result.diff.trackId = trackId;
+  result.diff.clipVersion = result.nextClipVersion;
+  result.diff.noteNanotickLo = static_cast<uint32_t>(start & 0xffffffffu);
+  result.diff.noteNanotickHi = static_cast<uint32_t>((start >> 32) & 0xffffffffu);
+  const uint64_t newDuration = sounding->payload.note.durationNanoticks;
+  result.diff.noteDurationLo = static_cast<uint32_t>(newDuration & 0xffffffffu);
+  result.diff.noteDurationHi =
+      static_cast<uint32_t>((newDuration >> 32) & 0xffffffffu);
+  result.diff.notePitch = sounding->payload.note.pitch;
+  result.diff.noteVelocity = sounding->payload.note.velocity;
+  result.diff.noteColumn = column;
+
+  if (recordUndo) {
+    // Undo restores the length it had before, so an OFF is reversible without
+    // a bespoke undo type.
+    UndoEntry undo{};
+    undo.type = UndoType::AddNote;
+    undo.trackId = trackId;
+    undo.nanotick = start;
+    undo.duration = previousDuration;
+    undo.pitch = sounding->payload.note.pitch;
+    undo.velocity = sounding->payload.note.velocity;
+    undo.noteId = sounding->payload.note.noteId;
+    undo.flags = column;
     result.undo = undo;
   }
   return result;

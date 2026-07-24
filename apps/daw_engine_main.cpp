@@ -2523,20 +2523,47 @@ struct TrackRuntime {
       std::cerr << "UI: AddNote failed - track " << trackId << " not found" << std::endl;
       return false;
     }
+    // A note with no velocity and no length is an OFF gesture. It ends the
+    // note sounding in that column rather than storing an event of its own,
+    // so length has exactly one representation.
+    const uint8_t column = static_cast<uint8_t>(flags & 0xffu);
+    const bool isNoteOff = velocity == 0 && duration == 0;
+
+    // Where a note runs to when nothing follows it in its column.
+    uint64_t spanEnd = loopEndNanotick.load(std::memory_order_acquire);
+    if (spanEnd <= loopStartNanotick.load(std::memory_order_acquire)) {
+      spanEnd = patternTicks;
+    }
+
     std::optional<daw::ClipEditResult> result;
     std::shared_ptr<const ClipSnapshot> snapshot;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
-      result = daw::addNoteToClip(runtime->track.clip,
-                                  trackId,
-                                  nanotick,
-                                  duration,
-                                  pitch,
-                                  velocity,
-                                  flags,
-                                  clipVersion,
-                                  recordUndo,
-                                  noteIdOverride);
+      if (isNoteOff) {
+        result = daw::endNoteInColumn(runtime->track.clip,
+                                      trackId,
+                                      nanotick,
+                                      column,
+                                      clipVersion,
+                                      recordUndo);
+        if (!result) {
+          // Nothing was sounding, so the edit is a no-op — but the UI already
+          // reserved a clip version for it.
+          consumeClipVersionForNoOp();
+        }
+      } else {
+        result = daw::addNoteToClip(runtime->track.clip,
+                                    trackId,
+                                    nanotick,
+                                    duration,
+                                    pitch,
+                                    velocity,
+                                    flags,
+                                    clipVersion,
+                                    recordUndo,
+                                    spanEnd,
+                                    noteIdOverride);
+      }
       if (result) {
         snapshot = buildClipSnapshot(runtime->track.clip);
       }
@@ -2658,12 +2685,29 @@ struct TrackRuntime {
     event.payload.chord.spreadNanoticks = spreadNanoticks;
     event.payload.chord.humanizeTiming = humanizeTiming;
     event.payload.chord.humanizeVelocity = humanizeVelocity;
-    event.payload.chord.durationNanoticks = duration;
     std::shared_ptr<const ClipSnapshot> snapshot;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       runtime->track.clip.removeChordAt(nanotick, column);
       runtime->track.clip.removeNoteAt(nanotick, column);
+      // A chord is a length-bearing event in the column, exactly like a note:
+      // it ends whatever was sounding here, and its own length is stored, not
+      // inferred at playback.
+      if (daw::MusicalEvent* sounding =
+              runtime->track.clip.soundingEventInColumn(nanotick, column)) {
+        daw::MusicalClip::truncateEventTo(*sounding, nanotick);
+      }
+      if (duration == 0) {
+        uint64_t spanEnd = loopEndNanotick.load(std::memory_order_acquire);
+        if (spanEnd <= loopStartNanotick.load(std::memory_order_acquire)) {
+          spanEnd = patternTicks;
+        }
+        const auto next =
+            runtime->track.clip.nextEventTickInColumn(nanotick, column);
+        const uint64_t end = next.value_or(spanEnd);
+        duration = end > nanotick ? end - nanotick : 0;
+      }
+      event.payload.chord.durationNanoticks = duration;
       runtime->track.clip.addEvent(std::move(event));
       snapshot = buildClipSnapshot(runtime->track.clip);
     }
@@ -5320,12 +5364,12 @@ struct TrackRuntime {
             }
 
             const uint8_t column = event->payload.note.column;
-            if (event->payload.note.velocity == 0 &&
-                event->payload.note.durationNanoticks == 0) {
-              cutActiveNoteInColumn(column, eventSample, currentBlockId);
+            // Length is stored, so playback infers nothing: no OFF sentinels
+            // to interpret and no cut-on-next. A note sounds for exactly the
+            // duration it carries, which is what the editor shows.
+            if (event->payload.note.durationNanoticks == 0) {
               continue;
             }
-            cutActiveNoteInColumn(column, eventSample, currentBlockId);
 
             daw::ResolvedPitch resolved =
                 daw::resolvedPitchFromCents(static_cast<double>(event->payload.note.pitch) * 100.0);

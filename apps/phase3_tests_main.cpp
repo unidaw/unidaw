@@ -490,7 +490,7 @@ bool runUndoStackTest() {
   std::atomic<uint32_t> clipVersion{0};
 
   const auto addResult = daw::addNoteToClip(
-      clip, 1, 120, 240, 60, 90, 0, clipVersion, true);
+      clip, 1, 120, 240, 60, 90, 0, clipVersion, true, /*spanEnd=*/3840000);
   if (!addResult.undo || addResult.undo->type != daw::UndoType::RemoveNote) {
     std::cerr << "Undo entry missing for add note" << std::endl;
     return false;
@@ -519,11 +519,96 @@ bool runUndoStackTest() {
   }
   daw::addNoteToClip(
       clip, undo.trackId, undo.nanotick, undo.duration,
-      undo.pitch, undo.velocity, undo.flags, clipVersion, false);
+      undo.pitch, undo.velocity, undo.flags, clipVersion, false,
+      /*spanEnd=*/3840000);
   if (clip.events().size() != 1) {
     std::cerr << "Undo add note failed" << std::endl;
     return false;
   }
+  return true;
+}
+
+// Duration is the single stored truth: a written note resolves its length to
+// the next event, cut-on-next truncates the previous note at edit time, and an
+// OFF gesture shortens whatever is sounding rather than storing a sentinel.
+bool runNoteDurationTest() {
+  auto noteAt = [](const daw::MusicalClip& clip, uint64_t tick) -> const daw::MusicalEvent* {
+    for (const auto& e : clip.events()) {
+      if (e.type == daw::MusicalEventType::Note && e.nanotickOffset == tick) {
+        return &e;
+      }
+    }
+    return nullptr;
+  };
+  const uint64_t Q = 960000;
+  const uint64_t span = 4 * Q;
+
+  // A lone note with unspecified length runs to the span end.
+  {
+    daw::MusicalClip clip;
+    std::atomic<uint32_t> ver{0};
+    daw::addNoteToClip(clip, 0, 0, 0, 60, 100, 0, ver, false, span);
+    const auto* n = noteAt(clip, 0);
+    if (!n || n->payload.note.durationNanoticks != span) {
+      std::cerr << "lone note should fill the span, got "
+                << (n ? n->payload.note.durationNanoticks : 0) << std::endl;
+      return false;
+    }
+  }
+
+  // A second note in the same column truncates the first at edit time.
+  {
+    daw::MusicalClip clip;
+    std::atomic<uint32_t> ver{0};
+    daw::addNoteToClip(clip, 0, 0, 0, 60, 100, 0, ver, false, span);
+    daw::addNoteToClip(clip, 0, Q, 0, 62, 100, 0, ver, false, span);
+    const auto* first = noteAt(clip, 0);
+    const auto* second = noteAt(clip, Q);
+    if (!first || first->payload.note.durationNanoticks != Q) {
+      std::cerr << "first note should be cut to one beat, got "
+                << (first ? first->payload.note.durationNanoticks : 0) << std::endl;
+      return false;
+    }
+    if (!second || second->payload.note.durationNanoticks != span - Q) {
+      std::cerr << "second note should run to the span end" << std::endl;
+      return false;
+    }
+  }
+
+  // An OFF gesture shortens the sounding note and stores no event of its own.
+  {
+    daw::MusicalClip clip;
+    std::atomic<uint32_t> ver{0};
+    daw::addNoteToClip(clip, 0, 0, 0, 60, 100, 0, ver, false, span);
+    auto off = daw::endNoteInColumn(clip, 0, Q, 0, ver, false);
+    if (!off) {
+      std::cerr << "OFF over a sounding note should return a result" << std::endl;
+      return false;
+    }
+    if (clip.events().size() != 1) {
+      std::cerr << "OFF must not store an event; size=" << clip.events().size()
+                << std::endl;
+      return false;
+    }
+    const auto* n = noteAt(clip, 0);
+    if (!n || n->payload.note.durationNanoticks != Q) {
+      std::cerr << "OFF should cut the note to one beat, got "
+                << (n ? n->payload.note.durationNanoticks : 0) << std::endl;
+      return false;
+    }
+  }
+
+  // An OFF over empty column is a no-op that stores nothing.
+  {
+    daw::MusicalClip clip;
+    std::atomic<uint32_t> ver{0};
+    auto off = daw::endNoteInColumn(clip, 0, Q, 0, ver, false);
+    if (off || clip.events().size() != 0) {
+      std::cerr << "OFF over nothing must be a no-op" << std::endl;
+      return false;
+    }
+  }
+
   return true;
 }
 
@@ -919,6 +1004,7 @@ int runAllTests(const std::string& pluginPath) {
       {"snapshot", [](const std::string&) { return runSnapshotTest(); }},
       {"clip_param_event", [](const std::string&) { return runClipParamEventTest(); }},
       {"undo_stack", [](const std::string&) { return runUndoStackTest(); }},
+      {"note_duration", [](const std::string&) { return runNoteDurationTest(); }},
       {"resync_mismatch", [](const std::string&) { return runResyncMismatchTest(); }},
       {"pulse_full", runPulseFullTest},
       {"note_off_full", runNoteOffFullTest},
@@ -961,7 +1047,8 @@ int main(int argc, char** argv) {
       testName != "chord_expansion" && testName != "humanize_determinism" &&
       testName != "harmony_order" && testName != "snapshot" &&
       testName != "clip_param_event" &&
-      testName != "undo_stack" && testName != "resync_mismatch" &&
+      testName != "undo_stack" && testName != "note_duration" &&
+      testName != "resync_mismatch" &&
       testName != "pulse_full" && testName != "note_off_full" &&
       testName != "resurrection_full" && testName != "composition_full" &&
       testName != "all") {
@@ -998,6 +1085,9 @@ int main(int argc, char** argv) {
   }
   if (testName == "undo_stack") {
     return runUndoStackTest() ? 0 : 1;
+  }
+  if (testName == "note_duration") {
+    return runNoteDurationTest() ? 0 : 1;
   }
   if (testName == "resync_mismatch") {
     return runResyncMismatchTest() ? 0 : 1;
