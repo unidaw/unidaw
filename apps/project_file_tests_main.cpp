@@ -289,7 +289,10 @@ int main() {
     }
     require(daw::eventIdAuthor(latest) == daw::kAuthorHuman,
             "a foreign id changed our author");
-    require(daw::eventIdCounter(latest) < 9999,
+    // Exactly 3: two human notes were allocated before the foreign one, which
+    // must consume nothing from this clip's counter. `< 9999` would have
+    // passed even if the counter had leaked to 9998.
+    require(daw::eventIdCounter(latest) == 3,
             "a foreign author's counter leaked into ours");
   }
 
