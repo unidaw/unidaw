@@ -240,12 +240,30 @@ fn paint_tracker_canvas(
     line_x += HARMONY_COLUMN_WIDTH;
     window.paint_quad(fill(line_bounds(line_x), harmony_border_color));
 
+    // A track boundary is drawn heavier than the column separators inside a
+    // track, so adjacent single-column tracks read as separate tracks rather
+    // than one undifferentiated grid.
+    let track_border = |x: f32| Bounds::new(
+        Point::new(px(x), px(origin_y)),
+        gpui::size(px(2.0), px(grid_height)),
+    );
     for columns in track_columns.iter() {
-        for _ in 0..*columns {
+        if *columns == 0 {
+            continue;
+        }
+        // Heavier line at the track's left edge.
+        window.paint_quad(fill(track_border(line_x), harmony_border_color));
+        for i in 0..*columns {
             line_x += COLUMN_WIDTH;
-            window.paint_quad(fill(line_bounds(line_x), border_color));
+            // Light separators only between columns within the track, not at
+            // its right edge (the next track's heavy line sits there).
+            if i + 1 < *columns {
+                window.paint_quad(fill(line_bounds(line_x), border_color));
+            }
         }
     }
+    // Close the last track's right edge.
+    window.paint_quad(fill(track_border(line_x), harmony_border_color));
 }
 
 fn time_label_for_nanotick(nanotick: u64) -> SharedString {
@@ -632,9 +650,11 @@ impl EngineView {
         const HARM_W: f32 = HARMONY_COLUMN_WIDTH;
         const COL_W: f32 = COLUMN_WIDTH;
         const FONT: f32 = TRACKER_FONT_SIZE_PX;
+        const HEADER_H: f32 = HEADER_HEIGHT;
         let total_columns: usize = key.track_columns.iter().sum();
         let width = TIME_W + HARM_W + COL_W * total_columns as f32 + 1.0;
-        let height = ROW_H * VISIBLE_ROWS as f32 + 1.0;
+        let body_top = HEADER_H;
+        let height = HEADER_H + ROW_H * VISIBLE_ROWS as f32 + 1.0;
         let text_y = ROW_H - 4.0; // baseline near the bottom of the row
 
         let mut svg = String::new();
@@ -648,11 +668,40 @@ impl EngineView {
         };
         let escape = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
 
+        // Header row: TIME, HARM, T1/T2..., matching render_tracker_header.
+        svg.push_str(&rect(0.0, 0.0, width, HEADER_H, "#1a1f2b"));
+        let header_baseline = HEADER_H / 2.0 + FONT / 3.0;
+        svg.push_str(&format!(
+            "<text x=\"8\" y=\"{header_baseline:.1}\" fill=\"#b0bac4\" \
+             font-weight=\"bold\">TIME</text>\n"
+        ));
+        svg.push_str(&rect(TIME_W, 0.0, HARM_W, HEADER_H, "#151922"));
+        svg.push_str(&format!(
+            "<text x=\"{:.1}\" y=\"{header_baseline:.1}\" fill=\"#7fa0c0\" \
+             font-weight=\"bold\">HARM</text>\n",
+            TIME_W + 8.0
+        ));
+        {
+            let mut hx = TIME_W + HARM_W;
+            for (track, &columns) in key.track_columns.iter().enumerate() {
+                if columns == 0 {
+                    continue;
+                }
+                svg.push_str(&format!(
+                    "<text x=\"{:.1}\" y=\"{header_baseline:.1}\" fill=\"#a0aab4\" \
+                     font-weight=\"bold\">T{}</text>\n",
+                    hx + 6.0,
+                    track + 1
+                ));
+                hx += COL_W * columns as f32;
+            }
+        }
+
         for row_index in 0..VISIBLE_ROWS {
             let Some(row) = cache.rows.get(row_index) else {
                 continue;
             };
-            let row_top = row_index as f32 * ROW_H;
+            let row_top = body_top + row_index as f32 * ROW_H;
             let row_end = row.row_start.saturating_add(key.row_nanoticks.max(1));
             let is_cursor_row = cursor_row >= 0 && cursor_row as usize == row_index;
             let is_playhead_row = playhead >= row.row_start && playhead < row_end;
@@ -725,17 +774,25 @@ impl EngineView {
             }
         }
 
-        // Column separators.
+        // Separators: harmony borders, then a heavier line at each track
+        // boundary with light separators only between columns within a track.
         let mut line_x = TIME_W;
         svg.push_str(&rect(line_x, 0.0, 1.0, height, "#3a4555"));
         line_x += HARM_W;
-        svg.push_str(&rect(line_x, 0.0, 1.0, height, "#3a4555"));
+        svg.push_str(&rect(line_x, 0.0, 2.0, height, "#3a4555"));
         for &columns in &key.track_columns {
-            for _ in 0..columns {
+            if columns == 0 {
+                continue;
+            }
+            svg.push_str(&rect(line_x, 0.0, 2.0, height, "#3a4555"));
+            for i in 0..columns {
                 line_x += COL_W;
-                svg.push_str(&rect(line_x, 0.0, 1.0, height, "#2a3545"));
+                if i + 1 < columns {
+                    svg.push_str(&rect(line_x, body_top, 1.0, height, "#2a3545"));
+                }
             }
         }
+        svg.push_str(&rect(line_x, 0.0, 2.0, height, "#3a4555"));
 
         svg.push_str("</svg>\n");
         svg
