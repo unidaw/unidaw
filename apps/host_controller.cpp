@@ -331,15 +331,72 @@ bool HostController::sendProcessBlock(uint32_t blockId,
   request.ppqPositionOfLastBarStart = transport.ppqPositionOfLastBarStart;
   request.timeSigNumerator = transport.timeSigNumerator;
   request.timeSigDenominator = transport.timeSigDenominator;
+  std::lock_guard<std::mutex> lock(socketMutex_);
   return sendMessageNonBlocking(socketFd_,
                                 ControlMessageType::ProcessBlock,
                                 &request,
                                 sizeof(request));
 }
 
+bool HostController::requestPluginState(uint32_t pluginIndex,
+                                        std::vector<uint8_t>& out) {
+  out.clear();
+  std::lock_guard<std::mutex> lock(socketMutex_);
+  if (socketFd_ < 0) {
+    return false;
+  }
+  StateHeader request{};
+  request.pluginIndex = pluginIndex;
+  request.byteCount = 0;
+  if (!sendMessage(socketFd_, ControlMessageType::GetState, &request, sizeof(request))) {
+    return false;
+  }
+
+  ControlHeader header;
+  if (!recvHeader(socketFd_, header)) {
+    return false;
+  }
+  if (header.type != static_cast<uint16_t>(ControlMessageType::GetState) ||
+      header.size < sizeof(StateHeader)) {
+    return false;
+  }
+  std::vector<uint8_t> payload(header.size);
+  if (!readAll(socketFd_, payload.data(), payload.size())) {
+    return false;
+  }
+  StateHeader response{};
+  std::memcpy(&response, payload.data(), sizeof(response));
+  const size_t available = payload.size() - sizeof(StateHeader);
+  const size_t count = std::min<size_t>(response.byteCount, available);
+  out.assign(payload.begin() + sizeof(StateHeader),
+             payload.begin() + sizeof(StateHeader) + count);
+  return true;
+}
+
+bool HostController::sendPluginState(uint32_t pluginIndex,
+                                     const std::vector<uint8_t>& data) {
+  std::lock_guard<std::mutex> lock(socketMutex_);
+  if (socketFd_ < 0) {
+    return false;
+  }
+  std::vector<uint8_t> payload(sizeof(StateHeader) + data.size());
+  StateHeader header{};
+  header.pluginIndex = pluginIndex;
+  header.byteCount = static_cast<uint32_t>(data.size());
+  std::memcpy(payload.data(), &header, sizeof(header));
+  if (!data.empty()) {
+    std::memcpy(payload.data() + sizeof(header), data.data(), data.size());
+  }
+  return sendMessage(socketFd_,
+                     ControlMessageType::SetState,
+                     payload.data(),
+                     payload.size());
+}
+
 bool HostController::sendOpenEditor(uint32_t pluginIndex) {
   OpenEditorRequest request;
   request.pluginIndex = pluginIndex;
+  std::lock_guard<std::mutex> lock(socketMutex_);
   return sendMessage(socketFd_, ControlMessageType::OpenEditor, &request, sizeof(request));
 }
 
@@ -347,10 +404,12 @@ bool HostController::sendSetBypass(uint32_t pluginIndex, bool bypass) {
   SetBypassRequest request;
   request.pluginIndex = pluginIndex;
   request.bypass = bypass ? 1u : 0u;
+  std::lock_guard<std::mutex> lock(socketMutex_);
   return sendMessage(socketFd_, ControlMessageType::SetBypass, &request, sizeof(request));
 }
 
 bool HostController::sendShutdown() {
+  std::lock_guard<std::mutex> lock(socketMutex_);
   return sendMessage(socketFd_, ControlMessageType::Shutdown, nullptr, 0);
 }
 

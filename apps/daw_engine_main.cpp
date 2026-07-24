@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <atomic>
 #include <array>
 #include <map>
@@ -2024,6 +2025,18 @@ struct TrackRuntime {
     return true;
   };
 
+  // Plugin state sits in a sibling directory rather than inside the JSON:
+  // blobs are opaque and often large, and keeping them out keeps the document
+  // diffable. The container shape (this, or the zip PROJECT_PERSISTENCE.md
+  // describes) is still an open decision.
+  auto pluginStateDir = [](const std::string& projectPath) -> std::filesystem::path {
+    std::filesystem::path p(projectPath);
+    return p.parent_path() / (p.stem().string() + ".state");
+  };
+  auto pluginStateFileName = [](uint32_t trackId, uint32_t deviceId) -> std::string {
+    return "t" + std::to_string(trackId) + "_d" + std::to_string(deviceId) + ".bin";
+  };
+
   // Snapshots the live session into a ProjectDocument and writes it. Each
   // track is copied under its own mutex so the document is consistent per
   // track without stalling audio behind one global lock.
@@ -2086,7 +2099,53 @@ struct TrackRuntime {
       }
       document.tracks.push_back(std::move(track));
     }
-    return daw::saveProject(document, path, error);
+    if (!daw::saveProject(document, path, error)) {
+      return false;
+    }
+
+    // Opaque plugin state lives beside the document, one file per device so a
+    // blob is addressable by durable id rather than by position.
+    const std::filesystem::path stateDir = pluginStateDir(path);
+    std::error_code ec;
+    std::filesystem::create_directories(stateDir, ec);
+    if (ec) {
+      DAW_EVENT("project.state_dir_failed").field("dir", stateDir.string());
+      return true;  // The document itself is saved; state is best-effort.
+    }
+    for (auto* runtime : runtimes) {
+      std::vector<daw::Device> devices;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        devices = runtime->track.chain.devices;
+      }
+      uint32_t hostIndex = 0;
+      for (const auto& device : devices) {
+        if (device.kind != daw::DeviceKind::VstInstrument &&
+            device.kind != daw::DeviceKind::VstEffect) {
+          continue;
+        }
+        std::vector<uint8_t> blob;
+        bool ok = false;
+        {
+          std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+          ok = runtime->controller.requestPluginState(hostIndex, blob);
+        }
+        if (ok && !blob.empty()) {
+          const auto blobPath =
+              stateDir / pluginStateFileName(runtime->trackId, device.id);
+          std::ofstream out(blobPath, std::ios::binary | std::ios::trunc);
+          out.write(reinterpret_cast<const char*>(blob.data()),
+                    static_cast<std::streamsize>(blob.size()));
+        }
+        DAW_EVENT("project.state_captured")
+            .field("track", runtime->trackId)
+            .field("device", device.id)
+            .field("bytes", static_cast<uint64_t>(blob.size()))
+            .field("ok", ok);
+        hostIndex++;
+      }
+    }
+    return true;
   };
 
   // Restores the musical document: clips, harmony and per-track harmony
@@ -2156,6 +2215,69 @@ struct TrackRuntime {
       std::atomic_store_explicit(&runtime->clipSnapshot,
                                  snapshot,
                                  std::memory_order_release);
+    }
+
+    // Restore plugin state. Device chains are not rebuilt on load yet, so this
+    // only lands when the live chain still matches the saved one — which is the
+    // reopen-the-same-session case. Anything else is reported rather than
+    // pushed into the wrong plugin.
+    const std::filesystem::path stateDir = pluginStateDir(path);
+    for (const auto& source : document.tracks) {
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (source.trackId < tracks.size()) {
+          runtime = tracks[source.trackId].get();
+        }
+      }
+      if (!runtime) {
+        continue;
+      }
+      std::vector<daw::Device> liveDevices;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        liveDevices = runtime->track.chain.devices;
+      }
+      auto vstIds = [](const std::vector<daw::Device>& devices) {
+        std::vector<uint32_t> ids;
+        for (const auto& device : devices) {
+          if (device.kind == daw::DeviceKind::VstInstrument ||
+              device.kind == daw::DeviceKind::VstEffect) {
+            ids.push_back(device.id);
+          }
+        }
+        return ids;
+      };
+      const auto savedIds = vstIds(source.chain.devices);
+      const auto liveIds = vstIds(liveDevices);
+      if (savedIds != liveIds) {
+        DAW_EVENT("project.state_chain_mismatch")
+            .field("track", source.trackId)
+            .field("saved_plugins", static_cast<uint64_t>(savedIds.size()))
+            .field("live_plugins", static_cast<uint64_t>(liveIds.size()));
+        continue;
+      }
+      for (size_t hostIndex = 0; hostIndex < savedIds.size(); ++hostIndex) {
+        const auto blobPath =
+            stateDir / pluginStateFileName(source.trackId, savedIds[hostIndex]);
+        std::ifstream in(blobPath, std::ios::binary);
+        if (!in) {
+          continue;
+        }
+        std::vector<uint8_t> blob((std::istreambuf_iterator<char>(in)),
+                                  std::istreambuf_iterator<char>());
+        bool ok = false;
+        {
+          std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+          ok = runtime->controller.sendPluginState(
+              static_cast<uint32_t>(hostIndex), blob);
+        }
+        DAW_EVENT("project.state_restored")
+            .field("track", source.trackId)
+            .field("device", savedIds[hostIndex])
+            .field("bytes", static_cast<uint64_t>(blob.size()))
+            .field("ok", ok);
+      }
     }
 
     // The UI's mirror is now arbitrarily stale, so force a full resync rather

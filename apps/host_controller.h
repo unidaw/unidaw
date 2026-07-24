@@ -3,6 +3,7 @@
 #include <sys/types.h>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -62,6 +63,12 @@ class HostController {
                         uint16_t segmentStart = 0,
                         uint16_t segmentLength = 0,
                         const HostTransport& transport = HostTransport{});
+  // Blocking request/response over the control socket. Called from the UI
+  // thread during save; the producer thread may briefly wait on the socket
+  // mutex, which is acceptable for an explicit user action.
+  bool requestPluginState(uint32_t pluginIndex, std::vector<uint8_t>& out);
+  bool sendPluginState(uint32_t pluginIndex, const std::vector<uint8_t>& data);
+
   bool sendOpenEditor(uint32_t pluginIndex);
   bool sendSetBypass(uint32_t pluginIndex, bool bypass);
   bool sendShutdown();
@@ -79,6 +86,10 @@ class HostController {
   bool waitForSocket(const std::string& path, int attempts);
   void disconnectInternal(bool killHost);
 
+  // Serialises writes to the control socket. Both the render-ahead producer
+  // thread (ProcessBlock) and the UI thread (editor, bypass, state) write to
+  // it, and a request that expects a reply must not interleave with anything.
+  std::mutex socketMutex_;
   int socketFd_ = -1;
   int shmFd_ = -1;
   void* shmBase_ = nullptr;

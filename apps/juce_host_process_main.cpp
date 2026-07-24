@@ -743,6 +743,47 @@ void runControlLoop(HostState& state) {
             break;
           }
         }
+      } else if (type == daw::ControlMessageType::GetState) {
+        if (payload.size() >= sizeof(daw::StateHeader)) {
+          daw::StateHeader request{};
+          std::memcpy(&request, payload.data(), sizeof(request));
+          std::vector<uint8_t> blob;
+          {
+            std::lock_guard<std::mutex> lock(state.pluginsMutex);
+            if (request.pluginIndex < state.plugins.size() &&
+                state.plugins[request.pluginIndex].instance) {
+              blob = state.plugins[request.pluginIndex].instance->getState();
+            }
+          }
+          std::vector<uint8_t> reply(sizeof(daw::StateHeader) + blob.size());
+          daw::StateHeader responseHeader{};
+          responseHeader.pluginIndex = request.pluginIndex;
+          responseHeader.byteCount = static_cast<uint32_t>(blob.size());
+          std::memcpy(reply.data(), &responseHeader, sizeof(responseHeader));
+          if (!blob.empty()) {
+            std::memcpy(reply.data() + sizeof(responseHeader), blob.data(), blob.size());
+          }
+          if (!daw::sendMessage(state.clientFd,
+                                daw::ControlMessageType::GetState,
+                                reply.data(),
+                                reply.size())) {
+            break;
+          }
+        }
+      } else if (type == daw::ControlMessageType::SetState) {
+        if (payload.size() >= sizeof(daw::StateHeader)) {
+          daw::StateHeader request{};
+          std::memcpy(&request, payload.data(), sizeof(request));
+          const size_t available = payload.size() - sizeof(daw::StateHeader);
+          const size_t count = std::min<size_t>(request.byteCount, available);
+          std::vector<uint8_t> blob(payload.begin() + sizeof(daw::StateHeader),
+                                    payload.begin() + sizeof(daw::StateHeader) + count);
+          std::lock_guard<std::mutex> lock(state.pluginsMutex);
+          if (request.pluginIndex < state.plugins.size() &&
+              state.plugins[request.pluginIndex].instance) {
+            state.plugins[request.pluginIndex].instance->setState(blob);
+          }
+        }
       } else if (type == daw::ControlMessageType::Shutdown) {
         break;
       }

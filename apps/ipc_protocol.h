@@ -14,6 +14,16 @@ enum class ControlMessageType : uint16_t {
   Shutdown = 3,
   OpenEditor = 4,
   SetBypass = 5,
+  // Opaque plugin state. Payload is StateHeader followed by the blob; the
+  // reply to GetState reuses the same shape. Without these a chain edit
+  // restarts the host and the sound is gone.
+  GetState = 6,
+  SetState = 7,
+};
+
+struct StateHeader {
+  uint32_t pluginIndex = 0;
+  uint32_t byteCount = 0;
 };
 
 struct ControlHeader {

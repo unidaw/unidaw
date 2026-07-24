@@ -111,6 +111,16 @@ mod integration_tests {
 
         impl TestHarness {
             fn new(test_name: &str) -> anyhow::Result<Self> {
+                Self::new_inner(test_name, false)
+            }
+
+            /// Runs the engine with its default plugin loaded, so tests can
+            /// exercise anything that needs a real hosted plugin.
+            fn new_with_plugin(test_name: &str) -> anyhow::Result<Self> {
+                Self::new_inner(test_name, true)
+            }
+
+            fn new_inner(test_name: &str, with_plugin: bool) -> anyhow::Result<Self> {
                 let guard = test_lock();
                 let shm_name = {
                     use std::hash::{Hash, Hasher};
@@ -133,7 +143,13 @@ mod integration_tests {
                     cleanup_socket(&socket);
                 }
                 env::set_var("DAW_UI_SHM_NAME", &shm_name);
-                env::set_var("DAW_ENGINE_TEST_MODE", "1");
+                // Test mode clears the default plugin path, so a harness that
+                // needs a real hosted plugin (to exercise plugin state) opts out.
+                if with_plugin {
+                    env::remove_var("DAW_ENGINE_TEST_MODE");
+                } else {
+                    env::set_var("DAW_ENGINE_TEST_MODE", "1");
+                }
                 env::set_var("DAW_HOST_SOCKET_WAIT_ATTEMPTS", "500");
                 env::set_var("DAW_HOST_SOCKET_PREFIX", &socket_prefix);
                 reset_ui_counters();
@@ -1724,6 +1740,46 @@ mod integration_tests {
                 ));
             }
             // Shared dir; other tests use different project names.
+            Ok(())
+        }
+
+        #[test]
+        fn test_plugin_state_is_captured_and_restored() -> anyhow::Result<()> {
+            // Opaque plugin state has to survive leaving the host process and
+            // coming back. The bundled identity plugin carries a gain float, so
+            // a non-empty blob proves the GetState/SetState path end to end.
+            let dir = project_dir();
+            let state_dir = dir.join("plugstate.uniproj.state");
+            let _ = std::fs::remove_dir_all(&state_dir);
+
+            {
+                let mut harness = TestHarness::new_with_plugin("plugin_state_save")?;
+                send_project_command(&mut harness, UiCommandType::SaveProject, "plugstate");
+                harness.pump(Duration::from_millis(800));
+            }
+
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !state_dir.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(50));
+            }
+            let blobs: Vec<_> = std::fs::read_dir(&state_dir)
+                .with_context(|| format!("no state dir at {}", state_dir.display()))?
+                .filter_map(Result::ok)
+                .collect();
+            assert!(!blobs.is_empty(), "no plugin state was captured");
+            for blob in &blobs {
+                let len = blob.metadata()?.len();
+                assert!(len > 0, "{:?} is empty", blob.file_name());
+            }
+
+            {
+                // Fresh engine and a fresh host process: the state must come
+                // back across a process boundary, not just within one session.
+                let mut harness = TestHarness::new_with_plugin("plugin_state_load")?;
+                send_project_command(&mut harness, UiCommandType::LoadProject, "plugstate");
+                harness.pump(Duration::from_millis(800));
+                harness.assert_engine_alive()?;
+            }
             Ok(())
         }
 
