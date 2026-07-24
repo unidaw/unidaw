@@ -78,6 +78,7 @@ add_executable(daw_engine
   apps/patcher_preset.cpp
   apps/patcher_abi.cpp
   apps/plugin_cache.cpp
+  apps/event_log.cpp
   apps/project_file.cpp
   apps/harmony_timeline.cpp
   apps/scale_library.cpp
@@ -208,6 +209,7 @@ endif()
 
 add_executable(project_file_tests
   apps/project_file_tests_main.cpp
+  apps/event_log.cpp
   apps/project_file.cpp
   apps/device_chain.cpp
 )

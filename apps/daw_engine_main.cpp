@@ -36,6 +36,7 @@
 #include "apps/patcher_graph.h"
 #include "apps/patcher_preset.h"
 #include "apps/patcher_preset_library.h"
+#include "apps/event_log.h"
 #include "apps/project_file.h"
 #include "apps/device_chain.h"
 #include "apps/modulation.h"
@@ -2128,10 +2129,12 @@ struct TrackRuntime {
       return true;
     }
     emitUiDiff(diffPayload);
-    std::cerr << "UI: base clip version mismatch (base " << baseVersion
-              << ", current " << current << ", cmd "
-              << static_cast<uint16_t>(commandType)
-              << ", track " << trackId << ") - resync requested" << std::endl;
+    DAW_EVENT("clip.version_mismatch")
+        .field("base", baseVersion)
+        .field("current", current)
+        .field("command", static_cast<uint32_t>(commandType))
+        .field("track", trackId)
+        .field("action", "resync_requested");
     return false;
   };
 
@@ -2145,10 +2148,11 @@ struct TrackRuntime {
     diffPayload.diffType = static_cast<uint16_t>(daw::UiHarmonyDiffType::ResyncNeeded);
     diffPayload.harmonyVersion = current;
     emitHarmonyDiff(diffPayload);
-    std::cerr << "UI: base harmony version mismatch (base " << baseVersion
-              << ", current " << current << ", cmd "
-              << static_cast<uint16_t>(commandType)
-              << ") - resync requested" << std::endl;
+    DAW_EVENT("harmony.version_mismatch")
+        .field("base", baseVersion)
+        .field("current", current)
+        .field("command", static_cast<uint32_t>(commandType))
+        .field("action", "resync_requested");
     return false;
   };
 
@@ -2236,9 +2240,11 @@ struct TrackRuntime {
       }
     }
     if (!result) {
-      std::cerr << "UI: RemoveNote - note not found (track " << trackId
-                << ", nanotick " << nanotick << ", pitch " << static_cast<int>(pitch)
-                << ")" << std::endl;
+      DAW_EVENT("clip.remove_note_missing")
+          .field("track", trackId)
+          .field("nanotick", nanotick)
+          .field("pitch", static_cast<uint32_t>(pitch))
+          .field("action", "version_consumed");
       consumeClipVersionForNoOp();
       return false;
     }
@@ -3152,17 +3158,17 @@ struct TrackRuntime {
           std::filesystem::path(dir) / (name + ".uniproj.json");
       std::string error;
       if (commandType == daw::UiCommandType::SaveProject) {
-        if (saveProjectToPath(path.string(), &error)) {
-          std::cerr << "UI: Saved project " << path.string() << std::endl;
-        } else {
-          std::cerr << "UI: SaveProject failed - " << error << std::endl;
-        }
+        const bool ok = saveProjectToPath(path.string(), &error);
+        DAW_EVENT("project.save")
+            .field("path", path.string())
+            .field("ok", ok)
+            .field("error", ok ? std::string() : error);
       } else {
-        if (loadProjectFromPath(path.string(), &error)) {
-          std::cerr << "UI: Loaded project " << path.string() << std::endl;
-        } else {
-          std::cerr << "UI: LoadProject failed - " << error << std::endl;
-        }
+        const bool ok = loadProjectFromPath(path.string(), &error);
+        DAW_EVENT("project.load")
+            .field("path", path.string())
+            .field("ok", ok)
+            .field("error", ok ? std::string() : error);
       }
       return;
     }
@@ -3681,12 +3687,19 @@ struct TrackRuntime {
       daw::UiEditBatchEntry editBatch{};
       bool handled = false;
       while (daw::uiEditRingPop(ringUiEdit, editBatch)) {
-        if (uiDebugEnabled()) {
-          std::cerr << "UI: received edit batch id " << editBatch.batchId
-                    << " ops " << editBatch.opCount << std::endl;
-        }
         const uint32_t opCount =
             std::min<uint32_t>(editBatch.opCount, daw::kUiEditBatchMaxOps);
+        if (opCount != editBatch.opCount) {
+          // Only reachable from a malformed or mismatched producer.
+          DAW_EVENT("edit_ring.op_count_clamped")
+              .field("batch", editBatch.batchId)
+              .field("claimed", editBatch.opCount)
+              .field("applied", opCount);
+        } else if (uiDebugEnabled()) {
+          DAW_EVENT("edit_ring.batch")
+              .field("batch", editBatch.batchId)
+              .field("ops", opCount);
+        }
         for (uint32_t i = 0; i < opCount; ++i) {
           handleUiEntry(editBatch.ops[i]);
         }
