@@ -604,6 +604,143 @@ impl EngineView {
     /// exactly as it would on screen. A cell taken from the optimistic overlay
     /// is suffixed with `*`, so a snapshot distinguishes an edit the engine has
     /// confirmed from one still in flight.
+    /// Renders the tracker viewport to SVG, from the same TrackerCache and
+    /// fast overlay the GPUI canvas paints, using the same colours and column
+    /// geometry. This is a visual feedback loop that needs no window and no
+    /// screen-recording permission: convert the SVG to PNG and look at it.
+    ///
+    /// It reproduces content, layout, cursor, playhead, harmony and OFF markers
+    /// faithfully; it cannot catch a bug that lives only in GPUI's own paint
+    /// path (a mistyped colour constant there), because it mirrors those
+    /// constants rather than sharing them.
+    pub fn render_tracker_svg(&mut self) -> String {
+        let cursor_row = self.cursor_view_row();
+        let cursor_col = self.cursor_col;
+        let harmony_focus = self.harmony_focus;
+        let playhead = self.snapshot.ui_global_nanotick_playhead;
+        let Some(cache) = self.tracker_cache() else {
+            return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" \
+                    height=\"20\"><text x=\"4\" y=\"14\" fill=\"#c00\">clip store \
+                    unavailable</text></svg>"
+                .to_string();
+        };
+        let overlay = self.fast_overlay_grid(&cache.key);
+        let key = &cache.key;
+
+        const ROW_H: f32 = ROW_HEIGHT;
+        const TIME_W: f32 = TIME_COLUMN_WIDTH;
+        const HARM_W: f32 = HARMONY_COLUMN_WIDTH;
+        const COL_W: f32 = COLUMN_WIDTH;
+        const FONT: f32 = TRACKER_FONT_SIZE_PX;
+        let total_columns: usize = key.track_columns.iter().sum();
+        let width = TIME_W + HARM_W + COL_W * total_columns as f32 + 1.0;
+        let height = ROW_H * VISIBLE_ROWS as f32 + 1.0;
+        let text_y = ROW_H - 4.0; // baseline near the bottom of the row
+
+        let mut svg = String::new();
+        svg.push_str(&format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" \
+             height=\"{height}\" font-family=\"monospace\" font-size=\"{FONT}\">\n"
+        ));
+        // A rect helper and an escaped-text helper.
+        let rect = |x: f32, y: f32, w: f32, h: f32, fill: &str| {
+            format!("<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{w:.1}\" height=\"{h:.1}\" fill=\"{fill}\"/>\n")
+        };
+        let escape = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+
+        for row_index in 0..VISIBLE_ROWS {
+            let Some(row) = cache.rows.get(row_index) else {
+                continue;
+            };
+            let row_top = row_index as f32 * ROW_H;
+            let row_end = row.row_start.saturating_add(key.row_nanoticks.max(1));
+            let is_cursor_row = cursor_row >= 0 && cursor_row as usize == row_index;
+            let is_playhead_row = playhead >= row.row_start && playhead < row_end;
+
+            let row_bg = if is_playhead_row {
+                "#1a2535"
+            } else if is_cursor_row {
+                "#1a2228"
+            } else if row_index % 4 == 0 {
+                "#15191f"
+            } else {
+                "#12161b"
+            };
+            svg.push_str(&rect(0.0, row_top, width, ROW_H, row_bg));
+
+            // Time column.
+            svg.push_str(&format!(
+                "<text x=\"6\" y=\"{:.1}\" fill=\"#6a7a8a\">{}</text>\n",
+                row_top + text_y,
+                escape(row.time_label.as_ref())
+            ));
+
+            // Harmony column.
+            let harm_bg = if is_cursor_row && harmony_focus { "#3a4a5a" } else { "#151922" };
+            svg.push_str(&rect(TIME_W, row_top, HARM_W, ROW_H, harm_bg));
+            if let Some(label) = row.harmony_label.as_ref() {
+                svg.push_str(&format!(
+                    "<text x=\"{:.1}\" y=\"{:.1}\" fill=\"#7fa0c0\">{}</text>\n",
+                    TIME_W + 6.0,
+                    row_top + text_y,
+                    escape(label.as_ref())
+                ));
+            }
+
+            // Note cells, overlay taking precedence exactly as the canvas does.
+            let overlay_row = overlay.get(row_index);
+            let mut cell_x = TIME_W + HARM_W;
+            for (track, &columns) in key.track_columns.iter().enumerate() {
+                for column in 0..columns {
+                    let is_cursor_cell = is_cursor_row
+                        && !harmony_focus
+                        && track == self.focused_track_index
+                        && column == cursor_col;
+                    if is_cursor_cell {
+                        svg.push_str(&rect(cell_x, row_top, COL_W, ROW_H, "#3a4a5a"));
+                    }
+                    let overlay_cell = overlay_row
+                        .and_then(|tracks| tracks.get(track))
+                        .and_then(|cells| cells.get(column))
+                        .and_then(|cell| cell.as_ref());
+                    let text = if let Some(FastCell::Label(label)) = overlay_cell {
+                        Some(label.to_string())
+                    } else {
+                        row.cell_labels
+                            .get(track)
+                            .and_then(|cells| cells.get(column))
+                            .and_then(|cell| cell.as_ref())
+                            .map(|label| label.to_string())
+                    };
+                    if let Some(text) = text {
+                        svg.push_str(&format!(
+                            "<text x=\"{:.1}\" y=\"{:.1}\" fill=\"#c0d0e0\">{}</text>\n",
+                            cell_x + 4.0,
+                            row_top + text_y,
+                            escape(&text)
+                        ));
+                    }
+                    cell_x += COL_W;
+                }
+            }
+        }
+
+        // Column separators.
+        let mut line_x = TIME_W;
+        svg.push_str(&rect(line_x, 0.0, 1.0, height, "#3a4555"));
+        line_x += HARM_W;
+        svg.push_str(&rect(line_x, 0.0, 1.0, height, "#3a4555"));
+        for &columns in &key.track_columns {
+            for _ in 0..columns {
+                line_x += COL_W;
+                svg.push_str(&rect(line_x, 0.0, 1.0, height, "#2a3545"));
+            }
+        }
+
+        svg.push_str("</svg>\n");
+        svg
+    }
+
     pub fn render_tracker_text(&mut self) -> String {
         let cursor_row = self.cursor_view_row();
         let cursor_track = self.focused_track_index;

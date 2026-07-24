@@ -690,6 +690,21 @@ mod integration_tests {
                 self.view.render_tracker_text()
             }
 
+            /// Writes an SVG of the tracker to tests/snapshots/<name>.svg for
+            /// visual inspection (convert with tools/svg2png.sh). Returns the
+            /// path so a caller can convert and view it.
+            fn write_tracker_svg(&mut self, name: &str) -> anyhow::Result<std::path::PathBuf> {
+                let svg = self.view.render_tracker_svg();
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/snapshots")
+                    .join(format!("{name}.svg"));
+                if let Some(parent) = path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&path, svg)?;
+                Ok(path)
+            }
+
             fn entry_count_at_row(&self, track: usize, row: i64) -> usize {
                 let nanotick = self.nanotick_for_row(row);
                 self.view.entries_for_row(nanotick, track).len()
@@ -1824,6 +1839,32 @@ mod integration_tests {
                 assert!(json.contains(pitch), "missing {pitch} in saved project:\n{json}");
             }
             // Shared dir; other tests use different project names.
+            Ok(())
+        }
+
+        #[test]
+        fn test_tracker_svg_snapshot() -> anyhow::Result<()> {
+            // Produces a real image of the tracker for visual review, using the
+            // same cache the GPUI canvas paints. Not an assertion — it is the
+            // eyes-on feedback loop.
+            let mut harness = TestHarness::new("tracker_svg")?;
+            harness.view.cursor_nanotick = 0;
+            harness.view.scroll_nanotick_offset = 0;
+            harness.view.focused_track_index = 0;
+            harness.view.cursor_col = 0;
+            harness.view.follow_playhead = false;
+            harness.wait_for_track_count(2, Duration::from_secs(1))?;
+
+            for key in ["q", "w", "e", "r"] {
+                harness.press_key(key);
+            }
+            harness.view.focus_note_cell(0, 1, 0, &mut harness.notify);
+            harness.press_key("1");
+            harness.pump(Duration::from_millis(500));
+            harness.view.focus_note_cell(2, 0, 0, &mut harness.notify);
+
+            let path = harness.write_tracker_svg("tracker_demo")?;
+            assert!(path.exists(), "svg not written");
             Ok(())
         }
 
