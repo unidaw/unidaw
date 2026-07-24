@@ -214,6 +214,35 @@ Patcher engine backend:
 - Patcher: `patcher_resolution`, `patcher_graph_edits`
 - UI integration (Rust): `cargo test -p daw-app --test engine_integration` (may skip track SHM-dependent checks if `/daw_engine_shared` is unavailable; latency checks use optimistic UI/pending state).
 
+## Verification tools (feedback loops)
+Prefer these over guessing; each turns an assertion about the running system
+into something observable.
+
+- **Tracker as text** — `EngineView::render_tracker_text()` renders the grid
+  (cursor, playhead, overlay, OFF markers) as text from the same cache the
+  canvas paints. Golden snapshots live in `ui/daw-app/tests/snapshots/*.txt`;
+  run with `UPDATE_SNAPSHOTS=1` to accept an intentional change.
+- **Tracker as image** — `EngineView::render_tracker_svg()` renders the same
+  cache to SVG with the real colours and geometry. A test writes it under
+  `tests/snapshots/*.svg`; `tools/svg2png.sh <in.svg>` converts to PNG to look
+  at. It mirrors GPUI's paint constants rather than sharing them, so it catches
+  content/layout/colour bugs but not a bug living only in GPUI's paint path.
+- **Audio** — `DAW_CAPTURE_WAV=<path> DAW_CAPTURE_SECONDS=<n>` records the
+  master output (a ring keeping the most recent N seconds; survives slow plugin
+  loads). `tools/perceptual.py <wav> [--expect-audio|--expect-silence]` reports
+  roughness, spectral flux, centroid, level, pitch movement etc. Use a real
+  VSTi from the plugin cache — the bundled Identity plugin is a passthrough and
+  synthesises nothing.
+- **Control surface** — `ui/daw-cli` attaches to a running engine's SHM:
+  `get transport|tracks|clip`, `do note|notes|chord|harmony|mixer|save|load|play`.
+  Writes go through the same versioned `UiCommand` ring the UI uses; `do` needs
+  `--force` because that ring is single-producer. Write a phrase with
+  `do notes --pitches ...`, not a shell loop (each process reads the clip
+  version once, so a loop loses all but the first note).
+- **Structured events** — `DAW_EVENT_LOG=<path>` writes one JSON object per
+  engine decision (version mismatch, plugin resolution, save/load, mixer,
+  capture). Query it rather than grepping prose.
+
 ## Coding constraints
 - Keep JUCE confined to `platform_juce/`.
 - Use ASCII by default.
