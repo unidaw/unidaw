@@ -318,6 +318,31 @@ class JuceAudioBackend final : public IAudioBackend,
   std::string deviceName_;
 };
 
+// Supplies musical position to a hosted plugin. The engine owns the transport,
+// so this is a plain holder the host writes before each process call rather
+// than a clock of its own.
+class EnginePlayHead final : public juce::AudioPlayHead {
+ public:
+  void update(const TransportInfo& transport) { transport_ = transport; }
+
+  juce::Optional<PositionInfo> getPosition() const override {
+    PositionInfo info;
+    info.setBpm(transport_.bpm);
+    info.setPpqPosition(transport_.ppqPosition);
+    info.setPpqPositionOfLastBarStart(transport_.ppqPositionOfLastBarStart);
+    info.setTimeInSamples(transport_.timeInSamples);
+    info.setTimeSignature(
+        TimeSignature{transport_.timeSigNumerator, transport_.timeSigDenominator});
+    info.setIsPlaying(transport_.isPlaying);
+    info.setIsRecording(false);
+    info.setIsLooping(false);
+    return info;
+  }
+
+ private:
+  TransportInfo transport_{};
+};
+
 class JucePluginInstance final : public IPluginInstance {
  public:
   explicit JucePluginInstance(std::unique_ptr<juce::AudioPluginInstance> instance,
@@ -330,11 +355,16 @@ class JucePluginInstance final : public IPluginInstance {
         version_(std::move(version)),
         uid16_(md5Uid16FromIdentifier(identifier_)) {}
 
+  void setTransport(const TransportInfo& transport) override {
+    playHead_.update(transport);
+  }
+
   void prepare(double sampleRate, int blockSize, int numOutputs) override {
     if (!instance_) {
       return;
     }
 
+    instance_->setPlayHead(&playHead_);
     instance_->setNonRealtime(false);
     juce::AudioProcessor::BusesLayout layout;
     const int inputChannels = instance_->getTotalNumInputChannels();
@@ -792,6 +822,7 @@ class JucePluginInstance final : public IPluginInstance {
   }
 
   std::unique_ptr<juce::AudioPluginInstance> instance_;
+  EnginePlayHead playHead_;
   std::string vendor_;
   std::string identifier_;
   std::string version_;
@@ -824,6 +855,9 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   void prepare(double, int, int numOutputs) override {
     outputChannels_ = numOutputs;
   }
+
+  // The identity plugin has no time-dependent behaviour.
+  void setTransport(const TransportInfo&) override {}
 
   void process(const float* const*,
                int,

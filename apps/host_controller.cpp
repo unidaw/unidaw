@@ -317,13 +317,20 @@ bool HostController::sendProcessBlock(uint32_t blockId,
                                       uint64_t engineSampleStart,
                                       uint64_t pluginSampleStart,
                                       uint16_t segmentStart,
-                                      uint16_t segmentLength) {
+                                      uint16_t segmentLength,
+                                      const HostTransport& transport) {
   ProcessBlockRequest request;
   request.blockId = blockId;
   request.engineSampleStart = engineSampleStart;
   request.pluginSampleStart = pluginSampleStart;
   request.segmentStart = segmentStart;
   request.segmentLength = segmentLength;
+  request.flags = transport.isPlaying ? kProcessBlockFlagPlaying : 0u;
+  request.bpm = transport.bpm;
+  request.ppqPosition = transport.ppqPosition;
+  request.ppqPositionOfLastBarStart = transport.ppqPositionOfLastBarStart;
+  request.timeSigNumerator = transport.timeSigNumerator;
+  request.timeSigDenominator = transport.timeSigDenominator;
   return sendMessageNonBlocking(socketFd_,
                                 ControlMessageType::ProcessBlock,
                                 &request,

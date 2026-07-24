@@ -73,11 +73,26 @@ class IAudioBackend {
   virtual std::string deviceName() const = 0;
 };
 
+// Musical position for the block about to be processed. Without this a hosted
+// plugin has no play head, so every tempo-synced delay, arpeggiator and LFO
+// free-runs instead of locking to the transport.
+struct TransportInfo {
+  double bpm = 120.0;
+  double ppqPosition = 0.0;
+  double ppqPositionOfLastBarStart = 0.0;
+  int64_t timeInSamples = 0;
+  int timeSigNumerator = 4;
+  int timeSigDenominator = 4;
+  bool isPlaying = false;
+};
+
 class IPluginInstance {
  public:
   virtual ~IPluginInstance() = default;
 
   virtual void prepare(double sampleRate, int blockSize, int numOutputs) = 0;
+  // Called before process() for the same block.
+  virtual void setTransport(const TransportInfo& transport) = 0;
   virtual void process(const float* const* inputs, int numInputs,
                        float* const* outputs, int numOutputs, int numFrames,
                        const MidiEvents& events, int64_t samplePosition) = 0;

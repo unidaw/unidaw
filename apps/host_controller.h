@@ -34,6 +34,16 @@ struct SharedMemoryView {
   ~SharedMemoryView();
 };
 
+// Musical position for a block, forwarded to the hosted plugin's play head.
+struct HostTransport {
+  double bpm = 120.0;
+  double ppqPosition = 0.0;
+  double ppqPositionOfLastBarStart = 0.0;
+  uint32_t timeSigNumerator = 4;
+  uint32_t timeSigDenominator = 4;
+  bool isPlaying = false;
+};
+
 class HostController {
  public:
   HostController() = default;
@@ -50,7 +60,8 @@ class HostController {
                         uint64_t engineSampleStart,
                         uint64_t pluginSampleStart,
                         uint16_t segmentStart = 0,
-                        uint16_t segmentLength = 0);
+                        uint16_t segmentLength = 0,
+                        const HostTransport& transport = HostTransport{});
   bool sendOpenEditor(uint32_t pluginIndex);
   bool sendSetBypass(uint32_t pluginIndex, bool bypass);
   bool sendShutdown();

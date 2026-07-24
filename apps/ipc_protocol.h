@@ -5,7 +5,8 @@
 namespace daw {
 
 constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
-constexpr uint16_t kControlVersion = 1;
+// 2: ProcessBlockRequest carries transport position for the play head.
+constexpr uint16_t kControlVersion = 2;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,
@@ -45,8 +46,17 @@ struct ProcessBlockRequest {
   uint64_t pluginSampleStart = 0;
   uint16_t segmentStart = 0;
   uint16_t segmentLength = 0;
-  uint32_t reserved = 0;
+  uint32_t flags = 0;  // bit 0: transport is playing
+  // Musical position for this block. A hosted plugin has no clock of its own,
+  // so without these every tempo-synced effect free-runs.
+  double bpm = 120.0;
+  double ppqPosition = 0.0;
+  double ppqPositionOfLastBarStart = 0.0;
+  uint32_t timeSigNumerator = 4;
+  uint32_t timeSigDenominator = 4;
 };
+
+constexpr uint32_t kProcessBlockFlagPlaying = 1u << 0;
 
 struct OpenEditorRequest {
   uint32_t pluginIndex = 0;

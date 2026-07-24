@@ -6003,6 +6003,18 @@ struct TrackRuntime {
             }
           }
 
+          // Musical position for this block. Without it the hosted plugin has
+          // no play head and every tempo-synced effect free-runs.
+          daw::HostTransport transport;
+          transport.bpm = tempoProvider.bpmAtNanotick(blockStartTicks);
+          transport.ppqPosition =
+              static_cast<double>(blockStartTicks) /
+              static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter);
+          const double beatsPerBar = 4.0;
+          transport.ppqPositionOfLastBarStart =
+              std::floor(transport.ppqPosition / beatsPerBar) * beatsPerBar;
+          transport.isPlaying = playing.load(std::memory_order_acquire);
+
           bool sentOk = false;
           if (debugStall) {
             const auto sendStart = std::chrono::steady_clock::now();
@@ -6010,7 +6022,8 @@ struct TrackRuntime {
                                                           sampleStart,
                                                           pluginSampleStart,
                                                           segmentStart,
-                                                          segmentLength);
+                                                          segmentLength,
+                                                          transport);
             const auto sendMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - sendStart).count();
             if (sendMs > 10) {
@@ -6023,7 +6036,8 @@ struct TrackRuntime {
                                                           sampleStart,
                                                           pluginSampleStart,
                                                           segmentStart,
-                                                          segmentLength);
+                                                          segmentLength,
+                                                          transport);
           }
           if (!sentOk) {
             runtime->hostReady.store(false, std::memory_order_release);

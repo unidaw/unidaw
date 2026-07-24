@@ -391,6 +391,22 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
   const bool pluginsReady = state.pluginsReady.load(std::memory_order_acquire);
   const bool havePlugins = pluginCount > 0 && pluginsReady;
 
+  // Publish the engine's musical position to every plugin's play head before
+  // processing, so tempo-synced behaviour locks to the transport.
+  daw::TransportInfo transport;
+  transport.bpm = request.bpm;
+  transport.ppqPosition = request.ppqPosition;
+  transport.ppqPositionOfLastBarStart = request.ppqPositionOfLastBarStart;
+  transport.timeInSamples = static_cast<int64_t>(request.engineSampleStart);
+  transport.timeSigNumerator = static_cast<int>(request.timeSigNumerator);
+  transport.timeSigDenominator = static_cast<int>(request.timeSigDenominator);
+  transport.isPlaying = (request.flags & daw::kProcessBlockFlagPlaying) != 0;
+  for (auto& slot : state.plugins) {
+    if (slot.instance) {
+      slot.instance->setTransport(transport);
+    }
+  }
+
   if (!havePlugins) {
     const uint32_t channelsToCopy = std::min(state.header->numChannelsOut,
                                              state.header->numChannelsIn);
