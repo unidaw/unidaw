@@ -447,7 +447,10 @@ struct TrackStateSnapshot {
   std::vector<daw::ModLink> modLinks;
   daw::TrackRouting routing;
   std::vector<daw::AutomationClip> automationClips;
-  bool harmonyQuantize = true;
+  // Off by default: when on, an absolute note is snapped to the scale at
+  // dispatch while the tracker still renders the pitch you typed, so the
+  // editor shows a note you do not hear. Opt in per track if you want it.
+  bool harmonyQuantize = false;
 };
 
 const TrackStateSnapshot kEmptyTrackState{};
@@ -693,7 +696,9 @@ int main(int argc, char** argv) {
 struct Track {
   daw::MusicalClip clip;
   std::vector<daw::AutomationClip> automationClips;
-  bool harmonyQuantize = true;
+  // See TrackStateSnapshot::harmonyQuantize — off by default so typed pitch
+  // is what sounds.
+  bool harmonyQuantize = false;
   daw::TrackChain chain;
   daw::TrackRouting routing;
   daw::ModRegistry modRegistry;

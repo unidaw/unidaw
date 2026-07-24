@@ -368,9 +368,20 @@ pub extern "C" fn patcher_process_random_degree(ctx: *mut PatcherContext) {
             }
         }
         let degree_max = config.degree.max(1);
+        // Seeding needs a musical position, not an audio-block one. The old
+        // seed mixed block_start_tick with the event's index inside the block,
+        // so rendering the same music at a different buffer size produced
+        // different notes.
+        let tempo_bpm = if ctx_ref.tempo_bpm > 0.0 {
+            ctx_ref.tempo_bpm as f64
+        } else {
+            DEFAULT_BPM
+        };
+        let samples_per_tick =
+            (ctx_ref.sample_rate as f64 * 60.0) / (tempo_bpm * NANOTICKS_PER_QUARTER as f64);
         let count = *ctx_ref.event_count;
         let events = core::slice::from_raw_parts_mut(ctx_ref.event_buffer, count as usize);
-        for (index, entry) in events.iter_mut().enumerate() {
+        for entry in events.iter_mut() {
             if entry.type_ != 9 {
                 continue;
             }
@@ -393,9 +404,20 @@ pub extern "C" fn patcher_process_random_degree(ctx: *mut PatcherContext) {
             if payload.metadata[0] != MUSICAL_LOGIC_KIND_GATE {
                 continue;
             }
-            let seed = (ctx_ref.block_start_tick as u64)
-                ^ (entry.sample_time as u64)
-                ^ (index as u64).wrapping_mul(0x9e37_79b9);
+            // Recover the event's absolute musical tick. sample_time only
+            // recovers to within a sample, and one sample spans many nanoticks,
+            // so snap to a grid far finer than any musical subdivision but far
+            // coarser than that jitter — otherwise a one-tick wobble would
+            // reseed and defeat the whole point.
+            let tick = if samples_per_tick > 0.0 {
+                let sample_delta =
+                    entry.sample_time as f64 - ctx_ref.block_start_sample as f64;
+                ctx_ref.block_start_tick as i64 + (sample_delta / samples_per_tick).round() as i64
+            } else {
+                ctx_ref.block_start_tick as i64
+            };
+            const SEED_GRID: i64 = (NANOTICKS_PER_QUARTER / 64) as i64;
+            let seed = tick.div_euclid(SEED_GRID) as u64;
             let random = (mix64(seed) % degree_max as u64) as u8;
             payload.degree = random.saturating_add(1);
             payload.velocity = if config.velocity != 0 {
@@ -573,6 +595,134 @@ pub extern "C" fn patcher_process_audio_passthrough(ctx: *mut PatcherContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Renders gate events at fixed musical positions through
+    /// random_degree, cutting the timeline into `block_frames`-sized blocks,
+    /// and returns the degrees produced.
+    fn render_degrees(block_frames: u64, gate_ticks: &[u64]) -> Vec<u8> {
+        const SAMPLE_RATE: f64 = 48_000.0;
+        const BPM: f64 = 120.0;
+        let samples_per_tick = (SAMPLE_RATE * 60.0) / (BPM * NANOTICKS_PER_QUARTER as f64);
+        let total_frames = 96_000u64;
+        let mut degrees = Vec::new();
+
+        let mut block_start_sample = 0u64;
+        while block_start_sample < total_frames {
+            let block_end_sample = block_start_sample + block_frames;
+            let block_start_tick = (block_start_sample as f64 / samples_per_tick).round() as u64;
+            let block_end_tick = (block_end_sample as f64 / samples_per_tick).round() as u64;
+
+            let mut buffer: Vec<EventEntry> = Vec::new();
+            for &tick in gate_ticks {
+                let sample = (tick as f64 * samples_per_tick).round() as u64;
+                if sample < block_start_sample || sample >= block_end_sample {
+                    continue;
+                }
+                let payload = MusicalLogicPayload {
+                    degree: 0,
+                    octave_offset: 0,
+                    _pad0: [0u8; 2],
+                    chord_id: 0,
+                    duration_ticks: 0,
+                    priority_hint: 0,
+                    velocity: 100,
+                    base_octave: 4,
+                    metadata: {
+                        let mut m = [0u8; 21];
+                        m[0] = MUSICAL_LOGIC_KIND_GATE;
+                        m
+                    },
+                };
+                let mut entry = EventEntry {
+                    sample_time: sample,
+                    block_id: 0,
+                    type_: 9,
+                    size: core::mem::size_of::<MusicalLogicPayload>() as u16,
+                    flags: 0,
+                    payload: [0u8; 40],
+                };
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        &payload as *const MusicalLogicPayload as *const u8,
+                        entry.payload.as_mut_ptr(),
+                        core::mem::size_of::<MusicalLogicPayload>(),
+                    );
+                }
+                buffer.push(entry);
+            }
+
+            if !buffer.is_empty() {
+                let mut count = buffer.len() as u32;
+                let capacity = buffer.len() as u32;
+                let mut overflow_tick = 0u64;
+                let config = PatcherRandomDegreeConfig {
+                    degree: 7,
+                    velocity: 100,
+                    _pad0: [0u8; 2],
+                    duration_ticks: 0,
+                };
+                let mut ctx = PatcherContext {
+                    abi_version: PATCHER_ABI_VERSION,
+                    block_start_tick,
+                    block_end_tick,
+                    block_start_sample,
+                    sample_rate: SAMPLE_RATE as f32,
+                    tempo_bpm: BPM as f32,
+                    num_frames: block_frames as u32,
+                    event_buffer: buffer.as_mut_ptr(),
+                    event_capacity: capacity,
+                    event_count: &mut count,
+                    last_overflow_tick: &mut overflow_tick,
+                    audio_channels: core::ptr::null_mut(),
+                    num_channels: 0,
+                    node_config: &config as *const _ as *const c_void,
+                    node_config_size: core::mem::size_of::<PatcherRandomDegreeConfig>() as u32,
+                    harmony_snapshot: core::ptr::null(),
+                    harmony_count: 0,
+                    mod_outputs: core::ptr::null_mut(),
+                    mod_output_count: 0,
+                    mod_output_samples: core::ptr::null_mut(),
+                    mod_output_stride: 0,
+                    mod_inputs: core::ptr::null_mut(),
+                    mod_input_count: 0,
+                    mod_input_stride: 0,
+                };
+                patcher_process_random_degree(&mut ctx);
+                for entry in buffer.iter() {
+                    let mut out = [0u8; core::mem::size_of::<MusicalLogicPayload>()];
+                    out.copy_from_slice(
+                        &entry.payload[..core::mem::size_of::<MusicalLogicPayload>()],
+                    );
+                    let parsed =
+                        unsafe { &*(out.as_ptr() as *const MusicalLogicPayload) };
+                    if parsed.metadata[0] == MUSICAL_LOGIC_KIND_DEGREE {
+                        degrees.push(parsed.degree);
+                    }
+                }
+            }
+            block_start_sample = block_end_sample;
+        }
+        degrees
+    }
+
+    #[test]
+    fn random_degree_is_independent_of_buffer_size() {
+        // The same music rendered at different buffer sizes must produce the
+        // same notes. The old seed mixed block_start_tick and the event's
+        // index within the block, so it did not.
+        let gates: Vec<u64> = (0..16).map(|i| i * (NANOTICKS_PER_QUARTER / 4)).collect();
+        let at_512 = render_degrees(512, &gates);
+        let at_128 = render_degrees(128, &gates);
+        let at_300 = render_degrees(300, &gates);
+
+        assert_eq!(at_512.len(), gates.len(), "expected one degree per gate");
+        assert_eq!(at_512, at_128, "buffer size 512 vs 128 changed the notes");
+        assert_eq!(at_512, at_300, "an odd buffer size changed the notes");
+        assert!(
+            at_512.iter().any(|&d| d != at_512[0]),
+            "degrees should vary across positions, got {at_512:?}"
+        );
+    }
 
     #[test]
     fn euclidean_hit_distribution() {

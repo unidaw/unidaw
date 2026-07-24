@@ -17,7 +17,7 @@ namespace daw {
 struct ProjectTrack {
   uint32_t trackId = 0;
   std::string name;
-  bool harmonyQuantize = true;
+  bool harmonyQuantize = false;
   TrackRouting routing{};
   TrackChain chain{};
   std::vector<ModLink> modLinks;
