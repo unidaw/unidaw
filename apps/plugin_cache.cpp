@@ -437,4 +437,52 @@ bool writePluginCacheAtomic(const std::string& path, const PluginCache& cache) {
   return true;
 }
 
+VstResolution resolveVstRef(const PluginCache& cache,
+                            const std::string& uid16,
+                            const std::string& path,
+                            const std::string& vendor,
+                            const std::string& name) {
+  auto usable = [](const PluginCacheEntry& entry) {
+    return entry.scanStatus == ScanStatus::Ok || entry.error.empty();
+  };
+
+  // Strongest first: identity, then the same file, then the same product moved
+  // elsewhere. Anything weaker would risk loading the wrong plugin silently,
+  // which is the bug this exists to prevent.
+  if (!uid16.empty()) {
+    for (size_t i = 0; i < cache.entries.size(); ++i) {
+      if (usable(cache.entries[i]) && cache.entries[i].pluginUid16 == uid16) {
+        return {VstMatch::Uid16, i};
+      }
+    }
+  }
+  if (!path.empty()) {
+    for (size_t i = 0; i < cache.entries.size(); ++i) {
+      if (usable(cache.entries[i]) && cache.entries[i].path == path) {
+        return {VstMatch::Path, i};
+      }
+    }
+  }
+  if (!name.empty()) {
+    for (size_t i = 0; i < cache.entries.size(); ++i) {
+      const auto& entry = cache.entries[i];
+      if (usable(entry) && entry.name == name &&
+          (vendor.empty() || entry.vendor == vendor)) {
+        return {VstMatch::VendorName, i};
+      }
+    }
+  }
+  return {VstMatch::None, 0};
+}
+
+const char* vstMatchToString(VstMatch match) {
+  switch (match) {
+    case VstMatch::None: return "none";
+    case VstMatch::Uid16: return "uid16";
+    case VstMatch::Path: return "path";
+    case VstMatch::VendorName: return "vendor_name";
+  }
+  return "none";
+}
+
 }  // namespace daw

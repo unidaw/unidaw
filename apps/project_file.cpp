@@ -349,8 +349,18 @@ std::string serializeProject(const ProjectDocument& document) {
       writer.key("kind", std::string(deviceKindToString(device.kind)));
       writer.key("capability_mask", static_cast<uint32_t>(device.capabilityMask));
       writer.key("patcher_node_id", device.patcherNodeId);
+      // host_slot_index is a runtime index into a directory scan and is written
+      // only so older readers still work; vst_ref is the durable identity.
       writer.key("host_slot_index", device.hostSlotIndex);
       writer.key("bypass", device.bypass);
+      if (!device.vstRef.empty()) {
+        writer.beginChildObject("vst_ref");
+        writer.key("vendor", device.vstRef.vendor);
+        writer.key("name", device.vstRef.name);
+        writer.key("path", device.vstRef.path);
+        writer.key("uid16", device.vstRef.uid16);
+        writer.endChildObject();
+      }
       if (device.hasEuclideanConfig) {
         writer.beginChildObject("euclidean");
         writer.key("steps", static_cast<uint32_t>(device.euclideanConfig.steps));
@@ -534,6 +544,12 @@ bool deserializeProject(const std::string& json,
           device.patcherNodeId = deviceTree.get<uint32_t>("patcher_node_id", 0);
           device.hostSlotIndex = deviceTree.get<uint32_t>("host_slot_index", 0);
           device.bypass = deviceTree.get<bool>("bypass", false);
+          if (const auto ref = deviceTree.get_child_optional("vst_ref")) {
+            device.vstRef.vendor = ref->get<std::string>("vendor", "");
+            device.vstRef.name = ref->get<std::string>("name", "");
+            device.vstRef.path = ref->get<std::string>("path", "");
+            device.vstRef.uid16 = ref->get<std::string>("uid16", "");
+          }
           if (const auto euclid = deviceTree.get_child_optional("euclidean")) {
             device.hasEuclideanConfig = true;
             device.euclideanConfig.steps = euclid->get<uint32_t>("steps", 0);

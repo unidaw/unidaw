@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 
+#include "apps/plugin_cache.h"
 #include "apps/project_file.h"
 
 namespace {
@@ -72,6 +73,10 @@ daw::ProjectDocument makeDocument() {
   device.patcherNodeId = 4;
   device.hostSlotIndex = 1;
   device.bypass = true;
+  device.vstRef.vendor = "Acme";
+  device.vstRef.name = "Synth";
+  device.vstRef.path = "/Library/Audio/Plug-Ins/VST3/Synth.vst3";
+  device.vstRef.uid16 = "00112233445566778899aabbccddeeff";
   track.chain.devices.push_back(device);
 
   daw::Device euclid;
@@ -169,6 +174,12 @@ int main() {
           "device kind lost");
   require(track.chain.devices[0].bypass, "device bypass lost");
   require(track.chain.devices[0].hostSlotIndex == 1, "host slot lost");
+  require(track.chain.devices[0].vstRef.uid16 == "00112233445566778899aabbccddeeff",
+          "vst_ref uid16 lost");
+  require(track.chain.devices[0].vstRef.vendor == "Acme", "vst_ref vendor lost");
+  require(track.chain.devices[0].vstRef.path ==
+              "/Library/Audio/Plug-Ins/VST3/Synth.vst3",
+          "vst_ref path lost");
   require(track.chain.devices[1].hasEuclideanConfig, "euclidean config lost");
   require(track.chain.devices[1].euclideanConfig.steps == 16, "euclidean steps lost");
   require(track.chain.devices[1].euclideanConfig.duration_ticks == 240000,
@@ -229,6 +240,47 @@ int main() {
   // Set KEEP_PROJECT_JSON=1 to leave the sample behind and eyeball the format.
   if (std::getenv("KEEP_PROJECT_JSON") == nullptr) {
     std::remove(path.c_str());
+  }
+
+  // Plugin resolution: the whole point is that a project must not silently
+  // load a different plugin when the scan order changes.
+  {
+    daw::PluginCache cache;
+    daw::PluginCacheEntry a;
+    a.path = "/plugins/Other.vst3";
+    a.name = "Other";
+    a.vendor = "Someone";
+    a.pluginUid16 = "ffffffffffffffffffffffffffffffff";
+    a.scanStatus = daw::ScanStatus::Ok;
+    daw::PluginCacheEntry b;
+    b.path = "/plugins/Synth.vst3";
+    b.name = "Synth";
+    b.vendor = "Acme";
+    b.pluginUid16 = "00112233445566778899aabbccddeeff";
+    b.scanStatus = daw::ScanStatus::Ok;
+    // Deliberately *not* in the order the project was saved with.
+    cache.entries = {a, b};
+
+    const auto byUid = daw::resolveVstRef(cache,
+                                          "00112233445566778899aabbccddeeff",
+                                          "/somewhere/else.vst3",
+                                          "Wrong",
+                                          "Wrong");
+    require(byUid.match == daw::VstMatch::Uid16 && byUid.index == 1,
+            "uid16 should win over a stale path");
+
+    const auto byPath = daw::resolveVstRef(cache, "", "/plugins/Synth.vst3", "", "");
+    require(byPath.match == daw::VstMatch::Path && byPath.index == 1,
+            "path should resolve when identity is absent");
+
+    const auto byName = daw::resolveVstRef(cache, "", "/moved/away.vst3", "Acme", "Synth");
+    require(byName.match == daw::VstMatch::VendorName && byName.index == 1,
+            "a moved plugin should resolve by vendor and name");
+
+    const auto missing =
+        daw::resolveVstRef(cache, "deadbeef", "/gone.vst3", "Nobody", "Ghost");
+    require(missing.match == daw::VstMatch::None,
+            "an uninstalled plugin must report missing, not match something else");
   }
 
   // A newer schema must be refused rather than silently half-read.

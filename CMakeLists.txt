@@ -212,6 +212,7 @@ add_executable(project_file_tests
   apps/event_log.cpp
   apps/project_file.cpp
   apps/device_chain.cpp
+  apps/plugin_cache.cpp
 )
 
 target_include_directories(project_file_tests PRIVATE

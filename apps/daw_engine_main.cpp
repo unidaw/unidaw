@@ -2063,6 +2063,27 @@ struct TrackRuntime {
         track.modLinks = runtime->track.modRegistry.links;
         track.clip = runtime->track.clip;
       }
+      // Stamp durable plugin identity. hostSlotIndex only means anything
+      // against the scan that produced it, so it must not be what a saved
+      // project relies on.
+      for (auto& device : track.chain.devices) {
+        if (device.hostSlotIndex == daw::kHostSlotIndexDirect) {
+          // Loaded by path rather than from the scan, so the path is the only
+          // identity available — still better than nothing to restore from.
+          if (!runtime->config.pluginPaths.empty()) {
+            device.vstRef.path = runtime->config.pluginPaths.front();
+          }
+          continue;
+        }
+        if (device.hostSlotIndex >= pluginCache.entries.size()) {
+          continue;
+        }
+        const auto& entry = pluginCache.entries[device.hostSlotIndex];
+        device.vstRef.vendor = entry.vendor;
+        device.vstRef.name = entry.name;
+        device.vstRef.path = entry.path;
+        device.vstRef.uid16 = entry.pluginUid16;
+      }
       document.tracks.push_back(std::move(track));
     }
     return daw::saveProject(document, path, error);
@@ -2081,6 +2102,38 @@ struct TrackRuntime {
 
     harmonyEvents = document.harmonyTimeline;
     harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
+
+    // Report plugin identity before touching anything: a project that silently
+    // loads the wrong plugin, or none, is worse than one that says so.
+    for (const auto& source : document.tracks) {
+      for (const auto& device : source.chain.devices) {
+        if (device.vstRef.empty()) {
+          continue;
+        }
+        const auto resolution = daw::resolveVstRef(pluginCache,
+                                                   device.vstRef.uid16,
+                                                   device.vstRef.path,
+                                                   device.vstRef.vendor,
+                                                   device.vstRef.name);
+        // A plugin loaded by path need not appear in the scan at all, so check
+        // the filesystem before calling it missing.
+        std::error_code pathEc;
+        const bool onDisk = !device.vstRef.path.empty() &&
+                            std::filesystem::exists(device.vstRef.path, pathEc);
+        const bool found = resolution.match != daw::VstMatch::None || onDisk;
+        DAW_EVENT(found ? "project.plugin_resolved" : "project.plugin_missing")
+            .field("track", source.trackId)
+            .field("device", device.id)
+            .field("vendor", device.vstRef.vendor)
+            .field("name", device.vstRef.name)
+            .field("path", device.vstRef.path)
+            .field("match",
+                   std::string(resolution.match == daw::VstMatch::None && onDisk
+                                   ? "direct_path"
+                                   : daw::vstMatchToString(resolution.match)))
+            .field("slot", static_cast<uint64_t>(resolution.index));
+      }
+    }
 
     for (const auto& source : document.tracks) {
       TrackRuntime* runtime = nullptr;

@@ -37,6 +37,29 @@ struct PluginCache {
   std::vector<PluginCacheEntry> entries;
 };
 
+// How a saved VstRef was matched back to an entry in the current cache.
+enum class VstMatch {
+  None,      // nothing matched; the plugin is missing
+  Uid16,     // exact plugin identity
+  Path,      // same file, identity not recorded or changed
+  VendorName,  // moved or reinstalled elsewhere
+};
+
+struct VstResolution {
+  VstMatch match = VstMatch::None;
+  size_t index = 0;
+};
+
+// Resolves a saved plugin identity against the current scan, strongest match
+// first. Returns match == None when the plugin is not installed.
+VstResolution resolveVstRef(const PluginCache& cache,
+                            const std::string& uid16,
+                            const std::string& path,
+                            const std::string& vendor,
+                            const std::string& name);
+
+const char* vstMatchToString(VstMatch match);
+
 PluginCache readPluginCache(const std::string& path);
 bool writePluginCacheAtomic(const std::string& path, const PluginCache& cache);
 std::string scanStatusToString(ScanStatus status);
