@@ -1641,14 +1641,97 @@ mod integration_tests {
             })
         }
 
+        /// One project directory per test process. DAW_PROJECT_DIR is inherited
+        /// by spawned engines, and env vars are process-global, so per-test
+        /// directories race whichever engine spawns second. Tests distinguish
+        /// themselves by project name instead.
+        fn project_dir() -> std::path::PathBuf {
+            static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+            DIR.get_or_init(|| {
+                let dir = std::env::temp_dir().join(format!("daw_proj_{}", std::process::id()));
+                let _ = std::fs::create_dir_all(&dir);
+                std::env::set_var("DAW_PROJECT_DIR", &dir);
+                dir
+            })
+            .clone()
+        }
+
+        fn send_project_command(
+            harness: &mut TestHarness,
+            command: UiCommandType,
+            project: &str,
+        ) {
+            use daw_bridge::layout::UiPatcherPresetCommandPayload;
+            let mut name = [0u8; 28];
+            let bytes = project.as_bytes();
+            name[..bytes.len()].copy_from_slice(bytes);
+            harness.bridge().send_ui_patcher_preset(UiPatcherPresetCommandPayload {
+                command_type: command as u16,
+                flags: 0,
+                track_id: 0,
+                base_version: 0,
+                name,
+            });
+        }
+
+        #[test]
+        fn test_project_survives_an_engine_restart() -> anyhow::Result<()> {
+            // The struct-level round trip in project_file_tests cannot catch a
+            // field the engine never writes or never reads back. This drives a
+            // real engine, restarts it, and requires the document to come back
+            // byte-identical. A load that silently did nothing would fail here,
+            // because the second engine starts empty.
+            let dir = project_dir();
+            let path = dir.join("rt.uniproj.json");
+            let _ = std::fs::remove_file(&path);
+
+            {
+                let mut harness = TestHarness::new("roundtrip_author")?;
+                harness.view.cursor_nanotick = 0;
+                harness.view.scroll_nanotick_offset = 0;
+                harness.view.focused_track_index = 0;
+                harness.view.cursor_col = 0;
+                for key in ["q", "w", "e", "r"] {
+                    harness.press_key(key);
+                }
+                harness.press_key("1");
+                harness.pump(Duration::from_millis(600));
+                send_project_command(&mut harness, UiCommandType::SaveProject, "rt");
+                harness.pump(Duration::from_millis(600));
+            }
+
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !path.exists() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(50));
+            }
+            let first = std::fs::read_to_string(&path)
+                .with_context(|| format!("project not written to {}", path.display()))?;
+            assert!(first.contains("\"pitch\": 60"), "authored notes missing:\n{first}");
+
+            {
+                // Fresh engine, empty document.
+                let mut harness = TestHarness::new("roundtrip_reload")?;
+                send_project_command(&mut harness, UiCommandType::LoadProject, "rt");
+                harness.pump(Duration::from_millis(800));
+                send_project_command(&mut harness, UiCommandType::SaveProject, "rt");
+                harness.pump(Duration::from_millis(800));
+            }
+
+            let second = std::fs::read_to_string(&path)?;
+            if first != second {
+                return Err(anyhow::anyhow!(
+                    "project did not survive a restart\n--- saved ---\n{first}\n--- reloaded ---\n{second}"
+                ));
+            }
+            // Shared dir; other tests use different project names.
+            Ok(())
+        }
+
         #[test]
         fn test_save_project_writes_notes_to_disk() -> anyhow::Result<()> {
             use daw_bridge::layout::UiPatcherPresetCommandPayload;
 
-            let dir = std::env::temp_dir().join(format!("daw_proj_{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::env::set_var("DAW_PROJECT_DIR", &dir);
-
+            let dir = project_dir();
             let mut harness = TestHarness::new("save_project")?;
             harness.view.cursor_nanotick = 0;
             harness.view.scroll_nanotick_offset = 0;
@@ -1684,7 +1767,7 @@ mod integration_tests {
             for pitch in ["\"pitch\": 60", "\"pitch\": 62", "\"pitch\": 64"] {
                 assert!(json.contains(pitch), "missing {pitch} in saved project:\n{json}");
             }
-            let _ = std::fs::remove_dir_all(&dir);
+            // Shared dir; other tests use different project names.
             Ok(())
         }
 
