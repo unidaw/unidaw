@@ -380,6 +380,29 @@ impl ClipTrack {
         &self.notes
     }
 
+    /// The tick at which an OFF marker should render in `column` within
+    /// `[start, end)`, if any. A note that is cut on next ends exactly where
+    /// the following event begins, so an OFF is shown only at a genuine gap:
+    /// a note ends in this span and nothing else starts at that tick.
+    pub fn note_off_tick_in(&self, column: usize, start: u64, end: u64) -> Option<u64> {
+        let notes = self.notes.get(column)?;
+        for note in notes.values() {
+            if note.duration == 0 {
+                continue;
+            }
+            let off = note.nanotick.saturating_add(note.duration);
+            if off < start || off >= end {
+                continue;
+            }
+            let occupied = self.notes.get(column).is_some_and(|m| m.contains_key(&off))
+                || self.chords.get(column).is_some_and(|m| m.contains_key(&off));
+            if !occupied {
+                return Some(off);
+            }
+        }
+        None
+    }
+
     pub fn chords(&self) -> &Vec<BTreeMap<u64, ClipChord>> {
         &self.chords
     }
@@ -710,5 +733,56 @@ impl PendingOverlay {
             .get(track)?
             .get(column as usize)?;
         map.range(nanotick.saturating_add(1)..).next().map(|(&tick, _)| tick)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::ClipNote;
+
+    fn note(nanotick: u64, duration: u64, pitch: u8, column: u8) -> ClipNote {
+        ClipNote { nanotick, duration, pitch, velocity: 100, column }
+    }
+
+    #[test]
+    fn off_marker_shows_only_at_a_genuine_gap() {
+        let mut store = ClipStore::new(1, 4);
+        // A note from tick 0 lasting one beat, then a gap, then another note.
+        store.insert_note(0, note(0, 960_000, 60, 0));
+        store.insert_note(0, note(1_920_000, 960_000, 64, 0));
+        let track = store.track(0).unwrap();
+
+        // The first note ends at 960_000 with nothing starting there — OFF.
+        assert_eq!(
+            track.note_off_tick_in(0, 720_000, 1_200_000),
+            Some(960_000),
+            "a note ending in a gap should mark OFF at its end"
+        );
+        // The second note ends at 2_880_000; also a gap after it.
+        assert_eq!(track.note_off_tick_in(0, 2_640_000, 3_120_000), Some(2_880_000));
+    }
+
+    #[test]
+    fn off_marker_is_suppressed_when_next_note_starts_there() {
+        let mut store = ClipStore::new(1, 4);
+        // Back-to-back notes: the first ends exactly where the second begins,
+        // so the second's label shows, not an OFF.
+        store.insert_note(0, note(0, 960_000, 60, 0));
+        store.insert_note(0, note(960_000, 960_000, 64, 0));
+        let track = store.track(0).unwrap();
+        assert_eq!(
+            track.note_off_tick_in(0, 720_000, 1_200_000),
+            None,
+            "no OFF when the next note starts at the previous note's end"
+        );
+    }
+
+    #[test]
+    fn off_marker_ignores_zero_duration_notes() {
+        let mut store = ClipStore::new(1, 4);
+        store.insert_note(0, note(0, 0, 60, 0));
+        let track = store.track(0).unwrap();
+        assert_eq!(track.note_off_tick_in(0, 0, 3_840_000), None);
     }
 }

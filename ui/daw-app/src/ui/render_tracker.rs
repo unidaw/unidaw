@@ -432,12 +432,32 @@ fn build_tracker_row_cache(
                     break;
                 }
                 for note in map.range(row_start..row_end).map(|(_, note)| note) {
-                    let label = if note.velocity == 0 && note.duration == 0 {
-                        off_label_shared()
-                    } else {
-                        note_label_shared(note.pitch)
-                    };
-                    set_row_cell_label(&mut row, track_index, column, label);
+                    set_row_cell_label(
+                        &mut row,
+                        track_index,
+                        column,
+                        note_label_shared(note.pitch),
+                    );
+                }
+                // A note ending in this row with nothing starting there shows an
+                // OFF marker — length made visible, so the grid matches what
+                // the engine plays.
+                if let Some(off) = track.note_off_tick_in(column, row_start, row_end) {
+                    let occupied = row
+                        .cell_labels
+                        .get(track_index)
+                        .and_then(|cols| cols.get(column))
+                        .map(|cell| cell.is_some())
+                        .unwrap_or(true);
+                    if !occupied {
+                        let _ = off;
+                        set_row_cell_label(
+                            &mut row,
+                            track_index,
+                            column,
+                            off_label_shared(),
+                        );
+                    }
                 }
             }
             for (column, map) in track.chords().iter().enumerate() {
