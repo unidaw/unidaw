@@ -36,6 +36,7 @@
 #include "apps/patcher_graph.h"
 #include "apps/patcher_preset.h"
 #include "apps/patcher_preset_library.h"
+#include "apps/project_file.h"
 #include "apps/device_chain.h"
 #include "apps/modulation.h"
 #include "apps/track_routing.h"
@@ -2017,6 +2018,91 @@ struct TrackRuntime {
     return true;
   };
 
+  // Snapshots the live session into a ProjectDocument and writes it. Each
+  // track is copied under its own mutex so the document is consistent per
+  // track without stalling audio behind one global lock.
+  auto saveProjectToPath = [&](const std::string& path,
+                               std::string* error) -> bool {
+    daw::ProjectDocument document;
+    document.meta.name = std::filesystem::path(path).stem().string();
+    document.nanoticksPerQuarter = daw::NanotickConverter::kNanoticksPerQuarter;
+    document.tempoMap = {{0, tempoProvider.bpmAtNanotick(0)}};
+    document.harmonyTimeline = harmonyEvents;
+
+    std::vector<TrackRuntime*> runtimes;
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      for (auto& runtime : tracks) {
+        if (runtime) {
+          runtimes.push_back(runtime.get());
+        }
+      }
+    }
+    for (auto* runtime : runtimes) {
+      daw::ProjectTrack track;
+      track.trackId = runtime->trackId;
+      track.name = "Track " + std::to_string(runtime->trackId + 1);
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        track.harmonyQuantize = runtime->track.harmonyQuantize;
+        track.routing = runtime->track.routing;
+        track.chain = runtime->track.chain;
+        track.modLinks = runtime->track.modRegistry.links;
+        track.clip = runtime->track.clip;
+      }
+      document.tracks.push_back(std::move(track));
+    }
+    return daw::saveProject(document, path, error);
+  };
+
+  // Restores the musical document: clips, harmony and per-track harmony
+  // quantize. Device chains and plugin state are intentionally not reapplied
+  // here — that needs host restarts and the vst_state blobs described in
+  // PROJECT_PERSISTENCE.md, which this version does not yet write.
+  auto loadProjectFromPath = [&](const std::string& path,
+                                 std::string* error) -> bool {
+    daw::ProjectDocument document;
+    if (!daw::loadProject(document, path, error)) {
+      return false;
+    }
+
+    harmonyEvents = document.harmonyTimeline;
+    harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
+
+    for (const auto& source : document.tracks) {
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (source.trackId < tracks.size()) {
+          runtime = tracks[source.trackId].get();
+        }
+      }
+      if (!runtime) {
+        continue;
+      }
+      std::shared_ptr<const ClipSnapshot> snapshot;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        runtime->track.clip = source.clip;
+        runtime->track.harmonyQuantize = source.harmonyQuantize;
+        snapshot = buildClipSnapshot(runtime->track.clip);
+      }
+      std::atomic_store_explicit(&runtime->clipSnapshot,
+                                 snapshot,
+                                 std::memory_order_release);
+    }
+
+    // The UI's mirror is now arbitrarily stale, so force a full resync rather
+    // than trying to describe the change as a diff.
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);
+    clipDirty.store(true, std::memory_order_release);
+    daw::UiDiffPayload resync{};
+    resync.diffType = static_cast<uint16_t>(daw::UiDiffType::ResyncNeeded);
+    resync.clipVersion = clipVersion.load(std::memory_order_acquire);
+    emitUiDiff(resync);
+    return true;
+  };
+
   // The UI reserves one clip version per edit it queues, so an edit whose
   // base version matched must advance the counter even when the edit turns out
   // to be a no-op. Otherwise the UI stays permanently one ahead and every
@@ -3036,6 +3122,41 @@ struct TrackRuntime {
                             0,
                             0,
                             0);
+      return;
+    }
+    if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
+        (commandType == daw::UiCommandType::SaveProject ||
+         commandType == daw::UiCommandType::LoadProject)) {
+      daw::UiPatcherPresetCommandPayload projectPayload{};
+      std::memcpy(&projectPayload, entry.payload, sizeof(projectPayload));
+      std::string name(projectPayload.name,
+                       strnlen(projectPayload.name, sizeof(projectPayload.name)));
+      if (name.empty()) {
+        name = "default";
+      }
+      const std::string dir = daw::defaultProjectDir();
+      std::error_code ec;
+      std::filesystem::create_directories(dir, ec);
+      if (ec) {
+        std::cerr << "UI: Project failed - cannot create dir " << dir << std::endl;
+        return;
+      }
+      const std::filesystem::path path =
+          std::filesystem::path(dir) / (name + ".uniproj.json");
+      std::string error;
+      if (commandType == daw::UiCommandType::SaveProject) {
+        if (saveProjectToPath(path.string(), &error)) {
+          std::cerr << "UI: Saved project " << path.string() << std::endl;
+        } else {
+          std::cerr << "UI: SaveProject failed - " << error << std::endl;
+        }
+      } else {
+        if (loadProjectFromPath(path.string(), &error)) {
+          std::cerr << "UI: Loaded project " << path.string() << std::endl;
+        } else {
+          std::cerr << "UI: LoadProject failed - " << error << std::endl;
+        }
+      }
       return;
     }
     if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&

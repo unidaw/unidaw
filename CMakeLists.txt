@@ -78,6 +78,7 @@ add_executable(daw_engine
   apps/patcher_preset.cpp
   apps/patcher_abi.cpp
   apps/plugin_cache.cpp
+  apps/project_file.cpp
   apps/harmony_timeline.cpp
   apps/scale_library.cpp
   apps/ui_snapshot.cpp
@@ -205,6 +206,19 @@ if (DAW_BUILD_PATCHER_RUST)
   target_link_libraries(patcher_graph_tests PRIVATE patcher_rust)
 endif()
 
+add_executable(project_file_tests
+  apps/project_file_tests_main.cpp
+  apps/project_file.cpp
+  apps/device_chain.cpp
+)
+
+target_include_directories(project_file_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+
+target_link_libraries(project_file_tests PRIVATE platform_juce)
+
 add_executable(device_chain_tests
   apps/device_chain_tests_main.cpp
   apps/device_chain.cpp
@@ -257,6 +271,11 @@ add_test(NAME patcher_graph_edits
   COMMAND patcher_graph_tests
 )
 set_tests_properties(patcher_graph_edits PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME project_file_round_trip
+  COMMAND project_file_tests
+)
+set_tests_properties(project_file_round_trip PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME device_chain_defaults
   COMMAND device_chain_tests

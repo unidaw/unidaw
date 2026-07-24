@@ -31,6 +31,22 @@ std::string defaultPatcherPresetDir() {
   return primary.string();
 }
 
+std::string defaultProjectDir() {
+  const char* env = std::getenv("DAW_PROJECT_DIR");
+  if (env && *env) {
+    return std::string(env);
+  }
+  const std::filesystem::path primary("projects");
+  if (std::filesystem::exists(primary)) {
+    return primary.string();
+  }
+  const std::filesystem::path fallback = std::filesystem::path("..") / "projects";
+  if (std::filesystem::exists(fallback)) {
+    return fallback.string();
+  }
+  return primary.string();
+}
+
 bool discoverPatcherPresets(const std::string& dir,
                             std::vector<PatcherPresetInfo>& outPresets,
                             std::string* error) {

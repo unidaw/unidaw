@@ -1642,6 +1642,53 @@ mod integration_tests {
         }
 
         #[test]
+        fn test_save_project_writes_notes_to_disk() -> anyhow::Result<()> {
+            use daw_bridge::layout::UiPatcherPresetCommandPayload;
+
+            let dir = std::env::temp_dir().join(format!("daw_proj_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::env::set_var("DAW_PROJECT_DIR", &dir);
+
+            let mut harness = TestHarness::new("save_project")?;
+            harness.view.cursor_nanotick = 0;
+            harness.view.scroll_nanotick_offset = 0;
+            harness.view.focused_track_index = 0;
+            harness.view.cursor_col = 0;
+
+            for key in ["q", "w", "e"] {
+                harness.press_key(key);
+            }
+            harness.pump(Duration::from_millis(500));
+
+            let mut name = [0u8; 28];
+            name[.."itest".len()].copy_from_slice(b"itest");
+            harness.bridge().send_ui_patcher_preset(UiPatcherPresetCommandPayload {
+                command_type: UiCommandType::SaveProject as u16,
+                flags: 0,
+                track_id: 0,
+                base_version: 0,
+                name,
+            });
+            harness.pump(Duration::from_millis(500));
+
+            let path = dir.join("itest.uniproj.json");
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !path.exists() && Instant::now() < deadline {
+                harness.pump(Duration::from_millis(100));
+            }
+            let json = std::fs::read_to_string(&path)
+                .with_context(|| format!("project not written to {}", path.display()))?;
+
+            assert!(json.contains("\"schema_version\": 1"), "missing schema:\n{json}");
+            // q/w/e are C, D and E in octave 4.
+            for pitch in ["\"pitch\": 60", "\"pitch\": 62", "\"pitch\": 64"] {
+                assert!(json.contains(pitch), "missing {pitch} in saved project:\n{json}");
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+            Ok(())
+        }
+
+        #[test]
         fn test_tracker_text_snapshot() -> anyhow::Result<()> {
             let mut harness = TestHarness::new("tracker_text_snapshot")?;
             harness.view.cursor_nanotick = 0;

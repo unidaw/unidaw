@@ -65,6 +65,11 @@ enum class UiCommandType : uint16_t {
   SetPatcherNodeConfig = 28,
   SavePatcherPreset = 29,
   RequestClipWindow = 30,
+  // Both carry a project name in UiPatcherPresetCommandPayload::name and
+  // resolve it against defaultProjectDir(); paths do not fit in a 40-byte
+  // payload and a name keeps the wire format unchanged.
+  SaveProject = 31,
+  LoadProject = 32,
 };
 
 enum class UiDiffType : uint16_t {

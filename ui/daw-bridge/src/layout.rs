@@ -293,6 +293,10 @@ pub enum UiCommandType {
     SetPatcherNodeConfig = 28,
     SavePatcherPreset = 29,
     RequestClipWindow = 30,
+    /// Both carry a project name in `UiPatcherPresetCommandPayload::name`,
+    /// resolved against the engine's project directory.
+    SaveProject = 31,
+    LoadProject = 32,
 }
 
 #[repr(u16)]
