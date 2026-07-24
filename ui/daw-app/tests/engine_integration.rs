@@ -642,6 +642,38 @@ mod integration_tests {
                 self.clip_chords_at_nanotick(track, nanotick)
             }
 
+            /// Renders the tracker as text and compares it against a golden
+            /// file under tests/snapshots. Run with UPDATE_SNAPSHOTS=1 to
+            /// rewrite them after an intentional change; a missing file is
+            /// written on first run.
+            fn assert_tracker_snapshot(&mut self, name: &str) -> anyhow::Result<()> {
+                let actual = self.view.render_tracker_text();
+                let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/snapshots")
+                    .join(format!("{name}.txt"));
+                if std::env::var("UPDATE_SNAPSHOTS").is_ok() || !path.exists() {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(&path, &actual)?;
+                    eprintln!("wrote tracker snapshot {}", path.display());
+                    return Ok(());
+                }
+                let expected = std::fs::read_to_string(&path)?;
+                if expected != actual {
+                    return Err(anyhow::anyhow!(
+                        "tracker snapshot `{name}` changed\n\
+                         re-run with UPDATE_SNAPSHOTS=1 to accept\n\
+                         --- expected ---\n{expected}\n--- actual ---\n{actual}"
+                    ));
+                }
+                Ok(())
+            }
+
+            fn tracker_text(&mut self) -> String {
+                self.view.render_tracker_text()
+            }
+
             fn entry_count_at_row(&self, track: usize, row: i64) -> usize {
                 let nanotick = self.nanotick_for_row(row);
                 self.view.entries_for_row(nanotick, track).len()
@@ -1607,6 +1639,58 @@ mod integration_tests {
 
                 Ok(())
             })
+        }
+
+        #[test]
+        fn test_tracker_text_snapshot() -> anyhow::Result<()> {
+            let mut harness = TestHarness::new("tracker_text_snapshot")?;
+            harness.view.cursor_nanotick = 0;
+            harness.view.scroll_nanotick_offset = 0;
+            harness.view.focused_track_index = 0;
+            harness.view.cursor_col = 0;
+            harness.view.follow_playhead = false;
+            harness.wait_for_track_count(2, Duration::from_secs(1))?;
+
+            for key in ["q", "w", "e", "r"] {
+                harness.press_key(key);
+            }
+            harness.view.focus_note_cell(0, 1, 0, &mut harness.notify);
+            harness.press_key("1");
+            harness.pump(Duration::from_millis(500));
+
+            harness.view.focus_note_cell(0, 0, 0, &mut harness.notify);
+            harness.assert_tracker_snapshot("notes_and_degree")?;
+            Ok(())
+        }
+
+        #[test]
+        fn test_tracker_text_shows_overlay_on_unaligned_window() -> anyhow::Result<()> {
+            // The fast overlay used to bucket cells by exact row alignment while
+            // the row cache selects by containment, so an off-grid window (any
+            // time follow-playhead is scrolling) dropped every optimistic label.
+            let mut harness = TestHarness::new("tracker_text_unaligned")?;
+            harness.view.cursor_nanotick = 0;
+            harness.view.scroll_nanotick_offset = 0;
+            harness.view.focused_track_index = 0;
+            harness.view.cursor_col = 0;
+            harness.view.follow_playhead = false;
+
+            let row = harness.nanotick_for_row(1).saturating_sub(harness.nanotick_for_row(0));
+
+            // Write on the grid, then scroll the window off it — the order
+            // follow-playhead produces, and the one that breaks alignment
+            // bucketing while leaving containment bucketing correct.
+            harness.view.cursor_nanotick = row * 4;
+            harness.press_key("q");
+            // No pump: the note exists only in the optimistic overlay.
+            harness.view.scroll_nanotick_offset = (row / 3) as i64;
+
+            let text = harness.tracker_text();
+            assert!(
+                text.contains('*'),
+                "an optimistic cell must render on an unaligned window; got:\n{text}"
+            );
+            Ok(())
         }
 
         #[test]

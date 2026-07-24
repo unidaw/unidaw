@@ -576,6 +576,105 @@ impl EngineView {
         self.tracker_cache.clone()
     }
 
+    /// Renders the tracker viewport as text, from the same row cache and with
+    /// the same fast-overlay precedence the painter uses.
+    ///
+    /// Going through `tracker_cache` on purpose: it applies the incremental
+    /// dirty-row logic, so a stale or wrongly-invalidated row shows up here
+    /// exactly as it would on screen. A cell taken from the optimistic overlay
+    /// is suffixed with `*`, so a snapshot distinguishes an edit the engine has
+    /// confirmed from one still in flight.
+    pub fn render_tracker_text(&mut self) -> String {
+        let cursor_row = self.cursor_view_row();
+        let cursor_track = self.focused_track_index;
+        let cursor_col = self.cursor_col;
+        let playhead = self.snapshot.ui_global_nanotick_playhead;
+        let Some(cache) = self.tracker_cache() else {
+            return "tracker: clip store unavailable\n".to_string();
+        };
+        let overlay = self.fast_overlay_grid(&cache.key);
+        let key = &cache.key;
+
+        let mut out = String::new();
+        out.push_str(&format!(
+            "window_start={} row_nanoticks={} track_columns={:?}\n",
+            key.window_start, key.row_nanoticks, key.track_columns
+        ));
+        out.push_str(&format!(
+            "cursor=t{}c{}r{} playhead_nanotick={}\n",
+            cursor_track, cursor_col, cursor_row, playhead
+        ));
+
+        let mut header = format!("{:<3}|{:>9} |", "row", "time");
+        for (track, &columns) in key.track_columns.iter().enumerate() {
+            if columns == 0 {
+                continue;
+            }
+            for column in 0..columns {
+                header.push_str(&format!(" {:<6}", format!("t{track}c{column}")));
+            }
+            header.push_str(" |");
+        }
+        header.push_str(" harm");
+        out.push_str(&header);
+        out.push('\n');
+        out.push_str(&"-".repeat(header.len()));
+        out.push('\n');
+
+        for row_index in 0..VISIBLE_ROWS {
+            let Some(row) = cache.rows.get(row_index) else {
+                continue;
+            };
+            let row_end = row.row_start.saturating_add(key.row_nanoticks.max(1));
+            let mut marker = if cursor_row >= 0 && cursor_row as usize == row_index {
+                '>'
+            } else {
+                ' '
+            };
+            if playhead >= row.row_start && playhead < row_end {
+                marker = if marker == '>' { '#' } else { '*' };
+            }
+            out.push_str(&format!(
+                "{:02}{}|{:>9} |",
+                row_index,
+                marker,
+                row.time_label.as_ref()
+            ));
+
+            let overlay_row = overlay.get(row_index);
+            for (track, &columns) in key.track_columns.iter().enumerate() {
+                if columns == 0 {
+                    continue;
+                }
+                for column in 0..columns {
+                    // Overlay first, matching the paint order.
+                    let overlay_cell = overlay_row
+                        .and_then(|tracks| tracks.get(track))
+                        .and_then(|cells| cells.get(column))
+                        .and_then(|cell| cell.as_ref());
+                    let text = if let Some(FastCell::Label(label)) = overlay_cell {
+                        format!("{label}*")
+                    } else {
+                        row.cell_labels
+                            .get(track)
+                            .and_then(|cells| cells.get(column))
+                            .and_then(|cell| cell.as_ref())
+                            .map(|label| label.to_string())
+                            .unwrap_or_else(|| ".".to_string())
+                    };
+                    out.push_str(&format!(" {text:<6}"));
+                }
+                out.push_str(" |");
+            }
+            match row.harmony_label.as_ref() {
+                Some(label) => out.push_str(&format!(" {}", label.as_ref())),
+                None => out.push_str(" ."),
+            }
+            out.push('\n');
+        }
+        out
+    }
+
     fn row_index_for_nanotick(&self, nanotick: u64) -> Option<usize> {
         let row_nanoticks = self.row_nanoticks().max(1);
         let visible_start = self.scroll_nanotick_offset.max(0) as u64;
