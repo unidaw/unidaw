@@ -2024,7 +2024,14 @@ struct TrackRuntime {
   auto saveProjectToPath = [&](const std::string& path,
                                std::string* error) -> bool {
     daw::ProjectDocument document;
-    document.meta.name = std::filesystem::path(path).stem().string();
+    // The file is "<name>.uniproj.json", so one stem() still leaves ".uniproj".
+    std::string stem = std::filesystem::path(path).stem().string();
+    const std::string suffix = ".uniproj";
+    if (stem.size() > suffix.size() &&
+        stem.compare(stem.size() - suffix.size(), suffix.size(), suffix) == 0) {
+      stem.erase(stem.size() - suffix.size());
+    }
+    document.meta.name = stem;
     document.nanoticksPerQuarter = daw::NanotickConverter::kNanoticksPerQuarter;
     document.tempoMap = {{0, tempoProvider.bpmAtNanotick(0)}};
     document.harmonyTimeline = harmonyEvents;
