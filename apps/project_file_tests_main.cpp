@@ -250,6 +250,68 @@ int main() {
     std::remove(path.c_str());
   }
 
+  // Event identity. The old scheme was a per-clip uint32 starting at 1, so the
+  // first note of every clip in a project shared an id and could not name
+  // anything.
+  {
+    daw::MusicalClip humanClip;
+    humanClip.addEvent(makeNote(0, 60, 100, 0, 240000));
+    humanClip.addEvent(makeNote(240000, 62, 100, 0, 240000));
+
+    daw::MusicalClip agentClip;
+    agentClip.setAuthor(daw::kAuthorAgent);
+    agentClip.addEvent(makeNote(0, 64, 100, 0, 240000));
+
+    const daw::EventId first = humanClip.events()[0].payload.note.noteId;
+    const daw::EventId second = humanClip.events()[1].payload.note.noteId;
+    const daw::EventId agent = agentClip.events()[0].payload.note.noteId;
+
+    require(first != second, "ids within a clip must differ");
+    require(first != agent,
+            "the first note of two clips must not share an id");
+    require(daw::eventIdAuthor(first) == daw::kAuthorHuman, "human author lost");
+    require(daw::eventIdAuthor(agent) == daw::kAuthorAgent, "agent author lost");
+    // Provenance is a bit test, not a side table.
+    require(daw::eventIdAuthor(agent) != daw::eventIdAuthor(second),
+            "authors must be distinguishable from the id alone");
+
+    // An id authored elsewhere must not perturb our counter space.
+    daw::MusicalEvent foreign = makeNote(480000, 67, 100, 0, 240000);
+    foreign.payload.note.noteId = daw::makeEventId(daw::kAuthorAgent, 9999);
+    humanClip.addEvent(foreign);
+    daw::MusicalEvent mine = makeNote(720000, 69, 100, 0, 240000);
+    humanClip.addEvent(mine);
+    daw::EventId latest = 0;
+    for (const auto& event : humanClip.events()) {
+      if (event.nanotickOffset == 720000) {
+        latest = event.payload.note.noteId;
+      }
+    }
+    require(daw::eventIdAuthor(latest) == daw::kAuthorHuman,
+            "a foreign id changed our author");
+    require(daw::eventIdCounter(latest) < 9999,
+            "a foreign author's counter leaked into ours");
+  }
+
+  // Ids must survive the file, including the author bits.
+  {
+    daw::ProjectDocument doc;
+    daw::ProjectTrack track;
+    daw::MusicalEvent event = makeNote(0, 60, 100, 0, 240000);
+    event.payload.note.noteId = daw::makeEventId(daw::kAuthorAgent, 0x1234'5678'9ABCull);
+    track.clip.addEvent(event);
+    doc.tracks.push_back(std::move(track));
+
+    daw::ProjectDocument reloaded;
+    std::string err;
+    require(daw::deserializeProject(daw::serializeProject(doc), reloaded, &err),
+            "round trip of an authored id failed");
+    const daw::EventId id = reloaded.tracks[0].clip.events()[0].payload.note.noteId;
+    require(daw::eventIdAuthor(id) == daw::kAuthorAgent, "author bits lost in the file");
+    require(daw::eventIdCounter(id) == 0x1234'5678'9ABCull,
+            "48-bit counter truncated in the file");
+  }
+
   // Plugin resolution: the whole point is that a project must not silently
   // load a different plugin when the scan order changes.
   {

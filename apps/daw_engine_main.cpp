@@ -2510,7 +2510,7 @@ struct TrackRuntime {
                           uint8_t velocity,
                           uint16_t flags,
                           bool recordUndo,
-                          std::optional<uint32_t> noteIdOverride =
+                          std::optional<daw::EventId> noteIdOverride =
                               std::nullopt) -> bool {
     TrackRuntime* runtime = nullptr;
     {

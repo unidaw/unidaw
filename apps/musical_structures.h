@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "apps/event_id.h"
 #include "apps/time_base.h"
 
 namespace daw {
@@ -25,7 +26,7 @@ struct NotePayload {
   uint8_t column = 0;
   uint8_t reserved = 0;
   uint64_t durationNanoticks = 0;
-  uint32_t noteId = 0;
+  EventId noteId = kEventIdNone;
 };
 
 struct ChordPayload {
@@ -77,13 +78,18 @@ struct MusicalEvent {
     events_.insert(it, std::move(event));
   }
 
-  uint32_t allocateNoteId(std::optional<uint32_t> overrideId = std::nullopt) {
-    if (overrideId && *overrideId > 0) {
+  EventId allocateNoteId(std::optional<EventId> overrideId = std::nullopt) {
+    if (overrideId && *overrideId != kEventIdNone) {
       reserveNoteId(*overrideId);
       return *overrideId;
     }
-    return nextNoteId_++;
+    return makeEventId(author_, nextCounter_++);
   }
+
+  // Who this clip attributes new events to. An agent editing the same document
+  // sets its own author so its notes are identifiable afterwards.
+  void setAuthor(uint16_t author) { author_ = author; }
+  uint16_t author() const { return author_; }
 
   void getEventsInRange(uint64_t startTick,
                         uint64_t endTick,
@@ -107,7 +113,7 @@ struct MusicalEvent {
     uint8_t pitch = 0;
     uint8_t velocity = 0;
     uint8_t column = 0;
-    uint32_t noteId = 0;
+    EventId noteId = kEventIdNone;
   };
 
   std::optional<RemovedNote> removeNoteAt(uint64_t nanotick, uint8_t column) {
@@ -326,14 +332,21 @@ struct MusicalEvent {
   }
 
  private:
-  void reserveNoteId(uint32_t noteId) {
-    if (noteId >= nextNoteId_) {
-      nextNoteId_ = noteId + 1;
+  // Only ids from this clip's own author can advance its counter; an id
+  // authored elsewhere carries its own counter space and must not perturb ours.
+  void reserveNoteId(EventId noteId) {
+    if (eventIdAuthor(noteId) != author_) {
+      return;
+    }
+    const uint64_t counter = eventIdCounter(noteId);
+    if (counter >= nextCounter_) {
+      nextCounter_ = counter + 1;
     }
   }
 
   std::vector<MusicalEvent> events_;
-  uint32_t nextNoteId_ = 1;
+  uint16_t author_ = kAuthorHuman;
+  uint64_t nextCounter_ = 1;
 };
 
 class PatternView {

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 7;
+pub const K_SHM_VERSION: u16 = 8;
 
 pub const K_UI_MAX_TRACKS: usize = 8;
 pub const K_UI_MAX_CLIP_NOTES: usize = 4096;
@@ -118,11 +118,13 @@ pub struct UiClipTrack {
 pub struct UiClipNote {
     pub t_on: u64,
     pub t_off: u64,
-    pub note_id: u32,
+    /// Authored EventId: author in the top 16 bits, counter in the low 48.
+    pub note_id: u64,
     pub pitch: u8,
     pub velocity: u8,
     pub column: u8,
     pub reserved: u8,
+    pub reserved2: u32,
 }
 
 #[repr(C)]
@@ -500,6 +502,20 @@ mod tests {
     #[test]
     fn clip_window_command_payload_size() {
         assert_eq!(size_of::<UiClipWindowCommandPayload>(), 40);
+    }
+
+    #[test]
+    fn ui_clip_note_layout_matches_cpp() {
+        // Widened for the authored EventId; the C++ side static_asserts the
+        // same size, so a mismatch fails at compile time on one end and here
+        // on the other.
+        const_assert_eq!(size_of::<UiClipNote>(), 32);
+        assert_eq!(offset_of!(UiClipNote, t_on), 0);
+        assert_eq!(offset_of!(UiClipNote, t_off), 8);
+        assert_eq!(offset_of!(UiClipNote, note_id), 16);
+        assert_eq!(offset_of!(UiClipNote, pitch), 24);
+        assert_eq!(offset_of!(UiClipNote, velocity), 25);
+        assert_eq!(offset_of!(UiClipNote, column), 26);
     }
 
     #[test]

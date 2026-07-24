@@ -622,7 +622,7 @@ bool deserializeProject(const std::string& json,
               static_cast<uint8_t>(noteTree.get<uint32_t>("velocity", 0));
           event.payload.note.column =
               static_cast<uint8_t>(noteTree.get<uint32_t>("column", 0));
-          event.payload.note.noteId = noteTree.get<uint32_t>("note_id", 0);
+          event.payload.note.noteId = noteTree.get<uint64_t>("note_id", 0);
           track.clip.addEvent(event);
         }
       }

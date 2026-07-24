@@ -4,10 +4,13 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "apps/event_id.h"
+
 namespace daw {
 
 constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
-constexpr uint16_t kShmVersion = 7;
+// 8: UiClipNote::noteId widened to a 64-bit authored EventId.
+constexpr uint16_t kShmVersion = 8;
 
 constexpr uint32_t kUiMaxTracks = 8;
 constexpr uint32_t kUiMaxClipNotes = 4096;
@@ -117,12 +120,16 @@ struct UiClipTrack {
 struct UiClipNote {
   uint64_t tOn = 0;
   uint64_t tOff = 0;
-  uint32_t noteId = 0;
+  EventId noteId = kEventIdNone;
   uint8_t pitch = 0;
   uint8_t velocity = 0;
   uint8_t column = 0;
   uint8_t reserved = 0;
+  uint32_t reserved2 = 0;
 };
+
+static_assert(sizeof(UiClipNote) == 32,
+              "UiClipNote layout must match the Rust mirror");
 
 struct UiClipChord {
   uint64_t nanotick = 0;

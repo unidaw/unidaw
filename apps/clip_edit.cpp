@@ -23,7 +23,7 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
                              uint16_t flags,
                              std::atomic<uint32_t>& clipVersion,
                              bool recordUndo,
-                             std::optional<uint32_t> noteIdOverride) {
+                             std::optional<EventId> noteIdOverride) {
   const uint8_t column = static_cast<uint8_t>(flags & 0xffu);
   clip.removeChordAt(nanotick, column);
   clip.removeNoteAt(nanotick, column);
@@ -34,7 +34,7 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
   MusicalEvent event;
   event.nanotickOffset = nanotick;
   event.type = MusicalEventType::Note;
-  const uint32_t noteId = clip.allocateNoteId(noteIdOverride);
+  const EventId noteId = clip.allocateNoteId(noteIdOverride);
   event.payload.note.pitch = pitch;
   event.payload.note.velocity = velocity;
   event.payload.note.column = column;
