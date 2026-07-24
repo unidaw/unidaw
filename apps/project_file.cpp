@@ -212,6 +212,74 @@ void writeRoute(JsonWriter& writer, const std::string& name, const TrackRoute& r
   writer.endChildObject();
 }
 
+const char* modSourceKindToString(ModSourceKind kind) {
+  switch (kind) {
+    case ModSourceKind::Macro: return "macro";
+    case ModSourceKind::Lfo: return "lfo";
+    case ModSourceKind::Envelope: return "envelope";
+    case ModSourceKind::PatcherNodeOutput: return "patcher_node_output";
+  }
+  return "macro";
+}
+
+ModSourceKind modSourceKindFromString(const std::string& text) {
+  if (text == "lfo") return ModSourceKind::Lfo;
+  if (text == "envelope") return ModSourceKind::Envelope;
+  if (text == "patcher_node_output") return ModSourceKind::PatcherNodeOutput;
+  return ModSourceKind::Macro;
+}
+
+const char* modTargetKindToString(ModTargetKind kind) {
+  switch (kind) {
+    case ModTargetKind::VstParam: return "vst_param";
+    case ModTargetKind::PatcherParam: return "patcher_param";
+    case ModTargetKind::PatcherMacro: return "patcher_macro";
+  }
+  return "vst_param";
+}
+
+ModTargetKind modTargetKindFromString(const std::string& text) {
+  if (text == "patcher_param") return ModTargetKind::PatcherParam;
+  if (text == "patcher_macro") return ModTargetKind::PatcherMacro;
+  return ModTargetKind::VstParam;
+}
+
+// VST3 parameter identity is a 16-byte UID, so it is stored as hex rather than
+// a number: a link that loses its target is a link with no meaning.
+std::string uid16ToHex(const uint8_t (&uid)[16]) {
+  static const char* digits = "0123456789abcdef";
+  std::string out;
+  out.reserve(32);
+  for (const uint8_t byte : uid) {
+    out += digits[(byte >> 4) & 0xf];
+    out += digits[byte & 0xf];
+  }
+  return out;
+}
+
+void uid16FromHex(const std::string& text, uint8_t (&uid)[16]) {
+  for (auto& byte : uid) {
+    byte = 0;
+  }
+  if (text.size() != 32) {
+    return;
+  }
+  auto nibble = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+  };
+  for (size_t i = 0; i < 16; ++i) {
+    const int hi = nibble(text[i * 2]);
+    const int lo = nibble(text[i * 2 + 1]);
+    if (hi < 0 || lo < 0) {
+      return;
+    }
+    uid[i] = static_cast<uint8_t>((hi << 4) | lo);
+  }
+}
+
 TrackRoute readRoute(const boost::property_tree::ptree& tree) {
   TrackRoute route;
   route.kind = routeKindFromString(tree.get<std::string>("kind", "none"));
@@ -306,8 +374,21 @@ std::string serializeProject(const ProjectDocument& document) {
     for (const auto& link : track.modLinks) {
       writer.beginArrayElement();
       writer.key("link_id", link.linkId);
+      writer.beginChildObject("src");
+      writer.key("device_id", link.source.deviceId);
+      writer.key("source_id", link.source.sourceId);
+      writer.key("kind", std::string(modSourceKindToString(link.source.kind)));
+      writer.endChildObject();
+      writer.beginChildObject("dst");
+      writer.key("device_id", link.target.deviceId);
+      writer.key("target_id", link.target.targetId);
+      writer.key("kind", std::string(modTargetKindToString(link.target.kind)));
+      writer.key("param_uid16", uid16ToHex(link.target.uid16));
+      writer.endChildObject();
       writer.key("depth", static_cast<double>(link.depth));
       writer.key("bias", static_cast<double>(link.bias));
+      writer.key("rate",
+                 std::string(link.rate == ModRate::SampleRate ? "sample" : "block"));
       writer.key("enabled", link.enabled);
       writer.endArrayElement();
     }
@@ -475,8 +556,25 @@ bool deserializeProject(const std::string& json,
         for (const auto& linkEntry : *links) {
           ModLink link;
           link.linkId = linkEntry.second.get<uint32_t>("link_id", 0);
+          if (const auto src = linkEntry.second.get_child_optional("src")) {
+            link.source.deviceId = src->get<uint32_t>("device_id", 0);
+            link.source.sourceId = src->get<uint32_t>("source_id", 0);
+            link.source.kind =
+                modSourceKindFromString(src->get<std::string>("kind", "macro"));
+          }
+          if (const auto dst = linkEntry.second.get_child_optional("dst")) {
+            link.target.deviceId = dst->get<uint32_t>("device_id", 0);
+            link.target.targetId = dst->get<uint32_t>("target_id", 0);
+            link.target.kind =
+                modTargetKindFromString(dst->get<std::string>("kind", "vst_param"));
+            uid16FromHex(dst->get<std::string>("param_uid16", ""),
+                         link.target.uid16);
+          }
           link.depth = linkEntry.second.get<float>("depth", 0.0f);
           link.bias = linkEntry.second.get<float>("bias", 0.0f);
+          link.rate = linkEntry.second.get<std::string>("rate", "block") == "sample"
+                          ? ModRate::SampleRate
+                          : ModRate::BlockRate;
           link.enabled = linkEntry.second.get<bool>("enabled", true);
           track.modLinks.push_back(link);
         }

@@ -85,8 +85,18 @@ daw::ProjectDocument makeDocument() {
 
   daw::ModLink link;
   link.linkId = 100;
+  link.source.deviceId = 11;
+  link.source.sourceId = 3;
+  link.source.kind = daw::ModSourceKind::Lfo;
+  link.target.deviceId = 10;
+  link.target.targetId = 7;
+  link.target.kind = daw::ModTargetKind::VstParam;
+  for (size_t i = 0; i < 16; ++i) {
+    link.target.uid16[i] = static_cast<uint8_t>(0xf0 + i);
+  }
   link.depth = 0.5f;
   link.bias = -0.25f;
+  link.rate = daw::ModRate::SampleRate;
   link.enabled = false;
   track.modLinks.push_back(link);
 
@@ -165,6 +175,24 @@ int main() {
           "euclidean duration lost");
   require(track.modLinks.size() == 1, "mod links lost");
   require(!track.modLinks[0].enabled, "mod link enabled flag lost");
+  // A link that loses its endpoints is a number with no referent, which is
+  // exactly what the first version of this serializer wrote.
+  require(track.modLinks[0].source.deviceId == 11, "mod link source device lost");
+  require(track.modLinks[0].source.sourceId == 3, "mod link source id lost");
+  require(track.modLinks[0].source.kind == daw::ModSourceKind::Lfo,
+          "mod link source kind lost");
+  require(track.modLinks[0].target.deviceId == 10, "mod link target device lost");
+  require(track.modLinks[0].target.targetId == 7, "mod link target id lost");
+  require(track.modLinks[0].target.kind == daw::ModTargetKind::VstParam,
+          "mod link target kind lost");
+  require(track.modLinks[0].rate == daw::ModRate::SampleRate, "mod link rate lost");
+  bool uidOk = true;
+  for (size_t i = 0; i < 16; ++i) {
+    if (track.modLinks[0].target.uid16[i] != static_cast<uint8_t>(0xf0 + i)) {
+      uidOk = false;
+    }
+  }
+  require(uidOk, "mod link target param uid16 lost");
   require(countEvents(track.clip, daw::MusicalEventType::Note) == 2, "notes lost");
   require(countEvents(track.clip, daw::MusicalEventType::Chord) == 1, "chords lost");
 
