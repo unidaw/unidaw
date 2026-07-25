@@ -25,6 +25,10 @@ struct ProjectTrack {
   uint32_t trackId = 0;
   std::string name;
   bool harmonyQuantize = false;
+  // Rows one beat is cut into for this lane's tracker grid (Mock B per-lane
+  // grids): 4 = 16ths, 3 = triplets. The engine persists this but does not use
+  // it — note timing is stored in nanoticks and is grid-independent.
+  uint32_t linesPerBeat = 4;
   MixerSettings mixer{};
   TrackRouting routing{};
   TrackChain chain{};

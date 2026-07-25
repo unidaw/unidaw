@@ -63,6 +63,7 @@ daw::ProjectDocument makeDocument() {
   track.trackId = 0;
   track.name = "Lead";
   track.harmonyQuantize = false;
+  track.linesPerBeat = 3;  // triplets — a value the old power-of-two zoom could not express
   track.mixer.gainDb = -6.5;
   track.mixer.pan = -0.75;
   track.mixer.mute = true;
@@ -169,6 +170,7 @@ int main() {
   const auto& track = roundTripped.tracks[0];
   require(track.name == "Lead", "track name lost");
   require(!track.harmonyQuantize, "harmony_quantize lost");
+  require(track.linesPerBeat == 3, "per-lane subdivision lost");
   require(track.mixer.gainDb == -6.5, "mixer gain lost");
   require(track.mixer.pan == -0.75, "mixer pan lost");
   require(track.mixer.mute, "mixer mute lost");

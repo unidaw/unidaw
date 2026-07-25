@@ -333,6 +333,7 @@ std::string serializeProject(const ProjectDocument& document) {
     writer.key("track_id", track.trackId);
     writer.key("name", track.name);
     writer.key("harmony_quantize", track.harmonyQuantize);
+    writer.key("lines_per_beat", track.linesPerBeat);
 
     writer.beginChildObject("mixer");
     writer.key("gain_db", track.mixer.gainDb);
@@ -519,6 +520,10 @@ bool deserializeProject(const std::string& json,
       track.trackId = tree.get<uint32_t>("track_id", 0);
       track.name = tree.get<std::string>("name", "");
       track.harmonyQuantize = tree.get<bool>("harmony_quantize", false);
+      track.linesPerBeat = tree.get<uint32_t>("lines_per_beat", 4);
+      if (track.linesPerBeat == 0) {
+        track.linesPerBeat = 4;
+      }
       if (const auto mixer = tree.get_child_optional("mixer")) {
         track.mixer.gainDb = mixer->get<double>("gain_db", 0.0);
         track.mixer.pan = mixer->get<double>("pan", 0.0);
