@@ -365,7 +365,15 @@ public:
       m_playbackBlockId->store(nextBlockToPlay, std::memory_order_release);
     }
 
-    auto tracks = std::atomic_load_explicit(&m_tracks, std::memory_order_acquire);
+    // Lock-free acquire of the current track list, then publish it as our
+    // hazard and re-validate: if the writer swapped between the load and the
+    // hazard store, reload so we never read a version the writer may free.
+    std::vector<TrackInfo>* tracks = m_tracksPtr.load(std::memory_order_acquire);
+    m_tracksHazard.store(tracks, std::memory_order_release);
+    if (tracks != m_tracksPtr.load(std::memory_order_acquire)) {
+      tracks = m_tracksPtr.load(std::memory_order_acquire);
+      m_tracksHazard.store(tracks, std::memory_order_release);
+    }
     if (!tracks) {
       return;
     }
@@ -569,9 +577,24 @@ public:
     m_resetPending.store(true, std::memory_order_release);
   }
 
+  // Called only from the consumer thread; single writer.
   void updateTracks(const std::vector<TrackInfo>& tracks) {
     auto next = std::make_shared<std::vector<TrackInfo>>(tracks);
-    std::atomic_store_explicit(&m_tracks, std::move(next), std::memory_order_release);
+    std::vector<TrackInfo>* raw = next.get();
+    m_tracksRetired.push_back(std::move(next));
+    m_tracksPtr.store(raw, std::memory_order_release);
+
+    // Reclaim: keep the version just published and whatever the audio thread
+    // is currently reading; free everything else. The reader re-validates its
+    // hazard against m_tracksPtr, so a version that is neither current nor
+    // hazarded can no longer be reached by the audio thread.
+    std::vector<TrackInfo>* hazard = m_tracksHazard.load(std::memory_order_acquire);
+    m_tracksRetired.erase(
+        std::remove_if(m_tracksRetired.begin(), m_tracksRetired.end(),
+                       [&](const std::shared_ptr<std::vector<TrackInfo>>& v) {
+                         return v.get() != raw && v.get() != hazard;
+                       }),
+        m_tracksRetired.end());
   }
 
 private:
@@ -585,7 +608,17 @@ private:
   uint64_t m_totalSamplesProcessed = 0;
   uint32_t m_lastPlayedBlockId = 0;  // Track which block we played last
 
-  std::shared_ptr<std::vector<TrackInfo>> m_tracks;
+  // The audio callback must not touch a lock, and libc++ implements the
+  // atomic_load(shared_ptr*) free functions with a global spinlock table
+  // (__sp_mut) — not lock-free — which the callback would contend with every
+  // updateTracks. So the track list is published as a raw pointer the callback
+  // loads lock-free, with a single-hazard-pointer scheme reclaiming old
+  // versions: the writer (the consumer thread, the only caller of
+  // updateTracks) keeps the current version and whatever the audio thread has
+  // hazarded, and frees the rest. At most two versions are ever retained.
+  std::atomic<std::vector<TrackInfo>*> m_tracksPtr{nullptr};
+  std::atomic<std::vector<TrackInfo>*> m_tracksHazard{nullptr};
+  std::vector<std::shared_ptr<std::vector<TrackInfo>>> m_tracksRetired;
 };
 
 struct ClipSnapshot {
