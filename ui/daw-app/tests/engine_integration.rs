@@ -1349,6 +1349,12 @@ mod integration_tests {
                 env::set_var("DAW_HOST_SOCKET_PREFIX", &socket_prefix);
                 env::set_var("DAW_HOST_SOCKET_WAIT_ATTEMPTS", "500");
                 env::remove_var("DAW_ENGINE_TEST_MODE");
+                // Capture engine events so we can prove the device removal
+                // reconciled the running host rather than restarting it.
+                let event_log = std::env::temp_dir()
+                    .join(format!("daw_chain_evt_{}.jsonl", std::process::id()));
+                let _ = std::fs::remove_file(&event_log);
+                env::set_var("DAW_EVENT_LOG", &event_log);
 
                 let plugin_index = env::var("DAW_TEST_PLUGIN_INDEX")
                     .ok()
@@ -1453,6 +1459,17 @@ mod integration_tests {
 
                 engine.assert_running()?;
                 engine.stop();
+
+                // The removal must have reconciled the running host in place,
+                // not restarted it — that is the whole point of the change.
+                let log = std::fs::read_to_string(&event_log).unwrap_or_default();
+                let _ = std::fs::remove_file(&event_log);
+                env::remove_var("DAW_EVENT_LOG");
+                assert!(
+                    log.contains("chain.reconciled"),
+                    "expected a live chain reconcile, not a host restart; events:\n{log}"
+                );
+
                 cleanup_shm(&shm_name);
                 cleanup_track_shm(3);
                 Ok(())

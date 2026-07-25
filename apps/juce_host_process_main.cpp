@@ -8,6 +8,7 @@
 #include <chrono>
 #include <atomic>
 #include <array>
+#include <optional>
 #include <mutex>
 #include <memory>
 #include <unordered_map>
@@ -55,6 +56,7 @@ struct HostState {
     std::unique_ptr<daw::IPluginInstance> instance;
     std::unordered_map<std::string, std::string> paramIdByUid16;
     bool bypass = false;
+    std::string path;  // so a chain edit can reuse an unchanged instance
   };
   std::vector<PluginSlot> plugins;
   std::mutex pluginsMutex;
@@ -146,6 +148,117 @@ int createServerSocket(const std::string& path) {
   return fd;
 }
 
+// Loads and prepares a single plugin. MUST run on the message thread, which
+// JUCE requires for instantiation and prepareToPlay.
+std::optional<HostState::PluginSlot> loadPluginSlot(daw::IPluginHost& host,
+                                                    const std::string& path,
+                                                    double sampleRate,
+                                                    uint32_t blockSize,
+                                                    uint32_t numChannelsOut) {
+  if (!std::filesystem::exists(path)) {
+    std::cerr << "Plugin path not found: " << path << std::endl;
+    return std::nullopt;
+  }
+  auto instance = host.loadVst3FromPath(path, sampleRate, blockSize);
+  if (!instance) {
+    std::cerr << "Failed to load plugin in host process: " << path << std::endl;
+    return std::nullopt;
+  }
+  instance->prepare(sampleRate, blockSize, static_cast<int>(numChannelsOut));
+  HostState::PluginSlot slot;
+  slot.instance = std::move(instance);
+  slot.path = path;
+  for (const auto& param : slot.instance->parameters()) {
+    const auto uid16 = daw::hashStableId16(param.stableId);
+    slot.paramIdByUid16.emplace(uid16Key(uid16.data()), param.stableId);
+  }
+  return slot;
+}
+
+// Sizes the chain scratch buffers for a plugin count. Called under
+// pluginsMutex when the chain changes.
+void resizeChainBuffers(HostState& state, size_t pluginCount,
+                        uint32_t numChannelsOut, uint32_t blockSize) {
+  if (pluginCount > 1) {
+    const size_t bufferSamples =
+        static_cast<size_t>(numChannelsOut) * blockSize;
+    state.chainBufferA.assign(bufferSamples, 0.0f);
+    state.chainBufferB.assign(bufferSamples, 0.0f);
+    state.chainPtrsA.resize(numChannelsOut);
+    state.chainPtrsB.resize(numChannelsOut);
+    for (uint32_t ch = 0; ch < numChannelsOut; ++ch) {
+      state.chainPtrsA[ch] =
+          state.chainBufferA.data() + static_cast<size_t>(ch) * blockSize;
+      state.chainPtrsB[ch] =
+          state.chainBufferB.data() + static_cast<size_t>(ch) * blockSize;
+    }
+  } else {
+    state.chainBufferA.clear();
+    state.chainBufferB.clear();
+    state.chainPtrsA.clear();
+    state.chainPtrsB.clear();
+  }
+}
+
+// Reconciles the loaded plugin chain to `desiredPaths` in place, reusing an
+// already-loaded instance whenever the path is unchanged so only a genuinely
+// new plugin is instantiated — that is what keeps a chain edit from dropping
+// audio for the seconds a full reload takes. MUST run on the message thread.
+void reconcileChain(HostState& state, const std::vector<std::string>& desiredPaths) {
+  if (!state.header) {
+    return;
+  }
+  const double sampleRate = state.header->sampleRate;
+  const uint32_t blockSize = state.header->blockSize;
+  const uint32_t numChannelsOut = state.header->numChannelsOut;
+  if (!state.pluginHost) {
+    state.pluginHost = daw::createPluginHost();
+  }
+
+  std::vector<HostState::PluginSlot> current;
+  {
+    std::lock_guard<std::mutex> lock(state.pluginsMutex);
+    current = std::move(state.plugins);
+  }
+
+  std::vector<HostState::PluginSlot> next;
+  next.reserve(desiredPaths.size());
+  std::vector<bool> reused(current.size(), false);
+  for (const auto& path : desiredPaths) {
+    // Reuse the first unclaimed loaded slot with a matching path, preserving
+    // its instance and dialled-in state.
+    bool matched = false;
+    for (size_t i = 0; i < current.size(); ++i) {
+      if (!reused[i] && current[i].path == path && current[i].instance) {
+        next.push_back(std::move(current[i]));
+        reused[i] = true;
+        matched = true;
+        break;
+      }
+    }
+    if (matched) {
+      continue;
+    }
+    if (auto slot = loadPluginSlot(*state.pluginHost, path, sampleRate,
+                                   blockSize, numChannelsOut)) {
+      next.push_back(std::move(*slot));
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(state.pluginsMutex);
+    state.plugins = std::move(next);
+    resizeChainBuffers(state, state.plugins.size(), numChannelsOut, blockSize);
+    state.pluginsReady.store(true, std::memory_order_release);
+    state.pluginsLoading.store(false, std::memory_order_release);
+  }
+  state.pluginPaths = desiredPaths;
+  // Instances not reused are destroyed here, on the message thread, as `current`
+  // goes out of scope.
+  std::cerr << "Host: reconciled chain to " << state.plugins.size()
+            << " plugin(s)" << std::endl;
+}
+
 void loadPlugins(HostState& state,
                  const std::vector<std::string>& pluginPaths,
                  double sampleRate,
@@ -181,6 +294,7 @@ void loadPlugins(HostState& state,
                       static_cast<int>(numChannelsOut));
     HostState::PluginSlot slot;
     slot.instance = std::move(instance);
+    slot.path = path;
     for (const auto& param : slot.instance->parameters()) {
       const auto uid16 = daw::hashStableId16(param.stableId);
       slot.paramIdByUid16.emplace(uid16Key(uid16.data()), param.stableId);
@@ -782,6 +896,35 @@ void runControlLoop(HostState& state) {
           if (request.pluginIndex < state.plugins.size() &&
               state.plugins[request.pluginIndex].instance) {
             state.plugins[request.pluginIndex].instance->setState(blob);
+          }
+        }
+      } else if (type == daw::ControlMessageType::SetChain) {
+        if (payload.size() >= sizeof(daw::ChainHeader)) {
+          daw::ChainHeader header{};
+          std::memcpy(&header, payload.data(), sizeof(header));
+          const size_t available = payload.size() - sizeof(daw::ChainHeader);
+          const size_t blockBytes = std::min<size_t>(header.byteCount, available);
+          const char* block =
+              reinterpret_cast<const char*>(payload.data() + sizeof(daw::ChainHeader));
+          std::vector<std::string> paths;
+          size_t offset = 0;
+          for (uint32_t i = 0; i < header.count && offset < blockBytes; ++i) {
+            const size_t len = ::strnlen(block + offset, blockBytes - offset);
+            paths.emplace_back(block + offset, len);
+            offset += len + 1;
+          }
+          // Instantiation must run on the message thread; the control loop is a
+          // separate thread. Post the reconcile and wait for it, so the reply
+          // to the next command reflects the new chain.
+          if (auto* manager = juce::MessageManager::getInstanceWithoutCreating()) {
+            juce::WaitableEvent done;
+            manager->callAsync([&state, paths, &done]() {
+              reconcileChain(state, paths);
+              done.signal();
+            });
+            done.wait();
+          } else {
+            reconcileChain(state, paths);
           }
         }
       } else if (type == daw::ControlMessageType::Shutdown) {

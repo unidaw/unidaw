@@ -393,6 +393,28 @@ bool HostController::sendPluginState(uint32_t pluginIndex,
                      payload.size());
 }
 
+bool HostController::sendSetChain(const std::vector<std::string>& pluginPaths) {
+  std::vector<uint8_t> block;
+  for (const auto& path : pluginPaths) {
+    block.insert(block.end(), path.begin(), path.end());
+    block.push_back('\0');
+  }
+  std::vector<uint8_t> payload(sizeof(ChainHeader) + block.size());
+  ChainHeader header{};
+  header.count = static_cast<uint32_t>(pluginPaths.size());
+  header.byteCount = static_cast<uint32_t>(block.size());
+  std::memcpy(payload.data(), &header, sizeof(header));
+  if (!block.empty()) {
+    std::memcpy(payload.data() + sizeof(header), block.data(), block.size());
+  }
+  std::lock_guard<std::mutex> lock(socketMutex_);
+  if (socketFd_ < 0) {
+    return false;
+  }
+  return sendMessage(socketFd_, ControlMessageType::SetChain,
+                     payload.data(), payload.size());
+}
+
 bool HostController::sendOpenEditor(uint32_t pluginIndex) {
   OpenEditorRequest request;
   request.pluginIndex = pluginIndex;

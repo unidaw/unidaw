@@ -19,11 +19,20 @@ enum class ControlMessageType : uint16_t {
   // restarts the host and the sound is gone.
   GetState = 6,
   SetState = 7,
+  // Reconcile the plugin chain to a new path list in place, reusing unchanged
+  // instances, so a chain edit does not restart the whole host and drop audio.
+  // Payload is ChainHeader followed by `count` null-terminated UTF-8 paths.
+  SetChain = 8,
 };
 
 struct StateHeader {
   uint32_t pluginIndex = 0;
   uint32_t byteCount = 0;
+};
+
+struct ChainHeader {
+  uint32_t count = 0;      // number of null-terminated paths that follow
+  uint32_t byteCount = 0;  // total bytes of the path block
 };
 
 struct ControlHeader {

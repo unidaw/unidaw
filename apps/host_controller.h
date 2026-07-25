@@ -69,6 +69,10 @@ class HostController {
   bool requestPluginState(uint32_t pluginIndex, std::vector<uint8_t>& out);
   bool sendPluginState(uint32_t pluginIndex, const std::vector<uint8_t>& data);
 
+  // Reconciles the host's plugin chain to `pluginPaths` in place, so a chain
+  // edit reuses unchanged plugins instead of restarting the whole host.
+  bool sendSetChain(const std::vector<std::string>& pluginPaths);
+
   bool sendOpenEditor(uint32_t pluginIndex);
   bool sendSetBypass(uint32_t pluginIndex, bool bypass);
   bool sendShutdown();

@@ -1610,9 +1610,35 @@ struct TrackRuntime {
       }
     }
     if (runtime.config.pluginPaths != pluginPaths) {
+      const bool hostRunning = runtime.hostReady.load(std::memory_order_acquire);
       {
         std::lock_guard<std::mutex> lock(runtime.controllerMutex);
         runtime.config.pluginPaths = pluginPaths;
+      }
+      if (hostRunning) {
+        // Reconcile the chain in the running host: unchanged plugins are
+        // reused, only a genuinely new one is loaded, and audio keeps playing.
+        bool reconciled = false;
+        {
+          std::lock_guard<std::mutex> lock(runtime.controllerMutex);
+          reconciled = runtime.controller.sendSetChain(pluginPaths);
+        }
+        if (reconciled) {
+          // Voice-reset the track: drop active notes so a removed plugin
+          // leaves no note stuck on and no dangling note-off.
+          {
+            std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+            runtime.activeNotes.clear();
+            runtime.activeNoteByColumn.clear();
+          }
+          DAW_EVENT("chain.reconciled")
+              .field("track", runtime.trackId)
+              .field("plugins", static_cast<uint64_t>(pluginPaths.size()));
+          applyHostBypassStates(runtime);
+          return;
+        }
+        // Live reconcile failed; fall back to a full restart below.
+        DAW_EVENT("chain.reconcile_failed").field("track", runtime.trackId);
       }
       runtime.hostReady.store(false, std::memory_order_release);
       runtime.active.store(false, std::memory_order_release);
