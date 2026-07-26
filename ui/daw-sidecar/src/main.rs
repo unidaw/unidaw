@@ -45,6 +45,10 @@ const KIND_STATE: u8 = 0;
 
 /// Header is fixed-size; peaks and notes follow, counted in the header.
 const HEADER_BYTES: usize = 56;
+/// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
+/// after the last field is written — the 56-byte checkpoint below predates every
+/// field added since and stopped catching drift long ago.
+const FULL_HEADER_BYTES: usize = 92;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
 const NOTE_BYTES: usize = 40;
 
@@ -295,15 +299,21 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&(f.extents.len() as u16).to_le_bytes());
     out.extend_from_slice(&f.lpb);
     out.extend_from_slice(&f.mixer_version.to_le_bytes());
-    out.extend_from_slice(&(f.mixer.len() as u16).to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());                   // pad to 8
-    // Names: 24 bytes each, nul-padded, fixed stride so the client can index.
-    out.extend_from_slice(&(f.harmony.len() as u16).to_le_bytes());
-    out.extend_from_slice(&(f.names.len() as u16).to_le_bytes());
-    out.extend_from_slice(&f.patcher_version.to_le_bytes());
-    out.extend_from_slice(&f.patcher_device.to_le_bytes());
-    out.extend_from_slice(&(f.patcher_nodes.len() as u16).to_le_bytes());
-    out.extend_from_slice(&(f.patcher_edges.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(f.mixer.len() as u16).to_le_bytes());  // 72
+    // 74 was a pad; the harmony count took it rather than being appended after
+    // it, which is what a two-byte shift of everything downstream looks like
+    // when you get it wrong — names decode empty and every pitch reads 0.
+    out.extend_from_slice(&(f.harmony.len() as u16).to_le_bytes());  // 74
+    out.extend_from_slice(&(f.names.len() as u16).to_le_bytes());    // 76
+    out.extend_from_slice(&f.patcher_version.to_le_bytes());         // 78
+    out.extend_from_slice(&f.patcher_device.to_le_bytes());          // 82
+    out.extend_from_slice(&(f.patcher_nodes.len() as u16).to_le_bytes());  // 86
+    out.extend_from_slice(&(f.patcher_edges.len() as u16).to_le_bytes());  // 88
+    out.extend_from_slice(&0u16.to_le_bytes());                      // 90, pad to 92
+    // The WHOLE header, not just the first 56 bytes. The old assertion stopped
+    // before every field added since, so a mislaid u16 shifted the entire
+    // variable section and nothing here noticed.
+    debug_assert_eq!(out.len(), FULL_HEADER_BYTES, "header layout drifted");
     for &(tick, root, scale) in &f.harmony {
         out.extend_from_slice(&tick.to_le_bytes());
         out.extend_from_slice(&root.to_le_bytes());
