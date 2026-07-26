@@ -548,7 +548,8 @@ function drawPatcher() {
     transport: engine ? engine.transport : 0,
     linkText: engine && engine.stale ? 'engine gone'
       : engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+    octave: state.octave, editStep: state.editStep, velocity: state.velocity,
+    rejectText: state.reject || '',
     viewName: state.view,
   });
 }
@@ -593,7 +594,8 @@ function drawPiano() {
     transport: engine ? engine.transport : 0,
     linkText: engine && engine.stale ? 'engine gone'
       : engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+    octave: state.octave, editStep: state.editStep, velocity: state.velocity,
+    rejectText: state.reject || '',
     viewName: state.view,
   });
 }
@@ -612,7 +614,8 @@ function drawMixer() {
     transport: engine ? engine.transport : 0,
     linkText: engine && engine.stale ? 'engine gone'
       : engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+    octave: state.octave, editStep: state.editStep, velocity: state.velocity,
+    rejectText: state.reject || '',
     viewName: state.view,
   });
 }
@@ -639,7 +642,8 @@ function drawArrange() {
     transport: engine ? engine.transport : 0,
     linkText: engine && engine.stale ? 'engine gone'
       : engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+    octave: state.octave, editStep: state.editStep, velocity: state.velocity,
+    rejectText: state.reject || '',
     viewName: state.view,
   });
 }
@@ -697,7 +701,8 @@ function draw() {
     transport: engine ? engine.transport : 0,
     linkText: engine && engine.stale ? 'engine gone'
       : engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+    octave: state.octave, editStep: state.editStep, velocity: state.velocity,
+    rejectText: state.reject || '',
     viewName: state.view,
   });
   // The sidecar owns the projection and the aggregation, so it needs to know
@@ -1190,6 +1195,14 @@ addEventListener('keydown', (e) => {
   //    instead of deleting a note.
   if (k === '[') { state.octave = Math.max(0, state.octave - 1); return done(); }
   if (k === ']') { state.octave = Math.min(9, state.octave + 1); return done(); }
+  // Edit step: how far the cursor advances after writing a note. 0 stays put,
+  // which is how you stack a chord by hand. Essential for entering a rhythm and
+  // previously visible in the chrome with no way to change it.
+  if (k === ',') { state.editStep = Math.max(0, state.editStep - 1); return done(); }
+  if (k === '.') { state.editStep = Math.min(16, state.editStep + 1); return done(); }
+  // Default velocity for new notes, in steps of 8 so it is reachable quickly.
+  if (k === ';') { state.velocity = Math.max(1, state.velocity - 8); return done(); }
+  if (k === "'") { state.velocity = Math.min(127, state.velocity + 8); return done(); }
   if (k === '-' || k === '_') { moveCursor(() => { state.zoom = Math.max(0, state.zoom - 1); }); return done(); }
   if (k === '+' || k === '=') { moveCursor(() => { state.zoom = Math.min(ZOOM_LEVELS.length - 1, state.zoom + 1); }); return done(); }
   if (k === ' ') { cmd('play'); return done(); }

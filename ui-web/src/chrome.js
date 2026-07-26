@@ -57,7 +57,8 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
   entry.className = 'ch-group';
   const octLabel = label('ch-meta', 'oct 4');
   const stepLabel = label('ch-meta', 'step 1');
-  entry.append(viewLabel, octLabel, stepLabel);
+  const velLabel = label('ch-meta', 'vel 100');
+  entry.append(viewLabel, octLabel, stepLabel, velLabel);
 
   const scales = document.createElement('button');
   scales.className = 'ch-btn ch-scales';
@@ -85,12 +86,13 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
   if (onScales) scales.addEventListener('click', onScales);
 
   // Cached scalars, so a write only happens when the value actually changes.
-  let lastTick = -1, lastTransport = -1, lastLink = '', lastOct = -1, lastStep = -1, lastReject = '', lastView = '';
+  let lastTick = -1, lastTransport = -1, lastLink = '', lastOct = -1, lastStep = -1, lastVel = -1, lastReject = '', lastView = '';
 
   return {
     /** Called from the draw loop. Must stay allocation-free when nothing moves. */
     update({ playheadTick, transport: tstate, linkText, octave, editStep,
-             rejectText = '', viewName = '' }) {
+             velocity = 100, rejectText = '', viewName = '' }) {
+      if (velocity !== lastVel) { lastVel = velocity; velLabel.firstChild.nodeValue = 'vel ' + velocity; }
       if (viewName !== lastView) { lastView = viewName; viewLabel.firstChild.nodeValue = viewName.toUpperCase(); }
       if (rejectText !== lastReject) {
         lastReject = rejectText;

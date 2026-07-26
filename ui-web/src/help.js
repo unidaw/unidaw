@@ -34,6 +34,8 @@ export const SURFACE_KEYS = {
       ['@', 'chord/degree token — the only thing Enter is for'],
       ['p', 'open the piano roll here (** = notes a cell cannot show apart)'],
       ['[ ]', 'octave down / up'],
+      [', .', 'edit step down / up (0 stays put, for stacking a chord)'],
+      ["; '", 'default velocity down / up'],
       ['- =', 'zoom out / in'],
       ['shift+up/down', 'extend the selection'],
       ['alt+c / alt+v', 'copy / paste (relative to the cursor)'],
