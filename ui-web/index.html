@@ -1152,6 +1152,18 @@ addEventListener('keydown', (e) => {
   }
   if (k === TOKEN_KEY) { begin(entry, state.cursor, '@'); return done(); }
 
+  // Open the piano roll at the cursor. A tracker cell can hold one note per
+  // column, so simultaneous notes on a track render as `**` — visible, which is
+  // the point, but not resolvable HERE. This is the way out of that: same
+  // position, a projection that can show them apart.
+  if (k === 'p') {
+    state.view = 'piano';
+    state.pianoStart = Math.max(0, tickOfCursorRow() - ZOOM_LEVELS[state.zoom].rowNanoticks * 8);
+    state.pianoAll = false;
+    fitPiano();
+    return done();
+  }
+
   // Selection operations. Shift+arrows extend, then these act on the range — or
   // on the cursor's own note when nothing is selected, so they are never inert.
   if (e.shiftKey && (k === 'ArrowDown' || k === 'ArrowUp')) {

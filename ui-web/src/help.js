@@ -32,6 +32,7 @@ export const SURFACE_KEYS = {
       ['Backspace', 'delete the note at the cursor'],
       ['0-9 a-f', 'velocity digits in the volume column, commit on each key'],
       ['@', 'chord/degree token — the only thing Enter is for'],
+      ['p', 'open the piano roll here (** = notes a cell cannot show apart)'],
       ['[ ]', 'octave down / up'],
       ['- =', 'zoom out / in'],
       ['shift+up/down', 'extend the selection'],
