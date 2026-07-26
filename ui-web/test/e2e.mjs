@@ -61,6 +61,15 @@ await page.evaluate((p) => window.__uni.loadProject(p), PROJECT);
 await page.waitForTimeout(2500);
 let e = await E();
 ok(!e.stale, 'engine is publishing', `clipVersion ${e.clipVersion}`);
+if (e.stale) {
+  // Everything below asserts on engine state, so a dead engine reports as nine
+  // unrelated failures and buries the one that matters. Stop and name it.
+  console.log('\n  engine has stopped publishing — every check below would be'
+            + ' a symptom of that.\n  restart with tools/webstack.sh; see the'
+            + ' plugin-host hang reported to backend.\n');
+  await browser.close();
+  process.exit(2);
+}
 ok(e.noteCount > 0, 'notes arrived', `${e.noteCount} notes on ${e.trackCount} tracks`);
 const names = await page.evaluate(() => window.__uni.names());
 ok(names && names.some((n) => n && !/^T\d/.test(n)), 'track names published', JSON.stringify(names.slice(0, 3)));
