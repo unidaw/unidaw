@@ -436,6 +436,8 @@ pub enum UiCommandType {
     Stop = 34,
     /// Seek the transport to the nanotick in note_nanotick_lo/hi (clamped to the loop).
     SetPosition = 35,
+    /// Rename a track (trackId + name in UiPatcherPresetCommandPayload).
+    SetTrackName = 36,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;

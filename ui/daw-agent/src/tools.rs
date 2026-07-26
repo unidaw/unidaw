@@ -104,6 +104,17 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                 "properties": { "name": { "type": "string", "maxLength": 28 } }
             }),
         },
+        ToolSpec {
+            name: "set_track_name",
+            description: "Rename a track. The name is published so every lane-labelling surface updates.",
+            params: json!({
+                "type": "object", "required": ["track", "name"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "name": { "type": "string", "maxLength": 24 }
+                }
+            }),
+        },
     ]
 }
 
@@ -130,6 +141,7 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "transport" => transport(handle, &call.args),
         "save" => named(handle, UiCommandType::SaveProject, &call.args, "saved"),
         "load" => named(handle, UiCommandType::LoadProject, &call.args, "loaded"),
+        "set_track_name" => set_track_name(handle, &call.args),
         other => ToolResult::err(format!("unknown tool {other:?}")),
     }
 }
@@ -260,6 +272,33 @@ fn transport(handle: &EngineHandle, args: &Value) -> ToolResult {
     }
 }
 
+fn set_track_name(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let track = match arg_u64(args, "track") {
+        Some(t) => t as u32,
+        None => return ToolResult::err("set_track_name needs \"track\""),
+    };
+    let name = match args.get("name").and_then(|v| v.as_str()) {
+        Some(n) => n,
+        None => return ToolResult::err("set_track_name needs \"name\""),
+    };
+    let mut bytes = [0u8; 28];
+    let src = name.as_bytes();
+    let len = src.len().min(24); // published field is 24 bytes
+    bytes[..len].copy_from_slice(&src[..len]);
+    let preset = UiPatcherPresetCommandPayload {
+        command_type: UiCommandType::SetTrackName as u16,
+        flags: 0,
+        track_id: track,
+        base_version: 0,
+        name: bytes,
+    };
+    let as_ui: UiCommandPayload = unsafe { std::mem::transmute(preset) };
+    match handle.send_command(as_ui) {
+        Ok(()) => ToolResult::ok(json!({ "track": track, "name": name })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 fn named(handle: &EngineHandle, command: UiCommandType, args: &Value, verb: &str) -> ToolResult {
     let name = match args.get("name").and_then(|v| v.as_str()) {
         Some(n) if !n.is_empty() => n,
@@ -316,7 +355,8 @@ mod tests {
             // Route only through the arg-independent recognition: an unknown tool
             // yields exactly the "unknown tool" message.
             let recognized = match call.tool.as_str() {
-                "observe" | "add_notes" | "transport" | "save" | "load" => true,
+                "observe" | "add_notes" | "transport" | "save" | "load"
+                | "set_track_name" => true,
                 _ => false,
             };
             assert!(recognized, "manifest tool {:?} has no dispatch arm", spec.name);

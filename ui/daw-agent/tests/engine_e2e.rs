@@ -244,6 +244,41 @@ fn roundtrip_preserves_placements() {
     assert_eq!(clip7["notes"].as_array().unwrap().len(), 2);
 }
 
+/// The agent loop (perceive -> decide -> act) drives the real engine: a scripted
+/// decider adds notes then saves, and the loop stops when the script runs out.
+#[test]
+fn agent_loop_drives_engine() {
+    use daw_agent::{run_agent_loop, ScriptedDecider};
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("loop");
+
+    let mut decider = ScriptedDecider::new(vec![
+        vec![ToolCall {
+            tool: "add_notes".into(),
+            args: json!({"track":0,"pitches":[60,62,64],"start":0,"step":Q,"duration":Q}),
+        }],
+        vec![ToolCall {
+            tool: "save".into(),
+            args: json!({"name":"loopout"}),
+        }],
+    ]);
+    let transcript = run_agent_loop(&session, &mut decider, 8);
+
+    assert_eq!(transcript.len(), 2, "loop should run two scripted steps then stop");
+    assert!(transcript.iter().all(|s| s.ok()), "every step should succeed: {transcript:?}");
+
+    let doc = read_project(&engine.proj, "loopout");
+    let mut pitches: Vec<u64> = doc["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|c| c["notes"].as_array().unwrap())
+        .map(|n| n["pitch"].as_u64().unwrap())
+        .collect();
+    pitches.sort_unstable();
+    assert_eq!(pitches, vec![60, 62, 64], "loop should have added the notes");
+}
+
 /// The patcher graph the engine runs is published so the UI can draw it: the
 /// default graph has a euclidean node (with config) wired to a passthrough.
 #[test]
@@ -301,6 +336,26 @@ fn track_names_published() {
             break;
         }
         assert!(Instant::now() < deadline, "loaded name never published: {:?}", session.handle().read_track_names());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Renaming a track via set_track_name updates the published name.
+#[test]
+fn set_track_name_updates_published_name() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("rename");
+    let r = session.execute(&ToolCall {
+        tool: "set_track_name".into(),
+        args: json!({ "track": 0, "name": "Kick" }),
+    });
+    assert!(r.ok, "set_track_name failed: {r:?}");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if session.handle().read_track_names().first().map(String::as_str) == Some("Kick") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "rename never published: {:?}", session.handle().read_track_names());
         std::thread::sleep(Duration::from_millis(20));
     }
 }

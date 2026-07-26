@@ -80,6 +80,8 @@ enum class UiCommandType : uint16_t {
   // Seek: move the transport to the nanotick in noteNanotickLo/Hi (clamped to
   // the loop). Works whether or not playback is running.
   SetPosition = 35,
+  // Rename a track. Carries trackId + name in UiPatcherPresetCommandPayload.
+  SetTrackName = 36,
 };
 
 constexpr uint16_t kMixerFlagMute = 1u << 0;
