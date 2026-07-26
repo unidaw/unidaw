@@ -85,7 +85,7 @@ import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch } from './s
 import { Browser } from './src/browser.js';
 import { Dock } from './src/dock.js';
 import { createHelp } from './src/help.js';
-import { createEntry, feed, cancel, begin, parseToken, editing, NOTE_KEYS, NOTE_OFF_KEY,
+import { createEntry, feed, cancel, begin, parseToken, parseChord, editing, NOTE_KEYS, NOTE_OFF_KEY,
          TOKEN_KEY, pitchOf, pitchToToken, hexValue, shiftDigit } from './src/entry.js';
 
 const metrics = {
@@ -392,10 +392,14 @@ function commitToken(text) {
     noteOffAtCursor();
   } else if (r.kind === 'empty') {
     deleteAtCursor();
+  } else if (r.kind === 'chord') {
+    if (!writeChord(r)) return;
+  } else if (r.kind === 'degree') {
+    // A degree note is a chord of quality "single note" at that degree.
+    if (!writeChord({ degree: r.degree - 1, quality: 0, inv: 0, oct: r.octave,
+                      spread: 0, ht: 0, hv: 0, dur: 0 })) return;
   } else {
-    // degree and chord forms parse but have no engine command yet — WriteChord
-    // and a param path are needed. Left visibly unaccepted rather than faked.
-    state.reject = 'cannot write "' + text + '" yet';
+    state.reject = r.why || ('cannot write "' + text + '"');
     return;                            // cursor stays put so it can be fixed
   }
   state.reject = null;
@@ -661,6 +665,29 @@ function deleteAtCursor() {
   const base = engine ? engine.clipVersion : 0;
   if (!conn.send({ type: 'delete', track: state.cursor.track, tick: tickOfCursorRow() })) return false;
   addPending(state.cursor.row, state.cursor.track, 0, '', base);
+  return true;
+}
+
+/**
+ * Write a chord at the cursor. Its own command and its own payload — the engine
+ * dispatches on entry size, so a chord sent as an ordinary note command is
+ * silently ignored rather than rejected.
+ */
+function writeChord(c) {
+  if (!onLaneGrid(state.cursor.row, state.cursor.track)) {
+    state.reject = 'lane has no row here'; return false;
+  }
+  const base = engine ? engine.clipVersion : 0;
+  const ok = conn && conn.send({
+    type: 'chord', track: state.cursor.track, tick: tickOfCursorRow(),
+    column: state.cursor.col, degree: c.degree, quality: c.quality,
+    inv: c.inv, oct: c.oct, spread: c.spread, ht: c.ht, hv: c.hv, dur: c.dur,
+  });
+  if (!ok) { state.reject = 'no engine'; return false; }
+  const NAMES = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
+  const label = (NAMES[c.degree % 7] || String(c.degree + 1))
+    + (c.quality === 2 ? '7' : c.quality === 0 ? '' : '');
+  addPending(state.cursor.row, state.cursor.track, state.cursor.col, label, base);
   return true;
 }
 

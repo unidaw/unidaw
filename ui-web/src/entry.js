@@ -66,6 +66,45 @@ export function shiftDigit(current, digit, width = 2) {
 }
 
 /**
+ * Parse a chord token: `@3^7~80h20`.
+ *
+ *   @<degree>   scale degree, 1-based as musicians write it (I, II, III…)
+ *   ^<n>        quality: ^1 single note, ^3 triad (default), ^7 seventh
+ *   i<n>        inversion
+ *   o<n>        base octave
+ *   ~<n>        strum spread, in nanoticks
+ *   h<n>        humanize (timing and velocity together)
+ *   /<n>        duration in nanoticks; omitted means until the next event
+ *
+ * A chord is (degree, quality, inversion) against the harmony timeline's scale,
+ * NOT absolute semitones — which is the point: the chord track survives a key
+ * change. Degrees are 1-based here and 0-based on the wire, converted once, at
+ * this boundary, so neither side has to remember which convention it is in.
+ */
+export function parseChord(text) {
+  const s = text.trim().toLowerCase();
+  if (s[0] !== '@') return null;
+  const m = /^@(\d+)/.exec(s);
+  if (!m) return { kind: 'invalid', why: 'chord needs a degree, e.g. @3' };
+  const degree = parseInt(m[1], 10);
+  if (degree < 1 || degree > 64) return { kind: 'invalid', why: 'degree out of range: ' + degree };
+  const pick = (re, dflt) => { const x = re.exec(s); return x ? parseInt(x[1], 10) : dflt; };
+  const qual = pick(/\^(\d+)/, 3);
+  const quality = qual === 1 ? 0 : qual === 7 ? 2 : 1;    // 0 single, 1 triad, 2 seventh
+  const h = pick(/h(\d+)/, 0);
+  return {
+    kind: 'chord',
+    degree: degree - 1,                                   // wire is 0-based
+    quality,
+    inv: pick(/i(\d+)/, 0),
+    oct: pick(/o(\d+)/, 4),
+    spread: pick(/~(\d+)/, 0),
+    ht: h, hv: h,
+    dur: pick(/\/(\d+)/, 0),
+  };
+}
+
+/**
  * Parse one typed token. Returns a typed result the caller turns into a command,
  * or `{ kind: 'invalid' }` — never a silent drop. A malformed token has to be
  * visible as malformed, because a cell that quietly ignores what you typed is
@@ -77,7 +116,9 @@ export function shiftDigit(current, digit, width = 2) {
  *   ---      note off
  */
 export function parseToken(text, column) {
-  const s = text.trim().toLowerCase().replace(/^@/, '');
+  const chord = parseChord(text);
+  if (chord) return chord;
+  const s = text.trim().toLowerCase();
   if (!s) return { kind: 'empty' };
   if (s === '---' || s === 'off') return { kind: 'off' };
 
@@ -134,7 +175,8 @@ export function feed(entry, key) {
     return 'consumed';
   }
   if (key.length !== 1) return 'ignore';
-  if (!/[0-9a-zA-Z#\-.^~@]/.test(key)) return 'ignore';
+  // `/` is part of the chord grammar (duration), so it must reach the buffer.
+  if (!/[0-9a-zA-Z#\-.^~@/]/.test(key)) return 'ignore';
   if (entry.text.length < 12) entry.text += key;
   return 'consumed';
 }

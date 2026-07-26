@@ -27,7 +27,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
-use daw_bridge::layout::{UiCommandPayload, UiCommandType, UiPatcherPresetCommandPayload};
+use daw_bridge::layout::{UiChordCommandPayload, UiCommandPayload, UiCommandType,
+                        UiPatcherPresetCommandPayload};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
 
 /// Wire format, little-endian. The frontend decodes with a DataView.
@@ -542,6 +543,42 @@ fn build_named(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
     Some(Ok(UiPatcherPresetCommandPayload::named(ty, name).as_command()))
 }
 
+/// Chords ride in their OWN payload, not UiCommandPayload — the engine dispatches
+/// on entry size, so a chord sent in the wrong shape is silently ignored rather
+/// than rejected.
+///
+/// A chord here is (scale degree, quality, inversion) resolved against the
+/// harmony timeline, NOT absolute semitones: `degree 3, quality seventh` means
+/// the seventh built on the third degree of whatever key is in force, which is
+/// what makes a chord track survive a key change.
+fn build_chord(body: &str) -> Option<UiChordCommandPayload> {
+    if !body.contains("\"chord\"") { return None; }
+    let n = |k: &str, d: i64| parse_num(body, k).unwrap_or(d);
+    let tick = n("\"tick\"", 0).max(0) as u64;
+    let dur = n("\"dur\"", 0).max(0) as u64;
+    Some(UiChordCommandPayload {
+        command_type: UiCommandType::WriteChord as u16,
+        // Low byte of flags is the column.
+        flags: (n("\"column\"", 0).clamp(0, 255) as u16) & 0xff,
+        track_id: n("\"track\"", 0).max(0) as u32,
+        base_version: n("\"base\"", 0).max(0) as u32,
+        nanotick_lo: tick as u32,
+        nanotick_hi: (tick >> 32) as u32,
+        // 0 means "until the next event in this column", which is the tracker's
+        // own convention for a held chord.
+        duration_lo: dur as u32,
+        duration_hi: (dur >> 32) as u32,
+        degree: n("\"degree\"", 0).clamp(0, 65535) as u16,
+        quality: n("\"quality\"", 1).clamp(0, 255) as u8,
+        inversion: n("\"inv\"", 0).clamp(0, 255) as u8,
+        base_octave: n("\"oct\"", 4).clamp(0, 9) as u8,
+        humanize_timing: n("\"ht\"", 0).clamp(0, 255) as u8,
+        humanize_velocity: n("\"hv\"", 0).clamp(0, 255) as u8,
+        reserved: 0,
+        spread_nanoticks: n("\"spread\"", 0).clamp(0, u32::MAX as i64) as u32,
+    })
+}
+
 fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_named(body) { return r; }
 
@@ -631,6 +668,17 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             let reply = format!(
                                 "{{\"ok\":true,\"viewport\":{{\"linesPerBeat\":{},\"firstRow\":{},\"rowCount\":{}}}}}",
                                 vp.lines_per_beat, vp.first_row, vp.row_count);
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+                        // Chords take a different payload, so they cannot go
+                        // through build_command's return type.
+                        if let Some(c) = build_chord(&t) {
+                            let reply = match handle.send_chord_command(c) {
+                                Ok(()) => format!("{{\"ok\":true,\"type\":{},\"degree\":{}}}",
+                                                  c.command_type, c.degree),
+                                Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                            };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
