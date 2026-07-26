@@ -59,9 +59,17 @@ const tracker = new Tracker(host, metrics);
 const TOTAL_ROWS = 100000;
 const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, zoom: 2, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
-// O(tree) walk — diagnostics only, never per frame. See GUIDELINES.md 3.10.
-let nodeCount = 0;
-setInterval(() => { nodeCount = document.querySelectorAll('*').length; }, 500);
+// The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
+// It was allocating several strings and a Text node every frame, which is
+// exactly what GUIDELINES.md 3.1 and 3.10 forbid.
+const hudText = document.createTextNode('');
+hud.appendChild(hudText);
+setInterval(() => {
+  const v = tracker.vm; if (!v) return;
+  hudText.nodeValue = v.zoom.label + '   row ' + state.cursor.row
+    + '   T' + (state.cursor.track + 1) + '   x' + state.scrollX
+    + '   ' + tracker.poolSize + ' pooled   ' + document.querySelectorAll('*').length + ' nodes';
+}, 500);
 
 // Two buffers, alternating: the renderer diffs prev against current, so they
 // have to be distinct objects. Steady-state allocation is zero.
@@ -96,7 +104,10 @@ function draw() {
   const shapeChanged = tracker.poolSize === 0 || !headRow || headRow.children.length !== state.tracks + 1;
   tracker.resize(host.clientHeight, state.tracks, state.columns);
   if (shapeChanged) buildHead();
-  if (headRow) headRow.style.transform = `translateX(${-state.scrollX}px)`;
+  if (headRow && headRow._x !== state.scrollX) {
+    headRow._x = state.scrollX;
+    headRow.style.transform = 'translateX(' + (-state.scrollX) + 'px)';
+  }
   bi ^= 1;
   const vm = bufs[bi] = buildViewModel({
     startRow: state.start, rowCount: tracker.poolSize,
@@ -108,8 +119,6 @@ function draw() {
   // The node count is an O(tree) walk. Sampling it every frame cost ~7 ms —
   // more than the render it was reporting on. Diagnostics must not be in the
   // hot path; refresh it on a timer instead.
-  hud.textContent = `${vm.zoom.label}   row ${state.cursor.row}   T${String(state.cursor.track + 1).padStart(2, '0')}`
-    + `   x${state.scrollX}   ${tracker.poolSize} pooled   ${nodeCount} nodes`;
 }
 
 // Input is coalesced into one draw per animation frame. Without this, key
@@ -185,6 +194,10 @@ window.__uni = {
   probe: () => tracker.probe(),
   state: () => JSON.parse(JSON.stringify(state)),
   scrollTo,
+  // Hermetic reset for tests: a scene that inherits the cursor from whatever ran
+  // before it is not a fixture, it is a dependency on execution order.
+  reset: () => { state.cursor.row = 0; state.cursor.track = 0; state.cursor.col = 0;
+                 state.playhead = 0; state.zoom = 2; state.scrollX = 0; state.start = 0; draw(); },
   scrollX: (x) => { state.scrollX = Math.max(0, x); draw(); },
   right: () => { let f = Math.min(state.cursor.track*state.columns+state.cursor.col+1, state.tracks*state.columns-1);
                  state.cursor.track = Math.floor(f/state.columns); state.cursor.col = f%state.columns; follow(); draw(); },

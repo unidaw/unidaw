@@ -49,6 +49,27 @@ Getting these wrong produces bugs that look like performance problems.
 
 Ranked by how much they cost to get wrong.
 
+### 3.0 This is enforced, not just written down
+
+`npm test` runs the goldens **and** `test/alloc.mjs`, which measures bytes
+allocated per draw and fails above 250. The unfixed renderer allocated ~11,000.
+A rule in a document decays; a failing test does not.
+
+If it fails you have added one of these to a per-frame path — all of them
+allocate, and all of them were present at some point in this file's history:
+
+| Pattern | Instead |
+|---|---|
+| `` `${x}px` `` or `'a' + x` | cache the **number**, build the string only when it changes |
+| `String(x)`, `x.toFixed()`, `padStart` | compare a cached number |
+| `el.textContent = s` | own a Text node, write `.nodeValue` |
+| `el.dataset.foo !== String(x)` | `el._foo !== x`, then write dataset |
+| an unguarded `style.*` write | compare the cached number first |
+| anything O(tree) for a diagnostic | put it on a timer |
+
+The residual is two strings for the one row whose identity genuinely changed —
+its `top` and its `data-row`. That is the floor, not waste.
+
 ### 3.1 Zero allocation in the draw path
 The view-model is pooled and double-buffered; rows, cells, clips and rails are
 allocated once per shape change and mutated in place. **0 GC events** across 80

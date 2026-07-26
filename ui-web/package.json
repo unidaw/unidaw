@@ -5,7 +5,9 @@
   "scripts": {
     "tokens": "node design/build-tokens.mjs",
     "shots": "node test/shot.mjs",
-    "bless": "node test/shot.mjs --bless"
+    "bless": "node test/shot.mjs --bless",
+    "alloc": "node test/alloc.mjs",
+    "test": "node test/shot.mjs && node test/alloc.mjs"
   },
   "devDependencies": {
     "playwright": "^1.61.1"

@@ -122,10 +122,12 @@ export class Tracker {
    * real scroll. Reading first is far cheaper than dirtying the node.
    */
   bindRow(elm, row) {
-    const rowStr = String(row.index);
-    if (elm.dataset.row !== rowStr) {
-      elm.dataset.row = rowStr;
-      elm.style.top = `${row.index * this.m.rowHeight}px`;
+    // Numeric cache, not a string compare. String(row.index) allocated once per
+    // pool row per draw — 66 strings a frame for a value that rarely changes.
+    if (elm._row !== row.index) {
+      elm._row = row.index;
+      elm.dataset.row = row.index;            // assigning a number coerces once
+      elm.style.top = (row.index * this.m.rowHeight) + 'px';
     }
     elm.classList.toggle('bar', row.bar);
     elm.classList.toggle('beat', row.beat && !row.bar);
@@ -177,7 +179,7 @@ export class Tracker {
       const row = vm.rows[i];
       const elm = this.pool[((rowIdx % n) + n) % n];
       if (elm.style.display === 'none') elm.style.display = '';
-      if (i < limit && (needFull || elm.dataset.row !== String(rowIdx))) this.bindRow(elm, row);
+      if (i < limit && (needFull || elm._row !== rowIdx)) this.bindRow(elm, row);
       this.byRow.set(rowIdx, elm);
     }
 
@@ -197,9 +199,10 @@ export class Tracker {
       if (elm.style.display !== 'none') elm.style.display = 'none';
     }
 
-    const xf = `translate(${-(vm.scrollX || 0)}px, ${-first * this.m.rowHeight}px)`;
-    if (this._xf !== xf) {
-      this._xf = xf;
+    const sx = -(vm.scrollX || 0), sy = -first * this.m.rowHeight;
+    if (this._sx !== sx || this._sy !== sy) {
+      this._sx = sx; this._sy = sy;
+      const xf = 'translate(' + sx + 'px, ' + sy + 'px)';   // only on movement
       this.band.style.transform = xf;
       this.rails.style.transform = xf;
     }
@@ -222,18 +225,17 @@ export class Tracker {
         this.rails.append(r);
         this.railPool[i] = r;
       }
-      const idStr = String(clip.id);
-      if (r.dataset.clip !== idStr) r.dataset.clip = idStr;
+      if (r._id !== clip.id) { r._id = clip.id; r.dataset.clip = clip.id; }
       if (r.style.display === 'none') r.style.display = '';
-      r.classList.toggle('active', clip.active);
-      const top = `${(clip.startTick / perRow) * this.m.rowHeight}px`;
-      const height = `${Math.max(1, (clip.endTick - clip.startTick) / perRow) * this.m.rowHeight}px`;
-      const left = `${this.m.gutterWidth + clip.track * this.m.cellWidth * this.cols}px`;
-      const width = `${this.m.cellWidth * this.cols}px`;
-      if (r.style.top !== top) r.style.top = top;
-      if (r.style.height !== height) r.style.height = height;
-      if (r.style.left !== left) r.style.left = left;
-      if (r.style.width !== width) r.style.width = width;
+      if (r._active !== clip.active) { r._active = clip.active; r.classList.toggle('active', clip.active); }
+      const top = (clip.startTick / perRow) * this.m.rowHeight;
+      const height = Math.max(1, (clip.endTick - clip.startTick) / perRow) * this.m.rowHeight;
+      const left = this.stripLeft + clip.track * this.trackStride;
+      const width = this.trackStride;
+      if (r._top !== top) { r._top = top; r.style.top = top + 'px'; }
+      if (r._h !== height) { r._h = height; r.style.height = height + 'px'; }
+      if (r._l !== left) { r._l = left; r.style.left = left + 'px'; }
+      if (r._w !== width) { r._w = width; r.style.width = width + 'px'; }
     }
     // Surplus rails are hidden, not removed — the pool high-water-marks and
     // then stops mutating the DOM entirely.
