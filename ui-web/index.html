@@ -6,6 +6,7 @@
 <link rel="stylesheet" href="src/tokens.css">
 <link rel="stylesheet" href="src/tracker.css">
 <link rel="stylesheet" href="src/arrange.css">
+<link rel="stylesheet" href="src/mixer.css">
 <style>
   html, body { margin: 0; height: 100%; background: var(--uni-surface-tracker-bg); color: var(--base-text); }
   body { font-family: var(--font-chrome); font-size: var(--font-size-chrome); overflow: hidden; }
@@ -32,9 +33,9 @@
                   font-size: var(--font-size-inst); letter-spacing: var(--font-tracking-fx);
                   color: var(--uni-text-instrument);
                   border-right: var(--uni-rule-track-width) solid var(--uni-rule-track); }
-  #tracker, #arrange { position: absolute; left: 0; right: 0; bottom: 16px;
+  #tracker, #arrange, #mixer { position: absolute; left: 0; right: 0; bottom: 16px;
              top: calc(38px + var(--metrics-header-height)); }
-  #arrange[hidden] { display: none; }
+  #arrange[hidden], #mixer[hidden] { display: none; }
   #hud { background: var(--uni-surface-tracker-bg); padding: 1px 4px; }
 </style>
 
@@ -42,6 +43,7 @@
 <div id="head"></div>
 <div id="tracker"></div>
 <div id="arrange" hidden></div>
+<div id="mixer" hidden></div>
 <div id="hud"></div>
 
 <script type="module">
@@ -52,6 +54,9 @@ import { connectEngine } from './src/engine.js';
 import { createChrome } from './src/chrome.js';
 import { Arrange } from './src/arrange.js';
 import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM } from './src/arrangemodel.js';
+import { Mixer } from './src/mixer.js';
+import { buildMixerModel, createMixerBuffer, createMixerState,
+         gainAtPosition, FLAG_MUTE, FLAG_SOLO } from './src/mixermodel.js';
 import { createEntry, feed, cancel, begin, parseToken, editing, NOTE_KEYS, NOTE_OFF_KEY,
          TOKEN_KEY, pitchOf, pitchToToken, hexValue, shiftDigit } from './src/entry.js';
 
@@ -82,6 +87,39 @@ const arrangeHost = document.getElementById('arrange');
 const arrange = new Arrange(arrangeHost, metrics);
 const ARRANGE_LANE_H = 44;
 let arrangeBuf = null;
+
+// Mixer state is LOCAL: the engine takes SetTrackMixer but publishes nothing
+// back, so this is what we last sent and nothing more. See mixermodel.js.
+const mixerState = createMixerState(16);
+let mixerBuf = null;
+let mixRevision = 0;
+const mixerHost = document.getElementById('mixer');
+
+function sendMixer(track) {
+  const s = mixerState.strips[track];
+  mixRevision++;
+  if (!conn || !conn.send({ type: 'mixer', track, gain: s.gain, pan: s.pan, flags: s.flags })) {
+    state.reject = 'no engine';
+  }
+  schedule();
+}
+
+const mixer = new Mixer(mixerHost, {
+  onGain: (track, pos) => {
+    mixerState.strips[track].gain = gainAtPosition(pos);
+    sendMixer(track);
+  },
+  onPan: (track, dir) => {
+    const s = mixerState.strips[track];
+    s.pan = Math.max(-1000, Math.min(1000, s.pan + dir * 100));
+    sendMixer(track);
+  },
+  onToggle: (track, which) => {
+    const s = mixerState.strips[track];
+    s.flags ^= which === 'mute' ? FLAG_MUTE : FLAG_SOLO;
+    sendMixer(track);
+  },
+});
 
 // A 100,000-row timeline. Nothing materialises it; the pool is viewport-sized.
 const TOTAL_ROWS = 100000;
@@ -261,6 +299,24 @@ function tickToRow(tick) {
   return Math.floor(tick / ZOOM_LEVELS[state.zoom].rowNanoticks);
 }
 
+function drawMixer() {
+  const n = Math.min(state.tracks, 16);
+  if (!mixerBuf || mixerBuf._shape !== String(n)) mixerBuf = createMixerBuffer(n);
+  mixer.render(buildMixerModel({
+    tracks: n,
+    engine: state.useEngine === false ? null : engine,
+    mixer: mixerState,
+    mixRevision,
+  }, mixerBuf));
+  chrome.update({
+    playheadTick: engine ? engine.playheadTick : 0,
+    transport: engine ? engine.transport : 0,
+    linkText: engine && engine.stale ? 'engine gone'
+      : engine && conn && conn.stats().connected ? 'live' : state.link,
+    octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+  });
+}
+
 /** Arrange draws from the same store; only the projection differs. */
 function drawArrange() {
   const lanes = Math.min(state.tracks, 16);
@@ -290,13 +346,15 @@ function drawArrange() {
 function draw() {
   // One scheduler, two surfaces. Hiding the other host rather than unmounting it
   // keeps its pools warm, so switching views costs no rebuild.
-  const wantArrange = state.view === 'arrange';
-  if (arrangeHost.hidden === wantArrange) {
-    arrangeHost.hidden = !wantArrange;
-    host.style.display = wantArrange ? 'none' : '';
-    head.style.display = wantArrange ? 'none' : '';
-  }
+  const v = state.view;
+  const wantArrange = v === 'arrange', wantMixer = v === 'mixer';
+  if (arrangeHost.hidden === wantArrange) arrangeHost.hidden = !wantArrange;
+  if (mixerHost.hidden === wantMixer) mixerHost.hidden = !wantMixer;
+  const trackerOn = !wantArrange && !wantMixer;
+  const disp = trackerOn ? '' : 'none';
+  if (host.style.display !== disp) { host.style.display = disp; head.style.display = disp; }
   if (wantArrange) return drawArrange();
+  if (wantMixer) return drawMixer();
   const shapeChanged = tracker.poolSize === 0 || !headRow || headRow.children.length !== state.tracks + 1;
   tracker.resize(host.clientHeight, state.tracks, state.columns);
   if (shapeChanged) buildHead();
@@ -510,7 +568,17 @@ addEventListener('keydown', (e) => {
 
   // 2.5 View switch, and arrange's own navigation. Arrange has no rows and no
   //     cell editing, so it must not fall through into the tracker's keys.
-  if (k === 'Tab') { state.view = state.view === 'arrange' ? 'tracker' : 'arrange'; return done(); }
+  if (k === 'Tab') {
+    const order = ['tracker', 'arrange', 'mixer'];
+    const i = order.indexOf(state.view);
+    state.view = order[(i + (e.shiftKey ? order.length - 1 : 1)) % order.length];
+    return done();
+  }
+  if (state.view === 'mixer') {
+    if (k === ' ') { cmd('play'); return done(); }
+    if (k === 'Escape') { state.reject = null; return done(); }
+    return;
+  }
   if (state.view === 'arrange') {
     const page = arrangeBuf ? arrangeBuf.view.ticksPerPixel * arrangeBuf.view.width : 3840000;
     if (k === 'ArrowRight') { state.arrangeStart += page / 8; return done(); }
@@ -677,6 +745,11 @@ window.__uni = {
                  state.playhead = 0; state.zoom = 3; state.scrollX = 0; state.start = 0;
                  engine = null; state.useEngine = false; state.view = 'tracker';
                  state.arrangeStart = 0; state.arrangeZoom = 3; state.selectedPlacement = -1;
+                 state.tracks = 16;
+                 for (let i = 0; i < mixerState.strips.length; i++) {
+                   const s = mixerState.strips[i]; s.gain = 0; s.pan = 0; s.flags = 0;
+                 }
+                 mixRevision++;
                  // The HUD carries a live node count and frame counter. Pin it
                  // here too, or a scene inherits whatever the previous scene's
                  // timer last wrote and the golden differs by that strip alone.
@@ -727,6 +800,10 @@ window.__uni = {
   lpb: () => (engine ? Array.from(engine.lpb) : null),
   view: (v) => { if (v) { state.view = v; draw(); } return state.view; },
   arrangeProbe: () => arrange.probe(),
+  mixerProbe: () => mixer.probe(),
+  setGain: (t, pos) => { mixerState.strips[t].gain = gainAtPosition(pos); sendMixer(t); },
+  setPan: (t, p) => { mixerState.strips[t].pan = p; sendMixer(t); },
+  toggleStrip: (t, w) => { mixerState.strips[t].flags ^= w === 'mute' ? FLAG_MUTE : FLAG_SOLO; sendMixer(t); },
   arrangeZoom: (z) => { state.arrangeZoom = z; draw(); },
   arrangeTo: (tick) => { state.arrangeStart = Math.max(0, tick); draw(); },
   extents: () => (engine ? engine.extents.slice(0, engine.extentCount)
@@ -772,6 +849,35 @@ window.__uni = {
                extents, extentCount: extents.length, extentsRevision: 1,
                lpb: Uint8Array.from([4, 4, 4, 3, 4, 6, 0, 0]),
                rowGrid: 1, notesRevision: 1, aggRevision: 1 };
+    draw();
+  },
+  /**
+   * Mixer fixture with known faders, both toggles, and synthetic meter levels.
+   * Meters need real audio to move, which webtest (no plugins) cannot produce,
+   * so a golden without fake peaks would never exercise the meter path at all.
+   */
+  useMixerFixture: () => {
+    state.useEngine = true; state.hudFrozen = true; conn.close();
+    hudText.nodeValue = 'mixer-fixture';
+    state.view = 'mixer';
+    const peaks = new Float32Array(16);
+    for (let i = 0; i < 8; i++) peaks[i] = [0.9, 0.5, 0.25, 0.05, 0.7, 0.01, 0, 0.35][i];
+    engine = { ok: true, seq: 1, playheadTick: 0, visualSample: 0, clipVersion: 1,
+               harmonyVersion: 0, transport: 1, trackCount: 8, stale: false,
+               peaks, peakCount: 8, notes: [], noteCount: 0,
+               aggCount: new Uint32Array(0), aggRep: new Uint8Array(0),
+               aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
+               extents: [], extentCount: 0, extentsRevision: 1,
+               lpb: Uint8Array.from([4, 4, 4, 3, 4, 6, 0, 0]),
+               rowGrid: 1, notesRevision: 1, aggRevision: 1 };
+    const g = [0.85, 0.6, 0.702, 0.702, 0.702, 0.45, 0.702, 0.9];
+    for (let i = 0; i < 8; i++) mixerState.strips[i].gain = gainAtPosition(g[i]);
+    mixerState.strips[2].pan = -400;
+    mixerState.strips[5].pan = 600;
+    mixerState.strips[3].flags = FLAG_MUTE;
+    mixerState.strips[4].flags = FLAG_SOLO;
+    mixRevision++;
+    state.tracks = 8;
     draw();
   },
   /** Which rows a lane actually has, for assertions that don't read pixels. */

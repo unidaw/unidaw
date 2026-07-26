@@ -52,6 +52,7 @@ const SCENES = [
   { name: 'arrange', arrange: true, setup: async (p) => p.evaluate(() => window.__uni.useArrangeFixture()) },
   { name: 'arrange-zoomed', arrange: true, setup: async (p) => p.evaluate(() => {
       window.__uni.useArrangeFixture(); window.__uni.arrangeZoom(5); }) },
+  { name: 'mixer', mixer: true, setup: async (p) => p.evaluate(() => window.__uni.useMixerFixture()) },
   { name: 'typed', setup: async (p) => { for (let i = 0; i < 12; i++) await p.keyboard.press('ArrowDown'); await p.keyboard.press('ArrowRight'); } },
   // The token buffer is the ONLY thing that waits for Enter, and it is only ever
   // opened by `@`. Every other keystroke commits on the keydown.
@@ -129,6 +130,21 @@ for (const scene of SCENES) {
     ok(a.domNodes < 1200, `arrange dom bounded: ${a.domNodes}`);
     ok(a.playheadX >= 0, `playhead placed: ${a.playheadX}`);
     console.log(`  ${a.zoom}  ${a.clips} clips  ${a.gridLines} gridlines  ${a.domNodes} nodes`);
+    await shoot(scene);
+    continue;
+  }
+
+  if (scene.mixer) {
+    const m = await page.evaluate(() => window.__uni.mixerProbe());
+    ok(m !== null, 'mixer model built');
+    ok(m.strips === 8, `strips: ${m.strips}`);
+    ok(m.authoritative === false, 'mixer declares itself non-authoritative');
+    ok(m.detail[3].mute && !m.detail[3].solo, 'mute flag on T04');
+    ok(m.detail[4].solo && !m.detail[4].dim, 'solo on T05 and not dimmed');
+    ok(m.detail[0].dim, 'unsoloed strips dimmed while something is soloed');
+    ok(m.detail[2].pan === 'L40' && m.detail[5].pan === 'R60', 'pan labels');
+    ok(m.detail[0].meter > m.detail[3].meter, 'meters map level to height');
+    console.log(`  ${m.strips} strips  dB ${m.detail.slice(0,3).map(s=>s.db).join(' ')}`);
     await shoot(scene);
     continue;
   }

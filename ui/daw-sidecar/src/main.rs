@@ -512,6 +512,14 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         p.note_duration_hi = (dur >> 32) as u32;
     } else if body.contains("\"delete\"") {
         p.command_type = UiCommandType::DeleteNote as u16;
+    } else if body.contains("\"mixer\"") {
+        // Gain is signed millibels and pan signed thousandths, but the payload
+        // fields are u32 — bit-cast rather than clamp, since the engine reads
+        // them back as i32 and a saturating cast would silently mean full left.
+        p.command_type = UiCommandType::SetTrackMixer as u16;
+        p.value0 = (parse_num(body, "\"gain\"").unwrap_or(0).clamp(-9600, 1200) as i32) as u32;
+        p.plugin_index = (parse_num(body, "\"pan\"").unwrap_or(0).clamp(-1000, 1000) as i32) as u32;
+        p.flags = parse_num(body, "\"flags\"").unwrap_or(0).clamp(0, 3) as u16;
     } else if body.contains("\"undo\"") {
         p.command_type = UiCommandType::Undo as u16;
     } else if body.contains("\"redo\"") {
