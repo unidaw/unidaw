@@ -93,6 +93,28 @@ Corollary for tests: a fixture where every lane shares a grid cannot distinguish
 correct projection from a plausible one. `__uni.useMixedGrid()` exists for exactly
 this and any grid work must be checked against it.
 
+The last three add two more shapes. An identifier that MOVES is not an identity:
+`placement_id` is currently an extent's index, so a selection keyed on it jumps
+to a different clip when the list changes — both the arrange and piano-roll
+selections are keyed on (track, position) instead. And a version compared against
+ITSELF is not a check at all: both harmony readers refreshed the version from the
+snapshot earlier in the same function and then compared it to itself, so the
+timeline would have been read exactly once. Hold the version the data you have was
+READ at, separately from the version currently published.
+
+### 2.3 Strides and offsets are load-bearing
+
+Twice a field added to the wire has shifted everything after it. The first grew a
+note from 40 to 42 bytes and decoded clip extents as garbage — rendering nothing,
+erroring nowhere. The second put a count after a pad instead of in place of it,
+and every note pitch read 0.
+
+The encoder asserts its full header length against the constant the client
+expects, in BOTH builds: `debug_assert` fails at the point of the mistake during
+development, and a startup check exits in release, since release is what ships
+and the one where a silent reinterpretation actually costs something. Add a field,
+update both numbers, and the assertion tells you if you got it wrong.
+
 ---
 
 ### 2.2 Two rules from index.html specifically
