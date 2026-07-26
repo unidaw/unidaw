@@ -59,7 +59,11 @@ for port in 8174 8175; do
     kill "$pid" 2>/dev/null || true
   done
 done
-pkill -f 'juce_host_process' 2>/dev/null || true
+# NOT killing juce_host_process. It is tempting — orphaned hosts do linger after
+# an engine dies — but the backend agent's engines spawn hosts too, and a global
+# pkill would shoot down their test runs. That is the same cross-agent hazard the
+# engine kill above is scoped to avoid; leaving a few orphans is the cheaper
+# mistake. They are harmless: an orphan holds a socket nobody connects to.
 sleep 1
 
 [ -x "$ENGINE" ] || { say "no engine at $ENGINE — run: cmake --build build --target daw_engine"; exit 1; }
