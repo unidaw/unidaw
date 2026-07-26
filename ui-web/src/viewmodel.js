@@ -93,7 +93,10 @@ export function createBuffer(rowCount, trackCount, columns) {
   for (let i = 0; i < rowCount; i++) {
     const cells = new Array(trackCount * columns);
     for (let t = 0, k = 0; t < trackCount; t++)
-      for (let c = 0; c < columns; c++) cells[k++] = { track: t, col: c, text: '', kind: 'empty' };
+      for (let c = 0; c < columns; c++)
+        cells[k++] = { track: t, col: c, text: '', kind: 'empty',
+                       // Aggregate for this cell at coarse zoom. count 0 = none.
+                       aggCount: 0, aggLo: 0, aggHi: 0 };
     rows[i] = { index: 0, label: '', beat: false, bar: false, cells };
   }
   return {
@@ -142,8 +145,9 @@ export function buildViewModel(opts, buf) {
     for (let t = 0; t < trackCount; t++) {
       const inClip = engine ? true : clipIndexAt(tick, t) >= 0;
       for (let c = 0; c < columns; c++) {
-        if (engine) { const cl = cells[ci++]; cl.text = ''; cl.kind = 'empty'; continue; }
+        if (engine) { const cl = cells[ci++]; cl.text = ''; cl.kind = 'empty'; cl.aggCount = 0; continue; }
         const cell = cells[ci++];
+        cell.aggCount = 0;
         if (!inClip) { cell.text = ''; cell.kind = 'outside'; continue; }
         if (zoom.aggregate && c === 0) {
           // A coarse row spans many finer rows; count the events that fall in it.
@@ -248,7 +252,32 @@ export function buildViewModel(opts, buf) {
   // Bumped when the cells say something new for reasons the renderer's identity
   // check cannot see. Engine edits move notesRevision; the fixture is a pure
   // function of (tick, zoom) so it only changes when those do.
-  buf.contentRevision = engine ? engine.notesRevision : zoomIndex;
+  // Coarse zoom: draw the engine's aggregate as a pitch-range mark rather than a
+  // count. At four bars a row spans 64 sixteenths, so every count read 30-45 —
+  // uniform noise down the column, carrying no information. pitch_min/pitch_max
+  // says "this region is busy and rising", which a number cannot.
+  if (engine && zoom.aggregate && engine.aggRows) {
+    for (let t = 0; t < Math.min(trackCount, engine.aggTracks); t++) {
+      for (let ri = 0; ri < rowCount && ri < engine.aggRows; ri++) {
+        const a = t * engine.aggRows + ri;
+        const count = engine.aggCount[a];
+        if (!count) continue;
+        const cell = rows[ri].cells[t * columns];
+        if (!cell) continue;
+        cell.text = '';
+        cell.kind = 'contour';
+        cell.aggCount = count;
+        cell.aggLo = engine.aggLo[a];
+        cell.aggHi = engine.aggHi[a];
+      }
+    }
+  }
+
+  // Both revisions, because either can change what the cells say while every row
+  // index stays put — and the renderer's identity check cannot see either.
+  buf.contentRevision = engine
+    ? engine.notesRevision * 1e6 + engine.aggRevision
+    : zoomIndex;
 
   buf.window.startRow = startRow; buf.window.rowCount = rowCount;
   buf.zoom = zoom;

@@ -42,6 +42,11 @@ export function createStore() {
     aggTracks: 0,
     /** Bumped whenever notes actually changed, so consumers can skip work. */
     notesRevision: 0,
+    /** Same, for aggregates. They change when the VIEWPORT moves, not when notes
+     *  do — so a consumer keyed only on notesRevision never sees them arrive.
+     *  That is the third time this exact shape has bitten: content changing
+     *  without the thing the renderer watches changing. */
+    aggRevision: 0,
   };
 }
 
@@ -124,12 +129,17 @@ export function decode(buf, store) {
       store.aggHi = new Uint8Array(aggN);
     }
     let o = HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES;
+    let changed = aggRows !== store.aggRows || aggTracks !== store.aggTracks;
     for (let i = 0; i < aggN; i++, o += 8) {
-      store.aggCount[i] = v.getUint32(o, true);
+      const c = v.getUint32(o, true);
+      const lo = v.getUint8(o + 5), hi = v.getUint8(o + 6);
+      if (!changed && (store.aggCount[i] !== c || store.aggLo[i] !== lo || store.aggHi[i] !== hi)) changed = true;
+      store.aggCount[i] = c;
       store.aggRep[i] = v.getUint8(o + 4);
-      store.aggLo[i] = v.getUint8(o + 5);
-      store.aggHi[i] = v.getUint8(o + 6);
+      store.aggLo[i] = lo;
+      store.aggHi[i] = hi;
     }
+    if (changed) store.aggRevision++;
   }
   store.aggRows = aggRows;
   store.aggTracks = aggTracks;

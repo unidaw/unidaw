@@ -104,6 +104,10 @@ export class Tracker {
         // soak, which is the heap sawtooth. Writing .nodeValue mutates in place
         // and allocates nothing.
         cell.appendChild(document.createTextNode(''));
+        // The contour mark, created once and hidden. A pitch-range bar says more
+        // at coarse zoom than a count does; see viewmodel.js.
+        const bar = el('i', 'tk-bar');
+        cell.appendChild(bar);
         tr.append(cell);
       }
       row.append(tr);
@@ -138,6 +142,20 @@ export class Tracker {
       if (!tr.classList.contains('tk-track')) continue;
       for (const cell of tr.children) {
         const c = row.cells[i++];
+        const bar = cell.lastChild;
+        if (c.aggCount) {
+          // MIDI 24..96 covers the useful range; clamp rather than scale to the
+          // window, so a mark means the same pitch height on every row.
+          const lo = Math.max(0, Math.min(1, (c.aggLo - 24) / 72));
+          const hi = Math.max(0, Math.min(1, (c.aggHi - 24) / 72));
+          const bottom = (lo * 100) | 0;
+          const height = Math.max(8, ((hi - lo) * 100) | 0);
+          const op = Math.min(1, 0.25 + c.aggCount / 24);
+          if (bar._b !== bottom) { bar._b = bottom; bar.style.bottom = bottom + '%'; }
+          if (bar._h !== height) { bar._h = height; bar.style.height = height + '%'; }
+          if (bar._o !== op) { bar._o = op; bar.style.opacity = op; }
+          if (bar._on !== 1) { bar._on = 1; bar.style.display = 'block'; }
+        } else if (bar._on !== 0) { bar._on = 0; bar.style.display = 'none'; }
         const tn = cell.firstChild;
         if (tn.nodeValue !== c.text) tn.nodeValue = c.text;
         if (cell.dataset.kind !== c.kind) cell.dataset.kind = c.kind;
