@@ -497,12 +497,14 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if body.contains("\"play\"") {
         p.command_type = UiCommandType::TogglePlay as u16;
     } else if body.contains("\"stop\"") {
-        // The engine has TogglePlay and no Stop, so "stop" can only mean "pause
-        // if running" — there is no seek command to return to the start with.
-        // The client only sends this when transport is 1, so the toggle always
-        // means halt. Asked backend for Stop/SetPosition; until then this is
-        // half a stop and the button says so.
-        p.command_type = UiCommandType::TogglePlay as u16;
+        // A real Stop now: halt AND rewind. TogglePlay is pause-in-place.
+        p.command_type = UiCommandType::Stop as u16;
+    } else if body.contains("\"seek\"") {
+        // Target nanotick rides in note_nanotick_lo/hi, already set above from
+        // "tick". Seeking while playing is audible about an ahead-buffer later
+        // (~100ms) but the published playhead moves on the next block, so the
+        // UI is honest immediately.
+        p.command_type = UiCommandType::SetPosition as u16;
     } else if body.contains("\"note\"") {
         let dur = parse_num(body, "\"dur\"").unwrap_or(960_000).max(1) as u64;
         p.command_type = UiCommandType::WriteNote as u16;

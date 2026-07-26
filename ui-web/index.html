@@ -75,12 +75,7 @@ const host = document.getElementById('tracker');
 const head = document.getElementById('head');
 const chrome = createChrome(document.getElementById('chrome'), {
   onPlay: () => cmd('play'),
-  onStop: () => {
-    if (!engine || !engine.transport) { state.reject = 'not playing'; schedule(); return; }
-    cmd('stop');
-    state.reject = 'stopped (engine has no rewind yet)';
-    schedule();
-  },
+  onStop: () => { cmd('stop'); state.reject = null; schedule(); },
 });
 // No write path yet — the command ring needs a channel the write-only socket
 // does not have. The buttons exist and say so rather than pretending.
@@ -664,6 +659,11 @@ addEventListener('keydown', (e) => {
     if (k === ']') { state.cursor.track = Math.min(state.tracks - 1, state.cursor.track + 1); return done(); }
     if (k === ' ') { cmd('play'); return done(); }
     if (k === 'Escape') { state.selectedNote = -1; state.reject = null; return done(); }
+    if (k === 's') {
+      conn && conn.send({ type: 'seek', track: state.cursor.track,
+                          tick: Math.max(0, Math.round(state.pianoStart)) });
+      return done();
+    }
     if (k === 'Backspace' || k === 'Delete') {
       if (state.selectedNote < 0) { state.reject = 'select a note first'; return done(); }
       // Delete is by tick on a track, so find the selected note's tick.
@@ -773,10 +773,12 @@ arrangeHost.addEventListener('pointerdown', (e) => {
   if (!hit) return;
   state.cursor.track = hit.track;
   state.selectedPlacement = hit.placement;
-  // Click-to-position needs SetPosition, which the engine does not have; say so
-  // rather than moving a playhead the engine will immediately contradict.
-  if (hit.placement < 0) state.reject = 'seek needs an engine command (asked backend)';
-  else state.reject = null;
+  // Click on empty lane seeks. On a placement it selects, because dragging
+  // clips is the more common intent there and a stray seek would be surprising.
+  if (hit.placement < 0) {
+    conn && conn.send({ type: 'seek', track: hit.track, tick: Math.max(0, Math.round(hit.tick)) });
+  }
+  state.reject = null;
   schedule();
 });
 
