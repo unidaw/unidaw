@@ -75,7 +75,9 @@ const TOTAL_ROWS = 100000;
 let engine = null;
 let conn = null;
 let lastViewportKey = -1;
-const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', selection: null, zoom: 2, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', selection: null,
+  // Entry state, shown in the chrome so you can see what you are typing into.
+  octave: 4, editStep: 1, velocity: 100, zoom: 2, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -120,6 +122,16 @@ function buildHead() {
   head.append(headRow);
 }
 
+// Tracker note entry: the piano layout on the QWERTY home rows, as every
+// tracker since Ultimate Soundtracker. The lower row is one octave below the
+// upper. Pressing a note key WRITES it — there is no confirm step; that is what
+// makes tracker entry fast, and it is why Enter-to-insert was wrong.
+const NOTE_KEYS = {
+  // upper row: C .. C
+  q: 0, '2': 1, w: 2, '3': 3, e: 4, r: 5, '5': 6, t: 7, '6': 8, y: 9, '7': 10, u: 11, i: 12,
+  // lower row: an octave down
+  z: -12, s: -11, x: -10, d: -9, c: -8, v: -7, g: -6, b: -5, h: -4, n: -3, j: -2, m: -1,
+};
 const NANOTICKS_PER_BEAT = 960000;
 /** Ticks per row on a given lane's own grid. */
 function laneRowTicks(track) {
@@ -156,6 +168,7 @@ function draw() {
     playheadTick: engine ? engine.playheadTick : 0,
     transport: engine ? engine.transport : 0,
     linkText: engine && conn && conn.stats().connected ? 'live' : state.link,
+    octave: state.octave, editStep: state.editStep,
   });
   // The sidecar owns the projection and the aggregation, so it needs to know
   // what we are looking at. Only sent when it actually moves.
@@ -227,19 +240,26 @@ addEventListener('keydown', (e) => {
     state.cursor.track = Math.floor(f / state.columns); state.cursor.col = f % state.columns; }
   else if (k === 'PageDown') { state.start = Math.min(TOTAL_ROWS - tracker.poolSize, state.start + 32); e.preventDefault(); schedule(); return; }
   else if (k === 'PageUp') { state.start = Math.max(0, state.start - 32); e.preventDefault(); schedule(); return; }
-  else if (k === 'Enter') {
-    // Write a note at the cursor. The pitch is a placeholder until keyboard
-    // note entry lands; the point here is that the ring round-trip works.
-    // Tick in the LANE's grid, not the viewport's. The sidecar projects notes
-    // back using lines_per_beat per track, so computing the tick in viewport
-    // space put a note written at display row 1 onto row 4.
-    const t = tickOfCursorRow();
-    conn && conn.send({ type: 'note', track: state.cursor.track,
-                        pitch: 60, tick: t, dur: laneRowTicks(state.cursor.track), vel: 100 });
-    e.preventDefault(); return;
+  else if (!e.metaKey && !e.ctrlKey && Object.prototype.hasOwnProperty.call(NOTE_KEYS, k.toLowerCase())) {
+    // Write immediately at the cursor, then advance by the edit step — the
+    // tracker gesture. Tick is computed in the LANE's grid, not the viewport's:
+    // the sidecar projects notes back per lane, so viewport-space ticks put a
+    // note written at display row 1 onto row 4.
+    const pitch = 12 * (state.octave + 1) + NOTE_KEYS[k.toLowerCase()];
+    if (pitch >= 0 && pitch <= 127) {
+      conn && conn.send({ type: 'note', track: state.cursor.track, pitch,
+                          tick: tickOfCursorRow(), dur: laneRowTicks(state.cursor.track),
+                          vel: state.velocity });
+      state.cursor.row += state.editStep;
+      follow();
+    }
+    e.preventDefault(); schedule(); return;
   }
+  else if (k === '[') { state.octave = Math.max(0, state.octave - 1); e.preventDefault(); schedule(); return; }
+  else if (k === ']') { state.octave = Math.min(9, state.octave + 1); e.preventDefault(); schedule(); return; }
   else if (k === 'Backspace' || k === 'Delete') {
     conn && conn.send({ type: 'delete', track: state.cursor.track, tick: tickOfCursorRow() });
+    state.cursor.row += state.editStep; follow();
     e.preventDefault(); return;
   }
   else if (k === 'z' && (e.metaKey || e.ctrlKey)) {
@@ -312,6 +332,7 @@ window.__uni = {
     f1: Math.max(state.cursor.track * state.columns + state.cursor.col, f) }; draw(); },
   selection: () => state.selection,
   engineStats: () => conn.stats(),
+  canSend: () => conn && conn.canSend(),
   // Goldens must not depend on whether a sidecar happens to be running.
   // Pins the fixture AND freezes the HUD: live frame counts and link status are
   // non-deterministic, so leaving them in the render makes every golden flaky.

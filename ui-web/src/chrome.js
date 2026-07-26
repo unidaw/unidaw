@@ -48,6 +48,14 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
   const sig = label('ch-meta', '4/4');
   pos.append(posLabel, tempo, sig);
 
+  // Entry state. A tracker where you cannot see the octave you are typing into
+  // is a tracker that writes the wrong notes silently.
+  const entry = document.createElement('div');
+  entry.className = 'ch-group';
+  const octLabel = label('ch-meta', 'oct 4');
+  const stepLabel = label('ch-meta', 'step 1');
+  entry.append(octLabel, stepLabel);
+
   const scales = document.createElement('button');
   scales.className = 'ch-btn ch-scales';
   scales.title = 'Scale browser';
@@ -62,18 +70,20 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
   const link = label('ch-link', 'connecting');
   right.append(link, scales);
 
-  host.append(brand, transport, pos, right);
+  host.append(brand, transport, pos, entry, right);
 
   if (onPlay) play.addEventListener('click', onPlay);
   if (onStop) stop.addEventListener('click', onStop);
   if (onScales) scales.addEventListener('click', onScales);
 
   // Cached scalars, so a write only happens when the value actually changes.
-  let lastTick = -1, lastTransport = -1, lastLink = '';
+  let lastTick = -1, lastTransport = -1, lastLink = '', lastOct = -1, lastStep = -1;
 
   return {
     /** Called from the draw loop. Must stay allocation-free when nothing moves. */
-    update({ playheadTick, transport: tstate, linkText }) {
+    update({ playheadTick, transport: tstate, linkText, octave, editStep }) {
+      if (octave !== lastOct) { lastOct = octave; octLabel.firstChild.nodeValue = 'oct ' + octave; }
+      if (editStep !== lastStep) { lastStep = editStep; stepLabel.firstChild.nodeValue = 'step ' + editStep; }
       if (playheadTick !== lastTick) {
         lastTick = playheadTick;
         const beat = Math.floor(playheadTick / NANOTICKS_PER_QUARTER);
