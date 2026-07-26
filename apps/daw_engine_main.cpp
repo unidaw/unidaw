@@ -47,6 +47,7 @@
 #include "apps/time_base.h"
 #include "apps/musical_structures.h"
 #include "apps/placement_schedule.h"
+#include "apps/note_entry.h"
 #include "apps/automation_clip.h"
 #include "apps/uid_hash.h"
 #include "apps/scale_library.h"
@@ -1557,6 +1558,31 @@ struct TrackRuntime {
         continue;
       }
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      if (runtime->arrangementDirty.load(std::memory_order_relaxed)) {
+        // Live-edited track: its authored placements no longer describe the
+        // notes, so derive rails from the flat clip by proximity — the same
+        // segmentation a save emits, so what the UI draws matches what lands on
+        // disk. Every note falls under a rail ("no notes outside clips").
+        const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
+        const auto segments =
+            daw::segmentEventsIntoClips(runtime->track.clip.events(), bar, bar);
+        uint32_t placementId = 0;
+        for (const auto& seg : segments) {
+          if (count >= daw::kUiMaxClipExtents) {
+            break;
+          }
+          daw::UiClipExtent& out = region->extents[count];
+          out.placementId = placementId++;
+          out.clipId = 0;  // derived from notes — no stable clip id yet
+          out.trackId = runtime->trackId;
+          out.flags = 0;
+          out.startTick = seg.at;
+          out.endTick = seg.at + seg.length;
+          std::memset(out.name, 0, sizeof(out.name));
+          ++count;
+        }
+        continue;
+      }
       for (const auto& ext : runtime->clipExtents) {
         if (count >= daw::kUiMaxClipExtents) {
           break;
@@ -2527,28 +2553,31 @@ struct TrackRuntime {
         }
         track.placements = std::move(trackPlacements);
       } else if (!trackClip.events().empty()) {
-        // clip length = the tick just past the last event.
-        uint64_t clipLen = 0;
-        for (const auto& e : trackClip.events()) {
-          const uint64_t dur =
-              e.type == daw::MusicalEventType::Note ? e.payload.note.durationNanoticks
-              : e.type == daw::MusicalEventType::Chord ? e.payload.chord.durationNanoticks
-                                                       : 0;
-          clipLen = std::max(clipLen, e.nanotickOffset + dur);
-        }
-        const uint32_t clipId = nextClipId++;
-        daw::ProjectClip projectClip;
-        projectClip.id = clipId;
-        projectClip.name = track.name;
-        projectClip.lengthNanoticks = clipLen;
-        projectClip.clip = std::move(trackClip);
-        document.clips.push_back(std::move(projectClip));
+        // No authored placement layout (a live-edited or never-loaded track), so
+        // derive clips from the notes: segment them by proximity so "no notes
+        // outside clips" holds on disk with sensible boundaries, rather than
+        // dumping everything into one clip at=0. One clip + placement per
+        // segment, ids allocated above every retained clip.
+        const uint64_t bar = 4 * document.nanoticksPerQuarter;
+        const auto segments =
+            daw::segmentEventsIntoClips(trackClip.events(), bar, bar);
+        for (const auto& seg : segments) {
+          const uint32_t clipId = nextClipId++;
+          daw::ProjectClip projectClip;
+          projectClip.id = clipId;
+          projectClip.name = track.name;
+          projectClip.lengthNanoticks = seg.length;
+          for (const auto& e : seg.events) {
+            projectClip.clip.addEvent(e);
+          }
+          document.clips.push_back(std::move(projectClip));
 
-        daw::ProjectPlacement placement;
-        placement.clipId = clipId;
-        placement.at = 0;
-        placement.lengthNanoticks = clipLen;
-        track.placements.push_back(std::move(placement));
+          daw::ProjectPlacement placement;
+          placement.clipId = clipId;
+          placement.at = seg.at;
+          placement.lengthNanoticks = seg.length;
+          track.placements.push_back(std::move(placement));
+        }
       }
       // Stamp durable plugin identity. hostSlotIndex only means anything
       // against the scan that produced it, so it must not be what a saved

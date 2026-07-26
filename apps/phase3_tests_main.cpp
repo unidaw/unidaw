@@ -896,6 +896,45 @@ bool runNoteEntryTest() {
     if (d.kind != NoteEntryKind::CreateNew) return fail("before -> create");
     if (d.at != 0 || d.clipRelativeTick != Q) return fail("before snap");
   }
+
+  // --- segmentEventsIntoClips: the batch view of the same rule. ---
+  auto note = [](uint64_t tick, uint8_t pitch, uint64_t dur) {
+    daw::MusicalEvent e;
+    e.type = daw::MusicalEventType::Note;
+    e.nanotickOffset = tick;
+    e.payload.note.pitch = pitch;
+    e.payload.note.durationNanoticks = dur;
+    return e;
+  };
+  // Notes within a bar of each other collapse into one clip.
+  {
+    auto segs = daw::segmentEventsIntoClips(
+        {note(0, 60, Q), note(Q, 62, Q), note(2 * Q, 64, Q)}, THRESH, BAR);
+    if (segs.size() != 1) return fail("clustered -> one clip");
+    if (segs[0].at != 0 || segs[0].events.size() != 3) return fail("cluster contents");
+    if (segs[0].length != 3 * Q) return fail("cluster length past last note");
+  }
+  // A gap wider than the threshold splits into two clips, each bar-anchored.
+  {
+    auto segs = daw::segmentEventsIntoClips(
+        {note(0, 60, Q), note(4 * BAR, 72, Q)}, THRESH, BAR);
+    if (segs.size() != 2) return fail("gap -> two clips");
+    if (segs[0].at != 0 || segs[1].at != 4 * BAR) return fail("segment anchors");
+    if (segs[1].events.size() != 1 || segs[1].events[0].nanotickOffset != 0)
+      return fail("second clip rebased to its anchor");
+  }
+  // A lone note far in anchors its clip to the containing bar, rebased.
+  {
+    auto segs = daw::segmentEventsIntoClips({note(2 * BAR + 2 * Q, 60, Q)}, THRESH, BAR);
+    if (segs.size() != 1 || segs[0].at != 2 * BAR) return fail("lone anchor");
+    if (segs[0].events[0].nanotickOffset != 2 * Q) return fail("lone rebase");
+  }
+  // Unsorted input still segments in time order.
+  {
+    auto segs = daw::segmentEventsIntoClips(
+        {note(4 * BAR, 72, Q), note(0, 60, Q)}, THRESH, BAR);
+    if (segs.size() != 2 || segs[0].at != 0) return fail("unsorted");
+  }
   return true;
 }
 

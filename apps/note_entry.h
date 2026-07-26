@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "apps/musical_structures.h"
+
 namespace daw {
 
 // One placed clip on a track's timeline, resolved for note-entry decisions.
@@ -116,6 +118,66 @@ inline NoteEntryDecision resolveNoteEntry(std::vector<PlacementSpan> spans,
   d.at = barLength > 0 ? (entryTick / barLength) * barLength : entryTick;
   d.clipRelativeTick = entryTick - d.at;
   return d;
+}
+
+// A clip derived from a flat run of events by proximity: `at` is its anchor on
+// the track timeline, `length` its extent (past the last event's end), and
+// `events` its notes/chords rebased to clip-relative ticks.
+struct ClipSegment {
+  uint64_t at = 0;
+  uint64_t length = 0;
+  std::vector<MusicalEvent> events;
+};
+
+// The tick just past an event — a note/chord runs for its duration; anything
+// else is a point. Used to size a segment so its clip covers every note fully.
+inline uint64_t eventEndTick(const MusicalEvent& e) {
+  uint64_t dur = 0;
+  if (e.type == MusicalEventType::Note) {
+    dur = e.payload.note.durationNanoticks;
+  } else if (e.type == MusicalEventType::Chord) {
+    dur = e.payload.chord.durationNanoticks;
+  }
+  return e.nanotickOffset + dur;
+}
+
+// Segments a track's flat events into clips by the same rule resolveNoteEntry
+// applies one note at a time: walking the events in time order, each either
+// joins the clip it lands in / just past (within `stretchThreshold`) or starts a
+// new clip anchored to its bar. This is the batch view of "no notes outside
+// clips" — the rails a UI draws and the clips a save emits for a track whose
+// notes aren't already an authored placement layout. Pure and deterministic.
+inline std::vector<ClipSegment> segmentEventsIntoClips(
+    std::vector<MusicalEvent> events, uint64_t stretchThreshold,
+    uint64_t barLength) {
+  std::vector<ClipSegment> segments;
+  std::sort(events.begin(), events.end(),
+            [](const MusicalEvent& a, const MusicalEvent& b) {
+              return a.nanotickOffset < b.nanotickOffset;
+            });
+  for (const auto& e : events) {
+    std::vector<PlacementSpan> spans;
+    spans.reserve(segments.size());
+    for (std::size_t i = 0; i < segments.size(); ++i) {
+      spans.push_back(
+          PlacementSpan{segments[i].at, segments[i].length, segments[i].length, i});
+    }
+    const auto d =
+        resolveNoteEntry(spans, e.nanotickOffset, stretchThreshold, barLength);
+    std::size_t seg = 0;
+    if (d.kind == NoteEntryKind::CreateNew) {
+      segments.push_back(ClipSegment{d.at, 0, {}});
+      seg = segments.size() - 1;
+    } else {
+      seg = d.placementIndex;
+    }
+    MusicalEvent rebased = e;
+    rebased.nanotickOffset = d.clipRelativeTick;
+    const uint64_t end = eventEndTick(rebased);
+    segments[seg].events.push_back(rebased);
+    segments[seg].length = std::max(segments[seg].length, end);
+  }
+  return segments;
 }
 
 }  // namespace daw
