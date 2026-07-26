@@ -1025,6 +1025,9 @@ struct TrackRuntime {
     // emits to keep the arrangement's structure — provided the track hasn't been
     // edited live. Guarded by trackMutex; set on load.
     std::vector<daw::ProjectPlacement> sourcePlacements;
+    // Display name, published so every lane-labelling surface shares one source.
+    // Guarded by trackMutex; defaults to "Track N", set from the project on load.
+    std::string trackName;
     // Set when a command mutates the flat clip (note add/remove). A dirty track
     // no longer matches its sourcePlacements, so save flattens it instead
     // (edits win over structure until note entry is structural, M3.2).
@@ -1096,6 +1099,7 @@ struct TrackRuntime {
                                bool startHost) -> std::unique_ptr<TrackRuntime> {
     auto runtime = std::make_unique<TrackRuntime>();
     runtime->trackId = trackId;
+    runtime->trackName = "Track " + std::to_string(trackId + 1);
     runtime->config = baseConfig;
     runtime->config.socketPath =
         trackId == 0 ? baseConfig.socketPath : trackSocketPath(trackId);
@@ -2875,6 +2879,9 @@ struct TrackRuntime {
           runtime->clipExtents.push_back(std::move(ext));
         }
         runtime->track.harmonyQuantize = source.harmonyQuantize;
+        if (!source.name.empty()) {
+          runtime->trackName = source.name;
+        }
         // Restore the device chain so reopening a session restores its plugins,
         // and its sound. hostSlotIndex is a runtime scan index with no meaning
         // across runs, so re-resolve each VST device from its durable vstRef
@@ -7371,6 +7378,18 @@ struct TrackRuntime {
           ++publishedMixerVersion;
         }
         uiShm.header->uiMixerVersion = publishedMixerVersion;
+        // Per-track names (nul-padded, truncated to fit). Copied under the track
+        // mutex since the name is a std::string set on load.
+        for (uint32_t i = 0; i < daw::kUiMaxTracks; ++i) {
+          char* dst = uiShm.header->uiTrackName[i];
+          std::memset(dst, 0, daw::kUiTrackNameBytes);
+          if (i < trackSnapshot.size()) {
+            std::lock_guard<std::mutex> lock(trackSnapshot[i]->trackMutex);
+            const std::string& n = trackSnapshot[i]->trackName;
+            std::memcpy(dst, n.data(),
+                        std::min<size_t>(n.size(), daw::kUiTrackNameBytes - 1));
+          }
+        }
         uiShm.header->uiClipVersion =
             clipVersion.load(std::memory_order_acquire);
         writeUiClipWindowSnapshot(trackSnapshot);

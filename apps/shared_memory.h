@@ -23,7 +23,12 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //     uiMixerVersion), so the UI renders faders at their true position rather than
 //     from last-sent optimistic state. Grows the header past 256; region offsets
 //     are computed from sizeof(ShmHeader) so they shift automatically.
-constexpr uint16_t kShmVersion = 12;
+// 13: per-track names (uiTrackName), so every lane-labelling surface reads one
+//     source instead of inventing T01..T16.
+constexpr uint16_t kShmVersion = 13;
+
+// Max bytes for a published track name (nul-padded, may be truncated).
+constexpr uint32_t kUiTrackNameBytes = 24;
 
 constexpr uint32_t kUiMaxTracks = 8;
 constexpr uint32_t kUiMaxClipNotes = 4096;
@@ -88,6 +93,9 @@ struct alignas(64) ShmHeader {
   int32_t uiTrackPanThousandths[kUiMaxTracks]{};
   uint8_t uiTrackMixFlags[kUiMaxTracks]{};
   uint32_t uiMixerVersion = 0;
+  // v13: per-track names, nul-padded. Published alongside the track count so all
+  // lane-labelling surfaces share one source.
+  char uiTrackName[kUiMaxTracks][kUiTrackNameBytes]{};
 };
 
 struct alignas(64) RingHeader {

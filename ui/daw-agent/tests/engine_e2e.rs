@@ -244,6 +244,39 @@ fn roundtrip_preserves_placements() {
     assert_eq!(clip7["notes"].as_array().unwrap().len(), 2);
 }
 
+/// Track names are published: a fresh track defaults to "Track N", and a loaded
+/// project's name flows through so every lane-labelling surface reads one source.
+#[test]
+fn track_names_published() {
+    let _serial = SERIAL.lock().unwrap();
+    let (engine, session) = start_engine("names");
+    // Fresh engine: default name.
+    let names = session.handle().read_track_names();
+    assert_eq!(names.first().map(String::as_str), Some("Track 1"), "default name: {names:?}");
+
+    // Load a project whose track carries a distinctive name.
+    let proj = json!({
+        "schema_version": 3,
+        "meta": { "name": "named", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tracks": [ { "track_id": 0, "name": "Bassline" } ]
+    });
+    std::fs::write(engine.proj.join("named.uniproj.json"), serde_json::to_string(&proj).unwrap()).unwrap();
+    let before = session.handle().clip_version();
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"named"}) });
+    assert!(load.ok, "load: {load:?}");
+    session.handle().wait_for_clip_version(before, before.wrapping_add(1), Duration::from_secs(3));
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if session.handle().read_track_names().first().map(String::as_str) == Some("Bassline") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "loaded name never published: {:?}", session.handle().read_track_names());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// Per-track mixer state written via SetTrackMixer is published back verbatim, so
 /// the UI can render a fader at its true position; the mixer version advances.
 #[test]
