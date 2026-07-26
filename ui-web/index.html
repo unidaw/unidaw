@@ -2,6 +2,7 @@
 <meta charset="utf-8">
 <title>Uni — tracker</title>
 <link rel="stylesheet" href="src/fonts.css">
+<link rel="stylesheet" href="src/icons/phosphor.css">
 <link rel="stylesheet" href="src/tokens.css">
 <link rel="stylesheet" href="src/tracker.css">
 <style>
@@ -16,7 +17,7 @@
          border-top: 1px solid var(--uni-rule-gutter); pointer-events: none; z-index: 3; }
   /* The header is a sibling, not part of the scrolled band: it must not move
      vertically, and the tracker must start below it rather than under it. */
-  #head { position: absolute; left: 0; right: 0; top: 0; height: var(--metrics-header-height);
+  #head { position: absolute; left: 0; right: 0; top: 38px; height: var(--metrics-header-height);
           overflow: hidden; background: var(--uni-surface-header-bg);
           border-bottom: 1px solid var(--uni-rule-gutter); z-index: 3; }
   #head .hrow { position: absolute; display: flex; height: 100%; }
@@ -30,10 +31,12 @@
                   font-size: var(--font-size-inst); letter-spacing: var(--font-tracking-fx);
                   color: var(--uni-text-instrument);
                   border-right: var(--uni-rule-track-width) solid var(--uni-rule-track); }
-  #tracker { position: absolute; left: 0; right: 0; bottom: 16px; top: var(--metrics-header-height); }
+  #tracker { position: absolute; left: 0; right: 0; bottom: 16px;
+             top: calc(38px + var(--metrics-header-height)); }
   #hud { background: var(--uni-surface-tracker-bg); padding: 1px 4px; }
 </style>
 
+<div id="chrome"></div>
 <div id="head"></div>
 <div id="tracker"></div>
 <div id="hud"></div>
@@ -43,6 +46,7 @@ import { Tracker } from './src/tracker.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
 import M from './design/out/tokens.js';
 import { connectEngine } from './src/engine.js';
+import { createChrome } from './src/chrome.js';
 
 const metrics = {
   rowHeight: M.metrics.rowHeight,
@@ -53,6 +57,12 @@ const metrics = {
 
 const host = document.getElementById('tracker');
 const head = document.getElementById('head');
+const chrome = createChrome(document.getElementById('chrome'), {
+  onPlay: () => cmd('play'), onStop: () => cmd('stop'),
+});
+// No write path yet — the command ring needs a channel the write-only socket
+// does not have. The buttons exist and say so rather than pretending.
+function cmd(what) { state.link = 'no write path (' + what + ')'; schedule(); }
 const hud = document.getElementById('hud');
 const tracker = new Tracker(host, metrics);
 
@@ -131,6 +141,11 @@ function draw() {
     engine: state.useEngine === false ? null : engine,
   }, bufs[bi]);
   vm.scrollX = state.scrollX;
+  chrome.update({
+    playheadTick: engine ? engine.playheadTick : 0,
+    transport: engine ? engine.transport : 0,
+    linkText: engine && conn && conn.stats().connected ? 'live' : state.link,
+  });
   // The sidecar owns the projection and the aggregation, so it needs to know
   // what we are looking at. Only sent when it actually moves.
   const vpKey = state.zoom * 1e9 + state.start * 1000 + tracker.poolSize;
