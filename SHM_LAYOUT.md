@@ -87,8 +87,10 @@ Offsets within `ShmHeader` (aligned to 64 bytes overall):
   - `uiTrackPanThousandths[kUiMaxTracks]`: 288 (pan in thousandths, -1000..1000)
   - `uiTrackMixFlags[kUiMaxTracks]`: 320 (bit0 mute, bit1 solo)
   - `uiMixerVersion`: 328 (moves only when a value changes)
+- v13 per-track names (grows the header to 576):
+  - `uiTrackName[kUiMaxTracks][24]`: 332 (nul-padded display names)
 
-`sizeof(ShmHeader)` = 384 bytes (aligned to 64; region offsets are computed from
+`sizeof(ShmHeader)` = 576 bytes (aligned to 64; region offsets are computed from
 `sizeof(ShmHeader)`, so growing it shifts the rings/regions automatically).
 
 ## UI Version Gating (Seqlock)
