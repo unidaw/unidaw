@@ -1333,7 +1333,11 @@ conn = connectEngine({
   onAck: (msg) => {
     // The project list comes back on the command socket's ack channel.
     if (typeof msg === 'string' && msg.indexOf('"projects"') >= 0) {
-      try { state.projects = JSON.parse(msg).projects || []; schedule(); } catch (e) { /* keep the old list */ }
+      // Parse alone in the try; the assignment and redraw outside it, so a bug
+      // in either surfaces instead of reading as a malformed reply.
+      let parsed = null;
+      try { parsed = JSON.parse(msg); } catch (e) { /* keep the old list */ }
+      if (parsed) { state.projects = parsed.projects || []; schedule(); }
     }
     if (state.dockOpen) dock.log('out', String(msg).slice(0, 200));
     state.ack = String(msg).slice(0, 80);
@@ -1375,8 +1379,13 @@ function saveSession() {
 }
 
 function restoreSession() {
+  // The read is OUTSIDE the try. A catch meant to tolerate malformed JSON must
+  // not also swallow a ReferenceError — that is exactly how this function
+  // silently restored nothing when it was called before SESSION_KEY existed, and
+  // a silent bug is worth more than a tolerated one.
+  const raw = localStorage.getItem(SESSION_KEY);
   let s;
-  try { s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; }
+  try { s = JSON.parse(raw || 'null'); } catch (e) { return null; }
   if (!s) return null;
   // Clamped on the way in: a stored index from an older build can be out of
   // range, and a view that no longer exists would leave every surface hidden.

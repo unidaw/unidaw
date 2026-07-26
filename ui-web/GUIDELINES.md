@@ -92,6 +92,23 @@ this and any grid work must be checked against it.
 
 ---
 
+### 2.2 Two rules from index.html specifically
+
+Five temporal-dead-zone bugs in one file. Four failed loudly — the page did not
+boot — and the goldens catch those, because they record `pageerror`. The fifth
+was silent and cost the most.
+
+- **Anything that RUNS at module scope goes at the bottom**, after every
+  declaration it touches. Declarations hoist; `const` and `let` do not
+  initialise.
+- **A catch that tolerates bad data must not span anything else.** The silent one
+  was `try { s = JSON.parse(localStorage.getItem(SESSION_KEY)) } catch { return
+  null }` — written to tolerate malformed JSON, it swallowed the ReferenceError
+  from `SESSION_KEY` and the feature quietly did nothing while looking wired.
+  Read outside the try, parse inside it.
+
+---
+
 ## 3. Performance rules
 
 Ranked by how much they cost to get wrong.
