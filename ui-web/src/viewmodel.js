@@ -11,7 +11,13 @@
 
 /** @typedef {{track:number, col:number, text:string, kind:'note'|'inst'|'fx'|'empty'|'off'|'aggregate', pending?:boolean}} Cell */
 /** @typedef {{index:number, label:string, beat:boolean, bar:boolean, cells:Cell[]}} Row */
-/** @typedef {{id:number, track:number, startRow:number, endRow:number, name:string, active:boolean}} Clip */
+/**
+ * Clips live in TIMELINE coordinates, never in rows. A row index is a function
+ * of the current zoom, so storing one would bake this frame's zoom into durable
+ * data and the clip would move when the user zoomed. The renderer projects
+ * ticks to rows itself. endTick is exclusive.
+ * @typedef {{id:number, track:number, startTick:number, endTick:number, name:string, active:boolean}} Clip
+ */
 /** @typedef {{id:number, name:string, columns:number}} Track */
 
 export const ZOOM_LEVELS = [
@@ -46,34 +52,70 @@ function contentAt(tick, track, col) {
 }
 
 /**
+ * Allocate a reusable view-model buffer. Call once per shape change, then pass
+ * it to buildViewModel to be filled in place.
+ *
+ * The naive version allocated a fresh object graph every draw — ~74 rows and
+ * ~1,776 cell objects, over 100k objects/second at 60 fps. That is enough GC
+ * pressure to show up as an occasional two-frame stall on a held key, which is
+ * exactly the tail we measured (ArrowDown p50 9.5 ms, p95 30.7 ms).
+ *
+ * Callers double-buffer: the renderer compares the previous view-model against
+ * the current one to decide what to rebind, so `prev` and `vm` must be distinct
+ * objects. Alternating two buffers keeps that comparison meaningful at zero
+ * steady-state allocation.
+ */
+export function createBuffer(rowCount, trackCount, columns) {
+  const rows = new Array(rowCount);
+  for (let i = 0; i < rowCount; i++) {
+    const cells = new Array(trackCount * columns);
+    for (let t = 0, k = 0; t < trackCount; t++)
+      for (let c = 0; c < columns; c++) cells[k++] = { track: t, col: c, text: '', kind: 'empty' };
+    rows[i] = { index: 0, label: '', beat: false, bar: false, cells };
+  }
+  return {
+    window: { startRow: 0, rowCount },
+    zoom: ZOOM_LEVELS[0], tracks: [], rows, clips: [],
+    cursor: { row: 0, track: 0, col: 0 }, playhead: { row: 0 }, selection: null,
+    _shape: `${rowCount}x${trackCount}x${columns}`,
+    _clipPool: [],
+  };
+}
+
+/**
  * Build a view-model for a window of the timeline.
  * @param {{startRow:number, rowCount:number, tracks:number, columns:number,
  *          zoomIndex?:number, cursor?:{row:number,track:number,col:number},
  *          playheadRow?:number, selection?:any}} opts
  */
-export function buildViewModel(opts) {
+export function buildViewModel(opts, buf) {
   const {
     startRow, rowCount, tracks: trackCount, columns = 3,
     zoomIndex = 2, cursor = { row: startRow, track: 0, col: 0 },
     playheadRow = startRow, selection = null,
   } = opts;
 
+  const shape = `${rowCount}x${trackCount}x${columns}`;
+  if (!buf || buf._shape !== shape) buf = createBuffer(rowCount, trackCount, columns);
+
   const zoom = ZOOM_LEVELS[zoomIndex];
   const tickOf = (r) => r * zoom.rowNanoticks;
 
-  /** @type {Track[]} */
-  const tracks = Array.from({ length: trackCount }, (_, i) => ({
-    id: i, name: `T${String(i + 1).padStart(2, '0')}`, columns,
-  }));
+  if (buf.tracks.length !== trackCount) {
+    buf.tracks = Array.from({ length: trackCount }, (_, i) => ({
+      id: i, name: `T${String(i + 1).padStart(2, '0')}`, columns,
+    }));
+  }
 
-  /** @type {Row[]} */
-  const rows = [];
-  for (let r = startRow; r < startRow + rowCount; r++) {
-    /** @type {Cell[]} */
-    const cells = [];
+  const rows = buf.rows;
+  for (let ri = 0; ri < rowCount; ri++) {
+    const r = startRow + ri;
+    const cells = rows[ri].cells;
+    let ci = 0;
     const tick = tickOf(r);
     for (let t = 0; t < trackCount; t++) {
       for (let c = 0; c < columns; c++) {
+        const cell = cells[ci++];
         if (zoom.aggregate && c === 0) {
           // A coarse row spans many finer rows; count the events that fall in it.
           const span = zoom.rowNanoticks / ZOOM_LEVELS[0].rowNanoticks;
@@ -81,11 +123,11 @@ export function buildViewModel(opts) {
           for (let k = 0; k < span && k < 64; k++) {
             if (contentAt(tick + k * ZOOM_LEVELS[0].rowNanoticks, t, c).kind !== 'empty') n++;
           }
-          if (n > 1) cells.push({ track: t, col: c, text: `[${n}x]`, kind: 'aggregate' });
-          else { const { text, kind } = contentAt(tick, t, c); cells.push({ track: t, col: c, text, kind }); }
+          if (n > 1) { cell.text = `[${n}x]`; cell.kind = 'aggregate'; }
+          else { const g = contentAt(tick, t, c); cell.text = g.text; cell.kind = g.kind; }
         } else {
-          const { text, kind } = contentAt(tick, t, c);
-          cells.push({ track: t, col: c, text, kind });
+          const g = contentAt(tick, t, c);
+          cell.text = g.text; cell.kind = g.kind;
         }
       }
     }
@@ -94,32 +136,40 @@ export function buildViewModel(opts) {
     const bar = Math.floor(tick / TICKS_PER_BAR) + 1;
     const beatInBar = Math.floor((tick % TICKS_PER_BAR) / (TICKS_PER_BAR / 4)) + 1;
     const sub = Math.floor((tick % (TICKS_PER_BAR / 4)) / 60000);
-    rows.push({
-      index: r,
-      label: zoom.rowNanoticks >= TICKS_PER_BAR ? `${bar}` : `${bar}:${beatInBar}${sub ? ':' + String(sub).padStart(2, '0') : ''}`,
-      beat: tick % (TICKS_PER_BAR / 4) === 0,
-      bar: tick % TICKS_PER_BAR === 0,
-      cells,
-    });
+    const row = rows[ri];
+    row.index = r;
+    row.label = zoom.rowNanoticks >= TICKS_PER_BAR ? `${bar}` : `${bar}:${beatInBar}${sub ? ':' + String(sub).padStart(2, '0') : ''}`;
+    row.beat = tick % (TICKS_PER_BAR / 4) === 0;
+    row.bar = tick % TICKS_PER_BAR === 0;
   }
 
   // Clips overlapping the window. They span rows, which is why the renderer
   // draws rails outside the recycled row band.
-  /** @type {Clip[]} */
-  const clips = [];
-  const CLIP_LEN = Math.max(4, Math.round((TICKS_PER_BAR * 4) / zoom.rowNanoticks));
-  const first = Math.floor(startRow / CLIP_LEN) - 1;
-  for (let k = first; k <= Math.floor((startRow + rowCount) / CLIP_LEN); k++) {
-    if (k < 0) continue;
+  const clips = buf.clips;
+  clips.length = 0;
+  const pool = buf._clipPool;
+  let cn = 0;
+  const CLIP_TICKS = TICKS_PER_BAR * 4;              // 4-bar clips, zoom-independent
+  const winStart = tickOf(startRow), winEnd = tickOf(startRow + rowCount);
+  const kFirst = Math.max(0, Math.floor(winStart / CLIP_TICKS));
+  const kLast = Math.floor(winEnd / CLIP_TICKS);
+  for (let k = kFirst; k <= kLast; k++) {
     for (let t = 0; t < trackCount; t++) {
       if ((k + t) % 3 === 0) continue; // gaps
-      clips.push({
-        id: k * 100 + t, track: t,
-        startRow: k * CLIP_LEN, endRow: k * CLIP_LEN + CLIP_LEN - 4,
-        name: `clip ${k}.${t}`, active: (k + t) % 7 === 0,
-      });
+      const cl = pool[cn] || (pool[cn] = { id: 0, track: 0, startTick: 0, endTick: 0, name: '', active: false });
+      cn++;
+      cl.id = k * 100 + t; cl.track = t;
+      cl.startTick = k * CLIP_TICKS;
+      cl.endTick = (k + 1) * CLIP_TICKS - TICKS_PER_BAR / 4;   // exclusive
+      cl.name = `clip ${k}.${t}`; cl.active = (k + t) % 7 === 0;
+      clips.push(cl);
     }
   }
 
-  return { window: { startRow, rowCount }, zoom, tracks, rows, clips, cursor, playhead: { row: playheadRow }, selection };
+  buf.window.startRow = startRow; buf.window.rowCount = rowCount;
+  buf.zoom = zoom;
+  buf.cursor.row = cursor.row; buf.cursor.track = cursor.track; buf.cursor.col = cursor.col;
+  buf.playhead.row = playheadRow;
+  buf.selection = selection;
+  return buf;
 }

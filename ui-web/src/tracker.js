@@ -165,8 +165,13 @@ export class Tracker {
     this.paintState(vm, prev);
   }
 
-  /** Rails span rows, so they live outside the band and are keyed by clip id. */
+  /**
+   * Rails span rows, so they live outside the recycled band and are keyed by
+   * clip id. Clips arrive in ticks; projecting to pixels is the renderer's job,
+   * which is what keeps a clip from moving when the zoom changes.
+   */
   paintClips(vm) {
+    const perRow = vm.zoom.rowNanoticks;
     const seen = new Set();
     for (const clip of vm.clips) {
       seen.add(clip.id);
@@ -178,8 +183,8 @@ export class Tracker {
         this.railEls.set(clip.id, r);
       }
       r.classList.toggle('active', clip.active);
-      const top = `${clip.startRow * this.m.rowHeight}px`;
-      const height = `${(clip.endRow - clip.startRow + 1) * this.m.rowHeight}px`;
+      const top = `${(clip.startTick / perRow) * this.m.rowHeight}px`;
+      const height = `${Math.max(1, (clip.endTick - clip.startTick) / perRow) * this.m.rowHeight}px`;
       const left = `${this.m.gutterWidth + this.m.laneWidth + clip.track * this.m.cellWidth * this.cols}px`;
       const width = `${this.m.cellWidth * this.cols}px`;
       if (r.style.top !== top) r.style.top = top;
