@@ -47,7 +47,8 @@ import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
 import M from './design/out/tokens.js';
 import { connectEngine } from './src/engine.js';
 import { createChrome } from './src/chrome.js';
-import { createEntry, feed, cancel, parseToken, editing, NOTE_KEYS, pitchToToken } from './src/entry.js';
+import { createEntry, feed, cancel, begin, parseToken, editing, NOTE_KEYS, NOTE_OFF_KEY,
+         TOKEN_KEY, pitchOf, pitchToToken, hexValue, shiftDigit } from './src/entry.js';
 
 const metrics = {
   rowHeight: M.metrics.rowHeight,
@@ -78,7 +79,7 @@ let conn = null;
 let lastViewportKey = -1;
 const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', selection: null,
   // Entry state, shown in the chrome so you can see what you are typing into.
-  octave: 4, editStep: 1, velocity: 100, zoom: 3, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+  octave: 4, editStep: 1, velocity: 100, zoom: 3, digitCell: -1, digitAcc: 0, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -157,10 +158,32 @@ function buildHead() {
     el.dataset.track = String(t);
     el.style.width = `${stride}px`;
     el.style.flex = `0 0 ${stride}px`;
-    el.textContent = `T${String(t + 1).padStart(2, '0')}`;
+    el.appendChild(document.createTextNode(`T${String(t + 1).padStart(2, '0')}`));
+    // The lane's grid, shown because it is not derivable from anything on
+    // screen: a lane at 3 lines/beat looks like a lane at 4 with gaps in it.
+    const lpb = document.createElement('span');
+    lpb.className = 'hlpb';
+    lpb.appendChild(document.createTextNode(''));
+    el.appendChild(lpb);
+    el._lpbEl = lpb; el._lpb = -1;
     headRow.append(el);
   }
   head.append(headRow);
+  paintHeadLpb();
+}
+
+/** Write each lane's lines-per-beat into its header. Guarded, so a frame where
+ *  nothing changed writes nothing — this runs from draw(). */
+function paintHeadLpb() {
+  if (!headRow) return;
+  for (let t = 0; t < state.tracks; t++) {
+    const el = headRow.children[t + 1];
+    if (!el || !el._lpbEl) continue;
+    const n = engine && engine.lpb[t] ? engine.lpb[t] : 0;
+    if (el._lpb === n) continue;
+    el._lpb = n;
+    el._lpbEl.firstChild.nodeValue = n ? ' ' + n + '/b' : '';
+  }
 }
 
 const NANOTICKS_PER_BEAT = 960000;
@@ -192,32 +215,25 @@ function tickOfCursorRow() {
  * visible rather than dropped — a cell that silently ignores what you typed is
  * indistinguishable from one that took it.
  */
+/**
+ * Commit a typed token. Only reached from the `@` buffer now — piano keys and
+ * value digits commit on their own keystroke and never come through here.
+ */
 function commitToken(text) {
   const r = parseToken(text, state.cursor.col);
-  // A row this lane does not have cannot take a note. Say so rather than writing
-  // it to the nearest tick, which would put it somewhere the cursor isn't.
-  if (!onLaneGrid(state.cursor.row, state.cursor.track)) { state.badToken = text; return; }
-  const tick = tickOfCursorRow();
-  const dur = laneRowTicks(state.cursor.track);
   if (r.kind === 'note') {
-    const base = engine ? engine.clipVersion : 0;
-    if (conn && conn.send({ type: 'note', track: state.cursor.track, pitch: r.pitch,
-                            tick, dur, vel: state.velocity })) {
-      // Draw it now; the engine's next version decides whether it stays.
-      addPending(state.cursor.row, state.cursor.track, 0, pitchToToken(r.pitch), base);
-    }
-  } else if (r.kind === 'off' || r.kind === 'empty') {
-    const base = engine ? engine.clipVersion : 0;
-    if (conn && conn.send({ type: 'delete', track: state.cursor.track, tick })) {
-      addPending(state.cursor.row, state.cursor.track, 0, '---', base);
-    }
-  } else if (r.kind === 'invalid') {
-    state.badToken = text;             // shown in the cell, not swallowed
+    if (!writePitch(r.pitch)) return;
+  } else if (r.kind === 'off') {
+    noteOffAtCursor();
+  } else if (r.kind === 'empty') {
+    deleteAtCursor();
+  } else {
+    // degree and chord forms parse but have no engine command yet — WriteChord
+    // and a param path are needed. Left visibly unaccepted rather than faked.
+    state.reject = 'cannot write "' + text + '" yet';
     return;                            // cursor stays put so it can be fixed
   }
-  // degree and value forms parse but have no command yet — the engine needs
-  // WriteChord / a param path for those. Deliberately not faked.
-  state.badToken = null;
+  state.reject = null;
   state.cursor.row += state.editStep;
   follow();
 }
@@ -231,6 +247,7 @@ function draw() {
   const shapeChanged = tracker.poolSize === 0 || !headRow || headRow.children.length !== state.tracks + 1;
   tracker.resize(host.clientHeight, state.tracks, state.columns);
   if (shapeChanged) buildHead();
+  paintHeadLpb();
   if (headRow && headRow._x !== state.scrollX) {
     headRow._x = state.scrollX;
     headRow.style.transform = 'translateX(' + (-state.scrollX) + 'px)';
@@ -250,8 +267,9 @@ function draw() {
   chrome.update({
     playheadTick: engine ? engine.playheadTick : 0,
     transport: engine ? engine.transport : 0,
-    linkText: engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave, editStep: state.editStep,
+    linkText: engine && engine.stale ? 'engine gone'
+      : engine && conn && conn.stats().connected ? 'live' : state.link,
+    octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
   });
   // The sidecar owns the projection and the aggregation, so it needs to know
   // what we are looking at. Only sent when it actually moves.
@@ -312,49 +330,185 @@ function scrollTo(row) {
   draw();
 }
 
+/** The engine note the cursor is sitting on, or null. */
+function noteAtCursor() {
+  if (!engine) return null;
+  const scale = engine.rowGrid > 0 ? ZOOM_LEVELS[state.zoom].linesPerBeat / engine.rowGrid : 1;
+  for (let i = 0; i < engine.noteCount; i++) {
+    const n = engine.notes[i];
+    if (n.track !== state.cursor.track) continue;
+    const r = scale === 1 ? n.row : Math.round(n.row * scale);
+    if (r === state.cursor.row) return n;
+  }
+  return null;
+}
+
+/** The engine note SOUNDING at the cursor's tick — it may have started earlier. */
+function noteCoveringCursor() {
+  if (!engine) return null;
+  const tick = tickOfCursorRow();
+  for (let i = 0; i < engine.noteCount; i++) {
+    const n = engine.notes[i];
+    if (n.track === state.cursor.track && n.tOn <= tick && tick < n.tOff) return n;
+  }
+  return null;
+}
+
+/** Rewrite a note in place with a new velocity or duration. */
+function rewriteNote(n, { vel = n.velocity, dur = n.tOff - n.tOn } = {}) {
+  if (!conn) return false;
+  const base = engine ? engine.clipVersion : 0;
+  const ok = conn.send({ type: 'note', track: n.track, pitch: n.pitch,
+                         tick: n.tOn, dur: Math.max(1, dur), vel });
+  return ok ? base : false;
+}
+
+/**
+ * Note off. A tracker OFF at row R means "whatever is sounding here stops here",
+ * which in a model of (t_on, t_off) pairs is a truncation of the covering note —
+ * not a new event, and not a deletion unless the note starts on this very row.
+ */
+function noteOffAtCursor() {
+  const n = noteCoveringCursor();
+  if (!n) return false;
+  const tick = tickOfCursorRow();
+  if (n.tOn >= tick) return deleteAtCursor();
+  const base = rewriteNote(n, { dur: tick - n.tOn });
+  if (base !== false) addPending(state.cursor.row, state.cursor.track, 0, 'OFF', base);
+  return base !== false;
+}
+
+function deleteAtCursor() {
+  if (!conn) return false;
+  const base = engine ? engine.clipVersion : 0;
+  if (!conn.send({ type: 'delete', track: state.cursor.track, tick: tickOfCursorRow() })) return false;
+  addPending(state.cursor.row, state.cursor.track, 0, '', base);
+  return true;
+}
+
+/** Write a pitch at the cursor, optimistically. */
+function writePitch(pitch) {
+  if (!onLaneGrid(state.cursor.row, state.cursor.track)) {
+    state.reject = 'lane has no row here'; return false;
+  }
+  const base = engine ? engine.clipVersion : 0;
+  const dur = laneRowTicks(state.cursor.track);
+  if (!conn || !conn.send({ type: 'note', track: state.cursor.track, pitch,
+                            tick: tickOfCursorRow(), dur, vel: state.velocity })) return false;
+  addPending(state.cursor.row, state.cursor.track, 0, pitchToToken(pitch), base);
+  return true;
+}
+
+/**
+ * A digit typed into a value column. Commits on the keystroke — there is nothing
+ * to confirm, because the field is a fixed width and is always complete.
+ * Velocity is carried on the note itself, so this is a rewrite of that note.
+ */
+function typeValue(digit) {
+  // Checked before the note lookup: on this column the missing piece is the
+  // command, not the note, and reporting "no note here" would send you looking
+  // for the wrong thing.
+  if (state.cursor.col !== 1) {
+    state.reject = 'effect column needs an engine param path';
+    return false;
+  }
+  const n = noteAtCursor();
+  if (!n) { state.reject = 'no note here to carry a value'; return false; }
+  {
+    // Continue the field if we are still on the same cell, else start fresh.
+    const same = state.digitCell === state.cursor.row * 1000 + state.cursor.track;
+    state.digitCell = state.cursor.row * 1000 + state.cursor.track;
+    const cur = same ? state.digitAcc : 0;
+    const v = Math.min(127, shiftDigit(cur, digit));
+    state.digitAcc = v;
+    const base = rewriteNote(n, { vel: v });
+    if (base === false) return false;
+    addPending(state.cursor.row, state.cursor.track, 1, ('0' + v).slice(-2), base);
+    return true;
+  }
+}
+
+/** Any cursor move abandons a half-typed token. */
+function moveCursor(fn) {
+  if (entry.active) cancel(entry);
+  state.digitCell = -1;
+  fn();
+}
+
 addEventListener('keydown', (e) => {
   const k = e.key;
-  if (k === 'ArrowDown') state.cursor.row++;
-  else if (k === 'ArrowUp') state.cursor.row = Math.max(0, state.cursor.row - 1);
-  else if (k === 'ArrowRight') { let f = state.cursor.track * state.columns + state.cursor.col + 1;
-    f = Math.min(f, state.tracks * state.columns - 1);
-    state.cursor.track = Math.floor(f / state.columns); state.cursor.col = f % state.columns; }
-  else if (k === 'ArrowLeft') { let f = Math.max(0, state.cursor.track * state.columns + state.cursor.col - 1);
-    state.cursor.track = Math.floor(f / state.columns); state.cursor.col = f % state.columns; }
-  else if (k === 'PageDown') { state.start = Math.min(TOTAL_ROWS - tracker.poolSize, state.start + 32); e.preventDefault(); schedule(); return; }
-  else if (k === 'PageUp') { state.start = Math.max(0, state.start - 32); e.preventDefault(); schedule(); return; }
-  else if (!e.metaKey && !e.ctrlKey) {
-    // The piano layout is a fast path INTO the buffer: pressing q fills the cell
-    // with "C-4" and commits, exactly as typing C-4 by hand would have. Anything
-    // else goes to the text buffer, which is what AGENTS.md's token grammar
-    // needs — a keymap can only ever produce the note column.
-    const lower = k.toLowerCase();
-    if (state.cursor.col === 0 && !entry.active
-        && Object.prototype.hasOwnProperty.call(NOTE_KEYS, lower)) {
-      const pitch = 12 * (state.octave + 1) + NOTE_KEYS[lower];
-      if (pitch >= 0 && pitch <= 127) { commitToken(pitchToToken(pitch)); }
-      e.preventDefault(); schedule(); return;
+  const done = () => { e.preventDefault(); schedule(); };
+
+  // 1. Modifier combos first, so nothing below can swallow them.
+  if (e.metaKey || e.ctrlKey) {
+    if (k.toLowerCase() === 'z') {
+      conn && conn.send({ type: e.shiftKey ? 'redo' : 'undo' });
+      return done();
     }
-    const act = feed(entry, k, state.cursor);
-    if (act === 'commit') { commitToken(entry.text); cancel(entry); e.preventDefault(); schedule(); return; }
-    if (act === 'consumed') { e.preventDefault(); schedule(); return; }
+    return;                                   // leave browser shortcuts alone
   }
-  else if (k === '[') { state.octave = Math.max(0, state.octave - 1); e.preventDefault(); schedule(); return; }
-  else if (k === ']') { state.octave = Math.min(9, state.octave + 1); e.preventDefault(); schedule(); return; }
-  else if (k === 'Backspace' || k === 'Delete') {
-    conn && conn.send({ type: 'delete', track: state.cursor.track, tick: tickOfCursorRow() });
+
+  // 2. An open token buffer owns the keyboard, except for navigation.
+  if (entry.active && k !== 'Tab') {
+    const act = feed(entry, k);
+    if (act === 'commit') { commitToken(entry.text); cancel(entry); return done(); }
+    if (act === 'consumed' || act === 'cancel') return done();
+  }
+
+  // 3. Navigation.
+  if (k === 'ArrowDown') { moveCursor(() => state.cursor.row++); follow(); return done(); }
+  if (k === 'ArrowUp') { moveCursor(() => { state.cursor.row = Math.max(0, state.cursor.row - 1); }); follow(); return done(); }
+  if (k === 'ArrowRight' || k === 'ArrowLeft') {
+    const d = k === 'ArrowRight' ? 1 : -1;
+    moveCursor(() => {
+      let f = state.cursor.track * state.columns + state.cursor.col + d;
+      f = Math.max(0, Math.min(f, state.tracks * state.columns - 1));
+      state.cursor.track = Math.floor(f / state.columns); state.cursor.col = f % state.columns;
+    });
+    follow(); return done();
+  }
+  if (k === 'PageDown') { moveCursor(() => { state.start = Math.min(TOTAL_ROWS - tracker.poolSize, state.start + 32); }); return done(); }
+  if (k === 'PageUp') { moveCursor(() => { state.start = Math.max(0, state.start - 32); }); return done(); }
+
+  // 4. Global controls. These used to sit AFTER a catch-all typing branch that
+  //    consumed every printable key, so none of them were reachable: `-` typed a
+  //    dash into a cell instead of zooming, and Backspace edited the buffer
+  //    instead of deleting a note.
+  if (k === '[') { state.octave = Math.max(0, state.octave - 1); return done(); }
+  if (k === ']') { state.octave = Math.min(9, state.octave + 1); return done(); }
+  if (k === '-' || k === '_') { moveCursor(() => { state.zoom = Math.max(0, state.zoom - 1); }); return done(); }
+  if (k === '+' || k === '=') { moveCursor(() => { state.zoom = Math.min(ZOOM_LEVELS.length - 1, state.zoom + 1); }); return done(); }
+  if (k === ' ') { cmd('play'); return done(); }
+  if (k === 'Escape') { state.reject = null; return done(); }
+
+  // 5. Editing at the cursor.
+  if (k === 'Backspace' || k === 'Delete') {
+    deleteAtCursor();
     state.cursor.row += state.editStep; follow();
-    e.preventDefault(); return;
+    return done();
   }
-  else if (k === 'z' && (e.metaKey || e.ctrlKey)) {
-    conn && conn.send({ type: e.shiftKey ? 'redo' : 'undo' }); e.preventDefault(); return;
+  if (k === TOKEN_KEY) { begin(entry, state.cursor, '@'); return done(); }
+
+  if (k.length !== 1) return;
+  state.reject = null;
+
+  if (state.cursor.col === 0) {
+    if (k.toLowerCase() === NOTE_OFF_KEY) {
+      noteOffAtCursor();
+      state.cursor.row += state.editStep; follow();
+      return done();
+    }
+    const pitch = pitchOf(k.toLowerCase(), state.octave);
+    if (pitch >= 0) {
+      writePitch(pitch);
+      state.cursor.row += state.editStep; follow();
+      return done();
+    }
+    return;
   }
-  else if (k === '+' || k === '=') { state.zoom = Math.min(ZOOM_LEVELS.length - 1, state.zoom + 1); }
-  else if (k === '-') { state.zoom = Math.max(0, state.zoom - 1); }
-  else return;
-  follow();
-  e.preventDefault();
-  schedule();
+
+  const d = hexValue(k);
+  if (d >= 0) { typeValue(d); return done(); }
 }, { capture: true });
 
 // Mouse: click moves the cursor, drag selects. Field = track*columns+col, so a

@@ -81,6 +81,10 @@
    here to write into, so the track tint drops away and the cell reads as void. */
 /* Between this lane's rows: the lane's grid does not land here, so there is
    nothing to write into. Distinct from an empty cell, which you can type in. */
+.ch-reject { color: var(--uni-text-fx); opacity: 0; transition: opacity .12s; }
+.ch-reject.on { opacity: 1; }
+.hlpb { color: var(--uni-text-gutter); font-size: var(--font-size-fx);
+         letter-spacing: var(--font-tracking-fx); margin-left: 6px; }
 .tk-cell[data-kind="offgrid"]   { background: var(--uni-surface-off-grid); }
 .tk-cell[data-kind="outside"]   { background: var(--uni-surface-tracker-bg); }
 .tk-cell[data-kind="off"]       { color: var(--uni-text-off); }

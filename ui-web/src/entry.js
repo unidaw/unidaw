@@ -1,33 +1,72 @@
-// Per-cell text entry.
+// Cell entry.
 //
-// AGENTS.md: "Tracker accepts free-text tokens per cell for notes, degree notes,
-// and chord tokens (e.g., C-4, 24-4, @3^7~80h20)." That is a text buffer with a
-// parser, not a keymap — a keymap can only ever produce the note column, and it
-// cannot express a degree, a chord, or an effect argument at all.
+// Three different things happen depending on the column, and conflating them is
+// what made typing unpredictable — `w` sometimes produced `D-4` and sometimes a
+// literal `w`, because a piano key and the first character of a typed token are
+// the same keystroke and whichever branch ran first won.
 //
-// The buffer is per-cell and transient: it exists while you are typing into one
-// cell, commits on a resolving keystroke, and is discarded on Escape or on
-// moving away. Nothing here touches the engine; the caller decides what a
-// committed token means.
+//   note column      a piano key IS the edit. It commits on the keydown; there
+//                    is no buffer to be in, so nothing can be half-typed.
+//   value columns    digits shift into a fixed-width field and commit on EVERY
+//                    keystroke. Nothing to confirm — the field is always whole.
+//   chord tokens     genuinely need free text (`@3^7~80h20`), so they get the
+//                    buffer, opened explicitly with `@` and closed with Enter.
+//                    This is the ONLY thing Enter is for.
+//
+// The rule that keeps it predictable: the buffer is never entered implicitly.
+// If you did not type `@`, no keystroke is ever waiting for a confirmation.
 
 const NOTE_LETTERS = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
 
 /**
- * The QWERTY piano layout, kept because it is how a tracker is actually played.
- * It is a fast path INTO the buffer, not an alternative to it: pressing `q`
- * fills the cell with "C-4" and commits, which is exactly what typing C-4 by
- * hand would have done.
+ * The QWERTY piano layout. Two rows, an octave apart, as every tracker has it:
+ * `z` is C in the current octave and `q` is C an octave above, so `z`=C-3 while
+ * `q`=C-4, `b`=G-3, `u`=B-4, `i`=C-5, `m`=B-3.
+ *
+ * `a` is deliberately absent — it is note-off, which is the one edit in this
+ * column that is not a pitch.
  */
 export const NOTE_KEYS = {
   q: 0, '2': 1, w: 2, '3': 3, e: 4, r: 5, '5': 6, t: 7, '6': 8, y: 9, '7': 10, u: 11, i: 12,
   z: -12, s: -11, x: -10, d: -9, c: -8, v: -7, g: -6, b: -5, h: -4, n: -3, j: -2, m: -1,
 };
 
+/** Note-off. Its own key because it is an event, not a pitch. */
+export const NOTE_OFF_KEY = 'a';
+
+/** Opens the token buffer. The only route into free-text entry. */
+export const TOKEN_KEY = '@';
+
 const NAMES = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];
 export function pitchToToken(p) { return NAMES[p % 12] + Math.floor(p / 12 - 1); }
 
+/** Pitch for a piano key in a given octave, or -1 if out of MIDI range. */
+export function pitchOf(key, octave) {
+  const semis = NOTE_KEYS[key];
+  if (semis === undefined) return -1;
+  const p = 12 * (octave + 1) + semis;
+  return p >= 0 && p <= 127 ? p : -1;
+}
+
+/** A hex digit's value, or -1. Value columns are hex, as trackers have them. */
+export function hexValue(key) {
+  const c = key.toLowerCase();
+  if (c >= '0' && c <= '9') return c.charCodeAt(0) - 48;
+  if (c >= 'a' && c <= 'f') return c.charCodeAt(0) - 87;
+  return -1;
+}
+
 /**
- * Parse one cell token. Returns a typed result the caller turns into a command,
+ * Shift a digit into a fixed-width field, tracker style: the field holds the
+ * last `width` digits typed, so 6 then 4 reads 06 then 64.
+ */
+export function shiftDigit(current, digit, width = 2) {
+  const max = Math.pow(16, width) - 1;
+  return Math.min(max, (current * 16 + digit) % Math.pow(16, width));
+}
+
+/**
+ * Parse one typed token. Returns a typed result the caller turns into a command,
  * or `{ kind: 'invalid' }` — never a silent drop. A malformed token has to be
  * visible as malformed, because a cell that quietly ignores what you typed is
  * indistinguishable from one that accepted it.
@@ -36,14 +75,12 @@ export function pitchToToken(p) { return NAMES[p % 12] + Math.floor(p / 12 - 1);
  *   c#3      absolute note, loose case and no dash
  *   24-4     degree 24 at octave 4  (degree notes, per AGENTS.md)
  *   ---      note off
- *   64       a bare number in a non-note column: raw value (velocity, fx arg)
  */
 export function parseToken(text, column) {
-  const s = text.trim().toLowerCase();
+  const s = text.trim().toLowerCase().replace(/^@/, '');
   if (!s) return { kind: 'empty' };
   if (s === '---' || s === 'off') return { kind: 'off' };
 
-  // Note columns take pitch-shaped tokens; other columns take raw values.
   if (column === 0) {
     const m = /^([a-g])([#b]?)-?(-?\d)$/.exec(s);
     if (m) {
@@ -53,7 +90,6 @@ export function parseToken(text, column) {
       const pitch = 12 * (parseInt(m[3], 10) + 1) + semis;
       return pitch >= 0 && pitch <= 127 ? { kind: 'note', pitch } : { kind: 'invalid' };
     }
-    // Degree form: <degree>-<octave>, e.g. 24-4
     const d = /^(\d+)-(-?\d)$/.exec(s);
     if (d) return { kind: 'degree', degree: parseInt(d[1], 10), octave: parseInt(d[2], 10) };
     return { kind: 'invalid' };
@@ -64,7 +100,7 @@ export function parseToken(text, column) {
   return { kind: 'invalid' };
 }
 
-/** A transient buffer over the cell the cursor is on. */
+/** The transient token buffer. Only ever active for chord/degree entry. */
 export function createEntry() {
   return { active: false, row: -1, track: -1, col: -1, text: '' };
 }
@@ -74,32 +110,31 @@ export function editing(entry, row, track, col) {
   return entry.active && entry.row === row && entry.track === track && entry.col === col;
 }
 
-export function begin(entry, cursor) {
+export function begin(entry, cursor, initial = '') {
   entry.active = true;
   entry.row = cursor.row; entry.track = cursor.track; entry.col = cursor.col;
-  entry.text = '';
+  entry.text = initial;
 }
 
 export function cancel(entry) { entry.active = false; entry.text = ''; }
 
 /**
- * Feed a keystroke. Returns what the caller should do:
- *   'consumed' — the buffer changed, redraw
- *   'commit'   — the token is complete; read entry.text and act
- *   'ignore'   — not for us
+ * Feed a keystroke to an ALREADY-OPEN token buffer. Never opens one: the caller
+ * decides that, on `@` alone. Returns 'consumed', 'commit', 'cancel' or 'ignore'.
  */
-export function feed(entry, key, cursor) {
-  if (key === 'Escape') { cancel(entry); return 'consumed'; }
-  if (key === 'Enter') return entry.active ? 'commit' : 'ignore';
+export function feed(entry, key) {
+  if (!entry.active) return 'ignore';
+  if (key === 'Escape') { cancel(entry); return 'cancel'; }
+  if (key === 'Enter') return 'commit';
   if (key === 'Backspace') {
-    if (!entry.active || !entry.text) return 'ignore';
     entry.text = entry.text.slice(0, -1);
+    // Backspacing past the opening `@` leaves the buffer, so the next keystroke
+    // is a piano key again rather than silently more text.
+    if (!entry.text) { cancel(entry); return 'cancel'; }
     return 'consumed';
   }
   if (key.length !== 1) return 'ignore';
-  if (!/[0-9a-zA-Z#\-.]/.test(key)) return 'ignore';
-  if (!entry.active) begin(entry, cursor);
-  if (entry.text.length >= 8) return 'consumed';
-  entry.text += key;
+  if (!/[0-9a-zA-Z#\-.^~@]/.test(key)) return 'ignore';
+  if (entry.text.length < 12) entry.text += key;
   return 'consumed';
 }

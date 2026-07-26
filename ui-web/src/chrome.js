@@ -65,10 +65,15 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
   const scaleKey = label('ch-key', '⌘⇧S');
   scales.append(scaleIcon, scaleLabel, scaleKey);
 
+  // Why the last edit was refused. An edit that is silently dropped is
+  // indistinguishable from one that was accepted, which is the whole reason this
+  // exists rather than a console warning.
+  const reject = label('ch-reject', '');
+
   const right = document.createElement('div');
   right.className = 'ch-right';
   const link = label('ch-link', 'connecting');
-  right.append(link, scales);
+  right.append(reject, link, scales);
 
   host.append(brand, transport, pos, entry, right);
 
@@ -77,11 +82,16 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
   if (onScales) scales.addEventListener('click', onScales);
 
   // Cached scalars, so a write only happens when the value actually changes.
-  let lastTick = -1, lastTransport = -1, lastLink = '', lastOct = -1, lastStep = -1;
+  let lastTick = -1, lastTransport = -1, lastLink = '', lastOct = -1, lastStep = -1, lastReject = '';
 
   return {
     /** Called from the draw loop. Must stay allocation-free when nothing moves. */
-    update({ playheadTick, transport: tstate, linkText, octave, editStep }) {
+    update({ playheadTick, transport: tstate, linkText, octave, editStep, rejectText = '' }) {
+      if (rejectText !== lastReject) {
+        lastReject = rejectText;
+        reject.firstChild.nodeValue = rejectText;
+        reject.classList.toggle('on', !!rejectText);
+      }
       if (octave !== lastOct) { lastOct = octave; octLabel.firstChild.nodeValue = 'oct ' + octave; }
       if (editStep !== lastStep) { lastStep = editStep; stepLabel.firstChild.nodeValue = 'step ' + editStep; }
       if (playheadTick !== lastTick) {

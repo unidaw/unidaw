@@ -101,6 +101,16 @@ function contentAt(tick, track, col) {
  * objects. Alternating two buffers keeps that comparison meaningful at zero
  * steady-state allocation.
  */
+/**
+ * Shared across buffers on purpose. The caller double-buffers so the renderer can
+ * diff current against previous, which means a per-buffer signature would be
+ * comparing this frame against TWO frames ago and miss a change that landed in
+ * between. The signature describes the world, not a particular buffer.
+ */
+const SIG = { zoomIndex: -1, pendingCount: -1, overlayLen: -1,
+              notesRevision: -2, aggRevision: -2, rowGrid: -2 };
+let contentRevision = 0;
+
 export function createBuffer(rowCount, trackCount, columns) {
   const rows = new Array(rowCount);
   for (let i = 0; i < rowCount; i++) {
@@ -237,13 +247,20 @@ export function buildViewModel(opts, buf) {
     const span = zoom.rowNanoticks;
     const winStart = tickOf(startRow);
     const winEnd = tickOf(startRow + rowCount);
+    // 1 whenever the sidecar is already projecting at our grid, which is the
+    // steady state; only a zoom in flight makes it anything else.
+    const gridScale = engine.rowGrid > 0 ? zoom.linesPerBeat / engine.rowGrid : 1;
     for (let i = 0; i < engine.noteCount; i++) {
       const n = engine.notes[i];
       if (n.tOn < winStart || n.tOn >= winEnd || n.track >= trackCount) continue;
-      // n.row was computed by LaneGrid on the sidecar. Fall back to arithmetic
-      // only for the fine grids where the two agree, so a mismatch is visible
-      // rather than silently papered over.
-      const ri = n.row >= startRow ? n.row - startRow : ((n.tOn - winStart) / span) | 0;
+      // n.row was computed by LaneGrid on the sidecar, in the grid the sidecar
+      // was last told about. Between a zoom keypress and the first frame built
+      // at the new grid, that is the OLD grid — the rows are stale by exactly
+      // the ratio of the two. Rescaling closes that window: the notes move with
+      // the labels on the very next frame instead of a round-trip later, when
+      // they were briefly sitting at wrong timecodes and looking authoritative.
+      const scaled = gridScale === 1 ? n.row : Math.round(n.row * gridScale);
+      const ri = scaled >= startRow ? scaled - startRow : ((n.tOn - winStart) / span) | 0;
       const row = rows[ri];
       if (!row) continue;
       const base = n.track * columns;
@@ -333,10 +350,29 @@ export function buildViewModel(opts, buf) {
     }
   }
 
-  buf.contentRevision = engine
-    ? engine.notesRevision * 1e6 + engine.aggRevision + pendingCount * 1e9
-      + (entryOverlay ? 1e12 + entryOverlay.text.length : 0)
-    : zoomIndex + (entryOverlay ? 1e6 + entryOverlay.text.length : 0);
+  // The renderer rebinds every visible cell when this changes, so it has to name
+  // EVERY input that can alter cell text. It used to pack them into one number by
+  // multiplying each by a power of ten; that silently broke twice — zoom was
+  // never in the engine branch at all (so changing zoom left engine notes on
+  // their old rows), and once notesRevision or rowGrid grew, the terms overlapped
+  // past Number.MAX_SAFE_INTEGER and changes cancelled out. Comparing the inputs
+  // costs the same and cannot alias.
+  {
+    const s = SIG;
+    const overlayLen = entryOverlay ? entryOverlay.text.length + 1 : 0;
+    if (s.zoomIndex !== zoomIndex || s.pendingCount !== pendingCount
+        || s.overlayLen !== overlayLen
+        || s.notesRevision !== (engine ? engine.notesRevision : -1)
+        || s.aggRevision !== (engine ? engine.aggRevision : -1)
+        || s.rowGrid !== (engine ? engine.rowGrid : -1)) {
+      s.zoomIndex = zoomIndex; s.pendingCount = pendingCount; s.overlayLen = overlayLen;
+      s.notesRevision = engine ? engine.notesRevision : -1;
+      s.aggRevision = engine ? engine.aggRevision : -1;
+      s.rowGrid = engine ? engine.rowGrid : -1;
+      contentRevision++;
+    }
+  }
+  buf.contentRevision = contentRevision;
 
   buf.window.startRow = startRow; buf.window.rowCount = rowCount;
   buf.zoom = zoom;

@@ -205,6 +205,8 @@ struct Frame {
     /// note kept its old row, landing off its own lane's grid. Same shape as
     /// every other bug on this branch — the content changed, the key did not.
     notes_grid: u32,
+    /// True once the engine has not published for STALE_AFTER.
+    stale: bool,
     /// Scratch, reused so the aggregation path allocates nothing per frame.
     ev: Vec<(u64, u8)>,
 }
@@ -214,7 +216,13 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&WIRE_MAGIC.to_le_bytes());             // 0
     out.extend_from_slice(&WIRE_VERSION.to_le_bytes());           // 4
     out.push(KIND_STATE);                                         // 6
-    out.push(0);                                                  // 7  feed
+    // 7: for KIND_STATE this is liveness — 1 means the engine has stopped
+    // publishing. The engine bumps ui_version once per audio block whether or not
+    // transport is running, so a stalled version means the process is gone. The
+    // segment stays mapped after it dies, so without this the UI keeps rendering
+    // the last frame: connected, plausible, and permanently wrong. That is how
+    // "the play button does nothing" presented.
+    out.push(f.stale as u8);                                      // 7  feed/status
     out.extend_from_slice(&f.seq.to_le_bytes());                  // 8
     out.extend_from_slice(&f.playhead_nanotick.to_le_bytes());    // 16
     out.extend_from_slice(&f.visual_sample.to_le_bytes());        // 24
@@ -583,6 +591,15 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>, viewp
     // the command port, so the viewport arrives there and reaches us through
     // `SharedViewport`. It used to be a hardcoded constant here while the client
     // dutifully sent updates into this socket's void.
+    // The engine publishes every audio block (~11.6 ms at 512/44.1k). A whole
+    // second of silence is ~86 missed publishes: it is not late, it is gone.
+    const STALE_AFTER: Duration = Duration::from_secs(1);
+    // Tracked separately from `last_version`, which is the SEND dedup key. Using
+    // one variable for both means forcing a frame out (to report the stall) also
+    // counts as the engine having published, and the flag clears itself the
+    // instant it is raised.
+    let mut last_seen_version = u64::MAX;
+    let mut last_change = Instant::now();
     let (mut seq, mut sent, mut polls) = (0u64, 0u64, 0u64);
     let started = Instant::now();
     let mut reported = started;
@@ -593,7 +610,21 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>, viewp
 
         let prev_cv = frame.clip_version;
         // Re-read every poll: zoom and scroll change between frames.
-        if read_frame(&handle, seq, &mut frame, prev_cv, viewport.load()) && frame.version != last_version {
+        let read = read_frame(&handle, seq, &mut frame, prev_cv, viewport.load());
+        // A stall has to be reported, which means sending a frame when nothing
+        // changed — the one case where the dedup below must not win.
+        let now = Instant::now();
+        if read && frame.version != last_seen_version {
+            last_seen_version = frame.version;
+            last_change = now;
+        }
+        let stale = now.duration_since(last_change) > STALE_AFTER;
+        if stale != frame.stale {
+            frame.stale = stale;
+            eprintln!("sidecar: engine {}", if stale { "stopped publishing" } else { "publishing again" });
+            last_version = u64::MAX;                 // force one frame out
+        }
+        if read && frame.version != last_version {
             // Dedup on the engine's own version: the engine publishes at ~86 Hz,
             // we poll faster so we never miss one, and the surplus polls cost a
             // single atomic load each.

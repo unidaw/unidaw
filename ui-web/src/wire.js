@@ -20,6 +20,8 @@ const NOTE_BYTES = 40;
 export function createStore() {
   return {
     ok: false,
+    /** The engine has stopped publishing; this store is a corpse, not a snapshot. */
+    stale: false,
     seq: 0,
     playheadTick: 0,
     visualSample: 0,
@@ -87,6 +89,9 @@ export function decode(buf, store) {
   if (v.getUint32(0, true) !== WIRE_MAGIC) return false;
   if (v.getUint16(4, true) !== WIRE_VERSION) return false;
   if (v.getUint8(6) !== KIND_STATE) return true; // a feed we don't handle yet
+  // Byte 7 is liveness for state frames: the engine has stopped publishing, so
+  // everything below is the last thing it said rather than what is true now.
+  store.stale = v.getUint8(7) !== 0;
 
   store.seq = Number(v.getBigUint64(8, true));
   store.playheadTick = Number(v.getBigUint64(16, true));

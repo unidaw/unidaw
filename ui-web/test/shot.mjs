@@ -48,6 +48,9 @@ const SCENES = [
   // projection from a plausible one; see __uni.useMixedGrid.
   { name: 'mixed-grid', setup: async (p) => p.evaluate(() => window.__uni.useMixedGrid()) },
   { name: 'typed', setup: async (p) => { for (let i = 0; i < 12; i++) await p.keyboard.press('ArrowDown'); await p.keyboard.press('ArrowRight'); } },
+  // The token buffer is the ONLY thing that waits for Enter, and it is only ever
+  // opened by `@`. Every other keystroke commits on the keydown.
+  { name: 'token-entry', setup: async (p) => { await p.keyboard.press('@'); for (const c of '3^7') await p.keyboard.press(c); } },
 ];
 
 let fail = 0;
