@@ -1,0 +1,8 @@
+[package]
+name = "daw-sidecar"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+daw-bridge = { path = "../daw-bridge" }
+tungstenite = "0.24"
