@@ -367,14 +367,29 @@ public:
       m_playbackBlockId->store(nextBlockToPlay, std::memory_order_release);
     }
 
-    // Lock-free acquire of the current track list, then publish it as our
-    // hazard and re-validate: if the writer swapped between the load and the
-    // hazard store, reload so we never read a version the writer may free.
-    std::vector<TrackInfo>* tracks = m_tracksPtr.load(std::memory_order_acquire);
-    m_tracksHazard.store(tracks, std::memory_order_release);
-    if (tracks != m_tracksPtr.load(std::memory_order_acquire)) {
-      tracks = m_tracksPtr.load(std::memory_order_acquire);
-      m_tracksHazard.store(tracks, std::memory_order_release);
+    // Lock-free acquire of the current track list under a single hazard pointer.
+    // Publish our candidate as the hazard, then re-read the head; loop until the
+    // head is unchanged *after* the hazard is visible. Only then has the writer's
+    // reclamation — which reads the hazard after swapping the head — no way to
+    // free the version we commit to.
+    //
+    // Both sides must be seq_cst. The protocol is a StoreLoad handoff (we store
+    // hazard then load head; the writer stores head then loads hazard), and
+    // release/acquire do not order StoreLoad — the store and load could reorder
+    // and reopen the window. An earlier version stored the hazard with
+    // release, re-checked once, and on mismatch reloaded+republished with no
+    // final re-check: that left a gap where the writer freed the version between
+    // our reload and our hazard store, and the audio thread then read a freed
+    // TrackInfo whose header was null — SIGSEGV at header->numChannelsOut
+    // (null + 0x1c) a few hundred ms into playback.
+    std::vector<TrackInfo>* tracks = m_tracksPtr.load(std::memory_order_seq_cst);
+    for (;;) {
+      m_tracksHazard.store(tracks, std::memory_order_seq_cst);
+      std::vector<TrackInfo>* head = m_tracksPtr.load(std::memory_order_seq_cst);
+      if (head == tracks) {
+        break;
+      }
+      tracks = head;
     }
     if (!tracks) {
       return;
@@ -584,13 +599,17 @@ public:
     auto next = std::make_shared<std::vector<TrackInfo>>(tracks);
     std::vector<TrackInfo>* raw = next.get();
     m_tracksRetired.push_back(std::move(next));
-    m_tracksPtr.store(raw, std::memory_order_release);
+    // seq_cst to pair with the reader's seq_cst hazard store / head load: publish
+    // the new head, THEN read the hazard. The seq_cst total order guarantees that
+    // if the reader committed to a version (saw the head unchanged after its
+    // hazard was visible), this load observes that hazard and keeps the version.
+    m_tracksPtr.store(raw, std::memory_order_seq_cst);
 
     // Reclaim: keep the version just published and whatever the audio thread
     // is currently reading; free everything else. The reader re-validates its
     // hazard against m_tracksPtr, so a version that is neither current nor
     // hazarded can no longer be reached by the audio thread.
-    std::vector<TrackInfo>* hazard = m_tracksHazard.load(std::memory_order_acquire);
+    std::vector<TrackInfo>* hazard = m_tracksHazard.load(std::memory_order_seq_cst);
     m_tracksRetired.erase(
         std::remove_if(m_tracksRetired.begin(), m_tracksRetired.end(),
                        [&](const std::shared_ptr<std::vector<TrackInfo>>& v) {
