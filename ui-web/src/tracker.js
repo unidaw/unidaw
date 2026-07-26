@@ -31,8 +31,11 @@ export class Tracker {
     this.pool = [];
     /** @type {Map<number, HTMLElement>} */
     this.byRow = new Map();
-    /** @type {Map<number, HTMLElement>} clip id -> rail element; avoids a querySelector per clip per frame */
-    this.railEls = new Map();
+    /** Fixed pool of rail elements. Clips scroll in and out constantly, and
+     *  creating/removing a DOM node per clip per frame churned 219 nodes over a
+     *  28-second scroll — allocation and layout in the hot path. Rails are now
+     *  reused and hidden, never destroyed, so a scroll mutates no DOM structure. */
+    this.railPool = [];
     this.bandTop = 0;      // absolute row index the band's first element holds
     this.scrollRow = 0;    // fractional top row of the viewport
 
@@ -172,16 +175,17 @@ export class Tracker {
    */
   paintClips(vm) {
     const perRow = vm.zoom.rowNanoticks;
-    const seen = new Set();
-    for (const clip of vm.clips) {
-      seen.add(clip.id);
-      let r = this.railEls.get(clip.id);
+    for (let i = 0; i < vm.clips.length; i++) {
+      const clip = vm.clips[i];
+      let r = this.railPool[i];
       if (!r) {
         r = el('div', 'tk-rail');
-        r.dataset.clip = String(clip.id);
         this.rails.append(r);
-        this.railEls.set(clip.id, r);
+        this.railPool[i] = r;
       }
+      const idStr = String(clip.id);
+      if (r.dataset.clip !== idStr) r.dataset.clip = idStr;
+      if (r.style.display === 'none') r.style.display = '';
       r.classList.toggle('active', clip.active);
       const top = `${(clip.startTick / perRow) * this.m.rowHeight}px`;
       const height = `${Math.max(1, (clip.endTick - clip.startTick) / perRow) * this.m.rowHeight}px`;
@@ -192,8 +196,11 @@ export class Tracker {
       if (r.style.left !== left) r.style.left = left;
       if (r.style.width !== width) r.style.width = width;
     }
-    for (const [id, r] of this.railEls) {
-      if (!seen.has(id)) { r.remove(); this.railEls.delete(id); }
+    // Surplus rails are hidden, not removed — the pool high-water-marks and
+    // then stops mutating the DOM entirely.
+    for (let i = vm.clips.length; i < this.railPool.length; i++) {
+      const r = this.railPool[i];
+      if (r.style.display !== 'none') r.style.display = 'none';
     }
   }
 
