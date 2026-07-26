@@ -167,7 +167,7 @@ const dockHost = document.getElementById('dock');
 // One API object: every console command goes through the same paths the keyboard
 // does, so the two can never drift into doing different things.
 const dock = new Dock(dockHost, {
-  setView: (v) => { if (v) state.view = v; schedule(); return state.view; },
+  setView: (v) => { if (v) { state.view = v; if (v === 'piano') fitPiano(); } schedule(); return state.view; },
   load: (n) => { const ok = conn && conn.loadProject(n); if (ok) state.currentProject = n; return ok; },
   save: (n) => { const ok = conn && conn.saveProject(n); if (ok) state.currentProject = n; return ok; },
   listProjects: () => conn && conn.send({ type: 'list' }),
@@ -1298,7 +1298,14 @@ window.__uni = {
   patcher: () => (engine ? { version: engine.patcherVersion, device: engine.patcherDevice,
     nodes: engine.patcherNodes.map(n => ({ id: n.id, type: n.type, cfg: Array.from(n.config) })),
     edges: engine.patcherEdges.slice() } : null),
-  view: (v) => { if (v) { state.view = v; draw(); } return state.view; },
+  view: (v) => {
+    // Same side effects as the key path. Entering the piano roll by Tab fitted
+    // the pitch window and entering it through here did not, so an agent opened
+    // it onto empty sky — two routes to one action that behave differently is
+    // the drift this API exists to avoid.
+    if (v) { state.view = v; if (v === 'piano') fitPiano(); draw(); }
+    return state.view;
+  },
   arrangeProbe: () => arrange.probe(),
   mixerProbe: () => mixer.probe(),
   pianoProbe: () => piano.probe(),
