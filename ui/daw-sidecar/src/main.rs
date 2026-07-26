@@ -118,6 +118,15 @@ impl SharedViewport {
     }
 }
 
+/// Bumped whenever a publish thread re-attaches to the segment.
+///
+/// The command threads hold their OWN EngineHandle and cannot poll for staleness
+/// — they are blocked in ws.read(). Without this they keep writing into a ring
+/// the restarted engine never reads: the command succeeds, the ack says ok, and
+/// nothing happens. Which is the same silent-plausible-failure this whole file
+/// keeps having, so it gets a counter rather than a hope.
+static SHM_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 struct Args {
     port: u16,
     cmd_port: u16,
@@ -713,7 +722,8 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
             let mut ws = match tungstenite::accept(stream) { Ok(w) => w, Err(_) => return };
             // Attached HERE, on the thread that will use it: EngineHandle is not
             // Send, so it cannot be created elsewhere and moved in.
-            let handle = match EngineHandle::attach(&shm, true) {
+            let mut generation = SHM_GENERATION.load(Ordering::Acquire);
+            let mut handle = match EngineHandle::attach(&shm, true) {
                 Ok(h) => h,
                 Err(e) => { let _ = ws.send(tungstenite::Message::Text(
                     format!("{{\"error\":\"attach failed: {e}\"}}"))); return; }
@@ -722,6 +732,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
             loop {
                 match ws.read() {
                     Ok(tungstenite::Message::Text(t)) => {
+                        // The engine may have restarted while we were blocked in
+                        // read(); re-attach before acting on anything.
+                        let g = SHM_GENERATION.load(Ordering::Acquire);
+                        if g != generation {
+                            match EngineHandle::attach(&shm, true) {
+                                Ok(h) => { handle = h; generation = g;
+                                           eprintln!("sidecar: command channel re-attached"); }
+                                Err(e) => {
+                                    let _ = ws.send(tungstenite::Message::Text(
+                                        format!("{{\"error\":\"re-attach failed: {}\"}}",
+                                                e.replace('"', "'"))));
+                                    continue;
+                                }
+                            }
+                        }
                         // Viewport updates are not engine commands — they change
                         // what we project, not what the song contains, so they
                         // never touch the command ring.
@@ -817,7 +842,7 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>, viewp
     let n = clients.fetch_add(1, Ordering::Relaxed) + 1;
     eprintln!("sidecar: client connected ({peer}), {n} total");
 
-    let handle = match EngineHandle::attach(&shm, false) {
+    let mut handle = match EngineHandle::attach(&shm, false) {
         Ok(h) => h,
         Err(e) => {
             let _ = ws.send(tungstenite::Message::Text(
@@ -853,6 +878,8 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>, viewp
     // instant it is raised.
     let mut last_seen_version = u64::MAX;
     let mut last_change = Instant::now();
+    const REATTACH_EVERY: Duration = Duration::from_secs(2);
+    let mut last_reattach = Instant::now();
     let (mut seq, mut sent, mut polls) = (0u64, 0u64, 0u64);
     let started = Instant::now();
     let mut reported = started;
@@ -872,6 +899,26 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>, viewp
             last_change = now;
         }
         let stale = now.duration_since(last_change) > STALE_AFTER;
+
+        // A restarted engine maps a NEW segment, so the handle we are holding
+        // points at memory nobody writes any more: the UI stays "engine gone"
+        // for ever and the only cure is reloading the page. Re-attach while
+        // stale, at a gentle interval — attaching is a mmap, not free, and a
+        // genuinely absent engine would otherwise be a busy loop.
+        if stale && now.duration_since(last_reattach) > REATTACH_EVERY {
+            last_reattach = now;
+            if let Ok(h) = EngineHandle::attach(&shm, false) {
+                handle = h;
+                // Force the next read to look new: the fresh engine starts its
+                // own version counter, which can be BELOW the one we remember.
+                last_seen_version = u64::MAX;
+                last_version = u64::MAX;
+                frame.clip_version = u32::MAX;
+                SHM_GENERATION.fetch_add(1, Ordering::Release);
+                eprintln!("sidecar: re-attached to {shm}");
+            }
+        }
+
         if stale != frame.stale {
             frame.stale = stale;
             eprintln!("sidecar: engine {}", if stale { "stopped publishing" } else { "publishing again" });
