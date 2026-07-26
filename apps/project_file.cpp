@@ -13,7 +13,7 @@
 namespace daw {
 namespace {
 
-constexpr uint32_t kProjectSchemaVersion = 3;
+constexpr uint32_t kProjectSchemaVersion = 4;
 
 void setError(std::string* error, const std::string& message) {
   if (error) {
@@ -608,6 +608,12 @@ std::string serializeProject(const ProjectDocument& document) {
                    static_cast<uint32_t>(device.euclideanConfig.base_octave));
         writer.endChildObject();
       }
+      // v4: this device's patcher DAG (per-device, superseding per-track).
+      if (!device.patcher.nodes.empty()) {
+        writer.beginChildObject("patcher");
+        writePatcherGraph(writer, device.patcher);
+        writer.endChildObject();
+      }
       writer.endArrayElement();
     }
     writer.endArray();
@@ -658,13 +664,9 @@ std::string serializeProject(const ProjectDocument& document) {
     }
     writer.endArray();
 
-    // This track's patcher DAG, omitted when empty so patcher-less tracks stay
-    // clean.
-    if (!track.patcher.nodes.empty()) {
-      writer.beginChildObject("patcher");
-      writePatcherGraph(writer, track.patcher);
-      writer.endChildObject();
-    }
+    // v4: patchers are per-device (written inside each device above). The
+    // track-level "patcher" is no longer written; it is still read for migrating
+    // schema <= 3 files onto the instrument device.
 
     writer.endArrayElement();
   }
@@ -832,6 +834,12 @@ bool deserializeProject(const std::string& json,
             device.euclideanConfig.base_octave =
                 euclid->get<uint32_t>("base_octave", 0);
           }
+          // v4: this device's patcher DAG (patcher-preset schema 2, as the
+          // per-track read below).
+          if (const auto patcherTree = deviceTree.get_child_optional("patcher")) {
+            std::string perr;
+            readPatcherGraphTree(*patcherTree, 2, device.patcher, &perr);
+          }
           track.chain.devices.push_back(device);
         }
       }
@@ -905,11 +913,32 @@ bool deserializeProject(const std::string& json,
         }
       }
 
-      // This track's patcher DAG (same node/edge shape as a standalone preset).
+      // Schema <= 3 had one patcher per track. Read it, then migrate it onto a
+      // device (patchers are per-device from v4): prefer the instrument, else the
+      // first device; if the track has no devices the graph is dropped (there is
+      // nothing for it to drive). A v4 file has no track-level "patcher", so this
+      // is inert on reload.
       if (const auto patcherTree = tree.get_child_optional("patcher")) {
         if (!readPatcherGraphTree(*patcherTree, 2, track.patcher, error)) {
           return false;
         }
+      }
+      if (!track.patcher.nodes.empty() && !track.chain.devices.empty()) {
+        Device* target = nullptr;
+        for (auto& d : track.chain.devices) {
+          if (d.kind == DeviceKind::VstInstrument ||
+              d.kind == DeviceKind::PatcherInstrument) {
+            target = &d;
+            break;
+          }
+        }
+        if (!target) {
+          target = &track.chain.devices.front();
+        }
+        if (target->patcher.nodes.empty()) {
+          target->patcher = std::move(track.patcher);
+        }
+        track.patcher = PatcherGraph{};  // migrated; not re-emitted
       }
 
       parsed.tracks.push_back(std::move(track));

@@ -2636,12 +2636,25 @@ struct TrackRuntime {
       }
       document.tracks.push_back(std::move(track));
     }
-    // The patcher DAG is part of the song now, not a side file. The engine runs
-    // one global graph today, so on save it parks that graph on the first track;
-    // the per-track format is ready for when each track runs its own.
-    if (!document.tracks.empty()) {
+    // The patcher DAG is part of the song. The engine runs one global graph
+    // today, so on save it parks that graph on a device (patchers are per-device
+    // now): the first track's instrument, else its first device. The per-device
+    // format is ready for when each device runs its own.
+    if (!document.tracks.empty() && !document.tracks.front().chain.devices.empty()) {
       std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
-      document.tracks.front().patcher = patcherGraphState.graph;
+      auto& devices = document.tracks.front().chain.devices;
+      daw::Device* target = nullptr;
+      for (auto& d : devices) {
+        if (d.kind == daw::DeviceKind::VstInstrument ||
+            d.kind == daw::DeviceKind::PatcherInstrument) {
+          target = &d;
+          break;
+        }
+      }
+      if (!target) {
+        target = &devices.front();
+      }
+      target->patcher = patcherGraphState.graph;
     }
     if (!daw::saveProject(document, path, error)) {
       return false;
@@ -2759,36 +2772,46 @@ struct TrackRuntime {
       }
     }
 
-    // Restore the song's patcher DAG. The engine executes one global graph, so
-    // it takes the first track that carries a patcher; the other tracks' patchers
-    // are preserved on the next save (round-tripped) but not yet run per-track.
-    // Applied only when a track carries one, so a patcher-less (or older) project
-    // leaves the live audio graph intact rather than wiping it to empty.
+    // Restore the song's patcher DAG. Patchers are per-device now, but the engine
+    // still executes one global graph, so it takes the first device (in track
+    // then chain order) that carries one; the rest are preserved on save
+    // (round-tripped) but not yet run per-device. A patcher-less (or older)
+    // project leaves the live audio graph intact rather than wiping it to empty.
+    bool patcherLoaded = false;
     for (const auto& source : document.tracks) {
-      if (source.patcher.nodes.empty()) {
-        continue;
+      if (patcherLoaded) {
+        break;
       }
-      daw::PatcherGraph loadedGraph = source.patcher;
-      if (daw::buildPatcherGraph(loadedGraph)) {
-        {
-          std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
-          patcherGraphState.graph = std::move(loadedGraph);
-          uint32_t nextId = 0;
-          for (const auto& node : patcherGraphState.graph.nodes) {
-            nextId = std::max(nextId, node.id + 1);
-          }
-          patcherGraphState.nextNodeId = nextId;
+      for (const auto& device : source.chain.devices) {
+        if (device.patcher.nodes.empty()) {
+          continue;
         }
-        patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
-        updatePatcherGraphSnapshot();
-        DAW_EVENT("project.patcher_loaded")
-            .field("track", source.trackId)
-            .field("nodes", static_cast<uint64_t>(source.patcher.nodes.size()))
-            .field("edges", static_cast<uint64_t>(source.patcher.edges.size()));
-      } else {
-        DAW_EVENT("project.patcher_invalid").field("track", source.trackId);
+        daw::PatcherGraph loadedGraph = device.patcher;
+        if (daw::buildPatcherGraph(loadedGraph)) {
+          {
+            std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+            patcherGraphState.graph = std::move(loadedGraph);
+            uint32_t nextId = 0;
+            for (const auto& node : patcherGraphState.graph.nodes) {
+              nextId = std::max(nextId, node.id + 1);
+            }
+            patcherGraphState.nextNodeId = nextId;
+          }
+          patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
+          updatePatcherGraphSnapshot();
+          DAW_EVENT("project.patcher_loaded")
+              .field("track", source.trackId)
+              .field("device", device.id)
+              .field("nodes", static_cast<uint64_t>(device.patcher.nodes.size()))
+              .field("edges", static_cast<uint64_t>(device.patcher.edges.size()));
+        } else {
+          DAW_EVENT("project.patcher_invalid")
+              .field("track", source.trackId)
+              .field("device", device.id);
+        }
+        patcherLoaded = true;  // engine runs only one graph for now
+        break;
       }
-      break;  // engine runs only one graph for now.
     }
 
     // Report plugin identity before touching anything: a project that silently

@@ -135,11 +135,15 @@ daw::ProjectDocument makeDocument() {
   empty.name = "Drums";
   document.tracks.push_back(std::move(empty));
 
-  // Each track carries its own patcher DAG. Track 0 exercises node configs
-  // (euclidean's signed octave_offset included) -> random_degree -> event_out;
-  // track 1 is a plain random_degree -> event_out. Two tracks with patchers
-  // proves the per-track model round-trips.
+  // Patchers are per-device. Track 0's instrument (device 10) carries a
+  // euclidean (signed octave_offset) -> random_degree -> event_out; track 1 gets
+  // a device with a plain random_degree -> event_out. Two devices with patchers
+  // proves the per-device model round-trips.
   {
+    daw::Device drums;
+    drums.id = 20;
+    drums.kind = daw::DeviceKind::PatcherInstrument;
+    document.tracks[1].chain.devices.push_back(drums);
     daw::PatcherNode euclid;
     euclid.id = 0;
     euclid.type = daw::PatcherNodeType::Euclidean;
@@ -150,7 +154,7 @@ daw::ProjectDocument makeDocument() {
     euclid.euclideanConfig.octave_offset = -1;
     euclid.euclideanConfig.velocity = 100;
     euclid.euclideanConfig.base_octave = 4;
-    document.tracks[0].patcher.nodes.push_back(euclid);
+    document.tracks[0].chain.devices[0].patcher.nodes.push_back(euclid);
 
     daw::PatcherNode rnd;
     rnd.id = 1;
@@ -158,17 +162,17 @@ daw::ProjectDocument makeDocument() {
     rnd.hasRandomDegreeConfig = true;
     rnd.randomDegreeConfig.degree = 8;
     rnd.randomDegreeConfig.velocity = 100;
-    document.tracks[0].patcher.nodes.push_back(rnd);
+    document.tracks[0].chain.devices[0].patcher.nodes.push_back(rnd);
 
     daw::PatcherNode out;
     out.id = 2;
     out.type = daw::PatcherNodeType::EventOut;
-    document.tracks[0].patcher.nodes.push_back(out);
+    document.tracks[0].chain.devices[0].patcher.nodes.push_back(out);
 
-    document.tracks[0].patcher.edges.push_back(
+    document.tracks[0].chain.devices[0].patcher.edges.push_back(
         {{0, daw::kPatcherEventOutputPort}, {1, daw::kPatcherEventInputPort},
          daw::PatcherPortKind::Event});
-    document.tracks[0].patcher.edges.push_back(
+    document.tracks[0].chain.devices[0].patcher.edges.push_back(
         {{1, daw::kPatcherEventOutputPort}, {2, daw::kPatcherEventInputPort},
          daw::PatcherPortKind::Event});
 
@@ -177,12 +181,12 @@ daw::ProjectDocument makeDocument() {
     rnd2.type = daw::PatcherNodeType::RandomDegree;
     rnd2.hasRandomDegreeConfig = true;
     rnd2.randomDegreeConfig.degree = 5;
-    document.tracks[1].patcher.nodes.push_back(rnd2);
+    document.tracks[1].chain.devices[0].patcher.nodes.push_back(rnd2);
     daw::PatcherNode out2;
     out2.id = 1;
     out2.type = daw::PatcherNodeType::EventOut;
-    document.tracks[1].patcher.nodes.push_back(out2);
-    document.tracks[1].patcher.edges.push_back(
+    document.tracks[1].chain.devices[0].patcher.nodes.push_back(out2);
+    document.tracks[1].chain.devices[0].patcher.edges.push_back(
         {{0, daw::kPatcherEventOutputPort}, {1, daw::kPatcherEventInputPort},
          daw::PatcherPortKind::Event});
   }
@@ -223,7 +227,7 @@ int main() {
   const std::string first = daw::serializeProject(original);
   const std::string second = daw::serializeProject(original);
   require(first == second, "serialization is not deterministic");
-  require(first.find("\"schema_version\": 3") != std::string::npos,
+  require(first.find("\"schema_version\": 4") != std::string::npos,
           "schema_version missing or not a number");
   // Numbers must not be quoted; anything else reading this file would have to
   // special-case string-wrapped integers.
@@ -307,9 +311,10 @@ int main() {
   const daw::MusicalClip& clip0 = *clip0Ptr;
   require(countEvents(clip0, daw::MusicalEventType::Note) == 2, "notes lost");
   require(countEvents(clip0, daw::MusicalEventType::Chord) == 1, "chords lost");
-  // Each track's patcher DAG must survive the round trip: node ids/types, the
+  // Each device's patcher DAG must survive the round trip: node ids/types, the
   // euclidean config (including its signed octave_offset), and edge topology.
-  const auto& p0 = roundTripped.tracks[0].patcher;
+  require(!roundTripped.tracks[0].chain.devices.empty(), "track 0 device lost");
+  const auto& p0 = roundTripped.tracks[0].chain.devices[0].patcher;
   require(p0.nodes.size() == 3, "track 0 patcher nodes lost");
   require(p0.nodes[0].type == daw::PatcherNodeType::Euclidean,
           "track 0 patcher node 0 type lost");
@@ -327,8 +332,9 @@ int main() {
           "track 0 patcher edge 0 endpoints lost");
   require(p0.edges[1].src.nodeId == 1 && p0.edges[1].dst.nodeId == 2,
           "track 0 patcher edge 1 endpoints lost");
-  // The second track's patcher round-trips independently — proves per-track.
-  const auto& p1 = roundTripped.tracks[1].patcher;
+  // A second device's patcher round-trips independently — proves per-device.
+  require(!roundTripped.tracks[1].chain.devices.empty(), "track 1 device lost");
+  const auto& p1 = roundTripped.tracks[1].chain.devices[0].patcher;
   require(p1.nodes.size() == 2, "track 1 patcher nodes lost");
   require(p1.nodes[0].type == daw::PatcherNodeType::RandomDegree,
           "track 1 random_degree lost");
@@ -652,6 +658,32 @@ int main() {
             "clip without kind should default to Symbolic");
     require(countEvents(doc.clips[0].clip, daw::MusicalEventType::Note) == 1,
             "schema-2 clip note lost");
+  }
+
+  // A schema <= 3 track-level patcher migrates onto the track's instrument device
+  // (patchers are per-device from v4). The track carries two devices; the graph
+  // must land on the VstInstrument, not the effect.
+  {
+    daw::ProjectDocument doc;
+    std::string err;
+    require(daw::deserializeProject(
+                "{\"schema_version\": 3, \"tracks\": [ { \"track_id\": 0,"
+                " \"device_chain\": ["
+                "   { \"device_id\": 5, \"kind\": \"vst_effect\" },"
+                "   { \"device_id\": 6, \"kind\": \"vst_instrument\" } ],"
+                " \"patcher\": { \"nodes\": [ { \"id\": 0, \"type\": \"event_out\" } ],"
+                "   \"edges\": [] } } ] }",
+                doc, &err),
+            "schema-3 track patcher failed to parse");
+    require(doc.tracks.size() == 1 && doc.tracks[0].chain.devices.size() == 2,
+            "schema-3 track/devices lost");
+    require(doc.tracks[0].patcher.nodes.empty(),
+            "track-level patcher should be cleared after migration");
+    const auto& inst = doc.tracks[0].chain.devices[1];  // the vst_instrument
+    require(inst.id == 6 && inst.patcher.nodes.size() == 1,
+            "patcher did not migrate onto the instrument device");
+    require(doc.tracks[0].chain.devices[0].patcher.nodes.empty(),
+            "patcher wrongly migrated onto the effect device");
   }
 
   if (failures != 0) {

@@ -109,7 +109,7 @@ const Q: u64 = 960_000;
 /// note lands under a clip ("no notes outside clips") with sane boundaries.
 #[test]
 fn segments_live_edits_into_clips() {
-    let _serial = SERIAL.lock().unwrap();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (engine, session) = start_engine("seg");
     let four_bars = 16 * Q;
 
@@ -137,7 +137,7 @@ fn segments_live_edits_into_clips() {
     assert!(save.ok, "save failed: {save:?}");
 
     let doc = read_project(&engine.proj, "segout");
-    assert_eq!(doc["schema_version"].as_u64(), Some(3));
+    assert_eq!(doc["schema_version"].as_u64(), Some(4));
     let clips = doc["clips"].as_array().unwrap();
     assert_eq!(clips.len(), 2, "expected two segmented clips: {clips:?}");
     let pls = track(&doc, 0)["placements"].as_array().unwrap().clone();
@@ -160,7 +160,7 @@ fn segments_live_edits_into_clips() {
 /// authored placements rather than flattening them.
 #[test]
 fn roundtrip_preserves_placements() {
-    let _serial = SERIAL.lock().unwrap();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (engine, session) = start_engine("rt");
     let two_bars = 8 * Q;
     let one_bar = 4 * Q;
@@ -248,7 +248,7 @@ fn roundtrip_preserves_placements() {
 /// project's name flows through so every lane-labelling surface reads one source.
 #[test]
 fn track_names_published() {
-    let _serial = SERIAL.lock().unwrap();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (engine, session) = start_engine("names");
     // Fresh engine: default name.
     let names = session.handle().read_track_names();
@@ -282,7 +282,7 @@ fn track_names_published() {
 #[test]
 fn mixer_read_back() {
     use daw_bridge::layout::{UiCommandPayload, UiCommandType, MIXER_FLAG_MUTE};
-    let _serial = SERIAL.lock().unwrap();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (_engine, session) = start_engine("mixer");
     let h = session.handle();
     let v0 = h.mixer_version();
@@ -328,7 +328,7 @@ fn mixer_read_back() {
 /// two transport commands the web UI needs beyond play/pause.
 #[test]
 fn transport_seek_and_stop() {
-    let _serial = SERIAL.lock().unwrap();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (_engine, session) = start_engine("transport");
     let target = 2 * Q; // within the default 1-bar loop
 
@@ -368,7 +368,7 @@ fn transport_seek_and_stop() {
 /// schedule it yet — the Movement 4 format slot, exercised against a live engine.
 #[test]
 fn audio_clip_persists_and_flags_rail() {
-    let _serial = SERIAL.lock().unwrap();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (engine, session) = start_engine("audio");
     let one_bar = 4 * Q;
 
