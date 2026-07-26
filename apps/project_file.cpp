@@ -8,6 +8,8 @@
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 
+#include "apps/patcher_preset.h"
+
 namespace daw {
 namespace {
 
@@ -119,6 +121,12 @@ class JsonWriter {
 
   void key(const std::string& name, uint32_t value) {
     key(name, static_cast<uint64_t>(value));
+  }
+
+  void key(const std::string& name, int64_t value) {
+    comma();
+    pad();
+    out_ << quote(name) << ": " << value;
   }
 
   void key(const std::string& name, double value) {
@@ -286,6 +294,63 @@ TrackRoute readRoute(const boost::property_tree::ptree& tree) {
   route.trackId = tree.get<uint32_t>("track_id", 0);
   route.inputId = tree.get<uint32_t>("input_id", 0);
   return route;
+}
+
+// Writes a patcher graph's "nodes" and "edges" arrays into the already-open
+// object. Same node/edge shape as a standalone patcher preset, so a per-track
+// patcher and a preset file are interchangeable.
+void writePatcherGraph(JsonWriter& writer, const PatcherGraph& graph) {
+  writer.beginArray("nodes");
+  for (const auto& node : graph.nodes) {
+    writer.beginArrayElement();
+    writer.key("id", node.id);
+    writer.key("type", std::string(patcherNodeTypeToString(node.type)));
+    if (node.hasEuclideanConfig) {
+      writer.beginChildObject("euclidean");
+      writer.key("steps", node.euclideanConfig.steps);
+      writer.key("hits", node.euclideanConfig.hits);
+      writer.key("offset", node.euclideanConfig.offset);
+      writer.key("duration_ticks",
+                 static_cast<uint64_t>(node.euclideanConfig.duration_ticks));
+      writer.key("degree", static_cast<uint32_t>(node.euclideanConfig.degree));
+      writer.key("octave_offset",
+                 static_cast<int64_t>(node.euclideanConfig.octave_offset));
+      writer.key("velocity", static_cast<uint32_t>(node.euclideanConfig.velocity));
+      writer.key("base_octave",
+                 static_cast<uint32_t>(node.euclideanConfig.base_octave));
+      writer.endChildObject();
+    }
+    if (node.hasLfoConfig) {
+      writer.beginChildObject("lfo");
+      writer.key("frequency_hz", static_cast<double>(node.lfoConfig.frequency_hz));
+      writer.key("depth", static_cast<double>(node.lfoConfig.depth));
+      writer.key("bias", static_cast<double>(node.lfoConfig.bias));
+      writer.key("phase_offset", static_cast<double>(node.lfoConfig.phase_offset));
+      writer.endChildObject();
+    }
+    if (node.hasRandomDegreeConfig) {
+      writer.beginChildObject("random_degree");
+      writer.key("degree", static_cast<uint32_t>(node.randomDegreeConfig.degree));
+      writer.key("velocity",
+                 static_cast<uint32_t>(node.randomDegreeConfig.velocity));
+      writer.key("duration_ticks",
+                 static_cast<uint64_t>(node.randomDegreeConfig.duration_ticks));
+      writer.endChildObject();
+    }
+    writer.endArrayElement();
+  }
+  writer.endArray();
+  writer.beginArray("edges");
+  for (const auto& edge : graph.edges) {
+    writer.beginArrayElement();
+    writer.key("src_node_id", edge.src.nodeId);
+    writer.key("src_port_id", edge.src.portId);
+    writer.key("dst_node_id", edge.dst.nodeId);
+    writer.key("dst_port_id", edge.dst.portId);
+    writer.key("kind", std::string(patcherEdgeKindToString(edge.kind)));
+    writer.endArrayElement();
+  }
+  writer.endArray();
 }
 
 }  // namespace
@@ -463,6 +528,14 @@ std::string serializeProject(const ProjectDocument& document) {
       writer.endArrayElement();
     }
     writer.endArray();
+
+    // This track's patcher DAG, omitted when empty so patcher-less tracks stay
+    // clean.
+    if (!track.patcher.nodes.empty()) {
+      writer.beginChildObject("patcher");
+      writePatcherGraph(writer, track.patcher);
+      writer.endChildObject();
+    }
 
     writer.endArrayElement();
   }
@@ -670,6 +743,13 @@ bool deserializeProject(const std::string& json,
           chord.humanizeVelocity =
               static_cast<uint16_t>(chordTree.get<uint32_t>("humanize_velocity", 0));
           track.clip.addEvent(event);
+        }
+      }
+
+      // This track's patcher DAG (same node/edge shape as a standalone preset).
+      if (const auto patcherTree = tree.get_child_optional("patcher")) {
+        if (!readPatcherGraphTree(*patcherTree, 2, track.patcher, error)) {
+          return false;
         }
       }
 
