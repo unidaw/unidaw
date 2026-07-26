@@ -27,6 +27,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
+use daw_bridge::layout::{UiCommandPayload, UiCommandType};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
 
 /// Wire format, little-endian. The frontend decodes with a DataView.
@@ -76,17 +77,19 @@ fn parse_viewport(txt: &str, vp: &mut Viewport) {
 
 struct Args {
     port: u16,
+    cmd_port: u16,
     shm: String,
     hz: u32,
 }
 
 fn parse_args() -> Args {
-    let mut a = Args { port: 8174, shm: default_shm_name(), hz: 120 };
+    let mut a = Args { port: 8174, cmd_port: 8175, shm: default_shm_name(), hz: 120 };
     let v: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < v.len() {
         match v[i].as_str() {
-            "--port" if i + 1 < v.len() => { a.port = v[i + 1].parse().unwrap_or(a.port); i += 2; }
+            "--port" if i + 1 < v.len() => { a.port = v[i + 1].parse().unwrap_or(a.port); a.cmd_port = a.port + 1; i += 2; }
+            "--cmd-port" if i + 1 < v.len() => { a.cmd_port = v[i + 1].parse().unwrap_or(a.cmd_port); i += 2; }
             "--shm" if i + 1 < v.len() => { a.shm = v[i + 1].clone(); i += 2; }
             "--hz" if i + 1 < v.len() => { a.hz = v[i + 1].parse().unwrap_or(a.hz).clamp(1, 1000); i += 2; }
             _ => i += 1,
@@ -304,6 +307,103 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     true
 }
 
+/// The command path: a second WebSocket, with the writable handle owned by its
+/// reader thread.
+///
+/// Not a second direction on the state socket — two attempts at duplex broke it
+/// (non-blocking makes send() fail under ordinary backpressure; a read timeout
+/// corrupts the stream mid-frame). And not HTTP either, for two reasons: a TCP
+/// handshake per keystroke is real cost when a drag emits a stream of edits, and
+/// EngineHandle holds raw pointers so it is not Send — it cannot be shared across
+/// connection threads however the front door is shaped. One connection, one
+/// owning thread, blocking reads.
+///
+/// Commands do NOT need to be synchronised with a frame. Every edit carries the
+/// clip version it was composed against, and the engine arbitrates by version
+/// rather than arrival order — that is what base_version is for. Optimistic
+/// editing is: render locally, send with base_version N, reconcile when a frame
+/// with N+1 arrives.
+///
+/// The ring is SPSC, so exactly one producer may write. That is this thread.
+///
+///   {"type":"play"}
+///   {"type":"note","track":0,"pitch":60,"tick":0,"dur":960000,"vel":100,"base":7}
+fn parse_num(body: &str, key: &str) -> Option<i64> {
+    let i = body.find(key)? + key.len();
+    let rest = &body[i..];
+    let start = rest.find(|c: char| c.is_ascii_digit() || c == '-')?;
+    let end = rest[start..].find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len() - start);
+    rest[start..start + end].parse().ok()
+}
+
+fn build_command(body: &str) -> Option<UiCommandPayload> {
+    let mut p = UiCommandPayload {
+        command_type: UiCommandType::None as u16,
+        flags: 0, track_id: 0, plugin_index: 0, note_pitch: 0, value0: 0,
+        note_nanotick_lo: 0, note_nanotick_hi: 0,
+        note_duration_lo: 0, note_duration_hi: 0,
+        base_version: parse_num(body, "\"base\"").unwrap_or(0).max(0) as u32,
+    };
+    let tick = parse_num(body, "\"tick\"").unwrap_or(0).max(0) as u64;
+    p.note_nanotick_lo = tick as u32;
+    p.note_nanotick_hi = (tick >> 32) as u32;
+    p.track_id = parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32;
+
+    if body.contains("\"play\"") {
+        p.command_type = UiCommandType::TogglePlay as u16;
+    } else if body.contains("\"note\"") {
+        let dur = parse_num(body, "\"dur\"").unwrap_or(960_000).max(1) as u64;
+        p.command_type = UiCommandType::WriteNote as u16;
+        p.note_pitch = parse_num(body, "\"pitch\"").unwrap_or(60).clamp(0, 127) as u32;
+        p.value0 = parse_num(body, "\"vel\"").unwrap_or(100).clamp(0, 127) as u32;
+        p.note_duration_lo = dur as u32;
+        p.note_duration_hi = (dur >> 32) as u32;
+    } else if body.contains("\"delete\"") {
+        p.command_type = UiCommandType::DeleteNote as u16;
+    } else if body.contains("\"undo\"") {
+        p.command_type = UiCommandType::Undo as u16;
+    } else if body.contains("\"redo\"") {
+        p.command_type = UiCommandType::Redo as u16;
+    } else {
+        return None;
+    }
+    Some(p)
+}
+
+fn serve_commands(listener: TcpListener, shm: String) {
+    for stream in listener.incoming().flatten() {
+        let shm = shm.clone();
+        thread::spawn(move || {
+            let mut ws = match tungstenite::accept(stream) { Ok(w) => w, Err(_) => return };
+            // Attached HERE, on the thread that will use it: EngineHandle is not
+            // Send, so it cannot be created elsewhere and moved in.
+            let handle = match EngineHandle::attach(&shm, true) {
+                Ok(h) => h,
+                Err(e) => { let _ = ws.send(tungstenite::Message::Text(
+                    format!("{{\"error\":\"attach failed: {e}\"}}"))); return; }
+            };
+            eprintln!("sidecar: command client connected");
+            loop {
+                match ws.read() {
+                    Ok(tungstenite::Message::Text(t)) => {
+                        let reply = match build_command(&t) {
+                            None => "{\"error\":\"unknown command\"}".to_string(),
+                            Some(p) => match handle.send_command(p) {
+                                Ok(()) => format!("{{\"ok\":true,\"type\":{}}}", p.command_type),
+                                Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                            },
+                        };
+                        if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                    }
+                    Ok(tungstenite::Message::Close(_)) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+            eprintln!("sidecar: command client gone");
+        });
+    }
+}
+
 fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
     let mut ws = match tungstenite::accept(stream) {
@@ -404,6 +504,15 @@ fn main() {
         Err(e) => eprintln!("sidecar: WARNING cannot attach to {} ({e}) — retrying per client", args.shm),
     }
     eprintln!("sidecar: ws://127.0.0.1:{} polling at {} Hz", args.port, args.hz);
+
+    match TcpListener::bind(("127.0.0.1", args.cmd_port)) {
+        Ok(l) => {
+            eprintln!("sidecar: ws://127.0.0.1:{} for commands", args.cmd_port);
+            let shm = args.shm.clone();
+            thread::spawn(move || serve_commands(l, shm));
+        }
+        Err(e) => eprintln!("sidecar: no command port {} ({e}) — read-only", args.cmd_port),
+    }
 
     let clients = Arc::new(AtomicU64::new(0));
     for stream in listener.incoming() {

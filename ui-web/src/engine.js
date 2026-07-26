@@ -11,7 +11,8 @@
 
 import { createStore, decode } from './wire.js';
 
-export function connectEngine({ url = 'ws://127.0.0.1:8174', onChange, onStatus } = {}) {
+export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.0.0.1:8175',
+                                onChange, onStatus, onAck } = {}) {
   const store = createStore();
   let ws = null;
   let closed = false;
@@ -55,16 +56,45 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', onChange, onStatus 
     ws.onerror = () => {};
   }
 
+  // Commands go out on their OWN socket. The state socket is write-only, and
+  // commands are a different shape anyway: rare, individually meaningful, and
+  // wanting an acknowledgement. They do not need to be synchronised with a
+  // frame — each carries the clip version it was composed against and the engine
+  // arbitrates by version, not by arrival order.
+  let cmdWs = null;
+  let cmdBackoff = 250;
+  function openCmd() {
+    if (closed) return;
+    cmdWs = new WebSocket(cmdUrl);
+    cmdWs.onopen = () => { cmdBackoff = 250; };
+    cmdWs.onmessage = (ev) => { if (onAck) onAck(ev.data); };
+    cmdWs.onclose = () => {
+      if (closed) return;
+      setTimeout(openCmd, cmdBackoff);
+      cmdBackoff = Math.min(cmdBackoff * 2, 4000);
+    };
+    cmdWs.onerror = () => {};
+  }
+
   open();
+  openCmd();
 
   return {
     store,
+    canSend: () => !!cmdWs && cmdWs.readyState === 1,
+    /** Fire-and-reconcile: the reply is an ack, the truth arrives in a frame. */
+    send(obj) {
+      if (!cmdWs || cmdWs.readyState !== 1) return false;
+      obj.base = store.clipVersion;      // what this edit was composed against
+      cmdWs.send(JSON.stringify(obj));
+      return true;
+    },
     /** Tell the sidecar what we are looking at; it does the projection. */
     setViewport(linesPerBeat, firstRow, rowCount) {
       if (!ws || ws.readyState !== 1) return;
       ws.send(`{"linesPerBeat":${linesPerBeat},"firstRow":${firstRow},"rowCount":${rowCount}}`);
     },
     stats: () => ({ framesIn, gaps, lastSeq, connected: ws && ws.readyState === 1 }),
-    close() { closed = true; if (ws) ws.close(); },
+    close() { closed = true; if (ws) ws.close(); if (cmdWs) cmdWs.close(); },
   };
 }
