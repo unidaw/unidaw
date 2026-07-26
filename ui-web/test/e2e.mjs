@@ -23,6 +23,8 @@
 // cascading.
 
 import { chromium } from 'playwright';
+import { rmSync } from 'node:fs';
+import { join } from 'node:path';
 
 const URL = process.env.UNI_URL || 'http://127.0.0.1:8173/index.html';
 const PROJECT = process.env.UNI_PROJECT || 'webtest';
@@ -289,6 +291,34 @@ await page.evaluate(() => window.__uni.browser(true));
 await page.waitForTimeout(700);
 const projects = await page.evaluate(() => window.__uni.projects());
 ok(projects.includes(PROJECT), 'the sidecar lists projects from disk', JSON.stringify(projects));
+
+section('save');
+// Writes a real file, so it cleans up after itself — a test that leaves state on
+// disk changes the behaviour of the next run of the test that lists it.
+const SCRATCH = 'e2e-scratch';
+await page.evaluate((n) => window.__uni.saveAs(n), SCRATCH);
+await page.waitForTimeout(2000);
+await page.evaluate(() => window.__uni.browser(true));
+await page.waitForTimeout(1200);
+const listed = await page.evaluate(() => window.__uni.projects());
+ok(listed.includes(SCRATCH), 'a saved project appears in the browser', JSON.stringify(listed));
+// Exactly the name it wrote, nothing globbed: a test that deletes by pattern in
+// a directory holding the user's projects is a bad trade for tidiness.
+const PROJECTS = process.env.UNI_PROJECTS
+  || '/Users/jak/src/daw-web/presets/projects';
+for (const suffix of ['.uniproj.json', '.uniproj.state']) {
+  rmSync(join(PROJECTS, SCRATCH + suffix), { recursive: true, force: true });
+}
+await page.evaluate(() => window.__uni.browser(false));
+
+section('dock');
+const bad = await page.evaluate(() => window.__uni.run('note 999'));
+ok(String(bad).includes('out of range'), 'the dock reports a bad argument', String(bad));
+const unknown = await page.evaluate(() => window.__uni.run('flurb'));
+ok(String(unknown).includes('unknown'), 'and an unknown command', String(unknown));
+const help = await page.evaluate(() => window.__uni.dockProbe().commands);
+ok(help.includes('note') && help.includes('gain') && help.includes('view'),
+   `the grammar spans editing, mixing and navigation: ${help.length} commands`);
 
 section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));

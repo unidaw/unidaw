@@ -62,8 +62,12 @@ export class Browser {
   beginSave(seed) {
     this.saving = true;
     this.saveText = seed || '';
+    // The seeded name starts SELECTED, so the first character typed replaces it.
+    // Appending instead turned "save as" on a project called foo into "foofoo" —
+    // the same bug the mixer's rename field had, fixed there and not here.
+    this.saveFresh = true;
   }
-  cancelSave() { this.saving = false; this.saveText = ''; }
+  cancelSave() { this.saving = false; this.saveText = ''; this.saveFresh = false; }
 
   /**
    * Feed a keystroke to the save field. Returns 'consumed', 'commit', 'cancel'
@@ -80,8 +84,13 @@ export class Browser {
       this.onSave && this.onSave(name);
       return 'commit';
     }
-    if (key === 'Backspace') { this.saveText = this.saveText.slice(0, -1); return 'consumed'; }
+    if (key === 'Backspace') {
+      this.saveFresh = false;
+      this.saveText = this.saveText.slice(0, -1);
+      return 'consumed';
+    }
     if (key.length !== 1) return 'ignore';
+    if (this.saveFresh) { this.saveText = ''; this.saveFresh = false; }
     // Matches what the sidecar accepts, so a name cannot be typed here and then
     // silently refused two hops away.
     if (!/[A-Za-z0-9._-]/.test(key)) return 'consumed';
