@@ -171,7 +171,12 @@ export function buildArrangeModel(opts, buf) {
       cl.w = Math.max(2, (e.endTick - e.startTick) / tpp);
       cl.name = e.name;
       cl.audio = !!e.audio;
-      cl.selected = e.placementId === selectedPlacement;
+      // Keyed on (track, startTick), not placement_id. Backend's note: the id is
+    // currently the extent's INDEX, so it shifts whenever the list changes — a
+    // selection keyed on it would silently jump to a different clip after an
+    // edit. Position is stable and disappears when the clip does, which is what
+    // a selection should do. Switch to the id when it becomes stable.
+    cl.selected = placementKey(e) === selectedPlacement;
     }
   }
   buf.clipCount = c;
@@ -185,6 +190,9 @@ export function buildArrangeModel(opts, buf) {
 
   return buf;
 }
+
+/** The stable identity of a placement for selection purposes. See above. */
+export function placementKey(e) { return e.track + ':' + e.startTick; }
 
 /** x -> tick, for hit testing and click-to-position. */
 export function tickAtX(view, x) {

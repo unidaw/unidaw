@@ -68,6 +68,23 @@ const SCENES = [
   { name: 'token-entry', setup: async (p) => { await p.keyboard.press('@'); for (const c of '3^7') await p.keyboard.press(c); } },
 ];
 
+/** Above this, a pixel difference is a change; below, it is antialiasing. */
+const NOISE_PX = 40;
+
+/** Differing pixel count via ImageMagick, or null if it could not be measured. */
+function pixelDiff(a, b, out) {
+  try {
+    const s = execFileSync('magick', ['compare', '-metric', 'AE', a, b, out],
+                           { stdio: ['ignore', 'pipe', 'pipe'] });
+    return Number(String(s).trim().split(/\s+/)[0]);
+  } catch (e) {
+    // `magick compare` exits non-zero when images differ; the count is on stderr.
+    const t = String(e.stderr || e.stdout || '').trim().split(/\s+/)[0];
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  }
+}
+
 let fail = 0;
 const ok = (cond, msg) => { console.log(`${cond ? '  PASS' : '  FAIL'}  ${msg}`); if (!cond) fail++; };
 
@@ -102,14 +119,19 @@ async function shoot(scene) {
     const a = readFileSync(baseline), b = readFileSync(png);
     if (a.equals(b)) console.log('  PASS  golden byte-identical');
     else {
-      // localise it — a percentage does not say where
-      try {
-        const out = execFileSync('magick', ['compare', '-metric', 'AE', baseline, png, join(OUT, `${scene.name}.diff.png`)], { stdio: ['ignore', 'pipe', 'pipe'] });
-        console.log(`  FAIL  golden differs: ${out}`);
-      } catch (e) {
-        const px = String(e.stderr || e.stdout || '').trim();
-        console.log(`  FAIL  golden differs: ${px} px  -> ${join(OUT, `${scene.name}.diff.png`)}`);
+      // Byte-identical stays the goal, but a handful of scattered pixels is
+      // antialiasing, not a regression — the patcher's SVG curves produced 19
+      // differing pixels once in about a dozen runs and were identical either
+      // side of it. Failing on that teaches people to re-run rather than to
+      // look, which is worse than the noise. Anything above the band still
+      // fails, and the count is always printed.
+      const px = pixelDiff(baseline, png, join(OUT, `${scene.name}.diff.png`));
+      if (px !== null && px <= NOISE_PX) {
+        console.log(`  WARN  golden differs by ${px} px — within antialiasing noise`);
+        return;
       }
+      console.log(`  FAIL  golden differs: ${px === null ? '?' : px} px`
+                + `  -> ${join(OUT, `${scene.name}.diff.png`)}`);
       fail++;
     }
   }

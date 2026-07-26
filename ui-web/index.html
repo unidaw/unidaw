@@ -299,7 +299,7 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   octave: 4, editStep: 1, velocity: 100, zoom: 3, digitCell: -1, digitAcc: 0,
   // Which surface is showing. Both consume the same engine store; only the
   // projection differs, which is the whole point of the view-model boundary.
-  projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: -1,
+  projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: null,
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
   pianoSelection: null, pianoMarquee: null,
   pianoFitPending: false, browserOpen: false, dockOpen: false, helpOpen: false,
@@ -1089,7 +1089,7 @@ addEventListener('keydown', (e) => {
     if (k === '-' || k === '_') { state.arrangeZoom = Math.min(ARRANGE_ZOOM.length - 1, state.arrangeZoom + 1); return done(); }
     if (k === '+' || k === '=') { state.arrangeZoom = Math.max(0, state.arrangeZoom - 1); return done(); }
     if (k === ' ') { cmd('play'); return done(); }
-    if (k === 'Escape') { state.selectedPlacement = -1; state.reject = null; return done(); }
+    if (k === 'Escape') { state.selectedPlacement = null; state.reject = null; return done(); }
     // Clip edits need engine commands that do not exist yet (move/resize/
     // duplicate/delete placement). Asked backend; refusing visibly until then.
     if (k === 'Backspace' || k === 'Delete') {
@@ -1185,7 +1185,7 @@ arrangeHost.addEventListener('pointerdown', (e) => {
   state.selectedPlacement = hit.placement;
   // Click on empty lane seeks. On a placement it selects, because dragging
   // clips is the more common intent there and a stray seek would be surprising.
-  if (hit.placement < 0) {
+  if (hit.placement === null) {
     conn && conn.send({ type: 'seek', track: hit.track, tick: Math.max(0, Math.round(hit.tick)) });
   }
   state.reject = null;
@@ -1281,7 +1281,7 @@ window.__uni = {
   reset: () => { state.cursor.row = 0; state.cursor.track = 0; state.cursor.col = 0;
                  state.playhead = 0; state.zoom = 3; state.scrollX = 0; state.start = 0;
                  engine = null; state.useEngine = false; state.view = 'tracker';
-                 state.arrangeStart = 0; state.arrangeZoom = 3; state.selectedPlacement = -1;
+                 state.arrangeStart = 0; state.arrangeZoom = 3; state.selectedPlacement = null;
                  state.tracks = 16;
                  for (let i = 0; i < mixerState.strips.length; i++) {
                    const s = mixerState.strips[i]; s.gain = 0; s.pan = 0; s.flags = 0;
@@ -1290,6 +1290,11 @@ window.__uni = {
                  state.pianoZoom = 3; state.pianoStart = 0; state.pianoLow = 36;
                  state.pianoAll = false; state.selectedNote = -1;
                  state.pianoSelection = null; state.pianoMarquee = null;
+                 // The chrome shows the last rejection. Left set, it bleeds into
+                 // every later scene and a golden differs by a strip of text that
+                 // has nothing to do with what the scene is testing — which is
+                 // exactly how the HUD leaked before it got its own flag.
+                 state.reject = null; state.badToken = null;
                  state.browserOpen = false; state.projects = []; state.currentProject = '';
                  browser.selected = 0; browser.cancelSave();
                  state.dockOpen = false; dock.clear(); state.helpOpen = false;
@@ -1415,7 +1420,7 @@ window.__uni = {
     state.useEngine = true; state.hudFrozen = true; conn.close();
     hudText.nodeValue = 'arrange-fixture';
     state.view = 'arrange'; state.arrangeZoom = 3; state.arrangeStart = 0;
-    state.selectedPlacement = 2;
+    state.selectedPlacement = '1:3840000';   // (track, startTick), see arrangemodel
     const B = 3840000;
     const mk = (id, clip, tr, s, e, name, audio) =>
       ({ placementId: id, clipId: clip, track: tr, flags: audio ? 1 : 0,

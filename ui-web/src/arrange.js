@@ -162,7 +162,8 @@ export class Arrange {
       if (el._name !== c.name) { el._name = c.name; el._label.nodeValue = c.name; }
       if (el._audio !== c.audio) { el._audio = c.audio; el.classList.toggle('audio', c.audio); }
       if (el._sel !== c.selected) { el._sel = c.selected; el.classList.toggle('sel', c.selected); }
-      if (el._pid !== c.id) { el._pid = c.id; el.dataset.placement = String(c.id); }
+      const pk = c.track + ':' + c.startTick;
+      if (el._pid !== pk) { el._pid = pk; el.dataset.placement = pk; }
     }
 
     const px = vm.playheadX;
@@ -190,10 +191,10 @@ export class Arrange {
     for (let i = 0; i < vm.clipCount; i++) {
       const c = vm.clips[i];
       if (c.track === track && x >= c.x && x < c.x + c.w) {
-        return { track, tick, placement: c.id, clip: c };
+        return { track, tick, placement: c.track + ':' + c.startTick, id: c.id, clip: c };
       }
     }
-    return { track, tick, placement: -1, clip: null };
+    return { track, tick, placement: null, clip: null };
   }
 
   /** Structure for tests and agents — the same contract the tracker's probe has. */
