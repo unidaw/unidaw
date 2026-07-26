@@ -52,6 +52,9 @@ const SCENES = [
   { name: 'arrange', arrange: true, setup: async (p) => p.evaluate(() => window.__uni.useArrangeFixture()) },
   { name: 'arrange-zoomed', arrange: true, setup: async (p) => p.evaluate(() => {
       window.__uni.useArrangeFixture(); window.__uni.arrangeZoom(5); }) },
+  { name: 'piano', piano: true, setup: async (p) => p.evaluate(() => window.__uni.usePianoFixture()) },
+  { name: 'piano-zoomed', piano: true, setup: async (p) => p.evaluate(() => {
+      window.__uni.usePianoFixture(); window.__uni.pianoZoom(5); }) },
   { name: 'mixer', mixer: true, setup: async (p) => p.evaluate(() => window.__uni.useMixerFixture()) },
   { name: 'typed', setup: async (p) => { for (let i = 0; i < 12; i++) await p.keyboard.press('ArrowDown'); await p.keyboard.press('ArrowRight'); } },
   // The token buffer is the ONLY thing that waits for Enter, and it is only ever
@@ -130,6 +133,27 @@ for (const scene of SCENES) {
     ok(a.domNodes < 1200, `arrange dom bounded: ${a.domNodes}`);
     ok(a.playheadX >= 0, `playhead placed: ${a.playheadX}`);
     console.log(`  ${a.zoom}  ${a.clips} clips  ${a.gridLines} gridlines  ${a.domNodes} nodes`);
+    await shoot(scene);
+    continue;
+  }
+
+  if (scene.piano) {
+    const q = await page.evaluate(() => window.__uni.pianoProbe());
+    ok(q !== null, 'piano model built');
+    ok(q.notes === 13, `all 13 notes drawn: ${q.notes}`);
+    ok(q.pitchRange && q.pitchRange[0] === 52 && q.pitchRange[1] === 79,
+       `pitch range ${JSON.stringify(q.pitchRange)}`);
+    ok(q.keys > 40, `keyboard drawn: ${q.keys} keys`);
+    ok(q.playheadX > 0, `playhead placed: ${q.playheadX}`);
+    ok(q.domNodes < 1500, `piano dom bounded: ${q.domNodes}`);
+    const styled = await page.evaluate(() => ({
+      muted: document.querySelectorAll('.pr-note.muted').length,
+      add: document.querySelectorAll('.pr-note.add').length,
+      sel: document.querySelectorAll('.pr-note.sel').length,
+    }));
+    ok(styled.muted === 1 && styled.add === 1 && styled.sel === 1,
+       `provenance styling: ${JSON.stringify(styled)}`);
+    console.log(`  ${q.zoom}  ${q.notes} notes  ${q.keys} keys  ${q.domNodes} nodes`);
     await shoot(scene);
     continue;
   }

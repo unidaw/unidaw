@@ -1,0 +1,92 @@
+/* Piano roll. Tokens only. */
+
+.pr {
+  position: absolute; inset: 0;
+  display: flex;
+  background: var(--uni-surface-tracker-bg);
+  overflow: hidden; contain: strict;
+}
+
+.pr-keys {
+  position: relative;
+  flex: 0 0 58px; width: 58px;
+  background: var(--uni-surface-header-bg);
+  border-right: 1px solid var(--uni-rule-gutter);
+  /* Clears the ruler, which lives in the band. */
+  margin-top: var(--metrics-header-height);
+  z-index: 2;
+}
+
+.pr-key {
+  position: absolute; left: 0; right: 0; top: 0;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--uni-rule-column);
+  padding-left: 5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-gutter);
+  background: var(--base-neutral-300, #e9e9ed);
+  color: var(--uni-surface-tracker-bg);
+}
+.pr-key.black { background: var(--uni-surface-tracker-bg); color: var(--uni-text-gutter); }
+
+.pr-band { position: relative; flex: 1 1 auto; overflow: hidden; }
+
+.pr-ruler {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: var(--metrics-header-height);
+  background: var(--uni-surface-header-bg);
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  overflow: hidden; z-index: 2; pointer-events: none;
+}
+.pr-tick {
+  position: absolute; top: 0; left: 0; height: 100%;
+  padding-left: 4px; box-sizing: border-box;
+  border-left: 1px solid var(--uni-rule-track);
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx); color: var(--uni-text-gutter);
+  line-height: var(--metrics-header-height);
+}
+
+.pr-rows, .pr-grid, .pr-notes {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  top: var(--metrics-header-height);
+}
+.pr-rows, .pr-grid { pointer-events: none; }
+
+/* Black-key rows are shaded so the octaves are readable without counting. */
+.pr-row {
+  position: absolute; left: 0; right: 0; top: 0;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--uni-rule-column);
+}
+.pr-row.black { background: var(--uni-surface-row-alt); }
+
+.pr-gridline {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  width: 1px;
+  background: var(--uni-rule-column);
+}
+.pr-gridline.bar { background: var(--uni-rule-track); }
+
+.pr-note {
+  position: absolute; top: 0; left: 0;
+  box-sizing: border-box;
+  background: var(--base-accent);
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 2px;
+  cursor: pointer;
+}
+/* Muted base notes still ship from the engine and are drawn struck out, the
+   same convention the tracker uses — the feed is display-resolved. */
+.pr-note.muted { background: transparent; border-style: dashed; }
+.pr-note.add { border-color: var(--uni-text-fx); }
+.pr-note.sel { outline: 1px solid var(--base-text); }
+
+.pr-playhead {
+  position: absolute; top: var(--metrics-header-height); bottom: 0; left: 0;
+  width: 1px;
+  background: var(--base-accent);
+  pointer-events: none; z-index: 3;
+}
