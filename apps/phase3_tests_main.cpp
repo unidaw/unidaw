@@ -19,6 +19,7 @@
 #include "apps/automation_clip.h"
 #include "apps/harmony_timeline.h"
 #include "apps/musical_structures.h"
+#include "apps/placement_schedule.h"
 #include "apps/scale_library.h"
 #include "apps/time_base.h"
 #include "apps/ui_snapshot.h"
@@ -750,6 +751,78 @@ bool runRowOpExpandTest() {
   return true;
 }
 
+// M3.3a: the pure placement scheduler — clip-relative +at with looping. This is
+// the coordinate change M3 turns on, unit-tested off the audio thread.
+bool runPlacementScheduleTest() {
+  const uint64_t Q = 960000;
+  const uint64_t BAR = 4 * Q;
+  auto note = [](uint64_t tick, uint8_t pitch) {
+    daw::MusicalEvent e;
+    e.type = daw::MusicalEventType::Note;
+    e.nanotickOffset = tick;
+    e.payload.note.pitch = pitch;
+    e.payload.note.durationNanoticks = 240000;
+    return e;
+  };
+  auto fail = [](const char* m) {
+    std::cerr << "placement_schedule: " << m << std::endl;
+    return false;
+  };
+  // A 1-bar clip: notes at beat 0 and beat 2.
+  const std::vector<daw::MusicalEvent> clip = {note(0, 60), note(2 * Q, 64)};
+
+  // Single placement at=0 over its bar: both notes at their ticks, iteration 0.
+  {
+    auto s = daw::placementEventsInWindow(clip, BAR, 0, BAR, 0, BAR);
+    if (s.size() != 2) return fail("one bar should yield 2 notes");
+    if (s[0].absTick != 0 || s[1].absTick != 2 * Q) return fail("single-iter ticks");
+    if (s[0].iteration != 0) return fail("single-iter iteration");
+  }
+  // Looping: 1-bar clip in a 4-bar placement -> 8 notes across 4 iterations.
+  {
+    auto s = daw::placementEventsInWindow(clip, BAR, 0, 4 * BAR, 0, 4 * BAR);
+    if (s.size() != 8) return fail("4-bar placement should loop to 8 notes");
+    bool found = false;
+    for (const auto& e : s)
+      if (e.absTick == 3 * BAR && e.iteration == 3) found = true;
+    if (!found) return fail("iteration 3 note missing");
+  }
+  // at offset: placement two bars in.
+  {
+    auto s = daw::placementEventsInWindow(clip, BAR, 2 * BAR, BAR, 0, 4 * BAR);
+    if (s.size() != 2 || s[0].absTick != 2 * BAR) return fail("at offset not applied");
+  }
+  // Window filtering: only the second half of the bar.
+  {
+    auto s = daw::placementEventsInWindow(clip, BAR, 0, BAR, 2 * Q, BAR);
+    if (s.size() != 1 || s[0].absTick != 2 * Q) return fail("window filter");
+  }
+  // Window entirely outside the placement.
+  {
+    auto s = daw::placementEventsInWindow(clip, BAR, 0, BAR, 10 * BAR, 11 * BAR);
+    if (!s.empty()) return fail("window outside placement should be empty");
+  }
+  // Partial last iteration: a 1.5-bar placement; the second iteration's beat-2
+  // note falls at the exclusive placement end and is dropped -> 3 notes.
+  {
+    auto s = daw::placementEventsInWindow(clip, BAR, 0, BAR + 2 * Q, 0, 4 * BAR);
+    if (s.size() != 3) return fail("partial iteration count");
+  }
+  // A clip event past the clip length must not bleed into the next repeat.
+  {
+    const std::vector<daw::MusicalEvent> bad = {note(0, 60), note(BAR + Q, 70)};
+    auto s = daw::placementEventsInWindow(bad, BAR, 0, 2 * BAR, 0, 2 * BAR);
+    for (const auto& e : s)
+      if (e.event.payload.note.pitch == 70) return fail("out-of-clip event bled");
+  }
+  // clipLength 0 = one pass, no loop.
+  {
+    auto s = daw::placementEventsInWindow(clip, 0, 0, 0, 0, 100 * BAR);
+    if (s.size() != 2) return fail("no-loop clip should play once");
+  }
+  return true;
+}
+
 bool runResyncMismatchTest() {
   daw::UiDiffPayload diff{};
   const bool matches = daw::requireMatchingClipVersion(2, 5, diff);
@@ -1145,6 +1218,7 @@ int runAllTests(const std::string& pluginPath) {
       {"note_duration", [](const std::string&) { return runNoteDurationTest(); }},
       {"row_op_probability", [](const std::string&) { return runRowOpProbabilityTest(); }},
       {"row_op_expand", [](const std::string&) { return runRowOpExpandTest(); }},
+      {"placement_schedule", [](const std::string&) { return runPlacementScheduleTest(); }},
       {"resync_mismatch", [](const std::string&) { return runResyncMismatchTest(); }},
       {"pulse_full", runPulseFullTest},
       {"note_off_full", runNoteOffFullTest},
@@ -1189,6 +1263,7 @@ int main(int argc, char** argv) {
       testName != "clip_param_event" &&
       testName != "undo_stack" && testName != "note_duration" &&
       testName != "row_op_probability" && testName != "row_op_expand" &&
+      testName != "placement_schedule" &&
       testName != "resync_mismatch" &&
       testName != "pulse_full" && testName != "note_off_full" &&
       testName != "resurrection_full" && testName != "composition_full" &&
@@ -1235,6 +1310,9 @@ int main(int argc, char** argv) {
   }
   if (testName == "row_op_expand") {
     return runRowOpExpandTest() ? 0 : 1;
+  }
+  if (testName == "placement_schedule") {
+    return runPlacementScheduleTest() ? 0 : 1;
   }
   if (testName == "resync_mismatch") {
     return runResyncMismatchTest() ? 0 : 1;
