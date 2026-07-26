@@ -16,11 +16,15 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    (ringUiAgentOffset).
 // 10: per-track lines_per_beat published (uiLinesPerBeat), so the UI builds a
 //    LaneGrid per track instead of one grid for the whole viewport.
-constexpr uint16_t kShmVersion = 10;
+// 11 (M3.4): a published clip-extents region (uiClipExtentOffset) — the clip
+//    boxes {placementId, clipId, trackId, at, end, name} that drive rails in
+//    both views — plus placementId + provenance flags on each UiClipNote.
+constexpr uint16_t kShmVersion = 11;
 
 constexpr uint32_t kUiMaxTracks = 8;
 constexpr uint32_t kUiMaxClipNotes = 4096;
 constexpr uint32_t kUiMaxClipChords = 1024;
+constexpr uint32_t kUiMaxClipExtents = 64;  // clip boxes across all tracks (M3.4)
 constexpr uint32_t kUiMaxHarmonyEvents = 512;
 constexpr uint32_t kUiEditBatchMaxOps = 32;
 constexpr uint32_t kUiEditBatchCapacity = 64;
@@ -68,6 +72,9 @@ struct alignas(64) ShmHeader {
   // v10: per-track tracker subdivision (Mock B per-lane grids). Published so the
   // UI builds a LaneGrid per track. Fits in the align(64) tail; header stays 256.
   uint8_t uiLinesPerBeat[kUiMaxTracks]{};
+  // v11 (M3.4): offset of the UiClipExtentRegion (clip boxes for rails). One
+  // u64; still inside the 256-byte header tail.
+  uint64_t uiClipExtentOffset = 0;
 };
 
 struct alignas(64) RingHeader {
@@ -134,6 +141,27 @@ struct UiClipTrack {
   uint64_t clipEndNanotick = 0;
 };
 
+// M3.4: one placed clip on the timeline — a rail in the tracker, a block in
+// arrange. Loose (session) placements are NOT published here (no timeline pos).
+struct UiClipExtent {
+  uint32_t placementId = 0;
+  uint32_t clipId = 0;
+  uint32_t trackId = 0;
+  uint32_t flags = 0;       // reserved for per-placement state
+  uint64_t startTick = 0;   // placement.at (absolute timeline tick)
+  uint64_t endTick = 0;     // at + length (exclusive)
+  char name[32]{};          // clip name, nul-padded
+};
+
+static_assert(sizeof(UiClipExtent) == 64,
+              "UiClipExtent layout must match the Rust mirror");
+
+struct UiClipExtentRegion {
+  uint32_t count = 0;
+  uint32_t reserved = 0;
+  UiClipExtent extents[kUiMaxClipExtents]{};
+};
+
 struct UiClipNote {
   uint64_t tOn = 0;
   uint64_t tOff = 0;
@@ -143,11 +171,15 @@ struct UiClipNote {
   uint8_t column = 0;
   uint8_t retrigger = 0;    // row op: 0/1 = one strike, N = N strikes
   uint8_t probability = 0;  // row op: 0 = always, 1..100 = percent
-  uint8_t reserved = 0;
-  uint16_t reserved2 = 0;
+  // v11 (M3.4) provenance: which placement this note belongs to, and how.
+  uint8_t placementFlags = 0;  // bit0 = muted (drawn struck-out), bit1 = is_add
+  uint16_t placementId = 0;
   uint32_t delayNanoticks = 0;  // row op: onset delay, absolute ticks
   uint32_t reserved3 = 0;
 };
+
+constexpr uint8_t kUiClipNoteMuted = 1u << 0;
+constexpr uint8_t kUiClipNoteAdd = 1u << 1;
 
 static_assert(sizeof(UiClipNote) == 40,
               "UiClipNote layout must match the Rust mirror");

@@ -17,8 +17,8 @@ use std::sync::atomic::fence;
 
 use crate::layout::{
     EventEntry, EventType, RingHeader, ShmHeader, UiChordCommandPayload,
-    UiClipWindowCommandPayload, UiClipWindowSnapshot, UiCommandPayload, K_SHM_MAGIC,
-    K_SHM_VERSION, K_UI_MAX_TRACKS,
+    UiClipExtent, UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot,
+    UiCommandPayload, K_SHM_MAGIC, K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS, K_UI_MAX_TRACKS,
 };
 use crate::reader::{SeqlockReader, UiSnapshot};
 
@@ -209,6 +209,33 @@ impl EngineHandle {
             let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
             if v0 == v1 && v0 % 2 == 0 {
                 return Some(snapshot);
+            }
+        }
+    }
+
+    /// Reads the published clip extents — the placed-clip boxes that drive rails
+    /// (M3.4) — under the seqlock. Loose (session) placements are not included.
+    pub fn read_clip_extents(&self) -> Vec<UiClipExtent> {
+        loop {
+            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue;
+            }
+            let offset = unsafe { (*self.header).ui_clip_extent_offset };
+            if offset == 0 {
+                return Vec::new();
+            }
+            let region = self._mmap.as_ptr().wrapping_add(offset as usize)
+                as *const UiClipExtentRegion;
+            let count = unsafe { (*region).count as usize }.min(K_UI_MAX_CLIP_EXTENTS);
+            let mut out = Vec::with_capacity(count);
+            for i in 0..count {
+                out.push(unsafe { (*region).extents[i] });
+            }
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                return out;
             }
         }
     }

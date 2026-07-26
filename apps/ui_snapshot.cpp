@@ -55,9 +55,11 @@ ClipWindowResult buildUiClipWindowSnapshot(const MusicalClip& clip,
       note.column = event.payload.note.column;
       note.retrigger = event.payload.note.retrigger;
       note.probability = event.payload.note.probability;
+      // M3.4 provenance: the engine plays the first placement's resolved clip, so
+      // every published note is placement 0, played (not muted), base (not add).
+      note.placementFlags = 0;
+      note.placementId = 0;
       note.delayNanoticks = event.payload.note.delayNanoticks;
-      note.reserved = 0;
-      note.reserved2 = 0;
       note.reserved3 = 0;
       ++noteCount;
     } else if (event.type == MusicalEventType::Chord) {
