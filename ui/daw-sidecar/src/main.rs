@@ -208,7 +208,15 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     //
     // The region is rebuilt only when clipVersion moves, so notes are re-parsed
     // only on an edit. Transport, playhead and peaks still update every frame.
-    let grid = LaneGrid::new(vp.lines_per_beat);
+    // One grid PER TRACK, from the engine's own published value. The grid is a
+    // property of the lane, not of the client's viewport — flattening it to a
+    // single viewport-level grid collapsed track 3's triplets and track 5's
+    // sextuplets onto quarter rows, where they silently overwrote each other and
+    // still rendered a plausible-looking pattern. SHM v10 publishes it so the
+    // client never has to guess.
+    let lpb = snap.ui_lines_per_beat;
+    let grid_for = |t: usize| LaneGrid::new(if lpb[t] == 0 { vp.lines_per_beat } else { lpb[t] as u32 });
+
     if out.clip_version != prev_clip_version || out.notes.is_empty() {
         out.notes.clear();
         out.window_start = 0;
@@ -232,7 +240,7 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
                     retrigger: note.retrigger,
                     probability: note.probability,
                     delay_nanoticks: note.delay_nanoticks,
-                    row: grid.row_of_tick(note.t_on) as u32,
+                    row: grid_for(track as usize).row_of_tick(note.t_on) as u32,
                 });
             }
         }
@@ -248,16 +256,19 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
         // Built through grid.window() rather than a struct literal: RowWindow
         // keeps its fields private precisely so the grid it belongs to cannot be
         // mismatched with the rows in it.
-        let window = grid.window(
-            grid.tick_of_row(vp.first_row),
-            grid.tick_of_row(vp.first_row + vp.row_count as u64),
-        );
         for t in 0..out.track_count {
+            // Each lane aggregates on its own grid, so a triplet lane's rows are
+            // thirds of a beat and a sextuplet lane's are sixths.
+            let g = grid_for(t as usize);
+            let window = g.window(
+                g.tick_of_row(vp.first_row),
+                g.tick_of_row(vp.first_row + vp.row_count as u64),
+            );
             out.ev.clear();
             for n in out.notes.iter().filter(|n| n.track as u16 == t) {
                 out.ev.push((n.t_on, n.pitch));
             }
-            for slot in aggregate_rows(&out.ev, grid, window) {
+            for slot in aggregate_rows(&out.ev, g, window) {
                 match slot {
                     Some(a) => out.aggs.push((a.count, a.representative, a.pitch_min, a.pitch_max)),
                     None => out.aggs.push((0, 0, 0, 0)),
