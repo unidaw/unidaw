@@ -989,6 +989,15 @@ struct TrackRuntime {
     // trackMutex; set on load.
     std::vector<ClipExtentInfo> clipExtents;
     std::shared_ptr<const ClipSnapshot> clipSnapshot;
+    // The placement list this track loaded from (project-level clips are held
+    // engine-wide). The runtime plays a flattened clip, so this is what save
+    // emits to keep the arrangement's structure — provided the track hasn't been
+    // edited live. Guarded by trackMutex; set on load.
+    std::vector<daw::ProjectPlacement> sourcePlacements;
+    // Set when a command mutates the flat clip (note add/remove). A dirty track
+    // no longer matches its sourcePlacements, so save flattens it instead
+    // (edits win over structure until note entry is structural, M3.2).
+    std::atomic<bool> arrangementDirty{false};
     std::shared_ptr<const TrackStateSnapshot> trackSnapshot;
     daw::HostController controller;
     daw::HostConfig config;
@@ -1303,6 +1312,13 @@ struct TrackRuntime {
   std::vector<daw::UndoEntry> redoStack;
   std::mutex harmonyMutex;
   std::vector<daw::HarmonyEvent> harmonyEvents;
+
+  // Project-level clip definitions retained from load. Placements (per-track,
+  // on TrackRuntime::sourcePlacements) reference these by id. Save re-emits the
+  // ones still referenced by a clean track so the arrangement's structure
+  // survives a load->save round-trip. Guarded by loadedClipsMutex.
+  std::mutex loadedClipsMutex;
+  std::vector<daw::ProjectClip> loadedClips;
 
   // Need to grab these freshly after connect/reconnect
   auto getRingStd = [&](TrackRuntime& runtime) {
@@ -2446,12 +2462,26 @@ struct TrackRuntime {
         }
       }
     }
+    // The project's retained clip definitions (from the last load). Clean tracks
+    // re-emit the placements that reference these; a flattened dirty track gets a
+    // freshly allocated id above every retained one, so the two never collide.
+    std::vector<daw::ProjectClip> retainedClips;
+    {
+      std::lock_guard<std::mutex> lock(loadedClipsMutex);
+      retainedClips = loadedClips;
+    }
+    uint32_t nextClipId = 1;
+    for (const auto& c : retainedClips) {
+      nextClipId = std::max(nextClipId, c.id + 1);
+    }
     for (auto* runtime : runtimes) {
       daw::ProjectTrack track;
       track.trackId = runtime->trackId;
       track.name = "Track " + std::to_string(runtime->trackId + 1);
       track.linesPerBeat = runtime->linesPerBeat.load(std::memory_order_relaxed);
       daw::MusicalClip trackClip;
+      bool trackDirty = false;
+      std::vector<daw::ProjectPlacement> trackPlacements;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         track.harmonyQuantize = runtime->track.harmonyQuantize;
@@ -2465,14 +2495,39 @@ struct TrackRuntime {
         track.chain = runtime->track.chain;
         track.modLinks = runtime->track.modRegistry.links;
         trackClip = runtime->track.clip;
+        trackDirty = runtime->arrangementDirty.load(std::memory_order_relaxed);
+        trackPlacements = runtime->sourcePlacements;
       }
-      // The engine plays a flattened per-track clip (all placements expanded to
-      // absolute ticks), so it saves as one clip + one placement at=0. Notes
-      // round-trip; a multi-placement arrangement's structure is flattened on
-      // an engine save until the runtime retains the placement list natively
-      // (M3.2). The file format itself keeps placements (project_file_tests).
-      // clip length = the tick just past the last event.
-      if (!trackClip.events().empty()) {
+      // A track that loaded from placements and hasn't been edited live re-emits
+      // exactly those placements plus the clips they reference, so a load->save
+      // round-trip preserves the arrangement's structure (multiple placements,
+      // additive overrides). A track edited live (arrangementDirty) no longer
+      // matches those placements, so it falls through to the flatten below — the
+      // edit is preserved as one clip at=0, the structure isn't (until note entry
+      // becomes structural, M3.2). A never-loaded track has no source placements
+      // and also flattens.
+      if (!trackDirty && !trackPlacements.empty()) {
+        for (const auto& pl : trackPlacements) {
+          bool present = false;
+          for (const auto& c : document.clips) {
+            if (c.id == pl.clipId) {
+              present = true;
+              break;
+            }
+          }
+          if (present) {
+            continue;
+          }
+          for (const auto& c : retainedClips) {
+            if (c.id == pl.clipId) {
+              document.clips.push_back(c);
+              break;
+            }
+          }
+        }
+        track.placements = std::move(trackPlacements);
+      } else if (!trackClip.events().empty()) {
+        // clip length = the tick just past the last event.
         uint64_t clipLen = 0;
         for (const auto& e : trackClip.events()) {
           const uint64_t dur =
@@ -2481,7 +2536,7 @@ struct TrackRuntime {
                                                        : 0;
           clipLen = std::max(clipLen, e.nanotickOffset + dur);
         }
-        const uint32_t clipId = runtime->trackId + 1;
+        const uint32_t clipId = nextClipId++;
         daw::ProjectClip projectClip;
         projectClip.id = clipId;
         projectClip.name = track.name;
@@ -2586,6 +2641,13 @@ struct TrackRuntime {
     }
 
     harmonyEvents = document.harmonyTimeline;
+    // Retain the project's clip definitions so a save can re-emit the ones a
+    // clean track still references, keeping the arrangement's structure across a
+    // load->save round-trip (the runtime itself plays a flattened clip).
+    {
+      std::lock_guard<std::mutex> lock(loadedClipsMutex);
+      loadedClips = document.clips;
+    }
     harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
     // A load replaces every clip; advance clipVersion so observers (and the
     // all-tracks published snapshot, which refreshes on this value) re-read.
@@ -2762,6 +2824,11 @@ struct TrackRuntime {
           }
         }
         runtime->track.clip = std::move(flat);
+        // Retain the placement list so save can re-emit it (and its clips) as
+        // long as the track stays clean; the flat clip above is only the
+        // playback form. A live edit sets arrangementDirty and save flattens.
+        runtime->sourcePlacements = source.placements;
+        runtime->arrangementDirty.store(false, std::memory_order_relaxed);
         // M3.4: retain the track's placed clips as rail extents. Loose session
         // placements (null at) have no timeline position and are not published.
         runtime->clipExtents.clear();
@@ -3014,6 +3081,7 @@ struct TrackRuntime {
                                     noteIdOverride);
       }
       if (result) {
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
         snapshot = buildClipSnapshot(runtime->track.clip);
       }
     }
@@ -3059,6 +3127,7 @@ struct TrackRuntime {
                                        clipVersion,
                                        recordUndo);
       if (result) {
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
         snapshot = buildClipSnapshot(runtime->track.clip);
       }
     }
@@ -3158,6 +3227,7 @@ struct TrackRuntime {
       }
       event.payload.chord.durationNanoticks = duration;
       runtime->track.clip.addEvent(std::move(event));
+      runtime->arrangementDirty.store(true, std::memory_order_relaxed);
       snapshot = buildClipSnapshot(runtime->track.clip);
     }
 
@@ -3269,6 +3339,7 @@ struct TrackRuntime {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       removed = runtime->track.clip.removeChordById(chordId);
       if (removed) {
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
         snapshot = buildClipSnapshot(runtime->track.clip);
       }
     }
@@ -3303,6 +3374,7 @@ struct TrackRuntime {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       removed = runtime->track.clip.removeChordAt(nanotick, column);
       if (removed) {
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
         snapshot = buildClipSnapshot(runtime->track.clip);
       }
     }
