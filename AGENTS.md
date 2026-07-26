@@ -233,6 +233,18 @@ into something observable.
   roughness, spectral flux, centroid, level, pitch movement etc. Use a real
   VSTi from the plugin cache — the bundled Identity plugin is a passthrough and
   synthesises nothing.
+  - **Headless render recipe.** A saved project restores its plugins on load
+    (chains are rebuilt from each device's `vst_ref`), so a full instrument
+    render needs no GUI. Run the engine from **`build/`** (it spawns
+    `./juce_host_process` relative to cwd) with `--run-seconds N` for a clean
+    timed shutdown that flushes the WAV. Bootstrap a valid project by having the
+    engine `do save` a skeleton, inject a real VSTi device + notes (a
+    hand-written chain only needs `vst_ref.path`/`name`; the load re-resolves
+    the slot), then per variant: launch with `DAW_CAPTURE_WAV`, `do load` +
+    `do play`, let it self-exit. Confirm from `DAW_EVENT_LOG` that
+    `chain.reconciled` fired and the plugin instantiated **before** trusting a
+    silent WAV — silence with the plugin loaded is a real result; silence
+    because nothing loaded is a false negative.
 - **Control surface** — `ui/daw-cli` attaches to a running engine's SHM:
   `get transport|tracks|clip`, `do note|notes|chord|harmony|mixer|save|load|play`.
   Writes go through the same versioned `UiCommand` ring the UI uses; `do` needs
