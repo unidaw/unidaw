@@ -65,7 +65,7 @@ const TOTAL_ROWS = 100000;
 let engine = null;
 let conn = null;
 let lastViewportKey = -1;
-const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', zoom: 2, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', selection: null, zoom: 2, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -127,7 +127,7 @@ function draw() {
   const vm = bufs[bi] = buildViewModel({
     startRow: state.start, rowCount: tracker.poolSize,
     tracks: state.tracks, columns: state.columns, zoomIndex: state.zoom,
-    cursor: state.cursor, playheadRow: state.playhead,
+    cursor: state.cursor, playheadRow: state.playhead, selection: state.selection,
     engine: state.useEngine === false ? null : engine,
   }, bufs[bi]);
   vm.scrollX = state.scrollX;
@@ -209,6 +209,40 @@ addEventListener('keydown', (e) => {
   schedule();
 }, { capture: true });
 
+// Mouse: click moves the cursor, drag selects. Field = track*columns+col, so a
+// drag across a track boundary selects the fields between it — what a tracker
+// user means by a range.
+let dragAnchor = null;
+function fieldOf(hit) { return hit.track * state.columns + hit.col; }
+
+host.addEventListener('pointerdown', (e) => {
+  const hit = tracker.hitTest(e.clientX, e.clientY, state.scrollX);
+  if (!hit) return;
+  host.setPointerCapture(e.pointerId);
+  dragAnchor = hit;
+  state.cursor.row = hit.row; state.cursor.track = hit.track; state.cursor.col = hit.col;
+  state.selection = null;
+  schedule();
+});
+
+host.addEventListener('pointermove', (e) => {
+  if (!dragAnchor) return;
+  const hit = tracker.hitTest(e.clientX, e.clientY, state.scrollX);
+  if (!hit) return;
+  const a = fieldOf(dragAnchor), b = fieldOf(hit);
+  state.selection = {
+    r0: Math.min(dragAnchor.row, hit.row), r1: Math.max(dragAnchor.row, hit.row),
+    f0: Math.min(a, b), f1: Math.max(a, b),
+  };
+  state.cursor.row = hit.row; state.cursor.track = hit.track; state.cursor.col = hit.col;
+  schedule();
+});
+
+host.addEventListener('pointerup', (e) => {
+  dragAnchor = null;
+  if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
+});
+
 addEventListener('resize', schedule);
 draw();
 
@@ -226,6 +260,12 @@ window.__uni = {
   probe: () => tracker.probe(),
   state: () => JSON.parse(JSON.stringify(state)),
   scrollTo,
+  clickAt: (x, y) => { const h2 = tracker.hitTest(x, y, state.scrollX); if (h2) {
+    state.cursor.row = h2.row; state.cursor.track = h2.track; state.cursor.col = h2.col; draw(); } return h2; },
+  selectTo: (r, f) => { state.selection = { r0: Math.min(state.cursor.row, r), r1: Math.max(state.cursor.row, r),
+    f0: Math.min(state.cursor.track * state.columns + state.cursor.col, f),
+    f1: Math.max(state.cursor.track * state.columns + state.cursor.col, f) }; draw(); },
+  selection: () => state.selection,
   engineStats: () => conn.stats(),
   // Goldens must not depend on whether a sidecar happens to be running.
   // Pins the fixture AND freezes the HUD: live frame counts and link status are

@@ -280,11 +280,55 @@ export class Tracker {
     }
     this.byRow.get(vm.playhead.row)?.classList.add('playhead');
     this.cellEl(vm.cursor)?.classList.add('cursor');
+    this.paintSelection(vm);
+  }
+
+  /**
+   * Selection is a rectangle in (row, field) space, where field is the flattened
+   * track*columns+col — so a drag across a track boundary selects the fields
+   * between, which is what a tracker user means by it.
+   *
+   * Painted by toggling a class on the cells inside, and only on the cells whose
+   * membership actually changed, so dragging costs a handful of class writes
+   * rather than a repaint of the band.
+   */
+  paintSelection(vm) {
+    const s = vm.selection;
+    for (const [rowIdx, elm] of this.byRow) {
+      const inRows = s && rowIdx >= s.r0 && rowIdx <= s.r1;
+      let f = 0;
+      for (const tr of elm.children) {
+        if (!tr.classList.contains('tk-track')) continue;
+        for (const cell of tr.children) {
+          const on = inRows && f >= s.f0 && f <= s.f1;
+          if (cell._sel !== on) { cell._sel = on; cell.classList.toggle('sel', on); }
+          f++;
+        }
+      }
+    }
   }
 
   cellEl(cur) {
     const row = this.byRow.get(cur.row);
     return row?.querySelector(`[data-track="${cur.track}"][data-col="${cur.col}"]`) ?? null;
+  }
+
+  /**
+   * Pixel -> cell. Uses the measured stride, so it stays correct whatever the
+   * CSS borders do — the same reason cellLeft() measures rather than computes.
+   * Returns null outside the grid or over the gutter.
+   */
+  hitTest(clientX, clientY, scrollX) {
+    const b = this.host.getBoundingClientRect();
+    const x = clientX - b.left + scrollX;
+    const y = clientY - b.top;
+    if (x < this.stripLeft || y < 0) return null;
+    const row = this.vm.window.startRow + Math.floor(y / this.m.rowHeight);
+    const rel = x - this.stripLeft;
+    const track = Math.floor(rel / this.trackStride);
+    if (track < 0 || track >= this.tracks) return null;
+    const col = Math.min(this.cols - 1, Math.floor((rel - track * this.trackStride) / this.m.cellWidth));
+    return { row, track, col };
   }
 
   /** What an agent (or a test) asks. Structure, not pixels. */

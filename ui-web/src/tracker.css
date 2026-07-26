@@ -94,6 +94,7 @@
 .tk-cell[data-kind="collide"]   { color: var(--uni-clip-rail-active); font-weight: 500; }
 .tk-cell[data-kind="aggregate"] { color: var(--uni-text-aggregate); letter-spacing: var(--font-tracking-fx); }
 
+.tk-cell.sel { background: var(--uni-surface-selection); }
 .tk-cell.cursor {
   background: var(--uni-surface-cursor-cell);
   outline: var(--uni-cursor-border-width) solid var(--uni-cursor-border);
