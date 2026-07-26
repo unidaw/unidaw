@@ -189,7 +189,7 @@ const dock = new Dock(dockHost, {
     addPending(state.cursor.row, state.cursor.track, 0, pitchToToken(pitch), base);
     schedule();
   },
-  del: () => { if (!deleteAtCursor()) throw new Error('nothing deleted'); schedule(); },
+  del: () => { if (!deleteAtCursor()) throw new Error(state.reject || 'nothing deleted'); schedule(); },
   goto: (row, track) => {
     state.cursor.row = Math.max(0, row);
     if (track !== undefined) state.cursor.track = Math.max(0, Math.min(state.tracks - 1, track));
@@ -1002,7 +1002,10 @@ function noteOffAtCursor() {
 }
 
 function deleteAtCursor() {
-  if (!conn) return false;
+  if (!conn) { state.reject = 'no engine'; return false; }
+  // Nothing here to delete is a fact worth reporting. Sending the command anyway
+  // and saying "delete" reads as success, and the engine quietly ignores it.
+  if (engine && !noteAtCursor()) { state.reject = 'no note here'; return false; }
   const base = engine ? engine.clipVersion : 0;
   if (!conn.send({ type: 'delete', track: state.cursor.track, tick: tickOfCursorRow() })) return false;
   addPending(state.cursor.row, state.cursor.track, 0, '', base);
