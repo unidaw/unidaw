@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 9;
+pub const K_SHM_VERSION: u16 = 10;
 
 pub const K_UI_MAX_TRACKS: usize = 8;
 pub const K_UI_MAX_CLIP_NOTES: usize = 4096;
@@ -54,6 +54,9 @@ pub struct ShmHeader {
     pub ui_clip_all_offset: u64,
     pub ui_clip_all_bytes: u64,
     pub ring_ui_agent_offset: u64,
+    // v10: per-track tracker subdivision (Mock B per-lane grids). Header stays
+    // 256 (fits the align(64) tail).
+    pub ui_lines_per_beat: [u8; K_UI_MAX_TRACKS],
 }
 
 #[repr(C, align(64))]
@@ -570,5 +573,6 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_clip_all_offset), 216);
         assert_eq!(offset_of!(ShmHeader, ui_clip_all_bytes), 224);
         assert_eq!(offset_of!(ShmHeader, ring_ui_agent_offset), 232);
+        assert_eq!(offset_of!(ShmHeader, ui_lines_per_beat), 240);
     }
 }

@@ -34,6 +34,8 @@ pub struct Transport {
 pub struct TrackView {
     pub track_id: u32,
     pub peak_rms: f32,
+    /// Per-lane tracker subdivision (4 = 16ths, 3 = triplets, 6 = sextuplets).
+    pub lines_per_beat: u8,
     pub note_count: usize,
     pub notes: Vec<NoteView>,
 }
@@ -127,9 +129,15 @@ pub fn observe(handle: &EngineHandle, _bars: u64) -> Observation {
             .as_ref()
             .and_then(|s| s.ui_track_peak_rms.get(track_id as usize).copied())
             .unwrap_or(0.0);
+        let lines_per_beat = snapshot
+            .as_ref()
+            .and_then(|s| s.ui_lines_per_beat.get(track_id as usize).copied())
+            .filter(|&v| v > 0)
+            .unwrap_or(4);
         tracks.push(TrackView {
             track_id,
             peak_rms,
+            lines_per_beat,
             note_count: notes.len(),
             notes,
         });
@@ -167,10 +175,13 @@ impl Observation {
         ));
         for t in &self.tracks {
             if t.notes.is_empty() {
-                out.push_str(&format!("track {}: (empty)\n", t.track_id));
+                out.push_str(&format!(
+                    "track {}: (empty)  [lpb {}]\n", t.track_id, t.lines_per_beat));
                 continue;
             }
-            out.push_str(&format!("track {}: {} notes\n", t.track_id, t.note_count));
+            out.push_str(&format!(
+                "track {}: {} notes  [lpb {}]\n",
+                t.track_id, t.note_count, t.lines_per_beat));
             for n in &t.notes {
                 out.push_str(&format!(
                     "  beat {:>7.3}  {:<3} vel {:>3} dur {} col {}\n",

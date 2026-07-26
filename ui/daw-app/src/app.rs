@@ -492,6 +492,7 @@ impl EngineView {
                 ui_harmony_offset: 0,
                 ui_harmony_bytes: 0,
                 ui_track_peak_rms: [0.0; K_UI_MAX_TRACKS],
+                ui_lines_per_beat: [4; K_UI_MAX_TRACKS],
             },
             clip_window: vec![ClipWindowState::default(); TRACK_COUNT],
             status: "SHM: disconnected".into(),
@@ -5032,6 +5033,7 @@ mod tests {
             ui_harmony_offset: 0,
             ui_harmony_bytes: 0,
             ui_track_peak_rms: [0.0; K_UI_MAX_TRACKS],
+            ui_lines_per_beat: [4; K_UI_MAX_TRACKS],
         };
         engine_view.track_columns = vec![1; TRACK_COUNT];
         engine_view.track_quantize = vec![false; TRACK_COUNT];
