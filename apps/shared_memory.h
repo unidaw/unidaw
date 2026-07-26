@@ -10,7 +10,11 @@ namespace daw {
 
 constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 8: UiClipNote::noteId widened to a 64-bit authored EventId.
-constexpr uint16_t kShmVersion = 8;
+// 9: row-op fields on UiClipNote (retrigger/probability/delay); an all-tracks
+//    published clip snapshot (uiClipAll*) so read-only observers see notes
+//    without the request ring; a second command ring for the agent
+//    (ringUiAgentOffset).
+constexpr uint16_t kShmVersion = 9;
 
 constexpr uint32_t kUiMaxTracks = 8;
 constexpr uint32_t kUiMaxClipNotes = 4096;
@@ -51,6 +55,14 @@ struct alignas(64) ShmHeader {
   uint64_t uiHarmonyOffset = 0;
   uint64_t uiHarmonyBytes = 0;
   float uiTrackPeakRms[kUiMaxTracks]{};
+  // v9, appended so existing offsets are unchanged. All-tracks published clip
+  // snapshot (an array of per-track UiClipWindowSnapshot) that any read-only
+  // observer reads without the request ring; refreshed when clipVersion moves.
+  uint64_t uiClipAllOffset = 0;
+  uint64_t uiClipAllBytes = 0;
+  // A second SPSC command ring so the in-app agent writes edits independently of
+  // the UI ring; the engine's command consumer drains both.
+  uint64_t ringUiAgentOffset = 0;
 };
 
 struct alignas(64) RingHeader {
@@ -124,11 +136,15 @@ struct UiClipNote {
   uint8_t pitch = 0;
   uint8_t velocity = 0;
   uint8_t column = 0;
+  uint8_t retrigger = 0;    // row op: 0/1 = one strike, N = N strikes
+  uint8_t probability = 0;  // row op: 0 = always, 1..100 = percent
   uint8_t reserved = 0;
-  uint32_t reserved2 = 0;
+  uint16_t reserved2 = 0;
+  uint32_t delayNanoticks = 0;  // row op: onset delay, absolute ticks
+  uint32_t reserved3 = 0;
 };
 
-static_assert(sizeof(UiClipNote) == 32,
+static_assert(sizeof(UiClipNote) == 40,
               "UiClipNote layout must match the Rust mirror");
 
 struct UiClipChord {

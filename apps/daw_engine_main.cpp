@@ -816,6 +816,14 @@ int main(int argc, char** argv) {
     header.uiHarmonyOffset = offset;
     header.uiHarmonyBytes = sizeof(daw::UiHarmonySnapshot);
     offset += daw::alignUp(header.uiHarmonyBytes, 64);
+    // v9: all-tracks published clip snapshot (one window per track) and a second
+    // command ring dedicated to the in-app agent.
+    header.uiClipAllOffset = offset;
+    header.uiClipAllBytes =
+        sizeof(daw::UiClipWindowSnapshot) * daw::kUiMaxTracks;
+    offset += daw::alignUp(header.uiClipAllBytes, 64);
+    header.ringUiAgentOffset = offset;
+    offset += daw::alignUp(daw::ringBytes(baseConfig.ringUiCapacity), 64);
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
@@ -845,6 +853,15 @@ int main(int argc, char** argv) {
     ringUi->entrySize = sizeof(daw::EventEntry);
     ringUi->readIndex.store(0);
     ringUi->writeIndex.store(0);
+
+    // v9: the agent's own SPSC command ring, drained by the same consumer as the
+    // UI ring. base_version optimistic concurrency arbitrates edits across rings.
+    auto* ringUiAgent = reinterpret_cast<daw::RingHeader*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + header.ringUiAgentOffset);
+    ringUiAgent->capacity = baseConfig.ringUiCapacity;
+    ringUiAgent->entrySize = sizeof(daw::EventEntry);
+    ringUiAgent->readIndex.store(0);
+    ringUiAgent->writeIndex.store(0);
 
     auto* ringUiOut = reinterpret_cast<daw::RingHeader*>(
         reinterpret_cast<uint8_t*>(uiShm.base) + header.ringUiOutOffset);
@@ -1269,6 +1286,12 @@ struct TrackRuntime {
       }
       return daw::makeEventRing(uiShm.base, uiShm.header->ringUiOffset);
   };
+  auto getRingUiAgent = [&]() {
+      if (!uiShm.header || uiShm.header->ringUiAgentOffset == 0) {
+        return daw::EventRingView{};
+      }
+      return daw::makeEventRing(uiShm.base, uiShm.header->ringUiAgentOffset);
+  };
   auto getRingUiOut = [&]() {
       if (!uiShm.header) {
         return daw::EventRingView{};
@@ -1412,6 +1435,50 @@ struct TrackRuntime {
                                    pending->request,
                                    clipVersionValue,
                                    *snapshot);
+  };
+
+  // v9: publish every track's clip in one region so read-only observers see
+  // notes without the request ring. Rebuilt only when clipVersion moves — the
+  // per-frame cost is otherwise a needless multi-megabyte memset. `force` seeds
+  // the first publish and reruns after a load.
+  uint32_t lastClipAllVersion = 0xFFFF'FFFFu;
+  auto writeUiClipAllSnapshot = [&](const std::vector<TrackRuntime*>& trackSnapshot,
+                                    bool force) {
+    if (!uiShm.header || uiShm.header->uiClipAllOffset == 0) {
+      return;
+    }
+    const uint32_t clipVersionValue = clipVersion.load(std::memory_order_acquire);
+    if (!force && clipVersionValue == lastClipAllVersion) {
+      return;  // notes unchanged; the published region is still valid.
+    }
+    lastClipAllVersion = clipVersionValue;
+    auto* all = reinterpret_cast<daw::UiClipWindowSnapshot*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiClipAllOffset);
+    for (uint32_t trackId = 0; trackId < daw::kUiMaxTracks; ++trackId) {
+      daw::UiClipWindowSnapshot& snap = all[trackId];
+      TrackRuntime* runtime = nullptr;
+      for (auto* candidate : trackSnapshot) {
+        if (candidate && candidate->trackId == trackId) {
+          runtime = candidate;
+          break;
+        }
+      }
+      if (!runtime) {
+        std::memset(&snap, 0, sizeof(daw::UiClipWindowSnapshot));
+        snap.trackId = trackId;
+        snap.clipVersion = clipVersionValue;
+        continue;
+      }
+      daw::ClipWindowRequest request{};
+      request.trackId = trackId;
+      request.requestId = 0;  // unsolicited: this is a published window.
+      request.windowStartNanotick = 0;
+      request.windowEndNanotick = UINT64_MAX;  // whole clip, capped by note array.
+      request.cursorEventIndex = 0;
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      daw::buildUiClipWindowSnapshot(runtime->track.clip, request,
+                                     clipVersionValue, snap);
+    }
   };
 
   auto writeUiHarmonySnapshot = [&]() {
@@ -2402,6 +2469,9 @@ struct TrackRuntime {
 
     harmonyEvents = document.harmonyTimeline;
     harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
+    // A load replaces every clip; advance clipVersion so observers (and the
+    // all-tracks published snapshot, which refreshes on this value) re-read.
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);
 
     // Report plugin identity before touching anything: a project that silently
     // loads the wrong plugin, or none, is worse than one that says so.
@@ -4208,7 +4278,8 @@ struct TrackRuntime {
     while (running.load()) {
       auto ringUi = getRingUi();
       auto ringUiEdit = getRingUiEdit();
-      if (ringUi.mask == 0 && ringUiEdit.mask == 0) {
+      auto ringUiAgent = getRingUiAgent();
+      if (ringUi.mask == 0 && ringUiEdit.mask == 0 && ringUiAgent.mask == 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         continue;
       }
@@ -4239,6 +4310,12 @@ struct TrackRuntime {
           std::cerr << "UI: received command entry size "
                     << uiEntry.size << " type " << uiEntry.type << std::endl;
         }
+        handleUiEntry(uiEntry);
+        handled = true;
+      }
+      // The agent's own ring, drained through the same handler so an agent edit
+      // is indistinguishable from a UI edit once inside the engine.
+      while (daw::ringPop(ringUiAgent, uiEntry)) {
         handleUiEntry(uiEntry);
         handled = true;
       }
@@ -6856,6 +6933,7 @@ struct TrackRuntime {
         uiShm.header->uiClipVersion =
             clipVersion.load(std::memory_order_acquire);
         writeUiClipWindowSnapshot(trackSnapshot);
+        writeUiClipAllSnapshot(trackSnapshot, false);
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);
         if (writeHarmony) {

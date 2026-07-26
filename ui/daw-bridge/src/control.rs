@@ -18,7 +18,7 @@ use std::sync::atomic::fence;
 use crate::layout::{
     EventEntry, EventType, RingHeader, ShmHeader, UiChordCommandPayload,
     UiClipWindowCommandPayload, UiClipWindowSnapshot, UiCommandPayload, K_SHM_MAGIC,
-    K_SHM_VERSION,
+    K_SHM_VERSION, K_UI_MAX_TRACKS,
 };
 use crate::reader::{SeqlockReader, UiSnapshot};
 
@@ -67,8 +67,20 @@ pub struct EngineHandle {
 
 impl EngineHandle {
     /// Maps the engine's UI shared memory. `writable` must be true to send
-    /// commands; see the single-producer note above.
+    /// commands; see the single-producer note above. Writes go to the UI command
+    /// ring.
     pub fn attach(name: &str, writable: bool) -> Result<Self, String> {
+        Self::attach_inner(name, writable, false)
+    }
+
+    /// Maps the engine as the in-app agent: writes go to the agent's OWN command
+    /// ring, so the agent never contends with the UI for the single-producer UI
+    /// ring. base_version optimistic concurrency arbitrates across the two rings.
+    pub fn attach_agent(name: &str) -> Result<Self, String> {
+        Self::attach_inner(name, true, true)
+    }
+
+    fn attach_inner(name: &str, writable: bool, agent_ring: bool) -> Result<Self, String> {
         let c_name = CString::new(name).map_err(|_| format!("invalid SHM name {name}"))?;
         let flags = if writable { libc::O_RDWR } else { libc::O_RDONLY };
         let fd = unsafe { libc::shm_open(c_name.as_ptr(), flags, 0) };
@@ -110,10 +122,15 @@ impl EngineHandle {
                 K_SHM_MAGIC, K_SHM_VERSION
             ));
         }
-        let ring_ui = if writable {
-            ring_view(mmap.as_ptr() as *mut u8, unsafe {
+        let ring_offset = unsafe {
+            if agent_ring {
+                (*header).ring_ui_agent_offset
+            } else {
                 (*header).ring_ui_offset
-            })
+            }
+        };
+        let ring_ui = if writable {
+            ring_view(mmap.as_ptr() as *mut u8, ring_offset)
         } else {
             None
         };
@@ -158,6 +175,36 @@ impl EngineHandle {
             let snapshot = unsafe {
                 *(self._mmap.as_ptr().add(offset as usize) as *const UiClipWindowSnapshot)
             };
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                return Some(snapshot);
+            }
+        }
+    }
+
+    /// Reads one track's clip from the all-tracks published region (v9), under
+    /// the same seqlock. No request needed — any read-only observer sees notes
+    /// this way. Returns None while a write is in progress, the region is absent
+    /// (older engine), or the track index is out of range.
+    pub fn read_track_clip(&self, track_id: u32) -> Option<UiClipWindowSnapshot> {
+        if track_id as usize >= K_UI_MAX_TRACKS {
+            return None;
+        }
+        let stride = std::mem::size_of::<UiClipWindowSnapshot>();
+        loop {
+            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue;
+            }
+            let offset = unsafe { (*self.header).ui_clip_all_offset };
+            let bytes = unsafe { (*self.header).ui_clip_all_bytes };
+            if offset == 0 || (bytes as usize) < stride * K_UI_MAX_TRACKS {
+                return None;
+            }
+            let base = self._mmap.as_ptr().wrapping_add(offset as usize)
+                as *const UiClipWindowSnapshot;
+            let snapshot = unsafe { *base.add(track_id as usize) };
             fence(Ordering::Acquire);
             let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
             if v0 == v1 && v0 % 2 == 0 {

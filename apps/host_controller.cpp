@@ -115,10 +115,16 @@ bool HostController::launch(const HostConfig& config) {
 }
 
 pid_t HostController::spawnHostProcess(const HostConfig& config) {
-  // We assume the executable is in the current directory or PATH.
-  // For this environment, we know it's ./juce_host_process in build dir usually,
-  // but let's try to be relative to current dir.
-  const std::string exe = "./juce_host_process";
+  // Default: ./juce_host_process relative to cwd. Because the string contains a
+  // slash, posix_spawnp does NOT search PATH, so the engine otherwise only starts
+  // from the build dir. DAW_HOST_BINARY overrides the path (absolute or relative)
+  // so the engine can be launched from anywhere.
+  std::string exe = "./juce_host_process";
+  if (const char* env = std::getenv("DAW_HOST_BINARY")) {
+    if (env[0] != '\0') {
+      exe = env;
+    }
+  }
 
   std::vector<std::string> args;
   args.emplace_back(exe);
