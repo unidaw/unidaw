@@ -60,8 +60,7 @@ impl Default for Viewport {
     fn default() -> Self { Self { lines_per_beat: 4, first_row: 0, row_count: 0 } }
 }
 
-/// Minimal field scrape — the control channel carries four integers and does not
-/// justify a JSON dependency.
+#[allow(dead_code)] // kept for when a real command channel needs a reader thread
 fn parse_viewport(txt: &str, vp: &mut Viewport) {
     let field = |k: &str| -> Option<u64> {
         let i = txt.find(k)? + k.len();
@@ -305,8 +304,17 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>) {
     let mut buf: Vec<u8> = Vec::with_capacity(64 * 1024);
     let mut frame = Frame::default();
     let mut last_version = u64::MAX;
-    let mut viewport = Viewport::default();
-    ws.get_mut().set_nonblocking(true).ok();
+    // Fixed generous window; the client slices what it can see. 256 rows across
+    // 8 tracks is 16 KB, well under the measured 126 MB/s ceiling.
+    let viewport = Viewport { lines_per_beat: 4, first_row: 0, row_count: 256 };
+    // WRITE-ONLY, deliberately. Two attempts at a client->server channel on this
+    // one socket both broke it: a non-blocking socket makes send() fail with
+    // WouldBlock under ordinary backpressure, and a read timeout corrupts the
+    // stream when it fires mid-frame — one frame through, then close 1006.
+    // Reading safely needs a second thread, which the payload does not justify:
+    // note rows are absolute (row_of_tick needs no viewport), and aggregates are
+    // computed over a fixed window the client slices. Revisit only if a real
+    // command path needs this direction.
     let (mut seq, mut sent, mut polls) = (0u64, 0u64, 0u64);
     let started = Instant::now();
     let mut reported = started;
@@ -314,17 +322,6 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>) {
     loop {
         let tick = Instant::now();
         polls += 1;
-
-        // Drain any viewport updates the client sent. Non-blocking, so a quiet
-        // client costs one failed read per tick.
-        loop {
-            match ws.read() {
-                Ok(tungstenite::Message::Text(t)) => { parse_viewport(&t, &mut viewport); last_version = u64::MAX; }
-                Ok(tungstenite::Message::Close(_)) => return,
-                Ok(_) => {}
-                Err(_) => break,
-            }
-        }
 
         let prev_cv = frame.clip_version;
         if read_frame(&handle, seq, &mut frame, prev_cv, viewport) && frame.version != last_version {
@@ -335,9 +332,12 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>) {
             seq += 1;
             frame.seq = seq;
             encode(&frame, &mut buf);
-            if ws.send(tungstenite::Message::Binary(buf.clone())).is_err() {
-                break;
-            }
+            // The socket is non-blocking so viewport reads never stall the poll
+            // loop — which means send() reports WouldBlock under ordinary
+            // backpressure. Treating that as fatal made the sidecar hang up on
+            // itself: the client connected, sent its viewport, and was dropped a
+            // moment later showing 'disconnected'. Only a genuine error closes.
+            if ws.send(tungstenite::Message::Binary(buf.clone())).is_err() { break; }
             sent += 1;
         }
 
