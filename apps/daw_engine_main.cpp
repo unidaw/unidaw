@@ -1040,6 +1040,15 @@ struct TrackRuntime {
     std::atomic<bool> needsRestart{false};
     std::atomic<bool> restartInFlight{false};
     std::atomic<bool> hostReady{false};
+    // Flapping guard: a plugin that crashes on load would otherwise spin the
+    // restart worker forever, spawning host after host until the machine (or the
+    // engine) falls over. Count restarts inside a rolling window; past the limit,
+    // give up on this track — it goes dead but the engine stays up and keeps
+    // publishing. Cleared when the chain is rebuilt (the user swaps the plugin).
+    // restartAttempts/restartWindowStart are touched only by the restart worker.
+    uint32_t restartAttempts = 0;
+    std::chrono::steady_clock::time_point restartWindowStart{};
+    std::atomic<bool> hostGaveUp{false};
     std::unique_ptr<daw::Watchdog> watchdog;
     std::map<std::array<uint8_t, 16>, ParamMirrorEntry, ParamKeyLess> paramMirror;
     std::mutex paramMirrorMutex;
@@ -1964,6 +1973,11 @@ struct TrackRuntime {
       }
       runtime.hostReady.store(false, std::memory_order_release);
       runtime.active.store(false, std::memory_order_release);
+      // The chain changed (user action), so retry even a track we'd given up on:
+      // clear the flapping guard and re-arm.
+      runtime.hostGaveUp.store(false, std::memory_order_release);
+      runtime.restartAttempts = 0;
+      runtime.restartWindowStart = {};
       runtime.needsRestart.store(true, std::memory_order_release);
       std::cerr << "Engine: queued host restart for track "
                 << runtime.trackId << std::endl;
@@ -1973,6 +1987,11 @@ struct TrackRuntime {
   };
 
   auto scheduleHostRestart = [&](TrackRuntime& runtime) {
+    // A track we've given up on stays dead until the chain is rebuilt; don't
+    // re-arm the restart loop for it.
+    if (runtime.hostGaveUp.load(std::memory_order_acquire)) {
+      return;
+    }
     bool expected = false;
     if (!runtime.restartInFlight.compare_exchange_strong(
             expected, true, std::memory_order_acq_rel)) {
@@ -2006,6 +2025,36 @@ struct TrackRuntime {
       }
       if (!runtime->needsRestart.load(std::memory_order_acquire)) {
         runtime->restartInFlight.store(false, std::memory_order_release);
+        continue;
+      }
+      // Flapping guard. Restarts spaced more than the window apart start a fresh
+      // count (an occasional crash is not flapping); too many inside the window
+      // means the plugin is crashing on load, so give up on this track rather
+      // than spin forever spawning hosts.
+      constexpr uint32_t kMaxRestartsPerWindow = 5;
+      constexpr auto kRestartWindow = std::chrono::seconds(10);
+      const auto nowRestart = std::chrono::steady_clock::now();
+      if (runtime->restartWindowStart.time_since_epoch().count() == 0 ||
+          nowRestart - runtime->restartWindowStart > kRestartWindow) {
+        runtime->restartWindowStart = nowRestart;
+        runtime->restartAttempts = 0;
+      }
+      ++runtime->restartAttempts;
+      if (runtime->restartAttempts > kMaxRestartsPerWindow) {
+        runtime->hostGaveUp.store(true, std::memory_order_release);
+        runtime->hostReady.store(false, std::memory_order_release);
+        runtime->active.store(false, std::memory_order_release);
+        runtime->needsRestart.store(false, std::memory_order_release);
+        runtime->restartInFlight.store(false, std::memory_order_release);
+        std::cerr << "Engine: track " << runtime->trackId
+                  << " host keeps dying (" << runtime->restartAttempts - 1
+                  << " restarts in " << kRestartWindow.count()
+                  << "s); giving up. The track is disabled but the engine stays "
+                     "up. Rebuild the chain (swap the plugin) to retry."
+                  << std::endl;
+        DAW_EVENT("host.gave_up")
+            .field("track", runtime->trackId)
+            .field("attempts", static_cast<uint64_t>(runtime->restartAttempts - 1));
         continue;
       }
       {
