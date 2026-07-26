@@ -31,12 +31,19 @@ use daw_bridge::control::{default_shm_name, EngineHandle};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 1;
+const WIRE_VERSION: u16 = 2;
+
+/// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
+/// added additively rather than as a version bump on both sides: per-track scopes
+/// are likely, and multiplexing them onto this one socket is two bytes of header
+/// versus a protocol change. `feed` identifies which producer within a kind —
+/// a track index for scopes, unused for state.
+const KIND_STATE: u8 = 0;
 
 /// Header is fixed-size; peaks and notes follow, counted in the header.
-const HEADER_BYTES: usize = 48;
+const HEADER_BYTES: usize = 56;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
-const NOTE_BYTES: usize = 24;
+const NOTE_BYTES: usize = 40;
 
 struct Args {
     port: u16,
@@ -63,11 +70,18 @@ fn parse_args() -> Args {
 struct WireNote {
     t_on: u64,
     t_off: u64,
-    note_id: u32,
+    /// u64, not u32. The previous encoder truncated this and nothing noticed
+    /// because note_count was always zero — but two ids 2^32 apart would have
+    /// collided, and optimistic-edit reconciliation is exactly the code that
+    /// would have discovered it, at the worst possible moment.
+    note_id: u64,
     pitch: u8,
     velocity: u8,
     column: u8,
     track: u8,
+    retrigger: u8,
+    probability: u8,
+    delay_nanoticks: u32,
 }
 
 #[derive(Default)]
@@ -88,20 +102,22 @@ struct Frame {
 
 fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.clear();
-    out.extend_from_slice(&WIRE_MAGIC.to_le_bytes());        // 0
-    out.extend_from_slice(&WIRE_VERSION.to_le_bytes());      // 4
-    out.extend_from_slice(&f.transport.to_le_bytes());       // 6
-    out.extend_from_slice(&f.seq.to_le_bytes());             // 8
-    out.extend_from_slice(&f.playhead_nanotick.to_le_bytes()); // 16
-    out.extend_from_slice(&f.visual_sample.to_le_bytes());   // 24
-    out.extend_from_slice(&f.clip_version.to_le_bytes());    // 32
-    out.extend_from_slice(&f.harmony_version.to_le_bytes()); // 36
-    out.extend_from_slice(&(f.track_count as u16).to_le_bytes()); // 40
-    out.extend_from_slice(&(f.peaks.len() as u16).to_le_bytes()); // 42
-    out.extend_from_slice(&(f.notes.len() as u32).to_le_bytes()); // 44
+    out.extend_from_slice(&WIRE_MAGIC.to_le_bytes());             // 0
+    out.extend_from_slice(&WIRE_VERSION.to_le_bytes());           // 4
+    out.push(KIND_STATE);                                         // 6
+    out.push(0);                                                  // 7  feed
+    out.extend_from_slice(&f.seq.to_le_bytes());                  // 8
+    out.extend_from_slice(&f.playhead_nanotick.to_le_bytes());    // 16
+    out.extend_from_slice(&f.visual_sample.to_le_bytes());        // 24
+    out.extend_from_slice(&f.clip_version.to_le_bytes());         // 32
+    out.extend_from_slice(&f.harmony_version.to_le_bytes());      // 36
+    out.extend_from_slice(&f.transport.to_le_bytes());            // 40
+    out.extend_from_slice(&f.track_count.to_le_bytes());          // 42
+    out.extend_from_slice(&(f.peaks.len() as u16).to_le_bytes()); // 44
+    out.extend_from_slice(&0u16.to_le_bytes());                   // 46 pad
+    out.extend_from_slice(&(f.notes.len() as u32).to_le_bytes()); // 48
+    out.extend_from_slice(&0u32.to_le_bytes());                   // 52 pad
     debug_assert_eq!(out.len(), HEADER_BYTES);
-    out.extend_from_slice(&f.window_start.to_le_bytes());
-    out.extend_from_slice(&f.window_end.to_le_bytes());
     for p in &f.peaks {
         out.extend_from_slice(&p.to_le_bytes());
     }
@@ -113,10 +129,15 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.push(n.velocity);
         out.push(n.column);
         out.push(n.track);
+        out.push(n.retrigger);
+        out.push(n.probability);
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&n.delay_nanoticks.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
     }
 }
 
-fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame) -> bool {
+fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u32) -> bool {
     // read_snapshot performs the load-v0 / read / acquire-fence / load-v1 retry
     // and returns the version. Never read header fields raw — that is how you tear.
     let Some(snap) = h.snapshot() else { return false };
@@ -134,27 +155,38 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame) -> bool {
     let n = (snap.ui_track_count as usize).min(snap.ui_track_peak_rms.len());
     out.peaks.extend_from_slice(&snap.ui_track_peak_rms[..n]);
 
-    // Whatever clip window the engine last published. We attach READ-ONLY and do
-    // not request windows: the UI command ring is single-producer, so requesting
-    // would collide with daw-app or daw-cli if either is attached. Windowed
-    // paging needs a designated owner and is deliberately deferred.
-    out.notes.clear();
-    out.window_start = 0;
-    out.window_end = 0;
-    if let Some(w) = h.read_clip_window() {
-        out.window_start = w.window_start_nanotick;
-        out.window_end = w.window_end_nanotick;
-        let count = (w.note_count as usize).min(w.notes.len());
-        for note in &w.notes[..count] {
-            out.notes.push(WireNote {
-                t_on: note.t_on,
-                t_off: note.t_off,
-                note_id: note.note_id as u32,
-                pitch: note.pitch,
-                velocity: note.velocity,
-                column: note.column,
-                track: w.track_id as u8,
-            });
+    // SHM v9: an all-tracks region the engine publishes unasked, indexed by
+    // track. No clip-window request, so no write access and no contention for
+    // the single-producer command ring — the read path never needs to be a
+    // producer at all.
+    //
+    // The region is rebuilt only when clipVersion moves, so notes are re-parsed
+    // only on an edit. Transport, playhead and peaks still update every frame.
+    if out.clip_version != prev_clip_version || out.notes.is_empty() {
+        out.notes.clear();
+        out.window_start = 0;
+        out.window_end = 0;
+        for track in 0..(snap.ui_track_count.min(8)) {
+            let Some(w) = h.read_track_clip(track) else { continue };
+            if track == 0 {
+                out.window_start = w.window_start_nanotick;
+                out.window_end = w.window_end_nanotick;
+            }
+            let count = (w.note_count as usize).min(w.notes.len());
+            for note in &w.notes[..count] {
+                out.notes.push(WireNote {
+                    t_on: note.t_on,
+                    t_off: note.t_off,
+                    note_id: note.note_id,
+                    pitch: note.pitch,
+                    velocity: note.velocity,
+                    column: note.column,
+                    track: track as u8,
+                    retrigger: note.retrigger,
+                    probability: note.probability,
+                    delay_nanoticks: note.delay_nanoticks,
+                });
+            }
         }
     }
     true
@@ -194,7 +226,8 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>) {
         let tick = Instant::now();
         polls += 1;
 
-        if read_frame(&handle, seq, &mut frame) && frame.version != last_version {
+        let prev_cv = frame.clip_version;
+        if read_frame(&handle, seq, &mut frame, prev_cv) && frame.version != last_version {
             // Dedup on the engine's own version: the engine publishes at ~86 Hz,
             // we poll faster so we never miss one, and the surplus polls cost a
             // single atomic load each.
