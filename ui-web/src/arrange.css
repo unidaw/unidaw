@@ -1,0 +1,107 @@
+/* Arrange view. Values come from tokens.css; nothing is hardcoded here that the
+   design system already names. */
+
+.ar {
+  position: absolute; inset: 0;
+  display: flex;
+  background: var(--uni-surface-tracker-bg);
+  overflow: hidden;
+  contain: strict;
+}
+
+.ar-gutter {
+  flex: 0 0 var(--metrics-gutter-width);
+  width: var(--metrics-gutter-width);
+  background: var(--uni-surface-header-bg);
+  border-right: 1px solid var(--uni-rule-gutter);
+  z-index: 2;
+  /* Clears the ruler, which lives in the band. Without this every lane head sits
+     one ruler-height above the lane it names — and it still looks plausible. */
+  padding-top: var(--metrics-header-height);
+  box-sizing: border-box;
+}
+
+.ar-head {
+  display: flex; align-items: center; justify-content: space-between;
+  box-sizing: border-box; padding: 0 8px;
+  border-bottom: 1px solid var(--uni-rule-column);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-inst);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-instrument);
+}
+.ar-head-lpb { color: var(--uni-text-gutter); font-size: var(--font-size-fx); }
+
+.ar-band { position: relative; flex: 1 1 auto; overflow: hidden; }
+
+/* The ruler owns the top strip; lanes start below it. */
+.ar-ruler {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: var(--metrics-header-height);
+  background: var(--uni-surface-header-bg);
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  overflow: hidden; z-index: 2; pointer-events: none;
+}
+.ar-tick {
+  position: absolute; top: 0; left: 0; height: 100%;
+  padding-left: 4px; box-sizing: border-box;
+  border-left: 1px solid var(--uni-rule-track);
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx); color: var(--uni-text-gutter);
+  line-height: var(--metrics-header-height);
+}
+
+.ar-lanes, .ar-grid, .ar-clips {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  top: var(--metrics-header-height);
+}
+.ar-grid, .ar-lanes { pointer-events: none; }
+
+.ar-lane {
+  position: absolute; left: 0; right: 0; top: 0;
+  border-bottom: 1px solid var(--uni-rule-column);
+  box-sizing: border-box;
+}
+.ar-lane:nth-child(even) { background: var(--uni-surface-row-alt); }
+
+.ar-gridline {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  width: 1px;
+  background: var(--uni-rule-column);
+}
+.ar-gridline.bar { background: var(--uni-rule-track); }
+
+.ar-clip {
+  position: absolute; top: 0; left: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 2px;
+  background: var(--uni-surface-cursor-cell);
+  overflow: hidden;
+  cursor: pointer;
+}
+/* Audio regions hold no note events, so they must not read as note material.
+   Backend ships them from schema v3 with UI_CLIP_EXTENT_AUDIO. */
+.ar-clip.audio {
+  background: var(--uni-surface-playhead-row);
+  border-style: dashed;
+}
+.ar-clip.sel { border-color: var(--base-accent); }
+
+.ar-clip-name {
+  padding: 2px 5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-instrument);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.ar-playhead {
+  position: absolute; top: var(--metrics-header-height); bottom: 0; left: 0;
+  width: 1px;
+  background: var(--base-accent);
+  pointer-events: none;
+  z-index: 3;
+}

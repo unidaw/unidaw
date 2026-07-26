@@ -5,6 +5,7 @@
 <link rel="stylesheet" href="src/icons/phosphor.css">
 <link rel="stylesheet" href="src/tokens.css">
 <link rel="stylesheet" href="src/tracker.css">
+<link rel="stylesheet" href="src/arrange.css">
 <style>
   html, body { margin: 0; height: 100%; background: var(--uni-surface-tracker-bg); color: var(--base-text); }
   body { font-family: var(--font-chrome); font-size: var(--font-size-chrome); overflow: hidden; }
@@ -31,14 +32,16 @@
                   font-size: var(--font-size-inst); letter-spacing: var(--font-tracking-fx);
                   color: var(--uni-text-instrument);
                   border-right: var(--uni-rule-track-width) solid var(--uni-rule-track); }
-  #tracker { position: absolute; left: 0; right: 0; bottom: 16px;
+  #tracker, #arrange { position: absolute; left: 0; right: 0; bottom: 16px;
              top: calc(38px + var(--metrics-header-height)); }
+  #arrange[hidden] { display: none; }
   #hud { background: var(--uni-surface-tracker-bg); padding: 1px 4px; }
 </style>
 
 <div id="chrome"></div>
 <div id="head"></div>
 <div id="tracker"></div>
+<div id="arrange" hidden></div>
 <div id="hud"></div>
 
 <script type="module">
@@ -47,6 +50,8 @@ import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
 import M from './design/out/tokens.js';
 import { connectEngine } from './src/engine.js';
 import { createChrome } from './src/chrome.js';
+import { Arrange } from './src/arrange.js';
+import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM } from './src/arrangemodel.js';
 import { createEntry, feed, cancel, begin, parseToken, editing, NOTE_KEYS, NOTE_OFF_KEY,
          TOKEN_KEY, pitchOf, pitchToToken, hexValue, shiftDigit } from './src/entry.js';
 
@@ -73,6 +78,10 @@ const chrome = createChrome(document.getElementById('chrome'), {
 function cmd(what) { if (!conn || !conn.send({ type: what })) { state.link = 'no engine'; schedule(); } }
 const hud = document.getElementById('hud');
 const tracker = new Tracker(host, metrics);
+const arrangeHost = document.getElementById('arrange');
+const arrange = new Arrange(arrangeHost, metrics);
+const ARRANGE_LANE_H = 44;
+let arrangeBuf = null;
 
 // A 100,000-row timeline. Nothing materialises it; the pool is viewport-sized.
 const TOTAL_ROWS = 100000;
@@ -85,7 +94,10 @@ let conn = null;
 let lastViewportKey = -1;
 const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', selection: null,
   // Entry state, shown in the chrome so you can see what you are typing into.
-  octave: 4, editStep: 1, velocity: 100, zoom: 3, digitCell: -1, digitAcc: 0, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+  octave: 4, editStep: 1, velocity: 100, zoom: 3, digitCell: -1, digitAcc: 0,
+  // Which surface is showing. Both consume the same engine store; only the
+  // projection differs, which is the whole point of the view-model boundary.
+  view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: -1, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -249,7 +261,42 @@ function tickToRow(tick) {
   return Math.floor(tick / ZOOM_LEVELS[state.zoom].rowNanoticks);
 }
 
+/** Arrange draws from the same store; only the projection differs. */
+function drawArrange() {
+  const lanes = Math.min(state.tracks, 16);
+  if (!arrangeBuf || arrangeBuf._shape !== `${lanes}x128`) {
+    arrangeBuf = createArrangeBuffer(lanes, 128);
+  }
+  const vm = buildArrangeModel({
+    startTick: state.arrangeStart,
+    width: arrangeHost.clientWidth - metrics.gutterWidth,
+    zoomIndex: state.arrangeZoom,
+    tracks: lanes,
+    engine: state.useEngine === false ? null : engine,
+    laneHeight: ARRANGE_LANE_H,
+    cursor: { track: state.cursor.track, tick: tickOfCursorRow() },
+    selectedPlacement: state.selectedPlacement,
+  }, arrangeBuf);
+  arrange.render(vm);
+  chrome.update({
+    playheadTick: engine ? engine.playheadTick : 0,
+    transport: engine ? engine.transport : 0,
+    linkText: engine && engine.stale ? 'engine gone'
+      : engine && conn && conn.stats().connected ? 'live' : state.link,
+    octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+  });
+}
+
 function draw() {
+  // One scheduler, two surfaces. Hiding the other host rather than unmounting it
+  // keeps its pools warm, so switching views costs no rebuild.
+  const wantArrange = state.view === 'arrange';
+  if (arrangeHost.hidden === wantArrange) {
+    arrangeHost.hidden = !wantArrange;
+    host.style.display = wantArrange ? 'none' : '';
+    head.style.display = wantArrange ? 'none' : '';
+  }
+  if (wantArrange) return drawArrange();
   const shapeChanged = tracker.poolSize === 0 || !headRow || headRow.children.length !== state.tracks + 1;
   tracker.resize(host.clientHeight, state.tracks, state.columns);
   if (shapeChanged) buildHead();
@@ -461,6 +508,31 @@ addEventListener('keydown', (e) => {
     if (act === 'consumed' || act === 'cancel') return done();
   }
 
+  // 2.5 View switch, and arrange's own navigation. Arrange has no rows and no
+  //     cell editing, so it must not fall through into the tracker's keys.
+  if (k === 'Tab') { state.view = state.view === 'arrange' ? 'tracker' : 'arrange'; return done(); }
+  if (state.view === 'arrange') {
+    const page = arrangeBuf ? arrangeBuf.view.ticksPerPixel * arrangeBuf.view.width : 3840000;
+    if (k === 'ArrowRight') { state.arrangeStart += page / 8; return done(); }
+    if (k === 'ArrowLeft') { state.arrangeStart = Math.max(0, state.arrangeStart - page / 8); return done(); }
+    if (k === 'PageDown') { state.arrangeStart += page; return done(); }
+    if (k === 'PageUp') { state.arrangeStart = Math.max(0, state.arrangeStart - page); return done(); }
+    if (k === 'Home') { state.arrangeStart = 0; return done(); }
+    if (k === 'ArrowDown') { state.cursor.track = Math.min(state.tracks - 1, state.cursor.track + 1); return done(); }
+    if (k === 'ArrowUp') { state.cursor.track = Math.max(0, state.cursor.track - 1); return done(); }
+    if (k === '-' || k === '_') { state.arrangeZoom = Math.min(ARRANGE_ZOOM.length - 1, state.arrangeZoom + 1); return done(); }
+    if (k === '+' || k === '=') { state.arrangeZoom = Math.max(0, state.arrangeZoom - 1); return done(); }
+    if (k === ' ') { cmd('play'); return done(); }
+    if (k === 'Escape') { state.selectedPlacement = -1; state.reject = null; return done(); }
+    // Clip edits need engine commands that do not exist yet (move/resize/
+    // duplicate/delete placement). Asked backend; refusing visibly until then.
+    if (k === 'Backspace' || k === 'Delete') {
+      state.reject = 'clip edits need engine commands (asked backend)';
+      return done();
+    }
+    return;
+  }
+
   // 3. Navigation.
   if (k === 'ArrowDown') { moveCursor(() => state.cursor.row++); follow(); return done(); }
   if (k === 'ArrowUp') { moveCursor(() => { state.cursor.row = Math.max(0, state.cursor.row - 1); }); follow(); return done(); }
@@ -522,6 +594,19 @@ addEventListener('keydown', (e) => {
 // user means by a range.
 let dragAnchor = null;
 function fieldOf(hit) { return hit.track * state.columns + hit.col; }
+
+arrangeHost.addEventListener('pointerdown', (e) => {
+  if (!arrangeBuf) return;
+  const hit = arrange.hitTest(e.clientX, e.clientY, arrangeBuf);
+  if (!hit) return;
+  state.cursor.track = hit.track;
+  state.selectedPlacement = hit.placement;
+  // Click-to-position needs SetPosition, which the engine does not have; say so
+  // rather than moving a playhead the engine will immediately contradict.
+  if (hit.placement < 0) state.reject = 'seek needs an engine command (asked backend)';
+  else state.reject = null;
+  schedule();
+});
 
 host.addEventListener('pointerdown', (e) => {
   const hit = tracker.hitTest(e.clientX, e.clientY, state.scrollX);
@@ -590,7 +675,8 @@ window.__uni = {
   // before it is not a fixture, it is a dependency on execution order.
   reset: () => { state.cursor.row = 0; state.cursor.track = 0; state.cursor.col = 0;
                  state.playhead = 0; state.zoom = 3; state.scrollX = 0; state.start = 0;
-                 engine = null; state.useEngine = false;
+                 engine = null; state.useEngine = false; state.view = 'tracker';
+                 state.arrangeStart = 0; state.arrangeZoom = 3; state.selectedPlacement = -1;
                  // The HUD carries a live node count and frame counter. Pin it
                  // here too, or a scene inherits whatever the previous scene's
                  // timer last wrote and the golden differs by that strip alone.
@@ -639,6 +725,13 @@ window.__uni = {
   loadProject: (name) => conn && conn.loadProject(name),
   saveProject: (name) => conn && conn.saveProject(name),
   lpb: () => (engine ? Array.from(engine.lpb) : null),
+  view: (v) => { if (v) { state.view = v; draw(); } return state.view; },
+  arrangeProbe: () => arrange.probe(),
+  arrangeZoom: (z) => { state.arrangeZoom = z; draw(); },
+  arrangeTo: (tick) => { state.arrangeStart = Math.max(0, tick); draw(); },
+  extents: () => (engine ? engine.extents.slice(0, engine.extentCount)
+    .map(e => ({ id: e.placementId, clip: e.clipId, tr: e.track, a: e.audio,
+                 s: e.startTick, e: e.endTick, n: e.name })) : null),
   /** Raw engine state. The row-projected playhead in state() hides whether the
    *  transport is running at all, which made "play does nothing" ambiguous. */
   engineState: () => (engine ? {
@@ -648,6 +741,39 @@ window.__uni = {
   } : null),
   notes: () => (engine ? engine.notes.slice(0, engine.noteCount)
     .map(n => ({ t: n.tOn, row: n.row, tr: n.track })) : null),
+  /**
+   * A synthetic store for the arrange view, including an AUDIO region — schema
+   * v3 ships those with UI_CLIP_EXTENT_AUDIO and they render differently, so a
+   * fixture without one cannot tell the two apart.
+   */
+  useArrangeFixture: () => {
+    state.useEngine = true; state.hudFrozen = true; conn.close();
+    hudText.nodeValue = 'arrange-fixture';
+    state.view = 'arrange'; state.arrangeZoom = 3; state.arrangeStart = 0;
+    state.selectedPlacement = 2;
+    const B = 3840000;
+    const mk = (id, clip, tr, s, e, name, audio) =>
+      ({ placementId: id, clipId: clip, track: tr, flags: audio ? 1 : 0,
+         startTick: s, endTick: e, name, audio });
+    const extents = [
+      mk(1, 1, 0, 0, B * 4, 'Bass', false),
+      mk(2, 2, 1, B, B * 5, 'Pad', false),
+      mk(3, 3, 2, B * 2, B * 3, 'Lead', false),
+      mk(4, 4, 3, 0, B * 8, 'Arp', false),
+      mk(5, 0, 4, B * 3, B * 7, 'Vocal take', true),
+      mk(6, 5, 5, B * 6, B * 9, 'Perc', false),
+    ];
+    engine = { ok: true, seq: 1, playheadTick: B * 2, visualSample: 0, clipVersion: 1,
+               harmonyVersion: 0, transport: 0, trackCount: 6, stale: false,
+               peaks: new Float32Array(6), peakCount: 0,
+               notes: [], noteCount: 0,
+               aggCount: new Uint32Array(0), aggRep: new Uint8Array(0),
+               aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
+               extents, extentCount: extents.length, extentsRevision: 1,
+               lpb: Uint8Array.from([4, 4, 4, 3, 4, 6, 0, 0]),
+               rowGrid: 1, notesRevision: 1, aggRevision: 1 };
+    draw();
+  },
   /** Which rows a lane actually has, for assertions that don't read pixels. */
   laneRows: (track) => {
     const out = [];

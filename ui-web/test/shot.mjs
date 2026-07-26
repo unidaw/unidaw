@@ -47,6 +47,11 @@ const SCENES = [
   // Lanes that DISAGREE about their grid. The one scene that can tell a correct
   // projection from a plausible one; see __uni.useMixedGrid.
   { name: 'mixed-grid', setup: async (p) => p.evaluate(() => window.__uni.useMixedGrid()) },
+  // Arrange: the same store, a horizontal projection. Includes an audio region,
+  // which renders differently and which no other fixture exercises.
+  { name: 'arrange', arrange: true, setup: async (p) => p.evaluate(() => window.__uni.useArrangeFixture()) },
+  { name: 'arrange-zoomed', arrange: true, setup: async (p) => p.evaluate(() => {
+      window.__uni.useArrangeFixture(); window.__uni.arrangeZoom(5); }) },
   { name: 'typed', setup: async (p) => { for (let i = 0; i < 12; i++) await p.keyboard.press('ArrowDown'); await p.keyboard.press('ArrowRight'); } },
   // The token buffer is the ONLY thing that waits for Enter, and it is only ever
   // opened by `@`. Every other keystroke commits on the keydown.
@@ -73,34 +78,9 @@ await page.evaluate(() => document.fonts.ready);
 await page.evaluate(() => window.__uni.useFixture());
 await page.waitForTimeout(120);
 
-for (const scene of SCENES) {
-  console.log(`\n[${scene.name}]`);
-  await page.evaluate(() => window.__uni.reset());
-  await scene.setup(page);
-  // Wait two animation frames, not a timeout. The renderer deliberately defers
-  // overscan binding by one frame on a zoom (GUIDELINES 3.9), so a screenshot
-  // taken before that lands catches a partially-bound band — it showed up as
-  // zoom-aggregate differing by 129 px roughly one run in three. A timeout only
-  // makes that less likely; waiting for the frame makes it impossible.
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-
-  const p = await page.evaluate(() => {
-    const q = window.__uni.probe();
-    return {
-      startRow: q.startRow, poolSize: q.poolSize, domNodes: q.domNodes, zoom: q.zoom,
-      tracks: q.tracks, columns: q.columns, cursor: q.cursor, clips: q.clips,
-      // read a cell the same way an agent would
-      sample: q.cellText(q.startRow + 3, 2, 0),
-      rect: q.cellRect(q.startRow + 3, 2, 0),
-    };
-  });
-
-  // Structural assertions — these are the ones that catch logic bugs.
-  ok(p.domNodes < 12000, `dom nodes bounded: ${p.domNodes}`);
-  ok(p.poolSize < 90, `pool is viewport-sized, not timeline-sized: ${p.poolSize}`);
-  ok(p.rect !== null && p.rect.w > 0, `cell (${p.startRow + 3},2,0) has geometry: ${JSON.stringify(p.rect)}`);
-  ok(typeof p.sample === 'string', `cell text readable via data attributes: ${JSON.stringify(p.sample)}`);
-
+/** Capture, then bless or compare. Shared by every surface — a second copy is
+ *  how two goldens end up with different staleness rules. */
+async function shoot(scene) {
   const png = join(OUT, `${scene.name}.png`);
   await page.screenshot({ path: png });
 
@@ -123,7 +103,55 @@ for (const scene of SCENES) {
       fail++;
     }
   }
-  console.log(`  ${p.zoom}  start=${p.startRow}  pool=${p.poolSize}  nodes=${p.domNodes}  clips=${p.clips}`);
+}
+
+for (const scene of SCENES) {
+  console.log(`\n[${scene.name}]`);
+  await page.evaluate(() => window.__uni.reset());
+  await scene.setup(page);
+  // Wait two animation frames, not a timeout. The renderer deliberately defers
+  // overscan binding by one frame on a zoom (GUIDELINES 3.9), so a screenshot
+  // taken before that lands catches a partially-bound band — it showed up as
+  // zoom-aggregate differing by 129 px roughly one run in three. A timeout only
+  // makes that less likely; waiting for the frame makes it impossible.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+  // Arrange is a different surface with a different structure. Asserting tracker
+  // cells against it does not weakly pass — it fails on geometry that was never
+  // supposed to exist, which is noise. Each surface gets its own assertions.
+  if (scene.arrange) {
+    const a = await page.evaluate(() => window.__uni.arrangeProbe());
+    ok(a !== null, 'arrange model built');
+    ok(a.lanes > 0 && a.lanes <= 16, `lanes bounded: ${a.lanes}`);
+    ok(a.clips > 0, `clips visible: ${a.clips}`);
+    ok(a.audioClips > 0, `audio regions distinguished: ${a.audioClips}`);
+    ok(a.rulerTicks > 0 && a.firstBar === 1, `ruler starts at bar 1: ${a.firstBar}, ${a.rulerTicks} ticks`);
+    ok(a.domNodes < 1200, `arrange dom bounded: ${a.domNodes}`);
+    ok(a.playheadX >= 0, `playhead placed: ${a.playheadX}`);
+    console.log(`  ${a.zoom}  ${a.clips} clips  ${a.gridLines} gridlines  ${a.domNodes} nodes`);
+    await shoot(scene);
+    continue;
+  }
+
+  const p = await page.evaluate(() => {
+    const q = window.__uni.probe();
+    return {
+      startRow: q.startRow, poolSize: q.poolSize, domNodes: q.domNodes, zoom: q.zoom,
+      tracks: q.tracks, columns: q.columns, cursor: q.cursor, clips: q.clips,
+      // read a cell the same way an agent would
+      sample: q.cellText(q.startRow + 3, 2, 0),
+      rect: q.cellRect(q.startRow + 3, 2, 0),
+    };
+  });
+
+  // Structural assertions — these are the ones that catch logic bugs.
+  ok(p.domNodes < 12000, `dom nodes bounded: ${p.domNodes}`);
+  ok(p.poolSize < 90, `pool is viewport-sized, not timeline-sized: ${p.poolSize}`);
+  ok(p.rect !== null && p.rect.w > 0, `cell (${p.startRow + 3},2,0) has geometry: ${JSON.stringify(p.rect)}`);
+  ok(typeof p.sample === 'string', `cell text readable via data attributes: ${JSON.stringify(p.sample)}`);
+
+  await shoot(scene);
+
 }
 
 await browser.close();
