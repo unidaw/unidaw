@@ -33,6 +33,9 @@
 }
 /* Soloed elsewhere: still audible in the UI sense, just not in the mix. */
 .mx-strip.dim { opacity: .45; }
+/* An edit in flight: drawn locally until the engine's next mixer version, which
+   settles it whether it was applied or rejected. */
+.mx-strip.pending .mx-gain { color: var(--uni-text-pending, var(--uni-text-fx)); }
 
 .mx-name { color: var(--uni-text-instrument); font-size: var(--font-size-inst); }
 

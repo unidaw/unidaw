@@ -27,3 +27,4 @@ state.bin
 .DS_Store
 .vscode/
 ui/daw-app/tests/snapshots/*.svg
+build/

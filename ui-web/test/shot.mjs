@@ -214,11 +214,11 @@ for (const scene of SCENES) {
     const m = await page.evaluate(() => window.__uni.mixerProbe());
     ok(m !== null, 'mixer model built');
     ok(m.strips === 8, `strips: ${m.strips}`);
-    ok(m.authoritative === false, 'mixer declares itself non-authoritative');
+    ok(m.authoritative === true, 'mixer reads the engine, not local state');
     ok(m.detail[3].mute && !m.detail[3].solo, 'mute flag on T04');
     ok(m.detail[4].solo && !m.detail[4].dim, 'solo on T05 and not dimmed');
     ok(m.detail[0].dim, 'unsoloed strips dimmed while something is soloed');
-    ok(m.detail[2].pan === 'L40' && m.detail[5].pan === 'R60', 'pan labels');
+    ok(m.detail[2].pan === 'L40' && m.detail[5].pan === 'R60', 'pan labels from the engine');
     ok(m.detail[0].meter > m.detail[3].meter, 'meters map level to height');
     console.log(`  ${m.strips} strips  dB ${m.detail.slice(0,3).map(s=>s.db).join(' ')}`);
     await shoot(scene);

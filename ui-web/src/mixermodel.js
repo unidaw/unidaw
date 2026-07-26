@@ -1,16 +1,13 @@
 // The mixer view-model: one strip per track.
 //
-// A note on truth. The engine accepts SetTrackMixer but publishes no gain, pan,
-// mute or solo, so there is nothing to read back. Everything except the meters is
-// therefore LOCAL state — what this client last sent — and it is wrong the moment
-// anything else moves a fader: a project load, an undo, the agent, another
-// surface. That is a real limitation and the UI says so rather than drawing a
-// confident fader over a guess. Asked backend for the read-back; when it lands,
-// `authoritative` flips and the local copy becomes a pending overlay like note
-// edits already are.
+// A note on truth, now resolved. The engine publishes per-track gain, pan and
+// mute/solo (SHM v12), so this surface reads the engine rather than remembering
+// what it sent. Local values survive only until the engine answers — the same
+// optimistic pattern the note cells use, and for the same reason: a fader that
+// keeps showing a local guess is wrong the moment a project load, an undo or
+// another surface moves it.
 //
-// Meters ARE real: ui_track_peak_rms is published per track and arrives as
-// `peaks` on the wire.
+// The read-back is keyed on ui_mixer_version, which moves only on change.
 
 /** Gain range, in millibels, matching what the sidecar clamps to. */
 export const GAIN_MIN = -9600;   // -96 dB, i.e. silence
@@ -20,17 +17,37 @@ export const GAIN_UNITY = 0;
 export const FLAG_MUTE = 1;
 export const FLAG_SOLO = 2;
 
-/** Local mixer state, one entry per track. */
+/**
+ * Optimistic local edits, one entry per track. `pendingUntil` is the mixer
+ * version this edit was composed against: once the engine publishes anything
+ * newer it has seen the edit, and the published value wins whether it applied
+ * it or not — exactly the base_version reconciliation the note path uses. Without
+ * the "or not" a REJECTED fader move would sit on screen forever looking like
+ * state.
+ */
 export function createMixerState(trackCount = 16) {
   const strips = new Array(trackCount);
   for (let i = 0; i < trackCount; i++) {
-    strips[i] = { track: i, gain: GAIN_UNITY, pan: 0, flags: 0, sentVersion: -1 };
+    strips[i] = { track: i, gain: GAIN_UNITY, pan: 0, flags: 0, pendingUntil: -1 };
   }
-  return {
-    strips,
-    /** False until the engine publishes mixer state; see the note above. */
-    authoritative: false,
-  };
+  return { strips, authoritative: false };
+}
+
+/** Drop local values the engine has now answered. */
+export function reconcileMixer(mixer, engine) {
+  if (!engine || engine.mixerVersion < 0) { mixer.authoritative = false; return; }
+  mixer.authoritative = true;
+  for (let i = 0; i < mixer.strips.length; i++) {
+    const s = mixer.strips[i];
+    if (s.pendingUntil >= 0 && engine.mixerVersion > s.pendingUntil) s.pendingUntil = -1;
+  }
+}
+
+/** The value to draw: the local one while an edit is in flight, else the engine's. */
+function resolve(mixer, engine, t, field, engineField) {
+  const s = mixer.strips[t];
+  if (!engine || !mixer.authoritative || s.pendingUntil >= 0) return s[field];
+  return t < engine.mixCount ? engine[engineField][t] : s[field];
 }
 
 export function createMixerBuffer(trackCount = 16) {
@@ -38,7 +55,7 @@ export function createMixerBuffer(trackCount = 16) {
   for (let i = 0; i < trackCount; i++) {
     strips[i] = {
       track: i, name: '', gain: 0, gainDb: '0.0', pan: 0, panLabel: 'C',
-      mute: false, solo: false, dimmed: false,
+      mute: false, solo: false, dimmed: false, pending: false,
       peak: 0, peakPct: 0, faderPct: 0,
     };
   }
@@ -80,7 +97,7 @@ export function gainAtPosition(pos) {
   return Math.round(GAIN_MIN + t * (GAIN_MAX - GAIN_MIN));
 }
 
-const SIG = { peakRev: -1, trackCount: -1, mixRev: -1, authoritative: null };
+const SIG = { peakRev: -1, trackCount: -1, mixRev: -1, authoritative: null, engineMix: -2 };
 let contentRevision = 0;
 
 /**
@@ -93,21 +110,26 @@ export function buildMixerModel(opts, buf) {
   // Solo is exclusive-ish: if anything is soloed, everything unsoloed is dimmed.
   // Computed here rather than per-strip so one pass decides it for all of them.
   let anySolo = false;
-  for (let t = 0; t < n; t++) if (mixer.strips[t].flags & FLAG_SOLO) { anySolo = true; break; }
+  for (let t = 0; t < n; t++) {
+    if (resolve(mixer, engine, t, 'flags', 'mixFlags') & FLAG_SOLO) { anySolo = true; break; }
+  }
 
   for (let t = 0; t < n; t++) {
-    const src = mixer.strips[t];
     const s = buf.strips[t];
+    const gain = resolve(mixer, engine, t, 'gain', 'mixGain');
+    const pan = resolve(mixer, engine, t, 'pan', 'mixPan');
+    const flags = resolve(mixer, engine, t, 'flags', 'mixFlags');
     s.track = t;
     s.name = 'T' + String(t + 1).padStart(2, '0');
-    s.gain = src.gain;
-    s.gainDb = gainLabel(src.gain);
-    s.pan = src.pan;
-    s.panLabel = panLabel(src.pan);
-    s.mute = (src.flags & FLAG_MUTE) !== 0;
-    s.solo = (src.flags & FLAG_SOLO) !== 0;
+    s.gain = gain;
+    s.gainDb = gainLabel(gain);
+    s.pan = pan;
+    s.panLabel = panLabel(pan);
+    s.mute = (flags & FLAG_MUTE) !== 0;
+    s.solo = (flags & FLAG_SOLO) !== 0;
+    s.pending = mixer.strips[t].pendingUntil >= 0;
     s.dimmed = anySolo && !s.solo;
-    s.faderPct = faderPosition(src.gain);
+    s.faderPct = faderPosition(gain);
     // Peak RMS is 0..1 linear; show it on a dB scale or everything below -20
     // is invisible, which is exactly the range a meter needs to be useful in.
     const p = engine && t < engine.peakCount ? engine.peaks[t] : 0;
@@ -120,10 +142,12 @@ export function buildMixerModel(opts, buf) {
   // Meters move every frame, so they are deliberately NOT in the revision: the
   // renderer updates meter heights unconditionally and everything else only on
   // a real change. Putting peaks in here would rebind every strip at 86 Hz.
+  const engineMix = engine ? engine.mixerVersion : -1;
   if (SIG.trackCount !== n || SIG.mixRev !== mixRevision
-      || SIG.authoritative !== mixer.authoritative) {
+      || SIG.authoritative !== mixer.authoritative || SIG.engineMix !== engineMix) {
     SIG.trackCount = n; SIG.mixRev = mixRevision;
     SIG.authoritative = mixer.authoritative;
+    SIG.engineMix = engineMix;
     contentRevision++;
   }
   buf.contentRevision = contentRevision;

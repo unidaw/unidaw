@@ -33,7 +33,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 7;
+const WIRE_VERSION: u16 = 8;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -217,6 +217,11 @@ struct Frame {
     notes_grid: u32,
     /// True once the engine has not published for STALE_AFTER.
     stale: bool,
+    /// Per-track mixer read-back (SHM v12). Until this existed the mixer drew
+    /// what the client last sent, which is wrong after a load, an undo, or any
+    /// other surface moving a fader.
+    mixer: Vec<(i32, i32, u8)>,
+    mixer_version: u32,
     /// Scratch, reused so the aggregation path allocates nothing per frame.
     ev: Vec<(u64, u8)>,
 }
@@ -254,6 +259,15 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&f.agg_tracks.to_le_bytes());
     out.extend_from_slice(&(f.extents.len() as u16).to_le_bytes());
     out.extend_from_slice(&f.lpb);
+    out.extend_from_slice(&f.mixer_version.to_le_bytes());
+    out.extend_from_slice(&(f.mixer.len() as u16).to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());                   // pad to 8
+    for &(gain, pan, flags) in &f.mixer {
+        out.extend_from_slice(&gain.to_le_bytes());
+        out.extend_from_slice(&pan.to_le_bytes());
+        out.push(flags);
+        out.push(0); out.push(0); out.push(0);                    // 12 bytes each
+    }
     for p in &f.peaks {
         out.extend_from_slice(&p.to_le_bytes());
     }
@@ -323,6 +337,17 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     // client never has to guess.
     let lpb = snap.ui_lines_per_beat;
     out.lpb = lpb;
+
+    // Cheap: read_mixer is a seqlock read of a fixed-size row. Guarded on the
+    // engine's own version so an unchanged mixer costs one atomic load.
+    let mv = h.mixer_version();
+    if mv != out.mixer_version || out.mixer.is_empty() {
+        out.mixer_version = mv;
+        out.mixer.clear();
+        for m in h.read_mixer() {
+            out.mixer.push((m.gain_millibels, m.pan_thousandths, m.flags));
+        }
+    }
 
     // ...but `row` on the wire is in the VIEWPORT's grid, not the lane's, because
     // every lane is drawn against one shared row axis. Emitting lane-space rows

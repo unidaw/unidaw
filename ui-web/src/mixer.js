@@ -103,6 +103,7 @@ export class Mixer {
       if (el._muteV !== s.mute) { el._muteV = s.mute; el._mute.classList.toggle('on', s.mute); }
       if (el._soloV !== s.solo) { el._soloV = s.solo; el._solo.classList.toggle('on', s.solo); }
       if (el._dimV !== s.dimmed) { el._dimV = s.dimmed; el.classList.toggle('dim', s.dimmed); }
+      if (el._pendV !== s.pending) { el._pendV = s.pending; el.classList.toggle('pending', s.pending); }
       // Unguarded on purpose — see the header note.
       const pct = (s.peakPct * 100).toFixed(0);
       if (el._meterV !== pct) { el._meterV = pct; el._meterFill.style.height = pct + '%'; }
@@ -115,7 +116,7 @@ export class Mixer {
     // The one honest thing this surface can say about itself.
     const note = vm.authoritative
       ? ''
-      : 'faders show what this client last sent — the engine does not publish mixer state yet';
+      : 'no engine — faders show local values only';
     if (this._notice !== note) {
       this._notice = note;
       this.notice.firstChild.nodeValue = note;
@@ -130,7 +131,7 @@ export class Mixer {
     for (let i = 0; i < vm.stripCount; i++) {
       const x = vm.strips[i];
       s.push({ track: x.track, gain: x.gain, db: x.gainDb, pan: x.panLabel,
-               mute: x.mute, solo: x.solo, dim: x.dimmed,
+               mute: x.mute, solo: x.solo, dim: x.dimmed, pending: x.pending,
                fader: +x.faderPct.toFixed(3), meter: +x.peakPct.toFixed(3) });
     }
     return { strips: vm.stripCount, authoritative: vm.authoritative,

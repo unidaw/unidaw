@@ -78,7 +78,7 @@ import { createChrome } from './src/chrome.js';
 import { Arrange } from './src/arrange.js';
 import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM } from './src/arrangemodel.js';
 import { Mixer } from './src/mixer.js';
-import { buildMixerModel, createMixerBuffer, createMixerState,
+import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
          gainAtPosition, FLAG_MUTE, FLAG_SOLO } from './src/mixermodel.js';
 import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch } from './src/pianomodel.js';
@@ -120,6 +120,8 @@ const mixerHost = document.getElementById('mixer');
 
 function sendMixer(track) {
   const s = mixerState.strips[track];
+  // Composed against this mixer version; the engine's next one settles it.
+  s.pendingUntil = engine ? engine.mixerVersion : -1;
   mixRevision++;
   if (!conn || !conn.send({ type: 'mixer', track, gain: s.gain, pan: s.pan, flags: s.flags })) {
     state.reject = 'no engine';
@@ -950,7 +952,15 @@ conn = connectEngine({
     if (state.dockOpen) dock.log('out', String(msg).slice(0, 200));
     state.ack = String(msg).slice(0, 80);
     (window.__acks || (window.__acks = [])).push(state.ack); },
-  onChange: (store) => { engine = store; reapPending(store.clipVersion, performance.now()); state.playhead = tickToRow(store.playheadTick); schedule(); },
+  onChange: (store) => {
+    engine = store;
+    reapPending(store.clipVersion, performance.now());
+    // Mixer edits reconcile on the engine's mixer version, the same way note
+    // edits reconcile on the clip version.
+    reconcileMixer(mixerState, store);
+    state.playhead = tickToRow(store.playheadTick);
+    schedule();
+  },
 });
 
 // Agent / test surface. Structure, not pixels — this is requirement (d).
@@ -1118,6 +1128,12 @@ window.__uni = {
     state.view = 'mixer';
     const peaks = new Float32Array(16);
     for (let i = 0; i < 8; i++) peaks[i] = [0.9, 0.5, 0.25, 0.05, 0.7, 0.01, 0, 0.35][i];
+    // Mixer values live on the ENGINE now (SHM v12), so the fixture publishes
+    // them the way the engine does. A fixture that still set local strips would
+    // exercise the fallback path and never touch the one that ships.
+    const gain = Int32Array.from([600, -490, 0, 0, 0, -1200, 0, 300, 0,0,0,0,0,0,0,0]);
+    const pan = Int32Array.from([0, 0, -400, 0, 0, 600, 0, 0, 0,0,0,0,0,0,0,0]);
+    const flags = Uint8Array.from([0, 0, 0, 1, 2, 0, 0, 0, 0,0,0,0,0,0,0,0]);
     engine = { ok: true, seq: 1, playheadTick: 0, visualSample: 0, clipVersion: 1,
                harmonyVersion: 0, transport: 1, trackCount: 8, stale: false,
                peaks, peakCount: 8, notes: [], noteCount: 0,
@@ -1125,23 +1141,13 @@ window.__uni = {
                aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
                extents: [], extentCount: 0, extentsRevision: 1,
                lpb: Uint8Array.from([4, 4, 4, 3, 4, 6, 0, 0]),
+               mixGain: gain, mixPan: pan, mixFlags: flags, mixCount: 8, mixerVersion: 7,
                rowGrid: 1, notesRevision: 1, aggRevision: 1 };
-    const g = [0.85, 0.6, 0.702, 0.702, 0.702, 0.45, 0.702, 0.9];
-    for (let i = 0; i < 8; i++) mixerState.strips[i].gain = gainAtPosition(g[i]);
-    mixerState.strips[2].pan = -400;
-    mixerState.strips[5].pan = 600;
-    mixerState.strips[3].flags = FLAG_MUTE;
-    mixerState.strips[4].flags = FLAG_SOLO;
+    reconcileMixer(mixerState, engine);
     mixRevision++;
     state.tracks = 8;
     draw();
   },
-  /**
-   * Piano-roll fixture: a chord plus a melody, one muted note and one override
-   * add, so the provenance styling is exercised. Notes carry a real tOff —
-   * useMixedGrid's do not, and the piano roll filters on note END, so that
-   * fixture would render an empty roll and look like a broken view.
-   */
   usePianoFixture: () => {
     state.useEngine = true; state.hudFrozen = true; conn.close();
     hudText.nodeValue = 'piano-fixture';
@@ -1219,6 +1225,10 @@ window.__uni = {
                 state.cursor.track = Math.floor(f/state.columns); state.cursor.col = f%state.columns; follow(); draw(); },
   setZoom: (z) => { state.zoom = z; draw(); },
   step: () => { state.cursor.row++; state.playhead = (state.playhead + 1) % TOTAL_ROWS; follow(); draw(); },
+  /** Synchronous draw. Tests must not route through schedule(), which coalesces
+   *  to one draw per animation frame — a 3000-iteration loop through it measures
+   *  a handful of draws and reports a reassuring number that means nothing. */
+  redraw: () => draw(),
   totalRows: TOTAL_ROWS,
 };
 </script>

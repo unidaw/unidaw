@@ -7,13 +7,14 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 7;
+export const WIRE_VERSION = 8;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 68;   // 56 + aggTracks u16 + extentCount u16 + lpb[8]
+const HEADER_BYTES = 76;   // 56 + aggTracks u16 + extentCount u16 + lpb[8] + mixer 8
+const MIXER_BYTES = 12;
 const NOTE_BYTES = 40;
 /** Mirrors daw_bridge::layout::UiClipExtent. */
 const EXTENT_BYTES = 64;
@@ -50,6 +51,13 @@ export function createStore() {
     extents: [],
     extentCount: 0,
     extentsRevision: 0,
+    /** Per-track mixer state, published by the engine (SHM v12). Authoritative —
+     *  before this existed the mixer drew what this client last sent, which was
+     *  wrong after a load, an undo, or any other surface moving a fader. */
+    mixGain: new Int32Array(16), mixPan: new Int32Array(16), mixFlags: new Uint8Array(16),
+    mixCount: 0,
+    /** Moves only when the mixer actually changes; the cache key for it. */
+    mixerVersion: -1,
     /** Per-track lines_per_beat. Needed to render a lane on its own grid AND to
      *  compute the tick a write targets — both halves of the projection. */
     lpb: new Uint8Array(8),
@@ -112,18 +120,34 @@ export function decode(buf, store) {
   const aggTracks = v.getUint16(56, true);
   const extentCount = v.getUint16(58, true);
   for (let i = 0; i < 8; i++) store.lpb[i] = v.getUint8(60 + i);
+  const mixerVersion = v.getUint32(68, true);
+  const mixCount = v.getUint16(72, true);
   const aggN = aggRows * aggTracks;
-  if (buf.byteLength < HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES + extentCount * EXTENT_BYTES + aggN * 8) return false;
+  if (buf.byteLength < HEADER_BYTES + mixCount * MIXER_BYTES + peakCount * 4
+      + noteCount * NOTE_BYTES + extentCount * EXTENT_BYTES + aggN * 8) return false;
+
+  // Mixer rows come first after the header; everything below offsets past them.
+  if (mixerVersion !== store.mixerVersion || mixCount !== store.mixCount) {
+    for (let i = 0; i < mixCount && i < store.mixGain.length; i++) {
+      const o = HEADER_BYTES + i * MIXER_BYTES;
+      store.mixGain[i] = v.getInt32(o, true);
+      store.mixPan[i] = v.getInt32(o + 4, true);
+      store.mixFlags[i] = v.getUint8(o + 8);
+    }
+    store.mixCount = Math.min(mixCount, store.mixGain.length);
+    store.mixerVersion = mixerVersion;
+  }
+  const AFTER_MIXER = HEADER_BYTES + mixCount * MIXER_BYTES;
 
   if (store.peaks.length < peakCount) store.peaks = new Float32Array(peakCount);
-  for (let i = 0; i < peakCount; i++) store.peaks[i] = v.getFloat32(HEADER_BYTES + i * 4, true);
+  for (let i = 0; i < peakCount; i++) store.peaks[i] = v.getFloat32(AFTER_MIXER + i * 4, true);
   store.peakCount = peakCount;
 
   // Notes only move on an edit; the sidecar re-serialises them only when
   // clipVersion changes, so skip the copy when it hasn't.
   if (clipVersion !== store.clipVersion || noteCount !== store.noteCount
       || rowGrid !== store.rowGrid) {
-    let o = HEADER_BYTES + peakCount * 4;
+    let o = AFTER_MIXER + peakCount * 4;
     for (let i = 0; i < noteCount; i++, o += NOTE_BYTES) {
       const n = note(store, i);
       n.tOn = Number(v.getBigUint64(o, true));
@@ -154,7 +178,7 @@ export function decode(buf, store) {
 
   // Clip extents: the rails. One per placement, timeline-positioned only.
   {
-    let o = HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES;
+    let o = AFTER_MIXER + peakCount * 4 + noteCount * NOTE_BYTES;
     let changed = extentCount !== store.extentCount;
     for (let i = 0; i < extentCount; i++, o += EXTENT_BYTES) {
       let e = store.extents[i];
@@ -188,7 +212,7 @@ export function decode(buf, store) {
       store.aggLo = new Uint8Array(aggN);
       store.aggHi = new Uint8Array(aggN);
     }
-    let o = HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES + extentCount * EXTENT_BYTES;
+    let o = AFTER_MIXER + peakCount * 4 + noteCount * NOTE_BYTES + extentCount * EXTENT_BYTES;
     let changed = aggRows !== store.aggRows || aggTracks !== store.aggTracks;
     for (let i = 0; i < aggN; i++, o += 8) {
       const c = v.getUint32(o, true);

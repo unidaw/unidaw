@@ -60,32 +60,66 @@ const heap = async () => {
 };
 
 const N = 3000;
-await page.evaluate(() => { for (let i = 0; i < 300; i++) window.__uni.step(); });  // warm
-
-const s0 = await heap();
-// NB: nothing inside the measured loop may allocate on the test's behalf.
-// state() deep-clones via JSON and inflated this by 15 bytes/draw — the probe
-// measuring itself, for the third time in this project. Read it once, outside.
-await page.evaluate((n) => { const at = window.__uni.state().start;
-  for (let i = 0; i < n; i++) window.__uni.scrollTo(at); }, N);
-const s1 = await heap();
-const statik = (s1 - s0) / N;
-
-const c0 = await heap();
-await page.evaluate((n) => { for (let i = 0; i < n; i++) window.__uni.step(); }, N);
-const c1 = await heap();
-const scrolling = (c1 - c0) / N;
-
-await br.close(); srv.close();
 
 let fail = 0;
 const check = (v, max, label) => {
   const ok = v <= max;
   if (!ok) fail++;
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(34)} ${v.toFixed(1)} bytes/draw   (limit ${max})`);
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(38)} ${v.toFixed(1)} bytes/draw   (limit ${max})`);
 };
+
+/**
+ * Measure a loop body. `setup` runs once outside the measurement — nothing
+ * inside the measured loop may allocate on the test's behalf. state() deep-
+ * clones via JSON and inflated an earlier version by 15 bytes/draw: the probe
+ * measuring itself, for the third time in this project.
+ */
+async function measure(setup, body, n = N) {
+  if (setup) await page.evaluate(setup);
+  await page.evaluate(body, 300);              // warm
+  const a = await heap();
+  await page.evaluate(body, n);
+  const b = await heap();
+  return (b - a) / n;
+}
+
 console.log(`\n  allocation, ${N} draws each\n`);
-check(statik, STATIC_MAX, 'at rest, nothing changes');
-check(scrolling, SCROLL_MAX, 'scrolling, one row rebinds');
+
+// --- tracker -------------------------------------------------------------
+check(await measure(
+  () => { window.__uni.view('tracker'); },
+  (n) => { const at = window.__uni.state().start;
+           for (let i = 0; i < n; i++) window.__uni.scrollTo(at); }),
+  STATIC_MAX, 'tracker at rest');
+check(await measure(null, (n) => { for (let i = 0; i < n; i++) window.__uni.step(); }),
+  SCROLL_MAX, 'tracker scrolling');
+
+// --- the other surfaces --------------------------------------------------
+// Each was built after the rule was written and none of them was covered by it.
+// A rule enforced on one surface is a rule the next surface does not have.
+check(await measure(
+  () => { window.__uni.useArrangeFixture(); },
+  (n) => { for (let i = 0; i < n; i++) window.__uni.arrangeTo((i % 64) * 240000); }),
+  SCROLL_MAX, 'arrange scrolling time');
+
+check(await measure(
+  () => { window.__uni.usePianoFixture(); },
+  (n) => { for (let i = 0; i < n; i++) window.__uni.pianoTo((i % 64) * 120000); }),
+  SCROLL_MAX, 'piano roll scrolling time');
+
+// The mixer's meters move every frame by design, so this is the one surface
+// where a redraw legitimately writes on every pass. It still must not allocate.
+check(await measure(
+  () => { window.__uni.useMixerFixture(); },
+  // redraw(), not setPan alone: the mixer's setters go through schedule(), which
+  // coalesces to one draw per frame, so a loop through them measures almost no
+  // draws at all and reports a reassuringly small number that means nothing.
+  (n) => { for (let i = 0; i < n; i++) {
+    window.__uni.setPan(i % 8, ((i * 37) % 2000) - 1000);
+    window.__uni.redraw();
+  } }),
+  SCROLL_MAX, 'mixer, meters and controls moving');
+await br.close(); srv.close();
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : `${fail} FAILURES — see GUIDELINES.md section 3`}`);
 process.exit(fail ? 1 : 0);
