@@ -59,6 +59,11 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', onChange, onStatus 
 
   return {
     store,
+    /** Tell the sidecar what we are looking at; it does the projection. */
+    setViewport(linesPerBeat, firstRow, rowCount) {
+      if (!ws || ws.readyState !== 1) return;
+      ws.send(`{"linesPerBeat":${linesPerBeat},"firstRow":${firstRow},"rowCount":${rowCount}}`);
+    },
     stats: () => ({ framesIn, gaps, lastSeq, connected: ws && ws.readyState === 1 }),
     close() { closed = true; if (ws) ws.close(); },
   };

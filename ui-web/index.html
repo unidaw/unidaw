@@ -60,7 +60,11 @@ const tracker = new Tracker(host, metrics);
 const TOTAL_ROWS = 100000;
 // Declared up here, not beside connectEngine: draw() reads it, and draw() runs
 // before the connection is made.
+// Declared before draw() because draw() reads them and runs first. Three TDZ
+// throws in this file so far; anything draw() touches gets hoisted here.
 let engine = null;
+let conn = null;
+let lastViewportKey = -1;
 const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', zoom: 2, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
@@ -127,6 +131,13 @@ function draw() {
     engine: state.useEngine === false ? null : engine,
   }, bufs[bi]);
   vm.scrollX = state.scrollX;
+  // The sidecar owns the projection and the aggregation, so it needs to know
+  // what we are looking at. Only sent when it actually moves.
+  const vpKey = state.zoom * 1e9 + state.start * 1000 + tracker.poolSize;
+  if (conn && vpKey !== lastViewportKey) {
+    lastViewportKey = vpKey;
+    conn.setViewport(ZOOM_LEVELS[state.zoom].linesPerBeat, state.start, tracker.poolSize);
+  }
   tracker.render(vm);
   // The node count is an O(tree) walk. Sampling it every frame cost ~7 ms —
   // more than the render it was reporting on. Diagnostics must not be in the
@@ -205,7 +216,7 @@ draw();
 // and every golden — still renders standalone. Connected after the first draw:
 // connectEngine calls onStatus synchronously, and touching `state` before its
 // declaration is a temporal-dead-zone throw that kills the whole module.
-const conn = connectEngine({
+conn = connectEngine({
   onStatus: (s, d) => { state.link = s + (d ? ': ' + d : ''); schedule(); },
   onChange: (store) => { engine = store; state.playhead = tickToRow(store.playheadTick); schedule(); },
 });

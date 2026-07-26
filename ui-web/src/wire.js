@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 2;
+export const WIRE_VERSION = 3;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 56;
+const HEADER_BYTES = 60;   // 56 + agg_tracks u16 + pad
 const NOTE_BYTES = 40;
 
 /** A reusable decode target. One per connection. */
@@ -32,6 +32,14 @@ export function createStore() {
     /** Pooled note objects; only the first `noteCount` are meaningful. */
     notes: [],
     noteCount: 0,
+    /** Per (track, row) aggregate for the requested window, from the engine's
+     *  aggregate_rows. Flat: index = track * aggRows + row. Four values each. */
+    aggCount: new Uint32Array(0),
+    aggRep: new Uint8Array(0),
+    aggLo: new Uint8Array(0),
+    aggHi: new Uint8Array(0),
+    aggRows: 0,
+    aggTracks: 0,
     /** Bumped whenever notes actually changed, so consumers can skip work. */
     notesRevision: 0,
   };
@@ -41,7 +49,7 @@ function note(store, i) {
   let n = store.notes[i];
   if (!n) {
     n = { tOn: 0, tOff: 0, id: 0, pitch: 0, velocity: 0, column: 0, track: 0,
-          retrigger: 0, probability: 0, delayTicks: 0 };
+          retrigger: 0, probability: 0, delayTicks: 0, row: 0 };
     store.notes[i] = n;
   }
   return n;
@@ -73,7 +81,10 @@ export function decode(buf, store) {
 
   const peakCount = v.getUint16(44, true);
   const noteCount = v.getUint32(48, true);
-  if (buf.byteLength < HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES) return false;
+  const aggRows = v.getUint32(52, true);
+  const aggTracks = v.getUint16(56, true);
+  const aggN = aggRows * aggTracks;
+  if (buf.byteLength < HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES + aggN * 8) return false;
 
   if (store.peaks.length < peakCount) store.peaks = new Float32Array(peakCount);
   for (let i = 0; i < peakCount; i++) store.peaks[i] = v.getFloat32(HEADER_BYTES + i * 4, true);
@@ -95,11 +106,33 @@ export function decode(buf, store) {
       n.retrigger = v.getUint8(o + 28);
       n.probability = v.getUint8(o + 29);
       n.delayTicks = v.getUint32(o + 32, true);
+      // Row comes from LaneGrid on the sidecar; the frontend never re-derives
+      // the projection, so triplet grids work and there is one definition of it.
+      n.row = v.getUint32(o + 36, true);
     }
     store.noteCount = noteCount;
     store.clipVersion = clipVersion;
     store.notesRevision++;
   }
+
+  // Aggregates change every frame the viewport moves, so they are always read.
+  if (aggN) {
+    if (store.aggCount.length < aggN) {
+      store.aggCount = new Uint32Array(aggN);
+      store.aggRep = new Uint8Array(aggN);
+      store.aggLo = new Uint8Array(aggN);
+      store.aggHi = new Uint8Array(aggN);
+    }
+    let o = HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES;
+    for (let i = 0; i < aggN; i++, o += 8) {
+      store.aggCount[i] = v.getUint32(o, true);
+      store.aggRep[i] = v.getUint8(o + 4);
+      store.aggLo[i] = v.getUint8(o + 5);
+      store.aggHi[i] = v.getUint8(o + 6);
+    }
+  }
+  store.aggRows = aggRows;
+  store.aggTracks = aggTracks;
 
   store.ok = true;
   return true;

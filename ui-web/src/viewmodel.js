@@ -21,12 +21,15 @@ import { pitchName } from './wire.js';
  */
 /** @typedef {{id:number, name:string, columns:number}} Track */
 
+// linesPerBeat is what LaneGrid takes, so the sidecar can build the same grid
+// we are describing. It is not restricted to powers of two — 3 is a triplet
+// grid, which is exactly the case JS tick/rowNanoticks division cannot express.
 export const ZOOM_LEVELS = [
-  { index: 0, rowNanoticks: 240000, label: '1/16', aggregate: false },
-  { index: 1, rowNanoticks: 480000, label: '1/8', aggregate: false },
-  { index: 2, rowNanoticks: 960000, label: '1/4', aggregate: false },
-  { index: 3, rowNanoticks: 3840000, label: '1 bar', aggregate: true },
-  { index: 4, rowNanoticks: 15360000, label: '4 bars', aggregate: true },
+  { index: 0, rowNanoticks: 240000, linesPerBeat: 4, label: '1/16', aggregate: false },
+  { index: 1, rowNanoticks: 480000, linesPerBeat: 2, label: '1/8', aggregate: false },
+  { index: 2, rowNanoticks: 960000, linesPerBeat: 1, label: '1/4', aggregate: false },
+  { index: 3, rowNanoticks: 3840000, linesPerBeat: 1, label: '1 bar', aggregate: true },
+  { index: 4, rowNanoticks: 15360000, linesPerBeat: 1, label: '4 bars', aggregate: true },
 ];
 
 const NOTES = ['C-4', 'D#4', 'F-4', 'G-4', 'A#4', 'C-5', 'E-4', 'OFF'];
@@ -202,7 +205,11 @@ export function buildViewModel(opts, buf) {
     for (let i = 0; i < engine.noteCount; i++) {
       const n = engine.notes[i];
       if (n.tOn < winStart || n.tOn >= winEnd || n.track >= trackCount) continue;
-      const row = rows[((n.tOn - winStart) / span) | 0];
+      // n.row was computed by LaneGrid on the sidecar. Fall back to arithmetic
+      // only for the fine grids where the two agree, so a mismatch is visible
+      // rather than silently papered over.
+      const ri = n.row >= startRow ? n.row - startRow : ((n.tOn - winStart) / span) | 0;
+      const row = rows[ri];
       if (!row) continue;
       const base = n.track * columns;
       const c0 = row.cells[base];

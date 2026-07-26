@@ -27,11 +27,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
+use daw_bridge::grid::{aggregate_rows, LaneGrid};
 
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 2;
+const WIRE_VERSION: u16 = 3;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -44,6 +45,35 @@ const KIND_STATE: u8 = 0;
 const HEADER_BYTES: usize = 56;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
 const NOTE_BYTES: usize = 40;
+
+/// The client's current viewport. It owns zoom and scroll; we own the
+/// projection, because LaneGrid is the authority on tick<->row and reimplementing
+/// it in JS would be a second definition of the same truth — and JS division
+/// cannot express triplet grids (lines_per_beat = 3) at all.
+#[derive(Clone, Copy)]
+struct Viewport {
+    lines_per_beat: u32,
+    first_row: u64,
+    row_count: u32,
+}
+impl Default for Viewport {
+    fn default() -> Self { Self { lines_per_beat: 4, first_row: 0, row_count: 0 } }
+}
+
+/// Minimal field scrape — the control channel carries four integers and does not
+/// justify a JSON dependency.
+fn parse_viewport(txt: &str, vp: &mut Viewport) {
+    let field = |k: &str| -> Option<u64> {
+        let i = txt.find(k)? + k.len();
+        let rest = &txt[i..];
+        let start = rest.find(|c: char| c.is_ascii_digit())?;
+        let end = rest[start..].find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len() - start);
+        rest[start..start + end].parse().ok()
+    };
+    if let Some(v) = field("\"linesPerBeat\"") { vp.lines_per_beat = (v as u32).clamp(1, 64); }
+    if let Some(v) = field("\"firstRow\"") { vp.first_row = v; }
+    if let Some(v) = field("\"rowCount\"") { vp.row_count = (v as u32).min(512); }
+}
 
 struct Args {
     port: u16,
@@ -82,6 +112,9 @@ struct WireNote {
     retrigger: u8,
     probability: u8,
     delay_nanoticks: u32,
+    /// Row index under the client's current grid, computed by LaneGrid here so
+    /// the frontend never re-derives the projection.
+    row: u32,
 }
 
 #[derive(Default)]
@@ -98,6 +131,13 @@ struct Frame {
     window_end: u64,
     peaks: Vec<f32>,
     notes: Vec<WireNote>,
+    /// Per (track, row) aggregate for the requested window, from aggregate_rows.
+    /// count 0 means the row is empty on that track.
+    aggs: Vec<(u32, u8, u8, u8)>,
+    agg_rows: u32,
+    agg_tracks: u16,
+    /// Scratch, reused so the aggregation path allocates nothing per frame.
+    ev: Vec<(u64, u8)>,
 }
 
 fn encode(f: &Frame, out: &mut Vec<u8>) {
@@ -116,8 +156,10 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&(f.peaks.len() as u16).to_le_bytes()); // 44
     out.extend_from_slice(&0u16.to_le_bytes());                   // 46 pad
     out.extend_from_slice(&(f.notes.len() as u32).to_le_bytes()); // 48
-    out.extend_from_slice(&0u32.to_le_bytes());                   // 52 pad
+    out.extend_from_slice(&f.agg_rows.to_le_bytes());             // 52
     debug_assert_eq!(out.len(), HEADER_BYTES);
+    out.extend_from_slice(&f.agg_tracks.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
     for p in &f.peaks {
         out.extend_from_slice(&p.to_le_bytes());
     }
@@ -133,11 +175,15 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.push(n.probability);
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(&n.delay_nanoticks.to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&n.row.to_le_bytes());
+    }
+    for &(count, rep, lo, hi) in &f.aggs {
+        out.extend_from_slice(&count.to_le_bytes());
+        out.push(rep); out.push(lo); out.push(hi); out.push(0);
     }
 }
 
-fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u32) -> bool {
+fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u32, vp: Viewport) -> bool {
     // read_snapshot performs the load-v0 / read / acquire-fence / load-v1 retry
     // and returns the version. Never read header fields raw — that is how you tear.
     let Some(snap) = h.snapshot() else { return false };
@@ -162,6 +208,7 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     //
     // The region is rebuilt only when clipVersion moves, so notes are re-parsed
     // only on an edit. Transport, playhead and peaks still update every frame.
+    let grid = LaneGrid::new(vp.lines_per_beat);
     if out.clip_version != prev_clip_version || out.notes.is_empty() {
         out.notes.clear();
         out.window_start = 0;
@@ -185,7 +232,36 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
                     retrigger: note.retrigger,
                     probability: note.probability,
                     delay_nanoticks: note.delay_nanoticks,
+                    row: grid.row_of_tick(note.t_on) as u32,
                 });
+            }
+        }
+    }
+    // Aggregation is the engine's policy, not the frontend's. aggregate_rows is
+    // pure over its inputs, so the same window yields the same answer wherever it
+    // is called — which is the point of calling it here rather than approximating
+    // it in JS with a count that read as uniform noise at coarse zoom.
+    out.aggs.clear();
+    out.agg_rows = vp.row_count;
+    out.agg_tracks = out.track_count;
+    if vp.row_count > 0 {
+        // Built through grid.window() rather than a struct literal: RowWindow
+        // keeps its fields private precisely so the grid it belongs to cannot be
+        // mismatched with the rows in it.
+        let window = grid.window(
+            grid.tick_of_row(vp.first_row),
+            grid.tick_of_row(vp.first_row + vp.row_count as u64),
+        );
+        for t in 0..out.track_count {
+            out.ev.clear();
+            for n in out.notes.iter().filter(|n| n.track as u16 == t) {
+                out.ev.push((n.t_on, n.pitch));
+            }
+            for slot in aggregate_rows(&out.ev, grid, window) {
+                match slot {
+                    Some(a) => out.aggs.push((a.count, a.representative, a.pitch_min, a.pitch_max)),
+                    None => out.aggs.push((0, 0, 0, 0)),
+                }
             }
         }
     }
@@ -218,6 +294,8 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>) {
     let mut buf: Vec<u8> = Vec::with_capacity(64 * 1024);
     let mut frame = Frame::default();
     let mut last_version = u64::MAX;
+    let mut viewport = Viewport::default();
+    ws.get_mut().set_nonblocking(true).ok();
     let (mut seq, mut sent, mut polls) = (0u64, 0u64, 0u64);
     let started = Instant::now();
     let mut reported = started;
@@ -226,8 +304,19 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>) {
         let tick = Instant::now();
         polls += 1;
 
+        // Drain any viewport updates the client sent. Non-blocking, so a quiet
+        // client costs one failed read per tick.
+        loop {
+            match ws.read() {
+                Ok(tungstenite::Message::Text(t)) => { parse_viewport(&t, &mut viewport); last_version = u64::MAX; }
+                Ok(tungstenite::Message::Close(_)) => return,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+
         let prev_cv = frame.clip_version;
-        if read_frame(&handle, seq, &mut frame, prev_cv) && frame.version != last_version {
+        if read_frame(&handle, seq, &mut frame, prev_cv, viewport) && frame.version != last_version {
             // Dedup on the engine's own version: the engine publishes at ~86 Hz,
             // we poll faster so we never miss one, and the surplus polls cost a
             // single atomic load each.
