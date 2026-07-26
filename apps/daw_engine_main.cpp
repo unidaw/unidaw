@@ -824,6 +824,8 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(header.uiClipAllBytes, 64);
     header.ringUiAgentOffset = offset;
     offset += daw::alignUp(daw::ringBytes(baseConfig.ringUiCapacity), 64);
+    header.uiClipExtentOffset = offset;  // v11: clip-extents region (rails)
+    offset += daw::alignUp(sizeof(daw::UiClipExtentRegion), 64);
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
@@ -898,6 +900,17 @@ int main(int argc, char** argv) {
     float value = 0.0f;
     uint32_t targetPluginIndex = daw::kParamTargetAll;
   };
+// M3.4: a placed clip's timeline box, retained on the runtime for publishing as
+// a rail. The engine plays the first placement's resolved clip today; all
+// non-loose placements are published here regardless.
+struct ClipExtentInfo {
+  uint32_t placementId = 0;
+  uint32_t clipId = 0;
+  uint64_t at = 0;
+  uint64_t endTick = 0;
+  std::string name;
+};
+
 struct Track {
   daw::MusicalClip clip;
   std::vector<daw::AutomationClip> automationClips;
@@ -955,6 +968,9 @@ struct TrackRuntime {
     // LaneGrid per track. The engine doesn't use it — timing is grid-independent.
     std::atomic<uint32_t> linesPerBeat{4};
     std::mutex trackMutex;
+    // M3.4: this track's placed clips, for publishing rails. Guarded by
+    // trackMutex; set on load.
+    std::vector<ClipExtentInfo> clipExtents;
     std::shared_ptr<const ClipSnapshot> clipSnapshot;
     std::shared_ptr<const TrackStateSnapshot> trackSnapshot;
     daw::HostController controller;
@@ -1486,6 +1502,47 @@ struct TrackRuntime {
       daw::buildUiClipWindowSnapshot(runtime->track.clip, request,
                                      clipVersionValue, snap);
     }
+  };
+
+  // M3.4: publish the placed-clip extents (rails). Rebuilt only when clipVersion
+  // moves; loose placements are already excluded (they carry no runtime extent).
+  uint32_t lastClipExtentVersion = 0xFFFF'FFFFu;
+  auto writeUiClipExtents = [&](bool force) {
+    if (!uiShm.header || uiShm.header->uiClipExtentOffset == 0) {
+      return;
+    }
+    const uint32_t clipVersionValue = clipVersion.load(std::memory_order_acquire);
+    if (!force && clipVersionValue == lastClipExtentVersion) {
+      return;
+    }
+    lastClipExtentVersion = clipVersionValue;
+    const auto freshTracks = snapshotTracks();
+    auto* region = reinterpret_cast<daw::UiClipExtentRegion*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiClipExtentOffset);
+    uint32_t count = 0;
+    for (auto* runtime : freshTracks) {
+      if (!runtime) {
+        continue;
+      }
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      for (const auto& ext : runtime->clipExtents) {
+        if (count >= daw::kUiMaxClipExtents) {
+          break;
+        }
+        daw::UiClipExtent& out = region->extents[count];
+        out.placementId = ext.placementId;
+        out.clipId = ext.clipId;
+        out.trackId = runtime->trackId;
+        out.flags = 0;
+        out.startTick = ext.at;
+        out.endTick = ext.endTick;
+        std::memset(out.name, 0, sizeof(out.name));
+        std::memcpy(out.name, ext.name.data(),
+                    std::min(ext.name.size(), sizeof(out.name) - 1));
+        ++count;
+      }
+    }
+    region->count = count;
   };
 
   auto writeUiHarmonySnapshot = [&]() {
@@ -2377,6 +2434,8 @@ struct TrackRuntime {
       daw::ProjectTrack track;
       track.trackId = runtime->trackId;
       track.name = "Track " + std::to_string(runtime->trackId + 1);
+      track.linesPerBeat = runtime->linesPerBeat.load(std::memory_order_relaxed);
+      daw::MusicalClip trackClip;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         track.harmonyQuantize = runtime->track.harmonyQuantize;
@@ -2389,7 +2448,33 @@ struct TrackRuntime {
         track.mixer.solo = runtime->mixSolo.load(std::memory_order_relaxed);
         track.chain = runtime->track.chain;
         track.modLinks = runtime->track.modRegistry.links;
-        track.clip = runtime->track.clip;
+        trackClip = runtime->track.clip;
+      }
+      // M3.1: the engine holds one clip per track, so it saves as one project
+      // clip + a single placement at=0 — the identity form of the placement
+      // model. clip length = the tick just past the last event.
+      if (!trackClip.events().empty()) {
+        uint64_t clipLen = 0;
+        for (const auto& e : trackClip.events()) {
+          const uint64_t dur =
+              e.type == daw::MusicalEventType::Note ? e.payload.note.durationNanoticks
+              : e.type == daw::MusicalEventType::Chord ? e.payload.chord.durationNanoticks
+                                                       : 0;
+          clipLen = std::max(clipLen, e.nanotickOffset + dur);
+        }
+        const uint32_t clipId = runtime->trackId + 1;
+        daw::ProjectClip projectClip;
+        projectClip.id = clipId;
+        projectClip.name = track.name;
+        projectClip.lengthNanoticks = clipLen;
+        projectClip.clip = std::move(trackClip);
+        document.clips.push_back(std::move(projectClip));
+
+        daw::ProjectPlacement placement;
+        placement.clipId = clipId;
+        placement.at = 0;
+        placement.lengthNanoticks = clipLen;
+        track.placements.push_back(std::move(placement));
       }
       // Stamp durable plugin identity. hostSlotIndex only means anything
       // against the scan that produced it, so it must not be what a saved
@@ -2581,7 +2666,67 @@ struct TrackRuntime {
       std::shared_ptr<const ClipSnapshot> snapshot;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        runtime->track.clip = source.clip;
+        // M3.1: the engine plays one clip per track, so resolve the track's
+        // first placement into a single clip (base - mutes + adds). Additional
+        // placements are preserved on the next save but not yet played (M3.3);
+        // for the identity form (one placement at=0, no overrides) this is just
+        // the base clip, so playback is unchanged.
+        daw::MusicalClip resolvedClip;
+        if (!source.placements.empty()) {
+          const auto& placement = source.placements.front();
+          const daw::ProjectClip* clipDef = nullptr;
+          for (const auto& c : document.clips) {
+            if (c.id == placement.clipId) {
+              clipDef = &c;
+              break;
+            }
+          }
+          if (clipDef) {
+            for (const auto& e : clipDef->clip.events()) {
+              bool muted = false;
+              if (e.type == daw::MusicalEventType::Note) {
+                for (const daw::EventId m : placement.mutes) {
+                  if (m == e.payload.note.noteId) {
+                    muted = true;
+                    break;
+                  }
+                }
+              }
+              if (!muted) {
+                resolvedClip.addEvent(e);
+              }
+            }
+            for (const auto& add : placement.adds) {
+              resolvedClip.addEvent(add);
+            }
+          }
+        }
+        runtime->track.clip = std::move(resolvedClip);
+        // M3.4: retain the track's placed clips as rail extents. Loose session
+        // placements (null at) have no timeline position and are not published.
+        runtime->clipExtents.clear();
+        for (size_t i = 0; i < source.placements.size(); ++i) {
+          const auto& pl = source.placements[i];
+          if (!pl.at.has_value()) {
+            continue;
+          }
+          ClipExtentInfo ext;
+          ext.placementId = static_cast<uint32_t>(i);
+          ext.clipId = pl.clipId;
+          ext.at = *pl.at;
+          uint64_t length = pl.lengthNanoticks;
+          for (const auto& c : document.clips) {
+            if (c.id == pl.clipId) {
+              if (length == 0) {
+                length = c.lengthNanoticks;
+              }
+              ext.name = c.name;
+              break;
+            }
+          }
+          ext.endTick = *pl.at + length;
+          runtime->clipExtents.push_back(std::move(ext));
+        }
         runtime->track.harmonyQuantize = source.harmonyQuantize;
         // Restore the device chain so reopening a session restores its plugins,
         // and its sound. hostSlotIndex is a runtime scan index with no meaning
@@ -7007,6 +7152,7 @@ struct TrackRuntime {
             clipVersion.load(std::memory_order_acquire);
         writeUiClipWindowSnapshot(trackSnapshot);
         writeUiClipAllSnapshot(false);
+        writeUiClipExtents(false);
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);
         if (writeHarmony) {

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 10;
+pub const K_SHM_VERSION: u16 = 11;
 
 pub const K_UI_MAX_TRACKS: usize = 8;
 pub const K_UI_MAX_CLIP_NOTES: usize = 4096;
@@ -57,6 +57,8 @@ pub struct ShmHeader {
     // v10: per-track tracker subdivision (Mock B per-lane grids). Header stays
     // 256 (fits the align(64) tail).
     pub ui_lines_per_beat: [u8; K_UI_MAX_TRACKS],
+    // v11 (M3.4): offset of the UiClipExtentRegion (clip boxes for rails).
+    pub ui_clip_extent_offset: u64,
 }
 
 #[repr(C, align(64))]
@@ -135,11 +137,39 @@ pub struct UiClipNote {
     pub retrigger: u8,
     /// Row op: 0 = always sound, 1..=100 = percent chance.
     pub probability: u8,
-    pub reserved: u8,
-    pub reserved2: u16,
+    /// v11 provenance: bit0 = muted (draw struck-out), bit1 = is_add.
+    pub placement_flags: u8,
+    /// v11 provenance: which placement this note belongs to.
+    pub placement_id: u16,
     /// Row op: onset delay in absolute nanoticks.
     pub delay_nanoticks: u32,
     pub reserved3: u32,
+}
+
+pub const UI_CLIP_NOTE_MUTED: u8 = 1 << 0;
+pub const UI_CLIP_NOTE_ADD: u8 = 1 << 1;
+
+/// v11 (M3.4): a placed clip's timeline box — a rail. `start_tick`/`end_tick` are
+/// absolute; `name` is nul-padded. Loose (session) placements are not published.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiClipExtent {
+    pub placement_id: u32,
+    pub clip_id: u32,
+    pub track_id: u32,
+    pub flags: u32,
+    pub start_tick: u64,
+    pub end_tick: u64,
+    pub name: [u8; 32],
+}
+
+pub const K_UI_MAX_CLIP_EXTENTS: usize = 64;
+
+#[repr(C)]
+pub struct UiClipExtentRegion {
+    pub count: u32,
+    pub reserved: u32,
+    pub extents: [UiClipExtent; K_UI_MAX_CLIP_EXTENTS],
 }
 
 #[repr(C)]
@@ -533,7 +563,12 @@ mod tests {
         assert_eq!(offset_of!(UiClipNote, column), 26);
         assert_eq!(offset_of!(UiClipNote, retrigger), 27);
         assert_eq!(offset_of!(UiClipNote, probability), 28);
+        assert_eq!(offset_of!(UiClipNote, placement_flags), 29);
+        assert_eq!(offset_of!(UiClipNote, placement_id), 30);
         assert_eq!(offset_of!(UiClipNote, delay_nanoticks), 32);
+        const_assert_eq!(size_of::<UiClipExtent>(), 64);
+        assert_eq!(offset_of!(UiClipExtent, start_tick), 16);
+        assert_eq!(offset_of!(UiClipExtent, name), 32);
     }
 
     #[test]
@@ -574,5 +609,6 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_clip_all_bytes), 224);
         assert_eq!(offset_of!(ShmHeader, ring_ui_agent_offset), 232);
         assert_eq!(offset_of!(ShmHeader, ui_lines_per_beat), 240);
+        assert_eq!(offset_of!(ShmHeader, ui_clip_extent_offset), 248);
     }
 }

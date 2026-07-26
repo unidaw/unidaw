@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,31 @@ struct MixerSettings {
   bool solo = false;
 };
 
+// A reusable clip definition. Project-level (Song.clips), referenced by
+// placements on any track. Events are CLIP-RELATIVE — 0-based within the clip,
+// never absolute timeline ticks. `lengthNanoticks` is the clip's own extent /
+// loop period; a placement longer than this loops the clip to fill itself.
+struct ProjectClip {
+  uint32_t id = 0;
+  std::string name;
+  uint64_t lengthNanoticks = 0;
+  MusicalClip clip;
+};
+
+// A placement of a clip on a track. `at` is the absolute timeline tick where the
+// clip's local tick 0 lands; nullopt = a loose session cell (ARCHITECTURE_REVIEW
+// ruling (e)). `lengthNanoticks` is the placement's timeline extent (0 = one
+// clip length); a shorter clip loops within [at, at+length). Overrides are
+// additive-only, one level deep (ruling (d)): `adds` inserts notes local to this
+// placement, `mutes` silences base notes by EventId. Resolved = base - mutes + adds.
+struct ProjectPlacement {
+  uint32_t clipId = 0;
+  std::optional<uint64_t> at;
+  uint64_t lengthNanoticks = 0;
+  std::vector<MusicalEvent> adds;
+  std::vector<EventId> mutes;
+};
+
 struct ProjectTrack {
   uint32_t trackId = 0;
   std::string name;
@@ -34,7 +60,9 @@ struct ProjectTrack {
   TrackRouting routing{};
   TrackChain chain{};
   std::vector<ModLink> modLinks;
-  MusicalClip clip;
+  // Placements of project-level clips on this track. Every note lives in a clip
+  // reached through a placement — no notes outside clips.
+  std::vector<ProjectPlacement> placements;
   // This track's patcher DAG. One patcher per track; an empty graph = none.
   PatcherGraph patcher;
 };
@@ -59,6 +87,8 @@ struct ProjectDocument {
   uint64_t nanoticksPerQuarter = 960000;
   std::vector<ProjectTempoPoint> tempoMap{{0, 120.0}};
   std::vector<HarmonyEvent> harmonyTimeline;
+  // Project-level clip library, referenced by track placements by id.
+  std::vector<ProjectClip> clips;
   std::vector<ProjectTrack> tracks;
 };
 

@@ -42,8 +42,23 @@ Recommended contents:
   - link list with sources/targets and depth/mode
 - Automation:
   - automation clips and targets
-- Clips:
-  - per-track clip references and data (inline or by reference later)
+- Clips (schema 2, implemented):
+  - **Project-level `clips[]`** — the clip library. Each: `{ id, name, length,
+    notes[], chords[] }`. Clip events are **clip-relative** (0-based within the
+    clip), never absolute timeline ticks.
+  - **Per-track `placements[]`** — a clip dropped on a track: `{ clip_id, at,
+    length, adds[], mutes[] }`. `at` = absolute timeline tick where the clip's
+    tick 0 lands (**omitted when the placement is a loose session cell**). A
+    shorter clip loops to fill the placement's `length`. Overrides are
+    additive-only, one level deep (ARCHITECTURE_REVIEW ruling (d)): `adds` are
+    notes/chords local to this placement, `mutes` are base note ids silenced
+    here. Resolved notes = base − mutes + adds.
+  - **Migration:** a schema-1 file (top-level per-track `notes`/`chords`)
+    materializes to one project clip + one placement at `at=0`; because
+    clip-relative == absolute at `at=0`, ticks are unchanged. Save always writes
+    schema 2, so load-then-save upgrades in place.
+  - The engine currently plays one clip per track (the first placement); the
+    per-track-execution and arrange views are later M3 stages.
 
 ## `project.json` schema stub (draft)
 

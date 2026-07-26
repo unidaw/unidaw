@@ -11,4 +11,16 @@ fn main() {
     println!("{}", obs.to_text());
     let notes: usize = obs.tracks.iter().map(|t| t.note_count).sum();
     println!("total notes across {} tracks: {notes}", obs.tracks.len());
+
+    // M3.4: clip extents (rails).
+    let extents = session.handle().read_clip_extents();
+    println!("== clip extents (rails): {} ==", extents.len());
+    for e in &extents {
+        let end = e.name.iter().position(|&b| b == 0).unwrap_or(e.name.len());
+        let name = String::from_utf8_lossy(&e.name[..end]);
+        println!(
+            "  track {} placement {} clip {}  [{}..{}]  \"{}\"",
+            e.track_id, e.placement_id, e.clip_id, e.start_tick, e.end_tick, name
+        );
+    }
 }
