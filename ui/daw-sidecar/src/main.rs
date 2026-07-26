@@ -32,7 +32,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 3;
+const WIRE_VERSION: u16 = 4;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -110,6 +110,14 @@ struct WireNote {
     track: u8,
     retrigger: u8,
     probability: u8,
+    /// bit0 muted, bit1 is-add. A muted base note still ships — the feed is
+    /// DISPLAY-resolved, so the editor can draw it struck out.
+    placement_flags: u8,
+    /// u8, not u16: it has to fit the note's 2 spare bytes without growing the
+    /// 40-byte stride. Growing it silently misaligned everything after the notes
+    /// — the extents decoded as garbage and nothing rendered. Widen only with a
+    /// deliberate stride change on both sides.
+    placement_id: u8,
     delay_nanoticks: u32,
     /// Row index under the client's current grid, computed by LaneGrid here so
     /// the frontend never re-derives the projection.
@@ -135,6 +143,9 @@ struct Frame {
     aggs: Vec<(u32, u8, u8, u8)>,
     agg_rows: u32,
     agg_tracks: u16,
+    /// Real clip placements from the engine (v11). placement_id, track,
+    /// start/end tick, name. Loose session placements are excluded upstream.
+    extents: Vec<(u32, u32, u64, u64, [u8; 32])>,
     /// Scratch, reused so the aggregation path allocates nothing per frame.
     ev: Vec<(u64, u8)>,
 }
@@ -158,7 +169,7 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&f.agg_rows.to_le_bytes());             // 52
     debug_assert_eq!(out.len(), HEADER_BYTES);
     out.extend_from_slice(&f.agg_tracks.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&(f.extents.len() as u16).to_le_bytes());
     for p in &f.peaks {
         out.extend_from_slice(&p.to_le_bytes());
     }
@@ -172,9 +183,17 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.push(n.track);
         out.push(n.retrigger);
         out.push(n.probability);
-        out.extend_from_slice(&0u16.to_le_bytes());
+        out.push(n.placement_flags);
+        out.push(n.placement_id);
         out.extend_from_slice(&n.delay_nanoticks.to_le_bytes());
         out.extend_from_slice(&n.row.to_le_bytes());
+    }
+    for &(pid, track, start, end, name) in &f.extents {
+        out.extend_from_slice(&pid.to_le_bytes());
+        out.extend_from_slice(&track.to_le_bytes());
+        out.extend_from_slice(&start.to_le_bytes());
+        out.extend_from_slice(&end.to_le_bytes());
+        out.extend_from_slice(&name);
     }
     for &(count, rep, lo, hi) in &f.aggs {
         out.extend_from_slice(&count.to_le_bytes());
@@ -238,12 +257,19 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
                     track: track as u8,
                     retrigger: note.retrigger,
                     probability: note.probability,
+                    placement_flags: note.placement_flags,
+                    placement_id: note.placement_id as u8,
                     delay_nanoticks: note.delay_nanoticks,
                     row: grid_for(track as usize).row_of_tick(note.t_on) as u32,
                 });
             }
         }
     }
+    out.extents.clear();
+    for e in h.read_clip_extents() {
+        out.extents.push((e.placement_id, e.track_id, e.start_tick, e.end_tick, e.name));
+    }
+
     // Aggregation is the engine's policy, not the frontend's. aggregate_rows is
     // pure over its inputs, so the same window yields the same answer wherever it
     // is called — which is the point of calling it here rather than approximating

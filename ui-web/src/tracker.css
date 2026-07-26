@@ -91,6 +91,10 @@
   pointer-events: none;
 }
 .tk-cell[data-kind="contour"] { position: relative; }
+/* A muted base note: silenced in THIS placement, still part of the clip. */
+.tk-cell[data-kind="muted"]     { color: var(--uni-text-off); text-decoration: line-through; opacity: .7; }
+/* An override add: local to one placement, not in the shared clip. */
+.tk-cell[data-kind="add"]       { color: var(--base-accent-ramp-400); font-style: italic; }
 .tk-cell[data-kind="collide"]   { color: var(--uni-clip-rail-active); font-weight: 500; }
 .tk-cell[data-kind="aggregate"] { color: var(--uni-text-aggregate); letter-spacing: var(--font-tracking-fx); }
 

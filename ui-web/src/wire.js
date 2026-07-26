@@ -7,7 +7,7 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 3;
+export const WIRE_VERSION = 4;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
@@ -40,6 +40,10 @@ export function createStore() {
     aggHi: new Uint8Array(0),
     aggRows: 0,
     aggTracks: 0,
+    /** Real clip placements from the engine. Pooled like everything else. */
+    extents: [],
+    extentCount: 0,
+    extentsRevision: 0,
     /** Bumped whenever notes actually changed, so consumers can skip work. */
     notesRevision: 0,
     /** Same, for aggregates. They change when the VIEWPORT moves, not when notes
@@ -54,7 +58,8 @@ function note(store, i) {
   let n = store.notes[i];
   if (!n) {
     n = { tOn: 0, tOff: 0, id: 0, pitch: 0, velocity: 0, column: 0, track: 0,
-          retrigger: 0, probability: 0, delayTicks: 0, row: 0 };
+          retrigger: 0, probability: 0, delayTicks: 0, row: 0,
+          muted: false, isAdd: false, placementId: 0 };
     store.notes[i] = n;
   }
   return n;
@@ -88,8 +93,9 @@ export function decode(buf, store) {
   const noteCount = v.getUint32(48, true);
   const aggRows = v.getUint32(52, true);
   const aggTracks = v.getUint16(56, true);
+  const extentCount = v.getUint16(58, true);
   const aggN = aggRows * aggTracks;
-  if (buf.byteLength < HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES + aggN * 8) return false;
+  if (buf.byteLength < HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES + extentCount * 56 + aggN * 8) return false;
 
   if (store.peaks.length < peakCount) store.peaks = new Float32Array(peakCount);
   for (let i = 0; i < peakCount; i++) store.peaks[i] = v.getFloat32(HEADER_BYTES + i * 4, true);
@@ -114,10 +120,37 @@ export function decode(buf, store) {
       // Row comes from LaneGrid on the sidecar; the frontend never re-derives
       // the projection, so triplet grids work and there is one definition of it.
       n.row = v.getUint32(o + 36, true);
+      // Offsets 30/31 are the note's two spare bytes; the 40-byte stride is
+      // load-bearing for every section after the notes.
+      const pf = v.getUint8(o + 30);
+      n.muted = (pf & 1) !== 0;      // still shipped, drawn struck out
+      n.isAdd = (pf & 2) !== 0;      // an override add, shown with provenance
+      n.placementId = v.getUint8(o + 31);
     }
     store.noteCount = noteCount;
     store.clipVersion = clipVersion;
     store.notesRevision++;
+  }
+
+  // Clip extents: the rails. One per placement, timeline-positioned only.
+  {
+    let o = HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES;
+    let changed = extentCount !== store.extentCount;
+    for (let i = 0; i < extentCount; i++, o += 56) {
+      let e = store.extents[i];
+      if (!e) e = store.extents[i] = { placementId: 0, track: 0, startTick: 0, endTick: 0, name: '' };
+      const pid = v.getUint32(o, true), tr = v.getUint32(o + 4, true);
+      const st = Number(v.getBigUint64(o + 8, true)), en = Number(v.getBigUint64(o + 16, true));
+      if (e.placementId !== pid || e.track !== tr || e.startTick !== st || e.endTick !== en) changed = true;
+      e.placementId = pid; e.track = tr; e.startTick = st; e.endTick = en;
+      if (changed) {
+        let s = '';
+        for (let k = 0; k < 32; k++) { const c = v.getUint8(o + 24 + k); if (!c) break; s += String.fromCharCode(c); }
+        e.name = s;
+      }
+    }
+    store.extentCount = extentCount;
+    if (changed) store.extentsRevision++;
   }
 
   // Aggregates change every frame the viewport moves, so they are always read.
@@ -128,7 +161,7 @@ export function decode(buf, store) {
       store.aggLo = new Uint8Array(aggN);
       store.aggHi = new Uint8Array(aggN);
     }
-    let o = HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES;
+    let o = HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES + extentCount * 56;
     let changed = aggRows !== store.aggRows || aggTracks !== store.aggTracks;
     for (let i = 0; i < aggN; i++, o += 8) {
       const c = v.getUint32(o, true);

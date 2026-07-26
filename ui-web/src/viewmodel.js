@@ -223,7 +223,13 @@ export function buildViewModel(opts, buf) {
         // is the contentAt bug again: a position key losing data while rendering
         // something plausible. Make the collision visible instead.
         if (c0.kind === 'note' && c0._row === ri) { c0.text = '**'; c0.kind = 'collide'; }
-        else { c0.text = pitchName(n.pitch); c0.kind = 'note'; c0._row = ri; }
+        else {
+          c0.text = pitchName(n.pitch);
+          // Muted base notes still ship — draw them struck out. Adds carry
+          // provenance so an override reads differently from the shared clip.
+          c0.kind = n.muted ? 'muted' : n.isAdd ? 'add' : 'note';
+          c0._row = ri;
+        }
       }
       if (columns > 1) {
         const c1 = row.cells[base + 1];
@@ -237,14 +243,18 @@ export function buildViewModel(opts, buf) {
         }
       }
     }
-    // Real clip placements are Movement 3 and do not exist yet; the engine has
-    // one implicit clip per track. Show that rather than inventing geometry.
+    // Real placements from the engine (v11). One per track today because the
+    // engine plays the first placement; the rail code is the same when M3.3
+    // brings several per track.
     const pool = buf._clipPool;
     clips.length = 0;
-    for (let t = 0; t < Math.min(trackCount, engine.trackCount || trackCount); t++) {
-      const cl = pool[t] || (pool[t] = { id: 0, track: 0, startTick: 0, endTick: 0, name: '', active: false });
-      cl.id = t; cl.track = t; cl.startTick = 0; cl.endTick = TICKS_PER_BAR;
-      cl.name = 'clip'; cl.active = false;
+    for (let i = 0; i < engine.extentCount; i++) {
+      const e = engine.extents[i];
+      if (e.track >= trackCount) continue;
+      const cl = pool[i] || (pool[i] = { id: 0, track: 0, startTick: 0, endTick: 0, name: '', active: false });
+      cl.id = e.placementId; cl.track = e.track;
+      cl.startTick = e.startTick; cl.endTick = e.endTick;
+      cl.name = e.name; cl.active = e.placementId === cursor.placementId;
       clips.push(cl);
     }
   }
