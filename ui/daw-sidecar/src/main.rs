@@ -52,7 +52,7 @@ const NOTE_BYTES: usize = 40;
 /// projection, because LaneGrid is the authority on tick<->row and reimplementing
 /// it in JS would be a second definition of the same truth — and JS division
 /// cannot express triplet grids (lines_per_beat = 3) at all.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct Viewport {
     lines_per_beat: u32,
     first_row: u64,
@@ -1004,5 +1004,163 @@ fn main() {
             }
             Err(e) => eprintln!("sidecar: accept failed: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The viewport is packed into one u64 so the publish loop reads it with a
+    /// single relaxed load. Bit-twiddling with no test is bit-twiddling that is
+    /// wrong, and a wrong viewport here is a wrong row projection everywhere.
+    #[test]
+    fn viewport_round_trips_through_the_packing() {
+        for vp in [
+            Viewport { lines_per_beat: 1, first_row: 0, row_count: 0 },
+            Viewport { lines_per_beat: 4, first_row: 62, row_count: 62 },
+            Viewport { lines_per_beat: 12, first_row: 99_999, row_count: 512 },
+            // The widest each field is allowed to be: lpb clamps to 64,
+            // row_count to 512, and first_row gets 40 bits.
+            Viewport { lines_per_beat: 64, first_row: (1 << 40) - 1, row_count: 512 },
+        ] {
+            let s = SharedViewport::new(vp);
+            let got = s.load();
+            assert_eq!(got.lines_per_beat, vp.lines_per_beat, "lpb for {vp:?}");
+            assert_eq!(got.first_row, vp.first_row, "first_row for {vp:?}");
+            assert_eq!(got.row_count, vp.row_count, "row_count for {vp:?}");
+        }
+    }
+
+    /// Fields must not bleed into each other. A first_row that overflowed into
+    /// lines_per_beat would reproject every note on screen.
+    #[test]
+    fn viewport_fields_do_not_bleed() {
+        let s = SharedViewport::new(Viewport { lines_per_beat: 12, first_row: 0, row_count: 0 });
+        s.store(Viewport { lines_per_beat: 12, first_row: 0xff_ffff_ffff, row_count: 511 });
+        let got = s.load();
+        assert_eq!(got.lines_per_beat, 12);
+        assert_eq!(got.row_count, 511);
+    }
+
+    #[test]
+    fn parse_viewport_reads_the_clients_json() {
+        let mut vp = Viewport::default();
+        parse_viewport(r#"{"linesPerBeat":12,"firstRow":480,"rowCount":62}"#, &mut vp);
+        assert_eq!((vp.lines_per_beat, vp.first_row, vp.row_count), (12, 480, 62));
+    }
+
+    #[test]
+    fn parse_viewport_clamps_rather_than_trusting() {
+        let mut vp = Viewport::default();
+        parse_viewport(r#"{"linesPerBeat":9999,"firstRow":1,"rowCount":99999}"#, &mut vp);
+        assert_eq!(vp.lines_per_beat, 64, "lpb clamped");
+        assert_eq!(vp.row_count, 512, "row_count clamped");
+    }
+
+    /// A project name becomes `<dir>/<name>.uniproj.json` on the engine side.
+    /// This is the boundary that stops it being anything else.
+    #[test]
+    fn safe_name_refuses_anything_that_could_leave_the_directory() {
+        for good in ["maximal", "webtest", "take-2", "a.b_c", "x"] {
+            assert!(safe_name(good), "{good} should be allowed");
+        }
+        for bad in ["", "..", ".", "../evil", "a/b", "a\\b", "with\0nul",
+                    "0123456789012345678901234567890"] {
+            assert!(!safe_name(bad), "{bad:?} should be refused");
+        }
+    }
+
+    #[test]
+    fn parse_str_reads_a_json_string_field() {
+        assert_eq!(parse_str(r#"{"type":"load","name":"maximal"}"#, "\"name\""), Some("maximal"));
+        assert_eq!(parse_str(r#"{"name":""}"#, "\"name\""), Some(""));
+        assert_eq!(parse_str(r#"{"type":"load"}"#, "\"name\""), None);
+    }
+
+    #[test]
+    fn build_command_maps_the_verbs() {
+        let ty = |body: &str| build_command(body).ok().map(|p| p.command_type);
+        assert_eq!(ty(r#"{"type":"play"}"#), Some(UiCommandType::TogglePlay as u16));
+        assert_eq!(ty(r#"{"type":"stop"}"#), Some(UiCommandType::Stop as u16));
+        assert_eq!(ty(r#"{"type":"seek","tick":960000}"#), Some(UiCommandType::SetPosition as u16));
+        assert_eq!(ty(r#"{"type":"delete","track":2,"tick":0}"#), Some(UiCommandType::DeleteNote as u16));
+        assert_eq!(ty(r#"{"type":"undo"}"#), Some(UiCommandType::Undo as u16));
+        assert_eq!(ty(r#"{"type":"nonsense"}"#), None);
+    }
+
+    /// A rejected name has to be distinguishable from a verb we do not know.
+    /// Collapsing the two reported a path-escape attempt as a typo.
+    #[test]
+    fn a_refused_name_is_not_an_unknown_command() {
+        // UiCommandPayload has no PartialEq (it is another crate's POD), so
+        // compare the error rather than the whole Result.
+        assert_eq!(build_command(r#"{"type":"load","name":"../etc"}"#).err(),
+                   Some("bad project name"));
+        assert_eq!(build_command(r#"{"type":"rename","track":0,"name":""}"#).err(),
+                   Some("bad track name"));
+        assert_eq!(build_command(r#"{"type":"nope"}"#).err(), Some("unknown command"));
+    }
+
+    #[test]
+    fn note_carries_its_tick_duration_and_velocity() {
+        let p = build_command(r#"{"type":"note","track":3,"pitch":64,"tick":4294967296,"dur":480000,"vel":90}"#)
+            .expect("should build");
+        assert_eq!(p.command_type, UiCommandType::WriteNote as u16);
+        assert_eq!(p.track_id, 3);
+        assert_eq!(p.note_pitch, 64);
+        assert_eq!(p.value0, 90);
+        // 2^32 exactly: the split across lo/hi is the part that can silently
+        // truncate, so it is the part worth asserting.
+        assert_eq!(p.note_nanotick_lo, 0);
+        assert_eq!(p.note_nanotick_hi, 1);
+        assert_eq!(p.note_duration_lo, 480_000);
+    }
+
+    #[test]
+    fn mixer_gain_and_pan_survive_being_negative() {
+        let p = build_command(r#"{"type":"mixer","track":1,"gain":-600,"pan":-500,"flags":1}"#)
+            .expect("should build");
+        assert_eq!(p.command_type, UiCommandType::SetTrackMixer as u16);
+        // Bit-cast, not saturated: the engine reads these back as i32, and a
+        // saturating cast would silently mean full left at minimum gain.
+        assert_eq!(p.value0 as i32, -600);
+        assert_eq!(p.plugin_index as i32, -500);
+        assert_eq!(p.flags, 1);
+    }
+
+    #[test]
+    fn chord_is_its_own_payload_with_a_zero_based_degree() {
+        let c = build_chord(r#"{"type":"chord","track":2,"tick":960000,"degree":2,"quality":2,"spread":80,"ht":20,"hv":20}"#)
+            .expect("should build");
+        assert_eq!(c.command_type, UiCommandType::WriteChord as u16);
+        assert_eq!(c.track_id, 2);
+        assert_eq!(c.degree, 2);
+        assert_eq!(c.quality, 2);
+        assert_eq!(c.spread_nanoticks, 80);
+        assert_eq!(c.humanize_timing, 20);
+        assert!(build_chord(r#"{"type":"note","pitch":60}"#).is_none(), "not a chord");
+    }
+
+    #[test]
+    fn list_projects_returns_names_not_paths() {
+        let dir = std::env::temp_dir().join("uni-sidecar-test-projects");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("alpha.uniproj.json"), "{}").unwrap();
+        std::fs::write(dir.join("beta.uniproj.json"), "{}").unwrap();
+        std::fs::write(dir.join("notaproject.txt"), "x").unwrap();
+        let out = list_projects(dir.to_str().unwrap());
+        assert!(out.contains("\"alpha\""), "{out}");
+        assert!(out.contains("\"beta\""), "{out}");
+        assert!(!out.contains("notaproject"), "non-projects excluded: {out}");
+        assert!(!out.contains(".uniproj"), "names, not filenames: {out}");
+        assert!(!out.contains(dir.to_str().unwrap()), "never a path: {out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_projects_survives_a_missing_directory() {
+        assert_eq!(list_projects("/nope/definitely/not/here"), "{\"ok\":true,\"projects\":[]}");
     }
 }

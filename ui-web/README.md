@@ -58,6 +58,10 @@ why `run()` is the entry point to prefer.
     npm run e2e     against a live engine     (needs tools/webstack.sh)
     npm run soak    heap leak check           (fixtures; takes minutes)
 
+and the sidecar's own:
+
+    cargo test --manifest-path ../ui/Cargo.toml -p daw-sidecar
+
 The split is deliberate. `npm test` must not depend on whether a sidecar happens
 to be running — a test that changes with the weather is not a test. But that
 leaves the engine boundary unexercised, and nearly every serious bug in this
