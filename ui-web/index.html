@@ -1,16 +1,40 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>Uni — tracker</title>
+<link rel="stylesheet" href="src/fonts.css">
 <link rel="stylesheet" href="src/tokens.css">
 <link rel="stylesheet" href="src/tracker.css">
 <style>
   html, body { margin: 0; height: 100%; background: var(--uni-surface-tracker-bg); color: var(--base-text); }
   body { font-family: var(--font-chrome); font-size: var(--font-size-chrome); overflow: hidden; }
-  #hud { position: fixed; right: 8px; bottom: 6px; font-family: var(--font-mono);
-         font-size: var(--font-size-fx); color: var(--base-neutral-600); pointer-events: none; }
-  #tracker { position: absolute; inset: 0; }
+  /* Its own strip along the bottom, so it never sits on top of a cell. */
+  #hud { position: absolute; left: 0; right: 0; bottom: 0; height: 16px;
+         display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+         padding: 0 8px; box-sizing: border-box; font-family: var(--font-mono);
+         font-size: var(--font-size-fx); letter-spacing: var(--font-tracking-fx);
+         color: var(--base-neutral-600); background: var(--uni-surface-header-bg);
+         border-top: 1px solid var(--uni-rule-gutter); pointer-events: none; z-index: 3; }
+  /* The header is a sibling, not part of the scrolled band: it must not move
+     vertically, and the tracker must start below it rather than under it. */
+  #head { position: absolute; left: 0; right: 0; top: 0; height: var(--metrics-header-height);
+          overflow: hidden; background: var(--uni-surface-header-bg);
+          border-bottom: 1px solid var(--uni-rule-gutter); z-index: 3; }
+  #head .hrow { position: absolute; display: flex; height: 100%; }
+  #head .hgut { position: sticky; left: 0; z-index: 2; flex: 0 0 var(--metrics-gutter-width);
+                width: var(--metrics-gutter-width); background: var(--uni-surface-header-bg);
+                display: flex; align-items: center; padding: 0 8px; box-sizing: border-box;
+                font-size: var(--font-size-fx); letter-spacing: var(--font-tracking-fx);
+                color: var(--uni-text-gutter); }
+  #head .htrack { display: flex; align-items: center; justify-content: center;
+                  box-sizing: border-box; font-family: var(--font-mono);
+                  font-size: var(--font-size-inst); letter-spacing: var(--font-tracking-fx);
+                  color: var(--uni-text-instrument);
+                  border-right: var(--uni-rule-track-width) solid var(--uni-rule-track); }
+  #tracker { position: absolute; left: 0; right: 0; bottom: 16px; top: var(--metrics-header-height); }
+  #hud { background: var(--uni-surface-tracker-bg); padding: 1px 4px; }
 </style>
 
+<div id="head"></div>
 <div id="tracker"></div>
 <div id="hud"></div>
 
@@ -27,6 +51,7 @@ const metrics = {
 };
 
 const host = document.getElementById('tracker');
+const head = document.getElementById('head');
 const hud = document.getElementById('hud');
 const tracker = new Tracker(host, metrics);
 
@@ -34,16 +59,44 @@ const tracker = new Tracker(host, metrics);
 const TOTAL_ROWS = 100000;
 const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, zoom: 2, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
+// O(tree) walk — diagnostics only, never per frame. See GUIDELINES.md 3.10.
 let nodeCount = 0;
-setInterval(() => { nodeCount = host.querySelectorAll('*').length; }, 500);
+setInterval(() => { nodeCount = document.querySelectorAll('*').length; }, 500);
 
 // Two buffers, alternating: the renderer diffs prev against current, so they
 // have to be distinct objects. Steady-state allocation is zero.
 const bufs = [null, null];
 let bi = 0;
 
+// Track headers: built once, then only transformed. They scroll horizontally
+// with the strip and never vertically.
+let headRow = null;
+function buildHead() {
+  head.textContent = '';
+  headRow = document.createElement('div'); headRow.className = 'hrow';
+  const g = document.createElement('div'); g.className = 'hgut'; g.textContent = 'TIME';
+  headRow.append(g);
+  // Width comes from the renderer's MEASURED track stride, not from
+  // cellWidth * columns. The arithmetic omits the per-track border — 2px each,
+  // compounding, so by track 16 the headers sit 32px left of their columns.
+  // Same mistake as the scroll clamp; see GUIDELINES.md 3.11.
+  const stride = tracker.trackStride || metrics.cellWidth * state.columns;
+  for (let t = 0; t < state.tracks; t++) {
+    const el = document.createElement('div'); el.className = 'htrack';
+    el.dataset.track = String(t);
+    el.style.width = `${stride}px`;
+    el.style.flex = `0 0 ${stride}px`;
+    el.textContent = `T${String(t + 1).padStart(2, '0')}`;
+    headRow.append(el);
+  }
+  head.append(headRow);
+}
+
 function draw() {
+  const shapeChanged = tracker.poolSize === 0 || !headRow || headRow.children.length !== state.tracks + 1;
   tracker.resize(host.clientHeight, state.tracks, state.columns);
+  if (shapeChanged) buildHead();
+  if (headRow) headRow.style.transform = `translateX(${-state.scrollX}px)`;
   bi ^= 1;
   const vm = bufs[bi] = buildViewModel({
     startRow: state.start, rowCount: tracker.poolSize,
@@ -55,7 +108,8 @@ function draw() {
   // The node count is an O(tree) walk. Sampling it every frame cost ~7 ms —
   // more than the render it was reporting on. Diagnostics must not be in the
   // hot path; refresh it on a timer instead.
-  hud.textContent = `${vm.zoom.label}  row ${state.cursor.row}  ${tracker.poolSize} pooled  ${nodeCount} nodes`;
+  hud.textContent = `${vm.zoom.label}   row ${state.cursor.row}   T${String(state.cursor.track + 1).padStart(2, '0')}`
+    + `   x${state.scrollX}   ${tracker.poolSize} pooled   ${nodeCount} nodes`;
 }
 
 // Input is coalesced into one draw per animation frame. Without this, key

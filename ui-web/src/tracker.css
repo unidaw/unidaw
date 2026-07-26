@@ -91,8 +91,21 @@
 
 .tk-rail {
   position: absolute;
-  border-left: var(--uni-clip-rail-width) solid var(--uni-clip-rail);
-  background: var(--uni-clip-scope-tint);
   box-sizing: border-box;
+  background: var(--uni-clip-scope-tint);
+  /* Top and bottom are what make a clip legible. A left border alone landed
+     exactly where the track border already is, so a clip's extent could only be
+     inferred from where the tint stopped — and a grab rail you cannot see is not
+     a grab rail. */
+  border-top: var(--uni-clip-rail-width) solid var(--uni-clip-rail);
+  border-bottom: var(--uni-clip-rail-width) solid var(--uni-clip-rail);
 }
-.tk-rail.active { border-left-color: var(--uni-clip-rail-active); }
+.tk-rail.active { border-color: var(--uni-clip-rail-active); }
+/* The grab handles: a thicker bar at each end, inset from the track borders. */
+.tk-rail::before, .tk-rail::after {
+  content: ''; position: absolute; left: 12%; right: 12%; height: 3px;
+  background: var(--uni-clip-rail); border-radius: 2px;
+}
+.tk-rail::before { top: -2px; }
+.tk-rail::after { bottom: -2px; }
+.tk-rail.active::before, .tk-rail.active::after { background: var(--uni-clip-rail-active); }

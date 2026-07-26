@@ -90,11 +90,10 @@ not be.
 
 ## Not done yet
 
-- **Fonts not vendored** — Inter and IBM Plex Mono still fall back to system
-  mono, and Phosphor icons are absent. Goldens are not portable until this is
-  fixed; font loading is the largest source of screenshot instability.
-- No header row (tracks are unlabelled), the 148px clip lane is empty, the first
-  row clips at the top, and the HUD overlaps the last row.
+- Phosphor icons are not vendored yet (Inter and IBM Plex Mono are, in
+  `src/fonts/`, so goldens are portable and committed).
+- Mouse input, selection, and editing. Keyboard is arrows, `PageUp`/`PageDown`
+  and `+`/`-`.
 - No engine connection. The Rust sidecar that mmaps `/daw_engine_ui` and pushes
   binary frames over localhost is the next slice.
 - Patcher, mixer, arrangement, browser, agent dock — designed, not built.
