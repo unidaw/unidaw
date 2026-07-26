@@ -244,6 +244,53 @@ fn roundtrip_preserves_placements() {
     assert_eq!(clip7["notes"].as_array().unwrap().len(), 2);
 }
 
+/// Per-track mixer state written via SetTrackMixer is published back verbatim, so
+/// the UI can render a fader at its true position; the mixer version advances.
+#[test]
+fn mixer_read_back() {
+    use daw_bridge::layout::{UiCommandPayload, UiCommandType, MIXER_FLAG_MUTE};
+    let _serial = SERIAL.lock().unwrap();
+    let (_engine, session) = start_engine("mixer");
+    let h = session.handle();
+    let v0 = h.mixer_version();
+
+    // -6 dB (=-600 mB), pan 25% left (-250 thousandths), muted.
+    let payload = UiCommandPayload {
+        command_type: UiCommandType::SetTrackMixer as u16,
+        flags: MIXER_FLAG_MUTE,
+        track_id: 0,
+        plugin_index: (-250i32) as u32, // pan thousandths
+        note_pitch: 0,
+        value0: (-600i32) as u32, // gain millibels
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    };
+    h.send_command(payload).expect("send SetTrackMixer");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let m = h.read_mixer();
+        if let Some(t0) = m.first() {
+            if t0.gain_millibels == -600
+                && t0.pan_thousandths == -250
+                && t0.flags & MIXER_FLAG_MUTE as u8 != 0
+            {
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "mixer read-back never reflected the change: {:?}",
+            h.read_mixer()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_ne!(h.mixer_version(), v0, "mixer_version should advance on a change");
+}
+
 /// Seek moves the transport to a position, and Stop halts and rewinds it — the
 /// two transport commands the web UI needs beyond play/pause.
 #[test]

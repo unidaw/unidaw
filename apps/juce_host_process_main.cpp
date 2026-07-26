@@ -1,4 +1,5 @@
 #include <cerrno>
+#include <csignal>
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -938,6 +939,10 @@ void runControlLoop(HostState& state) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  // Writes to the engine socket must not raise SIGPIPE if the engine goes away
+  // (macOS has no MSG_NOSIGNAL); let them fail with EPIPE and exit cleanly.
+  std::signal(SIGPIPE, SIG_IGN);
+
   std::string socketPath = "/tmp/daw_host.sock";
   HostState state;
   if (const char* env = std::getenv("DAW_ENGINE_TEST_MODE")) {

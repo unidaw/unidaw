@@ -22,6 +22,16 @@ use crate::layout::{
 };
 use crate::reader::{SeqlockReader, UiSnapshot};
 
+/// Per-track mixer read-back. Gain in millibels, pan in thousandths (integers —
+/// the header carries no float mixer fields), mute/solo in `flags`
+/// (`layout::MIXER_FLAG_*`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TrackMixer {
+    pub gain_millibels: i32,
+    pub pan_thousandths: i32,
+    pub flags: u8,
+}
+
 pub fn default_shm_name() -> String {
     for key in ["DAW_UI_SHM_NAME", "DAW_SHM_NAME"] {
         if let Ok(name) = std::env::var(key) {
@@ -259,6 +269,40 @@ impl EngineHandle {
             let mut out = Vec::with_capacity(count);
             for i in 0..count {
                 out.push(unsafe { (*region).extents[i] });
+            }
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                return out;
+            }
+        }
+    }
+
+    /// The published mixer version — moves only when a track's gain/pan/mute/solo
+    /// changes, so the UI can cache-key on it.
+    pub fn mixer_version(&self) -> u32 {
+        unsafe { std::ptr::read_volatile(&(*self.header).ui_mixer_version) }
+    }
+
+    /// Per-track mixer read-back for the current track count: gain in millibels,
+    /// pan in thousandths, mute/solo in flags (MIXER_FLAG_*). Read under the
+    /// seqlock so the row is internally consistent.
+    pub fn read_mixer(&self) -> Vec<TrackMixer> {
+        loop {
+            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue;
+            }
+            let count =
+                unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) } as usize;
+            let count = count.min(K_UI_MAX_TRACKS);
+            let mut out = Vec::with_capacity(count);
+            for i in 0..count {
+                out.push(TrackMixer {
+                    gain_millibels: unsafe { (*self.header).ui_track_gain_millibels[i] },
+                    pan_thousandths: unsafe { (*self.header).ui_track_pan_thousandths[i] },
+                    flags: unsafe { (*self.header).ui_track_mix_flags[i] },
+                });
             }
             fence(Ordering::Acquire);
             let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };

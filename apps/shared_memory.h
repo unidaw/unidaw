@@ -19,7 +19,11 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 11 (M3.4): a published clip-extents region (uiClipExtentOffset) — the clip
 //    boxes {placementId, clipId, trackId, at, end, name} that drive rails in
 //    both views — plus placementId + provenance flags on each UiClipNote.
-constexpr uint16_t kShmVersion = 11;
+// 12: per-track mixer read-back (uiTrackGainMillibels/PanThousandths/MixFlags +
+//     uiMixerVersion), so the UI renders faders at their true position rather than
+//     from last-sent optimistic state. Grows the header past 256; region offsets
+//     are computed from sizeof(ShmHeader) so they shift automatically.
+constexpr uint16_t kShmVersion = 12;
 
 constexpr uint32_t kUiMaxTracks = 8;
 constexpr uint32_t kUiMaxClipNotes = 4096;
@@ -75,6 +79,15 @@ struct alignas(64) ShmHeader {
   // v11 (M3.4): offset of the UiClipExtentRegion (clip boxes for rails). One
   // u64; still inside the 256-byte header tail.
   uint64_t uiClipExtentOffset = 0;
+  // v12: per-track mixer read-back. Gain in millibels and pan in thousandths
+  // (integers because the header carries no float mixer fields and rounding a
+  // fader is harmless); mix flags reuse kMixerFlagMute/Solo. uiMixerVersion moves
+  // only when a value changes, so the UI can cache-key on it. Grows the header to
+  // the next cache lines.
+  int32_t uiTrackGainMillibels[kUiMaxTracks]{};
+  int32_t uiTrackPanThousandths[kUiMaxTracks]{};
+  uint8_t uiTrackMixFlags[kUiMaxTracks]{};
+  uint32_t uiMixerVersion = 0;
 };
 
 struct alignas(64) RingHeader {

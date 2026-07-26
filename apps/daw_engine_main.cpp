@@ -1,4 +1,5 @@
 #include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -684,6 +685,14 @@ inline void getClipEventsInRange(const ClipSnapshot& snapshot,
 }  // namespace
 
 int main(int argc, char** argv) {
+  // Never let a dead host take the engine down. macOS doesn't define
+  // MSG_NOSIGNAL, so send() to a host socket that just closed raises SIGPIPE,
+  // whose default action is to terminate the process — which is exactly what
+  // happened when a plugin host died mid-playback. Ignoring it turns those writes
+  // into EPIPE returns, which the IPC layer already handles by marking the host
+  // dead and scheduling a restart.
+  std::signal(SIGPIPE, SIG_IGN);
+
   std::string socketPath = trackSocketPath(0);
   std::string pluginPath;
   bool spawnHost = true;
@@ -7247,6 +7256,13 @@ struct TrackRuntime {
     uint64_t lastOverflowLogged = 0;
     std::unordered_map<uint32_t, uint64_t> ringStdDropLogged;
     std::unordered_map<uint32_t, EngineAudioCallback::TrackInfo> trackInfoCache;
+    // Mixer read-back: publish per-track gain/pan/mute/solo every frame, but only
+    // move uiMixerVersion when a value actually changes, so the UI can cache-key.
+    uint32_t publishedMixerVersion = 0;
+    std::array<int32_t, daw::kUiMaxTracks> lastGainMillibels{};
+    std::array<int32_t, daw::kUiMaxTracks> lastPanThousandths{};
+    std::array<uint8_t, daw::kUiMaxTracks> lastMixFlags{};
+    lastGainMillibels.fill(INT32_MIN);  // force a first-frame publish
     const auto blockDuration =
         std::chrono::duration<double>(
             static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
@@ -7364,6 +7380,41 @@ struct TrackRuntime {
         }
         uiShm.header->uiTransportState =
             playing.load(std::memory_order_acquire) ? 1 : 0;
+        // Per-track mixer read-back. Gain linear -> millibels (2000*log10), pan
+        // -> thousandths; flags reuse the SetTrackMixer mute/solo bits. Bump the
+        // version only when something changed so the UI's cache key is stable.
+        bool mixerChanged = false;
+        for (uint32_t i = 0; i < daw::kUiMaxTracks; ++i) {
+          int32_t gainMb = -120000;  // ~silence for an absent/zero-gain track
+          int32_t panTh = 0;
+          uint8_t flags = 0;
+          if (i < trackSnapshot.size()) {
+            auto* rt = trackSnapshot[i];
+            const float g = rt->mixGainLinear.load(std::memory_order_relaxed);
+            gainMb = g > 0.0f
+                ? static_cast<int32_t>(std::lround(2000.0 * std::log10(g)))
+                : -120000;
+            panTh = static_cast<int32_t>(std::lround(
+                std::clamp(rt->mixPan.load(std::memory_order_relaxed), -1.0f, 1.0f) *
+                1000.0));
+            if (rt->mixMute.load(std::memory_order_relaxed)) flags |= daw::kMixerFlagMute;
+            if (rt->mixSolo.load(std::memory_order_relaxed)) flags |= daw::kMixerFlagSolo;
+          }
+          if (gainMb != lastGainMillibels[i] || panTh != lastPanThousandths[i] ||
+              flags != lastMixFlags[i]) {
+            mixerChanged = true;
+            lastGainMillibels[i] = gainMb;
+            lastPanThousandths[i] = panTh;
+            lastMixFlags[i] = flags;
+          }
+          uiShm.header->uiTrackGainMillibels[i] = gainMb;
+          uiShm.header->uiTrackPanThousandths[i] = panTh;
+          uiShm.header->uiTrackMixFlags[i] = flags;
+        }
+        if (mixerChanged) {
+          ++publishedMixerVersion;
+        }
+        uiShm.header->uiMixerVersion = publishedMixerVersion;
         uiShm.header->uiClipVersion =
             clipVersion.load(std::memory_order_acquire);
         writeUiClipWindowSnapshot(trackSnapshot);
