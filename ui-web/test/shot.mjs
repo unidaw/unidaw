@@ -68,20 +68,38 @@ const SCENES = [
   { name: 'token-entry', setup: async (p) => { await p.keyboard.press('@'); for (const c of '3^7') await p.keyboard.press(c); } },
 ];
 
-/** Above this, a pixel difference is a change; below, it is antialiasing. */
-const NOISE_PX = 40;
+/** Above this many perceptibly-differing pixels it is a change, not antialiasing. */
+const NOISE_PX = 16;
 
-/** Differing pixel count via ImageMagick, or null if it could not be measured. */
+/**
+ * Count of pixels differing perceptibly, or null if it could not be measured.
+ *
+ * NOT `compare -metric AE`. That returns 1.24 MILLION for two frames a human
+ * cannot tell apart — the whole image routinely differs by 1/255 per channel
+ * from GPU dithering — and adding `-fuzz 1%` made it return 131,070, which
+ * contradicted its own 3x3 difference bounding box. I chased a "regression"
+ * twice on those numbers.
+ *
+ * This builds the difference image, thresholds it, and counts what survives:
+ * for the same pair, TWO pixels, in one icon's antialiasing. That is a number
+ * with a meaning.
+ */
 function pixelDiff(a, b, out) {
   try {
-    const s = execFileSync('magick', ['compare', '-metric', 'AE', a, b, out],
-                           { stdio: ['ignore', 'pipe', 'pipe'] });
-    return Number(String(s).trim().split(/\s+/)[0]);
+    const n = execFileSync('magick', [a, b, '-compose', 'difference', '-composite',
+      '-colorspace', 'Gray', '-threshold', '2%', '-format', '%[fx:int(mean*w*h)]', 'info:'],
+      { stdio: ['ignore', 'pipe', 'pipe'] });
+    // Written only when it matters, so a passing run leaves no stale artefact.
+    const count = Number(String(n).trim());
+    if (count > 0) {
+      try {
+        execFileSync('magick', ['compare', '-metric', 'AE', a, b, out],
+                     { stdio: ['ignore', 'pipe', 'pipe'] });
+      } catch (e) { /* compare exits non-zero when images differ; the file is written */ }
+    }
+    return Number.isFinite(count) ? count : null;
   } catch (e) {
-    // `magick compare` exits non-zero when images differ; the count is on stderr.
-    const t = String(e.stderr || e.stdout || '').trim().split(/\s+/)[0];
-    const n = Number(t);
-    return Number.isFinite(n) ? n : null;
+    return null;
   }
 }
 
@@ -119,12 +137,10 @@ async function shoot(scene) {
     const a = readFileSync(baseline), b = readFileSync(png);
     if (a.equals(b)) console.log('  PASS  golden byte-identical');
     else {
-      // Byte-identical stays the goal, but a handful of scattered pixels is
-      // antialiasing, not a regression — the patcher's SVG curves produced 19
-      // differing pixels once in about a dozen runs and were identical either
-      // side of it. Failing on that teaches people to re-run rather than to
-      // look, which is worse than the noise. Anything above the band still
-      // fails, and the count is always printed.
+      // Byte-identical stays the goal, but a handful of perceptibly-differing
+      // pixels is antialiasing, not a regression. Failing on that teaches people
+      // to re-run rather than to look, which is worse than the noise. Anything
+      // above the band still fails, and the count is always printed.
       const px = pixelDiff(baseline, png, join(OUT, `${scene.name}.diff.png`));
       if (px !== null && px <= NOISE_PX) {
         console.log(`  WARN  golden differs by ${px} px — within antialiasing noise`);
