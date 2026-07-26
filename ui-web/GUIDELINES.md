@@ -255,6 +255,37 @@ Consequences the renderer has to carry:
 5. **Note entry creates or stretches a clip** — stretch within about a bar of an
    edge, otherwise a new clip. Entry still feels free; clips form underneath.
 
+### Answered by backend, and binding at M3.4
+
+**The merge key is `(placementId, iteration, noteId)` — three parts.** Identity
+lives in the clip definition: one EventId per clip note, and repeats do **not**
+mint new ids. A 1-bar clip in a 4-bar placement is the same note sounding four
+times with the same id, so a two-part key would drop three of them. Tick is
+`at + iteration * clipLength + noteTick`. The `**` collision marker is the
+placeholder until those fields arrive.
+
+**Editing any repeat targets the clip note.** Change one, all four repeats and
+every other placement of that clip change — that is the point of a shared clip.
+To vary a single bar you do not loop; you place the clip explicitly per bar and
+override the one you want. Override is per-**placement**, affecting all its
+iterations, never per-iteration. Looping means deliberately uniform repeats.
+
+**Muted notes ship with a flag; the feed is DISPLAY-resolved, not
+playback-resolved.** It carries base notes each with a played/muted bit, plus
+adds. Playback omits muted notes; the feed keeps them so they can be drawn struck
+out, and the base clip is never needed separately. So the guarantee is not "what
+plays is what is shown" but the stronger and more useful *"the feed shows what
+plays plus what is deliberately silenced, labelled"* — which is what an editor
+needs and a player does not.
+
+**Loose placements never arrive.** A null `at` has no timeline position, and the
+all-tracks region excludes those placements entirely rather than leaving them for
+the client to filter. Session cells get their own feed when the session view lands
+past M3.5. Nothing to pin, nothing to skip.
+
+So a rendered note row is `(placementId, iteration, noteId, muted?, isAdd?)` at an
+absolute tick, and rails are the non-null-`at` placements only.
+
 Arriving at M3.4, announced before the contract moves: `placementId` and a
 base/add flag folded into `UiClipNote`'s spare bytes, plus a clip-extents feed
 `{placementId, clipId, trackId, startTick, endTick, name}` — the shape the rails
