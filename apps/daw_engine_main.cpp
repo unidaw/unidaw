@@ -49,6 +49,7 @@
 #include "apps/musical_structures.h"
 #include "apps/placement_schedule.h"
 #include "apps/note_entry.h"
+#include "apps/placement_flatten.h"
 #include "apps/automation_clip.h"
 #include "apps/uid_hash.h"
 #include "apps/scale_library.h"
@@ -2833,58 +2834,13 @@ struct TrackRuntime {
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         // M3.3: flatten this track's placements into one absolute-tick clip the
-        // scheduler plays directly. Each placement resolves base - mutes + adds
-        // (clip-relative), then placementEventsInWindow expands it — looped to
-        // fill the placement — onto the timeline. Loose (null-at) placements have
-        // no timeline position and are skipped. For the identity form (one
-        // placement at=0 spanning its clip) the flat clip == the base clip.
+        // scheduler plays directly (base - mutes + adds, looped to fill each
+        // placement, at +at; audio clips skipped). flattenPlacements is the shared
+        // definition the live note-entry path also rebuilds from.
         daw::MusicalClip flat;
-        for (const auto& placement : source.placements) {
-          if (!placement.at.has_value()) {
-            continue;
-          }
-          const daw::ProjectClip* clipDef = nullptr;
-          for (const auto& c : document.clips) {
-            if (c.id == placement.clipId) {
-              clipDef = &c;
-              break;
-            }
-          }
-          // Audio clips are stored but not scheduled yet (their playback lands
-          // with the Movement 4 audio engine); skip them in the symbolic flatten.
-          if (clipDef && clipDef->kind == daw::ClipKind::Audio) {
-            continue;
-          }
-          std::vector<daw::MusicalEvent> resolved;
-          if (clipDef) {
-            for (const auto& e : clipDef->clip.events()) {
-              bool muted = false;
-              if (e.type == daw::MusicalEventType::Note) {
-                for (const daw::EventId m : placement.mutes) {
-                  if (m == e.payload.note.noteId) {
-                    muted = true;
-                    break;
-                  }
-                }
-              }
-              if (!muted) {
-                resolved.push_back(e);
-              }
-            }
-          }
-          for (const auto& add : placement.adds) {
-            resolved.push_back(add);
-          }
-          const uint64_t clipLen = clipDef ? clipDef->lengthNanoticks : 0;
-          const uint64_t plLen =
-              placement.lengthNanoticks > 0 ? placement.lengthNanoticks : clipLen;
-          const auto scheduled = daw::placementEventsInWindow(
-              resolved, clipLen, *placement.at, plLen, 0, arrangementEnd);
-          for (const auto& s : scheduled) {
-            daw::MusicalEvent ev = s.event;
-            ev.nanotickOffset = s.absTick;
-            flat.addEvent(ev);
-          }
+        for (const auto& ev :
+             daw::flattenPlacements(source.placements, document.clips, arrangementEnd)) {
+          flat.addEvent(ev);
         }
         runtime->track.clip = std::move(flat);
         // Retain the placement list so save can re-emit it (and its clips) as
