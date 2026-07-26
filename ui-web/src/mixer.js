@@ -33,6 +33,10 @@ export class Mixer {
     // One listener for the whole surface rather than per control: strips are
     // pooled and re-bound, so per-element listeners would have to be rebound too.
     this.host.addEventListener('pointerdown', (e) => this._down(e));
+    this.host.addEventListener('pointermove', (e) => this._move(e));
+    this.host.addEventListener('pointerup', () => this._up());
+    this.host.addEventListener('pointercancel', () => this._up());
+    this._drag = null;
   }
 
   _strip(i) {
@@ -79,13 +83,26 @@ export class Mixer {
       const r = target.getBoundingClientRect();
       // Bottom of the fader is 0, top is 1 — a fader that grew downward would
       // be a novel and unwelcome invention.
-      const pos = 1 - (e.clientY - r.top) / r.height;
-      this.onGain && this.onGain(track, pos);
-      this._dragTrack = track; this._dragRect = r;
+      this._drag = { track, rect: r };
+      this.onGain && this.onGain(track, 1 - (e.clientY - r.top) / r.height);
       this.host.setPointerCapture(e.pointerId);
     }
     if (act === 'pan') { this.onPan && this.onPan(track, e.shiftKey ? -1 : 1); }
   }
+
+  /**
+   * Continue a fader drag. The rect is captured at pointerdown and reused: the
+   * fader's fill changes height as you drag, so re-measuring the element would
+   * move the reference frame under the gesture and make the fader accelerate
+   * away from the pointer.
+   */
+  _move(e) {
+    if (!this._drag) return;
+    const r = this._drag.rect;
+    this.onGain && this.onGain(this._drag.track, 1 - (e.clientY - r.top) / r.height);
+  }
+
+  _up() { this._drag = null; }
 
   render(vm) {
     this.vm = vm;

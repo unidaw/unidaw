@@ -59,7 +59,7 @@ export function createMixerBuffer(trackCount = 16) {
       peak: 0, peakPct: 0, faderPct: 0,
     };
   }
-  return { strips, stripCount: 0, authoritative: false, contentRevision: 0,
+  return { strips, stripCount: 0, authoritative: false,
            _shape: String(trackCount) };
 }
 
@@ -97,8 +97,21 @@ export function gainAtPosition(pos) {
   return Math.round(GAIN_MIN + t * (GAIN_MAX - GAIN_MIN));
 }
 
-const SIG = { peakRev: -1, trackCount: -1, mixRev: -1, authoritative: null, engineMix: -2 };
-let contentRevision = 0;
+/**
+ * These renderers deliberately have NO content revision.
+ *
+ * The tracker needs one because it binds ~1,700 cells and cannot afford to touch
+ * them all every frame. Arrange, the piano roll and the mixer bind tens of
+ * elements and guard every individual write, so a per-frame pass is already
+ * cheap (0.1 ms measured) and a revision would buy nothing.
+ *
+ * They each HAD one, computed and then read by nobody. That is worse than not
+ * having one: arrange's omitted the per-lane grids, so the first person to trust
+ * it would have found lane labels going stale on a project load — this codebase's
+ * signature bug, lying in wait behind something that looked like it was handled.
+ * If one of these ever needs a revision, write it then, against what the model
+ * actually reads at that point.
+ */
 
 /**
  * @param {{tracks:number, engine:object|null, mixer:object, mixRevision:number}} opts
@@ -138,18 +151,5 @@ export function buildMixerModel(opts, buf) {
   }
   buf.stripCount = n;
   buf.authoritative = mixer.authoritative;
-
-  // Meters move every frame, so they are deliberately NOT in the revision: the
-  // renderer updates meter heights unconditionally and everything else only on
-  // a real change. Putting peaks in here would rebind every strip at 86 Hz.
-  const engineMix = engine ? engine.mixerVersion : -1;
-  if (SIG.trackCount !== n || SIG.mixRev !== mixRevision
-      || SIG.authoritative !== mixer.authoritative || SIG.engineMix !== engineMix) {
-    SIG.trackCount = n; SIG.mixRev = mixRevision;
-    SIG.authoritative = mixer.authoritative;
-    SIG.engineMix = engineMix;
-    contentRevision++;
-  }
-  buf.contentRevision = contentRevision;
   return buf;
 }

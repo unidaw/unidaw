@@ -52,14 +52,25 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
     ruler: new Float64Array(128), rulerBar: new Int32Array(128), rulerCount: 0,
     playheadX: -1,
     cursor: { track: 0, tick: 0 },
-    contentRevision: 0,
     _shape: `${laneCount}x${clipCapacity}`,
   };
 }
 
-const SIG = { extentsRevision: -2, zoomIndex: -1, startTick: -1, width: -1,
-              laneCount: -1, selected: -1 };
-let contentRevision = 0;
+/**
+ * These renderers deliberately have NO content revision.
+ *
+ * The tracker needs one because it binds ~1,700 cells and cannot afford to touch
+ * them all every frame. Arrange, the piano roll and the mixer bind tens of
+ * elements and guard every individual write, so a per-frame pass is already
+ * cheap (0.1 ms measured) and a revision would buy nothing.
+ *
+ * They each HAD one, computed and then read by nobody. That is worse than not
+ * having one: arrange's omitted the per-lane grids, so the first person to trust
+ * it would have found lane labels going stale on a project load — this codebase's
+ * signature bug, lying in wait behind something that looked like it was handled.
+ * If one of these ever needs a revision, write it then, against what the model
+ * actually reads at that point.
+ */
 
 /**
  * Build the arrange model for a visible time window.
@@ -164,19 +175,6 @@ export function buildArrangeModel(opts, buf) {
   buf.cursor.track = cursor.track;
   buf.cursor.tick = cursor.tick;
 
-  // Same rule as the tracker: name every input, compare rather than pack.
-  {
-    const rev = engine ? engine.extentsRevision : -1;
-    if (SIG.extentsRevision !== rev || SIG.zoomIndex !== zoomIndex
-        || SIG.startTick !== startTick || SIG.width !== width
-        || SIG.laneCount !== laneCount || SIG.selected !== selectedPlacement) {
-      SIG.extentsRevision = rev; SIG.zoomIndex = zoomIndex;
-      SIG.startTick = startTick; SIG.width = width;
-      SIG.laneCount = laneCount; SIG.selected = selectedPlacement;
-      contentRevision++;
-    }
-  }
-  buf.contentRevision = contentRevision;
   return buf;
 }
 

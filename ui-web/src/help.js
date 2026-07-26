@@ -106,7 +106,6 @@ function section(parent, title, rows) {
 export function createHelp(host) {
   host.className = 'hp';
   const inner = div('hp-inner', host);
-  const built = {};
   let shown = null;
 
   return {
@@ -120,7 +119,6 @@ export function createHelp(host) {
       const note = div('hp-note', inner);
       note.appendChild(document.createTextNode(
         'Every key here also exists as a dock command — press / and type help.'));
-      built[surface] = true;
     },
     probe: () => ({ surface: shown, sections: inner.querySelectorAll('.hp-sec').length,
                     rows: inner.querySelectorAll('.hp-row').length }),
