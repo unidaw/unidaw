@@ -122,6 +122,9 @@ export function buildViewModel(opts, buf) {
     // When present, cells come from the engine instead of the fixture. The
     // fixture stays because goldens must render without a running engine.
     engine = null,
+    // The cell currently being typed into, if any. Drawn over whatever the
+    // engine says is there — you must see what you are typing before it commits.
+    entryOverlay = null,
   } = opts;
 
   const shape = `${rowCount}x${trackCount}x${columns}`;
@@ -285,9 +288,18 @@ export function buildViewModel(opts, buf) {
 
   // Both revisions, because either can change what the cells say while every row
   // index stays put — and the renderer's identity check cannot see either.
+  if (entryOverlay) {
+    const ri = entryOverlay.row - startRow;
+    const row = rows[ri];
+    if (row) {
+      const cell = row.cells[entryOverlay.track * columns + entryOverlay.col];
+      if (cell) { cell.text = entryOverlay.text || '\u2588'; cell.kind = 'editing'; }
+    }
+  }
+
   buf.contentRevision = engine
-    ? engine.notesRevision * 1e6 + engine.aggRevision
-    : zoomIndex;
+    ? engine.notesRevision * 1e6 + engine.aggRevision + (entryOverlay ? 1e12 + entryOverlay.text.length : 0)
+    : zoomIndex + (entryOverlay ? 1e6 + entryOverlay.text.length : 0);
 
   buf.window.startRow = startRow; buf.window.rowCount = rowCount;
   buf.zoom = zoom;

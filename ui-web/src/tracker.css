@@ -95,6 +95,12 @@
 .tk-cell[data-kind="muted"]     { color: var(--uni-text-off); text-decoration: line-through; opacity: .7; }
 /* An override add: local to one placement, not in the shared clip. */
 .tk-cell[data-kind="add"]       { color: var(--base-accent-ramp-400); font-style: italic; }
+/* The cell you are typing into. Distinct from a committed note so a half-typed
+   token never reads as data. */
+.tk-cell[data-kind="editing"] {
+  color: var(--base-text); background: var(--uni-surface-cursor-cell);
+  outline: 1px solid var(--base-accent); outline-offset: -1px;
+}
 .tk-cell[data-kind="collide"]   { color: var(--uni-clip-rail-active); font-weight: 500; }
 .tk-cell[data-kind="aggregate"] { color: var(--uni-text-aggregate); letter-spacing: var(--font-tracking-fx); }
 

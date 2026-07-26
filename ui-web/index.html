@@ -47,6 +47,7 @@ import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
 import M from './design/out/tokens.js';
 import { connectEngine } from './src/engine.js';
 import { createChrome } from './src/chrome.js';
+import { createEntry, feed, cancel, parseToken, editing, NOTE_KEYS, pitchToToken } from './src/entry.js';
 
 const metrics = {
   rowHeight: M.metrics.rowHeight,
@@ -95,6 +96,7 @@ setInterval(() => {
 
 // Two buffers, alternating: the renderer diffs prev against current, so they
 // have to be distinct objects. Steady-state allocation is zero.
+const entry = createEntry();
 const bufs = [null, null];
 let bi = 0;
 
@@ -122,16 +124,6 @@ function buildHead() {
   head.append(headRow);
 }
 
-// Tracker note entry: the piano layout on the QWERTY home rows, as every
-// tracker since Ultimate Soundtracker. The lower row is one octave below the
-// upper. Pressing a note key WRITES it — there is no confirm step; that is what
-// makes tracker entry fast, and it is why Enter-to-insert was wrong.
-const NOTE_KEYS = {
-  // upper row: C .. C
-  q: 0, '2': 1, w: 2, '3': 3, e: 4, r: 5, '5': 6, t: 7, '6': 8, y: 9, '7': 10, u: 11, i: 12,
-  // lower row: an octave down
-  z: -12, s: -11, x: -10, d: -9, c: -8, v: -7, g: -6, b: -5, h: -4, n: -3, j: -2, m: -1,
-};
 const NANOTICKS_PER_BEAT = 960000;
 /** Ticks per row on a given lane's own grid. */
 function laneRowTicks(track) {
@@ -141,6 +133,32 @@ function laneRowTicks(track) {
 /** The tick the cursor's row means ON ITS LANE. Both halves must agree. */
 function tickOfCursorRow() {
   return state.cursor.row * laneRowTicks(state.cursor.track);
+}
+
+/**
+ * Turn a committed cell token into an engine command. The parser decides what
+ * the text means; this decides what to do about it. An invalid token is left
+ * visible rather than dropped — a cell that silently ignores what you typed is
+ * indistinguishable from one that took it.
+ */
+function commitToken(text) {
+  const r = parseToken(text, state.cursor.col);
+  const tick = tickOfCursorRow();
+  const dur = laneRowTicks(state.cursor.track);
+  if (r.kind === 'note') {
+    conn && conn.send({ type: 'note', track: state.cursor.track, pitch: r.pitch,
+                        tick, dur, vel: state.velocity });
+  } else if (r.kind === 'off' || r.kind === 'empty') {
+    conn && conn.send({ type: 'delete', track: state.cursor.track, tick });
+  } else if (r.kind === 'invalid') {
+    state.badToken = text;             // shown in the cell, not swallowed
+    return;                            // cursor stays put so it can be fixed
+  }
+  // degree and value forms parse but have no command yet — the engine needs
+  // WriteChord / a param path for those. Deliberately not faked.
+  state.badToken = null;
+  state.cursor.row += state.editStep;
+  follow();
 }
 
 // The playhead arrives as a tick and has to be projected like everything else.
@@ -162,6 +180,9 @@ function draw() {
     tracks: state.tracks, columns: state.columns, zoomIndex: state.zoom,
     cursor: state.cursor, playheadRow: state.playhead, selection: state.selection,
     engine: state.useEngine === false ? null : engine,
+    entryOverlay: entry.active
+      ? { row: entry.row, track: entry.track, col: entry.col, text: entry.text }
+      : null,
   }, bufs[bi]);
   vm.scrollX = state.scrollX;
   chrome.update({
@@ -240,20 +261,21 @@ addEventListener('keydown', (e) => {
     state.cursor.track = Math.floor(f / state.columns); state.cursor.col = f % state.columns; }
   else if (k === 'PageDown') { state.start = Math.min(TOTAL_ROWS - tracker.poolSize, state.start + 32); e.preventDefault(); schedule(); return; }
   else if (k === 'PageUp') { state.start = Math.max(0, state.start - 32); e.preventDefault(); schedule(); return; }
-  else if (!e.metaKey && !e.ctrlKey && Object.prototype.hasOwnProperty.call(NOTE_KEYS, k.toLowerCase())) {
-    // Write immediately at the cursor, then advance by the edit step — the
-    // tracker gesture. Tick is computed in the LANE's grid, not the viewport's:
-    // the sidecar projects notes back per lane, so viewport-space ticks put a
-    // note written at display row 1 onto row 4.
-    const pitch = 12 * (state.octave + 1) + NOTE_KEYS[k.toLowerCase()];
-    if (pitch >= 0 && pitch <= 127) {
-      conn && conn.send({ type: 'note', track: state.cursor.track, pitch,
-                          tick: tickOfCursorRow(), dur: laneRowTicks(state.cursor.track),
-                          vel: state.velocity });
-      state.cursor.row += state.editStep;
-      follow();
+  else if (!e.metaKey && !e.ctrlKey) {
+    // The piano layout is a fast path INTO the buffer: pressing q fills the cell
+    // with "C-4" and commits, exactly as typing C-4 by hand would have. Anything
+    // else goes to the text buffer, which is what AGENTS.md's token grammar
+    // needs — a keymap can only ever produce the note column.
+    const lower = k.toLowerCase();
+    if (state.cursor.col === 0 && !entry.active
+        && Object.prototype.hasOwnProperty.call(NOTE_KEYS, lower)) {
+      const pitch = 12 * (state.octave + 1) + NOTE_KEYS[lower];
+      if (pitch >= 0 && pitch <= 127) { commitToken(pitchToToken(pitch)); }
+      e.preventDefault(); schedule(); return;
     }
-    e.preventDefault(); schedule(); return;
+    const act = feed(entry, k, state.cursor);
+    if (act === 'commit') { commitToken(entry.text); cancel(entry); e.preventDefault(); schedule(); return; }
+    if (act === 'consumed') { e.preventDefault(); schedule(); return; }
   }
   else if (k === '[') { state.octave = Math.max(0, state.octave - 1); e.preventDefault(); schedule(); return; }
   else if (k === ']') { state.octave = Math.min(9, state.octave + 1); e.preventDefault(); schedule(); return; }
