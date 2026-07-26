@@ -62,9 +62,11 @@ why `run()` is the entry point to prefer.
     npm run e2e     against a live engine     (needs tools/webstack.sh)
     npm run soak    heap leak check           (fixtures; takes minutes)
 
-and the sidecar's own:
+Or all of the engine-free ones at once, including the Rust side that `npm test`
+does not reach:
 
-    cargo test --manifest-path ../ui/Cargo.toml -p daw-sidecar
+    ../tools/verify.sh           rust + units + goldens + allocation
+    ../tools/verify.sh --all     also frame work and a 4-minute soak
 
 The split is deliberate. `npm test` must not depend on whether a sidecar happens
 to be running — a test that changes with the weather is not a test. But that
