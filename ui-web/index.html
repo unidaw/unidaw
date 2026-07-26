@@ -80,6 +80,7 @@ import { createChrome } from './src/chrome.js';
 import { Arrange } from './src/arrange.js';
 import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName } from './src/arrangemodel.js';
 import { Mixer } from './src/mixer.js';
+import { Scope } from './src/scope.js';
 import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
          gainAtPosition, FLAG_MUTE, FLAG_SOLO } from './src/mixermodel.js';
 import { Piano } from './src/piano.js';
@@ -317,6 +318,8 @@ function pianoEdit(kind, semitones) {
   state.reject = null;
   return true;
 }
+
+let scope = null;
 
 const mixer = new Mixer(mixerHost, {
   onGain: (track, pos) => {
@@ -608,6 +611,20 @@ function drawPiano() {
 function drawMixer() {
   const n = Math.min(state.tracks, 16);
   if (!mixerBuf || mixerBuf._shape !== String(n)) mixerBuf = createMixerBuffer(n);
+  if (!scope) {
+    scope = new Scope(mixer.scopeCanvas, 16);
+    scope.readTheme(document.documentElement);
+  }
+  // The scope is driven by the ENGINE's rate, not the draw rate: it samples on
+  // every published frame (see onChange) and only paints here. Sampling in draw
+  // would give it the display's cadence and a history that stretches whenever
+  // the browser throttles.
+  scope.resize(mixerHost.clientWidth, 132, window.devicePixelRatio || 1);
+  // The tracks that EXIST, not the sixteen strips the mixer can hold. Sixteen
+  // lanes in 133px is eight pixels each and the trace is invisible; six is
+  // twenty-two and readable, which is the difference between a scope and a
+  // decoration.
+  scope.render(engine && engine.trackCount ? Math.min(engine.trackCount, 16) : 8);
   mixer.render(buildMixerModel({
     tracks: n,
     engine: state.useEngine === false ? null : engine,
@@ -1325,6 +1342,7 @@ conn = connectEngine({
     // Mixer edits reconcile on the engine's mixer version, the same way note
     // edits reconcile on the clip version.
     reconcileMixer(mixerState, store);
+    if (scope) scope.push(store.peaks, store.peakCount);
     state.playhead = tickToRow(store.playheadTick);
     schedule();
   },
@@ -1491,6 +1509,8 @@ window.__uni = {
   },
   arrangeProbe: () => arrange.probe(),
   mixerProbe: () => mixer.probe(),
+  scopeProbe: () => (scope ? scope.probe() : null),
+  peaks: () => (engine ? Array.from(engine.peaks.slice(0, Math.max(engine.peakCount, 8))) : null),
   rename: (track, name) => { mixer.beginRename(track);
     for (const c of name) mixer.feedRename(c);
     return mixer.feedRename('Enter'); },
@@ -1582,6 +1602,21 @@ window.__uni = {
    * Meters need real audio to move, which webtest (no plugins) cannot produce,
    * so a golden without fake peaks would never exercise the meter path at all.
    */
+  /** Feed the scope synthetic levels, so its path is testable without audio. */
+  feedScope: (n) => {
+    if (!scope) return null;
+    const buf = new Float32Array(16);
+    for (let i = 0; i < n; i++) {
+      for (let t = 0; t < 8; t++) {
+        // A different frequency per lane, so a wrong lane index is visible
+        // rather than plausible.
+        buf[t] = 0.5 + 0.45 * Math.sin((i / 20) * (t + 1));
+      }
+      scope.push(buf, 8);
+    }
+    draw();
+    return scope.probe();
+  },
   useMixerFixture: () => {
     state.useEngine = true; state.hudFrozen = true; conn.close();
     hudText.nodeValue = 'mixer-fixture';

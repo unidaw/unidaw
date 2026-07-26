@@ -28,6 +28,12 @@ export class Mixer {
     /** Which strip is being renamed, and the text so far. */
     this.renaming = -1; this.renameText = '';
     this.stripsEl = div('mx-strips', host);
+    // A canvas, deliberately. This is the surface where a real scope goes, and a
+    // scope redraws every pixel every frame — no arrangement of pooled divs
+    // makes that sensible. See src/scope.js.
+    this.scopeCanvas = document.createElement('canvas');
+    this.scopeCanvas.className = 'mx-scope';
+    host.appendChild(this.scopeCanvas);
     this.notice = textDiv('mx-notice', host);
     this.pool = [];
     this.vm = null;

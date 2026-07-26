@@ -88,6 +88,14 @@
 /* Says out loud that the faders are a local guess. Removing this when the
    engine publishes mixer state is the point — until then it must not be
    possible to mistake this surface for the truth. */
+/* The level history sits under the strips: same data as the meters, in time. */
+.mx-scope {
+  flex: 0 0 auto;
+  height: 132px;
+  display: block;
+  border-top: 1px solid var(--uni-rule-gutter);
+}
+
 .mx-notice {
   flex: 0 0 auto;
   padding: 4px 10px;

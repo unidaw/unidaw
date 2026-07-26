@@ -94,6 +94,7 @@ export const SURFACE_KEYS = {
       ['M / S', 'mute / solo'],
       ['click name', 'rename the track (r renames the cursor track)'],
       ['', 'values come from the engine; edits settle on its next mixer version'],
+      ['', 'the strip below is a level history, sampled at the engine\u2019s rate'],
     ],
   },
 };

@@ -289,6 +289,18 @@ for (const scene of SCENES) {
     ok(m.detail[0].dim, 'unsoloed strips dimmed while something is soloed');
     ok(m.detail[2].pan === 'L40' && m.detail[5].pan === 'R60', 'pan labels from the engine');
     ok(m.detail[0].meter > m.detail[3].meter, 'meters map level to height');
+    // The scope is a canvas, so assert on the ring and on painted pixels rather
+    // than on the DOM — there is no DOM to assert on, which is the point.
+    const sc = await page.evaluate(() => window.__uni.feedScope(600));
+    ok(sc && sc.head > 0, `scope ring advanced: head ${sc && sc.head}`);
+    const ink = await page.evaluate(() => {
+      const c = document.querySelector('.mx-scope');
+      const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let lit = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 2] > 90) lit++;
+      return lit;
+    });
+    ok(ink > 1000, `scope actually painted: ${ink} lit pixels`);
     console.log(`  ${m.strips} strips  dB ${m.detail.slice(0,3).map(s=>s.db).join(' ')}`);
     await shoot(scene);
     continue;
