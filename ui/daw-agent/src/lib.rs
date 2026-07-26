@@ -10,9 +10,11 @@
 //! Nothing here talks to a model or a network; an LLM harness maps its tool-call
 //! format onto `ToolCall`/`execute` and drives the loop.
 
+pub mod harness;
 pub mod observe;
 pub mod tools;
 
+pub use harness::{run_agent_loop, CallOutcome, Decider, ScriptedDecider, StepOutcome};
 pub use observe::{observe, NoteView, Observation, TrackView, Transport};
 pub use tools::{
     execute, manifest_json, tool_manifest, ToolCall, ToolResult, ToolSpec,
