@@ -572,6 +572,26 @@ function tickToRow(tick) {
   return Math.floor(tick / ZOOM_LEVELS[state.zoom].rowNanoticks);
 }
 
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+// From apps/scale_library.cpp. Index 0 is unused; the engine's ids start at 1.
+const SCALE_NAMES = ['', 'major', 'minor', 'dorian', 'mixolydian'];
+
+/**
+ * The key in force at the playhead, e.g. "A minor".
+ *
+ * The chrome said "C major" unconditionally before this. maximal changes key
+ * four times in four bars, so it was wrong three quarters of the time — a label
+ * stating something false, which is the failure this codebase keeps having.
+ */
+function currentKey() {
+  if (!engine || !engine.harmony || !engine.harmony.length) return '';
+  const tick = engine.playheadTick;
+  let cur = engine.harmony[0];
+  for (const e of engine.harmony) { if (e.tick <= tick) cur = e; else break; }
+  const root = NOTE_NAMES[((cur.root % 12) + 12) % 12] || '?';
+  return root + ' ' + (SCALE_NAMES[cur.scaleId] || ('scale ' + cur.scaleId));
+}
+
 /**
  * The chrome, from state. One place, called by every surface's draw.
  *
@@ -590,6 +610,7 @@ function updateChrome() {
     velocity: state.velocity,
     rejectText: state.reject || '',
     viewName: state.view,
+    keyName: currentKey(),
   });
 }
 
@@ -1595,6 +1616,8 @@ window.__uni = {
                            if (ok) state.currentProject = name; return ok; },
   lpb: () => (engine ? Array.from(engine.lpb) : null),
   names: () => (engine ? engine.names.slice() : null),
+  harmony: () => (engine ? engine.harmony.slice() : null),
+  key: () => currentKey(),
   patcher: () => (engine ? { version: engine.patcherVersion, device: engine.patcherDevice,
     nodes: engine.patcherNodes.map(n => ({ id: n.id, type: n.type, cfg: Array.from(n.config) })),
     edges: engine.patcherEdges.slice() } : null),

@@ -7,13 +7,14 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 9;
+export const WIRE_VERSION = 10;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
 const HEADER_BYTES = 92;   // ...+ mixer 8 + names/patcher counts 16
+const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
 const PATCHER_EDGE_BYTES = 20;
@@ -35,6 +36,8 @@ export function createStore() {
     visualSample: 0,
     clipVersion: -1,
     harmonyVersion: 0,
+    /** The version the decoded timeline was read at; see the sidecar's twin. */
+    harmonyVersionSeen: -1,
     transport: 0,
     trackCount: 0,
     peaks: new Float32Array(64),
@@ -64,6 +67,8 @@ export function createStore() {
     /** Track names, published by the engine (SHM v13). Four surfaces were
      *  labelling lanes "T01" because nothing carried the real ones. */
     names: [],
+    /** The harmony timeline: {tick, root, scaleId} per key change. */
+    harmony: [],
     /** The patcher graph (SHM v14). One global graph today; the shape does not
      *  change when it becomes per-device. */
     patcherVersion: -1, patcherDevice: 0, patcherNodes: [], patcherEdges: [],
@@ -131,20 +136,37 @@ export function decode(buf, store) {
   for (let i = 0; i < 8; i++) store.lpb[i] = v.getUint8(60 + i);
   const mixerVersion = v.getUint32(68, true);
   const mixCount = v.getUint16(72, true);
+  const harmonyCount = v.getUint16(74, true);
   const nameCount = v.getUint16(76, true);
   const patcherVersion = v.getUint32(78, true);
   const patcherDevice = v.getUint32(82, true);
   const nodeCount = v.getUint16(86, true);
   const edgeCount = v.getUint16(88, true);
   const aggN = aggRows * aggTracks;
-  const varBefore = nameCount * NAME_BYTES + nodeCount * PATCHER_NODE_BYTES
+  const varBefore = harmonyCount * HARMONY_BYTES + nameCount * NAME_BYTES + nodeCount * PATCHER_NODE_BYTES
                   + edgeCount * PATCHER_EDGE_BYTES + mixCount * MIXER_BYTES;
   if (buf.byteLength < HEADER_BYTES + varBefore + peakCount * 4
       + noteCount * NOTE_BYTES + extentCount * EXTENT_BYTES + aggN * 8) return false;
 
-  // Names first, then the patcher, then the mixer — matching the encoder.
+  // Harmony, names, patcher, mixer — matching the encoder.
   {
     let o = HEADER_BYTES;
+    // store.harmonyVersion was set from the header a few lines above, so it is
+    // already the NEW value; `harmonyVersionSeen` is the one the decoded timeline
+    // came from. Two fields, because comparing a value against itself is the
+    // cache-key mistake this file has a table about.
+    if (harmonyCount !== store.harmony.length
+        || store.harmonyVersion !== store.harmonyVersionSeen) {
+      store.harmonyVersionSeen = store.harmonyVersion;
+      store.harmony.length = harmonyCount;
+      for (let i = 0; i < harmonyCount; i++) {
+        const b = o + i * HARMONY_BYTES;
+        store.harmony[i] = { tick: Number(v.getBigUint64(b, true)),
+                             root: v.getUint32(b + 8, true),
+                             scaleId: v.getUint32(b + 12, true) };
+      }
+    }
+    o += harmonyCount * HARMONY_BYTES;
     // Compared, not keyed on clipVersion. A rename changes a name and nothing
     // else, so keying this on the clip version made the engine accept the
     // command, the ack say ok, and the name never move — and I made the same
@@ -197,7 +219,7 @@ export function decode(buf, store) {
     }
   }
 
-  const MIXER_AT = HEADER_BYTES + nameCount * NAME_BYTES
+  const MIXER_AT = HEADER_BYTES + harmonyCount * HARMONY_BYTES + nameCount * NAME_BYTES
                  + nodeCount * PATCHER_NODE_BYTES + edgeCount * PATCHER_EDGE_BYTES;
   if (mixerVersion !== store.mixerVersion || mixCount !== store.mixCount) {
     for (let i = 0; i < mixCount && i < store.mixGain.length; i++) {

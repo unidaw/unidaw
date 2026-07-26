@@ -65,7 +65,7 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
   scales.title = 'Scale browser';
   const scaleIcon = document.createElement('i');
   scaleIcon.className = 'ph ph-circles-three';
-  const scaleLabel = label('ch-scale', 'C major');
+  const scaleLabel = label('ch-scale', '—');
   const scaleKey = label('ch-key', '⌘⇧S');
   scales.append(scaleIcon, scaleLabel, scaleKey);
 
@@ -86,7 +86,7 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
   if (onScales) scales.addEventListener('click', onScales);
 
   // Cached scalars, so a write only happens when the value actually changes.
-  let lastTick = -1, lastTransport = -1, lastLink = '', lastOct = -1, lastStep = -1, lastVel = -1, lastReject = '', lastView = '';
+  let lastTick = -1, lastTransport = -1, lastLink = '', lastOct = -1, lastStep = -1, lastVel = -1, lastReject = '', lastView = '', lastKey = '';
 
   return {
     /** Called from the draw loop. Must stay allocation-free when nothing moves. */

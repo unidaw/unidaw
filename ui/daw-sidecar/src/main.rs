@@ -34,7 +34,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 9;
+const WIRE_VERSION: u16 = 10;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -237,6 +237,18 @@ struct Frame {
     /// other surface moving a fader.
     mixer: Vec<(i32, i32, u8)>,
     mixer_version: u32,
+    /// The harmony timeline: (nanotick, root, scale_id) per key change. The
+    /// chrome showed a hardcoded "C major" before this, which was wrong for
+    /// three quarters of the maximal project.
+    harmony: Vec<(u64, u32, u32)>,
+    /// The version the harmony we HOLD was read at. Not `harmony_version`, which
+    /// is refreshed from the snapshot earlier in the same function — comparing
+    /// against that makes the check always false and the timeline read exactly
+    /// once. Same cache-key mistake as the names, caught this time before it
+    /// shipped, by writing the comparison and then reading the order.
+    harmony_read_at: u32,
+    /// -1 is impossible for a u32 version, so this starts "never read".
+    harmony_ever_read: bool,
     /// Track names (SHM v13). Four surfaces were labelling lanes "T01".
     names: Vec<String>,
     /// The patcher graph (SHM v14). One global graph today; the region gains
@@ -286,12 +298,17 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&(f.mixer.len() as u16).to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());                   // pad to 8
     // Names: 24 bytes each, nul-padded, fixed stride so the client can index.
+    out.extend_from_slice(&(f.harmony.len() as u16).to_le_bytes());
     out.extend_from_slice(&(f.names.len() as u16).to_le_bytes());
     out.extend_from_slice(&f.patcher_version.to_le_bytes());
     out.extend_from_slice(&f.patcher_device.to_le_bytes());
     out.extend_from_slice(&(f.patcher_nodes.len() as u16).to_le_bytes());
     out.extend_from_slice(&(f.patcher_edges.len() as u16).to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());                   // pad to 8
+    for &(tick, root, scale) in &f.harmony {
+        out.extend_from_slice(&tick.to_le_bytes());
+        out.extend_from_slice(&root.to_le_bytes());
+        out.extend_from_slice(&scale.to_le_bytes());               // 16 bytes each
+    }
     for n in &f.names {
         let b = n.as_bytes();
         let take = b.len().min(24);
@@ -352,6 +369,17 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     }
 }
 
+/// Whether the harmony we hold is out of date. Its own version, not the clip
+/// one: a key change touches neither notes nor placements, and keying it on
+/// clip_version is the mistake that made renames invisible.
+fn f_harmony_stale(out: &Frame) -> bool {
+    // `harmony_read_at` alone, not `is_empty()` as well: the engine currently
+    // publishes an EMPTY timeline (the region is there, event_count is 0), and
+    // re-reading an empty one every frame is a poll for something that only
+    // changes when the version does.
+    out.harmony_read_at != out.harmony_version
+}
+
 fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u32, vp: Viewport) -> bool {
     // read_snapshot performs the load-v0 / read / acquire-fence / load-v1 retry
     // and returns the version. Never read header fields raw — that is how you tear.
@@ -401,6 +429,16 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     // compares. That is cheap here; the browser is the allocation-sensitive side,
     // not this one.
     out.names = h.read_track_names();
+
+    // Keyed on the engine's own harmony version, which moves only on a change.
+    if !out.harmony_ever_read || f_harmony_stale(out) {
+        out.harmony_ever_read = true;
+        out.harmony_read_at = out.harmony_version;
+        out.harmony.clear();
+        for e in h.read_harmony() {
+            out.harmony.push((e.nanotick, e.root, e.scale_id));
+        }
+    }
 
     let pv = h.patcher_version();
     if pv != out.patcher_version || out.patcher_nodes.is_empty() {

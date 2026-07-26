@@ -21,7 +21,7 @@ use crate::layout::{
     UiCommandPayload, UiPatcherEdge, UiPatcherNode, UiPatcherRegion, K_SHM_MAGIC,
     K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES,
     K_UI_MAX_TRACKS,
-};
+    UiHarmonyEvent, UiHarmonySnapshot, K_UI_MAX_HARMONY_EVENTS,};
 use crate::reader::{SeqlockReader, UiSnapshot};
 
 /// Per-track mixer read-back. Gain in millibels, pan in thousandths (integers —
@@ -336,6 +336,36 @@ impl EngineHandle {
 
     /// The published patcher graph the engine runs (one global graph today),
     /// under the seqlock. `device_id` is the device it's parked on (0 = default).
+    /// The harmony timeline the engine published: root and scale per position.
+    ///
+    /// Read under the same seqlock as everything else. The UI showed a hardcoded
+    /// "C major" before this existed, which was wrong for three quarters of the
+    /// maximal project — a label stating something false is worse than no label.
+    pub fn read_harmony(&self) -> Vec<UiHarmonyEvent> {
+        loop {
+            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue;
+            }
+            let off = unsafe { (*self.header).ui_harmony_offset };
+            if off == 0 {
+                return Vec::new();
+            }
+            let snap =
+                self._mmap.as_ptr().wrapping_add(off as usize) as *const UiHarmonySnapshot;
+            let n = (unsafe { (*snap).event_count } as usize).min(K_UI_MAX_HARMONY_EVENTS);
+            let mut out = Vec::with_capacity(n);
+            for i in 0..n {
+                out.push(unsafe { (*snap).events[i] });
+            }
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                return out;
+            }
+        }
+    }
+
     pub fn read_patcher(&self) -> PatcherView {
         loop {
             let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
