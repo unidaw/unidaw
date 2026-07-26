@@ -1015,6 +1015,21 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>, viewp
 }
 
 fn main() {
+    // Encode an empty frame and check the header came out the length the client
+    // expects. debug_assert catches this in development and is compiled out of
+    // the build we actually ship, which is the one where a two-byte drift
+    // silently reinterprets every field after it. Refuse to start instead.
+    {
+        let mut probe = Vec::new();
+        encode(&Frame::default(), &mut probe);
+        if probe.len() != FULL_HEADER_BYTES {
+            eprintln!("sidecar: header is {} bytes, wire.js expects {FULL_HEADER_BYTES} — \
+                       the two have drifted and every field after the mismatch would be \
+                       misread. Fix encode() and HEADER_BYTES together.", probe.len());
+            std::process::exit(2);
+        }
+    }
+
     let args = parse_args();
     let listener = match TcpListener::bind(("127.0.0.1", args.port)) {
         Ok(l) => l,
