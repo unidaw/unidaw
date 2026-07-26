@@ -202,6 +202,35 @@ ok(pa.length === pb.length && pa.every((n, i) => n.pitch === pb[i].pitch + 12),
 await page.evaluate(() => window.__uni.pianoEdit('transpose', -12));
 await page.waitForTimeout(3500);
 
+section('arrange interaction');
+await page.evaluate(() => window.__uni.view('arrange'));
+await frames();
+const clipBox = await page.evaluate(() => {
+  const c = document.querySelector('.ar-clip');
+  if (!c) return null;
+  const r = c.getBoundingClientRect();
+  return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+});
+if (clipBox) {
+  const tickWas = (await E()).playheadTick;
+  await page.mouse.click(clipBox.x, clipBox.y);
+  await page.waitForTimeout(700);
+  const s1 = await page.evaluate(() => ({
+    sel: window.__uni.state().selectedPlacement,
+    marked: document.querySelectorAll('.ar-clip.sel').length }));
+  // Clicking a clip must NOT move the playhead: dragging clips is the commoner
+  // intent there and a stray seek would be a surprise.
+  ok(s1.sel !== null && s1.marked === 1 && (await E()).playheadTick === tickWas,
+     'clicking a clip selects it and does not seek', JSON.stringify(s1));
+  await page.mouse.click(clipBox.x + 700, clipBox.y);
+  await page.waitForTimeout(700);
+  const s2 = await page.evaluate(() => window.__uni.state().selectedPlacement);
+  ok(s2 === null && (await E()).playheadTick !== tickWas,
+     'clicking empty lane seeks and clears the selection');
+} else {
+  ok(false, 'a clip to click');
+}
+
 section('aggregate zooms');
 await page.evaluate(() => window.__uni.view('tracker'));
 const aggAt = async (z) => {
