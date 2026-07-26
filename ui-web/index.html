@@ -131,6 +131,17 @@ function sendMixer(track) {
 
 const browserHost = document.getElementById('browser');
 const browser = new Browser(browserHost, {
+  onSave: (name) => {
+    if (!conn || !conn.saveProject(name)) { state.reject = 'no engine'; schedule(); return; }
+    state.currentProject = name;
+    // The engine writes the file after it processes the command, and there is no
+    // ack for "the file exists now" — an immediate re-list returns the old set and
+    // the project you just saved is missing from its own browser. Re-list once the
+    // write has plausibly landed; the rail also re-lists whenever it opens.
+    setTimeout(() => { if (conn) { conn.send({ type: 'list' }); schedule(); } }, 700);
+    state.reject = null;
+    schedule();
+  },
   onOpen: (name) => {
     if (!conn || !conn.loadProject(name)) { state.reject = 'no engine'; schedule(); return; }
     state.currentProject = name;
@@ -147,8 +158,8 @@ const dockHost = document.getElementById('dock');
 // does, so the two can never drift into doing different things.
 const dock = new Dock(dockHost, {
   setView: (v) => { if (v) state.view = v; schedule(); return state.view; },
-  load: (n) => conn && conn.loadProject(n),
-  save: (n) => conn && conn.saveProject(n),
+  load: (n) => { const ok = conn && conn.loadProject(n); if (ok) state.currentProject = n; return ok; },
+  save: (n) => { const ok = conn && conn.saveProject(n); if (ok) state.currentProject = n; return ok; },
   listProjects: () => conn && conn.send({ type: 'list' }),
   transport: (what) => cmd(what),
   seek: (tick) => conn && conn.send({ type: 'seek', track: state.cursor.track, tick: Math.max(0, tick) }),
@@ -899,10 +910,15 @@ addEventListener('keydown', (e) => {
 
   // 2.2 The rail owns the keyboard while it is open.
   if (state.browserOpen) {
+    // The save field owns the keyboard while it is up, or typing a project name
+    // containing 'b' would close the rail out from under it.
+    const act = browser.feedSave(k);
+    if (act !== 'ignore') return done();
     if (k === 'Escape' || k === 'b' || k === 'B') { state.browserOpen = false; return done(); }
     if (k === 'ArrowDown') { browser.move(1); return done(); }
     if (k === 'ArrowUp') { browser.move(-1); return done(); }
     if (k === 'Enter') { browser.openSelected(); return done(); }
+    if (k === 's' || k === 'S') { browser.beginSave(state.currentProject); return done(); }
     return done();                              // swallow the rest, do not edit behind it
   }
   if (k === 'b' || k === 'B') {
@@ -1178,7 +1194,7 @@ window.__uni = {
                  state.pianoZoom = 3; state.pianoStart = 0; state.pianoLow = 36;
                  state.pianoAll = false; state.selectedNote = -1;
                  state.browserOpen = false; state.projects = []; state.currentProject = '';
-                 browser.selected = 0;
+                 browser.selected = 0; browser.cancelSave();
                  state.dockOpen = false; dock.clear(); state.helpOpen = false;
                  // The HUD carries a live node count and frame counter. Pin it
                  // here too, or a scene inherits whatever the previous scene's
@@ -1225,8 +1241,12 @@ window.__uni = {
                lpb: Uint8Array.from(lpb), notesRevision: 1, aggRevision: 1 };
     draw();
   },
-  loadProject: (name) => conn && conn.loadProject(name),
-  saveProject: (name) => conn && conn.saveProject(name),
+  // currentProject is set here too, not only in the rail: it seeds save-as, and a
+  // project opened from the dock or a test is just as much "the open project".
+  loadProject: (name) => { const ok = conn && conn.loadProject(name);
+                           if (ok) state.currentProject = name; return ok; },
+  saveProject: (name) => { const ok = conn && conn.saveProject(name);
+                           if (ok) state.currentProject = name; return ok; },
   lpb: () => (engine ? Array.from(engine.lpb) : null),
   view: (v) => { if (v) { state.view = v; draw(); } return state.view; },
   arrangeProbe: () => arrange.probe(),
@@ -1247,6 +1267,8 @@ window.__uni = {
   /** Run a console command. THE agent entry point — one grammar, every surface. */
   run: (line) => { dock.submit(line); dock.render(); return dock.probe().last; },
   projects: () => state.projects.slice(),
+  saveAs: (name) => { browser.beginSave(name); for (const c of name) browser.feedSave(c);
+                      return browser.feedSave('Enter'); },
   setGain: (t, pos) => { mixerState.strips[t].gain = gainAtPosition(pos); sendMixer(t); },
   setPan: (t, p) => { mixerState.strips[t].pan = p; sendMixer(t); },
   toggleStrip: (t, w) => { mixerState.strips[t].flags ^= w === 'mute' ? FLAG_MUTE : FLAG_SOLO; sendMixer(t); },

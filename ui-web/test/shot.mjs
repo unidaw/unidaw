@@ -185,6 +185,11 @@ for (const scene of SCENES) {
     // These are different things — the highlighted row is not necessarily the
     // loaded one — and a rail that conflates them tells you nothing.
     ok(marks.sel === 1 && marks.cur === 1, `selection and loaded drawn apart: ${JSON.stringify(marks)}`);
+    // Save-as is a mode inside the rail, not a dialog, so it has to be visible
+    // as a mode rather than as the list looking slightly different.
+    const saving = await page.evaluate(() => { window.__uni.browserProbe();
+      return document.querySelectorAll('.br-save.on').length; });
+    ok(saving === 0, 'save field hidden until asked for');
     console.log(`  ${bp.items.length} projects, selected ${bp.selected}, current ${bp.current}`);
     await shoot(scene);
     continue;

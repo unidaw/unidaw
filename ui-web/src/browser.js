@@ -31,9 +31,19 @@ export class Browser {
     this.emptyEl = div('br-empty', host);
     this.emptyEl.appendChild(document.createTextNode('no projects found'));
 
+    // Save-as. An inline field rather than a dialog: the rail already owns the
+    // keyboard while it is open, so a second focus owner would be one too many.
+    this.saveRow = div('br-save', host);
+    this.savePrompt = div('br-saveprompt', this.saveRow);
+    this.savePrompt.appendChild(document.createTextNode('save as'));
+    this.saveName = div('br-savename', this.saveRow);
+    this.saveName.appendChild(document.createTextNode(''));
+    this.saving = false;
+    this.saveText = '';
+
     const foot = div('br-foot', host);
     this.hint = div('br-hint', foot);
-    this.hint.appendChild(document.createTextNode('B closes · Enter opens'));
+    this.hint.appendChild(document.createTextNode(''));
 
     this.pool = [];
     this.items = [];
@@ -46,6 +56,37 @@ export class Browser {
       this.selected = Number(row.dataset.index);
       this.onOpen && this.onOpen(this.items[this.selected]);
     });
+  }
+
+  /** Begin save-as, seeded with the loaded project's name. */
+  beginSave(seed) {
+    this.saving = true;
+    this.saveText = seed || '';
+  }
+  cancelSave() { this.saving = false; this.saveText = ''; }
+
+  /**
+   * Feed a keystroke to the save field. Returns 'consumed', 'commit', 'cancel'
+   * or 'ignore' — the same vocabulary the cell entry buffer uses, because it is
+   * the same problem and a second vocabulary would be one to remember.
+   */
+  feedSave(key) {
+    if (!this.saving) return 'ignore';
+    if (key === 'Escape') { this.cancelSave(); return 'cancel'; }
+    if (key === 'Enter') {
+      const name = this.saveText.trim();
+      if (!name) { return 'consumed'; }
+      this.saving = false;
+      this.onSave && this.onSave(name);
+      return 'commit';
+    }
+    if (key === 'Backspace') { this.saveText = this.saveText.slice(0, -1); return 'consumed'; }
+    if (key.length !== 1) return 'ignore';
+    // Matches what the sidecar accepts, so a name cannot be typed here and then
+    // silently refused two hops away.
+    if (!/[A-Za-z0-9._-]/.test(key)) return 'consumed';
+    if (this.saveText.length < 28) this.saveText += key;
+    return 'consumed';
   }
 
   setItems(names, current) {
@@ -93,10 +134,21 @@ export class Browser {
       this.count.firstChild.nodeValue = String(n);
       this.emptyEl.style.display = n ? 'none' : '';
     }
+    if (this._saving !== this.saving) {
+      this._saving = this.saving;
+      this.saveRow.classList.toggle('on', this.saving);
+    }
+    if (this._saveText !== this.saveText) {
+      this._saveText = this.saveText;
+      this.saveName.firstChild.nodeValue = this.saveText + '\u2588';
+    }
+    const hint = this.saving ? 'Enter saves · Esc cancels' : 'Enter opens · S saves as · B closes';
+    if (this._hint !== hint) { this._hint = hint; this.hint.firstChild.nodeValue = hint; }
   }
 
   probe() {
     return { items: this.items.slice(), selected: this.selected,
-             current: this.current, domNodes: this.pool.length };
+             current: this.current, saving: this.saving, saveText: this.saveText,
+             domNodes: this.pool.length };
   }
 }

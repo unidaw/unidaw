@@ -39,6 +39,17 @@
   padding: 10px; color: var(--uni-text-gutter);
 }
 
+.br-save {
+  flex: 0 0 auto;
+  display: none; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--uni-rule-gutter);
+  background: var(--uni-surface-cursor-cell);
+}
+.br-save.on { display: flex; }
+.br-saveprompt { color: var(--uni-text-gutter); }
+.br-savename { color: var(--base-text); }
+
 .br-foot {
   flex: 0 0 auto;
   padding: 6px 10px;
