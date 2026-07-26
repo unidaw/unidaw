@@ -202,6 +202,30 @@ ok(pa.length === pb.length && pa.every((n, i) => n.pitch === pb[i].pitch + 12),
 await page.evaluate(() => window.__uni.pianoEdit('transpose', -12));
 await page.waitForTimeout(3500);
 
+section('aggregate zooms');
+await page.evaluate(() => window.__uni.view('tracker'));
+const aggAt = async (z) => {
+  await page.evaluate((x) => window.__uni.setZoom(x), z);
+  await page.waitForTimeout(900);
+  await frames();
+  return page.evaluate(() => ({
+    engineRows: window.__uni.aggregates().rows,
+    contour: document.querySelectorAll('.tk-cell[data-kind="contour"]').length,
+    notes: document.querySelectorAll('.tk-cell[data-kind="note"]').length,
+  }));
+};
+const fine = await aggAt(3), bar = await aggAt(4), fourBar = await aggAt(5);
+ok(fine.contour === 0 && fine.notes > 0, 'a fine zoom draws notes, not contours');
+ok(bar.contour > 0 && bar.notes === 0, 'a bar zoom draws contours, not notes');
+// The bug this replaced: both aggregate zooms asked for beat resolution and got
+// identical data, so a 4-bar row showed one beat of it.
+ok(fourBar.engineRows === bar.engineRows * 4,
+   'each coarser zoom asks for four times the beats',
+   `${bar.engineRows} -> ${fourBar.engineRows}`);
+ok(fourBar.contour < bar.contour,
+   'and folds them into fewer rows', `${bar.contour} -> ${fourBar.contour}`);
+await page.evaluate(() => window.__uni.setZoom(3));
+
 section('piano roll drag');
 await page.evaluate(() => { window.__uni.view('piano'); window.__uni.pianoAll(false);
                             window.__uni.run('goto 0 0'); });
