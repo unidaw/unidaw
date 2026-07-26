@@ -52,6 +52,7 @@ const SCENES = [
   { name: 'arrange', arrange: true, setup: async (p) => p.evaluate(() => window.__uni.useArrangeFixture()) },
   { name: 'arrange-zoomed', arrange: true, setup: async (p) => p.evaluate(() => {
       window.__uni.useArrangeFixture(); window.__uni.arrangeZoom(5); }) },
+  { name: 'browser', browser: true, setup: async (p) => p.evaluate(() => window.__uni.useBrowserFixture()) },
   { name: 'piano', piano: true, setup: async (p) => p.evaluate(() => window.__uni.usePianoFixture()) },
   { name: 'piano-zoomed', piano: true, setup: async (p) => p.evaluate(() => {
       window.__uni.usePianoFixture(); window.__uni.pianoZoom(5); }) },
@@ -133,6 +134,23 @@ for (const scene of SCENES) {
     ok(a.domNodes < 1200, `arrange dom bounded: ${a.domNodes}`);
     ok(a.playheadX >= 0, `playhead placed: ${a.playheadX}`);
     console.log(`  ${a.zoom}  ${a.clips} clips  ${a.gridLines} gridlines  ${a.domNodes} nodes`);
+    await shoot(scene);
+    continue;
+  }
+
+  if (scene.browser) {
+    const bp = await page.evaluate(() => window.__uni.browserProbe());
+    ok(bp.items.length === 5, `projects listed: ${bp.items.length}`);
+    ok(bp.selected === 2, `selection: ${bp.selected}`);
+    ok(bp.current === 'maximal', `loaded project marked: ${bp.current}`);
+    const marks = await page.evaluate(() => ({
+      sel: document.querySelectorAll('.br-item.sel').length,
+      cur: document.querySelectorAll('.br-item.cur').length,
+    }));
+    // These are different things — the highlighted row is not necessarily the
+    // loaded one — and a rail that conflates them tells you nothing.
+    ok(marks.sel === 1 && marks.cur === 1, `selection and loaded drawn apart: ${JSON.stringify(marks)}`);
+    console.log(`  ${bp.items.length} projects, selected ${bp.selected}, current ${bp.current}`);
     await shoot(scene);
     continue;
   }

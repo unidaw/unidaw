@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="src/arrange.css">
 <link rel="stylesheet" href="src/mixer.css">
 <link rel="stylesheet" href="src/piano.css">
+<link rel="stylesheet" href="src/browser.css">
 <style>
   html, body { margin: 0; height: 100%; background: var(--uni-surface-tracker-bg); color: var(--base-text); }
   body { font-family: var(--font-chrome); font-size: var(--font-size-chrome); overflow: hidden; }
@@ -36,7 +37,11 @@
                   border-right: var(--uni-rule-track-width) solid var(--uni-rule-track); }
   #tracker, #arrange, #mixer, #piano { position: absolute; left: 0; right: 0; bottom: 16px;
              top: calc(38px + var(--metrics-header-height)); }
-  #arrange[hidden], #mixer[hidden], #piano[hidden] { display: none; }
+  #arrange[hidden], #mixer[hidden], #piano[hidden], #browser[hidden] { display: none; }
+  /* The rail overlays; it does not reflow the surface underneath, so opening it
+     never costs a relayout of a pooled grid. */
+  #browser { position: absolute; left: 0; bottom: 16px;
+             top: calc(38px + var(--metrics-header-height)); }
   #hud { background: var(--uni-surface-tracker-bg); padding: 1px 4px; }
 </style>
 
@@ -46,6 +51,7 @@
 <div id="arrange" hidden></div>
 <div id="mixer" hidden></div>
 <div id="piano" hidden></div>
+<div id="browser" hidden></div>
 <div id="hud"></div>
 
 <script type="module">
@@ -61,6 +67,7 @@ import { buildMixerModel, createMixerBuffer, createMixerState,
          gainAtPosition, FLAG_MUTE, FLAG_SOLO } from './src/mixermodel.js';
 import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch } from './src/pianomodel.js';
+import { Browser } from './src/browser.js';
 import { createEntry, feed, cancel, begin, parseToken, editing, NOTE_KEYS, NOTE_OFF_KEY,
          TOKEN_KEY, pitchOf, pitchToToken, hexValue, shiftDigit } from './src/entry.js';
 
@@ -102,6 +109,17 @@ function sendMixer(track) {
   }
   schedule();
 }
+
+const browserHost = document.getElementById('browser');
+const browser = new Browser(browserHost, {
+  onOpen: (name) => {
+    if (!conn || !conn.loadProject(name)) { state.reject = 'no engine'; schedule(); return; }
+    state.currentProject = name;
+    state.browserOpen = false;
+    state.reject = null;
+    schedule();
+  },
+});
 
 const pianoHost = document.getElementById('piano');
 let pianoBuf = null;
@@ -155,9 +173,9 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   octave: 4, editStep: 1, velocity: 100, zoom: 3, digitCell: -1, digitAcc: 0,
   // Which surface is showing. Both consume the same engine store; only the
   // projection differs, which is the whole point of the view-model boundary.
-  view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: -1,
+  projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: -1,
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
-  pianoFitPending: false, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+  pianoFitPending: false, browserOpen: false, currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -407,6 +425,8 @@ function drawArrange() {
 }
 
 function draw() {
+  if (browserHost.hidden === state.browserOpen) browserHost.hidden = !state.browserOpen;
+  if (state.browserOpen) { browser.setItems(state.projects, state.currentProject); browser.render(); }
   // One scheduler, two surfaces. Hiding the other host rather than unmounting it
   // keeps its pools warm, so switching views costs no rebuild.
   const v = state.view;
@@ -631,6 +651,22 @@ addEventListener('keydown', (e) => {
     if (act === 'consumed' || act === 'cancel') return done();
   }
 
+  // 2.2 The rail owns the keyboard while it is open.
+  if (state.browserOpen) {
+    if (k === 'Escape' || k === 'b' || k === 'B') { state.browserOpen = false; return done(); }
+    if (k === 'ArrowDown') { browser.move(1); return done(); }
+    if (k === 'ArrowUp') { browser.move(-1); return done(); }
+    if (k === 'Enter') { browser.openSelected(); return done(); }
+    return done();                              // swallow the rest, do not edit behind it
+  }
+  if (k === 'b' || k === 'B') {
+    state.browserOpen = true;
+    // Refresh on open rather than polling: the list changes when something
+    // saves a project, which is rare and never while the rail is shut.
+    conn && conn.send({ type: 'list' });
+    return done();
+  }
+
   // 2.5 View switch, and arrange's own navigation. Arrange has no rows and no
   //     cell editing, so it must not fall through into the tracker's keys.
   if (k === 'Tab') {
@@ -819,7 +855,12 @@ draw();
 // declaration is a temporal-dead-zone throw that kills the whole module.
 conn = connectEngine({
   onStatus: (s, d) => { state.link = s + (d ? ': ' + d : ''); schedule(); },
-  onAck: (msg) => { state.ack = String(msg).slice(0, 80);
+  onAck: (msg) => {
+    // The project list comes back on the command socket's ack channel.
+    if (typeof msg === 'string' && msg.indexOf('"projects"') >= 0) {
+      try { state.projects = JSON.parse(msg).projects || []; schedule(); } catch (e) { /* keep the old list */ }
+    }
+    state.ack = String(msg).slice(0, 80);
     (window.__acks || (window.__acks = [])).push(state.ack); },
   onChange: (store) => { engine = store; reapPending(store.clipVersion, performance.now()); state.playhead = tickToRow(store.playheadTick); schedule(); },
 });
@@ -858,6 +899,8 @@ window.__uni = {
                  mixRevision++;
                  state.pianoZoom = 3; state.pianoStart = 0; state.pianoLow = 36;
                  state.pianoAll = false; state.selectedNote = -1;
+                 state.browserOpen = false; state.projects = []; state.currentProject = '';
+                 browser.selected = 0;
                  // The HUD carries a live node count and frame counter. Pin it
                  // here too, or a scene inherits whatever the previous scene's
                  // timer last wrote and the golden differs by that strip alone.
@@ -915,6 +958,10 @@ window.__uni = {
     if (low !== undefined) state.pianoLow = low; draw(); },
   pianoAll: (on) => { state.pianoAll = !!on; draw(); },
   pianoFit: () => { fitPiano(); draw(); },
+  browser: (on) => { state.browserOpen = on === undefined ? !state.browserOpen : !!on;
+    if (state.browserOpen) conn && conn.send({ type: 'list' }); draw(); return state.browserOpen; },
+  browserProbe: () => browser.probe(),
+  projects: () => state.projects.slice(),
   setGain: (t, pos) => { mixerState.strips[t].gain = gainAtPosition(pos); sendMixer(t); },
   setPan: (t, p) => { mixerState.strips[t].pan = p; sendMixer(t); },
   toggleStrip: (t, w) => { mixerState.strips[t].flags ^= w === 'mute' ? FLAG_MUTE : FLAG_SOLO; sendMixer(t); },
@@ -1028,6 +1075,20 @@ window.__uni = {
                lpb: Uint8Array.from([4, 4, 4, 3, 4, 6, 0, 0]),
                rowGrid: 1, notesRevision: 1, aggRevision: 1 };
     fitPiano();
+    draw();
+  },
+  /**
+   * Browser fixture. Goldens run with the socket closed, so the real list — which
+   * arrives from the sidecar — would be empty and the scene would only ever prove
+   * that the empty state renders.
+   */
+  useBrowserFixture: () => {
+    state.useEngine = false; state.hudFrozen = true; conn.close();
+    hudText.nodeValue = 'browser-fixture';
+    state.projects = ['webtest', 'maximal', 'sketch-01', 'live-set', 'drums-only'];
+    state.currentProject = 'maximal';
+    state.browserOpen = true;
+    browser.selected = 2;
     draw();
   },
   /** Which rows a lane actually has, for assertions that don't read pixels. */

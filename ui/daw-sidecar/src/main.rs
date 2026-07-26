@@ -122,10 +122,17 @@ struct Args {
     cmd_port: u16,
     shm: String,
     hz: u32,
+    /// Where projects live. The engine resolves names against its own
+    /// DAW_PROJECT_DIR; we need the same directory to LIST them, because the
+    /// browser cannot read a filesystem and the engine publishes no index.
+    projects: String,
 }
 
 fn parse_args() -> Args {
-    let mut a = Args { port: 8174, cmd_port: 8175, shm: default_shm_name(), hz: 120 };
+    let mut a = Args {
+        port: 8174, cmd_port: 8175, shm: default_shm_name(), hz: 120,
+        projects: std::env::var("DAW_PROJECT_DIR").unwrap_or_else(|_| "presets/projects".into()),
+    };
     let v: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < v.len() {
@@ -134,6 +141,7 @@ fn parse_args() -> Args {
             "--cmd-port" if i + 1 < v.len() => { a.cmd_port = v[i + 1].parse().unwrap_or(a.cmd_port); i += 2; }
             "--shm" if i + 1 < v.len() => { a.shm = v[i + 1].clone(); i += 2; }
             "--hz" if i + 1 < v.len() => { a.hz = v[i + 1].parse().unwrap_or(a.hz).clamp(1, 1000); i += 2; }
+            "--projects" if i + 1 < v.len() => { a.projects = v[i + 1].clone(); i += 2; }
             _ => i += 1,
         }
     }
@@ -436,6 +444,36 @@ fn parse_num(body: &str, key: &str) -> Option<i64> {
     rest[start..start + end].parse().ok()
 }
 
+/// The projects on disk, newest first, as a JSON array of names.
+///
+/// Names only — the engine resolves them against its own project directory, and
+/// handing the client paths would invite it to send one back.
+fn list_projects(dir: &str) -> String {
+    let mut items: Vec<(std::time::SystemTime, String)> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let Some(stem) = name.strip_suffix(".uniproj.json") else { continue };
+            let when = entry.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+            items.push((when, stem.to_string()));
+        }
+    }
+    items.sort_by(|a, b| b.0.cmp(&a.0));
+    let mut out = String::from("{\"ok\":true,\"projects\":[");
+    for (i, (_, name)) in items.iter().enumerate() {
+        if i > 0 { out.push(','); }
+        out.push('"');
+        // Names come from the filesystem; a quote or backslash in one would
+        // produce a malformed reply the client silently fails to parse.
+        for c in name.chars() {
+            match c { '"' | '\\' => { out.push('\\'); out.push(c); } _ => out.push(c) }
+        }
+        out.push('"');
+    }
+    out.push_str("]}");
+    out
+}
+
 /// Pull a JSON string field. Same deliberately-small parser as `parse_num`:
 /// commands are a handful of flat objects we generate ourselves, so a real JSON
 /// dependency would be the largest thing in the binary for no gain.
@@ -532,10 +570,11 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     Ok(p)
 }
 
-fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport) {
+fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, projects: String) {
     for stream in listener.incoming().flatten() {
         let shm = shm.clone();
         let viewport = viewport.clone();
+        let projects = projects.clone();
         thread::spawn(move || {
             let mut ws = match tungstenite::accept(stream) { Ok(w) => w, Err(_) => return };
             // Attached HERE, on the thread that will use it: EngineHandle is not
@@ -552,6 +591,14 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport) 
                         // Viewport updates are not engine commands — they change
                         // what we project, not what the song contains, so they
                         // never touch the command ring.
+                        // Not an engine command: a directory listing. Answered
+                        // here because the browser cannot read a filesystem and
+                        // the engine publishes no project index.
+                        if t.contains("\"list\"") {
+                            let reply = list_projects(&projects);
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
                         if t.contains("\"linesPerBeat\"") {
                             let mut vp = viewport.load();
                             parse_viewport(&t, &mut vp);
@@ -713,7 +760,8 @@ fn main() {
             eprintln!("sidecar: ws://127.0.0.1:{} for commands", args.cmd_port);
             let shm = args.shm.clone();
             let vp = viewport.clone();
-            thread::spawn(move || serve_commands(l, shm, vp));
+            let projects = args.projects.clone();
+            thread::spawn(move || serve_commands(l, shm, vp, projects));
         }
         Err(e) => eprintln!("sidecar: no command port {} ({e}) — read-only", args.cmd_port),
     }
