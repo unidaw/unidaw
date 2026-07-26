@@ -110,7 +110,11 @@ daw::ProjectDocument makeDocument() {
   link.enabled = false;
   track.modLinks.push_back(link);
 
-  track.clip.addEvent(makeNote(0, 60, 100, 0, 240000));
+  daw::MusicalEvent opNote = makeNote(0, 60, 100, 0, 240000);
+  opNote.payload.note.retrigger = 3;
+  opNote.payload.note.probability = 60;
+  opNote.payload.note.delayNanoticks = 160000;
+  track.clip.addEvent(opNote);
   track.clip.addEvent(makeNote(240000, 64, 90, 1, 240000));
   track.clip.addEvent(makeChord(480000, 3, 0));
   document.tracks.push_back(std::move(track));
@@ -216,6 +220,27 @@ int main() {
   require(uidOk, "mod link target param uid16 lost");
   require(countEvents(track.clip, daw::MusicalEventType::Note) == 2, "notes lost");
   require(countEvents(track.clip, daw::MusicalEventType::Chord) == 1, "chords lost");
+  // Row ops (item 12) must survive the round trip; a note without ops must stay
+  // op-free (defaults are inert and are not written to disk).
+  const daw::NotePayload* firstNote = nullptr;
+  const daw::NotePayload* secondNote = nullptr;
+  for (const auto& event : track.clip.events()) {
+    if (event.type != daw::MusicalEventType::Note) continue;
+    if (event.nanotickOffset == 0) firstNote = &event.payload.note;
+    if (event.nanotickOffset == 240000) secondNote = &event.payload.note;
+  }
+  require(firstNote != nullptr && secondNote != nullptr, "row-op notes not found");
+  require(firstNote->retrigger == 3, "retrigger op lost");
+  require(firstNote->probability == 60, "probability op lost");
+  require(firstNote->delayNanoticks == 160000, "delay op lost");
+  require(secondNote->retrigger == 0 && secondNote->probability == 0 &&
+              secondNote->delayNanoticks == 0,
+          "op-free note gained spurious ops");
+  // The inert defaults must not bloat the file.
+  require(first.find("\"retrigger\"") != std::string::npos,
+          "retrigger not emitted for the op note");
+  require(first.find("\"probability\"") != std::string::npos,
+          "probability not emitted for the op note");
 
   bool foundChord = false;
   for (const auto& event : track.clip.events()) {

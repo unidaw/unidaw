@@ -53,7 +53,12 @@ ClipWindowResult buildUiClipWindowSnapshot(const MusicalClip& clip,
       note.pitch = event.payload.note.pitch;
       note.velocity = event.payload.note.velocity;
       note.column = event.payload.note.column;
+      note.retrigger = event.payload.note.retrigger;
+      note.probability = event.payload.note.probability;
+      note.delayNanoticks = event.payload.note.delayNanoticks;
       note.reserved = 0;
+      note.reserved2 = 0;
+      note.reserved3 = 0;
       ++noteCount;
     } else if (event.type == MusicalEventType::Chord) {
       if (chordCount >= kUiMaxClipChords) {

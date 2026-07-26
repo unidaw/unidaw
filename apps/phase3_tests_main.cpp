@@ -612,6 +612,144 @@ bool runNoteDurationTest() {
   return true;
 }
 
+// Item 12: the probability row op. Verifies the pure gate the audio path calls —
+// inert defaults, determinism, and that the roll rate tracks the percent.
+bool runRowOpProbabilityTest() {
+  using daw::noteProbabilityPasses;
+  const uint64_t nt = 480000;
+
+  // 0 (the default) and >=100 always sound: an op-free note is never gated.
+  for (uint8_t p : {uint8_t{0}, uint8_t{100}, uint8_t{200}}) {
+    for (uint64_t id = 1; id <= 50; ++id) {
+      if (!noteProbabilityPasses(id, nt, 60, 0, p)) {
+        std::cerr << "probability " << int(p) << " must always sound" << std::endl;
+        return false;
+      }
+    }
+  }
+
+  // Deterministic: the same note decides the same way every call, so a render is
+  // reproducible.
+  for (uint64_t id = 1; id <= 1000; ++id) {
+    const bool a = noteProbabilityPasses(id, nt, 64, 1, 50);
+    const bool b = noteProbabilityPasses(id, nt, 64, 1, 50);
+    if (a != b) {
+      std::cerr << "probability roll is not deterministic for id " << id << std::endl;
+      return false;
+    }
+  }
+
+  // Rate tracks the percent: over many distinct notes, the fraction that sound
+  // is close to the requested probability (not all-or-nothing).
+  auto rate = [&](uint8_t p) -> double {
+    int sounded = 0;
+    const int n = 4000;
+    for (uint64_t id = 1; id <= (uint64_t)n; ++id) {
+      if (noteProbabilityPasses(id, nt, 60, 0, p)) ++sounded;
+    }
+    return double(sounded) / n;
+  };
+  const double r25 = rate(25), r50 = rate(50), r75 = rate(75);
+  if (std::abs(r25 - 0.25) > 0.03 || std::abs(r50 - 0.50) > 0.03 ||
+      std::abs(r75 - 0.75) > 0.03) {
+    std::cerr << "probability rate off: p25=" << r25 << " p50=" << r50
+              << " p75=" << r75 << std::endl;
+    return false;
+  }
+
+  // Independent seeding: two notes differing only in pitch don't lock-step.
+  int differ = 0;
+  for (uint64_t id = 1; id <= 500; ++id) {
+    if (noteProbabilityPasses(id, nt, 60, 0, 50) !=
+        noteProbabilityPasses(id, nt, 61, 0, 50)) {
+      ++differ;
+    }
+  }
+  if (differ < 100) {
+    std::cerr << "pitch is not folded into the roll seed (differ=" << differ << ")"
+              << std::endl;
+    return false;
+  }
+  return true;
+}
+
+// Item 12: delay + retrigger expansion. The pure op->strikes step the (future)
+// audio-thread scheduler will drain; probability is separate and gates upstream.
+bool runRowOpExpandTest() {
+  using daw::expandNoteOps;
+  const uint64_t Q = 960000;
+
+  auto fail = [](const char* why) {
+    std::cerr << "expandNoteOps: " << why << std::endl;
+    return false;
+  };
+
+  // Op-free: exactly one strike spanning the whole duration.
+  {
+    auto s = expandNoteOps(1000, Q, 0, 0);
+    if (s.size() != 1 || s[0].onTick != 1000 || s[0].offTick != 1000 + Q) {
+      return fail("op-free note must yield one full-length strike");
+    }
+  }
+  // retrigger 1 is identical to no retrigger.
+  {
+    auto s = expandNoteOps(0, Q, 1, 0);
+    if (s.size() != 1 || s[0].onTick != 0 || s[0].offTick != Q) {
+      return fail("retrigger 1 must equal one strike");
+    }
+  }
+  // Delay shifts the whole note, preserving duration.
+  {
+    auto s = expandNoteOps(1000, Q, 0, 160000);
+    if (s.size() != 1 || s[0].onTick != 1000 + 160000 ||
+        s[0].offTick != 1000 + 160000 + Q) {
+      return fail("delay must shift onset and offset by the same amount");
+    }
+  }
+  // Retrigger 4 over a beat: four contiguous quarter-length re-strikes.
+  {
+    auto s = expandNoteOps(0, Q, 4, 0);
+    if (s.size() != 4) return fail("retrigger 4 must yield four strikes");
+    const uint64_t step = Q / 4;
+    for (uint64_t k = 0; k < 4; ++k) {
+      const uint64_t on = step * k;
+      const uint64_t off = (k == 3) ? Q : step * (k + 1);
+      if (s[k].onTick != on || s[k].offTick != off) {
+        return fail("retrigger 4 strike positions wrong");
+      }
+    }
+  }
+  // Invariants for an indivisible count: contiguous, covers exactly [start,end),
+  // last strike absorbs the remainder, every strike is non-empty.
+  {
+    const uint64_t dur = 1000000, start = 5000, delay = 7000;
+    auto s = expandNoteOps(start, dur, 3, delay);
+    if (s.size() != 3) return fail("retrigger 3 must yield three strikes");
+    if (s.front().onTick != start + delay) return fail("burst must start at start+delay");
+    if (s.back().offTick != start + delay + dur) return fail("burst must end at start+delay+dur");
+    for (size_t k = 0; k < s.size(); ++k) {
+      if (s[k].offTick <= s[k].onTick) return fail("strike must be non-empty");
+      if (k + 1 < s.size() && s[k].offTick != s[k + 1].onTick) {
+        return fail("strikes must be contiguous");
+      }
+    }
+  }
+  // A note retriggered more times than it has ticks is capped, never producing
+  // zero-length strikes.
+  {
+    auto s = expandNoteOps(0, 3, 200, 0);
+    if (s.size() != 3) return fail("retrigger must cap at the tick count");
+    for (const auto& strike : s) {
+      if (strike.offTick <= strike.onTick) return fail("capped strike is empty");
+    }
+  }
+  // Zero-duration note sounds nothing.
+  {
+    if (!expandNoteOps(0, 0, 4, 0).empty()) return fail("zero-duration must yield no strikes");
+  }
+  return true;
+}
+
 bool runResyncMismatchTest() {
   daw::UiDiffPayload diff{};
   const bool matches = daw::requireMatchingClipVersion(2, 5, diff);
@@ -1005,6 +1143,8 @@ int runAllTests(const std::string& pluginPath) {
       {"clip_param_event", [](const std::string&) { return runClipParamEventTest(); }},
       {"undo_stack", [](const std::string&) { return runUndoStackTest(); }},
       {"note_duration", [](const std::string&) { return runNoteDurationTest(); }},
+      {"row_op_probability", [](const std::string&) { return runRowOpProbabilityTest(); }},
+      {"row_op_expand", [](const std::string&) { return runRowOpExpandTest(); }},
       {"resync_mismatch", [](const std::string&) { return runResyncMismatchTest(); }},
       {"pulse_full", runPulseFullTest},
       {"note_off_full", runNoteOffFullTest},
@@ -1048,6 +1188,7 @@ int main(int argc, char** argv) {
       testName != "harmony_order" && testName != "snapshot" &&
       testName != "clip_param_event" &&
       testName != "undo_stack" && testName != "note_duration" &&
+      testName != "row_op_probability" && testName != "row_op_expand" &&
       testName != "resync_mismatch" &&
       testName != "pulse_full" && testName != "note_off_full" &&
       testName != "resurrection_full" && testName != "composition_full" &&
@@ -1088,6 +1229,12 @@ int main(int argc, char** argv) {
   }
   if (testName == "note_duration") {
     return runNoteDurationTest() ? 0 : 1;
+  }
+  if (testName == "row_op_probability") {
+    return runRowOpProbabilityTest() ? 0 : 1;
+  }
+  if (testName == "row_op_expand") {
+    return runRowOpExpandTest() ? 0 : 1;
   }
   if (testName == "resync_mismatch") {
     return runResyncMismatchTest() ? 0 : 1;

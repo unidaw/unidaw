@@ -100,6 +100,98 @@ impl TimeSpan {
     }
 }
 
+/// The inclusive row range a lane must render for a visible tick window, plus
+/// an iterator over (row_index, row_start_tick). This is the "give me rows for
+/// [start,end) at subdivision Z" query a windowed renderer wants: Z is the
+/// lane's `lines_per_beat`, the window is a tick span, and the rows come back
+/// beat-anchored so nothing shifts as the window scrolls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowWindow {
+    pub first_row: u64,
+    pub last_row: u64, // inclusive
+    grid: LaneGrid,
+}
+
+impl RowWindow {
+    pub fn len(&self) -> u64 {
+        self.last_row + 1 - self.first_row
+    }
+    pub fn is_empty(&self) -> bool {
+        false // first_row..=last_row is always at least one row
+    }
+    /// (row_index, tick_at_top_of_row) for each row in the window.
+    pub fn rows(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        (self.first_row..=self.last_row).map(move |r| (r, self.grid.tick_of_row(r)))
+    }
+}
+
+impl LaneGrid {
+    /// Rows covering `[start_tick, end_tick)`. The window always includes the
+    /// row containing `start_tick` and the row containing the last tick before
+    /// `end_tick`, so a partially-visible row at either edge is drawn.
+    pub fn window(&self, start_tick: u64, end_tick: u64) -> RowWindow {
+        let first = self.row_of_tick(start_tick);
+        let last = self.row_of_tick(end_tick.saturating_sub(1)).max(first);
+        RowWindow {
+            first_row: first,
+            last_row: last,
+            grid: *self,
+        }
+    }
+}
+
+/// What the engine considers authoritative for a row that collapses several
+/// events at coarse zoom — so the UI renders "[3x]" or a contour bar from a
+/// count and a pitch range instead of inventing its own aggregation policy.
+/// `representative` is the event at the row's own start tick if one lands there,
+/// else the earliest in the row — the one a single cell should show.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowAggregate {
+    pub count: u32,
+    pub representative: u8, // pitch of the representative event
+    pub pitch_min: u8,
+    pub pitch_max: u8,
+}
+
+/// Buckets `(tick, pitch)` events into one aggregate per row of `grid` within
+/// `window`. Events outside the window are ignored. A row with no events maps
+/// to `None`. Pure over its inputs, so it is the same on any front end.
+pub fn aggregate_rows(
+    events: &[(u64, u8)],
+    grid: LaneGrid,
+    window: RowWindow,
+) -> Vec<Option<RowAggregate>> {
+    let mut out = vec![None; window.len() as usize];
+    for &(tick, pitch) in events {
+        let row = grid.row_of_tick(tick);
+        if row < window.first_row || row > window.last_row {
+            continue;
+        }
+        let idx = (row - window.first_row) as usize;
+        let row_start = grid.tick_of_row(row);
+        match &mut out[idx] {
+            None => {
+                out[idx] = Some(RowAggregate {
+                    count: 1,
+                    representative: pitch,
+                    pitch_min: pitch,
+                    pitch_max: pitch,
+                });
+            }
+            Some(agg) => {
+                agg.count += 1;
+                agg.pitch_min = agg.pitch_min.min(pitch);
+                agg.pitch_max = agg.pitch_max.max(pitch);
+                // Prefer the event exactly on the row start as the representative.
+                if tick == row_start {
+                    agg.representative = pitch;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Re-grids a set of tick positions copied from one lane into another: the
 /// span is shifted to `dest_start` and each position keeps its offset, then
 /// snaps to the destination lane's grid. This is paste-by-time — copy a beat
@@ -199,6 +291,38 @@ mod tests {
         // 480_000 offset snaps to the nearest triplet row (320_000 or 640_000).
         assert_eq!(out[1], dest.snap(2 * NANOTICKS_PER_QUARTER + 480_000));
         assert_eq!(out[1], 2 * NANOTICKS_PER_QUARTER + 320_000);
+    }
+
+    #[test]
+    fn window_covers_partial_edge_rows() {
+        let g = LaneGrid::new(4); // 240_000/row
+        // Window from mid-row 1 to mid-row 3 must include rows 1,2,3.
+        let w = g.window(300_000, 3 * 240_000 + 10);
+        assert_eq!(w.first_row, 1);
+        assert_eq!(w.last_row, 3);
+        let rows: Vec<_> = w.rows().collect();
+        assert_eq!(rows, vec![(1, 240_000), (2, 480_000), (3, 720_000)]);
+    }
+
+    #[test]
+    fn aggregate_counts_and_ranges_per_row() {
+        let g = LaneGrid::new(1); // one row per beat — coarse zoom
+        let window = g.window(0, 4 * NANOTICKS_PER_QUARTER);
+        // Beat 0 has three notes; one lands exactly on the beat (rep), others high/low.
+        let events = [
+            (0u64, 60u8),          // on the row start -> representative
+            (120_000, 48),         // low, same beat
+            (240_000, 72),         // high, same beat
+            (NANOTICKS_PER_QUARTER, 64), // beat 1
+        ];
+        let rows = aggregate_rows(&events, g, window);
+        let b0 = rows[0].unwrap();
+        assert_eq!(b0.count, 3);
+        assert_eq!(b0.representative, 60, "the note on the beat represents the row");
+        assert_eq!(b0.pitch_min, 48);
+        assert_eq!(b0.pitch_max, 72);
+        assert_eq!(rows[1].unwrap().count, 1);
+        assert!(rows[2].is_none(), "empty beat aggregates to None");
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 8;
+pub const K_SHM_VERSION: u16 = 9;
 
 pub const K_UI_MAX_TRACKS: usize = 8;
 pub const K_UI_MAX_CLIP_NOTES: usize = 4096;
@@ -49,6 +49,11 @@ pub struct ShmHeader {
     pub ui_harmony_offset: u64,
     pub ui_harmony_bytes: u64,
     pub ui_track_peak_rms: [f32; K_UI_MAX_TRACKS],
+    // v9 (appended; earlier offsets unchanged, size stays 256). All-tracks
+    // published clip snapshot region and the agent's own command ring.
+    pub ui_clip_all_offset: u64,
+    pub ui_clip_all_bytes: u64,
+    pub ring_ui_agent_offset: u64,
 }
 
 #[repr(C, align(64))]
@@ -123,8 +128,15 @@ pub struct UiClipNote {
     pub pitch: u8,
     pub velocity: u8,
     pub column: u8,
+    /// Row op: 0/1 = one strike, N = N strikes.
+    pub retrigger: u8,
+    /// Row op: 0 = always sound, 1..=100 = percent chance.
+    pub probability: u8,
     pub reserved: u8,
-    pub reserved2: u32,
+    pub reserved2: u16,
+    /// Row op: onset delay in absolute nanoticks.
+    pub delay_nanoticks: u32,
+    pub reserved3: u32,
 }
 
 #[repr(C)]
@@ -509,13 +521,16 @@ mod tests {
         // Widened for the authored EventId; the C++ side static_asserts the
         // same size, so a mismatch fails at compile time on one end and here
         // on the other.
-        const_assert_eq!(size_of::<UiClipNote>(), 32);
+        const_assert_eq!(size_of::<UiClipNote>(), 40);
         assert_eq!(offset_of!(UiClipNote, t_on), 0);
         assert_eq!(offset_of!(UiClipNote, t_off), 8);
         assert_eq!(offset_of!(UiClipNote, note_id), 16);
         assert_eq!(offset_of!(UiClipNote, pitch), 24);
         assert_eq!(offset_of!(UiClipNote, velocity), 25);
         assert_eq!(offset_of!(UiClipNote, column), 26);
+        assert_eq!(offset_of!(UiClipNote, retrigger), 27);
+        assert_eq!(offset_of!(UiClipNote, probability), 28);
+        assert_eq!(offset_of!(UiClipNote, delay_nanoticks), 32);
     }
 
     #[test]
@@ -550,5 +565,10 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_harmony_offset), 168);
         assert_eq!(offset_of!(ShmHeader, ui_harmony_bytes), 176);
         assert_eq!(offset_of!(ShmHeader, ui_track_peak_rms), 184);
+        // v9 tail fields; header size stays 256 (they fit inside the align(64)
+        // padding after the peak-rms array).
+        assert_eq!(offset_of!(ShmHeader, ui_clip_all_offset), 216);
+        assert_eq!(offset_of!(ShmHeader, ui_clip_all_bytes), 224);
+        assert_eq!(offset_of!(ShmHeader, ring_ui_agent_offset), 232);
     }
 }

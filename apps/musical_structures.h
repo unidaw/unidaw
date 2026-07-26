@@ -13,12 +13,83 @@
 
 namespace daw {
 
+// splitmix64 finalizer — a cheap, well-distributed integer hash used to turn a
+// stable note identity into a reproducible [0,100) roll for probability ops.
+// Keyed on the note's EventId (not the runtime voice id), so the same note makes
+// the same decision on every render: generated content stays reproducible.
+inline uint64_t mix64(uint64_t x) {
+  x += 0x9E3779B97F4A7C15ull;
+  x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+  x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+  return x ^ (x >> 31);
+}
+
 enum class MusicalEventType {
   Note,
   Param,
   Meta,
   Chord,
 };
+
+// One sounded articulation of a note after its time-spreading row ops are
+// applied. Ticks share the origin of the note's own start tick.
+struct NoteStrike {
+  uint64_t onTick = 0;
+  uint64_t offTick = 0;  // always > onTick
+};
+
+// Expands a note's time-spreading row ops (delay, retrigger) into the concrete
+// strikes it sounds as. Probability is handled separately — it gates the whole
+// note before this runs. A note with no time ops yields exactly one strike,
+// [start, start+duration), so the op-free path is unchanged. Retrigger splits
+// the (delayed) duration into N contiguous, re-articulated sub-strikes; the last
+// absorbs any integer-division remainder so the burst ends exactly on time.
+// Pure and header-only so the (future) audio-thread scheduler and its unit test
+// share one definition.
+inline std::vector<NoteStrike> expandNoteOps(uint64_t noteStartTick,
+                                             uint64_t durationNanoticks,
+                                             uint8_t retrigger,
+                                             uint32_t delayNanoticks) {
+  std::vector<NoteStrike> strikes;
+  if (durationNanoticks == 0) {
+    return strikes;
+  }
+  const uint64_t start = noteStartTick + delayNanoticks;
+  // A strike must be at least one tick long, so a note retriggered more times
+  // than it has ticks is capped rather than producing zero-length strikes.
+  uint64_t n = retrigger < 1 ? 1 : retrigger;
+  if (n > durationNanoticks) {
+    n = durationNanoticks;
+  }
+  const uint64_t stride = durationNanoticks / n;
+  for (uint64_t k = 0; k < n; ++k) {
+    NoteStrike strike;
+    strike.onTick = start + stride * k;
+    strike.offTick = (k + 1 == n) ? (start + durationNanoticks)
+                                  : (start + stride * (k + 1));
+    strikes.push_back(strike);
+  }
+  return strikes;
+}
+
+// Decides whether a note sounds under its probability row op (item 12).
+// Deterministic in the note's stable identity (EventId, with position/pitch/
+// column folded in so id-less legacy notes still decide independently), so the
+// same note fires the same way on every render — generated content is
+// reproducible loop to loop. probability 0 (or >=100) always sounds; 1..=99 is
+// that percent chance. Pure and header-only so the audio path and its unit test
+// share one definition.
+inline bool noteProbabilityPasses(EventId noteId, uint64_t nanotickOffset,
+                                  uint8_t pitch, uint8_t column,
+                                  uint8_t probability) {
+  if (probability == 0 || probability >= 100) {
+    return true;
+  }
+  const uint64_t seed = noteId ^ mix64(nanotickOffset) ^
+                        (static_cast<uint64_t>(pitch) << 8) ^
+                        static_cast<uint64_t>(column);
+  return mix64(seed) % 100u < probability;
+}
 
 struct NotePayload {
   uint8_t pitch = 0;
@@ -27,6 +98,12 @@ struct NotePayload {
   uint8_t reserved = 0;
   uint64_t durationNanoticks = 0;
   EventId noteId = kEventIdNone;
+  // Per-note row ops (item 12), applied at playback. Defaults are inert, so a
+  // note without ops behaves exactly as before.
+  uint8_t retrigger = 0;    // 0/1 = one strike; N>=2 = N even strikes over the note
+  uint8_t probability = 0;  // 0 = always; 1..=100 = percent chance to sound
+  uint16_t reserved2 = 0;
+  uint32_t delayNanoticks = 0;  // onset delay, absolute ticks
 };
 
 struct ChordPayload {
