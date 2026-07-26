@@ -537,21 +537,34 @@ function tickToRow(tick) {
   return Math.floor(tick / ZOOM_LEVELS[state.zoom].rowNanoticks);
 }
 
+/**
+ * The chrome, from state. One place, called by every surface's draw.
+ *
+ * It was five hand-copied call sites building the same object, and adding a
+ * velocity readout I updated four of them — so the state said 84 and the chrome
+ * said 100. Five copies of a field list is five chances to miss one.
+ */
+function updateChrome() {
+  chrome.update({
+    playheadTick: engine ? engine.playheadTick : 0,
+    transport: engine ? engine.transport : 0,
+    linkText: engine && engine.stale ? 'engine gone'
+      : engine && conn && conn.stats().connected ? 'live' : state.link,
+    octave: state.octave,
+    editStep: state.editStep,
+    velocity: state.velocity,
+    rejectText: state.reject || '',
+    viewName: state.view,
+  });
+}
+
 function drawPatcher() {
   if (!patcherBuf) patcherBuf = createPatcherBuffer(64, 128);
   patcher.render(buildPatcherModel({
     engine: state.useEngine === false ? null : engine,
     selectedNode: state.selectedNode,
   }, patcherBuf));
-  chrome.update({
-    playheadTick: engine ? engine.playheadTick : 0,
-    transport: engine ? engine.transport : 0,
-    linkText: engine && engine.stale ? 'engine gone'
-      : engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave, editStep: state.editStep, velocity: state.velocity,
-    rejectText: state.reject || '',
-    viewName: state.view,
-  });
+  updateChrome();
 }
 
 const PIANO_KEY_H = 11;
@@ -589,15 +602,7 @@ function drawPiano() {
     marquee: state.pianoMarquee,
     dragId: state.pianoDrag ? state.pianoDrag.id : undefined,
   }, pianoBuf));
-  chrome.update({
-    playheadTick: engine ? engine.playheadTick : 0,
-    transport: engine ? engine.transport : 0,
-    linkText: engine && engine.stale ? 'engine gone'
-      : engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave, editStep: state.editStep, velocity: state.velocity,
-    rejectText: state.reject || '',
-    viewName: state.view,
-  });
+  updateChrome();
 }
 
 function drawMixer() {
@@ -609,15 +614,7 @@ function drawMixer() {
     mixer: mixerState,
     mixRevision,
   }, mixerBuf));
-  chrome.update({
-    playheadTick: engine ? engine.playheadTick : 0,
-    transport: engine ? engine.transport : 0,
-    linkText: engine && engine.stale ? 'engine gone'
-      : engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave, editStep: state.editStep, velocity: state.velocity,
-    rejectText: state.reject || '',
-    viewName: state.view,
-  });
+  updateChrome();
 }
 
 /** Arrange draws from the same store; only the projection differs. */
@@ -637,15 +634,7 @@ function drawArrange() {
     selectedPlacement: state.selectedPlacement,
   }, arrangeBuf);
   arrange.render(vm);
-  chrome.update({
-    playheadTick: engine ? engine.playheadTick : 0,
-    transport: engine ? engine.transport : 0,
-    linkText: engine && engine.stale ? 'engine gone'
-      : engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave, editStep: state.editStep, velocity: state.velocity,
-    rejectText: state.reject || '',
-    viewName: state.view,
-  });
+  updateChrome();
 }
 
 function draw() {
@@ -696,15 +685,7 @@ function draw() {
       : null,
   }, bufs[bi]);
   vm.scrollX = state.scrollX;
-  chrome.update({
-    playheadTick: engine ? engine.playheadTick : 0,
-    transport: engine ? engine.transport : 0,
-    linkText: engine && engine.stale ? 'engine gone'
-      : engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave, editStep: state.editStep, velocity: state.velocity,
-    rejectText: state.reject || '',
-    viewName: state.view,
-  });
+  updateChrome();
   // The sidecar owns the projection and the aggregation, so it needs to know
   // what we are looking at. Only sent when it actually moves.
   const vpKey = state.zoom * 1e9 + state.start * 1000 + tracker.poolSize;
