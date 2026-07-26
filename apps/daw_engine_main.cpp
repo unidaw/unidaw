@@ -2429,6 +2429,30 @@ struct TrackRuntime {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         runtime->track.clip = source.clip;
         runtime->track.harmonyQuantize = source.harmonyQuantize;
+        // Restore the device chain so reopening a session restores its plugins,
+        // and its sound. hostSlotIndex is a runtime scan index with no meaning
+        // across runs, so re-resolve each VST device from its durable vstRef
+        // into the current cache. A plugin present only on disk (not in the
+        // scan) can't be pinned to a stable slot here — it was reported by the
+        // project.plugin_* events above and is left for a rescan rather than
+        // loaded by an unstable index.
+        daw::TrackChain loadedChain = source.chain;
+        for (auto& device : loadedChain.devices) {
+          if (device.kind != daw::DeviceKind::VstInstrument &&
+              device.kind != daw::DeviceKind::VstEffect) {
+            continue;
+          }
+          if (device.vstRef.empty()) {
+            continue;
+          }
+          const auto resolution = daw::resolveVstRef(
+              pluginCache, device.vstRef.uid16, device.vstRef.path,
+              device.vstRef.vendor, device.vstRef.name);
+          if (resolution.match != daw::VstMatch::None) {
+            device.hostSlotIndex = static_cast<uint32_t>(resolution.index);
+          }
+        }
+        runtime->track.chain = std::move(loadedChain);
         runtime->mixGainLinear.store(
             static_cast<float>(std::pow(10.0, source.mixer.gainDb / 20.0)),
             std::memory_order_relaxed);
@@ -2441,12 +2465,16 @@ struct TrackRuntime {
       std::atomic_store_explicit(&runtime->clipSnapshot,
                                  snapshot,
                                  std::memory_order_release);
+      // Spawn or reconcile the host for the restored chain. Idempotent when the
+      // live chain already matches (reopen-same-session): equal plugin paths are
+      // a no-op, so this only does work when the chain actually changed.
+      rebuildHostForChain(*runtime);
     }
 
-    // Restore plugin state. Device chains are not rebuilt on load yet, so this
-    // only lands when the live chain still matches the saved one — which is the
-    // reopen-the-same-session case. Anything else is reported rather than
-    // pushed into the wrong plugin.
+    // Restore plugin state. The chain was just rebuilt from the project above,
+    // so on a clean reopen the live chain matches the saved one and state lands;
+    // if a live reconcile diverged it is reported rather than pushed into the
+    // wrong plugin.
     const std::filesystem::path stateDir = pluginStateDir(path);
     for (const auto& source : document.tracks) {
       TrackRuntime* runtime = nullptr;
