@@ -11,6 +11,16 @@
 // continuous x axis. Ticks are the only coordinate both views agree on, which is
 // exactly why GUIDELINES 2 says anything durable is expressed in ticks.
 
+/**
+ * A track's name. The engine publishes these (SHM v13) and falls back to
+ * "Track N" itself, so an empty string here means the engine has not spoken yet
+ * — not that the track is unnamed.
+ */
+export function trackName(engine, t) {
+  const n = engine && engine.names && engine.names[t];
+  return n || 'T' + String(t + 1).padStart(2, '0');
+}
+
 const TICKS_PER_BAR = 3840000;
 const TICKS_PER_BEAT = 960000;
 
@@ -100,9 +110,7 @@ export function buildArrangeModel(opts, buf) {
     lane.track = t;
     lane.y = t * laneHeight;
     lane.height = laneHeight;
-    // Track names are not published by the engine yet, so the lane is identified
-    // the same way the tracker identifies it. Swap when backend ships names.
-    lane.name = 'T' + String(t + 1).padStart(2, '0');
+    lane.name = trackName(engine, t);
     lane.lpb = engine && engine.lpb[t] ? engine.lpb[t] : 0;
   }
   buf.laneCount = Math.min(laneCount, buf.lanes.length);

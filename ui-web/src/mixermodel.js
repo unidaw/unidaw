@@ -9,6 +9,8 @@
 //
 // The read-back is keyed on ui_mixer_version, which moves only on change.
 
+import { trackName } from './arrangemodel.js';
+
 /** Gain range, in millibels, matching what the sidecar clamps to. */
 export const GAIN_MIN = -9600;   // -96 dB, i.e. silence
 export const GAIN_MAX = 1200;    // +12 dB
@@ -133,7 +135,7 @@ export function buildMixerModel(opts, buf) {
     const pan = resolve(mixer, engine, t, 'pan', 'mixPan');
     const flags = resolve(mixer, engine, t, 'flags', 'mixFlags');
     s.track = t;
-    s.name = 'T' + String(t + 1).padStart(2, '0');
+    s.name = trackName(engine, t);
     s.gain = gain;
     s.gainDb = gainLabel(gain);
     s.pan = pan;

@@ -10,27 +10,19 @@ set -euo pipefail
 
 WEB=/Users/jak/src/daw-web
 SHARED=/Users/jak/src/daw
-# THIS worktree's engine binary, run from the SHARED build directory.
+# The SHARED build, by preference. It is the backend agent's tree, so this can
+# put us on an SHM version ahead of the daw-bridge this branch is pinned to —
+# which happened, at v13 against v12. That risk is accepted because the attach
+# check below catches it immediately and loudly, and because the alternative is
+# worse: an engine built in this worktree loses its plugin host a few seconds in
+# ("Failed to receive control header") and exits, every time, while the same
+# source built in the shared tree runs indefinitely. I have not found why; the
+# host binaries behave identically when run alone.
 #
-# Both halves matter and each was learned the hard way:
-#
-#   the binary must be ours, because the shared tree is the backend agent's and
-#   building there compiles their uncommitted work — the engine reached SHM v13
-#   while this branch's daw-bridge was pinned to v12 and the sidecar refused to
-#   attach;
-#
-#   the working directory must be theirs, because the engine needs more than its
-#   binary. The plugin cache and the restored session live beside that build, and
-#   an engine started from a fresh build dir loses its plugin host on the first
-#   block ("Failed to receive control header") and exits.
-#
-#   and the HOST must be ours too. The engine and its plugin host speak a private
-#   protocol that moves with the SHM version; pairing our v12 engine with their
-#   v13 host fails at the first connect, which surfaces only as
-#   "host connect/launch failed" with no mention of a version anywhere.
-ENGINE=$WEB/build/daw_engine
-HOST=$WEB/build/juce_host_process
-RUNDIR=$SHARED/build
+# Set ENGINE=... to override, e.g. to test this worktree's own build.
+ENGINE=${ENGINE:-$SHARED/build/daw_engine}
+HOST=${HOST:-$SHARED/build/juce_host_process}
+RUNDIR=$(dirname "$ENGINE")
 SHM=${SHM:-/daw_web_ui}
 PROJECTS=$WEB/presets/projects
 PORT=${PORT:-8173}

@@ -70,6 +70,14 @@ export const SURFACE_KEYS = {
       ['- =', 'zoom out / in'],
     ],
   },
+  patcher: {
+    title: 'PATCHER',
+    keys: [
+      ['click node', 'select'],
+      ['Backspace', 'node edits — not wired yet, this surface is read-only'],
+      ['', 'one global graph; the engine does not run per-device graphs yet'],
+    ],
+  },
   mixer: {
     title: 'MIXER',
     keys: [

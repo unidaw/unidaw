@@ -55,6 +55,7 @@ const SCENES = [
   { name: 'help', help: true, setup: async (p) => p.evaluate(() => { window.__uni.help(true); }) },
   { name: 'help-piano', help: true, setup: async (p) => p.evaluate(() => {
       window.__uni.view('piano'); window.__uni.help(true); }) },
+  { name: 'patcher', patcher: true, setup: async (p) => p.evaluate(() => window.__uni.usePatcherFixture()) },
   { name: 'dock', dock: true, setup: async (p) => p.evaluate(() => window.__uni.useDockFixture()) },
   { name: 'browser', browser: true, setup: async (p) => p.evaluate(() => window.__uni.useBrowserFixture()) },
   { name: 'piano', piano: true, setup: async (p) => p.evaluate(() => window.__uni.usePianoFixture()) },
@@ -150,6 +151,25 @@ for (const scene of SCENES) {
     const shown = await page.evaluate(() => document.querySelector('.ch-view')?.textContent);
     ok(shown === hp.surface.toUpperCase(), `chrome names the surface: ${shown} vs ${hp.surface}`);
     console.log(`  ${hp.surface}: ${hp.rows} keys in ${hp.sections} sections`);
+    await shoot(scene);
+    continue;
+  }
+
+  if (scene.patcher) {
+    const g = await page.evaluate(() => window.__uni.patcherProbe());
+    ok(g.nodes === 5 && g.edges === 4, `graph: ${g.nodes} nodes, ${g.edges} edges`);
+    ok(g.types.join(',') === 'euclidean,random,lfo,kernel,out', `node types: ${g.types.join(',')}`);
+    // A type with no config table shows nothing, not eight anonymous numbers.
+    ok(g.configs.length === 3, `only typed configs described: ${g.configs.length}`);
+    ok(g.configs[2].startsWith('freq 2.50Hz'), `milli-units scaled: ${g.configs[2]}`);
+    const kinds = await page.evaluate(() => ({
+      event: document.querySelectorAll('.pt-edge.event').length,
+      audio: document.querySelectorAll('.pt-edge.audio').length,
+      control: document.querySelectorAll('.pt-edge.control').length,
+    }));
+    ok(kinds.event === 2 && kinds.audio === 1 && kinds.control === 1,
+       `edge kinds drawn apart: ${JSON.stringify(kinds)}`);
+    console.log(`  ${g.nodes} nodes, ${g.edges} edges, v${g.version}`);
     await shoot(scene);
     continue;
   }

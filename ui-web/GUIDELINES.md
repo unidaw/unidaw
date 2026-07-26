@@ -223,18 +223,20 @@ engine differently; they differ only in what they project onto the screen.
 | tracker | time on Y, columns on X | notes, aggregates, per-lane grids |
 | arrange | time on X, tracks on Y | clip extents (incl. the audio flag) |
 | piano roll | time on X, pitch on Y | notes |
-| mixer | one strip per track | peaks only — **the rest is local state** |
+| mixer | one strip per track | peaks, gain, pan, mute/solo |
 | browser rail | projects on disk | nothing; the sidecar lists them |
+| patcher | the node graph, laid out | patcher nodes and edges |
 | agent dock | the command stream | nothing |
 
 Two rules that came out of building them:
 
-- **A surface must say what it does not know.** The mixer accepts fader moves but
-  the engine publishes no mixer state, so every control except the meters is a
-  guess about what this client last sent — and it says so on screen and exposes
-  `authoritative: false` so a test can assert it is still being honest. The
-  alternative, a confident fader over a guess, is the same silent-plausible-
-  wrongness that section 2.1 is about.
+- **A surface must say what it does not know.** The mixer carried a line on screen
+  saying its faders were a local guess for as long as the engine published no
+  mixer state, and exposed `authoritative: false` so a test could assert it was
+  still being honest; when the read-back landed, both went away. The patcher says
+  the graph it shows is the engine's one global graph rather than implying a
+  per-device view it does not have. The alternative — a confident control over a
+  guess — is the same silent-plausible-wrongness section 2.1 is about.
 - **Anything unimplemented refuses out loud.** Clip edits, chord tokens and the
   effect column all name what is missing rather than doing nothing. A control
   that silently ignores you is indistinguishable from one that worked.

@@ -160,7 +160,7 @@ export class Piano {
       if (p < lo) lo = p; if (p > hi) hi = p;
     }
     return {
-      notes: vm.noteCount, keys: vm.keyCount, zoom: vm.zoom.label,
+      notes: vm.noteCount, keys: vm.keyCount, zoom: vm.zoom.label, track: vm.trackName,
       lowPitch: vm.view.lowPitch, startTick: vm.view.startTick,
       pitchRange: hi < 0 ? null : [lo, hi],
       gridLines: vm.gridCount, playheadX: Math.round(vm.playheadX),

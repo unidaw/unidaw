@@ -7,13 +7,16 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 8;
+export const WIRE_VERSION = 9;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 76;   // 56 + aggTracks u16 + extentCount u16 + lpb[8] + mixer 8
+const HEADER_BYTES = 92;   // ...+ mixer 8 + names/patcher counts 16
+const NAME_BYTES = 24;
+const PATCHER_NODE_BYTES = 40;
+const PATCHER_EDGE_BYTES = 20;
 const MIXER_BYTES = 12;
 const NOTE_BYTES = 40;
 /** Mirrors daw_bridge::layout::UiClipExtent. */
@@ -58,6 +61,12 @@ export function createStore() {
     mixCount: 0,
     /** Moves only when the mixer actually changes; the cache key for it. */
     mixerVersion: -1,
+    /** Track names, published by the engine (SHM v13). Four surfaces were
+     *  labelling lanes "T01" because nothing carried the real ones. */
+    names: [],
+    /** The patcher graph (SHM v14). One global graph today; the shape does not
+     *  change when it becomes per-device. */
+    patcherVersion: -1, patcherDevice: 0, patcherNodes: [], patcherEdges: [],
     /** Per-track lines_per_beat. Needed to render a lane on its own grid AND to
      *  compute the tick a write targets — both halves of the projection. */
     lpb: new Uint8Array(8),
@@ -95,6 +104,11 @@ function note(store, i) {
  * @param {ArrayBuffer} buf
  * @param {ReturnType<createStore>} store
  */
+/** Did the clip version change in this frame? Names ride it. */
+function clipVersionChanged(store, v) {
+  return v.getUint32(32, true) !== store.clipVersion;
+}
+
 export function decode(buf, store) {
   if (buf.byteLength < HEADER_BYTES) return false;
   const v = new DataView(buf);
@@ -122,14 +136,60 @@ export function decode(buf, store) {
   for (let i = 0; i < 8; i++) store.lpb[i] = v.getUint8(60 + i);
   const mixerVersion = v.getUint32(68, true);
   const mixCount = v.getUint16(72, true);
+  const nameCount = v.getUint16(76, true);
+  const patcherVersion = v.getUint32(78, true);
+  const patcherDevice = v.getUint32(82, true);
+  const nodeCount = v.getUint16(86, true);
+  const edgeCount = v.getUint16(88, true);
   const aggN = aggRows * aggTracks;
-  if (buf.byteLength < HEADER_BYTES + mixCount * MIXER_BYTES + peakCount * 4
+  const varBefore = nameCount * NAME_BYTES + nodeCount * PATCHER_NODE_BYTES
+                  + edgeCount * PATCHER_EDGE_BYTES + mixCount * MIXER_BYTES;
+  if (buf.byteLength < HEADER_BYTES + varBefore + peakCount * 4
       + noteCount * NOTE_BYTES + extentCount * EXTENT_BYTES + aggN * 8) return false;
 
-  // Mixer rows come first after the header; everything below offsets past them.
+  // Names first, then the patcher, then the mixer — matching the encoder.
+  {
+    let o = HEADER_BYTES;
+    if (nameCount !== store.names.length || clipVersionChanged(store, v)) {
+      store.names.length = nameCount;
+      for (let i = 0; i < nameCount; i++) {
+        let s = '';
+        for (let k = 0; k < NAME_BYTES; k++) {
+          const c = v.getUint8(o + i * NAME_BYTES + k);
+          if (!c) break;
+          s += String.fromCharCode(c);
+        }
+        store.names[i] = s;
+      }
+    }
+    o += nameCount * NAME_BYTES;
+    if (patcherVersion !== store.patcherVersion) {
+      store.patcherVersion = patcherVersion;
+      store.patcherDevice = patcherDevice;
+      store.patcherNodes.length = nodeCount;
+      for (let i = 0; i < nodeCount; i++) {
+        const b = o + i * PATCHER_NODE_BYTES;
+        const cfg = new Int32Array(8);
+        for (let k = 0; k < 8; k++) cfg[k] = v.getInt32(b + 8 + k * 4, true);
+        store.patcherNodes[i] = { id: v.getUint32(b, true), type: v.getUint8(b + 4),
+                                  hasConfig: v.getUint8(b + 5) !== 0, config: cfg };
+      }
+      o += nodeCount * PATCHER_NODE_BYTES;
+      store.patcherEdges.length = edgeCount;
+      for (let i = 0; i < edgeCount; i++) {
+        const b = o + i * PATCHER_EDGE_BYTES;
+        store.patcherEdges[i] = { src: v.getUint32(b, true), srcPort: v.getUint32(b + 4, true),
+                                  dst: v.getUint32(b + 8, true), dstPort: v.getUint32(b + 12, true),
+                                  kind: v.getUint8(b + 16) };
+      }
+    }
+  }
+
+  const MIXER_AT = HEADER_BYTES + nameCount * NAME_BYTES
+                 + nodeCount * PATCHER_NODE_BYTES + edgeCount * PATCHER_EDGE_BYTES;
   if (mixerVersion !== store.mixerVersion || mixCount !== store.mixCount) {
     for (let i = 0; i < mixCount && i < store.mixGain.length; i++) {
-      const o = HEADER_BYTES + i * MIXER_BYTES;
+      const o = MIXER_AT + i * MIXER_BYTES;
       store.mixGain[i] = v.getInt32(o, true);
       store.mixPan[i] = v.getInt32(o + 4, true);
       store.mixFlags[i] = v.getUint8(o + 8);
@@ -137,7 +197,7 @@ export function decode(buf, store) {
     store.mixCount = Math.min(mixCount, store.mixGain.length);
     store.mixerVersion = mixerVersion;
   }
-  const AFTER_MIXER = HEADER_BYTES + mixCount * MIXER_BYTES;
+  const AFTER_MIXER = MIXER_AT + mixCount * MIXER_BYTES;
 
   if (store.peaks.length < peakCount) store.peaks = new Float32Array(peakCount);
   for (let i = 0; i < peakCount; i++) store.peaks[i] = v.getFloat32(AFTER_MIXER + i * 4, true);

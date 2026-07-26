@@ -1,0 +1,45 @@
+/* Patcher. Tokens only. */
+
+.pt {
+  position: absolute; inset: 0;
+  background: var(--uni-surface-tracker-bg);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+}
+
+.pt-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.pt-edge { fill: none; stroke: var(--uni-rule-track); stroke-width: 1.5; }
+/* Event, audio and control carry different things; drawing them alike would
+   hide the one thing an edge has to tell you. */
+.pt-edge.event   { stroke: var(--base-accent); }
+.pt-edge.audio   { stroke: var(--uni-text-fx); stroke-dasharray: 5 3; }
+.pt-edge.control { stroke: var(--uni-text-gutter); stroke-dasharray: 2 3; }
+
+.pt-nodes { position: absolute; inset: 0; }
+
+.pt-node {
+  position: absolute; top: 0; left: 0;
+  width: 210px; height: 76px;
+  box-sizing: border-box;
+  padding: 7px 9px;
+  background: var(--uni-surface-header-bg);
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.pt-node.sel { border-color: var(--base-accent); }
+
+.pt-type { color: var(--uni-text-instrument); font-size: var(--font-size-inst); }
+.pt-id { position: absolute; top: 7px; right: 9px; color: var(--uni-text-gutter); }
+.pt-cfg { margin-top: 6px; color: var(--base-text); line-height: 1.35;
+          overflow: hidden; }
+
+.pt-notice {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 5px 10px;
+  color: var(--uni-text-gutter);
+  background: var(--uni-surface-header-bg);
+  border-top: 1px solid var(--uni-rule-gutter);
+}

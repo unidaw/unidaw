@@ -11,6 +11,8 @@
 // why the polyrhythm that took four rounds to get right in the tracker is free
 // here — there is no row to misproject onto.
 
+import { trackName } from './arrangemodel.js';
+
 const TICKS_PER_BAR = 3840000;
 const TICKS_PER_BEAT = 960000;
 
@@ -157,6 +159,8 @@ export function buildPianoModel(opts, buf) {
     }
   }
   buf.noteCount = n;
+
+  buf.trackName = allTracks ? 'all tracks' : trackName(engine, track);
 
   buf.playheadX = engine && engine.playheadTick >= startTick && engine.playheadTick < endTick
     ? (engine.playheadTick - startTick) / tpp

@@ -34,7 +34,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 8;
+const WIRE_VERSION: u16 = 9;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -223,6 +223,14 @@ struct Frame {
     /// other surface moving a fader.
     mixer: Vec<(i32, i32, u8)>,
     mixer_version: u32,
+    /// Track names (SHM v13). Four surfaces were labelling lanes "T01".
+    names: Vec<String>,
+    /// The patcher graph (SHM v14). One global graph today; the region gains
+    /// per-device graphs later and this shape does not change.
+    patcher_version: u32,
+    patcher_device: u32,
+    patcher_nodes: Vec<(u32, u8, u8, [i32; 8])>,
+    patcher_edges: Vec<(u32, u32, u32, u32, u8)>,
     /// Scratch, reused so the aggregation path allocates nothing per frame.
     ev: Vec<(u64, u8)>,
 }
@@ -263,6 +271,31 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&f.mixer_version.to_le_bytes());
     out.extend_from_slice(&(f.mixer.len() as u16).to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());                   // pad to 8
+    // Names: 24 bytes each, nul-padded, fixed stride so the client can index.
+    out.extend_from_slice(&(f.names.len() as u16).to_le_bytes());
+    out.extend_from_slice(&f.patcher_version.to_le_bytes());
+    out.extend_from_slice(&f.patcher_device.to_le_bytes());
+    out.extend_from_slice(&(f.patcher_nodes.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(f.patcher_edges.len() as u16).to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());                   // pad to 8
+    for n in &f.names {
+        let b = n.as_bytes();
+        let take = b.len().min(24);
+        out.extend_from_slice(&b[..take]);
+        out.extend(std::iter::repeat(0u8).take(24 - take));
+    }
+    for &(id, ty, has_cfg, cfg) in &f.patcher_nodes {
+        out.extend_from_slice(&id.to_le_bytes());
+        out.push(ty); out.push(has_cfg); out.push(0); out.push(0);
+        for v in cfg { out.extend_from_slice(&v.to_le_bytes()); }   // 40 bytes each
+    }
+    for &(sn, sp, dn, dp, kind) in &f.patcher_edges {
+        out.extend_from_slice(&sn.to_le_bytes());
+        out.extend_from_slice(&sp.to_le_bytes());
+        out.extend_from_slice(&dn.to_le_bytes());
+        out.extend_from_slice(&dp.to_le_bytes());
+        out.push(kind); out.push(0); out.push(0); out.push(0);      // 20 bytes each
+    }
     for &(gain, pan, flags) in &f.mixer {
         out.extend_from_slice(&gain.to_le_bytes());
         out.extend_from_slice(&pan.to_le_bytes());
@@ -341,6 +374,26 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
 
     // Cheap: read_mixer is a seqlock read of a fixed-size row. Guarded on the
     // engine's own version so an unchanged mixer costs one atomic load.
+    // Names change only on a project load, so they ride the clip version.
+    if out.names.is_empty() || out.clip_version != prev_clip_version {
+        out.names = h.read_track_names();
+    }
+
+    let pv = h.patcher_version();
+    if pv != out.patcher_version || out.patcher_nodes.is_empty() {
+        let view = h.read_patcher();
+        out.patcher_version = view.version;
+        out.patcher_device = view.device_id;
+        out.patcher_nodes.clear();
+        for n in &view.nodes {
+            out.patcher_nodes.push((n.id, n.node_type, n.has_config, n.config));
+        }
+        out.patcher_edges.clear();
+        for e in &view.edges {
+            out.patcher_edges.push((e.src_node, e.src_port, e.dst_node, e.dst_port, e.kind));
+        }
+    }
+
     let mv = h.mixer_version();
     if mv != out.mixer_version || out.mixer.is_empty() {
         out.mixer_version = mv;

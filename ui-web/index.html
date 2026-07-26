@@ -11,6 +11,7 @@
 <link rel="stylesheet" href="src/browser.css">
 <link rel="stylesheet" href="src/dock.css">
 <link rel="stylesheet" href="src/help.css">
+<link rel="stylesheet" href="src/patcher.css">
 <style>
   html, body { margin: 0; height: 100%; background: var(--uni-surface-tracker-bg); color: var(--base-text); }
   body { font-family: var(--font-chrome); font-size: var(--font-size-chrome); overflow: hidden; }
@@ -37,9 +38,9 @@
                   font-size: var(--font-size-inst); letter-spacing: var(--font-tracking-fx);
                   color: var(--uni-text-instrument);
                   border-right: var(--uni-rule-track-width) solid var(--uni-rule-track); }
-  #tracker, #arrange, #mixer, #piano { position: absolute; left: 0; right: 0; bottom: 16px;
+  #tracker, #arrange, #mixer, #piano, #patcher { position: absolute; left: 0; right: 0; bottom: 16px;
              top: calc(38px + var(--metrics-header-height)); }
-  #arrange[hidden], #mixer[hidden], #piano[hidden], #browser[hidden], #dock[hidden], #help[hidden] { display: none; }
+  #arrange[hidden], #mixer[hidden], #piano[hidden], #browser[hidden], #dock[hidden], #help[hidden], #patcher[hidden] { display: none; }
   /* The rail overlays; it does not reflow the surface underneath, so opening it
      never costs a relayout of a pooled grid. */
   #browser { position: absolute; left: 0; bottom: 16px;
@@ -63,6 +64,7 @@
 <div id="arrange" hidden></div>
 <div id="mixer" hidden></div>
 <div id="piano" hidden></div>
+<div id="patcher" hidden></div>
 <div id="browser" hidden></div>
 <div id="dock" hidden></div>
 <div id="stale" hidden></div>
@@ -76,7 +78,7 @@ import M from './design/out/tokens.js';
 import { connectEngine } from './src/engine.js';
 import { createChrome } from './src/chrome.js';
 import { Arrange } from './src/arrange.js';
-import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM } from './src/arrangemodel.js';
+import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName } from './src/arrangemodel.js';
 import { Mixer } from './src/mixer.js';
 import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
          gainAtPosition, FLAG_MUTE, FLAG_SOLO } from './src/mixermodel.js';
@@ -85,6 +87,8 @@ import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch } from './s
 import { Browser } from './src/browser.js';
 import { Dock } from './src/dock.js';
 import { createHelp } from './src/help.js';
+import { Patcher } from './src/patcher.js';
+import { buildPatcherModel, createPatcherBuffer } from './src/patchermodel.js';
 import { createEntry, feed, cancel, begin, parseToken, parseChord, editing, NOTE_KEYS, NOTE_OFF_KEY,
          TOKEN_KEY, pitchOf, pitchToToken, hexValue, shiftDigit } from './src/entry.js';
 
@@ -128,6 +132,12 @@ function sendMixer(track) {
   }
   schedule();
 }
+
+const patcherHost = document.getElementById('patcher');
+let patcherBuf = null;
+const patcher = new Patcher(patcherHost, {
+  onSelect: (id) => { state.selectedNode = id; schedule(); },
+});
 
 const browserHost = document.getElementById('browser');
 const browser = new Browser(browserHost, {
@@ -250,7 +260,8 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   // projection differs, which is the whole point of the view-model boundary.
   projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: -1,
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
-  pianoFitPending: false, browserOpen: false, dockOpen: false, helpOpen: false, currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+  pianoFitPending: false, browserOpen: false, dockOpen: false, helpOpen: false,
+  selectedNode: -1, currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -334,7 +345,9 @@ function buildHead() {
     el.dataset.track = String(t);
     el.style.width = `${stride}px`;
     el.style.flex = `0 0 ${stride}px`;
-    el.appendChild(document.createTextNode(`T${String(t + 1).padStart(2, '0')}`));
+    const nm = document.createTextNode('');
+    el.appendChild(nm);
+    el._nameNode = nm; el._nameVal = null;
     // The lane's grid, shown because it is not derivable from anything on
     // screen: a lane at 3 lines/beat looks like a lane at 4 with gaps in it.
     const lpb = document.createElement('span');
@@ -355,6 +368,8 @@ function paintHeadLpb() {
   for (let t = 0; t < state.tracks; t++) {
     const el = headRow.children[t + 1];
     if (!el || !el._lpbEl) continue;
+    const name = trackName(state.useEngine === false ? null : engine, t);
+    if (el._nameVal !== name) { el._nameVal = name; el._nameNode.nodeValue = name; }
     const n = engine && engine.lpb[t] ? engine.lpb[t] : 0;
     if (el._lpb === n) continue;
     el._lpb = n;
@@ -421,6 +436,22 @@ function commitToken(text) {
 // The playhead arrives as a tick and has to be projected like everything else.
 function tickToRow(tick) {
   return Math.floor(tick / ZOOM_LEVELS[state.zoom].rowNanoticks);
+}
+
+function drawPatcher() {
+  if (!patcherBuf) patcherBuf = createPatcherBuffer(64, 128);
+  patcher.render(buildPatcherModel({
+    engine: state.useEngine === false ? null : engine,
+    selectedNode: state.selectedNode,
+  }, patcherBuf));
+  chrome.update({
+    playheadTick: engine ? engine.playheadTick : 0,
+    transport: engine ? engine.transport : 0,
+    linkText: engine && engine.stale ? 'engine gone'
+      : engine && conn && conn.stats().connected ? 'live' : state.link,
+    octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+    viewName: state.view,
+  });
 }
 
 const PIANO_KEY_H = 11;
@@ -527,15 +558,18 @@ function draw() {
   // keeps its pools warm, so switching views costs no rebuild.
   const v = state.view;
   const wantArrange = v === 'arrange', wantMixer = v === 'mixer', wantPiano = v === 'piano';
+  const wantPatcher = v === 'patcher';
+  if (patcherHost.hidden === wantPatcher) patcherHost.hidden = !wantPatcher;
   if (arrangeHost.hidden === wantArrange) arrangeHost.hidden = !wantArrange;
   if (mixerHost.hidden === wantMixer) mixerHost.hidden = !wantMixer;
   if (pianoHost.hidden === wantPiano) pianoHost.hidden = !wantPiano;
-  const trackerOn = !wantArrange && !wantMixer && !wantPiano;
+  const trackerOn = !wantArrange && !wantMixer && !wantPiano && !wantPatcher;
   const disp = trackerOn ? '' : 'none';
   if (host.style.display !== disp) { host.style.display = disp; head.style.display = disp; }
   if (wantArrange) return drawArrange();
   if (wantMixer) return drawMixer();
   if (wantPiano) return drawPiano();
+  if (wantPatcher) return drawPatcher();
   const shapeChanged = tracker.poolSize === 0 || !headRow || headRow.children.length !== state.tracks + 1;
   tracker.resize(host.clientHeight, state.tracks, state.columns);
   if (shapeChanged) buildHead();
@@ -932,7 +966,7 @@ addEventListener('keydown', (e) => {
   // 2.5 View switch, and arrange's own navigation. Arrange has no rows and no
   //     cell editing, so it must not fall through into the tracker's keys.
   if (k === 'Tab') {
-    const order = ['tracker', 'arrange', 'piano', 'mixer'];
+    const order = ['tracker', 'arrange', 'piano', 'mixer', 'patcher'];
     const i = order.indexOf(state.view);
     state.view = order[(i + (e.shiftKey ? order.length - 1 : 1)) % order.length];
     // Opening the piano roll on whatever pitch window was last used shows empty
@@ -972,6 +1006,17 @@ addEventListener('keydown', (e) => {
       if (tick < 0) { state.reject = 'note is gone'; return done(); }
       conn && conn.send({ type: 'delete', track: state.cursor.track, tick });
       state.selectedNote = -1;
+      return done();
+    }
+    return;
+  }
+  if (state.view === 'patcher') {
+    if (k === ' ') { cmd('play'); return done(); }
+    if (k === 'Escape') { state.selectedNode = -1; state.reject = null; return done(); }
+    // Node edits need AddPatcherNode/ConnectPatcherNodes wiring that this surface
+    // does not have yet; refuse out loud rather than appear inert.
+    if (k === 'Backspace' || k === 'Delete') {
+      state.reject = 'patcher editing is not wired yet (read-only surface)';
       return done();
     }
     return;
@@ -1196,6 +1241,7 @@ window.__uni = {
                  state.browserOpen = false; state.projects = []; state.currentProject = '';
                  browser.selected = 0; browser.cancelSave();
                  state.dockOpen = false; dock.clear(); state.helpOpen = false;
+                 state.selectedNode = -1;
                  // The HUD carries a live node count and frame counter. Pin it
                  // here too, or a scene inherits whatever the previous scene's
                  // timer last wrote and the golden differs by that strip alone.
@@ -1248,10 +1294,15 @@ window.__uni = {
   saveProject: (name) => { const ok = conn && conn.saveProject(name);
                            if (ok) state.currentProject = name; return ok; },
   lpb: () => (engine ? Array.from(engine.lpb) : null),
+  names: () => (engine ? engine.names.slice() : null),
+  patcher: () => (engine ? { version: engine.patcherVersion, device: engine.patcherDevice,
+    nodes: engine.patcherNodes.map(n => ({ id: n.id, type: n.type, cfg: Array.from(n.config) })),
+    edges: engine.patcherEdges.slice() } : null),
   view: (v) => { if (v) { state.view = v; draw(); } return state.view; },
   arrangeProbe: () => arrange.probe(),
   mixerProbe: () => mixer.probe(),
   pianoProbe: () => piano.probe(),
+  patcherProbe: () => patcher.probe(),
   pianoZoom: (z) => { state.pianoZoom = z; draw(); },
   pianoTo: (tick, low) => { state.pianoStart = Math.max(0, tick);
     if (low !== undefined) state.pianoLow = low; draw(); },
@@ -1412,6 +1463,41 @@ window.__uni = {
     dock.log('err', 'pitch out of range: 999');
     dock.log('in', '> nope');
     dock.log('err', 'unknown: nope (try help)');
+    draw();
+  },
+  /**
+   * Patcher fixture: a branching graph with all three edge kinds and a node type
+   * that has no config table, so the "show nothing rather than eight anonymous
+   * numbers" path is exercised too.
+   */
+  usePatcherFixture: () => {
+    state.useEngine = true; state.hudFrozen = true; conn.close();
+    hudText.nodeValue = 'patcher-fixture';
+    state.view = 'patcher'; state.selectedNode = 1;
+    const nodes = [
+      { id: 0, type: 1, hasConfig: true, config: Int32Array.from([16, 5, 0, 1, 0, 100, 4, 0]) },
+      { id: 1, type: 5, hasConfig: true, config: Int32Array.from([8, 100, 0, 0, 0, 0, 0, 0]) },
+      { id: 2, type: 4, hasConfig: true, config: Int32Array.from([2500, 750, 0, 0, 0, 0, 0, 0]) },
+      { id: 3, type: 0, hasConfig: false, config: new Int32Array(8) },
+      { id: 4, type: 6, hasConfig: false, config: new Int32Array(8) },
+    ];
+    const edges = [
+      { src: 0, srcPort: 1, dst: 1, dstPort: 0, kind: 0 },
+      { src: 1, srcPort: 1, dst: 4, dstPort: 0, kind: 0 },
+      { src: 2, srcPort: 0, dst: 3, dstPort: 0, kind: 2 },
+      { src: 3, srcPort: 0, dst: 4, dstPort: 1, kind: 1 },
+    ];
+    engine = { ok: true, seq: 1, playheadTick: 0, visualSample: 0, clipVersion: 1,
+               harmonyVersion: 0, transport: 0, trackCount: 6, stale: false,
+               peaks: new Float32Array(6), peakCount: 0, notes: [], noteCount: 0,
+               aggCount: new Uint32Array(0), aggRep: new Uint8Array(0),
+               aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
+               extents: [], extentCount: 0, extentsRevision: 1, names: [],
+               lpb: Uint8Array.from([4, 4, 4, 3, 4, 6, 0, 0]),
+               patcherVersion: 3, patcherDevice: 0, patcherNodes: nodes, patcherEdges: edges,
+               mixGain: new Int32Array(16), mixPan: new Int32Array(16),
+               mixFlags: new Uint8Array(16), mixCount: 0, mixerVersion: 1,
+               rowGrid: 1, notesRevision: 1, aggRevision: 1 };
     draw();
   },
   /** Which rows a lane actually has, for assertions that don't read pixels. */
