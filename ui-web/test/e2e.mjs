@@ -202,6 +202,35 @@ ok(pa.length === pb.length && pa.every((n, i) => n.pitch === pb[i].pitch + 12),
 await page.evaluate(() => window.__uni.pianoEdit('transpose', -12));
 await page.waitForTimeout(3500);
 
+section('piano roll drag');
+await page.evaluate(() => { window.__uni.view('piano'); window.__uni.pianoAll(false);
+                            window.__uni.run('goto 0 0'); });
+await frames();
+const firstNote = () => page.evaluate(() => {
+  const ns = window.__uni.notes().filter((x) => x.tr === 0).sort((a, b) => a.t - b.t);
+  return ns[0] ? { t: ns[0].t, dur: ns[0].dur, p: ns[0].p } : null;
+});
+const n0 = await firstNote();
+const dragId = await page.evaluate(() => {
+  const el = document.querySelector('.pr-note'); return el ? Number(el.dataset.id) : null; });
+if (n0 && dragId !== null) {
+  await page.evaluate((id) => window.__uni.pianoDrag(id, 64, -22, 'move'), dragId);
+  await page.waitForTimeout(2200);
+  const n1 = await firstNote();
+  ok(n1.t > n0.t && n1.p === n0.p + 2 && n1.dur === n0.dur,
+     'dragging a note moves it in time and pitch, keeping its length',
+     `t ${n0.t}->${n1.t} pitch ${n0.p}->${n1.p} dur ${n1.dur}`);
+  const id2 = await page.evaluate(() => {
+    const el = document.querySelector('.pr-note'); return el ? Number(el.dataset.id) : null; });
+  await page.evaluate((id) => window.__uni.pianoDrag(id, 60, 0, 'resize'), id2);
+  await page.waitForTimeout(2200);
+  const n2 = await firstNote();
+  ok(n2.dur > n1.dur && n2.t === n1.t, 'dragging its edge changes only the length',
+     `dur ${n1.dur} -> ${n2.dur}`);
+} else {
+  ok(false, 'a note to drag');
+}
+
 section('browser');
 await page.evaluate(() => window.__uni.browser(true));
 await page.waitForTimeout(700);

@@ -8,11 +8,14 @@ function div(cls, parent) {
 }
 
 export class Piano {
-  constructor(host, { onNote, onSelect, onMarquee, onMarqueeEnd } = {}) {
+  constructor(host, { onNote, onSelect, onMarquee, onMarqueeEnd, onDrag, onDragEnd } = {}) {
     this.host = host;
     this.host.className = 'pr';
     this.onNote = onNote; this.onSelect = onSelect;
     this.onMarquee = onMarquee; this.onMarqueeEnd = onMarqueeEnd;
+    this.onDrag = onDrag; this.onDragEnd = onDragEnd;
+    /** How close to a note's right edge counts as "resize" rather than "move". */
+    this.EDGE = 7;
 
     this.keysEl = div('pr-keys', host);
     this.band = div('pr-band', host);
@@ -46,7 +49,19 @@ export class Piano {
     const vm = this.vm;
     if (!vm) return;
     const noteEl = e.target.closest('.pr-note');
-    if (noteEl && this.onSelect) { this.onSelect(Number(noteEl.dataset.id)); return; }
+    if (noteEl) {
+      const id = Number(noteEl.dataset.id);
+      this.onSelect && this.onSelect(id);
+      const r = noteEl.getBoundingClientRect();
+      const p = this._local(e);
+      // Grabbing the right edge resizes, anywhere else moves. A note narrower
+      // than twice the edge zone is all edge, so it can only be resized —
+      // otherwise a short note would be impossible to lengthen.
+      const kind = (r.right - e.clientX) <= this.EDGE ? 'resize' : 'move';
+      this._note = { id, kind, x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      this.band.setPointerCapture(e.pointerId);
+      return;
+    }
     const p = this._local(e);
     if (p.x < 0 || p.y < 0) return;
     // Shift starts a marquee; a plain click writes a note. Writing on every drag
@@ -65,20 +80,38 @@ export class Piano {
   }
 
   _move(e) {
-    if (!this._drag) return;
     const p = this._local(e);
+    if (this._note) {
+      this._note.x1 = p.x; this._note.y1 = p.y;
+      this.onDrag && this.onDrag(this._note);
+      return;
+    }
+    if (!this._drag) return;
     this._drag.x1 = p.x; this._drag.y1 = p.y;
     this.onMarquee && this.onMarquee(this._drag);
   }
 
   _up(e) {
+    if (this._note) {
+      const n = this._note;
+      this._note = null;
+      // A click is a drag of zero distance; committing one would rewrite a note
+      // to exactly where it already is and burn a clip version for nothing.
+      const moved = Math.abs(n.x1 - n.x0) > 2 || Math.abs(n.y1 - n.y0) > 2;
+      this.onDragEnd && this.onDragEnd(moved ? n : null);
+      return;
+    }
     if (!this._drag) return;
     const d = this._drag;
     this._drag = null;
     this.onMarqueeEnd && this.onMarqueeEnd(d);
   }
 
-  _cancel() { this._drag = null; this.onMarqueeEnd && this.onMarqueeEnd(null); }
+  _cancel() {
+    this._drag = null; this._note = null;
+    this.onMarqueeEnd && this.onMarqueeEnd(null);
+    this.onDragEnd && this.onDragEnd(null);
+  }
 
   _pool(arr, cls, parent, n, init) {
     while (arr.length < n) {
@@ -173,6 +206,16 @@ export class Piano {
       if (el._add !== n.isAdd) { el._add = n.isAdd; el.classList.toggle('add', n.isAdd); }
       if (el._sel !== n.selected) { el._sel = n.selected; el.classList.toggle('sel', n.selected); }
       if (el._id !== n.id) { el._id = n.id; el.dataset.id = String(n.id); }
+    }
+
+    // A ghost of the note being dragged, so you can see where it will land
+    // before you let go. Drawn as a class on the note itself rather than a
+    // second element: the note IS the preview.
+    for (let i = 0; i < vm.noteCount; i++) {
+      const el = this.notePool[i];
+      if (!el) continue;
+      const dragging = vm.dragId !== undefined && vm.notes[i].id === vm.dragId;
+      if (el._dragging !== dragging) { el._dragging = dragging; el.classList.toggle('dragging', dragging); }
     }
 
     const mq = vm.marquee;

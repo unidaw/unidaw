@@ -234,7 +234,57 @@ const piano = new Piano(pianoHost, {
     schedule();
   },
   onMarqueeEnd: () => { state.pianoMarquee = null; schedule(); },
+  onDrag: (d) => { state.pianoDrag = d; schedule(); },
+  onDragEnd: (d) => {
+    state.pianoDrag = null;
+    if (d) commitNoteDrag(d);
+    schedule();
+  },
 });
+
+/**
+ * Commit a note drag: a move rewrites the note at its new tick and pitch, a
+ * resize rewrites it with a new duration.
+ *
+ * A move is delete-then-write, in one batch so the sidecar sequences them
+ * against the versions each other produces. Sent as a batch even though it is
+ * two ops, because two ops stamped with the same base_version is exactly the
+ * race that made the tracker's first transpose move one note out of five.
+ */
+function commitNoteDrag(d) {
+  if (!engine || !conn || !pianoBuf) return;
+  let src = null;
+  for (let i = 0; i < engine.noteCount; i++) if (engine.notes[i].id === d.id) { src = engine.notes[i]; break; }
+  if (!src) { state.reject = 'note is gone'; return; }
+
+  const view = pianoBuf.view;
+  const dTick = (d.x1 - d.x0) * view.ticksPerPixel;
+  const dur = Math.max(1, src.tOff - src.tOn);
+
+  if (d.kind === 'resize') {
+    const step = laneRowTicks(src.track);
+    const want = Math.max(step, Math.round((dur + dTick) / step) * step);
+    if (want === dur) return;
+    conn.sendBatch([{ type: 'note', track: src.track, pitch: src.pitch,
+                      tick: src.tOn, dur: want, vel: src.velocity }]);
+    state.reject = null;
+    return;
+  }
+
+  // Move: snap the new onset to the LANE's grid, and the pitch to a whole
+  // semitone — a note between two keys is not a thing the engine can hold.
+  const step = laneRowTicks(src.track);
+  const tick = Math.max(0, Math.round((src.tOn + dTick) / step) * step);
+  const dPitch = -Math.round((d.y1 - d.y0) / view.keyHeight);
+  const pitch = src.pitch + dPitch;
+  if (pitch < 0 || pitch > 127) { state.reject = 'that would leave MIDI range'; return; }
+  if (tick === src.tOn && pitch === src.pitch) return;
+  conn.sendBatch([
+    { type: 'delete', track: src.track, tick: src.tOn },
+    { type: 'note', track: src.track, pitch, tick, dur, vel: src.velocity },
+  ]);
+  state.reject = null;
+}
 
 /** The engine notes the piano roll has selected, as {note, id}. */
 function pianoSelected() {
@@ -308,7 +358,7 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   // projection differs, which is the whole point of the view-model boundary.
   projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: null,
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
-  pianoSelection: null, pianoMarquee: null,
+  pianoSelection: null, pianoMarquee: null, pianoDrag: null,
   pianoFitPending: false, browserOpen: false, dockOpen: false, helpOpen: false,
   selectedNode: -1, currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
@@ -536,6 +586,7 @@ function drawPiano() {
     selectedNote: state.selectedNote,
     selection: state.pianoSelection,
     marquee: state.pianoMarquee,
+    dragId: state.pianoDrag ? state.pianoDrag.id : undefined,
   }, pianoBuf));
   chrome.update({
     playheadTick: engine ? engine.playheadTick : 0,
@@ -1370,6 +1421,7 @@ window.__uni = {
                  state.pianoZoom = 3; state.pianoStart = 0; state.pianoLow = 36;
                  state.pianoAll = false; state.selectedNote = -1;
                  state.pianoSelection = null; state.pianoMarquee = null;
+                 state.pianoDrag = null;
                  // The chrome shows the last rejection. Left set, it bleeds into
                  // every later scene and a golden differs by a strip of text that
                  // has nothing to do with what the scene is testing — which is
@@ -1460,6 +1512,9 @@ window.__uni = {
     return state.pianoSelection ? state.pianoSelection.size : 0;
   },
   pianoSelected: () => pianoSelected().map(n => ({ id: n.id, pitch: n.pitch, track: n.track })),
+  /** Drive a note drag the way the pointer does, for tests and agents. */
+  pianoDrag: (id, dx, dy, kind) => { commitNoteDrag({ id, kind: kind || 'move',
+    x0: 0, y0: 0, x1: dx, y1: dy }); schedule(); },
   pianoEdit: (kind, n) => pianoEdit(kind, n),
   pianoFit: () => { fitPiano(); draw(); },
   browser: (on) => { state.browserOpen = on === undefined ? !state.browserOpen : !!on;
@@ -1493,7 +1548,8 @@ window.__uni = {
     stale: engine.stale, noteCount: engine.noteCount, trackCount: engine.trackCount,
   } : null),
   notes: () => (engine ? engine.notes.slice(0, engine.noteCount)
-    .map(n => ({ t: n.tOn, row: n.row, tr: n.track })) : null),
+    .map(n => ({ t: n.tOn, off: n.tOff, dur: n.tOff - n.tOn, p: n.pitch,
+                 row: n.row, tr: n.track, id: n.id })) : null),
   /**
    * A synthetic store for the arrange view, including an AUDIO region — schema
    * v3 ships those with UI_CLIP_EXTENT_AUDIO and they render differently, so a

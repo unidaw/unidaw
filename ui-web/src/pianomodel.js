@@ -94,6 +94,7 @@ export function buildPianoModel(opts, buf) {
     // and "the notes an operation applies to" are different questions.
     selection = null,
     marquee = null,
+    dragId = undefined,
   } = opts;
 
   const zoom = PIANO_ZOOM[Math.max(0, Math.min(PIANO_ZOOM.length - 1, zoomIndex))];
@@ -176,6 +177,7 @@ export function buildPianoModel(opts, buf) {
 
   buf.trackName = allTracks ? 'all tracks' : trackName(engine, track);
   buf.marquee = marquee;
+  buf.dragId = dragId;
   buf.selectedCount = selection ? selection.size : 0;
 
   buf.playheadX = engine && engine.playheadTick >= startTick && engine.playheadTick < endTick

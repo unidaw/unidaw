@@ -61,6 +61,8 @@ export const SURFACE_KEYS = {
     keys: [
       ['click', 'write a note, snapped to the lane grid'],
       ['click note', 'select'],
+      ['drag a note', 'move it (snapped to the lane grid)'],
+      ['drag its right edge', 'change its length'],
       ['shift+drag', 'marquee-select notes'],
       ['alt+q / alt+a', 'transpose the selection a semitone'],
       ['alt+w / alt+s', 'transpose it an octave'],

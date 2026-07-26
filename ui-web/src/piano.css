@@ -83,6 +83,10 @@
 .pr-note.muted { background: transparent; border-style: dashed; }
 .pr-note.add { border-color: var(--uni-text-fx); }
 .pr-note.sel { outline: 1px solid var(--base-text); }
+.pr-note.dragging { opacity: .45 !important; }
+/* The right edge resizes; the rest moves. */
+.pr-note { cursor: grab; }
+.pr-note:active { cursor: grabbing; }
 
 .pr-marquee {
   position: absolute; top: 0; left: 0;
