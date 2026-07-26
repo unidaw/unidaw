@@ -158,6 +158,116 @@ void deserializeRandomDegree(const boost::property_tree::ptree& node,
 
 }  // namespace
 
+const char* patcherNodeTypeToString(PatcherNodeType type) {
+  return nodeTypeToString(type);
+}
+
+const char* patcherEdgeKindToString(PatcherPortKind kind) {
+  return edgeKindToString(kind);
+}
+
+bool readPatcherGraphTree(const boost::property_tree::ptree& root,
+                          uint32_t schemaVersion,
+                          PatcherGraph& graph,
+                          std::string* error) {
+  auto nodesOpt = root.get_child_optional("nodes");
+  if (!nodesOpt) {
+    setError(error, "patcher graph missing nodes");
+    return false;
+  }
+
+  struct PendingNode {
+    PatcherNode node;
+    std::vector<uint32_t> inputs;
+  };
+  std::vector<PendingNode> pendingNodes;
+  std::unordered_set<uint32_t> seenIds;
+  for (const auto& entry : *nodesOpt) {
+    const auto& nodeTree = entry.second;
+    const auto nodeIdOpt = nodeTree.get_optional<uint32_t>("id");
+    if (!nodeIdOpt) {
+      setError(error, "patcher graph node missing id");
+      return false;
+    }
+    const uint32_t nodeId = *nodeIdOpt;
+    if (!seenIds.insert(nodeId).second) {
+      setError(error, "patcher graph contains duplicate node id");
+      return false;
+    }
+
+    const std::string typeStr = nodeTree.get<std::string>("type", "");
+    PatcherNodeType type = PatcherNodeType::RustKernel;
+    if (!stringToNodeType(typeStr, type)) {
+      setError(error, "patcher graph contains unknown node type");
+      return false;
+    }
+
+    PatcherNode node;
+    node.id = nodeId;
+    node.type = type;
+
+    std::vector<uint32_t> inputs;
+    if (schemaVersion == 1) {
+      if (auto inputsTree = nodeTree.get_child_optional("inputs")) {
+        for (const auto& inputEntry : *inputsTree) {
+          inputs.push_back(inputEntry.second.get_value<uint32_t>());
+        }
+      }
+    }
+
+    if (auto euclidTree = nodeTree.get_child_optional("euclidean")) {
+      node.hasEuclideanConfig = true;
+      deserializeEuclidean(*euclidTree, node.euclideanConfig);
+    }
+    if (auto lfoTree = nodeTree.get_child_optional("lfo")) {
+      node.hasLfoConfig = true;
+      deserializeLfo(*lfoTree, node.lfoConfig);
+    }
+    if (auto randomTree = nodeTree.get_child_optional("random_degree")) {
+      node.hasRandomDegreeConfig = true;
+      deserializeRandomDegree(*randomTree, node.randomDegreeConfig);
+    }
+
+    pendingNodes.push_back(PendingNode{node, std::move(inputs)});
+  }
+
+  graph.nodes.clear();
+  graph.edges.clear();
+  graph.nodes.reserve(pendingNodes.size());
+  for (auto& pending : pendingNodes) {
+    graph.nodes.push_back(pending.node);
+  }
+  if (schemaVersion == 1) {
+    for (const auto& pending : pendingNodes) {
+      for (uint32_t inputId : pending.inputs) {
+        PatcherEdge edge{};
+        edge.src = {inputId, kPatcherEventOutputPort};
+        edge.dst = {pending.node.id, kPatcherEventInputPort};
+        edge.kind = PatcherPortKind::Event;
+        graph.edges.push_back(edge);
+      }
+    }
+  } else {
+    if (auto edgesTree = root.get_child_optional("edges")) {
+      for (const auto& edgeEntry : *edgesTree) {
+        const auto& edgeTree = edgeEntry.second;
+        PatcherEdge edge{};
+        edge.src.nodeId = edgeTree.get<uint32_t>("src_node_id", 0);
+        edge.src.portId = edgeTree.get<uint32_t>("src_port_id", 0);
+        edge.dst.nodeId = edgeTree.get<uint32_t>("dst_node_id", 0);
+        edge.dst.portId = edgeTree.get<uint32_t>("dst_port_id", 0);
+        const std::string kindStr = edgeTree.get<std::string>("kind", "event");
+        if (!stringToEdgeKind(kindStr, edge.kind)) {
+          setError(error, "patcher graph contains unknown edge kind");
+          return false;
+        }
+        graph.edges.push_back(edge);
+      }
+    }
+  }
+  return true;
+}
+
 bool savePatcherPreset(const PatcherGraph& graph,
                        const std::string& path,
                        std::string* error) {
@@ -230,100 +340,8 @@ bool loadPatcherPreset(PatcherGraph& graph,
     return false;
   }
 
-  auto nodesOpt = root.get_child_optional("nodes");
-  if (!nodesOpt) {
-    setError(error, "patcher preset missing nodes");
+  if (!readPatcherGraphTree(root, schemaVersion, graph, error)) {
     return false;
-  }
-
-  struct PendingNode {
-    PatcherNode node;
-    std::vector<uint32_t> inputs;
-  };
-  std::vector<PendingNode> pendingNodes;
-  std::unordered_set<uint32_t> seenIds;
-  for (const auto& entry : *nodesOpt) {
-    const auto& nodeTree = entry.second;
-    const auto nodeIdOpt = nodeTree.get_optional<uint32_t>("id");
-    if (!nodeIdOpt) {
-      setError(error, "patcher preset node missing id");
-      return false;
-    }
-    const uint32_t nodeId = *nodeIdOpt;
-    if (!seenIds.insert(nodeId).second) {
-      setError(error, "patcher preset contains duplicate node id");
-      return false;
-    }
-
-    const std::string typeStr = nodeTree.get<std::string>("type", "");
-    PatcherNodeType type = PatcherNodeType::RustKernel;
-    if (!stringToNodeType(typeStr, type)) {
-      setError(error, "patcher preset contains unknown node type");
-      return false;
-    }
-
-    PatcherNode node;
-    node.id = nodeId;
-    node.type = type;
-
-    std::vector<uint32_t> inputs;
-    if (schemaVersion == 1) {
-      if (auto inputsTree = nodeTree.get_child_optional("inputs")) {
-        for (const auto& inputEntry : *inputsTree) {
-          inputs.push_back(inputEntry.second.get_value<uint32_t>());
-        }
-      }
-    }
-
-    if (auto euclidTree = nodeTree.get_child_optional("euclidean")) {
-      node.hasEuclideanConfig = true;
-      deserializeEuclidean(*euclidTree, node.euclideanConfig);
-    }
-    if (auto lfoTree = nodeTree.get_child_optional("lfo")) {
-      node.hasLfoConfig = true;
-      deserializeLfo(*lfoTree, node.lfoConfig);
-    }
-    if (auto randomTree = nodeTree.get_child_optional("random_degree")) {
-      node.hasRandomDegreeConfig = true;
-      deserializeRandomDegree(*randomTree, node.randomDegreeConfig);
-    }
-
-    pendingNodes.push_back(PendingNode{node, std::move(inputs)});
-  }
-
-  graph.nodes.clear();
-  graph.edges.clear();
-  graph.nodes.reserve(pendingNodes.size());
-  for (auto& pending : pendingNodes) {
-    graph.nodes.push_back(pending.node);
-  }
-  if (schemaVersion == 1) {
-    for (const auto& pending : pendingNodes) {
-      for (uint32_t inputId : pending.inputs) {
-        PatcherEdge edge{};
-        edge.src = {inputId, kPatcherEventOutputPort};
-        edge.dst = {pending.node.id, kPatcherEventInputPort};
-        edge.kind = PatcherPortKind::Event;
-        graph.edges.push_back(edge);
-      }
-    }
-  } else {
-    if (auto edgesTree = root.get_child_optional("edges")) {
-      for (const auto& edgeEntry : *edgesTree) {
-        const auto& edgeTree = edgeEntry.second;
-        PatcherEdge edge{};
-        edge.src.nodeId = edgeTree.get<uint32_t>("src_node_id", 0);
-        edge.src.portId = edgeTree.get<uint32_t>("src_port_id", 0);
-        edge.dst.nodeId = edgeTree.get<uint32_t>("dst_node_id", 0);
-        edge.dst.portId = edgeTree.get<uint32_t>("dst_port_id", 0);
-        const std::string kindStr = edgeTree.get<std::string>("kind", "event");
-        if (!stringToEdgeKind(kindStr, edge.kind)) {
-          setError(error, "patcher preset contains unknown edge kind");
-          return false;
-        }
-        graph.edges.push_back(edge);
-      }
-    }
   }
   if (!buildPatcherGraph(graph)) {
     setError(error, "patcher preset graph is invalid");

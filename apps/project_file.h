@@ -8,6 +8,7 @@
 #include "apps/harmony_timeline.h"
 #include "apps/modulation.h"
 #include "apps/musical_structures.h"
+#include "apps/patcher_graph.h"
 #include "apps/track_routing.h"
 
 namespace daw {
@@ -34,6 +35,8 @@ struct ProjectTrack {
   TrackChain chain{};
   std::vector<ModLink> modLinks;
   MusicalClip clip;
+  // This track's patcher DAG. One patcher per track; an empty graph = none.
+  PatcherGraph patcher;
 };
 
 struct ProjectTempoPoint {
@@ -48,8 +51,9 @@ struct ProjectMeta {
 };
 
 // The authoritative, recallable document. Everything the engine needs to
-// reconstruct a session, minus plugin state blobs and patcher graphs, which
-// live beside project.json in the container (see PROJECT_PERSISTENCE.md).
+// reconstruct a session, minus plugin state blobs, which live beside
+// project.json in the container (see PROJECT_PERSISTENCE.md). Each track carries
+// its own patcher DAG, so a multi-patcher song is a set of per-track graphs.
 struct ProjectDocument {
   ProjectMeta meta{};
   uint64_t nanoticksPerQuarter = 960000;

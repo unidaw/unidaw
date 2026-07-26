@@ -213,6 +213,9 @@ add_executable(project_file_tests
   apps/project_file.cpp
   apps/device_chain.cpp
   apps/plugin_cache.cpp
+  apps/patcher_preset.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
 )
 
 target_include_directories(project_file_tests PRIVATE

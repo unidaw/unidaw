@@ -1442,8 +1442,7 @@ struct TrackRuntime {
   // per-frame cost is otherwise a needless multi-megabyte memset. `force` seeds
   // the first publish and reruns after a load.
   uint32_t lastClipAllVersion = 0xFFFF'FFFFu;
-  auto writeUiClipAllSnapshot = [&](const std::vector<TrackRuntime*>& trackSnapshot,
-                                    bool force) {
+  auto writeUiClipAllSnapshot = [&](bool force) {
     if (!uiShm.header || uiShm.header->uiClipAllOffset == 0) {
       return;
     }
@@ -1452,12 +1451,17 @@ struct TrackRuntime {
       return;  // notes unchanged; the published region is still valid.
     }
     lastClipAllVersion = clipVersionValue;
+    // Take a fresh track snapshot at rebuild time. The rebuild runs at most once
+    // per clipVersion change, so it must not use a snapshot captured earlier in
+    // the publish iteration — during a load that snapshot can predate the tracks
+    // the load just created, leaving late tracks permanently empty here.
+    const auto freshTracks = snapshotTracks();
     auto* all = reinterpret_cast<daw::UiClipWindowSnapshot*>(
         reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiClipAllOffset);
     for (uint32_t trackId = 0; trackId < daw::kUiMaxTracks; ++trackId) {
       daw::UiClipWindowSnapshot& snap = all[trackId];
       TrackRuntime* runtime = nullptr;
-      for (auto* candidate : trackSnapshot) {
+      for (auto* candidate : freshTracks) {
         if (candidate && candidate->trackId == trackId) {
           runtime = candidate;
           break;
@@ -2407,6 +2411,13 @@ struct TrackRuntime {
       }
       document.tracks.push_back(std::move(track));
     }
+    // The patcher DAG is part of the song now, not a side file. The engine runs
+    // one global graph today, so on save it parks that graph on the first track;
+    // the per-track format is ready for when each track runs its own.
+    if (!document.tracks.empty()) {
+      std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+      document.tracks.front().patcher = patcherGraphState.graph;
+    }
     if (!daw::saveProject(document, path, error)) {
       return false;
     }
@@ -2472,6 +2483,54 @@ struct TrackRuntime {
     // A load replaces every clip; advance clipVersion so observers (and the
     // all-tracks published snapshot, which refreshes on this value) re-read.
     clipVersion.fetch_add(1, std::memory_order_acq_rel);
+
+    // Grow the track set to fit the document, so a project with more tracks than
+    // the engine currently holds loads in full rather than dropping the tail.
+    // Only for tracks that don't exist yet — existing tracks are left untouched
+    // and their chains are rebuilt below. Bounded by kUiMaxTracks inside
+    // ensureTrack.
+    for (const auto& source : document.tracks) {
+      size_t currentSize = 0;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        currentSize = tracks.size();
+      }
+      if (source.trackId >= currentSize) {
+        ensureTrack(source.trackId, "");
+      }
+    }
+
+    // Restore the song's patcher DAG. The engine executes one global graph, so
+    // it takes the first track that carries a patcher; the other tracks' patchers
+    // are preserved on the next save (round-tripped) but not yet run per-track.
+    // Applied only when a track carries one, so a patcher-less (or older) project
+    // leaves the live audio graph intact rather than wiping it to empty.
+    for (const auto& source : document.tracks) {
+      if (source.patcher.nodes.empty()) {
+        continue;
+      }
+      daw::PatcherGraph loadedGraph = source.patcher;
+      if (daw::buildPatcherGraph(loadedGraph)) {
+        {
+          std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+          patcherGraphState.graph = std::move(loadedGraph);
+          uint32_t nextId = 0;
+          for (const auto& node : patcherGraphState.graph.nodes) {
+            nextId = std::max(nextId, node.id + 1);
+          }
+          patcherGraphState.nextNodeId = nextId;
+        }
+        patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
+        updatePatcherGraphSnapshot();
+        DAW_EVENT("project.patcher_loaded")
+            .field("track", source.trackId)
+            .field("nodes", static_cast<uint64_t>(source.patcher.nodes.size()))
+            .field("edges", static_cast<uint64_t>(source.patcher.edges.size()));
+      } else {
+        DAW_EVENT("project.patcher_invalid").field("track", source.trackId);
+      }
+      break;  // engine runs only one graph for now.
+    }
 
     // Report plugin identity before touching anything: a project that silently
     // loads the wrong plugin, or none, is worse than one that says so.
@@ -6933,7 +6992,7 @@ struct TrackRuntime {
         uiShm.header->uiClipVersion =
             clipVersion.load(std::memory_order_acquire);
         writeUiClipWindowSnapshot(trackSnapshot);
-        writeUiClipAllSnapshot(trackSnapshot, false);
+        writeUiClipAllSnapshot(false);
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);
         if (writeHarmony) {

@@ -123,6 +123,58 @@ daw::ProjectDocument makeDocument() {
   empty.trackId = 1;
   empty.name = "Drums";
   document.tracks.push_back(std::move(empty));
+
+  // Each track carries its own patcher DAG. Track 0 exercises node configs
+  // (euclidean's signed octave_offset included) -> random_degree -> event_out;
+  // track 1 is a plain random_degree -> event_out. Two tracks with patchers
+  // proves the per-track model round-trips.
+  {
+    daw::PatcherNode euclid;
+    euclid.id = 0;
+    euclid.type = daw::PatcherNodeType::Euclidean;
+    euclid.hasEuclideanConfig = true;
+    euclid.euclideanConfig.steps = 16;
+    euclid.euclideanConfig.hits = 5;
+    euclid.euclideanConfig.degree = 1;
+    euclid.euclideanConfig.octave_offset = -1;
+    euclid.euclideanConfig.velocity = 100;
+    euclid.euclideanConfig.base_octave = 4;
+    document.tracks[0].patcher.nodes.push_back(euclid);
+
+    daw::PatcherNode rnd;
+    rnd.id = 1;
+    rnd.type = daw::PatcherNodeType::RandomDegree;
+    rnd.hasRandomDegreeConfig = true;
+    rnd.randomDegreeConfig.degree = 8;
+    rnd.randomDegreeConfig.velocity = 100;
+    document.tracks[0].patcher.nodes.push_back(rnd);
+
+    daw::PatcherNode out;
+    out.id = 2;
+    out.type = daw::PatcherNodeType::EventOut;
+    document.tracks[0].patcher.nodes.push_back(out);
+
+    document.tracks[0].patcher.edges.push_back(
+        {{0, daw::kPatcherEventOutputPort}, {1, daw::kPatcherEventInputPort},
+         daw::PatcherPortKind::Event});
+    document.tracks[0].patcher.edges.push_back(
+        {{1, daw::kPatcherEventOutputPort}, {2, daw::kPatcherEventInputPort},
+         daw::PatcherPortKind::Event});
+
+    daw::PatcherNode rnd2;
+    rnd2.id = 0;
+    rnd2.type = daw::PatcherNodeType::RandomDegree;
+    rnd2.hasRandomDegreeConfig = true;
+    rnd2.randomDegreeConfig.degree = 5;
+    document.tracks[1].patcher.nodes.push_back(rnd2);
+    daw::PatcherNode out2;
+    out2.id = 1;
+    out2.type = daw::PatcherNodeType::EventOut;
+    document.tracks[1].patcher.nodes.push_back(out2);
+    document.tracks[1].patcher.edges.push_back(
+        {{0, daw::kPatcherEventOutputPort}, {1, daw::kPatcherEventInputPort},
+         daw::PatcherPortKind::Event});
+  }
   return document;
 }
 
@@ -220,6 +272,35 @@ int main() {
   require(uidOk, "mod link target param uid16 lost");
   require(countEvents(track.clip, daw::MusicalEventType::Note) == 2, "notes lost");
   require(countEvents(track.clip, daw::MusicalEventType::Chord) == 1, "chords lost");
+  // Each track's patcher DAG must survive the round trip: node ids/types, the
+  // euclidean config (including its signed octave_offset), and edge topology.
+  const auto& p0 = roundTripped.tracks[0].patcher;
+  require(p0.nodes.size() == 3, "track 0 patcher nodes lost");
+  require(p0.nodes[0].type == daw::PatcherNodeType::Euclidean,
+          "track 0 patcher node 0 type lost");
+  require(p0.nodes[0].hasEuclideanConfig, "euclidean config lost");
+  require(p0.nodes[0].euclideanConfig.steps == 16, "euclidean steps lost");
+  require(p0.nodes[0].euclideanConfig.octave_offset == -1,
+          "euclidean signed octave_offset lost");
+  require(p0.nodes[1].type == daw::PatcherNodeType::RandomDegree,
+          "track 0 random_degree lost");
+  require(p0.nodes[1].randomDegreeConfig.degree == 8, "random_degree degree lost");
+  require(p0.nodes[2].type == daw::PatcherNodeType::EventOut,
+          "track 0 event_out lost");
+  require(p0.edges.size() == 2, "track 0 patcher edges lost");
+  require(p0.edges[0].src.nodeId == 0 && p0.edges[0].dst.nodeId == 1,
+          "track 0 patcher edge 0 endpoints lost");
+  require(p0.edges[1].src.nodeId == 1 && p0.edges[1].dst.nodeId == 2,
+          "track 0 patcher edge 1 endpoints lost");
+  // The second track's patcher round-trips independently — proves per-track.
+  const auto& p1 = roundTripped.tracks[1].patcher;
+  require(p1.nodes.size() == 2, "track 1 patcher nodes lost");
+  require(p1.nodes[0].type == daw::PatcherNodeType::RandomDegree,
+          "track 1 random_degree lost");
+  require(p1.nodes[0].randomDegreeConfig.degree == 5, "track 1 degree lost");
+  require(p1.edges.size() == 1, "track 1 patcher edge lost");
+  require(first.find("\"patcher\"") != std::string::npos,
+          "patcher section not emitted");
   // Row ops (item 12) must survive the round trip; a note without ops must stay
   // op-free (defaults are inert and are not written to disk).
   const daw::NotePayload* firstNote = nullptr;
