@@ -319,8 +319,6 @@ function pianoEdit(kind, semitones) {
   return true;
 }
 
-let scope = null;
-
 const mixer = new Mixer(mixerHost, {
   onGain: (track, pos) => {
     mixerState.strips[track].gain = gainAtPosition(pos);
@@ -342,6 +340,14 @@ const mixer = new Mixer(mixerHost, {
     sendMixer(track);
   },
 });
+
+// Built eagerly, not on first sight of the mixer. It is a HISTORY: created
+// lazily, it would start recording the moment you first looked at it and show a
+// flat line for everything that happened before, which is worse than useless
+// because it looks like silence.
+const scope = new Scope(mixer.scopeCanvas, 16);
+scope.readTheme(document.documentElement);
+
 
 // A 100,000-row timeline. Nothing materialises it; the pool is viewport-sized.
 const TOTAL_ROWS = 100000;
@@ -611,10 +617,6 @@ function drawPiano() {
 function drawMixer() {
   const n = Math.min(state.tracks, 16);
   if (!mixerBuf || mixerBuf._shape !== String(n)) mixerBuf = createMixerBuffer(n);
-  if (!scope) {
-    scope = new Scope(mixer.scopeCanvas, 16);
-    scope.readTheme(document.documentElement);
-  }
   // The scope is driven by the ENGINE's rate, not the draw rate: it samples on
   // every published frame (see onChange) and only paints here. Sampling in draw
   // would give it the display's cadence and a history that stretches whenever
@@ -1342,7 +1344,7 @@ conn = connectEngine({
     // Mixer edits reconcile on the engine's mixer version, the same way note
     // edits reconcile on the clip version.
     reconcileMixer(mixerState, store);
-    if (scope) scope.push(store.peaks, store.peakCount);
+    scope.push(store.peaks, store.peakCount);
     state.playhead = tickToRow(store.playheadTick);
     schedule();
   },
@@ -1509,7 +1511,7 @@ window.__uni = {
   },
   arrangeProbe: () => arrange.probe(),
   mixerProbe: () => mixer.probe(),
-  scopeProbe: () => (scope ? scope.probe() : null),
+  scopeProbe: () => scope.probe(),
   peaks: () => (engine ? Array.from(engine.peaks.slice(0, Math.max(engine.peakCount, 8))) : null),
   rename: (track, name) => { mixer.beginRename(track);
     for (const c of name) mixer.feedRename(c);
@@ -1604,7 +1606,6 @@ window.__uni = {
    */
   /** Feed the scope synthetic levels, so its path is testable without audio. */
   feedScope: (n) => {
-    if (!scope) return null;
     const buf = new Float32Array(16);
     for (let i = 0; i < n; i++) {
       for (let t = 0; t < 8; t++) {
