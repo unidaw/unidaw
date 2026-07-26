@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Minimal repro for the engine dying under command traffic.
 //
-//   tools/webstack.sh && node tools/repro-hang.mjs
+//   tools/webstack.sh && (cd ui-web && node test/repro-hang.mjs)
+//
+// Lives under ui-web because that is where playwright is installed.
 //
 // Sends note writes and nothing else — no transport, no plugin chains in the
 // project — and reports the command count at which ui_version stops advancing.
