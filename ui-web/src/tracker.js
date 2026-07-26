@@ -15,7 +15,7 @@
 // The row pool is fixed: OVERSCAN rows above and below the viewport, recycled.
 // The timeline is unbounded, so there is no path here that materialises it.
 
-const OVERSCAN = 8;
+const OVERSCAN = 4;
 
 export class Tracker {
   /**
