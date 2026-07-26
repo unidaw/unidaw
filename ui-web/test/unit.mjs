@@ -23,6 +23,7 @@ import {
 import { isBlackKey, pitchLabel, fitLowPitch } from '../src/pianomodel.js';
 import { describeConfig, NODE_TYPES } from '../src/patchermodel.js';
 import { trackName } from '../src/arrangemodel.js';
+import { createField, begin as fBegin, feed as fFeed, cancel as fCancel } from '../src/textfield.js';
 
 test('lcmGrid finds a grid every lane lands on', () => {
   assert.equal(lcmGrid([4, 4, 4]), 4);
@@ -192,4 +193,67 @@ test('trackName respects the engine, and falls back visibly', () => {
   assert.equal(trackName(null, 2), 'T03');
   // An empty string means the engine has not spoken, not that it is unnamed.
   assert.equal(trackName({ names: ['', 'Pad'] }, 0), 'T01');
+});
+
+test('a seeded text field is replaced by the first keystroke', () => {
+  // The bug this module exists to stop: seeding "Bass" and typing "Big Bass"
+  // gave "BassBig Bass", and seeding "foo" and saving gave "foofoo". Twice, in
+  // two fields written separately.
+  const f = createField({ max: 16 });
+  fBegin(f, 'Bass');
+  assert.equal(f.text, 'Bass', 'the seed shows');
+  fFeed(f, 'L');
+  assert.equal(f.text, 'L', 'and the first character replaces it');
+  fFeed(f, 'o'); fFeed(f, 'w');
+  assert.equal(f.text, 'Low');
+});
+
+test('an unseeded field appends from the start', () => {
+  const f = createField();
+  fBegin(f, '');
+  for (const c of 'abc') fFeed(f, c);
+  assert.equal(f.text, 'abc');
+});
+
+test('backspace edits the seed rather than replacing it', () => {
+  const f = createField();
+  fBegin(f, 'webtest');
+  fFeed(f, 'Backspace');
+  assert.equal(f.text, 'webtes', 'backspace is an edit, so the seed stays');
+  fFeed(f, 'X');
+  assert.equal(f.text, 'webtesX', 'and it is no longer fresh');
+});
+
+test('a field refuses to commit empty unless it is allowed to', () => {
+  const name = createField();
+  fBegin(name, '');
+  assert.equal(fFeed(name, 'Enter'), 'consumed', 'a name must not be empty');
+  const cell = createField({ commitEmpty: true });
+  fBegin(cell, '');
+  assert.equal(fFeed(cell, 'Enter'), 'commit', 'an empty cell commit CLEARS the cell');
+});
+
+test('cancelWhenEmpty gives the keyboard back', () => {
+  const f = createField({ cancelWhenEmpty: true });
+  fBegin(f, '');
+  fFeed(f, '@');
+  assert.equal(fFeed(f, 'Backspace'), 'cancel', 'backspacing past the opener closes it');
+  assert.equal(f.active, false);
+  const g = createField();
+  fBegin(g, '');
+  fFeed(g, 'a');
+  assert.equal(fFeed(g, 'Backspace'), 'consumed', 'others just empty out');
+  assert.equal(g.active, true);
+});
+
+test('the charset is enforced and out-of-set keys do not fall through', () => {
+  const f = createField({ charset: /[A-Za-z0-9._-]/, max: 4 });
+  fBegin(f, '');
+  for (const c of 'a/b!c') fFeed(f, c);
+  assert.equal(f.text, 'abc', 'slash and bang refused');
+  // Refused, not ignored: a key that reached a field must not also reach the
+  // shortcut behind it.
+  assert.equal(fFeed(f, '/'), 'consumed');
+  fFeed(f, 'd'); fFeed(f, 'e');
+  assert.equal(f.text, 'abcd', 'capped at max');
 });

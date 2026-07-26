@@ -16,6 +16,9 @@
 // The rule that keeps it predictable: the buffer is never entered implicitly.
 // If you did not type `@`, no keystroke is ever waiting for a confirmation.
 
+import { createField, begin as fieldBegin, cancel as fieldCancel,
+         feed as fieldFeed } from './textfield.js';
+
 const NOTE_LETTERS = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
 
 /**
@@ -141,9 +144,24 @@ export function parseToken(text, column) {
   return { kind: 'invalid' };
 }
 
-/** The transient token buffer. Only ever active for chord/degree entry. */
+/**
+ * The transient token buffer. Only ever active for chord/degree entry.
+ *
+ * Backed by the shared text field (src/textfield.js) so it cannot drift from the
+ * browser's save-as and the mixer's rename, which it did.
+ */
 export function createEntry() {
-  return { active: false, row: -1, track: -1, col: -1, text: '' };
+  const f = createField({
+    charset: /[0-9a-zA-Z#\-.^~@/]/,
+    max: 12,
+    // A cell CLEARS on an empty commit, unlike a name, which must not be empty.
+    commitEmpty: true,
+    // Backspacing past the opening `@` leaves the buffer, so the next keystroke
+    // is a piano key again rather than silently more text.
+    cancelWhenEmpty: true,
+  });
+  f.row = -1; f.track = -1; f.col = -1;
+  return f;
 }
 
 /** True if this cell is the one being typed into. */
@@ -152,31 +170,17 @@ export function editing(entry, row, track, col) {
 }
 
 export function begin(entry, cursor, initial = '') {
-  entry.active = true;
   entry.row = cursor.row; entry.track = cursor.track; entry.col = cursor.col;
-  entry.text = initial;
+  fieldBegin(entry, initial);
+  // An explicitly typed opener is not a seed to be replaced — `@` then `3`
+  // must give "@3", not "3".
+  entry.fresh = false;
 }
 
-export function cancel(entry) { entry.active = false; entry.text = ''; }
+export function cancel(entry) { fieldCancel(entry); }
 
 /**
  * Feed a keystroke to an ALREADY-OPEN token buffer. Never opens one: the caller
  * decides that, on `@` alone. Returns 'consumed', 'commit', 'cancel' or 'ignore'.
  */
-export function feed(entry, key) {
-  if (!entry.active) return 'ignore';
-  if (key === 'Escape') { cancel(entry); return 'cancel'; }
-  if (key === 'Enter') return 'commit';
-  if (key === 'Backspace') {
-    entry.text = entry.text.slice(0, -1);
-    // Backspacing past the opening `@` leaves the buffer, so the next keystroke
-    // is a piano key again rather than silently more text.
-    if (!entry.text) { cancel(entry); return 'cancel'; }
-    return 'consumed';
-  }
-  if (key.length !== 1) return 'ignore';
-  // `/` is part of the chord grammar (duration), so it must reach the buffer.
-  if (!/[0-9a-zA-Z#\-.^~@/]/.test(key)) return 'ignore';
-  if (entry.text.length < 12) entry.text += key;
-  return 'consumed';
-}
+export function feed(entry, key) { return fieldFeed(entry, key); }

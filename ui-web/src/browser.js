@@ -8,6 +8,9 @@
 // with names only. Names, not paths: handing the client a path invites it to send
 // one back, and the engine resolves names against its own project directory.
 
+import { createField, begin as fieldBegin, cancel as fieldCancel,
+         feed as fieldFeed, display } from './textfield.js';
+
 function div(cls, parent) {
   const el = document.createElement('div');
   el.className = cls;
@@ -38,8 +41,9 @@ export class Browser {
     this.savePrompt.appendChild(document.createTextNode('save as'));
     this.saveName = div('br-savename', this.saveRow);
     this.saveName.appendChild(document.createTextNode(''));
-    this.saving = false;
-    this.saveText = '';
+    // Names go to the filesystem, so the charset matches what the sidecar
+    // accepts — a name cannot be typed here and refused two hops away.
+    this.field = createField({ charset: /[A-Za-z0-9._-]/, max: 28 });
 
     const foot = div('br-foot', host);
     this.hint = div('br-hint', foot);
@@ -59,43 +63,21 @@ export class Browser {
   }
 
   /** Begin save-as, seeded with the loaded project's name. */
-  beginSave(seed) {
-    this.saving = true;
-    this.saveText = seed || '';
-    // The seeded name starts SELECTED, so the first character typed replaces it.
-    // Appending instead turned "save as" on a project called foo into "foofoo" —
-    // the same bug the mixer's rename field had, fixed there and not here.
-    this.saveFresh = true;
-  }
-  cancelSave() { this.saving = false; this.saveText = ''; this.saveFresh = false; }
+  beginSave(seed) { fieldBegin(this.field, seed || ''); }
+  cancelSave() { fieldCancel(this.field); }
 
   /**
-   * Feed a keystroke to the save field. Returns 'consumed', 'commit', 'cancel'
-   * or 'ignore' — the same vocabulary the cell entry buffer uses, because it is
-   * the same problem and a second vocabulary would be one to remember.
+   * Feed a keystroke to the save field. One shared implementation with the
+   * cell buffer and the rename field — see src/textfield.js for why.
    */
   feedSave(key) {
-    if (!this.saving) return 'ignore';
-    if (key === 'Escape') { this.cancelSave(); return 'cancel'; }
-    if (key === 'Enter') {
-      const name = this.saveText.trim();
-      if (!name) { return 'consumed'; }
-      this.saving = false;
-      this.onSave && this.onSave(name);
-      return 'commit';
+    const act = fieldFeed(this.field, key);
+    if (act === 'commit') {
+      const name = this.field.text.trim();
+      fieldCancel(this.field);
+      if (name) this.onSave && this.onSave(name);
     }
-    if (key === 'Backspace') {
-      this.saveFresh = false;
-      this.saveText = this.saveText.slice(0, -1);
-      return 'consumed';
-    }
-    if (key.length !== 1) return 'ignore';
-    if (this.saveFresh) { this.saveText = ''; this.saveFresh = false; }
-    // Matches what the sidecar accepts, so a name cannot be typed here and then
-    // silently refused two hops away.
-    if (!/[A-Za-z0-9._-]/.test(key)) return 'consumed';
-    if (this.saveText.length < 28) this.saveText += key;
-    return 'consumed';
+    return act;
   }
 
   setItems(names, current) {
@@ -143,21 +125,19 @@ export class Browser {
       this.count.firstChild.nodeValue = String(n);
       this.emptyEl.style.display = n ? 'none' : '';
     }
-    if (this._saving !== this.saving) {
-      this._saving = this.saving;
-      this.saveRow.classList.toggle('on', this.saving);
+    if (this._saving !== this.field.active) {
+      this._saving = this.field.active;
+      this.saveRow.classList.toggle('on', this.field.active);
     }
-    if (this._saveText !== this.saveText) {
-      this._saveText = this.saveText;
-      this.saveName.firstChild.nodeValue = this.saveText + '\u2588';
-    }
-    const hint = this.saving ? 'Enter saves · Esc cancels' : 'Enter opens · S saves as · B closes';
+    const shown = display(this.field);
+    if (this._saveText !== shown) { this._saveText = shown; this.saveName.firstChild.nodeValue = shown; }
+    const hint = this.field.active ? 'Enter saves · Esc cancels' : 'Enter opens · S saves as · B closes';
     if (this._hint !== hint) { this._hint = hint; this.hint.firstChild.nodeValue = hint; }
   }
 
   probe() {
     return { items: this.items.slice(), selected: this.selected,
-             current: this.current, saving: this.saving, saveText: this.saveText,
+             current: this.current, saving: this.field.active, saveText: this.field.text,
              domNodes: this.pool.length };
   }
 }

@@ -6,6 +6,9 @@
 // strip at the engine's publish rate and turn a cheap surface into the most
 // expensive one in the app.
 
+import { createField, begin as fieldBegin, cancel as fieldCancel,
+         feed as fieldFeed, display } from './textfield.js';
+
 function div(cls, parent) {
   const el = document.createElement('div');
   el.className = cls;
@@ -25,8 +28,9 @@ export class Mixer {
     this.host.className = 'mx';
     this.onGain = onGain; this.onPan = onPan; this.onToggle = onToggle;
     this.onRename = onRename;
-    /** Which strip is being renamed, and the text so far. */
-    this.renaming = -1; this.renameText = '';
+    /** Which strip is being renamed; the text lives in the shared field. */
+    this.renaming = -1;
+    this.field = createField({ max: 23 });
     this.stripsEl = div('mx-strips', host);
     // A canvas, deliberately. This is the surface where a real scope goes, and a
     // scope redraws every pixel every frame — no arrangement of pooled divs
@@ -117,38 +121,25 @@ export class Mixer {
 
   beginRename(track) {
     this.renaming = track;
-    this.renameText = this.vm && this.vm.strips[track] ? this.vm.strips[track].name : '';
-    // The seeded name starts SELECTED, as every rename field does: the first
-    // character typed replaces it, Backspace edits it. Appending to the old name
-    // instead is how you get "BassBig Bass".
-    this.renameFresh = true;
+    const cur = this.vm && this.vm.strips[track] ? this.vm.strips[track].name : '';
+    fieldBegin(this.field, cur);
   }
-  cancelRename() { this.renaming = -1; this.renameText = ''; this.renameFresh = false; }
+  cancelRename() { this.renaming = -1; fieldCancel(this.field); }
 
-  /**
-   * Feed a keystroke to the rename field. Same vocabulary as the cell buffer and
-   * the browser's save field — three places needed this and inventing a third
-   * shape for it would be three things to remember instead of one.
-   */
+  /** One shared implementation; see src/textfield.js. */
   feedRename(key) {
     if (this.renaming < 0) return 'ignore';
-    if (key === 'Escape') { this.cancelRename(); return 'cancel'; }
-    if (key === 'Enter') {
-      const name = this.renameText.trim();
+    const act = fieldFeed(this.field, key);
+    if (act === 'commit') {
+      const name = this.field.text.trim();
       const track = this.renaming;
       this.renaming = -1;
+      fieldCancel(this.field);
       if (name) this.onRename && this.onRename(track, name);
-      return 'commit';
+    } else if (act === 'cancel') {
+      this.renaming = -1;
     }
-    if (key === 'Backspace') {
-      this.renameFresh = false;
-      this.renameText = this.renameText.slice(0, -1);
-      return 'consumed';
-    }
-    if (key.length !== 1) return 'ignore';
-    if (this.renameFresh) { this.renameText = ''; this.renameFresh = false; }
-    if (this.renameText.length < 23) this.renameText += key;
-    return 'consumed';
+    return act;
   }
 
   render(vm) {
@@ -159,7 +150,7 @@ export class Mixer {
       if (el.style.display === 'none') el.style.display = '';
       // While renaming, the strip shows what you are typing rather than what the
       // engine still thinks it is called.
-      const shown = i === this.renaming ? this.renameText + '\u2588' : s.name;
+      const shown = i === this.renaming ? display(this.field) : s.name;
       if (el._nameV !== shown) { el._nameV = shown; el._name.nodeValue = shown; }
       const ren = i === this.renaming;
       if (el._renV !== ren) { el._renV = ren; el.classList.toggle('renaming', ren); }
@@ -204,7 +195,7 @@ export class Mixer {
                fader: +x.faderPct.toFixed(3), meter: +x.peakPct.toFixed(3) });
     }
     return { strips: vm.stripCount, authoritative: vm.authoritative,
-             renaming: this.renaming, renameText: this.renameText,
+             renaming: this.renaming, renameText: this.field.text,
              domNodes: this.pool.length * 12, detail: s };
   }
 }
