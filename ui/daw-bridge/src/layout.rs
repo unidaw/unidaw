@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 11;
+pub const K_SHM_VERSION: u16 = 12;
 
 pub const K_UI_MAX_TRACKS: usize = 8;
 pub const K_UI_MAX_CLIP_NOTES: usize = 4096;
@@ -59,6 +59,12 @@ pub struct ShmHeader {
     pub ui_lines_per_beat: [u8; K_UI_MAX_TRACKS],
     // v11 (M3.4): offset of the UiClipExtentRegion (clip boxes for rails).
     pub ui_clip_extent_offset: u64,
+    // v12: per-track mixer read-back. Gain in millibels, pan in thousandths,
+    // mute/solo in flags (MIXER_FLAG_*). ui_mixer_version moves only on change.
+    pub ui_track_gain_millibels: [i32; K_UI_MAX_TRACKS],
+    pub ui_track_pan_thousandths: [i32; K_UI_MAX_TRACKS],
+    pub ui_track_mix_flags: [u8; K_UI_MAX_TRACKS],
+    pub ui_mixer_version: u32,
 }
 
 #[repr(C, align(64))]
@@ -592,7 +598,7 @@ mod tests {
 
     #[test]
     fn shm_header_layout_matches_cpp() {
-        const_assert_eq!(size_of::<ShmHeader>(), 256);
+        const_assert_eq!(size_of::<ShmHeader>(), 384);
         const_assert_eq!(align_of::<ShmHeader>(), 64);
         assert_eq!(offset_of!(ShmHeader, ring_std_offset), 56);
         assert_eq!(offset_of!(ShmHeader, ring_ctrl_offset), 64);
@@ -619,5 +625,10 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ring_ui_agent_offset), 232);
         assert_eq!(offset_of!(ShmHeader, ui_lines_per_beat), 240);
         assert_eq!(offset_of!(ShmHeader, ui_clip_extent_offset), 248);
+        // v12 mixer read-back; grows the header to 384.
+        assert_eq!(offset_of!(ShmHeader, ui_track_gain_millibels), 256);
+        assert_eq!(offset_of!(ShmHeader, ui_track_pan_thousandths), 288);
+        assert_eq!(offset_of!(ShmHeader, ui_track_mix_flags), 320);
+        assert_eq!(offset_of!(ShmHeader, ui_mixer_version), 328);
     }
 }

@@ -79,8 +79,17 @@ Offsets within `ShmHeader` (aligned to 64 bytes overall):
 - `uiHarmonyOffset`: 168
 - `uiHarmonyBytes`: 176
 - `uiTrackPeakRms`: 184
+- `uiClipAllOffset`: 216, `uiClipAllBytes`: 224, `ringUiAgentOffset`: 232 (v9)
+- `uiLinesPerBeat[kUiMaxTracks]`: 240 (v10)
+- `uiClipExtentOffset`: 248 (v11)
+- v12 mixer read-back (grows the header to 384):
+  - `uiTrackGainMillibels[kUiMaxTracks]`: 256 (gain in millibels = 0.01 dB)
+  - `uiTrackPanThousandths[kUiMaxTracks]`: 288 (pan in thousandths, -1000..1000)
+  - `uiTrackMixFlags[kUiMaxTracks]`: 320 (bit0 mute, bit1 solo)
+  - `uiMixerVersion`: 328 (moves only when a value changes)
 
-`sizeof(ShmHeader)` = 256 bytes (aligned to 64).
+`sizeof(ShmHeader)` = 384 bytes (aligned to 64; region offsets are computed from
+`sizeof(ShmHeader)`, so growing it shifts the rings/regions automatically).
 
 ## UI Version Gating (Seqlock)
 
