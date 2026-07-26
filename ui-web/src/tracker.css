@@ -81,6 +81,7 @@
    here to write into, so the track tint drops away and the cell reads as void. */
 .tk-cell[data-kind="outside"]   { background: var(--uni-surface-tracker-bg); }
 .tk-cell[data-kind="off"]       { color: var(--uni-text-off); }
+.tk-cell[data-kind="collide"]   { color: var(--uni-clip-rail-active); font-weight: 500; }
 .tk-cell[data-kind="aggregate"] { color: var(--uni-text-aggregate); letter-spacing: var(--font-tracking-fx); }
 
 .tk-cell.cursor {

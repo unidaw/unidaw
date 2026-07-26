@@ -222,6 +222,45 @@ daw_engine (C++) → SHM → Rust sidecar → binary frames → ViewModel → DO
 
 ---
 
+## 6.5 The M3 clip model — design for this, not for flat notes
+
+Announced by backend before it lands, so the tracker is designed once. Three
+layers, and the tracker is a view over the resolved result of all three.
+
+- **Clip** is a reusable *definition*, project-level, with **clip-relative**
+  events and its own length. Not a span on a track.
+- **Placement** drops a clip on a track: `{clipId, at, length, adds[], mutes[]}`.
+  `at` is the absolute tick where the clip's tick 0 lands. A shorter clip **loops**
+  to fill the placement — it is not copied N times. `at` may be null, meaning a
+  loose session cell.
+- **Overrides are additive-only and one level deep.** `adds[]` are notes local to
+  one placement; `mutes[]` are EventIds silenced in one placement. Resolved =
+  base − mutes + adds. This is what lets chorus 3 gain a hihat without copying the
+  clip. There is no SetField and no deeper nesting, by ruling.
+
+Consequences the renderer has to carry:
+
+1. **A note's row is `at` + its clip-relative tick**, so several placements of one
+   clip produce several rows from the same base note.
+2. **Overlapping placements can co-locate ticks.** Merge by `note_id`; never let a
+   position key silently overwrite. This is the `contentAt` failure class and
+   backend called it out by name. Until provenance arrives, a collision renders as
+   `**` rather than quietly dropping a note.
+3. **Rails are the same clip list in two views** — arrange draws blocks, the
+   tracker shades `[at, at+length)` with start and end markers.
+4. **Edit target is a mode**: BASE edits the clip and every placement of it,
+   OVERRIDE touches one placement. The UI must show which mode it is in and which
+   placement the cursor is over. A mute is a struck-out base note; an add shows
+   provenance; each placement gets a count badge and one-click revert.
+5. **Note entry creates or stretches a clip** — stretch within about a bar of an
+   edge, otherwise a new clip. Entry still feels free; clips form underneath.
+
+Arriving at M3.4, announced before the contract moves: `placementId` and a
+base/add flag folded into `UiClipNote`'s spare bytes, plus a clip-extents feed
+`{placementId, clipId, trackId, startTick, endTick, name}` — the shape the rails
+need. The note feed itself stays the v9/v10 all-tracks region and stays
+engine-**resolved**, so what plays is what is shown and the decoder survives.
+
 ## 7. Open and unmeasured
 
 - **Windows** — nothing has ever been run there.

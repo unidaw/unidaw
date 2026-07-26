@@ -213,7 +213,14 @@ export function buildViewModel(opts, buf) {
       if (!row) continue;
       const base = n.track * columns;
       const c0 = row.cells[base];
-      if (c0) { c0.text = pitchName(n.pitch); c0.kind = 'note'; }
+      if (c0) {
+        // Two notes can legitimately land on one (row, track) once placements can
+        // overlap — M3 allows it. Silently letting the second overwrite the first
+        // is the contentAt bug again: a position key losing data while rendering
+        // something plausible. Make the collision visible instead.
+        if (c0.kind === 'note' && c0._row === ri) { c0.text = '**'; c0.kind = 'collide'; }
+        else { c0.text = pitchName(n.pitch); c0.kind = 'note'; c0._row = ri; }
+      }
       if (columns > 1) {
         const c1 = row.cells[base + 1];
         if (c1) { c1.text = ('0' + n.velocity).slice(-2); c1.kind = 'inst'; }
