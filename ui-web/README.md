@@ -20,6 +20,9 @@ stream.
     tools/webstack.sh            # engine + sidecar + page server, or says why not
     open http://127.0.0.1:8173/index.html
 
+From a script or an agent, background it: the processes it starts are orphaned
+out of its process group, but a caller that waits on the group will still wait.
+
 The script starts exactly one of each and refuses rather than guessing. Read the
 comments in it before changing how it picks binaries — every line there is the
 result of something that went wrong.

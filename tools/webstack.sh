@@ -6,6 +6,12 @@
 # ./daw_engine, not build/daw_engine), and twice by two engines racing on the same
 # shared-memory segment, which produces frozen frames that look exactly like a
 # healthy stopped transport.
+# NOTE for automated callers: run this with output redirected to a file and the
+# invocation backgrounded. The processes it starts are orphaned out of its
+# process group, but a tool that waits on the group still waits — this stalled a
+# five-minute timeout while everything it had started was running perfectly.
+#
+#   ./tools/webstack.sh > /tmp/stack.out 2>&1     (backgrounded by the caller)
 set -euo pipefail
 
 WEB=/Users/jak/src/daw-web
@@ -68,24 +74,37 @@ sleep 1
 
 [ -x "$ENGINE" ] || { say "no engine at $ENGINE — run: cmake --build build --target daw_engine"; exit 1; }
 [ -x "$HOST" ] || { say "no host at $HOST — run: cmake --build build --target juce_host_process"; exit 1; }
-cd "$RUNDIR"
-DAW_UI_SHM_NAME=$SHM DAW_PROJECT_DIR=$PROJECTS \
-  DAW_HOST_BINARY=$HOST \
-  "$ENGINE" "$@" > /tmp/eng.log 2>&1 &
-ENGINE_PID=$!
-echo "$ENGINE_PID" > "$PIDFILE"
+
+# Each child is launched inside `( ... & )` so the subshell exits immediately and
+# the child is orphaned OUT of this script's process group. `nohup cmd &` alone
+# does not do that: the child stays in the group, an automated caller waits on
+# the group for output that never ends, and the script appears to hang while
+# everything it started is running perfectly. Cost me a five-minute timeout on
+# the one run where the page server was not already up.
+#
+# Pids come back through the file, since `$!` inside a subshell is not visible
+# out here.
+: > "$PIDFILE"
+
+( cd "$RUNDIR" && DAW_UI_SHM_NAME=$SHM DAW_PROJECT_DIR=$PROJECTS DAW_HOST_BINARY=$HOST \
+    nohup "$ENGINE" "$@" > /tmp/eng.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
 sleep 6
+ENGINE_PID=$(sed -n 1p "$PIDFILE")
 alive "$ENGINE_PID" || { say "engine exited during startup:"; tail -5 /tmp/eng.log; exit 1; }
 
-cd "$WEB/ui"
-DAW_PROJECT_DIR=$PROJECTS ./target/release/daw-sidecar --shm "$SHM" > /tmp/side.log 2>&1 &
-SIDECAR_PID=$!
-echo "$SIDECAR_PID" >> "$PIDFILE"
+( cd "$WEB/ui" && DAW_PROJECT_DIR=$PROJECTS \
+    nohup ./target/release/daw-sidecar --shm "$SHM" > /tmp/side.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
 sleep 2
+SIDECAR_PID=$(sed -n 2p "$PIDFILE")
 grep -q 'attached to' /tmp/side.log || { say "sidecar did not attach:"; head -3 /tmp/side.log; exit 1; }
 
 if ! lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
-  cd "$WEB/ui-web" && python3 -m http.server "$PORT" --bind 127.0.0.1 > /tmp/page.log 2>&1 &
+  # Fully detached: </dev/null and nohup. A backgrounded child that still holds
+  # the caller's stdin keeps an automated caller waiting for EOF forever — this
+  # script hung a five-minute tool timeout exactly once, on the one run where the
+  # page server was not already up and this branch actually executed.
+  ( cd "$WEB/ui-web" && nohup python3 -m http.server "$PORT" --bind 127.0.0.1 \
+      > /tmp/page.log 2>&1 < /dev/null & )
   sleep 1
 fi
 
