@@ -1,0 +1,88 @@
+/* Tracker styling. Every value comes from tokens.css — no hex, no font name, no
+   px literal that design/tokens.json already carries. Rule 3 of three. */
+
+.tk-host {
+  position: relative;
+  overflow: hidden;
+  /* Rule 2: this is why PrePaint stays flat and Layout reads 0.000 on scroll. */
+  contain: strict;
+  background: var(--uni-surface-tracker-bg);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums; /* or monospace columns drift */
+}
+
+.tk-band, .tk-rails {
+  position: absolute;
+  inset: 0;
+  will-change: transform; /* the band IS the scrolled thing; promotion is correct here */
+}
+.tk-rails { pointer-events: none; }
+
+.tk-row {
+  position: absolute;
+  left: 0;
+  display: flex;
+  height: var(--metrics-row-height);
+  box-sizing: border-box;
+}
+.tk-row.beat { background: var(--uni-surface-row-alt); }
+.tk-row.bar  { background: var(--uni-surface-row-alt); box-shadow: inset 0 1px 0 var(--uni-rule-gutter); }
+.tk-row.playhead { background: var(--uni-surface-playhead-row); }
+
+.tk-gutter {
+  width: var(--metrics-gutter-width);
+  flex: 0 0 var(--metrics-gutter-width);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  box-sizing: border-box;
+  font-size: var(--font-size-gutter);
+  letter-spacing: var(--font-tracking-gutter);
+  color: var(--uni-text-gutter);
+  border-right: var(--uni-rule-column-width) solid var(--uni-rule-gutter);
+}
+
+/* Track borders are deliberately heavier than the rules between columns inside
+   a track — without that, N single-column tracks read as one undifferentiated
+   grid of thin lines. */
+.tk-track {
+  display: flex;
+  background: var(--tint);
+  border-right: var(--uni-rule-track-width) solid var(--uni-rule-track);
+}
+
+.tk-cell {
+  width: var(--metrics-cell-width);
+  flex: 0 0 var(--metrics-cell-width);
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--font-size-cell);
+  color: var(--uni-text-note);
+  border-right: var(--uni-rule-column-width) solid var(--uni-rule-column);
+  cursor: text;
+}
+.tk-cell:last-child { border-right: none; }
+
+.tk-cell[data-kind="inst"]      { font-size: var(--font-size-inst); color: var(--uni-text-instrument); }
+.tk-cell[data-kind="fx"]        { font-size: var(--font-size-inst); color: var(--uni-text-fx); }
+.tk-cell[data-kind="empty"]     { color: var(--uni-text-empty); }
+.tk-cell[data-kind="off"]       { color: var(--uni-text-off); }
+.tk-cell[data-kind="aggregate"] { color: var(--uni-text-aggregate); letter-spacing: var(--font-tracking-fx); }
+
+.tk-cell.cursor {
+  background: var(--uni-surface-cursor-cell);
+  outline: var(--uni-cursor-border-width) solid var(--uni-cursor-border);
+  outline-offset: -1px;
+}
+
+.tk-rail {
+  position: absolute;
+  border-left: var(--uni-clip-rail-width) solid var(--uni-clip-rail);
+  background: var(--uni-clip-scope-tint);
+  box-sizing: border-box;
+}
+.tk-rail.active { border-left-color: var(--uni-clip-rail-active); }

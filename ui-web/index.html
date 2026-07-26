@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Uni — tracker</title>
+<link rel="stylesheet" href="src/tokens.css">
+<link rel="stylesheet" href="src/tracker.css">
+<style>
+  html, body { margin: 0; height: 100%; background: var(--uni-surface-tracker-bg); color: var(--base-text); }
+  body { font-family: var(--font-chrome); font-size: var(--font-size-chrome); overflow: hidden; }
+  #hud { position: fixed; right: 8px; bottom: 6px; font-family: var(--font-mono);
+         font-size: var(--font-size-fx); color: var(--base-neutral-600); pointer-events: none; }
+  #tracker { position: absolute; inset: 0; }
+</style>
+
+<div id="tracker"></div>
+<div id="hud"></div>
+
+<script type="module">
+import { Tracker } from './src/tracker.js';
+import { buildViewModel, ZOOM_LEVELS } from './src/viewmodel.js';
+import M from './design/out/tokens.js';
+
+const metrics = {
+  rowHeight: M.metrics.rowHeight,
+  gutterWidth: M.metrics.gutterWidth,
+  laneWidth: M.metrics.laneWidth,
+  cellWidth: M.metrics.cellWidth,
+};
+
+const host = document.getElementById('tracker');
+const hud = document.getElementById('hud');
+const tracker = new Tracker(host, metrics);
+
+// A 100,000-row timeline. Nothing materialises it; the pool is viewport-sized.
+const TOTAL_ROWS = 100000;
+const state = { start: 0, tracks: 8, columns: 3, zoom: 2, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+
+function visibleRows() { return Math.ceil(host.clientHeight / metrics.rowHeight) + 16; }
+
+function draw() {
+  tracker.resize(host.clientHeight, state.tracks, state.columns);
+  const vm = buildViewModel({
+    startRow: state.start, rowCount: tracker.poolSize,
+    tracks: state.tracks, columns: state.columns, zoomIndex: state.zoom,
+    cursor: state.cursor, playheadRow: state.playhead,
+  });
+  tracker.render(vm);
+  hud.textContent = `${vm.zoom.label}  row ${state.cursor.row}  ${tracker.poolSize} pooled  ${host.querySelectorAll('*').length} nodes`;
+}
+
+function scrollTo(row) {
+  state.start = Math.max(0, Math.min(TOTAL_ROWS - tracker.poolSize, row));
+  draw();
+}
+
+addEventListener('keydown', (e) => {
+  const k = e.key;
+  if (k === 'ArrowDown') state.cursor.row++;
+  else if (k === 'ArrowUp') state.cursor.row = Math.max(0, state.cursor.row - 1);
+  else if (k === 'ArrowRight') state.cursor.col = (state.cursor.col + 1) % state.columns;
+  else if (k === 'ArrowLeft') state.cursor.col = (state.cursor.col + state.columns - 1) % state.columns;
+  else if (k === 'PageDown') { scrollTo(state.start + 32); return; }
+  else if (k === 'PageUp') { scrollTo(state.start - 32); return; }
+  else if (k === '+' || k === '=') { state.zoom = Math.min(ZOOM_LEVELS.length - 1, state.zoom + 1); }
+  else if (k === '-') { state.zoom = Math.max(0, state.zoom - 1); }
+  else return;
+  // keep the cursor inside the band
+  const lo = state.start + 4, hi = state.start + tracker.poolSize - 12;
+  if (state.cursor.row < lo) state.start = Math.max(0, state.cursor.row - 4);
+  if (state.cursor.row > hi) state.start = state.cursor.row - tracker.poolSize + 12;
+  e.preventDefault();
+  draw();
+}, { capture: true });
+
+addEventListener('resize', draw);
+draw();
+
+// Agent / test surface. Structure, not pixels — this is requirement (d).
+window.__uni = {
+  probe: () => tracker.probe(),
+  state: () => JSON.parse(JSON.stringify(state)),
+  scrollTo,
+  setZoom: (z) => { state.zoom = z; draw(); },
+  step: () => { state.cursor.row++; state.playhead = (state.playhead + 1) % TOTAL_ROWS;
+                if (state.cursor.row > state.start + tracker.poolSize - 12) state.start = state.cursor.row - tracker.poolSize + 12;
+                draw(); },
+  totalRows: TOTAL_ROWS,
+};
+</script>

@@ -1,0 +1,13 @@
+{
+  "name": "uni-ui-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tokens": "node design/build-tokens.mjs",
+    "shots": "node test/shot.mjs",
+    "bless": "node test/shot.mjs --bless"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}

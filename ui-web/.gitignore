@@ -1,0 +1,8 @@
+node_modules/
+test/out/
+
+# Baselines are deliberately NOT committed yet: the fonts are not vendored, so
+# every golden here depends on this machine's system mono fallback and would be
+# invalidated the moment Inter and IBM Plex Mono land. Commit them in the same
+# change that vendors the fonts — a golden nobody can reproduce is worse than none.
+test/baselines/
