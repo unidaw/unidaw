@@ -50,11 +50,14 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
 
   // Entry state. A tracker where you cannot see the octave you are typing into
   // is a tracker that writes the wrong notes silently.
+  // Which surface is showing. Tab cycles four of them and nothing said which.
+  const viewLabel = label('ch-view', 'TRACKER');
+
   const entry = document.createElement('div');
   entry.className = 'ch-group';
   const octLabel = label('ch-meta', 'oct 4');
   const stepLabel = label('ch-meta', 'step 1');
-  entry.append(octLabel, stepLabel);
+  entry.append(viewLabel, octLabel, stepLabel);
 
   const scales = document.createElement('button');
   scales.className = 'ch-btn ch-scales';
@@ -82,11 +85,13 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
   if (onScales) scales.addEventListener('click', onScales);
 
   // Cached scalars, so a write only happens when the value actually changes.
-  let lastTick = -1, lastTransport = -1, lastLink = '', lastOct = -1, lastStep = -1, lastReject = '';
+  let lastTick = -1, lastTransport = -1, lastLink = '', lastOct = -1, lastStep = -1, lastReject = '', lastView = '';
 
   return {
     /** Called from the draw loop. Must stay allocation-free when nothing moves. */
-    update({ playheadTick, transport: tstate, linkText, octave, editStep, rejectText = '' }) {
+    update({ playheadTick, transport: tstate, linkText, octave, editStep,
+             rejectText = '', viewName = '' }) {
+      if (viewName !== lastView) { lastView = viewName; viewLabel.firstChild.nodeValue = viewName.toUpperCase(); }
       if (rejectText !== lastReject) {
         lastReject = rejectText;
         reject.firstChild.nodeValue = rejectText;

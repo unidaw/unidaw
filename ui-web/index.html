@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="src/piano.css">
 <link rel="stylesheet" href="src/browser.css">
 <link rel="stylesheet" href="src/dock.css">
+<link rel="stylesheet" href="src/help.css">
 <style>
   html, body { margin: 0; height: 100%; background: var(--uni-surface-tracker-bg); color: var(--base-text); }
   body { font-family: var(--font-chrome); font-size: var(--font-size-chrome); overflow: hidden; }
@@ -38,7 +39,7 @@
                   border-right: var(--uni-rule-track-width) solid var(--uni-rule-track); }
   #tracker, #arrange, #mixer, #piano { position: absolute; left: 0; right: 0; bottom: 16px;
              top: calc(38px + var(--metrics-header-height)); }
-  #arrange[hidden], #mixer[hidden], #piano[hidden], #browser[hidden], #dock[hidden] { display: none; }
+  #arrange[hidden], #mixer[hidden], #piano[hidden], #browser[hidden], #dock[hidden], #help[hidden] { display: none; }
   /* The rail overlays; it does not reflow the surface underneath, so opening it
      never costs a relayout of a pooled grid. */
   #browser { position: absolute; left: 0; bottom: 16px;
@@ -65,6 +66,7 @@
 <div id="browser" hidden></div>
 <div id="dock" hidden></div>
 <div id="stale" hidden></div>
+<div id="help" hidden></div>
 <div id="hud"></div>
 
 <script type="module">
@@ -82,6 +84,7 @@ import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch } from './src/pianomodel.js';
 import { Browser } from './src/browser.js';
 import { Dock } from './src/dock.js';
+import { createHelp } from './src/help.js';
 import { createEntry, feed, cancel, begin, parseToken, editing, NOTE_KEYS, NOTE_OFF_KEY,
          TOKEN_KEY, pitchOf, pitchToToken, hexValue, shiftDigit } from './src/entry.js';
 
@@ -135,6 +138,8 @@ const browser = new Browser(browserHost, {
   },
 });
 
+const helpHost = document.getElementById('help');
+const help = createHelp(helpHost);
 const dockHost = document.getElementById('dock');
 // One API object: every console command goes through the same paths the keyboard
 // does, so the two can never drift into doing different things.
@@ -232,7 +237,7 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   // projection differs, which is the whole point of the view-model boundary.
   projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: -1,
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
-  pianoFitPending: false, browserOpen: false, dockOpen: false, currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+  pianoFitPending: false, browserOpen: false, dockOpen: false, helpOpen: false, currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -439,6 +444,7 @@ function drawPiano() {
     linkText: engine && engine.stale ? 'engine gone'
       : engine && conn && conn.stats().connected ? 'live' : state.link,
     octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+    viewName: state.view,
   });
 }
 
@@ -457,6 +463,7 @@ function drawMixer() {
     linkText: engine && engine.stale ? 'engine gone'
       : engine && conn && conn.stats().connected ? 'live' : state.link,
     octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+    viewName: state.view,
   });
 }
 
@@ -483,10 +490,13 @@ function drawArrange() {
     linkText: engine && engine.stale ? 'engine gone'
       : engine && conn && conn.stats().connected ? 'live' : state.link,
     octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+    viewName: state.view,
   });
 }
 
 function draw() {
+  if (helpHost.hidden === state.helpOpen) helpHost.hidden = !state.helpOpen;
+  if (state.helpOpen) help.show(state.view);
   const stale = !!(engine && engine.stale && state.useEngine !== false);
   if (staleEl.hidden === stale) staleEl.hidden = !stale;
   if (dockHost.hidden === state.dockOpen) {
@@ -535,6 +545,7 @@ function draw() {
     linkText: engine && engine.stale ? 'engine gone'
       : engine && conn && conn.stats().connected ? 'live' : state.link,
     octave: state.octave, editStep: state.editStep, rejectText: state.reject || '',
+    viewName: state.view,
   });
   // The sidecar owns the projection and the aggregation, so it needs to know
   // what we are looking at. Only sent when it actually moves.
@@ -722,6 +733,8 @@ addEventListener('keydown', (e) => {
 
   // 2.1 The dock owns its own input entirely; it stops propagation there. This
   //     only handles opening it and closing it from outside.
+  if (state.helpOpen) { state.helpOpen = false; return done(); }
+  if (k === '?') { state.helpOpen = true; return done(); }
   if (k === '/' && !state.dockOpen) { state.dockOpen = true; return done(); }
   if (state.dockOpen && k === 'Escape') { state.dockOpen = false; return done(); }
 
@@ -976,7 +989,7 @@ window.__uni = {
                  state.pianoAll = false; state.selectedNote = -1;
                  state.browserOpen = false; state.projects = []; state.currentProject = '';
                  browser.selected = 0;
-                 state.dockOpen = false; dock.clear();
+                 state.dockOpen = false; dock.clear(); state.helpOpen = false;
                  // The HUD carries a live node count and frame counter. Pin it
                  // here too, or a scene inherits whatever the previous scene's
                  // timer last wrote and the golden differs by that strip alone.
@@ -1039,6 +1052,8 @@ window.__uni = {
   browserProbe: () => browser.probe(),
   dock: (on) => { state.dockOpen = on === undefined ? !state.dockOpen : !!on; draw(); return state.dockOpen; },
   dockProbe: () => dock.probe(),
+  help: (on) => { state.helpOpen = on === undefined ? !state.helpOpen : !!on; draw(); return state.helpOpen; },
+  helpProbe: () => help.probe(),
   /** Run a console command. THE agent entry point — one grammar, every surface. */
   run: (line) => { dock.submit(line); dock.render(); return dock.probe().last; },
   projects: () => state.projects.slice(),

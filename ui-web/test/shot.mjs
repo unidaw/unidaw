@@ -52,6 +52,9 @@ const SCENES = [
   { name: 'arrange', arrange: true, setup: async (p) => p.evaluate(() => window.__uni.useArrangeFixture()) },
   { name: 'arrange-zoomed', arrange: true, setup: async (p) => p.evaluate(() => {
       window.__uni.useArrangeFixture(); window.__uni.arrangeZoom(5); }) },
+  { name: 'help', help: true, setup: async (p) => p.evaluate(() => { window.__uni.help(true); }) },
+  { name: 'help-piano', help: true, setup: async (p) => p.evaluate(() => {
+      window.__uni.view('piano'); window.__uni.help(true); }) },
   { name: 'dock', dock: true, setup: async (p) => p.evaluate(() => window.__uni.useDockFixture()) },
   { name: 'browser', browser: true, setup: async (p) => p.evaluate(() => window.__uni.useBrowserFixture()) },
   { name: 'piano', piano: true, setup: async (p) => p.evaluate(() => window.__uni.usePianoFixture()) },
@@ -135,6 +138,17 @@ for (const scene of SCENES) {
     ok(a.domNodes < 1200, `arrange dom bounded: ${a.domNodes}`);
     ok(a.playheadX >= 0, `playhead placed: ${a.playheadX}`);
     console.log(`  ${a.zoom}  ${a.clips} clips  ${a.gridLines} gridlines  ${a.domNodes} nodes`);
+    await shoot(scene);
+    continue;
+  }
+
+  if (scene.help) {
+    const hp = await page.evaluate(() => window.__uni.helpProbe());
+    ok(hp.sections === 2, `surface keys and global keys: ${hp.sections} sections`);
+    ok(hp.rows > 8, `keys documented: ${hp.rows}`);
+    const shown = await page.evaluate(() => document.querySelector('.ch-view')?.textContent);
+    ok(shown === hp.surface.toUpperCase(), `chrome names the surface: ${shown} vs ${hp.surface}`);
+    console.log(`  ${hp.surface}: ${hp.rows} keys in ${hp.sections} sections`);
     await shoot(scene);
     continue;
   }
