@@ -103,7 +103,16 @@ while (Date.now() - t0 < MINUTES * 60_000) {
 // the dock's log fills to its cap, each surface's element pools grow once — and
 // that is one-off growth, not a leak. Measuring from `base` reported 238 KB/min
 // and from sample zero 166, for a heap that was actually drifting at 37.
-const settled = samples.find((s) => s.min >= 1) || samples[0];
+const settled = samples.find((s) => s.min >= 1);
+if (!settled || samples.length < 3) {
+  // Refuse rather than guess. A run too short to contain a settled sample has to
+  // measure from the warm-up, which reports a rising heap as a leak — a 1-minute
+  // run said 715 KB/min for a heap that drifts at 17.
+  console.log(`\n  ${MINUTES} min is too short to separate pool growth from drift.`);
+  console.log('  Run at least 3 minutes.\n');
+  await br.close(); srv.close();
+  process.exit(2);
+}
 const first = settled;
 const last = samples[samples.length - 1];
 const span = Math.max(last.min - first.min, 0.1);

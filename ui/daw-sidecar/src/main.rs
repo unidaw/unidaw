@@ -1060,7 +1060,9 @@ mod tests {
         let mut vp = Viewport::default();
         parse_viewport(r#"{"linesPerBeat":9999,"firstRow":1,"rowCount":99999}"#, &mut vp);
         assert_eq!(vp.lines_per_beat, 64, "lpb clamped");
-        assert_eq!(vp.row_count, 512, "row_count clamped");
+        // 2048, not 512: a client showing bars per row asks for the BEATS its
+        // window covers, and 62 rows at 4 bars each is 992 of them.
+        assert_eq!(vp.row_count, 2048, "row_count clamped");
     }
 
     /// A project name becomes `<dir>/<name>.uniproj.json` on the engine side.
