@@ -55,11 +55,43 @@ export class Tracker {
     this.band.textContent = '';
     this.pool = Array.from({ length: need }, () => this.makeRow(rowCount, columns));
     this.band.append(...this.pool);
+    this.measure();
+  }
+
+  /**
+   * Ask CSS for the geometry instead of recomputing it. Deriving the content
+   * width arithmetically meant duplicating the box model, and it silently
+   * omitted the per-track 2px border — 32px across 16 tracks, which made the
+   * last 30px of the strip permanently unreachable by horizontal scrolling.
+   *
+   * Forces layout, so it runs on shape change only, never per frame.
+   */
+  measure() {
+    const row = this.pool[0];
+    if (!row) return;
+    this.contentWidth = row.scrollWidth;
+    const tracks = row.querySelectorAll('.tk-track');
+    this.stripLeft = tracks[0] ? tracks[0].offsetLeft : this.m.gutterWidth;
+    this.trackStride = tracks.length > 1 ? tracks[1].offsetLeft - tracks[0].offsetLeft
+                                         : this.m.cellWidth * this.cols;
+  }
+
+  /** Left edge of a cell, in band coordinates. Uses measured stride, so it
+   *  stays correct whatever the CSS borders do. */
+  cellLeft(track, col) {
+    return this.stripLeft + track * this.trackStride + col * this.m.cellWidth;
+  }
+
+  /** How far right the band can travel before the strip's end meets the edge. */
+  maxScrollX(viewportWidth) {
+    return Math.max(0, (this.contentWidth || 0) - viewportWidth);
   }
 
   makeRow(trackCount, columns) {
     const row = el('div', 'tk-row');
-    row.append(el('div', 'tk-gutter'));
+    const g = el('div', 'tk-gutter');
+    g.appendChild(document.createTextNode(''));
+    row.append(g);
     for (let t = 0; t < trackCount; t++) {
       const tr = el('div', 'tk-track');
       tr.style.setProperty('--tint', `var(--uni-track-tint-${t % 8})`);
@@ -67,6 +99,11 @@ export class Tracker {
         const cell = el('div', 'tk-cell');
         cell.dataset.track = String(t);
         cell.dataset.col = String(c);
+        // Own the Text node up front. Assigning .textContent destroys and
+        // recreates one every write — 621,239 node mutations over a 5-minute
+        // soak, which is the heap sawtooth. Writing .nodeValue mutates in place
+        // and allocates nothing.
+        cell.appendChild(document.createTextNode(''));
         tr.append(cell);
       }
       row.append(tr);
@@ -92,13 +129,15 @@ export class Tracker {
     }
     elm.classList.toggle('bar', row.bar);
     elm.classList.toggle('beat', row.beat && !row.bar);
-    if (elm.firstChild.textContent !== row.label) elm.firstChild.textContent = row.label;
+    const gt = elm.firstChild.firstChild;
+    if (gt.nodeValue !== row.label) gt.nodeValue = row.label;
     let i = 0;
     for (const tr of elm.children) {
       if (!tr.classList.contains('tk-track')) continue;
       for (const cell of tr.children) {
         const c = row.cells[i++];
-        if (cell.textContent !== c.text) cell.textContent = c.text;
+        const tn = cell.firstChild;
+        if (tn.nodeValue !== c.text) tn.nodeValue = c.text;
         if (cell.dataset.kind !== c.kind) cell.dataset.kind = c.kind;
       }
     }
@@ -158,7 +197,7 @@ export class Tracker {
       if (elm.style.display !== 'none') elm.style.display = 'none';
     }
 
-    const xf = `translateY(${-first * this.m.rowHeight}px)`;
+    const xf = `translate(${-(vm.scrollX || 0)}px, ${-first * this.m.rowHeight}px)`;
     if (this._xf !== xf) {
       this._xf = xf;
       this.band.style.transform = xf;
@@ -189,7 +228,7 @@ export class Tracker {
       r.classList.toggle('active', clip.active);
       const top = `${(clip.startTick / perRow) * this.m.rowHeight}px`;
       const height = `${Math.max(1, (clip.endTick - clip.startTick) / perRow) * this.m.rowHeight}px`;
-      const left = `${this.m.gutterWidth + this.m.laneWidth + clip.track * this.m.cellWidth * this.cols}px`;
+      const left = `${this.m.gutterWidth + clip.track * this.m.cellWidth * this.cols}px`;
       const width = `${this.m.cellWidth * this.cols}px`;
       if (r.style.top !== top) r.style.top = top;
       if (r.style.height !== height) r.style.height = height;

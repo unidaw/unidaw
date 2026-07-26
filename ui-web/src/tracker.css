@@ -30,6 +30,13 @@
 .tk-row.playhead { background: var(--uni-surface-playhead-row); }
 
 .tk-gutter {
+  /* Sticky so the timeline ruler survives horizontal scrolling. It sits inside
+     the transformed band, so it needs its own ground to hide tracks passing
+     beneath it. */
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--uni-surface-tracker-bg);
   width: var(--metrics-gutter-width);
   flex: 0 0 var(--metrics-gutter-width);
   display: flex;
