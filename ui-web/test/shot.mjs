@@ -62,13 +62,21 @@ await page.waitForFunction(() => !!window.__uni);
 // a harness bug. Font loading is the largest source of screenshot instability;
 // it bit the harness itself.
 await page.evaluate(() => document.fonts.ready);
+// Pin the fixture: a golden that changes depending on whether the sidecar is
+// running is not a golden.
+await page.evaluate(() => window.__uni.useFixture());
 await page.waitForTimeout(120);
 
 for (const scene of SCENES) {
   console.log(`\n[${scene.name}]`);
   await page.evaluate(() => window.__uni.reset());
   await scene.setup(page);
-  await page.waitForTimeout(60);
+  // Wait two animation frames, not a timeout. The renderer deliberately defers
+  // overscan binding by one frame on a zoom (GUIDELINES 3.9), so a screenshot
+  // taken before that lands catches a partially-bound band — it showed up as
+  // zoom-aggregate differing by 129 px roughly one run in three. A timeout only
+  // makes that less likely; waiting for the frame makes it impossible.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
   const p = await page.evaluate(() => {
     const q = window.__uni.probe();

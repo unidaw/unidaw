@@ -42,6 +42,7 @@
 import { Tracker } from './src/tracker.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
 import M from './design/out/tokens.js';
+import { connectEngine } from './src/engine.js';
 
 const metrics = {
   rowHeight: M.metrics.rowHeight,
@@ -57,7 +58,10 @@ const tracker = new Tracker(host, metrics);
 
 // A 100,000-row timeline. Nothing materialises it; the pool is viewport-sized.
 const TOTAL_ROWS = 100000;
-const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, zoom: 2, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+// Declared up here, not beside connectEngine: draw() reads it, and draw() runs
+// before the connection is made.
+let engine = null;
+const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', zoom: 2, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -65,8 +69,10 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, zoom: 2, cursor: {
 const hudText = document.createTextNode('');
 hud.appendChild(hudText);
 setInterval(() => {
-  const v = tracker.vm; if (!v) return;
-  hudText.nodeValue = v.zoom.label + '   row ' + state.cursor.row
+  const v = tracker.vm; if (!v || state.useEngine === false) return;
+  const st = conn.stats();
+  hudText.nodeValue = (engine ? 'engine ' + st.framesIn + 'f' + (st.gaps ? ' ' + st.gaps + ' gaps' : '') : state.link)
+    + '   ' + v.zoom.label + '   row ' + state.cursor.row
     + '   T' + (state.cursor.track + 1) + '   x' + state.scrollX
     + '   ' + tracker.poolSize + ' pooled   ' + document.querySelectorAll('*').length + ' nodes';
 }, 500);
@@ -100,6 +106,11 @@ function buildHead() {
   head.append(headRow);
 }
 
+// The playhead arrives as a tick and has to be projected like everything else.
+function tickToRow(tick) {
+  return Math.floor(tick / ZOOM_LEVELS[state.zoom].rowNanoticks);
+}
+
 function draw() {
   const shapeChanged = tracker.poolSize === 0 || !headRow || headRow.children.length !== state.tracks + 1;
   tracker.resize(host.clientHeight, state.tracks, state.columns);
@@ -113,6 +124,7 @@ function draw() {
     startRow: state.start, rowCount: tracker.poolSize,
     tracks: state.tracks, columns: state.columns, zoomIndex: state.zoom,
     cursor: state.cursor, playheadRow: state.playhead,
+    engine: state.useEngine === false ? null : engine,
   }, bufs[bi]);
   vm.scrollX = state.scrollX;
   tracker.render(vm);
@@ -189,11 +201,28 @@ addEventListener('keydown', (e) => {
 addEventListener('resize', schedule);
 draw();
 
+// Live engine, when the sidecar is up. Falls back to the fixture so the page —
+// and every golden — still renders standalone. Connected after the first draw:
+// connectEngine calls onStatus synchronously, and touching `state` before its
+// declaration is a temporal-dead-zone throw that kills the whole module.
+const conn = connectEngine({
+  onStatus: (s, d) => { state.link = s + (d ? ': ' + d : ''); schedule(); },
+  onChange: (store) => { engine = store; state.playhead = tickToRow(store.playheadTick); schedule(); },
+});
+
 // Agent / test surface. Structure, not pixels — this is requirement (d).
 window.__uni = {
   probe: () => tracker.probe(),
   state: () => JSON.parse(JSON.stringify(state)),
   scrollTo,
+  engineStats: () => conn.stats(),
+  // Goldens must not depend on whether a sidecar happens to be running.
+  // Pins the fixture AND freezes the HUD: live frame counts and link status are
+  // non-deterministic, so leaving them in the render makes every golden flaky.
+  // Pins the fixture, freezes the HUD, and CLOSES the socket. Without the close
+  // the reconnect backoff keeps firing onStatus -> schedule() -> draw() while a
+  // screenshot is being taken, which made goldens pass once and fail twice.
+  useFixture: () => { state.useEngine = false; conn.close(); hudText.nodeValue = 'fixture'; draw(); },
   // Hermetic reset for tests: a scene that inherits the cursor from whatever ran
   // before it is not a fixture, it is a dependency on execution order.
   reset: () => { state.cursor.row = 0; state.cursor.track = 0; state.cursor.col = 0;

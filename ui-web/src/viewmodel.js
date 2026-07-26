@@ -1,3 +1,4 @@
+import { pitchName } from './wire.js';
 // The view-model: plain data describing exactly what is on screen right now.
 //
 // This is the boundary the whole frontend is built around. The renderer consumes
@@ -112,6 +113,9 @@ export function buildViewModel(opts, buf) {
     startRow, rowCount, tracks: trackCount, columns = 3,
     zoomIndex = 2, cursor = { row: startRow, track: 0, col: 0 },
     playheadRow = startRow, selection = null,
+    // When present, cells come from the engine instead of the fixture. The
+    // fixture stays because goldens must render without a running engine.
+    engine = null,
   } = opts;
 
   const shape = `${rowCount}x${trackCount}x${columns}`;
@@ -133,8 +137,9 @@ export function buildViewModel(opts, buf) {
     let ci = 0;
     const tick = tickOf(r);
     for (let t = 0; t < trackCount; t++) {
-      const inClip = clipIndexAt(tick, t) >= 0;
+      const inClip = engine ? true : clipIndexAt(tick, t) >= 0;
       for (let c = 0; c < columns; c++) {
+        if (engine) { const cl = cells[ci++]; cl.text = ''; cl.kind = 'empty'; continue; }
         const cell = cells[ci++];
         if (!inClip) { cell.text = ''; cell.kind = 'outside'; continue; }
         if (zoom.aggregate && c === 0) {
@@ -186,6 +191,50 @@ export function buildViewModel(opts, buf) {
       clips.push(cl);
     }
   }
+
+  // Place engine notes into the cleared grid. A note lands on the row whose tick
+  // range contains it, so the projection follows zoom for free — the same reason
+  // anything durable is stored in ticks rather than rows.
+  if (engine) {
+    const span = zoom.rowNanoticks;
+    const winStart = tickOf(startRow);
+    const winEnd = tickOf(startRow + rowCount);
+    for (let i = 0; i < engine.noteCount; i++) {
+      const n = engine.notes[i];
+      if (n.tOn < winStart || n.tOn >= winEnd || n.track >= trackCount) continue;
+      const row = rows[((n.tOn - winStart) / span) | 0];
+      if (!row) continue;
+      const base = n.track * columns;
+      const c0 = row.cells[base];
+      if (c0) { c0.text = pitchName(n.pitch); c0.kind = 'note'; }
+      if (columns > 1) {
+        const c1 = row.cells[base + 1];
+        if (c1) { c1.text = ('0' + n.velocity).slice(-2); c1.kind = 'inst'; }
+      }
+      if (columns > 2 && (n.retrigger || n.probability || n.delayTicks)) {
+        const c2 = row.cells[base + 2];
+        if (c2) {
+          c2.text = n.retrigger ? 'R' + n.retrigger : n.probability ? 'P' + n.probability : 'D';
+          c2.kind = 'fx';
+        }
+      }
+    }
+    // Real clip placements are Movement 3 and do not exist yet; the engine has
+    // one implicit clip per track. Show that rather than inventing geometry.
+    const pool = buf._clipPool;
+    clips.length = 0;
+    for (let t = 0; t < Math.min(trackCount, engine.trackCount || trackCount); t++) {
+      const cl = pool[t] || (pool[t] = { id: 0, track: 0, startTick: 0, endTick: 0, name: '', active: false });
+      cl.id = t; cl.track = t; cl.startTick = 0; cl.endTick = TICKS_PER_BAR;
+      cl.name = 'clip'; cl.active = false;
+      clips.push(cl);
+    }
+  }
+
+  // Bumped when the cells say something new for reasons the renderer's identity
+  // check cannot see. Engine edits move notesRevision; the fixture is a pure
+  // function of (tick, zoom) so it only changes when those do.
+  buf.contentRevision = engine ? engine.notesRevision : zoomIndex;
 
   buf.window.startRow = startRow; buf.window.rowCount = rowCount;
   buf.zoom = zoom;

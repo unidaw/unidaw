@@ -162,7 +162,15 @@ export class Tracker {
     //
     // Absolute `top` is what makes this work — an element is positioned by the
     // row it holds, so which slot it occupies does not matter.
-    const needFull = !prev || prev.zoom.index !== vm.zoom.index || prev.tracks.length !== vm.tracks.length;
+    // Content can change without any row changing identity — engine notes
+    // arriving is exactly that case, and it is invisible to an identity check.
+    // The renderer bound cells only on rebind, so live data never reached the
+    // DOM: the grid kept showing whatever the first draw put there. A content
+    // revision makes "the same rows now say something different" expressible.
+    const needFull = !prev
+      || prev.zoom.index !== vm.zoom.index
+      || prev.tracks.length !== vm.tracks.length
+      || (vm.contentRevision || 0) !== (prev.contentRevision || 0);
     const n = this.pool.length;
 
     // A zoom re-contents every row, and doing the whole pool in the input frame
