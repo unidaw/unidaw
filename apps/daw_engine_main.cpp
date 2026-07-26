@@ -1,4 +1,5 @@
 #include <chrono>
+#include <csignal>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -684,6 +685,14 @@ inline void getClipEventsInRange(const ClipSnapshot& snapshot,
 }  // namespace
 
 int main(int argc, char** argv) {
+  // Never let a dead host take the engine down. macOS doesn't define
+  // MSG_NOSIGNAL, so send() to a host socket that just closed raises SIGPIPE,
+  // whose default action is to terminate the process — which is exactly what
+  // happened when a plugin host died mid-playback. Ignoring it turns those writes
+  // into EPIPE returns, which the IPC layer already handles by marking the host
+  // dead and scheduling a restart.
+  std::signal(SIGPIPE, SIG_IGN);
+
   std::string socketPath = trackSocketPath(0);
   std::string pluginPath;
   bool spawnHost = true;
