@@ -53,7 +53,8 @@ why `run()` is the entry point to prefer.
 
 ## Tests
 
-    npm test        goldens + allocation      (fixtures; no engine needed)
+    npm test        units + goldens + alloc   (fixtures; no engine needed)
+    npm run unit    pure functions only       (fast, DOM-free)
     npm run perf    frame work per surface    (opens a real window)
     npm run e2e     against a live engine     (needs tools/webstack.sh)
     npm run soak    heap leak check           (fixtures; takes minutes)
