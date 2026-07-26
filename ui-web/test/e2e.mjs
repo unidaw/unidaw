@@ -15,8 +15,12 @@
 // and it asserts on what the engine actually says. It is not part of `npm test`
 // for that reason — it is `npm run e2e`.
 //
-// It uses webtest.uniproj (maximal with device_chain emptied) because a project
-// with plugin chains takes the engine down; see the hang reported to backend.
+// It uses webtest.uniproj (maximal with device_chain emptied). NOTE: the engine
+// currently loses its plugin host after roughly 38 UI commands and exits — see
+// tools/repro-hang.mjs and the report to backend. One run of this test sends
+// about 30, so the SECOND run usually starts against a dead engine. Restart the
+// stack between runs until that is fixed; the test says so rather than
+// cascading.
 
 import { chromium } from 'playwright';
 

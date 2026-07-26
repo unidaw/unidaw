@@ -1,101 +1,73 @@
-# ui-web — web frontend for Uni
+# ui-web — the Uni frontend
 
-A DOM tracker driven by a view-model, with WebGL2 reserved for DSP scopes. Runs
-alongside `ui/` (Rust/GPUI); neither replaces the other yet.
+A web frontend for the Uni engine. HTML and CSS, no framework, no build step for
+the app itself. It talks to the engine through a small Rust sidecar that owns the
+shared-memory bridge.
 
-```sh
-npm install
-npm run tokens     # design/tokens.json -> src/tokens.css, design/out/{theme.rs,tokens.js}
-npm run shots      # render, assert, screenshot, diff vs baselines
-npm run bless      # accept current renders as baselines
-```
+    ┌──────────┐   POSIX shm    ┌──────────────┐   WebSocket   ┌─────────┐
+    │  engine  │ ─────────────► │  daw-sidecar │ ────────────► │ browser │
+    │  (C++)   │ ◄───────────── │    (Rust)    │ ◄──────────── │  (JS)   │
+    └──────────┘  command ring  └──────────────┘   commands    └─────────┘
 
-**Read [GUIDELINES.md](GUIDELINES.md) before changing anything here.** It carries
-the hard requirements, the performance rules with the measurement that justifies
-each one, the domain invariants, and the measurement discipline — including the
-mistakes that produced phantom findings. This README is the tour; that file is
-the contract.
+Two sockets, deliberately: **8174** carries state and is write-only from the
+sidecar's side, **8175** carries commands and has a blocking reader. Trying to
+make one socket duplex broke it twice — a non-blocking socket reports `WouldBlock`
+under ordinary backpressure, and a read timeout that fires mid-frame corrupts the
+stream.
 
-## Why it is built this way
+## Running it
 
-Every rule below is a measurement taken on this machine at the redesign's real
-per-row density (81 nodes/row against the design export's own 88), headless
-Chrome, DPR 2, 100 keystrokes after warmup. `scratchpad/dens/` has the harness.
+    tools/webstack.sh            # engine + sidecar + page server, or says why not
+    open http://127.0.0.1:8173/index.html
 
-| Case | Nodes | Main thread / key |
-|---|---:|---:|
-| Edit, 64×16 | 7,433 | **1.50 ms** |
-| Edit, 96×16 | 11,145 | **1.57 ms** |
-| Edit, 64×16, tokenised | 7,433 | **1.41 ms** |
-| Scroll by band transform, 64×16 | 7,433 | **1.54 ms** (Layout 0.000) |
-| Scroll by band transform, 96×16 | 11,145 | **2.10 ms** |
-| Scroll by naive rebind, 64×16 | 7,433 | **11.66 ms** |
-| Scroll by naive rebind, 96×16 | 11,145 | **15.11 ms** |
+The script starts exactly one of each and refuses rather than guessing. Read the
+comments in it before changing how it picks binaries — every line there is the
+result of something that went wrong.
 
-**Rule 1 — scroll by transforming the band, never by rebinding visible cells.**
-This is the only cliff, and it is steep: 11.7–15.1 ms against 1.5–2.1 ms, i.e.
-70–90% of a 16.67 ms frame against ~10%. `Tracker.render()` rebinds a pooled row
-only when its `data-row` changes, which happens for the handful of rows crossing
-the band edge.
+## Surfaces
 
-**Rule 2 — `contain: strict` on the grid, rows absolutely positioned.** This is
-why PrePaint stays flat (0.047 → 0.082 ms from 3,087 to 11,145 nodes) and why
-Layout reads `0.000` during a scroll. Total cost is sublinear: 3.6× the nodes
-buys 1.7× the cost. The density worry was unfounded.
+Six, all consuming the same published snapshot. `Tab` cycles the graphical ones;
+`?` shows the keymap for whichever is up.
 
-**Rule 3 — everything visual comes from `design/tokens.json`.** No hex, no font,
-no px literal anywhere else. Tokenising measured *faster* than the design
-export's inline styles (1.41 vs 1.50 ms) because it drops a per-cell
-`color-mix(in srgb, oklch(...))` resolution. The token build also emits
-`design/out/theme.rs`, so the pipeline stays kit-agnostic — swapping the renderer
-never means re-typing colours.
+| | what it projects |
+|---|---|
+| tracker | time on Y, columns on X |
+| arrange | time on X, tracks on Y |
+| piano roll | time on X, pitch on Y |
+| mixer | one strip per track |
+| patcher | the engine's node graph, laid out here |
+| browser rail (`B`) | projects on disk |
+| agent dock (`/`) | the command stream, and a console over it |
 
-Patcher, measured the same way: dragging a node with 8 attached wires among 400
-costs **0.38 ms** in SVG and 0.26 ms in canvas; with 32 attached, 0.48 vs 0.33 ms.
-Keep the design's SVG overlay — it is far inside budget and wires stay queryable
-and hit-testable as real elements.
+## Driving it from code
 
-## Architecture
+`window.__uni` is the whole surface: `probe()`, `state()`, per-surface probes,
+and `run(line)` for the dock's command grammar. Every console command routes
+through the same functions the keyboard does, so the two cannot drift — which is
+why `run()` is the entry point to prefer.
 
-```
-daw_engine (C++) → SHM → [Rust sidecar, not built yet] → ViewModel → Tracker (DOM)
-                                                            ↓
-                                          fixtures · goldens · agent assertions
-```
+    window.__uni.run('load webtest')
+    window.__uni.run('goto 16 2')
+    window.__uni.run('note 64')
+    window.__uni.run('view arrange')
 
-`src/viewmodel.js` is the boundary. It describes only the visible window plus
-overlapping clips — Uni's timeline is unbounded and zoom decides detail, so
-there is no whole-document representation by construction. The renderer consumes
-the view-model and nothing else; tests and `window.__uni` read the same shape.
+## Tests
 
-Clip rails span rows, so they live **outside** the recycled band (`.tk-rails`),
-keyed by clip id and transformed in lockstep with it.
+    npm test        goldens + allocation      (fixtures; no engine needed)
+    npm run perf    frame work per surface    (opens a real window)
+    npm run e2e     against a live engine     (needs tools/webstack.sh)
 
-## Agent loop
+The split is deliberate. `npm test` must not depend on whether a sidecar happens
+to be running — a test that changes with the weather is not a test. But that
+leaves the engine boundary unexercised, and nearly every serious bug in this
+codebase has lived exactly there, so `npm run e2e` covers the other half.
 
-`test/shot.mjs` asserts on structure first and pixels second:
+Goldens are committed PNGs; `npm run bless` accepts new ones. Look at the image
+before you bless it.
 
-```
-[deep]
-  PASS  dom nodes bounded: 2539
-  PASS  pool is viewport-sized, not timeline-sized: 74
-  PASS  cell (99003,2,0) has geometry: {"x":564,"y":51,"w":76,"h":17}
-  PASS  cell text readable via data attributes: "E-4"
-```
+## Before you change anything
 
-Structural assertions catch logic bugs; goldens catch what structure cannot
-express. `window.__uni.probe()` exposes `cellText(row,track,col)` and
-`cellRect(row,track,col)` — the grid is queryable, which a canvas tracker would
-not be.
-
-## Not done yet
-
-- Phosphor icons are not vendored yet (Inter and IBM Plex Mono are, in
-  `src/fonts/`, so goldens are portable and committed).
-- Mouse input, selection, and editing. Keyboard is arrows, `PageUp`/`PageDown`
-  and `+`/`-`.
-- No engine connection. The Rust sidecar that mmaps `/daw_engine_ui` and pushes
-  binary frames over localhost is the next slice.
-- Patcher, mixer, arrangement, browser, agent dock — designed, not built.
-- Selection, mouse input, editing. Keyboard is arrows + `PageUp/Down` + `+`/`-`.
-- Windows is entirely unmeasured, here and everywhere else in this evaluation.
+Read `GUIDELINES.md`. Sections 2 and 2.1 in particular: the domain model, and the
+one bug this project keeps having (a cache key that does not name everything the
+cached value depends on — six instances so far, every one of them rendering
+something plausible while being wrong).
