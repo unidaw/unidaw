@@ -120,14 +120,34 @@ export class Tracker {
     // row it holds, so which slot it occupies does not matter.
     const needFull = !prev || prev.zoom.index !== vm.zoom.index || prev.tracks.length !== vm.tracks.length;
     const n = this.pool.length;
+
+    // A zoom re-contents every row, and doing the whole pool in the input frame
+    // costs 14.4 ms of a 16.6 ms budget — 86% utilisation, so any jitter misses
+    // the deadline. Only the rows a user can actually see have to be right this
+    // frame; the overscan exists for scroll headroom and can land in the next
+    // one. Deferring it trades one frame of headroom for a zoom step that fits.
+    const visible = Math.min(vm.rows.length, Math.ceil(this.host.clientHeight / this.m.rowHeight) + 1);
+    const limit = needFull ? visible : vm.rows.length;
+
     this.byRow.clear();
     for (let i = 0; i < vm.rows.length && i < n; i++) {
       const rowIdx = first + i;
       const row = vm.rows[i];
       const elm = this.pool[((rowIdx % n) + n) % n];
       if (elm.style.display === 'none') elm.style.display = '';
-      if (needFull || elm.dataset.row !== String(rowIdx)) this.bindRow(elm, row);
+      if (i < limit && (needFull || elm.dataset.row !== String(rowIdx))) this.bindRow(elm, row);
       this.byRow.set(rowIdx, elm);
+    }
+
+    if (needFull && limit < vm.rows.length) {
+      cancelAnimationFrame(this._tail);
+      this._tail = requestAnimationFrame(() => {
+        if (this.vm !== vm) return;            // superseded by a newer frame
+        for (let i = limit; i < vm.rows.length && i < n; i++) {
+          const rowIdx = first + i;
+          this.bindRow(this.pool[((rowIdx % n) + n) % n], vm.rows[i]);
+        }
+      });
     }
     // Slots not claimed this frame (a short window at the end of the timeline).
     for (let i = vm.rows.length; i < n; i++) {
