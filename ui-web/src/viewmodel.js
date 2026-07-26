@@ -24,13 +24,20 @@ export const ZOOM_LEVELS = [
 
 const NOTES = ['C-4', 'D#4', 'F-4', 'G-4', 'A#4', 'C-5', 'E-4', 'OFF'];
 
+const TICKS_PER_BAR = 3840000;
+
 /**
- * Deterministic pseudo-content for any absolute row index, so the fixture can
- * describe a 100,000-row timeline without materialising one. Same row index
- * always yields the same cell, which is what makes golden screenshots stable.
+ * Deterministic pseudo-content for a point on the TIMELINE, keyed on the tick a
+ * row represents rather than on its index.
+ *
+ * Keying on the row index instead was a real bug: content then never changed
+ * with zoom, so "1 bar" and "4 bars" rendered pixel-identical and half the zoom
+ * presses did nothing visible. It reads as lag — the UI appears not to respond —
+ * when in fact the frame was delivered in 15 ms and simply had nothing new in it.
+ * Rows are a projection of the timeline; content must follow the tick.
  */
-function contentAt(row, track, col) {
-  const h = Math.abs(Math.sin((row * 37 + track * 101 + col * 7) * 0.61803) * 10000) | 0;
+function contentAt(tick, track, col) {
+  const h = Math.abs(Math.sin((tick / 60000 + track * 101 + col * 7) * 0.61803) * 10000) | 0;
   if (h % 5 < 2) return { text: '', kind: 'empty' };
   if (h % 23 === 0) return { text: 'OFF', kind: 'off' };
   if (col === 0) return { text: NOTES[h % NOTES.length], kind: 'note' };
@@ -52,7 +59,7 @@ export function buildViewModel(opts) {
   } = opts;
 
   const zoom = ZOOM_LEVELS[zoomIndex];
-  const rowsPerBar = Math.max(1, Math.round(3840000 / zoom.rowNanoticks));
+  const tickOf = (r) => r * zoom.rowNanoticks;
 
   /** @type {Track[]} */
   const tracks = Array.from({ length: trackCount }, (_, i) => ({
@@ -64,23 +71,34 @@ export function buildViewModel(opts) {
   for (let r = startRow; r < startRow + rowCount; r++) {
     /** @type {Cell[]} */
     const cells = [];
+    const tick = tickOf(r);
     for (let t = 0; t < trackCount; t++) {
       for (let c = 0; c < columns; c++) {
         if (zoom.aggregate && c === 0) {
-          // At coarse zoom a row covers many events; show how many collapsed into it.
-          const n = 1 + (Math.abs(Math.sin((r * 13 + t) * 2.399) * 10) | 0) % 4;
-          cells.push({ track: t, col: c, text: n > 1 ? `[${n}x]` : contentAt(r, t, c).text, kind: n > 1 ? 'aggregate' : 'note' });
+          // A coarse row spans many finer rows; count the events that fall in it.
+          const span = zoom.rowNanoticks / ZOOM_LEVELS[0].rowNanoticks;
+          let n = 0;
+          for (let k = 0; k < span && k < 64; k++) {
+            if (contentAt(tick + k * ZOOM_LEVELS[0].rowNanoticks, t, c).kind !== 'empty') n++;
+          }
+          if (n > 1) cells.push({ track: t, col: c, text: `[${n}x]`, kind: 'aggregate' });
+          else { const { text, kind } = contentAt(tick, t, c); cells.push({ track: t, col: c, text, kind }); }
         } else {
-          const { text, kind } = contentAt(r, t, c);
+          const { text, kind } = contentAt(tick, t, c);
           cells.push({ track: t, col: c, text, kind });
         }
       }
     }
+    // Labels come from the tick too, so a row means the same musical position
+    // at every zoom — that is the whole point of zoom being a projection.
+    const bar = Math.floor(tick / TICKS_PER_BAR) + 1;
+    const beatInBar = Math.floor((tick % TICKS_PER_BAR) / (TICKS_PER_BAR / 4)) + 1;
+    const sub = Math.floor((tick % (TICKS_PER_BAR / 4)) / 60000);
     rows.push({
       index: r,
-      label: `${Math.floor(r / rowsPerBar) + 1}:${(r % rowsPerBar) + 1}`,
-      beat: r % Math.max(1, rowsPerBar / 4) === 0,
-      bar: r % rowsPerBar === 0,
+      label: zoom.rowNanoticks >= TICKS_PER_BAR ? `${bar}` : `${bar}:${beatInBar}${sub ? ':' + String(sub).padStart(2, '0') : ''}`,
+      beat: tick % (TICKS_PER_BAR / 4) === 0,
+      bar: tick % TICKS_PER_BAR === 0,
       cells,
     });
   }
@@ -89,7 +107,7 @@ export function buildViewModel(opts) {
   // draws rails outside the recycled row band.
   /** @type {Clip[]} */
   const clips = [];
-  const CLIP_LEN = 48;
+  const CLIP_LEN = Math.max(4, Math.round((TICKS_PER_BAR * 4) / zoom.rowNanoticks));
   const first = Math.floor(startRow / CLIP_LEN) - 1;
   for (let k = first; k <= Math.floor((startRow + rowCount) / CLIP_LEN); k++) {
     if (k < 0) continue;
