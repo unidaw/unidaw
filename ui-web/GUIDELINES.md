@@ -1,0 +1,217 @@
+# Uni web frontend — requirements and working rules
+
+Everything here was either stated as a requirement or learned by measuring on
+this machine. Each rule carries the number that justifies it, so a future change
+can argue with the evidence rather than with the rule.
+
+Measurements were taken in real Chrome with a real window on a 59.997 Hz display,
+against Jaakko's own profile with extensions live, at 3008×1580 DPR 2.
+
+---
+
+## 1. Hard requirements
+
+Stated by the owner. These are not negotiable and not up for re-derivation.
+
+1. **Cross-platform** — macOS *and* Windows.
+2. **Very performant. The UI must not lag.**
+3. **Must accommodate DSP scopes later** — oscilloscopes, spectrum analysers, a
+   scrolling spectrogram.
+4. **AI-legible and AI-operable** — an agent must be able to see the UI, drive
+   it, and assert on it.
+5. **Avoid GC like the plague.**
+6. **WASM is on the table** if it comes to that.
+
+**Windows is entirely unmeasured**, here and in every earlier evaluation. Treat
+any performance claim as macOS-only until someone runs it there.
+
+---
+
+## 2. Domain model
+
+Getting these wrong produces bugs that look like performance problems.
+
+- **There are no patterns. There is one continuous, unbounded timeline with
+  clips on it.** Virtualisation is not an optimisation, it is mandatory; there is
+  no size at which "just render it all" becomes acceptable.
+- **Zoom decides how much detail a row carries.** Rows are a *projection* of the
+  timeline, not a storage format.
+- **Anything durable is expressed in ticks, never in rows.** A row index is a
+  function of the current zoom, so storing one bakes today's zoom into tomorrow's
+  data. This applies to everything crossing the engine boundary.
+- **Clips contain notes.** Wherever a note exists there is a clip; no note exists
+  outside one; the space between clips is genuinely empty. Coverage is decided
+  *before* content, or notes float in gaps with no rail around them.
+
+---
+
+## 3. Performance rules
+
+Ranked by how much they cost to get wrong.
+
+### 3.1 Zero allocation in the draw path
+The view-model is pooled and double-buffered; rows, cells, clips and rails are
+allocated once per shape change and mutated in place. **0 GC events** across 80
+sustained keypresses, and no heap trend over a 5-minute soak.
+
+Double-buffering is not optional: the renderer diffs the previous view-model
+against the current one, so mutating a single buffer silently turns every draw
+into a full rebind.
+
+### 3.2 Own your Text nodes
+`element.textContent = x` **destroys and recreates a Text node on every write**.
+Append a Text node at construction and write `.nodeValue`, which mutates in place.
+
+> DOM node mutations over a 5-minute soak: **621,239 → 12**
+
+### 3.3 Scroll by transforming the band, never by rebinding visible cells
+
+| | 64×16 | 96×16 |
+|---|---:|---:|
+| transform | 1.54 ms | 2.10 ms |
+| naive rebind | **11.66 ms** | **15.11 ms** |
+
+### 3.4 Recycle the pool as a ring, not a list
+Slot is `row mod poolSize`. Indexing by position shifts every element's identity
+on every scroll, so a one-row move costs a full rebind. The tell was that a 1-row
+and a 32-row scroll cost *exactly the same* 7.8 ms.
+
+> cursor step 3.97 → **0.24 ms**, scroll 1 row 7.75 → **0.36 ms**
+
+Absolute `top` is what makes this legal — an element is placed by the row it
+holds, so which slot it occupies is irrelevant.
+
+### 3.5 `contain: strict` on the grid, rows absolutely positioned
+This is why PrePaint stays flat — **0.047 → 0.082 ms from 3,087 to 11,145
+nodes** — and why Layout reads `0.000` during a scroll. Total cost is sublinear:
+3.6× the nodes buys 1.7× the time.
+
+Per-row `contain: layout style paint` was tried and made it **worse** (13.77 →
+15.39 ms): scoping 66 rows costs more bookkeeping than the sibling invalidation
+it prevents.
+
+### 3.6 Guard every write
+Assigning a style or a text value dirties the node even when the value is
+identical. Compare first; reading is far cheaper than invalidating.
+
+### 3.7 Pool DOM elements; hide, never remove
+Clip rails were created and destroyed as clips scrolled in and out — 219 added,
+213 removed over 700 keypresses, each an allocation plus a layout. Surplus
+elements are now hidden, so the pool high-water-marks and stops mutating the DOM.
+
+### 3.8 Coalesce input into one draw per animation frame
+Key repeat is ~30/s. Without coalescing, several synchronous draws queue inside
+one frame.
+
+### 3.9 Split work that does not fit one frame
+A zoom re-contents every row: 14.4 ms of a 16.6 ms budget, 86% utilisation with
+nothing spare. Visible rows bind in the input frame, overscan in the next.
+
+> worst single frame **14.39 → 9.29 ms**, total work unchanged
+
+### 3.10 Never let a diagnostic into the hot path
+`host.querySelectorAll('*').length` in the HUD was an O(tree) walk per frame —
+more expensive than the render it reported on. Sample diagnostics on a timer.
+
+### 3.11 Measure geometry from CSS; do not duplicate the box model
+A hand-computed scroll extent forgot the 2px per-track border — 32px across 16
+tracks, leaving the last 30px permanently unreachable. `cellLeft()` and
+`maxScrollX()` measure the real row once per shape change. Forces layout, so it
+runs on resize only.
+
+---
+
+## 4. Measurement discipline
+
+Two of three "findings" in one session were errors in the instrument, not the
+app. This section exists because of that.
+
+- **The frame budget is 16.6 ms of *work*, not a 33 ms interval.** Measuring rAF
+  intervals against 33 ms says "no dropped frames" while the app sits at 95%
+  utilisation with no margin.
+- **Measure keydown→draw with ONE `rAF`, not two.** The app's `schedule()` queues
+  its callback first, so the draw has already run by the first one. Waiting for a
+  second measured a frame the app never spent, and produced a phantom "p95 30.7 ms
+  GC tail" that did not exist.
+- **Headless has no vsync.** Frame intervals come back at 8.2 ms p50, which is
+  impossible on a 60 Hz panel. Use `headless: false` for anything timing-related.
+- **`channel: 'chrome'` is not the same as headed.** It selects real Chrome; it
+  does not give you a window.
+- **Run long.** 3 seconds found nothing; 28 seconds found 219 nodes of DOM churn;
+  5 minutes confirmed no heap trend. Bucket results into thirds to catch drift.
+- **Cost that does not scale with the input is not doing the work you think.** A
+  1-row and a 32-row scroll costing the same was the whole diagnosis.
+- **Read the trace before optimising.** Three consecutive guesses at why scroll
+  was slow were all real problems and all changed nothing; a CDP trace showing
+  `Layout` at 4.76 ms during a transform-only scroll found the actual cause.
+- **A press that changes nothing is indistinguishable from a press that was
+  slow.** Verify that a visual change *occurred* — an image diff of adjacent
+  states catches "0 pixels changed" instantly.
+- **Do not assume the obvious optimisation helps.** Per-row containment made
+  things worse; a reported "rayon is 3–6× slower" did not reproduce at all.
+- **Measure against the real environment.** Connect over CDP to a clone of the
+  user's own profile with extensions live, not a sanitised launch.
+- **The user's perception outranks the instrument.** Every disagreement so far
+  resolved in the user's favour.
+
+---
+
+## 5. Architecture
+
+```
+daw_engine (C++) → SHM → Rust sidecar → binary frames → ViewModel → DOM
+                                                            ↓
+                                          fixtures · goldens · agent assertions
+```
+
+- **The view-model is the boundary.** Plain data describing only the visible
+  window plus overlapping clips. The renderer consumes it and nothing else;
+  tests and `window.__uni` read the same shape. Swapping the renderer means
+  reimplementing one consumer, not re-deriving the projection.
+- **One token source.** `design/tokens.json` → CSS custom properties, a Rust
+  `const Theme`, and a JS object. No hex, no font name, no px literal anywhere
+  else. Tokenising measured *faster* than inline styles (1.41 vs 1.50 ms) by
+  dropping a per-cell `color-mix(oklch())`.
+- **Reuse `daw-bridge`; never hand-mirror the SHM structs.** Three guarded
+  mirrors exist already, pinned by `static_assert` / `const_assert_eq!`. A fourth
+  unguarded one produces wrong notes, not a compile error.
+- **The acquire fence belongs in Rust**, not in JS over an ArrayBuffer.
+- **WebGL2 for DSP scopes, in a worker via `OffscreenCanvas`.** Measured
+  headroom: 137,408 line vertices plus a live 512×1024 spectrogram at 3200×2000
+  in 1.55 ms. Workers cannot help the tracker — style, layout and paint are
+  main-thread by definition — but they keep scope rendering off it entirely.
+
+---
+
+## 6. Agent loop
+
+- **Assert on structure first, pixels second.** `data-row` / `data-track` /
+  `data-col` on every cell; `window.__uni.probe()` exposes `cellText(row, track,
+  col)` and `cellRect(row, track, col)`. Reading back 1,024 cells with zero
+  misses is what makes a DOM tracker legible where a canvas is opaque pixels.
+- **Prefer an invariant to an eyeball.** "Every cell with content falls inside a
+  visible rail's span" caught the clip-containment bug in one number.
+- **A diff must report a bounding box, not a percentage.** A percentage does not
+  say where.
+- **Goldens are not portable until the fonts are vendored** — they currently
+  encode this machine's mono fallback. Bless them in the same change that vendors
+  Inter and IBM Plex Mono.
+- `npm run shots` renders, asserts, screenshots and diffs. `npm run bless`
+  accepts.
+
+---
+
+## 7. Open and unmeasured
+
+- **Windows** — nothing has ever been run there.
+- **Real engine data** — the fixture is `Math.sin`; real notes change the
+  allocation profile and the clip shapes.
+- **Modulation columns** — the redesign adds them on top of the three columns
+  built here, and cell count is the one thing measured to scale cost.
+- **Clip edges are invisible.** `.tk-rail` draws a `border-left` that lands
+  exactly where the track border already is, so a clip's extent can only be
+  inferred from where the tint stops. Grab rails need visible top and bottom
+  edges to be grabbable.
+- **Aggregate display.** At 4 bars per row every cell reads `[30x]`–`[45x]` —
+  uniform noise. `RowAggregate` also carries `pitch_min`/`pitch_max`; a contour
+  or density mark would carry more than a count.

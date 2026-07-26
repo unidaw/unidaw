@@ -10,6 +10,12 @@ npm run shots      # render, assert, screenshot, diff vs baselines
 npm run bless      # accept current renders as baselines
 ```
 
+**Read [GUIDELINES.md](GUIDELINES.md) before changing anything here.** It carries
+the hard requirements, the performance rules with the measurement that justifies
+each one, the domain invariants, and the measurement discipline — including the
+mistakes that produced phantom findings. This README is the tour; that file is
+the contract.
+
 ## Why it is built this way
 
 Every rule below is a measurement taken on this machine at the redesign's real
