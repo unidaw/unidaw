@@ -44,6 +44,16 @@
   #browser { position: absolute; left: 0; bottom: 16px;
              top: calc(38px + var(--metrics-header-height)); }
   #hud { background: var(--uni-surface-tracker-bg); padding: 1px 4px; }
+  /* The engine can stop responding while staying alive with its shared memory
+     mapped, so every value on screen stays valid-looking and nothing errors.
+     That is the worst failure shape available and a line of small text is not
+     enough to distinguish it from a stopped transport. */
+  #stale { position: absolute; left: 0; right: 0; top: 38px; z-index: 9;
+           padding: 6px 12px; box-sizing: border-box;
+           background: var(--uni-text-fx); color: var(--uni-surface-tracker-bg);
+           font-family: var(--font-mono); font-size: var(--font-size-inst);
+           letter-spacing: var(--font-tracking-fx); }
+  #stale[hidden] { display: none; }
 </style>
 
 <div id="chrome"></div>
@@ -54,6 +64,7 @@
 <div id="piano" hidden></div>
 <div id="browser" hidden></div>
 <div id="dock" hidden></div>
+<div id="stale" hidden></div>
 <div id="hud"></div>
 
 <script type="module">
@@ -226,6 +237,11 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
 // exactly what GUIDELINES.md 3.1 and 3.10 forbid.
+const staleEl = document.getElementById('stale');
+staleEl.appendChild(document.createTextNode(
+  'ENGINE NOT RESPONDING — it is still running but has stopped publishing. '
+  + 'Everything below is the last frame it sent, not the current state.'));
+
 const hudText = document.createTextNode('');
 hud.appendChild(hudText);
 setInterval(() => {
@@ -471,6 +487,8 @@ function drawArrange() {
 }
 
 function draw() {
+  const stale = !!(engine && engine.stale && state.useEngine !== false);
+  if (staleEl.hidden === stale) staleEl.hidden = !stale;
   if (dockHost.hidden === state.dockOpen) {
     dockHost.hidden = !state.dockOpen;
     if (state.dockOpen) dock.focus();
