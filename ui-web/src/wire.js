@@ -104,11 +104,6 @@ function note(store, i) {
  * @param {ArrayBuffer} buf
  * @param {ReturnType<createStore>} store
  */
-/** Did the clip version change in this frame? Names ride it. */
-function clipVersionChanged(store, v) {
-  return v.getUint32(32, true) !== store.clipVersion;
-}
-
 export function decode(buf, store) {
   if (buf.byteLength < HEADER_BYTES) return false;
   const v = new DataView(buf);
@@ -150,7 +145,24 @@ export function decode(buf, store) {
   // Names first, then the patcher, then the mixer — matching the encoder.
   {
     let o = HEADER_BYTES;
-    if (nameCount !== store.names.length || clipVersionChanged(store, v)) {
+    // Compared, not keyed on clipVersion. A rename changes a name and nothing
+    // else, so keying this on the clip version made the engine accept the
+    // command, the ack say ok, and the name never move — and I made the same
+    // mistake on the sidecar side in the same commit. Names are 8x24 bytes;
+    // comparing them costs less than being wrong about them.
+    let namesChanged = nameCount !== store.names.length;
+    if (!namesChanged) {
+      for (let i = 0; i < nameCount && !namesChanged; i++) {
+        const at = o + i * NAME_BYTES;
+        const cur = store.names[i] || '';
+        for (let k = 0; k < NAME_BYTES; k++) {
+          const c = v.getUint8(at + k);
+          if (k >= cur.length) { if (c !== 0) namesChanged = true; break; }
+          if (c !== cur.charCodeAt(k)) { namesChanged = true; break; }
+        }
+      }
+    }
+    if (namesChanged) {
       store.names.length = nameCount;
       for (let i = 0; i < nameCount; i++) {
         let s = '';

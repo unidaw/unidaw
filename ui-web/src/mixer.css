@@ -37,7 +37,9 @@
    settles it whether it was applied or rejected. */
 .mx-strip.pending .mx-gain { color: var(--uni-text-pending, var(--uni-text-fx)); }
 
-.mx-name { color: var(--uni-text-instrument); font-size: var(--font-size-inst); }
+.mx-name { color: var(--uni-text-instrument); font-size: var(--font-size-inst);
+            cursor: text; max-width: 100%; overflow: hidden; white-space: nowrap; }
+.mx-strip.renaming .mx-name { color: var(--base-accent); }
 
 .mx-meterwrap { flex: 1 1 auto; display: flex; gap: 5px; align-items: stretch; }
 

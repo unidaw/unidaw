@@ -278,6 +278,11 @@ const mixer = new Mixer(mixerHost, {
     s.pan = Math.max(-1000, Math.min(1000, s.pan + dir * 100));
     sendMixer(track);
   },
+  onRename: (track, name) => {
+    if (!conn || !conn.send({ type: 'rename', track, name })) { state.reject = 'no engine'; }
+    else state.reject = null;
+    schedule();
+  },
   onToggle: (track, which) => {
     const s = mixerState.strips[track];
     s.flags ^= which === 'mute' ? FLAG_MUTE : FLAG_SOLO;
@@ -979,6 +984,17 @@ addEventListener('keydown', (e) => {
     if (act === 'consumed' || act === 'cancel') return done();
   }
 
+  // 2.05 ANY open text field owns the keyboard, before the global shortcuts.
+  //
+  //      This is not a nicety. The browser rail opens on `b`, so renaming a
+  //      track "Big Bass" opened the rail on the B, fed `i`, `g` and the space
+  //      into it, closed it again on the second B, and left "ass" in the rename
+  //      field. Every text field has to be checked before the keys that are
+  //      "global" only when nothing is being typed into.
+  if (mixer.renaming >= 0) {
+    if (mixer.feedRename(k) !== 'ignore') return done();
+  }
+
   // 2.1 The dock owns its own input entirely; it stops propagation there. This
   //     only handles opening it and closing it from outside.
   if (state.helpOpen) { state.helpOpen = false; return done(); }
@@ -1075,6 +1091,7 @@ addEventListener('keydown', (e) => {
   if (state.view === 'mixer') {
     if (k === ' ') { cmd('play'); return done(); }
     if (k === 'Escape') { state.reject = null; return done(); }
+    if (k === 'r') { mixer.beginRename(state.cursor.track); return done(); }
     return;
   }
   if (state.view === 'arrange') {
@@ -1365,6 +1382,9 @@ window.__uni = {
   },
   arrangeProbe: () => arrange.probe(),
   mixerProbe: () => mixer.probe(),
+  rename: (track, name) => { mixer.beginRename(track);
+    for (const c of name) mixer.feedRename(c);
+    return mixer.feedRename('Enter'); },
   pianoProbe: () => piano.probe(),
   patcherProbe: () => patcher.probe(),
   pianoZoom: (z) => { state.pianoZoom = z; draw(); },

@@ -374,10 +374,19 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
 
     // Cheap: read_mixer is a seqlock read of a fixed-size row. Guarded on the
     // engine's own version so an unchanged mixer costs one atomic load.
-    // Names change only on a project load, so they ride the clip version.
-    if out.names.is_empty() || out.clip_version != prev_clip_version {
-        out.names = h.read_track_names();
-    }
+    // Read EVERY frame, not keyed on clip_version.
+    //
+    // "Names change only on a project load, so they ride the clip version" was
+    // wrong the moment SetTrackName existed: a rename changes a name and touches
+    // nothing else, so the engine accepted the command, the ack said ok, and the
+    // name never moved. Seventh instance of this project's one bug — content
+    // changing while the key the consumer watches stays still — and the first I
+    // have written myself since documenting it.
+    //
+    // There is no name version to key on, so this reads 8x24 bytes per frame and
+    // compares. That is cheap here; the browser is the allocation-sensitive side,
+    // not this one.
+    out.names = h.read_track_names();
 
     let pv = h.patcher_version();
     if pv != out.patcher_version || out.patcher_nodes.is_empty() {
@@ -584,10 +593,20 @@ fn build_named(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
         UiCommandType::LoadProject
     } else if body.contains("\"save\"") {
         UiCommandType::SaveProject
+    } else if body.contains("\"rename\"") {
+        UiCommandType::SetTrackName
     } else {
         return None;                       // not a named command at all
     };
     let name = parse_str(body, "\"name\"").unwrap_or("default");
+    // A track name is not a filename, so the path rules do not apply to it —
+    // only the length the payload can carry.
+    if matches!(ty, UiCommandType::SetTrackName) {
+        if name.is_empty() || name.len() > 28 { return Some(Err("bad track name")); }
+        let mut p = UiPatcherPresetCommandPayload::named(ty, name);
+        p.track_id = parse_num(body, "\"track\"").unwrap_or(0).clamp(0, 63) as u32;
+        return Some(Ok(p.as_command()));
+    }
     if !safe_name(name) {
         // Distinct from "unknown command": the command WAS understood and was
         // refused. Collapsing the two would report a rejected name as a typo.

@@ -56,7 +56,7 @@ Getting these wrong produces bugs that look like performance problems.
 
 ### 2.1 The one bug this project keeps having
 
-Six times now, in six different places: **content changed while the key the
+Nine times now, in nine different places: **content changed while the key the
 consumer watches stayed the same.** Every instance rendered something plausible,
 none errored, and no timing instrument could see any of them.
 
@@ -68,12 +68,23 @@ none errored, and no timing instrument could see any of them.
 | wire stride | note grew to 42 bytes | `NOTE_BYTES` still said 40 |
 | sidecar note cache | rows reprojected on zoom | `clip_version` |
 | client note cache | rows reprojected on zoom | `clipVersion`, `noteCount` |
+| track names (sidecar) | a rename | `clip_version` |
+| track names (client) | a rename | `clipVersion` |
+| piano selection | ids reassigned on rewrite | the note id |
 
 The rule: **a cache key must name everything the cached value is computed from.**
 If a value depends on the grid, the grid is in the key — which is why the frame
 header carries `notes_grid` and the store carries `rowGrid`. When adding an input
 to a derivation, the same commit adds it to the key, or the next person debugs a
 screen that looks fine.
+
+The last three are worth singling out. The two name rows were written by me in
+one commit, *after* this table existed — I keyed names on the clip version out of
+convenience, and a rename changes a name and nothing else, so the engine accepted
+the command, the ack said ok, and the name never moved. The third is the same
+shape from the other end: a selection keyed on note id emptied itself when the
+engine reassigned ids on rewrite. **If there is no version for a thing, compare
+the thing.** Names are 8x24 bytes; comparing them costs less than being wrong.
 
 Corollary for tests: a fixture where every lane shares a grid cannot distinguish a
 correct projection from a plausible one. `__uni.useMixedGrid()` exists for exactly
