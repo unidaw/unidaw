@@ -56,7 +56,7 @@ Getting these wrong produces bugs that look like performance problems.
 
 ### 2.1 The one bug this project keeps having
 
-Nine times now, in nine different places: **content changed while the key the
+Twelve times now, in twelve different places: **content changed while the key the
 consumer watches stayed the same.** Every instance rendered something plausible,
 none errored, and no timing instrument could see any of them.
 
@@ -71,6 +71,9 @@ none errored, and no timing instrument could see any of them.
 | track names (sidecar) | a rename | `clip_version` |
 | track names (client) | a rename | `clipVersion` |
 | piano selection | ids reassigned on rewrite | the note id |
+| arrange selection | placement_id is an index that shifts | the placement id |
+| aggregate zooms | 1 bar and 4 bars are different | both asked for 1 line/beat |
+| harmony (both sides) | a key change | the version, compared against itself |
 
 The rule: **a cache key must name everything the cached value is computed from.**
 If a value depends on the grid, the grid is in the key — which is why the frame
