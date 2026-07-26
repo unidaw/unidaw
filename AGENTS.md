@@ -213,10 +213,12 @@ Patcher engine backend:
 - Phase 3: `phase3_timebase`, `phase3_scheduler_ring`, `phase3_automation_ring`, `phase3_pulse_full`,
   `phase3_note_off_full`, `phase3_resurrection_full`, `phase3_composition_full`
 - Patcher: `patcher_resolution`, `patcher_graph_edits`
-- Rust: `cargo test` in `ui/` covers the bridge SHM layout/offset asserts, the agent, and the CLI.
-  End-to-end engine coverage that used to live in `daw-app`'s `engine_integration` (spawn engine ->
-  command ring -> SHM -> save/load) has not yet been re-homed against the sidecar/agent; the
-  `daw-agent` examples (`observe`, `smoke`, `roundtrip`) drive a live engine in the meantime.
+- Rust: `cargo test` in `ui/` covers the bridge SHM layout/offset asserts, the agent, the CLI,
+  and end-to-end engine tests (`daw-agent/tests/engine_e2e.rs`) that spawn `build/daw_engine` in
+  test mode and drive it over the command ring — segmentation-on-save and load->save placement
+  round-trip. They need the C++ targets built first (`cmake --build build`) and are serialized
+  (one engine at a time). The `daw-agent` examples (`observe`, `smoke`, `roundtrip`, `segtest`)
+  drive a live engine interactively.
 
 ## Verification tools (feedback loops)
 Prefer these over guessing; each turns an assertion about the running system
