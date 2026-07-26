@@ -340,6 +340,26 @@ fn track_names_published() {
     }
 }
 
+/// Renaming a track via set_track_name updates the published name.
+#[test]
+fn set_track_name_updates_published_name() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("rename");
+    let r = session.execute(&ToolCall {
+        tool: "set_track_name".into(),
+        args: json!({ "track": 0, "name": "Kick" }),
+    });
+    assert!(r.ok, "set_track_name failed: {r:?}");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if session.handle().read_track_names().first().map(String::as_str) == Some("Kick") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "rename never published: {:?}", session.handle().read_track_names());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// Per-track mixer state written via SetTrackMixer is published back verbatim, so
 /// the UI can render a fader at its true position; the mixer version advances.
 #[test]

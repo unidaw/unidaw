@@ -4177,6 +4177,25 @@ struct TrackRuntime {
       return;
     }
     if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
+        commandType == daw::UiCommandType::SetTrackName) {
+      daw::UiPatcherPresetCommandPayload namePayload{};
+      std::memcpy(&namePayload, entry.payload, sizeof(namePayload));
+      std::string name(namePayload.name,
+                       strnlen(namePayload.name, sizeof(namePayload.name)));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (namePayload.trackId < tracks.size()) {
+          runtime = tracks[namePayload.trackId].get();
+        }
+      }
+      if (runtime && !name.empty()) {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        runtime->trackName = std::move(name);
+      }
+      return;
+    }
+    if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
         (commandType == daw::UiCommandType::SaveProject ||
          commandType == daw::UiCommandType::LoadProject)) {
       daw::UiPatcherPresetCommandPayload projectPayload{};
