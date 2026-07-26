@@ -187,7 +187,20 @@ fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
         sent += 1;
         base = base.wrapping_add(1);
     }
-    ToolResult::ok(json!({ "sent": sent, "first_base_version": first_base, "track": track }))
+    // Wait for the engine to apply this batch (clip version reaches first_base +
+    // sent) before returning, so a following tool call reads a settled version
+    // and doesn't race the ring — no fixed delay between calls.
+    let applied = handle.wait_for_clip_version(
+        first_base,
+        first_base.wrapping_add(sent as u32),
+        std::time::Duration::from_secs(2),
+    );
+    ToolResult::ok(json!({
+        "sent": sent,
+        "first_base_version": first_base,
+        "applied": applied,
+        "track": track,
+    }))
 }
 
 fn transport(handle: &EngineHandle, args: &Value) -> ToolResult {

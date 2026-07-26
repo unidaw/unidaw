@@ -149,6 +149,34 @@ impl EngineHandle {
         unsafe { std::ptr::read_volatile(&(*self.header).ui_clip_version) }
     }
 
+    /// Block until the engine has acknowledged edits that advance the clip
+    /// version from `base` to at least `target`, or `timeout` elapses; returns
+    /// true if the target was reached. The engine bumps the clip version once
+    /// per applied edit and republishes it, so this is how a writer waits for
+    /// its writes to actually land instead of guessing a fixed delay. Progress
+    /// is measured forward from `base` (`wrapping_sub`) so a u32 wrap is benign.
+    /// There is no engine->reader notification channel in the lock-free SHM, so
+    /// this polls the published version at a short interval — it returns as soon
+    /// as the engine acks (about one audio block), not after a padded sleep.
+    pub fn wait_for_clip_version(
+        &self,
+        base: u32,
+        target: u32,
+        timeout: std::time::Duration,
+    ) -> bool {
+        let want = target.wrapping_sub(base);
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if self.clip_version().wrapping_sub(base) >= want {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_micros(250));
+        }
+    }
+
     pub fn track_count(&self) -> u32 {
         unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) }
     }
