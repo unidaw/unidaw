@@ -294,8 +294,10 @@ const mixer = new Mixer(mixerHost, {
 const TOTAL_ROWS = 100000;
 // Declared up here, not beside connectEngine: draw() reads it, and draw() runs
 // before the connection is made.
-// Declared before draw() because draw() reads them and runs first. Three TDZ
-// throws in this file so far; anything draw() touches gets hoisted here.
+// Declared before draw() because draw() reads them and runs first. FOUR TDZ bugs
+// in this file so far; anything draw() touches gets hoisted here, and anything
+// that runs at module scope goes at the BOTTOM. The fourth one was silent: a
+// try/catch swallowed the ReferenceError and the feature just did nothing.
 let engine = null;
 let conn = null;
 let lastViewportKey = -1;
@@ -1238,6 +1240,12 @@ host.addEventListener('pointerup', (e) => {
 });
 
 addEventListener('resize', schedule);
+
+// Save on a timer rather than on every change: view state moves constantly while
+// scrolling and localStorage writes are synchronous.
+setInterval(saveSession, 2000);
+addEventListener('beforeunload', saveSession);
+
 draw();
 
 // Live engine, when the sidecar is up. Falls back to the fixture so the page —
@@ -1264,6 +1272,47 @@ conn = connectEngine({
     schedule();
   },
 });
+
+/**
+ * Remember where you were across a reload.
+ *
+ * Only VIEW state — which surface, which zoom, which octave, which project.
+ * Nothing here is data: the engine owns that, and persisting a copy of it would
+ * be a second source of truth that goes stale the moment anything else edits.
+ *
+ * Disabled the instant a test calls reset(), because a golden that depends on
+ * what the previous run left in localStorage is not a golden.
+ */
+const SESSION_KEY = 'uni.session.v1';
+let persist = true;
+
+function saveSession() {
+  if (!persist) return;
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      view: state.view, zoom: state.zoom, octave: state.octave, editStep: state.editStep,
+      arrangeZoom: state.arrangeZoom, pianoZoom: state.pianoZoom, pianoAll: state.pianoAll,
+      project: state.currentProject,
+    }));
+  } catch (e) { /* private mode, quota — not worth breaking the app over */ }
+}
+
+function restoreSession() {
+  let s;
+  try { s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch (e) { return null; }
+  if (!s) return null;
+  // Clamped on the way in: a stored index from an older build can be out of
+  // range, and a view that no longer exists would leave every surface hidden.
+  const views = ['tracker', 'arrange', 'piano', 'mixer', 'patcher'];
+  if (views.includes(s.view)) state.view = s.view;
+  if (Number.isFinite(s.zoom)) state.zoom = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, s.zoom));
+  if (Number.isFinite(s.octave)) state.octave = Math.max(0, Math.min(9, s.octave));
+  if (Number.isFinite(s.editStep)) state.editStep = Math.max(0, Math.min(16, s.editStep));
+  if (Number.isFinite(s.arrangeZoom)) state.arrangeZoom = Math.max(0, Math.min(ARRANGE_ZOOM.length - 1, s.arrangeZoom));
+  if (Number.isFinite(s.pianoZoom)) state.pianoZoom = Math.max(0, Math.min(PIANO_ZOOM.length - 1, s.pianoZoom));
+  state.pianoAll = !!s.pianoAll;
+  return s.project || null;
+}
 
 // Agent / test surface. Structure, not pixels — this is requirement (d).
 window.__uni = {
@@ -1295,7 +1344,9 @@ window.__uni = {
                       conn.close(); hudText.nodeValue = 'fixture'; draw(); },
   // Hermetic reset for tests: a scene that inherits the cursor from whatever ran
   // before it is not a fixture, it is a dependency on execution order.
-  reset: () => { state.cursor.row = 0; state.cursor.track = 0; state.cursor.col = 0;
+  reset: () => { persist = false;
+                 try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+                 state.cursor.row = 0; state.cursor.track = 0; state.cursor.col = 0;
                  state.playhead = 0; state.zoom = 3; state.scrollX = 0; state.start = 0;
                  engine = null; state.useEngine = false; state.view = 'tracker';
                  state.arrangeStart = 0; state.arrangeZoom = 3; state.selectedPlacement = null;
@@ -1613,4 +1664,29 @@ window.__uni = {
   redraw: () => draw(),
   totalRows: TOTAL_ROWS,
 };
+
+// Restoring runs LAST, after every declaration it touches.
+//
+// It first ran up beside the resize listener, where SESSION_KEY is still in its
+// temporal dead zone — and the try/catch around the parse swallowed the
+// ReferenceError and returned null, so it silently restored nothing. Fourth TDZ
+// bug in this file; the header comment warns about exactly this.
+{
+  // Restore before the first draw, so the app opens where it was rather than
+  // flashing the default and jumping.
+  const wanted = restoreSession();
+  if (wanted) {
+    // The label is ours either way: the engine may already have this project
+    // open, in which case we do not reload it but we do still know its name.
+    state.currentProject = wanted;
+    // The engine has its own idea of what is loaded; ask for ours once the
+    // command socket is up, and only if the engine has nothing yet.
+    const t = setInterval(() => {
+      if (!conn || !conn.canSend()) return;
+      clearInterval(t);
+      if (!engine || engine.noteCount === 0) conn.loadProject(wanted);
+    }, 200);
+    setTimeout(() => clearInterval(t), 10000);
+  }
+}
 </script>

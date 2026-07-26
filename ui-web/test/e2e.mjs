@@ -103,6 +103,17 @@ ok(wrote >= 0, 'cursor note readable');
 await run('del', 900);
 ok((await E()).clipVersion > after, 'a delete moves it again');
 
+section('undo / redo');
+const beforeUndo = (await E()).noteCount;
+await run('note 71', 900);
+const afterWrite = (await E()).noteCount;
+ok(afterWrite !== beforeUndo, 'a write changes the note count', `${beforeUndo} -> ${afterWrite}`);
+await run('undo', 1000);
+ok((await E()).noteCount !== afterWrite, 'undo takes it back');
+await run('redo', 1000);
+ok((await E()).noteCount === afterWrite, 'redo puts it back', String(afterWrite));
+await run('undo', 1000);
+
 section('selection batch');
 await page.evaluate(() => { window.__uni.setZoom(3); window.__uni.selectRows(0, 6, 0, 2); });
 const sel = await page.evaluate(() => window.__uni.selected());
