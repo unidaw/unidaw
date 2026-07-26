@@ -873,6 +873,8 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(daw::ringBytes(baseConfig.ringUiCapacity), 64);
     header.uiClipExtentOffset = offset;  // v11: clip-extents region (rails)
     offset += daw::alignUp(sizeof(daw::UiClipExtentRegion), 64);
+    header.uiPatcherOffset = offset;  // v14: published patcher graph
+    offset += daw::alignUp(sizeof(daw::UiPatcherRegion), 64);
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
@@ -1635,6 +1637,81 @@ struct TrackRuntime {
       }
     }
     region->count = count;
+  };
+
+  // v14: publish the patcher graph the engine runs, so the UI can draw it. Reads
+  // the lock-free graph snapshot; only rewrites when the patcher version moves.
+  uint32_t lastPatcherVersion = 0xFFFF'FFFFu;
+  auto writeUiPatcher = [&](bool force) {
+    if (!uiShm.header || uiShm.header->uiPatcherOffset == 0) {
+      return;
+    }
+    const uint32_t version =
+        patcherGraphState.version.load(std::memory_order_acquire);
+    if (!force && version == lastPatcherVersion) {
+      return;
+    }
+    lastPatcherVersion = version;
+    auto graph = std::atomic_load_explicit(&patcherGraphSnapshot,
+                                           std::memory_order_acquire);
+    auto* region = reinterpret_cast<daw::UiPatcherRegion*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiPatcherOffset);
+    region->version = version;
+    if (!graph) {
+      region->nodeCount = 0;
+      region->edgeCount = 0;
+      return;
+    }
+    uint32_t nodeCount = 0;
+    for (const auto& n : graph->nodes) {
+      if (nodeCount >= daw::kUiMaxPatcherNodes) {
+        break;
+      }
+      daw::UiPatcherNode& out = region->nodes[nodeCount++];
+      out.id = n.id;
+      out.type = static_cast<uint8_t>(n.type);
+      out.hasConfig = 0;
+      std::memset(out.config, 0, sizeof(out.config));
+      if (n.hasEuclideanConfig) {
+        out.hasConfig = 1;
+        const auto& e = n.euclideanConfig;
+        out.config[0] = static_cast<int32_t>(e.steps);
+        out.config[1] = static_cast<int32_t>(e.hits);
+        out.config[2] = static_cast<int32_t>(e.offset);
+        out.config[3] = static_cast<int32_t>(e.degree);
+        out.config[4] = static_cast<int32_t>(e.octave_offset);
+        out.config[5] = static_cast<int32_t>(e.velocity);
+        out.config[6] = static_cast<int32_t>(e.base_octave);
+        out.config[7] = static_cast<int32_t>(e.duration_ticks & 0xffffffffu);
+      } else if (n.hasRandomDegreeConfig) {
+        out.hasConfig = 1;
+        const auto& r = n.randomDegreeConfig;
+        out.config[0] = static_cast<int32_t>(r.degree);
+        out.config[1] = static_cast<int32_t>(r.velocity);
+        out.config[2] = static_cast<int32_t>(r.duration_ticks & 0xffffffffu);
+      } else if (n.hasLfoConfig) {
+        out.hasConfig = 1;
+        const auto& l = n.lfoConfig;
+        out.config[0] = static_cast<int32_t>(std::lround(l.frequency_hz * 1000.0));
+        out.config[1] = static_cast<int32_t>(std::lround(l.depth * 1000.0));
+        out.config[2] = static_cast<int32_t>(std::lround(l.bias * 1000.0));
+        out.config[3] = static_cast<int32_t>(std::lround(l.phase_offset * 1000.0));
+      }
+    }
+    uint32_t edgeCount = 0;
+    for (const auto& e : graph->edges) {
+      if (edgeCount >= daw::kUiMaxPatcherEdges) {
+        break;
+      }
+      daw::UiPatcherEdge& out = region->edges[edgeCount++];
+      out.srcNode = e.src.nodeId;
+      out.srcPort = e.src.portId;
+      out.dstNode = e.dst.nodeId;
+      out.dstPort = e.dst.portId;
+      out.kind = static_cast<uint8_t>(e.kind);
+    }
+    region->nodeCount = nodeCount;
+    region->edgeCount = edgeCount;
   };
 
   auto writeUiHarmonySnapshot = [&]() {
@@ -7418,6 +7495,7 @@ struct TrackRuntime {
         writeUiClipWindowSnapshot(trackSnapshot);
         writeUiClipAllSnapshot(false);
         writeUiClipExtents(false);
+        writeUiPatcher(false);
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);
         if (writeHarmony) {

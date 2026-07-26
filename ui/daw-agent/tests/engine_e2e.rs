@@ -244,6 +244,34 @@ fn roundtrip_preserves_placements() {
     assert_eq!(clip7["notes"].as_array().unwrap().len(), 2);
 }
 
+/// The patcher graph the engine runs is published so the UI can draw it: the
+/// default graph has a euclidean node (with config) wired to a passthrough.
+#[test]
+fn patcher_graph_published() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("patcher");
+    // The region fills on the first publish; poll briefly.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let view = loop {
+        let v = session.handle().read_patcher();
+        if !v.nodes.is_empty() {
+            break v;
+        }
+        assert!(Instant::now() < deadline, "patcher graph never published");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // Euclidean = node type 1, carrying config (steps/hits/...).
+    let euclid = view
+        .nodes
+        .iter()
+        .find(|n| n.node_type == 1)
+        .expect("default graph should have a euclidean node");
+    assert_eq!(euclid.has_config, 1, "euclidean node should carry config");
+    assert_eq!(euclid.config[0], 16, "euclidean steps"); // steps
+    assert_eq!(euclid.config[1], 5, "euclidean hits"); // hits
+    assert!(!view.edges.is_empty(), "default graph should have an edge");
+}
+
 /// Track names are published: a fresh track defaults to "Track N", and a loaded
 /// project's name flows through so every lane-labelling surface reads one source.
 #[test]

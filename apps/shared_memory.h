@@ -25,7 +25,10 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //     are computed from sizeof(ShmHeader) so they shift automatically.
 // 13: per-track names (uiTrackName), so every lane-labelling surface reads one
 //     source instead of inventing T01..T16.
-constexpr uint16_t kShmVersion = 13;
+// 14: published patcher graph (uiPatcherOffset -> UiPatcherRegion), so the UI can
+//     draw the patcher the engine runs. Offset fits the header's existing tail
+//     padding — sizeof(ShmHeader) is unchanged.
+constexpr uint16_t kShmVersion = 14;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -96,6 +99,9 @@ struct alignas(64) ShmHeader {
   // v13: per-track names, nul-padded. Published alongside the track count so all
   // lane-labelling surfaces share one source.
   char uiTrackName[kUiMaxTracks][kUiTrackNameBytes]{};
+  // v14: byte offset of the published UiPatcherRegion (0 = none). Fits the
+  // header's existing tail padding, so sizeof(ShmHeader) is unchanged.
+  uint64_t uiPatcherOffset = 0;
 };
 
 struct alignas(64) RingHeader {
@@ -181,6 +187,42 @@ struct UiClipExtentRegion {
   uint32_t count = 0;
   uint32_t reserved = 0;
   UiClipExtent extents[kUiMaxClipExtents]{};
+};
+
+constexpr uint32_t kUiMaxPatcherNodes = 64;
+constexpr uint32_t kUiMaxPatcherEdges = 128;
+
+// v14: published patcher graph (read-back), so the UI can draw the patcher the
+// engine runs. The engine executes one global graph today, so `deviceId` is the
+// device it's parked on (0 when it is the built-in default). `config` is
+// type-interpreted (all ints; LFO floats are milli-units):
+//   Euclidean:    [steps, hits, offset, degree, octaveOffset, velocity, baseOctave, durTicksLo]
+//   RandomDegree: [degree, velocity, durTicksLo, 0, 0, 0, 0, 0]
+//   Lfo:          [freqMilliHz, depthMilli, biasMilli, phaseMilli, 0, 0, 0, 0]
+struct UiPatcherNode {
+  uint32_t id = 0;
+  uint8_t type = 0;       // PatcherNodeType
+  uint8_t hasConfig = 0;
+  uint16_t reserved = 0;
+  int32_t config[8]{};
+};
+
+struct UiPatcherEdge {
+  uint32_t srcNode = 0;
+  uint32_t srcPort = 0;
+  uint32_t dstNode = 0;
+  uint32_t dstPort = 0;
+  uint8_t kind = 0;       // PatcherPortKind
+  uint8_t reserved[3]{};
+};
+
+struct alignas(64) UiPatcherRegion {
+  uint32_t version = 0;   // mirrors PatcherGraphState.version
+  uint32_t deviceId = 0;
+  uint32_t nodeCount = 0;
+  uint32_t edgeCount = 0;
+  UiPatcherNode nodes[kUiMaxPatcherNodes]{};
+  UiPatcherEdge edges[kUiMaxPatcherEdges]{};
 };
 
 struct UiClipNote {

@@ -4,8 +4,10 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 13;
+pub const K_SHM_VERSION: u16 = 14;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
+pub const K_UI_MAX_PATCHER_NODES: usize = 64;
+pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
 
 pub const K_UI_MAX_TRACKS: usize = 8;
 pub const K_UI_MAX_CLIP_NOTES: usize = 4096;
@@ -68,6 +70,42 @@ pub struct ShmHeader {
     pub ui_mixer_version: u32,
     // v13: per-track names, nul-padded.
     pub ui_track_name: [[u8; K_UI_TRACK_NAME_BYTES]; K_UI_MAX_TRACKS],
+    // v14: byte offset of the published UiPatcherRegion (0 = none). Fits the
+    // header's tail padding, so the header size is unchanged.
+    pub ui_patcher_offset: u64,
+}
+
+/// v14: a published patcher-graph node. `config` is type-interpreted (see the C++
+/// UiPatcherNode doc): Euclidean/RandomDegree ints; Lfo floats as milli-units.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiPatcherNode {
+    pub id: u32,
+    pub node_type: u8, // PatcherNodeType
+    pub has_config: u8,
+    pub reserved: u16,
+    pub config: [i32; 8],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiPatcherEdge {
+    pub src_node: u32,
+    pub src_port: u32,
+    pub dst_node: u32,
+    pub dst_port: u32,
+    pub kind: u8, // PatcherPortKind
+    pub reserved: [u8; 3],
+}
+
+#[repr(C, align(64))]
+pub struct UiPatcherRegion {
+    pub version: u32,
+    pub device_id: u32,
+    pub node_count: u32,
+    pub edge_count: u32,
+    pub nodes: [UiPatcherNode; K_UI_MAX_PATCHER_NODES],
+    pub edges: [UiPatcherEdge; K_UI_MAX_PATCHER_EDGES],
 }
 
 #[repr(C, align(64))]
@@ -634,5 +672,9 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_track_mix_flags), 320);
         assert_eq!(offset_of!(ShmHeader, ui_mixer_version), 328);
         assert_eq!(offset_of!(ShmHeader, ui_track_name), 332); // v13
+        assert_eq!(offset_of!(ShmHeader, ui_patcher_offset), 528); // v14 (fits tail padding)
+        const_assert_eq!(size_of::<UiPatcherNode>(), 40);
+        const_assert_eq!(size_of::<UiPatcherEdge>(), 20);
+        const_assert_eq!(size_of::<UiPatcherRegion>(), 5184);
     }
 }
