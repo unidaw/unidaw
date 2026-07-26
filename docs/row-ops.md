@@ -50,17 +50,26 @@ silent no-op — a red cell, not a dropped op, is the tracker rule.
   and independently seeded, and `0`/`>=100` always sound (zero regression for
   op-free notes).
 
-- **Delay and retrigger — model + persistence done, playback pending.** Both
-  ops *move events in time*: a delayed onset, or retrigger strikes, land later
-  than the note's stored tick and routinely cross the audio block boundary. The
-  current scheduler iterates events by their stored tick within the block
-  window and drops anything whose computed sample falls outside it (the same
-  limit the existing chord-humanize jitter has). So these need a **per-track
-  pending-event queue** the block loop drains each block — the generalization of
-  today's `activeNotes` map (which already handles pending note-*offs*) to
-  pending note-*ons*. That one mechanism serves delay, retrigger, and any future
-  time-spreading op (ratchet, arp, roll) uniformly. It touches the audio thread,
-  so it is its own reviewed increment rather than bolted onto this one.
+- **Delay and retrigger — model, persistence, and expansion logic done; RT
+  wiring pending.** Both ops *move events in time*: a delayed onset, or retrigger
+  strikes, land later than the note's stored tick and routinely cross the audio
+  block boundary. The **pure expansion** — a note's `(start, duration,
+  retrigger, delay)` into the concrete list of `NoteStrike { onTick, offTick }`
+  it sounds as — lives in `daw::expandNoteOps()` and is unit-tested
+  (`row_op_expand`): delay shifts the whole note, retrigger splits the delayed
+  duration into N contiguous re-articulated strikes with the last absorbing the
+  remainder, counts are capped so no strike is ever empty, and the op-free path
+  yields exactly one full-length strike.
+
+  What remains is the **per-track pending-event queue** the block loop drains
+  each block: when a note first enters the play window, expand it and enqueue any
+  strikes that fall in future blocks (today's dispatch only "sees" an event when
+  its stored tick is in-window, and drops anything computed outside it — the same
+  limit the chord-humanize jitter has). That queue is the generalization of
+  today's `activeNotes` map (pending note-*offs*) to pending note-*ons*, and one
+  mechanism then serves delay, retrigger, and any future time-spreading op
+  (ratchet, arp, roll) uniformly. It touches the audio thread and needs wrap-
+  aware, allocation-free draining, so it is its own reviewed increment.
 
 ## Display and setting ops (pending)
 

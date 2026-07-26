@@ -403,6 +403,11 @@ add_test(NAME phase3_row_op_probability
 )
 set_tests_properties(phase3_row_op_probability PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_test(NAME phase3_row_op_expand
+  COMMAND phase3_tests --test row_op_expand
+)
+set_tests_properties(phase3_row_op_expand PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME phase3_resync_mismatch
   COMMAND phase3_tests --test resync_mismatch
 )
