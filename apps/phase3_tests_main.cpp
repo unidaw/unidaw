@@ -20,6 +20,7 @@
 #include "apps/harmony_timeline.h"
 #include "apps/musical_structures.h"
 #include "apps/placement_schedule.h"
+#include "apps/note_entry.h"
 #include "apps/scale_library.h"
 #include "apps/time_base.h"
 #include "apps/ui_snapshot.h"
@@ -823,6 +824,81 @@ bool runPlacementScheduleTest() {
   return true;
 }
 
+bool runNoteEntryTest() {
+  using daw::NoteEntryKind;
+  const uint64_t Q = 960000;
+  const uint64_t BAR = 4 * Q;
+  const uint64_t THRESH = BAR;  // stretch within one bar of the last note
+  auto fail = [](const char* m) {
+    std::cerr << "note_entry: " << m << std::endl;
+    return false;
+  };
+  auto span = [](uint64_t at, uint64_t length, uint64_t clipLength,
+                 std::size_t index) {
+    daw::PlacementSpan s;
+    s.at = at;
+    s.length = length;
+    s.clipLength = clipLength;
+    s.index = index;
+    return s;
+  };
+
+  // No placements: start a new clip anchored to the bar containing the tick.
+  {
+    auto d = daw::resolveNoteEntry({}, 2 * BAR + 2 * Q, THRESH, BAR);
+    if (d.kind != NoteEntryKind::CreateNew) return fail("empty -> create");
+    if (d.at != 2 * BAR || d.clipRelativeTick != 2 * Q) return fail("empty snap");
+  }
+  // Inside a 1-bar placement: edit that clip in place.
+  {
+    auto d = daw::resolveNoteEntry({span(0, BAR, BAR, 0)}, 2 * Q, THRESH, BAR);
+    if (d.kind != NoteEntryKind::InsidePlacement) return fail("inside kind");
+    if (d.placementIndex != 0 || d.clipRelativeTick != 2 * Q) return fail("inside rel");
+  }
+  // Inside a looped placement: the tick folds back into the clip length.
+  {
+    auto d = daw::resolveNoteEntry({span(0, 4 * BAR, BAR, 0)},
+                                   2 * BAR + 2 * Q, THRESH, BAR);
+    if (d.kind != NoteEntryKind::InsidePlacement) return fail("loop inside kind");
+    if (d.clipRelativeTick != 2 * Q) return fail("loop fold");
+  }
+  // Just past the end within threshold: stretch that placement.
+  {
+    auto d = daw::resolveNoteEntry({span(0, BAR, BAR, 0)}, BAR + Q, THRESH, BAR);
+    if (d.kind != NoteEntryKind::StretchPlacement) return fail("stretch kind");
+    if (d.placementIndex != 0 || d.clipRelativeTick != BAR + Q) return fail("stretch rel");
+  }
+  // Past the end beyond threshold: a new clip instead.
+  {
+    auto d = daw::resolveNoteEntry({span(0, BAR, BAR, 0)}, 3 * BAR, THRESH, BAR);
+    if (d.kind != NoteEntryKind::CreateNew) return fail("far -> create");
+    if (d.at != 3 * BAR) return fail("far create snap");
+  }
+  // Overlapping placements covering the tick: the latest-starting one wins.
+  {
+    auto d = daw::resolveNoteEntry(
+        {span(0, 2 * BAR, 2 * BAR, 0), span(BAR, 2 * BAR, 2 * BAR, 1)},
+        BAR + Q, THRESH, BAR);
+    if (d.kind != NoteEntryKind::InsidePlacement) return fail("overlap kind");
+    if (d.placementIndex != 1 || d.clipRelativeTick != Q) return fail("overlap latest");
+  }
+  // Two placements, entry after both: the nearest preceding end is stretched.
+  {
+    auto d = daw::resolveNoteEntry(
+        {span(0, BAR, BAR, 0), span(2 * BAR, BAR, BAR, 1)},
+        3 * BAR + Q, THRESH, BAR);
+    if (d.kind != NoteEntryKind::StretchPlacement) return fail("nearest end kind");
+    if (d.placementIndex != 1) return fail("nearest end index");
+  }
+  // Before the first placement: no backward stretch — a new clip.
+  {
+    auto d = daw::resolveNoteEntry({span(2 * BAR, BAR, BAR, 0)}, Q, THRESH, BAR);
+    if (d.kind != NoteEntryKind::CreateNew) return fail("before -> create");
+    if (d.at != 0 || d.clipRelativeTick != Q) return fail("before snap");
+  }
+  return true;
+}
+
 bool runResyncMismatchTest() {
   daw::UiDiffPayload diff{};
   const bool matches = daw::requireMatchingClipVersion(2, 5, diff);
@@ -1219,6 +1295,7 @@ int runAllTests(const std::string& pluginPath) {
       {"row_op_probability", [](const std::string&) { return runRowOpProbabilityTest(); }},
       {"row_op_expand", [](const std::string&) { return runRowOpExpandTest(); }},
       {"placement_schedule", [](const std::string&) { return runPlacementScheduleTest(); }},
+      {"note_entry", [](const std::string&) { return runNoteEntryTest(); }},
       {"resync_mismatch", [](const std::string&) { return runResyncMismatchTest(); }},
       {"pulse_full", runPulseFullTest},
       {"note_off_full", runNoteOffFullTest},
@@ -1263,7 +1340,7 @@ int main(int argc, char** argv) {
       testName != "clip_param_event" &&
       testName != "undo_stack" && testName != "note_duration" &&
       testName != "row_op_probability" && testName != "row_op_expand" &&
-      testName != "placement_schedule" &&
+      testName != "placement_schedule" && testName != "note_entry" &&
       testName != "resync_mismatch" &&
       testName != "pulse_full" && testName != "note_off_full" &&
       testName != "resurrection_full" && testName != "composition_full" &&
@@ -1313,6 +1390,9 @@ int main(int argc, char** argv) {
   }
   if (testName == "placement_schedule") {
     return runPlacementScheduleTest() ? 0 : 1;
+  }
+  if (testName == "note_entry") {
+    return runNoteEntryTest() ? 0 : 1;
   }
   if (testName == "resync_mismatch") {
     return runResyncMismatchTest() ? 0 : 1;
