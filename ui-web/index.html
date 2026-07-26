@@ -97,6 +97,45 @@ setInterval(() => {
 // Two buffers, alternating: the renderer diffs prev against current, so they
 // have to be distinct objects. Steady-state allocation is zero.
 const entry = createEntry();
+
+/**
+ * Optimistic edits: drawn immediately, dropped when the engine's clip version
+ * moves past the version they were composed against.
+ *
+ * That version IS the reconciliation key — it is why base_version exists and why
+ * commands never needed to be synchronised with a frame. An edit sent against
+ * clipVersion N has been seen by the engine once a frame arrives with anything
+ * greater than N, whether it was applied or rejected. Either way the feed is now
+ * authoritative and the local guess must stop being drawn, or a rejected edit
+ * would linger on screen forever looking like data.
+ *
+ * Entries are pooled; a handful are ever in flight.
+ */
+const pending = [];
+let pendingCount = 0;
+const PENDING_TIMEOUT_MS = 2000;
+
+function addPending(row, track, col, text, base) {
+  const e = pending[pendingCount] || (pending[pendingCount] =
+    { row: 0, track: 0, col: 0, text: '', base: 0, at: 0 });
+  e.row = row; e.track = track; e.col = col; e.text = text; e.base = base;
+  e.at = performance.now();
+  pendingCount++;
+}
+
+/** Drop anything the engine has now answered, or that never came back. */
+function reapPending(clipVersion, now) {
+  let w = 0;
+  for (let i = 0; i < pendingCount; i++) {
+    const e = pending[i];
+    const answered = clipVersion > e.base;
+    const stale = now - e.at > PENDING_TIMEOUT_MS;
+    if (answered || stale) continue;          // engine owns it now
+    if (w !== i) { const t = pending[w]; pending[w] = e; pending[i] = t; }
+    w++;
+  }
+  pendingCount = w;
+}
 const bufs = [null, null];
 let bi = 0;
 
@@ -146,10 +185,17 @@ function commitToken(text) {
   const tick = tickOfCursorRow();
   const dur = laneRowTicks(state.cursor.track);
   if (r.kind === 'note') {
-    conn && conn.send({ type: 'note', track: state.cursor.track, pitch: r.pitch,
-                        tick, dur, vel: state.velocity });
+    const base = engine ? engine.clipVersion : 0;
+    if (conn && conn.send({ type: 'note', track: state.cursor.track, pitch: r.pitch,
+                            tick, dur, vel: state.velocity })) {
+      // Draw it now; the engine's next version decides whether it stays.
+      addPending(state.cursor.row, state.cursor.track, 0, pitchToToken(r.pitch), base);
+    }
   } else if (r.kind === 'off' || r.kind === 'empty') {
-    conn && conn.send({ type: 'delete', track: state.cursor.track, tick });
+    const base = engine ? engine.clipVersion : 0;
+    if (conn && conn.send({ type: 'delete', track: state.cursor.track, tick })) {
+      addPending(state.cursor.row, state.cursor.track, 0, '---', base);
+    }
   } else if (r.kind === 'invalid') {
     state.badToken = text;             // shown in the cell, not swallowed
     return;                            // cursor stays put so it can be fixed
@@ -180,6 +226,7 @@ function draw() {
     tracks: state.tracks, columns: state.columns, zoomIndex: state.zoom,
     cursor: state.cursor, playheadRow: state.playhead, selection: state.selection,
     engine: state.useEngine === false ? null : engine,
+    pending, pendingCount,
     entryOverlay: entry.active
       ? { row: entry.row, track: entry.track, col: entry.col, text: entry.text }
       : null,
@@ -339,7 +386,7 @@ draw();
 conn = connectEngine({
   onStatus: (s, d) => { state.link = s + (d ? ': ' + d : ''); schedule(); },
   onAck: (msg) => { state.ack = String(msg).slice(0, 40); },
-  onChange: (store) => { engine = store; state.playhead = tickToRow(store.playheadTick); schedule(); },
+  onChange: (store) => { engine = store; reapPending(store.clipVersion, performance.now()); state.playhead = tickToRow(store.playheadTick); schedule(); },
 });
 
 // Agent / test surface. Structure, not pixels — this is requirement (d).

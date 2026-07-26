@@ -125,6 +125,8 @@ export function buildViewModel(opts, buf) {
     // The cell currently being typed into, if any. Drawn over whatever the
     // engine says is there — you must see what you are typing before it commits.
     entryOverlay = null,
+    // Optimistic edits, drawn over the engine's answer until it catches up.
+    pending = null, pendingCount = 0,
   } = opts;
 
   const shape = `${rowCount}x${trackCount}x${columns}`;
@@ -288,6 +290,14 @@ export function buildViewModel(opts, buf) {
 
   // Both revisions, because either can change what the cells say while every row
   // index stays put — and the renderer's identity check cannot see either.
+  for (let i = 0; i < pendingCount; i++) {
+    const e = pending[i];
+    const row = rows[e.row - startRow];
+    if (!row) continue;
+    const cell = row.cells[e.track * columns + e.col];
+    if (cell) { cell.text = e.text; cell.kind = 'pending'; }
+  }
+
   if (entryOverlay) {
     const ri = entryOverlay.row - startRow;
     const row = rows[ri];
@@ -298,7 +308,8 @@ export function buildViewModel(opts, buf) {
   }
 
   buf.contentRevision = engine
-    ? engine.notesRevision * 1e6 + engine.aggRevision + (entryOverlay ? 1e12 + entryOverlay.text.length : 0)
+    ? engine.notesRevision * 1e6 + engine.aggRevision + pendingCount * 1e9
+      + (entryOverlay ? 1e12 + entryOverlay.text.length : 0)
     : zoomIndex + (entryOverlay ? 1e6 + entryOverlay.text.length : 0);
 
   buf.window.startRow = startRow; buf.window.rowCount = rowCount;
