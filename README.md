@@ -7,37 +7,39 @@ Status: very early. Do not use. Not possible to save. But tracker and patcher Po
 ## Components
 - Engine (C++): scheduling, harmony, clip edits, audio graph, IPC.
 - Plugin host (C++/JUCE): VST3 scan/instantiate/process, state, editor windows.
-- UI (Rust/GPUI): tracker, palette, scale browser, SHM snapshot reader.
+- UI: a web front-end driven by a Rust sidecar over the SHM snapshot (replaces the
+  former Rust/GPUI `daw-app`, now removed). The in-app agent (`ui/daw-agent`) is the
+  Rust-side perception + tool substrate the sidecar and automated harnesses share.
 - Patcher (C++ + Rust bridge): event/control graph with deterministic DAG.
 
 ## Build
 - Build system: CMake for C++ targets; Cargo for Rust UI.
 - Example host binary: `build/juce_host`.
-- UI app: `ui/daw-app` (spawns `build/daw_engine` by default; override with `DAW_ENGINE_PATH`).
+- Engine binary: `build/daw_engine` (spawns per-track `build/juce_host_process`; run it from `build/`).
 - C++ build (JUCE defaults to `$HOME/src/juce/JUCE`; override with `-DJUCE_DIR=...`):
 ```sh
 cmake -S . -B build
 cmake --build build
 ```
-- Rust UI build:
+- Rust build (bridge, CLI, in-app agent):
 ```sh
 cd ui
-cargo build -p daw-app
+cargo build
 ```
 - Scan plugins (creates/updates cache):
 ```sh
 ./build/juce_scan --out build/plugin_cache.json --paths /path/to/VST3
 ```
-- Start UI (spawns `build/daw_engine` by default):
+- Drive a running engine (observe / edit) via the in-app agent:
 ```sh
 cd ui
-cargo run -p daw-app
+DAW_UI_SHM_NAME=/daw_engine_ui cargo run -p daw-agent --example observe
 ```
 
 ## Tests
 - C++: `ctest --output-on-failure` (Phase 2 + Phase 3 suites).
 - Patcher: `ctest -R patcher_ --output-on-failure`.
-- UI integration: `cargo test -p daw-app --test engine_integration`.
+- Rust: `cargo test` in `ui/` (bridge layout/offset asserts, agent, CLI).
 
 ## IPC and shared memory
 - UI reads engine snapshots and sends commands via shared memory rings; see `SHM_LAYOUT.md`.
