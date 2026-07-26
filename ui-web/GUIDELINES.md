@@ -120,7 +120,13 @@ its `top` and its `data-row`. That is the floor, not waste.
 ### 3.1 Zero allocation in the draw path
 The view-model is pooled and double-buffered; rows, cells, clips and rails are
 allocated once per shape change and mutated in place. **0 GC events** across 80
-sustained keypresses, and no heap trend over a 5-minute soak.
+sustained keypresses.
+
+`npm run soak` covers the leak case that `npm test` cannot: 753 passes over every
+surface in 3.5 minutes drifted **17 KB/min** on a 3.2 MB heap, and the heap fell
+on the last sample — which is what a non-leak looks like. Pools settle ~560 KB
+above cold start over the first minute; that is one-off, and measuring drift from
+before it reported 238 KB/min for a heap moving at 17.
 
 Double-buffering is not optional: the renderer diffs the previous view-model
 against the current one, so mutating a single buffer silently turns every draw

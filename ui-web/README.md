@@ -56,6 +56,7 @@ why `run()` is the entry point to prefer.
     npm test        goldens + allocation      (fixtures; no engine needed)
     npm run perf    frame work per surface    (opens a real window)
     npm run e2e     against a live engine     (needs tools/webstack.sh)
+    npm run soak    heap leak check           (fixtures; takes minutes)
 
 The split is deliberate. `npm test` must not depend on whether a sidecar happens
 to be running — a test that changes with the weather is not a test. But that
