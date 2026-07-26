@@ -362,6 +362,11 @@ ok(String(unknown).includes('unknown'), 'and an unknown command', String(unknown
 const help = await page.evaluate(() => window.__uni.dockProbe().commands);
 ok(help.includes('note') && help.includes('gain') && help.includes('view'),
    `the grammar spans editing, mixing and navigation: ${help.length} commands`);
+// Requirement (d) is that an agent can do what a user can. Every keyboard action
+// that changes something needs a command, or the console is a subset.
+for (const c of ['follow', 'rename', 'select', 'transpose', 'copy', 'paste', 'cut']) {
+  ok(help.includes(c), `the console can ${c}`);
+}
 
 section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));

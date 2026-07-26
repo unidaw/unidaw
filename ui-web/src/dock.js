@@ -31,7 +31,7 @@ export function createCommands(api) {
   return {
     help: { help: 'list commands', run: (a, x) =>
       Object.keys(x.commands).sort().map((k) => k + ' — ' + x.commands[k].help).join('\n') },
-    view: { help: 'view tracker|arrange|piano|mixer', run: (a) => 'view ' + api.setView(a[0]) },
+    view: { help: 'view tracker|arrange|piano|mixer|patcher', run: (a) => 'view ' + api.setView(a[0]) },
     load: { help: 'load <project>', run: (a) => { api.load(a[0]); return 'loading ' + a[0]; } },
     save: { help: 'save <project>', run: (a) => { api.save(a[0]); return 'saving ' + a[0]; } },
     projects: { help: 'list projects on disk', run: () => { api.listProjects(); return 'listing…'; } },
@@ -59,6 +59,30 @@ export function createCommands(api) {
     engine: { help: 'dump engine state', run: () => JSON.stringify(api.engine()) },
     undo: { help: 'undo', run: () => { api.transport('undo'); return 'undo'; } },
     redo: { help: 'redo', run: () => { api.transport('redo'); return 'redo'; } },
+    follow: { help: 'follow [on|off] — keep the playhead in view', run: (a) =>
+      'follow ' + (api.follow(a[0] === undefined ? undefined : a[0] !== 'off') ? 'on' : 'off') },
+    rename: { help: 'rename <track> <name>', run: (a) => {
+      const t = num(a[0], -1);
+      if (!(t >= 0)) throw new Error('rename needs a track number');
+      const name = a.slice(1).join(' ').trim();
+      if (!name) throw new Error('rename needs a name');
+      api.rename(t, name);
+      return 'renamed t' + t + ' to ' + name;
+    } },
+    select: { help: 'select <row0> <row1> [track] — a tracker range', run: (a) => {
+      const r0 = num(a[0], 0), r1 = num(a[1], r0);
+      const tr = a[2] === undefined ? undefined : num(a[2]);
+      return 'selected ' + api.select(r0, r1, tr) + ' note(s)';
+    } },
+    transpose: { help: 'transpose <semitones> — the selection', run: (a) => {
+      const n = num(a[0], 0);
+      if (!n) throw new Error('transpose by how much?');
+      api.transpose(n);
+      return 'transposed ' + (n > 0 ? '+' : '') + n;
+    } },
+    copy: { help: 'copy the selection', run: () => (api.copy() ? 'copied' : 'nothing to copy') },
+    paste: { help: 'paste at the cursor', run: () => (api.paste() ? 'pasted' : 'clipboard empty') },
+    cut: { help: 'cut the selection', run: () => (api.cut() ? 'cut' : 'nothing to cut') },
     clear: { help: 'clear the log', run: (a, x) => { x.clear(); return null; } },
   };
 }

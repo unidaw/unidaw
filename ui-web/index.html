@@ -211,6 +211,26 @@ const dock = new Dock(dockHost, {
                             notes: engine.noteCount, tracks: engine.trackCount,
                             clipVersion: engine.clipVersion, stale: engine.stale } : null),
   close: () => { state.dockOpen = false; schedule(); },
+  // Everything the keyboard can do, the console can do — otherwise "one grammar
+  // that drives every surface" is only true of the parts I remembered.
+  follow: (on) => { state.followPlayhead = on === undefined ? !state.followPlayhead : !!on;
+                    schedule(); return state.followPlayhead; },
+  rename: (t, name) => {
+    if (!conn || !conn.send({ type: 'rename', track: t, name })) throw new Error('no engine');
+    schedule();
+  },
+  select: (r0, r1, track) => {
+    const t = track === undefined ? state.cursor.track : track;
+    const f = t * state.columns;
+    state.selection = { r0: Math.min(r0, r1), r1: Math.max(r0, r1),
+                        f0: f, f1: f + state.columns - 1, _anchor: r0 };
+    schedule();
+    return notesInSelection().length;
+  },
+  transpose: (n) => { if (!transposeSelection(n)) throw new Error(state.reject || 'nothing to transpose'); schedule(); },
+  copy: () => copySelection(),
+  paste: () => pasteClipboard(),
+  cut: () => copySelection() && deleteSelection(),
 });
 
 const pianoHost = document.getElementById('piano');
