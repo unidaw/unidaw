@@ -2377,6 +2377,8 @@ struct TrackRuntime {
       daw::ProjectTrack track;
       track.trackId = runtime->trackId;
       track.name = "Track " + std::to_string(runtime->trackId + 1);
+      track.linesPerBeat = runtime->linesPerBeat.load(std::memory_order_relaxed);
+      daw::MusicalClip trackClip;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         track.harmonyQuantize = runtime->track.harmonyQuantize;
@@ -2389,7 +2391,33 @@ struct TrackRuntime {
         track.mixer.solo = runtime->mixSolo.load(std::memory_order_relaxed);
         track.chain = runtime->track.chain;
         track.modLinks = runtime->track.modRegistry.links;
-        track.clip = runtime->track.clip;
+        trackClip = runtime->track.clip;
+      }
+      // M3.1: the engine holds one clip per track, so it saves as one project
+      // clip + a single placement at=0 — the identity form of the placement
+      // model. clip length = the tick just past the last event.
+      if (!trackClip.events().empty()) {
+        uint64_t clipLen = 0;
+        for (const auto& e : trackClip.events()) {
+          const uint64_t dur =
+              e.type == daw::MusicalEventType::Note ? e.payload.note.durationNanoticks
+              : e.type == daw::MusicalEventType::Chord ? e.payload.chord.durationNanoticks
+                                                       : 0;
+          clipLen = std::max(clipLen, e.nanotickOffset + dur);
+        }
+        const uint32_t clipId = runtime->trackId + 1;
+        daw::ProjectClip projectClip;
+        projectClip.id = clipId;
+        projectClip.name = track.name;
+        projectClip.lengthNanoticks = clipLen;
+        projectClip.clip = std::move(trackClip);
+        document.clips.push_back(std::move(projectClip));
+
+        daw::ProjectPlacement placement;
+        placement.clipId = clipId;
+        placement.at = 0;
+        placement.lengthNanoticks = clipLen;
+        track.placements.push_back(std::move(placement));
       }
       // Stamp durable plugin identity. hostSlotIndex only means anything
       // against the scan that produced it, so it must not be what a saved
@@ -2581,7 +2609,42 @@ struct TrackRuntime {
       std::shared_ptr<const ClipSnapshot> snapshot;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        runtime->track.clip = source.clip;
+        // M3.1: the engine plays one clip per track, so resolve the track's
+        // first placement into a single clip (base - mutes + adds). Additional
+        // placements are preserved on the next save but not yet played (M3.3);
+        // for the identity form (one placement at=0, no overrides) this is just
+        // the base clip, so playback is unchanged.
+        daw::MusicalClip resolvedClip;
+        if (!source.placements.empty()) {
+          const auto& placement = source.placements.front();
+          const daw::ProjectClip* clipDef = nullptr;
+          for (const auto& c : document.clips) {
+            if (c.id == placement.clipId) {
+              clipDef = &c;
+              break;
+            }
+          }
+          if (clipDef) {
+            for (const auto& e : clipDef->clip.events()) {
+              bool muted = false;
+              if (e.type == daw::MusicalEventType::Note) {
+                for (const daw::EventId m : placement.mutes) {
+                  if (m == e.payload.note.noteId) {
+                    muted = true;
+                    break;
+                  }
+                }
+              }
+              if (!muted) {
+                resolvedClip.addEvent(e);
+              }
+            }
+            for (const auto& add : placement.adds) {
+              resolvedClip.addEvent(add);
+            }
+          }
+        }
+        runtime->track.clip = std::move(resolvedClip);
         runtime->track.harmonyQuantize = source.harmonyQuantize;
         // Restore the device chain so reopening a session restores its plugins,
         // and its sound. hostSlotIndex is a runtime scan index with no meaning

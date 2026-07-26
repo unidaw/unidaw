@@ -13,7 +13,7 @@
 namespace daw {
 namespace {
 
-constexpr uint32_t kProjectSchemaVersion = 1;
+constexpr uint32_t kProjectSchemaVersion = 2;
 
 void setError(std::string* error, const std::string& message) {
   if (error) {
@@ -136,6 +136,19 @@ class JsonWriter {
     tmp.precision(10);
     tmp << value;
     out_ << quote(name) << ": " << tmp.str();
+  }
+
+  // A bare number as an array element (for e.g. "mutes":[12,45]), inside an
+  // array opened by beginArray. Mirrors beginArrayElement but writes a value,
+  // not an object.
+  void arrayValue(uint64_t value) {
+    if (!arrayEmpty_) {
+      out_ << ",";
+    }
+    out_ << "\n";
+    arrayEmpty_ = false;
+    pad();
+    out_ << value;
   }
 
  private:
@@ -296,6 +309,125 @@ TrackRoute readRoute(const boost::property_tree::ptree& tree) {
   return route;
 }
 
+// Writes a "notes" and a "chords" array from an event list into the already-open
+// object. Split because notes and chords are what a musician edits and a diff
+// stays readable when only one kind changes. Shared by clip bodies and placement
+// adds so the event shape is defined once.
+void writeEvents(JsonWriter& writer, const std::vector<MusicalEvent>& events) {
+  writer.beginArray("notes");
+  for (const auto& event : events) {
+    if (event.type != MusicalEventType::Note) {
+      continue;
+    }
+    const auto& note = event.payload.note;
+    writer.beginArrayElement();
+    writer.key("nanotick", event.nanotickOffset);
+    writer.key("duration", note.durationNanoticks);
+    writer.key("pitch", static_cast<uint32_t>(note.pitch));
+    writer.key("velocity", static_cast<uint32_t>(note.velocity));
+    writer.key("column", static_cast<uint32_t>(note.column));
+    writer.key("note_id", note.noteId);
+    // Row ops (item 12) — omitted when inert so op-free clips are unchanged.
+    if (note.retrigger > 1) {
+      writer.key("retrigger", static_cast<uint32_t>(note.retrigger));
+    }
+    if (note.probability > 0) {
+      writer.key("probability", static_cast<uint32_t>(note.probability));
+    }
+    if (note.delayNanoticks > 0) {
+      writer.key("delay", static_cast<uint32_t>(note.delayNanoticks));
+    }
+    writer.endArrayElement();
+  }
+  writer.endArray();
+
+  writer.beginArray("chords");
+  for (const auto& event : events) {
+    if (event.type != MusicalEventType::Chord) {
+      continue;
+    }
+    const auto& chord = event.payload.chord;
+    writer.beginArrayElement();
+    writer.key("nanotick", event.nanotickOffset);
+    writer.key("duration", chord.durationNanoticks);
+    writer.key("chord_id", chord.chordId);
+    writer.key("degree", static_cast<uint32_t>(chord.degree));
+    writer.key("quality", static_cast<uint32_t>(chord.quality));
+    writer.key("inversion", static_cast<uint32_t>(chord.inversion));
+    writer.key("base_octave", static_cast<uint32_t>(chord.baseOctave));
+    writer.key("column", static_cast<uint32_t>(chord.column));
+    writer.key("spread", chord.spreadNanoticks);
+    writer.key("humanize_timing", static_cast<uint32_t>(chord.humanizeTiming));
+    writer.key("humanize_velocity", static_cast<uint32_t>(chord.humanizeVelocity));
+    writer.endArrayElement();
+  }
+  writer.endArray();
+}
+
+// Reads a "notes" and "chords" pair out of `tree` (a clip or a placement's
+// adds), appending to `out`. Inverse of writeEvents.
+void readEvents(const boost::property_tree::ptree& tree,
+                std::vector<MusicalEvent>& out) {
+  if (const auto notes = tree.get_child_optional("notes")) {
+    for (const auto& noteEntry : *notes) {
+      const auto& noteTree = noteEntry.second;
+      MusicalEvent event;
+      event.type = MusicalEventType::Note;
+      event.nanotickOffset = noteTree.get<uint64_t>("nanotick", 0);
+      event.payload.note.durationNanoticks = noteTree.get<uint64_t>("duration", 0);
+      event.payload.note.pitch =
+          static_cast<uint8_t>(noteTree.get<uint32_t>("pitch", 0));
+      event.payload.note.velocity =
+          static_cast<uint8_t>(noteTree.get<uint32_t>("velocity", 0));
+      event.payload.note.column =
+          static_cast<uint8_t>(noteTree.get<uint32_t>("column", 0));
+      event.payload.note.noteId = noteTree.get<uint64_t>("note_id", 0);
+      event.payload.note.retrigger =
+          static_cast<uint8_t>(noteTree.get<uint32_t>("retrigger", 0));
+      event.payload.note.probability =
+          static_cast<uint8_t>(noteTree.get<uint32_t>("probability", 0));
+      event.payload.note.delayNanoticks = noteTree.get<uint32_t>("delay", 0);
+      out.push_back(event);
+    }
+  }
+  if (const auto chords = tree.get_child_optional("chords")) {
+    for (const auto& chordEntry : *chords) {
+      const auto& chordTree = chordEntry.second;
+      MusicalEvent event;
+      event.type = MusicalEventType::Chord;
+      event.nanotickOffset = chordTree.get<uint64_t>("nanotick", 0);
+      auto& chord = event.payload.chord;
+      chord.durationNanoticks = chordTree.get<uint64_t>("duration", 0);
+      chord.chordId = chordTree.get<uint32_t>("chord_id", 0);
+      chord.degree = static_cast<uint8_t>(chordTree.get<uint32_t>("degree", 0));
+      chord.quality = static_cast<uint8_t>(chordTree.get<uint32_t>("quality", 0));
+      chord.inversion = static_cast<uint8_t>(chordTree.get<uint32_t>("inversion", 0));
+      chord.baseOctave =
+          static_cast<uint8_t>(chordTree.get<uint32_t>("base_octave", 0));
+      chord.column = static_cast<uint8_t>(chordTree.get<uint32_t>("column", 0));
+      chord.spreadNanoticks = chordTree.get<uint32_t>("spread", 0);
+      chord.humanizeTiming =
+          static_cast<uint16_t>(chordTree.get<uint32_t>("humanize_timing", 0));
+      chord.humanizeVelocity =
+          static_cast<uint16_t>(chordTree.get<uint32_t>("humanize_velocity", 0));
+      out.push_back(event);
+    }
+  }
+}
+
+// The tick just past the last event in a list — a clip's implied length when the
+// file gives none (v1 migration and defensive default).
+uint64_t maxEventEnd(const std::vector<MusicalEvent>& events) {
+  uint64_t end = 0;
+  for (const auto& e : events) {
+    uint64_t dur = e.type == MusicalEventType::Note ? e.payload.note.durationNanoticks
+                 : e.type == MusicalEventType::Chord ? e.payload.chord.durationNanoticks
+                                                     : 0;
+    end = std::max(end, e.nanotickOffset + dur);
+  }
+  return end;
+}
+
 // Writes a patcher graph's "nodes" and "edges" arrays into the already-open
 // object. Same node/edge shape as a standalone patcher preset, so a per-track
 // patcher and a preset file are interchangeable.
@@ -392,6 +524,19 @@ std::string serializeProject(const ProjectDocument& document) {
   }
   writer.endArray();
 
+  // Project-level clip library. Tracks reference these by id via placements;
+  // clip events are clip-relative (0-based within the clip).
+  writer.beginArray("clips");
+  for (const auto& clip : document.clips) {
+    writer.beginArrayElement();
+    writer.key("id", clip.id);
+    writer.key("name", clip.name);
+    writer.key("length", clip.lengthNanoticks);
+    writeEvents(writer, clip.clip.events());
+    writer.endArrayElement();
+  }
+  writer.endArray();
+
   writer.beginArray("tracks");
   for (const auto& track : document.tracks) {
     writer.beginArrayElement();
@@ -477,54 +622,24 @@ std::string serializeProject(const ProjectDocument& document) {
     }
     writer.endArray();
 
-    // Notes and chords are emitted separately rather than as one event list:
-    // they are what a musician actually edits, and splitting them keeps a
-    // diff readable when only one kind changes.
-    writer.beginArray("notes");
-    for (const auto& event : track.clip.events()) {
-      if (event.type != MusicalEventType::Note) {
-        continue;
-      }
-      const auto& note = event.payload.note;
+    // Placements of project-level clips on this track. Each references a clip by
+    // id, sits at an absolute tick (omitted when a loose session cell), and
+    // carries additive-only overrides: adds (notes/chords local to this
+    // placement) and mutes (base note ids silenced here).
+    writer.beginArray("placements");
+    for (const auto& placement : track.placements) {
       writer.beginArrayElement();
-      writer.key("nanotick", event.nanotickOffset);
-      writer.key("duration", note.durationNanoticks);
-      writer.key("pitch", static_cast<uint32_t>(note.pitch));
-      writer.key("velocity", static_cast<uint32_t>(note.velocity));
-      writer.key("column", static_cast<uint32_t>(note.column));
-      writer.key("note_id", note.noteId);
-      // Row ops (item 12) — omitted when inert so op-free projects are unchanged.
-      if (note.retrigger > 1) {
-        writer.key("retrigger", static_cast<uint32_t>(note.retrigger));
+      writer.key("clip_id", placement.clipId);
+      if (placement.at.has_value()) {
+        writer.key("at", *placement.at);  // omit when null = a session cell
       }
-      if (note.probability > 0) {
-        writer.key("probability", static_cast<uint32_t>(note.probability));
+      writer.key("length", placement.lengthNanoticks);
+      writeEvents(writer, placement.adds);
+      writer.beginArray("mutes");
+      for (const EventId id : placement.mutes) {
+        writer.arrayValue(id);
       }
-      if (note.delayNanoticks > 0) {
-        writer.key("delay", static_cast<uint32_t>(note.delayNanoticks));
-      }
-      writer.endArrayElement();
-    }
-    writer.endArray();
-
-    writer.beginArray("chords");
-    for (const auto& event : track.clip.events()) {
-      if (event.type != MusicalEventType::Chord) {
-        continue;
-      }
-      const auto& chord = event.payload.chord;
-      writer.beginArrayElement();
-      writer.key("nanotick", event.nanotickOffset);
-      writer.key("duration", chord.durationNanoticks);
-      writer.key("chord_id", chord.chordId);
-      writer.key("degree", static_cast<uint32_t>(chord.degree));
-      writer.key("quality", static_cast<uint32_t>(chord.quality));
-      writer.key("inversion", static_cast<uint32_t>(chord.inversion));
-      writer.key("base_octave", static_cast<uint32_t>(chord.baseOctave));
-      writer.key("column", static_cast<uint32_t>(chord.column));
-      writer.key("spread", chord.spreadNanoticks);
-      writer.key("humanize_timing", static_cast<uint32_t>(chord.humanizeTiming));
-      writer.key("humanize_velocity", static_cast<uint32_t>(chord.humanizeVelocity));
+      writer.endArray();
       writer.endArrayElement();
     }
     writer.endArray();
@@ -593,6 +708,30 @@ bool deserializeProject(const std::string& json,
       event.scaleId = entry.second.get<uint32_t>("scale_id", 0);
       event.flags = entry.second.get<uint32_t>("flags", 0);
       parsed.harmonyTimeline.push_back(event);
+    }
+  }
+
+  // Project-level clip library (schema 2). Legacy schema-1 files have no "clips";
+  // each track's top-level notes/chords migrate to one clip + one placement at=0
+  // in the track loop below. nextClipId allocates ids for those synthesized clips.
+  uint32_t nextClipId = 1;
+  if (const auto clips = root.get_child_optional("clips")) {
+    for (const auto& entry : *clips) {
+      const auto& clipTree = entry.second;
+      ProjectClip clip;
+      clip.id = clipTree.get<uint32_t>("id", 0);
+      clip.name = clipTree.get<std::string>("name", "");
+      clip.lengthNanoticks = clipTree.get<uint64_t>("length", 0);
+      std::vector<MusicalEvent> events;
+      readEvents(clipTree, events);
+      for (const auto& e : events) {
+        clip.clip.addEvent(e);
+      }
+      if (clip.lengthNanoticks == 0) {
+        clip.lengthNanoticks = maxEventEnd(events);
+      }
+      nextClipId = std::max(nextClipId, clip.id + 1);
+      parsed.clips.push_back(std::move(clip));
     }
   }
 
@@ -697,52 +836,44 @@ bool deserializeProject(const std::string& json,
         }
       }
 
-      if (const auto notes = tree.get_child_optional("notes")) {
-        for (const auto& noteEntry : *notes) {
-          const auto& noteTree = noteEntry.second;
-          MusicalEvent event;
-          event.type = MusicalEventType::Note;
-          event.nanotickOffset = noteTree.get<uint64_t>("nanotick", 0);
-          event.payload.note.durationNanoticks = noteTree.get<uint64_t>("duration", 0);
-          event.payload.note.pitch =
-              static_cast<uint8_t>(noteTree.get<uint32_t>("pitch", 0));
-          event.payload.note.velocity =
-              static_cast<uint8_t>(noteTree.get<uint32_t>("velocity", 0));
-          event.payload.note.column =
-              static_cast<uint8_t>(noteTree.get<uint32_t>("column", 0));
-          event.payload.note.noteId = noteTree.get<uint64_t>("note_id", 0);
-          event.payload.note.retrigger =
-              static_cast<uint8_t>(noteTree.get<uint32_t>("retrigger", 0));
-          event.payload.note.probability =
-              static_cast<uint8_t>(noteTree.get<uint32_t>("probability", 0));
-          event.payload.note.delayNanoticks =
-              noteTree.get<uint32_t>("delay", 0);
-          track.clip.addEvent(event);
+      if (const auto placements = tree.get_child_optional("placements")) {
+        // Schema 2: placements reference project-level clips by id.
+        for (const auto& pEntry : *placements) {
+          const auto& pTree = pEntry.second;
+          ProjectPlacement placement;
+          placement.clipId = pTree.get<uint32_t>("clip_id", 0);
+          if (const auto at = pTree.get_optional<uint64_t>("at")) {
+            placement.at = *at;  // omitted key => a loose session cell
+          }
+          placement.lengthNanoticks = pTree.get<uint64_t>("length", 0);
+          readEvents(pTree, placement.adds);
+          if (const auto mutes = pTree.get_child_optional("mutes")) {
+            for (const auto& m : *mutes) {
+              placement.mutes.push_back(m.second.get_value<EventId>());
+            }
+          }
+          track.placements.push_back(std::move(placement));
         }
-      }
-
-      if (const auto chords = tree.get_child_optional("chords")) {
-        for (const auto& chordEntry : *chords) {
-          const auto& chordTree = chordEntry.second;
-          MusicalEvent event;
-          event.type = MusicalEventType::Chord;
-          event.nanotickOffset = chordTree.get<uint64_t>("nanotick", 0);
-          auto& chord = event.payload.chord;
-          chord.durationNanoticks = chordTree.get<uint64_t>("duration", 0);
-          chord.chordId = chordTree.get<uint32_t>("chord_id", 0);
-          chord.degree = static_cast<uint8_t>(chordTree.get<uint32_t>("degree", 0));
-          chord.quality = static_cast<uint8_t>(chordTree.get<uint32_t>("quality", 0));
-          chord.inversion =
-              static_cast<uint8_t>(chordTree.get<uint32_t>("inversion", 0));
-          chord.baseOctave =
-              static_cast<uint8_t>(chordTree.get<uint32_t>("base_octave", 0));
-          chord.column = static_cast<uint8_t>(chordTree.get<uint32_t>("column", 0));
-          chord.spreadNanoticks = chordTree.get<uint32_t>("spread", 0);
-          chord.humanizeTiming =
-              static_cast<uint16_t>(chordTree.get<uint32_t>("humanize_timing", 0));
-          chord.humanizeVelocity =
-              static_cast<uint16_t>(chordTree.get<uint32_t>("humanize_velocity", 0));
-          track.clip.addEvent(event);
+      } else {
+        // Schema 1 migration: this track's top-level notes/chords become one
+        // project clip + one placement at=0. Clip-relative == absolute since
+        // at=0, so every event tick round-trips unchanged.
+        std::vector<MusicalEvent> events;
+        readEvents(tree, events);
+        if (!events.empty()) {
+          ProjectClip clip;
+          clip.id = nextClipId++;
+          clip.name = track.name;
+          for (const auto& e : events) {
+            clip.clip.addEvent(e);
+          }
+          clip.lengthNanoticks = maxEventEnd(events);
+          ProjectPlacement placement;
+          placement.clipId = clip.id;
+          placement.at = 0;
+          placement.lengthNanoticks = clip.lengthNanoticks;
+          parsed.clips.push_back(std::move(clip));
+          track.placements.push_back(std::move(placement));
         }
       }
 

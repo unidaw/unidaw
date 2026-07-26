@@ -114,9 +114,20 @@ daw::ProjectDocument makeDocument() {
   opNote.payload.note.retrigger = 3;
   opNote.payload.note.probability = 60;
   opNote.payload.note.delayNanoticks = 160000;
-  track.clip.addEvent(opNote);
-  track.clip.addEvent(makeNote(240000, 64, 90, 1, 240000));
-  track.clip.addEvent(makeChord(480000, 3, 0));
+  // A project-level clip holding the events, referenced by a placement at=0.
+  daw::ProjectClip clip0;
+  clip0.id = 1;
+  clip0.name = "Lead clip";
+  clip0.lengthNanoticks = 720000;
+  clip0.clip.addEvent(opNote);
+  clip0.clip.addEvent(makeNote(240000, 64, 90, 1, 240000));
+  clip0.clip.addEvent(makeChord(480000, 3, 0));
+  document.clips.push_back(std::move(clip0));
+  daw::ProjectPlacement place0;
+  place0.clipId = 1;
+  place0.at = 0;
+  place0.lengthNanoticks = 720000;
+  track.placements.push_back(std::move(place0));
   document.tracks.push_back(std::move(track));
 
   daw::ProjectTrack empty;
@@ -188,6 +199,21 @@ size_t countEvents(const daw::MusicalClip& clip, daw::MusicalEventType type) {
   return count;
 }
 
+// The clip a track's first placement references, or nullptr.
+const daw::MusicalClip* primaryClip(const daw::ProjectDocument& doc,
+                                    const daw::ProjectTrack& track) {
+  if (track.placements.empty()) {
+    return nullptr;
+  }
+  const uint32_t clipId = track.placements.front().clipId;
+  for (const auto& c : doc.clips) {
+    if (c.id == clipId) {
+      return &c.clip;
+    }
+  }
+  return nullptr;
+}
+
 }  // namespace
 
 int main() {
@@ -197,7 +223,7 @@ int main() {
   const std::string first = daw::serializeProject(original);
   const std::string second = daw::serializeProject(original);
   require(first == second, "serialization is not deterministic");
-  require(first.find("\"schema_version\": 1") != std::string::npos,
+  require(first.find("\"schema_version\": 2") != std::string::npos,
           "schema_version missing or not a number");
   // Numbers must not be quoted; anything else reading this file would have to
   // special-case string-wrapped integers.
@@ -270,8 +296,17 @@ int main() {
     }
   }
   require(uidOk, "mod link target param uid16 lost");
-  require(countEvents(track.clip, daw::MusicalEventType::Note) == 2, "notes lost");
-  require(countEvents(track.clip, daw::MusicalEventType::Chord) == 1, "chords lost");
+  // Track 0's content lives in a project clip reached through its placement.
+  require(roundTripped.tracks[0].placements.size() == 1, "track 0 placement lost");
+  require(roundTripped.tracks[0].placements[0].clipId == 1, "placement clip_id lost");
+  require(roundTripped.tracks[0].placements[0].at.has_value() &&
+              *roundTripped.tracks[0].placements[0].at == 0,
+          "placement at=0 lost");
+  const daw::MusicalClip* clip0Ptr = primaryClip(roundTripped, track);
+  require(clip0Ptr != nullptr, "track 0 primary clip lost");
+  const daw::MusicalClip& clip0 = *clip0Ptr;
+  require(countEvents(clip0, daw::MusicalEventType::Note) == 2, "notes lost");
+  require(countEvents(clip0, daw::MusicalEventType::Chord) == 1, "chords lost");
   // Each track's patcher DAG must survive the round trip: node ids/types, the
   // euclidean config (including its signed octave_offset), and edge topology.
   const auto& p0 = roundTripped.tracks[0].patcher;
@@ -305,7 +340,7 @@ int main() {
   // op-free (defaults are inert and are not written to disk).
   const daw::NotePayload* firstNote = nullptr;
   const daw::NotePayload* secondNote = nullptr;
-  for (const auto& event : track.clip.events()) {
+  for (const auto& event : clip0.events()) {
     if (event.type != daw::MusicalEventType::Note) continue;
     if (event.nanotickOffset == 0) firstNote = &event.payload.note;
     if (event.nanotickOffset == 240000) secondNote = &event.payload.note;
@@ -324,7 +359,7 @@ int main() {
           "probability not emitted for the op note");
 
   bool foundChord = false;
-  for (const auto& event : track.clip.events()) {
+  for (const auto& event : clip0.events()) {
     if (event.type != daw::MusicalEventType::Chord) {
       continue;
     }
@@ -407,17 +442,25 @@ int main() {
   // Ids must survive the file, including the author bits.
   {
     daw::ProjectDocument doc;
-    daw::ProjectTrack track;
+    daw::ProjectClip clip;
+    clip.id = 1;
+    clip.lengthNanoticks = 240000;
     daw::MusicalEvent event = makeNote(0, 60, 100, 0, 240000);
     event.payload.note.noteId = daw::makeEventId(daw::kAuthorAgent, 0x1234'5678'9ABCull);
-    track.clip.addEvent(event);
+    clip.clip.addEvent(event);
+    doc.clips.push_back(std::move(clip));
+    daw::ProjectTrack track;
+    daw::ProjectPlacement placement;
+    placement.clipId = 1;
+    placement.at = 0;
+    track.placements.push_back(placement);
     doc.tracks.push_back(std::move(track));
 
     daw::ProjectDocument reloaded;
     std::string err;
     require(daw::deserializeProject(daw::serializeProject(doc), reloaded, &err),
             "round trip of an authored id failed");
-    const daw::EventId id = reloaded.tracks[0].clip.events()[0].payload.note.noteId;
+    const daw::EventId id = reloaded.clips[0].clip.events()[0].payload.note.noteId;
     require(daw::eventIdAuthor(id) == daw::kAuthorAgent, "author bits lost in the file");
     require(daw::eventIdCounter(id) == 0x1234'5678'9ABCull,
             "48-bit counter truncated in the file");
@@ -469,6 +512,86 @@ int main() {
   const bool accepted =
       daw::deserializeProject("{\"schema_version\": 9999}", rejected, &error);
   require(!accepted, "a future schema_version was accepted");
+
+  // M3.1: a legacy schema-1 file (top-level track notes/chords) migrates to one
+  // project clip + one placement at=0, with note ticks unchanged (clip-relative
+  // == absolute when at=0 — the identity migration).
+  {
+    const std::string v1 =
+        "{\"schema_version\": 1,"
+        " \"meta\": {\"name\": \"Legacy\"},"
+        " \"timebase\": {\"nanoticks_per_quarter\": 960000},"
+        " \"tracks\": [{\"track_id\": 0, \"name\": \"Old\","
+        "   \"notes\": ["
+        "     {\"nanotick\": 0, \"duration\": 240000, \"pitch\": 60, \"velocity\": 100, \"column\": 0, \"note_id\": 5},"
+        "     {\"nanotick\": 480000, \"duration\": 240000, \"pitch\": 64, \"velocity\": 90, \"column\": 0, \"note_id\": 6}"
+        "   ], \"chords\": []}]}";
+    daw::ProjectDocument doc;
+    std::string err;
+    require(daw::deserializeProject(v1, doc, &err), "v1 migration failed to parse");
+    require(doc.clips.size() == 1, "v1 migration should synthesize one clip");
+    require(doc.tracks.size() == 1 && doc.tracks[0].placements.size() == 1,
+            "v1 migration should synthesize one placement");
+    const auto& pl = doc.tracks[0].placements[0];
+    require(pl.at.has_value() && *pl.at == 0, "migrated placement must be at=0");
+    require(pl.clipId == doc.clips[0].id, "migrated placement must reference the clip");
+    const auto& evs = doc.clips[0].clip.events();
+    require(evs.size() == 2, "migrated clip should hold both notes");
+    require(evs[0].nanotickOffset == 0 && evs[1].nanotickOffset == 480000,
+            "migrated ticks must be unchanged");
+    require(doc.clips[0].lengthNanoticks == 720000,
+            "migrated clip length should be the last event end");
+  }
+
+  // M3.1: two placements of one shared clip — one at != 0, one with a mute + an
+  // add — round-trip deep-equal (the no-copy-to-vary override model).
+  {
+    daw::ProjectDocument doc;
+    daw::ProjectClip clip;
+    clip.id = 7;
+    clip.name = "Shared";
+    clip.lengthNanoticks = 960000;
+    daw::MusicalEvent n0 = makeNote(0, 60, 100, 0, 240000);
+    n0.payload.note.noteId = daw::makeEventId(daw::kAuthorHuman, 100);
+    daw::MusicalEvent n1 = makeNote(480000, 67, 100, 0, 240000);
+    n1.payload.note.noteId = daw::makeEventId(daw::kAuthorHuman, 101);
+    clip.clip.addEvent(n0);
+    clip.clip.addEvent(n1);
+    doc.clips.push_back(std::move(clip));
+
+    daw::ProjectTrack track;
+    daw::ProjectPlacement a;
+    a.clipId = 7;
+    a.at = 0;
+    a.lengthNanoticks = 960000;
+    daw::ProjectPlacement b;
+    b.clipId = 7;
+    b.at = 3840000;  // two bars later
+    b.lengthNanoticks = 960000;
+    b.mutes.push_back(daw::makeEventId(daw::kAuthorHuman, 101));  // silence n1 here
+    daw::MusicalEvent hat = makeNote(120000, 42, 60, 2, 60000);   // extra hihat
+    hat.payload.note.noteId = daw::makeEventId(daw::kAuthorHuman, 200);
+    b.adds.push_back(hat);
+    track.placements.push_back(a);
+    track.placements.push_back(b);
+    doc.tracks.push_back(std::move(track));
+
+    daw::ProjectDocument rt;
+    std::string err;
+    require(daw::deserializeProject(daw::serializeProject(doc), rt, &err),
+            "two-placement round trip failed");
+    require(rt.clips.size() == 1 && rt.clips[0].id == 7, "shared clip lost");
+    require(rt.tracks[0].placements.size() == 2, "two placements lost");
+    const auto& pa = rt.tracks[0].placements[0];
+    const auto& pb = rt.tracks[0].placements[1];
+    require(pa.at.has_value() && *pa.at == 0, "placement A at lost");
+    require(pb.at.has_value() && *pb.at == 3840000, "placement B at lost");
+    require(pb.mutes.size() == 1 &&
+                pb.mutes[0] == daw::makeEventId(daw::kAuthorHuman, 101),
+            "placement B mute lost");
+    require(pb.adds.size() == 1 && pb.adds[0].payload.note.pitch == 42,
+            "placement B add lost");
+  }
 
   if (failures != 0) {
     std::cerr << "project_file_tests_main: " << failures << " failure(s)" << std::endl;
