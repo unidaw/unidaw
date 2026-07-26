@@ -60,7 +60,13 @@ const metrics = {
 const host = document.getElementById('tracker');
 const head = document.getElementById('head');
 const chrome = createChrome(document.getElementById('chrome'), {
-  onPlay: () => cmd('play'), onStop: () => cmd('stop'),
+  onPlay: () => cmd('play'),
+  onStop: () => {
+    if (!engine || !engine.transport) { state.reject = 'not playing'; schedule(); return; }
+    cmd('stop');
+    state.reject = 'stopped (engine has no rewind yet)';
+    schedule();
+  },
 });
 // No write path yet — the command ring needs a channel the write-only socket
 // does not have. The buttons exist and say so rather than pretending.
@@ -633,6 +639,13 @@ window.__uni = {
   loadProject: (name) => conn && conn.loadProject(name),
   saveProject: (name) => conn && conn.saveProject(name),
   lpb: () => (engine ? Array.from(engine.lpb) : null),
+  /** Raw engine state. The row-projected playhead in state() hides whether the
+   *  transport is running at all, which made "play does nothing" ambiguous. */
+  engineState: () => (engine ? {
+    transport: engine.transport, playheadTick: engine.playheadTick,
+    clipVersion: engine.clipVersion, rowGrid: engine.rowGrid,
+    stale: engine.stale, noteCount: engine.noteCount, trackCount: engine.trackCount,
+  } : null),
   notes: () => (engine ? engine.notes.slice(0, engine.noteCount)
     .map(n => ({ t: n.tOn, row: n.row, tr: n.track })) : null),
   /** Which rows a lane actually has, for assertions that don't read pixels. */

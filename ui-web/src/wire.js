@@ -7,7 +7,7 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 6;
+export const WIRE_VERSION = 7;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
@@ -15,6 +15,10 @@ export const KIND_STATE = 0;
 
 const HEADER_BYTES = 68;   // 56 + aggTracks u16 + extentCount u16 + lpb[8]
 const NOTE_BYTES = 40;
+/** Mirrors daw_bridge::layout::UiClipExtent. */
+const EXTENT_BYTES = 64;
+/** UI_CLIP_EXTENT_AUDIO — the placement is an audio region (schema v3). */
+export const EXTENT_AUDIO = 1 << 0;
 
 /** A reusable decode target. One per connection. */
 export function createStore() {
@@ -109,7 +113,7 @@ export function decode(buf, store) {
   const extentCount = v.getUint16(58, true);
   for (let i = 0; i < 8; i++) store.lpb[i] = v.getUint8(60 + i);
   const aggN = aggRows * aggTracks;
-  if (buf.byteLength < HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES + extentCount * 56 + aggN * 8) return false;
+  if (buf.byteLength < HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES + extentCount * EXTENT_BYTES + aggN * 8) return false;
 
   if (store.peaks.length < peakCount) store.peaks = new Float32Array(peakCount);
   for (let i = 0; i < peakCount; i++) store.peaks[i] = v.getFloat32(HEADER_BYTES + i * 4, true);
@@ -152,16 +156,23 @@ export function decode(buf, store) {
   {
     let o = HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES;
     let changed = extentCount !== store.extentCount;
-    for (let i = 0; i < extentCount; i++, o += 56) {
+    for (let i = 0; i < extentCount; i++, o += EXTENT_BYTES) {
       let e = store.extents[i];
-      if (!e) e = store.extents[i] = { placementId: 0, track: 0, startTick: 0, endTick: 0, name: '' };
-      const pid = v.getUint32(o, true), tr = v.getUint32(o + 4, true);
-      const st = Number(v.getBigUint64(o + 8, true)), en = Number(v.getBigUint64(o + 16, true));
-      if (e.placementId !== pid || e.track !== tr || e.startTick !== st || e.endTick !== en) changed = true;
-      e.placementId = pid; e.track = tr; e.startTick = st; e.endTick = en;
+      if (!e) e = store.extents[i] = { placementId: 0, clipId: 0, track: 0, flags: 0,
+                                        startTick: 0, endTick: 0, name: '', audio: false };
+      const pid = v.getUint32(o, true), cid = v.getUint32(o + 4, true);
+      const tr = v.getUint32(o + 8, true), fl = v.getUint32(o + 12, true);
+      const st = Number(v.getBigUint64(o + 16, true)), en = Number(v.getBigUint64(o + 24, true));
+      if (e.placementId !== pid || e.track !== tr || e.startTick !== st
+          || e.endTick !== en || e.flags !== fl || e.clipId !== cid) changed = true;
+      e.placementId = pid; e.clipId = cid; e.track = tr; e.flags = fl;
+      e.startTick = st; e.endTick = en;
+      // bit0: an audio region. It holds no note events, so the arrange view draws
+      // it as a waveform slot rather than a lane of notes.
+      e.audio = (fl & EXTENT_AUDIO) !== 0;
       if (changed) {
         let s = '';
-        for (let k = 0; k < 32; k++) { const c = v.getUint8(o + 24 + k); if (!c) break; s += String.fromCharCode(c); }
+        for (let k = 0; k < 32; k++) { const c = v.getUint8(o + 32 + k); if (!c) break; s += String.fromCharCode(c); }
         e.name = s;
       }
     }
@@ -177,7 +188,7 @@ export function decode(buf, store) {
       store.aggLo = new Uint8Array(aggN);
       store.aggHi = new Uint8Array(aggN);
     }
-    let o = HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES + extentCount * 56;
+    let o = HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES + extentCount * EXTENT_BYTES;
     let changed = aggRows !== store.aggRows || aggTracks !== store.aggTracks;
     for (let i = 0; i < aggN; i++, o += 8) {
       const c = v.getUint32(o, true);

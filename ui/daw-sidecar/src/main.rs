@@ -33,7 +33,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 6;
+const WIRE_VERSION: u16 = 7;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -193,9 +193,11 @@ struct Frame {
     /// write targets. Only the read half knew about it, which is why a note
     /// written for display row 1 landed at row 4.
     lpb: [u8; 8],
-    /// Real clip placements from the engine (v11). placement_id, track,
-    /// start/end tick, name. Loose session placements are excluded upstream.
-    extents: Vec<(u32, u32, u64, u64, [u8; 32])>,
+    /// Real clip placements from the engine. placement_id, clip_id, track,
+    /// flags, start/end tick, name. Loose session placements are excluded
+    /// upstream. `flags` bit0 is UI_CLIP_EXTENT_AUDIO — an audio region, which
+    /// carries no note events and is drawn as a waveform rather than a lane.
+    extents: Vec<(u32, u32, u32, u32, u64, u64, [u8; 32])>,
     /// The lines-per-beat the cached `notes` rows were projected with.
     ///
     /// The cache below is keyed on clip_version, because notes only move on an
@@ -262,12 +264,17 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.extend_from_slice(&n.delay_nanoticks.to_le_bytes());
         out.extend_from_slice(&n.row.to_le_bytes());
     }
-    for &(pid, track, start, end, name) in &f.extents {
-        out.extend_from_slice(&pid.to_le_bytes());
-        out.extend_from_slice(&track.to_le_bytes());
-        out.extend_from_slice(&start.to_le_bytes());
-        out.extend_from_slice(&end.to_le_bytes());
-        out.extend_from_slice(&name);
+    // 64 bytes each, matching UiClipExtent. The stride is load-bearing for the
+    // aggregates that follow it; widening it without the client is what made
+    // extents decode as garbage once before.
+    for &(pid, clip_id, track, flags, start, end, name) in &f.extents {
+        out.extend_from_slice(&pid.to_le_bytes());        // 0
+        out.extend_from_slice(&clip_id.to_le_bytes());    // 4
+        out.extend_from_slice(&track.to_le_bytes());      // 8
+        out.extend_from_slice(&flags.to_le_bytes());      // 12
+        out.extend_from_slice(&start.to_le_bytes());      // 16
+        out.extend_from_slice(&end.to_le_bytes());        // 24
+        out.extend_from_slice(&name);                     // 32..64
     }
     for &(count, rep, lo, hi) in &f.aggs {
         out.extend_from_slice(&count.to_le_bytes());
@@ -359,7 +366,8 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     }
     out.extents.clear();
     for e in h.read_clip_extents() {
-        out.extents.push((e.placement_id, e.track_id, e.start_tick, e.end_tick, e.name));
+        out.extents.push((e.placement_id, e.clip_id, e.track_id, e.flags,
+                          e.start_tick, e.end_tick, e.name));
     }
 
     // Aggregation is the engine's policy, not the frontend's. aggregate_rows is
@@ -487,6 +495,13 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     p.track_id = parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32;
 
     if body.contains("\"play\"") {
+        p.command_type = UiCommandType::TogglePlay as u16;
+    } else if body.contains("\"stop\"") {
+        // The engine has TogglePlay and no Stop, so "stop" can only mean "pause
+        // if running" — there is no seek command to return to the start with.
+        // The client only sends this when transport is 1, so the toggle always
+        // means halt. Asked backend for Stop/SetPosition; until then this is
+        // half a stop and the button says so.
         p.command_type = UiCommandType::TogglePlay as u16;
     } else if body.contains("\"note\"") {
         let dur = parse_num(body, "\"dur\"").unwrap_or(960_000).max(1) as u64;
