@@ -48,6 +48,7 @@ export const ZOOM_LEVELS = [
 const NOTES = ['C-4', 'D#4', 'F-4', 'G-4', 'A#4', 'C-5', 'E-4', 'OFF'];
 
 const TICKS_PER_BAR = 3840000;
+const TICKS_PER_BEAT = 960000;
 const CLIP_TICKS = TICKS_PER_BAR * 4;                 // fixture: 4-bar clips
 const CLIP_BODY = CLIP_TICKS - TICKS_PER_BAR / 4;     // ...with a beat of gap after
 
@@ -250,7 +251,11 @@ export function buildViewModel(opts, buf) {
     // 1 whenever the sidecar is already projecting at our grid, which is the
     // steady state; only a zoom in flight makes it anything else.
     const gridScale = engine.rowGrid > 0 ? zoom.linesPerBeat / engine.rowGrid : 1;
-    for (let i = 0; i < engine.noteCount; i++) {
+    // At an aggregate zoom the contour IS the representation: a row is bars
+    // wide, so no individual note belongs in a cell. Drawing them anyway put
+    // note names at beat positions on top of bar rows — every one of them in the
+    // wrong place, and looking exactly like a tracker.
+    for (let i = 0; !zoom.aggregate && i < engine.noteCount; i++) {
       const n = engine.notes[i];
       if (n.tOn < winStart || n.tOn >= winEnd || n.track >= trackCount) continue;
       // n.row was computed by LaneGrid on the sidecar, in the grid the sidecar
@@ -315,18 +320,32 @@ export function buildViewModel(opts, buf) {
   // uniform noise down the column, carrying no information. pitch_min/pitch_max
   // says "this region is busy and rising", which a number cannot.
   if (engine && zoom.aggregate && engine.aggRows) {
+    // The engine aggregates per BEAT (its grid cannot go coarser), so fold
+    // `beatsPerRow` of its rows into each of ours. Counts add; the pitch range
+    // is the union. Drawing its rows one-to-one against ours was wrong by a
+    // factor of four at "1 bar" and sixteen at "4 bars", and looked fine.
+    const beatsPerRow = Math.max(1, Math.round(zoom.rowNanoticks / TICKS_PER_BEAT));
     for (let t = 0; t < Math.min(trackCount, engine.aggTracks); t++) {
-      for (let ri = 0; ri < rowCount && ri < engine.aggRows; ri++) {
-        const a = t * engine.aggRows + ri;
-        const count = engine.aggCount[a];
+      for (let ri = 0; ri < rowCount; ri++) {
+        let count = 0, lo = 127, hi = 0;
+        for (let k = 0; k < beatsPerRow; k++) {
+          const src = ri * beatsPerRow + k;
+          if (src >= engine.aggRows) break;
+          const a = t * engine.aggRows + src;
+          const c = engine.aggCount[a];
+          if (!c) continue;
+          count += c;
+          if (engine.aggLo[a] < lo) lo = engine.aggLo[a];
+          if (engine.aggHi[a] > hi) hi = engine.aggHi[a];
+        }
         if (!count) continue;
         const cell = rows[ri].cells[t * columns];
         if (!cell) continue;
         cell.text = '';
         cell.kind = 'contour';
         cell.aggCount = count;
-        cell.aggLo = engine.aggLo[a];
-        cell.aggHi = engine.aggHi[a];
+        cell.aggLo = lo;
+        cell.aggHi = hi;
       }
     }
   }

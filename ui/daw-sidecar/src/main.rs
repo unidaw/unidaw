@@ -72,7 +72,12 @@ fn parse_viewport(txt: &str, vp: &mut Viewport) {
     };
     if let Some(v) = field("\"linesPerBeat\"") { vp.lines_per_beat = (v as u32).clamp(1, 64); }
     if let Some(v) = field("\"firstRow\"") { vp.first_row = v; }
-    if let Some(v) = field("\"rowCount\"") { vp.row_count = (v as u32).min(512); }
+    // 2048, not 512. The engine's LaneGrid is expressed in lines-per-beat and
+    // cannot describe a row coarser than one beat, so a client showing bars per
+    // row has to ask for the BEATS its window covers and fold them itself. At
+    // 4 bars a row over 62 rows that is 992 beats. 2048 x 16 tracks x 8 bytes is
+    // 256 KB in the worst case, against a measured 126 MB/s ceiling.
+    if let Some(v) = field("\"rowCount\"") { vp.row_count = (v as u32).min(2048); }
 }
 
 /// The client's viewport, handed from the command thread to the publish thread.

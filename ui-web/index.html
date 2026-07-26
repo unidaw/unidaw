@@ -707,10 +707,19 @@ function draw() {
   updateChrome();
   // The sidecar owns the projection and the aggregation, so it needs to know
   // what we are looking at. Only sent when it actually moves.
+  // The engine's grid is lines-per-beat and cannot express a row coarser than a
+  // beat, so at the aggregate zooms we ask for the BEATS our window covers and
+  // fold them per display row. Without this "1 bar" and "4 bars" both requested
+  // 1 line/beat, got identical data, and drew beat-resolution contours stretched
+  // across bar rows — right-looking and wrong by 4x and 16x.
+  const zl = ZOOM_LEVELS[state.zoom];
+  const beatsPerRow = Math.max(1, Math.round(zl.rowNanoticks / NANOTICKS_PER_BEAT));
+  const vpFirst = zl.aggregate ? state.start * beatsPerRow : state.start;
+  const vpRows = zl.aggregate ? tracker.poolSize * beatsPerRow : tracker.poolSize;
   const vpKey = state.zoom * 1e9 + state.start * 1000 + tracker.poolSize;
   if (conn && vpKey !== lastViewportKey) {
     lastViewportKey = vpKey;
-    conn.setViewport(ZOOM_LEVELS[state.zoom].linesPerBeat, state.start, tracker.poolSize);
+    conn.setViewport(zl.aggregate ? 1 : zl.linesPerBeat, vpFirst, vpRows);
   }
   tracker.render(vm);
   // The node count is an O(tree) walk. Sampling it every frame cost ~7 ms —
@@ -1522,6 +1531,9 @@ window.__uni = {
   mixerProbe: () => mixer.probe(),
   scopeProbe: () => scope.probe(),
   peaks: () => (engine ? Array.from(engine.peaks.slice(0, Math.max(engine.peakCount, 8))) : null),
+  aggregates: () => (engine ? { rows: engine.aggRows, tracks: engine.aggTracks,
+    counts: Array.from(engine.aggCount.slice(0, 24)),
+    rev: engine.aggRevision } : null),
   rename: (track, name) => { mixer.beginRename(track);
     for (const c of name) mixer.feedRename(c);
     return mixer.feedRename('Enter'); },
