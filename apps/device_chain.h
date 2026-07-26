@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "apps/patcher_abi.h"
+#include "apps/patcher_graph.h"
 
 namespace daw {
 
@@ -52,6 +53,11 @@ struct Device {
   bool hasEuclideanConfig = false;
   PatcherEuclideanConfig euclideanConfig{};
   VstRef vstRef{};
+  // This device's patcher DAG — the modulators/generators that drive it. Empty =
+  // none. Per-device (a track can have several), superseding the single
+  // per-track patcher. Only the authored nodes/edges are serialized; topoOrder
+  // and friends are rebuilt.
+  PatcherGraph patcher;
 };
 
 struct TrackChain {

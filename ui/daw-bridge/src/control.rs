@@ -18,7 +18,9 @@ use std::sync::atomic::fence;
 use crate::layout::{
     EventEntry, EventType, RingHeader, ShmHeader, UiChordCommandPayload,
     UiClipExtent, UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot,
-    UiCommandPayload, K_SHM_MAGIC, K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS, K_UI_MAX_TRACKS,
+    UiCommandPayload, UiPatcherEdge, UiPatcherNode, UiPatcherRegion, K_SHM_MAGIC,
+    K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES,
+    K_UI_MAX_TRACKS,
 };
 use crate::reader::{SeqlockReader, UiSnapshot};
 
@@ -30,6 +32,16 @@ pub struct TrackMixer {
     pub gain_millibels: i32,
     pub pan_thousandths: i32,
     pub flags: u8,
+}
+
+/// The published patcher graph: nodes + edges, plus the version to cache-key on
+/// and the device it's parked on.
+#[derive(Clone, Debug, Default)]
+pub struct PatcherView {
+    pub version: u32,
+    pub device_id: u32,
+    pub nodes: Vec<UiPatcherNode>,
+    pub edges: Vec<UiPatcherEdge>,
 }
 
 pub fn default_shm_name() -> String {
@@ -303,6 +315,78 @@ impl EngineHandle {
                     pan_thousandths: unsafe { (*self.header).ui_track_pan_thousandths[i] },
                     flags: unsafe { (*self.header).ui_track_mix_flags[i] },
                 });
+            }
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                return out;
+            }
+        }
+    }
+
+    /// The published patcher-version counter (moves on any patcher edit).
+    pub fn patcher_version(&self) -> u32 {
+        let off = unsafe { (*self.header).ui_patcher_offset };
+        if off == 0 {
+            return 0;
+        }
+        let region = self._mmap.as_ptr().wrapping_add(off as usize) as *const UiPatcherRegion;
+        unsafe { std::ptr::read_volatile(&(*region).version) }
+    }
+
+    /// The published patcher graph the engine runs (one global graph today),
+    /// under the seqlock. `device_id` is the device it's parked on (0 = default).
+    pub fn read_patcher(&self) -> PatcherView {
+        loop {
+            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue;
+            }
+            let off = unsafe { (*self.header).ui_patcher_offset };
+            if off == 0 {
+                return PatcherView::default();
+            }
+            let region =
+                self._mmap.as_ptr().wrapping_add(off as usize) as *const UiPatcherRegion;
+            let nodes_n =
+                (unsafe { (*region).node_count } as usize).min(K_UI_MAX_PATCHER_NODES);
+            let edges_n =
+                (unsafe { (*region).edge_count } as usize).min(K_UI_MAX_PATCHER_EDGES);
+            let mut view = PatcherView {
+                version: unsafe { (*region).version },
+                device_id: unsafe { (*region).device_id },
+                nodes: Vec::with_capacity(nodes_n),
+                edges: Vec::with_capacity(edges_n),
+            };
+            for i in 0..nodes_n {
+                view.nodes.push(unsafe { (*region).nodes[i] });
+            }
+            for i in 0..edges_n {
+                view.edges.push(unsafe { (*region).edges[i] });
+            }
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                return view;
+            }
+        }
+    }
+
+    /// Per-track display names for the current track count (nul-trimmed).
+    pub fn read_track_names(&self) -> Vec<String> {
+        loop {
+            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue;
+            }
+            let count =
+                unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) } as usize;
+            let count = count.min(K_UI_MAX_TRACKS);
+            let mut out = Vec::with_capacity(count);
+            for i in 0..count {
+                let raw = unsafe { &(*self.header).ui_track_name[i] };
+                let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+                out.push(String::from_utf8_lossy(&raw[..end]).into_owned());
             }
             fence(Ordering::Acquire);
             let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };

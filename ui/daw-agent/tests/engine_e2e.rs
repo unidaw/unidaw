@@ -109,7 +109,7 @@ const Q: u64 = 960_000;
 /// note lands under a clip ("no notes outside clips") with sane boundaries.
 #[test]
 fn segments_live_edits_into_clips() {
-    let _serial = SERIAL.lock().unwrap();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (engine, session) = start_engine("seg");
     let four_bars = 16 * Q;
 
@@ -137,7 +137,7 @@ fn segments_live_edits_into_clips() {
     assert!(save.ok, "save failed: {save:?}");
 
     let doc = read_project(&engine.proj, "segout");
-    assert_eq!(doc["schema_version"].as_u64(), Some(3));
+    assert_eq!(doc["schema_version"].as_u64(), Some(4));
     let clips = doc["clips"].as_array().unwrap();
     assert_eq!(clips.len(), 2, "expected two segmented clips: {clips:?}");
     let pls = track(&doc, 0)["placements"].as_array().unwrap().clone();
@@ -160,7 +160,7 @@ fn segments_live_edits_into_clips() {
 /// authored placements rather than flattening them.
 #[test]
 fn roundtrip_preserves_placements() {
-    let _serial = SERIAL.lock().unwrap();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (engine, session) = start_engine("rt");
     let two_bars = 8 * Q;
     let one_bar = 4 * Q;
@@ -244,12 +244,73 @@ fn roundtrip_preserves_placements() {
     assert_eq!(clip7["notes"].as_array().unwrap().len(), 2);
 }
 
+/// The patcher graph the engine runs is published so the UI can draw it: the
+/// default graph has a euclidean node (with config) wired to a passthrough.
+#[test]
+fn patcher_graph_published() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("patcher");
+    // The region fills on the first publish; poll briefly.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let view = loop {
+        let v = session.handle().read_patcher();
+        if !v.nodes.is_empty() {
+            break v;
+        }
+        assert!(Instant::now() < deadline, "patcher graph never published");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // Euclidean = node type 1, carrying config (steps/hits/...).
+    let euclid = view
+        .nodes
+        .iter()
+        .find(|n| n.node_type == 1)
+        .expect("default graph should have a euclidean node");
+    assert_eq!(euclid.has_config, 1, "euclidean node should carry config");
+    assert_eq!(euclid.config[0], 16, "euclidean steps"); // steps
+    assert_eq!(euclid.config[1], 5, "euclidean hits"); // hits
+    assert!(!view.edges.is_empty(), "default graph should have an edge");
+}
+
+/// Track names are published: a fresh track defaults to "Track N", and a loaded
+/// project's name flows through so every lane-labelling surface reads one source.
+#[test]
+fn track_names_published() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("names");
+    // Fresh engine: default name.
+    let names = session.handle().read_track_names();
+    assert_eq!(names.first().map(String::as_str), Some("Track 1"), "default name: {names:?}");
+
+    // Load a project whose track carries a distinctive name.
+    let proj = json!({
+        "schema_version": 3,
+        "meta": { "name": "named", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tracks": [ { "track_id": 0, "name": "Bassline" } ]
+    });
+    std::fs::write(engine.proj.join("named.uniproj.json"), serde_json::to_string(&proj).unwrap()).unwrap();
+    let before = session.handle().clip_version();
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"named"}) });
+    assert!(load.ok, "load: {load:?}");
+    session.handle().wait_for_clip_version(before, before.wrapping_add(1), Duration::from_secs(3));
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if session.handle().read_track_names().first().map(String::as_str) == Some("Bassline") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "loaded name never published: {:?}", session.handle().read_track_names());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// Per-track mixer state written via SetTrackMixer is published back verbatim, so
 /// the UI can render a fader at its true position; the mixer version advances.
 #[test]
 fn mixer_read_back() {
     use daw_bridge::layout::{UiCommandPayload, UiCommandType, MIXER_FLAG_MUTE};
-    let _serial = SERIAL.lock().unwrap();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (_engine, session) = start_engine("mixer");
     let h = session.handle();
     let v0 = h.mixer_version();
@@ -295,7 +356,7 @@ fn mixer_read_back() {
 /// two transport commands the web UI needs beyond play/pause.
 #[test]
 fn transport_seek_and_stop() {
-    let _serial = SERIAL.lock().unwrap();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (_engine, session) = start_engine("transport");
     let target = 2 * Q; // within the default 1-bar loop
 
@@ -335,7 +396,7 @@ fn transport_seek_and_stop() {
 /// schedule it yet — the Movement 4 format slot, exercised against a live engine.
 #[test]
 fn audio_clip_persists_and_flags_rail() {
-    let _serial = SERIAL.lock().unwrap();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let (engine, session) = start_engine("audio");
     let one_bar = 4 * Q;
 

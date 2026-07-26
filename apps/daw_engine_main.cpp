@@ -873,6 +873,8 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(daw::ringBytes(baseConfig.ringUiCapacity), 64);
     header.uiClipExtentOffset = offset;  // v11: clip-extents region (rails)
     offset += daw::alignUp(sizeof(daw::UiClipExtentRegion), 64);
+    header.uiPatcherOffset = offset;  // v14: published patcher graph
+    offset += daw::alignUp(sizeof(daw::UiPatcherRegion), 64);
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
@@ -1025,6 +1027,9 @@ struct TrackRuntime {
     // emits to keep the arrangement's structure — provided the track hasn't been
     // edited live. Guarded by trackMutex; set on load.
     std::vector<daw::ProjectPlacement> sourcePlacements;
+    // Display name, published so every lane-labelling surface shares one source.
+    // Guarded by trackMutex; defaults to "Track N", set from the project on load.
+    std::string trackName;
     // Set when a command mutates the flat clip (note add/remove). A dirty track
     // no longer matches its sourcePlacements, so save flattens it instead
     // (edits win over structure until note entry is structural, M3.2).
@@ -1096,6 +1101,7 @@ struct TrackRuntime {
                                bool startHost) -> std::unique_ptr<TrackRuntime> {
     auto runtime = std::make_unique<TrackRuntime>();
     runtime->trackId = trackId;
+    runtime->trackName = "Track " + std::to_string(trackId + 1);
     runtime->config = baseConfig;
     runtime->config.socketPath =
         trackId == 0 ? baseConfig.socketPath : trackSocketPath(trackId);
@@ -1631,6 +1637,81 @@ struct TrackRuntime {
       }
     }
     region->count = count;
+  };
+
+  // v14: publish the patcher graph the engine runs, so the UI can draw it. Reads
+  // the lock-free graph snapshot; only rewrites when the patcher version moves.
+  uint32_t lastPatcherVersion = 0xFFFF'FFFFu;
+  auto writeUiPatcher = [&](bool force) {
+    if (!uiShm.header || uiShm.header->uiPatcherOffset == 0) {
+      return;
+    }
+    const uint32_t version =
+        patcherGraphState.version.load(std::memory_order_acquire);
+    if (!force && version == lastPatcherVersion) {
+      return;
+    }
+    lastPatcherVersion = version;
+    auto graph = std::atomic_load_explicit(&patcherGraphSnapshot,
+                                           std::memory_order_acquire);
+    auto* region = reinterpret_cast<daw::UiPatcherRegion*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiPatcherOffset);
+    region->version = version;
+    if (!graph) {
+      region->nodeCount = 0;
+      region->edgeCount = 0;
+      return;
+    }
+    uint32_t nodeCount = 0;
+    for (const auto& n : graph->nodes) {
+      if (nodeCount >= daw::kUiMaxPatcherNodes) {
+        break;
+      }
+      daw::UiPatcherNode& out = region->nodes[nodeCount++];
+      out.id = n.id;
+      out.type = static_cast<uint8_t>(n.type);
+      out.hasConfig = 0;
+      std::memset(out.config, 0, sizeof(out.config));
+      if (n.hasEuclideanConfig) {
+        out.hasConfig = 1;
+        const auto& e = n.euclideanConfig;
+        out.config[0] = static_cast<int32_t>(e.steps);
+        out.config[1] = static_cast<int32_t>(e.hits);
+        out.config[2] = static_cast<int32_t>(e.offset);
+        out.config[3] = static_cast<int32_t>(e.degree);
+        out.config[4] = static_cast<int32_t>(e.octave_offset);
+        out.config[5] = static_cast<int32_t>(e.velocity);
+        out.config[6] = static_cast<int32_t>(e.base_octave);
+        out.config[7] = static_cast<int32_t>(e.duration_ticks & 0xffffffffu);
+      } else if (n.hasRandomDegreeConfig) {
+        out.hasConfig = 1;
+        const auto& r = n.randomDegreeConfig;
+        out.config[0] = static_cast<int32_t>(r.degree);
+        out.config[1] = static_cast<int32_t>(r.velocity);
+        out.config[2] = static_cast<int32_t>(r.duration_ticks & 0xffffffffu);
+      } else if (n.hasLfoConfig) {
+        out.hasConfig = 1;
+        const auto& l = n.lfoConfig;
+        out.config[0] = static_cast<int32_t>(std::lround(l.frequency_hz * 1000.0));
+        out.config[1] = static_cast<int32_t>(std::lround(l.depth * 1000.0));
+        out.config[2] = static_cast<int32_t>(std::lround(l.bias * 1000.0));
+        out.config[3] = static_cast<int32_t>(std::lround(l.phase_offset * 1000.0));
+      }
+    }
+    uint32_t edgeCount = 0;
+    for (const auto& e : graph->edges) {
+      if (edgeCount >= daw::kUiMaxPatcherEdges) {
+        break;
+      }
+      daw::UiPatcherEdge& out = region->edges[edgeCount++];
+      out.srcNode = e.src.nodeId;
+      out.srcPort = e.src.portId;
+      out.dstNode = e.dst.nodeId;
+      out.dstPort = e.dst.portId;
+      out.kind = static_cast<uint8_t>(e.kind);
+    }
+    region->nodeCount = nodeCount;
+    region->edgeCount = edgeCount;
   };
 
   auto writeUiHarmonySnapshot = [&]() {
@@ -2632,12 +2713,25 @@ struct TrackRuntime {
       }
       document.tracks.push_back(std::move(track));
     }
-    // The patcher DAG is part of the song now, not a side file. The engine runs
-    // one global graph today, so on save it parks that graph on the first track;
-    // the per-track format is ready for when each track runs its own.
-    if (!document.tracks.empty()) {
+    // The patcher DAG is part of the song. The engine runs one global graph
+    // today, so on save it parks that graph on a device (patchers are per-device
+    // now): the first track's instrument, else its first device. The per-device
+    // format is ready for when each device runs its own.
+    if (!document.tracks.empty() && !document.tracks.front().chain.devices.empty()) {
       std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
-      document.tracks.front().patcher = patcherGraphState.graph;
+      auto& devices = document.tracks.front().chain.devices;
+      daw::Device* target = nullptr;
+      for (auto& d : devices) {
+        if (d.kind == daw::DeviceKind::VstInstrument ||
+            d.kind == daw::DeviceKind::PatcherInstrument) {
+          target = &d;
+          break;
+        }
+      }
+      if (!target) {
+        target = &devices.front();
+      }
+      target->patcher = patcherGraphState.graph;
     }
     if (!daw::saveProject(document, path, error)) {
       return false;
@@ -2755,36 +2849,46 @@ struct TrackRuntime {
       }
     }
 
-    // Restore the song's patcher DAG. The engine executes one global graph, so
-    // it takes the first track that carries a patcher; the other tracks' patchers
-    // are preserved on the next save (round-tripped) but not yet run per-track.
-    // Applied only when a track carries one, so a patcher-less (or older) project
-    // leaves the live audio graph intact rather than wiping it to empty.
+    // Restore the song's patcher DAG. Patchers are per-device now, but the engine
+    // still executes one global graph, so it takes the first device (in track
+    // then chain order) that carries one; the rest are preserved on save
+    // (round-tripped) but not yet run per-device. A patcher-less (or older)
+    // project leaves the live audio graph intact rather than wiping it to empty.
+    bool patcherLoaded = false;
     for (const auto& source : document.tracks) {
-      if (source.patcher.nodes.empty()) {
-        continue;
+      if (patcherLoaded) {
+        break;
       }
-      daw::PatcherGraph loadedGraph = source.patcher;
-      if (daw::buildPatcherGraph(loadedGraph)) {
-        {
-          std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
-          patcherGraphState.graph = std::move(loadedGraph);
-          uint32_t nextId = 0;
-          for (const auto& node : patcherGraphState.graph.nodes) {
-            nextId = std::max(nextId, node.id + 1);
-          }
-          patcherGraphState.nextNodeId = nextId;
+      for (const auto& device : source.chain.devices) {
+        if (device.patcher.nodes.empty()) {
+          continue;
         }
-        patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
-        updatePatcherGraphSnapshot();
-        DAW_EVENT("project.patcher_loaded")
-            .field("track", source.trackId)
-            .field("nodes", static_cast<uint64_t>(source.patcher.nodes.size()))
-            .field("edges", static_cast<uint64_t>(source.patcher.edges.size()));
-      } else {
-        DAW_EVENT("project.patcher_invalid").field("track", source.trackId);
+        daw::PatcherGraph loadedGraph = device.patcher;
+        if (daw::buildPatcherGraph(loadedGraph)) {
+          {
+            std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+            patcherGraphState.graph = std::move(loadedGraph);
+            uint32_t nextId = 0;
+            for (const auto& node : patcherGraphState.graph.nodes) {
+              nextId = std::max(nextId, node.id + 1);
+            }
+            patcherGraphState.nextNodeId = nextId;
+          }
+          patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
+          updatePatcherGraphSnapshot();
+          DAW_EVENT("project.patcher_loaded")
+              .field("track", source.trackId)
+              .field("device", device.id)
+              .field("nodes", static_cast<uint64_t>(device.patcher.nodes.size()))
+              .field("edges", static_cast<uint64_t>(device.patcher.edges.size()));
+        } else {
+          DAW_EVENT("project.patcher_invalid")
+              .field("track", source.trackId)
+              .field("device", device.id);
+        }
+        patcherLoaded = true;  // engine runs only one graph for now
+        break;
       }
-      break;  // engine runs only one graph for now.
     }
 
     // Report plugin identity before touching anything: a project that silently
@@ -2875,6 +2979,9 @@ struct TrackRuntime {
           runtime->clipExtents.push_back(std::move(ext));
         }
         runtime->track.harmonyQuantize = source.harmonyQuantize;
+        if (!source.name.empty()) {
+          runtime->trackName = source.name;
+        }
         // Restore the device chain so reopening a session restores its plugins,
         // and its sound. hostSlotIndex is a runtime scan index with no meaning
         // across runs, so re-resolve each VST device from its durable vstRef
@@ -7371,11 +7478,24 @@ struct TrackRuntime {
           ++publishedMixerVersion;
         }
         uiShm.header->uiMixerVersion = publishedMixerVersion;
+        // Per-track names (nul-padded, truncated to fit). Copied under the track
+        // mutex since the name is a std::string set on load.
+        for (uint32_t i = 0; i < daw::kUiMaxTracks; ++i) {
+          char* dst = uiShm.header->uiTrackName[i];
+          std::memset(dst, 0, daw::kUiTrackNameBytes);
+          if (i < trackSnapshot.size()) {
+            std::lock_guard<std::mutex> lock(trackSnapshot[i]->trackMutex);
+            const std::string& n = trackSnapshot[i]->trackName;
+            std::memcpy(dst, n.data(),
+                        std::min<size_t>(n.size(), daw::kUiTrackNameBytes - 1));
+          }
+        }
         uiShm.header->uiClipVersion =
             clipVersion.load(std::memory_order_acquire);
         writeUiClipWindowSnapshot(trackSnapshot);
         writeUiClipAllSnapshot(false);
         writeUiClipExtents(false);
+        writeUiPatcher(false);
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);
         if (writeHarmony) {
