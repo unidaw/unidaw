@@ -428,6 +428,16 @@ std::string serializeProject(const ProjectDocument& document) {
       writer.key("velocity", static_cast<uint32_t>(note.velocity));
       writer.key("column", static_cast<uint32_t>(note.column));
       writer.key("note_id", note.noteId);
+      // Row ops (item 12) — omitted when inert so op-free projects are unchanged.
+      if (note.retrigger > 1) {
+        writer.key("retrigger", static_cast<uint32_t>(note.retrigger));
+      }
+      if (note.probability > 0) {
+        writer.key("probability", static_cast<uint32_t>(note.probability));
+      }
+      if (note.delayNanoticks > 0) {
+        writer.key("delay", static_cast<uint32_t>(note.delayNanoticks));
+      }
       writer.endArrayElement();
     }
     writer.endArray();
@@ -628,6 +638,12 @@ bool deserializeProject(const std::string& json,
           event.payload.note.column =
               static_cast<uint8_t>(noteTree.get<uint32_t>("column", 0));
           event.payload.note.noteId = noteTree.get<uint64_t>("note_id", 0);
+          event.payload.note.retrigger =
+              static_cast<uint8_t>(noteTree.get<uint32_t>("retrigger", 0));
+          event.payload.note.probability =
+              static_cast<uint8_t>(noteTree.get<uint32_t>("probability", 0));
+          event.payload.note.delayNanoticks =
+              noteTree.get<uint32_t>("delay", 0);
           track.clip.addEvent(event);
         }
       }

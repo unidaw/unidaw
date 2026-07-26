@@ -5430,6 +5430,14 @@ struct TrackRuntime {
               continue;
             }
 
+            // Probability row op: a deterministic per-note roll (see helper).
+            if (!daw::noteProbabilityPasses(
+                    event->payload.note.noteId, event->nanotickOffset,
+                    event->payload.note.pitch, column,
+                    event->payload.note.probability)) {
+              continue;
+            }
+
             daw::ResolvedPitch resolved =
                 daw::resolvedPitchFromCents(static_cast<double>(event->payload.note.pitch) * 100.0);
             if (auto harmony = getHarmonyAt(event->nanotickOffset)) {

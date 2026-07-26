@@ -13,12 +13,42 @@
 
 namespace daw {
 
+// splitmix64 finalizer — a cheap, well-distributed integer hash used to turn a
+// stable note identity into a reproducible [0,100) roll for probability ops.
+// Keyed on the note's EventId (not the runtime voice id), so the same note makes
+// the same decision on every render: generated content stays reproducible.
+inline uint64_t mix64(uint64_t x) {
+  x += 0x9E3779B97F4A7C15ull;
+  x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ull;
+  x = (x ^ (x >> 27)) * 0x94D049BB133111EBull;
+  return x ^ (x >> 31);
+}
+
 enum class MusicalEventType {
   Note,
   Param,
   Meta,
   Chord,
 };
+
+// Decides whether a note sounds under its probability row op (item 12).
+// Deterministic in the note's stable identity (EventId, with position/pitch/
+// column folded in so id-less legacy notes still decide independently), so the
+// same note fires the same way on every render — generated content is
+// reproducible loop to loop. probability 0 (or >=100) always sounds; 1..=99 is
+// that percent chance. Pure and header-only so the audio path and its unit test
+// share one definition.
+inline bool noteProbabilityPasses(EventId noteId, uint64_t nanotickOffset,
+                                  uint8_t pitch, uint8_t column,
+                                  uint8_t probability) {
+  if (probability == 0 || probability >= 100) {
+    return true;
+  }
+  const uint64_t seed = noteId ^ mix64(nanotickOffset) ^
+                        (static_cast<uint64_t>(pitch) << 8) ^
+                        static_cast<uint64_t>(column);
+  return mix64(seed) % 100u < probability;
+}
 
 struct NotePayload {
   uint8_t pitch = 0;
@@ -27,6 +57,12 @@ struct NotePayload {
   uint8_t reserved = 0;
   uint64_t durationNanoticks = 0;
   EventId noteId = kEventIdNone;
+  // Per-note row ops (item 12), applied at playback. Defaults are inert, so a
+  // note without ops behaves exactly as before.
+  uint8_t retrigger = 0;    // 0/1 = one strike; N>=2 = N even strikes over the note
+  uint8_t probability = 0;  // 0 = always; 1..=100 = percent chance to sound
+  uint16_t reserved2 = 0;
+  uint32_t delayNanoticks = 0;  // onset delay, absolute ticks
 };
 
 struct ChordPayload {
