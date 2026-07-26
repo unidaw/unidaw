@@ -671,6 +671,42 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
+                        // A batch: one frame, several edits, applied in order.
+                        //
+                        // Each edit must be composed against the version the
+                        // PREVIOUS one produced. The engine arbitrates by
+                        // base_version, so a client that stamps every op in a
+                        // transpose with the same base gets the first applied and
+                        // the rest rejected — which looks exactly like a partly
+                        // working transpose, and is how this was found.
+                        if let Some(rest) = t.strip_prefix("BATCH\n") {
+                            let (mut ok, mut failed) = (0u32, 0u32);
+                            for line in rest.lines().filter(|l| !l.trim().is_empty()) {
+                                let base = handle.clip_version();
+                                let sent = if let Some(c) = build_chord(line) {
+                                    let mut c = c;
+                                    c.base_version = base;
+                                    handle.send_chord_command(c).is_ok()
+                                } else {
+                                    match build_command(line) {
+                                        Ok(mut p) => { p.base_version = base;
+                                                       handle.send_command(p).is_ok() }
+                                        Err(_) => false,
+                                    }
+                                };
+                                if !sent { failed += 1; continue; }
+                                // Wait for the engine to actually apply it. Without
+                                // this the next op re-reads the same version and we
+                                // are back to the race we are fixing.
+                                if handle.wait_for_clip_version(
+                                    base, base.wrapping_add(1),
+                                    Duration::from_millis(250)) { ok += 1; } else { failed += 1; }
+                            }
+                            let reply = format!("{{\"ok\":true,\"applied\":{ok},\"failed\":{failed}}}");
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
                         // Chords take a different payload, so they cannot go
                         // through build_command's return type.
                         if let Some(c) = build_chord(&t) {

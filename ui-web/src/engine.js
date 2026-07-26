@@ -95,6 +95,22 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
       return true;
     },
     /**
+     * Several edits as one frame, applied in order by the sidecar.
+     *
+     * Not a convenience: the engine arbitrates by base_version, so a client that
+     * stamps every op of a transpose with the same version gets the first applied
+     * and the rest rejected. The sidecar re-bases each op on the version the
+     * previous one produced, which is the only place that can be done — it is the
+     * side that can wait for the engine to acknowledge.
+     */
+    sendBatch(objs) {
+      if (!cmdWs || cmdWs.readyState !== 1 || !objs.length) return false;
+      let msg = 'BATCH';
+      for (const o of objs) msg += '\n' + JSON.stringify(o);
+      cmdWs.send(msg);
+      return true;
+    },
+    /**
      * Open or save a project by name. The engine resolves it inside its own
      * project directory — the name is a name, never a path, and the sidecar
      * refuses anything that could climb out of that directory.

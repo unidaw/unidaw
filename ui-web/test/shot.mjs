@@ -146,6 +146,7 @@ for (const scene of SCENES) {
     const hp = await page.evaluate(() => window.__uni.helpProbe());
     ok(hp.sections === 2, `surface keys and global keys: ${hp.sections} sections`);
     ok(hp.rows > 8, `keys documented: ${hp.rows}`);
+    ok(hp.rows === (hp.surface === 'tracker' ? 22 : 17), `key count for ${hp.surface}: ${hp.rows}`);
     const shown = await page.evaluate(() => document.querySelector('.ch-view')?.textContent);
     ok(shown === hp.surface.toUpperCase(), `chrome names the surface: ${shown} vs ${hp.surface}`);
     console.log(`  ${hp.surface}: ${hp.rows} keys in ${hp.sections} sections`);

@@ -612,6 +612,121 @@ function scrollTo(row) {
   draw();
 }
 
+/**
+ * Every engine note inside the current selection (or just the cursor's note when
+ * there is no selection), as {note, row}. Rows are viewport rows, scaled the same
+ * way the renderer scales them.
+ *
+ * Selection is a rectangle over (row, field), where a field is track*columns+col.
+ * Notes live in column 0, so a selection that covers no column-0 field selects no
+ * notes — which is correct, and is why this filters on the field rather than on
+ * the track.
+ */
+function notesInSelection() {
+  const out = [];
+  if (!engine) return out;
+  const sel = state.selection;
+  const scale = engine.rowGrid > 0 ? ZOOM_LEVELS[state.zoom].linesPerBeat / engine.rowGrid : 1;
+  for (let i = 0; i < engine.noteCount; i++) {
+    const n = engine.notes[i];
+    const row = scale === 1 ? n.row : Math.round(n.row * scale);
+    if (sel) {
+      if (row < sel.r0 || row > sel.r1) continue;
+      const field = n.track * state.columns;          // notes are column 0
+      if (field < sel.f0 || field > sel.f1) continue;
+    } else {
+      if (row !== state.cursor.row || n.track !== state.cursor.track) continue;
+    }
+    out.push({ n, row });
+  }
+  return out;
+}
+
+/** The rows and tracks the selection spans, for pasting relative to the cursor. */
+function selectionOrigin() {
+  const sel = state.selection;
+  return sel ? { row: sel.r0, track: Math.floor(sel.f0 / state.columns) }
+             : { row: state.cursor.row, track: state.cursor.track };
+}
+
+/**
+ * The clipboard. Notes are stored RELATIVE to the selection's origin, in ticks
+ * and track offsets, so a paste lands correctly at a different row, a different
+ * track, and a different zoom. Storing absolute rows would bake the zoom the copy
+ * was made at into the paste — the same mistake as storing a row anywhere else.
+ */
+let clipboard = { notes: [], span: 0 };
+
+function copySelection() {
+  const picked = notesInSelection();
+  if (!picked.length) { state.reject = 'nothing to copy'; return false; }
+  const org = selectionOrigin();
+  const orgTick = org.row * ZOOM_LEVELS[state.zoom].rowNanoticks;
+  clipboard.notes = picked.map(({ n }) => ({
+    dt: n.tOn - orgTick, dur: Math.max(1, n.tOff - n.tOn),
+    dTrack: n.track - org.track, pitch: n.pitch, velocity: n.velocity,
+  }));
+  clipboard.span = clipboard.notes.reduce((a, c) => Math.max(a, c.dt + c.dur), 0);
+  state.reject = null;
+  return true;
+}
+
+function deleteSelection() {
+  const picked = notesInSelection();
+  if (!picked.length) { state.reject = 'nothing to delete'; return false; }
+  if (!conn) { state.reject = 'no engine'; return false; }
+  const base = engine ? engine.clipVersion : 0;
+  const ops = picked.map(({ n }) => ({ type: 'delete', track: n.track, tick: n.tOn }));
+  if (!conn.sendBatch(ops)) { state.reject = 'no engine'; return false; }
+  for (const { n, row } of picked) addPending(row, n.track, 0, '', base);
+  state.reject = null;
+  return true;
+}
+
+function pasteClipboard() {
+  if (!clipboard.notes.length) { state.reject = 'clipboard is empty'; return false; }
+  if (!conn) { state.reject = 'no engine'; return false; }
+  const atTick = tickOfCursorRow();
+  const ops = [];
+  for (const c of clipboard.notes) {
+    const track = state.cursor.track + c.dTrack;
+    if (track < 0 || track >= state.tracks) continue;   // pasted off the edge
+    ops.push({ type: 'note', track, pitch: c.pitch, tick: atTick + c.dt,
+               dur: c.dur, vel: c.velocity });
+  }
+  if (!ops.length) { state.reject = 'paste would land off the edge'; return false; }
+  if (!conn.sendBatch(ops)) { state.reject = 'no engine'; return false; }
+  state.reject = null;
+  return true;
+}
+
+/**
+ * Transpose the selection. Sends a write at the SAME tick with a new pitch, which
+ * the engine treats as a replace — no delete/rewrite pair, so there is no window
+ * in which the note does not exist.
+ */
+function transposeSelection(semitones) {
+  const picked = notesInSelection();
+  if (!picked.length) { state.reject = 'nothing to transpose'; return false; }
+  if (!conn) { state.reject = 'no engine'; return false; }
+  const base = engine ? engine.clipVersion : 0;
+  const ops = [], marks = [];
+  for (const { n, row } of picked) {
+    const p = n.pitch + semitones;
+    if (p < 0 || p > 127) continue;                     // silently clamping would lose the note
+    ops.push({ type: 'note', track: n.track, pitch: p, tick: n.tOn,
+               dur: Math.max(1, n.tOff - n.tOn), vel: n.velocity });
+    marks.push({ row, track: n.track, p });
+  }
+  const moved = ops.length;
+  if (!moved) { state.reject = 'transpose would push notes out of MIDI range'; return false; }
+  if (!conn.sendBatch(ops)) { state.reject = 'no engine'; return false; }
+  for (const m of marks) addPending(m.row, m.track, 0, pitchToToken(m.p), base);
+  if (moved < picked.length) state.reject = (picked.length - moved) + ' note(s) out of range';
+  else state.reject = null;
+  return true;
+}
+
 /** The engine note the cursor is sitting on, or null. */
 function noteAtCursor() {
   if (!engine) return null;
@@ -733,10 +848,25 @@ function typeValue(digit) {
   }
 }
 
+/** Grow the selection to include `row`, anchoring on where it started. */
+function extendSelection(row) {
+  const field = state.cursor.track * state.columns + state.cursor.col;
+  if (!state.selection) {
+    state.selection = { r0: state.cursor.row, r1: state.cursor.row, f0: field, f1: field };
+    state.selection._anchor = state.cursor.row;
+  }
+  const a = state.selection._anchor;
+  state.selection.r0 = Math.min(a, row);
+  state.selection.r1 = Math.max(a, row);
+}
+
 /** Any cursor move abandons a half-typed token. */
 function moveCursor(fn) {
   if (entry.active) cancel(entry);
   state.digitCell = -1;
+  // An unshifted move drops the selection. Keeping it would leave a range
+  // highlighted that the next operation silently acts on.
+  state.selection = null;
   fn();
 }
 
@@ -891,6 +1021,22 @@ addEventListener('keydown', (e) => {
   }
   if (k === TOKEN_KEY) { begin(entry, state.cursor, '@'); return done(); }
 
+  // Selection operations. Shift+arrows extend, then these act on the range — or
+  // on the cursor's own note when nothing is selected, so they are never inert.
+  if (e.shiftKey && (k === 'ArrowDown' || k === 'ArrowUp')) {
+    const to = state.cursor.row + (k === 'ArrowDown' ? 1 : -1);
+    extendSelection(Math.max(0, to));
+    state.cursor.row = Math.max(0, to);
+    follow(); return done();
+  }
+  if (k === 'c' && e.altKey) { copySelection(); return done(); }
+  if (k === 'v' && e.altKey) { pasteClipboard(); return done(); }
+  if (k === 'x' && e.altKey) { if (copySelection()) deleteSelection(); return done(); }
+  if (k === 'q' && e.altKey) { transposeSelection(1); return done(); }
+  if (k === 'a' && e.altKey) { transposeSelection(-1); return done(); }
+  if (k === 'w' && e.altKey) { transposeSelection(12); return done(); }
+  if (k === 's' && e.altKey) { transposeSelection(-12); return done(); }
+
   if (k.length !== 1) return;
   state.reject = null;
 
@@ -1001,6 +1147,13 @@ window.__uni = {
     f0: Math.min(state.cursor.track * state.columns + state.cursor.col, f),
     f1: Math.max(state.cursor.track * state.columns + state.cursor.col, f) }; draw(); },
   selection: () => state.selection,
+  selectRows: (r0, r1, f0, f1) => { state.selection = { r0, r1, f0, f1, _anchor: r0 }; draw(); },
+  copy: () => copySelection(),
+  paste: () => pasteClipboard(),
+  cut: () => copySelection() && deleteSelection(),
+  transpose: (n) => transposeSelection(n),
+  clipboard: () => clipboard.notes.slice(),
+  selected: () => notesInSelection().map(({ n, row }) => ({ row, track: n.track, pitch: n.pitch })),
   engineStats: () => conn.stats(),
   canSend: () => conn && conn.canSend(),
   // Goldens must not depend on whether a sidecar happens to be running.

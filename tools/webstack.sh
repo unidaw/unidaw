@@ -8,12 +8,29 @@
 # healthy stopped transport.
 set -euo pipefail
 
-# This worktree's own build, NOT /Users/jak/src/daw/build. That one is the backend
-# agent's working tree: building there compiles whatever they have uncommitted, so
-# the engine's SHM version can jump ahead of the daw-bridge this branch is pinned
-# to and the sidecar refuses to attach. Build what we have merged.
 WEB=/Users/jak/src/daw-web
-REPO=$WEB
+SHARED=/Users/jak/src/daw
+# THIS worktree's engine binary, run from the SHARED build directory.
+#
+# Both halves matter and each was learned the hard way:
+#
+#   the binary must be ours, because the shared tree is the backend agent's and
+#   building there compiles their uncommitted work — the engine reached SHM v13
+#   while this branch's daw-bridge was pinned to v12 and the sidecar refused to
+#   attach;
+#
+#   the working directory must be theirs, because the engine needs more than its
+#   binary. The plugin cache and the restored session live beside that build, and
+#   an engine started from a fresh build dir loses its plugin host on the first
+#   block ("Failed to receive control header") and exits.
+#
+#   and the HOST must be ours too. The engine and its plugin host speak a private
+#   protocol that moves with the SHM version; pairing our v12 engine with their
+#   v13 host fails at the first connect, which surfaces only as
+#   "host connect/launch failed" with no mention of a version anywhere.
+ENGINE=$WEB/build/daw_engine
+HOST=$WEB/build/juce_host_process
+RUNDIR=$SHARED/build
 SHM=${SHM:-/daw_web_ui}
 PROJECTS=$WEB/presets/projects
 PORT=${PORT:-8173}
@@ -42,12 +59,23 @@ if [ -f "$PIDFILE" ]; then
   fi
   rm -f "$PIDFILE"
 fi
+# Also clear anything holding OUR ports. A sidecar started by hand is not in the
+# pidfile, and "Address already in use" three steps later is a much worse way to
+# find out about it than here.
+for port in 8174 8175; do
+  for pid in $(lsof -nP -iTCP:$port -sTCP:LISTEN -t 2>/dev/null || true); do
+    kill "$pid" 2>/dev/null || true
+  done
+done
 pkill -f 'juce_host_process' 2>/dev/null || true
+sleep 1
 
-cd "$REPO/build"
+[ -x "$ENGINE" ] || { say "no engine at $ENGINE — run: cmake --build build --target daw_engine"; exit 1; }
+[ -x "$HOST" ] || { say "no host at $HOST — run: cmake --build build --target juce_host_process"; exit 1; }
+cd "$RUNDIR"
 DAW_UI_SHM_NAME=$SHM DAW_PROJECT_DIR=$PROJECTS \
-  DAW_HOST_BINARY=$REPO/build/juce_host_process \
-  ./daw_engine "$@" > /tmp/eng.log 2>&1 &
+  DAW_HOST_BINARY=$HOST \
+  "$ENGINE" "$@" > /tmp/eng.log 2>&1 &
 ENGINE_PID=$!
 echo "$ENGINE_PID" > "$PIDFILE"
 sleep 6
