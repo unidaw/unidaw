@@ -78,7 +78,7 @@ let conn = null;
 let lastViewportKey = -1;
 const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', selection: null,
   // Entry state, shown in the chrome so you can see what you are typing into.
-  octave: 4, editStep: 1, velocity: 100, zoom: 2, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+  octave: 4, editStep: 1, velocity: 100, zoom: 3, cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -86,7 +86,7 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
 const hudText = document.createTextNode('');
 hud.appendChild(hudText);
 setInterval(() => {
-  const v = tracker.vm; if (!v || state.useEngine === false) return;
+  const v = tracker.vm; if (!v || state.hudFrozen) return;
   const st = conn.stats();
   hudText.nodeValue = (engine ? 'engine ' + st.framesIn + 'f' + (st.gaps ? ' ' + st.gaps + ' gaps' : '') : state.link)
     + '   ' + v.zoom.label + '   row ' + state.cursor.row
@@ -164,14 +164,26 @@ function buildHead() {
 }
 
 const NANOTICKS_PER_BEAT = 960000;
-/** Ticks per row on a given lane's own grid. */
+/** Ticks per row on a given lane's own grid. This is a note's DURATION. */
 function laneRowTicks(track) {
   const n = engine && engine.lpb[track] ? engine.lpb[track] : 4;
   return NANOTICKS_PER_BEAT / n;
 }
-/** The tick the cursor's row means ON ITS LANE. Both halves must agree. */
+/**
+ * Whether a lane actually has a row here. Lanes share one row axis (the
+ * viewport's), and a lane at 4/beat only lands on every third row of a 12/beat
+ * axis — the rows in between belong to the triplet and sextuplet lanes. There is
+ * nothing to write into there, and offering an empty cell would imply otherwise.
+ */
+function onLaneGrid(row, track) {
+  const lane = engine && engine.lpb[track] ? engine.lpb[track] : ZOOM_LEVELS[state.zoom].linesPerBeat;
+  const stride = ZOOM_LEVELS[state.zoom].linesPerBeat / lane;
+  return stride < 1 || row % Math.round(stride) === 0;
+}
+/** The tick the cursor's row means. Rows are viewport rows — one axis, and the
+ *  same one the sidecar projects notes into. */
 function tickOfCursorRow() {
-  return state.cursor.row * laneRowTicks(state.cursor.track);
+  return state.cursor.row * ZOOM_LEVELS[state.zoom].rowNanoticks;
 }
 
 /**
@@ -182,6 +194,9 @@ function tickOfCursorRow() {
  */
 function commitToken(text) {
   const r = parseToken(text, state.cursor.col);
+  // A row this lane does not have cannot take a note. Say so rather than writing
+  // it to the nearest tick, which would put it somewhere the cursor isn't.
+  if (!onLaneGrid(state.cursor.row, state.cursor.track)) { state.badToken = text; return; }
   const tick = tickOfCursorRow();
   const dur = laneRowTicks(state.cursor.track);
   if (r.kind === 'note') {
@@ -385,7 +400,8 @@ draw();
 // declaration is a temporal-dead-zone throw that kills the whole module.
 conn = connectEngine({
   onStatus: (s, d) => { state.link = s + (d ? ': ' + d : ''); schedule(); },
-  onAck: (msg) => { state.ack = String(msg).slice(0, 40); },
+  onAck: (msg) => { state.ack = String(msg).slice(0, 80);
+    (window.__acks || (window.__acks = [])).push(state.ack); },
   onChange: (store) => { engine = store; reapPending(store.clipVersion, performance.now()); state.playhead = tickToRow(store.playheadTick); schedule(); },
 });
 
@@ -408,11 +424,69 @@ window.__uni = {
   // Pins the fixture, freezes the HUD, and CLOSES the socket. Without the close
   // the reconnect backoff keeps firing onStatus -> schedule() -> draw() while a
   // screenshot is being taken, which made goldens pass once and fail twice.
-  useFixture: () => { state.useEngine = false; conn.close(); hudText.nodeValue = 'fixture'; draw(); },
+  useFixture: () => { state.useEngine = false; state.hudFrozen = true;
+                      conn.close(); hudText.nodeValue = 'fixture'; draw(); },
   // Hermetic reset for tests: a scene that inherits the cursor from whatever ran
   // before it is not a fixture, it is a dependency on execution order.
   reset: () => { state.cursor.row = 0; state.cursor.track = 0; state.cursor.col = 0;
-                 state.playhead = 0; state.zoom = 2; state.scrollX = 0; state.start = 0; draw(); },
+                 state.playhead = 0; state.zoom = 3; state.scrollX = 0; state.start = 0;
+                 engine = null; state.useEngine = false;
+                 // The HUD carries a live node count and frame counter. Pin it
+                 // here too, or a scene inherits whatever the previous scene's
+                 // timer last wrote and the golden differs by that strip alone.
+                 if (state.hudFrozen) hudText.nodeValue = 'fixture';
+                 draw(); },
+  /**
+   * A synthetic engine frame where lanes DISAGREE about their grid: track 0 at
+   * 4/beat, track 1 at 3 (triplets), track 2 at 6 (sextuplets), track 3 at 4.
+   *
+   * This exists because every previous grid bug was invisible in a fixture where
+   * all lanes shared a grid — the projection was wrong in both directions for
+   * months and still rendered a perfectly plausible tracker. A golden that cannot
+   * distinguish right from wrong is not a test, so this is the one that can.
+   *
+   * Rows are the viewport's (zoom 0 = 12/beat, the LCM), which is what the
+   * sidecar now emits. A lane appears on every (12 / itsLpb)-th row.
+   */
+  useMixedGrid: () => {
+    // useEngine TRUE — the socket is closed so nothing overwrites the store, but
+    // draw() must take the engine path or this renders the fixture instead and
+    // the scene silently tests nothing. It did exactly that on the first run.
+    state.useEngine = true; state.hudFrozen = true;
+    conn.close(); hudText.nodeValue = 'mixed-grid';
+    state.zoom = 0; state.start = 0; state.scrollX = 0;
+    const lpb = [4, 3, 6, 4, 4, 4, 4, 4];
+    const notes = [];
+    for (let t = 0; t < 4; t++) {
+      const stride = 12 / lpb[t];
+      for (let k = 0; k * stride < 48; k++) {           // four beats of each lane
+        notes.push({ tOn: k * stride * 80000, tOff: 0, id: t * 100 + k,
+                     pitch: 48 + t * 5 + (k % 5), velocity: 100, column: 0, track: t,
+                     retrigger: 0, probability: 100, delayTicks: 0, row: k * stride,
+                     muted: false, isAdd: false, placementId: 1 });
+      }
+    }
+    engine = { ok: true, seq: 1, playheadTick: 0, visualSample: 0, clipVersion: 1,
+               harmonyVersion: 0, transport: 0, trackCount: 4,
+               peaks: new Float32Array(4), peakCount: 0,
+               notes, noteCount: notes.length,
+               aggCount: new Uint32Array(0), aggRep: new Uint8Array(0),
+               aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
+               extents: [], extentCount: 0, extentsRevision: 1,
+               lpb: Uint8Array.from(lpb), notesRevision: 1, aggRevision: 1 };
+    draw();
+  },
+  loadProject: (name) => conn && conn.loadProject(name),
+  saveProject: (name) => conn && conn.saveProject(name),
+  lpb: () => (engine ? Array.from(engine.lpb) : null),
+  notes: () => (engine ? engine.notes.slice(0, engine.noteCount)
+    .map(n => ({ t: n.tOn, row: n.row, tr: n.track })) : null),
+  /** Which rows a lane actually has, for assertions that don't read pixels. */
+  laneRows: (track) => {
+    const out = [];
+    for (let r = 0; r < 12; r++) if (onLaneGrid(r, track)) out.push(r);
+    return out;
+  },
   scrollX: (x) => { state.scrollX = Math.max(0, x); draw(); },
   right: () => { let f = Math.min(state.cursor.track*state.columns+state.cursor.col+1, state.tracks*state.columns-1);
                  state.cursor.track = Math.floor(f/state.columns); state.cursor.col = f%state.columns; follow(); draw(); },

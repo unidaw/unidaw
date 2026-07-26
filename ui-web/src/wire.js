@@ -7,7 +7,7 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 5;
+export const WIRE_VERSION = 6;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
@@ -47,6 +47,10 @@ export function createStore() {
     /** Per-track lines_per_beat. Needed to render a lane on its own grid AND to
      *  compute the tick a write targets — both halves of the projection. */
     lpb: new Uint8Array(8),
+    /** The lines-per-beat the incoming rows are projected in. Part of the note
+     *  cache key: zoom moves every row without touching clipVersion or
+     *  noteCount, so a cache keyed only on those serves rows from the old grid. */
+    rowGrid: 0,
     /** Bumped whenever notes actually changed, so consumers can skip work. */
     notesRevision: 0,
     /** Same, for aggregates. They change when the VIEWPORT moves, not when notes
@@ -93,6 +97,7 @@ export function decode(buf, store) {
   store.trackCount = v.getUint16(42, true);
 
   const peakCount = v.getUint16(44, true);
+  const rowGrid = v.getUint16(46, true);
   const noteCount = v.getUint32(48, true);
   const aggRows = v.getUint32(52, true);
   const aggTracks = v.getUint16(56, true);
@@ -107,7 +112,8 @@ export function decode(buf, store) {
 
   // Notes only move on an edit; the sidecar re-serialises them only when
   // clipVersion changes, so skip the copy when it hasn't.
-  if (clipVersion !== store.clipVersion || noteCount !== store.noteCount) {
+  if (clipVersion !== store.clipVersion || noteCount !== store.noteCount
+      || rowGrid !== store.rowGrid) {
     let o = HEADER_BYTES + peakCount * 4;
     for (let i = 0; i < noteCount; i++, o += NOTE_BYTES) {
       const n = note(store, i);
@@ -133,6 +139,7 @@ export function decode(buf, store) {
     }
     store.noteCount = noteCount;
     store.clipVersion = clipVersion;
+    store.rowGrid = rowGrid;
     store.notesRevision++;
   }
 

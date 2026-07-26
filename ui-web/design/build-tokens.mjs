@@ -30,10 +30,12 @@ function resolve(v) {
   return v;
 }
 
-/** Walk the token tree into flat [path, value] pairs, skipping $comment. */
+/** Walk the token tree into flat [path, value] pairs, skipping $-prefixed
+ *  metadata keys. Any $name is metadata, not just the literal `$comment` — a
+ *  `$offGridComment` shipped a whole sentence into tokens.css as a variable. */
 function flatten(node, path = [], out = []) {
   for (const [k, v] of Object.entries(node)) {
-    if (k === '$comment') continue;
+    if (k.startsWith('$')) continue;
     const p = [...path, k];
     if (v && typeof v === 'object' && !Array.isArray(v) && !('ref' in v)) flatten(v, p, out);
     else if (Array.isArray(v)) v.forEach((item, i) => out.push([[...p, String(i)], resolve(item)]));

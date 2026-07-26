@@ -63,10 +63,15 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
   // arbitrates by version, not by arrival order.
   let cmdWs = null;
   let cmdBackoff = 250;
+  // Last viewport we sent, replayed on (re)connect. The socket is usually not
+  // open yet when the first frame draws, and a restarted sidecar comes back at
+  // its 4-lines-per-beat default — in both cases the client would otherwise sit
+  // there believing it had already said what it was looking at.
+  let lastVp = null;
   function openCmd() {
     if (closed) return;
     cmdWs = new WebSocket(cmdUrl);
-    cmdWs.onopen = () => { cmdBackoff = 250; };
+    cmdWs.onopen = () => { cmdBackoff = 250; if (lastVp) cmdWs.send(lastVp); };
     cmdWs.onmessage = (ev) => { if (onAck) onAck(ev.data); };
     cmdWs.onclose = () => {
       if (closed) return;
@@ -89,10 +94,26 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
       cmdWs.send(JSON.stringify(obj));
       return true;
     },
-    /** Tell the sidecar what we are looking at; it does the projection. */
+    /**
+     * Open or save a project by name. The engine resolves it inside its own
+     * project directory — the name is a name, never a path, and the sidecar
+     * refuses anything that could climb out of that directory.
+     */
+    loadProject(name) { return this.send({ type: 'load', name }); },
+    saveProject(name) { return this.send({ type: 'save', name }); },
+    /**
+     * Tell the sidecar what we are looking at; it does the projection.
+     *
+     * Sent on the COMMAND socket. The state socket is write-only on the sidecar
+     * side, so this went nowhere for as long as it existed — every frame came
+     * back projected at the sidecar's default 4 lines per beat, which looks
+     * exactly like a correct tracker until a lane disagrees about its grid.
+     */
     setViewport(linesPerBeat, firstRow, rowCount) {
-      if (!ws || ws.readyState !== 1) return;
-      ws.send(`{"linesPerBeat":${linesPerBeat},"firstRow":${firstRow},"rowCount":${rowCount}}`);
+      lastVp = `{"linesPerBeat":${linesPerBeat},"firstRow":${firstRow},"rowCount":${rowCount}}`;
+      if (!cmdWs || cmdWs.readyState !== 1) return false;
+      cmdWs.send(lastVp);
+      return true;
     },
     stats: () => ({ framesIn, gaps, lastSeq, connected: ws && ws.readyState === 1 }),
     close() { closed = true; if (ws) ws.close(); if (cmdWs) cmdWs.close(); },

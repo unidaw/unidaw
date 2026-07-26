@@ -42,6 +42,42 @@ Getting these wrong produces bugs that look like performance problems.
 - **Clips contain notes.** Wherever a note exists there is a clip; no note exists
   outside one; the space between clips is genuinely empty. Coverage is decided
   *before* content, or notes float in gaps with no rail around them.
+- **`lines_per_beat` belongs to the lane, not the viewport.** A lane can be at 3
+  (triplets) or 6 (sextuplets) while its neighbour is at 4. Any code that assumes
+  one grid for the whole screen is wrong, and will look right until a project
+  mixes them.
+- **There is exactly one row axis on the wire, and it is the viewport's.** Lanes
+  are drawn against a shared axis, so a lane at 4/beat occupies every third row of
+  a 12/beat axis and has *no row* in between. The lane grid decides what a row
+  means in ticks — a note's duration, and which rows a lane has at all — and
+  nothing else. Emitting rows in lane space and reading them as viewport rows is
+  invisible while every lane agrees and misplaces every note the moment one does
+  not.
+
+### 2.1 The one bug this project keeps having
+
+Six times now, in six different places: **content changed while the key the
+consumer watches stayed the same.** Every instance rendered something plausible,
+none errored, and no timing instrument could see any of them.
+
+| Where | Content that moved | Key that didn't |
+|---|---|---|
+| `contentAt` | cell text (keyed on row index) | zoom changed ticks, not indices |
+| `bindRow` | engine notes | row identity |
+| aggregates | viewport moved | `notesRevision` |
+| wire stride | note grew to 42 bytes | `NOTE_BYTES` still said 40 |
+| sidecar note cache | rows reprojected on zoom | `clip_version` |
+| client note cache | rows reprojected on zoom | `clipVersion`, `noteCount` |
+
+The rule: **a cache key must name everything the cached value is computed from.**
+If a value depends on the grid, the grid is in the key — which is why the frame
+header carries `notes_grid` and the store carries `rowGrid`. When adding an input
+to a derivation, the same commit adds it to the key, or the next person debugs a
+screen that looks fine.
+
+Corollary for tests: a fixture where every lane shares a grid cannot distinguish a
+correct projection from a plausible one. `__uni.useMixedGrid()` exists for exactly
+this and any grid work must be checked against it.
 
 ---
 

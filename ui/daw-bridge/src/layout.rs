@@ -306,6 +306,39 @@ pub struct UiPatcherPresetCommandPayload {
     pub name: [u8; 28],
 }
 
+impl UiPatcherPresetCommandPayload {
+    /// Build a named command (load/save a project or patcher preset).
+    ///
+    /// The name is a fixed 28-byte field, not a pointer: a command ring entry is
+    /// a fixed-size POD slot shared with another process, so a longer name is
+    /// truncated here rather than silently reinterpreted there.
+    pub fn named(command: UiCommandType, name: &str) -> Self {
+        let mut bytes = [0u8; 28];
+        let source = name.as_bytes();
+        let len = source.len().min(bytes.len());
+        bytes[..len].copy_from_slice(&source[..len]);
+        Self { command_type: command as u16, flags: 0, track_id: 0, base_version: 0, name: bytes }
+    }
+
+    /// Reinterpret as the generic command payload for the ring.
+    ///
+    /// Sound only because both are 40-byte `#[repr(C)]` PODs — the engine
+    /// dispatches on `entry.size == sizeof(UiPatcherPresetCommandPayload)`, so if
+    /// the two ever diverge in size the engine stops recognising named commands
+    /// and simply ignores them. `SIZES_MATCH` below turns that into a build
+    /// error instead of a project that silently refuses to open.
+    pub fn as_command(self) -> UiCommandPayload {
+        const _: () = assert!(
+            core::mem::size_of::<UiPatcherPresetCommandPayload>()
+                == core::mem::size_of::<UiCommandPayload>(),
+            "named commands ride in a UiCommandPayload slot; the sizes must match",
+        );
+        // SAFETY: same size, both #[repr(C)], both plain data with no padding
+        // invariants or niches. The assert above is the guard.
+        unsafe { core::mem::transmute(self) }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub enum UiCommandType {
@@ -555,6 +588,10 @@ mod tests {
         // same size, so a mismatch fails at compile time on one end and here
         // on the other.
         const_assert_eq!(size_of::<UiClipNote>(), 40);
+        // Named commands are transmuted into a UiCommandPayload slot; see
+        // UiPatcherPresetCommandPayload::as_command.
+        const_assert_eq!(size_of::<UiCommandPayload>(), 40);
+        const_assert_eq!(size_of::<UiPatcherPresetCommandPayload>(), 40);
         assert_eq!(offset_of!(UiClipNote, t_on), 0);
         assert_eq!(offset_of!(UiClipNote, t_off), 8);
         assert_eq!(offset_of!(UiClipNote, note_id), 16);

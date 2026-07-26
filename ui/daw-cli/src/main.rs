@@ -154,25 +154,10 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
     0
 }
 
-fn named_command(command: UiCommandType, name: &str) -> UiPatcherPresetCommandPayload {
-    let mut bytes = [0u8; 28];
-    let source = name.as_bytes();
-    let len = source.len().min(bytes.len());
-    bytes[..len].copy_from_slice(&source[..len]);
-    UiPatcherPresetCommandPayload {
-        command_type: command as u16,
-        flags: 0,
-        track_id: 0,
-        base_version: 0,
-        name: bytes,
-    }
-}
-
 fn send_named(handle: &EngineHandle, command: UiCommandType, name: &str) -> i32 {
-    // Reuses the 40-byte command slot; the engine reads it as a named command.
-    let payload = named_command(command, name);
-    let as_ui: UiCommandPayload = unsafe { std::mem::transmute(payload) };
-    match handle.send_command(as_ui) {
+    // Built by daw-bridge, not here: the sidecar needs the same command, and two
+    // copies of a transmute into a shared-memory slot is one copy too many.
+    match handle.send_command(UiPatcherPresetCommandPayload::named(command, name).as_command()) {
         Ok(()) => 0,
         Err(err) => {
             eprintln!("daw-cli: {err}");

@@ -24,12 +24,25 @@ import { pitchName } from './wire.js';
 // linesPerBeat is what LaneGrid takes, so the sidecar can build the same grid
 // we are describing. It is not restricted to powers of two — 3 is a triplet
 // grid, which is exactly the case JS tick/rowNanoticks division cannot express.
+/** Smallest grid that can represent all of `lpbs` exactly. */
+export function lcmGrid(lpbs) {
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  let n = 1;
+  for (const v of lpbs) if (v > 0) n = (n * v) / gcd(n, v);
+  return Math.min(n, 24);   // 24/beat is already 96 rows a bar; past that, aggregate
+}
+
 export const ZOOM_LEVELS = [
-  { index: 0, rowNanoticks: 240000, linesPerBeat: 4, label: '1/16', aggregate: false },
-  { index: 1, rowNanoticks: 480000, linesPerBeat: 2, label: '1/8', aggregate: false },
-  { index: 2, rowNanoticks: 960000, linesPerBeat: 1, label: '1/4', aggregate: false },
-  { index: 3, rowNanoticks: 3840000, linesPerBeat: 1, label: '1 bar', aggregate: true },
-  { index: 4, rowNanoticks: 15360000, linesPerBeat: 1, label: '4 bars', aggregate: true },
+  // The polyrhythm level: rows fine enough that a 4-, 3- and 6-per-beat lane can
+  // each land exactly. A lane occupies every (grid / itsLpb)-th row and the rest
+  // are off ITS grid — which is what makes the polymeter visible rather than
+  // collapsed. See GUIDELINES 2 on rows being a projection.
+  { index: 0, rowNanoticks: 80000, linesPerBeat: 12, label: '1/48', aggregate: false },
+  { index: 1, rowNanoticks: 240000, linesPerBeat: 4, label: '1/16', aggregate: false },
+  { index: 2, rowNanoticks: 480000, linesPerBeat: 2, label: '1/8', aggregate: false },
+  { index: 3, rowNanoticks: 960000, linesPerBeat: 1, label: '1/4', aggregate: false },
+  { index: 4, rowNanoticks: 3840000, linesPerBeat: 1, label: '1 bar', aggregate: true },
+  { index: 5, rowNanoticks: 15360000, linesPerBeat: 1, label: '4 bars', aggregate: true },
 ];
 
 const NOTES = ['C-4', 'D#4', 'F-4', 'G-4', 'A#4', 'C-5', 'E-4', 'OFF'];
@@ -150,7 +163,16 @@ export function buildViewModel(opts, buf) {
     for (let t = 0; t < trackCount; t++) {
       const inClip = engine ? true : clipIndexAt(tick, t) >= 0;
       for (let c = 0; c < columns; c++) {
-        if (engine) { const cl = cells[ci++]; cl.text = ''; cl.kind = 'empty'; cl.aggCount = 0; continue; }
+        if (engine) {
+          const cl = cells[ci++];
+          cl.text = ''; cl.aggCount = 0;
+          // A lane only has rows where its own grid lands. Elsewhere there is no
+          // cell to write into — showing an empty one would imply you could.
+          const laneLpb = engine.lpb[t] || zoom.linesPerBeat;
+          const stride = zoom.linesPerBeat / laneLpb;
+          cl.kind = (stride >= 1 && r % Math.round(stride) !== 0) ? 'offgrid' : 'empty';
+          continue;
+        }
         const cell = cells[ci++];
         cell.aggCount = 0;
         if (!inClip) { cell.text = ''; cell.kind = 'outside'; continue; }
@@ -174,7 +196,11 @@ export function buildViewModel(opts, buf) {
     // at every zoom — that is the whole point of zoom being a projection.
     const bar = Math.floor(tick / TICKS_PER_BAR) + 1;
     const beatInBar = Math.floor((tick % TICKS_PER_BAR) / (TICKS_PER_BAR / 4)) + 1;
-    const sub = Math.floor((tick % (TICKS_PER_BAR / 4)) / 60000);
+    // The sub-beat index is the row's position within the beat ON THIS GRID, not
+    // in fixed 16ths. Hardcoding a 16th (60000nt) made a 12-per-beat grid label
+    // its rows 0,1,2,4,5,6,8 — skipping some numbers and reusing others, so two
+    // different rows could read as the same musical position.
+    const sub = Math.round((tick % (TICKS_PER_BAR / 4)) / zoom.rowNanoticks);
     const row = rows[ri];
     row.index = r;
     row.label = zoom.rowNanoticks >= TICKS_PER_BAR ? `${bar}` : `${bar}:${beatInBar}${sub ? ':' + String(sub).padStart(2, '0') : ''}`;

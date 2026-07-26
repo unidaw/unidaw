@@ -45,6 +45,7 @@ pub mod theme {
     pub const UNI_SURFACE_CURSOR_CELL: u32 = 0x2e9184d9;
     pub const UNI_SURFACE_PLAYHEAD_ROW: u32 = 0x129184d9;
     pub const UNI_SURFACE_SELECTION: u32 = 0x1a9184d9;
+    pub const UNI_SURFACE_OFF_GRID: u32 = 0x610a0a10;
     pub const UNI_RULE_COLUMN: u32 = 0x0de9e9ed;
     pub const UNI_RULE_TRACK: u32 = 0x1fe9e9ed;
     pub const UNI_RULE_TRACK_WIDTH: &str = "2px";

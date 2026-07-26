@@ -58,7 +58,8 @@ export default {
       "rowAlt": "rgba(233,233,237,0.014)",
       "cursorCell": "rgba(145,132,217,0.18)",
       "playheadRow": "rgba(145,132,217,0.07)",
-      "selection": "rgba(145,132,217,0.10)"
+      "selection": "rgba(145,132,217,0.10)",
+      "offGrid": "rgba(10,10,16,0.38)"
     },
     "rule": {
       "column": "rgba(233,233,237,0.05)",

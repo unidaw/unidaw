@@ -43,6 +43,7 @@
   --uni-surface-cursor-cell: rgba(145,132,217,0.18);
   --uni-surface-playhead-row: rgba(145,132,217,0.07);
   --uni-surface-selection: rgba(145,132,217,0.10);
+  --uni-surface-off-grid: rgba(10,10,16,0.38);
   --uni-rule-column: rgba(233,233,237,0.05);
   --uni-rule-track: rgba(233,233,237,0.12);
   --uni-rule-track-width: 2px;

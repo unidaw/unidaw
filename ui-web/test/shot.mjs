@@ -44,6 +44,9 @@ const SCENES = [
   { name: 'scrolled', setup: async (p) => p.evaluate(() => window.__uni.scrollTo(4096)) },
   { name: 'deep', setup: async (p) => p.evaluate(() => window.__uni.scrollTo(99000)) },
   { name: 'zoom-aggregate', setup: async (p) => p.evaluate(() => { window.__uni.setZoom(4); window.__uni.scrollTo(512); }) },
+  // Lanes that DISAGREE about their grid. The one scene that can tell a correct
+  // projection from a plausible one; see __uni.useMixedGrid.
+  { name: 'mixed-grid', setup: async (p) => p.evaluate(() => window.__uni.useMixedGrid()) },
   { name: 'typed', setup: async (p) => { for (let i = 0; i < 12; i++) await p.keyboard.press('ArrowDown'); await p.keyboard.press('ArrowRight'); } },
 ];
 

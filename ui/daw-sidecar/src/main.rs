@@ -27,13 +27,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
-use daw_bridge::layout::{UiCommandPayload, UiCommandType};
+use daw_bridge::layout::{UiCommandPayload, UiCommandType, UiPatcherPresetCommandPayload};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
 
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 5;
+const WIRE_VERSION: u16 = 6;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -61,7 +61,6 @@ impl Default for Viewport {
     fn default() -> Self { Self { lines_per_beat: 4, first_row: 0, row_count: 0 } }
 }
 
-#[allow(dead_code)] // kept for when a real command channel needs a reader thread
 fn parse_viewport(txt: &str, vp: &mut Viewport) {
     let field = |k: &str| -> Option<u64> {
         let i = txt.find(k)? + k.len();
@@ -73,6 +72,49 @@ fn parse_viewport(txt: &str, vp: &mut Viewport) {
     if let Some(v) = field("\"linesPerBeat\"") { vp.lines_per_beat = (v as u32).clamp(1, 64); }
     if let Some(v) = field("\"firstRow\"") { vp.first_row = v; }
     if let Some(v) = field("\"rowCount\"") { vp.row_count = (v as u32).min(512); }
+}
+
+/// The client's viewport, handed from the command thread to the publish thread.
+///
+/// It arrives on the COMMAND socket, not the state socket. The state socket is
+/// write-only (see the publish loop for why), so the `setViewport` messages the
+/// client had been sending there were read by nobody: the sidecar projected every
+/// frame at the default 4 lines/beat no matter what the zoom was, and requested
+/// 256 aggregate rows regardless of the pool. Nothing errored — a 4-per-beat
+/// projection is a perfectly plausible tracker, which is exactly why it survived.
+///
+/// Packed into one u64 so the publish loop reads it with a single relaxed load
+/// and takes no lock at frame rate. Relaxed is enough: each field is republished
+/// every time any of them changes, and a frame built from a viewport one poll
+/// stale is indistinguishable from one built a poll earlier.
+///
+/// One viewport for all clients. There is one client in practice; if a second
+/// ever matters, this becomes per-connection state rather than a shared cell.
+#[derive(Clone)]
+struct SharedViewport(Arc<AtomicU64>);
+
+impl SharedViewport {
+    fn new(vp: Viewport) -> Self {
+        let s = Self(Arc::new(AtomicU64::new(0)));
+        s.store(vp);
+        s
+    }
+    /// lines_per_beat: 8 bits (clamped to 64), row_count: 16 (clamped to 512),
+    /// first_row: 40 (1.1e12 rows; the timeline is 1e5).
+    fn store(&self, vp: Viewport) {
+        let packed = (vp.lines_per_beat as u64 & 0xff)
+            | ((vp.row_count as u64 & 0xffff) << 8)
+            | ((vp.first_row & 0xff_ffff_ffff) << 24);
+        self.0.store(packed, Ordering::Relaxed);
+    }
+    fn load(&self) -> Viewport {
+        let p = self.0.load(Ordering::Relaxed);
+        Viewport {
+            lines_per_beat: (p & 0xff) as u32,
+            row_count: ((p >> 8) & 0xffff) as u32,
+            first_row: (p >> 24) & 0xff_ffff_ffff,
+        }
+    }
 }
 
 struct Args {
@@ -154,6 +196,15 @@ struct Frame {
     /// Real clip placements from the engine (v11). placement_id, track,
     /// start/end tick, name. Loose session placements are excluded upstream.
     extents: Vec<(u32, u32, u64, u64, [u8; 32])>,
+    /// The lines-per-beat the cached `notes` rows were projected with.
+    ///
+    /// The cache below is keyed on clip_version, because notes only move on an
+    /// edit — but their ROW also moves when the viewport's grid changes, and zoom
+    /// does not touch clip_version. Without this the rows stayed frozen at
+    /// whatever grid was current when the project loaded: change zoom and every
+    /// note kept its old row, landing off its own lane's grid. Same shape as
+    /// every other bug on this branch — the content changed, the key did not.
+    notes_grid: u32,
     /// Scratch, reused so the aggregation path allocates nothing per frame.
     ev: Vec<(u64, u8)>,
 }
@@ -172,7 +223,13 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&f.transport.to_le_bytes());            // 40
     out.extend_from_slice(&f.track_count.to_le_bytes());          // 42
     out.extend_from_slice(&(f.peaks.len() as u16).to_le_bytes()); // 44
-    out.extend_from_slice(&0u16.to_le_bytes());                   // 46 pad
+    // 46: the grid these rows are projected in. Not decoration — the client
+    // caches decoded notes and only re-reads them when something in the header
+    // says they changed. Zoom changes every row while leaving clip_version and
+    // note_count identical, so without this the client keeps rendering rows from
+    // the previous grid: notes land at 1/12th of their real position and look
+    // like an ordinary, slightly odd pattern. Sixth instance of this shape.
+    out.extend_from_slice(&(f.notes_grid as u16).to_le_bytes());  // 46
     out.extend_from_slice(&(f.notes.len() as u32).to_le_bytes()); // 48
     out.extend_from_slice(&f.agg_rows.to_le_bytes());             // 52
     debug_assert_eq!(out.len(), HEADER_BYTES);
@@ -243,9 +300,21 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     // client never has to guess.
     let lpb = snap.ui_lines_per_beat;
     out.lpb = lpb;
-    let grid_for = |t: usize| LaneGrid::new(if lpb[t] == 0 { vp.lines_per_beat } else { lpb[t] as u32 });
 
-    if out.clip_version != prev_clip_version || out.notes.is_empty() {
+    // ...but `row` on the wire is in the VIEWPORT's grid, not the lane's, because
+    // every lane is drawn against one shared row axis. Emitting lane-space rows
+    // and reading them as viewport rows is invisible while all lanes agree and
+    // silently misplaces every note the moment one doesn't — a lane at 4/beat put
+    // its beat-3 note on row 12 while the viewport at 12/beat drew beat 3 at row
+    // 36, three beats off, with no error anywhere. The lane grid stays
+    // authoritative for what a row MEANS in ticks (note duration, and which rows a
+    // lane has at all); the client gets lpb[] for both. One axis on the wire.
+    let vp_grid = LaneGrid::new(vp.lines_per_beat);
+
+    if out.clip_version != prev_clip_version || out.notes.is_empty()
+        || out.notes_grid != vp.lines_per_beat
+    {
+        out.notes_grid = vp.lines_per_beat;
         out.notes.clear();
         out.window_start = 0;
         out.window_end = 0;
@@ -270,9 +339,14 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
                     placement_flags: note.placement_flags,
                     placement_id: note.placement_id as u8,
                     delay_nanoticks: note.delay_nanoticks,
-                    row: grid_for(track as usize).row_of_tick(note.t_on) as u32,
+                    row: vp_grid.row_of_tick(note.t_on) as u32,
                 });
             }
+        }
+    }
+    if std::env::var_os("DAW_SIDECAR_DEBUG_ROWS").is_some() {
+        for n in out.notes.iter().take(6) {
+            eprintln!("dbg: vp_lpb={} track={} t_on={} row={}", vp.lines_per_beat, n.track, n.t_on, n.row);
         }
     }
     out.extents.clear();
@@ -292,9 +366,12 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
         // keeps its fields private precisely so the grid it belongs to cannot be
         // mismatched with the rows in it.
         for t in 0..out.track_count {
-            // Each lane aggregates on its own grid, so a triplet lane's rows are
-            // thirds of a beat and a sextuplet lane's are sixths.
-            let g = grid_for(t as usize);
+            // Aggregates are indexed by viewport row on the client, so they must
+            // be BUCKETED by viewport row here. Aggregating each lane on its own
+            // grid produced buckets that did not line up with the rows they were
+            // drawn into — the same axis mismatch as `row` above, just harder to
+            // see because a wrong aggregate still looks like a plausible one.
+            let g = vp_grid;
             let window = g.window(
                 g.tick_of_row(vp.first_row),
                 g.tick_of_row(vp.first_row + vp.row_count as u64),
@@ -343,7 +420,52 @@ fn parse_num(body: &str, key: &str) -> Option<i64> {
     rest[start..start + end].parse().ok()
 }
 
-fn build_command(body: &str) -> Option<UiCommandPayload> {
+/// Pull a JSON string field. Same deliberately-small parser as `parse_num`:
+/// commands are a handful of flat objects we generate ourselves, so a real JSON
+/// dependency would be the largest thing in the binary for no gain.
+fn parse_str<'a>(txt: &'a str, key: &str) -> Option<&'a str> {
+    let i = txt.find(key)? + key.len();
+    let rest = &txt[i..];
+    let open = rest.find('"')?;
+    let after = &rest[open + 1..];
+    let close = after.find('"')?;
+    Some(&after[..close])
+}
+
+/// A project name has to survive being joined to a directory on the engine side,
+/// where it becomes `<dir>/<name>.uniproj.json`. Anything that could climb out of
+/// that directory is refused here, at the process boundary that faces the socket,
+/// rather than trusted to be handled two hops away.
+fn safe_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 28
+        && !name.contains(['/', '\\', '\0'])
+        && name != ".."
+        && name != "."
+}
+
+/// Commands that carry a name ride in the same 40-byte slot as the rest; see
+/// `UiPatcherPresetCommandPayload::as_command`.
+fn build_named(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
+    let ty = if body.contains("\"load\"") {
+        UiCommandType::LoadProject
+    } else if body.contains("\"save\"") {
+        UiCommandType::SaveProject
+    } else {
+        return None;                       // not a named command at all
+    };
+    let name = parse_str(body, "\"name\"").unwrap_or("default");
+    if !safe_name(name) {
+        // Distinct from "unknown command": the command WAS understood and was
+        // refused. Collapsing the two would report a rejected name as a typo.
+        return Some(Err("bad project name"));
+    }
+    Some(Ok(UiPatcherPresetCommandPayload::named(ty, name).as_command()))
+}
+
+fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
+    if let Some(r) = build_named(body) { return r; }
+
     let mut p = UiCommandPayload {
         command_type: UiCommandType::None as u16,
         flags: 0, track_id: 0, plugin_index: 0, note_pitch: 0, value0: 0,
@@ -372,14 +494,15 @@ fn build_command(body: &str) -> Option<UiCommandPayload> {
     } else if body.contains("\"redo\"") {
         p.command_type = UiCommandType::Redo as u16;
     } else {
-        return None;
+        return Err("unknown command");
     }
-    Some(p)
+    Ok(p)
 }
 
-fn serve_commands(listener: TcpListener, shm: String) {
+fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport) {
     for stream in listener.incoming().flatten() {
         let shm = shm.clone();
+        let viewport = viewport.clone();
         thread::spawn(move || {
             let mut ws = match tungstenite::accept(stream) { Ok(w) => w, Err(_) => return };
             // Attached HERE, on the thread that will use it: EngineHandle is not
@@ -393,9 +516,22 @@ fn serve_commands(listener: TcpListener, shm: String) {
             loop {
                 match ws.read() {
                     Ok(tungstenite::Message::Text(t)) => {
+                        // Viewport updates are not engine commands — they change
+                        // what we project, not what the song contains, so they
+                        // never touch the command ring.
+                        if t.contains("\"linesPerBeat\"") {
+                            let mut vp = viewport.load();
+                            parse_viewport(&t, &mut vp);
+                            viewport.store(vp);
+                            let reply = format!(
+                                "{{\"ok\":true,\"viewport\":{{\"linesPerBeat\":{},\"firstRow\":{},\"rowCount\":{}}}}}",
+                                vp.lines_per_beat, vp.first_row, vp.row_count);
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
                         let reply = match build_command(&t) {
-                            None => "{\"error\":\"unknown command\"}".to_string(),
-                            Some(p) => match handle.send_command(p) {
+                            Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                            Ok(p) => match handle.send_command(p) {
                                 Ok(()) => format!("{{\"ok\":true,\"type\":{}}}", p.command_type),
                                 Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                             },
@@ -411,7 +547,7 @@ fn serve_commands(listener: TcpListener, shm: String) {
     }
 }
 
-fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>) {
+fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>, viewport: SharedViewport) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
     let mut ws = match tungstenite::accept(stream) {
         Ok(w) => w,
@@ -439,15 +575,14 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>) {
     let mut last_version = u64::MAX;
     // Fixed generous window; the client slices what it can see. 256 rows across
     // 8 tracks is 16 KB, well under the measured 126 MB/s ceiling.
-    let viewport = Viewport { lines_per_beat: 4, first_row: 0, row_count: 256 };
     // WRITE-ONLY, deliberately. Two attempts at a client->server channel on this
     // one socket both broke it: a non-blocking socket makes send() fail with
     // WouldBlock under ordinary backpressure, and a read timeout corrupts the
     // stream when it fires mid-frame — one frame through, then close 1006.
-    // Reading safely needs a second thread, which the payload does not justify:
-    // note rows are absolute (row_of_tick needs no viewport), and aggregates are
-    // computed over a fixed window the client slices. Revisit only if a real
-    // command path needs this direction.
+    // Reading safely needs a second thread — and that thread already exists, on
+    // the command port, so the viewport arrives there and reaches us through
+    // `SharedViewport`. It used to be a hardcoded constant here while the client
+    // dutifully sent updates into this socket's void.
     let (mut seq, mut sent, mut polls) = (0u64, 0u64, 0u64);
     let started = Instant::now();
     let mut reported = started;
@@ -457,7 +592,8 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>) {
         polls += 1;
 
         let prev_cv = frame.clip_version;
-        if read_frame(&handle, seq, &mut frame, prev_cv, viewport) && frame.version != last_version {
+        // Re-read every poll: zoom and scroll change between frames.
+        if read_frame(&handle, seq, &mut frame, prev_cv, viewport.load()) && frame.version != last_version {
             // Dedup on the engine's own version: the engine publishes at ~86 Hz,
             // we poll faster so we never miss one, and the surplus polls cost a
             // single atomic load each.
@@ -512,11 +648,16 @@ fn main() {
     }
     eprintln!("sidecar: ws://127.0.0.1:{} polling at {} Hz", args.port, args.hz);
 
+    // Default until the client says otherwise: a plain 4-per-beat grid and a
+    // generous window, so a client that never sends a viewport still gets frames.
+    let viewport = SharedViewport::new(Viewport { lines_per_beat: 4, first_row: 0, row_count: 256 });
+
     match TcpListener::bind(("127.0.0.1", args.cmd_port)) {
         Ok(l) => {
             eprintln!("sidecar: ws://127.0.0.1:{} for commands", args.cmd_port);
             let shm = args.shm.clone();
-            thread::spawn(move || serve_commands(l, shm));
+            let vp = viewport.clone();
+            thread::spawn(move || serve_commands(l, shm, vp));
         }
         Err(e) => eprintln!("sidecar: no command port {} ({e}) — read-only", args.cmd_port),
     }
@@ -526,7 +667,8 @@ fn main() {
         match stream {
             Ok(s) => {
                 let (shm, hz, c) = (args.shm.clone(), args.hz, clients.clone());
-                thread::spawn(move || serve(s, shm, hz, c));
+                let vp = viewport.clone();
+                thread::spawn(move || serve(s, shm, hz, c, vp));
             }
             Err(e) => eprintln!("sidecar: accept failed: {e}"),
         }
