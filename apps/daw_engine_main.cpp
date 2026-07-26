@@ -46,6 +46,7 @@
 #include "apps/latency_manager.h"
 #include "apps/time_base.h"
 #include "apps/musical_structures.h"
+#include "apps/placement_schedule.h"
 #include "apps/automation_clip.h"
 #include "apps/uid_hash.h"
 #include "apps/scale_library.h"
@@ -737,11 +738,27 @@ int main(int argc, char** argv) {
   if (!pluginPath.empty()) {
     baseConfig.pluginPaths = {pluginPath};
   }
-  baseConfig.sampleRate = 48000.0;
+  baseConfig.sampleRate = 48000.0;  // fallback only; overridden by the device
   baseConfig.numChannelsIn = 2;
   baseConfig.numBlocks = 4; // Increase block count for deeper pipeline/safety
   baseConfig.ringUiCapacity = 1024;
   const uint32_t uiDiffRingCapacity = 1024;
+
+  // Adopt the audio device's ACTUAL sample rate before anything (hosts, the
+  // SHM header, the scheduler threads) captures the config. Hardcoding 48 kHz
+  // plays everything off-speed on any other device — 48k content on a 96k
+  // device runs 2x fast, on 192k 4x fast. Opened here to read the rate; started
+  // later. If there is no device, the 48 kHz fallback stands for offline timing.
+  std::unique_ptr<daw::IAudioBackend> audioBackend = daw::createAudioBackend();
+  if (audioBackend && audioBackend->openDefaultDevice(2)) {
+    baseConfig.sampleRate = audioBackend->sampleRate();
+    std::cout << "Audio device sample rate: " << baseConfig.sampleRate << " Hz"
+              << std::endl;
+  } else {
+    std::cerr << "No audio device; using " << baseConfig.sampleRate
+              << " Hz for offline timing" << std::endl;
+    audioBackend.reset();
+  }
 
   const std::string pluginCachePath = defaultPluginCachePath();
   const auto pluginCache = daw::readPluginCache(pluginCachePath);
@@ -1190,7 +1207,6 @@ struct TrackRuntime {
   std::atomic<uint32_t> audioPlaybackBlockId{0};
 
   std::unique_ptr<daw::IRuntime> audioRuntime;
-  std::unique_ptr<daw::IAudioBackend> audioBackend;
   std::unique_ptr<EngineAudioCallback> audioCallback;
 
   daw::StaticTempoProvider tempoProvider(120.0);
@@ -2450,9 +2466,12 @@ struct TrackRuntime {
         track.modLinks = runtime->track.modRegistry.links;
         trackClip = runtime->track.clip;
       }
-      // M3.1: the engine holds one clip per track, so it saves as one project
-      // clip + a single placement at=0 — the identity form of the placement
-      // model. clip length = the tick just past the last event.
+      // The engine plays a flattened per-track clip (all placements expanded to
+      // absolute ticks), so it saves as one clip + one placement at=0. Notes
+      // round-trip; a multi-placement arrangement's structure is flattened on
+      // an engine save until the runtime retains the placement list natively
+      // (M3.2). The file format itself keeps placements (project_file_tests).
+      // clip length = the tick just past the last event.
       if (!trackClip.events().empty()) {
         uint64_t clipLen = 0;
         for (const auto& e : trackClip.events()) {
@@ -2572,6 +2591,33 @@ struct TrackRuntime {
     // all-tracks published snapshot, which refreshes on this value) re-read.
     clipVersion.fetch_add(1, std::memory_order_acq_rel);
 
+    // M3.3: the transport loops over the whole arrangement now, not a fixed bar.
+    // Arrangement end = the furthest placement end across all tracks; the flat
+    // per-track clips built below place notes on that same absolute timeline.
+    uint64_t arrangementEnd = 0;
+    for (const auto& source : document.tracks) {
+      for (const auto& pl : source.placements) {
+        if (!pl.at.has_value()) {
+          continue;
+        }
+        uint64_t len = pl.lengthNanoticks;
+        if (len == 0) {
+          for (const auto& c : document.clips) {
+            if (c.id == pl.clipId) {
+              len = c.lengthNanoticks;
+              break;
+            }
+          }
+        }
+        arrangementEnd = std::max(arrangementEnd, *pl.at + len);
+      }
+    }
+    if (arrangementEnd == 0) {
+      arrangementEnd = patternTicks;  // empty project keeps the default bar
+    }
+    loopStartNanotick.store(0, std::memory_order_release);
+    loopEndNanotick.store(arrangementEnd, std::memory_order_release);
+
     // Grow the track set to fit the document, so a project with more tracks than
     // the engine currently holds loads in full rather than dropping the tail.
     // Only for tracks that don't exist yet — existing tracks are left untouched
@@ -2666,14 +2712,17 @@ struct TrackRuntime {
       std::shared_ptr<const ClipSnapshot> snapshot;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        // M3.1: the engine plays one clip per track, so resolve the track's
-        // first placement into a single clip (base - mutes + adds). Additional
-        // placements are preserved on the next save but not yet played (M3.3);
-        // for the identity form (one placement at=0, no overrides) this is just
-        // the base clip, so playback is unchanged.
-        daw::MusicalClip resolvedClip;
-        if (!source.placements.empty()) {
-          const auto& placement = source.placements.front();
+        // M3.3: flatten this track's placements into one absolute-tick clip the
+        // scheduler plays directly. Each placement resolves base - mutes + adds
+        // (clip-relative), then placementEventsInWindow expands it — looped to
+        // fill the placement — onto the timeline. Loose (null-at) placements have
+        // no timeline position and are skipped. For the identity form (one
+        // placement at=0 spanning its clip) the flat clip == the base clip.
+        daw::MusicalClip flat;
+        for (const auto& placement : source.placements) {
+          if (!placement.at.has_value()) {
+            continue;
+          }
           const daw::ProjectClip* clipDef = nullptr;
           for (const auto& c : document.clips) {
             if (c.id == placement.clipId) {
@@ -2681,6 +2730,7 @@ struct TrackRuntime {
               break;
             }
           }
+          std::vector<daw::MusicalEvent> resolved;
           if (clipDef) {
             for (const auto& e : clipDef->clip.events()) {
               bool muted = false;
@@ -2693,15 +2743,25 @@ struct TrackRuntime {
                 }
               }
               if (!muted) {
-                resolvedClip.addEvent(e);
+                resolved.push_back(e);
               }
             }
-            for (const auto& add : placement.adds) {
-              resolvedClip.addEvent(add);
-            }
+          }
+          for (const auto& add : placement.adds) {
+            resolved.push_back(add);
+          }
+          const uint64_t clipLen = clipDef ? clipDef->lengthNanoticks : 0;
+          const uint64_t plLen =
+              placement.lengthNanoticks > 0 ? placement.lengthNanoticks : clipLen;
+          const auto scheduled = daw::placementEventsInWindow(
+              resolved, clipLen, *placement.at, plLen, 0, arrangementEnd);
+          for (const auto& s : scheduled) {
+            daw::MusicalEvent ev = s.event;
+            ev.nanotickOffset = s.absTick;
+            flat.addEvent(ev);
           }
         }
-        runtime->track.clip = std::move(resolvedClip);
+        runtime->track.clip = std::move(flat);
         // M3.4: retain the track's placed clips as rail extents. Loose session
         // placements (null at) have no timeline position and are not published.
         runtime->clipExtents.clear();
@@ -7166,14 +7226,13 @@ struct TrackRuntime {
   });
   if (!testMode) {
     audioRuntime = daw::createJuceRuntime();
-    audioBackend = daw::createAudioBackend();
-    if (!audioBackend || !audioBackend->openDefaultDevice(2)) {
-      std::cerr << "Failed to initialize audio device" << std::endl;
+    // Opened earlier to adopt its sample rate; here we just wire the callback.
+    if (!audioBackend) {
+      std::cerr << "No audio device; running without audio output" << std::endl;
     } else {
-      std::cout << "Audio device initialized successfully" << std::endl;
       std::cout << "Audio device: " << audioBackend->deviceName() << std::endl;
       std::cout << "  Sample rate: " << audioBackend->sampleRate()
-                << " (engine expects: " << engineConfig.sampleRate << ")" << std::endl;
+                << " (engine now matches)" << std::endl;
       std::cout << "  Buffer size: " << audioBackend->blockSize()
                 << " (engine expects: " << engineConfig.blockSize << ")" << std::endl;
       audioCallback = std::make_unique<EngineAudioCallback>(
