@@ -4455,7 +4455,33 @@ struct TrackRuntime {
                static_cast<uint16_t>(daw::UiCommandType::TogglePlay)) {
       const bool next = !playing.load(std::memory_order_acquire);
       playing.store(next, std::memory_order_release);
-      std::cout << "UI: Transport " << (next ? "Play" : "Stop") << std::endl;
+      std::cout << "UI: Transport " << (next ? "Play" : "Pause") << std::endl;
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::Stop)) {
+      // Halt and rewind to the loop start. resetTimeline is drained by the
+      // producer, which rewinds the transport and the audio playback position
+      // together so the next Play starts clean.
+      playing.store(false, std::memory_order_release);
+      resetTimeline.store(true, std::memory_order_release);
+      std::cout << "UI: Transport Stop" << std::endl;
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetPosition)) {
+      const uint64_t target =
+          static_cast<uint64_t>(payload.noteNanotickLo) |
+          (static_cast<uint64_t>(payload.noteNanotickHi) << 32);
+      uint64_t start = loopStartNanotick.load(std::memory_order_acquire);
+      uint64_t end = loopEndNanotick.load(std::memory_order_acquire);
+      if (end <= start) {
+        start = 0;
+        end = patternTicks;
+      }
+      // Clamp into the loop; end is exclusive so the last tick is end-1.
+      uint64_t clamped = target < start ? start : target;
+      if (end > 0 && clamped >= end) {
+        clamped = end - 1;
+      }
+      transportNanotick.store(clamped, std::memory_order_release);
+      std::cout << "UI: Transport SetPosition " << clamped << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestClipWindow)) {
       daw::UiClipWindowCommandPayload windowPayload{};
@@ -4829,8 +4855,11 @@ struct TrackRuntime {
         continue;
       }
       if (resetTimeline.exchange(false)) {
-        transportNanotick.store(0, std::memory_order_release);
-        audioPlaybackBlockId.store(0, std::memory_order_release);  // Reset playback position too
+        // Rewind to the loop start (Stop), resetting the audio playback position
+        // with it so the next Play begins there rather than mid-block.
+        transportNanotick.store(loopStartNanotick.load(std::memory_order_acquire),
+                                std::memory_order_release);
+        audioPlaybackBlockId.store(0, std::memory_order_release);
       }
 
       for (auto* runtime : trackSnapshot) {

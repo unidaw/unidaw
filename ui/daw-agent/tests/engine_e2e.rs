@@ -244,6 +244,45 @@ fn roundtrip_preserves_placements() {
     assert_eq!(clip7["notes"].as_array().unwrap().len(), 2);
 }
 
+/// Seek moves the transport to a position, and Stop halts and rewinds it — the
+/// two transport commands the web UI needs beyond play/pause.
+#[test]
+fn transport_seek_and_stop() {
+    let _serial = SERIAL.lock().unwrap();
+    let (_engine, session) = start_engine("transport");
+    let target = 2 * Q; // within the default 1-bar loop
+
+    let seek = session.execute(&ToolCall {
+        tool: "transport".into(),
+        args: json!({ "action": "seek", "position": target }),
+    });
+    assert!(seek.ok, "seek failed: {seek:?}");
+    // The published playhead reflects the seek (transport, not a clip edit, so
+    // poll the snapshot rather than the clip version).
+    let poll = |want: u64, what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if let Some(s) = session.handle().snapshot() {
+                if s.ui_global_nanotick_playhead == want {
+                    return;
+                }
+            }
+            assert!(Instant::now() < deadline, "{what}: playhead never reached {want}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    poll(target, "seek");
+
+    let stop = session.execute(&ToolCall {
+        tool: "transport".into(),
+        args: json!({ "action": "stop" }),
+    });
+    assert!(stop.ok, "stop failed: {stop:?}");
+    poll(0, "stop rewind");
+    let s = session.handle().snapshot().expect("snapshot");
+    assert_eq!(s.ui_transport_state, 0, "stop should halt playback");
+}
+
 /// An audio clip persists through a load -> save round-trip (kind + source ref
 /// intact) and shows as a rail flagged as audio, even though the engine doesn't
 /// schedule it yet — the Movement 4 format slot, exercised against a live engine.

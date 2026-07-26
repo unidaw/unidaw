@@ -352,6 +352,10 @@ pub enum UiCommandType {
     /// Gain in millibels (`value0`, signed), pan in thousandths
     /// (`plugin_index`, signed), mute/solo in `flags`.
     SetTrackMixer = 33,
+    /// Halt playback and rewind the transport to the loop start.
+    Stop = 34,
+    /// Seek the transport to the nanotick in note_nanotick_lo/hi (clamped to the loop).
+    SetPosition = 35,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
