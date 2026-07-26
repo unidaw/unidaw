@@ -207,7 +207,7 @@ export class Arrange {
       audioClips: (() => { let n = 0; for (let i = 0; i < vm.clipCount; i++) if (vm.clips[i].audio) n++; return n; })(),
       zoom: vm.zoom.label,
       startTick: vm.view.startTick,
-      ticksPerPixel: vm.view.ticksPerPixel,
+      ticksPerPixel: vm.view.ticksPerPixel, width: vm.view.width,
       gridLines: vm.gridCount,
       rulerTicks: vm.rulerCount,
       firstBar: vm.rulerCount ? vm.rulerBar[0] : -1,

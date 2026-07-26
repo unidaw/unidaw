@@ -109,7 +109,12 @@ const chrome = createChrome(document.getElementById('chrome'), {
 });
 // No write path yet — the command ring needs a channel the write-only socket
 // does not have. The buttons exist and say so rather than pretending.
-function cmd(what) { if (!conn || !conn.send({ type: what })) { state.link = 'no engine'; schedule(); } }
+function cmd(what) {
+  // Starting or stopping the transport re-arms following: it is the moment you
+  // are asking to watch the music rather than to look around it.
+  if (what === 'play' || what === 'stop') state.followPlayhead = true;
+  if (!conn || !conn.send({ type: what })) { state.link = 'no engine'; schedule(); }
+}
 const hud = document.getElementById('hud');
 const tracker = new Tracker(host, metrics);
 const arrangeHost = document.getElementById('arrange');
@@ -369,6 +374,7 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
   pianoSelection: null, pianoMarquee: null, pianoDrag: null,
   pianoFitPending: false, browserOpen: false, dockOpen: false, helpOpen: false,
+  followPlayhead: true,
   selectedNode: -1, currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
@@ -740,6 +746,45 @@ function draw() {
 // The cursor centres and the timeline moves under it — the tracker convention
 // (Renoise, OpenMPT). It also means scrolling starts on the very first keypress
 // that crosses the middle, instead of after a long dead zone.
+/**
+ * Keep the playhead in view while the transport runs.
+ *
+ * Every DAW does this and this one did not: at 1/48 the tracker's 62 rows are
+ * about five beats, so the playhead left the window within a second and stayed
+ * gone. Following is on by default and switches OFF the moment you scroll or
+ * move the cursor yourself — looking somewhere else during playback is a
+ * deliberate act, and yanking the view back is the wrong answer to it. `F`
+ * turns it back on, and starting the transport does too.
+ */
+function followPlayhead() {
+  if (!state.followPlayhead || !engine || !engine.transport) return;
+  const tick = engine.playheadTick;
+
+  if (state.view === 'tracker') {
+    const row = Math.floor(tick / ZOOM_LEVELS[state.zoom].rowNanoticks);
+    const visible = Math.max(1, tracker.poolSize);
+    // A margin, not an edge: pinning the playhead to the last row means you
+    // never see what is coming.
+    if (row < state.start + 2 || row >= state.start + visible - 4) {
+      state.start = Math.max(0, row - Math.floor(visible / 3));
+    }
+    return;
+  }
+  if (state.view === 'arrange' && arrangeBuf) {
+    const span = arrangeBuf.view.ticksPerPixel * arrangeBuf.view.width;
+    if (tick < arrangeBuf.view.startTick || tick > arrangeBuf.view.startTick + span * 0.85) {
+      state.arrangeStart = Math.max(0, tick - span / 4);
+    }
+    return;
+  }
+  if (state.view === 'piano' && pianoBuf) {
+    const span = pianoBuf.view.ticksPerPixel * pianoBuf.view.width;
+    if (tick < pianoBuf.view.startTick || tick > pianoBuf.view.startTick + span * 0.85) {
+      state.pianoStart = Math.max(0, tick - span / 4);
+    }
+  }
+}
+
 function follow() {
   const visible = Math.max(1, Math.floor(host.clientHeight / metrics.rowHeight));
   const centre = Math.floor(visible / 2);
@@ -1024,6 +1069,9 @@ function extendSelection(row) {
 /** Any cursor move abandons a half-typed token. */
 function moveCursor(fn) {
   if (entry.active) cancel(entry);
+  // Looking somewhere else during playback is deliberate; do not yank the view
+  // back. `F` re-enables, and so does starting the transport.
+  state.followPlayhead = false;
   state.digitCell = -1;
   // An unshifted move drops the selection. Keeping it would leave a range
   // highlighted that the next operation silently acts on.
@@ -1102,6 +1150,9 @@ addEventListener('keydown', (e) => {
     return done();
   }
   if (state.view === 'piano') {
+    if (k.startsWith('Arrow') || k === 'PageUp' || k === 'PageDown' || k === 'Home') {
+      state.followPlayhead = false;
+    }
     const page = pianoBuf ? pianoBuf.view.ticksPerPixel * pianoBuf.view.width : 3840000;
     if (k === 'ArrowRight') { state.pianoStart += page / 8; return done(); }
     if (k === 'ArrowLeft') { state.pianoStart = Math.max(0, state.pianoStart - page / 8); return done(); }
@@ -1162,6 +1213,9 @@ addEventListener('keydown', (e) => {
     return;
   }
   if (state.view === 'arrange') {
+    if (k.startsWith('Arrow') || k === 'PageUp' || k === 'PageDown' || k === 'Home') {
+      state.followPlayhead = false;
+    }
     const page = arrangeBuf ? arrangeBuf.view.ticksPerPixel * arrangeBuf.view.width : 3840000;
     if (k === 'ArrowRight') { state.arrangeStart += page / 8; return done(); }
     if (k === 'ArrowLeft') { state.arrangeStart = Math.max(0, state.arrangeStart - page / 8); return done(); }
@@ -1215,6 +1269,7 @@ addEventListener('keydown', (e) => {
   if (k === '-' || k === '_') { moveCursor(() => { state.zoom = Math.max(0, state.zoom - 1); }); return done(); }
   if (k === '+' || k === '=') { moveCursor(() => { state.zoom = Math.min(ZOOM_LEVELS.length - 1, state.zoom + 1); }); return done(); }
   if (k === ' ') { cmd('play'); return done(); }
+  if (k === 'F') { state.followPlayhead = !state.followPlayhead; return done(); }
   if (k === 'Escape') { state.reject = null; return done(); }
 
   // 5. Editing at the cursor.
@@ -1359,6 +1414,7 @@ conn = connectEngine({
     reconcileMixer(mixerState, store);
     scope.push(store.peaks, store.peakCount);
     state.playhead = tickToRow(store.playheadTick);
+    followPlayhead();
     schedule();
   },
 });
@@ -1519,6 +1575,8 @@ window.__uni = {
   patcher: () => (engine ? { version: engine.patcherVersion, device: engine.patcherDevice,
     nodes: engine.patcherNodes.map(n => ({ id: n.id, type: n.type, cfg: Array.from(n.config) })),
     edges: engine.patcherEdges.slice() } : null),
+  follow: (on) => { state.followPlayhead = on === undefined ? !state.followPlayhead : !!on;
+                    draw(); return state.followPlayhead; },
   view: (v) => {
     // Same side effects as the key path. Entering the piano roll by Tab fitted
     // the pitch window and entering it through here did not, so an agent opened

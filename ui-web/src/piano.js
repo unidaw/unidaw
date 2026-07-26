@@ -254,6 +254,7 @@ export class Piano {
     return {
       notes: vm.noteCount, keys: vm.keyCount, zoom: vm.zoom.label, track: vm.trackName,
       lowPitch: vm.view.lowPitch, startTick: vm.view.startTick,
+      ticksPerPixel: vm.view.ticksPerPixel, width: vm.view.width,
       pitchRange: hi < 0 ? null : [lo, hi],
       gridLines: vm.gridCount, playheadX: Math.round(vm.playheadX),
       selected: vm.selectedCount,

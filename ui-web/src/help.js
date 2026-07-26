@@ -18,6 +18,7 @@ export const GLOBAL_KEYS = [
   ['B', 'browser rail'],
   ['?', 'this help'],
   ['Space', 'play / pause'],
+  ['F', 'follow the playhead (off when you scroll; on when you hit play)'],
   ['Cmd+Z', 'undo (shift to redo)'],
   ['Esc', 'cancel / close'],
 ];

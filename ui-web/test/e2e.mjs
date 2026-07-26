@@ -291,6 +291,49 @@ await page.evaluate(() => window.__uni.browser(true));
 await page.waitForTimeout(700);
 const projects = await page.evaluate(() => window.__uni.projects());
 ok(projects.includes(PROJECT), 'the sidecar lists projects from disk', JSON.stringify(projects));
+// Close it. An open rail owns the keyboard, so leaving it open makes every later
+// section's keystrokes land somewhere else — which is how "scrolling stops the
+// view following" failed while working perfectly by hand.
+await page.evaluate(() => window.__uni.browser(false));
+
+section('follow the playhead');
+// At the finest zooms the window is a few beats wide, so a view that does not
+// follow loses the playhead within a second — which is exactly what it did.
+for (const [view, probe, prep] of [
+  ['tracker', null, () => { window.__uni.view('tracker'); window.__uni.setZoom(0); }],
+  ['arrange', 'arrangeProbe', () => { window.__uni.view('arrange'); window.__uni.arrangeZoom(0); }],
+  ['piano', 'pianoProbe', () => { window.__uni.view('piano'); window.__uni.pianoZoom(0); }],
+]) {
+  await page.evaluate(prep);
+  await page.evaluate(() => window.__uni.follow(true));
+  await run('play', 300);
+  let offscreen = 0;
+  for (let i = 0; i < 3; i++) {
+    await page.waitForTimeout(900);
+    const vis = await page.evaluate(([v, pn]) => {
+      const e = window.__uni.engineState();
+      if (v === 'tracker') {
+        const s = window.__uni.state(), p = window.__uni.probe();
+        return s.playhead >= s.start && s.playhead < s.start + p.poolSize;
+      }
+      const p = window.__uni[pn]();
+      return e.playheadTick >= p.startTick
+          && e.playheadTick <= p.startTick + p.ticksPerPixel * p.width;
+    }, [view, probe]);
+    if (!vis) offscreen++;
+  }
+  await run('stop', 300);
+  ok(offscreen === 0, `${view} keeps the playhead in view`, `${offscreen}/3 off screen`);
+}
+await page.evaluate(() => { window.__uni.view('tracker'); window.__uni.setZoom(3); });
+// Looking elsewhere during playback is deliberate and must not be overridden.
+await page.keyboard.press('ArrowDown');
+ok((await page.evaluate(() => window.__uni.state().followPlayhead)) === false,
+   'scrolling by hand stops the view following');
+await run('play', 300);
+ok((await page.evaluate(() => window.__uni.state().followPlayhead)) === true,
+   'and pressing play re-arms it');
+await run('stop', 300);
 
 section('save');
 // Writes a real file, so it cleans up after itself — a test that leaves state on
