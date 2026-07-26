@@ -83,10 +83,11 @@ import { Mixer } from './src/mixer.js';
 import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
          gainAtPosition, FLAG_MUTE, FLAG_SOLO } from './src/mixermodel.js';
 import { Piano } from './src/piano.js';
-import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch } from './src/pianomodel.js';
+import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch,
+         notesInRect, noteKey } from './src/pianomodel.js';
 import { Browser } from './src/browser.js';
 import { Dock } from './src/dock.js';
-import { createHelp } from './src/help.js';
+import { createHelp, GLOBAL_KEYS, SURFACE_KEYS } from './src/help.js';
 import { Patcher } from './src/patcher.js';
 import { buildPatcherModel, createPatcherBuffer } from './src/patchermodel.js';
 import { createEntry, feed, cancel, begin, parseToken, parseChord, editing, NOTE_KEYS, NOTE_OFF_KEY,
@@ -224,8 +225,48 @@ const piano = new Piano(pianoHost, {
     }
     schedule();
   },
-  onSelect: (id) => { state.selectedNote = id; schedule(); },
+  onSelect: (id) => { state.selectedNote = id; state.pianoSelection = null; schedule(); },
+  onMarquee: (r) => {
+    state.pianoMarquee = r;
+    // Selected live, not on release: a marquee you cannot see the effect of
+    // until you let go is a guess.
+    if (pianoBuf) state.pianoSelection = notesInRect(pianoBuf, r.x0, r.y0, r.x1, r.y1);
+    schedule();
+  },
+  onMarqueeEnd: () => { state.pianoMarquee = null; schedule(); },
 });
+
+/** The engine notes the piano roll has selected, as {note, id}. */
+function pianoSelected() {
+  const out = [];
+  if (!engine || !state.pianoSelection) return out;
+  for (let i = 0; i < engine.noteCount; i++) {
+    const n = engine.notes[i];
+    if (state.pianoSelection.has(noteKey(n))) out.push(n);
+  }
+  return out;
+}
+
+/** Transpose or delete the piano roll's selection, through the same batch the
+ *  tracker uses — one path, so they cannot behave differently. */
+function pianoEdit(kind, semitones) {
+  const picked = pianoSelected();
+  if (!picked.length) { state.reject = 'select notes first (shift-drag)'; return false; }
+  if (!conn) { state.reject = 'no engine'; return false; }
+  const ops = [];
+  for (const n of picked) {
+    if (kind === 'delete') { ops.push({ type: 'delete', track: n.track, tick: n.tOn }); continue; }
+    const p = n.pitch + semitones;
+    if (p < 0 || p > 127) continue;
+    ops.push({ type: 'note', track: n.track, pitch: p, tick: n.tOn,
+               dur: Math.max(1, n.tOff - n.tOn), vel: n.velocity });
+  }
+  if (!ops.length) { state.reject = 'transpose would push notes out of MIDI range'; return false; }
+  if (!conn.sendBatch(ops)) { state.reject = 'no engine'; return false; }
+  if (kind === 'delete') state.pianoSelection = null;
+  state.reject = null;
+  return true;
+}
 
 const mixer = new Mixer(mixerHost, {
   onGain: (track, pos) => {
@@ -260,6 +301,7 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   // projection differs, which is the whole point of the view-model boundary.
   projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: -1,
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
+  pianoSelection: null, pianoMarquee: null,
   pianoFitPending: false, browserOpen: false, dockOpen: false, helpOpen: false,
   selectedNode: -1, currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
@@ -485,6 +527,8 @@ function drawPiano() {
     track: state.cursor.track,
     allTracks: state.pianoAll,
     selectedNote: state.selectedNote,
+    selection: state.pianoSelection,
+    marquee: state.pianoMarquee,
   }, pianoBuf));
   chrome.update({
     playheadTick: engine ? engine.playheadTick : 0,
@@ -990,10 +1034,17 @@ addEventListener('keydown', (e) => {
     if (k === '[') { state.cursor.track = Math.max(0, state.cursor.track - 1); return done(); }
     if (k === ']') { state.cursor.track = Math.min(state.tracks - 1, state.cursor.track + 1); return done(); }
     if (k === ' ') { cmd('play'); return done(); }
-    if (k === 'Escape') { state.selectedNote = -1; state.reject = null; return done(); }
-    if (k === 's') {
+    if (k === 'Escape') { state.selectedNote = -1; state.pianoSelection = null;
+                          state.reject = null; return done(); }
+    if (k === 's' && !e.altKey) {
       conn && conn.send({ type: 'seek', track: state.cursor.track,
                           tick: Math.max(0, Math.round(state.pianoStart)) });
+      return done();
+    }
+    if (e.altKey && (k === 'q' || k === 'a')) { pianoEdit('transpose', k === 'q' ? 1 : -1); return done(); }
+    if (e.altKey && (k === 'w' || k === 's')) { pianoEdit('transpose', k === 'w' ? 12 : -12); return done(); }
+    if ((k === 'Backspace' || k === 'Delete') && state.pianoSelection && state.pianoSelection.size) {
+      pianoEdit('delete');
       return done();
     }
     if (k === 'Backspace' || k === 'Delete') {
@@ -1238,6 +1289,7 @@ window.__uni = {
                  mixRevision++;
                  state.pianoZoom = 3; state.pianoStart = 0; state.pianoLow = 36;
                  state.pianoAll = false; state.selectedNote = -1;
+                 state.pianoSelection = null; state.pianoMarquee = null;
                  state.browserOpen = false; state.projects = []; state.currentProject = '';
                  browser.selected = 0; browser.cancelSave();
                  state.dockOpen = false; dock.clear(); state.helpOpen = false;
@@ -1314,6 +1366,13 @@ window.__uni = {
   pianoTo: (tick, low) => { state.pianoStart = Math.max(0, tick);
     if (low !== undefined) state.pianoLow = low; draw(); },
   pianoAll: (on) => { state.pianoAll = !!on; draw(); },
+  pianoSelect: (x0, y0, x1, y1) => {
+    state.pianoSelection = pianoBuf ? notesInRect(pianoBuf, x0, y0, x1, y1) : null;
+    draw();
+    return state.pianoSelection ? state.pianoSelection.size : 0;
+  },
+  pianoSelected: () => pianoSelected().map(n => ({ id: n.id, pitch: n.pitch, track: n.track })),
+  pianoEdit: (kind, n) => pianoEdit(kind, n),
   pianoFit: () => { fitPiano(); draw(); },
   browser: (on) => { state.browserOpen = on === undefined ? !state.browserOpen : !!on;
     if (state.browserOpen) conn && conn.send({ type: 'list' }); draw(); return state.browserOpen; },
@@ -1322,6 +1381,9 @@ window.__uni = {
   dockProbe: () => dock.probe(),
   help: (on) => { state.helpOpen = on === undefined ? !state.helpOpen : !!on; draw(); return state.helpOpen; },
   helpProbe: () => help.probe(),
+  /** The declared keymap, so a test can check the overlay renders all of it. */
+  keymap: () => ({ global: GLOBAL_KEYS.length,
+                   surface: (SURFACE_KEYS[state.view] || SURFACE_KEYS.tracker).keys.length }),
   /** Run a console command. THE agent entry point — one grammar, every surface. */
   run: (line) => { dock.submit(line); dock.render(); return dock.probe().last; },
   projects: () => state.projects.slice(),

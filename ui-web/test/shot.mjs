@@ -147,7 +147,12 @@ for (const scene of SCENES) {
     const hp = await page.evaluate(() => window.__uni.helpProbe());
     ok(hp.sections === 2, `surface keys and global keys: ${hp.sections} sections`);
     ok(hp.rows > 8, `keys documented: ${hp.rows}`);
-    ok(hp.rows === (hp.surface === 'tracker' ? 22 : 17), `key count for ${hp.surface}: ${hp.rows}`);
+    // Every DECLARED key renders. Asserting an exact count instead just means
+    // the test fails whenever a key is documented, which teaches you to edit the
+    // number rather than to look.
+    const km = await page.evaluate(() => window.__uni.keymap());
+    ok(hp.rows === km.global + km.surface,
+       `overlay renders the whole keymap: ${hp.rows} of ${km.global + km.surface}`);
     const shown = await page.evaluate(() => document.querySelector('.ch-view')?.textContent);
     ok(shown === hp.surface.toUpperCase(), `chrome names the surface: ${shown} vs ${hp.surface}`);
     console.log(`  ${hp.surface}: ${hp.rows} keys in ${hp.sections} sections`);

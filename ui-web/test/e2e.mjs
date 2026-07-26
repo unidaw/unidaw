@@ -173,6 +173,24 @@ for (const [view, probe, check, prep] of [
   ok(p && check(p), `${view} renders live data`, JSON.stringify(p).slice(0, 90));
 }
 
+section('piano roll selection');
+await page.evaluate(() => { window.__uni.view('piano'); window.__uni.pianoAll(true); });
+await frames();
+const picked = await page.evaluate(() => window.__uni.pianoSelect(0, 0, 120, 300));
+ok(picked > 1, 'marquee selects several notes', `${picked} notes`);
+const pb = await page.evaluate(() => window.__uni.pianoSelected());
+await page.evaluate(() => window.__uni.pianoEdit('transpose', 12));
+await page.waitForTimeout(3500);
+const pa = await page.evaluate(() => window.__uni.pianoSelected());
+// Both halves matter: every note moves (the batch), and the selection still
+// matches them afterwards (it is keyed on position, not on the note id the
+// engine reassigns when it rewrites).
+ok(pa.length === pb.length && pa.every((n, i) => n.pitch === pb[i].pitch + 12),
+   'the whole selection transposes and survives the edit',
+   `${pb.length} notes`);
+await page.evaluate(() => window.__uni.pianoEdit('transpose', -12));
+await page.waitForTimeout(3500);
+
 section('browser');
 await page.evaluate(() => window.__uni.browser(true));
 await page.waitForTimeout(700);

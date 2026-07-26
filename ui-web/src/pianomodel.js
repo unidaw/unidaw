@@ -38,7 +38,7 @@ export const PIANO_ZOOM = [
 export function createPianoBuffer(noteCapacity = 512, keyCapacity = 128) {
   const notes = new Array(noteCapacity);
   for (let i = 0; i < noteCapacity; i++) {
-    notes[i] = { id: 0, pitch: 0, track: 0, x: 0, y: 0, w: 0, h: 0,
+    notes[i] = { id: 0, pitch: 0, track: 0, tick: 0, x: 0, y: 0, w: 0, h: 0,
                  velocity: 0, muted: false, isAdd: false, selected: false };
   }
   const keys = new Array(keyCapacity);
@@ -82,6 +82,18 @@ export function buildPianoModel(opts, buf) {
     startTick = 0, width = 1200, height = 600, zoomIndex = 3,
     lowPitch = 36, keyHeight = 10, engine = null,
     track = 0, allTracks = false, selectedNote = -1,
+    // A Set of "track:tick" keys, NOT note ids.
+    //
+    // The engine assigns a new id when it rewrites a note, so an id-keyed
+    // selection empties itself the moment you transpose it — the selection
+    // survives the edit but stops matching what it selected. (track, tOn) is
+    // stable across a rewrite and disappears on a delete, which is exactly the
+    // behaviour a selection should have.
+    //
+    // Separate from selectedNote (the click target) because "the note I clicked"
+    // and "the notes an operation applies to" are different questions.
+    selection = null,
+    marquee = null,
   } = opts;
 
   const zoom = PIANO_ZOOM[Math.max(0, Math.min(PIANO_ZOOM.length - 1, zoomIndex))];
@@ -146,10 +158,12 @@ export function buildPianoModel(opts, buf) {
       d.id = src.id;
       d.pitch = src.pitch;
       d.track = src.track;
+      d.tick = src.tOn;
       d.velocity = src.velocity;
       d.muted = src.muted;
       d.isAdd = src.isAdd;
-      d.selected = src.id === selectedNote;
+      d.selected = src.id === selectedNote
+                 || (selection !== null && selection.has(noteKey(src)));
       d.x = (src.tOn - startTick) / tpp;
       d.y = (highPitch - 1 - src.pitch) * keyHeight;
       d.h = keyHeight;
@@ -161,11 +175,34 @@ export function buildPianoModel(opts, buf) {
   buf.noteCount = n;
 
   buf.trackName = allTracks ? 'all tracks' : trackName(engine, track);
+  buf.marquee = marquee;
+  buf.selectedCount = selection ? selection.size : 0;
 
   buf.playheadX = engine && engine.playheadTick >= startTick && engine.playheadTick < endTick
     ? (engine.playheadTick - startTick) / tpp
     : -1;
   return buf;
+}
+
+/**
+ * Note ids inside a pixel rectangle. Rectangle in the band's coordinates, the
+ * same ones the model lays notes out in, so this is a plain overlap test rather
+ * than a second projection that could disagree with the first.
+ */
+/** The stable identity of a note for selection purposes. See `selection` above. */
+export function noteKey(n) { return n.track + ':' + n.tOn; }
+
+export function notesInRect(buf, x0, y0, x1, y1) {
+  const lo = Math.min(x0, x1), hi = Math.max(x0, x1);
+  const top = Math.min(y0, y1), bot = Math.max(y0, y1);
+  const out = new Set();
+  for (let i = 0; i < buf.noteCount; i++) {
+    const n = buf.notes[i];
+    if (n.x + n.w < lo || n.x > hi) continue;
+    if (n.y + n.h < top || n.y > bot) continue;
+    out.add(n.track + ':' + n.tick);
+  }
+  return out;
 }
 
 /**

@@ -8,10 +8,11 @@ function div(cls, parent) {
 }
 
 export class Piano {
-  constructor(host, { onNote, onSelect } = {}) {
+  constructor(host, { onNote, onSelect, onMarquee, onMarqueeEnd } = {}) {
     this.host = host;
     this.host.className = 'pr';
     this.onNote = onNote; this.onSelect = onSelect;
+    this.onMarquee = onMarquee; this.onMarqueeEnd = onMarqueeEnd;
 
     this.keysEl = div('pr-keys', host);
     this.band = div('pr-band', host);
@@ -20,6 +21,7 @@ export class Piano {
     this.gridEl = div('pr-grid', this.band);
     this.notesEl = div('pr-notes', this.band);
     this.playhead = div('pr-playhead', this.band);
+    this.marquee = div('pr-marquee', this.band);
 
     this.keyPool = [];
     this.rowPool = [];
@@ -29,6 +31,15 @@ export class Piano {
     this.vm = null;
 
     this.band.addEventListener('pointerdown', (e) => this._down(e));
+    this.band.addEventListener('pointermove', (e) => this._move(e));
+    this.band.addEventListener('pointerup', (e) => this._up(e));
+    this.band.addEventListener('pointercancel', () => this._cancel());
+    this._drag = null;
+  }
+
+  _local(e) {
+    const r = this.rowsEl.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
   }
 
   _down(e) {
@@ -36,14 +47,38 @@ export class Piano {
     if (!vm) return;
     const noteEl = e.target.closest('.pr-note');
     if (noteEl && this.onSelect) { this.onSelect(Number(noteEl.dataset.id)); return; }
-    const r = this.rowsEl.getBoundingClientRect();
-    const x = e.clientX - r.left, y = e.clientY - r.top;
-    if (x < 0 || y < 0) return;
+    const p = this._local(e);
+    if (p.x < 0 || p.y < 0) return;
+    // Shift starts a marquee; a plain click writes a note. Writing on every drag
+    // would make selecting impossible, and selecting on every click would make
+    // the fastest way to enter notes a modifier chord.
+    if (e.shiftKey) {
+      this._drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+      this.band.setPointerCapture(e.pointerId);
+      this.onMarquee && this.onMarquee(this._drag);
+      return;
+    }
     const high = vm.view.lowPitch + vm.keyCount;
-    const pitch = high - 1 - Math.floor(y / vm.view.keyHeight);
-    const tick = vm.view.startTick + x * vm.view.ticksPerPixel;
+    const pitch = high - 1 - Math.floor(p.y / vm.view.keyHeight);
+    const tick = vm.view.startTick + p.x * vm.view.ticksPerPixel;
     this.onNote && this.onNote(pitch, tick);
   }
+
+  _move(e) {
+    if (!this._drag) return;
+    const p = this._local(e);
+    this._drag.x1 = p.x; this._drag.y1 = p.y;
+    this.onMarquee && this.onMarquee(this._drag);
+  }
+
+  _up(e) {
+    if (!this._drag) return;
+    const d = this._drag;
+    this._drag = null;
+    this.onMarqueeEnd && this.onMarqueeEnd(d);
+  }
+
+  _cancel() { this._drag = null; this.onMarqueeEnd && this.onMarqueeEnd(null); }
 
   _pool(arr, cls, parent, n, init) {
     while (arr.length < n) {
@@ -140,6 +175,20 @@ export class Piano {
       if (el._id !== n.id) { el._id = n.id; el.dataset.id = String(n.id); }
     }
 
+    const mq = vm.marquee;
+    const mqKey = mq ? `${mq.x0},${mq.y0},${mq.x1},${mq.y1}` : '';
+    if (this._mq !== mqKey) {
+      this._mq = mqKey;
+      if (!mq) this.marquee.style.display = 'none';
+      else {
+        if (this.marquee.style.display === 'none') this.marquee.style.display = '';
+        const x = Math.min(mq.x0, mq.x1), y = Math.min(mq.y0, mq.y1);
+        this.marquee.style.transform = `translate(${x}px, ${y}px)`;
+        this.marquee.style.width = Math.abs(mq.x1 - mq.x0) + 'px';
+        this.marquee.style.height = Math.abs(mq.y1 - mq.y0) + 'px';
+      }
+    }
+
     const px = vm.playheadX;
     if (this._px !== px) {
       this._px = px;
@@ -164,6 +213,7 @@ export class Piano {
       lowPitch: vm.view.lowPitch, startTick: vm.view.startTick,
       pitchRange: hi < 0 ? null : [lo, hi],
       gridLines: vm.gridCount, playheadX: Math.round(vm.playheadX),
+      selected: vm.selectedCount,
       domNodes: this.notePool.length + this.keyPool.length * 2 + this.gridPool.length,
     };
   }

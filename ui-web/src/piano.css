@@ -84,6 +84,13 @@
 .pr-note.add { border-color: var(--uni-text-fx); }
 .pr-note.sel { outline: 1px solid var(--base-text); }
 
+.pr-marquee {
+  position: absolute; top: 0; left: 0;
+  border: 1px solid var(--base-accent);
+  background: var(--uni-surface-selection);
+  pointer-events: none; z-index: 2;
+}
+
 .pr-playhead {
   position: absolute; top: var(--metrics-header-height); bottom: 0; left: 0;
   width: 1px;
