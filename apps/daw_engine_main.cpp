@@ -698,6 +698,11 @@ int main(int argc, char** argv) {
   if (const char* env = std::getenv("DAW_PATCHER_PARALLEL")) {
     patcherParallel = std::string(env) == "1";
   }
+  // Trace every scheduled note-on (tick + pitch) to the event log. Off by
+  // default; a verification aid — counts and times the notes the scheduler
+  // actually emits, independent of any synth's audio. Runs on the producer
+  // thread (same one that already locks and does I/O), never the audio callback.
+  const bool traceNotes = std::getenv("DAW_TRACE_NOTES") != nullptr;
   std::unique_ptr<WorkerPool> patcherPool;
   if (patcherParallel) {
     size_t threadCount = std::max<size_t>(1, std::thread::hardware_concurrency());
@@ -908,6 +913,19 @@ struct Track {
     bool hasScheduledEnd = false;
   };
 
+  // A future note-on produced by a time-spreading row op (delay, retrigger).
+  // Its start is beyond the block that dispatched the note, so it waits in the
+  // per-track queue and fires when a later block's window reaches onTick. ticks
+  // are pattern-relative and already wrapped into the loop.
+  struct PendingStrike {
+    uint64_t onTick = 0;
+    uint64_t durationNanoticks = 0;
+    uint8_t pitch = 0;
+    uint8_t velocity = 0;
+    uint8_t column = 0;
+    float tuningCents = 0.0f;
+  };
+
 struct TrackRuntime {
     uint32_t trackId = 0;
     Track track;
@@ -936,6 +954,9 @@ struct TrackRuntime {
     // Track notes that are currently playing and may need note-offs in future blocks
     std::map<uint32_t, ActiveNote> activeNotes;  // Key is noteId
     std::map<uint8_t, std::vector<uint32_t>> activeNoteByColumn;
+    // Future note-ons from delay/retrigger ops, awaiting the block that reaches
+    // them. Guarded by activeNotesMutex (they schedule alongside notes).
+    std::vector<PendingStrike> pendingStrikes;
     std::mutex activeNotesMutex;
 
     std::vector<float> patcherAudioBuffer;
@@ -1630,6 +1651,7 @@ struct TrackRuntime {
             std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
             runtime.activeNotes.clear();
             runtime.activeNoteByColumn.clear();
+            runtime.pendingStrikes.clear();
           }
           DAW_EVENT("chain.reconciled")
               .field("track", runtime.trackId)
@@ -5209,6 +5231,125 @@ struct TrackRuntime {
             }
           };
 
+          // Emit a note-on at onTick (assumed within this window) and schedule
+          // its note-off — in-block if it lands here, else via activeNotes for a
+          // later block. Shared by the plain note path, the row-op strike path,
+          // and the pending-strike drain, so all three emit identically. Must be
+          // called without activeNotesMutex held (it takes the lock itself).
+          auto emitNoteOnWithOff = [&](uint64_t onTick, uint64_t duration,
+                                       uint8_t pitch, uint8_t velocity,
+                                       uint8_t noteColumn, float noteTuningCents) {
+            const uint64_t tickDelta = baseTickDelta + (onTick - rangeStart);
+            const uint64_t eventSample =
+                blockSampleStart + tickDeltaToSamples(tickDelta);
+            const int64_t offset = static_cast<int64_t>(eventSample) -
+                                   static_cast<int64_t>(blockSampleStart);
+            if (offset < 0 ||
+                offset >= static_cast<int64_t>(engineConfig.blockSize)) {
+              return;
+            }
+            const uint32_t noteId =
+                nextNoteId.fetch_add(1, std::memory_order_acq_rel);
+            daw::EventEntry midiEntry;
+            midiEntry.sampleTime = eventSample;
+            midiEntry.blockId = 0;
+            midiEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
+            midiEntry.size = sizeof(daw::MidiPayload);
+            daw::MidiPayload midiPayload{};
+            midiPayload.status = 0x90;
+            midiPayload.data1 = pitch;
+            midiPayload.data2 = velocity;
+            midiPayload.channel = 0;
+            midiPayload.tuningCents = noteTuningCents;
+            midiPayload.noteId = noteId;
+            std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
+            pushScratchpad(midiEntry, onTick);
+            if (traceNotes) {
+              DAW_EVENT("note.emit")
+                  .field("track", runtime.trackId)
+                  .field("tick", onTick)
+                  .field("pitch", static_cast<uint64_t>(pitch))
+                  .field("dur", duration);
+            }
+
+            if (duration == 0) {
+              std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+              ActiveNote activeNote;
+              activeNote.noteId = noteId;
+              activeNote.pitch = pitch;
+              activeNote.column = noteColumn;
+              activeNote.startNanotick = onTick;
+              activeNote.endNanotick = onTick;
+              activeNote.tuningCents = noteTuningCents;
+              activeNote.hasScheduledEnd = false;
+              runtime.activeNotes[noteId] = activeNote;
+              runtime.activeNoteByColumn[noteColumn].push_back(noteId);
+              return;
+            }
+            const uint64_t noteEndTick = onTick + duration;
+            const uint64_t offTick = wrapTick(noteEndTick);
+            if (offTick >= rangeStart && offTick < rangeEnd) {
+              const uint64_t offDelta = baseTickDelta + (offTick - rangeStart);
+              const uint64_t offSample =
+                  blockSampleStart + tickDeltaToSamples(offDelta);
+              const int64_t offOffset = static_cast<int64_t>(offSample) -
+                                        static_cast<int64_t>(blockSampleStart);
+              if (offOffset >= 0 &&
+                  offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
+                daw::EventEntry noteOffEntry;
+                noteOffEntry.sampleTime = offSample;
+                noteOffEntry.blockId = 0;
+                noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
+                noteOffEntry.size = sizeof(daw::MidiPayload);
+                daw::MidiPayload offPayload{};
+                offPayload.status = 0x80;
+                offPayload.data1 = pitch;
+                offPayload.data2 = 0;
+                offPayload.channel = 0;
+                offPayload.tuningCents = noteTuningCents;
+                offPayload.noteId = noteId;
+                std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
+                pushScratchpad(noteOffEntry, noteEndTick);
+              }
+            } else {
+              std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+              ActiveNote activeNote;
+              activeNote.noteId = noteId;
+              activeNote.pitch = pitch;
+              activeNote.column = noteColumn;
+              activeNote.startNanotick = onTick;
+              activeNote.endNanotick = noteEndTick;
+              activeNote.tuningCents = noteTuningCents;
+              activeNote.hasScheduledEnd = true;
+              runtime.activeNotes[noteId] = activeNote;
+              runtime.activeNoteByColumn[noteColumn].push_back(noteId);
+            }
+          };
+
+          // Drain row-op strikes (delay/retrigger) whose onset has reached this
+          // window. Snapshot the due ones under the lock, then emit outside it so
+          // emitNoteOnWithOff can re-take activeNotesMutex without deadlock.
+          {
+            std::vector<PendingStrike> due;
+            {
+              std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
+              auto& pend = runtime.pendingStrikes;
+              for (size_t i = 0; i < pend.size();) {
+                if (pend[i].onTick >= rangeStart && pend[i].onTick < rangeEnd) {
+                  due.push_back(pend[i]);
+                  pend[i] = pend.back();
+                  pend.pop_back();
+                } else {
+                  ++i;
+                }
+              }
+            }
+            for (const auto& s : due) {
+              emitNoteOnWithOff(s.onTick, s.durationNanoticks, s.pitch,
+                                s.velocity, s.column, s.tuningCents);
+            }
+          }
+
           // First, check for any active notes that should end in this block
           {
             std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
@@ -5475,82 +5616,55 @@ struct TrackRuntime {
             }
             const uint8_t scheduledPitch = clampMidi(resolved.midi);
             const float tuningCents = resolved.cents;
-            const uint8_t channel = 0;
-            const uint32_t noteId = nextNoteId.fetch_add(1, std::memory_order_acq_rel);
-
-            // Emit note-on
-            daw::EventEntry midiEntry;
-            midiEntry.sampleTime = eventSample;
-            midiEntry.blockId = 0;
-            midiEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-            midiEntry.size = sizeof(daw::MidiPayload);
-            daw::MidiPayload midiPayload{};
-            midiPayload.status = 0x90;
-            midiPayload.data1 = scheduledPitch;
-            midiPayload.data2 = event->payload.note.velocity;
-            midiPayload.channel = channel;
-            midiPayload.tuningCents = tuningCents;
-            midiPayload.noteId = noteId;
-            std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
-            pushScratchpad(midiEntry, event->nanotickOffset);
-
-            // Track this note if it has a duration
             const uint64_t noteDuration = event->payload.note.durationNanoticks;
-            if (noteDuration > 0) {
-              uint64_t noteEndTick = event->nanotickOffset + noteDuration;
+            const uint8_t velocity = event->payload.note.velocity;
 
-              // Check if the note-off falls within this block
-              uint64_t offTick = noteEndTick;
-              offTick = wrapTick(offTick);
-
-              if (offTick >= rangeStart && offTick < rangeEnd) {
-                // Note ends in this block - emit note-off immediately
-                const uint64_t offDelta = baseTickDelta + (offTick - rangeStart);
-                const uint64_t offSample = blockSampleStart + tickDeltaToSamples(offDelta);
-                const int64_t offOffset = static_cast<int64_t>(offSample) - static_cast<int64_t>(blockSampleStart);
-
-                if (offOffset >= 0 && offOffset < static_cast<int64_t>(engineConfig.blockSize)) {
-                  daw::EventEntry noteOffEntry;
-                  noteOffEntry.sampleTime = offSample;
-                  noteOffEntry.blockId = 0;
-                  noteOffEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
-                  noteOffEntry.size = sizeof(daw::MidiPayload);
-                  daw::MidiPayload offPayload{};
-                  offPayload.status = 0x80;
-                  offPayload.data1 = scheduledPitch;
-                  offPayload.data2 = 0;
-                  offPayload.channel = channel;
-                  offPayload.tuningCents = tuningCents;
-                  offPayload.noteId = noteId;
-                  std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
-                  pushScratchpad(noteOffEntry, noteEndTick);
+            // Time-spreading row ops (delay, retrigger): expand the note into its
+            // strikes and route each through the shared emitter — inline if it
+            // lands in this window, else queued for the block that reaches it.
+            // The op-free path is one strike at the note's own tick, which is
+            // always in-window here (its start is why we are in this block), so
+            // it takes the fast inline branch below.
+            const uint8_t retrig = event->payload.note.retrigger;
+            const uint32_t delayTicks = event->payload.note.delayNanoticks;
+            if (retrig > 1 || delayTicks > 0) {
+              const auto strikes = daw::expandNoteOps(
+                  event->nanotickOffset, noteDuration, retrig, delayTicks);
+              std::vector<PendingStrike> queued;
+              for (const auto& s : strikes) {
+                const uint64_t onTick = wrapTick(s.onTick);
+                const uint64_t dur =
+                    s.offTick > s.onTick ? s.offTick - s.onTick : 0;
+                if (onTick >= rangeStart && onTick < rangeEnd) {
+                  emitNoteOnWithOff(onTick, dur, scheduledPitch, velocity, column,
+                                    tuningCents);
+                } else {
+                  queued.push_back(PendingStrike{onTick, dur, scheduledPitch,
+                                                 velocity, column, tuningCents});
                 }
-              } else {
-                // Note extends beyond this block - track it for later
+              }
+              if (!queued.empty()) {
                 std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-                ActiveNote activeNote;
-                activeNote.noteId = noteId;
-                activeNote.pitch = scheduledPitch;
-                activeNote.column = column;
-                activeNote.startNanotick = event->nanotickOffset;
-                activeNote.endNanotick = noteEndTick;
-                activeNote.tuningCents = tuningCents;
-                activeNote.hasScheduledEnd = true;
-                runtime.activeNotes[activeNote.noteId] = activeNote;
-                runtime.activeNoteByColumn[column].push_back(activeNote.noteId);
+                for (const auto& q : queued) {
+                  // The note re-enters the dispatch window once per loop and
+                  // would otherwise re-queue strikes that are still pending;
+                  // dedup so a strike is scheduled at most once per loop pass.
+                  bool exists = false;
+                  for (const auto& ps : runtime.pendingStrikes) {
+                    if (ps.onTick == q.onTick && ps.pitch == q.pitch &&
+                        ps.column == q.column) {
+                      exists = true;
+                      break;
+                    }
+                  }
+                  if (!exists) {
+                    runtime.pendingStrikes.push_back(q);
+                  }
+                }
               }
             } else {
-              std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
-              ActiveNote activeNote;
-              activeNote.noteId = noteId;
-              activeNote.pitch = scheduledPitch;
-              activeNote.column = column;
-              activeNote.startNanotick = event->nanotickOffset;
-              activeNote.endNanotick = event->nanotickOffset;
-              activeNote.tuningCents = tuningCents;
-              activeNote.hasScheduledEnd = false;
-              runtime.activeNotes[activeNote.noteId] = activeNote;
-              runtime.activeNoteByColumn[column].push_back(activeNote.noteId);
+              emitNoteOnWithOff(event->nanotickOffset, noteDuration,
+                                scheduledPitch, velocity, column, tuningCents);
             }
           }
         };

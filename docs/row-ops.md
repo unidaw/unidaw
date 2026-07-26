@@ -50,26 +50,36 @@ silent no-op — a red cell, not a dropped op, is the tracker rule.
   and independently seeded, and `0`/`>=100` always sound (zero regression for
   op-free notes).
 
-- **Delay and retrigger — model, persistence, and expansion logic done; RT
-  wiring pending.** Both ops *move events in time*: a delayed onset, or retrigger
-  strikes, land later than the note's stored tick and routinely cross the audio
-  block boundary. The **pure expansion** — a note's `(start, duration,
-  retrigger, delay)` into the concrete list of `NoteStrike { onTick, offTick }`
-  it sounds as — lives in `daw::expandNoteOps()` and is unit-tested
+- **Delay and retrigger — done.** Both ops *move events in time*: a delayed
+  onset, or retrigger strikes, land later than the note's stored tick and
+  routinely cross the block boundary. The **pure expansion** —
+  `daw::expandNoteOps()`, a note's `(start, duration, retrigger, delay)` into the
+  `NoteStrike { onTick, offTick }` list it sounds as — is unit-tested
   (`row_op_expand`): delay shifts the whole note, retrigger splits the delayed
   duration into N contiguous re-articulated strikes with the last absorbing the
-  remainder, counts are capped so no strike is ever empty, and the op-free path
-  yields exactly one full-length strike.
+  remainder, counts cap so no strike is empty, op-free yields one full-length
+  strike.
 
-  What remains is the **per-track pending-event queue** the block loop drains
-  each block: when a note first enters the play window, expand it and enqueue any
-  strikes that fall in future blocks (today's dispatch only "sees" an event when
-  its stored tick is in-window, and drops anything computed outside it — the same
-  limit the chord-humanize jitter has). That queue is the generalization of
-  today's `activeNotes` map (pending note-*offs*) to pending note-*ons*, and one
-  mechanism then serves delay, retrigger, and any future time-spreading op
-  (ratchet, arp, roll) uniformly. It touches the audio thread and needs wrap-
-  aware, allocation-free draining, so it is its own reviewed increment.
+  Playback drives that through a **per-track pending note-on queue**
+  (`runtime.pendingStrikes`), the generalization of the `activeNotes` map
+  (pending note-*offs*) to pending note-*ons*. When a note enters the dispatch
+  window it is expanded; strikes already in this block emit immediately, later
+  ones queue and fire when a subsequent block's window reaches them. A note
+  re-enters the window once per loop, so enqueue is deduped (onTick+pitch+column)
+  to schedule each strike at most once per pass. A shared `emitNoteOnWithOff`
+  emitter is used by the plain-note path, the strike path, and the drain, so all
+  three emit identically; the op-free path is byte-for-byte unchanged (verified:
+  identical rendered RMS/peak before and after). One mechanism now serves delay,
+  retrigger, and any future time-spreading op (ratchet, arp, roll).
+
+  Verified with a synth-independent note-on trace (`DAW_TRACE_NOTES=1` → one
+  `note.emit` per scheduled note-on): a plain note emits 1 note-on/loop at its
+  tick; `ret8` emits exactly 8 evenly spaced (0, ½, 1, … 3½ beats); `d1/2` moves
+  the onset from tick 0 to 480000. Counts stay stable across loops (no
+  accumulation), and the delayed strike fires ~21 blocks after dispatch, proving
+  the cross-block queue. Caveat: a strike whose tick lands past the 1-bar loop
+  end wraps into the loop (fires that pass rather than the next) — correct for
+  within-loop ops, approximate only for a delay that spills past the loop.
 
 ## Display and setting ops (pending)
 
