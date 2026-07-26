@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 4;
+export const WIRE_VERSION = 5;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 60;   // 56 + agg_tracks u16 + pad
+const HEADER_BYTES = 68;   // 56 + aggTracks u16 + extentCount u16 + lpb[8]
 const NOTE_BYTES = 40;
 
 /** A reusable decode target. One per connection. */
@@ -44,6 +44,9 @@ export function createStore() {
     extents: [],
     extentCount: 0,
     extentsRevision: 0,
+    /** Per-track lines_per_beat. Needed to render a lane on its own grid AND to
+     *  compute the tick a write targets — both halves of the projection. */
+    lpb: new Uint8Array(8),
     /** Bumped whenever notes actually changed, so consumers can skip work. */
     notesRevision: 0,
     /** Same, for aggregates. They change when the VIEWPORT moves, not when notes
@@ -94,6 +97,7 @@ export function decode(buf, store) {
   const aggRows = v.getUint32(52, true);
   const aggTracks = v.getUint16(56, true);
   const extentCount = v.getUint16(58, true);
+  for (let i = 0; i < 8; i++) store.lpb[i] = v.getUint8(60 + i);
   const aggN = aggRows * aggTracks;
   if (buf.byteLength < HEADER_BYTES + peakCount * 4 + noteCount * NOTE_BYTES + extentCount * 56 + aggN * 8) return false;
 

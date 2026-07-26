@@ -33,7 +33,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 4;
+const WIRE_VERSION: u16 = 5;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -146,6 +146,11 @@ struct Frame {
     aggs: Vec<(u32, u8, u8, u8)>,
     agg_rows: u32,
     agg_tracks: u16,
+    /// Per-track lines_per_beat. The client needs it for BOTH halves of the
+    /// projection: to render a lane on its own grid, and to compute the tick a
+    /// write targets. Only the read half knew about it, which is why a note
+    /// written for display row 1 landed at row 4.
+    lpb: [u8; 8],
     /// Real clip placements from the engine (v11). placement_id, track,
     /// start/end tick, name. Loose session placements are excluded upstream.
     extents: Vec<(u32, u32, u64, u64, [u8; 32])>,
@@ -173,6 +178,7 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     debug_assert_eq!(out.len(), HEADER_BYTES);
     out.extend_from_slice(&f.agg_tracks.to_le_bytes());
     out.extend_from_slice(&(f.extents.len() as u16).to_le_bytes());
+    out.extend_from_slice(&f.lpb);
     for p in &f.peaks {
         out.extend_from_slice(&p.to_le_bytes());
     }
@@ -236,6 +242,7 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     // still rendered a plausible-looking pattern. SHM v10 publishes it so the
     // client never has to guess.
     let lpb = snap.ui_lines_per_beat;
+    out.lpb = lpb;
     let grid_for = |t: usize| LaneGrid::new(if lpb[t] == 0 { vp.lines_per_beat } else { lpb[t] as u32 });
 
     if out.clip_version != prev_clip_version || out.notes.is_empty() {

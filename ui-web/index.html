@@ -120,6 +120,17 @@ function buildHead() {
   head.append(headRow);
 }
 
+const NANOTICKS_PER_BEAT = 960000;
+/** Ticks per row on a given lane's own grid. */
+function laneRowTicks(track) {
+  const n = engine && engine.lpb[track] ? engine.lpb[track] : 4;
+  return NANOTICKS_PER_BEAT / n;
+}
+/** The tick the cursor's row means ON ITS LANE. Both halves must agree. */
+function tickOfCursorRow() {
+  return state.cursor.row * laneRowTicks(state.cursor.track);
+}
+
 // The playhead arrives as a tick and has to be projected like everything else.
 function tickToRow(tick) {
   return Math.floor(tick / ZOOM_LEVELS[state.zoom].rowNanoticks);
@@ -219,16 +230,16 @@ addEventListener('keydown', (e) => {
   else if (k === 'Enter') {
     // Write a note at the cursor. The pitch is a placeholder until keyboard
     // note entry lands; the point here is that the ring round-trip works.
-    const zoomTicks = ZOOM_LEVELS[state.zoom].rowNanoticks;
+    // Tick in the LANE's grid, not the viewport's. The sidecar projects notes
+    // back using lines_per_beat per track, so computing the tick in viewport
+    // space put a note written at display row 1 onto row 4.
+    const t = tickOfCursorRow();
     conn && conn.send({ type: 'note', track: state.cursor.track,
-                        pitch: 60, tick: state.cursor.row * zoomTicks,
-                        dur: zoomTicks, vel: 100 });
+                        pitch: 60, tick: t, dur: laneRowTicks(state.cursor.track), vel: 100 });
     e.preventDefault(); return;
   }
   else if (k === 'Backspace' || k === 'Delete') {
-    const zoomTicks = ZOOM_LEVELS[state.zoom].rowNanoticks;
-    conn && conn.send({ type: 'delete', track: state.cursor.track,
-                        tick: state.cursor.row * zoomTicks });
+    conn && conn.send({ type: 'delete', track: state.cursor.track, tick: tickOfCursorRow() });
     e.preventDefault(); return;
   }
   else if (k === 'z' && (e.metaKey || e.ctrlKey)) {
