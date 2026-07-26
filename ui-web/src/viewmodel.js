@@ -31,6 +31,25 @@ export const ZOOM_LEVELS = [
 const NOTES = ['C-4', 'D#4', 'F-4', 'G-4', 'A#4', 'C-5', 'E-4', 'OFF'];
 
 const TICKS_PER_BAR = 3840000;
+const CLIP_TICKS = TICKS_PER_BAR * 4;                 // fixture: 4-bar clips
+const CLIP_BODY = CLIP_TICKS - TICKS_PER_BAR / 4;     // ...with a beat of gap after
+
+/**
+ * Clips are the container for notes, not a decoration over them: wherever a
+ * note exists there is a clip, no note exists outside one, and the space
+ * between clips is genuinely empty. So coverage has to be decided BEFORE
+ * content, or the grid shows notes floating in gaps with no rail around them.
+ *
+ * O(1) and allocation-free — the fixture lays clips on a regular grid, so
+ * coverage is arithmetic rather than a search. Real placements will need an
+ * interval lookup here, but it must stay allocation-free in the draw path.
+ */
+function clipIndexAt(tick, track) {
+  if (tick < 0) return -1;
+  const k = Math.floor(tick / CLIP_TICKS);
+  if ((k + track) % 3 === 0) return -1;               // gap between clips
+  return (tick - k * CLIP_TICKS) < CLIP_BODY ? k : -1;
+}
 
 /**
  * Deterministic pseudo-content for a point on the TIMELINE, keyed on the tick a
@@ -114,14 +133,17 @@ export function buildViewModel(opts, buf) {
     let ci = 0;
     const tick = tickOf(r);
     for (let t = 0; t < trackCount; t++) {
+      const inClip = clipIndexAt(tick, t) >= 0;
       for (let c = 0; c < columns; c++) {
         const cell = cells[ci++];
+        if (!inClip) { cell.text = ''; cell.kind = 'outside'; continue; }
         if (zoom.aggregate && c === 0) {
           // A coarse row spans many finer rows; count the events that fall in it.
           const span = zoom.rowNanoticks / ZOOM_LEVELS[0].rowNanoticks;
           let n = 0;
           for (let k = 0; k < span && k < 64; k++) {
-            if (contentAt(tick + k * ZOOM_LEVELS[0].rowNanoticks, t, c).kind !== 'empty') n++;
+            const sub = tick + k * ZOOM_LEVELS[0].rowNanoticks;
+            if (clipIndexAt(sub, t) >= 0 && contentAt(sub, t, c).kind !== 'empty') n++;
           }
           if (n > 1) { cell.text = `[${n}x]`; cell.kind = 'aggregate'; }
           else { const g = contentAt(tick, t, c); cell.text = g.text; cell.kind = g.kind; }
@@ -149,13 +171,12 @@ export function buildViewModel(opts, buf) {
   clips.length = 0;
   const pool = buf._clipPool;
   let cn = 0;
-  const CLIP_TICKS = TICKS_PER_BAR * 4;              // 4-bar clips, zoom-independent
   const winStart = tickOf(startRow), winEnd = tickOf(startRow + rowCount);
   const kFirst = Math.max(0, Math.floor(winStart / CLIP_TICKS));
   const kLast = Math.floor(winEnd / CLIP_TICKS);
   for (let k = kFirst; k <= kLast; k++) {
     for (let t = 0; t < trackCount; t++) {
-      if ((k + t) % 3 === 0) continue; // gaps
+      if ((k + t) % 3 === 0) continue; // gaps — must match clipIndexAt
       const cl = pool[cn] || (pool[cn] = { id: 0, track: 0, startTick: 0, endTick: 0, name: '', active: false });
       cn++;
       cl.id = k * 100 + t; cl.track = t;

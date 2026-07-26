@@ -70,6 +70,9 @@
 .tk-cell[data-kind="inst"]      { font-size: var(--font-size-inst); color: var(--uni-text-instrument); }
 .tk-cell[data-kind="fx"]        { font-size: var(--font-size-inst); color: var(--uni-text-fx); }
 .tk-cell[data-kind="empty"]     { color: var(--uni-text-empty); }
+/* Outside any clip. Not the same as an empty cell inside one: there is no clip
+   here to write into, so the track tint drops away and the cell reads as void. */
+.tk-cell[data-kind="outside"]   { background: var(--uni-surface-tracker-bg); }
 .tk-cell[data-kind="off"]       { color: var(--uni-text-off); }
 .tk-cell[data-kind="aggregate"] { color: var(--uni-text-aggregate); letter-spacing: var(--font-tracking-fx); }
 
