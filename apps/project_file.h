@@ -23,15 +23,43 @@ struct MixerSettings {
   bool solo = false;
 };
 
+// What kind of material a clip holds. The format carries this slot from the
+// start so audio regions are representable before it freezes — the retrofit that
+// symbolic-only formats never survive (ARCHITECTURE_REVIEW §7, Movement 4). The
+// engine plays Symbolic today; Audio clips persist and round-trip but are not yet
+// scheduled (their playback lands with the Movement 4 audio engine).
+enum class ClipKind : uint8_t {
+  Symbolic = 0,  // notes/chords in `clip`
+  Audio = 1,     // a region of an audio source, described by `audio`
+};
+
+// An audio region: a window into a source file placed on the timeline. Times on
+// the timeline (the clip's lengthNanoticks, the fades) are musical nanoticks; the
+// source in-point is in sample frames, the source's own unit, resolved against
+// the file's rate at play time. Minimal by design — enough to represent and
+// round-trip a region; warp/stretch, multi-channel, and clip-gain automation are
+// additive within this variant later.
+struct AudioClip {
+  std::string sourcePath;          // the audio file (durable source ids can come later)
+  uint64_t sourceStartFrame = 0;   // in-point into the source, in sample frames
+  double gainDb = 0.0;
+  uint64_t fadeInNanoticks = 0;
+  uint64_t fadeOutNanoticks = 0;
+};
+
 // A reusable clip definition. Project-level (Song.clips), referenced by
-// placements on any track. Events are CLIP-RELATIVE — 0-based within the clip,
-// never absolute timeline ticks. `lengthNanoticks` is the clip's own extent /
-// loop period; a placement longer than this loops the clip to fill itself.
+// placements on any track. For a Symbolic clip, events are CLIP-RELATIVE — 0-based
+// within the clip, never absolute timeline ticks. `lengthNanoticks` is the clip's
+// own extent / loop period; a placement longer than this loops the clip to fill
+// itself. `kind` selects which payload is meaningful: `clip` for Symbolic, `audio`
+// for Audio.
 struct ProjectClip {
   uint32_t id = 0;
   std::string name;
   uint64_t lengthNanoticks = 0;
-  MusicalClip clip;
+  ClipKind kind = ClipKind::Symbolic;
+  MusicalClip clip;   // meaningful when kind == Symbolic
+  AudioClip audio;    // meaningful when kind == Audio
 };
 
 // A placement of a clip on a track. `at` is the absolute timeline tick where the

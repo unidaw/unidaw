@@ -195,7 +195,8 @@ Patcher engine backend:
 - Patcher tests: `ctest -R patcher_ --output-on-failure`.
 - Device chain spec: `DEVICE_CHAIN.md`.
 - Current host binary: `build/juce_host`.
-- UI app (`daw-app`) spawns `build/daw_engine` automatically; override with `DAW_ENGINE_PATH`.
+- The Rust/GPUI `daw-app` has been removed; the web UI (Rust sidecar over SHM) replaces it.
+  Run `build/daw_engine` from `build/` (it spawns per-track `build/juce_host_process`).
 - Example run:
   `./build/juce_host --plugin /Library/Audio/Plug-Ins/VST3/SomeSynth.vst3`
 - Plugin scan cache: default `build/plugin_cache.json` (override with `DAW_PLUGIN_CACHE`).
@@ -212,7 +213,12 @@ Patcher engine backend:
 - Phase 3: `phase3_timebase`, `phase3_scheduler_ring`, `phase3_automation_ring`, `phase3_pulse_full`,
   `phase3_note_off_full`, `phase3_resurrection_full`, `phase3_composition_full`
 - Patcher: `patcher_resolution`, `patcher_graph_edits`
-- UI integration (Rust): `cargo test -p daw-app --test engine_integration` (may skip track SHM-dependent checks if `/daw_engine_shared` is unavailable; latency checks use optimistic UI/pending state).
+- Rust: `cargo test` in `ui/` covers the bridge SHM layout/offset asserts, the agent, the CLI,
+  and end-to-end engine tests (`daw-agent/tests/engine_e2e.rs`) that spawn `build/daw_engine` in
+  test mode and drive it over the command ring — segmentation-on-save and load->save placement
+  round-trip. They need the C++ targets built first (`cmake --build build`) and are serialized
+  (one engine at a time). The `daw-agent` examples (`observe`, `smoke`, `roundtrip`, `segtest`)
+  drive a live engine interactively.
 
 ## Verification tools (feedback loops)
 Prefer these over guessing; each turns an assertion about the running system

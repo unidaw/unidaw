@@ -78,12 +78,13 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: "transport",
-            description: "Start or stop playback.",
+            description: "Control playback: play/pause/toggle, stop (halt + rewind to loop start), or seek to a position.",
             params: json!({
                 "type": "object",
                 "required": ["action"],
                 "properties": {
-                    "action": { "type": "string", "enum": ["play", "stop", "toggle"] }
+                    "action": { "type": "string", "enum": ["play", "pause", "stop", "toggle", "seek"] },
+                    "position": { "type": "integer", "description": "Seek target in nanoticks (for action=seek)." }
                 }
             }),
         },
@@ -187,42 +188,75 @@ fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
         sent += 1;
         base = base.wrapping_add(1);
     }
-    ToolResult::ok(json!({ "sent": sent, "first_base_version": first_base, "track": track }))
+    // Wait for the engine to apply this batch (clip version reaches first_base +
+    // sent) before returning, so a following tool call reads a settled version
+    // and doesn't race the ring — no fixed delay between calls.
+    let applied = handle.wait_for_clip_version(
+        first_base,
+        first_base.wrapping_add(sent as u32),
+        std::time::Duration::from_secs(2),
+    );
+    ToolResult::ok(json!({
+        "sent": sent,
+        "first_base_version": first_base,
+        "applied": applied,
+        "track": track,
+    }))
 }
 
 fn transport(handle: &EngineHandle, args: &Value) -> ToolResult {
     let action = match args.get("action").and_then(|v| v.as_str()) {
         Some(a) => a,
-        None => return ToolResult::err("transport needs \"action\" (play|stop|toggle)"),
+        None => return ToolResult::err("transport needs \"action\" (play|pause|stop|toggle|seek)"),
     };
     let playing = handle.snapshot().map(|s| s.ui_transport_state != 0).unwrap_or(false);
-    // TogglePlay flips the transport; convert the desired absolute state into a
-    // toggle only when it would actually change, so play/stop are idempotent.
+
+    // stop and seek are distinct commands, not toggles.
+    let mut send = |cmd: UiCommandType, pos: u64| -> ToolResult {
+        let payload = UiCommandPayload {
+            command_type: cmd as u16,
+            flags: 0,
+            track_id: 0,
+            plugin_index: 0,
+            note_pitch: 0,
+            value0: 0,
+            note_nanotick_lo: (pos & 0xffff_ffff) as u32,
+            note_nanotick_hi: (pos >> 32) as u32,
+            note_duration_lo: 0,
+            note_duration_hi: 0,
+            base_version: 0,
+        };
+        match handle.send_command(payload) {
+            Ok(()) => ToolResult::ok(json!({ "action": action })),
+            Err(e) => ToolResult::err(e),
+        }
+    };
+    match action {
+        "stop" => return send(UiCommandType::Stop, 0),
+        "seek" => {
+            let pos = match arg_u64(args, "position") {
+                Some(p) => p,
+                None => return ToolResult::err("seek needs \"position\" (nanotick)"),
+            };
+            return send(UiCommandType::SetPosition, pos);
+        }
+        _ => {}
+    }
+
+    // play/pause/toggle map onto TogglePlay: flip only when it changes state, so
+    // they are idempotent.
     let should_toggle = match action {
         "toggle" => true,
         "play" => !playing,
-        "stop" => playing,
+        "pause" => playing,
         other => return ToolResult::err(format!("bad action {other:?}")),
     };
     if !should_toggle {
         return ToolResult::ok(json!({ "action": action, "changed": false, "playing": playing }));
     }
-    let payload = UiCommandPayload {
-        command_type: UiCommandType::TogglePlay as u16,
-        flags: 0,
-        track_id: 0,
-        plugin_index: 0,
-        note_pitch: 0,
-        value0: 0,
-        note_nanotick_lo: 0,
-        note_nanotick_hi: 0,
-        note_duration_lo: 0,
-        note_duration_hi: 0,
-        base_version: 0,
-    };
-    match handle.send_command(payload) {
-        Ok(()) => ToolResult::ok(json!({ "action": action, "changed": true })),
-        Err(e) => ToolResult::err(e),
+    match send(UiCommandType::TogglePlay, 0) {
+        r if r.ok => ToolResult::ok(json!({ "action": action, "changed": true })),
+        r => r,
     }
 }
 

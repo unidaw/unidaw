@@ -74,6 +74,12 @@ enum class UiCommandType : uint16_t {
   // signed), mute/solo in flags. Integers because UiCommandPayload has no
   // float fields and rounding a fader is harmless.
   SetTrackMixer = 33,
+  // Halt playback and return the transport to the loop start (a tracker Stop,
+  // distinct from TogglePlay's pause-in-place).
+  Stop = 34,
+  // Seek: move the transport to the nanotick in noteNanotickLo/Hi (clamped to
+  // the loop). Works whether or not playback is running.
+  SetPosition = 35,
 };
 
 constexpr uint16_t kMixerFlagMute = 1u << 0;

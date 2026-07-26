@@ -42,10 +42,17 @@ Recommended contents:
   - link list with sources/targets and depth/mode
 - Automation:
   - automation clips and targets
-- Clips (schema 2, implemented):
+- Clips (schema 3, implemented):
   - **Project-level `clips[]`** — the clip library. Each: `{ id, name, length,
-    notes[], chords[] }`. Clip events are **clip-relative** (0-based within the
-    clip), never absolute timeline ticks.
+    kind, ... }`. `kind` is `"symbolic"` (default) or `"audio"`.
+    - **Symbolic**: carries `notes[]`/`chords[]`, **clip-relative** (0-based
+      within the clip), never absolute timeline ticks.
+    - **Audio** (Movement 4 slot): carries `audio: { source_path,
+      source_start_frame, gain_db, fade_in, fade_out }`. `source_start_frame` is
+      the in-point into the source file (sample frames); `length`/fades are
+      musical nanoticks. Persisted and shown as a rail, but **not scheduled yet**
+      — playback lands with the Movement 4 audio engine. The slot exists now so
+      the format doesn't freeze symbolic-only (ARCHITECTURE_REVIEW §7).
   - **Per-track `placements[]`** — a clip dropped on a track: `{ clip_id, at,
     length, adds[], mutes[] }`. `at` = absolute timeline tick where the clip's
     tick 0 lands (**omitted when the placement is a loose session cell**). A
@@ -55,10 +62,14 @@ Recommended contents:
     here. Resolved notes = base − mutes + adds.
   - **Migration:** a schema-1 file (top-level per-track `notes`/`chords`)
     materializes to one project clip + one placement at `at=0`; because
-    clip-relative == absolute at `at=0`, ticks are unchanged. Save always writes
-    schema 2, so load-then-save upgrades in place.
-  - The engine currently plays one clip per track (the first placement); the
-    per-track-execution and arrange views are later M3 stages.
+    clip-relative == absolute at `at=0`, ticks are unchanged. A schema-2 clip
+    (no `kind`) reads as `symbolic`. Save always writes schema 3, so load-then-
+    save upgrades in place.
+  - The engine plays the whole arrangement: on load each track's placements are
+    flattened onto the timeline (looped, +at, overrides applied) and the transport
+    loops the arrangement length. A live-edited track's clips are derived from its
+    notes by proximity (rails + save); a loaded track keeps its authored
+    placements. Audio clips are skipped by the (symbolic) scheduler.
 
 ## `project.json` schema stub (draft)
 

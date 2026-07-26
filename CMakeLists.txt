@@ -416,6 +416,11 @@ add_test(NAME phase3_placement_schedule
 )
 set_tests_properties(phase3_placement_schedule PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_test(NAME phase3_note_entry
+  COMMAND phase3_tests --test note_entry
+)
+set_tests_properties(phase3_note_entry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME phase3_resync_mismatch
   COMMAND phase3_tests --test resync_mismatch
 )

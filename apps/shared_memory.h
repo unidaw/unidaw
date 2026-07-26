@@ -181,6 +181,10 @@ struct UiClipNote {
 constexpr uint8_t kUiClipNoteMuted = 1u << 0;
 constexpr uint8_t kUiClipNoteAdd = 1u << 1;
 
+// UiClipExtent.flags bits. An audio region reads as a rail like any clip, but the
+// UI renders it as a waveform rather than notes — and it carries no note events.
+constexpr uint32_t kUiClipExtentAudio = 1u << 0;
+
 static_assert(sizeof(UiClipNote) == 40,
               "UiClipNote layout must match the Rust mirror");
 

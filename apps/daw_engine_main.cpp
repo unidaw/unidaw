@@ -46,6 +46,8 @@
 #include "apps/latency_manager.h"
 #include "apps/time_base.h"
 #include "apps/musical_structures.h"
+#include "apps/placement_schedule.h"
+#include "apps/note_entry.h"
 #include "apps/automation_clip.h"
 #include "apps/uid_hash.h"
 #include "apps/scale_library.h"
@@ -365,14 +367,29 @@ public:
       m_playbackBlockId->store(nextBlockToPlay, std::memory_order_release);
     }
 
-    // Lock-free acquire of the current track list, then publish it as our
-    // hazard and re-validate: if the writer swapped between the load and the
-    // hazard store, reload so we never read a version the writer may free.
-    std::vector<TrackInfo>* tracks = m_tracksPtr.load(std::memory_order_acquire);
-    m_tracksHazard.store(tracks, std::memory_order_release);
-    if (tracks != m_tracksPtr.load(std::memory_order_acquire)) {
-      tracks = m_tracksPtr.load(std::memory_order_acquire);
-      m_tracksHazard.store(tracks, std::memory_order_release);
+    // Lock-free acquire of the current track list under a single hazard pointer.
+    // Publish our candidate as the hazard, then re-read the head; loop until the
+    // head is unchanged *after* the hazard is visible. Only then has the writer's
+    // reclamation — which reads the hazard after swapping the head — no way to
+    // free the version we commit to.
+    //
+    // Both sides must be seq_cst. The protocol is a StoreLoad handoff (we store
+    // hazard then load head; the writer stores head then loads hazard), and
+    // release/acquire do not order StoreLoad — the store and load could reorder
+    // and reopen the window. An earlier version stored the hazard with
+    // release, re-checked once, and on mismatch reloaded+republished with no
+    // final re-check: that left a gap where the writer freed the version between
+    // our reload and our hazard store, and the audio thread then read a freed
+    // TrackInfo whose header was null — SIGSEGV at header->numChannelsOut
+    // (null + 0x1c) a few hundred ms into playback.
+    std::vector<TrackInfo>* tracks = m_tracksPtr.load(std::memory_order_seq_cst);
+    for (;;) {
+      m_tracksHazard.store(tracks, std::memory_order_seq_cst);
+      std::vector<TrackInfo>* head = m_tracksPtr.load(std::memory_order_seq_cst);
+      if (head == tracks) {
+        break;
+      }
+      tracks = head;
     }
     if (!tracks) {
       return;
@@ -582,13 +599,17 @@ public:
     auto next = std::make_shared<std::vector<TrackInfo>>(tracks);
     std::vector<TrackInfo>* raw = next.get();
     m_tracksRetired.push_back(std::move(next));
-    m_tracksPtr.store(raw, std::memory_order_release);
+    // seq_cst to pair with the reader's seq_cst hazard store / head load: publish
+    // the new head, THEN read the hazard. The seq_cst total order guarantees that
+    // if the reader committed to a version (saw the head unchanged after its
+    // hazard was visible), this load observes that hazard and keeps the version.
+    m_tracksPtr.store(raw, std::memory_order_seq_cst);
 
     // Reclaim: keep the version just published and whatever the audio thread
     // is currently reading; free everything else. The reader re-validates its
     // hazard against m_tracksPtr, so a version that is neither current nor
     // hazarded can no longer be reached by the audio thread.
-    std::vector<TrackInfo>* hazard = m_tracksHazard.load(std::memory_order_acquire);
+    std::vector<TrackInfo>* hazard = m_tracksHazard.load(std::memory_order_seq_cst);
     m_tracksRetired.erase(
         std::remove_if(m_tracksRetired.begin(), m_tracksRetired.end(),
                        [&](const std::shared_ptr<std::vector<TrackInfo>>& v) {
@@ -737,11 +758,27 @@ int main(int argc, char** argv) {
   if (!pluginPath.empty()) {
     baseConfig.pluginPaths = {pluginPath};
   }
-  baseConfig.sampleRate = 48000.0;
+  baseConfig.sampleRate = 48000.0;  // fallback only; overridden by the device
   baseConfig.numChannelsIn = 2;
   baseConfig.numBlocks = 4; // Increase block count for deeper pipeline/safety
   baseConfig.ringUiCapacity = 1024;
   const uint32_t uiDiffRingCapacity = 1024;
+
+  // Adopt the audio device's ACTUAL sample rate before anything (hosts, the
+  // SHM header, the scheduler threads) captures the config. Hardcoding 48 kHz
+  // plays everything off-speed on any other device — 48k content on a 96k
+  // device runs 2x fast, on 192k 4x fast. Opened here to read the rate; started
+  // later. If there is no device, the 48 kHz fallback stands for offline timing.
+  std::unique_ptr<daw::IAudioBackend> audioBackend = daw::createAudioBackend();
+  if (audioBackend && audioBackend->openDefaultDevice(2)) {
+    baseConfig.sampleRate = audioBackend->sampleRate();
+    std::cout << "Audio device sample rate: " << baseConfig.sampleRate << " Hz"
+              << std::endl;
+  } else {
+    std::cerr << "No audio device; using " << baseConfig.sampleRate
+              << " Hz for offline timing" << std::endl;
+    audioBackend.reset();
+  }
 
   const std::string pluginCachePath = defaultPluginCachePath();
   const auto pluginCache = daw::readPluginCache(pluginCachePath);
@@ -909,6 +946,7 @@ struct ClipExtentInfo {
   uint64_t at = 0;
   uint64_t endTick = 0;
   std::string name;
+  bool isAudio = false;
 };
 
 struct Track {
@@ -972,6 +1010,15 @@ struct TrackRuntime {
     // trackMutex; set on load.
     std::vector<ClipExtentInfo> clipExtents;
     std::shared_ptr<const ClipSnapshot> clipSnapshot;
+    // The placement list this track loaded from (project-level clips are held
+    // engine-wide). The runtime plays a flattened clip, so this is what save
+    // emits to keep the arrangement's structure — provided the track hasn't been
+    // edited live. Guarded by trackMutex; set on load.
+    std::vector<daw::ProjectPlacement> sourcePlacements;
+    // Set when a command mutates the flat clip (note add/remove). A dirty track
+    // no longer matches its sourcePlacements, so save flattens it instead
+    // (edits win over structure until note entry is structural, M3.2).
+    std::atomic<bool> arrangementDirty{false};
     std::shared_ptr<const TrackStateSnapshot> trackSnapshot;
     daw::HostController controller;
     daw::HostConfig config;
@@ -1190,7 +1237,6 @@ struct TrackRuntime {
   std::atomic<uint32_t> audioPlaybackBlockId{0};
 
   std::unique_ptr<daw::IRuntime> audioRuntime;
-  std::unique_ptr<daw::IAudioBackend> audioBackend;
   std::unique_ptr<EngineAudioCallback> audioCallback;
 
   daw::StaticTempoProvider tempoProvider(120.0);
@@ -1287,6 +1333,13 @@ struct TrackRuntime {
   std::vector<daw::UndoEntry> redoStack;
   std::mutex harmonyMutex;
   std::vector<daw::HarmonyEvent> harmonyEvents;
+
+  // Project-level clip definitions retained from load. Placements (per-track,
+  // on TrackRuntime::sourcePlacements) reference these by id. Save re-emits the
+  // ones still referenced by a clean track so the arrangement's structure
+  // survives a load->save round-trip. Guarded by loadedClipsMutex.
+  std::mutex loadedClipsMutex;
+  std::vector<daw::ProjectClip> loadedClips;
 
   // Need to grab these freshly after connect/reconnect
   auto getRingStd = [&](TrackRuntime& runtime) {
@@ -1525,6 +1578,31 @@ struct TrackRuntime {
         continue;
       }
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      if (runtime->arrangementDirty.load(std::memory_order_relaxed)) {
+        // Live-edited track: its authored placements no longer describe the
+        // notes, so derive rails from the flat clip by proximity — the same
+        // segmentation a save emits, so what the UI draws matches what lands on
+        // disk. Every note falls under a rail ("no notes outside clips").
+        const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
+        const auto segments =
+            daw::segmentEventsIntoClips(runtime->track.clip.events(), bar, bar);
+        uint32_t placementId = 0;
+        for (const auto& seg : segments) {
+          if (count >= daw::kUiMaxClipExtents) {
+            break;
+          }
+          daw::UiClipExtent& out = region->extents[count];
+          out.placementId = placementId++;
+          out.clipId = 0;  // derived from notes — no stable clip id yet
+          out.trackId = runtime->trackId;
+          out.flags = 0;
+          out.startTick = seg.at;
+          out.endTick = seg.at + seg.length;
+          std::memset(out.name, 0, sizeof(out.name));
+          ++count;
+        }
+        continue;
+      }
       for (const auto& ext : runtime->clipExtents) {
         if (count >= daw::kUiMaxClipExtents) {
           break;
@@ -1533,7 +1611,7 @@ struct TrackRuntime {
         out.placementId = ext.placementId;
         out.clipId = ext.clipId;
         out.trackId = runtime->trackId;
-        out.flags = 0;
+        out.flags = ext.isAudio ? daw::kUiClipExtentAudio : 0u;
         out.startTick = ext.at;
         out.endTick = ext.endTick;
         std::memset(out.name, 0, sizeof(out.name));
@@ -2430,12 +2508,26 @@ struct TrackRuntime {
         }
       }
     }
+    // The project's retained clip definitions (from the last load). Clean tracks
+    // re-emit the placements that reference these; a flattened dirty track gets a
+    // freshly allocated id above every retained one, so the two never collide.
+    std::vector<daw::ProjectClip> retainedClips;
+    {
+      std::lock_guard<std::mutex> lock(loadedClipsMutex);
+      retainedClips = loadedClips;
+    }
+    uint32_t nextClipId = 1;
+    for (const auto& c : retainedClips) {
+      nextClipId = std::max(nextClipId, c.id + 1);
+    }
     for (auto* runtime : runtimes) {
       daw::ProjectTrack track;
       track.trackId = runtime->trackId;
       track.name = "Track " + std::to_string(runtime->trackId + 1);
       track.linesPerBeat = runtime->linesPerBeat.load(std::memory_order_relaxed);
       daw::MusicalClip trackClip;
+      bool trackDirty = false;
+      std::vector<daw::ProjectPlacement> trackPlacements;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         track.harmonyQuantize = runtime->track.harmonyQuantize;
@@ -2449,32 +2541,63 @@ struct TrackRuntime {
         track.chain = runtime->track.chain;
         track.modLinks = runtime->track.modRegistry.links;
         trackClip = runtime->track.clip;
+        trackDirty = runtime->arrangementDirty.load(std::memory_order_relaxed);
+        trackPlacements = runtime->sourcePlacements;
       }
-      // M3.1: the engine holds one clip per track, so it saves as one project
-      // clip + a single placement at=0 — the identity form of the placement
-      // model. clip length = the tick just past the last event.
-      if (!trackClip.events().empty()) {
-        uint64_t clipLen = 0;
-        for (const auto& e : trackClip.events()) {
-          const uint64_t dur =
-              e.type == daw::MusicalEventType::Note ? e.payload.note.durationNanoticks
-              : e.type == daw::MusicalEventType::Chord ? e.payload.chord.durationNanoticks
-                                                       : 0;
-          clipLen = std::max(clipLen, e.nanotickOffset + dur);
+      // A track that loaded from placements and hasn't been edited live re-emits
+      // exactly those placements plus the clips they reference, so a load->save
+      // round-trip preserves the arrangement's structure (multiple placements,
+      // additive overrides). A track edited live (arrangementDirty) no longer
+      // matches those placements, so it falls through to the flatten below — the
+      // edit is preserved as one clip at=0, the structure isn't (until note entry
+      // becomes structural, M3.2). A never-loaded track has no source placements
+      // and also flattens.
+      if (!trackDirty && !trackPlacements.empty()) {
+        for (const auto& pl : trackPlacements) {
+          bool present = false;
+          for (const auto& c : document.clips) {
+            if (c.id == pl.clipId) {
+              present = true;
+              break;
+            }
+          }
+          if (present) {
+            continue;
+          }
+          for (const auto& c : retainedClips) {
+            if (c.id == pl.clipId) {
+              document.clips.push_back(c);
+              break;
+            }
+          }
         }
-        const uint32_t clipId = runtime->trackId + 1;
-        daw::ProjectClip projectClip;
-        projectClip.id = clipId;
-        projectClip.name = track.name;
-        projectClip.lengthNanoticks = clipLen;
-        projectClip.clip = std::move(trackClip);
-        document.clips.push_back(std::move(projectClip));
+        track.placements = std::move(trackPlacements);
+      } else if (!trackClip.events().empty()) {
+        // No authored placement layout (a live-edited or never-loaded track), so
+        // derive clips from the notes: segment them by proximity so "no notes
+        // outside clips" holds on disk with sensible boundaries, rather than
+        // dumping everything into one clip at=0. One clip + placement per
+        // segment, ids allocated above every retained clip.
+        const uint64_t bar = 4 * document.nanoticksPerQuarter;
+        const auto segments =
+            daw::segmentEventsIntoClips(trackClip.events(), bar, bar);
+        for (const auto& seg : segments) {
+          const uint32_t clipId = nextClipId++;
+          daw::ProjectClip projectClip;
+          projectClip.id = clipId;
+          projectClip.name = track.name;
+          projectClip.lengthNanoticks = seg.length;
+          for (const auto& e : seg.events) {
+            projectClip.clip.addEvent(e);
+          }
+          document.clips.push_back(std::move(projectClip));
 
-        daw::ProjectPlacement placement;
-        placement.clipId = clipId;
-        placement.at = 0;
-        placement.lengthNanoticks = clipLen;
-        track.placements.push_back(std::move(placement));
+          daw::ProjectPlacement placement;
+          placement.clipId = clipId;
+          placement.at = seg.at;
+          placement.lengthNanoticks = seg.length;
+          track.placements.push_back(std::move(placement));
+        }
       }
       // Stamp durable plugin identity. hostSlotIndex only means anything
       // against the scan that produced it, so it must not be what a saved
@@ -2567,10 +2690,44 @@ struct TrackRuntime {
     }
 
     harmonyEvents = document.harmonyTimeline;
+    // Retain the project's clip definitions so a save can re-emit the ones a
+    // clean track still references, keeping the arrangement's structure across a
+    // load->save round-trip (the runtime itself plays a flattened clip).
+    {
+      std::lock_guard<std::mutex> lock(loadedClipsMutex);
+      loadedClips = document.clips;
+    }
     harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
     // A load replaces every clip; advance clipVersion so observers (and the
     // all-tracks published snapshot, which refreshes on this value) re-read.
     clipVersion.fetch_add(1, std::memory_order_acq_rel);
+
+    // M3.3: the transport loops over the whole arrangement now, not a fixed bar.
+    // Arrangement end = the furthest placement end across all tracks; the flat
+    // per-track clips built below place notes on that same absolute timeline.
+    uint64_t arrangementEnd = 0;
+    for (const auto& source : document.tracks) {
+      for (const auto& pl : source.placements) {
+        if (!pl.at.has_value()) {
+          continue;
+        }
+        uint64_t len = pl.lengthNanoticks;
+        if (len == 0) {
+          for (const auto& c : document.clips) {
+            if (c.id == pl.clipId) {
+              len = c.lengthNanoticks;
+              break;
+            }
+          }
+        }
+        arrangementEnd = std::max(arrangementEnd, *pl.at + len);
+      }
+    }
+    if (arrangementEnd == 0) {
+      arrangementEnd = patternTicks;  // empty project keeps the default bar
+    }
+    loopStartNanotick.store(0, std::memory_order_release);
+    loopEndNanotick.store(arrangementEnd, std::memory_order_release);
 
     // Grow the track set to fit the document, so a project with more tracks than
     // the engine currently holds loads in full rather than dropping the tail.
@@ -2666,14 +2823,17 @@ struct TrackRuntime {
       std::shared_ptr<const ClipSnapshot> snapshot;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        // M3.1: the engine plays one clip per track, so resolve the track's
-        // first placement into a single clip (base - mutes + adds). Additional
-        // placements are preserved on the next save but not yet played (M3.3);
-        // for the identity form (one placement at=0, no overrides) this is just
-        // the base clip, so playback is unchanged.
-        daw::MusicalClip resolvedClip;
-        if (!source.placements.empty()) {
-          const auto& placement = source.placements.front();
+        // M3.3: flatten this track's placements into one absolute-tick clip the
+        // scheduler plays directly. Each placement resolves base - mutes + adds
+        // (clip-relative), then placementEventsInWindow expands it — looped to
+        // fill the placement — onto the timeline. Loose (null-at) placements have
+        // no timeline position and are skipped. For the identity form (one
+        // placement at=0 spanning its clip) the flat clip == the base clip.
+        daw::MusicalClip flat;
+        for (const auto& placement : source.placements) {
+          if (!placement.at.has_value()) {
+            continue;
+          }
           const daw::ProjectClip* clipDef = nullptr;
           for (const auto& c : document.clips) {
             if (c.id == placement.clipId) {
@@ -2681,6 +2841,12 @@ struct TrackRuntime {
               break;
             }
           }
+          // Audio clips are stored but not scheduled yet (their playback lands
+          // with the Movement 4 audio engine); skip them in the symbolic flatten.
+          if (clipDef && clipDef->kind == daw::ClipKind::Audio) {
+            continue;
+          }
+          std::vector<daw::MusicalEvent> resolved;
           if (clipDef) {
             for (const auto& e : clipDef->clip.events()) {
               bool muted = false;
@@ -2693,15 +2859,30 @@ struct TrackRuntime {
                 }
               }
               if (!muted) {
-                resolvedClip.addEvent(e);
+                resolved.push_back(e);
               }
             }
-            for (const auto& add : placement.adds) {
-              resolvedClip.addEvent(add);
-            }
+          }
+          for (const auto& add : placement.adds) {
+            resolved.push_back(add);
+          }
+          const uint64_t clipLen = clipDef ? clipDef->lengthNanoticks : 0;
+          const uint64_t plLen =
+              placement.lengthNanoticks > 0 ? placement.lengthNanoticks : clipLen;
+          const auto scheduled = daw::placementEventsInWindow(
+              resolved, clipLen, *placement.at, plLen, 0, arrangementEnd);
+          for (const auto& s : scheduled) {
+            daw::MusicalEvent ev = s.event;
+            ev.nanotickOffset = s.absTick;
+            flat.addEvent(ev);
           }
         }
-        runtime->track.clip = std::move(resolvedClip);
+        runtime->track.clip = std::move(flat);
+        // Retain the placement list so save can re-emit it (and its clips) as
+        // long as the track stays clean; the flat clip above is only the
+        // playback form. A live edit sets arrangementDirty and save flattens.
+        runtime->sourcePlacements = source.placements;
+        runtime->arrangementDirty.store(false, std::memory_order_relaxed);
         // M3.4: retain the track's placed clips as rail extents. Loose session
         // placements (null at) have no timeline position and are not published.
         runtime->clipExtents.clear();
@@ -2721,6 +2902,7 @@ struct TrackRuntime {
                 length = c.lengthNanoticks;
               }
               ext.name = c.name;
+              ext.isAudio = c.kind == daw::ClipKind::Audio;
               break;
             }
           }
@@ -2954,6 +3136,7 @@ struct TrackRuntime {
                                     noteIdOverride);
       }
       if (result) {
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
         snapshot = buildClipSnapshot(runtime->track.clip);
       }
     }
@@ -2999,6 +3182,7 @@ struct TrackRuntime {
                                        clipVersion,
                                        recordUndo);
       if (result) {
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
         snapshot = buildClipSnapshot(runtime->track.clip);
       }
     }
@@ -3098,6 +3282,7 @@ struct TrackRuntime {
       }
       event.payload.chord.durationNanoticks = duration;
       runtime->track.clip.addEvent(std::move(event));
+      runtime->arrangementDirty.store(true, std::memory_order_relaxed);
       snapshot = buildClipSnapshot(runtime->track.clip);
     }
 
@@ -3209,6 +3394,7 @@ struct TrackRuntime {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       removed = runtime->track.clip.removeChordById(chordId);
       if (removed) {
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
         snapshot = buildClipSnapshot(runtime->track.clip);
       }
     }
@@ -3243,6 +3429,7 @@ struct TrackRuntime {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       removed = runtime->track.clip.removeChordAt(nanotick, column);
       if (removed) {
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
         snapshot = buildClipSnapshot(runtime->track.clip);
       }
     }
@@ -4268,7 +4455,33 @@ struct TrackRuntime {
                static_cast<uint16_t>(daw::UiCommandType::TogglePlay)) {
       const bool next = !playing.load(std::memory_order_acquire);
       playing.store(next, std::memory_order_release);
-      std::cout << "UI: Transport " << (next ? "Play" : "Stop") << std::endl;
+      std::cout << "UI: Transport " << (next ? "Play" : "Pause") << std::endl;
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::Stop)) {
+      // Halt and rewind to the loop start. resetTimeline is drained by the
+      // producer, which rewinds the transport and the audio playback position
+      // together so the next Play starts clean.
+      playing.store(false, std::memory_order_release);
+      resetTimeline.store(true, std::memory_order_release);
+      std::cout << "UI: Transport Stop" << std::endl;
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetPosition)) {
+      const uint64_t target =
+          static_cast<uint64_t>(payload.noteNanotickLo) |
+          (static_cast<uint64_t>(payload.noteNanotickHi) << 32);
+      uint64_t start = loopStartNanotick.load(std::memory_order_acquire);
+      uint64_t end = loopEndNanotick.load(std::memory_order_acquire);
+      if (end <= start) {
+        start = 0;
+        end = patternTicks;
+      }
+      // Clamp into the loop; end is exclusive so the last tick is end-1.
+      uint64_t clamped = target < start ? start : target;
+      if (end > 0 && clamped >= end) {
+        clamped = end - 1;
+      }
+      transportNanotick.store(clamped, std::memory_order_release);
+      std::cout << "UI: Transport SetPosition " << clamped << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestClipWindow)) {
       daw::UiClipWindowCommandPayload windowPayload{};
@@ -4642,8 +4855,11 @@ struct TrackRuntime {
         continue;
       }
       if (resetTimeline.exchange(false)) {
-        transportNanotick.store(0, std::memory_order_release);
-        audioPlaybackBlockId.store(0, std::memory_order_release);  // Reset playback position too
+        // Rewind to the loop start (Stop), resetting the audio playback position
+        // with it so the next Play begins there rather than mid-block.
+        transportNanotick.store(loopStartNanotick.load(std::memory_order_acquire),
+                                std::memory_order_release);
+        audioPlaybackBlockId.store(0, std::memory_order_release);
       }
 
       for (auto* runtime : trackSnapshot) {
@@ -7166,14 +7382,13 @@ struct TrackRuntime {
   });
   if (!testMode) {
     audioRuntime = daw::createJuceRuntime();
-    audioBackend = daw::createAudioBackend();
-    if (!audioBackend || !audioBackend->openDefaultDevice(2)) {
-      std::cerr << "Failed to initialize audio device" << std::endl;
+    // Opened earlier to adopt its sample rate; here we just wire the callback.
+    if (!audioBackend) {
+      std::cerr << "No audio device; running without audio output" << std::endl;
     } else {
-      std::cout << "Audio device initialized successfully" << std::endl;
       std::cout << "Audio device: " << audioBackend->deviceName() << std::endl;
       std::cout << "  Sample rate: " << audioBackend->sampleRate()
-                << " (engine expects: " << engineConfig.sampleRate << ")" << std::endl;
+                << " (engine now matches)" << std::endl;
       std::cout << "  Buffer size: " << audioBackend->blockSize()
                 << " (engine expects: " << engineConfig.blockSize << ")" << std::endl;
       audioCallback = std::make_unique<EngineAudioCallback>(
