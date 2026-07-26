@@ -9,6 +9,7 @@
 <link rel="stylesheet" href="src/mixer.css">
 <link rel="stylesheet" href="src/piano.css">
 <link rel="stylesheet" href="src/browser.css">
+<link rel="stylesheet" href="src/dock.css">
 <style>
   html, body { margin: 0; height: 100%; background: var(--uni-surface-tracker-bg); color: var(--base-text); }
   body { font-family: var(--font-chrome); font-size: var(--font-size-chrome); overflow: hidden; }
@@ -37,7 +38,7 @@
                   border-right: var(--uni-rule-track-width) solid var(--uni-rule-track); }
   #tracker, #arrange, #mixer, #piano { position: absolute; left: 0; right: 0; bottom: 16px;
              top: calc(38px + var(--metrics-header-height)); }
-  #arrange[hidden], #mixer[hidden], #piano[hidden], #browser[hidden] { display: none; }
+  #arrange[hidden], #mixer[hidden], #piano[hidden], #browser[hidden], #dock[hidden] { display: none; }
   /* The rail overlays; it does not reflow the surface underneath, so opening it
      never costs a relayout of a pooled grid. */
   #browser { position: absolute; left: 0; bottom: 16px;
@@ -52,6 +53,7 @@
 <div id="mixer" hidden></div>
 <div id="piano" hidden></div>
 <div id="browser" hidden></div>
+<div id="dock" hidden></div>
 <div id="hud"></div>
 
 <script type="module">
@@ -68,6 +70,7 @@ import { buildMixerModel, createMixerBuffer, createMixerState,
 import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch } from './src/pianomodel.js';
 import { Browser } from './src/browser.js';
+import { Dock } from './src/dock.js';
 import { createEntry, feed, cancel, begin, parseToken, editing, NOTE_KEYS, NOTE_OFF_KEY,
          TOKEN_KEY, pitchOf, pitchToToken, hexValue, shiftDigit } from './src/entry.js';
 
@@ -119,6 +122,49 @@ const browser = new Browser(browserHost, {
     state.reject = null;
     schedule();
   },
+});
+
+const dockHost = document.getElementById('dock');
+// One API object: every console command goes through the same paths the keyboard
+// does, so the two can never drift into doing different things.
+const dock = new Dock(dockHost, {
+  setView: (v) => { if (v) state.view = v; schedule(); return state.view; },
+  load: (n) => conn && conn.loadProject(n),
+  save: (n) => conn && conn.saveProject(n),
+  listProjects: () => conn && conn.send({ type: 'list' }),
+  transport: (what) => cmd(what),
+  seek: (tick) => conn && conn.send({ type: 'seek', track: state.cursor.track, tick: Math.max(0, tick) }),
+  note: (pitch, dur, vel) => {
+    const base = engine ? engine.clipVersion : 0;
+    const d = dur === undefined || Number.isNaN(dur) ? laneRowTicks(state.cursor.track) : dur;
+    const v = vel === undefined || Number.isNaN(vel) ? state.velocity : vel;
+    if (!conn || !conn.send({ type: 'note', track: state.cursor.track, pitch,
+                              tick: tickOfCursorRow(), dur: d, vel: v })) throw new Error('no engine');
+    addPending(state.cursor.row, state.cursor.track, 0, pitchToToken(pitch), base);
+    schedule();
+  },
+  del: () => { if (!deleteAtCursor()) throw new Error('nothing deleted'); schedule(); },
+  goto: (row, track) => {
+    state.cursor.row = Math.max(0, row);
+    if (track !== undefined) state.cursor.track = Math.max(0, Math.min(state.tracks - 1, track));
+    follow(); schedule();
+  },
+  zoom: (z) => { state.zoom = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, z)); schedule(); },
+  octave: (o) => { state.octave = Math.max(0, Math.min(9, o)); schedule(); },
+  gain: (t, db) => {
+    mixerState.strips[t].gain = Math.round(Math.max(-96, Math.min(12, db)) * 100);
+    sendMixer(t);
+  },
+  strip: (t, which) => {
+    mixerState.strips[t].flags ^= which === 'mute' ? FLAG_MUTE : FLAG_SOLO;
+    sendMixer(t);
+  },
+  state: () => ({ view: state.view, cursor: state.cursor, zoom: state.zoom,
+                  octave: state.octave, project: state.currentProject }),
+  engine: () => (engine ? { transport: engine.transport, tick: engine.playheadTick,
+                            notes: engine.noteCount, tracks: engine.trackCount,
+                            clipVersion: engine.clipVersion, stale: engine.stale } : null),
+  close: () => { state.dockOpen = false; schedule(); },
 });
 
 const pianoHost = document.getElementById('piano');
@@ -175,7 +221,7 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   // projection differs, which is the whole point of the view-model boundary.
   projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: -1,
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
-  pianoFitPending: false, browserOpen: false, currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+  pianoFitPending: false, browserOpen: false, dockOpen: false, currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -425,6 +471,11 @@ function drawArrange() {
 }
 
 function draw() {
+  if (dockHost.hidden === state.dockOpen) {
+    dockHost.hidden = !state.dockOpen;
+    if (state.dockOpen) dock.focus();
+  }
+  if (state.dockOpen) dock.render();
   if (browserHost.hidden === state.browserOpen) browserHost.hidden = !state.browserOpen;
   if (state.browserOpen) { browser.setItems(state.projects, state.currentProject); browser.render(); }
   // One scheduler, two surfaces. Hiding the other host rather than unmounting it
@@ -651,6 +702,11 @@ addEventListener('keydown', (e) => {
     if (act === 'consumed' || act === 'cancel') return done();
   }
 
+  // 2.1 The dock owns its own input entirely; it stops propagation there. This
+  //     only handles opening it and closing it from outside.
+  if (k === '/' && !state.dockOpen) { state.dockOpen = true; return done(); }
+  if (state.dockOpen && k === 'Escape') { state.dockOpen = false; return done(); }
+
   // 2.2 The rail owns the keyboard while it is open.
   if (state.browserOpen) {
     if (k === 'Escape' || k === 'b' || k === 'B') { state.browserOpen = false; return done(); }
@@ -860,6 +916,7 @@ conn = connectEngine({
     if (typeof msg === 'string' && msg.indexOf('"projects"') >= 0) {
       try { state.projects = JSON.parse(msg).projects || []; schedule(); } catch (e) { /* keep the old list */ }
     }
+    if (state.dockOpen) dock.log('out', String(msg).slice(0, 200));
     state.ack = String(msg).slice(0, 80);
     (window.__acks || (window.__acks = [])).push(state.ack); },
   onChange: (store) => { engine = store; reapPending(store.clipVersion, performance.now()); state.playhead = tickToRow(store.playheadTick); schedule(); },
@@ -901,6 +958,7 @@ window.__uni = {
                  state.pianoAll = false; state.selectedNote = -1;
                  state.browserOpen = false; state.projects = []; state.currentProject = '';
                  browser.selected = 0;
+                 state.dockOpen = false; dock.clear();
                  // The HUD carries a live node count and frame counter. Pin it
                  // here too, or a scene inherits whatever the previous scene's
                  // timer last wrote and the golden differs by that strip alone.
@@ -961,6 +1019,10 @@ window.__uni = {
   browser: (on) => { state.browserOpen = on === undefined ? !state.browserOpen : !!on;
     if (state.browserOpen) conn && conn.send({ type: 'list' }); draw(); return state.browserOpen; },
   browserProbe: () => browser.probe(),
+  dock: (on) => { state.dockOpen = on === undefined ? !state.dockOpen : !!on; draw(); return state.dockOpen; },
+  dockProbe: () => dock.probe(),
+  /** Run a console command. THE agent entry point — one grammar, every surface. */
+  run: (line) => { dock.submit(line); dock.render(); return dock.probe().last; },
   projects: () => state.projects.slice(),
   setGain: (t, pos) => { mixerState.strips[t].gain = gainAtPosition(pos); sendMixer(t); },
   setPan: (t, p) => { mixerState.strips[t].pan = p; sendMixer(t); },
@@ -1089,6 +1151,26 @@ window.__uni = {
     state.currentProject = 'maximal';
     state.browserOpen = true;
     browser.selected = 2;
+    draw();
+  },
+  /** Dock fixture: a scripted session showing all three line kinds. */
+  useDockFixture: () => {
+    state.useEngine = false; state.hudFrozen = true; conn.close();
+    hudText.nodeValue = 'dock-fixture';
+    state.dockOpen = true;
+    dock.clear();
+    dock.log('in', '> help');
+    dock.log('out', 'note <pitch> [dur] [vel] — at the cursor');
+    dock.log('out', 'view tracker|arrange|piano|mixer');
+    dock.log('in', '> goto 8 1');
+    dock.log('out', 'cursor 8 t1');
+    dock.log('in', '> note 64');
+    dock.log('out', 'note 64');
+    dock.log('out', '{"ok":true,"type":2}');
+    dock.log('in', '> note 999');
+    dock.log('err', 'pitch out of range: 999');
+    dock.log('in', '> nope');
+    dock.log('err', 'unknown: nope (try help)');
     draw();
   },
   /** Which rows a lane actually has, for assertions that don't read pixels. */

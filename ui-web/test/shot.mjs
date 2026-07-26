@@ -52,6 +52,7 @@ const SCENES = [
   { name: 'arrange', arrange: true, setup: async (p) => p.evaluate(() => window.__uni.useArrangeFixture()) },
   { name: 'arrange-zoomed', arrange: true, setup: async (p) => p.evaluate(() => {
       window.__uni.useArrangeFixture(); window.__uni.arrangeZoom(5); }) },
+  { name: 'dock', dock: true, setup: async (p) => p.evaluate(() => window.__uni.useDockFixture()) },
   { name: 'browser', browser: true, setup: async (p) => p.evaluate(() => window.__uni.useBrowserFixture()) },
   { name: 'piano', piano: true, setup: async (p) => p.evaluate(() => window.__uni.usePianoFixture()) },
   { name: 'piano-zoomed', piano: true, setup: async (p) => p.evaluate(() => {
@@ -134,6 +135,25 @@ for (const scene of SCENES) {
     ok(a.domNodes < 1200, `arrange dom bounded: ${a.domNodes}`);
     ok(a.playheadX >= 0, `playhead placed: ${a.playheadX}`);
     console.log(`  ${a.zoom}  ${a.clips} clips  ${a.gridLines} gridlines  ${a.domNodes} nodes`);
+    await shoot(scene);
+    continue;
+  }
+
+  if (scene.dock) {
+    const d = await page.evaluate(() => window.__uni.dockProbe());
+    ok(d.lines === 12, `log lines: ${d.lines}`);
+    ok(d.commands.includes('note') && d.commands.includes('view') && d.commands.includes('gain'),
+       `command grammar covers edit, view and mix: ${d.commands.length} commands`);
+    const kinds = await page.evaluate(() => ({
+      in: document.querySelectorAll('.dk-line.in').length,
+      out: document.querySelectorAll('.dk-line.out').length,
+      err: document.querySelectorAll('.dk-line.err').length,
+    }));
+    // Typed, returned and failed are three different things. A console that
+    // renders them alike is a log you have to re-read to understand.
+    ok(kinds.in === 5 && kinds.out === 5 && kinds.err === 2,
+       `line kinds distinguished: ${JSON.stringify(kinds)}`);
+    console.log(`  ${d.lines} lines, ${d.commands.length} commands`);
     await shoot(scene);
     continue;
   }

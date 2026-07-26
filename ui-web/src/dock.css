@@ -1,0 +1,43 @@
+/* Agent dock. A console strip along the bottom, over whatever is showing. */
+
+.dk {
+  position: absolute; left: 0; right: 0; bottom: 16px;
+  height: 240px;
+  display: flex; flex-direction: column;
+  background: var(--uni-surface-header-bg);
+  border-top: 1px solid var(--uni-rule-track);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  z-index: 7;
+}
+
+.dk-log {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 6px 10px;
+}
+
+.dk-line { white-space: pre-wrap; word-break: break-word; color: var(--base-text); }
+/* What was typed, what came back, what went wrong — three different things. */
+.dk-line.in  { color: var(--uni-text-instrument); }
+.dk-line.out { color: var(--uni-text-gutter); }
+.dk-line.err { color: var(--uni-text-fx); }
+
+.dk-row {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--uni-rule-gutter);
+}
+.dk-prompt { color: var(--base-accent); }
+
+.dk-input {
+  flex: 1 1 auto;
+  background: transparent; border: 0; outline: 0;
+  color: var(--base-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+}
+.dk-input::placeholder { color: var(--uni-text-gutter); }
