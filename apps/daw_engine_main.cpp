@@ -951,6 +951,9 @@ struct TrackRuntime {
     std::atomic<float> mixPan{0.0f};
     std::atomic<bool> mixMute{false};
     std::atomic<bool> mixSolo{false};
+    // Per-lane tracker subdivision (Mock B grids); published so the UI builds a
+    // LaneGrid per track. The engine doesn't use it — timing is grid-independent.
+    std::atomic<uint32_t> linesPerBeat{4};
     std::mutex trackMutex;
     std::shared_ptr<const ClipSnapshot> clipSnapshot;
     std::shared_ptr<const TrackStateSnapshot> trackSnapshot;
@@ -2611,6 +2614,9 @@ struct TrackRuntime {
                               std::memory_order_relaxed);
         runtime->mixMute.store(source.mixer.mute, std::memory_order_relaxed);
         runtime->mixSolo.store(source.mixer.solo, std::memory_order_relaxed);
+        runtime->linesPerBeat.store(
+            source.linesPerBeat == 0 ? 4u : source.linesPerBeat,
+            std::memory_order_relaxed);
         snapshot = buildClipSnapshot(runtime->track.clip);
       }
       std::atomic_store_explicit(&runtime->clipSnapshot,
@@ -6987,6 +6993,14 @@ struct TrackRuntime {
         uiShm.header->uiGlobalNanotickPlayhead = uiBlockStartTicks;
         uiShm.header->uiTrackCount = static_cast<uint32_t>(
             std::min<size_t>(trackSnapshot.size(), maxUiTracks));
+        for (uint32_t i = 0; i < daw::kUiMaxTracks; ++i) {
+          uiShm.header->uiLinesPerBeat[i] =
+              i < trackSnapshot.size()
+                  ? static_cast<uint8_t>(std::min<uint32_t>(
+                        trackSnapshot[i]->linesPerBeat.load(std::memory_order_relaxed),
+                        255u))
+                  : 0;
+        }
         uiShm.header->uiTransportState =
             playing.load(std::memory_order_acquire) ? 1 : 0;
         uiShm.header->uiClipVersion =

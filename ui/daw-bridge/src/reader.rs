@@ -16,6 +16,9 @@ pub struct UiSnapshot {
     pub ui_harmony_offset: u64,
     pub ui_harmony_bytes: u64,
     pub ui_track_peak_rms: [f32; K_UI_MAX_TRACKS],
+    /// v10: per-track tracker subdivision (0 = absent track). Build one LaneGrid
+    /// per track from this rather than one grid for the whole viewport.
+    pub ui_lines_per_beat: [u8; K_UI_MAX_TRACKS],
 }
 
 pub struct SeqlockReader {
@@ -49,6 +52,7 @@ impl SeqlockReader {
             let ui_harmony_offset = unsafe { (*self.header).ui_harmony_offset };
             let ui_harmony_bytes = unsafe { (*self.header).ui_harmony_bytes };
             let ui_track_peak_rms = unsafe { (*self.header).ui_track_peak_rms };
+            let ui_lines_per_beat = unsafe { (*self.header).ui_lines_per_beat };
 
             fence(Ordering::Acquire);
             let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
@@ -66,6 +70,7 @@ impl SeqlockReader {
                     ui_harmony_offset,
                     ui_harmony_bytes,
                     ui_track_peak_rms,
+                    ui_lines_per_beat,
                 });
             }
         }

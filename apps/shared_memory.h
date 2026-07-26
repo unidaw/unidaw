@@ -14,7 +14,9 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    published clip snapshot (uiClipAll*) so read-only observers see notes
 //    without the request ring; a second command ring for the agent
 //    (ringUiAgentOffset).
-constexpr uint16_t kShmVersion = 9;
+// 10: per-track lines_per_beat published (uiLinesPerBeat), so the UI builds a
+//    LaneGrid per track instead of one grid for the whole viewport.
+constexpr uint16_t kShmVersion = 10;
 
 constexpr uint32_t kUiMaxTracks = 8;
 constexpr uint32_t kUiMaxClipNotes = 4096;
@@ -63,6 +65,9 @@ struct alignas(64) ShmHeader {
   // A second SPSC command ring so the in-app agent writes edits independently of
   // the UI ring; the engine's command consumer drains both.
   uint64_t ringUiAgentOffset = 0;
+  // v10: per-track tracker subdivision (Mock B per-lane grids). Published so the
+  // UI builds a LaneGrid per track. Fits in the align(64) tail; header stays 256.
+  uint8_t uiLinesPerBeat[kUiMaxTracks]{};
 };
 
 struct alignas(64) RingHeader {
