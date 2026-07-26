@@ -223,7 +223,7 @@ int main() {
   const std::string first = daw::serializeProject(original);
   const std::string second = daw::serializeProject(original);
   require(first == second, "serialization is not deterministic");
-  require(first.find("\"schema_version\": 2") != std::string::npos,
+  require(first.find("\"schema_version\": 3") != std::string::npos,
           "schema_version missing or not a number");
   // Numbers must not be quoted; anything else reading this file would have to
   // special-case string-wrapped integers.
@@ -591,6 +591,67 @@ int main() {
             "placement B mute lost");
     require(pb.adds.size() == 1 && pb.adds[0].payload.note.pitch == 42,
             "placement B add lost");
+  }
+
+  // M4 slot: an audio clip round-trips as an audio region, placed and playable-
+  // as-a-rail even though the engine doesn't schedule it yet. Its source ref and
+  // region fields survive; it must NOT be read back as a symbolic clip.
+  {
+    daw::ProjectDocument doc;
+    daw::ProjectClip audioClip;
+    audioClip.id = 9;
+    audioClip.name = "Vox take";
+    audioClip.lengthNanoticks = 1920000;
+    audioClip.kind = daw::ClipKind::Audio;
+    audioClip.audio.sourcePath = "/takes/vox_01.wav";
+    audioClip.audio.sourceStartFrame = 44100;  // one second in at 44.1k
+    audioClip.audio.gainDb = -3.0;
+    audioClip.audio.fadeInNanoticks = 24000;
+    audioClip.audio.fadeOutNanoticks = 48000;
+    doc.clips.push_back(std::move(audioClip));
+
+    daw::ProjectTrack track;
+    daw::ProjectPlacement p;
+    p.clipId = 9;
+    p.at = 1920000;
+    p.lengthNanoticks = 1920000;
+    track.placements.push_back(p);
+    doc.tracks.push_back(std::move(track));
+
+    daw::ProjectDocument rt;
+    std::string err;
+    require(daw::deserializeProject(daw::serializeProject(doc), rt, &err),
+            "audio clip round trip failed");
+    require(rt.clips.size() == 1, "audio clip lost");
+    const auto& c = rt.clips[0];
+    require(c.kind == daw::ClipKind::Audio, "clip kind not audio after round trip");
+    require(c.clip.events().empty(), "audio clip should carry no symbolic events");
+    require(c.audio.sourcePath == "/takes/vox_01.wav", "audio source path lost");
+    require(c.audio.sourceStartFrame == 44100, "audio source start frame lost");
+    require(c.audio.gainDb == -3.0, "audio gain lost");
+    require(c.audio.fadeInNanoticks == 24000 && c.audio.fadeOutNanoticks == 48000,
+            "audio fades lost");
+    require(rt.tracks[0].placements.size() == 1 &&
+                rt.tracks[0].placements[0].at.value_or(0) == 1920000,
+            "audio placement lost");
+  }
+
+  // A schema <= 2 clip (no "kind" field) migrates to Symbolic, not Audio.
+  {
+    daw::ProjectDocument doc;
+    std::string err;
+    require(daw::deserializeProject(
+                "{\"schema_version\": 2,"
+                " \"clips\": [ { \"id\": 1, \"length\": 960000,"
+                "   \"notes\": [ { \"nanotick\": 0, \"duration\": 240000,"
+                "     \"pitch\": 60, \"velocity\": 100, \"column\": 0, \"note_id\": 1 } ] } ] }",
+                doc, &err),
+            "schema-2 clip without kind failed to parse");
+    require(doc.clips.size() == 1, "schema-2 clip lost");
+    require(doc.clips[0].kind == daw::ClipKind::Symbolic,
+            "clip without kind should default to Symbolic");
+    require(countEvents(doc.clips[0].clip, daw::MusicalEventType::Note) == 1,
+            "schema-2 clip note lost");
   }
 
   if (failures != 0) {

@@ -927,6 +927,7 @@ struct ClipExtentInfo {
   uint64_t at = 0;
   uint64_t endTick = 0;
   std::string name;
+  bool isAudio = false;
 };
 
 struct Track {
@@ -1591,7 +1592,7 @@ struct TrackRuntime {
         out.placementId = ext.placementId;
         out.clipId = ext.clipId;
         out.trackId = runtime->trackId;
-        out.flags = 0;
+        out.flags = ext.isAudio ? daw::kUiClipExtentAudio : 0u;
         out.startTick = ext.at;
         out.endTick = ext.endTick;
         std::memset(out.name, 0, sizeof(out.name));
@@ -2821,6 +2822,11 @@ struct TrackRuntime {
               break;
             }
           }
+          // Audio clips are stored but not scheduled yet (their playback lands
+          // with the Movement 4 audio engine); skip them in the symbolic flatten.
+          if (clipDef && clipDef->kind == daw::ClipKind::Audio) {
+            continue;
+          }
           std::vector<daw::MusicalEvent> resolved;
           if (clipDef) {
             for (const auto& e : clipDef->clip.events()) {
@@ -2877,6 +2883,7 @@ struct TrackRuntime {
                 length = c.lengthNanoticks;
               }
               ext.name = c.name;
+              ext.isAudio = c.kind == daw::ClipKind::Audio;
               break;
             }
           }

@@ -137,7 +137,7 @@ fn segments_live_edits_into_clips() {
     assert!(save.ok, "save failed: {save:?}");
 
     let doc = read_project(&engine.proj, "segout");
-    assert_eq!(doc["schema_version"].as_u64(), Some(2));
+    assert_eq!(doc["schema_version"].as_u64(), Some(3));
     let clips = doc["clips"].as_array().unwrap();
     assert_eq!(clips.len(), 2, "expected two segmented clips: {clips:?}");
     let pls = track(&doc, 0)["placements"].as_array().unwrap().clone();
@@ -242,4 +242,71 @@ fn roundtrip_preserves_placements() {
         .find(|c| c["id"].as_u64() == Some(7))
         .expect("clip 7 re-emitted");
     assert_eq!(clip7["notes"].as_array().unwrap().len(), 2);
+}
+
+/// An audio clip persists through a load -> save round-trip (kind + source ref
+/// intact) and shows as a rail flagged as audio, even though the engine doesn't
+/// schedule it yet — the Movement 4 format slot, exercised against a live engine.
+#[test]
+fn audio_clip_persists_and_flags_rail() {
+    let _serial = SERIAL.lock().unwrap();
+    let (engine, session) = start_engine("audio");
+    let one_bar = 4 * Q;
+
+    let proj = json!({
+        "schema_version": 3,
+        "meta": { "name": "audio_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "clips": [ {
+            "id": 5, "name": "Vox", "length": one_bar, "kind": "audio",
+            "audio": { "source_path": "/takes/vox.wav", "source_start_frame": 44100,
+                       "gain_db": -3.0, "fade_in": 24000, "fade_out": 48000 }
+        } ],
+        "tracks": [ {
+            "track_id": 0, "name": "Track 1",
+            "placements": [ { "clip_id": 5, "at": 0, "length": one_bar } ]
+        } ]
+    });
+    std::fs::write(
+        engine.proj.join("audio_in.uniproj.json"),
+        serde_json::to_string_pretty(&proj).unwrap(),
+    )
+    .unwrap();
+
+    let before = session.handle().clip_version();
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"audio_in"}) });
+    assert!(load.ok, "load failed: {load:?}");
+    assert!(session.handle().wait_for_clip_version(before, before.wrapping_add(1), Duration::from_secs(3)));
+
+    // The rail is published and flagged as audio. The extent region refreshes on
+    // the publish that carries the new clip version, which can trail the version
+    // bump by a block, so poll briefly rather than reading once.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let audio_rail = loop {
+        let extents = session.handle().read_clip_extents();
+        if let Some(e) = extents
+            .into_iter()
+            .find(|e| e.track_id == 0 && e.flags & daw_bridge::layout::UI_CLIP_EXTENT_AUDIO != 0)
+        {
+            break e;
+        }
+        assert!(Instant::now() < deadline, "audio rail not published/flagged");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(audio_rail.start_tick, 0);
+    assert_eq!(audio_rail.end_tick, one_bar);
+
+    // And it survives a save as an audio clip, not flattened away.
+    let save = session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"audio_out"}) });
+    assert!(save.ok, "save failed: {save:?}");
+    let doc = read_project(&engine.proj, "audio_out");
+    let clip = doc["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"].as_u64() == Some(5))
+        .expect("audio clip 5 not re-emitted");
+    assert_eq!(clip["kind"].as_str(), Some("audio"), "kind lost: {clip:?}");
+    assert_eq!(clip["audio"]["source_path"].as_str(), Some("/takes/vox.wav"));
+    assert_eq!(clip["audio"]["source_start_frame"].as_u64(), Some(44100));
 }

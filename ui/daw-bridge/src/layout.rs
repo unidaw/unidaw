@@ -149,6 +149,11 @@ pub struct UiClipNote {
 pub const UI_CLIP_NOTE_MUTED: u8 = 1 << 0;
 pub const UI_CLIP_NOTE_ADD: u8 = 1 << 1;
 
+/// `UiClipExtent.flags`: the rail is an audio region (render a waveform, no
+/// notes). Audio clips persist and show as rails but are not scheduled until the
+/// Movement 4 audio engine.
+pub const UI_CLIP_EXTENT_AUDIO: u32 = 1 << 0;
+
 /// v11 (M3.4): a placed clip's timeline box — a rail. `start_tick`/`end_tick` are
 /// absolute; `name` is nul-padded. Loose (session) placements are not published.
 #[repr(C)]

@@ -13,7 +13,7 @@
 namespace daw {
 namespace {
 
-constexpr uint32_t kProjectSchemaVersion = 2;
+constexpr uint32_t kProjectSchemaVersion = 3;
 
 void setError(std::string* error, const std::string& message) {
   if (error) {
@@ -532,7 +532,21 @@ std::string serializeProject(const ProjectDocument& document) {
     writer.key("id", clip.id);
     writer.key("name", clip.name);
     writer.key("length", clip.lengthNanoticks);
-    writeEvents(writer, clip.clip.events());
+    if (clip.kind == ClipKind::Audio) {
+      writer.key("kind", std::string("audio"));
+      writer.beginChildObject("audio");
+      writer.key("source_path", clip.audio.sourcePath);
+      writer.key("source_start_frame", clip.audio.sourceStartFrame);
+      writer.key("gain_db", clip.audio.gainDb);
+      writer.key("fade_in", clip.audio.fadeInNanoticks);
+      writer.key("fade_out", clip.audio.fadeOutNanoticks);
+      writer.endChildObject();
+    } else {
+      // Symbolic is the default; write its kind explicitly anyway so the field
+      // is always present and older-schema readers aren't the only signal.
+      writer.key("kind", std::string("symbolic"));
+      writeEvents(writer, clip.clip.events());
+    }
     writer.endArrayElement();
   }
   writer.endArray();
@@ -722,13 +736,27 @@ bool deserializeProject(const std::string& json,
       clip.id = clipTree.get<uint32_t>("id", 0);
       clip.name = clipTree.get<std::string>("name", "");
       clip.lengthNanoticks = clipTree.get<uint64_t>("length", 0);
-      std::vector<MusicalEvent> events;
-      readEvents(clipTree, events);
-      for (const auto& e : events) {
-        clip.clip.addEvent(e);
-      }
-      if (clip.lengthNanoticks == 0) {
-        clip.lengthNanoticks = maxEventEnd(events);
+      // Absent kind (schema <= 2) means symbolic — the only kind that existed.
+      const std::string kind = clipTree.get<std::string>("kind", "symbolic");
+      if (kind == "audio") {
+        clip.kind = ClipKind::Audio;
+        if (const auto audio = clipTree.get_child_optional("audio")) {
+          clip.audio.sourcePath = audio->get<std::string>("source_path", "");
+          clip.audio.sourceStartFrame = audio->get<uint64_t>("source_start_frame", 0);
+          clip.audio.gainDb = audio->get<double>("gain_db", 0.0);
+          clip.audio.fadeInNanoticks = audio->get<uint64_t>("fade_in", 0);
+          clip.audio.fadeOutNanoticks = audio->get<uint64_t>("fade_out", 0);
+        }
+      } else {
+        clip.kind = ClipKind::Symbolic;
+        std::vector<MusicalEvent> events;
+        readEvents(clipTree, events);
+        for (const auto& e : events) {
+          clip.clip.addEvent(e);
+        }
+        if (clip.lengthNanoticks == 0) {
+          clip.lengthNanoticks = maxEventEnd(events);
+        }
       }
       nextClipId = std::max(nextClipId, clip.id + 1);
       parsed.clips.push_back(std::move(clip));
