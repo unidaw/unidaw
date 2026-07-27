@@ -18,6 +18,7 @@ export default {
   "metrics": {
     "rowHeight": 17,
     "gutterWidth": 104,
+    "harmonyWidth": 132,
     "laneWidth": 148,
     "cellWidth": 76,
     "headerHeight": 24,

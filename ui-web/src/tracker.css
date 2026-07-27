@@ -18,6 +18,29 @@
 }
 .tk-rails { pointer-events: none; }
 
+/* The harmony column: what field is in force, between the time gutter and the
+   first track. It shows CHANGES, not state — the same words repeated down every
+   row would be noise, and the eye wants the moment the field moves. */
+.tk-harm {
+  flex: 0 0 var(--metrics-harmony-width);
+  width: var(--metrics-harmony-width);
+  box-sizing: border-box;
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 0 8px;
+  overflow: hidden; white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-inst);
+  letter-spacing: var(--font-tracking-fx);
+  border-right: var(--uni-rule-track-width) solid var(--uni-rule-track);
+}
+/* A field that is in force but did not start here still tints the column, so
+   the span a change covers is visible without repeating its name. */
+.tk-harm.active { background: var(--uni-clip-scope-tint); }
+.tk-harm-key { color: var(--uni-text-instrument); }
+.tk-harm-sub { color: var(--uni-text-gutter); font-size: var(--font-size-fx); }
+.tk-harm.starts { border-top: 1px solid var(--base-accent); }
+.tk-harm.starts .tk-harm-key { color: var(--base-accent); }
+
 .tk-row {
   position: absolute;
   left: 0;

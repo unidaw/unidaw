@@ -313,6 +313,44 @@ ok(barLoop.start === 2 * 3840000 && barLoop.end === 6 * 3840000,
    'the console sets it in the bar numbers the ruler prints',
    JSON.stringify(barLoop));
 
+section('harmony column');
+await page.evaluate(() => window.__uni.view('tracker'));
+await page.evaluate(() => window.__uni.run('goto 0 0'));
+await frames();
+const timeline = await page.evaluate(() => window.__uni.harmony());
+ok(timeline.length > 1, 'the project has a harmony timeline to show', `${timeline.length} events`);
+const harmCells = await page.evaluate(() => [...document.querySelectorAll('.tk-harm')]
+  .map((e) => ({ text: e.textContent.trim(), starts: e.classList.contains('starts'),
+                 active: e.classList.contains('active') })));
+const labelled = harmCells.filter((c) => c.text);
+ok(labelled.length > 1, 'the harmony column names each change', JSON.stringify(labelled.slice(0, 3)));
+// The point of the column: it shows CHANGES, so a label appears only where one
+// lands. Repeating the key on every row would be noise, and would also mean the
+// column was showing state rather than structure.
+ok(labelled.every((c) => c.starts), 'a label appears only on the row a change lands on');
+ok(harmCells.filter((c) => c.active).length > labelled.length,
+   'and the field it opens tints the rows it covers',
+   `${harmCells.filter((c) => c.active).length} tinted vs ${labelled.length} labelled`);
+// The column and the chrome answer DIFFERENT questions and must not be asserted
+// equal: the chrome names the field AT THE PLAYHEAD, the column names every
+// change in view. They coincide only when the playhead is on the first visible
+// change, and it is not — `stop` rewinds to the LOOP start, which an earlier
+// section moved to bar 3. The real invariant is that the column is the timeline:
+// same events, same order, same names.
+const keys = await page.evaluate(() => [...document.querySelectorAll('.tk-harm.starts .tk-harm-key')]
+  .map((e) => e.textContent));
+ok(keys.length === timeline.length,
+   'the column shows every change in the timeline and no others',
+   `${keys.length} labels vs ${timeline.length} events`);
+ok(keys[0] === await page.evaluate(() => window.__uni.harmonyName(0)),
+   'and names them the way the rest of the app does', keys[0]);
+// The tuning line is its own span and says 12-TET, because the engine publishes
+// no tuning for a note — backend has a cents model but it does not reach the
+// clip read-back yet.
+const tuning = await page.evaluate(() =>
+  (document.querySelector('.tk-harm.starts .tk-harm-sub') || {}).textContent || '');
+ok(tuning === '12-TET', 'and states the tuning it is assuming', tuning);
+
 section('patcher editing');
 await page.evaluate(() => window.__uni.view('patcher'));
 await frames();

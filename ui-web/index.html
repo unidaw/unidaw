@@ -862,6 +862,12 @@ function buildHead() {
   headRow = document.createElement('div'); headRow.className = 'hrow';
   const g = document.createElement('div'); g.className = 'hgut'; g.textContent = 'TIME';
   headRow.append(g);
+  // The harmony column's header, so the column is labelled rather than just
+  // present. Same width token the rows use — two places naming one width is how
+  // a header ends up 4px out of line with what it heads.
+  const hh = document.createElement('div'); hh.className = 'hharm';
+  hh.textContent = 'HARMONY';
+  headRow.append(hh);
   // Width comes from the renderer's MEASURED track stride, not from
   // cellWidth * columns. The arithmetic omits the per-track border — 2px each,
   // compounding, so by track 16 the headers sit 32px left of their columns.
@@ -976,13 +982,28 @@ const SCALE_NAMES = ['', 'major', 'minor', 'dorian', 'mixolydian'];
  * four times in four bars, so it was wrong three quarters of the time — a label
  * stating something false, which is the failure this codebase keeps having.
  */
+/**
+ * How a harmony event is written on screen: the key, and what it is in.
+ *
+ * Shared by the chrome and the tracker's harmony column so the two cannot spell
+ * the same field differently — which they would, eventually, because one of them
+ * would get a fix the other did not. The tuning line is honest: the engine
+ * publishes no tuning, so every field is 12-TET until it says otherwise.
+ */
+function nameHarmony(e) {
+  const root = NOTE_NAMES[((e.root % 12) + 12) % 12] || '?';
+  return {
+    label: root + ' ' + (SCALE_NAMES[e.scaleId] || ('scale ' + e.scaleId)),
+    sub: '12-TET',
+  };
+}
+
 function currentKey() {
   if (!engine || !engine.harmony || !engine.harmony.length) return '';
   const tick = engine.playheadTick;
   let cur = engine.harmony[0];
   for (const e of engine.harmony) { if (e.tick <= tick) cur = e; else break; }
-  const root = NOTE_NAMES[((cur.root % 12) + 12) % 12] || '?';
-  return root + ' ' + (SCALE_NAMES[cur.scaleId] || ('scale ' + cur.scaleId));
+  return nameHarmony(cur).label;
 }
 
 /**
@@ -1165,6 +1186,8 @@ function draw() {
     entryOverlay: entry.active
       ? { row: entry.row, track: entry.track, col: entry.col, text: entry.text }
       : null,
+    harmony: engine && state.useEngine !== false ? engine.harmony : null,
+    nameHarmony: nameHarmony,
   }, bufs[bi]);
   vm.scrollX = state.scrollX;
   updateChrome();
@@ -2171,6 +2194,10 @@ window.__uni = {
   names: () => (engine ? engine.names.slice() : null),
   harmony: () => (engine ? engine.harmony.slice() : null),
   key: () => currentKey(),
+  // How the app spells the Nth harmony event. Exposed so a test can assert the
+  // tracker column and the chrome share one spelling without hardcoding either.
+  harmonyName: (i) => (engine && engine.harmony && engine.harmony[i]
+    ? nameHarmony(engine.harmony[i]).label : ''),
   patcher: () => (engine ? { version: engine.patcherVersion, device: engine.patcherDevice,
     nodes: engine.patcherNodes.map(n => ({ id: n.id, type: n.type, cfg: Array.from(n.config) })),
     edges: engine.patcherEdges.slice() } : null),

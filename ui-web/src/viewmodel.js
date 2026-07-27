@@ -121,7 +121,10 @@ export function createBuffer(rowCount, trackCount, columns) {
         cells[k++] = { track: t, col: c, text: '', kind: 'empty',
                        // Aggregate for this cell at coarse zoom. count 0 = none.
                        aggCount: 0, aggLo: 0, aggHi: 0 };
-    rows[i] = { index: 0, label: '', beat: false, bar: false, cells };
+    rows[i] = { index: 0, label: '', beat: false, bar: false, cells,
+                // Preallocated like everything else in this buffer: the draw
+                // path must not create an object per row per frame.
+                harmony: { label: '', sub: '', starts: false, active: false } };
   }
   return {
     window: { startRow: 0, rowCount },
@@ -151,6 +154,20 @@ export function buildViewModel(opts, buf) {
     entryOverlay = null,
     // Optimistic edits, drawn over the engine's answer until it catches up.
     pending = null, pendingCount = 0,
+    /**
+     * The engine's harmony timeline, [{tick, root, scaleId}], for the column
+     * between the time gutter and the first track.
+     *
+     * The tracker showed no harmony at all, which for a program whose whole
+     * point is that notes are degrees against a field is a strange omission —
+     * the key was in the chrome, once, for the playhead. What matters while you
+     * type is the harmony HERE, on this row, which is a different question the
+     * moment the playhead is somewhere else.
+     */
+    harmony = null,
+    /** How a root pitch class and a scale id are named. Supplied by the caller
+     *  so this module needs no opinion about note spelling. */
+    nameHarmony = null,
   } = opts;
 
   const shape = `${rowCount}x${trackCount}x${columns}`;
@@ -165,12 +182,48 @@ export function buildViewModel(opts, buf) {
     }));
   }
 
+  // Which harmony event is in force at the first row, so the scan below only
+  // ever moves forward. The timeline is short (a key change is a musical event,
+  // not a per-note one) but the draw path runs every frame, and a rescan from
+  // zero per row is the shape that is fine until somebody writes a real song.
+  let hi = -1;
+  if (harmony && harmony.length) {
+    const first = tickOf(startRow);
+    for (let i = 0; i < harmony.length; i++) { if (harmony[i].tick <= first) hi = i; else break; }
+  }
+
   const rows = buf.rows;
   for (let ri = 0; ri < rowCount; ri++) {
     const r = startRow + ri;
     const cells = rows[ri].cells;
     let ci = 0;
     const tick = tickOf(r);
+
+    // The harmony cell. `starts` is true only on the row a change lands on, so
+    // the column reads as a list of changes rather than the same words repeated
+    // down the page — which is what the design shows and what a musician needs:
+    // the eye wants the CHANGE, not the state.
+    const hrow = rows[ri].harmony;
+    if (harmony && harmony.length) {
+      while (hi + 1 < harmony.length && harmony[hi + 1].tick <= tick) hi++;
+      const cur = hi >= 0 ? harmony[hi] : null;
+      // A change "lands on" this row when its tick falls inside the row's span.
+      // Comparing tick equality would miss every change that is not exactly on a
+      // row boundary, which at a coarse zoom is most of them.
+      const starts = !!cur && cur.tick >= tick && cur.tick < tick + zoom.rowNanoticks;
+      hrow.starts = starts;
+      hrow.active = !!cur;
+      if (cur && nameHarmony) {
+        const named = nameHarmony(cur);
+        hrow.label = starts ? named.label : '';
+        hrow.sub = starts ? named.sub : '';
+      } else {
+        hrow.label = '';
+        hrow.sub = '';
+      }
+    } else {
+      hrow.starts = false; hrow.active = false; hrow.label = ''; hrow.sub = '';
+    }
     for (let t = 0; t < trackCount; t++) {
       const inClip = engine ? true : clipIndexAt(tick, t) >= 0;
       for (let c = 0; c < columns; c++) {

@@ -13,6 +13,7 @@ pub mod theme {
     pub const FONT_TRACKING_FX: &str = "0.05em";
     pub const METRICS_ROW_HEIGHT: f32 = 17.0;
     pub const METRICS_GUTTER_WIDTH: f32 = 104.0;
+    pub const METRICS_HARMONY_WIDTH: f32 = 132.0;
     pub const METRICS_LANE_WIDTH: f32 = 148.0;
     pub const METRICS_CELL_WIDTH: f32 = 76.0;
     pub const METRICS_HEADER_HEIGHT: f32 = 24.0;

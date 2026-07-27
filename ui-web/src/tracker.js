@@ -92,6 +92,15 @@ export class Tracker {
     const g = el('div', 'tk-gutter');
     g.appendChild(document.createTextNode(''));
     row.append(g);
+    // The harmony column, between time and tracks. Two text nodes owned up
+    // front, like every other cell here: the key and the tuning line.
+    const h = el('div', 'tk-harm');
+    const hl = el('span', 'tk-harm-key');
+    hl.appendChild(document.createTextNode(''));
+    const hs = el('span', 'tk-harm-sub');
+    hs.appendChild(document.createTextNode(''));
+    h.append(hl, hs);
+    row.append(h);
     for (let t = 0; t < trackCount; t++) {
       const tr = el('div', 'tk-track');
       tr.style.setProperty('--tint', `var(--uni-track-tint-${t % 8})`);
@@ -137,6 +146,17 @@ export class Tracker {
     elm.classList.toggle('beat', row.beat && !row.bar);
     const gt = elm.firstChild.firstChild;
     if (gt.nodeValue !== row.label) gt.nodeValue = row.label;
+    // The harmony cell. `starts` drives a class rather than the text alone: a
+    // change is a rule on the page, and the row it lands on needs the emphasis
+    // whether or not the label happens to be wide.
+    const hcell = elm.children[1];
+    const h = row.harmony;
+    const hk = hcell.firstChild.firstChild;
+    const hsv = hcell.lastChild.firstChild;
+    if (hk.nodeValue !== h.label) hk.nodeValue = h.label;
+    if (hsv.nodeValue !== h.sub) hsv.nodeValue = h.sub;
+    if (hcell._st !== h.starts) { hcell._st = h.starts; hcell.classList.toggle('starts', h.starts); }
+    if (hcell._ac !== h.active) { hcell._ac = h.active; hcell.classList.toggle('active', h.active); }
     let i = 0;
     for (const tr of elm.children) {
       if (!tr.classList.contains('tk-track')) continue;

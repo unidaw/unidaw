@@ -863,14 +863,29 @@ int main(int argc, char** argv) {
   if (testMode) {
     pluginPath.clear();
   } else if (pluginPath.empty()) {
-    const std::filesystem::path candidates[] = {
-        "identity_plugin_artefacts/VST3/Identity.vst3",
-        "build/identity_plugin_artefacts/VST3/Identity.vst3",
-        "../build/identity_plugin_artefacts/VST3/Identity.vst3"};
-    for (const auto& candidate : candidates) {
-      if (std::filesystem::exists(candidate)) {
-        pluginPath = std::filesystem::absolute(candidate).string();
-        std::cout << "No plugin specified; using " << pluginPath << std::endl;
+    // JUCE writes plugin artefacts to <target>_artefacts/<CONFIG>/VST3. Only
+    // the unsuffixed layout was probed here, which no build produces any more —
+    // so this found the plugin solely in build directories old enough to still
+    // hold a leftover identity_plugin_artefacts/VST3 from a much earlier build,
+    // and found nothing in a freshly created one. That is why two checkouts of
+    // the same source behaved differently: one engine came up with Identity
+    // loaded, the other silently came up with no plugin at all. Probe both.
+    const std::filesystem::path roots[] = {"identity_plugin_artefacts",
+                                           "build/identity_plugin_artefacts",
+                                           "../build/identity_plugin_artefacts"};
+    const std::string configs[] = {"", "RelWithDebInfo", "Release", "Debug",
+                                   "MinSizeRel"};
+    for (const auto& root : roots) {
+      for (const auto& config : configs) {
+        std::filesystem::path candidate = config.empty() ? root : root / config;
+        candidate /= "VST3/Identity.vst3";
+        if (std::filesystem::exists(candidate)) {
+          pluginPath = std::filesystem::absolute(candidate).string();
+          std::cout << "No plugin specified; using " << pluginPath << std::endl;
+          break;
+        }
+      }
+      if (!pluginPath.empty()) {
         break;
       }
     }

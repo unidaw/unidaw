@@ -114,6 +114,15 @@
   font-size: var(--font-size-fx); letter-spacing: var(--font-tracking-fx);
   color: var(--uni-text-gutter);
 }
+#head .hharm {
+  flex: 0 0 var(--metrics-harmony-width);
+  width: var(--metrics-harmony-width);
+  box-sizing: border-box;
+  display: flex; align-items: center; padding: 0 8px;
+  font-size: var(--font-size-fx); letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-gutter);
+  border-right: var(--uni-rule-track-width) solid var(--uni-rule-track);
+}
 #head .htrack {
   display: flex; align-items: center; justify-content: center;
   box-sizing: border-box; font-family: var(--font-mono);
