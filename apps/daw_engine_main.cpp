@@ -3472,6 +3472,14 @@ struct TrackRuntime {
         }
         std::atomic_store_explicit(&runtime->trackSnapshot, snap,
                                    std::memory_order_release);
+        // Publish the loaded rack (chain / routing / mod links) so a UI attached
+        // to the running engine — or a sidecar that started after it — sees it
+        // without waiting for an edit. These diffs are otherwise emit-on-change
+        // only, leaving a fresh UI blind at load. (Called outside trackMutex; each
+        // emitter takes the lock itself.)
+        emitChainSnapshot(*runtime);
+        emitRoutingSnapshot(*runtime);
+        emitModSnapshot(*runtime);
       }
     }
 
