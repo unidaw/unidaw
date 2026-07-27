@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 15;
+pub const K_SHM_VERSION: u16 = 16;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
@@ -13,6 +13,8 @@ pub const K_UI_MAX_TRACKS: usize = 8;
 pub const K_UI_MAX_CLIP_NOTES: usize = 4096;
 pub const K_UI_MAX_CLIP_CHORDS: usize = 1024;
 pub const K_UI_MAX_HARMONY_EVENTS: usize = 512;
+pub const K_UI_MAX_SCALES: usize = 32;
+pub const K_UI_MAX_SCALE_STEPS: usize = 48;
 pub const K_UI_EDIT_BATCH_MAX_OPS: usize = 32;
 pub const K_UI_EDIT_BATCH_CAPACITY: usize = 64;
 pub const K_CHAIN_DEVICE_ID_AUTO: u32 = 0xFFFF_FFFF;
@@ -80,6 +82,8 @@ pub struct ShmHeader {
     pub ui_loop_end: u64,
     pub ui_load_seq: u32,
     pub ui_load_ok: u32,
+    // v16: byte offset of the published UiScaleRegion (0 = none).
+    pub ui_scales_offset: u64,
 }
 
 /// v14: a published patcher-graph node. `config` is type-interpreted (see the C++
@@ -113,6 +117,24 @@ pub struct UiPatcherRegion {
     pub edge_count: u32,
     pub nodes: [UiPatcherNode; K_UI_MAX_PATCHER_NODES],
     pub edges: [UiPatcherEdge; K_UI_MAX_PATCHER_EDGES],
+}
+
+/// v16: one scale from the engine's registry. Cents are milli-cents (cents*1000).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiScale {
+    pub id: u32,
+    pub step_count: u32,
+    pub octave_milli_cents: i32,
+    pub name: [u8; 24],
+    pub step_milli_cents: [i32; K_UI_MAX_SCALE_STEPS],
+}
+
+#[repr(C, align(64))]
+pub struct UiScaleRegion {
+    pub version: u32,
+    pub scale_count: u32,
+    pub scales: [UiScale; K_UI_MAX_SCALES],
 }
 
 #[repr(C, align(64))]
@@ -686,6 +708,18 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_loop_end), 544);
         assert_eq!(offset_of!(ShmHeader, ui_load_seq), 552);
         assert_eq!(offset_of!(ShmHeader, ui_load_ok), 556);
+        assert_eq!(offset_of!(ShmHeader, ui_scales_offset), 560); // v16 (fits tail padding)
+
+        // v16 scale-registry region layout.
+        assert_eq!(offset_of!(UiScale, id), 0);
+        assert_eq!(offset_of!(UiScale, step_count), 4);
+        assert_eq!(offset_of!(UiScale, octave_milli_cents), 8);
+        assert_eq!(offset_of!(UiScale, name), 12);
+        assert_eq!(offset_of!(UiScale, step_milli_cents), 36);
+        const_assert_eq!(size_of::<UiScale>(), 228);
+        assert_eq!(offset_of!(UiScaleRegion, version), 0);
+        assert_eq!(offset_of!(UiScaleRegion, scale_count), 4);
+        assert_eq!(offset_of!(UiScaleRegion, scales), 8);
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
         const_assert_eq!(size_of::<UiPatcherEdge>(), 20);
         const_assert_eq!(size_of::<UiPatcherRegion>(), 5184);

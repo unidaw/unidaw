@@ -19,8 +19,9 @@ use crate::layout::{
     EventEntry, EventType, RingHeader, ShmHeader, UiChordCommandPayload,
     UiClipExtent, UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot,
     UiCommandPayload, UiHarmonyEvent, UiHarmonySnapshot, UiPatcherEdge, UiPatcherNode,
-    UiPatcherRegion, K_SHM_MAGIC, K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS,
-    K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_TRACKS,
+    UiPatcherRegion, UiScaleRegion, K_SHM_MAGIC, K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS,
+    K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_SCALES,
+    K_UI_MAX_SCALE_STEPS, K_UI_MAX_TRACKS,
 };
 use crate::reader::{SeqlockReader, UiSnapshot};
 
@@ -42,6 +43,16 @@ pub struct PatcherView {
     pub device_id: u32,
     pub nodes: Vec<UiPatcherNode>,
     pub edges: Vec<UiPatcherEdge>,
+}
+
+/// One scale from the engine's registry, cents resolved from the published
+/// milli-cents. `step_cents` has `step_count` entries; the tuning card draws them.
+#[derive(Clone, Debug, Default)]
+pub struct ScaleView {
+    pub id: u32,
+    pub name: String,
+    pub octave_cents: f64,
+    pub step_cents: Vec<f64>,
 }
 
 pub fn default_shm_name() -> String {
@@ -422,6 +433,33 @@ impl EngineHandle {
                 return view;
             }
         }
+    }
+
+    /// The engine's scale registry (v16). Written once at startup and immutable,
+    /// so this is a plain read — no seqlock needed. Empty if not published.
+    pub fn read_scales(&self) -> Vec<ScaleView> {
+        let off = unsafe { (*self.header).ui_scales_offset };
+        if off == 0 {
+            return Vec::new();
+        }
+        let region =
+            self._mmap.as_ptr().wrapping_add(off as usize) as *const UiScaleRegion;
+        let n = (unsafe { (*region).scale_count } as usize).min(K_UI_MAX_SCALES);
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let s = unsafe { &(*region).scales[i] };
+            let steps = (s.step_count as usize).min(K_UI_MAX_SCALE_STEPS);
+            let end = s.name.iter().position(|&b| b == 0).unwrap_or(s.name.len());
+            out.push(ScaleView {
+                id: s.id,
+                name: String::from_utf8_lossy(&s.name[..end]).into_owned(),
+                octave_cents: s.octave_milli_cents as f64 / 1000.0,
+                step_cents: (0..steps)
+                    .map(|k| s.step_milli_cents[k] as f64 / 1000.0)
+                    .collect(),
+            });
+        }
+        out
     }
 
     /// Per-track display names for the current track count (nul-trimmed).
