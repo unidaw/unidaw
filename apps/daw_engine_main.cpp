@@ -5616,6 +5616,46 @@ struct TrackRuntime {
                   << ")" << std::endl;
       }
     } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetDeviceParam)) {
+      // A rack knob write: resolve deviceId -> host plugin index (same walk as the
+      // params read-back) and forward it to the host over the control socket. Fire-
+      // and-forget; the host setter is an atomic store, so no round-trip is needed.
+      daw::UiSetParamPayload sp{};
+      if (entry.size >= sizeof(sp)) {
+        std::memcpy(&sp, entry.payload, sizeof(sp));
+      }
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (sp.trackId < tracks.size()) {
+          runtime = tracks[sp.trackId].get();
+        }
+      }
+      uint32_t pluginIndex = 0;
+      bool found = false;
+      if (runtime) {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        uint32_t hostIndex = 0;
+        for (const auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::VstInstrument &&
+              d.kind != daw::DeviceKind::VstEffect) {
+            continue;
+          }
+          if (d.id == sp.deviceId) {
+            pluginIndex = hostIndex;
+            found = true;
+            break;
+          }
+          hostIndex++;
+        }
+      }
+      if (runtime && found) {
+        const float normalized =
+            std::clamp(static_cast<float>(sp.valueMilli) / 1000.0f, 0.0f, 1.0f);
+        std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+        runtime->controller.sendSetParam(pluginIndex, sp.uid16, normalized);
+      }
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestDeviceParams)) {
       // Publish one device's parameters into UiDeviceParamsRegion so the rack can
       // show real names + values. trackId + value0 (deviceId). The host query is a

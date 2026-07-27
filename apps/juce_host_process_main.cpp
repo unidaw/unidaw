@@ -892,6 +892,24 @@ void runControlLoop(HostState& state) {
             break;
           }
         }
+      } else if (type == daw::ControlMessageType::SetParam) {
+        // Fire-and-forget: resolve uid16 -> stableId and set it. The setter is an
+        // atomic store into the param-target array the audio thread reads, so calling
+        // it from this control thread is safe (no message-thread marshaling needed).
+        if (payload.size() == sizeof(daw::SetParamRequest)) {
+          daw::SetParamRequest request{};
+          std::memcpy(&request, payload.data(), sizeof(request));
+          std::lock_guard<std::mutex> lock(state.pluginsMutex);
+          if (request.pluginIndex < state.plugins.size() &&
+              state.plugins[request.pluginIndex].instance) {
+            auto& slot = state.plugins[request.pluginIndex];
+            const auto it = slot.paramIdByUid16.find(uid16Key(request.uid16));
+            if (it != slot.paramIdByUid16.end()) {
+              slot.instance->setParameterValueNormalizedById(it->second,
+                                                             request.normalized);
+            }
+          }
+        }
       } else if (type == daw::ControlMessageType::GetState) {
         if (payload.size() >= sizeof(daw::StateHeader)) {
           daw::StateHeader request{};

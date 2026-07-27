@@ -494,6 +494,9 @@ pub enum UiCommandType {
     /// enough that it is not coming back. 42 rather than 41 — see the same note
     /// in apps/event_payloads.h; the two were allocated 41 on separate branches.
     Quit = 42,
+    /// Set one plugin parameter from the rack (UiSetParamPayload). 43 because 42
+    /// is Quit above — see the note in apps/event_payloads.h. Next free is 44.
+    SetDeviceParam = 43,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -552,6 +555,21 @@ pub struct UiCommandPayload {
     pub note_duration_lo: u32,
     pub note_duration_hi: u32,
     pub base_version: u32,
+}
+
+/// A rack knob write (UiCommandType::SetDeviceParam). Mirrors the C++
+/// UiSetParamPayload (40 bytes). value_milli is the normalized value in milli
+/// (0..1000); uid16 is the durable param key from the device-params read-back.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiSetParamPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub value_milli: u32,
+    pub uid16: [u8; 16],
+    pub reserved: [u8; 8],
 }
 
 #[repr(C)]

@@ -515,7 +515,45 @@ const chain = new Chain(chainHost, {
     }
     schedule();
   },
+  /**
+   * A parameter drag. Returns whether it went out, which is what the rack shows
+   * a pending bar on — see chain.js's contract.
+   *
+   * There was no handler here at all until the engine had a command to send: the
+   * rack dragged, `onParam` was undefined, `sent` came back false and the strip
+   * said it had no route. That was honest, and it is now obsolete —
+   * SetDeviceParam (43) landed, so the drag reaches the plugin.
+   *
+   * `valueMilli` and `uid` both go through untouched. The value is the engine's
+   * own unit, so what comes back in the next read-back is comparable to what
+   * went out; the uid is how the host finds the parameter, because the index is
+   * ordering only and names a different parameter after a plugin update.
+   */
+  onParam: (edit) => onChainParam(edit),
 });
+/**
+ * The one parameter-write path.
+ *
+ * Named rather than inline so `window.__uni.setParam` can hand a test or an
+ * agent the SAME function the pointer drag calls, instead of a second one that
+ * has to be kept in step with it. That is the rule the whole `__uni` surface is
+ * built on, and it is why `dockApi` exists.
+ */
+function onChainParam(edit) {
+    if (!conn || !conn.canSend()) { state.reject = 'no engine'; return false; }
+    // The engine resolves by uid and has no index fallback, so a parameter whose
+    // host published a zeroed id cannot be written. Saying so beats sending a
+    // message that is accepted and does nothing.
+    if (!edit.uid || /^0+$/.test(edit.uid)) {
+      state.reject = 'this plugin publishes no durable id for that parameter';
+      return false;
+    }
+    const ok = conn.send({ type: 'setparam', track: edit.track, device: edit.device,
+                           index: edit.index, uid: edit.uid, valueMilli: edit.valueMilli });
+    state.reject = ok ? null : 'no engine';
+    schedule();
+    return ok;
+}
 const chainBuf = createChainBuffer();
 
 /**
@@ -2772,6 +2810,10 @@ window.__uni = {
   // The cursor, for tests and agents. `dockApi.goto` is the same movement the
   // console command performs, so the two cannot drift.
   goto: (row, track) => dockApi.goto(row, track),
+  // The same function the rack's drag calls, not a copy of it.
+  setParam: (track, device, index, uid, valueMilli) =>
+    onChainParam({ track, device, index, uid, valueMilli }),
+  reqParams: (track, device) => conn && conn.send({ type: 'reqparams', track, device }),
   tempo: (bpm, tick) => (bpm === undefined
     ? (engine ? { bpm: engine.tempoMilliBpm / 1000, points: engine.tempoPointCount } : null)
     : dockApi.tempo(bpm, tick)),

@@ -136,6 +136,49 @@ fn get_transport(handle: &EngineHandle) -> i32 {
     0
 }
 
+// do set-param <track> <device> <uid16hex> <milli> [--force]
+// uid16hex is the 32-char hex of the param's durable id (from `get device-params`);
+// milli is the normalized value in milli (0..1000).
+fn set_param(handle: &EngineHandle, args: &[&str]) -> i32 {
+    use daw_bridge::layout::UiSetParamPayload;
+    let track: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let device: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let Some(hex) = args.get(3) else {
+        eprintln!("daw-cli: usage: do set-param <track> <device> <uid16hex> <milli>");
+        return 2;
+    };
+    let bytes: Vec<u8> = (0..hex.len())
+        .step_by(2)
+        .filter_map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect();
+    if bytes.len() != 16 {
+        eprintln!("daw-cli: uid16 must be 32 hex chars (got {})", hex.len());
+        return 2;
+    }
+    let mut uid16 = [0u8; 16];
+    uid16.copy_from_slice(&bytes);
+    let milli: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let p = UiSetParamPayload {
+        command_type: UiCommandType::SetDeviceParam as u16,
+        flags: 0,
+        track_id: track,
+        device_id: device,
+        value_milli: milli,
+        uid16,
+        reserved: [0u8; 8],
+    };
+    match handle.send_set_param(p) {
+        Ok(()) => {
+            println!("{{ \"set_param\": {{ \"track\": {track}, \"device\": {device}, \"milli\": {milli} }} }}");
+            0
+        }
+        Err(err) => {
+            eprintln!("daw-cli: {err}");
+            1
+        }
+    }
+}
+
 // do set-tempo <bpm> [position_nanotick] [--force]
 // Flatten to <bpm> when no position, else insert/replace a point at position.
 fn set_tempo(handle: &EngineHandle, args: &[&str]) -> i32 {
@@ -396,10 +439,17 @@ fn get_device_params(handle: &EngineHandle, args: &[&str]) -> i32 {
         thread::sleep(Duration::from_millis(250));
         let v = handle.read_device_params();
         if (v.version > 0 && !v.params.is_empty()) || Instant::now() >= deadline {
-            let first = v.params.first().map(|p| p.name.clone()).unwrap_or_default();
+            let (first, uid, val) = v
+                .params
+                .first()
+                .map(|p| {
+                    let hex: String = p.uid16.iter().map(|b| format!("{b:02x}")).collect();
+                    (p.name.clone(), hex, p.value)
+                })
+                .unwrap_or_default();
             println!(
-                "{{ \"track\": {}, \"device\": {}, \"name\": {:?}, \"version\": {}, \"count\": {}, \"first\": {:?} }}",
-                v.track_id, v.device_id, v.device_name, v.version, v.params.len(), first
+                "{{ \"track\": {}, \"device\": {}, \"name\": {:?}, \"version\": {}, \"count\": {}, \"first\": {:?}, \"first_uid16\": {:?}, \"first_value\": {:.3} }}",
+                v.track_id, v.device_id, v.device_name, v.version, v.params.len(), first, uid, val
             );
             return 0;
         }
@@ -689,6 +739,7 @@ fn main() {
                     }
                 }
                 Some(&"set-tempo") => set_tempo(&handle, rest),
+                Some(&"set-param") => set_param(&handle, rest),
                 Some(&"note") | Some(&"delete-note") => {
                     let is_write = rest.first() == Some(&"note");
                     let command = if is_write {

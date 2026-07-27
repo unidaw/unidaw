@@ -646,6 +646,15 @@ impl EngineHandle {
         )
     }
 
+    /// Send a rack knob write. Same ring as send_command; a distinct payload shape
+    /// (UiSetParamPayload carries a uid16 that does not fit UiCommandPayload's fields).
+    pub fn send_set_param(&self, payload: crate::layout::UiSetParamPayload) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSetParamPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSetParamPayload>(),
+        )
+    }
+
     /// The engine dispatches on the entry's payload size, so every command
     /// shape shares one ring-write path.
     fn write_entry(&self, payload: *const u8, size: usize) -> Result<(), String> {

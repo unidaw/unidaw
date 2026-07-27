@@ -107,6 +107,15 @@ enum class UiCommandType : uint16_t {
   // it keeps the number and this one moved. Nothing had shipped against Quit=41
   // outside this branch.
   Quit = 42,
+  // Set one plugin parameter from the rack: UiSetParamPayload{trackId, deviceId,
+  // valueMilli (0..1000), uid16}. The engine resolves deviceId -> pluginIndex and
+  // forwards it to the host over the control socket.
+  //
+  // 43 because 42 is Quit above. That gap is not an accident and not a mistake:
+  // this and Quit were allocated on two branches that could not see each other,
+  // and the reservation held because whoever takes a number now announces it on
+  // the same turn they take it. Next free is 44.
+  SetDeviceParam = 43,
 };
 
 constexpr uint16_t kMixerFlagMute = 1u << 0;
@@ -188,6 +197,23 @@ struct UiAutomationCommandPayload {
 
 static_assert(sizeof(UiAutomationCommandPayload) == 40,
               "UiAutomationCommandPayload must fit EventEntry payload");
+
+// SetDeviceParam: a rack knob write. deviceId is the device's id (engine maps it to
+// the host plugin index); valueMilli is the normalized value in milli (0..1000, so
+// the UI's integer store survives the wire without a float); uid16 is the durable
+// param key the rack got from the device-params read-back.
+struct UiSetParamPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t valueMilli = 0;
+  uint8_t uid16[16]{};
+  uint8_t reserved[8]{};
+};
+
+static_assert(sizeof(UiSetParamPayload) == 40,
+              "UiSetParamPayload must fit EventEntry payload");
 
 struct UiChainCommandPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);

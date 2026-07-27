@@ -31,7 +31,7 @@ use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                         UiCommandPayload, UiCommandType,
                         UiDiffType, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
-                        UiPatcherPresetCommandPayload, K_CHAIN_DEVICE_ID_AUTO,
+                        UiPatcherPresetCommandPayload, UiSetParamPayload, K_CHAIN_DEVICE_ID_AUTO,
                         K_CHAIN_TRACK_ALL, K_HOST_SLOT_DIRECT};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
 
@@ -1105,48 +1105,67 @@ const MAX_DEVICE_PARAMS: i64 = 256;
 /// parameter after a plugin update, which is GUIDELINES 2.1's "an identifier that
 /// moves is not an identity" — so both travel, and whatever the engine grows
 /// should resolve the uid and use the index only as a hint.
-fn build_set_param(body: &str) -> Option<String> {
+fn build_set_param(body: &str) -> Option<Result<UiSetParamPayload, String>> {
     if !body.contains("\"setparam\"") { return None; }
     // Checked by its exact key, so `"valueMilli"` does not match: a caller who
     // sent a float gets told why the number would not have survived the trip.
     if body.contains("\"value\"") {
-        return Some("setparam carries valueMilli (an integer 0..1000, the engine's own \
-                     unit) - a 0..1 float in \"value\" would parse as its integer part \
-                     and arrive as 0".into());
+        return Some(Err("setparam carries valueMilli (an integer 0..1000, the engine's own \
+                         unit) - a 0..1 float in \"value\" would parse as its integer part \
+                         and arrive as 0".into()));
     }
     let Some(track) = parse_num(body, "\"track\"").filter(|t| *t >= 0) else {
-        return Some("setparam needs the track the device is on".into());
+        return Some(Err("setparam needs the track the device is on".into()));
     };
     let Some(device) = parse_num(body, "\"device\"").filter(|d| *d >= 0) else {
-        return Some("setparam needs the id of the device to change".into());
+        return Some(Err("setparam needs the id of the device to change".into()));
     };
     let Some(index) = parse_num(body, "\"index\"")
         .filter(|i| (0..MAX_DEVICE_PARAMS).contains(i)) else {
-        return Some(format!("setparam needs a parameter index in 0..{}", MAX_DEVICE_PARAMS - 1));
+        return Some(Err(format!("setparam needs a parameter index in 0..{}", MAX_DEVICE_PARAMS - 1)));
     };
     let Some(milli) = parse_num(body, "\"valueMilli\"").filter(|v| (0..=1000).contains(v)) else {
-        return Some("setparam needs valueMilli in 0..1000".into());
+        return Some(Err("setparam needs valueMilli in 0..1000".into()));
     };
-    // Optional, because the rack can send an edit for a parameter whose uid the
-    // engine published as zeroes. Present and malformed is a different thing
-    // from absent, and reads as a caller that built the message by hand.
-    if let Some(uid) = parse_str_value(body, "\"uid\"") {
-        if !uid.is_empty()
-            && (uid.len() != 32 || !uid.bytes().all(|b| b.is_ascii_hexdigit())) {
-            return Some("setparam's uid is the parameter's 16-byte durable id as 32 \
-                         hex characters, or absent".into());
-        }
+    // REQUIRED, and required to be non-zero — which it was not while this only
+    // ever refused.
+    //
+    // The engine resolves the parameter by uid16 and has no index fallback, so a
+    // missing or all-zero uid is a write the host silently drops. Sending it
+    // anyway would be the worst available outcome: acknowledged, plausible, and
+    // nothing moves. If a device ever publishes zeroed uids, the honest answer is
+    // that its parameters are not writable yet, and that is what this says.
+    let uid_hex = match parse_str_value(body, "\"uid\"") {
+        Some(u) => u,
+        None => return Some(Err("setparam needs the parameter's uid - the engine resolves \
+                                 the parameter by its durable id, not by its index".into())),
+    };
+    if uid_hex.len() != 32 || !uid_hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Some(Err("setparam's uid is the parameter's 16-byte durable id as 32 \
+                         hex characters".into()));
     }
-    // Parsed and then deliberately unused: these four are the payload the day
-    // there is somewhere to put them, and checking them now is what makes the
-    // refusal below the ONLY thing wrong with a well-formed command.
-    let _ = (track, device, index, milli);
-    Some("the engine has no command that writes a device parameter - \
-          UiCommandType in event_payloads.h runs to Quit (42) and none of them writes one, \
-          and UpdateDevice only sets bypass, patcher node and host slot. \
-          Needs a new command carrying trackId, deviceId, uid16, paramIndex and valueMilli, \
-          and a republish of the device's params region so the change reads back."
-        .into())
+    let mut uid16 = [0u8; 16];
+    for i in 0..16 {
+        uid16[i] = u8::from_str_radix(&uid_hex[i * 2..i * 2 + 2], 16).unwrap_or(0);
+    }
+    if uid16.iter().all(|&b| b == 0) {
+        return Some(Err("this parameter has no durable id, so the engine cannot find it - \
+                         the host published a zeroed uid for it".into()));
+    }
+    // `index` is validated but NOT sent: the engine keys on uid16, and
+    // shared_memory.h defines the index as ordering only. It is checked because a
+    // message carrying an impossible index was built wrong, and hearing that is
+    // more use than having the uid lookup miss for an unrelated reason.
+    let _ = index;
+    Some(Ok(UiSetParamPayload {
+        command_type: UiCommandType::SetDeviceParam as u16,
+        flags: 0,
+        track_id: track as u32,
+        device_id: device as u32,
+        value_milli: milli as u32,
+        uid16,
+        reserved: [0u8; 8],
+    }))
 }
 
 fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
@@ -1465,15 +1484,22 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             continue;
                         }
 
-                        // A parameter write. Today this can only ever be a
-                        // refusal — see build_set_param — so there is no send
-                        // here to go with it. When the engine gains the command
-                        // this grows the Ok arm every other block above has; the
-                        // reason it is a whole branch already is that the client
-                        // needs one answer to one message, and "unknown command"
-                        // would have told it nothing it could act on.
-                        if let Some(why) = build_set_param(&t) {
-                            let reply = format!("{{\"error\":\"{}\"}}", why.replace('"', "'"));
+                        // A parameter write. It carries a uid16, which does not
+                        // fit UiCommandPayload's fields, so it has its own
+                        // payload and its own send — the engine dispatches on
+                        // size. Fire and forget by design: the value you see
+                        // reflected comes back through the next device-params
+                        // read-back, not through this socket.
+                        if let Some(r) = build_set_param(&t) {
+                            let reply = match r {
+                                Ok(p) => match handle.send_set_param(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"type\":{},\"track\":{},\"device\":{},\"valueMilli\":{}}}",
+                                        p.command_type, p.track_id, p.device_id, p.value_milli),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                                Err(why) => format!("{{\"error\":\"{}\"}}", why.replace('"', "'")),
+                            };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
@@ -2779,24 +2805,34 @@ mod tests {
         assert!(build_chain_edit(r#"{"type":"deldevice","device":-1}"#).unwrap().is_err());
     }
 
-    /// A well-formed parameter write is refused, and the refusal names the thing
-    /// that is missing rather than the thing that was sent.
+    /// A well-formed parameter write becomes a payload, keyed on the uid.
     ///
-    /// This test is the record of a decision: nothing in UiCommandType writes a
-    /// plugin parameter, and the sidecar must not pick a neighbouring number and
-    /// hope. When the engine grows the command, this test is the one that has to
-    /// change, and changing it is the moment somebody re-reads the enum.
+    /// This test used to assert a REFUSAL: nothing in UiCommandType wrote a
+    /// plugin parameter, and the sidecar was not going to pick a neighbouring
+    /// number and hope. The comment on it said "when the engine grows the
+    /// command, this test is the one that has to change, and changing it is the
+    /// moment somebody re-reads the enum." The engine grew it — SetDeviceParam,
+    /// 43 — so here is that moment, and the numbers below are read off the enum.
     #[test]
-    fn setparam_is_refused_by_name_rather_than_sent_as_something_else() {
-        let why = build_set_param(
-            r#"{"type":"setparam","track":0,"device":7,"index":42,"valueMilli":620}"#)
-            .expect("recognised");
-        assert!(why.contains("no command that writes a device parameter"),
-                "the refusal names what is missing: {why}");
-        assert!(why.contains("valueMilli"), "and what the command it wants must carry: {why}");
-        // And nothing else in the sidecar claims it — which is the actual danger:
-        // the generic builder would otherwise fall through to "unknown command",
-        // and every other builder matches on a substring.
+    fn setparam_becomes_a_payload_keyed_on_the_durable_id() {
+        let p = build_set_param(concat!(
+            r#"{"type":"setparam","track":2,"device":7,"index":42,"valueMilli":620,"#,
+            r#""uid":"0123456789abcdef0123456789abcdef"}"#))
+            .expect("recognised").expect("built");
+        assert_eq!(p.command_type, UiCommandType::SetDeviceParam as u16);
+        assert_eq!(p.command_type, 43, "the engine's own number for it");
+        assert_eq!(p.track_id, 2);
+        assert_eq!(p.device_id, 7);
+        assert_eq!(p.value_milli, 620, "the engine's unit, unconverted");
+        // The hex string is bytes, not characters: 0x01 0x23 ... not '0' '1' ...
+        assert_eq!(p.uid16[0], 0x01);
+        assert_eq!(p.uid16[1], 0x23);
+        assert_eq!(p.uid16[15], 0xef);
+        // 40 bytes, which is what the engine dispatches on — a payload of the
+        // wrong size is read as some other command entirely.
+        assert_eq!(std::mem::size_of::<UiSetParamPayload>(), 40);
+        // And nothing else in the sidecar claims it, which is the actual danger:
+        // every other builder matches on a substring.
         assert!(build_chain_edit(
             r#"{"type":"setparam","track":0,"device":7,"index":1,"valueMilli":1}"#).is_none());
         assert!(build_chord(
@@ -2809,8 +2845,8 @@ mod tests {
     }
 
     #[test]
-    fn setparam_checks_its_own_shape_before_it_blames_the_engine() {
-        let miss = |b: &str| build_set_param(b).expect("recognised");
+    fn setparam_refuses_what_the_host_would_silently_drop() {
+        let miss = |b: &str| build_set_param(b).expect("recognised").expect_err("refused");
         // A 0..1 float is the shape everybody reaches for first, and parse_num
         // reads integers — so 0.62 would arrive as 0, silently, which is the one
         // failure mode this whole path exists to avoid.
@@ -2828,15 +2864,17 @@ mod tests {
                 .contains("valueMilli in 0..1000"));
         assert!(miss(r#"{"type":"setparam","track":0,"device":7,"index":1,"valueMilli":1001}"#)
                 .contains("valueMilli in 0..1000"));
-        // The durable id is optional, but a malformed one is a caller mistake and
-        // not something to pass on: the uid is what the eventual engine command
-        // resolves the parameter by.
+        // The uid is REQUIRED now, and was optional while this only ever refused.
+        // The engine resolves the parameter by uid16 and has no index fallback,
+        // so a missing or zeroed one is a write the host drops without a word —
+        // acknowledged, plausible, and nothing moves. Refusing is the honest answer.
+        assert!(miss(r#"{"type":"setparam","track":0,"device":7,"index":1,"valueMilli":1}"#)
+                .contains("uid"), "absent");
         assert!(miss(r#"{"type":"setparam","track":0,"device":7,"index":1,"valueMilli":1,"uid":"zz"}"#)
-                .contains("32 hex"));
-        let ok_uid = miss(concat!(r#"{"type":"setparam","track":0,"device":7,"index":1,"#,
-                                  r#""valueMilli":500,"uid":"0123456789abcdef0123456789abcdef"}"#));
-        assert!(ok_uid.contains("no command that writes"),
-                "a well-formed one gets past the shape checks: {ok_uid}");
+                .contains("32 hex"), "malformed");
+        assert!(miss(concat!(r#"{"type":"setparam","track":0,"device":7,"index":1,"#,
+                             r#""valueMilli":1,"uid":"00000000000000000000000000000000"}"#))
+                .contains("no durable id"), "all zeroes resolves to nothing");
         // Not a setparam at all.
         assert!(build_set_param(r#"{"type":"note","pitch":60}"#).is_none());
         assert!(build_set_param(r#"{"type":"reqparams","track":0,"device":7}"#).is_none());

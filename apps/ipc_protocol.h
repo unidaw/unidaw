@@ -24,7 +24,9 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 //    pick the right sub-plugin out of a multi-plugin VST3 bundle (Zebra2.vst3 holds
 //    Zebra2/Zebralette/ZRev/Zebrify). An older host would read the name as a second
 //    path and load garbage, so the version gate must reject it.
-constexpr uint16_t kControlVersion = 4;
+// 5: SetParam — set one plugin parameter by durable uid16 (the UI rack's knob write).
+//    A host without the handler would silently drop it, so gate it at the handshake.
+constexpr uint16_t kControlVersion = 5;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,
@@ -45,6 +47,10 @@ enum class ControlMessageType : uint16_t {
   // can show a real rack. Request payload is ParamsHeader{pluginIndex}; the reply
   // is ParamsHeader{pluginIndex,paramCount,byteCount} + paramCount HostParamWire.
   GetParams = 9,
+  // Set one parameter on one plugin, keyed by the durable uid16 the UI got from
+  // GetParams. Payload is SetParamRequest. Fire-and-forget (no reply); the host's
+  // setter is an atomic store, safe from the control thread.
+  SetParam = 10,
 };
 
 // Cap on parameters returned per query — a scrollable rack shows plenty within
@@ -68,6 +74,15 @@ struct HostParamWire {
   char stableId[48]{};       // plugin-stable id (JUCE param id), nul-padded
   char name[48]{};           // display name
   char display[24]{};        // current value text ("0.62", "440 Hz")
+};
+
+// SetParam payload: set plugin[pluginIndex]'s parameter identified by uid16 to
+// `normalized` (0..1). uid16 is the same durable key GetParams returns, so a mapping
+// survives a plugin version change; the host resolves it to its stableId.
+struct SetParamRequest {
+  uint32_t pluginIndex = 0;
+  uint8_t uid16[16]{};
+  float normalized = 0.0f;
 };
 
 struct StateHeader {
