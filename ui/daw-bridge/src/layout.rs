@@ -122,45 +122,14 @@ pub struct UiPatcherRegion {
     pub edges: [UiPatcherEdge; K_UI_MAX_PATCHER_EDGES],
 }
 
-/// v16: one scale from the engine's registry. Cents are milli-cents (cents*1000).
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct UiScale {
-    pub id: u32,
-    pub step_count: u32,
-    pub octave_milli_cents: i32,
-    pub name: [u8; 24],
-    pub step_milli_cents: [i32; K_UI_MAX_SCALE_STEPS],
-}
-
-#[repr(C, align(64))]
-pub struct UiScaleRegion {
-    pub version: u32,
-    pub scale_count: u32,
-    pub scales: [UiScale; K_UI_MAX_SCALES],
-}
-
-/// v17: one parameter of a device. `uid16` is the durable id to key mappings on;
-/// `value_milli` is the normalised value * 1000.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct UiDeviceParam {
-    pub index: u32,
-    pub value_milli: i32,
-    pub uid16: [u8; 16],
-    pub name: [u8; 40],
-    pub display: [u8; 24],
-}
-
-#[repr(C, align(64))]
-pub struct UiDeviceParamsRegion {
-    pub version: u32,
-    pub track_id: u32,
-    pub device_id: u32,
-    pub param_count: u32,
-    pub device_name: [u8; 40],
-    pub params: [UiDeviceParam; K_UI_MAX_DEVICE_PARAMS],
-}
+// v16/v17 scale + device-param regions are now generated from the C++ header
+// (bindgen) rather than hand-mirrored — see the `sys` module. Re-exported under
+// their idiomatic names; bindgen's layout_tests + the C++ static_asserts pin them
+// to the wire format, so the hand-written offset asserts are gone.
+pub use crate::sys::{
+    daw_UiDeviceParam as UiDeviceParam, daw_UiDeviceParamsRegion as UiDeviceParamsRegion,
+    daw_UiScale as UiScale, daw_UiScaleRegion as UiScaleRegion,
+};
 
 #[repr(C, align(64))]
 #[derive(Clone, Copy, Debug)]
@@ -685,10 +654,8 @@ mod tests {
         same!(UiPatcherNode, sys::daw_UiPatcherNode);
         same!(UiPatcherEdge, sys::daw_UiPatcherEdge);
         same!(UiPatcherRegion, sys::daw_UiPatcherRegion);
-        same!(UiScale, sys::daw_UiScale);
-        same!(UiScaleRegion, sys::daw_UiScaleRegion);
-        same!(UiDeviceParam, sys::daw_UiDeviceParam);
-        same!(UiDeviceParamsRegion, sys::daw_UiDeviceParamsRegion);
+        // UiScale/UiScaleRegion/UiDeviceParam/UiDeviceParamsRegion are now aliases
+        // OF the generated structs, so a parity check on them is vacuous.
         same!(UiClipNote, sys::daw_UiClipNote);
     }
 
@@ -770,29 +737,9 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_load_seq), 552);
         assert_eq!(offset_of!(ShmHeader, ui_load_ok), 556);
         assert_eq!(offset_of!(ShmHeader, ui_scales_offset), 560); // v16 (fits tail padding)
-
-        // v16 scale-registry region layout.
-        assert_eq!(offset_of!(UiScale, id), 0);
-        assert_eq!(offset_of!(UiScale, step_count), 4);
-        assert_eq!(offset_of!(UiScale, octave_milli_cents), 8);
-        assert_eq!(offset_of!(UiScale, name), 12);
-        assert_eq!(offset_of!(UiScale, step_milli_cents), 36);
-        const_assert_eq!(size_of::<UiScale>(), 228);
-        assert_eq!(offset_of!(UiScaleRegion, version), 0);
-        assert_eq!(offset_of!(UiScaleRegion, scale_count), 4);
-        assert_eq!(offset_of!(UiScaleRegion, scales), 8);
-
         assert_eq!(offset_of!(ShmHeader, ui_device_params_offset), 568); // v17
-        // v17 device-params region layout.
-        assert_eq!(offset_of!(UiDeviceParam, index), 0);
-        assert_eq!(offset_of!(UiDeviceParam, value_milli), 4);
-        assert_eq!(offset_of!(UiDeviceParam, uid16), 8);
-        assert_eq!(offset_of!(UiDeviceParam, name), 24);
-        assert_eq!(offset_of!(UiDeviceParam, display), 64);
-        const_assert_eq!(size_of::<UiDeviceParam>(), 88);
-        assert_eq!(offset_of!(UiDeviceParamsRegion, param_count), 12);
-        assert_eq!(offset_of!(UiDeviceParamsRegion, device_name), 16);
-        assert_eq!(offset_of!(UiDeviceParamsRegion, params), 56);
+        // The scale + device-param region structs (v16/v17) are now generated from
+        // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
         const_assert_eq!(size_of::<UiPatcherEdge>(), 20);
         const_assert_eq!(size_of::<UiPatcherRegion>(), 5184);

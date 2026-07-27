@@ -76,6 +76,14 @@ pub struct DeviceParamsView {
     pub params: Vec<DeviceParamView>,
 }
 
+/// Read a nul-terminated C `char` array (from a bindgen-generated struct, where
+/// `char` is `i8`) into an owned String.
+fn cchar_str(b: &[std::os::raw::c_char]) -> String {
+    let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+    let bytes = unsafe { std::slice::from_raw_parts(b.as_ptr() as *const u8, end) };
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 pub fn default_shm_name() -> String {
     for key in ["DAW_UI_SHM_NAME", "DAW_SHM_NAME"] {
         if let Ok(name) = std::env::var(key) {
@@ -465,18 +473,17 @@ impl EngineHandle {
         }
         let region =
             self._mmap.as_ptr().wrapping_add(off as usize) as *const UiScaleRegion;
-        let n = (unsafe { (*region).scale_count } as usize).min(K_UI_MAX_SCALES);
+        let n = (unsafe { (*region).scaleCount } as usize).min(K_UI_MAX_SCALES);
         let mut out = Vec::with_capacity(n);
         for i in 0..n {
             let s = unsafe { &(*region).scales[i] };
-            let steps = (s.step_count as usize).min(K_UI_MAX_SCALE_STEPS);
-            let end = s.name.iter().position(|&b| b == 0).unwrap_or(s.name.len());
+            let steps = (s.stepCount as usize).min(K_UI_MAX_SCALE_STEPS);
             out.push(ScaleView {
                 id: s.id,
-                name: String::from_utf8_lossy(&s.name[..end]).into_owned(),
-                octave_cents: s.octave_milli_cents as f64 / 1000.0,
+                name: cchar_str(&s.name),
+                octave_cents: s.octaveMilliCents as f64 / 1000.0,
                 step_cents: (0..steps)
-                    .map(|k| s.step_milli_cents[k] as f64 / 1000.0)
+                    .map(|k| s.stepMilliCents[k] as f64 / 1000.0)
                     .collect(),
             });
         }
@@ -492,26 +499,22 @@ impl EngineHandle {
         }
         let region = self._mmap.as_ptr().wrapping_add(off as usize)
             as *const UiDeviceParamsRegion;
-        let cstr = |b: &[u8]| {
-            let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
-            String::from_utf8_lossy(&b[..end]).into_owned()
-        };
-        let n = (unsafe { (*region).param_count } as usize).min(K_UI_MAX_DEVICE_PARAMS);
+        let n = (unsafe { (*region).paramCount } as usize).min(K_UI_MAX_DEVICE_PARAMS);
         let mut view = DeviceParamsView {
             version: unsafe { (*region).version },
-            track_id: unsafe { (*region).track_id },
-            device_id: unsafe { (*region).device_id },
-            device_name: cstr(unsafe { &(*region).device_name }),
+            track_id: unsafe { (*region).trackId },
+            device_id: unsafe { (*region).deviceId },
+            device_name: cchar_str(unsafe { &(*region).deviceName }),
             params: Vec::with_capacity(n),
         };
         for i in 0..n {
             let p = unsafe { &(*region).params[i] };
             view.params.push(DeviceParamView {
                 index: p.index,
-                value: p.value_milli as f32 / 1000.0,
+                value: p.valueMilli as f32 / 1000.0,
                 uid16: p.uid16,
-                name: cstr(&p.name),
-                display: cstr(&p.display),
+                name: cchar_str(&p.name),
+                display: cchar_str(&p.display),
             });
         }
         view
