@@ -1236,22 +1236,24 @@ if (meters) {
   ok(meters.song.numerator === 7 && meters.song.denominator === 8,
      'the song meter survived the whole chain',
      `${meters.song.numerator}/${meters.song.denominator}`);
-  // Loading a project with FEWER tracks than the one already open leaves the
-  // surplus tracks' rails published, so the arrangement shows clips belonging to a
-  // project the user closed. Minimal repro, with nothing else in the session:
+  // Counted, not just inspected. This section runs after several other projects
+  // have been loaded, and a load used to grow the engine's track set without ever
+  // shrinking it — so the surplus tracks of a LARGER previous project kept their
+  // placements and kept publishing rails, and the arrangement drew clips from a
+  // project the user had closed:
   //
   //   load meter    (3 tracks) -> 3 rails   t0:seven t1:five t2:four
   //   load maximal  (8 tracks) -> 6 rails   t0:Bass ... t5:Perc
   //   load meter    (3 tracks) -> 6 rails   t0:seven t1:five t2:four
   //                                          t3:Arp  t4:Drums t5:Perc   <- stale
   //
-  // The three that belong to this project are correct, which is why every other
-  // check in this section passes; the load replaces the tracks it defines and
-  // leaves the rest standing. Reported to backend.
-  blocked(meters.clips.length === 3, 'three rails',
-          'a load does not clear tracks beyond the new project\'s track count, so '
-          + 'the previous project\'s rails stay published (reported to backend)',
-          meters.clips.map((c) => `t${c.track}:${c.name || '(unnamed)'}#${c.clipId}`).join(' '));
+  // Every other check in this section passed throughout, because the three rails
+  // that DO belong to the project were always correct — which is why this reads as
+  // working until you count them. Fixed engine-side (4222c16); the count is what
+  // keeps it fixed, and `meter` being SMALLER than what runs before it is what
+  // gives the count something to catch.
+  ok(meters.clips.length === 3, `three rails, none inherited: ${meters.clips.length}`,
+     meters.clips.map((c) => `t${c.track}:${c.name || '(unnamed)'}#${c.clipId}`).join(' '));
 
   const byName = {};
   for (const c of meters.clips) byName[c.name] = c.grid;
