@@ -129,6 +129,19 @@ check(await measure(
     window.__uni.patchField(i % 4);
   } }),
   SCROLL_MAX, 'patcher moving the field cursor');
+
+// The device chain redraws with everything else and builds a title string per
+// card. Small surfaces are where the discipline quietly stops being true.
+check(await measure(
+  () => { window.__uni.useChainFixture(); },
+  (n) => { for (let i = 0; i < n; i++) { window.__uni.chainSelect(i % 4); } }),
+  SCROLL_MAX, 'device chain, moving the selection');
+
+// The palette filters on every keystroke and is the newest draw path here.
+check(await measure(
+  () => { window.__uni.palette(true); },
+  (n) => { for (let i = 0; i < n; i++) { window.__uni.paletteMove(i % 2 ? 1 : -1); } }),
+  SCROLL_MAX, 'palette, moving the selection');
 await br.close(); srv.close();
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : `${fail} FAILURES — see GUIDELINES.md section 3`}`);

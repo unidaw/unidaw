@@ -144,7 +144,11 @@
 
 /* ---- Transport chrome, from the redesign's top strip ------------------- */
 .chrome {
-  position: absolute; left: 0; right: 0; top: 0;
+  /* Laid out BY THE SHELL, not by itself. It used to be absolutely positioned at
+     the top of the document, which was right when a surface filled the window and
+     wrong the moment anything else wanted the row below it — it covered the
+     breadcrumb, and an absolutely positioned element covering a flex sibling
+     shows no sign of doing so. Height stays here because it is this bar's own. */
   height: 38px; display: flex; align-items: center; gap: 18px;
   padding: 0 14px; box-sizing: border-box;
   background: var(--uni-surface-header-bg);

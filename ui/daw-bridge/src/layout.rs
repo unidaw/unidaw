@@ -16,6 +16,12 @@ pub const K_UI_MAX_HARMONY_EVENTS: usize = 512;
 pub const K_UI_EDIT_BATCH_MAX_OPS: usize = 32;
 pub const K_UI_EDIT_BATCH_CAPACITY: usize = 64;
 pub const K_CHAIN_DEVICE_ID_AUTO: u32 = 0xFFFF_FFFF;
+/// `trackId` on a chain command meaning EVERY track. The same bit pattern as
+/// `K_CHAIN_DEVICE_ID_AUTO` and deliberately not the same constant: one names a
+/// device the engine should number itself, the other names a whole-project
+/// request, and folding them together would make a rename of either one silently
+/// change the other.
+pub const K_CHAIN_TRACK_ALL: u32 = 0xFFFF_FFFF;
 pub const UI_CLIP_WINDOW_FLAG_COMPLETE: u32 = 1 << 0;
 pub const UI_CLIP_WINDOW_FLAG_RESYNC: u32 = 1 << 1;
 
@@ -445,6 +451,14 @@ pub enum UiCommandType {
     SetPosition = 35,
     /// Rename a track (trackId + name in UiPatcherPresetCommandPayload).
     SetTrackName = 36,
+    /// Ask the engine to re-emit a track's device chain on `ringUiOut`.
+    ///
+    /// The chain is published as diffs, not as a region under the seqlock, so a
+    /// consumer that attaches after the last edit has no way to learn the current
+    /// chain by reading — it can only wait for the next one, which may never
+    /// come. `track_id` = `K_CHAIN_TRACK_ALL` asks for every track, which is what
+    /// a freshly connected UI wants.
+    RequestChainSnapshot = 37,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;

@@ -1,0 +1,112 @@
+/* Command palette. A card over whatever is showing, like the help overlay —
+   it is a thing you summon and dismiss, not a place you go. */
+
+.pl {
+  position: absolute; inset: 0;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding-top: 120px;
+  /* The only dim in the token set. help.css hard-codes a heavier one; a second
+     literal here would be a second colour to keep in step with the theme. */
+  background: var(--uni-surface-off-grid);
+  /* Above the help overlay (10), which is the only other full-screen card. */
+  z-index: 11;
+  font-family: var(--font-mono);
+}
+/* The surface owns its own hidden state so the host page does not have to know
+   that `.pl` is a flex container — `hidden` alone loses to `display: flex`. */
+.pl[hidden] { display: none; }
+
+.pl-card {
+  width: 720px; max-width: 92%;
+  display: flex; flex-direction: column;
+  background: var(--uni-surface-header-bg);
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 4px;
+  box-shadow: 0 24px 60px var(--uni-surface-off-grid);
+  overflow: hidden;
+}
+
+.pl-head {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--uni-rule-gutter);
+}
+.pl-mark { color: var(--base-accent); font-size: var(--font-size-chrome); }
+.pl-input {
+  flex: 1 1 auto;
+  background: transparent; border: 0; outline: 0;
+  color: var(--base-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-chrome);
+}
+.pl-input::placeholder { color: var(--uni-text-empty); }
+/* Matched over total, so a filter that is hiding most of the grammar says so. */
+.pl-count {
+  color: var(--uni-text-gutter);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+}
+
+.pl-list {
+  flex: 1 1 auto;
+  max-height: 360px; overflow-y: auto;
+  padding: 5px;
+}
+
+.pl-item {
+  display: flex; align-items: baseline; gap: 12px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.pl-item:hover { background: var(--uni-surface-row-alt); }
+.pl-item.sel { background: var(--uni-surface-cursor-cell); }
+
+.pl-name {
+  flex: 0 0 104px;
+  color: var(--base-text);
+  font-size: var(--font-size-chrome);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pl-item.sel .pl-name { color: var(--base-accent-ramp-300); }
+/* The help line is the grammar's own description of the command — the same text
+   `help` prints in the dock, so the two surfaces cannot describe it differently. */
+.pl-help {
+  flex: 1 1 auto;
+  color: var(--uni-text-instrument);
+  font-size: var(--font-size-gutter);
+  letter-spacing: var(--font-tracking-gutter);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.pl-empty {
+  padding: 10px 13px;
+  color: var(--uni-text-gutter);
+  font-size: var(--font-size-gutter);
+}
+
+/* A refusal, in the colour the dock gives its error lines. It stays on screen
+   because the palette stays open: the message is usually the argument you left
+   out, and closing the card takes the question away with the answer. */
+/* No `display: none` here, and none on .pl-empty either: both are hidden by
+   writing style.display, and hiding one in the stylesheet would make the JS's
+   "" — which means "whatever the stylesheet says" — hide it again. */
+.pl-status {
+  flex: 0 0 auto;
+  padding: 6px 13px;
+  border-top: 1px solid var(--uni-rule-gutter);
+  color: var(--uni-text-fx);
+  font-size: var(--font-size-gutter);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.pl-foot {
+  flex: 0 0 auto;
+  display: flex; gap: 14px;
+  padding: 7px 13px;
+  border-top: 1px solid var(--uni-rule-gutter);
+  color: var(--uni-text-gutter);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+}

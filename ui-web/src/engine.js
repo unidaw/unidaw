@@ -35,7 +35,7 @@ export function noEngine() {
 }
 
 export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.0.0.1:8175',
-                                onChange, onStatus, onAck, onEngineEvent } = {}) {
+                                onChange, onStatus, onAck, onEngineEvent, onChains } = {}) {
   const store = createStore();
   let ws = null;
   let closed = false;
@@ -62,6 +62,12 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
         // channel, as before. Parse alone in the try; act outside it.
         let parsed = null;
         try { parsed = JSON.parse(ev.data); } catch (err) { /* not JSON: raw */ }
+        // Per-track device chains, accumulated by the sidecar from the engine's
+        // ChainSnapshot diffs. State, not news — a fresh tab is told all of it.
+        if (parsed && Array.isArray(parsed.chains)) {
+          onChains && onChains(parsed.chains, parsed.rev);
+          return;
+        }
         if (parsed && Array.isArray(parsed.engine)) {
           onEngineEvent && onEngineEvent(parsed.engine, parsed.missed || 0);
           return;

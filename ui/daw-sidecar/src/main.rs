@@ -29,8 +29,9 @@ use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{EventEntry, UiChordCommandPayload, UiCommandPayload, UiCommandType,
-                        UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
-                        UiPatcherPresetCommandPayload};
+                        UiDiffType, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
+                        UiPatcherPresetCommandPayload, K_CHAIN_DEVICE_ID_AUTO,
+                        K_CHAIN_TRACK_ALL};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
 
 /// Wire format, little-endian. The frontend decodes with a DataView.
@@ -966,6 +967,19 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         p.value0 = (parse_num(body, "\"gain\"").unwrap_or(0).clamp(-9600, 1200) as i32) as u32;
         p.plugin_index = (parse_num(body, "\"pan\"").unwrap_or(0).clamp(-1000, 1000) as i32) as u32;
         p.flags = parse_num(body, "\"flags\"").unwrap_or(0).clamp(0, 3) as u16;
+    } else if body.contains("\"reqchain\"") {
+        // Ask the engine to re-emit a chain. The UI needs this because chains
+        // arrive only as diffs: a page opened after the last device edit has
+        // nothing to read back and would show an empty chain for ever.
+        p.command_type = UiCommandType::RequestChainSnapshot as u16;
+        // A missing or negative track means ALL of them. Not the `track_id`
+        // parsed above, which floors a negative to 0 — that would silently turn
+        // "every track" into "track 0" and answer a whole-project request with
+        // one chain.
+        p.track_id = match parse_num(body, "\"track\"") {
+            Some(t) if t >= 0 => t as u32,
+            _ => K_CHAIN_TRACK_ALL,
+        };
     } else if body.contains("\"undo\"") {
         p.command_type = UiCommandType::Undo as u16;
     } else if body.contains("\"redo\"") {
@@ -1126,7 +1140,7 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
 }
 
 fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
-         viewport: SharedViewport, events: Arc<EngineEvents>) {
+         viewport: SharedViewport, events: Arc<EngineEvents>, chains: Arc<ChainStore>) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
     let mut ws = match tungstenite::accept(stream) {
         Ok(w) => w,
@@ -1149,6 +1163,13 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
     // Start at the newest, so a client that connects late is not handed a
     // backlog of errors from before it existed and told they are its own.
     let mut event_cursor = events.since(0).1;
+    // Chains start at zero, deliberately unlike the events above: a chain is
+    // STATE, not news. A tab that connects after the last device edit still has
+    // to be told what the chains are, and the store is the only place that
+    // knows — the engine publishes chains as diffs, so there is nothing to read
+    // back. (Nothing has been missed either: the client can ask for a fresh
+    // snapshot with `reqchain`.)
+    let mut chain_cursor = 0u64;
 
     let period = Duration::from_micros(1_000_000 / hz as u64);
     // Reused across ticks — the steady state allocates nothing, same rule the
@@ -1252,6 +1273,15 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
             }
         }
 
+        // Device chains, same channel and the same rule: one shared store, a
+        // cursor per client, and a message only when the store actually moved.
+        // Whole-state, not a delta — the accumulation the client would otherwise
+        // have to redo is the part that is easy to get wrong (see ChainStore).
+        if let Some((body, rev)) = chains.changed_since(chain_cursor) {
+            chain_cursor = rev;
+            if ws.send(tungstenite::Message::Text(body)).is_err() { break; }
+        }
+
         if reported.elapsed() >= Duration::from_secs(10) {
             let secs = started.elapsed().as_secs_f64();
             eprintln!(
@@ -1311,6 +1341,188 @@ impl EngineEvents {
     }
 }
 
+/// One device in a track's chain, as the engine published it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ChainDevice {
+    id: u32,
+    kind: u32,
+    pos: u32,
+    node: u32,
+    slot: u32,
+    caps: u32,
+    bypass: u32,
+}
+
+/// One ChainSnapshot entry off the ring: which track and which version it
+/// belongs to, plus the device it describes — `None` for the empty-chain
+/// sentinel, which is a statement about the chain rather than a device in it.
+#[derive(Clone, Copy, Debug)]
+struct ChainEntry {
+    track: u32,
+    version: u32,
+    device: Option<ChainDevice>,
+}
+
+/// A track's chain as accumulated so far, plus the version it was published at.
+#[derive(Default)]
+struct TrackChain {
+    track: u32,
+    version: u32,
+    /// Reused across snapshots — a replacement clears this rather than dropping
+    /// it, so a chain that is re-published on every device edit allocates once.
+    devices: Vec<ChainDevice>,
+    /// The engine's first version is 1, so 0 would do as "never seen" — but that
+    /// is the engine's counter's business, not ours, and a store that silently
+    /// depends on it breaks the day the counter starts somewhere else.
+    seen: bool,
+}
+
+/// Per-track device chains, accumulated from the engine's ChainSnapshot diffs.
+///
+/// Shared for the same reason `EngineEvents` is: the out ring is SINGLE CONSUMER,
+/// so one thread drains it and every client reads what that thread accumulated.
+/// A per-client drain would hand each browser tab a different subset of the SAME
+/// snapshot's entries, and every tab would render a chain that is short by a
+/// device or two — plausible, silent, and different in each window.
+#[derive(Default)]
+struct ChainStore {
+    tracks: Mutex<Vec<TrackChain>>,
+    /// Bumped on every accepted entry so a client can tell "unchanged" from
+    /// "changed" with one relaxed load, and take the lock only when it must.
+    revision: AtomicU64,
+}
+
+impl ChainStore {
+    /// Fold one snapshot entry into the store.
+    ///
+    /// A snapshot is a REPLACEMENT keyed on (track, chain_version), not an
+    /// append. The engine emits one entry per device and stamps them all with one
+    /// version, so the first entry of a new version has to throw away what the
+    /// previous version left behind. Appending instead shows every device twice
+    /// after the first edit — the content changed while the key the consumer
+    /// watches (the track, its version) stood still, which is GUIDELINES 2.1
+    /// exactly, and it renders a perfectly believable chain while doing it.
+    fn apply(&self, entry: &ChainEntry) {
+        let mut tracks = self.tracks.lock().unwrap();
+        let slot = match tracks.iter().position(|t| t.track == entry.track) {
+            Some(i) => &mut tracks[i],
+            None => {
+                tracks.push(TrackChain { track: entry.track, ..Default::default() });
+                tracks.last_mut().unwrap()
+            }
+        };
+        if !slot.seen || entry.version > slot.version {
+            slot.seen = true;
+            slot.version = entry.version;
+            slot.devices.clear();
+        } else if entry.version < slot.version {
+            // A late entry from a snapshot the engine has already superseded.
+            // Ignored rather than appended: splicing two versions' devices into
+            // one list produces a chain that never existed, and its version says
+            // it is the newer one.
+            return;
+        }
+        match entry.device {
+            Some(d) => slot.devices.push(d),
+            // The empty-chain sentinel. The clear above IS the whole update: a
+            // track whose chain was emptied must show zero devices, not the ones
+            // it had before the engine emptied it.
+            None => {}
+        }
+        self.revision.fetch_add(1, Ordering::Release);
+    }
+
+    /// Forget everything. Called when the drainer re-attaches, because a fresh
+    /// engine maps a new segment AND restarts its chain-version counter — so
+    /// carrying the old versions over would make every snapshot the new engine
+    /// sends look stale, and the store would ignore all of them for ever.
+    ///
+    /// Refilling it is the CLIENT's job, via `reqchain`. The drainer holds a
+    /// writable handle but must not use it: the command ring is single-producer
+    /// and the command thread is that producer, so a request sent from here
+    /// would corrupt the ring it was trying to ask a question on.
+    fn reset(&self) {
+        let mut tracks = self.tracks.lock().unwrap();
+        if tracks.is_empty() { return; }
+        tracks.clear();
+        self.revision.fetch_add(1, Ordering::Release);
+    }
+
+    /// The whole store as JSON if it has moved since `cursor`, with the new
+    /// cursor. `None` when nothing changed — that is the common case, running on
+    /// every client thread at frame rate, and it costs one relaxed load and no
+    /// lock and no allocation.
+    ///
+    /// The message carries `rev` as well as each chain's `version` because a
+    /// snapshot can straddle two drain ticks: the devices for version V can still
+    /// be arriving while V stands still, so a client that cache-keys on the
+    /// version alone would pin the half of the chain it saw first. `rev` names
+    /// the other input.
+    fn changed_since(&self, cursor: u64) -> Option<(String, u64)> {
+        if self.revision.load(Ordering::Acquire) == cursor { return None; }
+        let tracks = self.tracks.lock().unwrap();
+        // Re-read under the lock: the value published with this body has to be
+        // the one the body was built from, not one an entry applied in between
+        // has already moved past.
+        let rev = self.revision.load(Ordering::Acquire);
+        let mut out = String::from("{\"chains\":[");
+        for (i, t) in tracks.iter().enumerate() {
+            if i > 0 { out.push(','); }
+            out.push_str(&format!(
+                "{{\"track\":{},\"version\":{},\"devices\":[", t.track, t.version));
+            for (j, d) in t.devices.iter().enumerate() {
+                if j > 0 { out.push(','); }
+                out.push_str(&format!(
+                    "{{\"id\":{},\"kind\":{},\"pos\":{},\"node\":{},\"slot\":{},\
+                     \"caps\":{},\"bypass\":{}}}",
+                    d.id, d.kind, d.pos, d.node, d.slot, d.caps, d.bypass));
+            }
+            out.push_str("]}");
+        }
+        out.push_str(&format!("],\"rev\":{rev}}}"));
+        Some((out, rev))
+    }
+
+    #[cfg(test)]
+    fn devices_of(&self, track: u32) -> Vec<ChainDevice> {
+        let tracks = self.tracks.lock().unwrap();
+        tracks.iter().find(|t| t.track == track).map(|t| t.devices.clone()).unwrap_or_default()
+    }
+}
+
+/// Read a ChainSnapshot diff off the ring, or None if this entry is not one.
+///
+/// Offsets are the authority here, not a struct: `UiChainDiffPayload` is
+/// diff_type u16@0, flags u16@2, track_id u32@4, chain_version u32@8,
+/// device_id u32@12, device_kind u32@16, position u32@20, patcher_node_id u32@24,
+/// host_slot_index u32@28, capability_mask u32@32, bypass u32@36 — 40 bytes, the
+/// whole payload. A short entry is refused rather than read past.
+fn decode_chain_snapshot(e: &EventEntry) -> Option<ChainEntry> {
+    if (e.size as usize) < 40 { return None; }
+    let p = &e.payload;
+    let u16at = |i: usize| u16::from_le_bytes([p[i], p[i + 1]]);
+    let u32at = |i: usize| u32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+    if u16at(0) != UiDiffType::ChainSnapshot as u16 { return None; }
+    let device_id = u32at(12);
+    Some(ChainEntry {
+        track: u32at(4),
+        version: u32at(8),
+        // kDeviceIdAuto in a SNAPSHOT is not a device id — it is how the engine
+        // says "this chain is empty", emitted as one entry so the version still
+        // travels. Taken as a device it would leave the track showing a phantom
+        // device with id 4294967295 and, worse, never clear the real ones.
+        device: (device_id != K_CHAIN_DEVICE_ID_AUTO).then(|| ChainDevice {
+            id: device_id,
+            kind: u32at(16),
+            pos: u32at(20),
+            node: u32at(24),
+            slot: u32at(28),
+            caps: u32at(32),
+            bypass: u32at(36),
+        }),
+    })
+}
+
 /// Turn one EventEntry from the engine's out ring into JSON, or None to drop it.
 ///
 /// Only the messages the UI must act on are forwarded. The note diffs (1-3) fire
@@ -1361,20 +1573,48 @@ fn decode_engine_event(e: &EventEntry) -> Option<String> {
 /// Its own thread with its own writable handle, at a slower cadence than the
 /// publish loop: these are rare, and an error the user reads 50 ms late is not
 /// a worse error.
-fn drain_engine_events(shm: String, events: Arc<EngineEvents>) {
+/// UiDiffType by number, for the log. Names, because "type 5 = 12" is not a
+/// report anyone can act on.
+fn diff_type_name(t: u16) -> &'static str {
+    match t {
+        1 => "add-note", 2 => "remove-note", 3 => "update-note", 4 => "resync",
+        5 => "chain-snapshot", 6 => "chain-error", 7 => "routing-snapshot",
+        8 => "routing-error", 9 => "mod-snapshot", 10 => "mod-error",
+        11 => "mod-link-uid", 12 => "patcher-delta", 13 => "patcher-error",
+        _ => "unknown",
+    }
+}
+
+fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<ChainStore>) {
     const EVERY: Duration = Duration::from_millis(50);
     const MAX_PER_TICK: usize = 32;
     let mut handle = EngineHandle::attach(&shm, true).ok();
     let mut entries: Vec<EventEntry> = Vec::with_capacity(MAX_PER_TICK);
     let mut last_attach = Instant::now();
+    let mut generation = SHM_GENERATION.load(Ordering::Acquire);
     let mut dropped: u64 = 0;
+    let mut kinds = [0u64; 16];
+    let mut last_report = Instant::now();
     loop {
         thread::sleep(EVERY);
+        // The publish loop bumps the generation when it re-attaches to a
+        // restarted engine. Follow it, because this thread's handle points into
+        // the segment the OLD engine mapped: it would keep draining a ring
+        // nobody writes any more, quietly, for ever — the chain would simply
+        // stop updating with no error anywhere.
+        let g = SHM_GENERATION.load(Ordering::Acquire);
+        if g != generation {
+            generation = g;
+            last_attach = Instant::now();
+            handle = EngineHandle::attach(&shm, true).ok();
+            chains.reset();
+        }
         let Some(h) = handle.as_ref() else {
             // The engine may not be up yet, or may have restarted under us.
             if last_attach.elapsed() > Duration::from_secs(2) {
                 last_attach = Instant::now();
                 handle = EngineHandle::attach(&shm, true).ok();
+                if handle.is_some() { chains.reset(); }
             }
             continue;
         };
@@ -1382,6 +1622,18 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>) {
         let n = h.drain_ui_out(&mut entries, MAX_PER_TICK);
         if n == 0 { continue; }
         for e in &entries {
+            if e.size >= 2 {
+                let t = u16::from_le_bytes([e.payload[0], e.payload[1]]) as usize;
+                if t < kinds.len() { kinds[t] += 1; }
+            }
+            // A chain snapshot is STATE, not news. It accumulates into the
+            // shared store instead of joining the event queue, which would
+            // replay a device list as a stream of one-line notifications and
+            // bury the errors the queue exists for.
+            if let Some(chain) = decode_chain_snapshot(e) {
+                chains.apply(&chain);
+                continue;
+            }
             match decode_engine_event(e) {
                 Some(json) => events.push(json),
                 // Counted, not ignored. A silent drop here would make the ring
@@ -1389,8 +1641,23 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>) {
                 None => dropped += 1,
             }
         }
-        if dropped > 0 && dropped % 256 == 0 {
-            eprintln!("sidecar: {dropped} engine diffs seen and not forwarded (note diffs etc.)");
+        // A histogram rather than a bare count. "1400 diffs not forwarded" says
+        // nothing about whether the ring carries something worth reading; a
+        // breakdown by type says exactly which capability is publishing and
+        // which is silent.
+        if last_report.elapsed() > Duration::from_secs(10) {
+            last_report = Instant::now();
+            let seen: Vec<String> = kinds.iter().enumerate()
+                .filter(|(_, n)| **n > 0)
+                .map(|(t, n)| format!("{}={}", diff_type_name(t as u16), n))
+                .collect();
+            if !seen.is_empty() {
+                // `dropped` next to the histogram, not instead of it: the
+                // breakdown says what the ring carries, this says how much of it
+                // reaches a client. The two diverging is the interesting case.
+                eprintln!("sidecar: engine diffs since start: {} (not-forwarded={dropped})",
+                          seen.join(" "));
+            }
         }
     }
 }
@@ -1443,11 +1710,15 @@ fn main() {
         Err(e) => eprintln!("sidecar: no command port {} ({e}) — read-only", args.cmd_port),
     }
 
-    // One drainer for the whole process, because the ring has one consumer.
+    // One drainer for the whole process, because the ring has one consumer. It
+    // owns both shared stores for the same reason: what it takes off the ring is
+    // taken from everyone else, so it has to put it somewhere every client can
+    // read.
     let events = Arc::new(EngineEvents::default());
+    let chains = Arc::new(ChainStore::default());
     {
-        let (shm, ev) = (args.shm.clone(), events.clone());
-        thread::spawn(move || drain_engine_events(shm, ev));
+        let (shm, ev, ch) = (args.shm.clone(), events.clone(), chains.clone());
+        thread::spawn(move || drain_engine_events(shm, ev, ch));
     }
 
     let clients = Arc::new(AtomicU64::new(0));
@@ -1457,7 +1728,8 @@ fn main() {
                 let (shm, hz, c) = (args.shm.clone(), args.hz, clients.clone());
                 let vp = viewport.clone();
                 let ev = events.clone();
-                thread::spawn(move || serve(s, shm, hz, c, vp, ev));
+                let ch = chains.clone();
+                thread::spawn(move || serve(s, shm, hz, c, vp, ev, ch));
             }
             Err(e) => eprintln!("sidecar: accept failed: {e}"),
         }
@@ -1683,6 +1955,164 @@ mod tests {
         for i in 0..(ENGINE_EVENT_CAP as u64 + 5) { ev.push(format!("{{\"n\":{i}}}")); }
         let (_, _, missed) = ev.since(1);
         assert!(missed > 0, "a client that fell behind is told");
+    }
+
+    /// One ChainSnapshot entry. Every field carries a distinct value, because
+    /// the failure this file has had twice is a field read from the wrong
+    /// offset, and a payload of zeros and ones cannot tell you about it.
+    fn chain_entry(track: u32, version: u32, device_id: u32, pos: u32) -> EventEntry {
+        let mut p = Vec::new();
+        p.extend_from_slice(&(UiDiffType::ChainSnapshot as u16).to_le_bytes()); // 0
+        p.extend_from_slice(&0u16.to_le_bytes());        // 2  flags
+        p.extend_from_slice(&track.to_le_bytes());       // 4
+        p.extend_from_slice(&version.to_le_bytes());     // 8
+        p.extend_from_slice(&device_id.to_le_bytes());   // 12
+        p.extend_from_slice(&7u32.to_le_bytes());        // 16 kind
+        p.extend_from_slice(&pos.to_le_bytes());         // 20
+        p.extend_from_slice(&11u32.to_le_bytes());       // 24 patcher node
+        p.extend_from_slice(&2u32.to_le_bytes());        // 28 host slot
+        p.extend_from_slice(&3u32.to_le_bytes());        // 32 capability mask
+        p.extend_from_slice(&1u32.to_le_bytes());        // 36 bypass
+        entry(&p)
+    }
+
+    fn apply_chain(store: &ChainStore, e: &EventEntry) {
+        store.apply(&decode_chain_snapshot(e).expect("a chain snapshot"));
+    }
+
+    /// The engine emits one entry per device and stamps them all with the same
+    /// version, so a new version REPLACES a track's devices. Appending shows
+    /// every device twice after the first edit, with a version that says it is
+    /// the current chain — the bug class in GUIDELINES 2.1.
+    #[test]
+    fn a_new_chain_version_replaces_the_devices_rather_than_appending_to_them() {
+        let store = ChainStore::default();
+        apply_chain(&store, &chain_entry(0, 87, 100, 0));
+        apply_chain(&store, &chain_entry(0, 87, 101, 1));
+        assert_eq!(store.devices_of(0).len(), 2);
+
+        // The same chain re-published after an edit, one device longer.
+        apply_chain(&store, &chain_entry(0, 88, 100, 0));
+        apply_chain(&store, &chain_entry(0, 88, 101, 1));
+        apply_chain(&store, &chain_entry(0, 88, 102, 2));
+        let devices = store.devices_of(0);
+        assert_eq!(devices.len(), 3, "three devices, not five: {devices:?}");
+        assert_eq!(devices[0].id, 100);
+        assert_eq!(devices[2].id, 102);
+        // Every field, from its own offset. This is the decode half of the same
+        // test: a payload read two bytes off still yields a plausible chain.
+        assert_eq!(devices[2], ChainDevice {
+            id: 102, kind: 7, pos: 2, node: 11, slot: 2, caps: 3, bypass: 1,
+        });
+
+        // Another track is its own chain and its own version; one track's
+        // snapshot must not disturb it.
+        apply_chain(&store, &chain_entry(3, 89, 200, 0));
+        assert_eq!(store.devices_of(0).len(), 3);
+        assert_eq!(store.devices_of(3).len(), 1);
+
+        let (json, _) = store.changed_since(0).expect("something changed");
+        assert!(json.contains("\"track\":0,\"version\":88"), "{json}");
+        assert!(json.contains("\"id\":102,\"kind\":7,\"pos\":2,\"node\":11,\"slot\":2,\"caps\":3,\"bypass\":1"),
+                "{json}");
+    }
+
+    /// Entries can still arrive for a version the engine has already superseded.
+    /// Applied, they would splice two chains into one list and label the result
+    /// with the newer version.
+    #[test]
+    fn an_entry_from_a_superseded_chain_version_is_ignored() {
+        let store = ChainStore::default();
+        apply_chain(&store, &chain_entry(1, 90, 100, 0));
+        apply_chain(&store, &chain_entry(1, 91, 200, 0));
+        let before = store.changed_since(0).expect("changed").1;
+
+        apply_chain(&store, &chain_entry(1, 90, 101, 1));   // late, older version
+        let devices = store.devices_of(1);
+        assert_eq!(devices.len(), 1, "the stale entry was not appended: {devices:?}");
+        assert_eq!(devices[0].id, 200);
+        // Ignored means ignored: a client must not be woken for a no-op.
+        assert!(store.changed_since(before).is_none(), "revision did not move");
+    }
+
+    /// An empty chain is a single entry whose device id is the auto sentinel.
+    /// Read as a device it would leave a phantom in the list; not read at all it
+    /// would leave the track showing the devices it no longer has.
+    #[test]
+    fn the_empty_chain_sentinel_leaves_the_track_with_no_devices() {
+        let store = ChainStore::default();
+        apply_chain(&store, &chain_entry(2, 5, 100, 0));
+        apply_chain(&store, &chain_entry(2, 5, 101, 1));
+        assert_eq!(store.devices_of(2).len(), 2);
+
+        apply_chain(&store, &chain_entry(2, 6, K_CHAIN_DEVICE_ID_AUTO, 0));
+        assert!(store.devices_of(2).is_empty(), "the chain was emptied");
+        let (json, _) = store.changed_since(0).expect("changed");
+        assert!(json.contains("\"track\":2,\"version\":6,\"devices\":[]}"), "{json}");
+    }
+
+    /// Same contract as the engine events: one shared store, one cursor per
+    /// client, and no message when nothing moved. A drain per client would give
+    /// each tab a different subset of one snapshot.
+    #[test]
+    fn every_client_reads_the_chains_from_its_own_cursor() {
+        let store = ChainStore::default();
+        assert!(store.changed_since(0).is_none(), "nothing published yet");
+        apply_chain(&store, &chain_entry(0, 1, 100, 0));
+
+        let (one, c1) = store.changed_since(0).expect("client one");
+        let (two, c2) = store.changed_since(0).expect("client two, not robbed");
+        assert_eq!(one, two);
+        assert_eq!(c1, c2);
+        assert!(store.changed_since(c1).is_none(), "caught up");
+
+        apply_chain(&store, &chain_entry(0, 2, 100, 0));
+        assert!(store.changed_since(c1).is_some(), "a new snapshot is news again");
+    }
+
+    /// A restarted engine maps a new segment and restarts its version counter,
+    /// so the store has to forget: kept, the old versions make every snapshot
+    /// the new engine sends look stale and the chain never updates again.
+    #[test]
+    fn a_reset_forgets_the_previous_engines_versions() {
+        let store = ChainStore::default();
+        apply_chain(&store, &chain_entry(0, 900, 100, 0));
+        store.reset();
+        assert!(store.devices_of(0).is_empty());
+        apply_chain(&store, &chain_entry(0, 1, 200, 0));
+        let devices = store.devices_of(0);
+        assert_eq!(devices.len(), 1, "version 1 from a fresh engine is accepted");
+        assert_eq!(devices[0].id, 200);
+    }
+
+    /// Not every diff on the ring is a chain snapshot, and a truncated entry
+    /// cannot be trusted to carry the fields we would read out of it.
+    #[test]
+    fn only_a_full_chain_snapshot_entry_decodes() {
+        let mut short = chain_entry(0, 1, 100, 0);
+        short.size = 24;
+        assert!(decode_chain_snapshot(&short).is_none(), "a short entry is refused");
+        // A note diff shares the first four bytes' shape and nothing else.
+        let mut note = Vec::new();
+        note.extend_from_slice(&1u16.to_le_bytes());
+        note.resize(40, 0);
+        assert!(decode_chain_snapshot(&entry(&note)).is_none());
+        // ...and a chain snapshot does not leak into the error/event queue.
+        assert!(decode_engine_event(&chain_entry(0, 1, 100, 0)).is_none());
+    }
+
+    /// "All tracks" is 0xFFFFFFFF, not 0. The generic parse above floors a
+    /// negative track to 0, which would answer a whole-project request with one
+    /// chain and look like the UI simply forgot the other tracks.
+    #[test]
+    fn reqchain_asks_for_every_track_unless_one_is_named() {
+        let p = build_command(r#"{"type":"reqchain"}"#).expect("should build");
+        assert_eq!(p.command_type, UiCommandType::RequestChainSnapshot as u16);
+        assert_eq!(p.command_type, 37, "the engine's own number for it");
+        assert_eq!(p.track_id, 0xFFFF_FFFF);
+        assert_eq!(build_command(r#"{"type":"reqchain","track":-1}"#).unwrap().track_id,
+                   0xFFFF_FFFF, "a negative track means all of them");
+        assert_eq!(build_command(r#"{"type":"reqchain","track":3}"#).unwrap().track_id, 3);
     }
 
     #[test]

@@ -1,0 +1,68 @@
+/* The device chain strip. Values come from tokens.css; nothing is hardcoded here
+   that the design system already names. */
+
+.dv {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  contain: strict;
+}
+
+.dv-head {
+  flex: 0 0 26px; height: 26px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 10px; box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-gutter);
+  border-bottom: 1px solid var(--uni-rule-column);
+}
+.dv-label { color: var(--base-neutral-600); }
+.dv-track { color: var(--uni-text-instrument); }
+.dv-version { color: var(--base-neutral-600); }
+/* Pushed right and dimmed: it is a caveat, not a heading. It has to be readable
+   without competing with the track it is about. */
+.dv-notice { margin-left: auto; color: var(--base-neutral-600); }
+
+.dv-cards {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; align-items: stretch; gap: 8px;
+  padding: 8px 10px; box-sizing: border-box;
+  /* Cards keep their width and the strip scrolls. Squeezing eight devices into
+     the window would make every one of them unreadable, which is the opposite
+     of what a chain view is for. */
+  overflow-x: auto; overflow-y: hidden;
+}
+
+.dv-card {
+  flex: 0 0 232px; width: 232px;
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 10px; box-sizing: border-box;
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 3px;
+  background: var(--uni-surface-tracker-bg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  cursor: pointer;
+}
+.dv-card.sel { border-color: var(--base-accent); }
+/* A bypassed device is still THERE — dimmed, not hidden, or the chain's shape
+   changes depending on what is switched on. */
+.dv-card.byp { opacity: .45; }
+
+.dv-card-top { display: flex; align-items: center; gap: 8px; }
+.dv-badge {
+  padding: 1px 5px; border-radius: 2px;
+  border: 1px solid var(--base-accent);
+  color: var(--base-accent);
+  font-size: var(--font-size-fx);
+}
+.dv-title {
+  color: var(--uni-text-instrument);
+  font-size: var(--font-size-inst);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dv-body { flex: 1 1 auto; color: var(--uni-text-gutter); }
+.dv-foot { color: var(--base-neutral-600); }

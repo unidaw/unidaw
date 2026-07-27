@@ -1,0 +1,202 @@
+/* The application shell: the frame every surface lives inside.
+ *
+ * Until now each surface filled the window and the browser, agent dock and help
+ * were overlays on top of it. The design (design/redesign/Uni.dc.html) is a
+ * PERSISTENT frame — browser rail, centre, right dock and device chain are all
+ * on screen at once, and only the centre swaps between tracker, arrangement,
+ * patcher and mixer. That is a different thing from a restyle: what the user is
+ * looking at while they edit is most of the point of a DAW layout.
+ *
+ * The measurements come from the design component, read off its rendered boxes
+ * rather than guessed: at 1600px wide it lays out
+ *   chrome 38 · breadcrumb 26 · main 714 · device chain 196 · status 26
+ * and within main, rail 266 · centre 1082 (of which 30 is the minimap) · dock 332.
+ * They are named here so the numbers exist in one place; nothing else may
+ * hardcode them.
+ */
+
+:root {
+  --shell-chrome-h: 38px;
+  --shell-crumb-h: 26px;
+  --shell-status-h: 26px;
+  --shell-rail-w: 266px;
+  --shell-dock-w: 332px;
+  --shell-chain-h: 196px;
+  --shell-minimap-w: 30px;
+}
+
+#app {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  /* The shell must not scroll. Every region that can overflow says so itself —
+     a shell that scrolls turns a dropped frame into a moving target. */
+  overflow: hidden;
+}
+
+#chrome {
+  flex: 0 0 var(--shell-chrome-h);
+  height: var(--shell-chrome-h);
+}
+
+/* Where you are: project, track, surface, layout. Its own row because the design
+   separates "what the transport is doing" from "what you are looking at", and
+   putting both in one bar is how the second becomes unreadable. */
+#crumb {
+  flex: 0 0 var(--shell-crumb-h);
+  height: var(--shell-crumb-h);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  background: var(--uni-surface-header-bg);
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-gutter);
+  overflow: hidden;
+  white-space: nowrap;
+}
+#crumb .cr-sep { color: var(--uni-rule-track); }
+#crumb .cr-strong { color: var(--uni-text-instrument); }
+#crumb .cr-right { margin-left: auto; color: var(--base-neutral-600); }
+
+#main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;      /* or a tall child stretches the shell instead of scrolling */
+}
+
+/* The browser is a RAIL now, not an overlay. It reflows the centre when it opens,
+   which is the point: the design gives it permanent residence, and a surface
+   that is narrower because the browser is open is honest about the space it has.
+   The cost is a relayout on toggle, which happens on a keystroke, not a frame. */
+#browser {
+  flex: 0 0 var(--shell-rail-w);
+  width: var(--shell-rail-w);
+  min-width: 0;
+  border-right: 1px solid var(--uni-rule-gutter);
+  background: var(--uni-surface-header-bg);
+  overflow: hidden;
+  position: relative;
+}
+
+#centre {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* The tracker's column header. Sized by the tokens, not by this file, because the
+   view-model maps nanoticks onto that height. */
+#head {
+  flex: 0 0 var(--metrics-header-height);
+  height: var(--metrics-header-height);
+  overflow: hidden;
+  background: var(--uni-surface-header-bg);
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  position: relative;
+  z-index: 3;
+}
+#head .hrow { position: absolute; display: flex; height: 100%; }
+#head .hgut {
+  position: sticky; left: 0; z-index: 2;
+  flex: 0 0 var(--metrics-gutter-width);
+  width: var(--metrics-gutter-width);
+  background: var(--uni-surface-header-bg);
+  display: flex; align-items: center; padding: 0 8px; box-sizing: border-box;
+  font-size: var(--font-size-fx); letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-gutter);
+}
+#head .htrack {
+  display: flex; align-items: center; justify-content: center;
+  box-sizing: border-box; font-family: var(--font-mono);
+  font-size: var(--font-size-inst); letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-instrument);
+  border-right: var(--uni-rule-track-width) solid var(--uni-rule-track);
+}
+
+/* Where a surface actually draws. Position:relative so the surfaces can stay
+   absolutely positioned inside it — they were written against `inset: 0` and
+   there is no reason to rewrite five renderers to move the frame around them. */
+#stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+}
+#tracker, #arrange, #mixer, #piano, #patcher { position: absolute; inset: 0; }
+
+#rdock {
+  flex: 0 0 var(--shell-dock-w);
+  width: var(--shell-dock-w);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--uni-rule-gutter);
+  background: var(--uni-surface-header-bg);
+  overflow: hidden;
+}
+/* The harmony card takes what it needs; the agent takes the rest, because the
+   agent's log is the thing that grows without bound and it is the one that
+   should scroll rather than push. */
+#harmony { flex: 0 0 auto; overflow: hidden; }
+#dock { flex: 1 1 auto; min-height: 0; position: relative; }
+
+#chain {
+  flex: 0 0 var(--shell-chain-h);
+  height: var(--shell-chain-h);
+  border-top: 1px solid var(--uni-rule-gutter);
+  background: var(--uni-surface-header-bg);
+  overflow: hidden;
+  position: relative;
+}
+
+#hud {
+  flex: 0 0 var(--shell-status-h);
+  height: var(--shell-status-h);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--base-neutral-600);
+  background: var(--uni-surface-header-bg);
+  border-top: 1px solid var(--uni-rule-gutter);
+  z-index: 3;
+}
+
+/* Regions the user can put away. `hidden` on a flex child still occupies its
+   basis unless display is cleared, which is a five-minute bug the first time. */
+#browser[hidden], #rdock[hidden], #chain[hidden], #head[hidden],
+#arrange[hidden], #mixer[hidden], #piano[hidden], #patcher[hidden],
+#help[hidden], #palette[hidden], #stale[hidden] { display: none; }
+
+/* Overlays stay overlays: help and the command palette are modal by nature —
+   they are about the application rather than about the music, and they should
+   not reflow the thing you are asking about. */
+#help, #palette {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+}
+
+/* The engine can stop responding while staying alive with its shared memory
+   mapped, so every value on screen stays valid-looking and nothing errors. That
+   is the worst failure shape available and a line of small text is not enough to
+   distinguish it from a stopped transport. */
+#stale {
+  position: absolute; left: 0; right: 0; top: var(--shell-chrome-h); z-index: 30;
+  padding: 6px 12px; box-sizing: border-box;
+  background: var(--uni-text-fx); color: var(--uni-surface-tracker-bg);
+  font-family: var(--font-mono); font-size: var(--font-size-inst);
+  letter-spacing: var(--font-tracking-fx);
+}

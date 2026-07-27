@@ -12,70 +12,49 @@
 <link rel="stylesheet" href="src/dock.css">
 <link rel="stylesheet" href="src/help.css">
 <link rel="stylesheet" href="src/patcher.css">
+<link rel="stylesheet" href="src/chain.css">
+<link rel="stylesheet" href="src/palette.css">
+<link rel="stylesheet" href="src/shell.css">
 <style>
   html, body { margin: 0; height: 100%; background: var(--uni-surface-tracker-bg); color: var(--base-text); }
   body { font-family: var(--font-chrome); font-size: var(--font-size-chrome); overflow: hidden; }
-  /* Its own strip along the bottom, so it never sits on top of a cell. */
-  #hud { position: absolute; left: 0; right: 0; bottom: 0; height: 16px;
-         display: flex; align-items: center; justify-content: flex-end; gap: 12px;
-         padding: 0 8px; box-sizing: border-box; font-family: var(--font-mono);
-         font-size: var(--font-size-fx); letter-spacing: var(--font-tracking-fx);
-         color: var(--base-neutral-600); background: var(--uni-surface-header-bg);
-         border-top: 1px solid var(--uni-rule-gutter); pointer-events: none; z-index: 3; }
-  /* The header is a sibling, not part of the scrolled band: it must not move
-     vertically, and the tracker must start below it rather than under it. */
-  #head { position: absolute; left: 0; right: 0; top: 38px; height: var(--metrics-header-height);
-          overflow: hidden; background: var(--uni-surface-header-bg);
-          border-bottom: 1px solid var(--uni-rule-gutter); z-index: 3; }
-  #head .hrow { position: absolute; display: flex; height: 100%; }
-  #head .hgut { position: sticky; left: 0; z-index: 2; flex: 0 0 var(--metrics-gutter-width);
-                width: var(--metrics-gutter-width); background: var(--uni-surface-header-bg);
-                display: flex; align-items: center; padding: 0 8px; box-sizing: border-box;
-                font-size: var(--font-size-fx); letter-spacing: var(--font-tracking-fx);
-                color: var(--uni-text-gutter); }
-  #head .htrack { display: flex; align-items: center; justify-content: center;
-                  box-sizing: border-box; font-family: var(--font-mono);
-                  font-size: var(--font-size-inst); letter-spacing: var(--font-tracking-fx);
-                  color: var(--uni-text-instrument);
-                  border-right: var(--uni-rule-track-width) solid var(--uni-rule-track); }
-  #tracker, #arrange, #mixer, #piano, #patcher { position: absolute; left: 0; right: 0; bottom: 16px;
-             top: calc(38px + var(--metrics-header-height)); }
-  #arrange[hidden], #mixer[hidden], #piano[hidden], #browser[hidden], #dock[hidden], #help[hidden], #patcher[hidden] { display: none; }
-  /* The rail overlays; it does not reflow the surface underneath, so opening it
-     never costs a relayout of a pooled grid. */
-  #browser { position: absolute; left: 0; bottom: 16px;
-             top: calc(38px + var(--metrics-header-height)); }
-  #hud { background: var(--uni-surface-tracker-bg); padding: 1px 4px; }
-  /* The engine can stop responding while staying alive with its shared memory
-     mapped, so every value on screen stays valid-looking and nothing errors.
-     That is the worst failure shape available and a line of small text is not
-     enough to distinguish it from a stopped transport. */
-  #stale { position: absolute; left: 0; right: 0; top: 38px; z-index: 9;
-           padding: 6px 12px; box-sizing: border-box;
-           background: var(--uni-text-fx); color: var(--uni-surface-tracker-bg);
-           font-family: var(--font-mono); font-size: var(--font-size-inst);
-           letter-spacing: var(--font-tracking-fx); }
-  #stale[hidden] { display: none; }
 </style>
 
-<div id="chrome"></div>
-<div id="head"></div>
-<div id="tracker"></div>
-<div id="arrange" hidden></div>
-<div id="mixer" hidden></div>
-<div id="piano" hidden></div>
-<div id="patcher" hidden></div>
-<div id="browser" hidden></div>
-<div id="dock" hidden></div>
+<div id="app">
+  <div id="chrome"></div>
+  <div id="crumb"></div>
+  <div id="main">
+    <div id="browser"></div>
+    <div id="centre">
+      <div id="head"></div>
+      <div id="stage">
+        <div id="tracker"></div>
+        <div id="arrange" hidden></div>
+        <div id="mixer" hidden></div>
+        <div id="piano" hidden></div>
+        <div id="patcher" hidden></div>
+      </div>
+    </div>
+    <div id="rdock">
+      <div id="harmony"></div>
+      <div id="dock"></div>
+    </div>
+  </div>
+  <div id="chain"></div>
+  <div id="hud"></div>
+</div>
 <div id="stale" hidden></div>
 <div id="help" hidden></div>
-<div id="hud"></div>
+<div id="palette" hidden></div>
 
 <script type="module">
 import { Tracker } from './src/tracker.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
 import M from './design/out/tokens.js';
 import { connectEngine, noEngine } from './src/engine.js';
+import { Chain } from './src/chain.js';
+import { Palette } from './src/palette.js';
+import { buildChainModel, createChainBuffer } from './src/chainmodel.js';
 import { createChrome } from './src/chrome.js';
 import { Arrange } from './src/arrange.js';
 import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName,
@@ -86,7 +65,7 @@ import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
          gainAtPosition, FLAG_MUTE, FLAG_SOLO } from './src/mixermodel.js';
 import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch,
-         notesInRect, noteKey } from './src/pianomodel.js';
+         notesInRect, noteKey, transposedKey } from './src/pianomodel.js';
 import { Browser } from './src/browser.js';
 import { Dock } from './src/dock.js';
 import { createHelp, GLOBAL_KEYS, SURFACE_KEYS } from './src/help.js';
@@ -368,7 +347,108 @@ const browser = new Browser(browserHost, {
 
 const helpHost = document.getElementById('help');
 const help = createHelp(helpHost);
+/**
+ * What fits.
+ *
+ * The centre is the work; the panels are context. Below these widths the rails
+ * would leave the tracker too narrow to read, so they yield rather than squeeze
+ * it — at 900px the first version gave the tracker 300px and kept 598px of
+ * rails, which is the wrong answer confidently laid out.
+ *
+ * Driven from JS rather than a media query so that STATE AND SCREEN AGREE: a
+ * panel hidden by CSS that the focus model still believed in would swallow the
+ * keyboard from behind a display:none, which is this morning's
+ * pointer-events lesson in a different costume.
+ */
+const CENTRE_MIN = 560;
+const RAIL_W = 266;
+const DOCK_W = 332;
+const CHAIN_H = 196;
+const STAGE_MIN = 300;
+function measureRoom() {
+  const w = document.documentElement.clientWidth;
+  const h = document.documentElement.clientHeight;
+  // The rail goes first: it is a picker you visit, where the dock is a running
+  // conversation you watch.
+  const roomForDock = w >= CENTRE_MIN + DOCK_W;
+  const roomForRail = w >= CENTRE_MIN + DOCK_W + RAIL_W;
+  const roomForChain = h >= STAGE_MIN + CHAIN_H + 90;   // 90 = chrome + crumb + status
+  const changed = roomForRail !== state.roomForRail
+               || roomForDock !== state.roomForDock
+               || roomForChain !== state.roomForChain;
+  state.roomForRail = roomForRail;
+  state.roomForDock = roomForDock;
+  state.roomForChain = roomForChain;
+  // Focus cannot point at something that is not on screen.
+  if (!roomForRail && state.focus === 'browser') state.focus = 'centre';
+  if (!roomForDock && state.focus === 'dock') state.focus = 'centre';
+  return changed;
+}
+addEventListener('resize', () => { measureRoom(); schedule(); });
+
+const chainHost = document.getElementById('chain');
+const chain = new Chain(chainHost, {
+  onSelect: (pos) => { state.chainSelected = pos; schedule(); },
+});
+const chainBuf = createChainBuffer();
+
+/**
+ * Per-track device chains, as the sidecar accumulates them.
+ *
+ * The engine publishes chains only as diffs, so this is state the sidecar has
+ * gathered rather than something readable on demand. `chainRev` is the
+ * sidecar's own revision counter: a snapshot can straddle two of its drain
+ * ticks, so devices for one chainVersion can still be arriving while the
+ * version stands still. Keying a redraw on the version alone would pin whatever
+ * half arrived first — GUIDELINES 2.1, one more time.
+ */
+let chains = Object.create(null);
+let chainRev = -1;
+
 const dockHost = document.getElementById('dock');
+const rdockHost = document.getElementById('rdock');
+const crumbHost = document.getElementById('crumb');
+
+/**
+ * The breadcrumb: project, track, surface. Its own row in the design, and worth
+ * one, because "which track am I typing into" is the question a tracker answers
+ * worst — the cursor is one cell among hundreds and the chrome is about the
+ * transport.
+ *
+ * Pooled and guarded like every other draw path: this runs every frame.
+ */
+const crumbCells = [];
+function crumbCell(i, cls) {
+  while (crumbCells.length <= i) {
+    const el = document.createElement('span');
+    el.appendChild(document.createTextNode(''));
+    el._t = null; el._c = null;
+    crumbHost.appendChild(el);
+    crumbCells.push(el);
+  }
+  const el = crumbCells[i];
+  if (el._c !== cls) { el._c = cls; el.className = cls; }
+  return el;
+}
+function crumbSet(i, cls, text) {
+  const el = crumbCell(i, cls);
+  if (el._t !== text) { el._t = text; el.firstChild.nodeValue = text; }
+}
+function drawCrumb() {
+  const name = state.currentProject || 'untitled';
+  crumbSet(0, 'cr-strong', name + '.uni');
+  crumbSet(1, 'cr-sep', '\u00b7');
+  crumbSet(2, 'cr-strong', trackName(engine, state.cursor.track));
+  crumbSet(3, 'cr-sep', '\u00b7');
+  crumbSet(4, '', SURFACE_TITLE[state.view] || state.view);
+  crumbSet(5, 'cr-right', currentKey());
+}
+
+/** What the breadcrumb calls each surface. */
+const SURFACE_TITLE = {
+  tracker: 'Tracker', arrange: 'Arrangement', piano: 'Scale roll',
+  mixer: 'Mixer', patcher: 'Patcher',
+};
 // One API object: every console command goes through the same paths the keyboard
 // does, so the two can never drift into doing different things.
 // Named rather than inline so `window.__uni` can hand an agent the SAME function
@@ -410,7 +490,7 @@ const dockApi = {
   engine: () => (engine ? { transport: engine.transport, tick: engine.playheadTick,
                             notes: engine.noteCount, tracks: engine.trackCount,
                             clipVersion: engine.clipVersion, stale: engine.stale } : null),
-  close: () => { state.dockOpen = false; schedule(); },
+  close: () => { state.focus = 'centre'; schedule(); },
   // Everything the keyboard can do, the console can do — otherwise "one grammar
   // that drives every surface" is only true of the parts I remembered.
   follow: (on) => { state.followPlayhead = on === undefined ? !state.followPlayhead : !!on;
@@ -503,6 +583,10 @@ const dockApi = {
   cut: () => copySelection() && deleteSelection(),
 };
 const dock = new Dock(dockHost, dockApi);
+// The palette runs the SAME registry the console does — one grammar, two ways in.
+// A second command list would be a second thing to keep in step, and the whole
+// point of the dock's grammar is that there is only one.
+const palette = new Palette(document.getElementById('palette'), dockApi);
 
 const pianoHost = document.getElementById('piano');
 let pianoBuf = null;
@@ -611,6 +695,15 @@ function pianoEdit(kind, semitones) {
   if (!ops.length) { state.reject = 'transpose would push notes out of MIDI range'; return false; }
   if (!conn.sendBatch(ops)) { state.reject = 'no engine'; return false; }
   if (kind === 'delete') state.pianoSelection = null;
+  else {
+    // The selection follows the notes. Its keys carry pitch, so a transpose
+    // moves every one of them; leaving them behind would silently select
+    // whatever else happened to be at the old pitches — which, in a chord, is
+    // another note of the same chord.
+    const moved = new Set();
+    for (const n of picked) moved.add(transposedKey(n, semitones));
+    state.pianoSelection = moved;
+  }
   state.reject = null;
   return true;
 }
@@ -672,9 +765,29 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: null,
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
   pianoSelection: null, pianoMarquee: null, pianoDrag: null,
-  pianoFitPending: false, browserOpen: false, dockOpen: false, helpOpen: false,
+  pianoFitPending: false, browserOpen: true, dockOpen: true, helpOpen: false,
+  /**
+   * Which region the keyboard belongs to: 'centre' | 'browser' | 'dock'.
+   *
+   * The rails used to be overlays, and "the rail owns the keyboard while it is
+   * open" was the right rule for something you opened, used and dismissed. The
+   * design makes them permanent residents, and the same rule then means the
+   * browser eats Enter and the arrow keys for the whole session — the first
+   * thing it broke was writing a chord, because Enter committed the token to a
+   * project list instead. Visible is not focused.
+   */
+  focus: 'centre',
+  /**
+   * Which side panels the window is big enough for.
+   *
+   * Recomputed on resize, not per frame: reading clientWidth in the draw path
+   * forces a layout every frame, which is the diagnostic-in-the-hot-path rule
+   * (GUIDELINES 3.10/3.11) with extra steps.
+   */
+  roomForRail: true, roomForDock: true, roomForChain: true,
   followPlayhead: true,
   selectedNode: -1, selectedField: 0, patchAddType: 1, patchLinkFrom: null,
+  chainSelected: -1,
   currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
@@ -993,13 +1106,31 @@ function draw() {
   if (state.helpOpen) help.show(state.view);
   const stale = !!(engine && engine.stale && state.useEngine !== false);
   if (staleEl.hidden === stale) staleEl.hidden = !stale;
-  if (dockHost.hidden === state.dockOpen) {
-    dockHost.hidden = !state.dockOpen;
-    if (state.dockOpen) dock.focus();
+  // The right dock hides as a whole: the harmony card and the agent share it, and
+  // hiding one while the other stays leaves a 332px column holding one thing.
+  // Wanted AND room for it. Two inputs, one visibility — and the focus model
+  // above is kept in step with the same measurement.
+  const showDock = state.dockOpen && state.roomForDock;
+  const showRail = state.browserOpen && state.roomForRail;
+  const showChain = state.roomForChain;
+  if (rdockHost.hidden === showDock) rdockHost.hidden = !showDock;
+  if (showDock) dock.render();
+  if (browserHost.hidden === showRail) browserHost.hidden = !showRail;
+  if (showRail) { browser.setItems(state.projects, state.currentProject); browser.render(); }
+  if (chainHost.hidden === showChain) chainHost.hidden = !showChain;
+  const paletteHost = document.getElementById('palette');
+  if (paletteHost.hidden === palette.opened) {
+    paletteHost.hidden = !palette.opened;
+    if (palette.opened) palette.focus();
   }
-  if (state.dockOpen) dock.render();
-  if (browserHost.hidden === state.browserOpen) browserHost.hidden = !state.browserOpen;
-  if (state.browserOpen) { browser.setItems(state.projects, state.currentProject); browser.render(); }
+  if (palette.opened) palette.render();
+  drawCrumb();
+  if (showChain) chain.render(buildChainModel({
+    track: state.cursor.track,
+    chains,
+    selected: state.chainSelected,
+    trackName: trackName(engine, state.cursor.track),
+  }, chainBuf));
   // One scheduler, two surfaces. Hiding the other host rather than unmounting it
   // keeps its pools warm, so switching views costs no rebuild.
   const v = state.view;
@@ -1427,10 +1558,28 @@ addEventListener('keydown', (e) => {
   const alt = e.altKey ? e.code : '';
   const done = () => { e.preventDefault(); schedule(); };
 
-  // 1. Modifier combos first, so nothing below can swallow them.
+  // 1. Modifier combos first, so nothing below can swallow them. Cmd on macOS,
+  //    Ctrl elsewhere — both, because the same build runs on both.
   if (e.metaKey || e.ctrlKey) {
-    if (k.toLowerCase() === 'z') {
+    const c = k.toLowerCase();
+    if (c === 'z') {
       conn && conn.send({ type: e.shiftKey ? 'redo' : 'undo' });
+      return done();
+    }
+    // The design's grammar: ⌘B browser, ⌘J agent. They move FOCUS to a panel
+    // that is already on screen; a second press puts it away entirely, because
+    // a rail you never use should not cost 266px for ever.
+    if (c === 'b') {
+      if (state.focus === 'browser') state.browserOpen = false;
+      else { state.browserOpen = true; conn && conn.send({ type: 'list' }); }
+      state.focus = state.browserOpen ? 'browser' : 'centre';
+      return done();
+    }
+    if (c === 'k') { palette.toggle(); return done(); }
+    if (c === 'j') {
+      if (state.focus === 'dock') state.dockOpen = false;
+      else { state.dockOpen = true; dock.focus(); }
+      state.focus = state.dockOpen ? 'dock' : 'centre';
       return done();
     }
     return;                                   // leave browser shortcuts alone
@@ -1441,6 +1590,13 @@ addEventListener('keydown', (e) => {
     const act = feed(entry, k);
     if (act === 'commit') { commitToken(entry.text); cancel(entry); return done(); }
     if (act === 'consumed' || act === 'cancel') return done();
+  }
+
+  // 2.02 The palette is modal: while it is up it owns everything except the
+  //      modifier combos above, which is what "palette" means.
+  if (palette.opened) {
+    const act = palette.feed(k);
+    if (act !== 'ignore') return done();
   }
 
   // 2.05 ANY open text field owns the keyboard, before the global shortcuts.
@@ -1458,29 +1614,29 @@ addEventListener('keydown', (e) => {
   //     only handles opening it and closing it from outside.
   if (state.helpOpen) { state.helpOpen = false; return done(); }
   if (k === '?') { state.helpOpen = true; return done(); }
-  if (k === '/' && !state.dockOpen) { state.dockOpen = true; return done(); }
-  if (state.dockOpen && k === 'Escape') { state.dockOpen = false; return done(); }
+  if (k === '/' && state.focus !== 'dock') {
+    state.dockOpen = true; state.focus = 'dock'; dock.focus(); return done();
+  }
 
-  // 2.2 The rail owns the keyboard while it is open.
-  if (state.browserOpen) {
+  // 2.2 The rail owns the keyboard only while it is FOCUSED. It is on screen
+  //     the rest of the time, and a panel you can see is not a panel you are
+  //     typing into.
+  if (state.browserOpen && state.focus === 'browser') {
     // The save field owns the keyboard while it is up, or typing a project name
     // containing 'b' would close the rail out from under it.
     const act = browser.feedSave(k);
     if (act !== 'ignore') return done();
-    if (k === 'Escape' || k === 'b' || k === 'B') { state.browserOpen = false; return done(); }
+    // Escape hands the keyboard back rather than putting the rail away: it is a
+    // permanent panel now, and dismissing it on Escape would make it flicker
+    // out of the layout every time somebody cancelled something.
+    if (k === 'Escape') { state.focus = 'centre'; return done(); }
     if (k === 'ArrowDown') { browser.move(1); return done(); }
     if (k === 'ArrowUp') { browser.move(-1); return done(); }
     if (k === 'Enter') { browser.openSelected(); return done(); }
     if (k === 's' || k === 'S') { browser.beginSave(state.currentProject); return done(); }
     return done();                              // swallow the rest, do not edit behind it
   }
-  if (k === 'b' || k === 'B') {
-    state.browserOpen = true;
-    // Refresh on open rather than polling: the list changes when something
-    // saves a project, which is rare and never while the rail is shut.
-    conn && conn.send({ type: 'list' });
-    return done();
-  }
+
 
   // 2.5 View switch, and arrange's own navigation. Arrange has no rows and no
   //     cell editing, so it must not fall through into the tracker's keys.
@@ -1759,6 +1915,9 @@ draw();
  */
 const WANTS_ENGINE = new URLSearchParams(location.search).get('engine') !== 'off';
 
+// The first paint must know what fits; the resize listener only fires on change.
+measureRoom();
+
 // Live engine, when the sidecar is up. Falls back to the fixture so the page —
 // and every golden — still renders standalone. Connected after the first draw:
 // connectEngine calls onStatus synchronously, and touching `state` before its
@@ -1774,6 +1933,15 @@ conn = WANTS_ENGINE ? connectEngine({
    * accepted — the command was sent, the ack said ok, and the read-back simply
    * did not change.
    */
+  onChains: (list, rev) => {
+    if (rev === chainRev) return;
+    chainRev = rev;
+    // Replace per track rather than merge: the sidecar already resolved which
+    // chainVersion won, and merging here would reintroduce the question it
+    // answered.
+    for (const c of list) chains[c.track] = c;
+    schedule();
+  },
   onEngineEvent: (list, missed) => {
     for (const e of list) {
       const text = describeEngineEvent(e);
@@ -2034,6 +2202,15 @@ window.__uni = {
     return mixer.feedRename('Enter'); },
   pianoProbe: () => piano.probe(),
   patcherProbe: () => patcher.probe(),
+  chainProbe: () => chain.probe(),
+  paletteProbe: () => palette.probe(),
+  paletteMove: (d) => { palette.move(d); draw(); return palette.probe().selected; },
+  chainSelect: (pos) => { state.chainSelected = pos; draw(); return state.chainSelected; },
+  palette: (on) => { if (on === false) palette.close(); else palette.open(); draw();
+                     return palette.opened; },
+  chains: () => JSON.parse(JSON.stringify(chains)),
+  reqChain: (track) => conn && conn.send({ type: 'reqchain',
+                                           track: track === undefined ? -1 : track }),
   patchSelect: (id) => { state.selectedNode = id; state.selectedField = 0; draw(); },
   patchAdd: (type) => { if (type !== undefined) state.patchAddType = type;
                         const r = addPatcherNode(); draw(); return r; },
@@ -2061,9 +2238,12 @@ window.__uni = {
   pianoEdit: (kind, n) => pianoEdit(kind, n),
   pianoFit: () => { fitPiano(); draw(); },
   browser: (on) => { state.browserOpen = on === undefined ? !state.browserOpen : !!on;
+    state.focus = state.browserOpen ? 'browser' : 'centre';
     if (state.browserOpen) conn && conn.send({ type: 'list' }); draw(); return state.browserOpen; },
   browserProbe: () => browser.probe(),
-  dock: (on) => { state.dockOpen = on === undefined ? !state.dockOpen : !!on; draw(); return state.dockOpen; },
+  dock: (on) => { state.dockOpen = on === undefined ? !state.dockOpen : !!on;
+    state.focus = state.dockOpen ? 'dock' : 'centre'; draw(); return state.dockOpen; },
+  focus: (where) => { if (where) state.focus = where; draw(); return state.focus; },
   dockProbe: () => dock.probe(),
   help: (on) => { state.helpOpen = on === undefined ? !state.helpOpen : !!on; draw(); return state.helpOpen; },
   helpProbe: () => help.probe(),
@@ -2240,6 +2420,30 @@ window.__uni = {
    * that has no config table, so the "show nothing rather than eight anonymous
    * numbers" path is exercised too.
    */
+  /**
+   * A device chain with something in it.
+   *
+   * The bundled projects all have empty chains, so the live stack proves the
+   * PIPELINE (engine emits, sidecar accumulates, client stores) and cannot
+   * prove the cards. Same reason every other surface here has a fixture: the
+   * rendering and the plumbing fail differently and want testing separately.
+   * The values are the engine's own vocabulary — DeviceKind, the capability
+   * bits, and the two sentinels from device_chain.h.
+   */
+  useChainFixture: () => {
+    state.hudFrozen = true;
+    state.cursor.track = 0;
+    state.chainSelected = 1;
+    chains = Object.create(null);
+    chains[0] = { track: 0, version: 87, devices: [
+      { id: 4, kind: 0, pos: 0, node: 11, slot: 0xfffffffe, caps: 2, bypass: 0 },
+      { id: 7, kind: 3, pos: 1, node: 0xffffffff, slot: 1, caps: 5, bypass: 0 },
+      { id: 9, kind: 2, pos: 2, node: 14, slot: 0xfffffffe, caps: 4, bypass: 0 },
+      { id: 12, kind: 4, pos: 3, node: 0xffffffff, slot: 2, caps: 4, bypass: 1 },
+    ] };
+    chainRev = 1;
+    draw();
+  },
   usePatcherFixture: () => {
     state.useEngine = true; state.hudFrozen = true; conn.close();
     hudText.nodeValue = 'patcher-fixture';

@@ -192,7 +192,26 @@ export function buildPianoModel(opts, buf) {
  * than a second projection that could disagree with the first.
  */
 /** The stable identity of a note for selection purposes. See `selection` above. */
-export function noteKey(n) { return n.track + ':' + n.tOn; }
+/**
+ * A note's identity for selection purposes: track, start, PITCH.
+ *
+ * Not the note id, which the engine reassigns when it rewrites a track. Not
+ * (track, start) either, which was the first fix and is not unique — a CHORD is
+ * several notes sharing a start, so they collapsed to one key and a selection
+ * containing a chord operated on whichever one the Set happened to answer for.
+ * It survived a long time because the fixtures had no chords in the marquee.
+ *
+ * The cost is that the key MOVES when a note is transposed, so an edit that
+ * changes pitch has to remap the selection by the same amount. That is what
+ * `transposedKey` is for, and it is the honest trade: a key that is unique and
+ * moves predictably beats a key that is stable and ambiguous.
+ */
+export function noteKey(n) { return n.track + ':' + n.tOn + ':' + n.pitch; }
+
+/** The key a note WILL have once it is transposed by `semitones`. */
+export function transposedKey(n, semitones) {
+  return n.track + ':' + n.tOn + ':' + (n.pitch + semitones);
+}
 
 export function notesInRect(buf, x0, y0, x1, y1) {
   const lo = Math.min(x0, x1), hi = Math.max(x0, x1);
