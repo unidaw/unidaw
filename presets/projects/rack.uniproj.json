@@ -1,0 +1,357 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "name": "rack",
+    "created_utc": 0,
+    "modified_utc": 0
+  },
+  "timebase": {
+    "nanoticks_per_quarter": 960000
+  },
+  "tempo_map": [
+    {
+      "nanotick": 0,
+      "bpm": 120.0
+    },
+    {
+      "nanotick": 7680000,
+      "bpm": 128.0
+    }
+  ],
+  "harmony_timeline": [
+    {
+      "nanotick": 0,
+      "root": 9,
+      "scale_id": 2
+    },
+    {
+      "nanotick": 3840000,
+      "root": 5,
+      "scale_id": 1
+    },
+    {
+      "nanotick": 7680000,
+      "root": 0,
+      "scale_id": 1
+    },
+    {
+      "nanotick": 11520000,
+      "root": 7,
+      "scale_id": 1
+    }
+  ],
+  "tracks": [
+    {
+      "track_id": 0,
+      "name": "Bass",
+      "harmony_quantize": true,
+      "lines_per_beat": 4,
+      "mixer": {
+        "gain_db": -2.0,
+        "pan": -0.3,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 0,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 0,
+          "host_slot_index": 0,
+          "bypass": false,
+          "vst_ref": {
+            "vendor": "",
+            "name": "Identity",
+            "path": "",
+            "uid16": ""
+          }
+        }
+      ],
+      "mod_links": [
+        {
+          "link_id": 1,
+          "src": {
+            "device_id": 0,
+            "source_id": 3,
+            "kind": "lfo"
+          },
+          "dst": {
+            "device_id": 0,
+            "target_id": 7,
+            "kind": "vst_param",
+            "param_uid16": "00112233445566778899aabbccddeeff"
+          },
+          "depth": 0.4,
+          "bias": -0.1,
+          "rate": "block"
+        }
+      ],
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 960000,
+          "pitch": 33,
+          "velocity": 112,
+          "column": 0,
+          "note_id": 1001
+        },
+        {
+          "nanotick": 1920000,
+          "duration": 960000,
+          "pitch": 33,
+          "velocity": 96,
+          "column": 0,
+          "note_id": 1002,
+          "delay": 160000
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 480000,
+          "pitch": 40,
+          "velocity": 90,
+          "column": 0,
+          "note_id": 1003
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 960000,
+          "pitch": 29,
+          "velocity": 112,
+          "column": 0,
+          "note_id": 1004
+        },
+        {
+          "nanotick": 5760000,
+          "duration": 960000,
+          "pitch": 29,
+          "velocity": 96,
+          "column": 0,
+          "note_id": 1005,
+          "delay": 160000
+        },
+        {
+          "nanotick": 6720000,
+          "duration": 480000,
+          "pitch": 36,
+          "velocity": 90,
+          "column": 0,
+          "note_id": 1006
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 960000,
+          "pitch": 36,
+          "velocity": 112,
+          "column": 0,
+          "note_id": 1007
+        },
+        {
+          "nanotick": 9600000,
+          "duration": 960000,
+          "pitch": 36,
+          "velocity": 96,
+          "column": 0,
+          "note_id": 1008,
+          "delay": 160000
+        },
+        {
+          "nanotick": 10560000,
+          "duration": 480000,
+          "pitch": 43,
+          "velocity": 90,
+          "column": 0,
+          "note_id": 1009
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 960000,
+          "pitch": 31,
+          "velocity": 112,
+          "column": 0,
+          "note_id": 1010
+        },
+        {
+          "nanotick": 13440000,
+          "duration": 960000,
+          "pitch": 31,
+          "velocity": 96,
+          "column": 0,
+          "note_id": 1011,
+          "delay": 160000
+        },
+        {
+          "nanotick": 14400000,
+          "duration": 480000,
+          "pitch": 38,
+          "velocity": 90,
+          "column": 0,
+          "note_id": 1012
+        }
+      ],
+      "chords": [],
+      "patcher": {
+        "nodes": [
+          {
+            "id": 0,
+            "type": "euclidean",
+            "euclidean": {
+              "steps": 16,
+              "hits": 5,
+              "offset": 0,
+              "duration_ticks": 0,
+              "degree": 1,
+              "octave_offset": 0,
+              "velocity": 100,
+              "base_octave": 4
+            }
+          },
+          {
+            "id": 1,
+            "type": "random_degree",
+            "random_degree": {
+              "degree": 8,
+              "velocity": 100,
+              "duration_ticks": 0
+            }
+          },
+          {
+            "id": 2,
+            "type": "event_out"
+          }
+        ],
+        "edges": [
+          {
+            "src_node_id": 0,
+            "src_port_id": 1,
+            "dst_node_id": 1,
+            "dst_port_id": 0,
+            "kind": "event"
+          },
+          {
+            "src_node_id": 1,
+            "src_port_id": 1,
+            "dst_node_id": 2,
+            "dst_port_id": 0,
+            "kind": "event"
+          }
+        ]
+      }
+    },
+    {
+      "track_id": 1,
+      "name": "Pad",
+      "harmony_quantize": false,
+      "lines_per_beat": 4,
+      "mixer": {
+        "gain_db": -4.0,
+        "pan": 0.0,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [],
+      "mod_links": [],
+      "notes": [],
+      "chords": [
+        {
+          "nanotick": 0,
+          "duration": 3840000,
+          "chord_id": 1,
+          "degree": 0,
+          "quality": 1,
+          "inversion": 0,
+          "base_octave": 4,
+          "column": 0,
+          "spread": 240000,
+          "humanize_timing": 20,
+          "humanize_velocity": 15
+        },
+        {
+          "nanotick": 3840000,
+          "duration": 3840000,
+          "chord_id": 2,
+          "degree": 0,
+          "quality": 2,
+          "inversion": 1,
+          "base_octave": 4,
+          "column": 0,
+          "spread": 240000,
+          "humanize_timing": 0,
+          "humanize_velocity": 12
+        },
+        {
+          "nanotick": 7680000,
+          "duration": 3840000,
+          "chord_id": 3,
+          "degree": 0,
+          "quality": 1,
+          "inversion": 0,
+          "base_octave": 4,
+          "column": 0,
+          "spread": 240000,
+          "humanize_timing": 20,
+          "humanize_velocity": 0
+        },
+        {
+          "nanotick": 11520000,
+          "duration": 3840000,
+          "chord_id": 4,
+          "degree": 4,
+          "quality": 1,
+          "inversion": 2,
+          "base_octave": 4,
+          "column": 0,
+          "spread": 240000,
+          "humanize_timing": 0,
+          "humanize_velocity": 10
+        }
+      ]
+    }
+  ]
+}
