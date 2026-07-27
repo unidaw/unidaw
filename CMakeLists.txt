@@ -366,6 +366,11 @@ add_test(NAME phase3_automation_ring
 )
 set_tests_properties(phase3_automation_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_test(NAME phase3_audio_region
+  COMMAND phase3_tests --test audio_region
+)
+set_tests_properties(phase3_audio_region PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME phase3_harmony_quantize
   COMMAND phase3_tests --test harmony_quantize
 )
