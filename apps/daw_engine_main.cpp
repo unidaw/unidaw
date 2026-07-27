@@ -1058,6 +1058,11 @@ struct TrackRuntime {
     // edit; edits mutate the store, not track.clip. Both guarded by trackMutex.
     std::vector<daw::ProjectPlacement> sourcePlacements;
     std::vector<daw::ProjectClip> ownedClips;
+    // Clip ids this track created or copy-on-write-forked (i.e. owns exclusively
+    // and may edit in place). A loaded clip id NOT here is pristine — shared with
+    // the project/other tracks — so the first edit forks it to a fresh id before
+    // mutating, keeping save ids collision-free without content comparison.
+    std::vector<uint32_t> editableClipIds;
     // Display name, published so every lane-labelling surface shares one source.
     // Guarded by trackMutex; defaults to "Track N", set from the project on load.
     std::string trackName;
@@ -2723,6 +2728,113 @@ struct TrackRuntime {
     }
     return buildClipSnapshot(rt.track.clip);
   };
+
+  // Where a structural edit at an absolute tick lands: an index into ownedClips,
+  // the clip-relative tick, and the covering placement.
+  struct EditTarget {
+    bool valid = false;
+    size_t ownedIndex = 0;      // index into runtime->ownedClips
+    uint64_t relTick = 0;       // clip-relative tick to edit at
+    size_t placementIndex = 0;  // index into runtime->sourcePlacements
+    uint32_t clipId = 0;
+    uint64_t placementAt = 0;   // the placement's absolute anchor
+  };
+
+  // Map an absolute-tick edit to a target owned clip via the shared
+  // resolveNoteEntry rule, creating a clip+placement (CreateNew) or copy-on-write
+  // forking a pristine loaded clip (first edit) as needed. Assumes trackMutex is
+  // held. Returns {valid=false} only on an internal inconsistency.
+  auto resolveClipTarget = [&](TrackRuntime& rt, uint64_t absTick) -> EditTarget {
+    const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
+    std::vector<daw::PlacementSpan> spans;
+    for (size_t i = 0; i < rt.sourcePlacements.size(); ++i) {
+      const auto& pl = rt.sourcePlacements[i];
+      if (!pl.at.has_value()) {
+        continue;
+      }
+      uint64_t clipLen = 0;
+      for (const auto& c : rt.ownedClips) {
+        if (c.id == pl.clipId) {
+          clipLen = c.lengthNanoticks;
+          break;
+        }
+      }
+      const uint64_t len = pl.lengthNanoticks > 0 ? pl.lengthNanoticks : clipLen;
+      spans.push_back(daw::PlacementSpan{*pl.at, len, clipLen, i});
+    }
+    const auto decision = daw::resolveNoteEntry(spans, absTick, bar, bar);
+
+    auto findOwned = [&](uint32_t clipId) -> size_t {
+      for (size_t i = 0; i < rt.ownedClips.size(); ++i) {
+        if (rt.ownedClips[i].id == clipId) {
+          return i;
+        }
+      }
+      return rt.ownedClips.size();
+    };
+    auto isEditable = [&](uint32_t id) {
+      for (uint32_t e : rt.editableClipIds) {
+        if (e == id) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    EditTarget t;
+    if (decision.kind == daw::NoteEntryKind::CreateNew) {
+      daw::ProjectClip nc;
+      nc.id = nextClipId.fetch_add(1, std::memory_order_acq_rel);
+      nc.name = "Clip";
+      nc.lengthNanoticks = 0;
+      const uint32_t newId = nc.id;
+      rt.ownedClips.push_back(std::move(nc));
+      rt.editableClipIds.push_back(newId);
+      daw::ProjectPlacement pl;
+      pl.clipId = newId;
+      pl.at = decision.at;
+      pl.lengthNanoticks = 0;
+      rt.sourcePlacements.push_back(std::move(pl));
+      t.valid = true;
+      t.ownedIndex = rt.ownedClips.size() - 1;
+      t.relTick = decision.clipRelativeTick;
+      t.placementIndex = rt.sourcePlacements.size() - 1;
+      t.clipId = newId;
+      t.placementAt = decision.at;
+      return t;
+    }
+    // InsidePlacement / StretchPlacement: the covering placement's owned clip.
+    const size_t pi = decision.placementIndex;
+    if (pi >= rt.sourcePlacements.size()) {
+      return t;  // invalid
+    }
+    uint32_t clipId = rt.sourcePlacements[pi].clipId;
+    size_t oi = findOwned(clipId);
+    if (oi >= rt.ownedClips.size()) {
+      return t;  // no owned clip for this placement (should not happen)
+    }
+    if (!isEditable(clipId)) {
+      // Copy-on-write: fork this pristine loaded clip to a fresh id and repoint
+      // every placement of this track that referenced the old id.
+      const uint32_t newId = nextClipId.fetch_add(1, std::memory_order_acq_rel);
+      rt.ownedClips[oi].id = newId;
+      for (auto& p : rt.sourcePlacements) {
+        if (p.clipId == clipId) {
+          p.clipId = newId;
+        }
+      }
+      rt.editableClipIds.push_back(newId);
+      clipId = newId;
+    }
+    t.valid = true;
+    t.ownedIndex = oi;
+    t.relTick = decision.clipRelativeTick;
+    t.placementIndex = pi;
+    t.clipId = clipId;
+    t.placementAt = decision.at;
+    return t;
+  };
+  (void)resolveClipTarget;  // wired by later stages
 
   // Snapshots the live session into a ProjectDocument and writes it. Each
   // track is copied under its own mutex so the document is consistent per
