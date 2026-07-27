@@ -7974,7 +7974,9 @@ struct TrackRuntime {
         transportEntry.type = static_cast<uint16_t>(daw::EventType::Transport);
         transportEntry.size = sizeof(daw::TransportPayload);
         daw::TransportPayload transportPayload;
-        transportPayload.tempoBpm = tempoProvider.bpmAtNanotick(0);
+        // Current-position tempo (not the initial one) so a tempo-synced plugin
+        // follows tempo_map changes, matching the ProcessBlockRequest play head.
+        transportPayload.tempoBpm = tempoProvider.bpmAtNanotick(blockStartTicks);
         transportPayload.timeSigNum = 4;  // TODO: time signature is not yet modelled
         transportPayload.timeSigDen = 4;
         transportPayload.playState = isPlaying ? 1 : 0;
