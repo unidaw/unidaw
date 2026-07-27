@@ -306,33 +306,49 @@ add_test(NAME device_chain_ui_live
 )
 set_tests_properties(device_chain_ui_live PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Where JUCE actually put the Identity bundle.
+#
+# This was spelled ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+# — the single-configuration layout. A build that carries a configuration (this
+# one writes RelWithDebInfo/) puts the bundle one directory deeper, so the path
+# named a file that was not there, the host loaded 0 plugins from 1 path, and
+# eight of the thirty-two tests failed with symptoms about parameters and notes
+# rather than about a missing file.
+#
+# daw_engine_main.cpp already learned this — it searches several roots, and its
+# comment mentions "a leftover identity_plugin_artefacts/VST3 from a much earlier
+# build". The test registration never did. Asking the target where it put itself
+# is the version that cannot drift: it is correct under every generator, and it
+# fails at configure time rather than at run time if the target is renamed.
+set(IDENTITY_VST3 "$<TARGET_BUNDLE_DIR:identity_plugin_VST3>")
+
 add_test(NAME phase2_impulse
   COMMAND phase2_tests --test impulse
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase2_impulse PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase2_param_priority
   COMMAND phase2_tests --test param_priority
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase2_param_priority PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase2_param_targeting
   COMMAND phase2_tests --test param_targeting
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase2_param_targeting PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase2_chaos
   COMMAND phase2_tests --test chaos
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase2_chaos PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase2_ui_visual
   COMMAND phase2_tests --test ui_visual
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase2_ui_visual PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
@@ -358,19 +374,19 @@ target_link_libraries(phase3_tests PRIVATE platform_juce)
 
 add_test(NAME phase3_timebase
   COMMAND phase3_tests --test timebase
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase3_timebase PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase3_scheduler_ring
   COMMAND phase3_tests --test scheduler_ring
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase3_scheduler_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase3_automation_ring
   COMMAND phase3_tests --test automation_ring
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase3_automation_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
@@ -446,24 +462,24 @@ set_tests_properties(phase3_resync_mismatch PROPERTIES WORKING_DIRECTORY ${CMAKE
 
 add_test(NAME phase3_pulse_full
   COMMAND phase3_tests --test pulse_full
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase3_pulse_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase3_note_off_full
   COMMAND phase3_tests --test note_off_full
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase3_note_off_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase3_resurrection_full
   COMMAND phase3_tests --test resurrection_full
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase3_resurrection_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase3_composition_full
   COMMAND phase3_tests --test composition_full
-          --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
+          --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase3_composition_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
