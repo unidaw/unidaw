@@ -4023,6 +4023,54 @@ struct TrackRuntime {
       emitChainSnapshot(*runtime);
     }
 
+    // Clear the arrangement of any track the loaded project does not define. Load
+    // grows the track set to fit the document but never shrank it, so a smaller
+    // project loaded after a larger one left the previous project's rails (and audio)
+    // standing — the UI drew clips from a project the user had closed.
+    {
+      auto inDocument = [&](uint32_t tid) {
+        for (const auto& s : document.tracks) {
+          if (s.trackId == tid) {
+            return true;
+          }
+        }
+        return false;
+      };
+      std::vector<TrackRuntime*> engineTracks;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        for (auto& rt : tracks) {
+          if (rt) {
+            engineTracks.push_back(rt.get());
+          }
+        }
+      }
+      for (auto* runtime : engineTracks) {
+        if (inDocument(runtime->trackId)) {
+          continue;
+        }
+        std::shared_ptr<const ClipSnapshot> snapshot;
+        {
+          std::lock_guard<std::mutex> tlock(runtime->trackMutex);
+          if (runtime->sourcePlacements.empty() && runtime->ownedClips.empty()) {
+            continue;  // already blank
+          }
+          runtime->sourcePlacements.clear();
+          runtime->ownedClips.clear();
+          runtime->editableClipIds.clear();
+          runtime->arrangementDirty.store(false, std::memory_order_relaxed);
+          snapshot = rebuildFlatAndPublish(*runtime);
+          std::atomic_store_explicit(&runtime->audioRender,
+                                     rebuildAudioRender(*runtime),
+                                     std::memory_order_release);
+        }
+        if (snapshot) {
+          std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
+                                     std::memory_order_release);
+        }
+      }
+    }
+
     // Restore plugin state. The chain was just rebuilt from the project above,
     // so on a clean reopen the live chain matches the saved one and state lands;
     // if a live reconcile diverged it is reported rather than pushed into the
