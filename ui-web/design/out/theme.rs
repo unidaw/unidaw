@@ -84,4 +84,12 @@ pub mod theme {
     pub const UNI_TRACK_TINT_7: u32 = 0x0ab4ff78;
     pub const UNI_HARMONY_FIELD_STRONG: u32 = 0x339184d9;
     pub const UNI_HARMONY_FIELD_SOFT: u32 = 0x0d9184d9;
+    pub const UNI_TRACK_HUE_0: &str = "oklch(0.75 0.145 35)";
+    pub const UNI_TRACK_HUE_1: &str = "oklch(0.81 0.150 88)";
+    pub const UNI_TRACK_HUE_2: &str = "oklch(0.78 0.135 155)";
+    pub const UNI_TRACK_HUE_3: &str = "oklch(0.74 0.150 289)";
+    pub const UNI_TRACK_HUE_4: &str = "oklch(0.79 0.115 205)";
+    pub const UNI_TRACK_HUE_5: &str = "oklch(0.74 0.150 340)";
+    pub const UNI_TRACK_HUE_6: &str = "oklch(0.74 0.130 250)";
+    pub const UNI_TRACK_HUE_7: &str = "oklch(0.72 0.060 289)";
 }

@@ -313,6 +313,38 @@ ok(barLoop.start === 2 * 3840000 && barLoop.end === 6 * 3840000,
    'the console sets it in the bar numbers the ruler prints',
    JSON.stringify(barLoop));
 
+section('clip rails');
+await page.evaluate(() => window.__uni.view('tracker'));
+await page.evaluate(() => window.__uni.run('goto 2 1'));
+await frames();
+const rails = await page.evaluate(() => [...document.querySelectorAll('.tk-rail')]
+  .filter((r) => r.style.display !== 'none')
+  .map((r) => ({ w: Math.round(r.getBoundingClientRect().width),
+                 name: r.textContent.trim(),
+                 active: r.classList.contains('active'),
+                 hue: r.style.getPropertyValue('--clip') })));
+ok(rails.length > 1, 'a rail per clip, from the engine’s extents', `${rails.length} rails`);
+ok(rails.every((r) => r.w === 5), 'narrow, at the column edge — not the whole column',
+   rails.map((r) => r.w).join(','));
+ok(rails.every((r) => r.name), 'each names its clip', rails.map((r) => r.name).join(','));
+// A clip you cannot tell apart from its neighbour is a clip you cannot talk
+// about, so each track gets its own hue rather than eight shades of the accent.
+ok(new Set(rails.map((r) => r.hue)).size > 1, 'and carries its track’s own colour',
+   JSON.stringify([...new Set(rails.map((r) => r.hue))].slice(0, 3)));
+// The active state could not fire at all before: it compared placementId against
+// a cursor field nothing ever set. "The clip the cursor is in" is the question a
+// tracker can answer.
+ok(rails.filter((r) => r.active).length === 1,
+   'exactly the clip the cursor is in is active',
+   String(rails.filter((r) => r.active).length));
+await page.evaluate(() => window.__uni.run('goto 2 2'));
+await frames();
+const moved = await page.evaluate(() => [...document.querySelectorAll('.tk-rail')]
+  .filter((r) => r.style.display !== 'none' && r.classList.contains('active'))
+  .map((r) => r.textContent.trim()));
+ok(moved.length === 1 && moved[0] !== rails.find((r) => r.active).name,
+   'and it follows the cursor to another track', JSON.stringify(moved));
+
 section('harmony column');
 await page.evaluate(() => window.__uni.view('tracker'));
 await page.evaluate(() => window.__uni.run('goto 0 0'));

@@ -167,13 +167,40 @@
 .tk-rail {
   position: absolute;
   box-sizing: border-box;
-  background: var(--uni-clip-scope-tint);
-  /* Top and bottom are what make a clip legible. A left border alone landed
-     exactly where the track border already is, so a clip's extent could only be
-     inferred from where the tint stopped — and a grab rail you cannot see is not
-     a grab rail. */
-  border-top: var(--uni-clip-rail-width) solid var(--uni-clip-rail);
-  border-bottom: var(--uni-clip-rail-width) solid var(--uni-clip-rail);
+  border-radius: 3px;
+  z-index: 3;
+  cursor: grab;
+  /* Solid end caps in the track's colour with a translucent body between: the
+     caps read as grips, which is what they are — the rail is the clip's handle.
+     One gradient rather than three elements, because this is drawn per clip per
+     frame. */
+  background: linear-gradient(180deg,
+      var(--clip) 0 5px,
+      color-mix(in srgb, var(--clip) 30%, transparent) 5px calc(100% - 5px),
+      var(--clip) calc(100% - 5px));
+}
+/* The clip the cursor is in. Solid plus a glow, so "which clip am I editing" is
+   answerable from the corner of the eye. */
+.tk-rail.active {
+  background: var(--clip);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--clip) 55%, transparent);
+}
+/* The clip's name, beside its rail. Rotated because a rail is 5px wide and a
+   name is not — and a clip you cannot name is one you cannot talk about. */
+.tk-rail-name {
+  position: absolute;
+  /* To the LEFT of the rail, not on it. Reading bottom-to-top so the name starts
+     at the clip's start, which is where the eye goes. */
+  right: 9px; bottom: 0;
+  transform-origin: 100% 100%;
+  transform: rotate(-90deg);
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--clip);
+  opacity: .9;
+  pointer-events: none;
 }
 .tk-rail.active { border-color: var(--uni-clip-rail-active); }
 /* The grab handles: a thicker bar at each end, inset from the track borders. */

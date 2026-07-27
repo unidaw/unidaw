@@ -316,16 +316,31 @@ export class Tracker {
       let r = this.railPool[i];
       if (!r) {
         r = el('div', 'tk-rail');
+        const lab = el('span', 'tk-rail-name');
+        lab.appendChild(document.createTextNode(''));
+        r.append(lab);
+        r._label = lab.firstChild;
+        r._name = null; r._hue = null;
         this.rails.append(r);
         this.railPool[i] = r;
       }
       if (r._id !== clip.id) { r._id = clip.id; r.dataset.clip = clip.id; }
       if (r.style.display === 'none') r.style.display = '';
       if (r._active !== clip.active) { r._active = clip.active; r.classList.toggle('active', clip.active); }
-      const top = (clip.startTick / perRow) * this.m.rowHeight;
-      const height = Math.max(1, (clip.endTick - clip.startTick) / perRow) * this.m.rowHeight;
-      const left = this.stripLeft + clip.track * this.trackStride;
-      const width = this.trackStride;
+      if (r._name !== clip.name) { r._name = clip.name; r._label.nodeValue = clip.name; }
+      // The track's own hue, so a clip is findable across the width of the
+      // screen. Eight shades of one accent are not.
+      const hue = 'var(--uni-track-hue-' + (clip.track % 8) + ')';
+      if (r._hue !== hue) { r._hue = hue; r.style.setProperty('--clip', hue); }
+      // 2px inset at each end, so consecutive clips show a gap rather than one
+      // unbroken bar — the boundary between two clips is information.
+      const top = (clip.startTick / perRow) * this.m.rowHeight + 2;
+      const height = Math.max(10,
+        ((clip.endTick - clip.startTick) / perRow) * this.m.rowHeight - 4);
+      // Tucked inside the track's LAST column rather than sitting on the border,
+      // where it would be indistinguishable from the rule already there.
+      const left = this.stripLeft + clip.track * this.trackStride + this.trackStride - 7;
+      const width = 5;
       if (r._top !== top) { r._top = top; r.style.top = top + 'px'; }
       if (r._h !== height) { r._h = height; r.style.height = height + 'px'; }
       if (r._l !== left) { r._l = left; r.style.left = left + 'px'; }

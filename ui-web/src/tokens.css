@@ -82,4 +82,12 @@
   --uni-track-tint-7: rgba(180,255,120,0.04);
   --uni-harmony-field-strong: rgba(145,132,217,0.20);
   --uni-harmony-field-soft: rgba(145,132,217,0.05);
+  --uni-track-hue-0: oklch(0.75 0.145 35);
+  --uni-track-hue-1: oklch(0.81 0.150 88);
+  --uni-track-hue-2: oklch(0.78 0.135 155);
+  --uni-track-hue-3: oklch(0.74 0.150 289);
+  --uni-track-hue-4: oklch(0.79 0.115 205);
+  --uni-track-hue-5: oklch(0.74 0.150 340);
+  --uni-track-hue-6: oklch(0.74 0.130 250);
+  --uni-track-hue-7: oklch(0.72 0.060 289);
 }

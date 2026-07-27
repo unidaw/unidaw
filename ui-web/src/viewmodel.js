@@ -365,7 +365,13 @@ export function buildViewModel(opts, buf) {
       const cl = pool[i] || (pool[i] = { id: 0, track: 0, startTick: 0, endTick: 0, name: '', active: false });
       cl.id = e.placementId; cl.track = e.track;
       cl.startTick = e.startTick; cl.endTick = e.endTick;
-      cl.name = e.name; cl.active = e.placementId === cursor.placementId;
+      cl.name = e.name;
+      // The clip the CURSOR is in. It used to compare e.placementId against
+      // cursor.placementId, which nothing ever set — so the active state could
+      // not fire, and a selected clip never looked selected. "Where the cursor
+      // is" is the question a tracker can actually answer.
+      cl.active = e.track === cursor.track
+               && tickOf(cursor.row) >= e.startTick && tickOf(cursor.row) < e.endTick;
       clips.push(cl);
     }
   }
