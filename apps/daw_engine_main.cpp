@@ -5301,6 +5301,21 @@ struct TrackRuntime {
           device.kind = static_cast<daw::DeviceKind>(chainPayload.deviceKind);
           device.patcherNodeId = chainPayload.patcherNodeId;
           device.hostSlotIndex = chainPayload.hostSlotIndex;
+          // Record the DURABLE plugin identity too, not just the volatile scan index.
+          // hostSlotIndex names a different plugin the moment anything is installed or
+          // removed, so a project saved with only the index reloads the wrong plugin
+          // silently. vstRef is what the loader actually keys on; fill it from the
+          // cache entry the slot resolves to, so a device added through AddDevice is
+          // as durable as one from a loaded project.
+          if ((device.kind == daw::DeviceKind::VstInstrument ||
+               device.kind == daw::DeviceKind::VstEffect) &&
+              device.hostSlotIndex < pluginCache.entries.size()) {
+            const auto& entry = pluginCache.entries[device.hostSlotIndex];
+            device.vstRef.vendor = entry.vendor;
+            device.vstRef.name = entry.name;
+            device.vstRef.path = entry.path;
+            device.vstRef.uid16 = entry.pluginUid16;
+          }
           device.bypass = chainPayload.bypass != 0;
           device.capabilityMask = capabilityMaskForKind(device.kind);
           chainChanged = daw::addDevice(runtime->track.chain,
