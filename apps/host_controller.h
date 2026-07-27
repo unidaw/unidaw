@@ -15,6 +15,10 @@ namespace daw {
 struct HostConfig {
   std::string socketPath;
   std::vector<std::string> pluginPaths;
+  // Parallel to pluginPaths: the desired sub-plugin name for each, so a launch is
+  // name-aware for multi-plugin bundles. May be shorter/empty; a missing entry means
+  // "take the first type".
+  std::vector<std::string> pluginNames;
   std::string shmName;
   uint32_t blockSize = 512;
   double sampleRate = 48000.0;
@@ -77,7 +81,7 @@ class HostController {
 
   // Reconciles the host's plugin chain to `pluginPaths` in place, so a chain
   // edit reuses unchanged plugins instead of restarting the whole host.
-  bool sendSetChain(const std::vector<std::string>& pluginPaths);
+  bool sendSetChain(const std::vector<PluginRef>& refs);
 
   bool sendOpenEditor(uint32_t pluginIndex);
   bool sendSetBypass(uint32_t pluginIndex, bool bypass);

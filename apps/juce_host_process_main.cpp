@@ -58,12 +58,15 @@ struct HostState {
     std::unordered_map<std::string, std::string> paramIdByUid16;
     bool bypass = false;
     std::string path;  // so a chain edit can reuse an unchanged instance
+    std::string name;  // desired sub-plugin name; reuse must match this too, since
+                       // two devices can share a bundle path but differ by plugin
   };
   std::vector<PluginSlot> plugins;
   std::mutex pluginsMutex;
   std::vector<float*> inputPtrs;
   std::vector<float*> outputPtrs;
   std::vector<std::string> pluginPaths;
+  std::vector<std::string> pluginNames;  // parallel to pluginPaths (may be shorter)
   std::vector<float> chainBufferA;
   std::vector<float> chainBufferB;
   std::vector<float*> chainPtrsA;
@@ -153,6 +156,7 @@ int createServerSocket(const std::string& path) {
 // JUCE requires for instantiation and prepareToPlay.
 std::optional<HostState::PluginSlot> loadPluginSlot(daw::IPluginHost& host,
                                                     const std::string& path,
+                                                    const std::string& name,
                                                     double sampleRate,
                                                     uint32_t blockSize,
                                                     uint32_t numChannelsOut) {
@@ -160,7 +164,7 @@ std::optional<HostState::PluginSlot> loadPluginSlot(daw::IPluginHost& host,
     std::cerr << "Plugin path not found: " << path << std::endl;
     return std::nullopt;
   }
-  auto instance = host.loadVst3FromPath(path, sampleRate, blockSize);
+  auto instance = host.loadVst3FromPath(path, name, sampleRate, blockSize);
   if (!instance) {
     std::cerr << "Failed to load plugin in host process: " << path << std::endl;
     return std::nullopt;
@@ -169,6 +173,7 @@ std::optional<HostState::PluginSlot> loadPluginSlot(daw::IPluginHost& host,
   HostState::PluginSlot slot;
   slot.instance = std::move(instance);
   slot.path = path;
+  slot.name = name;
   for (const auto& param : slot.instance->parameters()) {
     const auto uid16 = daw::hashStableId16(param.stableId);
     slot.paramIdByUid16.emplace(uid16Key(uid16.data()), param.stableId);
@@ -205,7 +210,7 @@ void resizeChainBuffers(HostState& state, size_t pluginCount,
 // already-loaded instance whenever the path is unchanged so only a genuinely
 // new plugin is instantiated — that is what keeps a chain edit from dropping
 // audio for the seconds a full reload takes. MUST run on the message thread.
-void reconcileChain(HostState& state, const std::vector<std::string>& desiredPaths) {
+void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired) {
   if (!state.header) {
     return;
   }
@@ -223,14 +228,16 @@ void reconcileChain(HostState& state, const std::vector<std::string>& desiredPat
   }
 
   std::vector<HostState::PluginSlot> next;
-  next.reserve(desiredPaths.size());
+  next.reserve(desired.size());
   std::vector<bool> reused(current.size(), false);
-  for (const auto& path : desiredPaths) {
-    // Reuse the first unclaimed loaded slot with a matching path, preserving
-    // its instance and dialled-in state.
+  for (const auto& ref : desired) {
+    // Reuse the first unclaimed loaded slot with a matching path AND name,
+    // preserving its instance and dialled-in state. Name matters because two
+    // devices can point at one bundle but different plugins inside it.
     bool matched = false;
     for (size_t i = 0; i < current.size(); ++i) {
-      if (!reused[i] && current[i].path == path && current[i].instance) {
+      if (!reused[i] && current[i].path == ref.path &&
+          current[i].name == ref.name && current[i].instance) {
         next.push_back(std::move(current[i]));
         reused[i] = true;
         matched = true;
@@ -240,8 +247,8 @@ void reconcileChain(HostState& state, const std::vector<std::string>& desiredPat
     if (matched) {
       continue;
     }
-    if (auto slot = loadPluginSlot(*state.pluginHost, path, sampleRate,
-                                   blockSize, numChannelsOut)) {
+    if (auto slot = loadPluginSlot(*state.pluginHost, ref.path, ref.name,
+                                   sampleRate, blockSize, numChannelsOut)) {
       next.push_back(std::move(*slot));
     }
   }
@@ -253,7 +260,12 @@ void reconcileChain(HostState& state, const std::vector<std::string>& desiredPat
     state.pluginsReady.store(true, std::memory_order_release);
     state.pluginsLoading.store(false, std::memory_order_release);
   }
-  state.pluginPaths = desiredPaths;
+  state.pluginPaths.clear();
+  state.pluginNames.clear();
+  for (const auto& ref : desired) {
+    state.pluginPaths.push_back(ref.path);
+    state.pluginNames.push_back(ref.name);
+  }
   // Instances not reused are destroyed here, on the message thread, as `current`
   // goes out of scope.
   std::cerr << "Host: reconciled chain to " << state.plugins.size()
@@ -262,6 +274,7 @@ void reconcileChain(HostState& state, const std::vector<std::string>& desiredPat
 
 void loadPlugins(HostState& state,
                  const std::vector<std::string>& pluginPaths,
+                 const std::vector<std::string>& pluginNames,
                  double sampleRate,
                  uint32_t blockSize,
                  uint32_t numChannelsOut) {
@@ -275,15 +288,19 @@ void loadPlugins(HostState& state,
   auto pluginHost = daw::createPluginHost();
   std::vector<HostState::PluginSlot> plugins;
 
-  for (const auto& path : pluginPaths) {
+  for (size_t idx = 0; idx < pluginPaths.size(); ++idx) {
+    const auto& path = pluginPaths[idx];
+    const std::string name =
+        idx < pluginNames.size() ? pluginNames[idx] : std::string();
     if (!std::filesystem::exists(path)) {
       std::cerr << "Plugin path not found: " << path << std::endl;
       continue;
     }
     if (logLoad) {
-      std::cerr << "Host: loading plugin " << path << std::endl;
+      std::cerr << "Host: loading plugin " << path
+                << (name.empty() ? "" : " (" + name + ")") << std::endl;
     }
-    auto instance = pluginHost->loadVst3FromPath(path, sampleRate, blockSize);
+    auto instance = pluginHost->loadVst3FromPath(path, name, sampleRate, blockSize);
     if (!instance) {
       std::cerr << "Failed to load plugin in host process: " << path << std::endl;
       continue;
@@ -296,6 +313,7 @@ void loadPlugins(HostState& state,
     HostState::PluginSlot slot;
     slot.instance = std::move(instance);
     slot.path = path;
+    slot.name = name;
     for (const auto& param : slot.instance->parameters()) {
       const auto uid16 = daw::hashStableId16(param.stableId);
       slot.paramIdByUid16.emplace(uid16Key(uid16.data()), param.stableId);
@@ -963,25 +981,37 @@ void runControlLoop(HostState& state) {
           const size_t blockBytes = std::min<size_t>(header.byteCount, available);
           const char* block =
               reinterpret_cast<const char*>(payload.data() + sizeof(daw::ChainHeader));
-          std::vector<std::string> paths;
+          // v4: each entry is two null-terminated strings, path then name.
+          auto readString = [&](size_t& off) -> std::string {
+            if (off >= blockBytes) {
+              return {};
+            }
+            const size_t len = ::strnlen(block + off, blockBytes - off);
+            std::string s(block + off, len);
+            off += len + 1;
+            return s;
+          };
+          std::vector<daw::PluginRef> refs;
+          refs.reserve(header.count);
           size_t offset = 0;
           for (uint32_t i = 0; i < header.count && offset < blockBytes; ++i) {
-            const size_t len = ::strnlen(block + offset, blockBytes - offset);
-            paths.emplace_back(block + offset, len);
-            offset += len + 1;
+            daw::PluginRef ref;
+            ref.path = readString(offset);
+            ref.name = readString(offset);
+            refs.push_back(std::move(ref));
           }
           // Instantiation must run on the message thread; the control loop is a
           // separate thread. Post the reconcile and wait for it, so the reply
           // to the next command reflects the new chain.
           if (auto* manager = juce::MessageManager::getInstanceWithoutCreating()) {
             juce::WaitableEvent done;
-            manager->callAsync([&state, paths, &done]() {
-              reconcileChain(state, paths);
+            manager->callAsync([&state, refs, &done]() {
+              reconcileChain(state, refs);
               done.signal();
             });
             done.wait();
           } else {
-            reconcileChain(state, paths);
+            reconcileChain(state, refs);
           }
         }
       } else if (type == daw::ControlMessageType::Shutdown) {
@@ -1005,11 +1035,19 @@ int main(int argc, char** argv) {
     state.testMode = std::string(env) == "1";
   }
   for (int i = 1; i + 1 < argc; ++i) {
-    if (std::string(argv[i]) == "--socket") {
+    const std::string arg = argv[i];
+    if (arg == "--socket") {
       socketPath = argv[i + 1];
       ++i;
-    } else if (std::string(argv[i]) == "--plugin") {
+    } else if (arg == "--plugin") {
       state.pluginPaths.push_back(argv[i + 1]);
+      state.pluginNames.emplace_back();  // kept parallel; --plugin-name fills it
+      ++i;
+    } else if (arg == "--plugin-name") {
+      // Names the sub-plugin for the most recent --plugin (multi-plugin bundle).
+      if (!state.pluginNames.empty()) {
+        state.pluginNames.back() = argv[i + 1];
+      }
       ++i;
     }
   }
@@ -1047,7 +1085,8 @@ int main(int argc, char** argv) {
     const double defaultSampleRate = 48000.0;
     const uint32_t defaultBlockSize = 512;
     const uint32_t defaultChannels = 2;
-    loadPlugins(state, state.pluginPaths, defaultSampleRate, defaultBlockSize, defaultChannels);
+    loadPlugins(state, state.pluginPaths, state.pluginNames, defaultSampleRate,
+                defaultBlockSize, defaultChannels);
   }
 
   std::thread controlThread([&state]() { runControlLoop(state); });

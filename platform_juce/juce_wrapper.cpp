@@ -952,6 +952,7 @@ class JucePluginHost final : public IPluginHost {
   }
 
   std::unique_ptr<IPluginInstance> loadVst3FromPath(const std::string& path,
+                                                    const std::string& desiredName,
                                                     double sampleRate,
                                                     int blockSize) override {
     const bool logLoad = std::getenv("DAW_HOST_LOG_LOAD") != nullptr;
@@ -983,7 +984,42 @@ class JucePluginHost final : public IPluginHost {
       return nullptr;
     }
 
+    // A VST3 bundle can hold several plugins (u-he Zebra2.vst3 ships Zebra2 +
+    // Zebralette + more; NI/Waves bundles hold dozens). `desiredName` says which one
+    // the project meant; select it by name so we don't silently load the wrong
+    // sub-plugin — exactly the "loaded the wrong plugin" failure the resolver exists
+    // to prevent. Empty name, or no match, falls back to the first type.
     const auto* description = types.getFirst();
+    if (!desiredName.empty()) {
+      const juce::String want(desiredName);
+      const juce::PluginDescription* match = nullptr;
+      for (const auto* d : types) {
+        if (d->name == want) {
+          match = d;
+          break;
+        }
+      }
+      if (match) {
+        description = match;
+      } else if (types.size() > 1) {
+        juce::String names;
+        for (int i = 0; i < types.size(); ++i) {
+          names << (i ? ", " : "") << types[i]->name;
+        }
+        std::cerr << "Host: bundle " << path << " has no plugin named '"
+                  << want << "' among [" << names << "] — loading first ("
+                  << description->name << ")" << std::endl;
+      }
+    } else if (types.size() > 1) {
+      juce::String names;
+      for (int i = 0; i < types.size(); ++i) {
+        names << (i ? ", " : "") << types[i]->name;
+      }
+      std::cerr << "Host: multi-plugin VST3 bundle " << path << " has "
+                << types.size() << " types [" << names
+                << "] and no requested name — loading first ("
+                << description->name << ")" << std::endl;
+    }
     std::unique_ptr<juce::AudioPluginInstance> instance;
     if (logLoad) {
       std::cerr << "Host: creating VST3 instance for " << path << std::endl;
@@ -998,8 +1034,18 @@ class JucePluginHost final : public IPluginHost {
       std::cerr << "Failed to create plugin instance: " << error << std::endl;
 #if JUCE_MAC
       std::string slowError;
-      const auto slowDescriptions =
+      auto slowDescriptions =
           buildVst3DescriptionsFromFactory(juce::File(path), &slowError);
+      // Try the requested sub-plugin first, so a multi-plugin bundle still lands on
+      // the right one on the slow path (not just whichever instantiates first).
+      if (!desiredName.empty()) {
+        const juce::String want(desiredName);
+        std::stable_sort(slowDescriptions.begin(), slowDescriptions.end(),
+                         [&](const juce::PluginDescription& a,
+                             const juce::PluginDescription& b) {
+                           return (a.name == want) && (b.name != want);
+                         });
+      }
       for (const auto& desc : slowDescriptions) {
         juce::String slowErr;
         auto slowInstance = formatManager_.createPluginInstance(desc, sampleRate, blockSize,

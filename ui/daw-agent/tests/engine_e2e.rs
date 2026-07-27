@@ -673,6 +673,85 @@ fn device_params_published_on_request() {
     );
 }
 
+/// A multi-plugin VST3 bundle (u-he Zebra2.vst3 holds Zebra2, Zebralette, ZRev,
+/// Zebrify) must load the sub-plugin the project NAMES, not just the first type.
+/// Before the SetChain name change, this loaded Zebra2 for any of them. Gated on the
+/// bundle being installed — it is a vendor plugin, absent on CI, so we skip rather
+/// than fail there.
+#[test]
+fn multi_bundle_selects_named_subplugin() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let bundle = std::path::Path::new("/Library/Audio/Plug-Ins/VST3/Zebra2.vst3");
+    if !bundle.exists() {
+        eprintln!("skipping: {} not installed", bundle.display());
+        return;
+    }
+    let (engine, session) = start_engine("zlette");
+
+    // Same bundle path as a Zebra2 project, but the project asks for Zebralette —
+    // a different plugin living inside the same .vst3.
+    let proj = json!({
+        "schema_version": 4,
+        "meta": { "name": "zlette", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ {
+                "device_id": 0, "kind": "vst_instrument", "patcher_node_id": 0,
+                "host_slot_index": 0, "bypass": false,
+                "vst_ref": { "vendor": "u-he", "name": "Zebralette",
+                             "path": bundle.to_str().unwrap(), "uid16": "" }
+            } ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(
+        engine.proj.join("zlette.uniproj.json"),
+        serde_json::to_string_pretty(&proj).unwrap(),
+    )
+    .unwrap();
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"zlette"}) });
+    assert!(load.ok, "load failed: {load:?}");
+
+    let req = || {
+        let p = UiCommandPayload {
+            command_type: UiCommandType::RequestDeviceParams as u16,
+            flags: 0,
+            track_id: 0,
+            plugin_index: 0,
+            note_pitch: 0,
+            value0: 0,
+            note_nanotick_lo: 0,
+            note_nanotick_hi: 0,
+            note_duration_lo: 0,
+            note_duration_hi: 0,
+            base_version: 0,
+        };
+        let _ = session.handle().send_command(p);
+    };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let view = loop {
+        req();
+        let v = session.handle().read_device_params();
+        if !v.device_name.is_empty() {
+            break v;
+        }
+        assert!(Instant::now() < deadline, "device params never published");
+        std::thread::sleep(Duration::from_millis(250));
+    };
+
+    // The host reports the ACTUALLY-loaded instance's name; it must be the one the
+    // project asked for, not the bundle's first type (Zebra2).
+    assert_eq!(
+        view.device_name, "Zebralette",
+        "named sub-plugin selection failed: loaded {:?} instead of Zebralette",
+        view.device_name
+    );
+}
+
 /// The scale registry is published (v16) so the harmony + tuning UI can draw the
 /// real cents ladder. Read-only, written once at startup.
 #[test]

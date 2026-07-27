@@ -122,8 +122,11 @@ class IPluginHost {
  public:
   virtual ~IPluginHost() = default;
 
+  // `desiredName` selects one plugin out of a multi-plugin VST3 bundle by name;
+  // pass "" to take the first type (correct for a single-plugin bundle).
   virtual std::unique_ptr<IPluginInstance> loadVst3FromPath(
-      const std::string& path, double sampleRate, int blockSize) = 0;
+      const std::string& path, const std::string& desiredName,
+      double sampleRate, int blockSize) = 0;
 };
 
 // A decoded audio source, downmixed to mono, in float samples. `sampleRate` is
