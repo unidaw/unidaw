@@ -718,6 +718,29 @@ int main(int argc, char** argv) {
             "patcher wrongly migrated onto the effect device");
   }
 
+  // Song time signature (Phase 2 of per-clip grid) round-trips, and a project written
+  // before the field defaults to 4/4. The per-clip meter is separate and tested via
+  // the clip round-trips above.
+  {
+    daw::ProjectDocument doc = makeDocument();
+    doc.songTimeSigNumerator = 7;
+    doc.songTimeSigDenominator = 8;
+    daw::ProjectDocument rt;
+    std::string err;
+    require(daw::deserializeProject(daw::serializeProject(doc), rt, &err),
+            "song time-sig round-trip parse failed");
+    require(rt.songTimeSigNumerator == 7 && rt.songTimeSigDenominator == 8,
+            "song time signature did not survive a round-trip");
+    daw::ProjectDocument legacy;
+    require(daw::deserializeProject(
+                "{\"schema_version\": 4, \"timebase\": "
+                "{\"nanoticks_per_quarter\": 960000}}",
+                legacy, &err),
+            "legacy timebase parse failed");
+    require(legacy.songTimeSigNumerator == 4 && legacy.songTimeSigDenominator == 4,
+            "a project without a song time signature must default to 4/4");
+  }
+
   // Movement 0: load -> save is idempotent. Serialize a loaded project, reload it,
   // and serialize again — the bytes must match. This is the "recall you can trust"
   // round-trip the hand-built document above cannot exercise, because it never goes

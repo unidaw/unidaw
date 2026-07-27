@@ -121,6 +121,12 @@ struct ProjectMeta {
 struct ProjectDocument {
   ProjectMeta meta{};
   uint64_t nanoticksPerQuarter = 960000;
+  // The SONG's time signature — what the arrangement ruler and the tracker's time
+  // gutter count in. Separate from a clip's own meter (ProjectClip time_sig_*): a
+  // 7/8 clip draws its own accents inside bars that the song still numbers in its
+  // meter, so polymetric clips never lose a shared sense of where you are.
+  uint32_t songTimeSigNumerator = 4;
+  uint32_t songTimeSigDenominator = 4;
   std::vector<ProjectTempoPoint> tempoMap{{0, 120.0}};
   std::vector<HarmonyEvent> harmonyTimeline;
   // Project-level clip library, referenced by track placements by id.

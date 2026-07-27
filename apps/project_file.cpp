@@ -502,6 +502,8 @@ std::string serializeProject(const ProjectDocument& document) {
 
   writer.beginChildObject("timebase");
   writer.key("nanoticks_per_quarter", document.nanoticksPerQuarter);
+  writer.key("time_sig_numerator", document.songTimeSigNumerator);
+  writer.key("time_sig_denominator", document.songTimeSigDenominator);
   writer.endChildObject();
 
   writer.beginArray("tempo_map");
@@ -705,6 +707,12 @@ bool deserializeProject(const std::string& json,
   parsed.meta.modifiedUtc = root.get<std::string>("meta.modified_utc", "");
   parsed.nanoticksPerQuarter =
       root.get<uint64_t>("timebase.nanoticks_per_quarter", 960000);
+  // Song time signature (default 4/4 so a project without it — every project written
+  // before this field — keeps counting in common time).
+  parsed.songTimeSigNumerator =
+      root.get<uint32_t>("timebase.time_sig_numerator", 4);
+  parsed.songTimeSigDenominator =
+      root.get<uint32_t>("timebase.time_sig_denominator", 4);
 
   parsed.tempoMap.clear();
   if (const auto tempo = root.get_child_optional("tempo_map")) {
