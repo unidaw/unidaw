@@ -91,8 +91,13 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
   return {
     /** Called from the draw loop. Must stay allocation-free when nothing moves. */
     update({ playheadTick, transport: tstate, linkText, octave, editStep,
-             velocity = 100, rejectText = '', viewName = '' }) {
+             velocity = 100, rejectText = '', viewName = '', keyName = '' }) {
       if (velocity !== lastVel) { lastVel = velocity; velLabel.firstChild.nodeValue = 'vel ' + velocity; }
+      // The key CHANGES: it is resolved from the harmony timeline at the
+      // playhead, so it moves during playback rather than being a caption. A
+      // dash means the engine has published no timeline, which is a different
+      // thing from a project genuinely having no harmony.
+      if (keyName !== lastKey) { lastKey = keyName; scaleLabel.firstChild.nodeValue = keyName || '—'; }
       if (viewName !== lastView) { lastView = viewName; viewLabel.firstChild.nodeValue = viewName.toUpperCase(); }
       if (rejectText !== lastReject) {
         lastReject = rejectText;
