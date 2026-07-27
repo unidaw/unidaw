@@ -532,6 +532,9 @@ std::string serializeProject(const ProjectDocument& document) {
     writer.key("id", clip.id);
     writer.key("name", clip.name);
     writer.key("length", clip.lengthNanoticks);
+    writer.key("lines_per_beat", clip.linesPerBeat);
+    writer.key("time_sig_numerator", clip.timeSigNumerator);
+    writer.key("time_sig_denominator", clip.timeSigDenominator);
     if (clip.kind == ClipKind::Audio) {
       writer.key("kind", std::string("audio"));
       writer.beginChildObject("audio");
@@ -738,6 +741,12 @@ bool deserializeProject(const std::string& json,
       clip.id = clipTree.get<uint32_t>("id", 0);
       clip.name = clipTree.get<std::string>("name", "");
       clip.lengthNanoticks = clipTree.get<uint64_t>("length", 0);
+      clip.linesPerBeat = clipTree.get<uint32_t>("lines_per_beat", 4);
+      clip.timeSigNumerator = clipTree.get<uint32_t>("time_sig_numerator", 4);
+      clip.timeSigDenominator = clipTree.get<uint32_t>("time_sig_denominator", 4);
+      if (clip.linesPerBeat == 0) clip.linesPerBeat = 4;
+      if (clip.timeSigNumerator == 0) clip.timeSigNumerator = 4;
+      if (clip.timeSigDenominator == 0) clip.timeSigDenominator = 4;
       // Absent kind (schema <= 2) means symbolic — the only kind that existed.
       const std::string kind = clipTree.get<std::string>("kind", "symbolic");
       if (kind == "audio") {

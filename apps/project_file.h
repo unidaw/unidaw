@@ -57,6 +57,14 @@ struct ProjectClip {
   uint32_t id = 0;
   std::string name;
   uint64_t lengthNanoticks = 0;
+  // The clip's musical grid, owned per-clip (a clip is a "section"). lines_per_beat is
+  // the tracker row subdivision; the time signature governs bar length within the
+  // clip. Moved here from the track so each clip carries its own meter; the active
+  // grid is the clip under the playhead, and a new clip inherits its predecessor's.
+  // Meaningful for Symbolic clips.
+  uint32_t linesPerBeat = 4;
+  uint32_t timeSigNumerator = 4;
+  uint32_t timeSigDenominator = 4;
   ClipKind kind = ClipKind::Symbolic;
   MusicalClip clip;   // meaningful when kind == Symbolic
   AudioClip audio;    // meaningful when kind == Audio
