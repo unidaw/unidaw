@@ -436,6 +436,9 @@ pub enum UiCommandType {
     /// Set the project tempo. value0 = milli-BPM. flags: 0 = insert-or-replace a point
     /// at note_nanotick_lo/hi; 1 = flatten the map to this single tempo.
     SetTempo = 41,
+    // 42 = Quit, taken by the frontend on its web-ui branch. Reserved; do not reuse.
+    /// Set one plugin parameter from the rack (UiSetParamPayload).
+    SetDeviceParam = 43,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -494,6 +497,21 @@ pub struct UiCommandPayload {
     pub note_duration_lo: u32,
     pub note_duration_hi: u32,
     pub base_version: u32,
+}
+
+/// A rack knob write (UiCommandType::SetDeviceParam). Mirrors the C++
+/// UiSetParamPayload (40 bytes). value_milli is the normalized value in milli
+/// (0..1000); uid16 is the durable param key from the device-params read-back.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiSetParamPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub value_milli: u32,
+    pub uid16: [u8; 16],
+    pub reserved: [u8; 8],
 }
 
 #[repr(C)]

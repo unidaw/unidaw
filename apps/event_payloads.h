@@ -91,6 +91,12 @@ enum class UiCommandType : uint16_t {
   // insert-or-replace a tempo point at the nanotick in noteNanotickLo/Hi; 1 = flatten
   // the whole map to this single tempo (a transport-bar BPM edit), ignoring position.
   SetTempo = 41,
+  // 42 = Quit, taken by the frontend on its web-ui branch (last-client-disconnect
+  // shutdown). Reserved here so the next allocation skips it; do not reuse.
+  // Set one plugin parameter from the rack: UiSetParamPayload{trackId, deviceId,
+  // valueMilli (0..1000), uid16}. The engine resolves deviceId -> pluginIndex and
+  // forwards it to the host over the control socket.
+  SetDeviceParam = 43,
 };
 
 constexpr uint16_t kMixerFlagMute = 1u << 0;
@@ -172,6 +178,23 @@ struct UiAutomationCommandPayload {
 
 static_assert(sizeof(UiAutomationCommandPayload) == 40,
               "UiAutomationCommandPayload must fit EventEntry payload");
+
+// SetDeviceParam: a rack knob write. deviceId is the device's id (engine maps it to
+// the host plugin index); valueMilli is the normalized value in milli (0..1000, so
+// the UI's integer store survives the wire without a float); uid16 is the durable
+// param key the rack got from the device-params read-back.
+struct UiSetParamPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t valueMilli = 0;
+  uint8_t uid16[16]{};
+  uint8_t reserved[8]{};
+};
+
+static_assert(sizeof(UiSetParamPayload) == 40,
+              "UiSetParamPayload must fit EventEntry payload");
 
 struct UiChainCommandPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);

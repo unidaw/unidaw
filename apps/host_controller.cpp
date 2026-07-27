@@ -491,6 +491,19 @@ bool HostController::sendSetBypass(uint32_t pluginIndex, bool bypass) {
   return sendMessage(socketFd_, ControlMessageType::SetBypass, &request, sizeof(request));
 }
 
+bool HostController::sendSetParam(uint32_t pluginIndex, const uint8_t* uid16,
+                                 float normalized) {
+  SetParamRequest request;
+  request.pluginIndex = pluginIndex;
+  std::memcpy(request.uid16, uid16, sizeof(request.uid16));
+  request.normalized = normalized;
+  std::lock_guard<std::mutex> lock(socketMutex_);
+  if (socketFd_ < 0) {
+    return false;
+  }
+  return sendMessage(socketFd_, ControlMessageType::SetParam, &request, sizeof(request));
+}
+
 bool HostController::sendShutdown() {
   std::lock_guard<std::mutex> lock(socketMutex_);
   return sendMessage(socketFd_, ControlMessageType::Shutdown, nullptr, 0);
