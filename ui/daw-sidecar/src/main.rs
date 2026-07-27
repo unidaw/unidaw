@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{UiChordCommandPayload, UiCommandPayload, UiCommandType,
-                        UiPatcherPresetCommandPayload};
+                        UiPatcherNodeConfigPayload, UiPatcherPresetCommandPayload};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
 
 /// Wire format, little-endian. The frontend decodes with a DataView.
@@ -732,6 +732,65 @@ fn build_chord(body: &str) -> Option<UiChordCommandPayload> {
     })
 }
 
+/// A patcher node's config, packed into the 16 bytes the engine expects.
+///
+/// The read side gives eight i32 per node; the write side is an explicit
+/// little-endian layout that DIFFERS per node type, and is not a C++ struct
+/// memcpy — backend replaced that precisely because it coupled the wire to
+/// padding and truncated Euclidean. So the client sends the same eight values it
+/// read and the packing happens here, once, next to the layout it implements.
+///
+///   Euclidean(1)    steps u16@0, hits u16@2, offset u16@4, degree u8@6,
+///                   octaveOffset i8@7, velocity u8@8, baseOctave u8@9,
+///                   pad u16@10, durationTicks u32@12
+///   Lfo(4)          freqMilliHz i32@0, depthMilli i32@4, biasMilli i32@8,
+///                   phaseMilli i32@12
+///   RandomDegree(5) degree u8@0, velocity u8@1, pad u16@2, durationTicks u32@4
+fn build_patcher_config(body: &str) -> Option<Result<UiPatcherNodeConfigPayload, &'static str>> {
+    if !body.contains("\"patchcfg\"") { return None; }
+    let n = |k: &str| parse_num(body, k).unwrap_or(0);
+    let node_type = n("\"nodeType\"") as u32;
+    let mut cfg = [0u8; 16];
+    // The eight values as read from UiPatcherNode.config, in that order.
+    let c: Vec<i64> = (0..8).map(|i| parse_num(body, &format!("\"c{i}\"")).unwrap_or(0)).collect();
+    match node_type {
+        1 => {
+            cfg[0..2].copy_from_slice(&(c[0].clamp(0, 65535) as u16).to_le_bytes());
+            cfg[2..4].copy_from_slice(&(c[1].clamp(0, 65535) as u16).to_le_bytes());
+            cfg[4..6].copy_from_slice(&(c[2].clamp(0, 65535) as u16).to_le_bytes());
+            cfg[6] = c[3].clamp(0, 255) as u8;
+            cfg[7] = (c[4].clamp(-128, 127) as i8) as u8;
+            cfg[8] = c[5].clamp(0, 255) as u8;
+            cfg[9] = c[6].clamp(0, 255) as u8;
+            cfg[12..16].copy_from_slice(&(c[7].clamp(0, u32::MAX as i64) as u32).to_le_bytes());
+        }
+        4 => {
+            for i in 0..4 {
+                let v = c[i].clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+                cfg[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        5 => {
+            cfg[0] = c[0].clamp(0, 255) as u8;
+            cfg[1] = c[1].clamp(0, 255) as u8;
+            cfg[4..8].copy_from_slice(&(c[2].clamp(0, u32::MAX as i64) as u32).to_le_bytes());
+        }
+        // A type with no layout is refused rather than sent as zeros, which the
+        // engine would apply.
+        _ => return Some(Err("no config layout for that node type")),
+    }
+    Some(Ok(UiPatcherNodeConfigPayload {
+        command_type: UiCommandType::SetPatcherNodeConfig as u16,
+        flags: 0,
+        track_id: n("\"track\"").max(0) as u32,
+        base_version: n("\"base\"").max(0) as u32,
+        node_id: n("\"node\"").max(0) as u32,
+        config_type: node_type,
+        config: cfg,
+        reserved: [0; 4],
+    }))
+}
+
 fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_named(body) { return r; }
 
@@ -872,6 +931,20 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Duration::from_millis(250)) { ok += 1; } else { failed += 1; }
                             }
                             let reply = format!("{{\"ok\":true,\"applied\":{ok},\"failed\":{failed}}}");
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // Patcher config has its own payload too.
+                        if let Some(r) = build_patcher_config(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_patcher_config(p) {
+                                    Ok(()) => format!("{{\"ok\":true,\"type\":{},\"node\":{}}}",
+                                                      p.command_type, p.node_id),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
@@ -1229,6 +1302,61 @@ mod tests {
         assert_eq!(c.spread_nanoticks, 80);
         assert_eq!(c.humanize_timing, 20);
         assert!(build_chord(r#"{"type":"note","pitch":60}"#).is_none(), "not a chord");
+    }
+
+    /// Byte-level layout, which is where this project has been bitten twice.
+    /// The values are the ones the READ side reports, so a round trip through
+    /// the UI has to come back the same.
+    #[test]
+    fn euclidean_config_packs_to_the_engine_layout() {
+        let p = build_patcher_config(
+            r#"{"type":"patchcfg","node":0,"nodeType":1,"c0":16,"c1":5,"c2":3,"c3":2,"c4":-1,"c5":100,"c6":4,"c7":480000}"#)
+            .expect("recognised").expect("packed");
+        assert_eq!(p.config_type, 1);
+        assert_eq!(u16::from_le_bytes([p.config[0], p.config[1]]), 16, "steps");
+        assert_eq!(u16::from_le_bytes([p.config[2], p.config[3]]), 5, "hits");
+        assert_eq!(u16::from_le_bytes([p.config[4], p.config[5]]), 3, "offset");
+        assert_eq!(p.config[6], 2, "degree");
+        assert_eq!(p.config[7] as i8, -1, "octaveOffset is SIGNED");
+        assert_eq!(p.config[8], 100, "velocity");
+        assert_eq!(p.config[9], 4, "baseOctave");
+        assert_eq!(u32::from_le_bytes([p.config[12], p.config[13], p.config[14], p.config[15]]),
+                   480_000, "durationTicks at 12, after the pad");
+    }
+
+    #[test]
+    fn lfo_config_is_four_i32_and_keeps_its_sign() {
+        let p = build_patcher_config(
+            r#"{"type":"patchcfg","node":2,"nodeType":4,"c0":2500,"c1":750,"c2":-250,"c3":0}"#)
+            .expect("recognised").expect("packed");
+        let at = |i: usize| i32::from_le_bytes([p.config[i], p.config[i+1], p.config[i+2], p.config[i+3]]);
+        assert_eq!(at(0), 2500, "freq milliHz");
+        assert_eq!(at(4), 750, "depth milli");
+        assert_eq!(at(8), -250, "bias milli, negative");
+        assert_eq!(at(12), 0, "phase milli");
+    }
+
+    #[test]
+    fn random_degree_puts_duration_at_four_not_two() {
+        let p = build_patcher_config(
+            r#"{"type":"patchcfg","node":1,"nodeType":5,"c0":8,"c1":100,"c2":960000}"#)
+            .expect("recognised").expect("packed");
+        assert_eq!(p.config[0], 8);
+        assert_eq!(p.config[1], 100);
+        // Bytes 2-3 are a pad; duration starts at 4. Writing it at 2 would be a
+        // plausible guess and silently wrong.
+        assert_eq!(u16::from_le_bytes([p.config[2], p.config[3]]), 0, "pad stays zero");
+        assert_eq!(u32::from_le_bytes([p.config[4], p.config[5], p.config[6], p.config[7]]),
+                   960_000);
+    }
+
+    #[test]
+    fn an_unknown_node_type_is_refused_rather_than_zeroed() {
+        // Sending zeros for a type we do not know how to pack would be applied
+        // by the engine as a real configuration.
+        assert_eq!(build_patcher_config(r#"{"type":"patchcfg","nodeType":99}"#).unwrap().err(),
+                   Some("no config layout for that node type"));
+        assert!(build_patcher_config(r#"{"type":"note","pitch":60}"#).is_none());
     }
 
     #[test]

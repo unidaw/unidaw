@@ -24,11 +24,38 @@ export const EDGE_KINDS = ['event', 'audio', 'control'];
  * A type with no entry here shows nothing rather than eight anonymous numbers.
  */
 const CONFIG_FIELDS = {
-  euclidean: ['steps', 'hits', 'offset', 'degree', 'oct', 'vel', 'base'],
-  random: ['degree', 'vel', 'dur'],
+  euclidean: ['steps', 'hits', 'offset', 'degree', 'oct', 'vel', 'base',
+              ['dur', 960000, 'b']],
+  random: ['degree', 'vel', ['dur', 960000, 'b']],
   // Stored as milli-units, so they are shown divided rather than as raw i32s.
   lfo: [['freq', 1000, 'Hz'], ['depth', 1000, ''], ['bias', 1000, ''], ['phase', 1000, '']],
 };
+
+/** How much one nudge moves each field, and what it may not exceed. */
+const CONFIG_LIMITS = {
+  euclidean: [[1, 1, 64], [1, 0, 64], [1, 0, 63], [1, 0, 12], [1, -4, 4], [1, 1, 127], [1, 0, 9],
+              [120000, 0, 7680000]],
+  random: [[1, 0, 12], [1, 1, 127], [120000, 0, 7680000]],
+  // Milli-units, so a step of 100 is 0.1 Hz.
+  lfo: [[100, 1, 20000], [50, 0, 1000], [50, -1000, 1000], [50, 0, 1000]],
+};
+
+/** The editable fields of a node type, as {name, index}. Empty if none. */
+export function configFields(type) {
+  const fields = CONFIG_FIELDS[NODE_TYPES[type]];
+  if (!fields) return [];
+  return fields.map((f, i) => ({ name: Array.isArray(f) ? f[0] : f, index: i }));
+}
+
+/** Nudge one field, clamped. Returns the new eight-value config. */
+export function nudgeConfig(type, config, fieldIndex, dir) {
+  const limits = CONFIG_LIMITS[NODE_TYPES[type]];
+  if (!limits || !limits[fieldIndex]) return null;
+  const [step, lo, hi] = limits[fieldIndex];
+  const out = Array.from(config);
+  out[fieldIndex] = Math.max(lo, Math.min(hi, out[fieldIndex] + dir * step));
+  return out;
+}
 
 export function describeConfig(type, config) {
   const fields = CONFIG_FIELDS[NODE_TYPES[type]];
@@ -47,10 +74,11 @@ export function describeConfig(type, config) {
 }
 
 // Wide enough for the longest config line a node type produces, and tall enough
-// for two of them. Euclidean's seven fields wrapped to three lines and spilled
-// out of the box at the first size I picked.
-const NODE_W = 210;
-const NODE_H = 76;
+// for all of it. Euclidean's fields wrapped to three lines and spilled out of the
+// box at the first size I picked; they are eight now, so this has room for four
+// lines plus the field cursor along the bottom.
+const NODE_W = 220;
+const NODE_H = 98;
 const GAP_X = 76;
 const GAP_Y = 24;
 
@@ -58,7 +86,7 @@ export function createPatcherBuffer(nodeCap = 64, edgeCap = 128) {
   const nodes = new Array(nodeCap);
   for (let i = 0; i < nodeCap; i++) {
     nodes[i] = { id: 0, type: 0, typeName: '', config: '', x: 0, y: 0, w: NODE_W, h: NODE_H,
-                 selected: false };
+                 selected: false, field: -1, fieldName: '' };
   }
   const edges = new Array(edgeCap);
   for (let i = 0; i < edgeCap; i++) {
@@ -91,10 +119,15 @@ function computeDepths(nodes, edges, depth) {
 }
 
 /**
- * @param {{engine:object|null, selectedNode:number, width:number}} opts
+ * @param {{engine:object|null, selectedNode:number, selectedField:number,
+ *          pending:Map<number,number[]>|null}} opts
+ *
+ * `pending` is the caller's map of edits sent but not yet confirmed, keyed on
+ * node id. It wins over the engine's value so the box shows what you just typed
+ * — the same optimism the faders have.
  */
 export function buildPatcherModel(opts, buf) {
-  const { engine = null, selectedNode = -1 } = opts;
+  const { engine = null, selectedNode = -1, selectedField = 0, pending = null } = opts;
   const srcNodes = engine ? engine.patcherNodes : [];
   const srcEdges = engine ? engine.patcherEdges : [];
 
@@ -117,12 +150,21 @@ export function buildPatcherModel(opts, buf) {
     node.id = src.id;
     node.type = src.type;
     node.typeName = NODE_TYPES[src.type] || ('type' + src.type);
-    node.config = src.hasConfig ? describeConfig(src.type, src.config) : '';
+    const sent = pending ? pending.get(src.id) : undefined;
+    const cfg = sent || src.config;
+    node.config = (src.hasConfig || sent) ? describeConfig(src.type, cfg) : '';
     node.x = 24 + d * (NODE_W + GAP_X);
     node.y = 24 + row * (NODE_H + GAP_Y);
     node.w = NODE_W;
     node.h = NODE_H;
     node.selected = src.id === selectedNode;
+    // Which field the keyboard is on, so the box can show it. -1 when this node
+    // is not selected: an edit cursor on an unselected node would be a lie about
+    // what the next keystroke does.
+    node.field = node.selected ? selectedField : -1;
+    node.fieldName = node.selected
+      ? (configFields(src.type)[selectedField] || {}).name || ''
+      : '';
   }
   buf.nodeCount = n;
 

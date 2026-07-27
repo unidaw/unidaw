@@ -186,6 +186,55 @@ for (const [view, probe, check, prep] of [
   ok(p && check(p), `${view} renders live data`, JSON.stringify(p).slice(0, 90));
 }
 
+section('patcher editing');
+await page.evaluate(() => window.__uni.view('patcher'));
+await frames();
+const graph = await page.evaluate(() => window.__uni.patchNodes());
+const euclid = graph.find((n) => n.type === 'euclidean');
+ok(!!euclid && euclid.fields.length > 0, 'a node advertises its editable fields',
+   euclid ? euclid.fields.join(' ') : 'none');
+const hitsWas = euclid.config[1];
+// Three steps in ONE command, all sent before the engine can answer any of them.
+// A nudge that re-read the engine each time would send the same value three
+// times and land on +1.
+await page.evaluate((id) => window.__uni.run(`patch ${id} hits 3`), euclid.id);
+// One frame, not one engine round trip: the box has to show the value on the
+// next paint. Asserting the VALUE rather than the pending flag, for the reason
+// the mixer's equivalent does — the flag is a transient a local engine can clear
+// inside two frames, and a flaky test is worse than no test.
+await frames();
+const optimistic = await page.evaluate(() => window.__uni.patcherProbe().configs[0]);
+ok(optimistic.includes('hits ' + (hitsWas + 3)), 'the box shows the edit on the next paint',
+   optimistic);
+await page.waitForTimeout(1200);
+const euclidAfter = await page.evaluate(() => window.__uni.patchNodes());
+ok(euclidAfter.find((n) => n.id === euclid.id).config[1] === hitsWas + 3,
+   'three nudges chain rather than repeating the first',
+   `${hitsWas} -> ${euclidAfter.find((n) => n.id === euclid.id).config[1]}`);
+// Every other value survives: the engine rebuilds the config from what it gets,
+// so a field the UI dropped would be a field the engine zeroed.
+ok(euclidAfter.find((n) => n.id === euclid.id).config.every((v, i) => i === 1 || v === euclid.config[i]),
+   'and no other field is disturbed',
+   JSON.stringify(euclidAfter.find((n) => n.id === euclid.id).config));
+await page.evaluate((id) => window.__uni.run(`patch ${id} hits -99`), euclid.id);
+await page.waitForTimeout(1200);
+const low = await page.evaluate(() => window.__uni.patchNodes());
+ok(low.find((n) => n.id === euclid.id).config[1] === 0, 'a big negative clamps at the floor',
+   JSON.stringify(low.find((n) => n.id === euclid.id).config));
+const refused = await page.evaluate(() => {
+  try { window.__uni.patch(window.__uni.patchNodes()[0].id, 'nope', 1); return 'no throw'; }
+  catch (e) { return e.message; }
+});
+ok(/no field/.test(refused), 'an unknown field is named, not silently ignored', refused);
+const noCfg = await page.evaluate(() => {
+  const plain = window.__uni.patchNodes().find((n) => !n.fields.length);
+  if (!plain) return 'no such node';
+  try { window.__uni.patch(plain.id, 'steps', 1); return 'no throw'; } catch (e) { return e.message; }
+});
+ok(/no editable configuration/.test(noCfg), 'a node without a layout refuses out loud', noCfg);
+await page.evaluate(([id, n]) => window.__uni.run(`patch ${id} hits ${n}`), [euclid.id, hitsWas]);
+await page.waitForTimeout(1200);
+
 section('piano roll selection');
 await page.evaluate(() => { window.__uni.view('piano'); window.__uni.pianoAll(true); });
 await frames();

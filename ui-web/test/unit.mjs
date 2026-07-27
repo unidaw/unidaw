@@ -21,7 +21,8 @@ import {
   gainLabel, panLabel, faderPosition, gainAtPosition, GAIN_MIN, GAIN_MAX,
 } from '../src/mixermodel.js';
 import { isBlackKey, pitchLabel, fitLowPitch } from '../src/pianomodel.js';
-import { describeConfig, NODE_TYPES } from '../src/patchermodel.js';
+import { describeConfig, configFields, nudgeConfig,
+         NODE_TYPES } from '../src/patchermodel.js';
 import { trackName } from '../src/arrangemodel.js';
 import { createField, begin as fBegin, feed as fFeed, cancel as fCancel } from '../src/textfield.js';
 
@@ -184,6 +185,27 @@ test('patcher config is named per type, or shown as nothing', () => {
   assert.match(lfo, /depth 0\.75/);
   // A type with no table shows NOTHING, not eight anonymous numbers.
   assert.equal(describeConfig(NODE_TYPES.indexOf('kernel'), [1, 2, 3, 4, 5, 6, 7, 8]), '');
+});
+
+test('a nudge clamps, and leaves every other value exactly as it was read', () => {
+  const EU = NODE_TYPES.indexOf('euclidean');
+  assert.deepEqual(configFields(EU).map((f) => f.name),
+                   ['steps', 'hits', 'offset', 'degree', 'oct', 'vel', 'base', 'dur']);
+  // Every published value goes back, edited or not: the engine rebuilds the whole
+  // config from what it receives, so a field this UI does not name is a field it
+  // would otherwise zero.
+  assert.deepEqual(nudgeConfig(EU, [16, 5, 0, 1, 0, 100, 4, 960000], 1, 1),
+                   [16, 6, 0, 1, 0, 100, 4, 960000]);
+  // Clamped at the bottom rather than wrapping to something absurd. A Euclidean
+  // pattern of zero steps is a division by zero in the engine's generator.
+  assert.deepEqual(nudgeConfig(EU, [1, 0, 0, 0, 0, 1, 0, 0], 0, -1)[0], 1);
+  // Signed fields keep going below zero.
+  assert.equal(nudgeConfig(EU, [16, 5, 0, 1, 0, 100, 4, 0], 4, -1)[4], -1);
+  // A type with no layout refuses rather than sending a config of zeros — the
+  // same refusal the sidecar makes, so the UI never asks for it.
+  assert.equal(nudgeConfig(NODE_TYPES.indexOf('passthru'), [0, 0, 0, 0, 0, 0, 0, 0], 0, 1), null);
+  // And a field index past the end of the type's table.
+  assert.equal(nudgeConfig(NODE_TYPES.indexOf('random'), [0, 0, 0, 0, 0, 0, 0, 0], 5, 1), null);
 });
 
 test('trackName respects the engine, and falls back visibly', () => {

@@ -68,7 +68,7 @@ const PASS = async () => page.evaluate(() => {
   for (let i = 0; i < 40; i++) { u.setPan(i % 8, ((i * 37) % 2000) - 1000); u.redraw(); }
 
   u.usePatcherFixture();
-  u.redraw();
+  for (let i = 0; i < 20; i++) { u.patchSelect(i % 5); u.patchField(i % 4); }
 
   u.useDockFixture();
   for (let i = 0; i < 10; i++) u.run('state');

@@ -119,6 +119,16 @@ check(await measure(
     window.__uni.redraw();
   } }),
   SCROLL_MAX, 'mixer, meters and controls moving');
+
+// The patcher was read-only until config editing landed; a draw that rebuilds a
+// config line per node per frame is exactly the shape that quietly allocates.
+check(await measure(
+  () => { window.__uni.usePatcherFixture(); },
+  (n) => { for (let i = 0; i < n; i++) {
+    window.__uni.patchSelect(i % 5);
+    window.__uni.patchField(i % 4);
+  } }),
+  SCROLL_MAX, 'patcher moving the field cursor');
 await br.close(); srv.close();
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : `${fail} FAILURES — see GUIDELINES.md section 3`}`);

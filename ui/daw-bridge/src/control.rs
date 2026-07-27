@@ -20,8 +20,7 @@ use crate::layout::{
     UiClipExtent, UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot,
     UiCommandPayload, UiHarmonyEvent, UiHarmonySnapshot, UiPatcherEdge, UiPatcherNode,
     UiPatcherRegion, K_SHM_MAGIC, K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS,
-    K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_TRACKS,
-};
+    K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_TRACKS, UiPatcherNodeConfigPayload,};
 use crate::reader::{SeqlockReader, UiSnapshot};
 
 /// Per-track mixer read-back. Gain in millibels, pan in thousandths (integers —
@@ -446,6 +445,18 @@ impl EngineHandle {
                 return out;
             }
         }
+    }
+
+    /// A patcher node's configuration. Its own payload: the engine dispatches on
+    /// entry size, so this cannot ride in a UiCommandPayload slot.
+    pub fn send_patcher_config(
+        &self,
+        payload: UiPatcherNodeConfigPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const UiPatcherNodeConfigPayload as *const u8,
+            std::mem::size_of::<UiPatcherNodeConfigPayload>(),
+        )
     }
 
     pub fn send_chord_command(&self, payload: UiChordCommandPayload) -> Result<(), String> {

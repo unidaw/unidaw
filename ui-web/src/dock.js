@@ -83,6 +83,16 @@ export function createCommands(api) {
     copy: { help: 'copy the selection', run: () => (api.copy() ? 'copied' : 'nothing to copy') },
     paste: { help: 'paste at the cursor', run: () => (api.paste() ? 'pasted' : 'clipboard empty') },
     cut: { help: 'cut the selection', run: () => (api.cut() ? 'cut' : 'nothing to cut') },
+    nodes: { help: 'list patcher nodes with their editable fields', run: () => {
+      const ns = api.nodes();
+      if (!ns.length) return 'no patcher nodes';
+      return ns.map((n) => '#' + n.id + ' ' + n.type
+        + (n.fields.length ? '  [' + n.fields.join(' ') + ']' : '  (no config)')).join('\n');
+    } },
+    patch: { help: 'patch <node> <field> <steps> — nudge a patcher config field', run: (a) => {
+      if (a.length < 3) throw new Error('patch <node> <field> <steps>');
+      return api.patch(num(a[0], 0), a[1], num(a[2], 0));
+    } },
     clear: { help: 'clear the log', run: (a, x) => { x.clear(); return null; } },
   };
 }

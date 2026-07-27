@@ -83,7 +83,9 @@ export const SURFACE_KEYS = {
     title: 'PATCHER',
     keys: [
       ['click node', 'select'],
-      ['Backspace', 'node edits — not wired yet, this surface is read-only'],
+      ['left/right', 'choose a config field on the selected node'],
+      ['up/down', 'change it'],
+      ['Backspace', 'adding and connecting nodes — not wired yet'],
       ['', 'one global graph; the engine does not run per-device graphs yet'],
     ],
   },

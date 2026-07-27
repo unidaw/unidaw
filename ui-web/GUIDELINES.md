@@ -284,7 +284,7 @@ engine differently; they differ only in what they project onto the screen.
 | piano roll | time on X, pitch on Y | notes |
 | mixer | one strip per track | peaks, gain, pan, mute/solo |
 | browser rail | projects on disk | nothing; the sidecar lists them |
-| patcher | the node graph, laid out | patcher nodes and edges |
+| patcher | the node graph, laid out | patcher nodes, edges and per-node config |
 | agent dock | the command stream | nothing |
 
 Two rules that came out of building them:
@@ -299,6 +299,13 @@ Two rules that came out of building them:
 - **Anything unimplemented refuses out loud.** Clip edits, chord tokens and the
   effect column all name what is missing rather than doing nothing. A control
   that silently ignores you is indistinguishable from one that worked.
+- **A read-back the UI does not fully write is a config the engine will zero.**
+  The engine rebuilds a patcher node's whole config from the payload it receives,
+  so the eight published values all go back, edited field aside. `duration_ticks`
+  was not in the first field table and would have been silently zeroed by every
+  edit; it is named now. The general rule: when a write replaces a record rather
+  than patching a field, the UI has to carry every field of that record, whether
+  or not it offers a control for it.
 
 The agent-facing contract is the dock's command grammar, not the keymap: every
 command routes through the same functions the keys do, so the two cannot drift.

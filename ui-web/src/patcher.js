@@ -46,7 +46,10 @@ export class Patcher {
       id.appendChild(document.createTextNode(''));
       const cfg = div('pt-cfg', el);
       cfg.appendChild(document.createTextNode(''));
+      const field = div('pt-field', el);
+      field.appendChild(document.createTextNode(''));
       el._type = type.firstChild; el._id = id.firstChild; el._cfg = cfg.firstChild;
+      el._field = field.firstChild; el._fieldV = null;
       el._typeV = null; el._idV = null; el._cfgV = null; el._x = -1; el._y = -1; el._sel = null;
       this.nodePool.push(el);
     }
@@ -78,6 +81,10 @@ export class Patcher {
       if (el._idV !== n.id) { el._idV = n.id; el._id.nodeValue = '#' + n.id; el.dataset.id = String(n.id); }
       if (el._cfgV !== n.config) { el._cfgV = n.config; el._cfg.nodeValue = n.config; }
       if (el._sel !== n.selected) { el._sel = n.selected; el.classList.toggle('sel', n.selected); }
+      if (el._fieldV !== n.fieldName) {
+        el._fieldV = n.fieldName;
+        el._field.nodeValue = n.fieldName ? '\u25B8 ' + n.fieldName : '';
+      }
     }
     for (let i = vm.nodeCount; i < this.nodePool.length; i++) {
       const el = this.nodePool[i];
@@ -114,6 +121,7 @@ export class Patcher {
     return {
       nodes: vm.nodeCount, edges: vm.edgeCount, version: vm.version, device: vm.device,
       types: vm.nodes.slice(0, vm.nodeCount).map((n) => n.typeName),
+      field: (vm.nodes.slice(0, vm.nodeCount).find((n) => n.selected) || {}).fieldName || '',
       configs: vm.nodes.slice(0, vm.nodeCount).map((n) => n.config).filter(Boolean),
       domNodes: this.nodePool.length + this.edgePool.length,
     };
