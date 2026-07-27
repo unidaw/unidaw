@@ -110,6 +110,10 @@ export default {
         "6": "rgba(255,160,200,0.04)",
         "7": "rgba(180,255,120,0.04)"
       }
+    },
+    "harmony": {
+      "fieldStrong": "rgba(145,132,217,0.20)",
+      "fieldSoft": "rgba(145,132,217,0.05)"
     }
   }
 };

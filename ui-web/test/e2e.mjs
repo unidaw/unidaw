@@ -319,26 +319,47 @@ await page.evaluate(() => window.__uni.run('goto 0 0'));
 await frames();
 const timeline = await page.evaluate(() => window.__uni.harmony());
 ok(timeline.length > 1, 'the project has a harmony timeline to show', `${timeline.length} events`);
-const harmCells = await page.evaluate(() => [...document.querySelectorAll('.tk-harm')]
-  .map((e) => ({ text: e.textContent.trim(), starts: e.classList.contains('starts'),
-                 active: e.classList.contains('active') })));
-const labelled = harmCells.filter((c) => c.text);
-ok(labelled.length > 1, 'the harmony column names each change', JSON.stringify(labelled.slice(0, 3)));
-// The point of the column: it shows CHANGES, so a label appears only where one
-// lands. Repeating the key on every row would be noise, and would also mean the
-// column was showing state rather than structure.
-ok(labelled.every((c) => c.starts), 'a label appears only on the row a change lands on');
-ok(harmCells.filter((c) => c.active).length > labelled.length,
-   'and the field it opens tints the rows it covers',
-   `${harmCells.filter((c) => c.active).length} tinted vs ${labelled.length} labelled`);
+const blocks = await page.evaluate(() => [...document.querySelectorAll('.tk-hb')]
+  .filter((e) => e.style.display !== 'none')
+  .map((e) => ({ key: e.querySelector('.tk-hb-key').textContent,
+                 foot: e.querySelector('.tk-hb-foot').textContent,
+                 h: Math.round(e.getBoundingClientRect().height) })));
+ok(blocks.length > 1, 'the harmony lane draws a block per field', JSON.stringify(blocks.slice(0, 3)));
+// A field is a SPAN, so its block is taller than a row. The first version drew a
+// label on the change row and nothing else, which reads correctly from the top of
+// a song and says nothing once you are inside a field.
+ok(blocks.every((b) => b.h > 17), 'each block spans the rows its field covers',
+   blocks.map((b) => b.h).join(','));
+// The label is sticky: scroll into the MIDDLE of a field and it must still name
+// it. This is the whole reason the lane is not a per-row cell.
+await page.evaluate(() => window.__uni.scrollTo(6));
+await frames();
+const midField = await page.evaluate(() => {
+  const e = [...document.querySelectorAll('.tk-hb')].filter((x) => x.style.display !== 'none')[0];
+  if (!e) return null;
+  const lab = e.querySelector('.tk-hb-label').getBoundingClientRect();
+  // Against the HOST, not the lane: the lane is transformed by the scroll, so
+  // its own origin sits above the visible area and every offset measured from it
+  // looks wrong while being right.
+  const host = document.getElementById('tracker').getBoundingClientRect();
+  return { key: e.querySelector('.tk-hb-key').textContent,
+           fromTop: Math.round(lab.top - host.top),
+           insideView: lab.top - host.top >= 0 && lab.top - host.top < 40 };
+});
+ok(midField && midField.key && midField.insideView,
+   'and a field scrolled past keeps its name on screen', JSON.stringify(midField));
+await page.evaluate(() => window.__uni.scrollTo(0));
+await frames();
+const labelled = blocks;
 // The column and the chrome answer DIFFERENT questions and must not be asserted
 // equal: the chrome names the field AT THE PLAYHEAD, the column names every
 // change in view. They coincide only when the playhead is on the first visible
 // change, and it is not — `stop` rewinds to the LOOP start, which an earlier
 // section moved to bar 3. The real invariant is that the column is the timeline:
 // same events, same order, same names.
-const keys = await page.evaluate(() => [...document.querySelectorAll('.tk-harm.starts .tk-harm-key')]
-  .map((e) => e.textContent));
+const keys = await page.evaluate(() => [...document.querySelectorAll('.tk-hb')]
+  .filter((e) => e.style.display !== 'none')
+  .map((e) => e.querySelector('.tk-hb-key').textContent));
 ok(keys.length === timeline.length,
    'the column shows every change in the timeline and no others',
    `${keys.length} labels vs ${timeline.length} events`);
@@ -348,7 +369,7 @@ ok(keys[0] === await page.evaluate(() => window.__uni.harmonyName(0)),
 // no tuning for a note — backend has a cents model but it does not reach the
 // clip read-back yet.
 const tuning = await page.evaluate(() =>
-  (document.querySelector('.tk-harm.starts .tk-harm-sub') || {}).textContent || '');
+  (document.querySelector('.tk-hb .tk-hb-sub') || {}).textContent || '');
 ok(tuning === '12-TET', 'and states the tuning it is assuming', tuning);
 
 section('patcher editing');

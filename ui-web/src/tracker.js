@@ -42,7 +42,13 @@ export class Tracker {
     host.className = 'tk-host';
     this.rails = el('div', 'tk-rails');   // clip rails: OUTSIDE the recycled band
     this.band = el('div', 'tk-band');     // the recycled row pool
-    host.append(this.rails, this.band);
+    // The harmony lane. Outside the band because a field SPANS rows, and outside
+    // the horizontal scroll because the design keeps it fixed beside the time
+    // gutter — it answers "where am I in the music", which does not scroll away
+    // when you look at track 12.
+    this.harmLane = el('div', 'tk-harm-lane');
+    this.harmPool = [];
+    host.append(this.rails, this.harmLane, this.band);
   }
 
   /** Size the pool to the viewport. Called on mount and resize only. */
@@ -92,15 +98,9 @@ export class Tracker {
     const g = el('div', 'tk-gutter');
     g.appendChild(document.createTextNode(''));
     row.append(g);
-    // The harmony column, between time and tracks. Two text nodes owned up
-    // front, like every other cell here: the key and the tuning line.
-    const h = el('div', 'tk-harm');
-    const hl = el('span', 'tk-harm-key');
-    hl.appendChild(document.createTextNode(''));
-    const hs = el('span', 'tk-harm-sub');
-    hs.appendChild(document.createTextNode(''));
-    h.append(hl, hs);
-    row.append(h);
+    // The harmony column is a LANE, not a cell — see paintHarmony. The row still
+    // reserves its width so the tracks line up with the header.
+    row.append(el('div', 'tk-harm-spacer'));
     for (let t = 0; t < trackCount; t++) {
       const tr = el('div', 'tk-track');
       tr.style.setProperty('--tint', `var(--uni-track-tint-${t % 8})`);
@@ -146,17 +146,7 @@ export class Tracker {
     elm.classList.toggle('beat', row.beat && !row.bar);
     const gt = elm.firstChild.firstChild;
     if (gt.nodeValue !== row.label) gt.nodeValue = row.label;
-    // The harmony cell. `starts` drives a class rather than the text alone: a
-    // change is a rule on the page, and the row it lands on needs the emphasis
-    // whether or not the label happens to be wide.
-    const hcell = elm.children[1];
-    const h = row.harmony;
-    const hk = hcell.firstChild.firstChild;
-    const hsv = hcell.lastChild.firstChild;
-    if (hk.nodeValue !== h.label) hk.nodeValue = h.label;
-    if (hsv.nodeValue !== h.sub) hsv.nodeValue = h.sub;
-    if (hcell._st !== h.starts) { hcell._st = h.starts; hcell.classList.toggle('starts', h.starts); }
-    if (hcell._ac !== h.active) { hcell._ac = h.active; hcell.classList.toggle('active', h.active); }
+
     let i = 0;
     for (const tr of elm.children) {
       if (!tr.classList.contains('tk-track')) continue;
@@ -252,8 +242,66 @@ export class Tracker {
       this.band.style.transform = xf;
       this.rails.style.transform = xf;
     }
+    // The lane moves vertically with the rows and never horizontally.
+    if (this._hy !== sy) {
+      this._hy = sy;
+      this.harmLane.style.transform = 'translateY(' + sy + 'px)';
+    }
+    this.paintHarmony(vm, first);
     this.paintClips(vm);
     this.paintState(vm, prev);
+  }
+
+  /**
+   * Harmony fields, as blocks that span their extent.
+   *
+   * The label is STICKY: a field scrolled partway off the top keeps its name on
+   * the first visible row, because the question it answers — what key is this —
+   * does not stop mattering once you have scrolled past the change. The footer
+   * does the same at the bottom. `first` is the band's top row, which is what
+   * the lane's transform is against, so the clamp is in the same space as the
+   * geometry rather than in viewport pixels that would need a second reading of
+   * the layout.
+   */
+  paintHarmony(vm, first) {
+    const perRow = vm.zoom.rowNanoticks;
+    const rh = this.m.rowHeight;
+    const viewTop = first * rh;
+    const viewBottom = viewTop + this.poolSize * rh;
+    for (let i = 0; i < vm.harmony.length; i++) {
+      const b = vm.harmony[i];
+      let e = this.harmPool[i];
+      if (!e) {
+        e = el('div', 'tk-hb');
+        const lab = el('div', 'tk-hb-label');
+        const k = el('span', 'tk-hb-key'); k.appendChild(document.createTextNode(''));
+        const s = el('span', 'tk-hb-sub'); s.appendChild(document.createTextNode(''));
+        lab.append(k, s);
+        const foot = el('div', 'tk-hb-foot'); foot.appendChild(document.createTextNode(''));
+        e.append(lab, foot);
+        e._k = k.firstChild; e._s = s.firstChild; e._f = foot.firstChild;
+        e._lab = lab; e._foot = foot;
+        this.harmLane.append(e);
+        this.harmPool[i] = e;
+      }
+      if (e.style.display === 'none') e.style.display = '';
+      const top = (b.startTick / perRow) * rh;
+      const height = Math.max(rh, ((b.endTick - b.startTick) / perRow) * rh);
+      if (e._t !== top) { e._t = top; e.style.top = top + 'px'; }
+      if (e._h !== height) { e._h = height; e.style.height = height + 'px'; }
+      if (e._kv !== b.label) { e._kv = b.label; e._k.nodeValue = b.label; }
+      if (e._sv !== b.sub) { e._sv = b.sub; e._s.nodeValue = b.sub; }
+      if (e._fv !== b.foot) { e._fv = b.foot; e._f.nodeValue = b.foot; }
+      // Offsets that keep both ends of the block inside the viewport.
+      const lo = Math.max(0, viewTop - top);
+      const fo = Math.max(0, (top + height) - viewBottom);
+      if (e._lo !== lo) { e._lo = lo; e._lab.style.transform = 'translateY(' + lo + 'px)'; }
+      if (e._fo !== fo) { e._fo = fo; e._foot.style.transform = 'translateY(' + (-fo) + 'px)'; }
+    }
+    for (let i = vm.harmony.length; i < this.harmPool.length; i++) {
+      const e = this.harmPool[i];
+      if (e.style.display !== 'none') e.style.display = 'none';
+    }
   }
 
   /**

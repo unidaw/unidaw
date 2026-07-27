@@ -121,14 +121,11 @@ export function createBuffer(rowCount, trackCount, columns) {
         cells[k++] = { track: t, col: c, text: '', kind: 'empty',
                        // Aggregate for this cell at coarse zoom. count 0 = none.
                        aggCount: 0, aggLo: 0, aggHi: 0 };
-    rows[i] = { index: 0, label: '', beat: false, bar: false, cells,
-                // Preallocated like everything else in this buffer: the draw
-                // path must not create an object per row per frame.
-                harmony: { label: '', sub: '', starts: false, active: false } };
+    rows[i] = { index: 0, label: '', beat: false, bar: false, cells };
   }
   return {
     window: { startRow: 0, rowCount },
-    zoom: ZOOM_LEVELS[0], tracks: [], rows, clips: [],
+    zoom: ZOOM_LEVELS[0], tracks: [], rows, clips: [], harmony: [], _harmonyPool: [],
     cursor: { row: 0, track: 0, col: 0 }, playhead: { row: 0 }, selection: null,
     _shape: `${rowCount}x${trackCount}x${columns}`,
     _clipPool: [],
@@ -182,14 +179,46 @@ export function buildViewModel(opts, buf) {
     }));
   }
 
-  // Which harmony event is in force at the first row, so the scan below only
-  // ever moves forward. The timeline is short (a key change is a musical event,
-  // not a per-note one) but the draw path runs every frame, and a rescan from
-  // zero per row is the shape that is fine until somebody writes a real song.
-  let hi = -1;
+  /**
+   * Harmony as SPANNING BLOCKS, not per-row cells.
+   *
+   * A field is a span, and the first version of this drew it as a label on the
+   * row the change lands on. That reads correctly from the top of a song and
+   * says NOTHING once you scroll into the middle of a field — which is most of
+   * the time you are actually working. The block carries its own extent, and the
+   * renderer keeps the label pinned to the visible top of it, so "what key am I
+   * in" is answerable from anywhere in the span.
+   *
+   * Blocks live outside the recycled row band for the same reason clip rails do.
+   */
+  const blocks = buf.harmony;
+  blocks.length = 0;
   if (harmony && harmony.length) {
-    const first = tickOf(startRow);
-    for (let i = 0; i < harmony.length; i++) { if (harmony[i].tick <= first) hi = i; else break; }
+    const winStart = tickOf(startRow);
+    const winEnd = tickOf(startRow + rowCount);
+    const hpool = buf._harmonyPool;
+    let bn = 0;
+    for (let i = 0; i < harmony.length; i++) {
+      const ev = harmony[i];
+      const from = ev.tick;
+      // The last field runs to the end of time, not to the end of the timeline.
+      const to = i + 1 < harmony.length ? harmony[i + 1].tick : Number.MAX_SAFE_INTEGER;
+      if (to <= winStart || from >= winEnd) continue;
+      const b = hpool[bn] || (hpool[bn] = { key: '', label: '', sub: '', foot: '',
+                                            startTick: 0, endTick: 0 });
+      bn++;
+      const named = nameHarmony ? nameHarmony(ev) : { label: '', sub: '' };
+      b.key = ev.tick + ':' + ev.root + ':' + ev.scaleId;
+      b.label = named.label;
+      b.sub = named.sub;
+      // The design pins a root/quant line to the bottom of the span. Root is
+      // the pitch class the engine published; quant is not published, so it is
+      // not claimed.
+      b.foot = 'root ' + ev.root;
+      b.startTick = from;
+      b.endTick = Math.min(to, winEnd + zoom.rowNanoticks);
+      blocks.push(b);
+    }
   }
 
   const rows = buf.rows;
@@ -199,31 +228,7 @@ export function buildViewModel(opts, buf) {
     let ci = 0;
     const tick = tickOf(r);
 
-    // The harmony cell. `starts` is true only on the row a change lands on, so
-    // the column reads as a list of changes rather than the same words repeated
-    // down the page — which is what the design shows and what a musician needs:
-    // the eye wants the CHANGE, not the state.
-    const hrow = rows[ri].harmony;
-    if (harmony && harmony.length) {
-      while (hi + 1 < harmony.length && harmony[hi + 1].tick <= tick) hi++;
-      const cur = hi >= 0 ? harmony[hi] : null;
-      // A change "lands on" this row when its tick falls inside the row's span.
-      // Comparing tick equality would miss every change that is not exactly on a
-      // row boundary, which at a coarse zoom is most of them.
-      const starts = !!cur && cur.tick >= tick && cur.tick < tick + zoom.rowNanoticks;
-      hrow.starts = starts;
-      hrow.active = !!cur;
-      if (cur && nameHarmony) {
-        const named = nameHarmony(cur);
-        hrow.label = starts ? named.label : '';
-        hrow.sub = starts ? named.sub : '';
-      } else {
-        hrow.label = '';
-        hrow.sub = '';
-      }
-    } else {
-      hrow.starts = false; hrow.active = false; hrow.label = ''; hrow.sub = '';
-    }
+
     for (let t = 0; t < trackCount; t++) {
       const inClip = engine ? true : clipIndexAt(tick, t) >= 0;
       for (let c = 0; c < columns; c++) {

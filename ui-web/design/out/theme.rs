@@ -82,4 +82,6 @@ pub mod theme {
     pub const UNI_TRACK_TINT_5: u32 = 0x0a78dcff;
     pub const UNI_TRACK_TINT_6: u32 = 0x0affa0c8;
     pub const UNI_TRACK_TINT_7: u32 = 0x0ab4ff78;
+    pub const UNI_HARMONY_FIELD_STRONG: u32 = 0x339184d9;
+    pub const UNI_HARMONY_FIELD_SOFT: u32 = 0x0d9184d9;
 }

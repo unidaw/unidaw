@@ -80,4 +80,6 @@
   --uni-track-tint-5: rgba(120,220,255,0.04);
   --uni-track-tint-6: rgba(255,160,200,0.04);
   --uni-track-tint-7: rgba(180,255,120,0.04);
+  --uni-harmony-field-strong: rgba(145,132,217,0.20);
+  --uni-harmony-field-soft: rgba(145,132,217,0.05);
 }
