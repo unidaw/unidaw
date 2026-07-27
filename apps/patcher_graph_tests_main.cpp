@@ -151,8 +151,10 @@ void testAssemblePatcherPool() {
   using namespace daw;
 
   // Two patcher devices, each with its own graph, merge into one pool with
-  // globally unique ids and one output node reported per device.
+  // globally unique ids and one output node reported per device. Device A names
+  // its output explicitly (patcherNodeId = the EventOut, id 1).
   Device a = makePatcherDevice(10, DeviceKind::PatcherEvent, euclidToEventOut());
+  a.patcherNodeId = 1;
   PatcherGraph single;  // one passthrough, no edges -> it is the sink/output
   PatcherNode pass;
   pass.id = 0;
@@ -191,6 +193,15 @@ void testAssemblePatcherPool() {
   assert(!none.anyPerDevice);
   assert(none.pool.nodes.empty());
   assert(none.deviceOutputs.empty());
+
+  // When a device names no valid output node (patcherNodeId not in its graph),
+  // assembly falls back to the graph's natural output (here the EventOut, id 1).
+  Device c = makePatcherDevice(60, DeviceKind::PatcherEvent, euclidToEventOut());
+  c.patcherNodeId = 999;  // not a node in its graph
+  AssembledPatcher fb = assemblePatcherPool({c});
+  assert(fb.deviceOutputs.size() == 1);
+  assert(fb.deviceOutputs[0].first == 60);
+  assert(fb.pool.nodes[fb.deviceOutputs[0].second].type == PatcherNodeType::EventOut);
 
   std::cout << "assemble_patcher_pool: ok" << std::endl;
 }

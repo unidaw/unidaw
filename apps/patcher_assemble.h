@@ -72,8 +72,19 @@ inline AssembledPatcher assemblePatcherPool(const std::vector<Device>& devices) 
     if (device.bypass || device.patcher.nodes.empty()) {
       continue;
     }
+    // The device's output node: honor the node it already names (its
+    // patcherNodeId, if that id exists in its own graph), else the graph's
+    // natural output. Either way it is an OLD id, remapped below.
     uint32_t deviceOut = 0;
-    if (!patcherGraphOutputNode(device.patcher, deviceOut)) {
+    bool haveOut = false;
+    for (const auto& n : device.patcher.nodes) {
+      if (n.id == device.patcherNodeId) {
+        deviceOut = device.patcherNodeId;
+        haveOut = true;
+        break;
+      }
+    }
+    if (!haveOut && !patcherGraphOutputNode(device.patcher, deviceOut)) {
       continue;
     }
     // Remap this device's node ids to a fresh block above every prior device's,
