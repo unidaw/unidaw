@@ -24,6 +24,7 @@ export class Arrange {
     this.gutter = div('ar-gutter', host);
     this.band = div('ar-band', host);
     this.ruler = div('ar-ruler', this.band);
+    this.loop = div('ar-loop', this.ruler);
     this.lanesEl = div('ar-lanes', this.band);
     this.gridEl = div('ar-grid', this.band);
     this.clipsEl = div('ar-clips', this.band);
@@ -166,6 +167,18 @@ export class Arrange {
       if (el._pid !== pk) { el._pid = pk; el.dataset.placement = pk; }
     }
 
+    const lp = vm.loop;
+    const lk = lp.on ? lp.x + ':' + lp.w : '';
+    if (this._loop !== lk) {
+      this._loop = lk;
+      if (!lp.on) this.loop.style.display = 'none';
+      else {
+        if (this.loop.style.display === 'none') this.loop.style.display = '';
+        this.loop.style.transform = `translateX(${lp.x}px)`;
+        this.loop.style.width = `${lp.w}px`;
+      }
+    }
+
     const px = vm.playheadX;
     if (this._px !== px) {
       this._px = px;
@@ -209,6 +222,7 @@ export class Arrange {
       startTick: vm.view.startTick,
       ticksPerPixel: vm.view.ticksPerPixel, width: vm.view.width,
       gridLines: vm.gridCount,
+      loop: vm.loop.on ? { x: Math.round(vm.loop.x), w: Math.round(vm.loop.w) } : null,
       rulerTicks: vm.rulerCount,
       firstBar: vm.rulerCount ? vm.rulerBar[0] : -1,
       playheadX: Math.round(vm.playheadX),

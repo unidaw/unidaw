@@ -42,6 +42,17 @@
   border-bottom: 1px solid var(--uni-rule-gutter);
   overflow: hidden; z-index: 2; pointer-events: none;
 }
+/* The loop, in the ruler where a loop belongs — over the bar numbers it spans,
+   not over the material. */
+.ar-loop {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  background: var(--uni-surface-selection);
+  border-left: 2px solid var(--base-accent);
+  border-right: 2px solid var(--base-accent);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
 .ar-tick {
   position: absolute; top: 0; left: 0; height: 100%;
   padding-left: 4px; box-sizing: border-box;

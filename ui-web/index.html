@@ -385,6 +385,8 @@ const TOTAL_ROWS = 100000;
 let engine = null;
 let conn = null;
 let lastViewportKey = -1;
+// The load sequence we have already reacted to. Bumps once per attempt.
+let lastLoadSeq = -1;
 const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', selection: null,
   // Entry state, shown in the chrome so you can see what you are typing into.
   octave: 4, editStep: 1, velocity: 100, zoom: 3, digitCell: -1, digitAcc: 0,
@@ -1456,6 +1458,14 @@ conn = connectEngine({
     // Mixer edits reconcile on the engine's mixer version, the same way note
     // edits reconcile on the clip version.
     reconcileMixer(mixerState, store);
+    // A load result. The engine used to accept a malformed project, change
+    // nothing, and ack ok — indistinguishable from a load that worked and
+    // produced identical content. It reports now, so we can too.
+    if (store.loadSeq !== lastLoadSeq) {
+      lastLoadSeq = store.loadSeq;
+      if (!store.loadOk) state.reject = 'the engine refused that project';
+      else state.reject = null;
+    }
     scope.push(store.peaks, store.peakCount);
     state.playhead = tickToRow(store.playheadTick);
     followPlayhead();
@@ -1632,6 +1642,8 @@ window.__uni = {
     return state.view;
   },
   arrangeProbe: () => arrange.probe(),
+  loop: () => (engine ? { start: engine.loopStart, end: engine.loopEnd } : null),
+  loadStatus: () => (engine ? { seq: engine.loadSeq, ok: engine.loadOk } : null),
   mixerProbe: () => mixer.probe(),
   scopeProbe: () => scope.probe(),
   peaks: () => (engine ? Array.from(engine.peaks.slice(0, Math.max(engine.peakCount, 8))) : null),

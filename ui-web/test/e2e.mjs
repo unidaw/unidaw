@@ -296,6 +296,28 @@ ok(projects.includes(PROJECT), 'the sidecar lists projects from disk', JSON.stri
 // view following" failed while working perfectly by hand.
 await page.evaluate(() => window.__uni.browser(false));
 
+section('loop and load status');
+const loop = await page.evaluate(() => window.__uni.loop());
+ok(loop && loop.end > loop.start, 'the engine publishes a loop region',
+   `${loop && loop.start} .. ${loop && loop.end}`);
+await page.evaluate(() => window.__uni.view('arrange'));
+await frames();
+const drawn = (await page.evaluate(() => window.__uni.arrangeProbe())).loop;
+ok(drawn && drawn.w > 0, 'and arrange draws it', JSON.stringify(drawn));
+const ls0 = await page.evaluate(() => window.__uni.loadStatus());
+ok(ls0 && ls0.ok === 1, 'a good load reports ok', JSON.stringify(ls0));
+// A load the engine refuses must be distinguishable from one that worked and
+// happened to produce identical content — it used to ack {"ok":true} either way.
+await page.evaluate(() => window.__uni.loadProject('definitely-not-a-project'));
+await page.waitForTimeout(2000);
+const ls1 = await page.evaluate(() => window.__uni.loadStatus());
+ok(ls1.seq > ls0.seq && ls1.ok === 0, 'a refused load reports a failure',
+   JSON.stringify(ls1));
+const said = await page.evaluate(() => document.querySelector('.ch-reject')?.textContent);
+ok(/refused/.test(said || ''), 'and the UI says so', JSON.stringify(said));
+await page.evaluate((p) => window.__uni.loadProject(p), PROJECT);
+await page.waitForTimeout(2200);
+
 section('follow the playhead');
 // At the finest zooms the window is a few beats wide, so a view that does not
 // follow loses the playhead within a second — which is exactly what it did.

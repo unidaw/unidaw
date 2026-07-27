@@ -58,6 +58,8 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
     view: { startTick: 0, ticksPerPixel: 60000, width: 0 },
     /** Bar lines to draw, as x positions. Pooled like everything else. */
     grid: new Float64Array(256), gridCount: 0, gridIsBar: new Uint8Array(256),
+    /** The loop region in pixels, or null when there is none. */
+    loop: { x: 0, w: 0, on: false },
     /** Numbered bar ticks for the ruler: x plus the bar number to print. */
     ruler: new Float64Array(128), rulerBar: new Int32Array(128), rulerCount: 0,
     playheadX: -1,
@@ -180,6 +182,18 @@ export function buildArrangeModel(opts, buf) {
     }
   }
   buf.clipCount = c;
+
+  // The loop, if the engine has one. Clamped to the window rather than skipped
+  // when it runs off the edge: a loop you are inside should still show its edge.
+  const ls = engine ? engine.loopStart : 0;
+  const le = engine ? engine.loopEnd : 0;
+  buf.loop.on = le > ls && le > startTick && ls < endTick;
+  if (buf.loop.on) {
+    const x0 = Math.max(0, (ls - startTick) / tpp);
+    const x1 = Math.min(width, (le - startTick) / tpp);
+    buf.loop.x = x0;
+    buf.loop.w = Math.max(1, x1 - x0);
+  }
 
   buf.playheadX = engine && engine.playheadTick >= startTick && engine.playheadTick < endTick
     ? (engine.playheadTick - startTick) / tpp

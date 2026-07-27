@@ -34,7 +34,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 10;
+const WIRE_VERSION: u16 = 11;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -48,7 +48,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 92;
+const FULL_HEADER_BYTES: usize = 116;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
 const NOTE_BYTES: usize = 40;
 
@@ -241,6 +241,14 @@ struct Frame {
     /// other surface moving a fader.
     mixer: Vec<(i32, i32, u8)>,
     mixer_version: u32,
+    /// The loop region (v15). You could always SET one and never draw it.
+    loop_start: u64,
+    loop_end: u64,
+    /// A load result (v15): the sequence bumps once per LoadProject attempt and
+    /// `ok` says whether it took. Before this a malformed project was accepted
+    /// with {"ok":true} and silently changed nothing.
+    load_seq: u32,
+    load_ok: u32,
     /// The harmony timeline: (nanotick, root, scale_id) per key change. The
     /// chrome showed a hardcoded "C major" before this, which was wrong for
     /// three quarters of the maximal project.
@@ -309,7 +317,11 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&f.patcher_device.to_le_bytes());          // 82
     out.extend_from_slice(&(f.patcher_nodes.len() as u16).to_le_bytes());  // 86
     out.extend_from_slice(&(f.patcher_edges.len() as u16).to_le_bytes());  // 88
-    out.extend_from_slice(&0u16.to_le_bytes());                      // 90, pad to 92
+    out.extend_from_slice(&0u16.to_le_bytes());                      // 90, pad
+    out.extend_from_slice(&f.loop_start.to_le_bytes());              // 92
+    out.extend_from_slice(&f.loop_end.to_le_bytes());                // 100
+    out.extend_from_slice(&f.load_seq.to_le_bytes());                // 108
+    out.extend_from_slice(&f.load_ok.to_le_bytes());                 // 112, to 116
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
     // variable section and nothing here noticed.
@@ -439,6 +451,13 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     // compares. That is cheap here; the browser is the allocation-sensitive side,
     // not this one.
     out.names = h.read_track_names();
+
+    let (ls, le) = h.loop_range();
+    out.loop_start = ls;
+    out.loop_end = le;
+    let (lseq, lok) = h.load_status();
+    out.load_seq = lseq;
+    out.load_ok = lok;
 
     // Keyed on the engine's own harmony version, which moves only on a change.
     if !out.harmony_ever_read || f_harmony_stale(out) {

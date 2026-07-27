@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 10;
+export const WIRE_VERSION = 11;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 92;   // ...+ mixer 8 + names/patcher counts 16
+const HEADER_BYTES = 116;  // ...+ mixer 8 + counts 16 + loop 16 + load 8
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -69,6 +69,10 @@ export function createStore() {
     names: [],
     /** The harmony timeline: {tick, root, scaleId} per key change. */
     harmony: [],
+    /** The loop region (SHM v15). Settable before this, never drawable. */
+    loopStart: 0, loopEnd: 0,
+    /** A load result: seq bumps per attempt, ok says whether it took. */
+    loadSeq: 0, loadOk: 1,
     /** The patcher graph (SHM v14). One global graph today; the shape does not
      *  change when it becomes per-device. */
     patcherVersion: -1, patcherDevice: 0, patcherNodes: [], patcherEdges: [],
@@ -142,6 +146,10 @@ export function decode(buf, store) {
   const patcherDevice = v.getUint32(82, true);
   const nodeCount = v.getUint16(86, true);
   const edgeCount = v.getUint16(88, true);
+  store.loopStart = Number(v.getBigUint64(92, true));
+  store.loopEnd = Number(v.getBigUint64(100, true));
+  store.loadSeq = v.getUint32(108, true);
+  store.loadOk = v.getUint32(112, true);
   const aggN = aggRows * aggTracks;
   const varBefore = harmonyCount * HARMONY_BYTES + nameCount * NAME_BYTES + nodeCount * PATCHER_NODE_BYTES
                   + edgeCount * PATCHER_EDGE_BYTES + mixCount * MIXER_BYTES;
