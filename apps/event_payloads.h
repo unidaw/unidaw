@@ -415,6 +415,16 @@ struct UiPatcherGraphCommandPayload {
 static_assert(sizeof(UiPatcherGraphCommandPayload) == 40,
               "UiPatcherGraphCommandPayload must fit EventEntry payload");
 
+// Set one patcher node's config. `configType` is the PatcherNodeType of the node
+// (Euclidean=1, Lfo=4, RandomDegree=5). `config` is an explicit little-endian
+// layout per type (NOT a raw struct) whose values match the published read-back
+// (UiPatcherNode.config in shared_memory.h):
+//   Euclidean:    [steps u16 @0][hits u16 @2][offset u16 @4][degree u8 @6]
+//                 [octaveOffset i8 @7][velocity u8 @8][baseOctave u8 @9]
+//                 [pad u16 @10][durationTicks u32 @12]
+//   RandomDegree: [degree u8 @0][velocity u8 @1][pad u16 @2][durationTicks u32 @4]
+//   Lfo:          [freqMilliHz i32 @0][depthMilli i32 @4][biasMilli i32 @8]
+//                 [phaseMilli i32 @12]   (milli-units; engine stores float Hz)
 struct UiPatcherNodeConfigPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
   uint16_t flags = 0;

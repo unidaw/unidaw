@@ -4208,30 +4208,55 @@ struct TrackRuntime {
       constexpr uint16_t kGraphErrInvalidType = 1;
       constexpr uint16_t kGraphErrInvalidNode = 2;
       bool updated = false;
+      // config[16] is an explicit little-endian layout per configType (NOT a raw
+      // struct memcpy — that truncated Euclidean's 26-byte struct and coupled the
+      // wire to C++ padding). See UiPatcherNodeConfigPayload for the documented
+      // layouts; the values match the published read-back (UiPatcherNode.config).
+      const uint8_t* cfg = configPayload.config;
+      auto rdU16 = [&](int i) -> uint32_t {
+        return static_cast<uint32_t>(cfg[i]) | (static_cast<uint32_t>(cfg[i + 1]) << 8);
+      };
+      auto rdU32 = [&](int i) -> uint32_t {
+        return static_cast<uint32_t>(cfg[i]) |
+               (static_cast<uint32_t>(cfg[i + 1]) << 8) |
+               (static_cast<uint32_t>(cfg[i + 2]) << 16) |
+               (static_cast<uint32_t>(cfg[i + 3]) << 24);
+      };
       if (configPayload.configType ==
           static_cast<uint32_t>(daw::PatcherNodeType::Euclidean)) {
+        // [steps u16][hits u16][offset u16][degree u8][octaveOffset i8]
+        // [velocity u8][baseOctave u8][pad u16][durationTicks u32]
         daw::PatcherEuclideanConfig config{};
-        const size_t copySize =
-            std::min(sizeof(config), sizeof(configPayload.config));
-        std::memcpy(&config, configPayload.config, copySize);
+        config.steps = rdU16(0);
+        config.hits = rdU16(2);
+        config.offset = rdU16(4);
+        config.degree = cfg[6];
+        config.octave_offset = static_cast<int8_t>(cfg[7]);
+        config.velocity = cfg[8];
+        config.base_octave = cfg[9];
+        config.duration_ticks = rdU32(12);
         updated = setEuclideanConfig(patcherGraphState,
                                      configPayload.nodeId,
                                      config);
       } else if (configPayload.configType ==
                  static_cast<uint32_t>(daw::PatcherNodeType::RandomDegree)) {
+        // [degree u8][velocity u8][pad u16][durationTicks u32]
         daw::PatcherRandomDegreeConfig config{};
-        const size_t copySize =
-            std::min(sizeof(config), sizeof(configPayload.config));
-        std::memcpy(&config, configPayload.config, copySize);
+        config.degree = cfg[0];
+        config.velocity = cfg[1];
+        config.duration_ticks = rdU32(4);
         updated = setRandomDegreeConfig(patcherGraphState,
                                         configPayload.nodeId,
                                         config);
       } else if (configPayload.configType ==
                  static_cast<uint32_t>(daw::PatcherNodeType::Lfo)) {
+        // [freqMilliHz i32][depthMilli i32][biasMilli i32][phaseMilli i32]
+        // (milli-units mirror the read-back; the engine stores float Hz).
         daw::PatcherLfoConfig config{};
-        const size_t copySize =
-            std::min(sizeof(config), sizeof(configPayload.config));
-        std::memcpy(&config, configPayload.config, copySize);
+        config.frequency_hz = static_cast<int32_t>(rdU32(0)) / 1000.0f;
+        config.depth = static_cast<int32_t>(rdU32(4)) / 1000.0f;
+        config.bias = static_cast<int32_t>(rdU32(8)) / 1000.0f;
+        config.phase_offset = static_cast<int32_t>(rdU32(12)) / 1000.0f;
         updated = setLfoConfig(patcherGraphState,
                                configPayload.nodeId,
                                config);
