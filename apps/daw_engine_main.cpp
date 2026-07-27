@@ -330,7 +330,19 @@ public:
     const std::atomic<bool>* solo = nullptr;
     size_t shmSize = 0;
     uint32_t trackId = 0;
+    // Which published slot (uiTrackPeakRms[uiSlot]) this track's level goes to —
+    // the track's index in the UI track list, not its push position here.
+    uint32_t uiSlot = 0;
   };
+
+  // Per-slot output peak, written by the audio thread each block and read by the
+  // consumer to publish uiTrackPeakRms. Relaxed atomics: a meter that reads one
+  // block stale is invisible.
+  float trackPeak(uint32_t slot) const {
+    return slot < daw::kUiMaxTracks
+               ? m_trackPeak[slot].load(std::memory_order_relaxed)
+               : 0.0f;
+  }
 
   EngineAudioCallback(double sampleRate, uint32_t blockSize, uint32_t numBlocks,
                       std::atomic<uint32_t>* playbackBlockId)
@@ -397,6 +409,13 @@ public:
       return;
     }
 
+    // Meters read 0 unless a track mixes audio this block, so clear all slots up
+    // front and let the mix loop set the ones that play. A muted/inactive/absent
+    // track thus reads silence rather than a stale level.
+    for (uint32_t s = 0; s < daw::kUiMaxTracks; ++s) {
+      m_trackPeak[s].store(0.0f, std::memory_order_relaxed);
+    }
+
     bool hasActiveTrack = false;
     bool playedBlock = false;
 
@@ -455,7 +474,9 @@ public:
       // The host writes block N to slot N % numBlocks
       uint32_t blockToRead = nextBlockToPlay % m_numBlocks;
 
-      // Mix this track's audio into output
+      // Mix this track's audio into output, measuring its post-fader peak for
+      // the meter as we go (max abs of what we actually add to the bus).
+      float trackPeak = 0.0f;
       for (int ch = 0; ch < std::min(numOutputChannels, (int)track.header->numChannelsOut); ++ch) {
         // Extra safety checks
         if (!track.shmView || !track.shmBase || !track.header) {
@@ -503,8 +524,16 @@ public:
         // lie: levels were neither unity nor measurable. Tracks now sum at
         // their own gain, so clipping is visible rather than pre-attenuated.
         for (int i = 0; i < std::min(numSamples, (int)m_blockSize); ++i) {
-          output[i] += trackChannel[i] * channelGain;
+          const float sample = trackChannel[i] * channelGain;
+          output[i] += sample;
+          const float mag = sample < 0.0f ? -sample : sample;
+          if (mag > trackPeak) {
+            trackPeak = mag;
+          }
         }
+      }
+      if (track.uiSlot < daw::kUiMaxTracks) {
+        m_trackPeak[track.uiSlot].store(trackPeak, std::memory_order_relaxed);
       }
     }
 
@@ -642,6 +671,7 @@ private:
   std::atomic<std::vector<TrackInfo>*> m_tracksPtr{nullptr};
   std::atomic<std::vector<TrackInfo>*> m_tracksHazard{nullptr};
   std::vector<std::shared_ptr<std::vector<TrackInfo>>> m_tracksRetired;
+  std::atomic<float> m_trackPeak[daw::kUiMaxTracks]{};
 };
 
 struct ClipSnapshot {
@@ -1353,6 +1383,10 @@ struct TrackRuntime {
   std::atomic<bool> harmonyDirty{true};
   std::atomic<uint32_t> harmonyVersion{0};
   std::atomic<uint32_t> patcherGraphVersion{0};
+  // Published so the UI can tell a failed LoadProject from a silent no-op:
+  // projectLoadSeq bumps once per load attempt, projectLoadOk holds its result.
+  std::atomic<uint32_t> projectLoadSeq{0};
+  std::atomic<uint32_t> projectLoadOk{0};
   std::mutex undoMutex;
   std::vector<daw::UndoEntry> undoStack;
   std::vector<daw::UndoEntry> redoStack;
@@ -2842,7 +2876,12 @@ struct TrackRuntime {
       return false;
     }
 
-    harmonyEvents = document.harmonyTimeline;
+    {
+      // Lock like addHarmony/removeHarmony and the readers do: load replaces the
+      // whole vector, and the UI-publish and audio threads read it concurrently.
+      std::lock_guard<std::mutex> lock(harmonyMutex);
+      harmonyEvents = document.harmonyTimeline;
+    }
     // Retain the project's clip definitions so a save can re-emit the ones a
     // clean track still references, keeping the arrangement's structure across a
     // load->save round-trip (the runtime itself plays a flattened clip).
@@ -2851,6 +2890,11 @@ struct TrackRuntime {
       loadedClips = document.clips;
     }
     harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
+    // Arm the harmony publish gate. The snapshot write is gated by harmonyDirty
+    // (an interactive-edit signal); bumping only harmonyVersion moved the
+    // published version but left the region at its empty startup snapshot, so a
+    // loaded timeline read as 0 events.
+    harmonyDirty.store(true, std::memory_order_release);
     // A load replaces every clip; advance clipVersion so observers (and the
     // all-tracks published snapshot, which refreshes on this value) re-read.
     clipVersion.fetch_add(1, std::memory_order_acq_rel);
@@ -4164,30 +4208,55 @@ struct TrackRuntime {
       constexpr uint16_t kGraphErrInvalidType = 1;
       constexpr uint16_t kGraphErrInvalidNode = 2;
       bool updated = false;
+      // config[16] is an explicit little-endian layout per configType (NOT a raw
+      // struct memcpy — that truncated Euclidean's 26-byte struct and coupled the
+      // wire to C++ padding). See UiPatcherNodeConfigPayload for the documented
+      // layouts; the values match the published read-back (UiPatcherNode.config).
+      const uint8_t* cfg = configPayload.config;
+      auto rdU16 = [&](int i) -> uint32_t {
+        return static_cast<uint32_t>(cfg[i]) | (static_cast<uint32_t>(cfg[i + 1]) << 8);
+      };
+      auto rdU32 = [&](int i) -> uint32_t {
+        return static_cast<uint32_t>(cfg[i]) |
+               (static_cast<uint32_t>(cfg[i + 1]) << 8) |
+               (static_cast<uint32_t>(cfg[i + 2]) << 16) |
+               (static_cast<uint32_t>(cfg[i + 3]) << 24);
+      };
       if (configPayload.configType ==
           static_cast<uint32_t>(daw::PatcherNodeType::Euclidean)) {
+        // [steps u16][hits u16][offset u16][degree u8][octaveOffset i8]
+        // [velocity u8][baseOctave u8][pad u16][durationTicks u32]
         daw::PatcherEuclideanConfig config{};
-        const size_t copySize =
-            std::min(sizeof(config), sizeof(configPayload.config));
-        std::memcpy(&config, configPayload.config, copySize);
+        config.steps = rdU16(0);
+        config.hits = rdU16(2);
+        config.offset = rdU16(4);
+        config.degree = cfg[6];
+        config.octave_offset = static_cast<int8_t>(cfg[7]);
+        config.velocity = cfg[8];
+        config.base_octave = cfg[9];
+        config.duration_ticks = rdU32(12);
         updated = setEuclideanConfig(patcherGraphState,
                                      configPayload.nodeId,
                                      config);
       } else if (configPayload.configType ==
                  static_cast<uint32_t>(daw::PatcherNodeType::RandomDegree)) {
+        // [degree u8][velocity u8][pad u16][durationTicks u32]
         daw::PatcherRandomDegreeConfig config{};
-        const size_t copySize =
-            std::min(sizeof(config), sizeof(configPayload.config));
-        std::memcpy(&config, configPayload.config, copySize);
+        config.degree = cfg[0];
+        config.velocity = cfg[1];
+        config.duration_ticks = rdU32(4);
         updated = setRandomDegreeConfig(patcherGraphState,
                                         configPayload.nodeId,
                                         config);
       } else if (configPayload.configType ==
                  static_cast<uint32_t>(daw::PatcherNodeType::Lfo)) {
+        // [freqMilliHz i32][depthMilli i32][biasMilli i32][phaseMilli i32]
+        // (milli-units mirror the read-back; the engine stores float Hz).
         daw::PatcherLfoConfig config{};
-        const size_t copySize =
-            std::min(sizeof(config), sizeof(configPayload.config));
-        std::memcpy(&config, configPayload.config, copySize);
+        config.frequency_hz = static_cast<int32_t>(rdU32(0)) / 1000.0f;
+        config.depth = static_cast<int32_t>(rdU32(4)) / 1000.0f;
+        config.bias = static_cast<int32_t>(rdU32(8)) / 1000.0f;
+        config.phase_offset = static_cast<int32_t>(rdU32(12)) / 1000.0f;
         updated = setLfoConfig(patcherGraphState,
                                configPayload.nodeId,
                                config);
@@ -4272,6 +4341,11 @@ struct TrackRuntime {
             .field("error", ok ? std::string() : error);
       } else {
         const bool ok = loadProjectFromPath(path.string(), &error);
+        // Publish the result (ok first, then the seq the UI watches) so a failed
+        // load is distinguishable from a no-op rather than silently keeping the
+        // old project.
+        projectLoadOk.store(ok ? 1u : 0u, std::memory_order_release);
+        projectLoadSeq.fetch_add(1, std::memory_order_acq_rel);
         DAW_EVENT("project.load")
             .field("path", path.string())
             .field("ok", ok)
@@ -7452,6 +7526,7 @@ struct TrackRuntime {
                 info.solo = &runtime->mixSolo;
                 info.shmSize = shmView->size;
                 info.trackId = trackId;
+                info.uiSlot = trackId;  // == this track's published slot
                 trackInfoCache[trackId] = info;
                 updated = true;
               }
@@ -7508,9 +7583,24 @@ struct TrackRuntime {
                         trackSnapshot[i]->linesPerBeat.load(std::memory_order_relaxed),
                         255u))
                   : 0;
+          // Per-track output peak the audio thread measured this block (0 for
+          // absent/silent tracks). Slot i == track i, matching the mixer fields.
+          uiShm.header->uiTrackPeakRms[i] =
+              (audioCallback && i < trackSnapshot.size())
+                  ? audioCallback->trackPeak(i)
+                  : 0.0f;
         }
         uiShm.header->uiTransportState =
             playing.load(std::memory_order_acquire) ? 1 : 0;
+        // v15: loop range, so the UI can draw the SetLoopRange span. Inside the
+        // seqlock frame, so (start,end) is consistent with the playhead above.
+        uiShm.header->uiLoopStart =
+            loopStartNanotick.load(std::memory_order_acquire);
+        uiShm.header->uiLoopEnd =
+            loopEndNanotick.load(std::memory_order_acquire);
+        // v15: load-result signal (ok read before seq, matching the writer order).
+        uiShm.header->uiLoadOk = projectLoadOk.load(std::memory_order_acquire);
+        uiShm.header->uiLoadSeq = projectLoadSeq.load(std::memory_order_acquire);
         // Per-track mixer read-back. Gain linear -> millibels (2000*log10), pan
         // -> thousandths; flags reuse the SetTrackMixer mute/solo bits. Bump the
         // version only when something changed so the UI's cache key is stable.

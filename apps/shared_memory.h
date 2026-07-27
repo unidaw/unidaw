@@ -28,7 +28,10 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 14: published patcher graph (uiPatcherOffset -> UiPatcherRegion), so the UI can
 //     draw the patcher the engine runs. Offset fits the header's existing tail
 //     padding — sizeof(ShmHeader) is unchanged.
-constexpr uint16_t kShmVersion = 14;
+// 15: loop range read-back (uiLoopStart/uiLoopEnd) + load-result signal
+//     (uiLoadSeq/uiLoadOk). All ride the header's remaining tail padding, so
+//     sizeof(ShmHeader) is unchanged.
+constexpr uint16_t kShmVersion = 15;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -102,6 +105,16 @@ struct alignas(64) ShmHeader {
   // v14: byte offset of the published UiPatcherRegion (0 = none). Fits the
   // header's existing tail padding, so sizeof(ShmHeader) is unchanged.
   uint64_t uiPatcherOffset = 0;
+  // v15: loop region (nanoticks), mirrored from loopStartNanotick/End so the UI
+  // can draw the SetLoopRange span.
+  uint64_t uiLoopStart = 0;
+  uint64_t uiLoopEnd = 0;
+  // v15: load-result signal. uiLoadSeq increments once per LoadProject attempt
+  // (success or fail); uiLoadOk is 1 if the last attempt loaded, 0 if it was
+  // rejected. Lets the UI tell a failed load from a no-op instead of a silent
+  // "same content". Ride the header's tail padding; sizeof(ShmHeader) unchanged.
+  uint32_t uiLoadSeq = 0;
+  uint32_t uiLoadOk = 0;
 };
 
 struct alignas(64) RingHeader {
