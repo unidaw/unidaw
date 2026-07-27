@@ -1480,9 +1480,10 @@ struct TrackRuntime {
   std::unique_ptr<daw::IRuntime> audioRuntime;
   std::unique_ptr<EngineAudioCallback> audioCallback;
 
-  // Settable so a loaded project's tempo actually takes effect — a StaticTempoProvider
-  // here made the engine play every project at 120 regardless of its tempo_map.
-  daw::SettableTempoProvider tempoProvider(120.0);
+  // Map-aware so a loaded project's tempo — including changes mid-song — actually
+  // takes effect. A StaticTempoProvider here made the engine play every project at
+  // 120 regardless of its tempo_map.
+  daw::TempoMapProvider tempoProvider(120.0);
   daw::NanotickConverter tickConverter(
       tempoProvider, static_cast<uint32_t>(engineConfig.sampleRate));
   const uint64_t ticksPerBeat = daw::NanotickConverter::kNanoticksPerQuarter;
@@ -1612,6 +1613,12 @@ struct TrackRuntime {
   // survives a load->save round-trip. Guarded by loadedClipsMutex.
   std::mutex loadedClipsMutex;
   std::vector<daw::ProjectClip> loadedClips;
+
+  // Project tempo map retained from load so a save re-emits the FULL map (any tempo
+  // changes included), rather than collapsing it to the current single tempo. Only
+  // the load/save handlers touch it, and both run on the UI command thread, so it
+  // needs no lock.
+  std::vector<daw::ProjectTempoPoint> loadedTempoMap{{0, 120.0}};
 
   // Need to grab these freshly after connect/reconnect
   auto getRingStd = [&](TrackRuntime& runtime) {
@@ -3298,7 +3305,9 @@ struct TrackRuntime {
     }
     document.meta.name = stem;
     document.nanoticksPerQuarter = daw::NanotickConverter::kNanoticksPerQuarter;
-    document.tempoMap = {{0, tempoProvider.bpmAtNanotick(0)}};
+    // Re-emit the full retained tempo map so a load->save round-trip keeps tempo
+    // changes, not just the current tempo. (A never-loaded session defaults to 120.)
+    document.tempoMap = loadedTempoMap;
     document.harmonyTimeline = harmonyEvents;
 
     std::vector<TrackRuntime*> runtimes;
@@ -3531,12 +3540,18 @@ struct TrackRuntime {
       std::lock_guard<std::mutex> lock(harmonyMutex);
       harmonyEvents = document.harmonyTimeline;
     }
-    // Adopt the project's tempo. Without this the engine kept its startup 120 and
-    // ignored tempo_map entirely (a slower project then played too fast). We honour
-    // the initial point; per-position tempo automation is a later feature.
-    if (!document.tempoMap.empty()) {
-      tempoProvider.setBpm(document.tempoMap.front().bpm);
+    // Adopt the project's tempo map — including tempo changes mid-song. Without this
+    // the engine kept its startup 120 and ignored tempo_map entirely (a slower
+    // project then played too fast). Retain the full map so a save round-trips it.
+    loadedTempoMap = document.tempoMap.empty()
+                         ? std::vector<daw::ProjectTempoPoint>{{0, 120.0}}
+                         : document.tempoMap;
+    std::vector<daw::TempoPoint> tempoPoints;
+    tempoPoints.reserve(loadedTempoMap.size());
+    for (const auto& pt : loadedTempoMap) {
+      tempoPoints.push_back({pt.nanotick, pt.bpm});
     }
+    tempoProvider.setMap(std::move(tempoPoints));
     // Retain the project's clip definitions so a save can re-emit the ones a
     // clean track still references, keeping the arrangement's structure across a
     // load->save round-trip (the runtime itself plays a flattened clip).
@@ -5564,6 +5579,42 @@ struct TrackRuntime {
       std::cout << "UI: last client gone — engine shutting down" << std::endl;
       running.store(false, std::memory_order_release);
       restartCv.notify_all();
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetTempo)) {
+      // value0 = milli-BPM. flags: 1 = flatten the map to this single tempo (a
+      // transport-bar BPM edit); 0 = insert-or-replace a point at the nanotick in
+      // noteNanotickLo/Hi (a tempo-lane edit). Runs on the UI command thread, same as
+      // load/save, so loadedTempoMap is single-threaded here; setMap is mutex-guarded
+      // against the UI-publish reader. Save re-emits loadedTempoMap, so this persists.
+      const double bpm = static_cast<double>(payload.value0) / 1000.0;
+      if (bpm > 0.0) {
+        if (payload.flags == 1) {
+          loadedTempoMap = {{0, bpm}};
+        } else {
+          const uint64_t pos =
+              static_cast<uint64_t>(payload.noteNanotickLo) |
+              (static_cast<uint64_t>(payload.noteNanotickHi) << 32);
+          bool replaced = false;
+          for (auto& pt : loadedTempoMap) {
+            if (pt.nanotick == pos) {
+              pt.bpm = bpm;
+              replaced = true;
+              break;
+            }
+          }
+          if (!replaced) {
+            loadedTempoMap.push_back({pos, bpm});
+          }
+        }
+        std::vector<daw::TempoPoint> pts;
+        pts.reserve(loadedTempoMap.size());
+        for (const auto& pt : loadedTempoMap) {
+          pts.push_back({pt.nanotick, pt.bpm});
+        }
+        tempoProvider.setMap(std::move(pts));
+        std::cout << "UI: SetTempo " << bpm << " bpm (flags " << payload.flags
+                  << ")" << std::endl;
+      }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestDeviceParams)) {
       // Publish one device's parameters into UiDeviceParamsRegion so the rack can
@@ -8024,7 +8075,9 @@ struct TrackRuntime {
         transportEntry.type = static_cast<uint16_t>(daw::EventType::Transport);
         transportEntry.size = sizeof(daw::TransportPayload);
         daw::TransportPayload transportPayload;
-        transportPayload.tempoBpm = tempoProvider.bpmAtNanotick(0);
+        // Current-position tempo (not the initial one) so a tempo-synced plugin
+        // follows tempo_map changes, matching the ProcessBlockRequest play head.
+        transportPayload.tempoBpm = tempoProvider.bpmAtNanotick(blockStartTicks);
         transportPayload.timeSigNum = 4;  // TODO: time signature is not yet modelled
         transportPayload.timeSigDen = 4;
         transportPayload.playState = isPlaying ? 1 : 0;
@@ -8566,6 +8619,12 @@ struct TrackRuntime {
         uiShm.header->uiVersion.fetch_add(1, std::memory_order_release);
         uiShm.header->uiVisualSampleCount = uiSampleCount;
         uiShm.header->uiGlobalNanotickPlayhead = uiBlockStartTicks;
+        // Tempo AT the playhead (milli-BPM), plus how many points the map has, so the
+        // chrome shows the true current BPM instead of a hardcoded 120 and can tell a
+        // constant-tempo song from one that changes.
+        uiShm.header->uiTempoMilliBpm = static_cast<uint32_t>(std::lround(
+            tempoProvider.bpmAtNanotick(uiBlockStartTicks) * 1000.0));
+        uiShm.header->uiTempoPointCount = tempoProvider.pointCount();
         uiShm.header->uiTrackCount = static_cast<uint32_t>(
             std::min<size_t>(trackSnapshot.size(), maxUiTracks));
         for (uint32_t i = 0; i < daw::kUiMaxTracks; ++i) {

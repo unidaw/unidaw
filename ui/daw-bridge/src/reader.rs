@@ -9,6 +9,11 @@ pub struct UiSnapshot {
     pub ui_global_nanotick_playhead: u64,
     pub ui_track_count: u32,
     pub ui_transport_state: u32,
+    /// Tempo at the current playhead, milli-BPM (120000 = 120.000). Read in the same
+    /// seqlock frame as the playhead, so it is the tempo at THIS position.
+    pub ui_tempo_milli_bpm: u32,
+    /// Points in the project tempo map (1 = constant tempo).
+    pub ui_tempo_point_count: u32,
     pub ui_clip_version: u32,
     pub ui_clip_offset: u64,
     pub ui_clip_bytes: u64,
@@ -45,6 +50,8 @@ impl SeqlockReader {
             let ui_global_nanotick_playhead = unsafe { (*self.header).ui_global_nanotick_playhead };
             let ui_track_count = unsafe { (*self.header).ui_track_count };
             let ui_transport_state = unsafe { (*self.header).ui_transport_state };
+            let ui_tempo_milli_bpm = unsafe { (*self.header).ui_tempo_milli_bpm };
+            let ui_tempo_point_count = unsafe { (*self.header).ui_tempo_point_count };
             let ui_clip_version = unsafe { (*self.header).ui_clip_version };
             let ui_clip_offset = unsafe { (*self.header).ui_clip_offset };
             let ui_clip_bytes = unsafe { (*self.header).ui_clip_bytes };
@@ -63,6 +70,8 @@ impl SeqlockReader {
                     ui_global_nanotick_playhead,
                     ui_track_count,
                     ui_transport_state,
+                    ui_tempo_milli_bpm,
+                    ui_tempo_point_count,
                     ui_clip_version,
                     ui_clip_offset,
                     ui_clip_bytes,

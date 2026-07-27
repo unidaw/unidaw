@@ -58,11 +58,14 @@ pub struct ShmHeader {
     pub ui_track_count: u32,
     pub ui_transport_state: u32,
     pub ui_clip_version: u32,
-    pub reserved_ui: u32,
+    /// Tempo at the current playhead, milli-BPM (120000 = 120.000). Repurposed
+    /// reserved slot — same offset, no version bump.
+    pub ui_tempo_milli_bpm: u32,
     pub ui_clip_offset: u64,
     pub ui_clip_bytes: u64,
     pub ui_harmony_version: u32,
-    pub reserved_ui2: u32,
+    /// Number of points in the project tempo map (1 = constant tempo).
+    pub ui_tempo_point_count: u32,
     pub ui_harmony_offset: u64,
     pub ui_harmony_bytes: u64,
     pub ui_track_peak_rms: [f32; K_UI_MAX_TRACKS],
@@ -484,9 +487,13 @@ pub enum UiCommandType {
     /// Ask the engine to query a device's host for its parameters and publish
     /// them into UiDeviceParamsRegion. trackId in track_id, deviceId in value0.
     RequestDeviceParams = 40,
+    /// Set the project tempo. value0 = milli-BPM. flags: 0 = insert-or-replace a point
+    /// at note_nanotick_lo/hi; 1 = flatten the map to this single tempo.
+    SetTempo = 41,
     /// Shut the engine down cleanly. Sent when the last UI has been gone long
-    /// enough that it is not coming back.
-    Quit = 41,
+    /// enough that it is not coming back. 42 rather than 41 — see the same note
+    /// in apps/event_payloads.h; the two were allocated 41 on separate branches.
+    Quit = 42,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;

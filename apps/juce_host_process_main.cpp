@@ -60,6 +60,8 @@ struct HostState {
     std::string path;  // so a chain edit can reuse an unchanged instance
     std::string name;  // desired sub-plugin name; reuse must match this too, since
                        // two devices can share a bundle path but differ by plugin
+    double preparedSampleRate = 0.0;  // rate this instance was prepared at; a reused
+                                      // slot is re-prepared if the device rate changed
   };
   std::vector<PluginSlot> plugins;
   std::mutex pluginsMutex;
@@ -174,6 +176,7 @@ std::optional<HostState::PluginSlot> loadPluginSlot(daw::IPluginHost& host,
   slot.instance = std::move(instance);
   slot.path = path;
   slot.name = name;
+  slot.preparedSampleRate = sampleRate;
   for (const auto& param : slot.instance->parameters()) {
     const auto uid16 = daw::hashStableId16(param.stableId);
     slot.paramIdByUid16.emplace(uid16Key(uid16.data()), param.stableId);
@@ -238,6 +241,18 @@ void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired
     for (size_t i = 0; i < current.size(); ++i) {
       if (!reused[i] && current[i].path == ref.path &&
           current[i].name == ref.name && current[i].instance) {
+        // A slot loaded at the startup default rate (before Hello) and reused here
+        // would keep playing at the wrong rate — 48k content on a 44.1k device is
+        // ~8.8% off in pitch and tempo-sync. Re-prepare only when the rate actually
+        // changed, so normal chain edits (rate unchanged) still preserve DSP state.
+        if (current[i].preparedSampleRate != sampleRate) {
+          std::cerr << "Host: re-preparing " << ref.path << " from "
+                    << current[i].preparedSampleRate << " to " << sampleRate
+                    << " Hz" << std::endl;
+          current[i].instance->prepare(sampleRate, blockSize,
+                                       static_cast<int>(numChannelsOut));
+          current[i].preparedSampleRate = sampleRate;
+        }
         next.push_back(std::move(current[i]));
         reused[i] = true;
         matched = true;
@@ -314,6 +329,7 @@ void loadPlugins(HostState& state,
     slot.instance = std::move(instance);
     slot.path = path;
     slot.name = name;
+    slot.preparedSampleRate = sampleRate;
     for (const auto& param : slot.instance->parameters()) {
       const auto uid16 = daw::hashStableId16(param.stableId);
       slot.paramIdByUid16.emplace(uid16Key(uid16.data()), param.stableId);

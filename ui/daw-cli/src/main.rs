@@ -125,10 +125,54 @@ fn get_transport(handle: &EngineHandle) -> i32 {
         snapshot.ui_global_nanotick_playhead
     );
     println!("  \"transport_state\": {},", snapshot.ui_transport_state);
+    println!(
+        "  \"tempo_bpm\": {:.3},",
+        snapshot.ui_tempo_milli_bpm as f64 / 1000.0
+    );
+    println!("  \"tempo_point_count\": {},", snapshot.ui_tempo_point_count);
     println!("  \"track_count\": {},", handle.track_count());
     println!("  \"clip_version\": {}", handle.clip_version());
     println!("}}");
     0
+}
+
+// do set-tempo <bpm> [position_nanotick] [--force]
+// Flatten to <bpm> when no position, else insert/replace a point at position.
+fn set_tempo(handle: &EngineHandle, args: &[&str]) -> i32 {
+    let bpm: f64 = match args.get(1).and_then(|s| s.parse().ok()) {
+        Some(b) if b > 0.0 => b,
+        _ => {
+            eprintln!("daw-cli: usage: do set-tempo <bpm> [position_nanotick]");
+            return 2;
+        }
+    };
+    let position: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+    // flags: 1 = flatten to a single tempo (no position given), 0 = point at position.
+    let flags: u16 = if args.get(2).is_some() { 0 } else { 1 };
+    let milli = (bpm * 1000.0).round() as u32;
+    let p = UiCommandPayload {
+        command_type: UiCommandType::SetTempo as u16,
+        flags,
+        track_id: 0,
+        plugin_index: 0,
+        note_pitch: 0,
+        value0: milli,
+        note_nanotick_lo: (position & 0xffff_ffff) as u32,
+        note_nanotick_hi: (position >> 32) as u32,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    };
+    match handle.send_command(p) {
+        Ok(()) => {
+            println!("{{ \"set_tempo\": {:.3}, \"position\": {}, \"flags\": {} }}", bpm, position, flags);
+            0
+        }
+        Err(err) => {
+            eprintln!("daw-cli: {err}");
+            1
+        }
+    }
 }
 
 fn get_tracks(handle: &EngineHandle) -> i32 {
@@ -644,6 +688,7 @@ fn main() {
                         }
                     }
                 }
+                Some(&"set-tempo") => set_tempo(&handle, rest),
                 Some(&"note") | Some(&"delete-note") => {
                     let is_write = rest.first() == Some(&"note");
                     let command = if is_write {

@@ -91,12 +91,22 @@ enum class UiCommandType : uint16_t {
   // Publish one device's parameters into UiDeviceParamsRegion: trackId + value0 =
   // deviceId. Lets the device-chain rack pull a device's real name + param list.
   RequestDeviceParams = 40,
+  // Set the project tempo. value0 = milli-BPM (120000 = 120). flags: 0 =
+  // insert-or-replace a tempo point at the nanotick in noteNanotickLo/Hi; 1 = flatten
+  // the whole map to this single tempo (a transport-bar BPM edit), ignoring position.
+  SetTempo = 41,
   // Shut the engine down cleanly. The UI is the application as far as a user is
   // concerned, so when the last one goes away the engine should go with it —
   // otherwise closing the window leaves audio playing with nothing on screen to
   // stop it, which is what happened. The sidecar sends this after a grace period,
   // so a page reload (disconnect then reconnect) does not kill the session.
-  Quit = 41,
+  //
+  // 42, not 41: this and SetTempo were allocated 41 independently, on two
+  // branches, and collided at the merge. SetTempo had already shipped to
+  // origin/main with an engine handler, a bridge binding and a daw-cli verb, so
+  // it keeps the number and this one moved. Nothing had shipped against Quit=41
+  // outside this branch.
+  Quit = 42,
 };
 
 constexpr uint16_t kMixerFlagMute = 1u << 0;

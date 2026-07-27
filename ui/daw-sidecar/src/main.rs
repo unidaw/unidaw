@@ -1121,7 +1121,7 @@ fn build_set_param(body: &str) -> Option<String> {
     // refusal below the ONLY thing wrong with a well-formed command.
     let _ = (track, device, index, milli);
     Some("the engine has no command that writes a device parameter - \
-          UiCommandType in event_payloads.h ends at RequestDeviceParams (40) and Quit (41), \
+          UiCommandType in event_payloads.h runs to Quit (42) and none of them writes one, \
           and UpdateDevice only sets bypass, patcher node and host slot. \
           Needs a new command carrying trackId, deviceId, uid16, paramIndex and valueMilli, \
           and a republish of the device's params region so the change reads back."
