@@ -58,11 +58,13 @@ inline NoteEntryDecision resolveNoteEntry(std::vector<PlacementSpan> spans,
                                           uint64_t stretchThreshold,
                                           uint64_t barLength) {
   // Sort by anchor so "latest covering" and "nearest preceding end" are simple
-  // scans. A stable order also makes the decision deterministic under ties.
-  std::sort(spans.begin(), spans.end(),
-            [](const PlacementSpan& a, const PlacementSpan& b) {
-              return a.at < b.at;
-            });
+  // scans. stable_sort (not sort) so the order is deterministic under ties, which
+  // the decision below relies on — an unstable sort here made the pick depend on the
+  // input arrangement.
+  std::stable_sort(spans.begin(), spans.end(),
+                   [](const PlacementSpan& a, const PlacementSpan& b) {
+                     return a.at < b.at;
+                   });
 
   // Inside an existing placement: prefer the latest-starting one that covers the
   // tick (topmost of a stack), so consecutive edits stay in the clip you're in.
@@ -151,10 +153,14 @@ inline std::vector<ClipSegment> segmentEventsIntoClips(
     std::vector<MusicalEvent> events, uint64_t stretchThreshold,
     uint64_t barLength) {
   std::vector<ClipSegment> segments;
-  std::sort(events.begin(), events.end(),
-            [](const MusicalEvent& a, const MusicalEvent& b) {
-              return a.nanotickOffset < b.nanotickOffset;
-            });
+  // stable_sort so notes sharing a nanotick keep their incoming order across a
+  // load->save round-trip. std::sort is unstable, so re-saving a loaded project
+  // permuted same-tick notes (a chord voicing, a row-op stack) on every pass — the
+  // notes never changed, but the file did.
+  std::stable_sort(events.begin(), events.end(),
+                   [](const MusicalEvent& a, const MusicalEvent& b) {
+                     return a.nanotickOffset < b.nanotickOffset;
+                   });
   for (const auto& e : events) {
     std::vector<PlacementSpan> spans;
     spans.reserve(segments.size());

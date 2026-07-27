@@ -147,10 +147,15 @@ struct MusicalEvent {
         reserveNoteId(event.payload.note.noteId);
       }
     }
-    const auto it = std::lower_bound(
+    // upper_bound (not lower_bound) so a new event lands AFTER existing events at the
+    // same tick, preserving insertion order. lower_bound inserted before them, which
+    // reversed same-tick notes on every pass — so loading a project and re-saving it
+    // flipped chord voicings / row-op stacks back and forth, and load was not
+    // idempotent. Same-tick order now round-trips through load->save unchanged.
+    const auto it = std::upper_bound(
         events_.begin(), events_.end(), event.nanotickOffset,
-        [](const MusicalEvent& lhs, uint64_t tick) {
-          return lhs.nanotickOffset < tick;
+        [](uint64_t tick, const MusicalEvent& rhs) {
+          return tick < rhs.nanotickOffset;
         });
     events_.insert(it, std::move(event));
   }

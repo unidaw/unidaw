@@ -24,6 +24,10 @@ pub struct UiSnapshot {
     /// v10: per-track tracker subdivision (0 = absent track). Build one LaneGrid
     /// per track from this rather than one grid for the whole viewport.
     pub ui_lines_per_beat: [u8; K_UI_MAX_TRACKS],
+    /// v19: the song's time signature (ruler + time gutter). A clip's own meter is
+    /// separate, on UiClipExtent.
+    pub ui_song_time_sig_num: u32,
+    pub ui_song_time_sig_den: u32,
 }
 
 pub struct SeqlockReader {
@@ -60,6 +64,8 @@ impl SeqlockReader {
             let ui_harmony_bytes = unsafe { (*self.header).ui_harmony_bytes };
             let ui_track_peak_rms = unsafe { (*self.header).ui_track_peak_rms };
             let ui_lines_per_beat = unsafe { (*self.header).ui_lines_per_beat };
+            let ui_song_time_sig_num = unsafe { (*self.header).ui_song_time_sig_num };
+            let ui_song_time_sig_den = unsafe { (*self.header).ui_song_time_sig_den };
 
             fence(Ordering::Acquire);
             let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
@@ -80,6 +86,8 @@ impl SeqlockReader {
                     ui_harmony_bytes,
                     ui_track_peak_rms,
                     ui_lines_per_beat,
+                    ui_song_time_sig_num,
+                    ui_song_time_sig_den,
                 });
             }
         }

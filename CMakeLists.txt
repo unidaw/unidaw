@@ -241,6 +241,24 @@ target_include_directories(waveform_store_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# Header-only tests for the per-clip grid packed into UiClipExtent.flags.
+add_executable(clip_grid_tests
+  apps/clip_grid_tests_main.cpp
+)
+target_include_directories(clip_grid_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# The pyramid verified against the real fixture WAVs (decodes through platform_juce).
+add_executable(waveform_fixture_tests
+  apps/waveform_fixture_tests_main.cpp
+)
+target_include_directories(waveform_fixture_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+target_link_libraries(waveform_fixture_tests PRIVATE platform_juce)
+
 add_executable(audio_io_tests
   apps/audio_io_tests_main.cpp
 )
@@ -303,7 +321,7 @@ add_test(NAME patcher_graph_edits
 set_tests_properties(patcher_graph_edits PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME project_file_round_trip
-  COMMAND project_file_tests
+  COMMAND project_file_tests ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects
 )
 set_tests_properties(project_file_round_trip PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
@@ -316,6 +334,16 @@ add_test(NAME waveform_store
   COMMAND waveform_store_tests
 )
 set_tests_properties(waveform_store PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME clip_grid
+  COMMAND clip_grid_tests
+)
+set_tests_properties(clip_grid PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME waveform_fixture
+  COMMAND waveform_fixture_tests ${CMAKE_CURRENT_SOURCE_DIR}/presets/audio
+)
+set_tests_properties(waveform_fixture PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME device_chain_defaults
   COMMAND device_chain_tests

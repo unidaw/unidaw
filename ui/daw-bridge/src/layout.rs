@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 18;
+pub const K_SHM_VERSION: u16 = 19;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
@@ -110,6 +110,10 @@ pub struct ShmHeader {
     // sizeof(ShmHeader) 576 -> 640, so the size/offset asserts below moved with v18.
     pub ui_audio_source_offset: u64,
     pub ui_waveform_offset: u64,
+    // v19: song time signature for the ruler + time gutter. Two u32s ride the header's
+    // alignment tail padding, so sizeof(ShmHeader) stays 640.
+    pub ui_song_time_sig_num: u32,
+    pub ui_song_time_sig_den: u32,
 }
 
 /// v14: a published patcher-graph node. `config` is type-interpreted (see the C++
@@ -254,6 +258,30 @@ pub const UI_CLIP_NOTE_ADD: u8 = 1 << 1;
 /// notes). Audio clips persist and show as rails but are not scheduled until the
 /// Movement 4 audio engine.
 pub const UI_CLIP_EXTENT_AUDIO: u32 = 1 << 0;
+
+/// v19: the clip's own musical grid packed into the spare bits of
+/// `UiClipExtent.flags`. `linesPerBeat == 0` is the sentinel for "no grid" — fall
+/// back to the song meter. Denominator is a power-of-two exponent. See shared_memory.h
+/// for the three rules (0 = no grid, clamp-not-truncate, power-of-two denominator).
+pub const UI_CLIP_GRID_LPB_SHIFT: u32 = 1;
+pub const UI_CLIP_GRID_NUM_SHIFT: u32 = 6;
+pub const UI_CLIP_GRID_DEN_EXP_SHIFT: u32 = 11;
+pub const UI_CLIP_GRID_LPB_MASK: u32 = 0x1f;
+pub const UI_CLIP_GRID_NUM_MASK: u32 = 0x1f;
+pub const UI_CLIP_GRID_DEN_EXP_MASK: u32 = 0x7;
+
+/// Decode the per-clip grid from `UiClipExtent.flags`. Returns
+/// `Some((lines_per_beat, numerator, denominator))`, or `None` when no grid is
+/// published (the caller uses the song meter).
+pub fn unpack_clip_grid(flags: u32) -> Option<(u32, u32, u32)> {
+    let lpb = (flags >> UI_CLIP_GRID_LPB_SHIFT) & UI_CLIP_GRID_LPB_MASK;
+    if lpb == 0 {
+        return None;
+    }
+    let num = (flags >> UI_CLIP_GRID_NUM_SHIFT) & UI_CLIP_GRID_NUM_MASK;
+    let exp = (flags >> UI_CLIP_GRID_DEN_EXP_SHIFT) & UI_CLIP_GRID_DEN_EXP_MASK;
+    Some((lpb, num, 1u32 << exp))
+}
 
 /// v11 (M3.4): a placed clip's timeline box — a rail. `start_tick`/`end_tick` are
 /// absolute; `name` is nul-padded. Loose (session) placements are not published.
@@ -877,6 +905,8 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_device_params_offset), 568); // v17
         assert_eq!(offset_of!(ShmHeader, ui_audio_source_offset), 576); // v18
         assert_eq!(offset_of!(ShmHeader, ui_waveform_offset), 584);
+        assert_eq!(offset_of!(ShmHeader, ui_song_time_sig_num), 592); // v19
+        assert_eq!(offset_of!(ShmHeader, ui_song_time_sig_den), 596);
         // The scale + device-param region structs (v16/v17) are now generated from
         // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);

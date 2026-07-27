@@ -130,6 +130,10 @@ fn get_transport(handle: &EngineHandle) -> i32 {
         snapshot.ui_tempo_milli_bpm as f64 / 1000.0
     );
     println!("  \"tempo_point_count\": {},", snapshot.ui_tempo_point_count);
+    println!(
+        "  \"song_time_sig\": \"{}/{}\",",
+        snapshot.ui_song_time_sig_num, snapshot.ui_song_time_sig_den
+    );
     println!("  \"track_count\": {},", handle.track_count());
     println!("  \"clip_version\": {}", handle.clip_version());
     println!("}}");
@@ -456,6 +460,24 @@ fn get_device_params(handle: &EngineHandle, args: &[&str]) -> i32 {
     }
 }
 
+// get extents — dump the published clip rails, decoding each clip's packed grid.
+fn get_extents(handle: &EngineHandle) -> i32 {
+    let extents = handle.read_clip_extents();
+    println!("[");
+    for e in &extents {
+        let grid = daw_bridge::layout::unpack_clip_grid(e.flags)
+            .map(|(lpb, n, d)| format!("{{ \"lpb\": {lpb}, \"time_sig\": \"{n}/{d}\" }}"))
+            .unwrap_or_else(|| "null".to_string());
+        let audio = e.flags & daw_bridge::layout::UI_CLIP_EXTENT_AUDIO != 0;
+        println!(
+            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"audio\": {}, \"start\": {}, \"end\": {}, \"grid\": {} }},",
+            e.placement_id, e.clip_id, e.track_id, audio, e.start_tick, e.end_tick, grid
+        );
+    }
+    println!("]");
+    0
+}
+
 // get audio-sources — dump the published UiAudioSourceRegion (sources + clips).
 fn get_audio_sources(handle: &EngineHandle) -> i32 {
     let v = handle.read_audio_sources();
@@ -764,6 +786,7 @@ fn main() {
                 Some(&"transport") => get_transport(&handle),
                 Some(&"tracks") => get_tracks(&handle),
                 Some(&"audio-sources") => get_audio_sources(&handle),
+                Some(&"extents") => get_extents(&handle),
                 other => {
                     eprintln!("daw-cli: unknown query {:?}\n\n{USAGE}", other.unwrap_or(&""));
                     2

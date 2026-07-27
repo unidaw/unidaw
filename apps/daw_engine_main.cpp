@@ -36,6 +36,7 @@
 #include "apps/plugin_cache.h"
 #include "apps/patcher_abi.h"
 #include "apps/audio_region.h"
+#include "apps/clip_grid.h"
 #include "apps/waveform_store.h"
 #include "apps/patcher_assemble.h"
 #include "apps/patcher_graph.h"
@@ -1639,6 +1640,12 @@ struct TrackRuntime {
   // needs no lock.
   std::vector<daw::ProjectTempoPoint> loadedTempoMap{{0, 120.0}};
 
+  // The song's time signature, adopted on load. Read on the audio callback (plugin
+  // play head) and the publish thread (transport read-back), written on the UI thread
+  // at load — relaxed atomics, since a meter one block stale is invisible.
+  std::atomic<uint32_t> songTimeSigNum{4};
+  std::atomic<uint32_t> songTimeSigDen{4};
+
   // Directory of the currently-loaded project file, so a clip's relative sourcePath
   // resolves against the project (portable) rather than the engine's CWD. Set by
   // loadProjectFromPath before the track loop; read by rebuildAudioRender.
@@ -1886,31 +1893,13 @@ struct TrackRuntime {
         continue;
       }
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
-      if (runtime->arrangementDirty.load(std::memory_order_relaxed)) {
-        // Live-edited track: its authored placements no longer describe the
-        // notes, so derive rails from the flat clip by proximity — the same
-        // segmentation a save emits, so what the UI draws matches what lands on
-        // disk. Every note falls under a rail ("no notes outside clips").
-        const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
-        const auto segments =
-            daw::segmentEventsIntoClips(runtime->track.clip.events(), bar, bar);
-        uint32_t placementId = 0;
-        for (const auto& seg : segments) {
-          if (count >= daw::kUiMaxClipExtents) {
-            break;
-          }
-          daw::UiClipExtent& out = region->extents[count];
-          out.placementId = placementId++;
-          out.clipId = 0;  // derived from notes — no stable clip id yet
-          out.trackId = runtime->trackId;
-          out.flags = 0;
-          out.startTick = seg.at;
-          out.endTick = seg.at + seg.length;
-          std::memset(out.name, 0, sizeof(out.name));
-          ++count;
-        }
-        continue;
-      }
+      // Always publish the authored clip extents. rebuildFlatAndPublish rebuilds
+      // rt.clipExtents from the structural store (placements + owned clips) on every
+      // edit, so they describe the notes even on a live-edited track — carrying the
+      // real clipId (which joins UiAudioClip and the per-clip grid) that the old
+      // arrangement-dirty segmentation path zeroed. That path predated the structural
+      // store; segmenting the flat clip dropped clip identity, made audio rails vanish
+      // on a note edit, and published no grid. See the frontend's P1.
       for (const auto& ext : runtime->clipExtents) {
         if (count >= daw::kUiMaxClipExtents) {
           break;
@@ -1919,7 +1908,35 @@ struct TrackRuntime {
         out.placementId = ext.placementId;
         out.clipId = ext.clipId;
         out.trackId = runtime->trackId;
-        out.flags = ext.isAudio ? daw::kUiClipExtentAudio : 0u;
+        uint32_t extFlags = ext.isAudio ? daw::kUiClipExtentAudio : 0u;
+        // Pack the clip's own musical grid into the spare flag bits (0 => the reader
+        // falls back to the song meter). Clamp + refuse loudly per the three rules.
+        for (const auto& oc : runtime->ownedClips) {
+          if (oc.id != ext.clipId) {
+            continue;
+          }
+          const auto g = daw::packClipGrid(oc.linesPerBeat, oc.timeSigNumerator,
+                                           oc.timeSigDenominator);
+          extFlags |= g.bits;
+          if (g.outcome == daw::ClipGridOutcome::ClampedLpb ||
+              g.outcome == daw::ClipGridOutcome::ClampedNum) {
+            DAW_EVENT("project.meter_clamped")
+                .field("clip", ext.clipId)
+                .field("field",
+                       std::string(g.outcome == daw::ClipGridOutcome::ClampedLpb
+                                       ? "lines_per_beat"
+                                       : "time_sig_numerator"))
+                .field("asked", g.asked)
+                .field("stored", g.stored);
+          } else if (g.outcome == daw::ClipGridOutcome::RefusedDen) {
+            DAW_EVENT("project.meter_refused")
+                .field("clip", ext.clipId)
+                .field("field", std::string("time_sig_denominator"))
+                .field("asked", g.asked);
+          }
+          break;
+        }
+        out.flags = extFlags;
         out.startTick = ext.at;
         out.endTick = ext.endTick;
         std::memset(out.name, 0, sizeof(out.name));
@@ -3227,6 +3244,31 @@ struct TrackRuntime {
       nc.id = nextClipId.fetch_add(1, std::memory_order_acq_rel);
       nc.name = "Clip";
       nc.lengthNanoticks = 0;
+      // Inherit the grid of the predecessor clip on this track — the placement with
+      // the greatest anchor before the new one — so a new section keeps the meter you
+      // were working in rather than snapping back to 4/4. Defaults stand when there is
+      // no predecessor.
+      {
+        const daw::ProjectClip* pred = nullptr;
+        uint64_t predAt = 0;
+        for (const auto& p : rt.sourcePlacements) {
+          if (!p.at.has_value() || *p.at >= decision.at) {
+            continue;
+          }
+          if (pred == nullptr || *p.at > predAt) {
+            const size_t oi = findOwned(p.clipId);
+            if (oi < rt.ownedClips.size()) {
+              pred = &rt.ownedClips[oi];
+              predAt = *p.at;
+            }
+          }
+        }
+        if (pred != nullptr) {
+          nc.linesPerBeat = pred->linesPerBeat;
+          nc.timeSigNumerator = pred->timeSigNumerator;
+          nc.timeSigDenominator = pred->timeSigDenominator;
+        }
+      }
       const uint32_t newId = nc.id;
       rt.ownedClips.push_back(std::move(nc));
       rt.editableClipIds.push_back(newId);
@@ -3391,6 +3433,9 @@ struct TrackRuntime {
     // Re-emit the full retained tempo map so a load->save round-trip keeps tempo
     // changes, not just the current tempo. (A never-loaded session defaults to 120.)
     document.tempoMap = loadedTempoMap;
+    // Re-emit the adopted song time signature so it survives a load->save.
+    document.songTimeSigNumerator = songTimeSigNum.load(std::memory_order_relaxed);
+    document.songTimeSigDenominator = songTimeSigDen.load(std::memory_order_relaxed);
     document.harmonyTimeline = harmonyEvents;
 
     std::vector<TrackRuntime*> runtimes;
@@ -3635,6 +3680,14 @@ struct TrackRuntime {
     loadedTempoMap = document.tempoMap.empty()
                          ? std::vector<daw::ProjectTempoPoint>{{0, 120.0}}
                          : document.tempoMap;
+    // Adopt the song time signature, so the plugin play head's bar start and the
+    // transport read-back stop assuming 4/4.
+    songTimeSigNum.store(
+        document.songTimeSigNumerator ? document.songTimeSigNumerator : 4,
+        std::memory_order_relaxed);
+    songTimeSigDen.store(
+        document.songTimeSigDenominator ? document.songTimeSigDenominator : 4,
+        std::memory_order_relaxed);
     std::vector<daw::TempoPoint> tempoPoints;
     tempoPoints.reserve(loadedTempoMap.size());
     for (const auto& pt : loadedTempoMap) {
@@ -8407,8 +8460,8 @@ struct TrackRuntime {
         // Current-position tempo (not the initial one) so a tempo-synced plugin
         // follows tempo_map changes, matching the ProcessBlockRequest play head.
         transportPayload.tempoBpm = tempoProvider.bpmAtNanotick(blockStartTicks);
-        transportPayload.timeSigNum = 4;  // TODO: time signature is not yet modelled
-        transportPayload.timeSigDen = 4;
+        transportPayload.timeSigNum = songTimeSigNum.load(std::memory_order_relaxed);
+        transportPayload.timeSigDen = songTimeSigDen.load(std::memory_order_relaxed);
         transportPayload.playState = isPlaying ? 1 : 0;
         std::memcpy(transportEntry.payload, &transportPayload, sizeof(transportPayload));
         daw::ringWrite(ringCtrl, transportEntry);
@@ -8720,7 +8773,14 @@ struct TrackRuntime {
           transport.ppqPosition =
               static_cast<double>(blockStartTicks) /
               static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter);
-          const double beatsPerBar = 4.0;
+          // Quarter notes per bar = numerator * 4 / denominator (ppq counts quarters),
+          // so a 7/8 bar is 3.5 quarters and a tempo-synced plugin's bar start is
+          // right in any meter, not just 4/4.
+          const uint32_t tsNum = songTimeSigNum.load(std::memory_order_relaxed);
+          const uint32_t tsDen = songTimeSigDen.load(std::memory_order_relaxed);
+          const double beatsPerBar =
+              tsDen > 0 ? static_cast<double>(tsNum) * 4.0 / static_cast<double>(tsDen)
+                        : 4.0;
           transport.ppqPositionOfLastBarStart =
               std::floor(transport.ppqPosition / beatsPerBar) * beatsPerBar;
           transport.isPlaying = playing.load(std::memory_order_acquire);
@@ -8978,6 +9038,11 @@ struct TrackRuntime {
             loopStartNanotick.load(std::memory_order_acquire);
         uiShm.header->uiLoopEnd =
             loopEndNanotick.load(std::memory_order_acquire);
+        // v19: the song's time signature, for the ruler + time gutter.
+        uiShm.header->uiSongTimeSigNum =
+            songTimeSigNum.load(std::memory_order_relaxed);
+        uiShm.header->uiSongTimeSigDen =
+            songTimeSigDen.load(std::memory_order_relaxed);
         // v15: load-result signal (ok read before seq, matching the writer order).
         uiShm.header->uiLoadOk = projectLoadOk.load(std::memory_order_acquire);
         uiShm.header->uiLoadSeq = projectLoadSeq.load(std::memory_order_acquire);

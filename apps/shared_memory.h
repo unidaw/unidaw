@@ -49,7 +49,10 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 18: waveform read-back — UiAudioSourceRegion + UiWaveformRegion (uiAudioSourceOffset
 //     / uiWaveformOffset). The two new u64 offsets grow sizeof(ShmHeader) 576 -> 640,
 //     so this is the first UI-region bump that does NOT ride the header tail padding.
-constexpr uint16_t kShmVersion = 18;
+// 19: song time signature read-back (uiSongTimeSigNum/uiSongTimeSigDen) for the
+//     ruler + time gutter. Two u32s ride the header's alignment tail padding, so
+//     sizeof(ShmHeader) is unchanged (640).
+constexpr uint16_t kShmVersion = 19;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -151,6 +154,11 @@ struct alignas(64) ShmHeader {
   // v14-v17 — so the Rust mirror's size/offset asserts move with this bump.
   uint64_t uiAudioSourceOffset = 0;
   uint64_t uiWaveformOffset = 0;
+  // v19: the song's time signature, for the arrangement ruler + the tracker's time
+  // gutter (a clip's own meter is separate, on UiClipExtent). Two u32s fit the header's
+  // 64-byte-alignment tail padding, so sizeof(ShmHeader) stays 640.
+  uint32_t uiSongTimeSigNum = 4;
+  uint32_t uiSongTimeSigDen = 4;
 };
 
 struct alignas(64) RingHeader {
@@ -424,6 +432,31 @@ constexpr uint8_t kUiClipNoteAdd = 1u << 1;
 // UiClipExtent.flags bits. An audio region reads as a rail like any clip, but the
 // UI renders it as a waveform rather than notes — and it carries no note events.
 constexpr uint32_t kUiClipExtentAudio = 1u << 0;
+
+// v19: the clip's own musical grid, packed into the spare bits of UiClipExtent.flags
+// (no size or version change — the field was reserved). A clip is a "section", so it
+// carries its own meter; the tracker draws each visible clip's grid. THREE RULES the
+// packer MUST honour, or the encoding is a trap:
+//   (a) linesPerBeat == 0 is the sentinel for "no grid on this extent" — the packer
+//       writes 0 for all three sub-fields, never a partial grid, and the reader then
+//       falls back to the song meter. lpb 0 is otherwise invalid so it is free to mean
+//       absence; a denominator exponent of 0 is a real meter (den 1) and cannot.
+//   (b) values are CLAMPED to field width, never truncated — a numerator of 32
+//       truncated to 5 bits reads back as 0 and would masquerade as "no grid". The
+//       engine clamps and emits project.meter_clamped when it does.
+//   (c) the denominator is a power-of-two EXPONENT (den = 1 << exp); a non-power-of-two
+//       denominator is refused (written as no grid + an event), never rounded.
+//
+//   bit  0     kUiClipExtentAudio                (existing)
+//   bits 1-5   linesPerBeat        5 bits  1..31
+//   bits 6-10  timeSigNumerator    5 bits  1..31
+//   bits 11-13 timeSigDenominator  3 bits  exponent 0..7 => denominator 1..128
+constexpr uint32_t kUiClipGridLpbShift = 1;
+constexpr uint32_t kUiClipGridNumShift = 6;
+constexpr uint32_t kUiClipGridDenExpShift = 11;
+constexpr uint32_t kUiClipGridLpbMax = 31;
+constexpr uint32_t kUiClipGridNumMax = 31;
+constexpr uint32_t kUiClipGridDenExpMax = 7;
 
 static_assert(sizeof(UiClipNote) == 40,
               "UiClipNote layout must match the Rust mirror");
