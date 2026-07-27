@@ -93,7 +93,7 @@ export function createPatcherBuffer(nodeCap = 64, edgeCap = 128) {
     edges[i] = { src: 0, dst: 0, kind: 0, kindName: '', path: '' };
   }
   return { nodes, nodeCount: 0, edges, edgeCount: 0,
-           version: -1, device: 0, empty: true,
+           version: -1, device: 0, empty: true, addType: '', linkFrom: -1,
            _shape: `${nodeCap}x${edgeCap}` };
 }
 
@@ -127,13 +127,18 @@ function computeDepths(nodes, edges, depth) {
  * — the same optimism the faders have.
  */
 export function buildPatcherModel(opts, buf) {
-  const { engine = null, selectedNode = -1, selectedField = 0, pending = null } = opts;
+  const { engine = null, selectedNode = -1, selectedField = 0, pending = null,
+          addType = -1, linkFrom = null } = opts;
   const srcNodes = engine ? engine.patcherNodes : [];
   const srcEdges = engine ? engine.patcherEdges : [];
 
   buf.version = engine ? engine.patcherVersion : -1;
   buf.device = engine ? engine.patcherDevice : 0;
   buf.empty = srcNodes.length === 0;
+  buf.addType = NODE_TYPES[addType] || '';
+  // Which node an in-progress connection started from, so the next keystroke's
+  // meaning is on screen rather than in the user's head.
+  buf.linkFrom = linkFrom === null ? -1 : linkFrom;
 
   const depth = new Array(srcNodes.length);
   const indexOf = computeDepths(srcNodes, srcEdges, depth);

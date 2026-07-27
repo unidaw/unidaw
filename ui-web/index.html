@@ -235,6 +235,51 @@ function configOf(node) {
   return sent || node.config;
 }
 
+/**
+ * Add, remove or connect nodes. The graph is the engine's, so all three are a
+ * send and a wait — there is nothing sensible to show optimistically, because a
+ * node the engine has not created yet has no id to draw.
+ */
+function sendGraph(msg) {
+  if (!conn || !conn.send(msg)) { state.reject = 'no engine'; return false; }
+  state.reject = null;
+  return true;
+}
+
+/** Add a node of the armed type. */
+function addPatcherNode() {
+  return sendGraph({ type: 'patchadd', nodeType: state.patchAddType, track: 0 });
+}
+
+/** Remove the selected node. Its edges go with it, on the engine's side. */
+function removePatcherNode() {
+  const node = selectedPatcherNode();
+  if (!node) { state.reject = 'select a node first'; return false; }
+  if (!sendGraph({ type: 'patchdel', node: node.id, track: 0 })) return false;
+  state.selectedNode = -1;
+  state.patchLinkFrom = null;
+  return true;
+}
+
+/**
+ * Connect in two steps: arm on the source, fire on the destination. Ports are
+ * resolved by the sidecar from the two node types, so nobody types a port id.
+ */
+function linkPatcherNode() {
+  const node = selectedPatcherNode();
+  if (!node) { state.reject = 'select a node first'; return false; }
+  if (state.patchLinkFrom === null) {
+    state.patchLinkFrom = { id: node.id, type: node.type };
+    state.reject = null;
+    return true;
+  }
+  const from = state.patchLinkFrom;
+  state.patchLinkFrom = null;
+  if (from.id === node.id) { state.reject = 'a node cannot connect to itself'; return false; }
+  return sendGraph({ type: 'patchlink', src: from.id, srcType: from.type,
+                     dst: node.id, dstType: node.type, track: 0 });
+}
+
 /** Drop the pending entries the engine has confirmed. Once per engine frame. */
 function reconcilePatcher() {
   if (!patchPending.size || !engine) return;
@@ -374,6 +419,32 @@ const dockApi = {
     fields: configFields(n.type).map((f) => f.name),
     config: Array.from(configOf(n)),
   })) : []),
+  addNode: (type) => {
+    const t = NODE_TYPES.indexOf(String(type));
+    const n = t >= 0 ? t : Number(type);
+    if (!(n >= 0 && n < NODE_TYPES.length)) {
+      throw new Error('node types: ' + NODE_TYPES.join(' '));
+    }
+    state.patchAddType = n;
+    if (!addPatcherNode()) throw new Error(state.reject || 'refused');
+    return 'adding ' + NODE_TYPES[n];
+  },
+  delNode: (id) => {
+    state.selectedNode = id;
+    if (!removePatcherNode()) throw new Error(state.reject || 'refused');
+    return 'removing #' + id;
+  },
+  linkNodes: (a, b, kind) => {
+    const nodes = engine ? engine.patcherNodes : [];
+    const src = nodes.find((n) => n.id === a), dst = nodes.find((n) => n.id === b);
+    if (!src) throw new Error('no node ' + a);
+    if (!dst) throw new Error('no node ' + b);
+    const msg = { type: 'patchlink', src: a, srcType: src.type,
+                  dst: b, dstType: dst.type, track: 0 };
+    if (kind !== undefined && !Number.isNaN(kind)) msg.kind = kind;
+    if (!sendGraph(msg)) throw new Error(state.reject || 'refused');
+    return 'linking #' + a + ' to #' + b;
+  },
   patch: (id, field, delta) => {
     const node = engine && engine.patcherNodes.find((n) => n.id === id);
     if (!node) throw new Error('no node ' + id);
@@ -571,7 +642,8 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   pianoSelection: null, pianoMarquee: null, pianoDrag: null,
   pianoFitPending: false, browserOpen: false, dockOpen: false, helpOpen: false,
   followPlayhead: true,
-  selectedNode: -1, selectedField: 0, currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+  selectedNode: -1, selectedField: 0, patchAddType: 1, patchLinkFrom: null,
+  currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -797,6 +869,8 @@ function drawPatcher() {
     selectedNode: state.selectedNode,
     selectedField: state.selectedField,
     pending: patchPending,
+    addType: state.patchAddType,
+    linkFrom: state.patchLinkFrom ? state.patchLinkFrom.id : null,
   }, patcherBuf));
   updateChrome();
 }
@@ -1420,10 +1494,17 @@ addEventListener('keydown', (e) => {
   }
   if (state.view === 'patcher') {
     if (k === ' ') { cmd('play'); return done(); }
-    if (k === 'Escape') { state.selectedNode = -1; state.reject = null; return done(); }
+    if (k === 'Escape') { state.selectedNode = -1; state.patchLinkFrom = null;
+                          state.reject = null; return done(); }
+    // a adds a node of the armed type, t cycles which type that is, c connects
+    // (arm on the source, fire on the destination), Backspace removes.
+    if (k === 'a') { addPatcherNode(); return done(); }
+    if (k === 't') {
+      state.patchAddType = (state.patchAddType + 1) % NODE_TYPES.length;
+      return done();
+    }
+    if (k === 'c') { linkPatcherNode(); return done(); }
     // Left/right pick a config field on the selected node, up/down change it.
-    // Adding and connecting nodes still needs AddPatcherNode/ConnectPatcherNodes,
-    // which this surface does not have; that refuses out loud below.
     if (k === 'ArrowLeft' || k === 'ArrowRight') {
       const node = selectedPatcherNode();
       const n = node ? configFields(node.type).length : 0;
@@ -1432,10 +1513,7 @@ addEventListener('keydown', (e) => {
     }
     if (k === 'ArrowUp') { nudgePatcher(1); return done(); }
     if (k === 'ArrowDown') { nudgePatcher(-1); return done(); }
-    if (k === 'Backspace' || k === 'Delete') {
-      state.reject = 'adding and connecting nodes is not wired yet';
-      return done();
-    }
+    if (k === 'Backspace' || k === 'Delete') { removePatcherNode(); return done(); }
     return;
   }
   if (state.view === 'mixer') {
@@ -1634,6 +1712,17 @@ conn = connectEngine({
       let parsed = null;
       try { parsed = JSON.parse(msg); } catch (e) { /* keep the old list */ }
       if (parsed) { state.projects = parsed.projects || []; schedule(); }
+    }
+    // The sidecar refuses with {"error":"..."} and those messages are written to
+    // be read — "those two node types have no compatible ports" is the answer to
+    // the question the user just asked. They were being logged to a dock that is
+    // usually closed and dropped otherwise, so every careful refusal on that side
+    // arrived as silence on this one.
+    if (typeof msg === 'string' && msg.indexOf('"error"') >= 0) {
+      let why = null;
+      try { why = JSON.parse(msg).error; } catch (e) { /* fall through to the raw */ }
+      state.reject = why || String(msg).slice(0, 80);
+      schedule();
     }
     if (state.dockOpen) dock.log('out', String(msg).slice(0, 200));
     state.ack = String(msg).slice(0, 80);
@@ -1848,6 +1937,10 @@ window.__uni = {
   pianoProbe: () => piano.probe(),
   patcherProbe: () => patcher.probe(),
   patchSelect: (id) => { state.selectedNode = id; state.selectedField = 0; draw(); },
+  patchAdd: (type) => { if (type !== undefined) state.patchAddType = type;
+                        const r = addPatcherNode(); draw(); return r; },
+  patchRemove: () => { const r = removePatcherNode(); draw(); return r; },
+  patchLink: () => { const r = linkPatcherNode(); draw(); return r; },
   patchField: (i) => { state.selectedField = i; draw(); return state.selectedField; },
   patchNudge: (dir) => { const r = nudgePatcher(dir); draw(); return !!r; },
   // The console's own two, so a test and an agent read the same thing the dock

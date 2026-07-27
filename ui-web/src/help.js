@@ -85,9 +85,12 @@ export const SURFACE_KEYS = {
     title: 'PATCHER',
     keys: [
       ['click node', 'select'],
+      ['a', 'add a node of the armed type'],
+      ['t', 'cycle the armed type'],
+      ['c', 'connect — once on the source, again on the destination'],
       ['left/right', 'choose a config field on the selected node'],
       ['up/down', 'change it'],
-      ['Backspace', 'adding and connecting nodes — not wired yet'],
+      ['Backspace', 'remove the selected node'],
       ['', 'one global graph; the engine does not run per-device graphs yet'],
     ],
   },

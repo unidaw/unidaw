@@ -28,7 +28,8 @@ use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{UiChordCommandPayload, UiCommandPayload, UiCommandType,
-                        UiPatcherNodeConfigPayload, UiPatcherPresetCommandPayload};
+                        UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
+                        UiPatcherPresetCommandPayload};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
 
 /// Wire format, little-endian. The frontend decodes with a DataView.
@@ -791,6 +792,122 @@ fn build_patcher_config(body: &str) -> Option<Result<UiPatcherNodeConfigPayload,
     }))
 }
 
+/// The engine's port table, per node type: (port id, kind, is_output).
+///
+/// Kinds are PatcherPortKind: Event 0, Audio 1, Control 2. Port ids are the
+/// engine's constants (event in 0, event out 1, control in 2, control out 3,
+/// audio in 4, audio out 5).
+///
+/// This lives here rather than in the page because it is engine data, and one
+/// copy of engine data as close to the engine as the wire allows beats two
+/// copies drifting apart. The engine validates again regardless — this table
+/// exists so the UI can offer a connection that will be accepted, not so it can
+/// skip the check.
+fn ports_for(node_type: u32) -> &'static [(u32, u32, bool)] {
+    const EVENT: u32 = 0;
+    const AUDIO: u32 = 1;
+    const CONTROL: u32 = 2;
+    match node_type {
+        // RustKernel
+        0 => &[(0, EVENT, false), (1, EVENT, true), (2, CONTROL, false), (3, CONTROL, true)],
+        // Euclidean: a source of events and nothing else.
+        1 => &[(1, EVENT, true)],
+        // Passthrough
+        2 => &[(0, EVENT, false), (1, EVENT, true)],
+        // AudioPassthrough
+        3 => &[(4, AUDIO, false), (5, AUDIO, true)],
+        // Lfo: control out only.
+        4 => &[(3, CONTROL, true)],
+        // RandomDegree
+        5 => &[(0, EVENT, false), (1, EVENT, true)],
+        // EventOut: a sink.
+        6 => &[(0, EVENT, false)],
+        _ => &[],
+    }
+}
+
+/// The one connection that can exist between two node types, or why not.
+///
+/// Almost every pair has exactly one answer, so the UI should not make anyone
+/// type port numbers. Kernel-to-kernel is the exception — it could be events or
+/// control — and that is refused with a message rather than guessed, unless the
+/// caller says which kind.
+fn resolve_link(
+    src_type: u32,
+    dst_type: u32,
+    want_kind: Option<u32>,
+) -> Result<(u32, u32, u32), &'static str> {
+    let mut found: Option<(u32, u32, u32)> = None;
+    let mut count = 0;
+    for &(sp, sk, s_out) in ports_for(src_type) {
+        if !s_out { continue; }
+        for &(dp, dk, d_out) in ports_for(dst_type) {
+            if d_out || dk != sk { continue; }
+            if let Some(k) = want_kind { if k != sk { continue; } }
+            count += 1;
+            if found.is_none() { found = Some((sp, dp, sk)); }
+        }
+    }
+    match (found, count) {
+        (None, _) => Err("those two node types have no compatible ports"),
+        (Some(link), 1) => Ok(link),
+        (Some(_), _) => Err("more than one kind of connection fits — say which"),
+    }
+}
+
+/// Add, remove or connect patcher nodes.
+///
+/// Ports are resolved from the node TYPES the caller sends, which it read from
+/// the published graph. The alternative is asking a person to type "port 3",
+/// which is engine trivia and gets it wrong.
+fn build_patcher_graph(body: &str) -> Option<Result<UiPatcherGraphCommandPayload, &'static str>> {
+    let add = body.contains("\"patchadd\"");
+    let del = body.contains("\"patchdel\"");
+    let link = body.contains("\"patchlink\"");
+    if !(add || del || link) { return None; }
+    let n = |k: &str| parse_num(body, k).unwrap_or(0);
+    let mut p = UiPatcherGraphCommandPayload {
+        command_type: UiCommandType::None as u16,
+        flags: 0,
+        track_id: n("\"track\"").max(0) as u32,
+        base_version: n("\"base\"").max(0) as u32,
+        node_id: n("\"node\"").max(0) as u32,
+        node_type: n("\"nodeType\"").max(0) as u32,
+        src_node_id: n("\"src\"").max(0) as u32,
+        dst_node_id: n("\"dst\"").max(0) as u32,
+        src_port_id: 0,
+        dst_port_id: 0,
+        edge_kind: 0,
+    };
+    if add {
+        // PatcherNodeType::EventOut is the last one; the engine refuses past it
+        // and so does this, so a typo is answered on the socket rather than in a
+        // log the UI cannot see.
+        if p.node_type > 6 { return Some(Err("no such node type")); }
+        p.command_type = UiCommandType::AddPatcherNode as u16;
+    } else if del {
+        p.command_type = UiCommandType::RemovePatcherNode as u16;
+    } else {
+        if p.src_node_id == p.dst_node_id {
+            return Some(Err("a node cannot connect to itself"));
+        }
+        let want = parse_num(body, "\"kind\"").map(|k| k.max(0) as u32);
+        let (sp, dp, kind) = match resolve_link(
+            n("\"srcType\"").max(0) as u32,
+            n("\"dstType\"").max(0) as u32,
+            want,
+        ) {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        };
+        p.command_type = UiCommandType::ConnectPatcherNodes as u16;
+        p.src_port_id = sp;
+        p.dst_port_id = dp;
+        p.edge_kind = kind;
+    }
+    Some(Ok(p))
+}
+
 fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_named(body) { return r; }
 
@@ -945,6 +1062,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Duration::from_millis(250)) { ok += 1; } else { failed += 1; }
                             }
                             let reply = format!("{{\"ok\":true,\"applied\":{ok},\"failed\":{failed}}}");
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // Graph edits: add, remove, connect. Own payload again.
+                        if let Some(r) = build_patcher_graph(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_patcher_graph(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"type\":{},\"node\":{},\"srcPort\":{},\"dstPort\":{},\"kind\":{}}}",
+                                        p.command_type, p.node_id, p.src_port_id, p.dst_port_id, p.edge_kind),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
@@ -1321,6 +1453,53 @@ mod tests {
     /// Byte-level layout, which is where this project has been bitten twice.
     /// The values are the ones the READ side reports, so a round trip through
     /// the UI has to come back the same.
+    #[test]
+    fn a_link_resolves_ports_from_the_two_node_types() {
+        // euclidean -> passthru: event out 1 to event in 0, kind Event.
+        assert_eq!(resolve_link(1, 2, None), Ok((1, 0, 0)));
+        // lfo -> kernel: control out 3 to control in 2, kind Control.
+        assert_eq!(resolve_link(4, 0, None), Ok((3, 2, 2)));
+        // audio -> audio: ports 5 and 4, kind Audio.
+        assert_eq!(resolve_link(3, 3, None), Ok((5, 4, 1)));
+        // An LFO's control output has nowhere to go on a euclidean.
+        assert!(resolve_link(4, 1, None).is_err());
+        // Euclidean is a source: nothing connects INTO it.
+        assert!(resolve_link(2, 1, None).is_err());
+        // Kernel to kernel could be events or control, so it is refused rather
+        // than guessed — until the caller says which.
+        assert_eq!(resolve_link(0, 0, None).err(),
+                   Some("more than one kind of connection fits — say which"));
+        assert_eq!(resolve_link(0, 0, Some(0)), Ok((1, 0, 0)));
+        assert_eq!(resolve_link(0, 0, Some(2)), Ok((3, 2, 2)));
+    }
+
+    #[test]
+    fn graph_edits_carry_the_right_command_and_refuse_the_impossible() {
+        let p = build_patcher_graph(r#"{"type":"patchadd","nodeType":4}"#).unwrap().unwrap();
+        assert_eq!(p.command_type, UiCommandType::AddPatcherNode as u16);
+        assert_eq!(p.node_type, 4);
+
+        let p = build_patcher_graph(r#"{"type":"patchdel","node":7}"#).unwrap().unwrap();
+        assert_eq!(p.command_type, UiCommandType::RemovePatcherNode as u16);
+        assert_eq!(p.node_id, 7);
+
+        let p = build_patcher_graph(
+            r#"{"type":"patchlink","src":0,"srcType":1,"dst":3,"dstType":2}"#)
+            .unwrap().unwrap();
+        assert_eq!(p.command_type, UiCommandType::ConnectPatcherNodes as u16);
+        assert_eq!((p.src_node_id, p.dst_node_id), (0, 3));
+        assert_eq!((p.src_port_id, p.dst_port_id, p.edge_kind), (1, 0, 0));
+
+        // A node type the engine does not have is refused here, where the answer
+        // reaches the UI, rather than on the engine's error ring.
+        assert_eq!(build_patcher_graph(r#"{"type":"patchadd","nodeType":9}"#).unwrap().err(),
+                   Some("no such node type"));
+        assert_eq!(build_patcher_graph(
+            r#"{"type":"patchlink","src":2,"srcType":1,"dst":2,"dstType":2}"#).unwrap().err(),
+                   Some("a node cannot connect to itself"));
+        assert!(build_patcher_graph(r#"{"type":"note","pitch":60}"#).is_none());
+    }
+
     #[test]
     fn a_loop_carries_two_absolute_nanoticks_and_refuses_an_empty_span() {
         let p = build_command(r#"{"type":"loop","start":4294967296,"end":4294967296000}"#)

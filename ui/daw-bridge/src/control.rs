@@ -20,7 +20,7 @@ use crate::layout::{
     UiClipExtent, UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot,
     UiCommandPayload, UiHarmonyEvent, UiHarmonySnapshot, UiPatcherEdge, UiPatcherNode,
     UiPatcherRegion, K_SHM_MAGIC, K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS,
-    K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_TRACKS, UiPatcherNodeConfigPayload,};
+    K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_TRACKS, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,};
 use crate::reader::{SeqlockReader, UiSnapshot};
 
 /// Per-track mixer read-back. Gain in millibels, pan in thousandths (integers —
@@ -447,8 +447,12 @@ impl EngineHandle {
         }
     }
 
-    /// A patcher node's configuration. Its own payload: the engine dispatches on
-    /// entry size, so this cannot ride in a UiCommandPayload slot.
+    /// A patcher node's configuration.
+    ///
+    /// Its own payload rather than a UiCommandPayload: every command payload is
+    /// 40 bytes, so the engine checks the size and then dispatches on
+    /// commandType — the shape has to match the one that command reads, field
+    /// for field, or the engine reads a config out of the wrong offsets.
     pub fn send_patcher_config(
         &self,
         payload: UiPatcherNodeConfigPayload,
@@ -456,6 +460,18 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const UiPatcherNodeConfigPayload as *const u8,
             std::mem::size_of::<UiPatcherNodeConfigPayload>(),
+        )
+    }
+
+    /// Add, remove or connect patcher nodes. Same story as the config above:
+    /// a distinct 40-byte shape the engine reads for these three command types.
+    pub fn send_patcher_graph(
+        &self,
+        payload: UiPatcherGraphCommandPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const UiPatcherGraphCommandPayload as *const u8,
+            std::mem::size_of::<UiPatcherGraphCommandPayload>(),
         )
     }
 

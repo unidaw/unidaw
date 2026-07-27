@@ -106,9 +106,14 @@ export class Patcher {
     // The graph is real but singular. Saying so is the difference between a
     // surface that is honest about its scope and one that quietly implies a
     // per-device view it does not have.
-    const note = vm.empty
+    // What the next keystroke will do comes first, because it changes; the
+    // standing caveat about one global graph comes after it.
+    const scope = vm.empty
       ? 'no patcher graph published'
       : `one global graph, on device ${vm.device} — per-device execution is not in the engine yet`;
+    const note = vm.linkFrom >= 0
+      ? `connecting from #${vm.linkFrom} — press c on the destination · ${scope}`
+      : (vm.addType ? `a adds ${vm.addType} (t cycles) · ${scope}` : scope);
     if (this._notice !== note) {
       this._notice = note;
       this.notice.firstChild.nodeValue = note;
@@ -122,6 +127,9 @@ export class Patcher {
       nodes: vm.nodeCount, edges: vm.edgeCount, version: vm.version, device: vm.device,
       types: vm.nodes.slice(0, vm.nodeCount).map((n) => n.typeName),
       field: (vm.nodes.slice(0, vm.nodeCount).find((n) => n.selected) || {}).fieldName || '',
+      addType: vm.addType,
+      linkFrom: vm.linkFrom,
+      notice: this._notice,
       configs: vm.nodes.slice(0, vm.nodeCount).map((n) => n.config).filter(Boolean),
       domNodes: this.nodePool.length + this.edgePool.length,
     };

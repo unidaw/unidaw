@@ -313,9 +313,19 @@ Two rules that came out of building them:
   the graph it shows is the engine's one global graph rather than implying a
   per-device view it does not have. The alternative — a confident control over a
   guess — is the same silent-plausible-wrongness section 2.1 is about.
-- **Anything unimplemented refuses out loud.** Clip edits, chord tokens and the
-  effect column all name what is missing rather than doing nothing. A control
-  that silently ignores you is indistinguishable from one that worked.
+- **Anything unimplemented refuses out loud.** Clip edits and the effect column
+  name what is missing rather than doing nothing. A control that silently
+  ignores you is indistinguishable from one that worked. What is left: arrange
+  clip edits, waiting on a stable placement id from the engine (`placement_id`
+  is an index today), and reading the engine's own error ring, whose format is
+  not published — a refusal only the engine can detect is still silent.
+- **A refusal the other side wrote is a refusal this side must show.** The
+  sidecar answers every command with `{"ok":true}` or `{"error":"..."}`, and
+  those error strings are written to be read — "those two node types have no
+  compatible ports" is the answer to the question just asked. They were logged to
+  a dock that is usually closed and dropped otherwise, so careful refusals on one
+  side arrived as silence on the other. Every error ack now lands on the chrome's
+  reject line.
 - **A read-back the UI does not fully write is a config the engine will zero.**
   The engine rebuilds a patcher node's whole config from the payload it receives,
   so the eight published values all go back, edited field aside. `duration_ticks`

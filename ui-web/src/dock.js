@@ -93,6 +93,19 @@ export function createCommands(api) {
       if (a.length < 3) throw new Error('patch <node> <field> <steps>');
       return api.patch(num(a[0], 0), a[1], num(a[2], 0));
     } },
+    addnode: { help: 'addnode <type> — a patcher node, by type name', run: (a) => {
+      if (!a[0]) throw new Error('addnode <type>');
+      return api.addNode(a[0]);
+    } },
+    delnode: { help: 'delnode <node>', run: (a) => {
+      if (a[0] === undefined) throw new Error('delnode <node>');
+      return api.delNode(num(a[0], -1));
+    } },
+    link: { help: 'link <src> <dst> [kind] — ports are worked out from the types', run: (a) => {
+      if (a.length < 2) throw new Error('link <src> <dst>');
+      return api.linkNodes(num(a[0], -1), num(a[1], -1),
+                           a[2] === undefined ? undefined : num(a[2]));
+    } },
     loop: { help: 'loop <fromBar> <toBar> — bars are 1-based, as on the ruler', run: (a) => {
       if (a.length < 2) throw new Error('loop <fromBar> <toBar>');
       return api.setLoop(num(a[0], 1), num(a[1], 2));

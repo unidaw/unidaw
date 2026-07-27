@@ -282,6 +282,39 @@ ok(/no editable configuration/.test(noCfg), 'a node without a layout refuses out
 await page.evaluate(([id, n]) => window.__uni.run(`patch ${id} hits ${n}`), [euclid.id, hitsWas]);
 await page.waitForTimeout(1200);
 
+section('patcher graph edits');
+const graphWas = await page.evaluate(() => window.__uni.patcher());
+await page.evaluate(() => window.__uni.run('addnode random'));
+await page.waitForTimeout(1400);
+const grown = await page.evaluate(() => window.__uni.patcher());
+ok(grown.nodes.length === graphWas.nodes.length + 1, 'a node can be added',
+   `${graphWas.nodes.length} -> ${grown.nodes.length} nodes`);
+const added = grown.nodes[grown.nodes.length - 1];
+// Ports come from the two node types, so nothing here types a port number.
+await page.evaluate(([src, dst]) => window.__uni.run(`link ${src} ${dst}`),
+                    [euclid.id, added.id]);
+await page.waitForTimeout(1400);
+const linked = await page.evaluate(() => window.__uni.patcher());
+const newEdge = linked.edges.find((e) => e.dst === added.id);
+ok(!!newEdge, 'and connected without anyone naming a port',
+   JSON.stringify(linked.edges));
+ok(newEdge && newEdge.srcPort === 1 && newEdge.dstPort === 0 && newEdge.kind === 0,
+   'on the ports the engine expects for that pair', JSON.stringify(newEdge));
+// A pair with no compatible ports is refused, and the refusal reaches the UI —
+// the sidecar's message used to go to a dock nobody had open.
+const audioNode = await page.evaluate(() =>
+  window.__uni.patchNodes().find((n) => n.type === 'audio'));
+await page.evaluate(([a, b]) => window.__uni.run(`link ${a} ${b}`),
+                    [euclid.id, audioNode.id]);
+await page.waitForTimeout(900);
+const why = await page.evaluate(() => window.__uni.state().reject);
+ok(/compatible ports/.test(why || ''), 'an impossible connection says why, on screen', String(why));
+await page.evaluate((id) => window.__uni.run(`delnode ${id}`), added.id);
+await page.waitForTimeout(1400);
+const shrunk = await page.evaluate(() => window.__uni.patcher());
+ok(shrunk.nodes.length === graphWas.nodes.length, 'and removed again, taking its edge with it',
+   `${grown.nodes.length} -> ${shrunk.nodes.length} nodes, ${shrunk.edges.length} edges`);
+
 section('piano roll selection');
 await page.evaluate(() => { window.__uni.view('piano'); window.__uni.pianoAll(true); });
 await frames();
@@ -333,7 +366,18 @@ section('aggregate zooms');
 await page.evaluate(() => window.__uni.view('tracker'));
 const aggAt = async (z) => {
   await page.evaluate((x) => window.__uni.setZoom(x), z);
-  await page.waitForTimeout(900);
+  // Poll until the engine's row count SETTLES, rather than sleeping a number
+  // that happened to be long enough. The zoom goes out on the command socket
+  // and comes back on the state socket a viewport-apply later; a fixed 900 ms
+  // passed for months and then failed the day a section was added ahead of it,
+  // reporting a 16x jump because one read was still the previous zoom's.
+  let prev = -1, stable = 0;
+  for (let i = 0; i < 60 && stable < 3; i++) {
+    await page.waitForTimeout(100);
+    const rows = await page.evaluate(() => window.__uni.aggregates().rows);
+    stable = rows === prev ? stable + 1 : 0;
+    prev = rows;
+  }
   await frames();
   return page.evaluate(() => ({
     engineRows: window.__uni.aggregates().rows,
@@ -482,7 +526,8 @@ ok(help.includes('note') && help.includes('gain') && help.includes('view'),
    `the grammar spans editing, mixing and navigation: ${help.length} commands`);
 // Requirement (d) is that an agent can do what a user can. Every keyboard action
 // that changes something needs a command, or the console is a subset.
-for (const c of ['follow', 'rename', 'select', 'transpose', 'copy', 'paste', 'cut']) {
+for (const c of ['follow', 'rename', 'select', 'transpose', 'copy', 'paste', 'cut',
+                 'loop', 'patch', 'addnode', 'delnode', 'link']) {
   ok(help.includes(c), `the console can ${c}`);
 }
 
