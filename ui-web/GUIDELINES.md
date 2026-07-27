@@ -700,10 +700,20 @@ engine-**resolved**, so what plays is what is shown and the decoder survives.
   allocation profile and the clip shapes.
 - **Modulation columns** — the redesign adds them on top of the three columns
   built here, and cell count is the one thing measured to scale cost.
-- **Clip edges are invisible.** `.tk-rail` draws a `border-left` that lands
-  exactly where the track border already is, so a clip's extent can only be
-  inferred from where the tint stops. Grab rails need visible top and bottom
-  edges to be grabbable.
-- **Aggregate display.** At 4 bars per row every cell reads `[30x]`–`[45x]` —
-  uniform noise. `RowAggregate` also carries `pitch_min`/`pitch_max`; a contour
-  or density mark would carry more than a count.
+- **Per-lane grids are correct at exactly one zoom.** The table in 2.1.1 has the
+  measurements. `lcmGrid()` does the right arithmetic, is exported, and is called
+  from nowhere. It is not a bug to be fixed in an afternoon: a grid whose lanes
+  advance at different rates has no obvious "the row I am on" for cross-track
+  selection and paste, which is why no tracker in forty years shipped it
+  (ARCHITECTURE_REVIEW Movement 1, item 11, explicitly budgets it as an
+  interaction-design problem). **Awaiting a decision** between marking the
+  incommensurable rows honestly and putting the axis on the lanes' LCM. Per-clip
+  grids (v19) have moved the ground under both: the grid now belongs to a CLIP,
+  so a single lane's grid is no longer even constant down the timeline.
+
+The two items that used to sit here are done, and are recorded as done rather
+than deleted so the list stays honest about what it has and has not tracked:
+clip edges now have visible end grips (`.tk-rail::before/::after`, plus solid
+caps in the rail's own gradient), and the aggregate cells that used to read
+`[30x]`–`[45x]` as uniform noise now carry the pitch ribbon built from
+`RowAggregate`'s `pitch_min`/`pitch_max`.
