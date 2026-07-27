@@ -150,6 +150,14 @@ static SHM_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// whatever the live count happens to say at the instant we look.
 static CONNECTS: AtomicU64 = AtomicU64::new(0);
 
+/// Whether the engine should outlive its last client.
+///
+/// Off by default, because a user thinks the window IS the application. On for
+/// test runs, which open and close a browser dozens of times and would otherwise
+/// take the engine down with the first one — the behaviour is correct for a
+/// person and hostile to a harness.
+static KEEP_ENGINE: AtomicU64 = AtomicU64::new(0);
+
 struct Args {
     port: u16,
     cmd_port: u16,
@@ -172,6 +180,7 @@ fn parse_args() -> Args {
         match v[i].as_str() {
             "--port" if i + 1 < v.len() => { a.port = v[i + 1].parse().unwrap_or(a.port); a.cmd_port = a.port + 1; i += 2; }
             "--cmd-port" if i + 1 < v.len() => { a.cmd_port = v[i + 1].parse().unwrap_or(a.cmd_port); i += 2; }
+            "--keep-engine" => { KEEP_ENGINE.store(1, Ordering::Relaxed); i += 1; }
             "--shm" if i + 1 < v.len() => { a.shm = v[i + 1].clone(); i += 2; }
             "--hz" if i + 1 < v.len() => { a.hz = v[i + 1].parse().unwrap_or(a.hz).clamp(1, 1000); i += 2; }
             "--projects" if i + 1 < v.len() => { a.projects = v[i + 1].clone(); i += 2; }
@@ -1564,7 +1573,7 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
 
     let n = clients.fetch_sub(1, Ordering::Relaxed) - 1;
     eprintln!("sidecar: client gone ({peer}), {n} remain");
-    if n == 0 {
+    if n == 0 && KEEP_ENGINE.load(Ordering::Relaxed) == 0 {
         last_client_gone(&shm, clients.clone());
     }
 }

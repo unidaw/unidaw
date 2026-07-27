@@ -62,6 +62,12 @@ LOCK=/tmp/uni-web-stack$SEG.lock
 # Sidecar ports follow the page port, so one override moves the whole stack.
 WS_STATE=${WS_STATE:-$((PORT + 1))}
 WS_CMD=${WS_CMD:-$((PORT + 2))}
+# The engine follows its last client out the door, because a user thinks the
+# window is the application. A TEST RUN opens and closes a browser dozens of
+# times and would take the engine with the first one, so harnesses set
+# KEEP_ENGINE=1 — correct for a person, hostile to a harness.
+KEEP=""
+[ -n "${KEEP_ENGINE:-}" ] && KEEP="--keep-engine"
 
 alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 
@@ -183,7 +189,7 @@ say "building the sidecar…"
   || { say "sidecar build failed:"; tail -20 /tmp/side-build.log; exit 1; }
 
 ( cd "$WEB/ui" && DAW_PROJECT_DIR=$PROJECTS \
-    nohup ./target/release/daw-sidecar --shm "$SHM" --port "$WS_STATE" --cmd-port "$WS_CMD" \
+    nohup ./target/release/daw-sidecar --shm "$SHM" --port "$WS_STATE" --cmd-port "$WS_CMD" $KEEP \
       > /tmp/side$SEG.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
 sleep 2
 SIDECAR_PID=$(sed -n 2p "$PIDFILE")

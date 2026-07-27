@@ -267,3 +267,23 @@
 .ch-link  { font-family: var(--font-mono); font-size: 9px; letter-spacing: .06em;
             color: var(--base-neutral-700); }
 .ch-link.live { color: var(--uni-text-fx); }
+
+/* The mode row: one button per surface, with the key that reaches it. The keys
+   are printed because a shortcut nobody can discover is not a shortcut. */
+.ch-tabs { display: flex; align-items: center; gap: 2px; margin-left: 4px; }
+.ch-tab {
+  display: flex; align-items: baseline; gap: 5px;
+  padding: 3px 8px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-family: var(--font-chrome);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--base-neutral-600);
+  cursor: pointer;
+}
+.ch-tab:hover { color: var(--uni-text-instrument); }
+.ch-tab.on { color: var(--base-accent); border-color: var(--base-accent); }
+.ch-tab-key { font-size: 8px; color: var(--base-neutral-800); }
+.ch-tab.on .ch-tab-key { color: var(--base-accent-ramp-700); }

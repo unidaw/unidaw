@@ -67,7 +67,7 @@ import { createPending, propose, applyPending, settlePending,
 import { buildHarmonyModel, createHarmonyBuffer } from './src/harmonymodel.js';
 import { Palette } from './src/palette.js';
 import { buildChainModel, createChainBuffer } from './src/chainmodel.js';
-import { createChrome } from './src/chrome.js';
+import { createChrome, VIEW_TABS } from './src/chrome.js';
 import { Arrange } from './src/arrange.js';
 import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName,
          TICKS_PER_BAR, snapLoop } from './src/arrangemodel.js';
@@ -97,6 +97,7 @@ const metrics = {
 const host = document.getElementById('tracker');
 const head = document.getElementById('head');
 const chrome = createChrome(document.getElementById('chrome'), {
+  onView: (v) => { state.view = v; if (v === 'piano') fitPiano(); state.focus = 'centre'; schedule(); },
   onPlay: () => cmd('play'),
   onStop: () => { cmd('stop'); state.reject = null; schedule(); },
 });
@@ -441,7 +442,19 @@ const harmonyBuf = createHarmonyBuffer();
 
 const chainHost = document.getElementById('chain');
 const chain = new Chain(chainHost, {
-  onSelect: (pos) => { state.chainSelected = pos; schedule(); },
+  onSelect: (pos) => {
+    state.chainSelected = pos;
+    // A patcher device's card is a way INTO its graph. Selecting one and having
+    // to go and find the patcher yourself is the kind of gap that makes a rack
+    // feel like a list rather than a thing you can open.
+    const here = chains[state.cursor.track];
+    const dev = here && (here.devices || [])[pos];
+    if (dev && dev.node !== undefined && dev.node !== 0xffffffff) {
+      state.selectedNode = dev.node;
+      state.selectedField = 0;
+    }
+    schedule();
+  },
   /**
    * The rack's "+" card. Adds a PATCHER device, not a VST one.
    *
@@ -1221,6 +1234,9 @@ function draw() {
   if (browserHost.hidden === showRail) browserHost.hidden = !showRail;
   if (showRail) { browser.setItems(state.projects, state.currentProject); browser.render(); }
   if (chainHost.hidden === showChain) chainHost.hidden = !showChain;
+  // The minimap belongs to the tracker alone.
+  const wantMinimap = state.view === 'tracker';
+  if (minimapHost.hidden === wantMinimap) minimapHost.hidden = !wantMinimap;
   const paletteHost = document.getElementById('palette');
   if (paletteHost.hidden === palette.opened) {
     paletteHost.hidden = !palette.opened;
@@ -1242,7 +1258,15 @@ function draw() {
   if (showDock) pendingCard.render(pendingState);
   if (showDock) harmonyCard.render(buildHarmonyModel({
     harmony: engine && state.useEngine !== false ? engine.harmony : null,
-    playheadTick: engine ? engine.playheadTick : 0,
+    // THE CURSOR'S tick on the tracker, the playhead's everywhere else.
+    //
+    // The card answered "what is playing", which is the wrong question while you
+    // are editing: scroll down to the F major bar and the card still said A
+    // minor, because the playhead had not moved. In a tracker the cursor is where
+    // your attention is, so that is the harmony worth naming; on the other
+    // surfaces there is no cell cursor and the playhead is the only answer.
+    playheadTick: state.view === 'tracker' ? tickOfCursorRow()
+                                           : (engine ? engine.playheadTick : 0),
     version: engine ? engine.harmonyVersion : -1,
     nameHarmony,
     scales,
@@ -1698,6 +1722,18 @@ addEventListener('keydown', (e) => {
   const alt = e.altKey ? e.code : '';
   const done = () => { e.preventDefault(); schedule(); };
 
+  // 0. The mode keys, ahead of everything — including any open text field. A
+  //    surface switch is never what you meant to type, and a user who cannot
+  //    leave a surface is stuck in it. Tab still cycles; these name the surfaces.
+  for (const t of VIEW_TABS) {
+    if (k === t.key) {
+      state.view = t.view;
+      if (t.view === 'piano') fitPiano();
+      state.focus = 'centre';
+      return done();
+    }
+  }
+
   // 1. Modifier combos first, so nothing below can swallow them. Cmd on macOS,
   //    Ctrl elsewhere — both, because the same build runs on both.
   if (e.metaKey || e.ctrlKey) {
@@ -2134,7 +2170,11 @@ conn = WANTS_ENGINE ? connectEngine({
       state.reject = why || String(msg).slice(0, 80);
       schedule();
     }
-    if (state.dockOpen) dock.log('out', String(msg).slice(0, 200));
+    // NOT logged. Every command's ack was printed verbatim into the agent dock —
+    // {"ok":true,"type":40}, and a viewport echo on every scroll — which buried
+    // the one line a person needed under machine chatter and told them nothing
+    // they could act on. Failures still surface: the error branch above puts them
+    // on the reject line, and the dock logs its own commands' results.
     state.ack = String(msg).slice(0, 80);
     (window.__acks || (window.__acks = [])).push(state.ack); },
   onChange: (store) => {

@@ -947,6 +947,46 @@ ok(applied.status === 'applied', 'applying it commits only once the send went ou
 ok((await E()).clipVersion > cvBefore, 'and the edit actually reached the engine',
    `${cvBefore} -> ${(await E()).clipVersion}`);
 
+section('finding your way around');
+// Tab cycling was the only route between surfaces and nothing said so — a user
+// pressed every function key, found nothing, and discovered Tab by accident.
+const tabs = await page.evaluate(() => [...document.querySelectorAll('.ch-tab')]
+  .map((b) => ({ view: b.dataset.view, text: b.textContent })));
+ok(tabs.length === 5, 'the chrome names every surface', tabs.map((t) => t.view).join(','));
+ok(tabs.every((t) => /F\d/.test(t.text)), 'and prints the key that reaches it',
+   tabs.map((t) => t.text).join(' '));
+for (const [key, view] of [['F2', 'arrange'], ['F3', 'patcher'], ['F8', 'mixer'], ['F1', 'tracker']]) {
+  await page.keyboard.press(key);
+  await frames();
+  const got = await page.evaluate(() => window.__uni.state().view);
+  ok(got === view, `${key} goes to ${view}`, got);
+}
+// The minimap is the tracker's. It lived in the shared stage and painted over
+// the patcher, the mixer and the arrangement.
+await page.keyboard.press('F3');
+await frames();
+ok(await page.evaluate(() => document.getElementById('minimap').hidden),
+   'the minimap does not paint over other surfaces');
+await page.keyboard.press('F1');
+await frames();
+ok(!(await page.evaluate(() => document.getElementById('minimap').hidden)),
+   'and comes back on the tracker');
+
+// The harmony card answers for where the CURSOR is, not where the playhead is:
+// scrolling to a different field used to leave it naming the first one.
+await page.evaluate(() => window.__uni.run('goto 0 0'));
+await frames();
+const atTop = await page.evaluate(() => window.__uni.harmonyProbe().key);
+await page.evaluate(() => window.__uni.run('goto 6 0'));
+await page.waitForTimeout(400);
+const lower = await page.evaluate(() => window.__uni.harmonyProbe().key);
+ok(atTop !== lower, 'the harmony card follows the cursor', `${atTop} -> ${lower}`);
+
+// The dock is for things a person can act on. Every ack used to be printed into
+// it verbatim, including a viewport echo on every scroll.
+const noise = await page.evaluate(() => window.__uni.dockProbe().last.join(' '));
+ok(!/"ok":true/.test(noise), 'the dock does not echo raw command acks', noise.slice(0, 80));
+
 section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));
 

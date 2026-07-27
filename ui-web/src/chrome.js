@@ -26,7 +26,24 @@ function button(cls, iconClass, title) {
   return b;
 }
 
-export function createChrome(host, { onPlay, onStop, onScales } = {}) {
+/**
+ * The surfaces, in the order the design's mode buttons list them, with the
+ * function key each answers to.
+ *
+ * Tab cycling was the ONLY way to change surface and nothing on screen said so —
+ * a user pressed every function key, found nothing, and discovered Tab by
+ * accident. A mode row is not decoration; it is the answer to "what else is
+ * there", which an application has to answer without being asked.
+ */
+export const VIEW_TABS = [
+  { view: 'tracker', label: 'TRACKER', key: 'F1' },
+  { view: 'arrange', label: 'ARRANGE', key: 'F2' },
+  { view: 'patcher', label: 'PATCHER', key: 'F3' },
+  { view: 'piano', label: 'SCALE ROLL', key: 'F4' },
+  { view: 'mixer', label: 'MIXER', key: 'F8' },
+];
+
+export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
   host.className = 'chrome';
 
   const brand = document.createElement('div');
@@ -50,8 +67,28 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
 
   // Entry state. A tracker where you cannot see the octave you are typing into
   // is a tracker that writes the wrong notes silently.
-  // Which surface is showing. Tab cycles four of them and nothing said which.
+  // Which surface is showing — now a row of buttons, one per surface.
   const viewLabel = label('ch-view', 'TRACKER');
+  const tabs = document.createElement('div');
+  tabs.className = 'ch-tabs';
+  const tabEls = [];
+  for (const t of VIEW_TABS) {
+    const b = document.createElement('button');
+    b.className = 'ch-tab';
+    b.type = 'button';
+    b.dataset.view = t.view;
+    b.append(document.createTextNode(t.label));
+    const fk = document.createElement('span');
+    fk.className = 'ch-tab-key';
+    fk.appendChild(document.createTextNode(t.key));
+    b.appendChild(fk);
+    // A control that does nothing is worse than no control, so it only binds
+    // when the host gave it somewhere to go.
+    if (onView) b.addEventListener('pointerdown', () => onView(t.view));
+    b._on = null;
+    tabs.appendChild(b);
+    tabEls.push(b);
+  }
 
   const entry = document.createElement('div');
   entry.className = 'ch-group';
@@ -79,7 +116,7 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
   const link = label('ch-link', 'connecting');
   right.append(reject, link, scales);
 
-  host.append(brand, transport, pos, entry, right);
+  host.append(brand, transport, pos, entry, tabs, right);
 
   if (onPlay) play.addEventListener('click', onPlay);
   if (onStop) stop.addEventListener('click', onStop);
@@ -98,7 +135,14 @@ export function createChrome(host, { onPlay, onStop, onScales } = {}) {
       // dash means the engine has published no timeline, which is a different
       // thing from a project genuinely having no harmony.
       if (keyName !== lastKey) { lastKey = keyName; scaleLabel.firstChild.nodeValue = keyName || '—'; }
-      if (viewName !== lastView) { lastView = viewName; viewLabel.firstChild.nodeValue = viewName.toUpperCase(); }
+      if (viewName !== lastView) {
+        lastView = viewName;
+        viewLabel.firstChild.nodeValue = viewName.toUpperCase();
+        for (const b of tabEls) {
+          const on = b.dataset.view === viewName;
+          if (b._on !== on) { b._on = on; b.classList.toggle('on', on); }
+        }
+      }
       if (rejectText !== lastReject) {
         lastReject = rejectText;
         reject.firstChild.nodeValue = rejectText;

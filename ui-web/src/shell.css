@@ -25,6 +25,15 @@
   --shell-minimap-w: 30px;
 }
 
+/* Text selection is off across the application. Dragging in a tracker selects
+   rows, dragging on a clip rail moves a clip — a blue text highlight following
+   the pointer is never what was meant, and it makes every drag look broken. The
+   places that DO want selection ask for it back below. */
+#app, #app * { user-select: none; -webkit-user-select: none; }
+#app input, #app textarea, .dk-log, .hm-body {
+  user-select: text; -webkit-user-select: text;
+}
+
 #app {
   position: absolute;
   inset: 0;
@@ -143,11 +152,15 @@
 /* The minimap is pinned to the right of the STAGE, outside the horizontally
    scrolled strip — it spans the song, so it must not move when you scroll
    across tracks. The surfaces stop short of it. */
+/* Only the tracker has a minimap. It lived in #stage, which every surface shares,
+   so it painted a column of the song's density over the patcher, the mixer and
+   the arrangement — visible in every screenshot and belonging to none of them. */
 #minimap {
   position: absolute; top: 0; bottom: 0; right: 0;
   width: var(--metrics-minimap-width);
   z-index: 4;
 }
+#minimap[hidden] { display: none; }
 #tracker { right: var(--metrics-minimap-width); }
 /* Only the tracker has a minimap; the other surfaces own their full width. */
 #arrange, #mixer, #piano, #patcher { right: 0; }
