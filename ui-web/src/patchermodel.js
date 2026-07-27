@@ -24,9 +24,13 @@ export const EDGE_KINDS = ['event', 'audio', 'control'];
  * A type with no entry here shows nothing rather than eight anonymous numbers.
  */
 const CONFIG_FIELDS = {
+  // duration_ticks 0 is a SENTINEL, not a length: backend confirmed the Rust
+  // processor substitutes step_ticks/2 (half a Euclidean step) when it sees zero.
+  // Showing "dur 0.00b" for something that sounds like half a step is exactly
+  // the confident-wrong number this file exists to avoid.
   euclidean: ['steps', 'hits', 'offset', 'degree', 'oct', 'vel', 'base',
-              ['dur', 960000, 'b']],
-  random: ['degree', 'vel', ['dur', 960000, 'b']],
+              ['dur', 960000, 'b', 'auto']],
+  random: ['degree', 'vel', ['dur', 960000, 'b', 'auto']],
   // Stored as milli-units, so they are shown divided rather than as raw i32s.
   lfo: [['freq', 1000, 'Hz'], ['depth', 1000, ''], ['bias', 1000, ''], ['phase', 1000, '']],
 };
@@ -64,8 +68,10 @@ export function describeConfig(type, config) {
   for (let i = 0; i < fields.length; i++) {
     const f = fields[i];
     if (Array.isArray(f)) {
-      const [name, scale, unit] = f;
-      parts.push(name + ' ' + (config[i] / scale).toFixed(2) + unit);
+      const [name, scale, unit, zeroLabel] = f;
+      parts.push(zeroLabel && config[i] === 0
+        ? name + ' ' + zeroLabel
+        : name + ' ' + (config[i] / scale).toFixed(2) + unit);
     } else {
       parts.push(f + ' ' + config[i]);
     }

@@ -1313,22 +1313,32 @@ impl EngineEvents {
 
 /// Turn one EventEntry from the engine's out ring into JSON, or None to drop it.
 ///
-/// Only the messages that mean "what you asked for did not happen" are
-/// forwarded. The note diffs (1-3) fire on every edit and are already covered by
-/// clipVersion; forwarding them would be a firehose that buries the one line
-/// somebody needs to read.
+/// Only the messages the UI must act on are forwarded. The note diffs (1-3) fire
+/// on every edit and are already covered by clipVersion; forwarding them would be
+/// a firehose that buries the one line somebody needs to read.
+///
+/// ResyncNeeded (4) is NOT an error — backend was explicit about this. An
+/// undo/redo swaps a track's whole store, which the engine will not try to
+/// describe note-by-note, so it republishes and asks for a refetch. It rides a
+/// UiDiffPayload, whose offset 2 is `flags`, not `error_code`, and whose offset 8
+/// is the clip version. Decoding it with the error prefix would report a code
+/// that is really a flag word.
 fn decode_engine_event(e: &EventEntry) -> Option<String> {
     if e.size < 8 { return None; }
     let p = &e.payload;
     let u16at = |i: usize| u16::from_le_bytes([p[i], p[i + 1]]);
     let u32at = |i: usize| u32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
-    // Every diff payload starts diff_type:u16, then the error ones carry
-    // error_code:u16 and track_id:u32 in the same place.
     let diff = u16at(0);
-    let code = u16at(2);
     let track = u32at(4);
+    if diff == 4 {
+        let clip_version = if e.size >= 12 { u32at(8) } else { 0 };
+        return Some(format!(
+            "{{\"kind\":\"resync\",\"track\":{track},\"clipVersion\":{clip_version}}}"));
+    }
+    // The error payloads DO share a prefix: diff_type:u16, error_code:u16,
+    // track_id:u32.
+    let code = u16at(2);
     let kind = match diff {
-        4 => "resync",
         6 => "chain-error",
         8 => "routing-error",
         10 => "mod-error",
@@ -1627,6 +1637,19 @@ mod tests {
 
         // A short entry cannot be trusted to have the common prefix.
         assert!(decode_engine_event(&entry(&[13, 0])).is_none());
+
+        // ResyncNeeded rides a UiDiffPayload: offset 2 is FLAGS, offset 8 is the
+        // clip version. Decoded with the error prefix it would report a flag word
+        // as an error code and call an undo a failure.
+        let mut r = Vec::new();
+        r.extend_from_slice(&4u16.to_le_bytes());
+        r.extend_from_slice(&7u16.to_le_bytes());     // flags, NOT an error code
+        r.extend_from_slice(&2u32.to_le_bytes());     // track
+        r.extend_from_slice(&912u32.to_le_bytes());   // clipVersion
+        r.resize(40, 0);
+        let json = decode_engine_event(&entry(&r)).expect("resync");
+        assert_eq!(json, "{\"kind\":\"resync\",\"track\":2,\"clipVersion\":912}");
+        assert!(!json.contains("code"), "a resync has no error code: {json}");
 
         // The other error kinds decode from the shared prefix.
         let mut c = Vec::new();

@@ -179,6 +179,12 @@ test('patcher config is named per type, or shown as nothing', () => {
   const euclid = describeConfig(NODE_TYPES.indexOf('euclidean'),
                                 [16, 5, 0, 1, 0, 100, 4, 0]);
   assert.match(euclid, /steps 16/);
+  // duration_ticks 0 is "use the default", not a zero-length note — the Rust
+  // processor substitutes half a step. Rendering it as 0.00b was a confident
+  // wrong number about something audible.
+  assert.match(euclid, /dur auto/);
+  assert.match(describeConfig(NODE_TYPES.indexOf('euclidean'),
+                              [16, 5, 0, 1, 0, 100, 4, 960000]), /dur 1\.00b/);
   assert.match(euclid, /hits 5/);
   // Milli-units divided rather than shown raw.
   const lfo = describeConfig(NODE_TYPES.indexOf('lfo'), [2500, 750, 0, 0, 0, 0, 0, 0]);

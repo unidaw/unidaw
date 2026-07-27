@@ -39,24 +39,67 @@ say() { printf '  %s\n' "$*"; }
 # agent runs `daw_engine --run-seconds N` against its own shm constantly; killing
 # by process name would shoot down its test runs, and refusing to start because
 # one is up would block on something that is none of our business.
-# The engine takes its segment from DAW_UI_SHM_NAME, an env var, so it is not in
-# the command line to pattern-match on. Track pids in a file instead.
 PIDFILE=/tmp/uni-web-stack.pids
+LOCK=/tmp/uni-web-stack.lock
 
 alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 
-if [ -f "$PIDFILE" ]; then
-  while read -r pid; do alive "$pid" && kill "$pid" 2>/dev/null || true; done < "$PIDFILE"
-  sleep 2
-  still=""
-  while read -r pid; do alive "$pid" && still="$still $pid"; done < "$PIDFILE"
-  if [ -n "$still" ]; then
-    say "REFUSING TO START: our own process(es)$still would not die"
-    ps -o pid,command -p $(echo "$still" | tr ' ' ',' | sed 's/^,//;s/,$//') 2>/dev/null || true
+# EXCLUSIVE. Two copies of this script overlapping is how four engines ended up
+# writing one segment: each read the pidfile, each killed what was in it, each
+# truncated it, and each started an engine the others never learned about. The
+# window is wide — the sidecar build alone is tens of seconds — and an automated
+# caller that backgrounds this and sleeps a fixed number of seconds walks into it
+# every time it guesses low. mkdir is atomic on every filesystem that matters.
+if ! mkdir "$LOCK" 2>/dev/null; then
+  # A lock left by a killed run must not wedge the machine for ever.
+  if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
+    say "taking a stale lock ($LOCK, older than 10 min)"
+    rmdir "$LOCK" 2>/dev/null || true
+    mkdir "$LOCK" 2>/dev/null || { say "REFUSING TO START: cannot take $LOCK"; exit 1; }
+  else
+    say "REFUSING TO START: another webstack.sh holds $LOCK"
+    say "if that is wrong: rmdir $LOCK"
     exit 1
   fi
-  rm -f "$PIDFILE"
 fi
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+
+# Every process whose ENVIRONMENT names our segment.
+#
+# This is the authority on "what is running on /daw_web_ui", and the pidfile is
+# not. The engine takes its segment from DAW_UI_SHM_NAME, so it is not in the
+# command line — but `ps eww` prints the environment, so it can be matched
+# exactly. That finds an engine started by a previous run of this script, by
+# hand, or by a concurrent copy, none of which any pidfile knows about; and it
+# cannot touch the backend agent's engines, which run on their own segment names.
+#
+# This script used to report `pgrep -f daw_engine`, which prints SOME engine
+# rather than the one it started — so its own output said the stack was healthy
+# while four engines fought over one seqlock, producing frozen frames, plugin
+# hosts torn down by rivals, and engine deaths that looked like an engine bug.
+our_engines() {
+  local pid
+  for pid in $(pgrep -f "$(basename "$ENGINE")" 2>/dev/null || true); do
+    if ps eww -p "$pid" 2>/dev/null | tr ' ' '\n' | grep -qx "DAW_UI_SHM_NAME=$SHM"; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
+
+for pid in $(our_engines); do kill "$pid" 2>/dev/null || true; done
+if [ -f "$PIDFILE" ]; then
+  while read -r pid; do alive "$pid" && kill "$pid" 2>/dev/null || true; done < "$PIDFILE"
+fi
+sleep 2
+for pid in $(our_engines); do kill -9 "$pid" 2>/dev/null || true; done
+sleep 1
+still=$(our_engines | tr '\n' ' ')
+if [ -n "${still// /}" ]; then
+  say "REFUSING TO START: engine(s) on $SHM would not die: $still"
+  ps -o pid,command -p $(echo "$still" | tr ' ' ',' | sed 's/,*$//') 2>/dev/null || true
+  exit 1
+fi
+rm -f "$PIDFILE"
 # Also clear anything holding OUR ports. A sidecar started by hand is not in the
 # pidfile, and "Address already in use" three steps later is a much worse way to
 # find out about it than here.
@@ -89,7 +132,11 @@ sleep 1
 ( cd "$RUNDIR" && DAW_UI_SHM_NAME=$SHM DAW_PROJECT_DIR=$PROJECTS DAW_HOST_BINARY=$HOST \
     nohup "$ENGINE" "$@" > /tmp/eng.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
 sleep 6
-ENGINE_PID=$(sed -n 1p "$PIDFILE")
+# The engine's OWN pid, resolved from the segment rather than from `$!`. `$!`
+# here is the subshell that wraps the `cd &&`, one below the engine, so it was
+# reported and health-checked in place of the process it started — off by one and
+# right often enough to look correct.
+ENGINE_PID=$(our_engines | head -1)
 alive "$ENGINE_PID" || { say "engine exited during startup:"; tail -5 /tmp/eng.log; exit 1; }
 
 # Build before launching. This script used to run whatever release binary was
@@ -116,7 +163,17 @@ if ! lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
   sleep 1
 fi
 
-say "engine  pid $(pgrep -f daw_engine)"
+# The pid we STARTED, not whichever one a pattern happens to find first.
+say "engine  pid $ENGINE_PID"
+# And there is exactly one of them. Everything above is about getting here; if it
+# is ever wrong, say so rather than leave a racing pair to be discovered later as
+# an inexplicable engine death.
+engines=$(our_engines | tr '\n' ' ')
+count=$(printf '%s' "$engines" | wc -w | tr -d ' ')
+if [ "$count" != "1" ]; then
+  say "REFUSING: $count engines on $SHM ($engines) — a single-producer segment with $count writers"
+  exit 1
+fi
 say "sidecar pid $(pgrep -f "daw-sidecar.*$SHM")  ws 8174 state / 8175 commands"
 say "page    http://127.0.0.1:$PORT/index.html"
 head -2 /tmp/side.log | sed 's/^/  /'

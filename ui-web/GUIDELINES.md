@@ -134,6 +134,23 @@ The same shape applies to anything that makes a decorative element interactive:
 `pointer-events`, `user-select`, and `z-index` were all chosen when nothing had
 to be clickable, and none of them announce that they are now wrong.
 
+### 2.19 A result the engine keeps publishing is not news
+
+Two false alarms on the reject line, both the same shape: the engine publishes a
+LAST-RESULT, and the client read every value it had not seen as an event that had
+just happened.
+
+- A fresh engine on its default project publishes `{loadSeq: 0, loadOk: 0}`,
+  which means NO LOAD HAS BEEN ATTEMPTED. Compared against a `-1` sentinel it
+  read as a failed load, so every startup said "the engine refused that project"
+  about something nobody asked for.
+- The engine keeps publishing the last load result indefinitely. So a page opened
+  after somebody typed a bad project name greeted every later visitor with that
+  refusal — a result belonging to a session that had ended.
+
+The rule: **a client reports only results for actions it initiated.** The first
+frame adopts the engine's counters silently; from then on a change is news.
+
 ### 2.18 The engine's own refusals were on the floor
 
 The engine writes diffs and errors to `ringUiOut` and nothing read it, so a

@@ -228,7 +228,9 @@ function describeEngineEvent(e) {
     if (e.src !== e.dst && (e.src || e.dst)) return `${why} (#${e.src} to #${e.dst})`;
     return e.node ? `${why} (#${e.node})` : why;
   }
-  if (e.kind === 'resync') return 'the engine asked for a resync';
+  if (e.kind === 'resync') {
+    return `track ${e.track} republished (clip version ${e.clipVersion})`;
+  }
   return `${e.kind.replace('-', ' ')} on track ${e.track} (code ${e.code})`;
 }
 
@@ -655,6 +657,12 @@ let engine = null;
 let conn = null;
 let lastViewportKey = -1;
 // The load sequence we have already reacted to. Bumps once per attempt.
+// -1 means "we have not seen the engine's load counter yet". The FIRST frame
+// adopts whatever it says without reporting: that result belongs to whoever
+// asked for it, which may have been a previous page or nobody at all. A client
+// that announces it is telling you about something you did not do — and the
+// engine keeps publishing the last result indefinitely, so a page opened after
+// someone typed a bad project name greeted every visitor with the refusal.
 let lastLoadSeq = -1;
 const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', selection: null,
   // Entry state, shown in the chrome so you can see what you are typing into.
@@ -1769,6 +1777,12 @@ conn = WANTS_ENGINE ? connectEngine({
   onEngineEvent: (list, missed) => {
     for (const e of list) {
       const text = describeEngineEvent(e);
+      // A resync is NOT a refusal. It means the engine swapped a whole track
+      // store — an undo or redo — and republished rather than describing the
+      // change note by note. The refetch is already covered: the sidecar reads
+      // the snapshot on clipVersion, which moves with it. Showing it on the
+      // reject line would put an error on screen every time undo worked.
+      if (e.kind === 'resync') { dock.log('out', 'engine: ' + text); continue; }
       state.reject = text;
       dock.log('err', 'engine: ' + text);
     }
@@ -1809,10 +1823,20 @@ conn = WANTS_ENGINE ? connectEngine({
     // A load result. The engine used to accept a malformed project, change
     // nothing, and ack ok — indistinguishable from a load that worked and
     // produced identical content. It reports now, so we can too.
+    //
+    // Sequence 0 means NO LOAD HAS BEEN ATTEMPTED, not a load that failed. An
+    // engine that boots on its default project publishes {seq: 0, ok: 0}, and
+    // comparing that against a -1 sentinel put "the engine refused that project"
+    // on screen at every startup — a refusal reported for something nobody asked
+    // for, which is worse than saying nothing.
     if (store.loadSeq !== lastLoadSeq) {
+      const first = lastLoadSeq < 0;
       lastLoadSeq = store.loadSeq;
-      if (!store.loadOk) state.reject = 'the engine refused that project';
-      else state.reject = null;
+      // Sequence 0 also means nothing happened: an engine on its default project
+      // publishes {seq: 0, ok: 0}, which is not a failed load.
+      if (!first && store.loadSeq !== 0) {
+        state.reject = store.loadOk ? null : 'the engine refused that project';
+      }
     }
     scope.push(store.peaks, store.peakCount);
     state.playhead = tickToRow(store.playheadTick);
