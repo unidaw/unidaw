@@ -167,12 +167,21 @@ struct Args {
     /// DAW_PROJECT_DIR; we need the same directory to LIST them, because the
     /// browser cannot read a filesystem and the engine publishes no index.
     projects: String,
+    /// The engine's plugin scan, which it writes beside its own binary. Same
+    /// reasoning as `projects`: the browser cannot read it and the engine does
+    /// not publish it, but it is already on disk.
+    plugin_cache: String,
 }
 
 fn parse_args() -> Args {
     let mut a = Args {
         port: 8174, cmd_port: 8175, shm: default_shm_name(), hz: 120,
         projects: std::env::var("DAW_PROJECT_DIR").unwrap_or_else(|_| "presets/projects".into()),
+        // Relative to the sidecar's cwd, which webstack.sh sets to <repo>/ui —
+        // so the default finds the engine's build directory beside it. The flag
+        // is what a stack running an engine from somewhere else uses.
+        plugin_cache: std::env::var("DAW_PLUGIN_CACHE")
+            .unwrap_or_else(|_| "../build/plugin_cache.json".into()),
     };
     let v: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
@@ -184,6 +193,7 @@ fn parse_args() -> Args {
             "--shm" if i + 1 < v.len() => { a.shm = v[i + 1].clone(); i += 2; }
             "--hz" if i + 1 < v.len() => { a.hz = v[i + 1].parse().unwrap_or(a.hz).clamp(1, 1000); i += 2; }
             "--projects" if i + 1 < v.len() => { a.projects = v[i + 1].clone(); i += 2; }
+            "--plugin-cache" if i + 1 < v.len() => { a.plugin_cache = v[i + 1].clone(); i += 2; }
             _ => i += 1,
         }
     }
@@ -661,6 +671,73 @@ fn parse_num(body: &str, key: &str) -> Option<i64> {
 ///
 /// Names only — the engine resolves them against its own project directory, and
 /// handing the client paths would invite it to send one back.
+/**
+ * Is this text a single, complete JSON object?
+ *
+ * The plugin cache is passed through to the client verbatim rather than parsed
+ * and rebuilt — it is already JSON, the browser already has a parser, and
+ * re-encoding 52 records by hand is 52 chances to mangle a plugin name that
+ * contains a quote. But a value spliced into a message must be well formed, or
+ * the client loses the WHOLE message to a parse error and cannot tell why.
+ *
+ * The realistic failure is truncation: the engine rewrites this file after a
+ * scan, and a read that lands mid-write returns half a document. Balancing
+ * braces and brackets while respecting strings and escapes catches exactly that,
+ * which is why it is worth twenty lines rather than a dependency.
+ */
+fn is_complete_json_object(t: &str) -> bool {
+    let t = t.trim();
+    if !t.starts_with('{') || !t.ends_with('}') { return false; }
+    let (mut depth, mut in_str, mut esc) = (0i32, false, false);
+    for c in t.chars() {
+        if esc { esc = false; continue; }
+        if in_str {
+            match c { '\\' => esc = true, '"' => in_str = false, _ => {} }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '{' | '[' => depth += 1,
+            '}' | ']' => { depth -= 1; if depth < 0 { return false; } }
+            _ => {}
+        }
+    }
+    depth == 0 && !in_str
+}
+
+/**
+ * The plugin catalogue, as the engine's scanner left it.
+ *
+ * The browser rail had eight categories and content in one of them, so there was
+ * no way to see — let alone choose — an installed plugin. The engine already
+ * scans, and already writes the answer to plugin_cache.json beside its binary:
+ * name, vendor, format, is_instrument, uid16, path, and an ok/error per entry.
+ * Nothing here needs the engine to publish anything new; it needs somebody to
+ * read the file the engine already wrote.
+ *
+ * Served from the sidecar for the same reason the project list is: a browser
+ * cannot read a filesystem.
+ *
+ * The `error` entries are forwarded rather than filtered. A plugin you own and
+ * cannot see is worse than one you can see and cannot use, and "why is Zebra not
+ * in the list" is a question the list itself should answer.
+ */
+fn list_plugins(path: &str) -> String {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => return format!(
+            "{{\"error\":\"no plugin catalogue at {} - the engine writes it when it scans ({})\"}}",
+            path.replace('"', "'"), e.to_string().replace('"', "'")),
+    };
+    if !is_complete_json_object(&text) {
+        return format!(
+            "{{\"error\":\"the plugin catalogue at {} is not a complete JSON object - \
+              a scan may be in progress; try again\"}}",
+            path.replace('"', "'"));
+    }
+    format!("{{\"ok\":true,\"pluginCache\":{text}}}")
+}
+
 fn list_projects(dir: &str) -> String {
     let mut items: Vec<(std::time::SystemTime, String)> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
@@ -1343,11 +1420,13 @@ fn last_client_gone(shm: &str, clients: Arc<AtomicU64>) {
     });
 }
 
-fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, projects: String) {
+fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, projects: String,
+                  plugin_cache: String) {
     for stream in listener.incoming().flatten() {
         let shm = shm.clone();
         let viewport = viewport.clone();
         let projects = projects.clone();
+        let plugin_cache = plugin_cache.clone();
         thread::spawn(move || {
             let mut ws = match tungstenite::accept(stream) { Ok(w) => w, Err(_) => return };
             // Attached HERE, on the thread that will use it: EngineHandle is not
@@ -1385,6 +1464,13 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         // the engine publishes no project index.
                         if t.contains("\"list\"") {
                             let reply = list_projects(&projects);
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+                        // Same shape and the same reason: a directory the
+                        // browser cannot read, answered here.
+                        if t.contains("\"plugins\"") {
+                            let reply = list_plugins(&plugin_cache);
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
@@ -2155,7 +2241,8 @@ fn main() {
             let shm = args.shm.clone();
             let vp = viewport.clone();
             let projects = args.projects.clone();
-            thread::spawn(move || serve_commands(l, shm, vp, projects));
+            let plugin_cache = args.plugin_cache.clone();
+            thread::spawn(move || serve_commands(l, shm, vp, projects, plugin_cache));
         }
         Err(e) => eprintln!("sidecar: no command port {} ({e}) — read-only", args.cmd_port),
     }
@@ -2889,6 +2976,43 @@ mod tests {
         assert!(build_command(r#"{"type":"adddevice","kind":0}"#).is_err());
         assert!(build_command(r#"{"type":"deldevice","device":7}"#).is_err(),
                 "deldevice is not the note command delete");
+    }
+
+    #[test]
+    fn a_truncated_plugin_catalogue_is_refused_rather_than_forwarded() {
+        // The realistic failure: the engine rewrites this file after a scan and a
+        // read lands mid-write. Forwarding half a document costs the client the
+        // WHOLE message to a parse error, with nothing saying why.
+        assert!(is_complete_json_object(r#"{"plugins":[]}"#));
+        assert!(is_complete_json_object(r#"  {"a":{"b":[1,2]}}  "#));
+        assert!(!is_complete_json_object(r#"{"plugins":[{"name":"Zeb"#), "truncated");
+        assert!(!is_complete_json_object(r#"{"plugins":[]}}"#), "one too many");
+        assert!(!is_complete_json_object(r#"[1,2]"#), "an array is not the document");
+        assert!(!is_complete_json_object(""), "empty");
+        // Braces and brackets INSIDE strings must not count, or a plugin called
+        // "Bass{" makes a complete file look truncated. Nobody would find that.
+        assert!(is_complete_json_object(r#"{"name":"Bass{ [ }"}"#));
+        // ...nor must an escaped quote end the string early.
+        assert!(is_complete_json_object(r#"{"name":"say \" {"}"#));
+
+        // A missing file explains itself rather than returning an empty list,
+        // which would read as "you have no plugins".
+        let miss = list_plugins("/nonexistent/plugin_cache.json");
+        assert!(miss.contains("\"error\""), "{miss}");
+        assert!(miss.contains("the engine writes it when it scans"), "{miss}");
+
+        // A good one is passed through verbatim, under a key the client reads.
+        let dir = std::env::temp_dir().join("uni-sidecar-test-plugincache");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let good = dir.join("plugin_cache.json");
+        std::fs::write(&good, r#"{"schema_version":1,"plugins":[{"name":"A \"quoted\" one"}]}"#).unwrap();
+        let out = list_plugins(good.to_str().unwrap());
+        assert!(out.starts_with("{\"ok\":true,\"pluginCache\":{"), "{out}");
+        // Verbatim means the awkward name survives: re-encoding it by hand is
+        // exactly the step this avoids.
+        assert!(out.contains(r#"A \"quoted\" one"#), "{out}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -206,6 +206,7 @@ say "building the sidecar…"
 
 ( cd "$WEB/ui" && DAW_PROJECT_DIR=$PROJECTS \
     nohup ./target/release/daw-sidecar --shm "$SHM" --port "$WS_STATE" --cmd-port "$WS_CMD" $KEEP \
+      --plugin-cache "$RUNDIR/plugin_cache.json" \
       > /tmp/side$SEG.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
 sleep 2
 # Resolved, not `$!` — see our_sidecar. Written back over the subshell's pid so
