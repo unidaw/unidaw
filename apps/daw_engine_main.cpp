@@ -5515,6 +5515,42 @@ struct TrackRuntime {
       transportNanotick.store(clamped, std::memory_order_release);
       std::cout << "UI: Transport SetPosition " << clamped << std::endl;
     } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetTempo)) {
+      // value0 = milli-BPM. flags: 1 = flatten the map to this single tempo (a
+      // transport-bar BPM edit); 0 = insert-or-replace a point at the nanotick in
+      // noteNanotickLo/Hi (a tempo-lane edit). Runs on the UI command thread, same as
+      // load/save, so loadedTempoMap is single-threaded here; setMap is mutex-guarded
+      // against the UI-publish reader. Save re-emits loadedTempoMap, so this persists.
+      const double bpm = static_cast<double>(payload.value0) / 1000.0;
+      if (bpm > 0.0) {
+        if (payload.flags == 1) {
+          loadedTempoMap = {{0, bpm}};
+        } else {
+          const uint64_t pos =
+              static_cast<uint64_t>(payload.noteNanotickLo) |
+              (static_cast<uint64_t>(payload.noteNanotickHi) << 32);
+          bool replaced = false;
+          for (auto& pt : loadedTempoMap) {
+            if (pt.nanotick == pos) {
+              pt.bpm = bpm;
+              replaced = true;
+              break;
+            }
+          }
+          if (!replaced) {
+            loadedTempoMap.push_back({pos, bpm});
+          }
+        }
+        std::vector<daw::TempoPoint> pts;
+        pts.reserve(loadedTempoMap.size());
+        for (const auto& pt : loadedTempoMap) {
+          pts.push_back({pt.nanotick, pt.bpm});
+        }
+        tempoProvider.setMap(std::move(pts));
+        std::cout << "UI: SetTempo " << bpm << " bpm (flags " << payload.flags
+                  << ")" << std::endl;
+      }
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestDeviceParams)) {
       // Publish one device's parameters into UiDeviceParamsRegion so the rack can
       // show real names + values. trackId + value0 (deviceId). The host query is a
@@ -8518,6 +8554,12 @@ struct TrackRuntime {
         uiShm.header->uiVersion.fetch_add(1, std::memory_order_release);
         uiShm.header->uiVisualSampleCount = uiSampleCount;
         uiShm.header->uiGlobalNanotickPlayhead = uiBlockStartTicks;
+        // Tempo AT the playhead (milli-BPM), plus how many points the map has, so the
+        // chrome shows the true current BPM instead of a hardcoded 120 and can tell a
+        // constant-tempo song from one that changes.
+        uiShm.header->uiTempoMilliBpm = static_cast<uint32_t>(std::lround(
+            tempoProvider.bpmAtNanotick(uiBlockStartTicks) * 1000.0));
+        uiShm.header->uiTempoPointCount = tempoProvider.pointCount();
         uiShm.header->uiTrackCount = static_cast<uint32_t>(
             std::min<size_t>(trackSnapshot.size(), maxUiTracks));
         for (uint32_t i = 0; i < daw::kUiMaxTracks; ++i) {

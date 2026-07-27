@@ -83,11 +83,16 @@ struct alignas(64) ShmHeader {
   uint32_t uiTrackCount = 0;
   uint32_t uiTransportState = 0;
   uint32_t uiClipVersion = 0;
-  uint32_t reservedUi = 0;
+  // Tempo at the current playhead, in milli-BPM (120000 = 120.000). A u32 so the UI
+  // compares an integer instead of rebuilding a string on a float that jitters in
+  // its last digit. Repurposed reserved slot — same offset, no kShmVersion bump.
+  uint32_t uiTempoMilliBpm = 120000;
   uint64_t uiClipOffset = 0;
   uint64_t uiClipBytes = 0;
   uint32_t uiHarmonyVersion = 0;
-  uint32_t reservedUi2 = 0;
+  // Number of points in the project's tempo map, so the UI can tell "the song is
+  // 128" from "the song is 128 HERE" (whether a tempo lane is worth drawing).
+  uint32_t uiTempoPointCount = 1;
   uint64_t uiHarmonyOffset = 0;
   uint64_t uiHarmonyBytes = 0;
   float uiTrackPeakRms[kUiMaxTracks]{};

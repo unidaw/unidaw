@@ -87,6 +87,10 @@ enum class UiCommandType : uint16_t {
   // Publish one device's parameters into UiDeviceParamsRegion: trackId + value0 =
   // deviceId. Lets the device-chain rack pull a device's real name + param list.
   RequestDeviceParams = 40,
+  // Set the project tempo. value0 = milli-BPM (120000 = 120). flags: 0 =
+  // insert-or-replace a tempo point at the nanotick in noteNanotickLo/Hi; 1 = flatten
+  // the whole map to this single tempo (a transport-bar BPM edit), ignoring position.
+  SetTempo = 41,
 };
 
 constexpr uint16_t kMixerFlagMute = 1u << 0;

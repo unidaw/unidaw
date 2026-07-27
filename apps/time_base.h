@@ -55,6 +55,11 @@ class TempoMapProvider final : public ITempoProvider {
     return bpm > 0.0 ? bpm : 120.0;
   }
 
+  uint32_t pointCount() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return static_cast<uint32_t>(points_.size());
+  }
+
   void setMap(std::vector<TempoPoint> points) {
     points.erase(std::remove_if(points.begin(), points.end(),
                                 [](const TempoPoint& p) { return p.bpm <= 0.0; }),
