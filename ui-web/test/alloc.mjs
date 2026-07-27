@@ -225,6 +225,43 @@ await scenario('arrange scrolling time',
   (n) => { for (let i = 0; i < n; i++) window.__uni.arrangeTo((i % 64) * 240000); },
   CHURN_SCROLL_MAX);
 
+/**
+ * The arrangement panning with WAVEFORMS on screen.
+ *
+ * The one property this is measuring: a pan must not repaint the waveform canvas.
+ * The layer is one canvas at the painted band's absolute origin inside the same
+ * scrolled wrapper the clips are in, so a pan moves it with the one transform
+ * everything else already rides (GUIDELINES 3.3) and the canvas is untouched
+ * until the viewport reaches the edge of what has been painted.
+ *
+ * The step is the SAME 4 px a frame as the scenario above, and the range is eight
+ * times longer: the painted band is wider than the screen, so a 256 px sweep
+ * would never leave it, and this one leaves it about ten times a cycle. The
+ * repaint path is therefore measured rather than avoided — 34 repaints in 3,300
+ * draws, which is what "a pan does not repaint the canvas" looks like as a number.
+ *
+ * READ THE NUMBER CAREFULLY. Most of it is not the waveform layer. The same wide
+ * pan run against the ARRANGE fixture, with no audio anywhere and the canvas
+ * painting nothing, measures ~1,120 B/draw — whichever arrange scenario first
+ * pans further than a screen inside a profiled run pays a large one-off in
+ * `render`, and every arrange scenario after it is cheap. Run second, this
+ * scenario measures 212. Run first, as it is here, it measures ~940. The waveform
+ * layer's own contribution, in both orders, is the ~150 B/draw that `_waveWindow`,
+ * `_waves` and `ticksPerSourceFrame` account for between them.
+ *
+ * The 300-draw warm-up walks the whole range first, so every window the loop asks
+ * for is already in the cache and what is left is the painting, not the fixture
+ * synthesising audio.
+ *
+ * If this goes red, the likely cause is a guard that no longer covers everything
+ * the picture is computed from, so every frame repaints: the canvas is a cache
+ * and its key is the pile of numbers compared at the top of `_waves`.
+ */
+await scenario('arrange panning with waveforms',
+  () => { window.__uni.useWaveFixture(); },
+  (n) => { for (let i = 0; i < n; i++) window.__uni.arrangeTo((i % 512) * 240000); },
+  CHURN_SCROLL_MAX);
+
 await scenario('piano roll scrolling time',
   () => { window.__uni.usePianoFixture(); },
   (n) => { for (let i = 0; i < n; i++) window.__uni.pianoTo((i % 64) * 120000); },

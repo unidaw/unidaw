@@ -133,6 +133,51 @@ snapshot earlier in the same function and then compared it to itself, so the
 timeline would have been read exactly once. Hold the version the data you have was
 READ at, separately from the version currently published.
 
+### 2.1.2 A golden that is not reproducible is not a golden
+
+Two scenes disagreed with their own baselines while every structural assertion
+about them passed. Both were the harness, not the product, and both had already
+been dismissed once as "pre-existing" — which is what a flaky golden buys you: it
+trains everyone to explain the failure away, and then it hides the real one. The
+556px regression underneath these was a genuine bug in my own draw path.
+
+Three causes, all of them the same mistake — photographing a system that had not
+finished moving:
+
+1. **A CSS transition.** `.ch-reject` fades in over 120ms; the harness waited two
+   animation frames, ~32ms. Same text, different opacity, a different image every
+   run. Blessing froze one arbitrary point on the ramp and the next run picked
+   another. Fixed by finishing every running animation
+   (`document.getAnimations()` → `finish()`) rather than by deleting the fade: the
+   ease-in is real product behaviour, and a harness that switches off the thing it
+   is photographing tests a UI nobody uses. What a golden should capture is where
+   a transition ENDS, which is the one part of it that is deterministic.
+
+2. **Lazily-loaded fonts.** `document.fonts.ready` was awaited at boot, but it
+   resolves for the faces wanted *at that moment*. A face that a later scene is
+   the first to use is requested when that scene first paints a glyph in it. Await
+   it per scene.
+
+3. **Partial rasterisation.** Chrome re-rasterises only the tiles it believes are
+   dirty and reuses the rest, so identical DOM can come out with different
+   antialiasing depending on what was invalidated before it. This UI mutates its
+   surfaces in place between scenes *by design*, which is exactly the case that
+   varies. Pin it at launch: `--disable-partial-raster`,
+   `--disable-gpu-rasterization`, `--force-color-profile=srgb`,
+   `--disable-lcd-text`.
+
+The tell for all three was the SHAPE of the diff, and it is worth recognising.
+23 pixels, bistable rather than drifting, confined to the rounded corners of one
+pill and two diagonal cable pixels. Straight edges land on the same pixel under a
+sub-pixel shift; curves and diagonals are the only witness. A diff that small and
+that shaped is never a feature change — it is the renderer, and chasing it through
+the product code finds nothing, because there is nothing there.
+
+So: before believing any golden diff, check the scene against ITSELF across two
+runs. `magick a.png b.png -compose difference …` on two consecutive outputs
+answers "is this a regression or a flake?" in one command, and it is the first
+question, not the last.
+
 ### 2.3 Strides and offsets are load-bearing
 
 Twice a field added to the wire has shifted everything after it. The first grew a

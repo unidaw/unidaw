@@ -21,7 +21,7 @@
 // surface that installs a window listener is a surface that fights the handler
 // for the same keys and wins at random.
 
-import { createCommands } from './dock.js';
+import { createCommands, runCommand } from './dock.js';
 
 /**
  * Ranking, written down because a search that ranks mysteriously is worse than
@@ -108,10 +108,20 @@ export class Palette {
     // per-keystroke work is deciding which of these are in and where they sit.
     // `lower` is precomputed for the same reason: lowercasing 30 names on every
     // keystroke is 30 strings nobody reads.
+    // `sig` is the command's argument schema written out — `gain <track> <dB>`.
+    // It comes from the registry rather than being derived here, so the hint
+    // beside the input names the arguments the gate will actually check.
     this.entries = [];
     for (const name of Object.keys(this.commands)) {
       const help = this.commands[name].help || '';
-      this.entries.push({ name, help, lower: name.toLowerCase(),
+      const sig = this.commands[name].sig || name;
+      const takesArgs = !!(this.commands[name].args || NO_ARGS).length;
+      this.entries.push({ name, help, sig,
+                          // Nothing shown for a command that takes nothing: a
+                          // hint that only ever repeats the highlighted name is
+                          // noise you learn to stop reading.
+                          hint: takesArgs ? sig : '',
+                          lower: name.toLowerCase(),
                           helpLower: help.toLowerCase(), tier: 0, span: 0, at: 0 });
     }
 
@@ -125,6 +135,12 @@ export class Palette {
     this.input.autocomplete = 'off';
     this.input.placeholder = 'transpose · loop · addnode …';
     head.appendChild(this.input);
+    // The completion: the highlighted command's arguments, beside what you are
+    // typing. `zoom` and `oct` take a number each and the palette used to say so
+    // only in the help column, which is where you look after guessing wrong.
+    // Dim like the count, because it is a fact about the row, not an error.
+    this.sigEl = div('pl-sig pl-count', head);
+    this.sigEl.appendChild(document.createTextNode(''));
     this.countEl = div('pl-count', head);
     this.countEl.appendChild(document.createTextNode(''));
 
@@ -151,6 +167,7 @@ export class Palette {
     this.result = '';
     this._dirty = true;
     this._rowH = 0;
+    this._sig = null;         // the hint on screen; null so the first draw writes
 
     this.input.addEventListener('keydown', (e) => {
       // Stops here rather than bubbling to the app, for the reason the dock stops
@@ -313,7 +330,9 @@ export class Palette {
     if (!e) { this.setStatus('no command matches'); return null; }
     const cmd = this.commands[e.name];
     try {
-      const out = cmd.run(this.args(), this);
+      // The dock's gate, not a second one: a launcher that accepted arguments
+      // the console refuses would be two grammars wearing one name.
+      const out = runCommand(e.name, cmd, this.args(), this);
       this.result = out === null || out === undefined ? '' : String(out);
       this.close();
       if (this.result && this.api && typeof this.api.log === 'function') {
@@ -385,6 +404,19 @@ export class Palette {
       if (el._sel !== sel) { el._sel = sel; el.classList.toggle('sel', sel); }
     }
 
+    // The hint tracks the SELECTION, so it is guarded on the string itself
+    // rather than on the index — arrowing between two commands that take the
+    // same arguments must not touch the DOM at all. Every one of these strings
+    // was built once at construction, so the comparison is a pointer compare
+    // and this costs nothing on the frames where nothing moved (GUIDELINES 3).
+    const hint = n ? this.matches[this.selected].hint : '';
+    if (this._sig !== hint) {
+      this._sig = hint;
+      this.sigEl.firstChild.nodeValue = hint;
+      const disp = hint ? '' : 'none';
+      if (this.sigEl.style.display !== disp) this.sigEl.style.display = disp;
+    }
+
     if (this._shown !== n || this._total !== this.entries.length) {
       this._shown = n;
       this._total = this.entries.length;
@@ -426,6 +458,9 @@ export class Palette {
       matches: m,
       selected: this.selected,
       selectedName: sel ? sel.name : null,
+      // What the highlighted command expects, so an agent can read the grammar
+      // off the surface instead of guessing at it.
+      signature: sel ? sel.sig : null,
       total: this.entries.length,
       status: this.status,
       result: this.result,

@@ -35,7 +35,7 @@ export function trackName(engine, t) {
   return FALLBACK_NAMES[t] || (FALLBACK_NAMES[t] = 'T' + String(t + 1).padStart(2, '0'));
 }
 
-import { DEFAULT_METER, ticksPerBar, ticksPerBeat } from './meter.js';
+import { DEFAULT_METER, NANOTICKS_PER_QUARTER, ticksPerBar, ticksPerBeat } from './meter.js';
 
 // Kept as exports because callers import them; they are now DERIVED from the song
 // meter rather than asserted, so a project that is not in 4/4 draws its bar lines
@@ -126,6 +126,32 @@ export function anchoredStart(anchorTick, pointerX, ticksPerPixel) {
 }
 
 /**
+ * Nanoticks per SOURCE frame, for a file at `rateHz` positioned at `bpmMilli`.
+ *
+ *   ticksPerSourceFrame = nanoticksPerQuarter * bpm / (60 * rateHz)
+ *
+ * Two things this must not do, both of which draw a waveform that looks right and
+ * sits in the wrong place:
+ *
+ *  - It must not assume 120 BPM. The engine publishes the tempo the audio was
+ *    POSITIONED at (`audioMapBpmMilli`), and mirroring that number is the whole of
+ *    what makes the drawn waveform line up with the audio you hear. A hardcoded
+ *    120 is correct on every fixture and wrong on every real project.
+ *  - It must not assume the file's rate equals the engine's. `rate` in the source
+ *    table is the FILE's, and a 48 kHz file in a 44.1 kHz session is a 9% error —
+ *    small enough to read as "close enough" and large enough to be a bar out by
+ *    the end of a song.
+ *
+ * `bpmMilli` is BPM x 1000, which is what the engine publishes; folding the 1000
+ * in with the 60 leaves one multiply and one divide, and no chance of a stray
+ * factor of a thousand in a per-clip path.
+ */
+export function ticksPerSourceFrame(bpmMilli, rateHz) {
+  if (!(rateHz > 0) || !(bpmMilli > 0)) return 0;
+  return (NANOTICKS_PER_QUARTER * bpmMilli) / (60 * 1000 * rateHz);
+}
+
+/**
  * Snap a dragged loop span to bars, or to beats when `fine`.
  *
  * Here rather than in the page because it is a musical decision with edge cases
@@ -152,11 +178,60 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
   const clips = new Array(clipCapacity);
   for (let i = 0; i < clipCapacity; i++) {
     clips[i] = { id: 0, clipId: 0, track: 0, x: 0, w: 0, name: '',
-                 audio: false, selected: false, startTick: 0, endTick: 0 };
+                 audio: false, selected: false, startTick: 0, endTick: 0,
+                 /**
+                  * What the clip reads, when it reads audio. Zero srcId means
+                  * "nothing to draw yet" and covers three different states —
+                  * a clip that is not audio, an audio clip whose source table
+                  * has not arrived, and an audio clip whose clip record the
+                  * engine has not published. None of them is an error and all
+                  * three draw the same thing, which is nothing.
+                  *
+                  * `srcStatus` is the source table's: 1 ready, 2 failed to
+                  * decode. 2 is carried through rather than filtered out here,
+                  * because a file that would not decode has to be VISIBLE as
+                  * one — silently blank is the same picture as silence.
+                  */
+                 /**
+                  * Which pooled element draws this clip: the extent's own index,
+                  * not this record's. See `clipSlots` below.
+                  */
+                 slot: 0,
+                 srcId: 0, srcStatus: 0, srcFrames: 0,
+                 /** The in-point, in SOURCE frames. */
+                 startFrame: 0,
+                 /** Nanoticks per source frame; 0 when unknown. */
+                 ticksPerFrame: 0 };
   }
   return {
     lanes, laneCount,
     clips, clipCount: 0,
+    /**
+     * How many pooled clip elements the renderer needs — the engine's extent
+     * count, not the visible count.
+     *
+     * A clip's element is chosen by its EXTENT INDEX, the way the ruler's labels
+     * and the gridlines are chosen by theirs (GUIDELINES 3.4). Indexed by position
+     * in the visible list instead, one region scrolling off the left shifts every
+     * later region down a slot, so every element takes a new x, a new width and a
+     * new placement key — a full rebind of the whole screen for a pan of one
+     * pixel. That is the failure the tracker's row pool was built to avoid and the
+     * clip pool had it: measured, a pan across a song of regions spent ~600 bytes
+     * a frame rewriting positions that had not changed.
+     *
+     * The engine caps extents at 64, so this is bounded, and a slot with nothing
+     * in it this frame is hidden rather than removed (GUIDELINES 3.7).
+     */
+    clipSlots: 0,
+    /**
+     * Bumped by the page whenever a waveform window lands or the source table is
+     * replaced. The renderer's canvas is a cache of what it last painted, and
+     * this is the one input to that painting which is not on screen — without it
+     * the picture would stand still while its content changed (GUIDELINES 2.1).
+     */
+    waveRevision: 0,
+    /** Memo for `ticksPerSourceFrame` — the tempo and rate it was computed at. */
+    _tpfBpm: -1, _tpfRate: -1, _tpf: 0,
     view: { startTick: 0, ticksPerPixel: 60000, width: 0 },
     /**
      * How far the time axis is scrolled, in pixels: `startTick / ticksPerPixel`.
@@ -242,15 +317,19 @@ const NO_CURSOR = Object.freeze({ track: 0, tick: 0 });
  *
  * `loop` is the caller's in-flight loop span, which wins over the engine's.
  *
+ * `audio` is the page's audio side — `{sources, clips, bpmMilli, revision}` as
+ * `__uni.audioSources()` publishes it, plus the revision described on the buffer.
+ * Null when the project has no audio or the table has not arrived.
+ *
  * @param {{startTick:number, width:number, zoomIndex:number, tracks:number,
  *          engine:object|null, laneHeight:number, cursor:object,
- *          selectedPlacement:number}} opts
+ *          selectedPlacement:number, audio:object|null}} opts
  */
 export function buildArrangeModel(opts, buf) {
   const {
     startTick = 0, width = 1200, zoomIndex = 3, tracks: laneCount = 8, loop = null,
     engine = null, laneHeight = 44, cursor = NO_CURSOR,
-    selectedPlacement = -1, laneScroll = 0,
+    selectedPlacement = -1, laneScroll = 0, audio = null, clipMarginPx = 0,
   } = opts;
 
   const zoom = ARRANGE_ZOOM[Math.max(0, Math.min(ARRANGE_ZOOM.length - 1, zoomIndex))];
@@ -339,13 +418,23 @@ export function buildArrangeModel(opts, buf) {
   // Clips overlapping the window. Placements are already bounded by the engine
   // (64 extents), but windowing here keeps the renderer's work proportional to
   // what is visible rather than to what exists.
+  //
+  // `clipMarginPx` widens THIS window and nothing else — not the grid, not the
+  // ruler, not the loop. The renderer paints its waveform band wider than the
+  // screen so a pan costs no repaint (ARRANGE_CLIP_MARGIN_PX), and a band it
+  // cannot see the clips of would draw holes at its edges that fill in a frame
+  // later. The extra blocks are placed at their absolute x like every other one
+  // and the arrangement's own overflow clips them.
+  const clipLo = startTick - clipMarginPx * tpp;
+  const clipHi = endTick + clipMarginPx * tpp;
   let c = 0;
   if (engine) {
     for (let i = 0; i < engine.extentCount && c < buf.clips.length; i++) {
       const e = engine.extents[i];
       if (e.track >= laneCount) continue;
-      if (e.endTick <= startTick || e.startTick >= endTick) continue;
+      if (e.endTick <= clipLo || e.startTick >= clipHi) continue;
       const cl = buf.clips[c++];
+      cl.slot = i;
       cl.id = e.placementId;
       cl.clipId = e.clipId;
       cl.track = e.track;
@@ -360,6 +449,37 @@ export function buildArrangeModel(opts, buf) {
       cl.w = Math.max(2, (e.endTick - e.startTick) / tpp);
       cl.name = e.name;
       cl.audio = !!e.audio;
+      // What this clip reads, if anything. Two lookups on plain objects keyed by
+      // id — no allocation, and both misses are ordinary: the source table
+      // arrives on a project load and the extents arrive at frame rate, so for a
+      // frame or two after a load there are audio extents with no audio clip
+      // record and that is not a fault.
+      cl.srcId = 0; cl.srcStatus = 0; cl.srcFrames = 0; cl.startFrame = 0;
+      // Guarded for the same reason the write below is: once this field has held
+      // a fraction it is a double field, and storing 0 into one is still a heap
+      // number.
+      if (cl.ticksPerFrame !== 0) cl.ticksPerFrame = 0;
+      if (cl.audio && audio) {
+        const ac = audio.clips ? audio.clips[e.clipId] : null;
+        const src = ac && audio.sources ? audio.sources[ac.sourceId] : null;
+        if (src) {
+          cl.srcId = src.id;
+          cl.srcStatus = src.status;
+          cl.srcFrames = src.frames;
+          cl.startFrame = ac.startFrame;
+          // Memoised on its two inputs, and guarded on the way out. This is the
+          // one field here that is not an integer, and V8 has not had unboxed
+          // double fields since 7.6: both the CALL, which returns a fraction, and
+          // the STORE, which puts one in an object, allocate a heap number.
+          // Unguarded it cost ~80 bytes a frame to recompute a number that changes
+          // when the tempo or the file does, which is to say almost never.
+          if (buf._tpfBpm !== audio.bpmMilli || buf._tpfRate !== src.rate) {
+            buf._tpfBpm = audio.bpmMilli; buf._tpfRate = src.rate;
+            buf._tpf = ticksPerSourceFrame(audio.bpmMilli, src.rate);
+          }
+          if (cl.ticksPerFrame !== buf._tpf) cl.ticksPerFrame = buf._tpf;
+        }
+      }
       // Keyed on (track, startTick), not placement_id. Backend's note: the id is
     // currently the extent's INDEX, so it shifts whenever the list changes — a
     // selection keyed on it would silently jump to a different clip after an
@@ -369,6 +489,8 @@ export function buildArrangeModel(opts, buf) {
     }
   }
   buf.clipCount = c;
+  buf.clipSlots = engine ? engine.extentCount : 0;
+  buf.waveRevision = audio ? audio.revision : 0;
 
   // The loop, if the engine has one. Clamped to the window rather than skipped
   // when it runs off the edge: a loop you are inside should still show its edge.

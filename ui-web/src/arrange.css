@@ -113,6 +113,15 @@
 }
 .ar-gridline.bar { background: var(--uni-rule-track); }
 
+/* The waveform band. First child of the clip wrapper, so the clip blocks paint
+   over it — a region's wash, border and name belong on top of its material.
+   Its width, height and x are all written from JS, because all three are
+   projections of the zoom rather than facts of the layout. */
+.ar-wave {
+  position: absolute; top: 0; left: 0;
+  pointer-events: none;
+}
+
 .ar-clip {
   position: absolute; top: 0; left: 0;
   box-sizing: border-box;
@@ -128,6 +137,10 @@
   background: var(--uni-surface-playhead-row);
   border-style: dashed;
 }
+/* A source that would not decode. The canvas draws a stripe where the waveform
+   would be; this says the same thing on the block, so the state survives a clip
+   too narrow to hold a stripe. */
+.ar-clip.audio.failed { border-color: var(--uni-text-fx); border-style: solid; }
 .ar-clip.sel { border-color: var(--base-accent); }
 
 .ar-clip-name {

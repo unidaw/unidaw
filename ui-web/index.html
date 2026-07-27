@@ -68,7 +68,7 @@ import { buildHarmonyModel, createHarmonyBuffer } from './src/harmonymodel.js';
 import { Palette } from './src/palette.js';
 import { buildChainModel, createChainBuffer } from './src/chainmodel.js';
 import { createChrome, VIEW_TABS } from './src/chrome.js';
-import { Arrange } from './src/arrange.js';
+import { Arrange, ARRANGE_CLIP_MARGIN_PX } from './src/arrange.js';
 import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName,
          TICKS_PER_BAR, snapLoop } from './src/arrangemodel.js';
 import { Mixer } from './src/mixer.js';
@@ -803,6 +803,10 @@ const WAVE_MAX_INFLIGHT = 4;
 function requestWaveform(sourceId, decimation, firstFrame, columns, mask) {
   const key = sourceId + ':' + decimation + ':' + firstFrame;
   if (waveCache.has(key) || waveAsked.has(key)) return false;
+  // The fixture answers its own questions, in place, from the same key the real
+  // path uses — see useWaveFixture. Below the dedupe on purpose: a fixture that
+  // synthesised on every ask would rebuild the same window every frame.
+  if (waveSynth) return synthWaveform(key, sourceId, decimation, firstFrame, columns);
   if (waveAsked.size >= WAVE_MAX_INFLIGHT) return false;
   if (!conn || !conn.canSend()) return false;
   const ok = conn.send({ type: 'waveform', source: sourceId, decim: decimation,
@@ -810,6 +814,116 @@ function requestWaveform(sourceId, decimation, firstFrame, columns, mask) {
                          mask: mask === undefined ? 3 : mask });
   if (ok) waveAsked.set(key, Date.now());
   return ok;
+}
+
+/**
+ * The arrangement's audio side, as one record the renderer reads each frame.
+ *
+ * Hoisted and mutated in place rather than built per draw (GUIDELINES 3): this is
+ * handed to `buildArrangeModel` on every frame the arrangement is on screen, and
+ * an object literal there is an allocation per frame for four fields that almost
+ * never change.
+ *
+ * `revision` is the whole of what tells the waveform canvas that its picture is
+ * out of date. The source table and the windows are both content that moves while
+ * every other key — the clip version, the extents revision, the zoom — stands
+ * still, which is this project's signature bug (GUIDELINES 2.1). Bumped in both
+ * places that change either of them, and nowhere else.
+ */
+const arrangeAudio = { sources: null, clips: null, bpmMilli: 120000, revision: 0 };
+let waveRevision = 0;
+
+/**
+ * The renderer's two handles on the audio side, wired HERE rather than at
+ * construction.
+ *
+ * `waveCache` and `requestWaveform` are declared a few hundred lines below the
+ * `new Arrange(...)` that wants them, and a `const` does not initialise when it
+ * hoists — passing them as constructor arguments up there reads them in the
+ * temporal dead zone. That is the fifth TDZ bug this file has had and the only
+ * kind that fails silently (GUIDELINES 2.2), so the wiring goes after both
+ * declarations, where it can be seen to be after them.
+ */
+arrange.bindAudio(waveCache, requestWaveform);
+
+// --- the waveform fixture --------------------------------------------------
+//
+// Synthesised windows, so the arrangement's waveform path can be measured and
+// screenshotted with `?engine=off` — which is where every golden and every
+// allocation scenario runs (GUIDELINES 2.17). Without this the one branch that
+// never gets covered is the one that draws.
+//
+// It answers through `requestWaveform`, on the same key, so what is exercised is
+// the real request/cache/paint loop and not a shortcut around it.
+let waveSynth = false;
+
+/**
+ * The fixture signal, as min/max over one bucket of frames.
+ *
+ * The same eight one-second sections `tools/gen_audio_fixture.py` writes, and for
+ * the same reasons: an impulse train that catches averaging, an alternating
+ * section that catches storing one magnitude instead of a min AND a max, and a DC
+ * second that catches drawing +/-|peak| around a centre line. Computed
+ * ANALYTICALLY per bucket rather than by scanning samples — a bucket at the
+ * coarse zooms is a quarter of a million frames, and a fixture that took a second
+ * to build would be a fixture nobody ran.
+ */
+const SYNTH_SECTIONS = 8;
+function synthBucket(f0, f1, rate, out) {
+  let lo = 0, hi = 0, first = true;
+  const s0 = Math.floor(f0 / rate);
+  const s1 = Math.floor((f1 - 1) / rate);
+  for (let s = s0; s <= s1 && s < SYNTH_SECTIONS; s++) {
+    const a = Math.max(f0, s * rate), b = Math.min(f1, (s + 1) * rate);
+    if (b <= a) continue;
+    let l = 0, h = 0;
+    if (s === 1 || s === 6) { l = -1; h = 1; }               // full sine / alternating
+    else if (s === 2) { l = -0.25; h = 0.25; }               // quarter sine
+    else if (s === 3) { const t = (b - s * rate) / rate; l = -t; h = t; }  // ramp
+    else if (s === 4) {                                       // impulse train, 10/s
+      const i0 = Math.ceil((a - s * rate) / (rate / 10));
+      const i1 = Math.floor((b - 1 - s * rate) / (rate / 10));
+      for (let k = i0; k <= i1; k++) { if (k % 2 === 0) h = 1; else l = -1; }
+    } else if (s === 5) { l = 0.5; h = 0.5; }                 // DC, entirely above zero
+    if (first) { lo = l; hi = h; first = false; }
+    else { if (l < lo) lo = l; if (h > hi) hi = h; }
+  }
+  out[0] = lo; out[1] = hi;
+}
+const _synthOut = [0, 0];
+
+/** Answer one request from the fixture, filing it under the key that was asked. */
+function synthWaveform(key, sourceId, decimation, firstFrame, columns) {
+  const src = arrangeAudio.sources ? arrangeAudio.sources[sourceId] : null;
+  if (!src || src.status !== 1) return false;
+  const rate = src.rate, ch = src.waveChannels;
+  const avail = Math.max(0, Math.ceil((src.frames - firstFrame) / decimation));
+  const cols = Math.min(columns, avail);
+  if (cols <= 0) return false;
+  const pairs = new Int16Array(cols * ch * 2);
+  for (let i = 0; i < cols; i++) {
+    const f0 = firstFrame + i * decimation;
+    synthBucket(f0, Math.min(f0 + decimation, src.frames), rate, _synthOut);
+    for (let c = 0; c < ch; c++) {
+      // Channel 1 is the exact NEGATION of channel 0, like the stereo fixture
+      // file: a renderer that downmixes draws the loudest material as silence.
+      const lo = c === 0 ? _synthOut[0] : -_synthOut[1];
+      const hi = c === 0 ? _synthOut[1] : -_synthOut[0];
+      const o = (c * cols + i) * 2;
+      pairs[o] = Math.max(-32767, Math.min(32767, Math.round(lo * 32768)));
+      pairs[o + 1] = Math.max(-32767, Math.min(32767, Math.round(hi * 32768)));
+    }
+  }
+  waveCache.set(key, { sourceId, decimation, columns: cols, channels: ch,
+                       firstFrame, status: cols < columns ? 1 : 0,
+                       keyLo: 0, keyHi: 0, pairs });
+  waveRevision++;
+  // The same shape as a real answer landing: the window arrived, so the frame
+  // that asked for it is out of date. Synthesising inside the draw that asked and
+  // then not scheduling another would leave the fixture one frame short of drawn,
+  // which is exactly the kind of "works if you nudge it" a golden then bakes in.
+  schedule();
+  return true;
 }
 
 /** Device parameters by device id, as answers arrive. */
@@ -1663,7 +1777,8 @@ function drawMixer() {
 /** Arrange draws from the same store; only the projection differs. */
 const _arrangeOpts = { loop: null, startTick: 0, width: 0, zoomIndex: 0, tracks: 0,
                        engine: null, laneHeight: 0, cursor: { track: 0, tick: 0 },
-                       selectedPlacement: -1 };
+                       selectedPlacement: -1, audio: null,
+                       clipMarginPx: ARRANGE_CLIP_MARGIN_PX };
 let arrangeBufLanes = -1;
 function drawArrange() {
   const lanes = Math.min(state.tracks, 16);
@@ -1684,6 +1799,14 @@ function drawArrange() {
   o.cursor.track = state.cursor.track;
   o.cursor.tick = tickOfCursorRow();
   o.selectedPlacement = state.selectedPlacement;
+  // The audio side, refreshed into the hoisted record rather than rebuilt: both
+  // tables are REPLACED on a project load, so the record cannot simply hold the
+  // ones it saw at startup.
+  arrangeAudio.sources = audioSources;
+  arrangeAudio.clips = audioClips;
+  arrangeAudio.bpmMilli = audioBpmMilli;
+  arrangeAudio.revision = waveRevision;
+  o.audio = arrangeAudio;
   arrange.render(buildArrangeModel(o, arrangeBuf));
   updateChrome();
 }
@@ -2748,6 +2871,7 @@ conn = WANTS_ENGINE ? connectEngine({
     // already (GUIDELINES 2.1): a cache whose key survives a load but whose
     // subject does not is a cache that lies.
     waveCache.clear();
+    waveRevision++;
     schedule();
   },
   /**
@@ -2771,6 +2895,11 @@ conn = WANTS_ENGINE ? connectEngine({
     const key = w.sourceId + ':' + w.decimation + ':' + w.firstFrame;
     waveAsked.delete(key);
     if (w.status === 3 || !w.pairs) { schedule(); return; }
+    // Only a window that LANDED is news. A refusal deliberately does not bump it:
+    // the renderer would repaint, ask the same question, be refused again, and
+    // spin at answer rate. Left alone, the window stays missing and the renderer's
+    // own retry clock asks again a few times a second, which is bounded.
+    waveRevision++;
     waveCache.set(key, {
       sourceId: w.sourceId, decimation: w.decimation, columns: w.columns,
       channels: w.channels, firstFrame: w.firstFrame, status: w.status,
@@ -3039,6 +3168,13 @@ window.__uni = {
                  browser.setPlugins(null, ''); browser.setQuery(''); browser.setCategory('all');
                  state.dockOpen = false; dock.clear(); state.helpOpen = false;
                  state.selectedNode = -1; state.selectedField = 0; patchPending.clear();
+                 // The audio side, back to cold. A scene that inherited a source
+                 // table would draw waveforms inside another scene's regions —
+                 // and the synth flag would keep answering questions the next
+                 // fixture never asked.
+                 waveSynth = false; waveCache.clear(); waveAsked.clear();
+                 audioSources = Object.create(null); audioClips = Object.create(null);
+                 audioBpmMilli = 120000; waveRevision++;
                  // The HUD carries a live node count and frame counter. Pin it
                  // here too, or a scene inherits whatever the previous scene's
                  // timer last wrote and the golden differs by that strip alone.
@@ -3359,6 +3495,83 @@ window.__uni = {
     draw();
   },
   /**
+   * The arrangement with AUDIO material behind it: sources, clips, and windows
+   * the fixture answers itself.
+   *
+   * Separate from `useArrangeFixture` rather than folded into it, because the two
+   * fixtures answer different questions. That one is about lanes, placements and
+   * the ruler and its golden must not move because the waveform code changed;
+   * this one is about what is drawn INSIDE an audio region and needs a table, a
+   * tempo and a sample rate that the other has no business carrying.
+   *
+   * Three sources on purpose: a mono one, a stereo one whose right channel is the
+   * negation of its left (a downmix draws the loudest material as a flat line),
+   * and one that FAILED to decode — because "the file would not open" has to look
+   * different from "the file is quiet", and a fixture with only good sources
+   * cannot tell the two apart.
+   */
+  useWaveFixture: () => {
+    state.useEngine = true; state.hudFrozen = true; conn.close();
+    hudText.nodeValue = 'wave-fixture';
+    state.view = 'arrange'; state.arrangeZoom = 3; state.arrangeStart = 0;
+    state.selectedPlacement = null;
+    const RATE = 44100, SECS = 8;
+    const FRAMES = RATE * SECS;
+    audioSources = Object.create(null);
+    audioClips = Object.create(null);
+    // `rate` is the FILE's, and it is deliberately NOT the engine's: the tick
+    // mapping has to read this number rather than assume the session rate.
+    audioSources[1] = { id: 1, frames: FRAMES, rate: RATE, channels: 1, waveChannels: 1,
+                        status: 1, absPeak: 1, levelMask: 0x7ffc1, keyLo: 1, keyHi: 0,
+                        path: 'fixture/probe_mono.wav' };
+    audioSources[2] = { id: 2, frames: FRAMES, rate: RATE, channels: 2, waveChannels: 2,
+                        status: 1, absPeak: 1, levelMask: 0x7ffc1, keyLo: 2, keyHi: 0,
+                        path: 'fixture/probe_stereo.wav' };
+    audioSources[3] = { id: 3, frames: 0, rate: 0, channels: 0, waveChannels: 0,
+                        status: 2, absPeak: 0, levelMask: 0, keyLo: 3, keyHi: 0,
+                        path: 'fixture/broken.wav' };
+    const B = 3840000;                       // one bar; the sources are four long
+    const LEN = B * 4;
+    // Clip 4 reads the same mono source from four seconds in, so an in-point that
+    // is ignored draws the first half of the file where the second belongs.
+    audioClips[1] = { clipId: 1, sourceId: 1, startFrame: 0, lengthTicks: LEN,
+                      fadeInTicks: 0, fadeOutTicks: 0, gainDb: 0 };
+    audioClips[2] = { clipId: 2, sourceId: 2, startFrame: 0, lengthTicks: LEN,
+                      fadeInTicks: 0, fadeOutTicks: 0, gainDb: 0 };
+    audioClips[3] = { clipId: 3, sourceId: 3, startFrame: 0, lengthTicks: LEN,
+                      fadeInTicks: 0, fadeOutTicks: 0, gainDb: 0 };
+    audioClips[4] = { clipId: 4, sourceId: 1, startFrame: 4 * RATE, lengthTicks: LEN,
+                      fadeInTicks: 0, fadeOutTicks: 0, gainDb: 0 };
+    audioBpmMilli = 120000;                  // 8 s = 4 bars, so sections land on beats
+    const NAMES = ['probe mono', 'probe stereo', 'broken', 'mono from 4s'];
+    const extents = [];
+    // Sixteen placements over sixty-four bars, so a pan has material under it for
+    // longer than the painted band is wide — the case the allocation scenario is
+    // measuring is a pan that keeps leaving what has been painted.
+    for (let k = 0; k < 16; k++) {
+      const clipId = (k % 4) + 1;
+      extents.push({ placementId: k + 1, clipId, track: k % 4, flags: 1,
+                     startTick: k * 4 * B, endTick: k * 4 * B + LEN,
+                     name: NAMES[clipId - 1], audio: true });
+    }
+    // One NOTE clip, so the fixture still shows that the two kinds draw apart.
+    extents.push({ placementId: 17, clipId: 9, track: 4, flags: 0,
+                   startTick: 0, endTick: B * 8, name: 'Keys', audio: false });
+    engine = { ok: true, seq: 1, playheadTick: B * 2, visualSample: 0, clipVersion: 1,
+               harmonyVersion: 0, transport: 0, trackCount: 5, stale: false,
+               peaks: new Float32Array(8), peakCount: 0,
+               notes: [], noteCount: 0,
+               aggCount: new Uint32Array(0), aggRep: new Uint8Array(0),
+               aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
+               extents, extentCount: extents.length, extentsRevision: 1,
+               lpb: Uint8Array.from([4, 4, 4, 4, 4, 0, 0, 0]),
+               rowGrid: 1, notesRevision: 1, aggRevision: 1 };
+    waveCache.clear();
+    waveSynth = true;
+    waveRevision++;
+    draw();
+  },
+  /**
    * Mixer fixture with known faders, both toggles, and synthetic meter levels.
    * Meters need real audio to move, which webtest (no plugins) cannot produce,
    * so a golden without fake peaks would never exercise the meter path at all.
@@ -3495,17 +3708,30 @@ window.__uni = {
     state.dockOpen = true;
     dock.clear();
     dock.log('in', '> help');
-    dock.log('out', 'note <pitch> [dur] [vel] — at the cursor');
-    dock.log('out', 'view tracker|arrange|piano|mixer');
+    // The two help lines are the REAL ones, filtered out of the real help output,
+    // rather than a copy of what help said the day this fixture was written. The
+    // copy had already drifted twice: it showed the pre-schema line format, and a
+    // `view` whose list predated the patcher. A fixture that displays text the
+    // product would never emit teaches the reader a UI that does not exist
+    // (GUIDELINES 2.1.1) — and it does it in a screenshot, which is the one place
+    // a reader has no way to check it against anything.
+    for (const line of dock.commands.help.run([], dock).split('\n')) {
+      if (line.startsWith('note ') || line.startsWith('view ')) dock.log('out', line);
+    }
     dock.log('in', '> goto 8 1');
     dock.log('out', 'cursor 8 t1');
     dock.log('in', '> note 64');
     dock.log('out', 'note 64');
     dock.log('out', '{"ok":true,"type":2}');
-    dock.log('in', '> note 999');
-    dock.log('err', 'pitch out of range: 999');
-    dock.log('in', '> nope');
-    dock.log('err', 'unknown: nope (try help)');
+    // Both refusals go through the real submit path, which echoes the input and
+    // logs whatever the product actually says. Neither reaches `api`: an unknown
+    // name never resolves to a command, and `note 999` is refused by the argument
+    // schema before `run` is called — so the fixture stays side-effect free while
+    // being genuinely produced rather than transcribed. The transcribed version
+    // said "pitch out of range: 999", which the schema stopped emitting when it
+    // took over the refusals and started naming the argument it means.
+    dock.submit('note 999');
+    dock.submit('nope');
     draw();
   },
   /**

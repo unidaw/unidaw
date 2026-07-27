@@ -34,6 +34,7 @@ import { ticksPerBar, ticksPerBeat, positionOf, createPosition, sameMeter,
 import { buildChainModel, createChainBuffer, createParamEdits, findParamEdit,
          setParamEdit, dropParamEdit, reapParamEdits, MAX_PARAMS,
          EDIT_HOLD_MS } from '../src/chainmodel.js';
+import { createCommands, checkArgs, runCommand, parseHelpArgs } from '../src/dock.js';
 
 test('lcmGrid finds a grid every lane lands on', () => {
   assert.equal(lcmGrid([4, 4, 4]), 4);
@@ -528,6 +529,149 @@ test('a project row leaves its meta line to the renderer', () => {
   assert.deepEqual([rows[0].recent, rows[1].recent], [true, false]);
   assert.equal(rows[0].meta, '');
   assert.equal(rows[0].lower, 'newest');
+});
+
+// --- the command grammar ---------------------------------------------------
+// Every command states its arguments twice: as prose in `help`, which is what a
+// person and a model read, and as `args`, which is what the gate reads. The
+// first test below is the one that matters — it is what stops those two from
+// becoming two descriptions of the same thing with nothing forcing them to
+// agree, which is the bug this project keeps having (GUIDELINES 2.1). It
+// already found one: `select <row0> <row1>` documented a required second row
+// and accepted a missing one.
+
+/** Every api method the grammar reaches, recording what it was handed. */
+function stubApi() {
+  const calls = [];
+  const api = { calls };
+  for (const k of ['setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
+                   'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
+                   'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
+                   'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
+                   'cut']) {
+    api[k] = (...args) => { calls.push(k + '(' + args.join(',') + ')'); return 0; };
+  }
+  return api;
+}
+
+test('every command’s prose and its schema describe the same arguments', () => {
+  const cmds = createCommands(stubApi());
+  const names = Object.keys(cmds);
+  assert.ok(names.length > 30, `the whole grammar is covered: ${names.length} commands`);
+  for (const name of names) {
+    const cmd = cmds[name];
+    // No schema means the gate has nothing to check and everything passes, so a
+    // command that forgets one fails here rather than in front of a user.
+    assert.ok(Array.isArray(cmd.args), `${name} declares an argument schema`);
+    const prose = parseHelpArgs(cmd.help);
+    assert.equal(prose.length, cmd.args.length,
+                 `${name} takes ${cmd.args.length} arguments but says "${cmd.help}"`);
+    for (let i = 0; i < prose.length; i++) {
+      const a = cmd.args[i];
+      assert.equal(prose[i].name, a.name,
+                   `${name} argument ${i}: "${cmd.help}" vs schema <${a.name}>`);
+      assert.equal(prose[i].optional, !!a.optional,
+                   `${name} <${a.name}>: [optional] in the prose and in the schema disagree`);
+      assert.ok(['int', 'num', 'text', 'enum'].includes(a.type), `${name} <${a.name}> is typed`);
+      // An enum's values ARE its name in the prose, so a value added to one and
+      // not the other shows up as a name that no longer matches.
+      if (a.type === 'enum') assert.equal(a.values.join('|'), a.name, `${name} enum values`);
+      if (a.min !== undefined && a.max !== undefined) {
+        assert.ok(a.min <= a.max, `${name} <${a.name}> has a range that can be satisfied`);
+      }
+      // Only the last argument can swallow the rest of the line; anything
+      // earlier would eat the arguments after it and never report a thing.
+      if (a.rest) assert.equal(i, cmd.args.length - 1, `${name} <${a.name}> is last`);
+    }
+    assert.equal(cmd.sig, prose.length
+      ? name + ' ' + prose.map((p) => (p.optional ? `[${p.name}]` : `<${p.name}>`)).join(' ')
+      : name, `${name}: the signature refusals quote is the prose signature`);
+  }
+});
+
+test('the help parser reads the signature and stops at the em dash', () => {
+  // The commentary after the dash names <tick> a second time. A parser that
+  // read the whole line would report three arguments for a command with two,
+  // and the drift test above would fail on a file that is perfectly correct.
+  assert.deepEqual(parseHelpArgs('tempo <bpm> [tick] — whole song, or one point from <tick>'),
+                   [{ name: 'bpm', optional: false }, { name: 'tick', optional: true }]);
+  assert.deepEqual(parseHelpArgs('list commands'), [], 'prose with no placeholders takes none');
+  assert.deepEqual(parseHelpArgs('follow [on|off] — keep the playhead in view'),
+                   [{ name: 'on|off', optional: true }]);
+});
+
+test('a bad argument is refused by name, not coerced', () => {
+  const cmds = createCommands(stubApi());
+  // Each of these used to be accepted: num(a[0], d) turns anything into a
+  // number or a NaN and the command carried on with it.
+  assert.equal(checkArgs('gain', cmds.gain, ['0', '400']),
+               'gain: <dB> must be between -96 and 12, got 400');
+  assert.equal(checkArgs('gain', cmds.gain, ['16', '0']),
+               'gain: <track> must be between 0 and 15, got 16',
+               'sixteen strips exist; the seventeenth threw a TypeError about undefined');
+  assert.equal(checkArgs('note', cmds.note, ['60.5']),
+               'note: <pitch> must be a whole number, got "60.5"');
+  assert.equal(checkArgs('seek', cmds.seek, ['-1']), 'seek: <tick> must be at least 0, got -1');
+  assert.equal(checkArgs('zoom', cmds.zoom, ['99']), 'zoom: <index> must be between 0 and 5, got 99');
+  assert.equal(checkArgs('patch', cmds.patch, ['0', 'hits', 'lots']),
+               'patch: <steps> must be a whole number, got "lots"',
+               'this one sent nothing at all and reported the unchanged config');
+  assert.equal(checkArgs('view', cmds.view, ['trackr']),
+               'view: "trackr" is not one of tracker, arrange, piano, mixer, patcher');
+  assert.equal(checkArgs('follow', cmds.follow, ['of']),
+               'follow: "of" is not one of on, off', 'anything but "off" used to mean on');
+  // And the ones that were always fine still are.
+  assert.equal(checkArgs('gain', cmds.gain, ['15', '-96']), null);
+  assert.equal(checkArgs('note', cmds.note, ['127', '480000', '100']), null);
+  assert.equal(checkArgs('tempo', cmds.tempo, ['128.5']), null, 'a decimal bpm');
+  assert.equal(checkArgs('transpose', cmds.transpose, ['-12']), null, 'a signed field');
+});
+
+test('arity is checked against the prose, and names what is missing', () => {
+  const cmds = createCommands(stubApi());
+  assert.equal(checkArgs('gain', cmds.gain, ['3']), 'gain: missing <dB> — gain <track> <dB>');
+  assert.equal(checkArgs('gain', cmds.gain, []), 'gain: missing <track> — gain <track> <dB>');
+  assert.equal(checkArgs('gain', cmds.gain, ['3', '0', '0']),
+               'gain: too many arguments — gain <track> <dB>');
+  assert.equal(checkArgs('play', cmds.play, ['now']), 'play: takes no arguments');
+  // One argument, and the message already named it: quoting the signature after
+  // that says the same thing twice.
+  assert.equal(checkArgs('zoom', cmds.zoom, []), 'zoom: missing <index>');
+  assert.equal(checkArgs('view', cmds.view, []),
+               'view: missing <tracker|arrange|piano|mixer|patcher>');
+  // Optional means optional, in both directions.
+  assert.equal(checkArgs('select', cmds.select, ['8']), null, 'one row is a one-row range');
+  assert.equal(checkArgs('note', cmds.note, ['60']), null);
+  // A trailing name is the rest of the line, so the words after it are not
+  // "too many arguments" — they are the name.
+  assert.equal(checkArgs('rename', cmds.rename, ['0', 'Big', 'Bass']), null);
+  assert.equal(checkArgs('rename', cmds.rename, ['0']),
+               'rename: missing <name> — rename <track> <name>');
+  // A command with no schema at all refuses rather than accepting anything.
+  assert.match(checkArgs('bogus', { help: 'x' }, []), /no argument schema/);
+});
+
+test('the gate runs before the command, and the command still says what it said', () => {
+  const api = stubApi();
+  const cmds = createCommands(api);
+  assert.throws(() => runCommand('gain', cmds.gain, ['0', '400'], null),
+                /must be between -96 and 12/);
+  assert.equal(api.calls.length, 0, 'the mixer never heard about it');
+  // The log lines are part of the contract — an agent reads them back.
+  assert.equal(runCommand('gain', cmds.gain, ['3', '-6'], null), 'gain t3 -6dB');
+  assert.equal(runCommand('zoom', cmds.zoom, ['2'], null), 'zoom 2');
+  assert.equal(runCommand('goto', cmds.goto, ['8', '1'], null), 'cursor 8 t1');
+  assert.equal(runCommand('note', cmds.note, ['64'], null), 'note 64');
+  assert.equal(runCommand('rename', cmds.rename, ['0', 'Big', 'Bass'], null),
+               'renamed t0 to Big Bass');
+  assert.equal(runCommand('tempo', cmds.tempo, ['128'], null), 'tempo 128 (whole song)');
+  assert.equal(runCommand('tempo', cmds.tempo, ['128', '3840000'], null), 'tempo 128 from 3840000');
+  assert.deepEqual(api.calls, ['gain(3,-6)', 'zoom(2)', 'goto(8,1)', 'note(64,,)',
+                               'rename(0,Big Bass)', 'tempo(128,)', 'tempo(128,3840000)']);
+  // A check the gate cannot make stays where it is: zero is inside every range
+  // and still means nothing.
+  assert.throws(() => runCommand('transpose', cmds.transpose, ['0'], null),
+                /transpose by how much\?/);
 });
 
 test('the row pool grows, is reused, and never mixes the two feeds', () => {

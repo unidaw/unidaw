@@ -53,6 +53,12 @@ const SCENES = [
   { name: 'arrange', arrange: true, setup: async (p) => p.evaluate(() => window.__uni.useArrangeFixture()) },
   { name: 'arrange-zoomed', arrange: true, setup: async (p) => p.evaluate(() => {
       window.__uni.useArrangeFixture(); window.__uni.arrangeZoom(5); }) },
+  // Audio regions with their material drawn inside them. Its own scene rather
+  // than a flag on the two above, because the arrange goldens must not move when
+  // the waveform changes and vice versa — and because this one asserts on PIXELS,
+  // which is the only place a peak renderer's mistakes actually show up.
+  { name: 'arrange-waves', arrange: true, waves: true,
+    setup: async (p) => p.evaluate(() => window.__uni.useWaveFixture()) },
   { name: 'help', help: true, setup: async (p) => p.evaluate(() => { window.__uni.help(true); }) },
   { name: 'help-piano', help: true, setup: async (p) => p.evaluate(() => {
       window.__uni.view('piano'); window.__uni.help(true); }) },
@@ -122,7 +128,23 @@ let fail = 0;
 const ok = (cond, msg) => { console.log(`${cond ? '  PASS' : '  FAIL'}  ${msg}`); if (!cond) fail++; };
 
 const { server, port } = await serve(root);
-const browser = await chromium.launch({ channel: 'chrome' });
+// Rasterisation pinned, because the default is not reproducible. Chrome
+// re-rasterises only the tiles it thinks are dirty and reuses what it already
+// has, so the same DOM can come out with different antialiasing depending on
+// what was invalidated before it — and this UI mutates its surfaces in place
+// between scenes by design, which is precisely the case that varies. It showed
+// up as `patcher` differing from its own baseline by 23px in five runs out of
+// six, bistable rather than drifting, entirely on the rounded corners of one
+// pill and two diagonal cable pixels: straight edges land on the same pixel
+// either way, so curves were the only witness.
+//
+// srgb as well, so the goldens do not depend on the colour profile of whichever
+// display the machine happens to have attached.
+const browser = await chromium.launch({
+  channel: 'chrome',
+  args: ['--disable-partial-raster', '--disable-gpu-rasterization',
+         '--force-color-profile=srgb', '--disable-lcd-text'],
+});
 const page = await browser.newPage({ viewport: { width: 1680, height: 980 }, deviceScaleFactor: 2 });
 page.on('pageerror', (e) => console.log('  [pageerror]', e.message));
 await page.goto(`http://127.0.0.1:${port}/index.html?engine=off`);
@@ -168,6 +190,122 @@ async function shoot(scene) {
   }
 }
 
+/**
+ * What the waveform layer actually PAINTED, read back off the canvas.
+ *
+ * Everything below is a pixel assertion on purpose. A waveform is the one surface
+ * where the view-model can be perfectly right and the picture perfectly wrong —
+ * every mistake this fixture exists to catch (averaging away a transient,
+ * storing one magnitude instead of a min and a max, mirroring +/-|peak| around a
+ * centre line, downmixing a stereo pair) produces a model that looks correct and
+ * a drawing that is not. `useWaveFixture` publishes the same eight one-second
+ * sections `tools/gen_audio_fixture.py` writes, so every number here is known in
+ * advance rather than blessed from whatever came out.
+ *
+ * Geometry is derived from the probe rather than hardcoded: the fixture is at
+ * 120 BPM and 44,100 Hz, so one second of source is 1,920,000 nanoticks, and
+ * everything else follows from `ticksPerPixel` and the device pixel ratio. A test
+ * that hardcoded 64 px per second would pass on this machine and lie on any other.
+ */
+async function waveAssertions(page, a) {
+  const w = a.wave;
+  ok(w.bound && w.themed, `waveform layer wired and themed: ${w.bound}/${w.themed}`);
+  ok(w.wanted > 0 && w.held === w.wanted && !w.incomplete,
+     `every window on screen has data: ${w.held}/${w.wanted}`);
+  ok(w.repaints > 0 && w.deviceWidth > 0 && w.deviceHeight > 0,
+     `canvas painted: ${w.deviceWidth}x${w.deviceHeight} device px, ${w.repaints} repaints`);
+
+  // One second of the fixture's audio, in canvas device pixels.
+  const TICKS_PER_AUDIO_SECOND = 1920000;
+  const secPx = (TICKS_PER_AUDIO_SECOND / a.ticksPerPixel) * w.dpr;
+  const laneDev = w.laneHeight * w.dpr;
+
+  /** The lit rows of one lane-relative column, and where the bands are. */
+  const column = (track, clipStartTick, second) => page.evaluate(
+    ([track, clipStartTick, second, secPx, tpp, dpr, spanX, laneDev]) => {
+      const cv = document.querySelector('.ar-wave');
+      const x = Math.round((clipStartTick / tpp - spanX) * dpr + secPx * (second + 0.5));
+      const y0 = Math.round(track * laneDev);
+      const d = cv.getContext('2d').getImageData(x, y0, 1, Math.round(laneDev)).data;
+      const rows = [];
+      let r = 0, g = 0, b = 0;
+      for (let i = 0; i < Math.round(laneDev); i++) {
+        if (d[i * 4 + 3] > 40) { rows.push(i); r = d[i * 4]; g = d[i * 4 + 1]; b = d[i * 4 + 2]; }
+      }
+      return { x, rows, rgb: [r, g, b] };
+    },
+    [track, clipStartTick, second, secPx, a.ticksPerPixel, w.dpr, w.spanX, laneDev]);
+
+  const B = 3840000;                       // one bar, as the fixture lays it out
+  const mid = laneDev / 2;
+  const inset = w.inset;
+
+  // --- mono, track 0, starting at bar 1 -----------------------------------
+  const silence = await column(0, 0, 0);
+  ok(silence.rows.length === 1 && Math.abs(silence.rows[0] - mid) <= 1,
+     `silence is one device pixel at the centre: rows ${JSON.stringify(silence.rows)}, centre ${mid}`);
+
+  const loud = await column(0, 0, 1);
+  ok(loud.rows[0] <= inset + 1 && loud.rows[loud.rows.length - 1] >= laneDev - inset - 2,
+     `full scale reaches the lane edges: ${loud.rows[0]}..${loud.rows[loud.rows.length - 1]}`
+     + ` of ${inset}..${laneDev - inset - 1}`);
+
+  const quiet = await column(0, 0, 2);
+  const quietSpan = quiet.rows[quiet.rows.length - 1] - quiet.rows[0] + 1;
+  const loudSpan = loud.rows[loud.rows.length - 1] - loud.rows[0] + 1;
+  ok(Math.abs(quietSpan / loudSpan - 0.25) < 0.06,
+     `a quarter of full scale draws a quarter as tall: ${quietSpan} vs ${loudSpan}`);
+
+  // THE ONE THIS FIXTURE EXISTS FOR. The DC second is a constant +0.5: every
+  // sample is above zero, so every drawn pixel must be. A renderer that mirrors
+  // +/-|peak| about the centre draws a band straddling it, which is a picture of
+  // audio that is not in the file.
+  const dc = await column(0, 0, 5);
+  ok(dc.rows.length > 0 && dc.rows[dc.rows.length - 1] < mid,
+     `DC +0.5 draws entirely ABOVE the centre: rows ${JSON.stringify(dc.rows)}, centre ${mid}`);
+  const dcHeight = mid - dc.rows[dc.rows.length - 1];
+  ok(Math.abs(dcHeight - (mid - inset) * 0.5) <= 1.5,
+     `and at half of full deflection: ${dcHeight} px above centre, half-scale is ${(mid - inset) * 0.5}`);
+
+  // The alternating section has mean 0 and |peak| 1. One magnitude per bucket
+  // cannot express it; a min AND a max can.
+  const alt = await column(0, 0, 6);
+  ok(alt.rows[0] <= inset + 1 && alt.rows[alt.rows.length - 1] >= laneDev - inset - 2,
+     `alternating +/-1 spans the lane: ${alt.rows[0]}..${alt.rows[alt.rows.length - 1]}`);
+
+  // --- stereo, track 1, starting at bar 5 ---------------------------------
+  // Right is the exact negation of left, so a downmix is identically zero: the
+  // loudest second in the file would draw as a flat line.
+  const stLoud = await column(1, B * 4, 1);
+  const half = (laneDev - inset * 2) / 2;
+  const band0 = stLoud.rows.filter((r) => r < mid);
+  const band1 = stLoud.rows.filter((r) => r >= mid);
+  ok(band0.length >= half - 2 && band1.length >= half - 2,
+     `stereo draws TWO full-height bands, not a downmixed line: ${band0.length} + ${band1.length}`
+     + ` of ${half} each`);
+
+  const stDc = await column(1, B * 4, 5);
+  const up = stDc.rows.filter((r) => r < mid);
+  const down = stDc.rows.filter((r) => r >= mid);
+  ok(up.length > 0 && down.length > 0, `both channels drawn: ${JSON.stringify(stDc.rows)}`);
+  // Mirror images: channel 1 is -channel 0, so its deflection is the same size in
+  // the opposite direction. Compared as DISTANCE from the lane's centre line —
+  // the two bands are drawn from their own centres and a rectangle with a
+  // one-pixel floor cannot land on the exact reflection of another.
+  const aboveNear = mid - up[up.length - 1], belowNear = down[0] - mid;
+  const aboveFar = mid - up[0], belowFar = down[down.length - 1] - mid;
+  ok(Math.abs(aboveNear - belowNear) <= 1 && Math.abs(aboveFar - belowFar) <= 1,
+     `the two bands mirror: ${aboveNear}/${aboveFar} above vs ${belowNear}/${belowFar} below`);
+
+  // --- a source that would not decode, track 2, bar 9 ----------------------
+  const bad = await column(2, B * 8, 1);
+  ok(bad.rows.length > 0, `a failed source is not silently blank: ${bad.rows.length} lit rows`);
+  ok(bad.rgb[0] > bad.rgb[2],
+     `and it is drawn in the warning colour, not the waveform's: rgb(${bad.rgb.join(',')})`);
+  const marked = await page.evaluate(() => document.querySelectorAll('.ar-clip.audio.failed').length);
+  ok(marked > 0, `the block says so too: ${marked} clips marked failed`);
+}
+
 for (const scene of SCENES) {
   console.log(`\n[${scene.name}]`);
   await page.evaluate(() => window.__uni.reset());
@@ -178,6 +316,35 @@ for (const scene of SCENES) {
   // zoom-aggregate differing by 129 px roughly one run in three. A timeout only
   // makes that less likely; waiting for the frame makes it impossible.
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  // Fonts again, per scene, not only at boot. `document.fonts.ready` resolves for
+  // the faces wanted AT THAT MOMENT, and a face a later scene is the first to use
+  // is requested when that scene first paints a glyph in it — so the boot await
+  // does not cover it. patcher differed from its own baseline by 23px in five runs
+  // out of six: not a fade but a bistable pair of layouts, the difference confined
+  // to the rounded corners of the PATCHER pill and two diagonal cable pixels, which
+  // is what a sub-pixel width shift looks like when every straight edge still lands
+  // on the same pixel. Straight edges hide it; curves are the only witness.
+  await page.evaluate(() => document.fonts.ready);
+  // Then jump every running CSS transition to its end state. Two frames is ~32ms
+  // and `.ch-reject` fades over 120ms, so a scene that ends in a rejection was
+  // photographed partway through the fade — same text, different opacity, a
+  // different image every run. bad-token differed from ITSELF by ~1900px between
+  // two consecutive runs, and blessing it just froze one arbitrary point on the
+  // ramp; the next run picked another.
+  //
+  // Finished, not disabled: the fade is real product behaviour (a rejection that
+  // eases in reads as feedback, one that pops reads as a glitch) and a harness
+  // that turns off the thing it is photographing tests a UI nobody uses. What the
+  // golden should capture is where the transition ENDS, which is deterministic.
+  await page.evaluate(() => {
+    for (const a of document.getAnimations()) {
+      // An infinite animation has no end to jump to and finish() throws on one.
+      // There are none today; the guard is so that adding one later degrades to
+      // the old flake in one scene instead of throwing and failing every scene.
+      try { a.finish(); } catch { /* not finishable — leave it running */ }
+    }
+  });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(r)));
 
   // Arrange is a different surface with a different structure. Asserting tracker
   // cells against it does not weakly pass — it fails on geometry that was never
@@ -192,6 +359,7 @@ for (const scene of SCENES) {
     ok(a.domNodes < 1200, `arrange dom bounded: ${a.domNodes}`);
     ok(a.playheadX >= 0, `playhead placed: ${a.playheadX}`);
     console.log(`  ${a.zoom}  ${a.clips} clips  ${a.gridLines} gridlines  ${a.domNodes} nodes`);
+    if (scene.waves) await waveAssertions(page, a);
     await shoot(scene);
     continue;
   }

@@ -1184,7 +1184,7 @@ const MAX_DEVICE_PARAMS: i64 = 256;
 /// moves is not an identity" — so both travel, and whatever the engine grows
 /// should resolve the uid and use the index only as a hint.
 fn build_set_param(body: &str) -> Option<Result<UiSetParamPayload, String>> {
-    if !body.contains("\"setparam\"") { return None; }
+    if !is_type(body, "setparam") { return None; }
     // Checked by its exact key, so `"valueMilli"` does not match: a caller who
     // sent a float gets told why the number would not have survived the trip.
     if body.contains("\"value\"") {
@@ -1246,6 +1246,30 @@ fn build_set_param(body: &str) -> Option<Result<UiSetParamPayload, String>> {
     }))
 }
 
+/// Does this message's `type` field say exactly this?
+///
+/// The dispatch below matched on `body.contains("\"waveform\"")` and friends —
+/// a substring search over the WHOLE message, including its values. That is fine
+/// until a value happens to be a command name, and then it is silent: loading a
+/// project called `waveform` sends {"type":"load","name":"waveform"}, which the
+/// waveform handler claimed and answered with "waveform needs the id of the
+/// source to read". The load never reached the engine and nothing said why.
+///
+/// Found by the e2e test loading the waveform fixture by name, which is exactly
+/// the case hand-testing had skipped. A project called `list`, `plugins`,
+/// `settempo` or `setparam` would have done the same thing.
+///
+/// Matching the type FIELD closes it for every verb that goes through here. No
+/// whitespace tolerance is needed: every client of this socket builds its
+/// messages with JSON.stringify, which emits none.
+fn is_type(body: &str, verb: &str) -> bool {
+    let mut needle = String::with_capacity(verb.len() + 10);
+    needle.push_str("\"type\":\"");
+    needle.push_str(verb);
+    needle.push('"');
+    body.contains(&needle)
+}
+
 /// A process-wide request counter for waveform queries.
 ///
 /// Allocated HERE, not in the browser. Two tabs minting their own ids into one
@@ -1302,7 +1326,7 @@ fn encode_waveform(v: &daw_bridge::control::WaveformSlotView, out: &mut Vec<u8>)
  * the difference between a mistake and a mystery.
  */
 fn build_waveform_request(body: &str) -> Option<Result<UiWaveformRequestPayload, String>> {
-    if !body.contains("\"waveform\"") { return None; }
+    if !is_type(body, "waveform") { return None; }
     let Some(source) = parse_num(body, "\"source\"").filter(|v| *v >= 0) else {
         return Some(Err("waveform needs the id of the source to read".into()));
     };
@@ -1369,7 +1393,7 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         // the publish loop below notices.
         p.command_type = UiCommandType::RequestDeviceParams as u16;
         p.value0 = parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32;
-    } else if body.contains("\"settempo\"") {
+    } else if is_type(body, "settempo") {
         // {"type":"settempo","milliBpm":128000}                  — the whole song
         // {"type":"settempo","milliBpm":128000,"tick":7680000}   — from here on
         //
@@ -1554,14 +1578,14 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         // Not an engine command: a directory listing. Answered
                         // here because the browser cannot read a filesystem and
                         // the engine publishes no project index.
-                        if t.contains("\"list\"") {
+                        if is_type(&t, "list") {
                             let reply = list_projects(&projects);
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
                         // Same shape and the same reason: a directory the
                         // browser cannot read, answered here.
-                        if t.contains("\"plugins\"") {
+                        if is_type(&t, "plugins") {
                             let reply = list_plugins(&plugin_cache);
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
@@ -3154,6 +3178,37 @@ mod tests {
         assert!(build_command(r#"{"type":"adddevice","kind":0}"#).is_err());
         assert!(build_command(r#"{"type":"deldevice","device":7}"#).is_err(),
                 "deldevice is not the note command delete");
+    }
+
+    #[test]
+    fn a_project_may_be_named_after_a_command() {
+        // A message is dispatched on its `type` FIELD, not on any substring of it.
+        //
+        // This was not true: the handlers matched `body.contains("\"waveform\"")`,
+        // so loading a project called `waveform` — which sends
+        // {"type":"load","name":"waveform"} — was claimed by the waveform handler
+        // and answered "waveform needs the id of the source to read". The load
+        // never reached the engine, and the reply named a concept the caller had
+        // not mentioned. Every verb dispatched here had the same hole.
+        for verb in ["waveform", "setparam", "settempo", "list", "plugins",
+                     "note", "chord", "loop", "seek", "adddevice"] {
+            let body = format!("{{\"type\":\"load\",\"name\":\"{verb}\"}}");
+            assert!(build_waveform_request(&body).is_none(),
+                    "the waveform handler claimed a load of a project called {verb}");
+            assert!(build_set_param(&body).is_none(),
+                    "the setparam handler claimed a load of a project called {verb}");
+            assert!(!is_type(&body, verb),
+                    "is_type matched {verb} in a message whose type is load");
+            // ...and the load itself still builds, which is the point.
+            let p = build_command(&body).expect("a load of a project named after a verb");
+            assert_eq!(p.command_type, UiCommandType::LoadProject as u16,
+                       "loading a project called {verb} must still be a load");
+        }
+        // The positive direction, so the check is not vacuously satisfied by
+        // is_type never matching anything.
+        assert!(is_type(r#"{"type":"waveform","source":1}"#, "waveform"));
+        assert!(build_waveform_request(r#"{"type":"waveform","source":1,"decim":1,"cols":4}"#)
+                .is_some(), "a real waveform request is still recognised");
     }
 
     #[test]

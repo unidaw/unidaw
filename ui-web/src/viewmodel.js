@@ -441,6 +441,13 @@ export function buildViewModel(opts, buf) {
         }
         const cell = cells[ci++];
         cell.aggCount = 0;
+        // ...and the pitch, or the ribbon leaks across a fixture switch. The
+        // cells are POOLED and this branch never writes a pitch, so a cell that
+        // held an engine note kept drawing that note's mark under fixture
+        // content — visible as pitch marks in three goldens that have no engine
+        // and therefore no pitches. Every field the other branch writes has to be
+        // cleared here, or the pool remembers.
+        cell.pitch = -1;
         if (!inClip) { cell.text = ''; cell.kind = 'outside'; continue; }
         if (zoom.aggregate && c === 0) {
           // A coarse row spans many finer rows; count the events that fall in it.

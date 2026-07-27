@@ -11,6 +11,86 @@ import { anchoredStart, clampZoom, ticksPerPixelAt, wheelPixels,
 
 const GRID_POOL = 256;
 
+// --- the waveform layer ----------------------------------------------------
+//
+// One CANVAS for every clip, not one canvas per clip and not DOM.
+//
+// DOM is out on volume: a waveform is one filled column per device pixel, so a
+// screen-wide clip is a few thousand nodes whose only per-frame write is a
+// height — the exact shape GUIDELINES 3 exists to keep out of this app.
+//
+// A canvas PER CLIP is out on arithmetic. At the finest zoom a bar is 512 px, so
+// a four-minute region is ~250,000 CSS px and half a million device pixels wide,
+// and every browser refuses a canvas dimension past ~16,384. A per-clip canvas
+// would therefore have to be windowed anyway — at which point it is this, once
+// per clip instead of once per screen, with N contexts and N clears.
+//
+// So: ONE canvas, the width of the viewport plus overscan, living inside
+// `.ar-clips > .ar-scroll` at the painted band's absolute origin. Being inside
+// the scrolled wrapper is the whole point — a pan translates the wrapper and the
+// canvas goes with it for free, exactly as the clips, gridlines and ruler ticks
+// do (GUIDELINES 3.3), and costs NO repaint until the viewport reaches the edge
+// of what has been painted. It is the same band-with-overscan trick `tracker.js`
+// uses for rows, turned on its side.
+//
+// It is sized to the full lane strip vertically (laneCount x laneHeight) rather
+// than to the visible band, so a lane scroll is also free: `.ar-clips` is already
+// translated by `-laneScroll` and the canvas rides that too. The strip is bounded
+// — the page caps arrange at 16 lanes — so this is a bounded canvas, which the
+// horizontal axis can never be.
+
+/** CSS pixels painted beyond each edge of the viewport. Bigger costs memory and
+ *  repaint time; smaller repaints more often. 384 px is about a third of a
+ *  viewport, so a fast trackpad pan repaints every ten-odd frames. */
+const WAVE_OVERSCAN_PX = 384;
+
+/**
+ * How far past the viewport the arrange model must window its clips, in pixels.
+ *
+ * TWICE the overscan, and the factor of two is the whole point. The painted band
+ * is re-centred only when the viewport reaches its edge, so at the moment before
+ * a repaint the band already extends a full overscan beyond the viewport on one
+ * side — and the viewport has itself moved an overscan since the band was placed.
+ * A model windowed to the viewport would therefore hand the painter a clip set
+ * that changes every time a region crosses the SCREEN edge, which during a pan is
+ * constantly: measured, that repainted 37% of frames for a picture that had not
+ * changed. Windowed to the band, the set changes only when the band moves.
+ */
+export const ARRANGE_CLIP_MARGIN_PX = WAVE_OVERSCAN_PX * 2;
+
+/**
+ * Columns per requested window.
+ *
+ * Requests are TILED — anchored to a multiple of `decimation * WAVE_TILE_COLS`
+ * rather than to wherever the viewport happens to start. The cache is keyed on
+ * (source, decimation, firstFrame), so a window asked for at the pan's current
+ * position is a key nobody will ever ask for again: every repaint would miss,
+ * re-request, and evict. Anchored to a tile grid, a pan across a file asks for
+ * each tile once and hits the cache from then on.
+ *
+ * 4096 columns is 8192 pairs in stereo, inside the engine's 24,576-pair slot, and
+ * at the coarsest arrange zoom one tile covers about two hours of audio.
+ */
+const WAVE_TILE_COLS = 4096;
+
+/** Both channels. The engine clamps to what the source actually has. */
+const WAVE_MASK_BOTH = 3;
+
+/** No browser will allocate a canvas dimension past this. */
+const WAVE_MAX_DEVICE_PX = 16384;
+
+/** CSS pixels of clearance between the waveform and the lane's edges. */
+const WAVE_INSET_PX = 2;
+
+/** Milliseconds between repaints while a window we want has not arrived. An
+ *  answer bumps the revision and repaints immediately, so this only paces the
+ *  case where nothing is coming back — a dropped request, or no engine. */
+const WAVE_RETRY_MS = 125;
+
+/** Device pixels of on/off in the stripe drawn over a source that would not
+ *  decode. Long enough to read as deliberate, short enough to fit a narrow clip. */
+const WAVE_FAIL_DASH = 6;
+
 /**
  * Bar numbers as text, made once each and kept.
  *
@@ -87,15 +167,43 @@ export class Arrange {
     this.gridIn = div('ar-scroll', this.gridEl);
     this.clipsEl = div('ar-clips', this.band);
     this.clipsIn = div('ar-scroll', this.clipsEl);
+    // FIRST child of the clip wrapper, so every pooled clip block created later
+    // paints over it. The blocks are a translucent wash, a border and a name, so
+    // the waveform reads as the material INSIDE the region rather than as
+    // something drawn next to it.
+    this.waveCanvas = document.createElement('canvas');
+    this.waveCanvas.className = 'ar-wave';
+    this.clipsIn.appendChild(this.waveCanvas);
+    this.waveCtx = this.waveCanvas.getContext('2d');
     this.playhead = div('ar-playhead', this.band);
 
     this.lanePool = [];
     this.headPool = [];
     this.clipPool = [];
+    /** Which clip slots this frame claimed. Grown with the pool, never per frame. */
+    this._clipSeen = new Uint8Array(0);
     this.gridPool = [];
     this.rulerPool = [];
     this.laneCount = 0;
     this.vm = null;
+
+    // The waveform layer's state. Every one of these is a guard: the canvas is a
+    // cache of a picture, and the picture is a function of exactly these.
+    this.waveCache = null;              // the page's Map of windows; see bindAudio
+    this.waveRequest = null;            // the page's requestWaveform
+    this.waveColors = { body: '', fail: '' };
+    this.waveThemed = false;
+    this._wvDevW = 0; this._wvDevH = 0; this._wvDpr = 0;
+    this._wvSpanX = 0; this._wvSpanW = 0; this._wvTx = -1;
+    this._wvTpp = -1; this._wvLaneH = -1; this._wvLanes = -1; this._wvRev = -1;
+    this._wvIncomplete = false; this._wvNextTry = 0;
+    // The visible clips as the last paint saw them, six numbers each. A pan
+    // inside the painted band must not repaint, so "did the clips change?" has to
+    // be answerable without a string and without a revision the model does not
+    // have — and it has to name every input, not just the count (GUIDELINES 2.1).
+    this._wvSig = new Float64Array(0); this._wvSigN = -1;
+    this.waveRepaints = 0; this.waveDrawn = 0;
+    this.waveWanted = 0; this.waveHeld = 0;
 
     // The ruler is where a loop is set, because that is where it is drawn.
     this.ruler.addEventListener('pointerdown', (e) => this._loopDown(e));
@@ -337,10 +445,302 @@ export class Arrange {
       label.appendChild(document.createTextNode(''));
       el._label = label.firstChild;
       el._x = -1; el._w = -1; el._y = -1; el._name = null;
-      el._pTrack = -1; el._pTick = -1;
+      el._pTrack = -1; el._pTick = -1; el._bad = false;
       this.clipPool.push(el);
     }
     return this.clipPool;
+  }
+
+  /**
+   * Where the waveform layer gets its data.
+   *
+   * Wired after construction rather than through the constructor because the
+   * page declares `waveCache` and `requestWaveform` well below the renderer it
+   * builds, and a constructor argument would read them in the temporal dead zone
+   * — the silent failure GUIDELINES 2.2 is about. Nothing draws until this is
+   * called, and `probe()` says so, so "not wired" is distinguishable from
+   * "wired and drawing nothing".
+   */
+  bindAudio(cache, request) {
+    this.waveCache = cache || null;
+    this.waveRequest = request || null;
+    this._wvRev = -1;                    // whatever is painted predates the data
+  }
+
+  /**
+   * The waveform's colours, from the stylesheet rather than repeated here — the
+   * same contract `scope.js` and `minimap.js` have, and for the same reason: a
+   * canvas is the one surface where a missing token paints a plausible black
+   * rectangle instead of failing. `waveThemed` reports it, and the read is
+   * retried while it is false because a host that is not in the document yet has
+   * no computed style to read.
+   */
+  _readWaveTheme() {
+    const s = getComputedStyle(this.host);
+    const pick = (n) => (s.getPropertyValue(n) || '').trim();
+    this.waveColors.body = pick('--base-accent-ramp-400');
+    this.waveColors.fail = pick('--uni-text-fx');
+    this.waveThemed = !!(this.waveColors.body && this.waveColors.fail);
+  }
+
+  /**
+   * Did the visible clips change since the last paint? Records them either way.
+   *
+   * Six numbers per clip, and they are the six the painting reads: which lane,
+   * which span of the timeline, which source, where in that source, and whether
+   * the source decoded. `x` and `w` are left out because both are
+   * `tick / ticksPerPixel` and the zoom is already a guard — adding them would
+   * be naming the same input twice.
+   */
+  _waveClipsMoved(vm, spanLoTick, spanHiTick) {
+    const n = vm.clipCount * 6;
+    if (this._wvSig.length < n) this._wvSig = new Float64Array(n + 64);
+    const s = this._wvSig;
+    let k = 0;
+    let moved = false;
+    for (let i = 0; i < vm.clipCount; i++) {
+      const c = vm.clips[i];
+      // Clips OUTSIDE the painted band are not part of the picture, so they must
+      // not be part of its key. The model deliberately hands over more than the
+      // screen holds (ARRANGE_CLIP_MARGIN_PX) so that this set is the band's and
+      // not the viewport's — one moves when the band is re-centred, the other
+      // every time a region crosses the screen edge.
+      //
+      // Compared in TICKS rather than in the pixels the band was measured in:
+      // `startTick`/`endTick` are integers where `x`/`w` are fractions, and this
+      // runs over every visible clip on every frame. Reading two double fields per
+      // clip here cost 60-200 bytes a frame to answer a question the integers
+      // answer exactly.
+      if (c.endTick <= spanLoTick || c.startTick >= spanHiTick) continue;
+      const o = k * 6;
+      k++;
+      if (s[o] !== c.track || s[o + 1] !== c.startTick || s[o + 2] !== c.endTick
+          || s[o + 3] !== c.srcId || s[o + 4] !== c.startFrame
+          || s[o + 5] !== c.srcStatus) moved = true;
+      s[o] = c.track; s[o + 1] = c.startTick; s[o + 2] = c.endTick;
+      s[o + 3] = c.srcId; s[o + 4] = c.startFrame; s[o + 5] = c.srcStatus;
+    }
+    if (this._wvSigN !== k) moved = true;
+    this._wvSigN = k;
+    return moved;
+  }
+
+  /**
+   * Paint the waveform layer, if anything about it moved.
+   *
+   * The early return is the point of the whole file: at rest, and during a pan
+   * that stays inside the painted band, this walks a handful of guards and does
+   * nothing at all.
+   */
+  _waves(vm, laneH) {
+    if (!this.waveCache) return;
+    if (!this.waveThemed) this._readWaveTheme();
+    if (!this.waveThemed) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const width = vm.view.width;
+    const tpp = vm.view.ticksPerPixel;
+    const sx = vm.scrollX;
+
+    // The band to paint. Aligned to a whole DEVICE pixel so a column drawn at
+    // canvas x lands on the same physical pixel it would have at any other pan
+    // offset — a fractional origin resamples the whole waveform on every repaint
+    // and makes it shimmer.
+    let spanW = width + 2 * WAVE_OVERSCAN_PX;
+    if (spanW * dpr > WAVE_MAX_DEVICE_PX) spanW = WAVE_MAX_DEVICE_PX / dpr;
+    const outside = this._wvSpanW <= 0 || sx < this._wvSpanX
+                 || sx + width > this._wvSpanX + this._wvSpanW;
+    const spanX = outside
+      ? Math.max(0, Math.floor((sx - WAVE_OVERSCAN_PX) * dpr) / dpr)
+      : this._wvSpanX;
+
+    const contentH = vm.laneCount * laneH;
+    const devW = Math.max(1, Math.min(WAVE_MAX_DEVICE_PX, Math.round(spanW * dpr)));
+    const devH = Math.max(1, Math.min(WAVE_MAX_DEVICE_PX, Math.round(contentH * dpr)));
+
+    // Every input to the picture, compared before anything is written. The
+    // retry clock is last because it is the only one that is not a fact about
+    // what is on screen: it exists so a window that never arrives is asked for
+    // again without turning the miss into a repaint per frame.
+    const moved = this._waveClipsMoved(vm, spanX * tpp, (spanX + spanW) * tpp);
+    const stale = this._wvIncomplete
+               && (this._wvRev !== vm.waveRevision
+                   || performance.now() >= this._wvNextTry);
+    if (!moved && !outside && !stale
+        && this._wvTpp === tpp && this._wvLaneH === laneH
+        && this._wvLanes === vm.laneCount && this._wvDpr === dpr
+        && this._wvRev === vm.waveRevision
+        && this._wvDevW === devW && this._wvDevH === devH) return;
+
+    this._wvSpanX = spanX; this._wvSpanW = spanW;
+    this._wvTpp = tpp; this._wvLaneH = laneH; this._wvLanes = vm.laneCount;
+    this._wvDpr = dpr; this._wvRev = vm.waveRevision;
+    this._wvNextTry = performance.now() + WAVE_RETRY_MS;
+
+    if (this._wvDevW !== devW || this._wvDevH !== devH) {
+      this._wvDevW = devW; this._wvDevH = devH;
+      this.waveCanvas.width = devW;
+      this.waveCanvas.height = devH;
+      this.waveCanvas.style.width = `${spanW}px`;
+      this.waveCanvas.style.height = `${contentH}px`;
+    }
+    // The canvas sits at the band's ABSOLUTE origin inside the scrolled wrapper,
+    // like everything else in this layer (GUIDELINES 3.3). Guarded on the number
+    // so a repaint that did not move the band writes no string.
+    if (this._wvTx !== spanX) {
+      this._wvTx = spanX;
+      this.waveCanvas.style.transform = `translateX(${spanX}px)`;
+    }
+
+    const ctx = this.waveCtx;
+    ctx.clearRect(0, 0, devW, devH);
+    this.waveRepaints++;
+    this._wvIncomplete = false;
+    this.waveDrawn = 0; this.waveWanted = 0; this.waveHeld = 0;
+
+    const insetDev = Math.max(1, Math.round(WAVE_INSET_PX * dpr));
+    const laneDev = laneH * dpr;
+
+    ctx.fillStyle = this.waveColors.body;
+    for (let i = 0; i < vm.clipCount; i++) {
+      const c = vm.clips[i];
+      if (!c.audio) continue;
+      // The clip's span, clipped to the painted band, in canvas device pixels.
+      const dx0 = Math.max(0, Math.floor((c.x - spanX) * dpr));
+      const dx1 = Math.min(devW, Math.ceil((c.x + c.w - spanX) * dpr));
+      if (dx1 <= dx0) continue;
+
+      const top = c.track * laneDev + insetDev;
+      const usable = laneDev - insetDev * 2;
+      if (usable < 2) continue;
+
+      if (c.srcStatus === 2) {
+        // A file that would not decode. Blank would be indistinguishable from
+        // silence, which is the one thing it must not look like.
+        ctx.fillStyle = this.waveColors.fail;
+        const y = Math.round(top + usable / 2) - 1;
+        for (let x = dx0; x < dx1; x += WAVE_FAIL_DASH * 2) {
+          ctx.fillRect(x, y, Math.min(WAVE_FAIL_DASH, dx1 - x), 2);
+        }
+        ctx.fillStyle = this.waveColors.body;
+        this.waveDrawn++;
+        continue;
+      }
+      // Status 1 is READY. 0 means the table has the source but the decode has not
+      // finished, and nothing is asked for until it has — a "not ready" answer is
+      // cached under the same key as the real one would be, so asking early is how
+      // a source ends up permanently blank. The table republishes when the decode
+      // lands, which clears the cache and repaints.
+      if (c.srcStatus !== 1) continue;
+      if (!c.srcId || !(c.ticksPerFrame > 0) || !(c.srcFrames > 0)) continue;
+
+      // Source frames per DEVICE pixel, and the power of two at or below it. One
+      // bucket is then at most one device pixel wide, so a column never has to
+      // interpolate — it aggregates whole buckets, or at the finest levels reads
+      // one. decimation 1 is raw samples, where min === max === the sample; the
+      // 1-device-pixel floor below is what keeps that from drawing nothing.
+      const framesPerPx = (tpp / dpr) / c.ticksPerFrame;
+      let dec = 1;
+      while (dec * 2 <= framesPerPx) dec *= 2;
+      // Frame at canvas x = 0, and how fast frames run per device pixel.
+      const frame0 = c.startFrame + (spanX * tpp - c.startTick) / c.ticksPerFrame;
+      const fStart = Math.max(0, frame0 + dx0 * framesPerPx);
+      const fEnd = Math.min(c.srcFrames, frame0 + dx1 * framesPerPx);
+      if (fEnd <= fStart) continue;
+
+      const tileFrames = dec * WAVE_TILE_COLS;
+      const first = Math.floor(fStart / tileFrames);
+      const last = Math.floor((fEnd - 1) / tileFrames);
+      for (let t = first; t <= last; t++) {
+        const tileFirst = t * tileFrames;
+        if (tileFirst >= c.srcFrames) break;
+        this.waveWanted++;
+        const key = c.srcId + ':' + dec + ':' + tileFirst;
+        const win = this.waveCache.get(key);
+        if (!win || !win.pairs || win.columns === 0) {
+          if (!win) {
+            this._wvIncomplete = true;
+            // Never blocks and never retries in a loop: the page's own request
+            // is already bounded in flight and deduped against the cache.
+            if (this.waveRequest) {
+              this.waveRequest(c.srcId, dec, tileFirst, WAVE_TILE_COLS, WAVE_MASK_BOTH);
+            }
+          }
+          continue;
+        }
+        this.waveHeld++;
+        this._waveWindow(win, dec, frame0, framesPerPx, dx0, dx1, top, usable);
+        this.waveDrawn++;
+      }
+    }
+  }
+
+  /**
+   * One cached window, over the device pixels it covers.
+   *
+   * Q15 to lane: `y = mid - (q / 32768) * half`, where full scale is +/-1.0 and
+   * NOT the file's own peak. Normalising to `absPeak` would make two clips of the
+   * same material draw differently the moment one of them held a louder moment,
+   * and would make a quiet recording indistinguishable from a loud one.
+   *
+   * Stereo splits the lane into two half-height bands, channel 0 above channel 1.
+   * A mono downmix is not a lossy shortcut, it is FALSE: an out-of-phase pair
+   * sums to silence, so the fixture's stereo file — whose right channel is the
+   * exact negation of its left — would draw all eight seconds of a full-scale
+   * signal as a flat line.
+   */
+  _waveWindow(win, dec, frame0, framesPerPx, dx0, dx1, top, usable) {
+    const ctx = this.waveCtx;
+    const pairs = win.pairs;
+    const cols = win.columns;
+    const ch = win.channels > 0 ? win.channels : 1;
+    const winFirst = win.firstFrame;
+    const winEnd = winFirst + cols * dec;
+
+    // Only the device pixels this window actually covers. Walking the whole clip
+    // per window and skipping would be O(clip x windows) for no gain.
+    let a = Math.max(dx0, Math.ceil((winFirst - frame0) / framesPerPx));
+    let b = Math.min(dx1, Math.ceil((winEnd - frame0) / framesPerPx));
+    if (b <= a) return;
+
+    const bandH = usable / ch;
+    for (let c = 0; c < ch; c++) {
+      const base = c * cols * 2;
+      const bandTop = top + c * bandH;
+      const bandBot = bandTop + bandH;
+      const mid = bandTop + bandH / 2;
+      const half = bandH / 2;
+      for (let x = a; x < b; x++) {
+        // The frames this device pixel covers, as bucket indices. `dec` is at or
+        // below one pixel's worth of frames, so this is one or two buckets.
+        const f0 = frame0 + x * framesPerPx;
+        let i0 = Math.floor((f0 - winFirst) / dec);
+        let i1 = Math.ceil((f0 + framesPerPx - winFirst) / dec);
+        if (i0 < 0) i0 = 0;
+        if (i1 > cols) i1 = cols;
+        if (i1 <= i0) continue;
+        let lo = 32767, hi = -32768;
+        for (let i = i0; i < i1; i++) {
+          const mn = pairs[base + i * 2], mx = pairs[base + i * 2 + 1];
+          if (mn < lo) lo = mn;
+          if (mx > hi) hi = mx;
+        }
+        let yt = mid - (hi / 32768) * half;
+        let yb = mid - (lo / 32768) * half;
+        if (yt < bandTop) yt = bandTop;
+        if (yb > bandBot) yb = bandBot;
+        let t = Math.round(yt), bt = Math.round(yb);
+        // A MINIMUM OF ONE DEVICE PIXEL. min === max wherever the material is
+        // constant — silence, DC, and every column at decimation 1 — and a
+        // rectangle from min to max is then zero pixels tall, so the finest zoom
+        // and every silent passage would draw an empty lane.
+        if (bt - t < 1) {
+          if (t >= bandBot) t = bandBot - 1;
+          bt = t + 1;
+        }
+        ctx.fillRect(x, t, 1, bt - t);
+      }
+    }
   }
 
   render(vm) {
@@ -439,15 +839,23 @@ export class Arrange {
       if (el.style.display !== 'none') el.style.display = 'none';
     }
 
-    const clips = this._clip(vm.clipCount);
-    for (let i = 0; i < clips.length; i++) {
-      const el = clips[i];
-      if (i >= vm.clipCount) {
-        if (el.style.display !== 'none') el.style.display = 'none';
-        continue;
-      }
-      if (el.style.display === 'none') el.style.display = '';
+    // Clips are slotted by the EXTENT'S index, not by their position in the
+    // visible list — the same rule as the ruler and the grid above (GUIDELINES
+    // 3.4), and for the same reason. By position, a region scrolling off the left
+    // shifts every later region into a different element, so every one of them
+    // takes a new transform, width and placement key on a pan that moved nothing.
+    // By extent index, a clip keeps its element for as long as the engine keeps
+    // its extent, and a pan writes nothing at all.
+    const clips = this._clip(Math.max(vm.clipSlots, vm.clipCount));
+    if (this._clipSeen.length < clips.length) this._clipSeen = new Uint8Array(clips.length + 16);
+    const seen = this._clipSeen;
+    seen.fill(0);
+    for (let i = 0; i < vm.clipCount; i++) {
       const c = vm.clips[i];
+      const slot = c.slot < clips.length ? c.slot : i;
+      seen[slot] = 1;
+      const el = clips[slot];
+      if (el.style.display === 'none') el.style.display = '';
       const y = c.track * lh;
       if (el._x !== c.x || el._y !== y) {
         el._x = c.x; el._y = y;
@@ -457,6 +865,10 @@ export class Arrange {
       if (el._h !== lh) { el._h = lh; el.style.height = `${lh}px`; }
       if (el._name !== c.name) { el._name = c.name; el._label.nodeValue = c.name; }
       if (el._audio !== c.audio) { el._audio = c.audio; el.classList.toggle('audio', c.audio); }
+      // A source that would not decode, said on the block as well as on the
+      // canvas: a region narrower than the stripe still has to look wrong.
+      const bad = c.srcStatus === 2;
+      if (el._bad !== bad) { el._bad = bad; el.classList.toggle('failed', bad); }
       if (el._sel !== c.selected) { el._sel = c.selected; el.classList.toggle('sel', c.selected); }
       // The placement key the page and `hitTest` compare against, guarded on the
       // two numbers it is made of rather than on itself: building the string to
@@ -468,6 +880,12 @@ export class Arrange {
         el._pTrack = c.track; el._pTick = c.startTick;
         el.dataset.placement = c.track + ':' + c.startTick;
       }
+    }
+    // Slots nothing claimed this frame. Hidden, never removed (GUIDELINES 3.7).
+    for (let s = 0; s < clips.length; s++) {
+      if (seen[s]) continue;
+      const el = clips[s];
+      if (el.style.display !== 'none') el.style.display = 'none';
     }
 
     // Guarded on (on, x, w), which is the whole of what gets drawn. The key used
@@ -484,6 +902,11 @@ export class Arrange {
         this.loop.style.width = `${lp.w}px`;
       }
     }
+
+    // Last, after the clip blocks have been placed: the canvas is behind them and
+    // both are read from the same view-model, so painting after them keeps the
+    // two in step within one frame rather than one frame apart.
+    this._waves(vm, lh);
 
     const px = vm.playheadX;
     if (this._px !== px) {
@@ -558,6 +981,27 @@ export class Arrange {
       firstBar: vm.rulerCount ? vm.rulerBar[0] : -1,
       playheadX: Math.round(vm.playheadX),
       domNodes: this.clipPool.length + this.lanePool.length + this.gridPool.length,
+      /**
+       * The waveform layer, in numbers a test can assert on before it goes near a
+       * pixel — and the geometry it needs to find one when it does.
+       *
+       * `repaints` is the number this surface is really about: a pan inside the
+       * painted band must not move it. `wanted` vs `held` says how much of what is
+       * on screen has data behind it, so "the waveform is missing" and "the
+       * waveform is empty" are different answers rather than the same blank lane.
+       */
+      wave: {
+        bound: !!this.waveCache,
+        themed: this.waveThemed,
+        deviceWidth: this._wvDevW, deviceHeight: this._wvDevH, dpr: this._wvDpr,
+        spanX: this._wvSpanX, spanW: this._wvSpanW,
+        repaints: this.waveRepaints,
+        clips: this.waveDrawn,
+        wanted: this.waveWanted, held: this.waveHeld,
+        incomplete: this._wvIncomplete,
+        laneHeight: this._wvLaneH,
+        inset: Math.max(1, Math.round(WAVE_INSET_PX * (this._wvDpr || 1))),
+      },
     };
   }
 }

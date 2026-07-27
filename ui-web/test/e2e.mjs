@@ -849,8 +849,13 @@ for (const suffix of ['.uniproj.json', '.uniproj.state']) {
 await page.evaluate(() => window.__uni.browser(false));
 
 section('dock');
-const bad = await page.evaluate(() => window.__uni.run('note 999'));
-ok(String(bad).includes('out of range'), 'the dock reports a bad argument', String(bad));
+const bad = String(await page.evaluate(() => window.__uni.run('note 999')));
+// Asserts the PROPERTY, not the wording: a refusal has to name the command, the
+// argument and the value, so the person reading it knows which of three numbers
+// they got wrong. Pinning the exact sentence made this fail the moment the
+// message improved, which is a test punishing the thing it exists to encourage.
+ok(bad.includes('note') && bad.includes('pitch') && bad.includes('999'),
+   'the dock refuses a bad argument by naming command, argument and value', bad);
 const unknown = await page.evaluate(() => window.__uni.run('flurb'));
 ok(String(unknown).includes('unknown'), 'and an unknown command', String(unknown));
 const help = await page.evaluate(() => window.__uni.dockProbe().commands);
@@ -1105,6 +1110,81 @@ if (beforeP && beforeP.first) {
     window.__uni.setParam(0, d, i, '00000000000000000000000000000000', 500),
     [beforeP.device, beforeP.first.index]);
   ok(zeroed === false, 'a parameter with no durable id is refused, not sent', String(zeroed));
+}
+
+section('audio sources and waveforms');
+/**
+ * The waveform data path, end to end, against the committed fixtures.
+ *
+ * Each of these was verified by hand when the path landed. A hand verification
+ * that is not a test decays — and these three in particular are the ones that
+ * distinguish a correct peak implementation from one that returns plausible
+ * numbers, so they are worth the seconds they cost.
+ */
+// Assert the load TOOK, and wait for the table rather than sleeping at it. A
+// fixed sleep turns "the command never went out" into "the data never arrived",
+// which sends you looking at the wrong end of the pipe — it did exactly that here.
+const wfLoaded = await page.evaluate(() => window.__uni.loadProject('waveform'));
+ok(wfLoaded !== false, `the waveform project load went out: ${wfLoaded}`);
+await page.waitForFunction(
+  () => Object.keys(window.__uni.audioSources().sources).length >= 2,
+  null, { timeout: 8000 }).catch(() => {});
+const audio = await page.evaluate(() => {
+  const a = window.__uni.audioSources();
+  return { sources: Object.values(a.sources), clips: Object.values(a.clips) };
+});
+ok(audio.sources.length === 2, `both sources decoded: ${audio.sources.length}`);
+const mono = audio.sources.find((s) => s.channels === 1);
+const stereo = audio.sources.find((s) => s.channels === 2);
+ok(!!mono && !!stereo, 'one mono and one stereo source');
+if (mono && stereo) {
+  ok(mono.frames === 352800 && stereo.frames === 352800,
+     `8 seconds at 44100: ${mono.frames} / ${stereo.frames} frames`);
+  // absPeak on the STEREO file is the mixdown-is-false proof at its source: its
+  // channels are exact negations, so peaks built after a mono downmix would read
+  // ~0 while the file is as loud as a file can be.
+  ok(stereo.absPeak > 0.9,
+     `stereo absPeak is full scale, so peaks are built pre-downmix: ${stereo.absPeak}`);
+  ok(audio.clips.length === 2, `both clips map to a source: ${audio.clips.length}`);
+}
+
+if (mono) {
+  // The DC +0.5 second: every bucket must read min == max == 16384. A renderer
+  // that draws ±|peak| mirrored around a centre line shows this as a band
+  // straddling zero when the truth is a block entirely above it.
+  const dc = await page.evaluate((id) => window.__uni.waveform(id, 64, 221184, 64, 1),
+                                 mono.id);
+  const allDc = dc.pairs && Array.from(dc.pairs).every((v) => v === 16384);
+  ok(!!allDc, `the DC second is a block above zero, not a band around it: ` +
+              (dc.pairs ? Array.from(dc.pairs.slice(0, 4)).join(',') : dc.error));
+
+  // decim 1 is raw samples, and a one-frame bucket has min == max. That identity
+  // is what makes the peak regime and the sample regime one request and one
+  // reply, with no crossover for a waveform to pop at.
+  const raw = await page.evaluate((id) => window.__uni.waveform(id, 1, 264600, 8, 1),
+                                  mono.id);
+  const degenerate = raw.pairs && Array.from(raw.pairs)
+    .every((v, i) => (i % 2 === 1 ? v === raw.pairs[i - 1] : true));
+  ok(!!degenerate, 'at decim 1 min equals max, so peaks and samples are one path');
+}
+
+if (stereo) {
+  // Channel 1 must be the EXACT negation of channel 0. A downmix of this file is
+  // silence, so this is the assertion the stereo fixture exists for.
+  const st = await page.evaluate((id) => window.__uni.waveform(id, 64, 44032, 32, 3),
+                                 stereo.id);
+  let mirrored = !!(st.pairs && st.channels === 2), loud = false;
+  if (mirrored) {
+    const c = st.columns;
+    for (let i = 0; i < c; i++) {
+      const mn0 = st.pairs[i * 2], mx0 = st.pairs[i * 2 + 1];
+      const mn1 = st.pairs[(c + i) * 2], mx1 = st.pairs[(c + i) * 2 + 1];
+      if (mn1 !== -mx0 || mx1 !== -mn0) { mirrored = false; break; }
+      if (mx0 > 30000) loud = true;
+    }
+  }
+  ok(mirrored, 'channel 1 is the exact negation of channel 0');
+  ok(loud, 'and both reach full scale where a mono downmix would be silent');
 }
 
 section('page errors');
