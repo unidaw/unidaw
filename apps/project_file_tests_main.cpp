@@ -220,7 +220,7 @@ const daw::MusicalClip* primaryClip(const daw::ProjectDocument& doc,
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   const daw::ProjectDocument original = makeDocument();
 
   // Serializing twice must produce identical bytes, or diffs are meaningless.
@@ -716,6 +716,33 @@ int main() {
             "patcher did not migrate onto the instrument device");
     require(doc.tracks[0].chain.devices[0].patcher.nodes.empty(),
             "patcher wrongly migrated onto the effect device");
+  }
+
+  // Movement 0: load -> save is idempotent. Serialize a loaded project, reload it,
+  // and serialize again — the bytes must match. This is the "recall you can trust"
+  // round-trip the hand-built document above cannot exercise, because it never goes
+  // through the load path where same-tick note ordering settles. It caught an addEvent
+  // that inserted same-tick events BEFORE existing ones, flipping chord voicings /
+  // row-op stacks on every save so a project drifted with each open. Uses the maximal
+  // fixture (notes, chords, row ops, placements, devices, harmony) from argv[1].
+  {
+    const std::string dir = argc > 1 ? argv[1] : "../presets/projects";
+    const std::string path = dir + "/maximal.uniproj.json";
+    daw::ProjectDocument doc1;
+    std::string idErr;
+    if (daw::loadProject(doc1, path, &idErr)) {
+      const std::string s1 = daw::serializeProject(doc1);
+      daw::ProjectDocument doc2;
+      require(daw::deserializeProject(s1, doc2, &idErr),
+              "reload of a serialized project failed");
+      const std::string s2 = daw::serializeProject(doc2);
+      require(s1 == s2,
+              "load->save is not idempotent (a re-saved project differs from its own "
+              "reload)");
+    } else {
+      std::cout << "project_file_tests_main: skipping idempotency (no fixture at "
+                << path << ")" << std::endl;
+    }
   }
 
   if (failures != 0) {

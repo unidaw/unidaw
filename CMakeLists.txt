@@ -313,7 +313,7 @@ add_test(NAME patcher_graph_edits
 set_tests_properties(patcher_graph_edits PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME project_file_round_trip
-  COMMAND project_file_tests
+  COMMAND project_file_tests ${CMAKE_CURRENT_SOURCE_DIR}/presets/projects
 )
 set_tests_properties(project_file_round_trip PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
