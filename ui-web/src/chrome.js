@@ -5,6 +5,8 @@
 // publish rate, so rebuilding it would allocate a string and a Text node ~86
 // times a second, which is exactly what GUIDELINES 3.1 and 3.2 forbid.
 
+import { DEFAULT_METER, meterText } from './meter.js';
+
 const NANOTICKS_PER_QUARTER = 960000;
 const BEATS_PER_BAR = 4;
 const NANOTICKS_PER_SUB = NANOTICKS_PER_QUARTER / 1000;
@@ -92,7 +94,12 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
   // Seeded to what the store seeds tempoMilliBpm to, so the first update is a
   // no-op rather than a rewrite of the same string.
   let lastTempo = 120000, lastTempoVaries = false;
-  const sig = label('ch-meta', '4/4');
+  // The song's time signature. It said '4/4' unconditionally, which was true of
+  // every project only because no project could say otherwise — the model has no
+  // song meter yet. Now it prints what it is given, so the day one arrives this is
+  // already honest. See meter.js.
+  const sig = label('ch-meta', meterText(DEFAULT_METER));
+  let lastMeterKey = -1;
   pos.append(posLabel, tempo, sig);
 
   // Entry state. A tracker where you cannot see the octave you are typing into
@@ -164,7 +171,15 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
     /** Called from the draw loop. Must stay allocation-free when nothing moves. */
     update({ playheadTick, transport: tstate, linkText, octave, editStep,
              velocity = 100, rejectText = '', viewName = '', keyName = '',
-             tempoMilliBpm = 120000, tempoPointCount = 0 }) {
+             tempoMilliBpm = 120000, tempoPointCount = 0, meter = DEFAULT_METER }) {
+      // Guarded on the two numbers, not on the record: the engine will republish a
+      // meter on every frame, and a guard keyed on object identity would rebuild
+      // this string sixty times a second to print the same thing.
+      const meterKey = meter.numerator * 64 + meter.denominator;
+      if (meterKey !== lastMeterKey) {
+        lastMeterKey = meterKey;
+        sig.firstChild.nodeValue = meterText(meter);
+      }
       /**
        * The project's tempo, at the playhead.
        *

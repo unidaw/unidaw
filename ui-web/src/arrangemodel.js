@@ -35,8 +35,14 @@ export function trackName(engine, t) {
   return FALLBACK_NAMES[t] || (FALLBACK_NAMES[t] = 'T' + String(t + 1).padStart(2, '0'));
 }
 
-export const TICKS_PER_BAR = 3840000;
-const TICKS_PER_BEAT = 960000;
+import { DEFAULT_METER, ticksPerBar, ticksPerBeat } from './meter.js';
+
+// Kept as exports because callers import them; they are now DERIVED from the song
+// meter rather than asserted, so a project that is not in 4/4 draws its bar lines
+// where its bars are. Still module-level constants until the engine publishes a
+// song meter — see meter.js on why that is one assumption instead of four.
+export const TICKS_PER_BAR = ticksPerBar(DEFAULT_METER);
+const TICKS_PER_BEAT = ticksPerBeat(DEFAULT_METER);
 
 /**
  * Horizontal zoom, in nanoticks per pixel. Coarser than the tracker's because

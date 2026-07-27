@@ -22,9 +22,13 @@
 // 12-TET is therefore true of what exists today rather than published by it,
 // which is why `tuningKnown` is false and the chip is drawn as a readout.
 
+import { DEFAULT_METER, ticksPerBar, ticksPerBeat } from './meter.js';
+
 /** Nanoticks. Same constant the tracker, arrange and piano projections use. */
-const TICKS_PER_BAR = 3840000;
-const TICKS_PER_BEAT = TICKS_PER_BAR / 4;
+// Derived, not asserted. TICKS_PER_BEAT was TICKS_PER_BAR / 4, which is the
+// numerator baked in a second time: in 7/8 a bar is seven beats, not four.
+const TICKS_PER_BAR = ticksPerBar(DEFAULT_METER);
+const TICKS_PER_BEAT = ticksPerBeat(DEFAULT_METER);
 
 export const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 

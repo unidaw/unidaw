@@ -29,6 +29,8 @@ import { trackName } from '../src/arrangemodel.js';
 import { createField, begin as fBegin, feed as fFeed, cancel as fCancel } from '../src/textfield.js';
 import { fillRows, setProjectRow, setPluginRow, makeRow,
          KIND_PROJECT, KIND_PLUGIN } from '../src/browser.js';
+import { ticksPerBar, ticksPerBeat, positionOf, createPosition, sameMeter,
+         meterText } from '../src/meter.js';
 import { buildChainModel, createChainBuffer, createParamEdits, findParamEdit,
          setParamEdit, dropParamEdit, reapParamEdits, MAX_PARAMS,
          EDIT_HOLD_MS } from '../src/chainmodel.js';
@@ -320,6 +322,65 @@ test('the charset is enforced and out-of-set keys do not fall through', () => {
   assert.equal(fFeed(f, '/'), 'consumed');
   fFeed(f, 'd'); fFeed(f, 'e');
   assert.equal(f.text, 'abcd', 'capped at max');
+});
+
+// --- the song meter ------------------------------------------------------
+// 4/4 cannot distinguish a correct implementation from the four hardcoded 3840000s
+// it replaces, so every check here is in a meter that is not 4/4.
+test('a beat is the denominator unit, not always a quarter', () => {
+  assert.equal(ticksPerBeat({ numerator: 4, denominator: 4 }), 960000, 'a quarter');
+  assert.equal(ticksPerBeat({ numerator: 6, denominator: 8 }), 480000, 'an eighth');
+  assert.equal(ticksPerBeat({ numerator: 5, denominator: 2 }), 1920000, 'a half');
+  // The mistake this catches: treating the denominator as decoration and calling a
+  // beat a quarter always, which draws 6/8 as 6/4 — twice as long, and plausible.
+  assert.notEqual(ticksPerBeat({ numerator: 6, denominator: 8 }),
+                  ticksPerBeat({ numerator: 6, denominator: 4 }));
+});
+
+test('a bar is numerator beats, and 4/4 still lands on the old constant', () => {
+  assert.equal(ticksPerBar({ numerator: 4, denominator: 4 }), 3840000,
+               'the literal this replaced, so no golden moves');
+  assert.equal(ticksPerBar({ numerator: 7, denominator: 8 }), 3360000);
+  assert.equal(ticksPerBar({ numerator: 3, denominator: 4 }), 2880000);
+});
+
+test('a tick knows which bar and beat it is in, in any meter', () => {
+  const p = createPosition();
+  const m78 = { numerator: 7, denominator: 8 };
+  const bar = ticksPerBar(m78);          // 3360000
+  const beat = ticksPerBeat(m78);        // 480000
+
+  positionOf(0, m78, beat, p);
+  assert.deepEqual([p.bar, p.beat, p.sub, p.onBar, p.onBeat], [1, 1, 0, true, true]);
+
+  // Last beat of bar 1: seven beats to a bar, so beat 7 exists and beat 8 does not.
+  positionOf(6 * beat, m78, beat, p);
+  assert.deepEqual([p.bar, p.beat, p.onBar], [1, 7, false]);
+
+  // ...and the next beat is bar 2 beat 1. Under the old TICKS_PER_BAR / 4 rule this
+  // was bar 1 beat 8, which is a bar that does not exist in 7/8.
+  positionOf(7 * beat, m78, beat, p);
+  assert.deepEqual([p.bar, p.beat, p.onBar, p.onBeat], [2, 1, true, true]);
+  assert.equal(7 * beat, bar, 'seven beats IS the bar');
+
+  // sub is a row offset inside the beat and depends on the display grid, not the
+  // meter — the same tick is a different sub at a different zoom.
+  positionOf(beat + beat / 4, m78, beat / 4, p);
+  assert.equal(p.sub, 1);
+  positionOf(beat + beat / 4, m78, beat / 8, p);
+  assert.equal(p.sub, 2);
+});
+
+test('meters compare by value, and their text is interned', () => {
+  // The engine will republish a meter every frame. A guard on object identity
+  // would rebuild every bar label sixty times a second while looking correct.
+  assert.ok(sameMeter({ numerator: 5, denominator: 8 }, { numerator: 5, denominator: 8 }));
+  assert.ok(!sameMeter({ numerator: 5, denominator: 8 }, { numerator: 5, denominator: 4 }));
+  assert.ok(!sameMeter(null, { numerator: 4, denominator: 4 }));
+  assert.equal(meterText({ numerator: 7, denominator: 8 }), '7/8');
+  assert.equal(meterText({ numerator: 7, denominator: 8 }),
+               meterText({ numerator: 7, denominator: 8 }),
+               'same string object, so a nodeValue compare is a pointer compare');
 });
 
 // --- the device rack -------------------------------------------------------

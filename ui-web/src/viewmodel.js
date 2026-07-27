@@ -1,4 +1,6 @@
 import { pitchName } from './wire.js';
+import { DEFAULT_METER, createPosition, positionOf, sameMeter,
+         ticksPerBar, NANOTICKS_PER_QUARTER } from './meter.js';
 // The view-model: plain data describing exactly what is on screen right now.
 //
 // This is the boundary the whole frontend is built around. The renderer consumes
@@ -47,10 +49,12 @@ export const ZOOM_LEVELS = [
 
 const NOTES = ['C-4', 'D#4', 'F-4', 'G-4', 'A#4', 'C-5', 'E-4', 'OFF'];
 
-const TICKS_PER_BAR = 3840000;
-const TICKS_PER_BEAT = 960000;
-const CLIP_TICKS = TICKS_PER_BAR * 4;                 // fixture: 4-bar clips
-const CLIP_BODY = CLIP_TICKS - TICKS_PER_BAR / 4;     // ...with a beat of gap after
+// The FIXTURE's clip geometry, pinned to 4/4 on purpose: it exists to lay out
+// pseudo-clips for the goldens, and a fixture whose shape moved with the project's
+// meter would make every golden a function of a setting the fixture does not have.
+const FIXTURE_TICKS_PER_BAR = ticksPerBar(DEFAULT_METER);
+const CLIP_TICKS = FIXTURE_TICKS_PER_BAR * 4;              // fixture: 4-bar clips
+const CLIP_BODY = CLIP_TICKS - FIXTURE_TICKS_PER_BAR / 4;  // ...with a beat of gap after
 
 /**
  * Clips are the container for notes, not a decoration over them: wherever a
@@ -136,6 +140,12 @@ const EMPTY_NAME = Object.freeze({ label: '', sub: '' });
 const LABELS = new Map();
 const LABEL_CAP = 8192;
 let labelZoom = -1;
+/** The meter the intern table was filled for. A tick names a different bar in a
+ *  different meter, so the table belongs to one meter at a time — the same reason
+ *  it belongs to one zoom at a time. */
+let labelMeter = null;
+/** positionOf's output. One record, reused: this runs per visible row per frame. */
+const _pos = createPosition();
 
 const R_TEXT = [], P_TEXT = [], EVTS = [], PILL_SAME = [];
 function interned(table, prefix, n) {
@@ -209,7 +219,7 @@ export function createBuffer(rowCount, trackCount, columns) {
     _rows: rowCount, _trackCount: trackCount, _columns: columns,
     // What the row labels were last built for. Labels are a pure function of
     // (startRow, zoom, rowCount) — see the row loop.
-    _labelStart: -1, _labelZoom: -1,
+    _labelStart: -1, _labelZoom: -1, _labelMeter: null,
     _clipPool: [],
   };
 }
@@ -264,6 +274,14 @@ export function buildViewModel(opts, buf) {
     /** How a root pitch class and a scale id are named. Supplied by the caller
      *  so this module needs no opinion about note spelling. */
     nameHarmony = null,
+    /**
+     * The SONG's meter — what the time gutter counts in.
+     *
+     * Not the clip's. A clip owns its own time signature now and draws its own
+     * accents, but bar NUMBERING stays global so that "where am I" has one answer
+     * across tracks whose clips disagree. See meter.js.
+     */
+    meter = DEFAULT_METER,
   } = opts;
 
   if (!buf || buf._rows !== rowCount || buf._trackCount !== trackCount
@@ -358,13 +376,22 @@ export function buildViewModel(opts, buf) {
    * strings that were already there. During playback, which is when frames are
    * scarce, the labels are precisely the part of the tracker that does NOT move.
    */
-  const relabel = buf._labelStart !== startRow || buf._labelZoom !== zoomIndex;
+  // The meter is in this key because it is an input to every label: the same tick
+  // is bar 5 in 4/4 and bar 6 in 7/8. Leaving it out is GUIDELINES 2.1 — content
+  // changing while the key stands still — and it would show as bar numbers that
+  // never update after a meter change, which reads as the meter not having taken.
+  const relabel = buf._labelStart !== startRow || buf._labelZoom !== zoomIndex
+                  || !sameMeter(buf._labelMeter, meter);
   buf._labelStart = startRow;
   buf._labelZoom = zoomIndex;
+  buf._labelMeter = meter;
+  const barTicks = ticksPerBar(meter);
   // A tick names a different row at every zoom, so the intern table belongs to
   // one zoom at a time. Keyed on the zoom rather than cleared by the caller,
   // because two buffers share it and either can be the one that notices.
-  if (labelZoom !== zoomIndex) { labelZoom = zoomIndex; LABELS.clear(); }
+  if (labelZoom !== zoomIndex || !sameMeter(labelMeter, meter)) {
+    labelZoom = zoomIndex; labelMeter = meter; LABELS.clear();
+  }
   for (let ri = 0; ri < rowCount; ri++) {
     const r = startRow + ri;
     const cells = rows[ri].cells;
@@ -422,20 +449,21 @@ export function buildViewModel(opts, buf) {
       if (label === undefined) {
         // Labels come from the tick too, so a row means the same musical position
         // at every zoom — that is the whole point of zoom being a projection.
-        const bar = Math.floor(tick / TICKS_PER_BAR) + 1;
-        const beatInBar = Math.floor((tick % TICKS_PER_BAR) / (TICKS_PER_BAR / 4)) + 1;
+        positionOf(tick, meter, zoom.rowNanoticks, _pos);
+        const bar = _pos.bar;
+        const beatInBar = _pos.beat;
         // The sub-beat index is the row's position within the beat ON THIS GRID, not
         // in fixed 16ths. Hardcoding a 16th (60000nt) made a 12-per-beat grid label
         // its rows 0,1,2,4,5,6,8 — skipping some numbers and reusing others, so two
         // different rows could read as the same musical position.
-        const sub = Math.round((tick % (TICKS_PER_BAR / 4)) / zoom.rowNanoticks);
-        label = zoom.rowNanoticks >= TICKS_PER_BAR ? `${bar}` : `${bar}:${beatInBar}${sub ? ':' + DEC2[sub] : ''}`;
+        const sub = _pos.sub;
+        label = zoom.rowNanoticks >= barTicks ? `${bar}` : `${bar}:${beatInBar}${sub ? ':' + DEC2[sub] : ''}`;
         if (LABELS.size >= LABEL_CAP) LABELS.clear();
         LABELS.set(tick, label);
       }
       row.label = label;
-      row.beat = tick % (TICKS_PER_BAR / 4) === 0;
-      row.bar = tick % TICKS_PER_BAR === 0;
+      row.beat = _pos.onBeat;
+      row.bar = _pos.onBar;
     }
   }
 
@@ -463,7 +491,7 @@ export function buildViewModel(opts, buf) {
         cn++;
         cl.id = k * 100 + t; cl.track = t;
         cl.startTick = k * CLIP_TICKS;
-        cl.endTick = (k + 1) * CLIP_TICKS - TICKS_PER_BAR / 4;   // exclusive
+        cl.endTick = (k + 1) * CLIP_TICKS - FIXTURE_TICKS_PER_BAR / 4;   // exclusive
         // Keyed on the two numbers the name spells. Scrolling changes which
         // (k, t) lands in a given pool slot, so the guard has to name the clip
         // rather than the slot.
@@ -596,7 +624,11 @@ export function buildViewModel(opts, buf) {
     // `beatsPerRow` of its rows into each of ours. Counts add; the pitch range
     // is the union. Drawing its rows one-to-one against ours was wrong by a
     // factor of four at "1 bar" and sixteen at "4 bars", and looked fine.
-    const beatsPerRow = Math.max(1, Math.round(zoom.rowNanoticks / TICKS_PER_BEAT));
+    // The ENGINE's aggregate grid is per quarter note, not per meter beat — it
+    // knows nothing about the time signature. Folding its rows by the meter's beat
+    // would be right-looking and wrong by the denominator ratio in any meter that
+    // is not x/4.
+    const beatsPerRow = Math.max(1, Math.round(zoom.rowNanoticks / NANOTICKS_PER_QUARTER));
     for (let t = 0; t < Math.min(trackCount, engine.aggTracks); t++) {
       for (let ri = 0; ri < rowCount; ri++) {
         let count = 0, lo = 127, hi = 0;
