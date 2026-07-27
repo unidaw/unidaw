@@ -372,6 +372,38 @@ const tuning = await page.evaluate(() =>
   (document.querySelector('.tk-hb .tk-hb-sub') || {}).textContent || '');
 ok(tuning === '12-TET', 'and states the tuning it is assuming', tuning);
 
+section('device rack');
+// The rack against a fixture, because no bundled project has a device CHAIN —
+// their tracks carry a directly-hosted default plugin, which is not a chain
+// device. The live pipeline (engine emits, sidecar accumulates, client asks for
+// params) is covered by the chain section; this covers what the cards DRAW,
+// which is the half a live empty rack cannot show.
+await page.evaluate(() => window.__uni.useChainFixture());
+await frames();
+const rack = await page.evaluate(() => window.__uni.chainProbe());
+ok(rack.cards === 4, 'the rack draws a card per device', String(rack.cards));
+ok(rack.named === 2 && rack.titles.includes('Identity'),
+   'a device whose host has answered shows its real name', JSON.stringify(rack.titles));
+// And one that has not still says what it IS. Two true statements; only one of
+// them is the device's name.
+ok(rack.titles.some((t) => /^patcher /.test(t)),
+   'one that has not answered shows its kind and id instead');
+ok(rack.params[1] === 3 && rack.params[0] === 0,
+   'parameters appear only on the cards that have them', JSON.stringify(rack.params));
+ok(/2 of 4/.test(rack.notice), 'and the strip says how much of the rack has answered',
+   rack.notice);
+// Parameter rows sit ABOVE the footer. They were appended after it once, which
+// looked plausible in a screenshot and was wrong.
+const order = await page.evaluate(() => {
+  const c = [...document.querySelectorAll('.dv-card')][1];
+  return [...c.children].map((x) => x.className);
+});
+ok(order.indexOf('dv-p') > order.indexOf('dv-body')
+   && order.lastIndexOf('dv-p') < order.indexOf('dv-foot'),
+   'parameter rows sit between the body and the footer', order.join(','));
+await page.evaluate((p) => window.__uni.loadProject(p), PROJECT);
+await page.waitForTimeout(2500);
+
 section('harmony + tuning card');
 const card = await page.evaluate(() => window.__uni.harmonyProbe());
 ok(card.key && card.count > 1, 'the card names the field at the playhead',

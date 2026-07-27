@@ -52,7 +52,9 @@ export class Chain {
       const badge = div('dv-badge', top);
       const title = div('dv-title', top);
       const body = div('dv-body', el);
+      el._rows = [];
       const foot = div('dv-foot', el);
+      el._footEl = foot;
       el._badge = text(badge);
       el._title = text(title);
       el._body = text(body);
@@ -90,10 +92,49 @@ export class Chain {
       if (el._t !== c.title) { el._t = c.title; el._title.nodeValue = c.title; }
       const body = c.caps || 'no declared capabilities';
       if (el._y !== body) { el._y = body; el._body.nodeValue = body; }
+      this._params(el, c);
       if (el._f !== c.sub) { el._f = c.sub; el._foot.nodeValue = c.sub; }
       if (el._sel !== c.selected) { el._sel = c.selected; el.classList.toggle('sel', c.selected); }
       if (el._byp !== c.bypass) { el._byp = c.bypass; el.classList.toggle('byp', c.bypass); }
       if (el.dataset.pos !== String(c.pos)) el.dataset.pos = String(c.pos);
+    }
+  }
+
+  /**
+   * A card's parameter rows: name, a bar, the host's own display string.
+   *
+   * Pooled per card and hidden rather than removed, like everything else here —
+   * a card's parameter count changes when its host answers, and rebuilding the
+   * rows on that transition is a DOM churn on every rack you look at.
+   */
+  _params(el, c) {
+    const rows = el._rows;
+    while (rows.length < c.paramCount) {
+      // NOT div('dv-p', el): that appends first, so the insertBefore below became
+      // insertBefore(r, r) — a no-op that left every parameter row underneath the
+      // footer. Build it detached and place it once.
+      const r = div('dv-p');
+      const n = div('dv-p-n', r); n.appendChild(document.createTextNode(''));
+      const bar = div('dv-p-bar', r);
+      const fill = div('dv-p-fill', bar);
+      const v = div('dv-p-v', r); v.appendChild(document.createTextNode(''));
+      r._n = n.firstChild; r._f = fill; r._v = v.firstChild;
+      r._nv = null; r._fv = null; r._vv = null;
+      rows.push(r);
+      // Above the footer, which was created before any of these existed.
+      el.insertBefore(r, el._footEl);
+    }
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const on = i < c.paramCount;
+      const disp = on ? '' : 'none';
+      if (r.style.display !== disp) r.style.display = disp;
+      if (!on) continue;
+      const q = c.params[i];
+      if (r._nv !== q.name) { r._nv = q.name; r._n.nodeValue = q.name; }
+      if (r._vv !== q.display) { r._vv = q.display; r._v.nodeValue = q.display; }
+      const w = Math.round(q.frac * 100);
+      if (r._fv !== w) { r._fv = w; r._f.style.width = w + '%'; }
     }
   }
 
@@ -107,6 +148,8 @@ export class Chain {
       cards: vm.cardCount,
       notice: vm.notice,
       titles: vm.cards.slice(0, vm.cardCount).map((c) => c.title),
+      named: vm.cards.slice(0, vm.cardCount).filter((c) => c.named).length,
+      params: vm.cards.slice(0, vm.cardCount).map((c) => c.paramCount),
       domNodes: this.host.querySelectorAll('*').length,
     };
   }

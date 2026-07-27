@@ -415,6 +415,10 @@ let chainRev = -1;
 let listRequested = false;
 /** The engine's scale registry: [{id, name, octaveCents, stepCents[]}]. */
 let scales = null;
+/** Device parameters by device id, as answers arrive. */
+const deviceParams = Object.create(null);
+/** Devices we have already asked about, so the rack asks once, not per frame. */
+const paramsAsked = new Set();
 
 const dockHost = document.getElementById('dock');
 const rdockHost = document.getElementById('rdock');
@@ -1164,12 +1168,28 @@ function draw() {
     nameHarmony,
     scales,
   }, harmonyBuf));
-  if (showChain) chain.render(buildChainModel({
-    track: state.cursor.track,
-    chains,
-    selected: state.chainSelected,
-    trackName: trackName(engine, state.cursor.track),
-  }, chainBuf));
+  if (showChain) {
+    // Ask for each visible device's parameters once. The engine answers one
+    // device per query, so this walks the rack rather than asking for all of it:
+    // a request per frame would be a query storm against the plugin hosts.
+    const here = chains[state.cursor.track];
+    if (here && conn && conn.canSend()) {
+      for (const d of here.devices || []) {
+        const key = state.cursor.track + ':' + d.id;
+        if (paramsAsked.has(key)) continue;
+        paramsAsked.add(key);
+        conn.send({ type: 'reqparams', track: state.cursor.track, device: d.id });
+        break;                        // one per frame; the rest follow
+      }
+    }
+    chain.render(buildChainModel({
+      track: state.cursor.track,
+      chains,
+      selected: state.chainSelected,
+      trackName: trackName(engine, state.cursor.track),
+      params: deviceParams,
+    }, chainBuf));
+  }
   // One scheduler, two surfaces. Hiding the other host rather than unmounting it
   // keeps its pools warm, so switching views costs no rebuild.
   const v = state.view;
@@ -1983,6 +2003,14 @@ conn = WANTS_ENGINE ? connectEngine({
    * it becomes the most confidently wrong thing on the screen.
    */
   onScales: (list) => { scales = list; schedule(); },
+  /**
+   * A device's real name and parameters (SHM v17).
+   *
+   * Kept per device id, because the region holds only the newest answer and the
+   * rack shows several cards at once — dropping the previous one would make the
+   * strip flicker between "named" and "unnamed" as you clicked along it.
+   */
+  onDeviceParams: (dp) => { deviceParams[dp.device] = dp; schedule(); },
   onChains: (list, rev) => {
     if (rev === chainRev) return;
     chainRev = rev;
@@ -2266,6 +2294,7 @@ window.__uni = {
   pianoProbe: () => piano.probe(),
   patcherProbe: () => patcher.probe(),
   chainProbe: () => chain.probe(),
+  deviceParams: () => JSON.parse(JSON.stringify(deviceParams)),
   harmonyProbe: () => harmonyCard.probe(),
   scales: () => scales,
   paletteProbe: () => palette.probe(),
@@ -2507,6 +2536,19 @@ window.__uni = {
       { id: 12, kind: 4, pos: 3, node: 0xffffffff, slot: 2, caps: 4, bypass: 1 },
     ] };
     chainRev = 1;
+    // Two of the four have answered, so the fixture covers the state the rack is
+    // actually in most of the time: a rack part-way through being told what it
+    // holds. A fixture where everything has answered would not exercise the
+    // "asking the hosts" line at all.
+    deviceParams[7] = { device: 7, name: 'Identity', params: [
+      { index: 0, value: 620, name: 'cutoff', display: '620 Hz' },
+      { index: 1, value: 310, name: 'reso', display: '0.31' },
+      { index: 2, value: 880, name: 'drive', display: '+8.8 dB' },
+    ] };
+    deviceParams[12] = { device: 12, name: 'Valhalla Delay', params: [
+      { index: 0, value: 187, name: 'time', display: '3/16' },
+      { index: 1, value: 540, name: 'feedback', display: '0.54' },
+    ] };
     draw();
   },
   usePatcherFixture: () => {

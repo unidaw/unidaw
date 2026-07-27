@@ -35,7 +35,8 @@ export function noEngine() {
 }
 
 export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.0.0.1:8175',
-                                onChange, onStatus, onAck, onEngineEvent, onChains, onScales } = {}) {
+                                onChange, onStatus, onAck, onEngineEvent, onChains, onScales,
+                                onDeviceParams } = {}) {
   const store = createStore();
   let ws = null;
   let closed = false;
@@ -62,6 +63,13 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
         // channel, as before. Parse alone in the try; act outside it.
         let parsed = null;
         try { parsed = JSON.parse(ev.data); } catch (err) { /* not JSON: raw */ }
+        // One device's parameters, in answer to a reqparams. The engine fills a
+        // single region per query, so this is the answer to the most recent
+        // question rather than accumulated state.
+        if (parsed && parsed.deviceParams) {
+          onDeviceParams && onDeviceParams(parsed.deviceParams);
+          return;
+        }
         // The scale registry. Written once by the engine at startup, so it
         // arrives once per connection and never changes under us.
         if (parsed && Array.isArray(parsed.scales)) {

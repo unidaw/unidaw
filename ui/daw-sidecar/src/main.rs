@@ -936,6 +936,12 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         // (~100ms) but the published playhead moves on the next block, so the
         // UI is honest immediately.
         p.command_type = UiCommandType::SetPosition as u16;
+    } else if body.contains("\"reqparams\"") {
+        // Ask the engine to query a device's HOST for its parameters. The answer
+        // lands in a region, not on the wire — the engine bumps its version and
+        // the publish loop below notices.
+        p.command_type = UiCommandType::RequestDeviceParams as u16;
+        p.value0 = parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32;
     } else if body.contains("\"loop\"") {
         // Start and end, not tick and dur: the engine reads the end as an
         // absolute nanotick out of the duration field, and calling the second
@@ -1172,6 +1178,15 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
     /// client that connects while the engine is absent still gets it when the
     /// engine appears.
     let mut scales_sent = false;
+    /**
+     * The last device-params version this client was sent.
+     *
+     * The engine fills ONE region per query — ask for another device and the
+     * previous answer is gone. So this is not accumulated state like the chains;
+     * it is "the answer to the most recent question", and the version is what
+     * says a new answer has arrived.
+     */
+    let mut params_version = 0u32;
     // Chains start at zero, deliberately unlike the events above: a chain is
     // STATE, not news. A tab that connects after the last device edit still has
     // to be told what the chains are, and the store is the only place that
@@ -1280,6 +1295,25 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
                 let msg = format!("{{\"scales\":[{}]}}", body.join(","));
                 if ws.send(tungstenite::Message::Text(msg)).is_err() { break; }
                 scales_sent = true;
+            }
+        }
+
+        {
+            let dp = handle.read_device_params();
+            if dp.version != 0 && dp.version != params_version {
+                params_version = dp.version;
+                let ps: Vec<String> = dp.params.iter().map(|q| format!(
+                    "{{\"index\":{},\"value\":{},\"name\":\"{}\",\"display\":\"{}\",\"uid\":\"{}\"}}",
+                    q.index, q.value,
+                    q.name.replace('\\', "").replace('"', "'"),
+                    q.display.replace('\\', "").replace('"', "'"),
+                    q.uid16.iter().map(|b| format!("{b:02x}")).collect::<String>())).collect();
+                let msg = format!(
+                    "{{\"deviceParams\":{{\"version\":{},\"track\":{},\"device\":{},\"name\":\"{}\",\"params\":[{}]}}}}",
+                    dp.version, dp.track_id, dp.device_id,
+                    dp.device_name.replace('\\', "").replace('"', "'"),
+                    ps.join(","));
+                if ws.send(tungstenite::Message::Text(msg)).is_err() { break; }
             }
         }
 

@@ -66,3 +66,13 @@
 }
 .dv-body { flex: 1 1 auto; color: var(--uni-text-gutter); }
 .dv-foot { color: var(--base-neutral-600); }
+
+/* Parameter rows, once the device's host has answered. The value is the host's
+   own display string — it knows whether a number is dB, Hz or a note name. */
+.dv-p { display: flex; align-items: center; gap: 6px; height: 13px; }
+.dv-p-n { flex: 0 0 62px; color: var(--uni-text-gutter);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dv-p-bar { flex: 1 1 auto; height: 3px; background: var(--uni-rule-column); border-radius: 2px; }
+.dv-p-fill { height: 100%; background: var(--base-accent); border-radius: 2px; }
+.dv-p-v { flex: 0 0 58px; text-align: right; color: var(--base-accent-ramp-300);
+          overflow: hidden; white-space: nowrap; }
