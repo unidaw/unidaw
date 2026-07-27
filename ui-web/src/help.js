@@ -52,6 +52,8 @@ export const SURFACE_KEYS = {
     keys: [
       ['click lane', 'seek'],
       ['click clip', 'select placement'],
+      ['drag ruler', 'set the loop, snapped to bars'],
+      ['shift-drag', 'the same, snapped to beats'],
       ['left/right', 'scroll time'],
       ['up/down', 'change track'],
       ['- =', 'zoom out / in'],

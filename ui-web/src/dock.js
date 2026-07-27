@@ -93,6 +93,10 @@ export function createCommands(api) {
       if (a.length < 3) throw new Error('patch <node> <field> <steps>');
       return api.patch(num(a[0], 0), a[1], num(a[2], 0));
     } },
+    loop: { help: 'loop <fromBar> <toBar> — bars are 1-based, as on the ruler', run: (a) => {
+      if (a.length < 2) throw new Error('loop <fromBar> <toBar>');
+      return api.setLoop(num(a[0], 1), num(a[1], 2));
+    } },
     clear: { help: 'clear the log', run: (a, x) => { x.clear(); return null; } },
   };
 }

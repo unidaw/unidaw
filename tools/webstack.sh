@@ -92,6 +92,14 @@ sleep 6
 ENGINE_PID=$(sed -n 1p "$PIDFILE")
 alive "$ENGINE_PID" || { say "engine exited during startup:"; tail -5 /tmp/eng.log; exit 1; }
 
+# Build before launching. This script used to run whatever release binary was
+# lying around, so an edited sidecar started silently as the previous one and
+# answered a brand-new command with "unknown command" — twenty minutes of looking
+# for a bug in code that was never running.
+say "building the sidecar…"
+( cd "$WEB/ui" && cargo build --release -p daw-sidecar ) > /tmp/side-build.log 2>&1 \
+  || { say "sidecar build failed:"; tail -20 /tmp/side-build.log; exit 1; }
+
 ( cd "$WEB/ui" && DAW_PROJECT_DIR=$PROJECTS \
     nohup ./target/release/daw-sidecar --shm "$SHM" > /tmp/side.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
 sleep 2

@@ -23,6 +23,7 @@ import {
 import { isBlackKey, pitchLabel, fitLowPitch } from '../src/pianomodel.js';
 import { describeConfig, configFields, nudgeConfig,
          NODE_TYPES } from '../src/patchermodel.js';
+import { snapLoop, TICKS_PER_BAR } from '../src/arrangemodel.js';
 import { trackName } from '../src/arrangemodel.js';
 import { createField, begin as fBegin, feed as fFeed, cancel as fCancel } from '../src/textfield.js';
 
@@ -185,6 +186,21 @@ test('patcher config is named per type, or shown as nothing', () => {
   assert.match(lfo, /depth 0\.75/);
   // A type with no table shows NOTHING, not eight anonymous numbers.
   assert.equal(describeConfig(NODE_TYPES.indexOf('kernel'), [1, 2, 3, 4, 5, 6, 7, 8]), '');
+});
+
+test('a dragged loop snaps, normalises and is never empty', () => {
+  const BAR = TICKS_PER_BAR;
+  // Forwards, snapped to the nearest bar at each end.
+  assert.deepEqual(snapLoop(BAR * 0.6, BAR * 3.4, false), { start: BAR, end: BAR * 3 });
+  // Backwards: a drag right-to-left is the same span, not an empty one.
+  assert.deepEqual(snapLoop(BAR * 3.4, BAR * 0.6, false), { start: BAR, end: BAR * 3 });
+  // A click is one bar, not zero. The engine refuses end <= start, and a ruler
+  // that silently ignored a click would look broken.
+  assert.deepEqual(snapLoop(BAR * 2.1, BAR * 2.1, false), { start: BAR * 2, end: BAR * 3 });
+  // Fine mode is beats.
+  assert.deepEqual(snapLoop(0, BAR / 4 * 1.4, true), { start: 0, end: BAR / 4 });
+  // Never negative, however far left the drag goes.
+  assert.equal(snapLoop(-BAR * 5, BAR, false).start, 0);
 });
 
 test('a nudge clamps, and leaves every other value exactly as it was read', () => {

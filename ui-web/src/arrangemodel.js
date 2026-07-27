@@ -21,7 +21,7 @@ export function trackName(engine, t) {
   return n || 'T' + String(t + 1).padStart(2, '0');
 }
 
-const TICKS_PER_BAR = 3840000;
+export const TICKS_PER_BAR = 3840000;
 const TICKS_PER_BEAT = 960000;
 
 /**
@@ -37,6 +37,21 @@ export const ARRANGE_ZOOM = [
   { index: 4, ticksPerPixel: 120000, label: 'bar/32px' },
   { index: 5, ticksPerPixel: 240000, label: 'bar/16px' },
 ];
+
+/**
+ * Snap a dragged loop span to bars, or to beats when `fine`.
+ *
+ * Here rather than in the page because it is a musical decision with edge cases
+ * worth testing: a backwards drag is the same span rather than an empty one, a
+ * click is one unit rather than zero (the engine refuses end <= start), and a
+ * drag off the left edge stops at zero.
+ */
+export function snapLoop(a, b, fine) {
+  const unit = fine ? TICKS_PER_BAR / 4 : TICKS_PER_BAR;
+  const start = Math.max(0, Math.round(Math.min(a, b) / unit) * unit);
+  const end = Math.max(start + unit, Math.round(Math.max(a, b) / unit) * unit);
+  return { start, end };
+}
 
 /**
  * Reusable buffer. Same discipline as the tracker's: the draw path allocates
@@ -87,13 +102,15 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
 /**
  * Build the arrange model for a visible time window.
  *
+ * `loop` is the caller's in-flight loop span, which wins over the engine's.
+ *
  * @param {{startTick:number, width:number, zoomIndex:number, tracks:number,
  *          engine:object|null, laneHeight:number, cursor:object,
  *          selectedPlacement:number}} opts
  */
 export function buildArrangeModel(opts, buf) {
   const {
-    startTick = 0, width = 1200, zoomIndex = 3, tracks: laneCount = 8,
+    startTick = 0, width = 1200, zoomIndex = 3, tracks: laneCount = 8, loop = null,
     engine = null, laneHeight = 44, cursor = { track: 0, tick: 0 },
     selectedPlacement = -1,
   } = opts;
@@ -185,8 +202,12 @@ export function buildArrangeModel(opts, buf) {
 
   // The loop, if the engine has one. Clamped to the window rather than skipped
   // when it runs off the edge: a loop you are inside should still show its edge.
-  const ls = engine ? engine.loopStart : 0;
-  const le = engine ? engine.loopEnd : 0;
+  //
+  // `loop` overrides the engine while a drag is in flight or a set command has
+  // not come back yet — the bracket has to follow the pointer, and the engine is
+  // a round trip away.
+  const ls = loop ? loop.start : (engine ? engine.loopStart : 0);
+  const le = loop ? loop.end : (engine ? engine.loopEnd : 0);
   buf.loop.on = le > ls && le > startTick && ls < endTick;
   if (buf.loop.on) {
     const x0 = Math.max(0, (ls - startTick) / tpp);

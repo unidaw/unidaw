@@ -78,7 +78,8 @@ import M from './design/out/tokens.js';
 import { connectEngine } from './src/engine.js';
 import { createChrome } from './src/chrome.js';
 import { Arrange } from './src/arrange.js';
-import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName } from './src/arrangemodel.js';
+import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName,
+         TICKS_PER_BAR, snapLoop } from './src/arrangemodel.js';
 import { Mixer } from './src/mixer.js';
 import { Scope } from './src/scope.js';
 import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
@@ -119,12 +120,72 @@ function cmd(what) {
 const hud = document.getElementById('hud');
 const tracker = new Tracker(host, metrics);
 const arrangeHost = document.getElementById('arrange');
-const arrange = new Arrange(arrangeHost, metrics);
+const arrange = new Arrange(arrangeHost, metrics, {
+  onLoop: (a, b, done, opts) => setLoopFromDrag(a, b, done, opts),
+});
 const ARRANGE_LANE_H = 44;
+
+/**
+ * The loop the UI is showing: a drag in progress, else a set we sent and the
+ * engine has not published back, else nothing and the engine's own span wins.
+ *
+ * Two overrides rather than one because they end differently. A drag ends when
+ * the pointer lifts; a pending set ends when the engine agrees, and if the
+ * engine refuses it the bracket has to snap back rather than sit there lying.
+ */
+let loopDrag = null;
+let loopPending = null;
+function loopOverride() { return loopDrag || loopPending; }
+
+/**
+ * Snap a dragged loop to whole bars, or to beats with Shift held.
+ *
+ * A loop is a musical span, and a bar is what one is almost always wanted in;
+ * the sub-bar case is real but rare enough to be the modifier. The span is at
+ * least one unit wide because the engine refuses end <= start, and a click that
+ * silently did nothing would look like a broken ruler.
+ */
+function setLoopFromDrag(a, b, done, opts = {}) {
+  if (opts.cancelled) { loopDrag = null; schedule(); return; }
+  const { start: lo, end: hi } = snapLoop(a, b, opts.fine);
+  loopDrag = { start: lo, end: hi };
+  if (!done) { schedule(); return; }
+  loopDrag = null;
+  if (!conn || !conn.send({ type: 'loop', start: lo, end: hi })) {
+    state.reject = 'no engine';
+    schedule();
+    return;
+  }
+  // Stamped, because a pending value with no deadline is a bracket that lies
+  // forever if the engine never agrees. The notes have the same reaper.
+  loopPending = { start: lo, end: hi, at: performance.now() };
+  state.reject = null;
+  schedule();
+}
+
+/** How long the bracket may show a value the engine has not confirmed. */
+const LOOP_PENDING_MS = 2000;
+
+/** Drop the pending loop once the engine publishes it, or gives up. */
+function reconcileLoop() {
+  if (!loopPending || !engine) return;
+  if (engine.loopStart === loopPending.start && engine.loopEnd === loopPending.end) {
+    loopPending = null;
+    return;
+  }
+  if (performance.now() - loopPending.at > LOOP_PENDING_MS) {
+    // The engine did not take it. Snap back to what it actually has and say so,
+    // rather than leaving a bracket that describes a loop nothing will play.
+    loopPending = null;
+    state.reject = 'the engine did not take that loop';
+    schedule();
+  }
+}
 let arrangeBuf = null;
 
-// Mixer state is LOCAL: the engine takes SetTrackMixer but publishes nothing
-// back, so this is what we last sent and nothing more. See mixermodel.js.
+// What we last SENT to the mixer. Not the truth any more — the engine publishes
+// gain, pan and mute/solo back (SHM v12), and reconcileMixer drops these entries
+// as it confirms them. See mixermodel.js.
 const mixerState = createMixerState(16);
 let mixerBuf = null;
 let mixRevision = 0;
@@ -296,6 +357,18 @@ const dockApi = {
     return notesInSelection().length;
   },
   transpose: (n) => { if (!transposeSelection(n)) throw new Error(state.reject || 'nothing to transpose'); schedule(); },
+  setLoop: (fromBar, toBar) => {
+    // Bars, 1-based, the same numbers the ruler prints. Ticks would match `seek`,
+    // but nobody reads a loop out of a project in nanoticks and the ruler is
+    // right there saying 5.
+    if (!(fromBar >= 1) || !(toBar >= 1)) throw new Error('bars are 1-based');
+    const a = (fromBar - 1) * TICKS_PER_BAR;
+    const b = (toBar - 1) * TICKS_PER_BAR;
+    setLoopFromDrag(a, b, true);
+    if (state.reject) throw new Error(state.reject);
+    const l = loopOverride() || { start: a, end: Math.max(b, a + TICKS_PER_BAR) };
+    return 'loop bars ' + (l.start / TICKS_PER_BAR + 1) + '–' + (l.end / TICKS_PER_BAR + 1);
+  },
   nodes: () => (engine ? engine.patcherNodes.map((n) => ({
     id: n.id, type: NODE_TYPES[n.type] || n.type,
     fields: configFields(n.type).map((f) => f.name),
@@ -795,6 +868,7 @@ function drawArrange() {
     arrangeBuf = createArrangeBuffer(lanes, 128);
   }
   const vm = buildArrangeModel({
+    loop: loopOverride(),
     startTick: state.arrangeStart,
     width: arrangeHost.clientWidth - metrics.gutterWidth,
     zoomIndex: state.arrangeZoom,
@@ -1571,6 +1645,7 @@ conn = connectEngine({
     // edits reconcile on the clip version.
     reconcileMixer(mixerState, store);
     reconcilePatcher();
+    reconcileLoop();
     // A load result. The engine used to accept a malformed project, change
     // nothing, and ack ok — indistinguishable from a load that worked and
     // produced identical content. It reports now, so we can too.
@@ -1756,6 +1831,10 @@ window.__uni = {
   },
   arrangeProbe: () => arrange.probe(),
   loop: () => (engine ? { start: engine.loopStart, end: engine.loopEnd } : null),
+  // What the RULER is showing, which during a drag is not what the engine has.
+  loopShown: () => loopOverride() || (engine ? { start: engine.loopStart, end: engine.loopEnd } : null),
+  setLoop: (a, b, fine) => { setLoopFromDrag(a, b, true, { fine }); draw(); return loopOverride(); },
+  dragLoop: (a, b, fine) => { setLoopFromDrag(a, b, false, { fine }); draw(); return loopOverride(); },
   loadStatus: () => (engine ? { seq: engine.loadSeq, ok: engine.loadOk } : null),
   mixerProbe: () => mixer.probe(),
   scopeProbe: () => scope.probe(),

@@ -186,6 +186,53 @@ for (const [view, probe, check, prep] of [
   ok(p && check(p), `${view} renders live data`, JSON.stringify(p).slice(0, 90));
 }
 
+section('loop region');
+await page.evaluate(() => { window.__uni.view('arrange'); window.__uni.arrangeTo(0); });
+await frames();
+// A REAL pointer, not the __uni shim. The first cut of this worked through the
+// shim and did nothing under the mouse, because .ar-ruler was still
+// pointer-events:none from when it was decorative — a listener nobody can reach
+// throws no error and passes any test that calls past it.
+const rulerBox = await page.evaluate(() => {
+  const b = document.querySelector('.ar-ruler').getBoundingClientRect();
+  return { x: b.x, y: b.y + b.height / 2 };
+});
+const loopBefore = await page.evaluate(() => window.__uni.loop());
+await page.mouse.move(rulerBox.x + 60, rulerBox.y);
+await page.mouse.down();
+await page.mouse.move(rulerBox.x + 260, rulerBox.y, { steps: 8 });
+const dragging = await page.evaluate(() => window.__uni.loopShown());
+const engineMid = await page.evaluate(() => window.__uni.loop());
+ok(dragging.start !== engineMid.start || dragging.end !== engineMid.end,
+   'the bracket follows the pointer before the engine is told',
+   `${JSON.stringify(dragging)} vs engine ${JSON.stringify(engineMid)}`);
+ok(dragging.start % 3840000 === 0 && dragging.end % 3840000 === 0,
+   'and snaps to whole bars', JSON.stringify(dragging));
+await page.mouse.up();
+await page.waitForTimeout(1200);
+const loopAfter = await page.evaluate(() => window.__uni.loop());
+ok(loopAfter.start === dragging.start && loopAfter.end === dragging.end,
+   'releasing sets the engine\'s loop',
+   `${JSON.stringify(loopBefore)} -> ${JSON.stringify(loopAfter)}`);
+// Shift snaps finer, and a right-to-left drag is a span rather than nothing.
+await page.keyboard.down('Shift');
+await page.mouse.move(rulerBox.x + 430, rulerBox.y);
+await page.mouse.down();
+await page.mouse.move(rulerBox.x + 400, rulerBox.y, { steps: 4 });
+await page.mouse.up();
+await page.keyboard.up('Shift');
+await page.waitForTimeout(1200);
+const fineLoop = await page.evaluate(() => window.__uni.loop());
+ok(fineLoop.end > fineLoop.start && (fineLoop.end - fineLoop.start) < 3840000,
+   'shift-dragging backwards gives a sub-bar span, not an empty one',
+   JSON.stringify(fineLoop));
+const byBar = await page.evaluate(() => window.__uni.run('loop 3 7'));
+await page.waitForTimeout(1200);
+const barLoop = await page.evaluate(() => window.__uni.loop());
+ok(barLoop.start === 2 * 3840000 && barLoop.end === 6 * 3840000,
+   'the console sets it in the bar numbers the ruler prints',
+   JSON.stringify(barLoop));
+
 section('patcher editing');
 await page.evaluate(() => window.__uni.view('patcher'));
 await frames();

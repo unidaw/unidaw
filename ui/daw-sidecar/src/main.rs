@@ -817,6 +817,20 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         // (~100ms) but the published playhead moves on the next block, so the
         // UI is honest immediately.
         p.command_type = UiCommandType::SetPosition as u16;
+    } else if body.contains("\"loop\"") {
+        // Start and end, not tick and dur: the engine reads the end as an
+        // absolute nanotick out of the duration field, and calling the second
+        // one "dur" in the wire message would invite someone to send a length.
+        let start = parse_num(body, "\"start\"").unwrap_or(0).max(0) as u64;
+        let end = parse_num(body, "\"end\"").unwrap_or(0).max(0) as u64;
+        // The engine refuses end <= start to stderr, where nobody sees it.
+        // Refuse here so the UI gets an answer on the socket it is listening to.
+        if end <= start { return Err("a loop must end after it starts"); }
+        p.command_type = UiCommandType::SetLoopRange as u16;
+        p.note_nanotick_lo = start as u32;
+        p.note_nanotick_hi = (start >> 32) as u32;
+        p.note_duration_lo = end as u32;
+        p.note_duration_hi = (end >> 32) as u32;
     } else if body.contains("\"note\"") {
         let dur = parse_num(body, "\"dur\"").unwrap_or(960_000).max(1) as u64;
         p.command_type = UiCommandType::WriteNote as u16;
@@ -1307,6 +1321,27 @@ mod tests {
     /// Byte-level layout, which is where this project has been bitten twice.
     /// The values are the ones the READ side reports, so a round trip through
     /// the UI has to come back the same.
+    #[test]
+    fn a_loop_carries_two_absolute_nanoticks_and_refuses_an_empty_span() {
+        let p = build_command(r#"{"type":"loop","start":4294967296,"end":4294967296000}"#)
+            .expect("loop");
+        assert_eq!(p.command_type, UiCommandType::SetLoopRange as u16);
+        // Start in the nanotick pair, end in the DURATION pair — the engine reads
+        // it as an absolute position, not a length.
+        assert_eq!(p.note_nanotick_lo, 0);
+        assert_eq!(p.note_nanotick_hi, 1);
+        assert_eq!(
+            ((p.note_duration_hi as u64) << 32) | p.note_duration_lo as u64,
+            4_294_967_296_000
+        );
+        // A zero-length or inverted span is refused here rather than on the
+        // engine's stderr.
+        assert_eq!(build_command(r#"{"type":"loop","start":960000,"end":960000}"#).err(),
+                   Some("a loop must end after it starts"));
+        assert_eq!(build_command(r#"{"type":"loop","start":960000,"end":0}"#).err(),
+                   Some("a loop must end after it starts"));
+    }
+
     #[test]
     fn euclidean_config_packs_to_the_engine_layout() {
         let p = build_patcher_config(

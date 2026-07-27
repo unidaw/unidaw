@@ -40,7 +40,12 @@
   height: var(--metrics-header-height);
   background: var(--uni-surface-header-bg);
   border-bottom: 1px solid var(--uni-rule-gutter);
-  overflow: hidden; z-index: 2; pointer-events: none;
+  overflow: hidden; z-index: 2;
+  /* Interactive: this is where the loop is dragged. It was pointer-events:none
+     while it was decorative, and leaving it that way made the drag handlers fire
+     never — with no error, because a listener nobody reaches is not a fault. */
+  cursor: ew-resize;
+  user-select: none; -webkit-user-select: none;
 }
 /* The loop, in the ruler where a loop belongs — over the bar numbers it spans,
    not over the material. */
@@ -55,6 +60,8 @@
 
 .ar-tick {
   position: absolute; top: 0; left: 0; height: 100%;
+  /* The bar numbers are not the target; the ruler is. */
+  pointer-events: none;
   padding-left: 4px; box-sizing: border-box;
   border-left: 1px solid var(--uni-rule-track);
   font-family: var(--font-mono); font-size: var(--font-size-fx);

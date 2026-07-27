@@ -117,6 +117,23 @@ update both numbers, and the assertion tells you if you got it wrong.
 
 ---
 
+### 2.15 A test that calls past the UI does not test the UI
+
+The loop-drag handlers were written, wired, and verified through
+`window.__uni.setLoop(...)` — which passed, while dragging the ruler with a real
+mouse did nothing at all. `.ar-ruler` still carried `pointer-events: none` from
+when it was decorative. A listener nobody can reach throws no error, logs
+nothing, and satisfies every test that reaches the function directly.
+
+So: **when the feature IS the interaction, drive the interaction.**
+`page.mouse.down()` on the element, not the callback it eventually calls. The
+agent-facing API and the pointer path have to be tested separately, because the
+whole point of the agent-facing API is that it bypasses the pointer path.
+
+The same shape applies to anything that makes a decorative element interactive:
+`pointer-events`, `user-select`, and `z-index` were all chosen when nothing had
+to be clickable, and none of them announce that they are now wrong.
+
 ### 2.2 Two rules from index.html specifically
 
 Five temporal-dead-zone bugs in one file. Four failed loudly — the page did not

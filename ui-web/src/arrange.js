@@ -16,10 +16,13 @@ function div(cls, parent) {
 }
 
 export class Arrange {
-  constructor(host, metrics) {
+  constructor(host, metrics, { onLoop } = {}) {
     this.host = host;
     this.metrics = metrics;
     this.host.className = 'ar';
+    // Raw ticks, unsnapped: where a loop is ALLOWED to start is a musical
+    // question, and this file knows about pixels. The caller snaps.
+    this.onLoop = onLoop;
 
     this.gutter = div('ar-gutter', host);
     this.band = div('ar-band', host);
@@ -37,6 +40,50 @@ export class Arrange {
     this.rulerPool = [];
     this.laneCount = 0;
     this.vm = null;
+
+    // The ruler is where a loop is set, because that is where it is drawn.
+    this.ruler.addEventListener('pointerdown', (e) => this._loopDown(e));
+    this.ruler.addEventListener('pointermove', (e) => this._loopMove(e));
+    this.ruler.addEventListener('pointerup', (e) => this._loopUp(e));
+    this.ruler.addEventListener('pointercancel', () => this._loopCancel());
+    this._loopDrag = null;
+  }
+
+  /** Tick under the pointer, from the ruler's own box. */
+  _tickAt(e) {
+    if (!this.vm) return 0;
+    const r = this.ruler.getBoundingClientRect();
+    return this.vm.view.startTick + (e.clientX - r.left) * this.vm.view.ticksPerPixel;
+  }
+
+  _loopDown(e) {
+    if (!this.vm || !this.onLoop) return;
+    const t = this._tickAt(e);
+    this._loopDrag = { a: t, b: t };
+    this.ruler.setPointerCapture(e.pointerId);
+    this.onLoop(t, t, false, { fine: e.shiftKey });
+  }
+
+  _loopMove(e) {
+    if (!this._loopDrag) return;
+    this._loopDrag.b = this._tickAt(e);
+    this.onLoop(this._loopDrag.a, this._loopDrag.b, false, { fine: e.shiftKey });
+  }
+
+  _loopUp(e) {
+    if (!this._loopDrag) return;
+    const { a } = this._loopDrag;
+    const b = this._tickAt(e);
+    this._loopDrag = null;
+    this.ruler.releasePointerCapture(e.pointerId);
+    this.onLoop(a, b, true, { fine: e.shiftKey });
+  }
+
+  /** A cancelled drag reverts: it must not commit a span the pointer left. */
+  _loopCancel() {
+    if (!this._loopDrag) return;
+    this._loopDrag = null;
+    this.onLoop(0, 0, true, { cancelled: true });
   }
 
   /** Grow pools to the shape being drawn. Called only when the shape changes. */
