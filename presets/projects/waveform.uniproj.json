@@ -14,7 +14,7 @@
       "time_sig_numerator": 4,
       "time_sig_denominator": 4,
       "audio": {
-        "source_path": "../presets/audio/waveform_probe.wav",
+        "source_path": "../audio/waveform_probe.wav",
         "source_start_frame": 0,
         "gain_db": 0.0,
         "fade_in": 0,
@@ -30,7 +30,7 @@
       "time_sig_numerator": 4,
       "time_sig_denominator": 4,
       "audio": {
-        "source_path": "../presets/audio/waveform_probe_stereo.wav",
+        "source_path": "../audio/waveform_probe_stereo.wav",
         "source_start_frame": 0,
         "gain_db": 0.0,
         "fade_in": 0,
