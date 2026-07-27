@@ -1861,31 +1861,13 @@ struct TrackRuntime {
         continue;
       }
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
-      if (runtime->arrangementDirty.load(std::memory_order_relaxed)) {
-        // Live-edited track: its authored placements no longer describe the
-        // notes, so derive rails from the flat clip by proximity — the same
-        // segmentation a save emits, so what the UI draws matches what lands on
-        // disk. Every note falls under a rail ("no notes outside clips").
-        const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
-        const auto segments =
-            daw::segmentEventsIntoClips(runtime->track.clip.events(), bar, bar);
-        uint32_t placementId = 0;
-        for (const auto& seg : segments) {
-          if (count >= daw::kUiMaxClipExtents) {
-            break;
-          }
-          daw::UiClipExtent& out = region->extents[count];
-          out.placementId = placementId++;
-          out.clipId = 0;  // derived from notes — no stable clip id yet
-          out.trackId = runtime->trackId;
-          out.flags = 0;
-          out.startTick = seg.at;
-          out.endTick = seg.at + seg.length;
-          std::memset(out.name, 0, sizeof(out.name));
-          ++count;
-        }
-        continue;
-      }
+      // Always publish the authored clip extents. rebuildFlatAndPublish rebuilds
+      // rt.clipExtents from the structural store (placements + owned clips) on every
+      // edit, so they describe the notes even on a live-edited track — carrying the
+      // real clipId (which joins UiAudioClip and the per-clip grid) that the old
+      // arrangement-dirty segmentation path zeroed. That path predated the structural
+      // store; segmenting the flat clip dropped clip identity, made audio rails vanish
+      // on a note edit, and published no grid. See the frontend's P1.
       for (const auto& ext : runtime->clipExtents) {
         if (count >= daw::kUiMaxClipExtents) {
           break;
