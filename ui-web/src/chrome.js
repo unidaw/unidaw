@@ -132,7 +132,14 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
   const octLabel = label('ch-meta', 'oct 4');
   const stepLabel = label('ch-meta', 'step 1');
   const velLabel = label('ch-meta', 'vel 100');
-  entry.append(viewLabel, octLabel, stepLabel, velLabel);
+  // What a bare digit writes in the column the cursor is in. The three columns
+  // read digits differently — degree, velocity, effect — and nothing said which,
+  // so one keystroke did three things and you had to remember which. It sits with
+  // the other entry state because that is what it is: a fact about what typing
+  // will do, next to the octave and the step it will do it at.
+  const digitMode = label('ch-mode', '');
+  let lastDigitMode = null;
+  entry.append(viewLabel, octLabel, stepLabel, velLabel, digitMode);
 
   const scales = document.createElement('button');
   scales.className = 'ch-btn ch-scales';
@@ -171,7 +178,12 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
     /** Called from the draw loop. Must stay allocation-free when nothing moves. */
     update({ playheadTick, transport: tstate, linkText, octave, editStep,
              velocity = 100, rejectText = '', viewName = '', keyName = '',
-             tempoMilliBpm = 120000, tempoPointCount = 0, meter = DEFAULT_METER }) {
+             tempoMilliBpm = 120000, tempoPointCount = 0, meter = DEFAULT_METER,
+             digitMode: digitModeText = '' }) {
+      if (digitModeText !== lastDigitMode) {
+        lastDigitMode = digitModeText;
+        digitMode.firstChild.nodeValue = digitModeText;
+      }
       // Guarded on the two numbers, not on the record: the engine will republish a
       // meter on every frame, and a guard keyed on object identity would rebuild
       // this string sixty times a second to print the same thing.

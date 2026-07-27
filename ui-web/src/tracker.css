@@ -306,3 +306,20 @@
   text-decoration: underline wavy;
   text-decoration-skip-ink: none;
 }
+
+/* What a bare digit will write, in the column the cursor is in.
+ *
+ * Dimmer than the octave and step beside it: those are values you SET, this is a
+ * consequence of where you are. Reading as a setting would invite people to try
+ * to change it. */
+/* Its width is RESERVED, not fitted.
+ *
+ * The text changes as the cursor moves between columns, and this label sits to
+ * the left of the surface tabs — so a label that grew and shrank would slide
+ * TRACKER/ARRANGE/PATCHER back and forth under the pointer every time you moved
+ * sideways in the grid. A navigation control that moves while you are aiming at
+ * it is worse than one placed slightly further right. */
+.ch-mode {
+  font-size: 10px; letter-spacing: .06em; color: var(--uni-text-gutter);
+  min-width: 40px;
+}

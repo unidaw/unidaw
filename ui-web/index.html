@@ -1155,6 +1155,25 @@ let lastLoadSeq = -1;
 const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', selection: null,
   // Entry state, shown in the chrome so you can see what you are typing into.
   octave: 4, editStep: 1, velocity: 100, zoom: 3, digitCell: -1, digitAcc: 0,
+  /**
+   * What the note column does with a DIGIT: 'pitch' or 'degree'.
+   *
+   * There is a genuine collision here and it cannot be resolved by picking a
+   * clever default. The tracker keymap is a QWERTY piano, and five of the ten
+   * digits are already black keys — NOTE_KEYS maps 2, 3, 5, 6 and 7 to C#, D#,
+   * F#, G# and A#. So "a digit writes a degree" would mean 0, 1, 4, 8 and 9
+   * wrote degrees while 2, 3, 5, 6 and 7 wrote pitches: one key class, two
+   * meanings, decided by which digit you happened to press. That is worse than
+   * either option alone.
+   *
+   * So it is a mode, toggled by `\``, and the chrome always says which — which is
+   * what ARCHITECTURE_REVIEW Movement 1 item 9 asks for by name.
+   *
+   * Letters stay piano keys in both modes: a letter is never a degree, so there
+   * is nothing to disambiguate and taking them away would make degree mode a
+   * worse place to be for no gain.
+   */
+  entryMode: 'pitch',
   // Which surface is showing. Both consume the same engine store; only the
   // projection differs, which is the whole point of the view-model boundary.
   projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: null,
@@ -1487,7 +1506,8 @@ function currentKey() {
  */
 const _chromeOpts = { playheadTick: 0, transport: 0, linkText: '', octave: 0,
                       editStep: 0, velocity: 100, rejectText: '', viewName: '',
-                      keyName: '', tempoMilliBpm: 120000, tempoPointCount: 0 };
+                      keyName: '', digitMode: '', tempoMilliBpm: 120000,
+                      tempoPointCount: 0 };
 function updateChrome() {
   const o = _chromeOpts;
   o.playheadTick = engine ? engine.playheadTick : 0;
@@ -1500,6 +1520,11 @@ function updateChrome() {
   o.rejectText = state.reject || '';
   o.viewName = state.view;
   o.keyName = currentKey();
+  // What a DIGIT does where the cursor is. The three columns read digits
+  // differently and nothing on screen said which — see typeDegree.
+  o.digitMode = state.cursor.col === 0
+                  ? (state.entryMode === 'degree' ? '#=deg' : '#=note')
+              : state.cursor.col === 1 ? '#=vel' : '#=fx';
   // 120000 when there is no engine, which is what the fixture plays at — not 0,
   // which would put "0.00 BPM" on screen for every golden and every headless run.
   o.tempoMilliBpm = engine && engine.tempoMilliBpm ? engine.tempoMilliBpm : 120000;
@@ -2147,6 +2172,27 @@ function typeValue(digit) {
   }
 }
 
+/**
+ * Write a scale degree at the cursor from a bare digit.
+ *
+ * Degrees are 1-based everywhere a musician writes them (I, II, III...), so `1`
+ * is the root. That makes `0` not a degree at all rather than a synonym for the
+ * root, and saying so is better than quietly writing the tonic when someone
+ * meant something else.
+ *
+ * The octave is the entry octave, the same one a letter key uses, so a digit and
+ * a letter put a note in the same register.
+ */
+function typeDegree(digit) {
+  if (digit < 1) {
+    state.reject = 'degrees are 1-based — 1 is the root, so 0 is not a degree';
+    return false;
+  }
+  // quality 0 is "single note": a degree, not a chord built on it.
+  return writeChord({ degree: digit - 1, quality: 0, inv: 0, oct: state.octave,
+                      spread: 0, ht: 0, hv: 0, dur: 0 });
+}
+
 /** Grow the selection to include `row`, anchoring on where it started. */
 function extendSelection(row) {
   const field = state.cursor.track * state.columns + state.cursor.col;
@@ -2414,6 +2460,12 @@ addEventListener('keydown', (e) => {
   //    consumed every printable key, so none of them were reachable: `-` typed a
   //    dash into a cell instead of zooming, and Backspace edited the buffer
   //    instead of deleting a note.
+  // The note column's digit meaning. Grouped with octave and step because it is
+  // the same kind of thing: a standing choice about what typing does next.
+  if (k === '`') {
+    state.entryMode = state.entryMode === 'pitch' ? 'degree' : 'pitch';
+    return done();
+  }
   if (k === '[') { state.octave = Math.max(0, state.octave - 1); return done(); }
   if (k === ']') { state.octave = Math.min(9, state.octave + 1); return done(); }
   // Edit step: how far the cursor advances after writing a note. 0 stays put,
@@ -2477,10 +2529,23 @@ addEventListener('keydown', (e) => {
       state.cursor.row += state.editStep; follow();
       return done();
     }
+    const deg = hexValue(k);
+    // Degree mode takes the digits BEFORE the piano lookup, or 2/3/5/6/7 would
+    // still write pitches and the mode would silently apply to half the keys.
+    if (state.entryMode === 'degree' && deg >= 0) { typeDegree(deg); return done(); }
     const pitch = pitchOf(k.toLowerCase(), state.octave);
     if (pitch >= 0) {
       writePitch(pitch);
       state.cursor.row += state.editStep; follow();
+      return done();
+    }
+    // A digit that is not one of the five piano digits used to reach no handler
+    // at all — this branch ended in a bare `return`, so 0, 1, 4, 8 and 9 did
+    // NOTHING on the note column: no write, no refusal, no message. That is the
+    // silent no-op ARCHITECTURE_REVIEW Movement 1 item 12 names. Now it says what
+    // the key could have meant and where the other meaning lives.
+    if (deg >= 0) {
+      state.reject = k + ' is not a piano key — ` switches to degree mode';
       return done();
     }
     return;
