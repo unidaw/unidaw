@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Generate the audio fixture the waveform work is tested against.
 
-    python3 tools/gen_audio_fixture.py            # writes presets/audio/waveform_probe.wav
+    python3 tools/gen_audio_fixture.py     # writes both files under presets/audio/
+
+Writes TWO files:
+    waveform_probe.wav          mono, the 8 sections below
+    waveform_probe_stereo.wav   the same signal on the left, NEGATED on the right
 
 No project in presets/projects/ contains an audio clip, so there has never been a
 waveform to draw or a peak computation to check. This makes one — and makes it a
@@ -40,8 +44,14 @@ this file is worth committing rather than generating a sine and moving on:
     when the truth is a solid block entirely above it. Real audio has DC offsets;
     this is how you find out whether the renderer can express one.
 
-Mono 16-bit PCM at 44100 Hz, 8 seconds = 4 bars at 120 BPM, so the section
-boundaries land on beats and are easy to point at in the arrangement.
+  - THE STEREO FILE catches a mono downmix, which is not merely lossy but FALSE.
+    Its channels sum to exactly zero at every frame, so a waveform built from a
+    downmix draws all eight seconds — including the full-scale sine — as a flat
+    line, while the file is as loud as a file can be. Nothing about that failure
+    looks like a bug in the peak code; it looks like a quiet recording.
+
+16-bit PCM at 44100 Hz, 8 seconds = 4 bars at 120 BPM, so the section boundaries
+land on beats and are easy to point at in the arrangement.
 
 Written with the standard library alone: this is a fixture generator, and adding
 a dependency to produce a WAV whose format is 44 bytes of header would be a poor
@@ -55,11 +65,11 @@ import sys
 
 RATE = 44100
 SECONDS = 8
-CHANNELS = 1
 BITS = 16
 
-OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                   "presets", "audio", "waveform_probe.wav")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MONO = os.path.join(ROOT, "presets", "audio", "waveform_probe.wav")
+STEREO = os.path.join(ROOT, "presets", "audio", "waveform_probe_stereo.wav")
 
 
 def sample_at(n):
@@ -95,9 +105,8 @@ def sample_at(n):
     return 0.0
 
 
-def main():
-    os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    frames = RATE * SECONDS
+def write_wav(path, channels, frames, value):
+    """`value(n, c)` gives the sample for frame n, channel c, in -1.0..1.0."""
     # 32767, not 32768: -32768 is representable and +32768 is not, so scaling by
     # 32768 clips the positive full-scale sine by one LSB and makes the file's
     # actual peak asymmetric — which would then show up in the very peak values
@@ -105,24 +114,40 @@ def main():
     peak = 32767
     body = bytearray()
     for n in range(frames):
-        v = sample_at(n)
-        v = -1.0 if v < -1.0 else (1.0 if v > 1.0 else v)
-        body += struct.pack("<h", int(round(v * peak)))
+        for c in range(channels):
+            v = value(n, c)
+            v = -1.0 if v < -1.0 else (1.0 if v > 1.0 else v)
+            body += struct.pack("<h", int(round(v * peak)))
 
-    byte_rate = RATE * CHANNELS * BITS // 8
-    block_align = CHANNELS * BITS // 8
+    byte_rate = RATE * channels * BITS // 8
+    block_align = channels * BITS // 8
     header = b"RIFF" + struct.pack("<I", 36 + len(body)) + b"WAVE"
-    header += b"fmt " + struct.pack("<IHHIIHH", 16, 1, CHANNELS, RATE,
+    header += b"fmt " + struct.pack("<IHHIIHH", 16, 1, channels, RATE,
                                     byte_rate, block_align, BITS)
     header += b"data" + struct.pack("<I", len(body))
-
-    with open(OUT, "wb") as f:
+    with open(path, "wb") as f:
         f.write(header)
         f.write(body)
+    print(f"wrote {path}")
+    print(f"  {frames} frames, {SECONDS}s, {RATE} Hz, {channels}ch, {BITS}-bit, "
+          f"{len(header) + len(body)} bytes")
 
-    print(f"wrote {OUT}")
-    print(f"  {frames} frames, {SECONDS}s, {RATE} Hz, {CHANNELS}ch, {BITS}-bit")
-    print(f"  {len(header) + len(body)} bytes")
+
+def main():
+    os.makedirs(os.path.dirname(MONO), exist_ok=True)
+    frames = RATE * SECONDS
+    write_wav(MONO, 1, frames, lambda n, c: sample_at(n))
+
+    # STEREO: right is the exact negation of left.
+    #
+    # This one file turns "a mono downmix is FALSE, not merely lossy" into a
+    # numeric assertion. (L + R) / 2 is identically zero for every frame, so a
+    # waveform built from a downmix draws all eight seconds — including the
+    # full-scale sine — as a flat line at zero, while the file is as loud as a
+    # file can be. Nothing about that failure looks like a bug in the peak code;
+    # it looks like a quiet recording, which is why it needs a fixture rather
+    # than a comment.
+    write_wav(STEREO, 2, frames, lambda n, c: sample_at(n) if c == 0 else -sample_at(n))
     # Print the expected peaks per second, which is what a peak implementation
     # should be checked against.
     print("\n  expected min/max per second:")
