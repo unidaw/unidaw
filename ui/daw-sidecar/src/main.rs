@@ -21,7 +21,7 @@
 //!   cargo run -p daw-sidecar -- [--port 8174] [--shm /daw_engine_ui] [--hz 120]
 
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -31,7 +31,8 @@ use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                         UiCommandPayload, UiCommandType,
                         UiDiffType, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
-                        UiPatcherPresetCommandPayload, UiSetParamPayload, K_CHAIN_DEVICE_ID_AUTO,
+                        UiPatcherPresetCommandPayload, UiSetParamPayload,
+                        UiWaveformRequestPayload, K_UI_WAVEFORM_SLOTS, K_CHAIN_DEVICE_ID_AUTO,
                         K_CHAIN_TRACK_ALL, K_HOST_SLOT_DIRECT};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
 
@@ -1245,6 +1246,97 @@ fn build_set_param(body: &str) -> Option<Result<UiSetParamPayload, String>> {
     }))
 }
 
+/// A process-wide request counter for waveform queries.
+///
+/// Allocated HERE, not in the browser. Two tabs minting their own ids into one
+/// four-slot region is a livelock: each rejects the other's echo, times out, and
+/// re-requests for ever. One counter in the one process both tabs go through
+/// costs nothing and makes that impossible.
+static WAVEFORM_SEQ: AtomicU32 = AtomicU32::new(1);
+
+/// The waveform answer's binary frame. Header, then channel-planar i16 pairs.
+///
+/// Binary because a full slot is 24,576 pairs — 98 KB of i16 — and rendering that
+/// as JSON numbers would be roughly 400 KB of text to parse per zoom step, for
+/// data the browser wants as a typed array anyway.
+const WAVE_MAGIC: u32 = 0x5749_4e55; // "UNIW"
+const WAVE_WIRE_VERSION: u16 = 1;
+const WAVE_HEADER_BYTES: usize = 56;
+
+fn encode_waveform(v: &daw_bridge::control::WaveformSlotView, out: &mut Vec<u8>) {
+    out.clear();
+    out.extend_from_slice(&WAVE_MAGIC.to_le_bytes());              // 0
+    out.extend_from_slice(&WAVE_WIRE_VERSION.to_le_bytes());       // 4
+    out.push(1u8);                                                 // 6 kind: answer
+    out.push(v.status as u8);                                      // 7
+    out.extend_from_slice(&v.request_seq.to_le_bytes());           // 8
+    out.extend_from_slice(&v.source_id.to_le_bytes());             // 12
+    out.extend_from_slice(&((v.content_key & 0xffff_ffff) as u32).to_le_bytes()); // 16
+    out.extend_from_slice(&((v.content_key >> 32) as u32).to_le_bytes());         // 20
+    out.extend_from_slice(&v.decimation.to_le_bytes());            // 24
+    out.extend_from_slice(&v.columns.to_le_bytes());               // 28
+    out.extend_from_slice(&v.channels.to_le_bytes());              // 32
+    out.extend_from_slice(&(v.first_frame as u32).to_le_bytes());  // 36
+    out.extend_from_slice(&((v.first_frame >> 32) as u32).to_le_bytes()); // 40
+    out.extend_from_slice(&(v.frame_count as u32).to_le_bytes());  // 44
+    out.extend_from_slice(&((v.frame_count >> 32) as u32).to_le_bytes()); // 48
+    out.extend_from_slice(&v.flags.to_le_bytes());                 // 52, to 56
+    debug_assert_eq!(out.len(), WAVE_HEADER_BYTES, "waveform header drifted");
+    for p in &v.pairs {
+        out.extend_from_slice(&p.to_le_bytes());
+    }
+}
+
+/**
+ * A windowed waveform query.
+ *
+ *   {"type":"waveform","source":1,"decim":64,"frame":0,"cols":1396,"mask":3}
+ *
+ * `decim` 1 means raw samples: a bucket of one frame has min == max == the
+ * sample, so the fine regime and the peak regime are the same request and the
+ * same reply, and there is no crossover to get wrong.
+ *
+ * Validated here as well as in the engine, because the engine answers a bad
+ * request with status 3 on a slot the caller then has to go and read to discover
+ * it asked wrongly. Saying so on the socket the caller is already listening to is
+ * the difference between a mistake and a mystery.
+ */
+fn build_waveform_request(body: &str) -> Option<Result<UiWaveformRequestPayload, String>> {
+    if !body.contains("\"waveform\"") { return None; }
+    let Some(source) = parse_num(body, "\"source\"").filter(|v| *v >= 0) else {
+        return Some(Err("waveform needs the id of the source to read".into()));
+    };
+    let decim = parse_num(body, "\"decim\"").unwrap_or(1);
+    if decim < 1 || (decim & (decim - 1)) != 0 {
+        return Some(Err("waveform decim must be a power of two (1 = raw samples)".into()));
+    }
+    let frame = parse_num(body, "\"frame\"").unwrap_or(0).max(0);
+    if frame % decim != 0 {
+        return Some(Err("waveform frame must be a multiple of decim - buckets are \
+                         anchored to source frame 0 so a window is an index, not a scan".into()));
+    }
+    let Some(cols) = parse_num(body, "\"cols\"").filter(|v| *v > 0) else {
+        return Some(Err("waveform needs cols > 0".into()));
+    };
+    // 1 = channel 0, 3 = both. Defaulting to both and letting the engine clamp to
+    // what the source has is friendlier than making every caller ask first.
+    let mask = parse_num(body, "\"mask\"").unwrap_or(3).clamp(1, 3);
+    let seq = WAVEFORM_SEQ.fetch_add(1, Ordering::Relaxed);
+    Some(Ok(UiWaveformRequestPayload {
+        command_type: UiCommandType::RequestWaveform as u16,
+        flags: if body.contains("\"force\":true") { 1 } else { 0 },
+        request_seq: seq,
+        source_id: source as u32,
+        decimation: decim as u32,
+        first_frame_lo: frame as u32,
+        first_frame_hi: ((frame as u64) >> 32) as u32,
+        columns: cols as u32,
+        channel_mask: mask as u32,
+        reserved0: 0,
+        reserved1: 0,
+    }))
+}
+
 fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_named(body) { return r; }
 
@@ -1570,6 +1662,65 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             continue;
                         }
 
+                        // A windowed waveform read. Answered as a BINARY frame:
+                        // a full slot is 24,576 pairs and JSON numbers would be
+                        // ~400 KB of text per zoom step for something the browser
+                        // wants as a typed array anyway.
+                        if let Some(r) = build_waveform_request(&t) {
+                            match r {
+                                Err(why) => {
+                                    let reply = format!("{{\"error\":\"{}\"}}", why.replace('"', "'"));
+                                    if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                                }
+                                Ok(req) => {
+                                    let seq = req.request_seq;
+                                    let slot = (seq as usize) % K_UI_WAVEFORM_SLOTS;
+                                    if let Err(e) = handle.send_waveform_request(req) {
+                                        let reply = format!("{{\"error\":\"{}\"}}", e.replace('"', "'"));
+                                        if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                                    } else {
+                                        // Poll the slot until the engine echoes OUR seq.
+                                        //
+                                        // The echo is the only proof the answer is
+                                        // ours: slots are reused mod 4, so a slot
+                                        // holding an answer is not a slot holding
+                                        // the answer to this question. Reading it
+                                        // without checking is how you draw one
+                                        // clip's waveform inside another.
+                                        //
+                                        // ~250 ms at 1 ms: the engine answers a
+                                        // sliced level in microseconds and a
+                                        // scanned one in about a millisecond, so
+                                        // this is two orders of margin, and a
+                                        // timeout says so rather than hanging the
+                                        // command thread.
+                                        let mut got = None;
+                                        for _ in 0..250 {
+                                            if let Some(v) = handle.read_waveform_slot(slot) {
+                                                if v.request_seq == seq { got = Some(v); break; }
+                                            }
+                                            thread::sleep(Duration::from_millis(1));
+                                        }
+                                        match got {
+                                            Some(v) => {
+                                                let mut out = Vec::with_capacity(
+                                                    WAVE_HEADER_BYTES + v.pairs.len() * 2);
+                                                encode_waveform(&v, &mut out);
+                                                if ws.send(tungstenite::Message::Binary(out)).is_err() { break; }
+                                            }
+                                            None => {
+                                                let reply = format!(
+                                                    "{{\"error\":\"the engine did not answer waveform request {} within 250ms\"}}",
+                                                    seq);
+                                                if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+
                         // A parameter write. It carries a uid16, which does not
                         // fit UiCommandPayload's fields, so it has its own
                         // payload and its own send — the engine dispatches on
@@ -1662,6 +1813,12 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
      * says a new answer has arrived.
      */
     let mut params_version = 0u32;
+    // The audio source table's version, so the descriptors are sent when they
+    // change and not on every frame. They move on a project load and never
+    // otherwise, and they carry u64 frame counts — pushing them at the 86 Hz
+    // frame rate would be ~256 BigInt temporaries per frame in the client's
+    // ingest path for data that is constant between loads.
+    let mut audio_sources_version = 0u32;
     // Chains start at zero, deliberately unlike the events above: a chain is
     // STATE, not news. A tab that connects after the last device edit still has
     // to be told what the chains are, and the store is the only place that
@@ -1774,6 +1931,27 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
         }
 
         {
+            // Audio sources + clips, same shape and the same rule as device
+            // params: one shared read, a version gate, a JSON line when it moves.
+            let av = handle.read_audio_sources();
+            if av.version != 0 && av.version != audio_sources_version {
+                audio_sources_version = av.version;
+                let srcs: Vec<String> = av.sources.iter().map(|s| format!(
+                    "{{\"id\":{},\"frames\":{},\"rate\":{},\"channels\":{},\"waveChannels\":{},\"status\":{},\"absPeak\":{:.6},\"levelMask\":{},\"keyLo\":{},\"keyHi\":{},\"path\":\"{}\"}}",
+                    s.source_id, s.source_frames, s.source_rate_hz, s.source_channels,
+                    s.wave_channels, s.status, s.abs_peak, s.level_mask,
+                    (s.content_key & 0xffff_ffff) as u32, (s.content_key >> 32) as u32,
+                    s.path.replace('\\', "").replace('"', "'"))).collect();
+                let clips: Vec<String> = av.clips.iter().map(|c| format!(
+                    "{{\"clipId\":{},\"sourceId\":{},\"startFrame\":{},\"lengthTicks\":{},\"fadeInTicks\":{},\"fadeOutTicks\":{},\"gainDb\":{:.3}}}",
+                    c.clip_id, c.source_id, c.source_start_frame, c.clip_length_ticks,
+                    c.fade_in_ticks, c.fade_out_ticks, c.gain_db)).collect();
+                let msg = format!(
+                    "{{\"audioSources\":{{\"version\":{},\"bpmMilli\":{},\"sources\":[{}],\"clips\":[{}]}}}}",
+                    av.version, av.audio_map_bpm_milli, srcs.join(","), clips.join(","));
+                if ws.send(tungstenite::Message::Text(msg)).is_err() { break; }
+            }
+
             let dp = handle.read_device_params();
             if dp.version != 0 && dp.version != params_version {
                 params_version = dp.version;
@@ -2976,6 +3154,76 @@ mod tests {
         assert!(build_command(r#"{"type":"adddevice","kind":0}"#).is_err());
         assert!(build_command(r#"{"type":"deldevice","device":7}"#).is_err(),
                 "deldevice is not the note command delete");
+    }
+
+    #[test]
+    fn a_waveform_request_is_validated_before_it_reaches_the_engine() {
+        let ok = |b: &str| build_waveform_request(b).expect("recognised").expect("built");
+        let bad = |b: &str| build_waveform_request(b).expect("recognised").expect_err("refused");
+
+        let p = ok(r#"{"type":"waveform","source":2,"decim":64,"frame":4294967296,"cols":1396}"#);
+        assert_eq!(p.command_type, UiCommandType::RequestWaveform as u16);
+        assert_eq!(p.command_type, 44, "the engine's own number for it");
+        assert_eq!(p.source_id, 2);
+        assert_eq!(p.decimation, 64);
+        assert_eq!(p.columns, 1396);
+        // 64-bit frame split lo/hi, like every other position on this wire.
+        assert_eq!(p.first_frame_lo, 0);
+        assert_eq!(p.first_frame_hi, 1);
+        assert_eq!(p.channel_mask, 3, "both channels unless asked otherwise");
+        assert_eq!(std::mem::size_of::<UiWaveformRequestPayload>(), 40);
+
+        // decim 1 is RAW SAMPLES and must be accepted: a bucket of one frame has
+        // min == max == the sample, which is what makes the fine regime and the
+        // peak regime one mechanism instead of two with a seam between them.
+        assert_eq!(ok(r#"{"type":"waveform","source":1,"decim":1,"frame":0,"cols":8}"#).decimation, 1);
+
+        // Every sequence number is distinct, because the slot is seq % 4 and the
+        // echo is the only proof an answer is yours.
+        let a = ok(r#"{"type":"waveform","source":1,"decim":1,"frame":0,"cols":1}"#).request_seq;
+        let b = ok(r#"{"type":"waveform","source":1,"decim":1,"frame":0,"cols":1}"#).request_seq;
+        assert_ne!(a, b, "two requests must not share a slot identity");
+
+        // Refusals, on the socket the caller is listening to rather than as a
+        // status code on a slot they would have to go and read.
+        assert!(bad(r#"{"type":"waveform","decim":1,"frame":0,"cols":8}"#).contains("source"));
+        assert!(bad(r#"{"type":"waveform","source":1,"decim":48,"frame":0,"cols":8}"#)
+                .contains("power of two"), "48 is not");
+        assert!(bad(r#"{"type":"waveform","source":1,"decim":0,"frame":0,"cols":8}"#)
+                .contains("power of two"));
+        // Buckets are anchored to source frame 0, so a misaligned window is not a
+        // window at all — it would silently become a scan at a different phase and
+        // the outline would crawl as you panned.
+        assert!(bad(r#"{"type":"waveform","source":1,"decim":64,"frame":32,"cols":8}"#)
+                .contains("multiple of decim"));
+        assert!(bad(r#"{"type":"waveform","source":1,"decim":1,"frame":0,"cols":0}"#)
+                .contains("cols"));
+        // Not a waveform request at all.
+        assert!(build_waveform_request(r#"{"type":"note","pitch":60}"#).is_none());
+    }
+
+    #[test]
+    fn the_waveform_frame_says_what_it_is_before_it_says_anything_else() {
+        let v = daw_bridge::control::WaveformSlotView {
+            request_seq: 7, source_id: 2, content_key: 0x1122_3344_5566_7788,
+            decimation: 64, columns: 3, channels: 2,
+            first_frame: 0x1_0000_0000, frame_count: 192, status: 1, flags: 1,
+            pairs: vec![-32767, 32767, 0, 0, 5, -5, 1, 2, 3, 4, 5, 6],
+        };
+        let mut out = Vec::new();
+        encode_waveform(&v, &mut out);
+        assert_eq!(out.len(), WAVE_HEADER_BYTES + v.pairs.len() * 2);
+        assert_eq!(&out[0..4], &WAVE_MAGIC.to_le_bytes(), "magic first");
+        assert_eq!(out[6], 1, "kind");
+        assert_eq!(out[7], 1, "status rides in the header, not the payload");
+        // The 64-bit fields are split lo/hi rather than written as u64, because
+        // the reader is JavaScript and getBigUint64 allocates a BigInt per call.
+        assert_eq!(&out[36..40], &0u32.to_le_bytes(), "firstFrame lo");
+        assert_eq!(&out[40..44], &1u32.to_le_bytes(), "firstFrame hi");
+        // Pairs follow the header verbatim, little-endian, so the client can view
+        // them as an Int16Array without copying.
+        let first = i16::from_le_bytes([out[WAVE_HEADER_BYTES], out[WAVE_HEADER_BYTES + 1]]);
+        assert_eq!(first, -32767);
     }
 
     #[test]

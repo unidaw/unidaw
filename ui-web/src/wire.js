@@ -370,3 +370,65 @@ export function pitchName(p) {
   return PITCH_NAMES[p] !== undefined ? PITCH_NAMES[p]
                                       : NAMES[((p % 12) + 12) % 12] + Math.floor(p / 12 - 1);
 }
+
+// --- waveform answers ------------------------------------------------------
+//
+// A separate frame on the command socket, not part of the state frame: it is a
+// reply to a question, arrives at zoom/pan rate rather than at 86 Hz, and is up
+// to 98 KB of int16. Its own magic so a mis-routed frame is refused rather than
+// read as a state frame that happens to start with the wrong bytes.
+
+export const WAVE_MAGIC = 0x57494e55; // "UNIW"
+export const WAVE_WIRE_VERSION = 1;
+const WAVE_HEADER_BYTES = 56;
+
+/** status: what the engine could do with the request. */
+export const WAVE_OK = 0, WAVE_TRUNCATED = 1, WAVE_NOTREADY = 2, WAVE_BAD = 3;
+
+/**
+ * Decode one waveform answer into `out`, returning it, or null if the buffer is
+ * not one.
+ *
+ * `out.pairs` is an Int16Array VIEW over the incoming buffer, not a copy. The
+ * buffer arrives fresh from the socket and nothing else refers to it, so a copy
+ * would be 98 KB of pure waste per zoom step. It is channel-planar then column
+ * then (min, max): for channel c column i, pairs[(c * columns + i) * 2] and +1.
+ *
+ * The 64-bit fields are split lo/hi on the wire because the reader is JavaScript
+ * and getBigUint64 allocates a BigInt per call — see the store's tempo fields for
+ * the same reasoning. Frame counts fit a double exactly well past any real file:
+ * 2^53 frames is 6,500 years at 44.1 kHz.
+ */
+export function decodeWaveform(buf, out) {
+  if (!buf || buf.byteLength < WAVE_HEADER_BYTES) return null;
+  const v = new DataView(buf);
+  if (v.getUint32(0, true) !== WAVE_MAGIC) return null;
+  if (v.getUint16(4, true) !== WAVE_WIRE_VERSION) return null;
+  if (v.getUint8(6) !== 1) return null;            // a kind we do not handle
+  out.status = v.getUint8(7);
+  out.requestSeq = v.getUint32(8, true);
+  out.sourceId = v.getUint32(12, true);
+  out.keyLo = v.getUint32(16, true);
+  out.keyHi = v.getUint32(20, true);
+  out.decimation = v.getUint32(24, true);
+  out.columns = v.getUint32(28, true);
+  out.channels = v.getUint32(32, true);
+  out.firstFrame = v.getUint32(36, true) + v.getUint32(40, true) * 4294967296;
+  out.frameCount = v.getUint32(44, true) + v.getUint32(48, true) * 4294967296;
+  out.flags = v.getUint32(52, true);
+  const want = out.columns * out.channels * 2;
+  const have = (buf.byteLength - WAVE_HEADER_BYTES) >> 1;
+  // A short payload means the header and the body disagree, which is the stride
+  // bug this codebase has shipped twice. Refuse rather than read past the end and
+  // draw whatever is there.
+  if (have < want) { out.status = WAVE_BAD; out.pairs = null; return out; }
+  out.pairs = new Int16Array(buf, WAVE_HEADER_BYTES, want);
+  return out;
+}
+
+/** A reusable decode target for waveform answers. */
+export function createWaveform() {
+  return { status: WAVE_NOTREADY, requestSeq: 0, sourceId: 0, keyLo: 0, keyHi: 0,
+           decimation: 0, columns: 0, channels: 0, firstFrame: 0, frameCount: 0,
+           flags: 0, pairs: null };
+}

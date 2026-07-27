@@ -9,7 +9,7 @@
 // the renderer run at whatever cadence the audio block size implies. Instead we
 // mark dirty and let the existing rAF scheduler pick it up.
 
-import { createStore, decode } from './wire.js';
+import { createStore, decode, decodeWaveform, createWaveform } from './wire.js';
 
 /**
  * A connection that connects to nothing.
@@ -37,7 +37,7 @@ export function noEngine() {
 
 export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.0.0.1:8175',
                                 onChange, onStatus, onAck, onEngineEvent, onChains, onScales,
-                                onDeviceParams } = {}) {
+                                onDeviceParams, onWaveform, onAudioSources } = {}) {
   const store = createStore();
   let ws = null;
   let closed = false;
@@ -69,6 +69,14 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
         // question rather than accumulated state.
         if (parsed && parsed.deviceParams) {
           onDeviceParams && onDeviceParams(parsed.deviceParams);
+          return;
+        }
+        // The audio source table: which files this project decodes, and which
+        // clip reads which. Version-gated by the sidecar, so it arrives on a
+        // project load and not on every frame — the frame rate is 86 Hz and these
+        // carry u64 frame counts, which would be a BigInt per field per frame.
+        if (parsed && parsed.audioSources) {
+          onAudioSources && onAudioSources(parsed.audioSources);
           return;
         }
         // The scale registry. Written once by the engine at startup, so it
@@ -116,6 +124,11 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
   // frame — each carries the clip version it was composed against and the engine
   // arbitrates by version, not by arrival order.
   let cmdWs = null;
+  // One decode target, reused. The answer's `pairs` is a view over the incoming
+  // buffer rather than a copy, so the record itself holds no data and the
+  // consumer must read it before the next frame arrives — which it does, because
+  // the consumer is a synchronous callback.
+  const waveBuf = createWaveform();
   let cmdBackoff = 250;
   // Last viewport we sent, replayed on (re)connect. The socket is usually not
   // open yet when the first frame draws, and a restarted sidecar comes back at
@@ -125,8 +138,22 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
   function openCmd() {
     if (closed) return;
     cmdWs = new WebSocket(cmdUrl);
+    // Waveform answers come back on this socket as BINARY — a full slot is 98 KB
+    // of int16 and JSON numbers would be four times that in text, for something
+    // the renderer wants as a typed array. Without this the frames arrive as Blob
+    // and every reader has to go async to look at them.
+    cmdWs.binaryType = 'arraybuffer';
     cmdWs.onopen = () => { cmdBackoff = 250; if (lastVp) cmdWs.send(lastVp); };
-    cmdWs.onmessage = (ev) => { if (onAck) onAck(ev.data); };
+    cmdWs.onmessage = (ev) => {
+      if (ev.data instanceof ArrayBuffer) {
+        // Decoded HERE, like the state frame, so the page never sees a raw
+        // buffer and there is one place that knows the wire format.
+        const w = decodeWaveform(ev.data, waveBuf);
+        if (w && onWaveform) onWaveform(w);
+        return;
+      }
+      if (onAck) onAck(ev.data);
+    };
     cmdWs.onclose = () => {
       if (closed) return;
       setTimeout(openCmd, cmdBackoff);

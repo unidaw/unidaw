@@ -767,6 +767,51 @@ let pluginCache = null;
 let pluginError = '';
 /** The engine's scale registry: [{id, name, octaveCents, stepCents[]}]. */
 let scales = null;
+/**
+ * The audio side: which sources this project decoded, which clip reads which,
+ * and the windows of peaks fetched so far.
+ *
+ * `waveCache` is keyed on the exact question asked — source, decimation and
+ * first frame — because that tuple is what an answer describes. Keying on the
+ * clip, or on the zoom, would be a key that stands still while the content moves.
+ */
+let audioSources = Object.create(null);
+let audioClips = Object.create(null);
+let audioBpmMilli = 120000;
+const waveCache = new Map();
+const waveAsked = new Map();
+/** Windows held at once. 1396 columns of stereo is ~11 KB, so this is ~1.4 MB —
+ *  a few screens of history at any zoom, and bounded rather than a session-long
+ *  accumulation during a pan. */
+const WAVE_CACHE_MAX = 128;
+/** How many requests may be outstanding. The engine has four slots and answers
+ *  every request rather than draining to the latest, so more than four in flight
+ *  would start overwriting answers we are still waiting for. */
+const WAVE_MAX_INFLIGHT = 4;
+
+/**
+ * Ask for one window of peaks, unless it is already held or already in flight.
+ *
+ * Returns whether anything went out, so a caller can tell "already have it" from
+ * "no engine" — the renderer ignores that and simply draws what has arrived.
+ *
+ * Bounded in flight because the engine answers EVERY request into four slots
+ * rather than draining to the latest: a fifth in flight would overwrite an answer
+ * still being waited on. A pan that outruns the engine drops requests here rather
+ * than corrupting answers there.
+ */
+function requestWaveform(sourceId, decimation, firstFrame, columns, mask) {
+  const key = sourceId + ':' + decimation + ':' + firstFrame;
+  if (waveCache.has(key) || waveAsked.has(key)) return false;
+  if (waveAsked.size >= WAVE_MAX_INFLIGHT) return false;
+  if (!conn || !conn.canSend()) return false;
+  const ok = conn.send({ type: 'waveform', source: sourceId, decim: decimation,
+                         frame: firstFrame, cols: columns,
+                         mask: mask === undefined ? 3 : mask });
+  if (ok) waveAsked.set(key, Date.now());
+  return ok;
+}
+
 /** Device parameters by device id, as answers arrive. */
 const deviceParams = Object.create(null);
 /** Devices we have already asked about, so the rack asks once, not per frame. */
@@ -2685,6 +2730,61 @@ conn = WANTS_ENGINE ? connectEngine({
    * strip flicker between "named" and "unnamed" as you clicked along it.
    */
   onDeviceParams: (dp) => { deviceParams[dp.device] = dp; schedule(); },
+  /**
+   * The audio source table, and which clip reads which source.
+   *
+   * Arrives on a project load and not again, so it is plain state rather than
+   * anything version-guarded on this side. Keyed by id for the renderer, which
+   * asks "what does clip 7 read" once per visible audio clip per frame.
+   */
+  onAudioSources: (a) => {
+    audioSources = Object.create(null);
+    audioClips = Object.create(null);
+    for (const s of a.sources || []) audioSources[s.id] = s;
+    for (const c of a.clips || []) audioClips[c.clipId] = c;
+    audioBpmMilli = a.bpmMilli || 120000;
+    // A reload replaces the files, so every window cached against the old ones
+    // describes audio that is no longer there. Device ids taught this lesson
+    // already (GUIDELINES 2.1): a cache whose key survives a load but whose
+    // subject does not is a cache that lies.
+    waveCache.clear();
+    schedule();
+  },
+  /**
+   * One windowed waveform answer.
+   *
+   * `w.pairs` is a VIEW over the socket's buffer, so it has to be copied to be
+   * kept — the next answer reuses the record and the buffer is gone. The copy is
+   * the only one in this path and it is what makes the cache a cache.
+   */
+  onWaveform: (w) => {
+    /**
+     * The answer is filed under what it DESCRIBES, not under what was asked.
+     *
+     * The request id is allocated by the SIDECAR — deliberately, so that two tabs
+     * cannot mint colliding ids into a four-slot region — which means this side
+     * never learns it and cannot correlate on it. It does not need to: the answer
+     * carries its own source, decimation and first frame, and that tuple is
+     * exactly the cache key. An answer that describes itself cannot be filed
+     * under the wrong question, which a correlation id can.
+     */
+    const key = w.sourceId + ':' + w.decimation + ':' + w.firstFrame;
+    waveAsked.delete(key);
+    if (w.status === 3 || !w.pairs) { schedule(); return; }
+    waveCache.set(key, {
+      sourceId: w.sourceId, decimation: w.decimation, columns: w.columns,
+      channels: w.channels, firstFrame: w.firstFrame, status: w.status,
+      keyLo: w.keyLo, keyHi: w.keyHi, pairs: Int16Array.from(w.pairs),
+    });
+    // Bounded: a pan across a long file would otherwise accumulate a window per
+    // step for the life of the session. Oldest-out, which for a pan is also
+    // least-recently-looked-at.
+    if (waveCache.size > WAVE_CACHE_MAX) {
+      const oldest = waveCache.keys().next().value;
+      waveCache.delete(oldest);
+    }
+    schedule();
+  },
   onChains: (list, rev) => {
     if (rev === chainRev) return;
     chainRev = rev;
@@ -3139,6 +3239,25 @@ window.__uni = {
   // console command performs, so the two cannot drift.
   goto: (row, track) => dockApi.goto(row, track),
   // The same function the rack's drag calls, not a copy of it.
+  audioSources: () => ({ sources: audioSources, clips: audioClips, bpmMilli: audioBpmMilli }),
+  /**
+   * Ask for one window and resolve when its answer lands. Test surface only —
+   * the renderer requests through the same cache but never waits.
+   */
+  waveform: (source, decim, frame, cols, mask) => new Promise((resolve) => {
+    if (!requestWaveform(source, decim, frame, cols, mask)) {
+      return resolve({ error: 'not sent' });
+    }
+    const key = source + ':' + decim + ':' + frame;
+    const t0 = Date.now();
+    const poll = () => {
+      const hit = waveCache.get(key);
+      if (hit) return resolve(hit);
+      if (Date.now() - t0 > 3000) return resolve({ error: 'timeout' });
+      setTimeout(poll, 30);
+    };
+    poll();
+  }),
   setParam: (track, device, index, uid, valueMilli) =>
     onChainParam({ track, device, index, uid, valueMilli }),
   reqParams: (track, device) => conn && conn.send({ type: 'reqparams', track, device }),
