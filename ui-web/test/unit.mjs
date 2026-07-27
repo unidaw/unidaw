@@ -27,6 +27,8 @@ import { snapLoop, TICKS_PER_BAR } from '../src/arrangemodel.js';
 import { velocityText } from '../src/viewmodel.js';
 import { trackName } from '../src/arrangemodel.js';
 import { createField, begin as fBegin, feed as fFeed, cancel as fCancel } from '../src/textfield.js';
+import { fillRows, setProjectRow, setPluginRow, makeRow,
+         KIND_PROJECT, KIND_PLUGIN } from '../src/browser.js';
 import { buildChainModel, createChainBuffer, createParamEdits, findParamEdit,
          setParamEdit, dropParamEdit, reapParamEdits, MAX_PARAMS,
          EDIT_HOLD_MS } from '../src/chainmodel.js';
@@ -402,4 +404,87 @@ test('edits are pooled, and the pool is a pool rather than a leak', () => {
   assert.equal(edits.count, 1);
   assert.equal(findParamEdit(edits, 1, 1), b, 'dropping one does not lose the other');
   assert.equal(edits.slots.length, 2, 'and the slots are still there to be reused');
+});
+
+// --- the browser rail's row model ------------------------------------------
+// The rail is heterogeneous now: a row is a project or a plugin, and they differ
+// in badge, meta line, search text and what opening one does. The interesting
+// part is DOM-free — every string a row shows is built when the feed arrives,
+// which is the property alloc.mjs measures from the other end and the one thing
+// a renderer cannot be trusted to keep on its own.
+
+test('a plugin row carries the catalogue’s own words, and says which kind it is', () => {
+  const inst = setPluginRow(makeRow(), {
+    name: 'Zebra2', vendor: 'u-he', format: 'VST3', is_instrument: true, ok: true,
+    error: '', path: '/Library/Audio/Plug-Ins/VST3/u-he/Zebra2.vst3', uid: 'VST3-Zebra2-aa-bb' });
+  assert.equal(inst.kind, KIND_PLUGIN);
+  assert.equal(inst.badge, 'PLUG');
+  assert.equal(inst.name, 'Zebra2');
+  assert.equal(inst.meta, 'u-he · VST3', 'vendor and format, in the rail’s separator');
+  assert.equal(inst.mark, 'INST', 'the type survives the meta line being truncated');
+  // The durable identity stays reachable: it is what an insert will need, and
+  // the row is the only thing the click handler is handed.
+  assert.equal(inst.plugin.uid, 'VST3-Zebra2-aa-bb');
+
+  const fx = setPluginRow(makeRow(), {
+    name: 'Analog Heat', vendor: 'Elektron Music Machines', format: 'VST3',
+    is_instrument: false, ok: true, error: '' });
+  assert.equal(fx.mark, 'FX');
+  assert.equal(fx.meta, 'Elektron Music Machines · VST3');
+});
+
+test('a failed scan keeps its row and wears the reason', () => {
+  // "why is Zebra not in the list" has to be answerable by the list.
+  const bad = setPluginRow(makeRow(), {
+    name: 'Sylenth1', vendor: 'LennarDigital', format: 'VST3', is_instrument: true,
+    ok: false, error: 'the plugin crashed while being scanned' });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.meta, 'the plugin crashed while being scanned',
+               'the scanner’s reason, not a vendor line for something unusable');
+  assert.equal(bad.mark, '!');
+  // And one whose scanner said nothing at all still says something.
+  const mute = setPluginRow(makeRow(), { name: 'X', ok: false, error: '' });
+  assert.match(mute.meta, /scan failed/);
+});
+
+test('search text names the vendor, the format and the kind', () => {
+  const row = setPluginRow(makeRow(), {
+    name: 'Diva', vendor: 'u-he', format: 'VST3', is_instrument: true, ok: true, error: '' });
+  for (const q of ['diva', 'u-he', 'vst3', 'instrument']) {
+    assert.ok(row.lower.indexOf(q) >= 0, `"${q}" narrows to it`);
+  }
+  assert.equal(row.lower.indexOf('effect'), -1, 'and does not match the other kind');
+});
+
+test('a project row leaves its meta line to the renderer', () => {
+  const rows = [makeRow(), makeRow()];
+  fillRows(rows, ['newest', 'older'], setProjectRow);
+  assert.equal(rows[0].kind, KIND_PROJECT);
+  assert.equal(rows[0].badge, 'PROJ');
+  // Which project is LOADED changes without the list changing, so the line is
+  // chosen from interned constants at render time rather than built here. The
+  // one fact this side does know is the sidecar's newest-first ordering.
+  assert.deepEqual([rows[0].recent, rows[1].recent], [true, false]);
+  assert.equal(rows[0].meta, '');
+  assert.equal(rows[0].lower, 'newest');
+});
+
+test('the row pool grows, is reused, and never mixes the two feeds', () => {
+  const pool = [];
+  const cat = [{ name: 'A', vendor: 'v', format: 'VST3', ok: true, error: '' },
+               { name: 'B', vendor: 'v', format: 'VST3', ok: true, error: '' }];
+  assert.equal(fillRows(pool, cat, setPluginRow), 2);
+  const first = pool[0], second = pool[1];
+  // A re-list of ONE plugin must not drop the second slot: the pool is a pool.
+  assert.equal(fillRows(pool, [cat[0]], setPluginRow), 1);
+  assert.equal(pool.length, 2, 'the surplus slot is kept, not discarded');
+  assert.equal(pool[0], first, 'and the live one is the same object as before');
+  assert.equal(fillRows(pool, cat, setPluginRow), 2);
+  assert.equal(pool[1], second, 'so a regrowth allocates nothing');
+  // Projects and plugins never share a pool, which is why a project re-list —
+  // it happens every time the rail opens — cannot rebuild 52 plugin strings.
+  const projects = [];
+  fillRows(projects, ['p'], setProjectRow);
+  assert.equal(projects[0].kind, KIND_PROJECT);
+  assert.equal(pool[0].kind, KIND_PLUGIN);
 });

@@ -268,6 +268,17 @@ await scenario('palette, moving the selection',
   () => { window.__uni.palette(true); },
   (n) => { for (let i = 0; i < n; i++) { window.__uni.paletteMove(i % 2 ? 1 : -1); } });
 
+// The browser rail with both feeds behind it: 5 projects and 52 plugins, which
+// is what this machine actually has. It has never been covered here, and it is
+// the surface that most invites a per-row string — every row carries a badge, a
+// name, a meta line built from a vendor and a format, and a type mark, and the
+// rail redraws with the rest of the app on every frame it is open, whatever
+// surface you are looking at. If any of those four is built per row per frame
+// rather than when the catalogue arrived, this reads ~57x it.
+await scenario('browser rail, 52 plugins, moving the selection',
+  () => { window.__uni.usePluginFixture(); window.__uni.browserCategory('all'); },
+  (n) => { for (let i = 0; i < n; i++) window.__uni.browserMove(i % 2 ? 1 : -1); });
+
 await br.close(); srv.close();
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : `${fail} FAILURES — see GUIDELINES.md section 3`}`);

@@ -460,7 +460,7 @@ engine differently; they differ only in what they project onto the screen.
 | arrange | time on X, tracks on Y | clip extents (incl. the audio flag) |
 | piano roll | time on X, pitch on Y | notes |
 | mixer | one strip per track | peaks, gain, pan, mute/solo |
-| browser rail | projects on disk | nothing; the sidecar lists them |
+| browser rail | projects and plugins on disk | nothing; the sidecar reads both from disk |
 | patcher | the node graph, laid out | patcher nodes, edges and per-node config |
 | agent dock | the command stream | nothing |
 

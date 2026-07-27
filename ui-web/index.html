@@ -78,7 +78,7 @@ import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
 import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch,
          notesInRect, noteKey, transposedKey } from './src/pianomodel.js';
-import { Browser } from './src/browser.js';
+import { Browser, KIND_PLUGIN } from './src/browser.js';
 import { Dock } from './src/dock.js';
 import { createHelp, GLOBAL_KEYS, SURFACE_KEYS } from './src/help.js';
 import { Patcher } from './src/patcher.js';
@@ -336,6 +336,16 @@ function nudgePatcher(dir) {
   return next;
 }
 
+// The two refusals a plugin row can produce, interned. The first is the state
+// of the world and not the user's fault; the second is the scanner's own reason
+// repeated back, because a row that says "failed" and will not say how is a row
+// you have to go and investigate elsewhere.
+// Declared ABOVE the handler that reads them: `const` does not hoist, and four
+// temporal-dead-zone bugs in this file is four more than enough (GUIDELINES 2.2).
+const PLUGIN_INSERT_REFUSAL = 'adding a plugin needs the engine to record its '
+  + 'durable identity (vstRef) rather than a scan index — not yet available';
+const PLUGIN_SCAN_REFUSAL = 'that plugin did not scan: ';
+
 const browserHost = document.getElementById('browser');
 const browser = new Browser(browserHost, {
   onSave: (name) => {
@@ -349,7 +359,39 @@ const browser = new Browser(browserHost, {
     state.reject = null;
     schedule();
   },
-  onOpen: (name) => {
+  /**
+   * Opening a row. Two kinds of row now, and only one of them can be honoured.
+   *
+   * A project loads. A PLUGIN CANNOT BE INSERTED YET, and says so rather than
+   * doing nothing (GUIDELINES 4.5: anything unimplemented refuses out loud).
+   * The engine's `AddDevice` sets `hostSlotIndex` — an index into a directory
+   * scan — and never populates `vstRef`, which device_chain.h calls in its own
+   * words "the durable identity of a hosted plugin ... what a saved project
+   * must carry instead". Inserting one today would write projects that name a
+   * plugin by a number meaning a different plugin the moment anything is
+   * installed or removed, which is precisely the thing that header exists to
+   * forbid. The engine change is requested.
+   *
+   * THE SEAM, for whoever wires it when it lands: everything needed is already
+   * on `row.plugin` — the catalogue entry, carrying `vendor`, `name`, `path`
+   * and `uid`. It becomes
+   *
+   *     conn.send({ type: 'adddevice', track: state.cursor.track,
+   *                 vendor: p.vendor, name: p.name, path: p.path, uid: p.uid })
+   *
+   * with the sidecar filling a VstRef from those four and the engine resolving
+   * the slot itself. Nothing else about this rail has to move: the row already
+   * knows which plugin it is, and it already knows the scan failed for the ones
+   * that cannot be inserted at all.
+   */
+  onOpen: (row) => {
+    if (!row) return;
+    if (row.kind === KIND_PLUGIN) {
+      state.reject = row.ok ? PLUGIN_INSERT_REFUSAL : PLUGIN_SCAN_REFUSAL + row.meta;
+      schedule();
+      return;
+    }
+    const name = row.name;
     if (!conn || !conn.loadProject(name)) { state.reject = 'no engine'; schedule(); return; }
     state.currentProject = name;
     state.browserOpen = false;
@@ -357,6 +399,36 @@ const browser = new Browser(browserHost, {
     schedule();
   },
 });
+
+/**
+ * Adopt a `{"type":"plugins"}` reply.
+ *
+ * Two shapes come back and both are answers: `{"ok":true,"pluginCache":{…}}`,
+ * or `{"error":"…"}` when the catalogue is missing or a scan is mid-write. The
+ * error is kept, not dropped — "the engine writes it when it scans" is the
+ * reason the list is empty and the rail shows it in place of one.
+ *
+ * A function rather than four lines inside onAck so the fixture can feed the
+ * SAME text the socket does, through the same parse (GUIDELINES 3.0.2: measure
+ * the path the program is on). Parsing alone inside the try, per GUIDELINES 2.2
+ * — a catch written to tolerate malformed JSON must not also swallow a bug in
+ * the code that reads the result.
+ */
+function applyPluginReply(msg) {
+  let parsed = null;
+  try { parsed = JSON.parse(msg); } catch (e) { /* reported below */ }
+  if (!parsed) {
+    pluginCache = null; pluginError = 'the plugin catalogue reply was not JSON';
+  } else if (parsed.error) {
+    pluginCache = null; pluginError = String(parsed.error);
+  } else {
+    const list = parsed.pluginCache && parsed.pluginCache.plugins;
+    if (Array.isArray(list)) { pluginCache = list; pluginError = ''; }
+    // A reply that is neither an error nor a list is not an empty catalogue.
+    else { pluginCache = null; pluginError = 'the plugin catalogue reply carried no plugin list'; }
+  }
+  schedule();
+}
 
 const helpHost = document.getElementById('help');
 const help = createHelp(helpHost);
@@ -570,6 +642,23 @@ let chains = Object.create(null);
 let chainRev = -1;
 /** Whether the project list has been asked for on this connection. */
 let listRequested = false;
+/**
+ * The plugin catalogue, and why there isn't one.
+ *
+ * Module-level rather than on `state` for the same reason `chains` and `scales`
+ * are: `__uni.state()` deep-clones state through JSON for every test that asks
+ * what the app is doing, and 52 catalogue entries in there would make a probe
+ * that costs nothing today cost a copy of the machine's plugin folder.
+ *
+ * `pluginsAsked` is the request flag, `pluginsPending` the outstanding-reply
+ * flag — they are not the same thing, and the second is what lets an
+ * `{"error":…}` on the shared ack channel be recognised as the catalogue's
+ * answer rather than published as a refusal of whatever the user last did.
+ */
+let pluginsAsked = false;
+let pluginsPending = false;
+let pluginCache = null;
+let pluginError = '';
 /** The engine's scale registry: [{id, name, octaveCents, stepCents[]}]. */
 let scales = null;
 /** Device parameters by device id, as answers arrive. */
@@ -1430,7 +1519,16 @@ function draw() {
   if (rdockHost.hidden === showDock) rdockHost.hidden = !showDock;
   if (showDock) dock.render();
   if (browserHost.hidden === showRail) browserHost.hidden = !showRail;
-  if (showRail) { browser.setItems(state.projects, state.currentProject); browser.render(); }
+  // Both feeds are handed over here, every frame, and both setters compare
+  // before they do anything — the project list by CONTENT (the host rebuilds it
+  // in place, so a rename keeps the array) and the catalogue by IDENTITY (it
+  // comes from a JSON.parse, so a new reply is always a new array). Neither
+  // rebuilds a row unless something actually moved.
+  if (showRail) {
+    browser.setItems(state.projects, state.currentProject);
+    browser.setPlugins(pluginCache, pluginError);
+    browser.render();
+  }
   if (chainHost.hidden === showChain) chainHost.hidden = !showChain;
   // The minimap belongs to the tracker alone.
   const wantMinimap = state.view === 'tracker';
@@ -2423,12 +2521,28 @@ conn = WANTS_ENGINE ? connectEngine({
       try { parsed = JSON.parse(msg); } catch (e) { /* keep the old list */ }
       if (parsed) { state.projects = parsed.projects || []; schedule(); }
     }
+    // The plugin catalogue comes back on the same channel and in the same two
+    // shapes. It is claimed BEFORE the generic error branch below, and that is
+    // the point of `pluginsPending`: "no plugin catalogue at ../build — the
+    // engine writes it when it scans" is a standing condition of the machine,
+    // not a refusal of anything anyone just did, and the chrome's reject line is
+    // for the latter (GUIDELINES 2.19). The rail asked, so the rail shows it.
+    // Both conditions, because an ack channel is shared: only an error arriving
+    // while our own request is outstanding AND naming a plugin is ours.
+    let claimed = false;
+    if (typeof msg === 'string'
+        && (msg.indexOf('"pluginCache"') >= 0
+            || (pluginsPending && msg.indexOf('"error"') >= 0 && msg.indexOf('plugin') >= 0))) {
+      pluginsPending = false;
+      claimed = true;
+      applyPluginReply(msg);
+    }
     // The sidecar refuses with {"error":"..."} and those messages are written to
     // be read — "those two node types have no compatible ports" is the answer to
     // the question the user just asked. They were being logged to a dock that is
     // usually closed and dropped otherwise, so every careful refusal on that side
     // arrived as silence on this one.
-    if (typeof msg === 'string' && msg.indexOf('"error"') >= 0) {
+    if (!claimed && typeof msg === 'string' && msg.indexOf('"error"') >= 0) {
       let why = null;
       try { why = JSON.parse(msg).error; } catch (e) { /* fall through to the raw */ }
       state.reject = why || String(msg).slice(0, 80);
@@ -2457,6 +2571,13 @@ conn = WANTS_ENGINE ? connectEngine({
     // not open yet — the send would return false and the flag would be spent.
     if (!listRequested && conn && conn.canSend()) {
       listRequested = conn.send({ type: 'list' });
+    }
+    // And the plugin catalogue, once, the same way and for the same reasons.
+    // It is a file the engine's scanner wrote, so it changes about as often as
+    // the plugin folder does; asking per frame would be re-reading a 26 KB file
+    // sixty times a second to be told the same thing.
+    if (!pluginsAsked && conn && conn.canSend()) {
+      pluginsAsked = pluginsPending = conn.send({ type: 'plugins' });
     }
     // A load result. The engine used to accept a malformed project, change
     // nothing, and ack ok — indistinguishable from a load that worked and
@@ -2609,6 +2730,13 @@ window.__uni = {
                  state.reject = null; state.badToken = null;
                  state.browserOpen = false; state.projects = []; state.currentProject = '';
                  browser.selected = 0; browser.cancelSave();
+                 // The rail's second feed and its filter, back to cold. A scene
+                 // that inherited a catalogue — or a query — from whatever ran
+                 // before it is a dependency on execution order wearing a
+                 // fixture's clothes.
+                 pluginsAsked = false; pluginsPending = false;
+                 pluginCache = null; pluginError = '';
+                 browser.setPlugins(null, ''); browser.setQuery(''); browser.setCategory('all');
                  state.dockOpen = false; dock.clear(); state.helpOpen = false;
                  state.selectedNode = -1; state.selectedField = 0; patchPending.clear();
                  // The HUD carries a live node count and frame counter. Pin it
@@ -2838,6 +2966,14 @@ window.__uni = {
     state.focus = state.browserOpen ? 'browser' : 'centre';
     if (state.browserOpen) conn && conn.send({ type: 'list' }); draw(); return state.browserOpen; },
   browserProbe: () => browser.probe(),
+  // The rail's own verbs. Every one of them goes through the method the keyboard
+  // and the pointer already call, so an agent driving the rail and a person
+  // driving it cannot end up in different states — and the allocation test can
+  // move a selection over 57 rows without synthesising key events.
+  browserMove: (delta) => { browser.move(delta); draw(); return browser.selected; },
+  browserCategory: (key) => { const ok = browser.setCategory(key); draw(); return ok; },
+  browserQuery: (q) => { browser.setQuery(q); draw(); return browser.probe().shown.length; },
+  browserPick: () => { const row = browser.openSelected(); draw(); return row; },
   dock: (on) => { state.dockOpen = on === undefined ? !state.dockOpen : !!on;
     state.focus = state.dockOpen ? 'dock' : 'centre'; draw(); return state.dockOpen; },
   focus: (where) => { if (where) state.focus = where; draw(); return state.focus; },
@@ -2990,6 +3126,47 @@ window.__uni = {
     state.currentProject = 'maximal';
     state.browserOpen = true;
     browser.selected = 2;
+    draw();
+  },
+  /**
+   * The rail with a plugin catalogue behind it.
+   *
+   * `?engine=off` answers no `{"type":"plugins"}`, so without this the rail's
+   * newest and largest feed is the one no test can measure — which is exactly
+   * the mistake GUIDELINES 3.0.2 names: for the whole life of alloc.mjs every
+   * scenario ran on a branch that spelled nothing. It feeds the SAME text the
+   * socket delivers, through the same JSON.parse and the same setter, so what
+   * gets measured is the path the program is actually on.
+   *
+   * 52 entries because that is what this machine's scanner produced, and one of
+   * them failed on purpose: a catalogue in which everything worked cannot tell
+   * a greyed row from a missing one.
+   */
+  usePluginFixture: (n = 52) => {
+    state.useEngine = false; state.hudFrozen = true; conn.close();
+    hudText.nodeValue = 'plugin-fixture';
+    const vendors = ['u-he', 'Kilohearts', 'Sugar Bytes', 'VCV', 'XLN Audio',
+                     'Elektron Music Machines'];
+    const plugins = [];
+    for (let i = 0; i < n; i++) {
+      const broken = i === 7;
+      plugins.push({
+        path: '/Library/Audio/Plug-Ins/VST3/Vendor/Plug ' + i + '.vst3',
+        identifier: '/Library/Audio/Plug-Ins/VST3/Vendor/Plug ' + i + '.vst3',
+        uid: 'VST3-Plug ' + i + '-c84a7500-f7f0b6e7',
+        name: 'Plug ' + i, vendor: vendors[i % vendors.length], version: '1.0.0',
+        format: 'VST3', is_instrument: i % 4 === 0, has_editor: true,
+        num_inputs: 2, num_outputs: 2, ok: !broken,
+        error: broken ? 'the plugin crashed while being scanned' : '',
+        scan_time_ms: 0,
+      });
+    }
+    applyPluginReply(JSON.stringify(
+      { ok: true, pluginCache: { schema_version: 1, generated_at_ms: 0, plugins } }));
+    state.projects = ['webtest', 'maximal', 'sketch-01', 'live-set', 'drums-only'];
+    state.currentProject = 'maximal';
+    state.browserOpen = true;
+    browser.selected = 0;
     draw();
   },
   /** Dock fixture: a scripted session showing all three line kinds. */

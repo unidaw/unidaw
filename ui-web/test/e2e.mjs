@@ -1007,6 +1007,106 @@ ok(atTop !== lower, 'the harmony card follows the cursor', `${atTop} -> ${lower}
 const noise = await page.evaluate(() => window.__uni.dockProbe().last.join(' '));
 ok(!/"ok":true/.test(noise), 'the dock does not echo raw command acks', noise.slice(0, 80));
 
+section('tempo');
+// The transport bar printed a hardcoded "120.00 BPM" from the day it was written.
+// These assert the LABEL, not the store behind it — the store was never the thing
+// that was lying.
+await page.evaluate(() => window.__uni.loadProject('maximal'));
+await page.waitForTimeout(1200);
+const tempoLabel = () => page.evaluate(() =>
+  document.querySelector('.ch-meta')?.textContent ?? '');
+const tempoState = () => page.evaluate(() => window.__uni.tempo());
+
+const tempo0 = await tempoState();
+ok(tempo0 && tempo0.bpm > 0, 'the engine publishes a tempo', JSON.stringify(tempo0));
+ok((await tempoLabel()).startsWith(String(Math.floor(tempo0.bpm))),
+   'and the chrome prints that tempo, not a caption', await tempoLabel());
+// maximal changes tempo partway, so it has more than one point, and the label
+// says so with a trailing mark. A song of one tempo must NOT wear it.
+ok(tempo0.points > 1, 'maximal has a tempo change', `${tempo0.points} points`);
+ok(/·$/.test(await tempoLabel()), 'a varying tempo is marked as varying', await tempoLabel());
+
+// Flatten: no position means the whole song, and the mark goes away.
+await page.evaluate(() => window.__uni.tempo(90));
+await page.waitForTimeout(900);
+const tempo1 = await tempoState();
+ok(Math.round(tempo1.bpm) === 90, 'setting the tempo takes', JSON.stringify(tempo1));
+ok(tempo1.points === 1, 'and with no position it flattens the map', `${tempo1.points} points`);
+ok(!/·$/.test(await tempoLabel()), 'so it is no longer marked as varying', await tempoLabel());
+
+// A position means ONE point. `tempo(x, 0)` would replace the point at bar 1 and
+// leave later changes standing — a different edit, which is why absence rather
+// than zero is what means "all of it".
+await page.evaluate(() => window.__uni.tempo(150, 7680000));
+await page.waitForTimeout(900);
+const tempo2 = await tempoState();
+ok(tempo2.points === 2, 'a position inserts a point instead of flattening', `${tempo2.points} points`);
+ok(Math.round(tempo2.bpm) === 90, 'and the playhead still reads the tempo where it is',
+   JSON.stringify(tempo2));
+
+// A refusal has to reach the person, not just the log.
+await page.evaluate(() => { try { window.__uni.tempo(5000); } catch (e) {} });
+await page.waitForTimeout(700);
+const rejected = await page.evaluate(() =>
+  document.querySelector('.ch-reject')?.textContent ?? '');
+ok(/between 10 and 1000/.test(rejected), 'an impossible tempo is refused on screen', rejected);
+
+section('device parameters');
+/**
+ * A parameter write needs the audio thread.
+ *
+ * The host applies the value on its audio callback, so on an engine started with
+ * --no-audio the send is accepted, nothing errors, and the value never moves.
+ * That is the engine's shape rather than a defect — backend's own daw-cli behaves
+ * identically — and it is recorded here because "accepted, no error, nothing
+ * moved" is the hardest failure there is to read, and because a headless CI run
+ * would otherwise report it as a broken UI.
+ *
+ * So the write is only asserted when the stack was started with audio. Set
+ * UNI_HAS_AUDIO=1 to run it; the default says why it did not.
+ */
+await page.evaluate(() => window.__uni.loadProject('rack'));
+await page.waitForTimeout(2000);
+await page.evaluate(() => window.__uni.reqParams(0, 0));
+await page.waitForTimeout(1500);
+const beforeP = await page.evaluate(() => {
+  const all = window.__uni.deviceParams(); const ids = Object.keys(all || {});
+  if (!ids.length) return null;
+  const d = all[ids[0]];
+  return { device: Number(ids[0]), name: d.name, count: d.params.length, first: d.params[0] };
+});
+ok(beforeP && beforeP.count > 0, 'the rack reads a real plugin\'s parameters',
+   beforeP ? `${beforeP.name}, ${beforeP.count} params` : 'none published');
+
+if (beforeP && beforeP.first) {
+  const uid = beforeP.first.uid;
+  ok(/^[0-9a-f]{32}$/.test(uid) && !/^0+$/.test(uid),
+     'and each one carries a durable id, not just an index', uid);
+  if (process.env.UNI_HAS_AUDIO) {
+    const target = beforeP.first.value > 0.5 ? 150 : 850;
+    const sent = await page.evaluate(([d, i, u, v]) => window.__uni.setParam(0, d, i, u, v),
+      [beforeP.device, beforeP.first.index, uid, target]);
+    ok(sent === true, 'a parameter write goes out', String(sent));
+    await page.waitForTimeout(2500);
+    const afterP = await page.evaluate(() => {
+      const all = window.__uni.deviceParams(); const ids = Object.keys(all || {});
+      return ids.length ? all[ids[0]].params[0].value : null;
+    });
+    ok(Math.abs(afterP - target / 1000) < 0.01, 'and the plugin actually moved',
+       `${beforeP.first.value} -> ${afterP} (asked ${target / 1000})`);
+  } else {
+    console.log('  SKIP  a parameter write moves the plugin  '
+      + '(needs an engine with an audio device: the host applies on its audio '
+      + 'callback, so --no-audio accepts the write and drops it. UNI_HAS_AUDIO=1 to run)');
+  }
+  // Refusing a parameter with no durable id is the honest answer; sending it
+  // would be accepted and would change nothing.
+  const zeroed = await page.evaluate(([d, i]) =>
+    window.__uni.setParam(0, d, i, '00000000000000000000000000000000', 500),
+    [beforeP.device, beforeP.first.index]);
+  ok(zeroed === false, 'a parameter with no durable id is refused, not sent', String(zeroed));
+}
+
 section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));
 
