@@ -57,7 +57,8 @@ Getting these wrong produces bugs that look like performance problems.
 ### 2.1 The one bug this project keeps having
 
 Twelve times now, in twelve different places: **content changed while the key the
-consumer watches stayed the same.** Every instance rendered something plausible,
+consumer watches stayed the same.** (Thirteen, if you count 2.1.1 below, where
+the thing that stood still was a test's own coverage.) Every instance rendered something plausible,
 none errored, and no timing instrument could see any of them.
 
 | Where | Content that moved | Key that didn't |
@@ -92,6 +93,36 @@ the thing.** Names are 8x24 bytes; comparing them costs less than being wrong.
 Corollary for tests: a fixture where every lane shares a grid cannot distinguish a
 correct projection from a plausible one. `__uni.useMixedGrid()` exists for exactly
 this and any grid work must be checked against it.
+
+### 2.1.1 A fixture only tests where you point it
+
+`useMixedGrid` was built to catch exactly the bug described above, and it did not,
+because the golden that uses it is shot at **zoom 0 — the one zoom level where the
+projection is correct.** Measured across the table:
+
+| zoom | axis | 4/beat lane | 3/beat lane | 6/beat lane |
+|---|---|---|---|---|
+| 0 | 12/beat | 24/37 off-grid | 27/37 | 18/37 |
+| 1 | 4/beat | **0/37** | **0/37** | **0/37** |
+| 2 | 2/beat | **0/37** | **0/37** | **0/37** |
+| 3 | 1/beat | **0/37** | **0/37** | **0/37** |
+
+Zoom 0 is right: a lane occupies every (axis / itsLpb)-th row. At every other zoom
+nothing is marked off-grid at all, so the tracker offers a writable cell on every
+row of a triplet lane whose rows sit at 1/3-beat positions a 4/beat axis cannot
+express. The cause is one rounding — `Math.round(4 / 3)` is `1`, and `r % 1` is
+always `0`, so "incommensurable" becomes "every row is fine".
+
+The lesson is not about grids. It is 2.1 applied to the TEST: **the fixture's
+coverage was itself a key that stood still while the thing it tested varied.** A
+fixture that exercises one point of a parameter it was built to protect is a
+fixture that will pass while the feature is broken everywhere else.
+
+So: when a fixture exists to protect a property that varies along an axis — zoom,
+meter, channel count, sample rate — the test must sweep that axis, or say in one
+line why one point is sufficient. `lcmGrid()` in `viewmodel.js` does the correct
+arithmetic for this, is exported, and is called from nowhere: the machinery for the
+right answer was written and never wired, which is its own kind of evidence.
 
 The last three add two more shapes. An identifier that MOVES is not an identity:
 `placement_id` is currently an extent's index, so a selection keyed on it jumps
