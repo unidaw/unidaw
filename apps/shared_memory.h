@@ -8,6 +8,21 @@
 
 namespace daw {
 
+// Layout-stable atomic aliases. For the C++ engine/host these are std::atomic<T>
+// (so every existing .load()/.store() keeps working); when the header is parsed
+// with -DSHM_BINDGEN to generate the Rust mirror they are plain integers, which
+// bindgen understands. std::atomic<uintN_t> has the identical size + alignment as
+// uintN_t on every target here (u32/u64 are always lock-free), so the byte layout
+// is the same either way — the Rust side wraps these fields in Atomic* to access
+// them. This is the one source of truth for the shared-memory layout.
+#ifdef SHM_BINDGEN
+using ShmAtomicU32 = uint32_t;
+using ShmAtomicU64 = uint64_t;
+#else
+using ShmAtomicU32 = std::atomic<uint32_t>;
+using ShmAtomicU64 = std::atomic<uint64_t>;
+#endif
+
 constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 8: UiClipNote::noteId widened to a 64-bit authored EventId.
 // 9: row-op fields on UiClipNote (retrigger/probability/delay); an all-tracks
@@ -62,7 +77,7 @@ struct alignas(64) ShmHeader {
   uint64_t ringUiOutOffset = 0;
   uint64_t ringUiEditOffset = 0;
   uint64_t mailboxOffset = 0;
-  std::atomic<uint64_t> uiVersion{0};
+  ShmAtomicU64 uiVersion{0};
   uint64_t uiVisualSampleCount = 0;
   uint64_t uiGlobalNanotickPlayhead = 0;
   uint32_t uiTrackCount = 0;
@@ -126,8 +141,8 @@ struct alignas(64) ShmHeader {
 struct alignas(64) RingHeader {
   uint32_t capacity = 0;
   uint32_t entrySize = 0;
-  std::atomic<uint32_t> readIndex{0};
-  std::atomic<uint32_t> writeIndex{0};
+  ShmAtomicU32 readIndex{0};
+  ShmAtomicU32 writeIndex{0};
   uint32_t reserved[12]{};
 };
 
@@ -170,9 +185,9 @@ enum class EventType : uint16_t {
 };
 
 struct alignas(64) BlockMailbox {
-  std::atomic<uint32_t> completedBlockId{0};
-  std::atomic<uint64_t> completedSampleTime{0};
-  std::atomic<uint64_t> replayAckSampleTime{0};
+  ShmAtomicU32 completedBlockId{0};
+  ShmAtomicU64 completedSampleTime{0};
+  ShmAtomicU64 replayAckSampleTime{0};
   uint32_t reserved[11]{};
 };
 
