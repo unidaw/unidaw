@@ -170,6 +170,23 @@ class WorkerPool {
   bool stopping_ = false;
 };
 
+// A machine-level cache location, found regardless of the current directory, so a
+// checkout that has scanned once is not silently cacheless when run from elsewhere.
+// Honors XDG_CACHE_HOME (portable), else the macOS app-support dir, else ~/.cache.
+std::string stablePluginCachePath() {
+  if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && *xdg) {
+    return std::string(xdg) + "/uni/plugin_cache.json";
+  }
+  if (const char* home = std::getenv("HOME"); home && *home) {
+#if defined(__APPLE__)
+    return std::string(home) + "/Library/Application Support/uni/plugin_cache.json";
+#else
+    return std::string(home) + "/.cache/uni/plugin_cache.json";
+#endif
+  }
+  return {};
+}
+
 std::string defaultPluginCachePath() {
   if (const char* env = std::getenv("DAW_PLUGIN_CACHE")) {
     return env;
@@ -179,6 +196,14 @@ std::string defaultPluginCachePath() {
   }
   if (std::filesystem::exists("../build/plugin_cache.json")) {
     return "../build/plugin_cache.json";
+  }
+  // Machine-level fallback before the bare cwd name: a fresh checkout run from any
+  // directory still finds a cache it scanned earlier. Kept AFTER the cwd build paths
+  // so the local dev build->run loop is unchanged; making it authoritative over cwd
+  // is a separate, coordinated change (the launcher owns the write side).
+  if (const auto stable = stablePluginCachePath();
+      !stable.empty() && std::filesystem::exists(stable)) {
+    return stable;
   }
   return "plugin_cache.json";
 }
@@ -907,6 +932,7 @@ int main(int argc, char** argv) {
   baseConfig.socketPath = socketPath;
   if (!pluginPath.empty()) {
     baseConfig.pluginPaths = {pluginPath};
+    baseConfig.pluginNames = {""};  // name-agnostic; rebuildHostForChain fills it
   }
   baseConfig.sampleRate = 48000.0;  // fallback only; overridden by the device
   baseConfig.numChannelsIn = 2;
@@ -1305,6 +1331,7 @@ struct TrackRuntime {
         trackId == 0 ? baseConfig.socketPath : trackSocketPath(trackId);
     if (!trackPluginPath.empty()) {
       runtime->config.pluginPaths = {trackPluginPath};
+      runtime->config.pluginNames = {""};  // filled by rebuildHostForChain
     }
     runtime->config.shmName = trackShmName(trackId);
 
@@ -2032,6 +2059,9 @@ struct TrackRuntime {
     }
 
     runtime.config.pluginPaths = pluginPaths;
+    // Names unknown at this bare-path restart; keep parallel + name-agnostic so the
+    // launch never pairs a stale name with a new path. rebuildHostForChain fills it.
+    runtime.config.pluginNames.assign(pluginPaths.size(), std::string());
     const bool connected = runtime.controller.launch(runtime.config);
     if (!connected) {
       return false;
@@ -2139,10 +2169,12 @@ struct TrackRuntime {
 
   auto rebuildHostForChain = [&](TrackRuntime& runtime) {
     std::vector<std::string> pluginPaths;
+    std::vector<std::string> pluginNames;
     {
       std::lock_guard<std::mutex> lock(runtime.trackMutex);
       const auto& devices = runtime.track.chain.devices;
       pluginPaths.reserve(devices.size());
+      pluginNames.reserve(devices.size());
       for (const auto& device : devices) {
         if (device.kind != daw::DeviceKind::VstInstrument &&
             device.kind != daw::DeviceKind::VstEffect) {
@@ -2155,21 +2187,33 @@ struct TrackRuntime {
           continue;
         }
         pluginPaths.push_back(*path);
+        // The project's intended plugin name selects the right one out of a
+        // multi-plugin bundle host-side (Zebra2.vst3 holds several).
+        pluginNames.push_back(device.vstRef.name);
       }
     }
-    if (runtime.config.pluginPaths != pluginPaths) {
+    // Compare names too: swapping to another plugin in the SAME bundle keeps the
+    // path but changes the name, and that still needs a reconcile.
+    if (runtime.config.pluginPaths != pluginPaths ||
+        runtime.config.pluginNames != pluginNames) {
       const bool hostRunning = runtime.hostReady.load(std::memory_order_acquire);
       {
         std::lock_guard<std::mutex> lock(runtime.controllerMutex);
         runtime.config.pluginPaths = pluginPaths;
+        runtime.config.pluginNames = pluginNames;
       }
       if (hostRunning) {
         // Reconcile the chain in the running host: unchanged plugins are
         // reused, only a genuinely new one is loaded, and audio keeps playing.
+        std::vector<daw::PluginRef> refs;
+        refs.reserve(pluginPaths.size());
+        for (size_t i = 0; i < pluginPaths.size(); ++i) {
+          refs.push_back({pluginPaths[i], pluginNames[i]});
+        }
         bool reconciled = false;
         {
           std::lock_guard<std::mutex> lock(runtime.controllerMutex);
-          reconciled = runtime.controller.sendSetChain(pluginPaths);
+          reconciled = runtime.controller.sendSetChain(refs);
         }
         if (reconciled) {
           // Voice-reset the track: drop active notes so a removed plugin
@@ -5546,6 +5590,16 @@ struct TrackRuntime {
           }
           hostIndex++;
         }
+      }
+      // A request for a device that does not resolve wrote nothing to the region
+      // and emitted no query event, so an empty rack looked identical whether the
+      // device was missing or the host round-trip failed. Make the miss visible.
+      if (!runtime || !found) {
+        DAW_EVENT("device.params_query.unresolved")
+            .field("track", trackId)
+            .field("device", deviceId)
+            .field("hasRuntime", runtime != nullptr)
+            .field("found", found);
       }
       if (runtime && found && uiShm.header &&
           uiShm.header->uiDeviceParamsOffset != 0) {

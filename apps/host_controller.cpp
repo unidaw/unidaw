@@ -130,12 +130,19 @@ pid_t HostController::spawnHostProcess(const HostConfig& config) {
   args.emplace_back(exe);
   args.emplace_back("--socket");
   args.emplace_back(config.socketPath);
-  for (const auto& path : config.pluginPaths) {
+  for (size_t i = 0; i < config.pluginPaths.size(); ++i) {
+    const auto& path = config.pluginPaths[i];
     if (path.empty()) {
       continue;
     }
     args.emplace_back("--plugin");
     args.emplace_back(path);
+    // Name-aware startup for multi-plugin bundles: pair each --plugin with the
+    // desired sub-plugin name when we know it. Empty/absent => take the first type.
+    if (i < config.pluginNames.size() && !config.pluginNames[i].empty()) {
+      args.emplace_back("--plugin-name");
+      args.emplace_back(config.pluginNames[i]);
+    }
   }
 
   std::vector<char*> argv;
@@ -443,15 +450,19 @@ bool HostController::sendPluginState(uint32_t pluginIndex,
                      payload.size());
 }
 
-bool HostController::sendSetChain(const std::vector<std::string>& pluginPaths) {
+bool HostController::sendSetChain(const std::vector<PluginRef>& refs) {
+  // Each entry is path\0name\0 (v4). The name lets the host pick the right plugin
+  // out of a multi-plugin bundle; an empty name means "take the first type".
   std::vector<uint8_t> block;
-  for (const auto& path : pluginPaths) {
-    block.insert(block.end(), path.begin(), path.end());
+  for (const auto& ref : refs) {
+    block.insert(block.end(), ref.path.begin(), ref.path.end());
+    block.push_back('\0');
+    block.insert(block.end(), ref.name.begin(), ref.name.end());
     block.push_back('\0');
   }
   std::vector<uint8_t> payload(sizeof(ChainHeader) + block.size());
   ChainHeader header{};
-  header.count = static_cast<uint32_t>(pluginPaths.size());
+  header.count = static_cast<uint32_t>(refs.size());
   header.byteCount = static_cast<uint32_t>(block.size());
   std::memcpy(payload.data(), &header, sizeof(header));
   if (!block.empty()) {

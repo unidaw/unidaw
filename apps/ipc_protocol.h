@@ -1,15 +1,30 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace daw {
+
+// One plugin in a chain: the bundle path plus the desired plugin name within it. A
+// VST3 bundle can hold several plugins (Zebra2.vst3 = Zebra2/Zebralette/ZRev/Zebrify)
+// and the path alone cannot say which; `name` disambiguates. Empty name = take the
+// first type (correct for a single-plugin bundle). Carried over SetChain as
+// path\0name\0 pairs (kControlVersion 4).
+struct PluginRef {
+  std::string path;
+  std::string name;
+};
 
 constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 // 2: ProcessBlockRequest carries transport position for the play head.
 // 3: GetParams + ParamsHeader.pluginName (B1). Bumped so a host built before this
 //    is rejected at the handshake (recvHeader checks the version) instead of
 //    misparsing the larger reply header into a silent empty param list.
-constexpr uint16_t kControlVersion = 3;
+// 4: SetChain entries are now path\0name\0 pairs (not bare paths) so the host can
+//    pick the right sub-plugin out of a multi-plugin VST3 bundle (Zebra2.vst3 holds
+//    Zebra2/Zebralette/ZRev/Zebrify). An older host would read the name as a second
+//    path and load garbage, so the version gate must reject it.
+constexpr uint16_t kControlVersion = 4;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,

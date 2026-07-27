@@ -325,6 +325,43 @@ fn pitch_name(pitch: u8) -> String {
 }
 
 /// Asks the engine for a clip window and waits for the matching snapshot.
+// get device-params <track> <device> — request one device's params + read them
+// back. Sends RequestDeviceParams and polls the region (the plugin loads async).
+fn get_device_params(handle: &EngineHandle, args: &[&str]) -> i32 {
+    let track: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let device: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let req = || {
+        let p = UiCommandPayload {
+            command_type: UiCommandType::RequestDeviceParams as u16,
+            flags: 0,
+            track_id: track,
+            plugin_index: 0,
+            note_pitch: 0,
+            value0: device,
+            note_nanotick_lo: 0,
+            note_nanotick_hi: 0,
+            note_duration_lo: 0,
+            note_duration_hi: 0,
+            base_version: 0,
+        };
+        let _ = handle.send_command(p);
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        req();
+        thread::sleep(Duration::from_millis(250));
+        let v = handle.read_device_params();
+        if (v.version > 0 && !v.params.is_empty()) || Instant::now() >= deadline {
+            let first = v.params.first().map(|p| p.name.clone()).unwrap_or_default();
+            println!(
+                "{{ \"track\": {}, \"device\": {}, \"name\": {:?}, \"version\": {}, \"count\": {}, \"first\": {:?} }}",
+                v.track_id, v.device_id, v.device_name, v.version, v.params.len(), first
+            );
+            return 0;
+        }
+    }
+}
+
 fn get_clip(handle: &EngineHandle, args: &[String]) -> i32 {
     let track = match flag_u64(args, "--track", Some(0)) {
         Ok(value) => value as u32,
@@ -507,6 +544,25 @@ fn main() {
             }
             match EngineHandle::attach(&name, true) {
                 Ok(handle) => get_clip(&handle, &args),
+                Err(err) => {
+                    eprintln!("daw-cli: {err}");
+                    1
+                }
+            }
+        }
+        // Reads its own read-back, but first SENDS RequestDeviceParams — that is a
+        // write to the single-producer command ring, so it needs a writable handle
+        // (a read-only mmap makes send_command a silent no-op) and the --force guard.
+        Some((&"get", rest)) if rest.first() == Some(&"device-params") => {
+            if !force {
+                eprintln!(
+                    "daw-cli: `get device-params` writes RequestDeviceParams to the\n\
+                     single-producer command ring. Pass --force when nothing else is writing."
+                );
+                std::process::exit(2);
+            }
+            match EngineHandle::attach(&name, true) {
+                Ok(handle) => get_device_params(&handle, rest),
                 Err(err) => {
                     eprintln!("daw-cli: {err}");
                     1

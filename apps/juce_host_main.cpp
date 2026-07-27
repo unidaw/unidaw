@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
   const int numOutputs = audio->outputChannels();
 
   auto host = daw::createPluginHost();
-  auto plugin = host->loadVst3FromPath(pluginPath, sampleRate, blockSize);
+  auto plugin = host->loadVst3FromPath(pluginPath, /*desiredName=*/"", sampleRate, blockSize);
   if (!plugin) {
     std::cerr << "Failed to load VST3 at path: " << pluginPath << std::endl;
     return 1;
@@ -268,7 +268,7 @@ int main(int argc, char** argv) {
   }
 
   if (!state.empty()) {
-    auto verify = host->loadVst3FromPath(pluginPath, sampleRate, blockSize);
+    auto verify = host->loadVst3FromPath(pluginPath, /*desiredName=*/"", sampleRate, blockSize);
     if (verify) {
       verify->prepare(sampleRate, blockSize, numOutputs);
       const bool restored = verify->setState(state);
