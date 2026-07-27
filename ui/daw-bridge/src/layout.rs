@@ -484,6 +484,9 @@ pub enum UiCommandType {
     /// Ask the engine to query a device's host for its parameters and publish
     /// them into UiDeviceParamsRegion. trackId in track_id, deviceId in value0.
     RequestDeviceParams = 40,
+    /// Shut the engine down cleanly. Sent when the last UI has been gone long
+    /// enough that it is not coming back.
+    Quit = 41,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;

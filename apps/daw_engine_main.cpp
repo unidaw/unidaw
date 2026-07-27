@@ -812,17 +812,29 @@ int main(int argc, char** argv) {
   bool spawnHost = true;
   int runSeconds = -1;
   bool testMode = false;
-  for (int i = 1; i + 1 < argc; ++i) {
+  bool noAudio = false;
+  // `i < argc`, not `i + 1 < argc`: the old bound meant a flag with NO value was
+  // invisible when it came last, so `daw_engine --no-spawn` silently spawned.
+  // Flags that take a value check for one themselves.
+  for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--socket") {
+    const bool hasValue = (i + 1) < argc;
+    if (arg == "--socket" && hasValue) {
       socketPath = argv[i + 1];
       ++i;
-    } else if (arg == "--plugin") {
+    } else if (arg == "--plugin" && hasValue) {
       pluginPath = std::filesystem::absolute(argv[i + 1]).string();
       ++i;
     } else if (arg == "--no-spawn") {
       spawnHost = false;
-    } else if (arg == "--run-seconds") {
+    } else if (arg == "--no-audio") {
+      // Run the whole engine with no audio DEVICE: the transport still advances,
+      // the UI still publishes, plugins still load — there is simply no output.
+      // Added because every measurement of the transport used to require putting
+      // sound through somebody's speakers, which makes a test suite something you
+      // cannot run while a person is in the room.
+      noAudio = true;
+    } else if (arg == "--run-seconds" && hasValue) {
       runSeconds = std::max(0, std::atoi(argv[i + 1]));
       ++i;
     }
@@ -907,7 +919,12 @@ int main(int argc, char** argv) {
   // plays everything off-speed on any other device — 48k content on a 96k
   // device runs 2x fast, on 192k 4x fast. Opened here to read the rate; started
   // later. If there is no device, the 48 kHz fallback stands for offline timing.
-  std::unique_ptr<daw::IAudioBackend> audioBackend = daw::createAudioBackend();
+  std::unique_ptr<daw::IAudioBackend> audioBackend =
+      noAudio ? nullptr : daw::createAudioBackend();
+  if (noAudio) {
+    std::cout << "--no-audio: no output device; " << baseConfig.sampleRate
+              << " Hz assumed for timing" << std::endl;
+  }
   if (audioBackend && audioBackend->openDefaultDevice(2)) {
     baseConfig.sampleRate = audioBackend->sampleRate();
     std::cout << "Audio device sample rate: " << baseConfig.sampleRate << " Hz"
@@ -5484,6 +5501,17 @@ struct TrackRuntime {
       for (auto* runtime : targets) {
         emitChainSnapshot(*runtime);
       }
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::Quit)) {
+      // The last UI went away. Silence first, then exit: `running` unwinds through
+      // the join/stop path at the bottom of main(), which takes a moment, and a
+      // moment of audio after the window closed is exactly what this exists to
+      // stop. The sidecar only sends this after a grace period, so a page reload
+      // does not end the session.
+      playing.store(false, std::memory_order_release);
+      std::cout << "UI: last client gone — engine shutting down" << std::endl;
+      running.store(false, std::memory_order_release);
+      restartCv.notify_all();
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestDeviceParams)) {
       // Publish one device's parameters into UiDeviceParamsRegion so the rack can

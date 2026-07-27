@@ -140,6 +140,16 @@ impl SharedViewport {
 /// keeps having, so it gets a counter rather than a hope.
 static SHM_GENERATION: AtomicU64 = AtomicU64::new(0);
 
+/// How many clients have EVER connected.
+///
+/// The live count is not enough to decide "nobody came back". A page reload opens
+/// the new socket before the old one's handler has finished unwinding, so the
+/// decrement can land AFTER the increment and the count reads zero while a client
+/// is sitting there connected — which quit the engine on every refresh. A
+/// monotonic counter cannot be fooled that way: if it moved, somebody arrived,
+/// whatever the live count happens to say at the instant we look.
+static CONNECTS: AtomicU64 = AtomicU64::new(0);
+
 struct Args {
     port: u16,
     cmd_port: u16,
@@ -1117,6 +1127,59 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     Ok(p)
 }
 
+/// How long the engine waits, with nobody watching, before it quits.
+///
+/// A page RELOAD is a disconnect followed a moment later by a connect, so quitting
+/// on the first empty moment would end the session every time somebody refreshed.
+/// Long enough to cover a reload and a slow page load; short enough that a closed
+/// window does not leave a synth running.
+const NO_CLIENT_GRACE: Duration = Duration::from_secs(12);
+
+/// The last UI disconnected.
+///
+/// Silence goes out IMMEDIATELY — closing the window should stop the sound, and a
+/// user who has shut the UI is not waiting to hear whether we meant it. The quit
+/// waits out the grace period and is cancelled if anyone reconnects, which a
+/// reload does.
+///
+/// The engine is the application's process, not a service: a user thinks the
+/// window IS the app, so leaving a headless engine playing after it closes is a
+/// surprise nobody asked for.
+fn last_client_gone(shm: &str, clients: Arc<AtomicU64>) {
+    let shm = shm.to_string();
+    let seen = CONNECTS.load(Ordering::Relaxed);
+    thread::spawn(move || {
+        // Stop the transport at once. Best effort: if the engine is already gone
+        // there is nothing to silence and nothing to report.
+        if let Ok(h) = EngineHandle::attach(&shm, true) {
+            let mut p = UiCommandPayload {
+                command_type: UiCommandType::Stop as u16,
+                flags: 0, track_id: 0, plugin_index: 0, note_pitch: 0, value0: 0,
+                note_nanotick_lo: 0, note_nanotick_hi: 0,
+                note_duration_lo: 0, note_duration_hi: 0, base_version: 0,
+            };
+            let _ = h.send_command(p);
+            thread::sleep(NO_CLIENT_GRACE);
+            // Someone came back — a reload, or a second window. Either signal is
+            // enough: a live count above zero, or ANY new connection since the
+            // grace period began. The second is the one that matters, because a
+            // reload's decrement can land after its own reconnect and leave the
+            // count reading zero with a client on the other end.
+            if clients.load(Ordering::Relaxed) > 0
+                || CONNECTS.load(Ordering::Relaxed) != seen {
+                eprintln!("sidecar: a client returned within the grace period — engine stays up");
+                return;
+            }
+            p.command_type = UiCommandType::Quit as u16;
+            match h.send_command(p) {
+                Ok(()) => eprintln!("sidecar: no client for {}s — asked the engine to quit",
+                                    NO_CLIENT_GRACE.as_secs()),
+                Err(e) => eprintln!("sidecar: could not ask the engine to quit: {e}"),
+            }
+        }
+    });
+}
+
 fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, projects: String) {
     for stream in listener.incoming().flatten() {
         let shm = shm.clone();
@@ -1294,6 +1357,7 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
         Ok(w) => w,
         Err(e) => { eprintln!("sidecar: handshake failed from {peer}: {e}"); return; }
     };
+    CONNECTS.fetch_add(1, Ordering::Relaxed);
     let n = clients.fetch_add(1, Ordering::Relaxed) + 1;
     eprintln!("sidecar: client connected ({peer}), {n} total");
 
@@ -1500,6 +1564,9 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
 
     let n = clients.fetch_sub(1, Ordering::Relaxed) - 1;
     eprintln!("sidecar: client gone ({peer}), {n} remain");
+    if n == 0 {
+        last_client_gone(&shm, clients.clone());
+    }
 }
 
 /// Decoded engine-to-UI messages, newest last, with a monotonic sequence.

@@ -91,6 +91,12 @@ enum class UiCommandType : uint16_t {
   // Publish one device's parameters into UiDeviceParamsRegion: trackId + value0 =
   // deviceId. Lets the device-chain rack pull a device's real name + param list.
   RequestDeviceParams = 40,
+  // Shut the engine down cleanly. The UI is the application as far as a user is
+  // concerned, so when the last one goes away the engine should go with it —
+  // otherwise closing the window leaves audio playing with nothing on screen to
+  // stop it, which is what happened. The sidecar sends this after a grace period,
+  // so a page reload (disconnect then reconnect) does not kill the session.
+  Quit = 41,
 };
 
 constexpr uint16_t kMixerFlagMute = 1u << 0;
