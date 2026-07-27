@@ -513,6 +513,38 @@ int main() {
             "an uninstalled plugin must report missing, not match something else");
   }
 
+  // A multi-plugin bundle: several products share ONE path. A project saved with one
+  // of them must not reload as a sibling after a rescan reorders the cache — the
+  // exact Zebra2 -> ZEBRIFY silent swap. Path alone is not identity here; the name is.
+  {
+    daw::PluginCache cache;
+    daw::PluginCacheEntry zebrify;  // listed first after a reorder
+    zebrify.path = "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3";
+    zebrify.name = "Zebrify";
+    zebrify.vendor = "u-he";
+    zebrify.scanStatus = daw::ScanStatus::Ok;
+    daw::PluginCacheEntry zebra2;
+    zebra2.path = "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3";  // same file
+    zebra2.name = "Zebra2";
+    zebra2.vendor = "u-he";
+    zebra2.scanStatus = daw::ScanStatus::Ok;
+    cache.entries = {zebrify, zebra2};  // Zebrify first, as a rescan might list it
+
+    // No uid16 (the common case today): path+name must find Zebra2, not the first
+    // entry that merely shares the path.
+    const auto saved = daw::resolveVstRef(
+        cache, "", "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3", "u-he", "Zebra2");
+    require(saved.match == daw::VstMatch::Path && saved.index == 1,
+            "a bundle member must resolve by path+name, not path alone");
+
+    // Path alone, with no name to disambiguate, must decline rather than coin-flip
+    // between the bundle's members.
+    const auto ambiguous = daw::resolveVstRef(
+        cache, "", "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3", "", "");
+    require(ambiguous.match == daw::VstMatch::None,
+            "an ambiguous bundle path must not silently pick a member");
+  }
+
   // A newer schema must be refused rather than silently half-read.
   daw::ProjectDocument rejected;
   const bool accepted =

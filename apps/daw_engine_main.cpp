@@ -5962,6 +5962,88 @@ struct TrackRuntime {
         region->version += 1;
       }
     } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::RequestWaveform)) {
+      // Answer a windowed waveform query by slicing the source's pyramid into a
+      // seqlocked slot. Pure memory reads of state we already own — no host round-
+      // trip (contract §2.3). Every request in the drain is answered into
+      // slot = requestSeq % slots; NOT drain-to-latest, which makes tiled answers
+      // uncompletable.
+      daw::UiWaveformRequestPayload req{};
+      std::memcpy(&req, entry.payload, sizeof(req));
+      if (!uiShm.header || uiShm.header->uiWaveformOffset == 0) {
+        return;
+      }
+      auto* region = reinterpret_cast<daw::UiWaveformRegion*>(
+          reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiWaveformOffset);
+      daw::UiWaveformSlot& slot =
+          region->slots[req.requestSeq % daw::kUiWaveformSlots];
+      const uint64_t firstFrame = static_cast<uint64_t>(req.firstFrameLo) |
+                                  (static_cast<uint64_t>(req.firstFrameHi) << 32);
+
+      // Resolve the source + its pyramid (a copy of the entry keeps the pyramid
+      // alive past a concurrent beginLoad).
+      daw::WaveformSourceEntry entryCopy{};
+      const bool known = waveformStore.lookup(req.sourceId, entryCopy);
+
+      // Which published channels the mask actually selects, in ascending order.
+      uint32_t sel[2] = {0, 0};
+      uint32_t outChannels = 0;
+      const uint32_t waveCh = entryCopy.pyramid ? entryCopy.pyramid->channels : 0;
+      for (uint32_t c = 0; c < waveCh && c < 2; ++c) {
+        if (req.channelMask & (1u << c)) sel[outChannels++] = c;
+      }
+
+      const bool pow2 = req.decimation != 0 &&
+                        (req.decimation & (req.decimation - 1)) == 0;
+      const bool aligned = req.decimation != 0 && firstFrame % req.decimation == 0;
+      const bool capOk =
+          static_cast<uint64_t>(req.columns) * (outChannels ? outChannels : 1) <=
+          daw::kUiWaveformMaxPairs;
+
+      uint32_t status;         // 0 ok, 1 truncated, 2 notready, 3 badrequest
+      uint32_t flags = 0;      // bit0 = window ran past EOF
+      uint32_t outColumns = 0;
+      uint64_t frameCount = 0;
+      uint32_t writtenChannels = 0;
+      if (!known || !pow2 || !aligned || req.columns == 0 || outChannels == 0 ||
+          !capOk) {
+        status = 3;  // badrequest
+      } else if (!entryCopy.pyramid) {
+        status = 2;  // source known but not ready (decode failed / pending)
+      } else {
+        // Seqlock is entered below; slice straight into the shared pairs buffer,
+        // which the reader ignores while seq is odd.
+        status = 0;  // provisional; set to truncated after the slice if short
+        writtenChannels = outChannels;
+      }
+
+      // Publish under the seqlock: seq odd while writing, release-fenced, then even.
+      const uint32_t s = slot.seq.load(std::memory_order_relaxed);
+      slot.seq.store(s | 1u, std::memory_order_relaxed);
+      if (status == 0) {
+        const daw::WaveformSlice sl =
+            daw::sliceWaveform(*entryCopy.pyramid, sel, outChannels, firstFrame,
+                               req.decimation, req.columns, slot.pairs);
+        outColumns = sl.columns;
+        frameCount = sl.frameCount;
+        if (sl.truncated) status = 1;
+        if (sl.pastEof) flags |= 1u;
+      }
+      slot.requestSeq = req.requestSeq;
+      slot.sourceId = req.sourceId;
+      slot.contentKeyLo = static_cast<uint32_t>(entryCopy.contentKey & 0xffffffffu);
+      slot.contentKeyHi = static_cast<uint32_t>(entryCopy.contentKey >> 32);
+      slot.decimation = req.decimation;
+      slot.columns = outColumns;
+      slot.channels = writtenChannels;
+      slot.firstFrame = firstFrame;
+      slot.frameCount = frameCount;
+      slot.status = status;
+      slot.flags = flags;
+      slot.formatVersion = daw::kWaveformFormatVersion;
+      std::atomic_thread_fence(std::memory_order_release);
+      slot.seq.store((s | 1u) + 1u, std::memory_order_relaxed);
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestClipWindow)) {
       daw::UiClipWindowCommandPayload windowPayload{};
       std::memcpy(&windowPayload, entry.payload, sizeof(windowPayload));

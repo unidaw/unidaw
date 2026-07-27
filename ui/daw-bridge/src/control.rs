@@ -14,6 +14,7 @@ use std::sync::atomic::Ordering;
 use memmap2::{Mmap, MmapMut, MmapOptions};
 
 use std::sync::atomic::fence;
+use std::sync::atomic::AtomicU32;
 
 use crate::layout::{
     EventEntry, EventType, RingHeader, ShmHeader, UiChainCommandPayload, UiChordCommandPayload,
@@ -23,7 +24,8 @@ use crate::layout::{
     UiPatcherRegion, UiScaleRegion, K_SHM_MAGIC, K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS,
     K_UI_MAX_DEVICE_PARAMS, K_UI_MAX_HARMONY_EVENTS,
     K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_SCALES, K_UI_MAX_SCALE_STEPS,
-    K_UI_MAX_TRACKS,
+    K_UI_MAX_TRACKS, UiAudioSourceRegion, UiWaveformRegion, UiWaveformRequestPayload,
+    K_UI_MAX_AUDIO_CLIPS, K_UI_MAX_AUDIO_SOURCES, K_UI_WAVEFORM_MAX_PAIRS, K_UI_WAVEFORM_SLOTS,
 };
 use crate::reader::{SeqlockReader, UiSnapshot};
 
@@ -75,6 +77,64 @@ pub struct DeviceParamsView {
     pub device_id: u32,
     pub device_name: String,
     pub params: Vec<DeviceParamView>,
+}
+
+/// One decoded audio source descriptor (UiAudioSource). `content_key` is rejoined
+/// from the split lo/hi words. `status`: 0 absent, 1 ready, 2 failed.
+#[derive(Debug, Clone, Default)]
+pub struct AudioSourceView {
+    pub source_id: u32,
+    pub content_key: u64,
+    pub source_channels: u32,
+    pub wave_channels: u32,
+    pub status: u32,
+    pub source_frames: u64,
+    pub source_rate_hz: f64,
+    pub abs_peak: f32,
+    pub level_mask: u32,
+    pub path: String,
+    pub flags: u32, // bit0 >2 channels truncated, bit1 |x|>1 seen
+}
+
+/// One audio clip descriptor (UiAudioClip) — joins UiClipExtent.clipId to a source.
+#[derive(Debug, Clone, Default)]
+pub struct AudioClipView {
+    pub clip_id: u32,
+    pub source_id: u32,
+    pub source_start_frame: u64,
+    pub clip_length_ticks: u64,
+    pub fade_in_ticks: u32,
+    pub fade_out_ticks: u32,
+    pub gain_db: f32,
+    pub flags: u32,
+}
+
+/// The audio source + clip descriptor tables (UiAudioSourceRegion), version-gated.
+#[derive(Debug, Clone, Default)]
+pub struct AudioSourcesView {
+    pub version: u32,
+    pub audio_map_bpm_milli: u32,
+    pub format_version: u32,
+    pub sources: Vec<AudioSourceView>,
+    pub clips: Vec<AudioClipView>,
+}
+
+/// A windowed waveform answer read out of one UiWaveformSlot under its seqlock.
+/// `pairs` is channel-planar then column then (min,max): for channel c column i,
+/// pairs[(c*columns + i)*2] and +1. `status`: 0 ok, 1 truncated, 2 notready, 3 bad.
+#[derive(Debug, Clone, Default)]
+pub struct WaveformSlotView {
+    pub request_seq: u32,
+    pub source_id: u32,
+    pub content_key: u64,
+    pub decimation: u32,
+    pub columns: u32,
+    pub channels: u32,
+    pub first_frame: u64,
+    pub frame_count: u64,
+    pub status: u32,
+    pub flags: u32,
+    pub pairs: Vec<i16>,
 }
 
 /// Read a nul-terminated C `char` array (from a bindgen-generated struct, where
@@ -528,6 +588,132 @@ impl EngineHandle {
             });
         }
         view
+    }
+
+    /// Reads the audio source + clip descriptor tables (UiAudioSourceRegion). The
+    /// region is version-gated and rewritten only at project load; a version double-
+    /// check rejects a torn read against a concurrent load.
+    pub fn read_audio_sources(&self) -> AudioSourcesView {
+        let off = unsafe { (*self.header).ui_audio_source_offset };
+        if off == 0 {
+            return AudioSourcesView::default();
+        }
+        let region = self._mmap.as_ptr().wrapping_add(off as usize)
+            as *const UiAudioSourceRegion;
+        let ver_ptr = unsafe { std::ptr::addr_of!((*region).version) } as *const AtomicU32;
+        for _ in 0..256 {
+            let v0 = unsafe { (*ver_ptr).load(Ordering::Acquire) };
+            let source_count =
+                (unsafe { (*region).sourceCount } as usize).min(K_UI_MAX_AUDIO_SOURCES);
+            let clip_count =
+                (unsafe { (*region).clipCount } as usize).min(K_UI_MAX_AUDIO_CLIPS);
+            let mut view = AudioSourcesView {
+                version: v0,
+                audio_map_bpm_milli: unsafe { (*region).audioMapBpmMilli },
+                format_version: unsafe { (*region).formatVersion },
+                sources: Vec::with_capacity(source_count),
+                clips: Vec::with_capacity(clip_count),
+            };
+            for i in 0..source_count {
+                let s = unsafe { &(*region).sources[i] };
+                view.sources.push(AudioSourceView {
+                    source_id: s.sourceId,
+                    content_key: s.contentKeyLo as u64 | ((s.contentKeyHi as u64) << 32),
+                    source_channels: s.sourceChannels,
+                    wave_channels: s.waveChannels,
+                    status: s.status,
+                    source_frames: s.sourceFrames,
+                    source_rate_hz: s.sourceRateHz,
+                    abs_peak: s.absPeak,
+                    level_mask: s.levelMask,
+                    path: cchar_str(&s.path),
+                    flags: s.flags,
+                });
+            }
+            for i in 0..clip_count {
+                let c = unsafe { &(*region).clips[i] };
+                view.clips.push(AudioClipView {
+                    clip_id: c.clipId,
+                    source_id: c.sourceId,
+                    source_start_frame: c.sourceStartFrame,
+                    clip_length_ticks: c.clipLengthTicks,
+                    fade_in_ticks: c.fadeInTicks,
+                    fade_out_ticks: c.fadeOutTicks,
+                    gain_db: c.gainDb,
+                    flags: c.flags,
+                });
+            }
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*ver_ptr).load(Ordering::Acquire) };
+            if v0 == v1 {
+                return view;
+            }
+        }
+        AudioSourcesView::default()
+    }
+
+    /// Sends a windowed waveform query. The engine answers it into
+    /// `slots[requestSeq % K_UI_WAVEFORM_SLOTS]`; read it back with
+    /// `read_waveform_slot`. Same ring as every other command.
+    pub fn send_waveform_request(
+        &self,
+        payload: UiWaveformRequestPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const UiWaveformRequestPayload as *const u8,
+            std::mem::size_of::<UiWaveformRequestPayload>(),
+        )
+    }
+
+    /// Reads one waveform answer slot under its per-slot seqlock (seq odd while the
+    /// engine is writing). Returns None if the region is absent, the index is out of
+    /// range, or the writer never settled. The caller must still check `request_seq`
+    /// + `content_key` against what it asked — slots are reused mod the slot count.
+    pub fn read_waveform_slot(&self, index: usize) -> Option<WaveformSlotView> {
+        if index >= K_UI_WAVEFORM_SLOTS {
+            return None;
+        }
+        let off = unsafe { (*self.header).ui_waveform_offset };
+        if off == 0 {
+            return None;
+        }
+        let region =
+            self._mmap.as_ptr().wrapping_add(off as usize) as *const UiWaveformRegion;
+        let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
+        // The slot's `seq` is a plain u32 in the bindgen struct (SHM_BINDGEN maps the
+        // C++ atomic to u32); read it through an AtomicU32 cast so the seqlock's
+        // acquire ordering against the payload is real.
+        let seq_ptr = unsafe { std::ptr::addr_of!((*slot).seq) } as *const AtomicU32;
+        for _ in 0..4096 {
+            let v0 = unsafe { (*seq_ptr).load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue; // engine mid-write
+            }
+            let snap = unsafe { std::ptr::read_volatile(slot) };
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*seq_ptr).load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                let n = (snap.columns as usize)
+                    .saturating_mul(snap.channels as usize)
+                    .saturating_mul(2)
+                    .min(K_UI_WAVEFORM_MAX_PAIRS * 2);
+                return Some(WaveformSlotView {
+                    request_seq: snap.requestSeq,
+                    source_id: snap.sourceId,
+                    content_key: snap.contentKeyLo as u64
+                        | ((snap.contentKeyHi as u64) << 32),
+                    decimation: snap.decimation,
+                    columns: snap.columns,
+                    channels: snap.channels,
+                    first_frame: snap.firstFrame,
+                    frame_count: snap.frameCount,
+                    status: snap.status,
+                    flags: snap.flags,
+                    pairs: snap.pairs[..n].to_vec(),
+                });
+            }
+        }
+        None
     }
 
     /// Per-track display names for the current track count (nul-trimmed).

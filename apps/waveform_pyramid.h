@@ -132,4 +132,99 @@ inline WaveformPyramid buildWaveformPyramid(const float* const* channels,
   return p;
 }
 
+// The outcome of slicing one window out of a pyramid.
+struct WaveformSlice {
+  uint32_t columns = 0;      // columns actually written per channel (<= requested)
+  uint64_t frameCount = 0;   // columns * decimation, clipped at end of source
+  bool truncated = false;    // fewer columns than requested (window ran past EOF)
+  bool pastEof = false;      // requested window extended past the source end
+};
+
+// Answer one windowed RequestWaveform by filling `out` with channel-planar min/max
+// pairs: for output channel oc, column i, out[(oc*columns + i)*2] is the min and +1
+// the max, where `columns` is the returned count (NOT the requested one). `selChannels`
+// lists the pyramid channel index for each of `outChannels` output planes (so a
+// channelMask selecting only ch1 writes ch1's data at plane 0). `out` must hold
+// outChannels * reqColumns * 2 int16s. Three regimes, one output shape (contract §3):
+//   decimation == 1        -> each bucket is one sample, min == max (degenerate pair)
+//   stored level present    -> slice it directly (the fast path; frame-0 anchoring makes
+//                              firstFrame/decimation an exact bucket index)
+//   otherwise               -> scan level 0 over decimation frames per bucket
+// The scan and the slice are bit-identical for a stored decimation (min/max is
+// associative + idempotent), which the tests assert.
+inline WaveformSlice sliceWaveform(const WaveformPyramid& p,
+                                   const uint32_t* selChannels,
+                                   uint32_t outChannels, uint64_t firstFrame,
+                                   uint32_t decimation, uint32_t reqColumns,
+                                   int16_t* out) {
+  WaveformSlice r;
+  if (decimation == 0 || reqColumns == 0 || outChannels == 0) return r;
+
+  // Columns available from firstFrame to the end of the source.
+  uint32_t cols = 0;
+  if (firstFrame < p.frames) {
+    const uint64_t avail = p.frames - firstFrame;
+    const uint64_t availCols = (avail + decimation - 1) / decimation;
+    cols = static_cast<uint32_t>(std::min<uint64_t>(reqColumns, availCols));
+  }
+  r.columns = cols;
+  r.frameCount =
+      std::min<uint64_t>(static_cast<uint64_t>(cols) * decimation,
+                         firstFrame < p.frames ? p.frames - firstFrame : 0);
+  r.truncated = cols < reqColumns;
+  r.pastEof = firstFrame + static_cast<uint64_t>(reqColumns) * decimation > p.frames;
+  if (cols == 0) return r;
+
+  // Find a stored level at exactly this decimation, if any.
+  int level = -1;
+  for (size_t k = 0; k < p.levelDecimations.size(); ++k) {
+    if (p.levelDecimations[k] == decimation) {
+      level = static_cast<int>(k);
+      break;
+    }
+  }
+
+  for (uint32_t oc = 0; oc < outChannels; ++oc) {
+    const uint32_t sc = selChannels[oc];
+    int16_t* dst = out + static_cast<size_t>(oc) * cols * 2;
+    if (decimation == 1) {
+      const int16_t* s0 = &p.level0[static_cast<size_t>(sc) * p.frames];
+      for (uint32_t i = 0; i < cols; ++i) {
+        const int16_t v = s0[firstFrame + i];
+        dst[i * 2] = v;
+        dst[i * 2 + 1] = v;
+      }
+    } else if (level >= 0) {
+      const uint32_t buckets = p.bucketsAtLevel(static_cast<size_t>(level));
+      const int16_t* lp =
+          &p.levelPairs[level][static_cast<size_t>(sc) * buckets * 2];
+      const uint64_t base = firstFrame / decimation;  // exact: frame-0 anchored
+      for (uint32_t i = 0; i < cols; ++i) {
+        const uint64_t b = base + i;
+        if (b < buckets) {
+          dst[i * 2] = lp[b * 2];
+          dst[i * 2 + 1] = lp[b * 2 + 1];
+        } else {
+          dst[i * 2] = 0;
+          dst[i * 2 + 1] = 0;
+        }
+      }
+    } else {
+      const int16_t* s0 = &p.level0[static_cast<size_t>(sc) * p.frames];
+      for (uint32_t i = 0; i < cols; ++i) {
+        const uint64_t start = firstFrame + static_cast<uint64_t>(i) * decimation;
+        const uint64_t end = std::min<uint64_t>(start + decimation, p.frames);
+        int16_t lo = INT16_MAX, hi = INT16_MIN;
+        for (uint64_t f = start; f < end; ++f) {
+          lo = std::min(lo, s0[f]);
+          hi = std::max(hi, s0[f]);
+        }
+        dst[i * 2] = lo;
+        dst[i * 2 + 1] = hi;
+      }
+    }
+  }
+  return r;
+}
+
 }  // namespace daw

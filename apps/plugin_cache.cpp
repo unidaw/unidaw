@@ -446,9 +446,15 @@ VstResolution resolveVstRef(const PluginCache& cache,
     return entry.scanStatus == ScanStatus::Ok || entry.error.empty();
   };
 
-  // Strongest first: identity, then the same file, then the same product moved
-  // elsewhere. Anything weaker would risk loading the wrong plugin silently,
-  // which is the bug this exists to prevent.
+  // Strongest first. The ordering is load-bearing: a multi-plugin bundle
+  // (Zebra2.vst3 holds Zebra2, Zebralette, ZRev, Zebrify) shares ONE path across
+  // several cache entries, so path ALONE is not an identity — a path-only match
+  // returns whichever of them the scan happens to list first, which after a rescan
+  // reorders the cache is a different plugin. That silent swap is exactly the bug
+  // vstRef exists to prevent, so path is paired with the product name, and bare path
+  // is demoted below vendor+name and used only when it is unambiguous.
+
+  // 1. uid16 — exact plugin identity.
   if (!uid16.empty()) {
     for (size_t i = 0; i < cache.entries.size(); ++i) {
       if (usable(cache.entries[i]) && cache.entries[i].pluginUid16 == uid16) {
@@ -456,13 +462,17 @@ VstResolution resolveVstRef(const PluginCache& cache,
       }
     }
   }
-  if (!path.empty()) {
+  // 2. path AND name — the same file and the same product within it. Unambiguous
+  //    even for a bundle, because the name distinguishes the members.
+  if (!path.empty() && !name.empty()) {
     for (size_t i = 0; i < cache.entries.size(); ++i) {
-      if (usable(cache.entries[i]) && cache.entries[i].path == path) {
+      const auto& entry = cache.entries[i];
+      if (usable(entry) && entry.path == path && entry.name == name) {
         return {VstMatch::Path, i};
       }
     }
   }
+  // 3. vendor+name — the same product, in a different file (moved / reinstalled).
   if (!name.empty()) {
     for (size_t i = 0; i < cache.entries.size(); ++i) {
       const auto& entry = cache.entries[i];
@@ -470,6 +480,22 @@ VstResolution resolveVstRef(const PluginCache& cache,
           (vendor.empty() || entry.vendor == vendor)) {
         return {VstMatch::VendorName, i};
       }
+    }
+  }
+  // 4. path alone — last resort, and ONLY when the path is unambiguous (exactly one
+  //    usable entry there). For a bundle with several entries at one path this would
+  //    be a coin flip between products, so decline and report unresolved instead.
+  if (!path.empty()) {
+    size_t found = cache.entries.size();
+    size_t count = 0;
+    for (size_t i = 0; i < cache.entries.size(); ++i) {
+      if (usable(cache.entries[i]) && cache.entries[i].path == path) {
+        ++count;
+        found = i;
+      }
+    }
+    if (count == 1) {
+      return {VstMatch::Path, found};
     }
   }
   return {VstMatch::None, 0};

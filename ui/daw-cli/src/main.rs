@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{
     UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload, UiCommandType,
-    UiPatcherPresetCommandPayload,
+    UiPatcherPresetCommandPayload, UiWaveformRequestPayload,
 };
 
 const USAGE: &str = "\
@@ -456,6 +456,79 @@ fn get_device_params(handle: &EngineHandle, args: &[&str]) -> i32 {
     }
 }
 
+// get audio-sources — dump the published UiAudioSourceRegion (sources + clips).
+fn get_audio_sources(handle: &EngineHandle) -> i32 {
+    let v = handle.read_audio_sources();
+    println!(
+        "{{ \"version\": {}, \"audioMapBpmMilli\": {}, \"formatVersion\": {}, \"sourceCount\": {}, \"clipCount\": {},",
+        v.version, v.audio_map_bpm_milli, v.format_version, v.sources.len(), v.clips.len()
+    );
+    println!("  \"sources\": [");
+    for s in &v.sources {
+        println!(
+            "    {{ \"sourceId\": {}, \"status\": {}, \"channels\": {}, \"waveChannels\": {}, \"frames\": {}, \"rateHz\": {}, \"absPeak\": {:.6}, \"levelMask\": {}, \"contentKey\": {}, \"flags\": {}, \"path\": {:?} }},",
+            s.source_id, s.status, s.source_channels, s.wave_channels, s.source_frames,
+            s.source_rate_hz, s.abs_peak, s.level_mask, s.content_key, s.flags, s.path
+        );
+    }
+    println!("  ],\n  \"clips\": [");
+    for c in &v.clips {
+        println!(
+            "    {{ \"clipId\": {}, \"sourceId\": {}, \"sourceStartFrame\": {}, \"clipLengthTicks\": {}, \"fadeIn\": {}, \"fadeOut\": {}, \"gainDb\": {} }},",
+            c.clip_id, c.source_id, c.source_start_frame, c.clip_length_ticks,
+            c.fade_in_ticks, c.fade_out_ticks, c.gain_db
+        );
+    }
+    println!("  ]\n}}");
+    0
+}
+
+// get waveform <sourceId> <decimation> <firstFrame> <columns> [channelMask]
+// Sends RequestWaveform and reads the seqlocked answer slot back.
+fn get_waveform(handle: &EngineHandle, args: &[&str]) -> i32 {
+    let source_id: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let decimation: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(64);
+    let first_frame: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let columns: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(16);
+    let channel_mask: u32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(1);
+    let request_seq: u32 = 0x7A5E;
+    let slot_index = (request_seq as usize) % 4; // K_UI_WAVEFORM_SLOTS
+    let payload = UiWaveformRequestPayload {
+        command_type: UiCommandType::RequestWaveform as u16,
+        flags: 0,
+        request_seq,
+        source_id,
+        decimation,
+        first_frame_lo: (first_frame & 0xffff_ffff) as u32,
+        first_frame_hi: (first_frame >> 32) as u32,
+        columns,
+        channel_mask,
+        reserved0: 0,
+        reserved1: 0,
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let _ = handle.send_waveform_request(payload);
+        thread::sleep(Duration::from_millis(100));
+        if let Some(v) = handle.read_waveform_slot(slot_index) {
+            if v.request_seq == request_seq {
+                let pairs: Vec<String> = v.pairs.iter().map(|p| p.to_string()).collect();
+                println!(
+                    "{{ \"requestSeq\": {}, \"sourceId\": {}, \"status\": {}, \"decimation\": {}, \"columns\": {}, \"channels\": {}, \"firstFrame\": {}, \"frameCount\": {}, \"contentKey\": {}, \"flags\": {}, \"pairs\": [{}] }}",
+                    v.request_seq, v.source_id, v.status, v.decimation, v.columns,
+                    v.channels, v.first_frame, v.frame_count, v.content_key, v.flags,
+                    pairs.join(",")
+                );
+                return 0;
+            }
+        }
+        if Instant::now() >= deadline {
+            eprintln!("daw-cli: no waveform answer for source {source_id} (slot {slot_index})");
+            return 1;
+        }
+    }
+}
+
 fn get_clip(handle: &EngineHandle, args: &[String]) -> i32 {
     let track = match flag_u64(args, "--track", Some(0)) {
         Ok(value) => value as u32,
@@ -663,6 +736,22 @@ fn main() {
                 }
             }
         }
+        Some((&"get", rest)) if rest.first() == Some(&"waveform") => {
+            if !force {
+                eprintln!(
+                    "daw-cli: `get waveform` writes RequestWaveform to the\n\
+                     single-producer command ring. Pass --force when nothing else is writing."
+                );
+                std::process::exit(2);
+            }
+            match EngineHandle::attach(&name, true) {
+                Ok(handle) => get_waveform(&handle, rest),
+                Err(err) => {
+                    eprintln!("daw-cli: {err}");
+                    1
+                }
+            }
+        }
         Some((&"get", rest)) => {
             let handle = match EngineHandle::attach(&name, false) {
                 Ok(handle) => handle,
@@ -674,6 +763,7 @@ fn main() {
             match rest.first() {
                 Some(&"transport") => get_transport(&handle),
                 Some(&"tracks") => get_tracks(&handle),
+                Some(&"audio-sources") => get_audio_sources(&handle),
                 other => {
                     eprintln!("daw-cli: unknown query {:?}\n\n{USAGE}", other.unwrap_or(&""));
                     2
