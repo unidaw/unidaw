@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 12;
+export const WIRE_VERSION = 13;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 124;  // ...+ mixer 8 + counts 16 + loop 16 + load 8 + tempo 8
+const HEADER_BYTES = 128;  // ...+ mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -24,6 +24,36 @@ const NOTE_BYTES = 40;
 const EXTENT_BYTES = 64;
 /** UI_CLIP_EXTENT_AUDIO — the placement is an audio region (schema v3). */
 export const EXTENT_AUDIO = 1 << 0;
+
+/**
+ * The clip's own musical grid, packed into the spare bits of `UiClipExtent.flags`
+ * (kShmVersion 19). Mirrors `unpack_clip_grid` in ui/daw-bridge/src/layout.rs —
+ * change the two together.
+ *
+ * `linesPerBeat === 0` is the sentinel for "this clip publishes no grid", which is
+ * NOT the same as "this clip is in 4/4": it means fall back to the SONG meter. The
+ * denominator is stored as a power-of-two exponent, because the only denominators
+ * music uses are powers of two and three bits are all that was spare.
+ */
+const CLIP_GRID_LPB_SHIFT = 1, CLIP_GRID_LPB_MASK = 0x1f;
+const CLIP_GRID_NUM_SHIFT = 6, CLIP_GRID_NUM_MASK = 0x1f;
+const CLIP_GRID_DEN_EXP_SHIFT = 11, CLIP_GRID_DEN_EXP_MASK = 0x7;
+
+/**
+ * Unpack a clip's grid, or return null when it publishes none.
+ *
+ * Writes into a caller-owned record when given one: this is read per rail per
+ * frame in the arrangement, and GUIDELINES 3 forbids an object per call there.
+ */
+export function unpackClipGrid(flags, out) {
+  const lpb = (flags >>> CLIP_GRID_LPB_SHIFT) & CLIP_GRID_LPB_MASK;
+  if (lpb === 0) return null;
+  const o = out || { linesPerBeat: 0, numerator: 4, denominator: 4 };
+  o.linesPerBeat = lpb;
+  o.numerator = (flags >>> CLIP_GRID_NUM_SHIFT) & CLIP_GRID_NUM_MASK;
+  o.denominator = 1 << ((flags >>> CLIP_GRID_DEN_EXP_SHIFT) & CLIP_GRID_DEN_EXP_MASK);
+  return o;
+}
 
 /** A reusable decode target. One per connection. */
 export function createStore() {
@@ -87,6 +117,19 @@ export function createStore() {
      * frame after connecting is a worse lie than the one this replaces.
      */
     tempoMilliBpm: 120000, tempoPointCount: 0,
+    /**
+     * The SONG's time signature (kShmVersion 19), which is what bar NUMBERING
+     * counts in — the time gutter and the arrangement ruler. A clip may run a
+     * different meter inside one of those bars; that grid rides on the clip and is
+     * read from `UiClipExtent.flags`, not from here. `meter.js` is the module for
+     * this one, and the two must not be confused: they answer different questions.
+     *
+     * Seeded at 4/4 for the same reason the tempo is seeded at 120 — it is what
+     * the code assumed silently in four separate files before the engine published
+     * anything, and the first frame after connecting should not be the one that
+     * divides by a zero denominator.
+     */
+    songTimeSigNum: 4, songTimeSigDen: 4,
     /** The patcher graph (SHM v14). One global graph today; the shape does not
      *  change when it becomes per-device. */
     patcherVersion: -1, patcherDevice: 0, patcherNodes: [], patcherEdges: [],
@@ -166,6 +209,12 @@ export function decode(buf, store) {
   store.loadOk = v.getUint32(112, true);
   store.tempoMilliBpm = v.getUint32(116, true) || 120000;
   store.tempoPointCount = v.getUint32(120, true);
+  // `|| 4` on both: the sidecar already defaults them, so a zero here means a
+  // frame from something older or a field mislaid, and 4/4 is the assumption the
+  // whole page made before v19 anyway. A zero denominator would divide by zero in
+  // every bar computation downstream of this line.
+  store.songTimeSigNum = v.getUint16(124, true) || 4;
+  store.songTimeSigDen = v.getUint16(126, true) || 4;
   const aggN = aggRows * aggTracks;
   const varBefore = harmonyCount * HARMONY_BYTES + nameCount * NAME_BYTES + nodeCount * PATCHER_NODE_BYTES
                   + edgeCount * PATCHER_EDGE_BYTES + mixCount * MIXER_BYTES;
@@ -301,7 +350,13 @@ export function decode(buf, store) {
     for (let i = 0; i < extentCount; i++, o += EXTENT_BYTES) {
       let e = store.extents[i];
       if (!e) e = store.extents[i] = { placementId: 0, clipId: 0, track: 0, flags: 0,
-                                        startTick: 0, endTick: 0, name: '', audio: false };
+                                        startTick: 0, endTick: 0, name: '', audio: false,
+                                        // The clip's own grid, or null when it publishes
+                                        // none. The record is owned by the extent and
+                                        // rewritten in place; `grid` points at it or at
+                                        // null, so a consumer can test one field.
+                                        _grid: { linesPerBeat: 0, numerator: 4, denominator: 4 },
+                                        grid: null };
       const pid = v.getUint32(o, true), cid = v.getUint32(o + 4, true);
       const tr = v.getUint32(o + 8, true), fl = v.getUint32(o + 12, true);
       const st = Number(v.getBigUint64(o + 16, true)), en = Number(v.getBigUint64(o + 24, true));
@@ -312,6 +367,10 @@ export function decode(buf, store) {
       // bit0: an audio region. It holds no note events, so the arrange view draws
       // it as a waveform slot rather than a lane of notes.
       e.audio = (fl & EXTENT_AUDIO) !== 0;
+      // The clip's own meter and row grid, unpacked from the same word. Null when
+      // the clip publishes none, which means "count it in the song's meter" and is
+      // a different claim from "it is in 4/4".
+      e.grid = unpackClipGrid(fl, e._grid);
       if (changed) {
         let s = '';
         for (let k = 0; k < 32; k++) { const c = v.getUint8(o + 32 + k); if (!c) break; s += String.fromCharCode(c); }

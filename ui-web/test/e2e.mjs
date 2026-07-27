@@ -15,12 +15,20 @@
 // and it asserts on what the engine actually says. It is not part of `npm test`
 // for that reason — it is `npm run e2e`.
 //
-// It uses webtest.uniproj (maximal with device_chain emptied). NOTE: the engine
-// currently loses its plugin host after roughly 38 UI commands and exits — see
-// tools/repro-hang.mjs and the report to backend. One run of this test sends
-// about 30, so the SECOND run usually starts against a dead engine. Restart the
-// stack between runs until that is fixed; the test says so rather than
-// cascading.
+// It uses webtest.uniproj (maximal with device_chain emptied).
+//
+// START THE STACK IMMEDIATELY BEFORE RUNNING THIS, and expect to restart it for
+// every run. That is not a defect: when the last websocket client goes away the
+// sidecar waits out a 12-second grace period and then sends Quit, and the engine
+// stops. Closing this test's browser starts that clock, so a second run more than
+// twelve seconds later finds nothing to talk to and reports "no engine".
+//
+// An earlier version of this comment blamed "the engine loses its plugin host
+// after roughly 38 UI commands and exits". That is not what was observed here: the
+// engine's last words are `UI: last client gone — engine shutting down`, which is
+// the deliberate path above, reached the moment it should be. Left recorded
+// because a wrong cause in a comment is worse than none — it sends the next reader
+// to tools/repro-hang.mjs and the plugin host when the answer is a timer.
 
 import { chromium } from 'playwright';
 import { rmSync } from 'node:fs';
@@ -1186,6 +1194,98 @@ if (stereo) {
   ok(mirrored, 'channel 1 is the exact negation of channel 0');
   ok(loud, 'and both reach full scale where a mono downmix would be silent');
 }
+
+section('song meter and per-clip grids');
+/**
+ * Two meters travel this wire and they are not the same quantity.
+ *
+ * The SONG's time signature is what bar NUMBERING counts in — the time gutter and
+ * the arrangement ruler. A CLIP's grid is what that rail runs internally, and a
+ * project may hold several at once. Before v19 the page had neither: 4/4 was
+ * hardcoded as the literal 3840000 in three model files and as the string '4/4' in
+ * the chrome, so a project in 7/8 was mislabelled in four independent ways and
+ * fixing three of them would have looked like a fix.
+ *
+ * `presets/projects/meter.uniproj.json` exists to separate the two: the song is in
+ * 7/8, and its three clips are in 7/8, 5/4 and 4/4 with three different row grids.
+ * A test that asserted only the song meter would pass against a build that
+ * published the song's meter for every clip; one that asserted only the clips
+ * would pass against a build with no song meter at all. Both, together, is the
+ * check — and the 4/4 clip is in there so that "publishes a grid" is distinguished
+ * from "publishes a grid that differs from the song".
+ */
+// Wait for THIS load to land, not for data that looks like it. The obvious
+// condition — "at least three rails" — was already true of the project loaded by
+// the section before, so every assertion below ran against the previous project
+// and reported 6 rails in 4/4. The load counter is the only thing that says the
+// load being waited for is the one that finished; loadProject() returning true
+// says the command went OUT, which is a different claim.
+const seqBefore = await page.evaluate(() => window.__uni.loadStatus().seq);
+const mLoaded = await page.evaluate(() => window.__uni.loadProject('meter'));
+ok(mLoaded !== false, `the meter project load went out: ${mLoaded}`);
+await page.waitForFunction(
+  (s) => { const l = window.__uni.loadStatus(); return l && l.seq > s && l.ok; },
+  seqBefore, { timeout: 8000 }).catch(() => {});
+// The load counter and the rails are published on the same cycle, but they are two
+// separate fields and nothing guarantees a frame carries both. Measured, the rails
+// were correct within 250ms of the counter moving; this is that with room.
+await page.waitForTimeout(400);
+const meters = await page.evaluate(() => window.__uni.meters());
+ok(meters !== null, 'the page has an engine to ask');
+if (meters) {
+  ok(meters.song.numerator === 7 && meters.song.denominator === 8,
+     'the song meter survived the whole chain',
+     `${meters.song.numerator}/${meters.song.denominator}`);
+  // Loading a project with FEWER tracks than the one already open leaves the
+  // surplus tracks' rails published, so the arrangement shows clips belonging to a
+  // project the user closed. Minimal repro, with nothing else in the session:
+  //
+  //   load meter    (3 tracks) -> 3 rails   t0:seven t1:five t2:four
+  //   load maximal  (8 tracks) -> 6 rails   t0:Bass ... t5:Perc
+  //   load meter    (3 tracks) -> 6 rails   t0:seven t1:five t2:four
+  //                                          t3:Arp  t4:Drums t5:Perc   <- stale
+  //
+  // The three that belong to this project are correct, which is why every other
+  // check in this section passes; the load replaces the tracks it defines and
+  // leaves the rest standing. Reported to backend.
+  blocked(meters.clips.length === 3, 'three rails',
+          'a load does not clear tracks beyond the new project\'s track count, so '
+          + 'the previous project\'s rails stay published (reported to backend)',
+          meters.clips.map((c) => `t${c.track}:${c.name || '(unnamed)'}#${c.clipId}`).join(' '));
+
+  const byName = {};
+  for (const c of meters.clips) byName[c.name] = c.grid;
+  const shape = (g) => (g ? `${g.numerator}/${g.denominator} lpb${g.linesPerBeat}` : 'none');
+
+  ok(byName.seven && byName.seven.numerator === 7 && byName.seven.denominator === 8
+       && byName.seven.linesPerBeat === 4,
+     'the 7/8 clip publishes its own grid', shape(byName.seven));
+  // The one that matters most: a clip whose meter is NOT the song's. Everything
+  // upstream could be publishing the song meter under a per-clip name and every
+  // other assertion here would still pass.
+  ok(byName.five && byName.five.numerator === 5 && byName.five.denominator === 4
+       && byName.five.linesPerBeat === 6,
+     'and a clip in a DIFFERENT meter from the song keeps it', shape(byName.five));
+  ok(byName.four && byName.four.numerator === 4 && byName.four.denominator === 4
+       && byName.four.linesPerBeat === 4,
+     'and a 4/4 clip publishes 4/4 rather than nothing', shape(byName.four));
+
+  // Three distinct grids on the wire at once. Stated as a set, because the three
+  // assertions above would all pass if the decoder returned the same record three
+  // times — the extents are POOLED and rewritten in place, which is exactly the
+  // shape that produces that bug.
+  const distinct = new Set(meters.clips.map((c) => shape(c.grid)));
+  ok(distinct.size === 3, 'three DISTINCT grids, not one record read three times',
+     [...distinct].join(', '));
+}
+
+// And the chrome says it, which is the half a user sees. Asserted on the property
+// rather than on the position of the field: which slot the meter occupies in the
+// chrome is layout, and a test that pins layout fails on every rearrangement.
+const chromeMeter = await page.evaluate(
+  () => [...document.querySelectorAll('.ch-meta')].map((n) => n.textContent));
+ok(chromeMeter.includes('7/8'),
+   'the chrome counts the song in 7/8', JSON.stringify(chromeMeter));
 
 section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));

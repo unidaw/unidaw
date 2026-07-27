@@ -35,6 +35,7 @@ import { buildChainModel, createChainBuffer, createParamEdits, findParamEdit,
          setParamEdit, dropParamEdit, reapParamEdits, MAX_PARAMS,
          EDIT_HOLD_MS } from '../src/chainmodel.js';
 import { createCommands, checkArgs, runCommand, parseHelpArgs } from '../src/dock.js';
+import { unpackClipGrid } from '../src/wire.js';
 
 test('lcmGrid finds a grid every lane lands on', () => {
   assert.equal(lcmGrid([4, 4, 4]), 4);
@@ -692,4 +693,59 @@ test('the row pool grows, is reused, and never mixes the two feeds', () => {
   fillRows(projects, ['p'], setProjectRow);
   assert.equal(projects[0].kind, KIND_PROJECT);
   assert.equal(pool[0].kind, KIND_PLUGIN);
+});
+
+/**
+ * The per-clip grid, unpacked from the flags word.
+ *
+ * `unpackClipGrid` mirrors `unpack_clip_grid` in ui/daw-bridge/src/layout.rs, and a
+ * decoder that mirrors another decoder is exactly the thing that drifts quietly:
+ * every wrong answer here is a plausible meter, so nothing downstream looks broken
+ * — a clip in 7/8 simply draws its bar lines in the wrong places.
+ *
+ * Packed here from the shift/mask constants rather than from magic numbers, so the
+ * test states the layout it believes in instead of hiding it in a literal.
+ */
+const packGrid = (lpb, num, denExp) => (lpb << 1) | (num << 6) | (denExp << 11);
+
+test('unpackClipGrid reads the grid a clip publishes', () => {
+  // The three the meter fixture carries, which is what the e2e asserts against.
+  assert.deepEqual(unpackClipGrid(packGrid(4, 7, 3)),
+                   { linesPerBeat: 4, numerator: 7, denominator: 8 }, '7/8 lpb4');
+  assert.deepEqual(unpackClipGrid(packGrid(6, 5, 2)),
+                   { linesPerBeat: 6, numerator: 5, denominator: 4 }, '5/4 lpb6');
+  assert.deepEqual(unpackClipGrid(packGrid(4, 4, 2)),
+                   { linesPerBeat: 4, numerator: 4, denominator: 4 }, '4/4 lpb4');
+});
+
+test('a clip that publishes no grid is not a clip in 4/4', () => {
+  // linesPerBeat 0 is the sentinel, and the distinction is load-bearing: "no grid"
+  // means COUNT ME IN THE SONG'S METER, which for a song in 7/8 is not 4/4. A
+  // decoder that returned a default record here would silently put every such clip
+  // in common time and look entirely reasonable doing it.
+  assert.equal(unpackClipGrid(0), null);
+  assert.equal(unpackClipGrid(1), null, 'the audio bit alone still means no grid');
+  assert.equal(unpackClipGrid(packGrid(0, 7, 3)), null,
+               'and a numerator without a lines-per-beat is still no grid');
+});
+
+test('unpackClipGrid ignores the bits that are not its own', () => {
+  // bit 0 is UI_CLIP_EXTENT_AUDIO and the high bits are unallocated. An audio clip
+  // has a grid like any other, so masking must not be sensitive to either.
+  const g = packGrid(4, 7, 3);
+  assert.deepEqual(unpackClipGrid(g | 1), unpackClipGrid(g), 'the audio bit');
+  assert.deepEqual(unpackClipGrid(g | 0xffffc000), unpackClipGrid(g), 'the spare bits');
+});
+
+test('unpackClipGrid writes into a caller-owned record', () => {
+  // It runs per rail per frame in the arrangement, so it must not allocate there
+  // (GUIDELINES 3.1). The record is the caller's and is rewritten in place.
+  const out = { linesPerBeat: 0, numerator: 0, denominator: 0 };
+  const got = unpackClipGrid(packGrid(6, 5, 2), out);
+  assert.equal(got, out, 'the same object comes back, not a copy');
+  assert.deepEqual(out, { linesPerBeat: 6, numerator: 5, denominator: 4 });
+  // Reused for a second clip: every field must be rewritten, or a clip that
+  // published a smaller grid inherits the previous one's numerator.
+  unpackClipGrid(packGrid(4, 4, 2), out);
+  assert.deepEqual(out, { linesPerBeat: 4, numerator: 4, denominator: 4 });
 });

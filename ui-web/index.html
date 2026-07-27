@@ -1663,10 +1663,29 @@ function currentKey() {
  * are argument lists that JavaScript makes you spell as a heap object, and the
  * callee reads them once.
  */
+/**
+ * The song's meter, as one record mutated in place rather than rebuilt.
+ *
+ * Every consumer compares meters with `sameMeter`, which compares the two NUMBERS
+ * and not the object identity — precisely so this record can be reused. A fresh
+ * object per frame would allocate in the draw path AND, for anything that had
+ * keyed a cache on identity, invalidate every bar label sixty times a second to
+ * arrive at the same string (GUIDELINES 2.1, from the other side).
+ */
+const _songMeter = { numerator: 4, denominator: 4 };
+function songMeter() {
+  // 4/4 without an engine: that is what the fixtures are in, and it is what the
+  // page assumed silently in four files before the engine published a meter at
+  // all. A zero denominator would divide by zero in every bar computation.
+  _songMeter.numerator = engine && engine.songTimeSigNum ? engine.songTimeSigNum : 4;
+  _songMeter.denominator = engine && engine.songTimeSigDen ? engine.songTimeSigDen : 4;
+  return _songMeter;
+}
+
 const _chromeOpts = { playheadTick: 0, transport: 0, linkText: '', octave: 0,
                       editStep: 0, velocity: 100, rejectText: '', viewName: '',
                       keyName: '', digitMode: '', tempoMilliBpm: 120000,
-                      tempoPointCount: 0 };
+                      tempoPointCount: 0, meter: null };
 function updateChrome() {
   const o = _chromeOpts;
   o.playheadTick = engine ? engine.playheadTick : 0;
@@ -1688,6 +1707,7 @@ function updateChrome() {
   // which would put "0.00 BPM" on screen for every golden and every headless run.
   o.tempoMilliBpm = engine && engine.tempoMilliBpm ? engine.tempoMilliBpm : 120000;
   o.tempoPointCount = engine ? engine.tempoPointCount : 0;
+  o.meter = songMeter();
   chrome.update(o);
 }
 
@@ -1826,7 +1846,7 @@ const _entryOverlay = { row: 0, track: 0, col: 0, text: '' };
 const _vmOpts = { startRow: 0, rowCount: 0, tracks: 0, columns: 3, zoomIndex: 2,
                   cursor: null, playheadRow: 0, selection: null, engine: null,
                   pending: null, pendingCount: 0, entryOverlay: null,
-                  badToken: null, harmony: null, nameHarmony: null };
+                  badToken: null, harmony: null, nameHarmony: null, meter: null };
 
 function draw() {
   if (helpHost.hidden === state.helpOpen) helpHost.hidden = !state.helpOpen;
@@ -1988,6 +2008,10 @@ function draw() {
   o.badToken = state.badToken;
   o.harmony = engine && state.useEngine !== false ? engine.harmony : null;
   o.nameHarmony = nameHarmony;
+  // Bar NUMBERING in the time gutter, which counts the SONG's bars. A clip in a
+  // different meter draws its own accents inside one of them; that grid comes off
+  // the clip, not off this.
+  o.meter = songMeter();
   const vm = bufs[bi] = buildViewModel(o, bufs[bi]);
   vm.scrollX = state.scrollX;
   updateChrome();
@@ -3305,6 +3329,24 @@ window.__uni = {
   saveProject: (name) => { const ok = conn && conn.saveProject(name);
                            if (ok) state.currentProject = name; return ok; },
   lpb: () => (engine ? Array.from(engine.lpb) : null),
+  /**
+   * The two meters, side by side, because confusing them is the whole hazard.
+   *
+   * `song` is what bar NUMBERING counts in — the time gutter and the arrangement
+   * ruler. `clips` is what each rail runs internally; a null grid there means the
+   * clip publishes none and is counted in the song's meter, which is a different
+   * claim from being in 4/4. A test that asserts on one of these without the other
+   * cannot tell a correct 7/8 song from a clip that happens to be in 7/8.
+   */
+  meters: () => (engine ? {
+    song: { numerator: engine.songTimeSigNum, denominator: engine.songTimeSigDen },
+    clips: engine.extents.slice(0, engine.extentCount).map((e) => ({
+      track: e.track, clipId: e.clipId, name: e.name,
+      grid: e.grid ? { linesPerBeat: e.grid.linesPerBeat,
+                       numerator: e.grid.numerator,
+                       denominator: e.grid.denominator } : null,
+    })),
+  } : null),
   names: () => (engine ? engine.names.slice() : null),
   harmony: () => (engine ? engine.harmony.slice() : null),
   key: () => currentKey(),

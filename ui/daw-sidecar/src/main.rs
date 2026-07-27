@@ -39,7 +39,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 12;
+const WIRE_VERSION: u16 = 13;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -53,7 +53,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 124;
+const FULL_HEADER_BYTES: usize = 128;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
 const NOTE_BYTES: usize = 40;
 
@@ -296,6 +296,17 @@ struct Frame {
     /// not, which are different claims.
     tempo_milli_bpm: u32,
     tempo_point_count: u32,
+    /// The SONG's time signature (kShmVersion 19). Bar NUMBERING is global — the
+    /// time gutter and the arrangement ruler count the song's bars — while a clip
+    /// may run an entirely different meter inside one of them. So this is not the
+    /// same quantity as the per-clip grid packed into `UiClipExtent.flags`, and
+    /// the two are not interchangeable: this is the one you count in.
+    ///
+    /// u16 apiece because a numerator of 5 does not need 32 bits and the header is
+    /// read by a DataView with hand-written offsets, where four spare bytes are
+    /// four more chances to mislay a field.
+    song_time_sig_num: u16,
+    song_time_sig_den: u16,
     /// The harmony timeline: (nanotick, root, scale_id) per key change. The
     /// chrome showed a hardcoded "C major" before this, which was wrong for
     /// three quarters of the maximal project.
@@ -370,7 +381,9 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&f.load_seq.to_le_bytes());                // 108
     out.extend_from_slice(&f.load_ok.to_le_bytes());                 // 112
     out.extend_from_slice(&f.tempo_milli_bpm.to_le_bytes());         // 116
-    out.extend_from_slice(&f.tempo_point_count.to_le_bytes());       // 120, to 124
+    out.extend_from_slice(&f.tempo_point_count.to_le_bytes());       // 120
+    out.extend_from_slice(&f.song_time_sig_num.to_le_bytes());       // 124
+    out.extend_from_slice(&f.song_time_sig_den.to_le_bytes());       // 126, to 128
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
     // variable section and nothing here noticed.
@@ -513,6 +526,14 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     // it.
     out.tempo_milli_bpm = snap.ui_tempo_milli_bpm;
     out.tempo_point_count = snap.ui_tempo_point_count;
+    // Clamped into the u16 the frame carries, and defaulted rather than zeroed: a
+    // denominator of 0 divides by zero in every bar computation downstream, and an
+    // engine that has not published a meter yet is the normal state during the
+    // first frames after a load, not an error worth propagating as one.
+    out.song_time_sig_num = if snap.ui_song_time_sig_num == 0 { 4 }
+                            else { snap.ui_song_time_sig_num.min(u16::MAX as u32) as u16 };
+    out.song_time_sig_den = if snap.ui_song_time_sig_den == 0 { 4 }
+                            else { snap.ui_song_time_sig_den.min(u16::MAX as u32) as u16 };
 
     // Keyed on the engine's own harmony version, which moves only on a change.
     if !out.harmony_ever_read || f_harmony_stale(out) {
@@ -2409,9 +2430,15 @@ fn main() {
         let mut probe = Vec::new();
         encode(&Frame::default(), &mut probe);
         if probe.len() != FULL_HEADER_BYTES {
-            eprintln!("sidecar: header is {} bytes, wire.js expects {FULL_HEADER_BYTES} — \
-                       the two have drifted and every field after the mismatch would be \
-                       misread. Fix encode() and HEADER_BYTES together.", probe.len());
+            // Says what it actually compared. The previous wording claimed to know
+            // what wire.js expects, which it does not — this is encode() against
+            // this file's own constant. `wire_js_agrees_about_the_header_and_the_
+            // version` is the one that reads the page's literals, and it runs long
+            // before anything gets this far.
+            eprintln!("sidecar: encode() wrote {} header bytes, FULL_HEADER_BYTES says \
+                       {FULL_HEADER_BYTES} — they have drifted, and every field after \
+                       the mismatch would be misread by the page. Fix encode() and the \
+                       constant together, then wire.js.", probe.len());
             std::process::exit(2);
         }
     }
@@ -3338,5 +3365,55 @@ mod tests {
     #[test]
     fn list_projects_survives_a_missing_directory() {
         assert_eq!(list_projects("/nope/definitely/not/here"), "{\"ok\":true,\"projects\":[]}");
+    }
+
+    /// The encoder writes exactly the header it claims to.
+    ///
+    /// `encode` asserts this itself, but only through `debug_assert`, which is
+    /// compiled out of the release build — the one where a two-byte drift silently
+    /// reinterprets every field after it. `main` re-checks at startup and refuses
+    /// to run, which is the right behaviour but arrives after someone has already
+    /// pushed. This is the same check at the time it is cheap to act on.
+    #[test]
+    fn the_header_is_the_length_it_says_it_is() {
+        let mut probe = Vec::new();
+        encode(&Frame::default(), &mut probe);
+        assert_eq!(probe.len(), FULL_HEADER_BYTES,
+                   "encode() and FULL_HEADER_BYTES disagree");
+    }
+
+    /// ...and the page agrees about both numbers.
+    ///
+    /// Every version of this file has carried a comment saying to change the two
+    /// sides together, and the startup check's message already claims to know what
+    /// "wire.js expects" while in fact comparing the Rust constant against itself.
+    /// A comment is not a check. This reads the actual literals out of wire.js, so
+    /// a header field added on one side only fails here rather than in a browser,
+    /// where the symptom is every subsequent field decoding as garbage — that has
+    /// happened twice and cost an afternoon each time.
+    ///
+    /// Parsed with a plain string search rather than a dependency: two constants
+    /// declared one way in one file do not justify a JS parser, and the test fails
+    /// loudly if the declaration it looks for is no longer there.
+    #[test]
+    fn wire_js_agrees_about_the_header_and_the_version() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui-web/src/wire.js");
+        let src = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+
+        fn literal(src: &str, decl: &str) -> usize {
+            let at = src.find(decl)
+                .unwrap_or_else(|| panic!("wire.js no longer declares `{decl}` — \
+                                           this test cannot see the value it guards"));
+            let rest = &src[at + decl.len()..];
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            digits.parse().unwrap_or_else(|_| panic!("`{decl}` is not followed by a number"))
+        }
+
+        assert_eq!(literal(&src, "const HEADER_BYTES = "), FULL_HEADER_BYTES,
+                   "wire.js HEADER_BYTES and the sidecar's FULL_HEADER_BYTES have drifted");
+        assert_eq!(literal(&src, "export const WIRE_VERSION = "), WIRE_VERSION as usize,
+                   "wire.js WIRE_VERSION and the sidecar's have drifted — the page will \
+                    reject every frame");
     }
 }
