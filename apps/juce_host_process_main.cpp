@@ -900,11 +900,21 @@ void runControlLoop(HostState& state) {
           daw::SetParamRequest request{};
           std::memcpy(&request, payload.data(), sizeof(request));
           std::lock_guard<std::mutex> lock(state.pluginsMutex);
-          if (request.pluginIndex < state.plugins.size() &&
-              state.plugins[request.pluginIndex].instance) {
+          // Log both no-op paths: the engine's forwarded=true only means "sent", so a
+          // drop here (bad index or a uid16 that does not resolve — e.g. a stale
+          // mapping after a plugin swap) would otherwise be invisible on both sides.
+          if (request.pluginIndex >= state.plugins.size() ||
+              !state.plugins[request.pluginIndex].instance) {
+            std::cerr << "Host: SetParam dropped - no plugin at index "
+                      << request.pluginIndex << " (have " << state.plugins.size()
+                      << ")" << std::endl;
+          } else {
             auto& slot = state.plugins[request.pluginIndex];
             const auto it = slot.paramIdByUid16.find(uid16Key(request.uid16));
-            if (it != slot.paramIdByUid16.end()) {
+            if (it == slot.paramIdByUid16.end()) {
+              std::cerr << "Host: SetParam dropped - uid16 not found on plugin "
+                        << request.pluginIndex << std::endl;
+            } else {
               slot.instance->setParameterValueNormalizedById(it->second,
                                                              request.normalized);
             }
@@ -1026,7 +1036,10 @@ void runControlLoop(HostState& state) {
             return s;
           };
           std::vector<daw::PluginRef> refs;
-          refs.reserve(header.count);
+          // header.count is off the wire; the loop is already bounded by blockBytes,
+          // but reserve() would honour a bogus huge count and blow up. Each entry is
+          // at least two NULs, so blockBytes/2 caps the real count.
+          refs.reserve(std::min<size_t>(header.count, blockBytes / 2 + 1));
           size_t offset = 0;
           for (uint32_t i = 0; i < header.count && offset < blockBytes; ++i) {
             daw::PluginRef ref;

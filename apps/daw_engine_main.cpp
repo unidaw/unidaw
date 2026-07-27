@@ -5555,6 +5555,14 @@ struct TrackRuntime {
           if (!replaced) {
             loadedTempoMap.push_back({pos, bpm});
           }
+          // Keep the retained map sorted by position so a save re-emits an ordered
+          // tempo_map (the provider sorts its own copy, but loadedTempoMap is what
+          // SaveProject writes out).
+          std::sort(loadedTempoMap.begin(), loadedTempoMap.end(),
+                    [](const daw::ProjectTempoPoint& a,
+                       const daw::ProjectTempoPoint& b) {
+                      return a.nanotick < b.nanotick;
+                    });
         }
         std::vector<daw::TempoPoint> pts;
         pts.reserve(loadedTempoMap.size());
@@ -5589,6 +5597,13 @@ struct TrackRuntime {
         for (const auto& d : runtime->track.chain.devices) {
           if (d.kind != daw::DeviceKind::VstInstrument &&
               d.kind != daw::DeviceKind::VstEffect) {
+            continue;
+          }
+          // Count only devices that resolve to a host plugin. rebuildHostForChain
+          // omits a path-unresolvable device from the SetChain it sends, so the host's
+          // plugin vector is compacted; counting it here would shift every later
+          // device's index and route the write to the wrong plugin (or off the end).
+          if (!resolveDevicePluginPath(*runtime, d.hostSlotIndex)) {
             continue;
           }
           if (d.id == sp.deviceId) {
@@ -5646,6 +5661,12 @@ struct TrackRuntime {
         for (const auto& d : runtime->track.chain.devices) {
           if (d.kind != daw::DeviceKind::VstInstrument &&
               d.kind != daw::DeviceKind::VstEffect) {
+            continue;
+          }
+          // Skip a device that does not resolve to a host plugin, matching the host's
+          // compacted plugin vector (rebuildHostForChain omits it from SetChain);
+          // otherwise the read-back reports a shifted / wrong plugin's params.
+          if (!resolveDevicePluginPath(*runtime, d.hostSlotIndex)) {
             continue;
           }
           if (d.id == deviceId) {
