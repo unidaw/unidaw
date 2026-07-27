@@ -1448,7 +1448,9 @@ struct TrackRuntime {
   std::unique_ptr<daw::IRuntime> audioRuntime;
   std::unique_ptr<EngineAudioCallback> audioCallback;
 
-  daw::StaticTempoProvider tempoProvider(120.0);
+  // Settable so a loaded project's tempo actually takes effect — a StaticTempoProvider
+  // here made the engine play every project at 120 regardless of its tempo_map.
+  daw::SettableTempoProvider tempoProvider(120.0);
   daw::NanotickConverter tickConverter(
       tempoProvider, static_cast<uint32_t>(engineConfig.sampleRate));
   const uint64_t ticksPerBeat = daw::NanotickConverter::kNanoticksPerQuarter;
@@ -3496,6 +3498,12 @@ struct TrackRuntime {
       // whole vector, and the UI-publish and audio threads read it concurrently.
       std::lock_guard<std::mutex> lock(harmonyMutex);
       harmonyEvents = document.harmonyTimeline;
+    }
+    // Adopt the project's tempo. Without this the engine kept its startup 120 and
+    // ignored tempo_map entirely (a slower project then played too fast). We honour
+    // the initial point; per-position tempo automation is a later feature.
+    if (!document.tempoMap.empty()) {
+      tempoProvider.setBpm(document.tempoMap.front().bpm);
     }
     // Retain the project's clip definitions so a save can re-emit the ones a
     // clean track still references, keeping the arrangement's structure across a
@@ -5902,8 +5910,6 @@ struct TrackRuntime {
     uint32_t lastPlaybackBlock = 0;
     auto lastPlaybackAdvance = std::chrono::steady_clock::now();
     const auto playbackStallLimit = std::chrono::milliseconds(100);
-    bool aheadStalling = false;
-    auto aheadStallStart = std::chrono::steady_clock::now();
     auto stallNowMs = [&]() -> uint64_t {
       return static_cast<uint64_t>(
           std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -6094,31 +6100,29 @@ struct TrackRuntime {
         lastPlaybackAdvance = playbackNow;
       }
       bool throttlePlayback = false;
-      if (currentPlayback > 0) {  // Only throttle once playback has started
+      if (currentPlayback > 0) {  // Only pace once device playback has started
         const uint32_t nextId = nextBlockId.load(std::memory_order_relaxed);
-        if (currentPlayback <= nextId) {
-          const uint32_t aheadOfPlayback = nextId - currentPlayback;
-          if (aheadOfPlayback > 10) {
-            if (!aheadStalling) {
-              aheadStalling = true;
-              aheadStallStart = playbackNow;
-            }
-            if (playbackNow - aheadStallStart < playbackStallLimit) {
-              if (isPlaying) {
-                logStall("ahead", nextId, minCompleted, currentPlayback, aheadOfPlayback);
-              }
-              std::this_thread::sleep_for(std::chrono::milliseconds(1));
-              continue;
-            }
-          } else {
-            aheadStalling = false;
+        // Pace production to the AUDIO DEVICE, not to how fast the hosts can
+        // render. The transport advances once per produced block (transportNanotick
+        // at :8369), so if production outruns playback the whole song speeds up —
+        // it ran ~4.5x too fast. The block ring is numBlocks deep, so the producer
+        // must not get numBlocks ahead of the block the device is actually playing
+        // or it overwrites a slot the callback still needs. HARD gate: wait until
+        // the device drains one. (The old code allowed being 10 ahead — impossible
+        // to honour with a 4-deep ring — only under a 100ms latch, and the audio
+        // callback's catch-up kept currentPlayback glued to nextId so it never even
+        // reached 10. That is why the brake never engaged.)
+        if (currentPlayback <= nextId &&
+            nextId - currentPlayback >= engineConfig.numBlocks) {
+          if (isPlaying) {
+            logStall("ahead", nextId, minCompleted, currentPlayback,
+                     nextId - currentPlayback);
           }
-        } else {
-          aheadStalling = false;
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+          continue;
         }
       } else {
         throttlePlayback = true;
-        aheadStalling = false;
       }
 
       const uint32_t blockId = nextBlockId.fetch_add(1);
@@ -7955,8 +7959,8 @@ struct TrackRuntime {
         transportEntry.type = static_cast<uint16_t>(daw::EventType::Transport);
         transportEntry.size = sizeof(daw::TransportPayload);
         daw::TransportPayload transportPayload;
-        transportPayload.tempoBpm = 120.0;
-        transportPayload.timeSigNum = 4;
+        transportPayload.tempoBpm = tempoProvider.bpmAtNanotick(0);
+        transportPayload.timeSigNum = 4;  // TODO: time signature is not yet modelled
         transportPayload.timeSigDen = 4;
         transportPayload.playState = isPlaying ? 1 : 0;
         std::memcpy(transportEntry.payload, &transportPayload, sizeof(transportPayload));

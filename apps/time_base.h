@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <cmath>
 
@@ -19,6 +20,30 @@ class StaticTempoProvider final : public ITempoProvider {
 
  private:
   double bpm_ = 120.0;
+};
+
+// A single-tempo provider whose bpm can be updated after construction. The engine
+// creates one at startup (before any project is loaded) and updates it from the
+// project's tempo_map on load — without this the engine played every project at a
+// hardcoded 120 regardless of its tempo. setBpm is called off the audio thread
+// (project load); bpmAtNanotick is read on the audio/producer thread, so the value
+// is atomic. Ignores non-positive bpm, which would divide-by-zero the tick math.
+class SettableTempoProvider final : public ITempoProvider {
+ public:
+  explicit SettableTempoProvider(double bpm) : bpm_(bpm) {}
+
+  double bpmAtNanotick(uint64_t /*nanotick*/) const override {
+    return bpm_.load(std::memory_order_acquire);
+  }
+
+  void setBpm(double bpm) {
+    if (bpm > 0.0) {
+      bpm_.store(bpm, std::memory_order_release);
+    }
+  }
+
+ private:
+  std::atomic<double> bpm_;
 };
 
 class NanotickConverter {
