@@ -35,7 +35,7 @@ export function noEngine() {
 }
 
 export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.0.0.1:8175',
-                                onChange, onStatus, onAck, onEngineEvent, onChains } = {}) {
+                                onChange, onStatus, onAck, onEngineEvent, onChains, onScales } = {}) {
   const store = createStore();
   let ws = null;
   let closed = false;
@@ -62,6 +62,12 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
         // channel, as before. Parse alone in the try; act outside it.
         let parsed = null;
         try { parsed = JSON.parse(ev.data); } catch (err) { /* not JSON: raw */ }
+        // The scale registry. Written once by the engine at startup, so it
+        // arrives once per connection and never changes under us.
+        if (parsed && Array.isArray(parsed.scales)) {
+          onScales && onScales(parsed.scales);
+          return;
+        }
         // Per-track device chains, accumulated by the sidecar from the engine's
         // ChainSnapshot diffs. State, not news — a fresh tab is told all of it.
         if (parsed && Array.isArray(parsed.chains)) {

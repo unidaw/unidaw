@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="src/help.css">
 <link rel="stylesheet" href="src/patcher.css">
 <link rel="stylesheet" href="src/chain.css">
+<link rel="stylesheet" href="src/harmony.css">
 <link rel="stylesheet" href="src/palette.css">
 <link rel="stylesheet" href="src/shell.css">
 <style>
@@ -53,6 +54,8 @@ import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
 import M from './design/out/tokens.js';
 import { connectEngine, noEngine } from './src/engine.js';
 import { Chain } from './src/chain.js';
+import { Harmony } from './src/harmony.js';
+import { buildHarmonyModel, createHarmonyBuffer } from './src/harmonymodel.js';
 import { Palette } from './src/palette.js';
 import { buildChainModel, createChainBuffer } from './src/chainmodel.js';
 import { createChrome } from './src/chrome.js';
@@ -386,6 +389,10 @@ function measureRoom() {
 }
 addEventListener('resize', () => { measureRoom(); schedule(); });
 
+const harmonyHost = document.getElementById('harmony');
+const harmonyCard = new Harmony(harmonyHost, {});
+const harmonyBuf = createHarmonyBuffer();
+
 const chainHost = document.getElementById('chain');
 const chain = new Chain(chainHost, {
   onSelect: (pos) => { state.chainSelected = pos; schedule(); },
@@ -404,6 +411,8 @@ const chainBuf = createChainBuffer();
  */
 let chains = Object.create(null);
 let chainRev = -1;
+/** The engine's scale registry: [{id, name, octaveCents, stepCents[]}]. */
+let scales = null;
 
 const dockHost = document.getElementById('dock');
 const rdockHost = document.getElementById('rdock');
@@ -1146,6 +1155,13 @@ function draw() {
   }
   if (palette.opened) palette.render();
   drawCrumb();
+  if (showDock) harmonyCard.render(buildHarmonyModel({
+    harmony: engine && state.useEngine !== false ? engine.harmony : null,
+    playheadTick: engine ? engine.playheadTick : 0,
+    version: engine ? engine.harmonyVersion : -1,
+    nameHarmony,
+    scales,
+  }, harmonyBuf));
   if (showChain) chain.render(buildChainModel({
     track: state.cursor.track,
     chains,
@@ -1956,6 +1972,15 @@ conn = WANTS_ENGINE ? connectEngine({
    * accepted — the command was sent, the ack said ok, and the read-back simply
    * did not change.
    */
+  /**
+   * The engine's scale registry (SHM v16). Static, so this arrives once.
+   *
+   * Until it did, the tuning half of the harmony card said the wire carried no
+   * cents — true when it was written and false twenty minutes later. A panel
+   * that states what is missing has to stop saying it the moment it arrives, or
+   * it becomes the most confidently wrong thing on the screen.
+   */
+  onScales: (list) => { scales = list; schedule(); },
   onChains: (list, rev) => {
     if (rev === chainRev) return;
     chainRev = rev;
@@ -2230,6 +2255,8 @@ window.__uni = {
   pianoProbe: () => piano.probe(),
   patcherProbe: () => patcher.probe(),
   chainProbe: () => chain.probe(),
+  harmonyProbe: () => harmonyCard.probe(),
+  scales: () => scales,
   paletteProbe: () => palette.probe(),
   paletteMove: (d) => { palette.move(d); draw(); return palette.probe().selected; },
   chainSelect: (pos) => { state.chainSelected = pos; draw(); return state.chainSelected; },

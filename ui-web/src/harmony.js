@@ -58,6 +58,11 @@ export class Harmony {
 
     const body = div('hm-body', host);
     this.body = body;
+    // The cents ladder. Pooled like every other list here — the row count is
+    // small but it changes with the scale, and creating rows per change is the
+    // habit that becomes a leak somewhere it matters.
+    this.ladder = null;
+    this.degPool = [];
 
     const key = div('hm-key', body);
     this.name = text(div('hm-name', key));
@@ -115,6 +120,25 @@ export class Harmony {
     return this.pool;
   }
 
+  /** One ladder row per degree, reused. */
+  _deg(n) {
+    if (!this.ladder) {
+      this.ladder = div('hm-ladder', this.body);
+      this.ladderHead = text(div('hm-ladder-head', this.ladder));
+    }
+    while (this.degPool.length < n) {
+      const row = div('hm-deg', this.ladder);
+      const idx = div('hm-deg-i', row); idx.appendChild(document.createTextNode(''));
+      const barWrap = div('hm-deg-bar', row);
+      const bar = div('hm-deg-fill', barWrap);
+      const c = div('hm-deg-c', row); c.appendChild(document.createTextNode(''));
+      row._i = idx.firstChild; row._bar = bar; row._c = c.firstChild;
+      row._iv = null; row._w = null; row._cv = null;
+      this.degPool.push(row);
+    }
+    return this.degPool;
+  }
+
   render(vm) {
     this.vm = vm;
     if (this._open !== vm.open) {
@@ -128,6 +152,32 @@ export class Harmony {
       this.chipEl.title = vm.tuningNotice;
     }
     if (this._tune !== vm.tuningNotice) { this._tune = vm.tuningNotice; this.tuneText.nodeValue = vm.tuningNotice; }
+    // The ladder: the design's degree table, real since SHM v16.
+    const degPool = this._deg(vm.degreeCount || 0);
+    const head = vm.degreeCount
+      ? vm.scaleName + ' · ' + vm.degreeCount + ' degrees · ' + Math.round(vm.octaveCents) + '¢ octave'
+      : '';
+    if (this._lh !== head) { this._lh = head; this.ladderHead.nodeValue = head; }
+    if (this.ladder) {
+      const show = vm.degreeCount > 0 ? '' : 'none';
+      if (this.ladder.style.display !== show) this.ladder.style.display = show;
+    }
+    for (let i = 0; i < degPool.length; i++) {
+      const row = degPool[i];
+      const on = i < vm.degreeCount;
+      const disp = on ? '' : 'none';
+      if (row.style.display !== disp) row.style.display = disp;
+      if (!on) continue;
+      const d = vm.degrees[i];
+      if (row._iv !== d.name) { row._iv = d.name; row._i.nodeValue = d.name; }
+      const w = Math.round(d.frac * 100);
+      if (row._w !== w) { row._w = w; row._bar.style.width = w + '%'; }
+      // The offset from equal temperament is what says "this is microtonal", so
+      // it is shown when it is not zero and omitted when it is — a column of
+      // "+0.0" teaches nothing.
+      const ct = Math.round(d.cents) + '¢' + (d.offset ? ' ' + (d.offset > 0 ? '+' : '') + d.offset : '');
+      if (row._cv !== ct) { row._cv = ct; row._c.nodeValue = ct; }
+    }
     if (this._key !== vm.key) { this._key = vm.key; this.name.nodeValue = vm.key; }
     if (this._since !== vm.since) { this._since = vm.since; this.since.nodeValue = vm.since; }
     if (this._ver !== vm.versionText) { this._ver = vm.versionText; this.version.nodeValue = vm.versionText; }
@@ -191,6 +241,9 @@ export class Harmony {
       // `authoritative: false` was until the read-back landed.
       tuning: vm.tuning,
       tuningKnown: vm.tuningKnown,
+      scaleName: vm.scaleName,
+      degrees: vm.degreeCount,
+      cents: vm.degrees.slice(0, vm.degreeCount).map((d) => d.cents),
       tuningNotice: vm.tuningNotice,
       rowFirst: vm.rowFirst,
       rows: vm.rows.slice(0, vm.rowCount).map((r) => ({

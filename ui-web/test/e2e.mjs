@@ -372,6 +372,26 @@ const tuning = await page.evaluate(() =>
   (document.querySelector('.tk-hb .tk-hb-sub') || {}).textContent || '');
 ok(tuning === '12-TET', 'and states the tuning it is assuming', tuning);
 
+section('harmony + tuning card');
+const card = await page.evaluate(() => window.__uni.harmonyProbe());
+ok(card.key && card.count > 1, 'the card names the field at the playhead',
+   `${card.key}, ${card.count} events`);
+// The cents ladder is real as of SHM v16: the engine publishes each scale's
+// per-degree cents in MILLI-cents, so these are exact rather than a float that
+// nearly represents 386.31.
+ok(card.tuningKnown && card.degrees > 0,
+   'and draws the degree ladder from the engine’s scale registry',
+   `${card.scaleName}: ${card.cents.join(',')}`);
+ok(card.cents.length === card.degrees && card.cents[0] === 0,
+   'the ladder starts at the root and has one row per degree', String(card.degrees));
+// What it still cannot do, said out loud. The registry is a fixed built-in list;
+// there is no command to select or edit a tuning, so the TET chip is a readout.
+ok(/read-only/.test(card.tuningNotice),
+   'and says the tuning is a readout, not a control', card.tuningNotice);
+const registry = await page.evaluate(() => window.__uni.scales());
+ok(Array.isArray(registry) && registry.length > 0,
+   'the registry itself reached the client', `${registry.length} scales`);
+
 section('patcher editing');
 await page.evaluate(() => window.__uni.view('patcher'));
 await frames();

@@ -1163,6 +1163,15 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
     // Start at the newest, so a client that connects late is not handed a
     // backlog of errors from before it existed and told they are its own.
     let mut event_cursor = events.since(0).1;
+
+    /// The scale registry, sent ONCE per client.
+    ///
+    /// The engine writes it at startup and never again, so it is state a client
+    /// needs on arrival rather than news it could miss — no cursor, no version,
+    /// no polling. Sent after the first successful read rather than before, so a
+    /// client that connects while the engine is absent still gets it when the
+    /// engine appears.
+    let mut scales_sent = false;
     // Chains start at zero, deliberately unlike the events above: a chain is
     // STATE, not news. A tab that connects after the last device edit still has
     // to be told what the chains are, and the store is the only place that
@@ -1257,6 +1266,21 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
             // moment later showing 'disconnected'. Only a genuine error closes.
             if ws.send(tungstenite::Message::Binary(buf.clone())).is_err() { break; }
             sent += 1;
+        }
+
+        if !scales_sent {
+            let scales = handle.read_scales();
+            if !scales.is_empty() {
+                let body: Vec<String> = scales.iter().map(|s| format!(
+                    "{{\"id\":{},\"name\":\"{}\",\"octaveCents\":{},\"stepCents\":[{}]}}",
+                    s.id,
+                    s.name.replace('"', "'"),
+                    s.octave_cents,
+                    s.step_cents.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","))).collect();
+                let msg = format!("{{\"scales\":[{}]}}", body.join(","));
+                if ws.send(tungstenite::Message::Text(msg)).is_err() { break; }
+                scales_sent = true;
+            }
         }
 
         // Engine-originated messages, on the same socket as the frames but as

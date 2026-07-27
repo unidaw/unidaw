@@ -1,43 +1,157 @@
-/* Browser rail. Overlays whichever surface is showing. */
+/* Browser rail. Sized by the shell (#browser is --shell-rail-w wide); this file
+   only lays out what is inside it. Values come from tokens.css — nothing here
+   invents a colour or a type size the design system already names. */
 
 .br {
-  position: absolute; left: 0; top: 0; bottom: 0;
-  width: 240px;
+  position: absolute; inset: 0;
   display: flex; flex-direction: column;
-  background: var(--uni-surface-header-bg);
-  border-right: 1px solid var(--uni-rule-track);
+  overflow: hidden;
+  /* Same reason as the tracker's grid (GUIDELINES 3.5): the rail redraws with
+     the app, and a list that can invalidate layout outside itself makes every
+     other surface pay for a filter keystroke. */
+  contain: strict;
   font-family: var(--font-mono);
   font-size: var(--font-size-fx);
   letter-spacing: var(--font-tracking-fx);
-  z-index: 6;
 }
+
+/* --- header ------------------------------------------------------------- */
 
 .br-head {
   flex: 0 0 auto;
   display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 10px;
+  padding: 9px 10px;
   border-bottom: 1px solid var(--uni-rule-gutter);
-  color: var(--uni-text-gutter);
 }
-.br-count { color: var(--uni-text-instrument); }
+.br-title { color: var(--base-accent); font-size: var(--font-size-inst); }
+/* The keystroke is true whether or not a handler exists, so it is always drawn.
+   The ✕ and the pointer only appear with `.on`, which browser.js adds when the
+   host wired onClose — see the note there about controls that do nothing. */
+.br-close {
+  color: var(--uni-text-gutter);
+  font-size: var(--font-size-inst);
+  letter-spacing: normal;
+}
+.br-close.on { cursor: pointer; }
+.br-close.on:hover { color: var(--base-accent-ramp-300); }
 
-.br-list { flex: 1 1 auto; overflow-y: auto; padding: 4px 0; }
+/* --- search ------------------------------------------------------------- */
+
+.br-search {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--uni-rule-column);
+}
+/* Find mode. The rail's keys go to the query while this is lit, so it has to be
+   visible without hovering — the native caret is not enough, because the field
+   is a display and the platform is not the thing inserting into it. */
+.br-search.on {
+  background: var(--uni-surface-selection);
+  box-shadow: inset 2px 0 0 var(--base-accent);
+}
+.br-search.on .br-glass { color: var(--base-accent); }
+.br-glass { color: var(--uni-text-instrument); font-size: var(--font-size-cell); }
+.br-input {
+  flex: 1 1 auto; min-width: 0;
+  background: transparent; border: 0; outline: 0;
+  color: var(--base-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-cell);
+}
+.br-input::placeholder { color: var(--uni-text-empty); }
+
+/* --- category chips ----------------------------------------------------- */
+
+.br-chips {
+  flex: 0 0 auto;
+  display: flex; flex-wrap: wrap; gap: 3px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--uni-rule-column);
+}
+.br-chip {
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: var(--base-surface);
+  color: var(--uni-text-instrument);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  cursor: pointer;
+}
+.br-chip:hover { color: var(--base-neutral-400); }
+.br-chip.on {
+  background: var(--uni-surface-cursor-cell);
+  border-color: var(--base-accent-ramp-700);
+  color: var(--base-accent-ramp-300);
+}
+/* A category with no feed behind it. Hollow and dashed rather than merely dim:
+   a solid edge reads as a button that happens to be quiet, and the whole point
+   is that these are not buttons yet. The <button> is also `disabled`, so this
+   is the appearance of a refusal the platform is already enforcing. */
+.br-chip.off {
+  background: transparent;
+  border: 1px dashed var(--uni-rule-track);
+  color: var(--uni-text-empty);
+  cursor: default;
+}
+.br-chip.off:hover { color: var(--uni-text-empty); }
+
+/* --- list --------------------------------------------------------------- */
+
+.br-list {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; overflow-x: hidden;
+  padding: 4px 5px;
+}
 
 .br-item {
-  padding: 5px 10px;
-  color: var(--base-text);
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 5px;
+  border-radius: 3px;
+  border: 1px solid transparent;
   cursor: pointer;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .br-item:hover { background: var(--uni-surface-row-alt); }
-.br-item.sel { background: var(--uni-surface-cursor-cell); }
-/* The one that is actually loaded, which is not necessarily the highlighted one. */
-.br-item.cur { color: var(--base-accent); }
-.br-item.cur::before { content: '\25B8 '; }
-
-.br-empty {
-  padding: 10px; color: var(--uni-text-gutter);
+/* The highlighted row: the design's tinted panel plus a ring, so it survives on
+   top of the hover wash. */
+.br-item.sel {
+  background: var(--uni-surface-cursor-cell);
+  border-color: var(--uni-clip-rail);
 }
+
+.br-kind {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border: 1px solid var(--uni-clip-rail);
+  border-radius: 2px;
+  color: var(--base-accent);
+  font-size: var(--font-size-fx);
+}
+
+.br-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.br-name {
+  color: var(--uni-text-note);
+  font-size: var(--font-size-gutter);
+  letter-spacing: var(--font-tracking-gutter);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.br-meta {
+  color: var(--uni-text-gutter);
+  font-size: var(--font-size-fx);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* The trailing slot is the design's star. There are no favourites on the wire,
+   so it carries the one per-row fact this side has instead: which project is
+   actually loaded, which is NOT the same as the highlighted one. */
+.br-mark { flex: 0 0 10px; text-align: center; color: var(--base-accent); }
+.br-item.cur .br-name { color: var(--base-accent-ramp-300); }
+
+.br-empty { padding: 10px; color: var(--uni-text-gutter); }
+
+/* --- save-as ------------------------------------------------------------ */
 
 .br-save {
   flex: 0 0 auto;
@@ -48,11 +162,32 @@
 }
 .br-save.on { display: flex; }
 .br-saveprompt { color: var(--uni-text-gutter); }
-.br-savename { color: var(--base-text); }
+.br-savename { color: var(--base-text); font-size: var(--font-size-gutter); }
+
+/* --- footer ------------------------------------------------------------- */
 
 .br-foot {
   flex: 0 0 auto;
-  padding: 6px 10px;
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 7px 10px;
   border-top: 1px solid var(--uni-rule-gutter);
-  color: var(--uni-text-gutter);
 }
+.br-scan {
+  display: flex; align-items: center; justify-content: space-between;
+  color: var(--uni-text-gutter);
+  font-size: var(--font-size-inst);
+  letter-spacing: normal;
+}
+.br-rescan { color: var(--base-accent-ramp-600); }
+.br-rescan.on { cursor: pointer; }
+.br-rescan.on:hover { color: var(--base-accent-ramp-300); }
+/* The standing caveat: dim, wrapped, and permanently on screen. It is the same
+   job the mixer's "faders show local values only" line did — it goes away when
+   the feeds it describes arrive, and not before. */
+.br-note {
+  color: var(--uni-text-empty);
+  font-size: var(--font-size-fx);
+  letter-spacing: normal;
+  line-height: 1.45;
+}
+.br-hint { color: var(--uni-text-gutter); }

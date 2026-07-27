@@ -150,3 +150,24 @@
   line-height: 1.5;
   color: var(--base-neutral-600);
 }
+
+/* The cents ladder: one row per degree of the field in force. Real data since
+   SHM v16 — the engine publishes per-degree cents in milli-cents, so these are
+   exact rather than a float that nearly represents 386.31. */
+.hm-ladder { margin-top: 8px; }
+.hm-ladder-head {
+  color: var(--base-neutral-600);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  padding-bottom: 4px;
+}
+.hm-deg {
+  display: flex; align-items: center; gap: 8px;
+  height: 15px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+}
+.hm-deg-i { flex: 0 0 14px; color: var(--uni-text-gutter); text-align: right; }
+.hm-deg-bar { flex: 1 1 auto; height: 3px; background: var(--uni-rule-column); border-radius: 2px; }
+.hm-deg-fill { height: 100%; background: var(--base-accent); border-radius: 2px; }
+.hm-deg-c { flex: 0 0 66px; color: var(--base-accent-ramp-300); text-align: right; }

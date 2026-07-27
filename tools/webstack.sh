@@ -16,18 +16,31 @@ set -euo pipefail
 
 WEB=/Users/jak/src/daw-web
 SHARED=/Users/jak/src/daw
-# The SHARED build, by preference. It is the backend agent's tree, so this can
-# put us on an SHM version ahead of the daw-bridge this branch is pinned to —
-# which happened, at v13 against v12. That risk is accepted because the attach
-# check below catches it immediately and loudly, and because the alternative is
-# worse: an engine built in this worktree loses its plugin host a few seconds in
-# ("Failed to receive control header") and exits, every time, while the same
-# source built in the shared tree runs indefinitely. I have not found why; the
-# host binaries behave identically when run alone.
+# THIS checkout's own build. It used to be the other agent's, on the belief that
+# "an engine built in this worktree loses its plugin host a few seconds in
+# ('Failed to receive control header') and exits, every time". That belief was
+# wrong twice over, and it cost us a shared build directory and a tangled tree:
 #
-# Set ENGINE=... to override, e.g. to test this worktree's own build.
-ENGINE=${ENGINE:-$SHARED/build/daw_engine}
-HOST=${HOST:-$SHARED/build/juce_host_process}
+#  - "Failed to receive control header" is not a failure signature. The host
+#    prints it whenever recvHeader() returns false, which includes the clean EOF
+#    it gets when the engine closes the socket. It is the host's normal epitaph
+#    on every orderly shutdown, so it is the last line of a healthy log too.
+#  - The real difference between the trees was the WORKING DIRECTORY, not the
+#    build. Default-plugin discovery is cwd-relative and probed only the flat
+#    `identity_plugin_artefacts/VST3/` layout, which JUCE stopped emitting long
+#    ago and which survives solely as a leftover in older build dirs. A fresh
+#    checkout therefore came up with "plugin paths=0" — silently, with no plugin
+#    at all. Fixed in apps/daw_engine_main.cpp, which now probes the
+#    per-configuration subdirectory as well.
+#
+# The failure does not reproduce: this build, driven for 90s with a project
+# loaded, 25 note writes and the transport running, kept its engine and all six
+# hosts. The historic sighting was almost certainly the four-engines-on-one-
+# segment race that the lock below now prevents.
+#
+# Set ENGINE=... to override, e.g. to run against the other checkout's build.
+ENGINE=${ENGINE:-$WEB/build/daw_engine}
+HOST=${HOST:-$WEB/build/juce_host_process}
 RUNDIR=$(dirname "$ENGINE")
 SHM=${SHM:-/daw_web_ui}
 PROJECTS=$WEB/presets/projects
@@ -39,8 +52,16 @@ say() { printf '  %s\n' "$*"; }
 # agent runs `daw_engine --run-seconds N` against its own shm constantly; killing
 # by process name would shoot down its test runs, and refusing to start because
 # one is up would block on something that is none of our business.
-PIDFILE=/tmp/uni-web-stack.pids
-LOCK=/tmp/uni-web-stack.lock
+# Scoped by SEGMENT, so a second stack on a different shm can run beside the
+# first instead of evicting it. They were global, which meant the only way to
+# test an alternative engine was to take the working one down — and that is
+# exactly the experiment worth running most often.
+SEG=$(printf '%s' "$SHM" | tr -c 'A-Za-z0-9' '_')
+PIDFILE=/tmp/uni-web-stack$SEG.pids
+LOCK=/tmp/uni-web-stack$SEG.lock
+# Sidecar ports follow the page port, so one override moves the whole stack.
+WS_STATE=${WS_STATE:-$((PORT + 1))}
+WS_CMD=${WS_CMD:-$((PORT + 2))}
 
 alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 
@@ -103,7 +124,7 @@ rm -f "$PIDFILE"
 # Also clear anything holding OUR ports. A sidecar started by hand is not in the
 # pidfile, and "Address already in use" three steps later is a much worse way to
 # find out about it than here.
-for port in 8174 8175; do
+for port in $WS_STATE $WS_CMD; do
   for pid in $(lsof -nP -iTCP:$port -sTCP:LISTEN -t 2>/dev/null || true); do
     kill "$pid" 2>/dev/null || true
   done
@@ -112,7 +133,9 @@ done
 # an engine dies — but the backend agent's engines spawn hosts too, and a global
 # pkill would shoot down their test runs. That is the same cross-agent hazard the
 # engine kill above is scoped to avoid; leaving a few orphans is the cheaper
-# mistake. They are harmless: an orphan holds a socket nobody connects to.
+# mistake. They are harmless: HostController::launch() unlinks the socket path
+# before it binds, so a leftover file cannot route a new engine into an old
+# host — checked in host_controller.cpp rather than assumed.
 sleep 1
 
 [ -x "$ENGINE" ] || { say "no engine at $ENGINE — run: cmake --build build --target daw_engine"; exit 1; }
@@ -130,14 +153,14 @@ sleep 1
 : > "$PIDFILE"
 
 ( cd "$RUNDIR" && DAW_UI_SHM_NAME=$SHM DAW_PROJECT_DIR=$PROJECTS DAW_HOST_BINARY=$HOST \
-    nohup "$ENGINE" "$@" > /tmp/eng.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
+    nohup "$ENGINE" "$@" > /tmp/eng$SEG.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
 sleep 6
 # The engine's OWN pid, resolved from the segment rather than from `$!`. `$!`
 # here is the subshell that wraps the `cd &&`, one below the engine, so it was
 # reported and health-checked in place of the process it started — off by one and
 # right often enough to look correct.
 ENGINE_PID=$(our_engines | head -1)
-alive "$ENGINE_PID" || { say "engine exited during startup:"; tail -5 /tmp/eng.log; exit 1; }
+alive "$ENGINE_PID" || { say "engine exited during startup:"; tail -5 /tmp/eng$SEG.log; exit 1; }
 
 # Build before launching. This script used to run whatever release binary was
 # lying around, so an edited sidecar started silently as the previous one and
@@ -148,10 +171,11 @@ say "building the sidecar…"
   || { say "sidecar build failed:"; tail -20 /tmp/side-build.log; exit 1; }
 
 ( cd "$WEB/ui" && DAW_PROJECT_DIR=$PROJECTS \
-    nohup ./target/release/daw-sidecar --shm "$SHM" > /tmp/side.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
+    nohup ./target/release/daw-sidecar --shm "$SHM" --port "$WS_STATE" --cmd-port "$WS_CMD" \
+      > /tmp/side$SEG.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
 sleep 2
 SIDECAR_PID=$(sed -n 2p "$PIDFILE")
-grep -q 'attached to' /tmp/side.log || { say "sidecar did not attach:"; head -3 /tmp/side.log; exit 1; }
+grep -q 'attached to' /tmp/side$SEG.log || { say "sidecar did not attach:"; head -3 /tmp/side$SEG.log; exit 1; }
 
 if ! lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
   # Fully detached: </dev/null and nohup. A backgrounded child that still holds
@@ -174,6 +198,6 @@ if [ "$count" != "1" ]; then
   say "REFUSING: $count engines on $SHM ($engines) — a single-producer segment with $count writers"
   exit 1
 fi
-say "sidecar pid $(pgrep -f "daw-sidecar.*$SHM")  ws 8174 state / 8175 commands"
+say "sidecar pid $(pgrep -f "daw-sidecar.*$SHM")  ws $WS_STATE state / $WS_CMD commands"
 say "page    http://127.0.0.1:$PORT/index.html"
-head -2 /tmp/side.log | sed 's/^/  /'
+head -2 /tmp/side$SEG.log | sed 's/^/  /'

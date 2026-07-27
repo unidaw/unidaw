@@ -48,8 +48,20 @@ export function harmonyLabel(root, scaleId) {
  * they are looking at came from the engine.
  */
 export const TUNING_NOTICE =
-  'the wire carries tick, root and scaleId only — no TET, no scala, no '
-  + 'per-degree cents; the engine’s own scales are all 12-TET';
+  'the engine publishes no scale registry — pull an engine at SHM v16 or later';
+
+/**
+ * What is still missing once the registry HAS arrived.
+ *
+ * v16 brought the scales themselves: id, name, octave and per-degree cents,
+ * exact in milli-cents. What it did not bring is any way to CHOOSE or EDIT one —
+ * the registry is a fixed built-in list, so the TET chips in the design are a
+ * control over something that does not exist yet. Saying which half is real
+ * matters more than saying "partial".
+ */
+export const TUNING_READONLY_NOTICE =
+  'read-only: the engine publishes its scales but has no command to select or '
+  + 'edit a tuning';
 
 /** What the tuning chip reads. Inferred from the engine's scales, not published. */
 export const TUNING_INFERRED = '12-TET';
@@ -73,6 +85,7 @@ export function createHarmonyBuffer(rowCap = 8) {
     version: -1, versionText: '',
     notice: '',
     tuning: TUNING_INFERRED, tuningKnown: false, tuningNotice: TUNING_NOTICE,
+    degrees: [], degreeCount: 0, scaleName: '', octaveCents: 0,
     rows, rowCount: 0, rowFirst: 0, more: '',
     _cap: rowCap,
     // Cache keys, one set per derived string. Every one of them names the whole
@@ -95,7 +108,7 @@ export function createHarmonyBuffer(rowCap = 8) {
  */
 export function buildHarmonyModel(opts, buf) {
   const { harmony = null, playheadTick = 0, version = -1, open = true,
-          nameHarmony = null } = opts;
+          nameHarmony = null, scales = null } = opts;
 
   buf.known = !!harmony;
   buf.open = open !== false;
@@ -152,6 +165,46 @@ export function buildHarmonyModel(opts, buf) {
     // card can show that is entirely made of published numbers, so it is the one
     // that replaces the design's "17-4 -> G4 +38c -> 391.27 Hz".
     buf.fields = cur ? 'root ' + root + ' · scale ' + scaleId : '';
+  }
+
+  /**
+   * The cents ladder for the field in force, from the engine's scale registry.
+   *
+   * This is the design's degree table, and as of SHM v16 it is real: the engine
+   * publishes every scale's per-degree cents in milli-cents, which is exact
+   * rather than a float that nearly represents 386.31. What it does NOT publish
+   * is any way to pick or change one, so the ladder is a readout.
+   *
+   * Rebuilt only when the scale changes. It is a handful of rows, but this runs
+   * on every frame of playback and the rule here is that nothing allocates when
+   * nothing changed.
+   */
+  const sc = scales && scaleId >= 0 ? scales.find((s) => s.id === scaleId) : null;
+  buf.tuningKnown = !!sc;
+  buf.tuningNotice = !scales ? TUNING_NOTICE : TUNING_READONLY_NOTICE;
+  if (buf._kScale !== (sc ? sc.id : -1) || buf._kScaleN !== (scales ? scales.length : 0)) {
+    buf._kScale = sc ? sc.id : -1;
+    buf._kScaleN = scales ? scales.length : 0;
+    buf.scaleName = sc ? sc.name : '';
+    buf.octaveCents = sc ? sc.octaveCents : 0;
+    buf.degrees.length = 0;
+    if (sc) {
+      for (let i = 0; i < sc.stepCents.length; i++) {
+        const c = sc.stepCents[i];
+        buf.degrees.push({
+          index: i,
+          // Degrees are 1-based to a musician; the array is not.
+          name: String(i + 1),
+          cents: c,
+          // Against equal temperament, which is the comparison that says whether
+          // a scale is microtonal at a glance. A 12-TET scale reads all zeros.
+          offset: Math.round((c - Math.round(c / 100) * 100) * 10) / 10,
+          // A bar length for the renderer, so it needs no arithmetic of its own.
+          frac: sc.octaveCents > 0 ? c / sc.octaveCents : 0,
+        });
+      }
+    }
+    buf.degreeCount = buf.degrees.length;
   }
 
   const sinceBar = cur ? Math.floor(cur.tick / TICKS_PER_BAR) + 1 : -1;
