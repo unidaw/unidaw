@@ -192,17 +192,42 @@ export class Tracker {
       const cell = cells[i];
       const c = row.cells[i];
       const bar = cell._bar;
+      /**
+       * The pitch mark. Two things share one pooled element because they are the
+       * same statement at two zooms: "the register here is THIS high".
+       *
+       * At a coarse zoom a row spans many notes, so the mark is the RANGE the
+       * engine aggregated. At a fine zoom a row holds one note, so it is that
+       * note — and down a column the marks form the melodic contour, which is
+       * what ARCHITECTURE_REVIEW Movement 1 item 14 asks for: shape and register
+       * collisions visible without reading a single note name.
+       *
+       * MIDI 24..96 covers the useful range, clamped rather than scaled to what
+       * is on screen — so a mark means the same pitch height on every row of
+       * every track, which is the whole basis for comparing two columns by eye.
+       * Scaling to the visible window would make the same note sit at different
+       * heights depending on what else happened to be nearby.
+       */
+      let markLo = -1, markHi = -1, markOp = 0;
       if (c.aggCount) {
-        // MIDI 24..96 covers the useful range; clamp rather than scale to the
-        // window, so a mark means the same pitch height on every row.
-        const lo = Math.max(0, Math.min(1, (c.aggLo - 24) / 72));
-        const hi = Math.max(0, Math.min(1, (c.aggHi - 24) / 72));
+        markLo = c.aggLo; markHi = c.aggHi;
+        markOp = Math.min(1, 0.25 + c.aggCount / 24);
+      } else if (c.pitch >= 0) {
+        markLo = c.pitch;
+        markHi = c._hiPitch === undefined ? c.pitch : c._hiPitch;
+        markOp = 1;
+      }
+      if (markLo >= 0) {
+        const lo = Math.max(0, Math.min(1, (markLo - 24) / 72));
+        const hi = Math.max(0, Math.min(1, (markHi - 24) / 72));
         const bottom = (lo * 100) | 0;
+        // A single note has lo === hi, so without a floor the mark is zero-height
+        // and the ribbon is invisible at exactly the zoom you read it at. 8% of a
+        // 17px row is about a pixel and a half: a tick, not a bar.
         const height = Math.max(8, ((hi - lo) * 100) | 0);
-        const op = Math.min(1, 0.25 + c.aggCount / 24);
         if (bar._b !== bottom) { bar._b = bottom; bar.style.bottom = bottom + '%'; }
         if (bar._h !== height) { bar._h = height; bar.style.height = height + '%'; }
-        if (bar._o !== op) { bar._o = op; bar.style.opacity = op; }
+        if (bar._o !== markOp) { bar._o = markOp; bar.style.opacity = markOp; }
         if (bar._on !== 1) { bar._on = 1; bar.style.display = 'block'; }
       } else if (bar._on !== 0) { bar._on = 0; bar.style.display = 'none'; }
       const tn = cell._text;

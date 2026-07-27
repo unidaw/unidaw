@@ -203,7 +203,14 @@ export function createBuffer(rowCount, trackCount, columns) {
       for (let c = 0; c < columns; c++)
         cells[k++] = { track: t, col: c, text: '', kind: 'empty',
                        // Aggregate for this cell at coarse zoom. count 0 = none.
-                       aggCount: 0, aggLo: 0, aggHi: 0 };
+                       aggCount: 0, aggLo: 0, aggHi: 0,
+                       // The pitch this cell holds, for the contour ribbon. -1 =
+                       // none. Separate from aggLo/aggHi because they answer a
+                       // different question — a RANGE over many notes at coarse
+                       // zoom, versus THE note here — and overloading one pair to
+                       // mean both is how a renderer ends up drawing a range that
+                       // is really a single note.
+                       pitch: -1 };
     rows[i] = { index: 0, label: '', beat: false, bar: false, cells };
   }
   return {
@@ -424,7 +431,7 @@ export function buildViewModel(opts, buf) {
       for (let c = 0; c < columns; c++) {
         if (engine) {
           const cl = cells[ci++];
-          cl.text = ''; cl.aggCount = 0;
+          cl.text = ''; cl.aggCount = 0; cl.pitch = -1;
           // A lane only has rows where its own grid lands. Elsewhere there is no
           // cell to write into — showing an empty one would imply you could.
           const laneLpb = engine.lpb[t] || zoom.linesPerBeat;
@@ -565,9 +572,16 @@ export function buildViewModel(opts, buf) {
           // are the 128 pitches. The tables fill once and never again.
           c0.text = c0._same !== null ? pillSame(c0.aggCount, c0._same)
                                       : pillEvts(c0.aggCount);
+          // Several notes on one row: the ribbon shows the SPREAD, which is the
+          // register collision this feature exists to make visible.
+          if (n.pitch < c0.pitch) c0.pitch = n.pitch;
+          if (c0._hiPitch === undefined || n.pitch > c0._hiPitch) c0._hiPitch = n.pitch;
           c0.kind = 'collide';
         } else {
           c0.text = pitchName(n.pitch);
+          // The contour ribbon's datum. Set alongside the text because it is the
+          // same fact — what note is here — read at a glance instead of read.
+          c0.pitch = n.pitch;
           // Muted base notes still ship — draw them struck out. Adds carry
           // provenance so an override reads differently from the shared clip.
           c0.kind = n.muted ? 'muted' : n.isAdd ? 'add' : 'note';
@@ -575,6 +589,9 @@ export function buildViewModel(opts, buf) {
           // Reset the pill's accumulators: this cell holds one note again.
           c0.aggCount = 0;
           c0._same = undefined;
+          // ...and the ribbon's spread, or a cell that briefly held a chord would
+          // keep drawing its range after the chord became one note.
+          c0._hiPitch = undefined;
         }
       }
       if (columns > 1) {

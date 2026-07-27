@@ -46,7 +46,8 @@ const SCENES = [
   { name: 'zoom-aggregate', setup: async (p) => p.evaluate(() => { window.__uni.setZoom(4); window.__uni.scrollTo(512); }) },
   // Lanes that DISAGREE about their grid. The one scene that can tell a correct
   // projection from a plausible one; see __uni.useMixedGrid.
-  { name: 'mixed-grid', setup: async (p) => p.evaluate(() => window.__uni.useMixedGrid()) },
+  { name: 'mixed-grid', contour: true,
+    setup: async (p) => p.evaluate(() => window.__uni.useMixedGrid()) },
   // Arrange: the same store, a horizontal projection. Includes an audio region,
   // which renders differently and which no other fixture exercises.
   { name: 'arrange', arrange: true, setup: async (p) => p.evaluate(() => window.__uni.useArrangeFixture()) },
@@ -336,6 +337,59 @@ for (const scene of SCENES) {
   ok(p.poolSize < 90, `pool is viewport-sized, not timeline-sized: ${p.poolSize}`);
   ok(p.rect !== null && p.rect.w > 0, `cell (${p.startRow + 3},2,0) has geometry: ${JSON.stringify(p.rect)}`);
   ok(typeof p.sample === 'string', `cell text readable via data attributes: ${JSON.stringify(p.sample)}`);
+
+  if (scene.contour) {
+    /**
+     * The pitch ribbon's marks sit at a height PROPORTIONAL TO PITCH.
+     *
+     * A screenshot cannot tell a ribbon that tracks the melody from one that
+     * draws every mark at the same height — both look like a tidy column of
+     * ticks — and the second is what you get if the mark is decorative. So this
+     * reads the marks back with the pitch of the cell they are in and asserts
+     * the two agree in ORDER: higher note, higher mark.
+     *
+     * Order rather than exact values, because the mapping clamps MIDI 24..96 and
+     * rounds to whole percent, so two nearby pitches can legitimately land on the
+     * same percent. Monotonicity is the property that makes the ribbon readable;
+     * exact heights are an implementation detail.
+     */
+    const ribbon = await page.evaluate(() => {
+      const vm = window.__uni.probe();
+      const out = [];
+      for (const cellEl of document.querySelectorAll('.tk-cell[data-kind="note"]')) {
+        const bar = cellEl.querySelector('.tk-bar');
+        if (!bar || bar.style.display === 'none') continue;
+        const text = cellEl.textContent.trim();
+        if (!text) continue;
+        out.push({ text, bottom: parseFloat(bar.style.bottom) });
+        if (out.length >= 24) break;
+      }
+      return { marks: out, tracks: vm.tracks };
+    });
+    ok(ribbon.marks.length > 8, `notes carry a pitch mark: ${ribbon.marks.length}`);
+    // Turn each note name back into a pitch and check the marks agree in order.
+    const NOTES = { 'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 9, 'B': 11 };
+    const pitchOfName = (t) => {
+      const m = /^([A-G])([#-])(-?\d)$/.exec(t);
+      if (!m) return null;
+      return 12 * (Number(m[3]) + 1) + NOTES[m[1]] + (m[2] === '#' ? 1 : 0);
+    };
+    const pairs = ribbon.marks.map((m) => ({ p: pitchOfName(m.text), b: m.bottom }))
+                              .filter((x) => x.p !== null);
+    ok(pairs.length > 8, `note names parsed back to pitches: ${pairs.length}`);
+    let inverted = 0;
+    for (let i = 0; i < pairs.length; i++) {
+      for (let j = i + 1; j < pairs.length; j++) {
+        if (pairs[i].p < pairs[j].p && pairs[i].b > pairs[j].b) inverted++;
+        if (pairs[i].p > pairs[j].p && pairs[i].b < pairs[j].b) inverted++;
+      }
+    }
+    ok(inverted === 0, `every mark is at or above every lower note's mark: ${inverted} inversions`);
+    // ...and it must actually VARY, or a constant height would pass the order
+    // check vacuously. That is the failure this whole assertion exists for.
+    const lows = new Set(pairs.map((x) => x.b));
+    ok(lows.size > 2, `and the marks are at different heights: ${lows.size} distinct`);
+  }
 
   if (scene.badToken) {
     /**

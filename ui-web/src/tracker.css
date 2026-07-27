@@ -147,14 +147,28 @@
 .tk-cell[data-kind="off"]       { color: var(--uni-text-off); }
 /* Pitch-range mark for an aggregated row. Absolute inside the cell so it costs
    no layout, and inset from the column rules so adjacent marks stay readable. */
+/* The pitch mark: where this cell sits in the register, as a thin ribbon down
+ * the left edge of the column.
+ *
+ * At the LEFT EDGE and 2px wide so it never competes with the note name beside
+ * it — the point is that a column of these reads as a melodic line at a glance,
+ * and two columns read as two lines you can compare for register collisions
+ * (ARCHITECTURE_REVIEW Movement 1 item 14). A mark across the middle of the cell
+ * would be a decoration on a note you were already reading.
+ *
+ * The coarse-zoom variant keeps its wider bar: there the cell has no text to
+ * compete with and the mark IS the content, so a hairline would be throwing away
+ * the only thing on the row. Selected by data-kind, which the renderer already
+ * writes, so distinguishing them costs no extra per-cell work. */
 .tk-bar {
-  position: absolute; left: 20%; right: 20%;
+  position: absolute; left: 0; width: 2px;
   display: none;
   background: var(--uni-clip-rail-active);
   border-radius: 1px;
   pointer-events: none;
 }
-.tk-cell[data-kind="contour"] { position: relative; }
+.tk-cell { position: relative; }
+.tk-cell[data-kind="contour"] .tk-bar { left: 20%; right: 20%; width: auto; }
 /* A muted base note: silenced in THIS placement, still part of the clip. */
 .tk-cell[data-kind="muted"]     { color: var(--uni-text-off); text-decoration: line-through; opacity: .7; }
 /* An override add: local to one placement, not in the shared clip. */
