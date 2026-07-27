@@ -31,7 +31,7 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 15: loop range read-back (uiLoopStart/uiLoopEnd) + load-result signal
 //     (uiLoadSeq/uiLoadOk). All ride the header's remaining tail padding, so
 //     sizeof(ShmHeader) is unchanged.
-constexpr uint16_t kShmVersion = 16;
+constexpr uint16_t kShmVersion = 17;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -118,6 +118,9 @@ struct alignas(64) ShmHeader {
   // v16: byte offset of the published UiScaleRegion (0 = none) — the scale
   // registry for the harmony + tuning UI. Read-only, written once at startup.
   uint64_t uiScalesOffset = 0;
+  // v17: byte offset of the UiDeviceParamsRegion (0 = none) — one device's
+  // parameters, refreshed on RequestDeviceParams.
+  uint64_t uiDeviceParamsOffset = 0;
 };
 
 struct alignas(64) RingHeader {
@@ -260,6 +263,31 @@ struct alignas(64) UiScaleRegion {
   uint32_t version = 0;
   uint32_t scaleCount = 0;
   UiScale scales[kUiMaxScales]{};
+};
+
+// v17: one device's parameters, published on request (RequestDeviceParams) so the
+// device-chain rack can show real names + values instead of "VST #7". Request-
+// driven and single-device to keep it small. `uid16` is the durable param id
+// (hashStableId16 of the plugin's stable param id) — key UI mappings on it so they
+// survive a plugin version change; `index` is only for ordering. valueMilli is the
+// normalised value * 1000.
+constexpr uint32_t kUiMaxDeviceParams = 256;
+
+struct UiDeviceParam {
+  uint32_t index = 0;
+  int32_t valueMilli = 0;
+  uint8_t uid16[16] = {};
+  char name[40] = {};
+  char display[24] = {};  // current value text ("0.62", "440 Hz")
+};
+
+struct alignas(64) UiDeviceParamsRegion {
+  uint32_t version = 0;   // bumps per publish
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t paramCount = 0;
+  char deviceName[40] = {};
+  UiDeviceParam params[kUiMaxDeviceParams]{};
 };
 
 struct UiClipNote {

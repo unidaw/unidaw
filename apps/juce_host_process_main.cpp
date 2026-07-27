@@ -885,6 +885,62 @@ void runControlLoop(HostState& state) {
             break;
           }
         }
+      } else if (type == daw::ControlMessageType::GetParams) {
+        if (payload.size() >= sizeof(daw::ParamsHeader)) {
+          daw::ParamsHeader request{};
+          std::memcpy(&request, payload.data(), sizeof(request));
+          auto copyFixed = [](char* dst, size_t cap, const std::string& s) {
+            std::memset(dst, 0, cap);
+            std::memcpy(dst, s.data(), std::min(s.size(), cap - 1));
+          };
+          std::vector<daw::HostParamWire> params;
+          std::string pluginName;
+          {
+            std::lock_guard<std::mutex> lock(state.pluginsMutex);
+            if (request.pluginIndex < state.plugins.size() &&
+                state.plugins[request.pluginIndex].instance) {
+              auto* inst = state.plugins[request.pluginIndex].instance.get();
+              pluginName = inst->name();
+              const auto& infos = inst->parameters();
+              const uint32_t n = std::min<uint32_t>(
+                  static_cast<uint32_t>(infos.size()), daw::kMaxParamsPerQuery);
+              params.reserve(n);
+              for (uint32_t i = 0; i < n; ++i) {
+                const auto& info = infos[i];
+                daw::HostParamWire w{};
+                w.index = static_cast<uint32_t>(info.index >= 0 ? info.index
+                                                                : static_cast<int>(i));
+                w.normalized =
+                    inst->getParameterValueNormalizedById(info.stableId);
+                copyFixed(w.stableId, sizeof(w.stableId), info.stableId);
+                copyFixed(w.name, sizeof(w.name), info.name);
+                copyFixed(w.display, sizeof(w.display),
+                          inst->getParameterTextById(info.stableId, w.normalized));
+                params.push_back(w);
+              }
+            }
+          }
+          daw::ParamsHeader responseHeader{};
+          responseHeader.pluginIndex = request.pluginIndex;
+          responseHeader.paramCount = static_cast<uint32_t>(params.size());
+          responseHeader.byteCount =
+              static_cast<uint32_t>(params.size() * sizeof(daw::HostParamWire));
+          std::memcpy(responseHeader.pluginName, pluginName.data(),
+                      std::min(pluginName.size(),
+                               sizeof(responseHeader.pluginName) - 1));
+          std::vector<uint8_t> reply(sizeof(responseHeader) +
+                                     responseHeader.byteCount);
+          std::memcpy(reply.data(), &responseHeader, sizeof(responseHeader));
+          if (!params.empty()) {
+            std::memcpy(reply.data() + sizeof(responseHeader), params.data(),
+                        responseHeader.byteCount);
+          }
+          if (!daw::sendMessage(state.clientFd,
+                                daw::ControlMessageType::GetParams, reply.data(),
+                                reply.size())) {
+            break;
+          }
+        }
       } else if (type == daw::ControlMessageType::SetState) {
         if (payload.size() >= sizeof(daw::StateHeader)) {
           daw::StateHeader request{};

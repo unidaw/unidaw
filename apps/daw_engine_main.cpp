@@ -1005,6 +1005,8 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(sizeof(daw::UiPatcherRegion), 64);
     header.uiScalesOffset = offset;  // v16: scale registry read-back
     offset += daw::alignUp(sizeof(daw::UiScaleRegion), 64);
+    header.uiDeviceParamsOffset = offset;  // v17: one device's params (on request)
+    offset += daw::alignUp(sizeof(daw::UiDeviceParamsRegion), 64);
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
@@ -5461,6 +5463,7 @@ struct TrackRuntime {
       transportNanotick.store(clamped, std::memory_order_release);
       std::cout << "UI: Transport SetPosition " << clamped << std::endl;
     } else if (payload.commandType ==
+<<<<<<< HEAD
                static_cast<uint16_t>(daw::UiCommandType::RequestChainSnapshot)) {
       // A UI that attached after the engine started has never seen a chain
       // diff, so let it ask. 0xFFFFFFFFu means every track; an unknown track is
@@ -5481,6 +5484,84 @@ struct TrackRuntime {
       // Outside tracksMutex: emitChainSnapshot takes the per-track lock itself.
       for (auto* runtime : targets) {
         emitChainSnapshot(*runtime);
+=======
+               static_cast<uint16_t>(daw::UiCommandType::RequestDeviceParams)) {
+      // Publish one device's parameters into UiDeviceParamsRegion so the rack can
+      // show real names + values. trackId + value0 (deviceId). The host query is a
+      // blocking round-trip (like save's requestPluginState) — fine off the audio
+      // thread. Bumps region->version after writing so a polling UI sees the swap.
+      const uint32_t trackId = payload.trackId;
+      const uint32_t deviceId = payload.value0;
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (trackId < tracks.size()) {
+          runtime = tracks[trackId].get();
+        }
+      }
+      std::string deviceName;
+      uint32_t pluginIndex = 0;
+      bool found = false;
+      if (runtime) {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        uint32_t hostIndex = 0;
+        for (const auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::VstInstrument &&
+              d.kind != daw::DeviceKind::VstEffect) {
+            continue;
+          }
+          if (d.id == deviceId) {
+            pluginIndex = hostIndex;
+            deviceName = d.vstRef.name;
+            found = true;
+            break;
+          }
+          hostIndex++;
+        }
+      }
+      if (runtime && found && uiShm.header &&
+          uiShm.header->uiDeviceParamsOffset != 0) {
+        std::vector<daw::HostParamWire> wire;
+        std::string hostName;
+        {
+          std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+          runtime->controller.requestPluginParams(pluginIndex, wire, hostName);
+        }
+        // Prefer the actually-loaded plugin's name (authoritative) over the stored
+        // vstRef name, which can drift if resolution loaded a different plugin.
+        const std::string& shownName = !hostName.empty() ? hostName : deviceName;
+        auto* region = reinterpret_cast<daw::UiDeviceParamsRegion*>(
+            reinterpret_cast<uint8_t*>(uiShm.base) +
+            uiShm.header->uiDeviceParamsOffset);
+        region->trackId = trackId;
+        region->deviceId = deviceId;
+        std::memset(region->deviceName, 0, sizeof(region->deviceName));
+        std::memcpy(region->deviceName, shownName.data(),
+                    std::min(shownName.size(), sizeof(region->deviceName) - 1));
+        const uint32_t n =
+            std::min<uint32_t>(static_cast<uint32_t>(wire.size()),
+                               daw::kUiMaxDeviceParams);
+        for (uint32_t i = 0; i < n; ++i) {
+          daw::UiDeviceParam& out = region->params[i];
+          out.index = wire[i].index;
+          out.valueMilli = static_cast<int32_t>(std::lround(
+              std::clamp(wire[i].normalized, 0.0f, 1.0f) * 1000.0f));
+          const std::string sid(
+              wire[i].stableId,
+              ::strnlen(wire[i].stableId, sizeof(wire[i].stableId)));
+          const auto uid = daw::hashStableId16(sid);
+          std::memcpy(out.uid16, uid.data(), sizeof(out.uid16));
+          std::memset(out.name, 0, sizeof(out.name));
+          std::memcpy(out.name, wire[i].name,
+                      ::strnlen(wire[i].name, sizeof(out.name) - 1));
+          std::memset(out.display, 0, sizeof(out.display));
+          std::memcpy(out.display, wire[i].display,
+                      ::strnlen(wire[i].display, sizeof(out.display) - 1));
+        }
+        region->paramCount = n;
+        std::atomic_thread_fence(std::memory_order_release);
+        region->version += 1;
+>>>>>>> main
       }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestClipWindow)) {

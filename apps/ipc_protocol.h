@@ -23,6 +23,33 @@ enum class ControlMessageType : uint16_t {
   // instances, so a chain edit does not restart the whole host and drop audio.
   // Payload is ChainHeader followed by `count` null-terminated UTF-8 paths.
   SetChain = 8,
+  // Enumerate one plugin's parameters (name/value/display/stable id) so the UI
+  // can show a real rack. Request payload is ParamsHeader{pluginIndex}; the reply
+  // is ParamsHeader{pluginIndex,paramCount,byteCount} + paramCount HostParamWire.
+  GetParams = 9,
+};
+
+// Cap on parameters returned per query — a scrollable rack shows plenty within
+// this, and it bounds the IPC message + the published region.
+constexpr uint32_t kMaxParamsPerQuery = 256;
+
+struct ParamsHeader {
+  uint32_t pluginIndex = 0;
+  uint32_t paramCount = 0;  // params in this reply (<= kMaxParamsPerQuery)
+  uint32_t byteCount = 0;   // paramCount * sizeof(HostParamWire)
+  uint32_t reserved = 0;
+  char pluginName[48]{};    // the loaded plugin's display name (reply only)
+};
+
+// One parameter on the wire: fixed-size so the reply is a flat array. Strings are
+// nul-padded and truncated; the engine hashes stableId to the durable uid it uses
+// for param events, so a UI mapping survives a plugin version change.
+struct HostParamWire {
+  uint32_t index = 0;
+  float normalized = 0.0f;   // current value, 0..1
+  char stableId[48]{};       // plugin-stable id (JUCE param id), nul-padded
+  char name[48]{};           // display name
+  char display[24]{};        // current value text ("0.62", "440 Hz")
 };
 
 struct StateHeader {
