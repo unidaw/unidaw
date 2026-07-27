@@ -1448,9 +1448,10 @@ struct TrackRuntime {
   std::unique_ptr<daw::IRuntime> audioRuntime;
   std::unique_ptr<EngineAudioCallback> audioCallback;
 
-  // Settable so a loaded project's tempo actually takes effect — a StaticTempoProvider
-  // here made the engine play every project at 120 regardless of its tempo_map.
-  daw::SettableTempoProvider tempoProvider(120.0);
+  // Map-aware so a loaded project's tempo — including changes mid-song — actually
+  // takes effect. A StaticTempoProvider here made the engine play every project at
+  // 120 regardless of its tempo_map.
+  daw::TempoMapProvider tempoProvider(120.0);
   daw::NanotickConverter tickConverter(
       tempoProvider, static_cast<uint32_t>(engineConfig.sampleRate));
   const uint64_t ticksPerBeat = daw::NanotickConverter::kNanoticksPerQuarter;
@@ -3507,14 +3508,18 @@ struct TrackRuntime {
       std::lock_guard<std::mutex> lock(harmonyMutex);
       harmonyEvents = document.harmonyTimeline;
     }
-    // Adopt the project's tempo. Without this the engine kept its startup 120 and
-    // ignored tempo_map entirely (a slower project then played too fast). We honour
-    // the initial point for playback; per-position tempo automation is a later
-    // feature. Retain the full map so a save round-trips it rather than losing it.
+    // Adopt the project's tempo map — including tempo changes mid-song. Without this
+    // the engine kept its startup 120 and ignored tempo_map entirely (a slower
+    // project then played too fast). Retain the full map so a save round-trips it.
     loadedTempoMap = document.tempoMap.empty()
                          ? std::vector<daw::ProjectTempoPoint>{{0, 120.0}}
                          : document.tempoMap;
-    tempoProvider.setBpm(loadedTempoMap.front().bpm);
+    std::vector<daw::TempoPoint> tempoPoints;
+    tempoPoints.reserve(loadedTempoMap.size());
+    for (const auto& pt : loadedTempoMap) {
+      tempoPoints.push_back({pt.nanotick, pt.bpm});
+    }
+    tempoProvider.setMap(std::move(tempoPoints));
     // Retain the project's clip definitions so a save can re-emit the ones a
     // clean track still references, keeping the arrangement's structure across a
     // load->save round-trip (the runtime itself plays a flattened clip).

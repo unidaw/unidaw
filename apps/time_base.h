@@ -1,8 +1,11 @@
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cmath>
+#include <mutex>
+#include <vector>
 
 namespace daw {
 
@@ -22,28 +25,54 @@ class StaticTempoProvider final : public ITempoProvider {
   double bpm_ = 120.0;
 };
 
-// A single-tempo provider whose bpm can be updated after construction. The engine
-// creates one at startup (before any project is loaded) and updates it from the
-// project's tempo_map on load — without this the engine played every project at a
-// hardcoded 120 regardless of its tempo. setBpm is called off the audio thread
-// (project load); bpmAtNanotick is read on the audio/producer thread, so the value
-// is atomic. Ignores non-positive bpm, which would divide-by-zero the tick math.
-class SettableTempoProvider final : public ITempoProvider {
- public:
-  explicit SettableTempoProvider(double bpm) : bpm_(bpm) {}
+struct TempoPoint {
+  uint64_t nanotick = 0;
+  double bpm = 120.0;
+};
 
-  double bpmAtNanotick(uint64_t /*nanotick*/) const override {
-    return bpm_.load(std::memory_order_acquire);
+// Holds the project's tempo map so playback honours tempo changes mid-song, not just
+// the initial tempo. The engine builds one at startup (default 120) and replaces the
+// map from tempo_map on load. bpmAtNanotick returns the tempo of the last point at or
+// before the query position (a step function; points are kept sorted). Read on the
+// producer/UI threads and never on the hard-RT audio callback, so a mutex is fine —
+// setMap only runs on project load, so there is effectively no contention.
+class TempoMapProvider final : public ITempoProvider {
+ public:
+  explicit TempoMapProvider(double bpm) {
+    points_.push_back({0, bpm > 0.0 ? bpm : 120.0});
   }
 
-  void setBpm(double bpm) {
-    if (bpm > 0.0) {
-      bpm_.store(bpm, std::memory_order_release);
+  double bpmAtNanotick(uint64_t nanotick) const override {
+    std::lock_guard<std::mutex> lock(mutex_);
+    double bpm = points_.front().bpm;
+    for (const auto& p : points_) {
+      if (p.nanotick <= nanotick) {
+        bpm = p.bpm;
+      } else {
+        break;  // sorted ascending: no later point applies
+      }
     }
+    return bpm > 0.0 ? bpm : 120.0;
+  }
+
+  void setMap(std::vector<TempoPoint> points) {
+    points.erase(std::remove_if(points.begin(), points.end(),
+                                [](const TempoPoint& p) { return p.bpm <= 0.0; }),
+                 points.end());
+    if (points.empty()) {
+      points.push_back({0, 120.0});
+    }
+    std::sort(points.begin(), points.end(),
+              [](const TempoPoint& a, const TempoPoint& b) {
+                return a.nanotick < b.nanotick;
+              });
+    std::lock_guard<std::mutex> lock(mutex_);
+    points_ = std::move(points);
   }
 
  private:
-  std::atomic<double> bpm_;
+  mutable std::mutex mutex_;
+  std::vector<TempoPoint> points_;  // always non-empty, sorted by nanotick
 };
 
 class NanotickConverter {
