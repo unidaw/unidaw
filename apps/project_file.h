@@ -26,8 +26,8 @@ struct MixerSettings {
 // What kind of material a clip holds. The format carries this slot from the
 // start so audio regions are representable before it freezes — the retrofit that
 // symbolic-only formats never survive (ARCHITECTURE_REVIEW §7, Movement 4). The
-// engine plays Symbolic today; Audio clips persist and round-trip but are not yet
-// scheduled (their playback lands with the Movement 4 audio engine).
+// engine plays both: Symbolic clips schedule notes, and Audio clips are decoded
+// (decodeAudioFileMono) and mixed by the audio callback (renderAudioRegionBlock).
 enum class ClipKind : uint8_t {
   Symbolic = 0,  // notes/chords in `clip`
   Audio = 1,     // a region of an audio source, described by `audio`
@@ -57,6 +57,14 @@ struct ProjectClip {
   uint32_t id = 0;
   std::string name;
   uint64_t lengthNanoticks = 0;
+  // The clip's musical grid, owned per-clip (a clip is a "section"). lines_per_beat is
+  // the tracker row subdivision; the time signature governs bar length within the
+  // clip. Moved here from the track so each clip carries its own meter; the active
+  // grid is the clip under the playhead, and a new clip inherits its predecessor's.
+  // Meaningful for Symbolic clips.
+  uint32_t linesPerBeat = 4;
+  uint32_t timeSigNumerator = 4;
+  uint32_t timeSigDenominator = 4;
   ClipKind kind = ClipKind::Symbolic;
   MusicalClip clip;   // meaningful when kind == Symbolic
   AudioClip audio;    // meaningful when kind == Audio

@@ -265,6 +265,20 @@ void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired
     if (auto slot = loadPluginSlot(*state.pluginHost, ref.path, ref.name,
                                    sampleRate, blockSize, numChannelsOut)) {
       next.push_back(std::move(*slot));
+    } else {
+      // Keep a null-instance placeholder rather than dropping the slot, so the host's
+      // plugin vector stays index-aligned with the desired chain. Otherwise a plugin
+      // that fails to instantiate compacts the vector and every later device's index
+      // shifts — routing param writes/read-backs to the wrong plugin. The audio loop
+      // passes a placeholder through; control handlers no-op on it; a later reconcile
+      // retries (reuse requires a live instance).
+      HostState::PluginSlot placeholder;
+      placeholder.path = ref.path;
+      placeholder.name = ref.name;
+      placeholder.preparedSampleRate = sampleRate;
+      next.push_back(std::move(placeholder));
+      std::cerr << "Host: placeholder for failed plugin " << ref.path
+                << " (name '" << ref.name << "') — chain index preserved" << std::endl;
     }
   }
 
@@ -302,6 +316,16 @@ void loadPlugins(HostState& state,
   }
   auto pluginHost = daw::createPluginHost();
   std::vector<HostState::PluginSlot> plugins;
+  // A slot that fails to load stays in the vector as a null-instance placeholder so
+  // indices don't shift (same reason as reconcileChain). The audio loop passes it
+  // through and control handlers no-op on it.
+  auto pushPlaceholder = [&](const std::string& p, const std::string& n) {
+    HostState::PluginSlot placeholder;
+    placeholder.path = p;
+    placeholder.name = n;
+    placeholder.preparedSampleRate = sampleRate;
+    plugins.push_back(std::move(placeholder));
+  };
 
   for (size_t idx = 0; idx < pluginPaths.size(); ++idx) {
     const auto& path = pluginPaths[idx];
@@ -309,6 +333,7 @@ void loadPlugins(HostState& state,
         idx < pluginNames.size() ? pluginNames[idx] : std::string();
     if (!std::filesystem::exists(path)) {
       std::cerr << "Plugin path not found: " << path << std::endl;
+      pushPlaceholder(path, name);
       continue;
     }
     if (logLoad) {
@@ -318,6 +343,7 @@ void loadPlugins(HostState& state,
     auto instance = pluginHost->loadVst3FromPath(path, name, sampleRate, blockSize);
     if (!instance) {
       std::cerr << "Failed to load plugin in host process: " << path << std::endl;
+      pushPlaceholder(path, name);
       continue;
     }
     if (logLoad) {
@@ -716,7 +742,11 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
                                                ? state.chainPtrsA.data()
                                                : state.chainPtrsB.data());
       const int numOutputs = static_cast<int>(channelsOut);
-      const int pluginInputs = slot.instance->inputChannels();
+      // A slot with a null instance is a plugin that failed to load; it stays in the
+      // chain (as a placeholder) so device indices don't shift, and here it just
+      // passes audio through like a bypass. Guard the deref either way.
+      const int pluginInputs =
+          slot.instance ? slot.instance->inputChannels() : numInputs;
       const float* const* pluginInputPtrs =
           pluginInputs > 0 ? inputPtrs : nullptr;
       const int pluginInputCount =
@@ -730,7 +760,7 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
           std::fill(state.chainBufferB.begin(), state.chainBufferB.end(), 0.0f);
         }
       }
-      if (slot.bypass) {
+      if (slot.bypass || !slot.instance) {
         if (pluginInputPtrs && pluginInputCount > 0) {
           const int channelsToCopy = std::min(pluginInputCount, numOutputs);
           for (int ch = 0; ch < channelsToCopy; ++ch) {
@@ -900,11 +930,21 @@ void runControlLoop(HostState& state) {
           daw::SetParamRequest request{};
           std::memcpy(&request, payload.data(), sizeof(request));
           std::lock_guard<std::mutex> lock(state.pluginsMutex);
-          if (request.pluginIndex < state.plugins.size() &&
-              state.plugins[request.pluginIndex].instance) {
+          // Log both no-op paths: the engine's forwarded=true only means "sent", so a
+          // drop here (bad index or a uid16 that does not resolve — e.g. a stale
+          // mapping after a plugin swap) would otherwise be invisible on both sides.
+          if (request.pluginIndex >= state.plugins.size() ||
+              !state.plugins[request.pluginIndex].instance) {
+            std::cerr << "Host: SetParam dropped - no plugin at index "
+                      << request.pluginIndex << " (have " << state.plugins.size()
+                      << ")" << std::endl;
+          } else {
             auto& slot = state.plugins[request.pluginIndex];
             const auto it = slot.paramIdByUid16.find(uid16Key(request.uid16));
-            if (it != slot.paramIdByUid16.end()) {
+            if (it == slot.paramIdByUid16.end()) {
+              std::cerr << "Host: SetParam dropped - uid16 not found on plugin "
+                        << request.pluginIndex << std::endl;
+            } else {
               slot.instance->setParameterValueNormalizedById(it->second,
                                                              request.normalized);
             }
@@ -1026,7 +1066,10 @@ void runControlLoop(HostState& state) {
             return s;
           };
           std::vector<daw::PluginRef> refs;
-          refs.reserve(header.count);
+          // header.count is off the wire; the loop is already bounded by blockBytes,
+          // but reserve() would honour a bogus huge count and blow up. Each entry is
+          // at least two NULs, so blockBytes/2 caps the real count.
+          refs.reserve(std::min<size_t>(header.count, blockBytes / 2 + 1));
           size_t offset = 0;
           for (uint32_t i = 0; i < header.count && offset < blockBytes; ++i) {
             daw::PluginRef ref;

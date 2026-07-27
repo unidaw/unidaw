@@ -116,6 +116,10 @@ enum class UiCommandType : uint16_t {
   // and the reservation held because whoever takes a number now announces it on
   // the same turn they take it. Next free is 44.
   SetDeviceParam = 43,
+  // Windowed waveform query (UiWaveformRequestPayload). The engine answers into a
+  // UiWaveformRegion seqlock slot from the per-source min/max pyramid — no host
+  // round-trip. Next free is 45.
+  RequestWaveform = 44,
 };
 
 constexpr uint16_t kMixerFlagMute = 1u << 0;
@@ -214,6 +218,26 @@ struct UiSetParamPayload {
 
 static_assert(sizeof(UiSetParamPayload) == 40,
               "UiSetParamPayload must fit EventEntry payload");
+
+// RequestWaveform: ask for one windowed slice of a source's min/max pyramid.
+// requestSeq is allocated by the sidecar (single process-wide counter) and echoed in
+// the reply; slot = requestSeq % kUiWaveformSlots. decimation is a power of two >= 1
+// (1 = raw samples). firstFrame is split lo/hi. channelMask bit c selects channel c.
+struct UiWaveformRequestPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  uint16_t flags = 0;           // bit0 = force rebuild (re-stat, re-decode, re-key)
+  uint32_t requestSeq = 0;
+  uint32_t sourceId = 0;
+  uint32_t decimation = 0;      // power of two >= 1
+  uint32_t firstFrameLo = 0;
+  uint32_t firstFrameHi = 0;
+  uint32_t columns = 0;         // requested columns per channel
+  uint32_t channelMask = 0;     // bit0 = ch0, bit1 = ch1
+  uint32_t reserved0 = 0;
+  uint32_t reserved1 = 0;
+};
+static_assert(sizeof(UiWaveformRequestPayload) == 40,
+              "UiWaveformRequestPayload must fit EventEntry payload");
 
 struct UiChainCommandPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
