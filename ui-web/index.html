@@ -2447,6 +2447,21 @@ conn = WANTS_ENGINE ? connectEngine({
       paramsAsked.clear();
       for (const k of Object.keys(chains)) delete chains[k];
       chainRev = -1;
+      /**
+       * ...and then ask for them again.
+       *
+       * The engine publishes a chain only when it changes, which is the right
+       * rule — a diff you have already seen is not worth resending. But a load
+       * is not a change from the engine's point of view and the cache above was
+       * just emptied, so the rack sat blank over a project the user had opened
+       * two seconds ago, telling them to "press r to ask for this track's
+       * chain". Pressing a key to see what you just opened is not a feature.
+       *
+       * 0xFFFFFFFF is every track. Sent once per load, not per frame: it is
+       * inside the loadSeq guard, and the answer arrives as ordinary chain
+       * diffs that the existing path already handles.
+       */
+      if (conn && conn.canSend()) conn.send({ type: 'reqchain', track: 0xFFFFFFFF });
     }
     scope.push(store.peaks, store.peakCount);
     state.playhead = tickToRow(store.playheadTick);

@@ -104,6 +104,13 @@ trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 # rather than the one it started — so its own output said the stack was healthy
 # while four engines fought over one seqlock, producing frozen frames, plugin
 # hosts torn down by rivals, and engine deaths that looked like an engine bug.
+# The sidecar on OUR ports, by its command line. Same reason as our_engines: `$!`
+# names the subshell that wraps the `cd && ...`, not the process it started, so
+# the pid the file carried belonged to something that had already exited.
+our_sidecar() {
+  pgrep -f "daw-sidecar --shm $SHM " 2>/dev/null | head -1
+}
+
 our_engines() {
   local pid
   for pid in $(pgrep -f "$(basename "$ENGINE")" 2>/dev/null || true); do
@@ -179,6 +186,15 @@ sleep 6
 # right often enough to look correct.
 ENGINE_PID=$(our_engines | head -1)
 alive "$ENGINE_PID" || { say "engine exited during startup:"; tail -5 /tmp/eng$SEG.log; exit 1; }
+# ...and put the RESOLVED pid in the pidfile, over the subshell's.
+#
+# The file said 82417 while the engine ran as 82419, so `kill $(cat pidfile)`
+# killed a wrapper that had already exited and left the engine holding the audio
+# device — orphaned to pid 1, invisible to the pidfile, and audible. A teardown
+# by this script would still have got it, because the teardown also calls
+# our_engines; but the pidfile is the thing a person reads, and a pidfile that
+# names the wrong process is worse than none, because it looks like it worked.
+printf "%s\n" "$ENGINE_PID" > "$PIDFILE"
 
 # Build before launching. This script used to run whatever release binary was
 # lying around, so an edited sidecar started silently as the previous one and
@@ -192,7 +208,10 @@ say "building the sidecar…"
     nohup ./target/release/daw-sidecar --shm "$SHM" --port "$WS_STATE" --cmd-port "$WS_CMD" $KEEP \
       > /tmp/side$SEG.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
 sleep 2
-SIDECAR_PID=$(sed -n 2p "$PIDFILE")
+# Resolved, not `$!` — see our_sidecar. Written back over the subshell's pid so
+# the file names the two processes a person would actually want to stop.
+SIDECAR_PID=$(our_sidecar)
+[ -n "$SIDECAR_PID" ] && printf '%s\n%s\n' "$ENGINE_PID" "$SIDECAR_PID" > "$PIDFILE"
 grep -q 'attached to' /tmp/side$SEG.log || { say "sidecar did not attach:"; head -3 /tmp/side$SEG.log; exit 1; }
 
 if ! lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
