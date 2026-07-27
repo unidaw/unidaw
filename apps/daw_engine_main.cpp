@@ -5333,6 +5333,21 @@ struct TrackRuntime {
           device.kind = static_cast<daw::DeviceKind>(chainPayload.deviceKind);
           device.patcherNodeId = chainPayload.patcherNodeId;
           device.hostSlotIndex = chainPayload.hostSlotIndex;
+          // Record the DURABLE plugin identity too, not just the volatile scan index.
+          // hostSlotIndex names a different plugin the moment anything is installed or
+          // removed, so a project saved with only the index reloads the wrong plugin
+          // silently. vstRef is what the loader actually keys on; fill it from the
+          // cache entry the slot resolves to, so a device added through AddDevice is
+          // as durable as one from a loaded project.
+          if ((device.kind == daw::DeviceKind::VstInstrument ||
+               device.kind == daw::DeviceKind::VstEffect) &&
+              device.hostSlotIndex < pluginCache.entries.size()) {
+            const auto& entry = pluginCache.entries[device.hostSlotIndex];
+            device.vstRef.vendor = entry.vendor;
+            device.vstRef.name = entry.name;
+            device.vstRef.path = entry.path;
+            device.vstRef.uid16 = entry.pluginUid16;
+          }
           device.bypass = chainPayload.bypass != 0;
           device.capabilityMask = capabilityMaskForKind(device.kind);
           chainChanged = daw::addDevice(runtime->track.chain,
@@ -5649,12 +5664,29 @@ struct TrackRuntime {
           hostIndex++;
         }
       }
+      bool forwarded = false;
       if (runtime && found) {
         const float normalized =
             std::clamp(static_cast<float>(sp.valueMilli) / 1000.0f, 0.0f, 1.0f);
         std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-        runtime->controller.sendSetParam(pluginIndex, sp.uid16, normalized);
+        forwarded = runtime->controller.sendSetParam(pluginIndex, sp.uid16, normalized);
       }
+      // Always log the write. The host stores the value atomically, but it only
+      // takes effect when the plugin next processes a block — so on a headless
+      // engine (no audio device driving the callback) the store is real yet never
+      // applied, and used to be completely silent. audioActive says whether any
+      // block has played; !audioActive + forwarded = "stored, nothing to apply it".
+      const bool audioActive =
+          audioPlaybackBlockId.load(std::memory_order_acquire) > 0;
+      DAW_EVENT("device.set_param")
+          .field("track", sp.trackId)
+          .field("device", sp.deviceId)
+          .field("pluginIndex", pluginIndex)
+          .field("valueMilli", sp.valueMilli)
+          .field("found", found)
+          .field("forwarded", forwarded)
+          .field("playing", playing.load(std::memory_order_acquire))
+          .field("audioActive", audioActive);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestDeviceParams)) {
       // Publish one device's parameters into UiDeviceParamsRegion so the rack can
