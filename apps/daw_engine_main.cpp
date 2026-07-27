@@ -35,6 +35,7 @@
 #include "apps/host_controller.h"
 #include "apps/plugin_cache.h"
 #include "apps/patcher_abi.h"
+#include "apps/audio_region.h"
 #include "apps/patcher_assemble.h"
 #include "apps/patcher_graph.h"
 #include "apps/patcher_preset.h"
@@ -314,6 +315,19 @@ bool writeWav16(const std::string& path,
   return static_cast<bool>(out);
 }
 
+// One placed audio region resolved for the audio thread: the sample-domain params
+// (position/length in engine output frames, computed from its placement) plus the
+// decoded mono source it reads. Shared by shared_ptr so the audio thread never
+// touches the decode or the store.
+struct AudioRegionRender {
+  daw::AudioRegionParams params;
+  std::shared_ptr<const std::vector<float>> source;
+  uint64_t sourceFrames = 0;
+};
+// A track's audio regions, published as an immutable snapshot the audio callback
+// reads lock-free (rebuilt on load/edit, like the note clip snapshot).
+using AudioRenderList = std::vector<AudioRegionRender>;
+
 class EngineAudioCallback {
 public:
   struct TrackInfo {
@@ -334,6 +348,11 @@ public:
     // Which published slot (uiTrackPeakRms[uiSlot]) this track's level goes to —
     // the track's index in the UI track list, not its push position here.
     uint32_t uiSlot = 0;
+    // This track's placed audio clips, resolved + decoded. A RESOLVED shared_ptr
+    // (not atomic-loaded here — that would hit libc++'s __sp_mut spinlock on the
+    // audio thread, see the note below); it is kept alive by the hazard-protected
+    // track list, and republished by rebuilding the list when audio clips change.
+    std::shared_ptr<const AudioRenderList> audioRender;
   };
 
   // Per-slot output peak, written by the audio thread each block and read by the
@@ -354,7 +373,9 @@ public:
         m_resetPending(false),
         m_playbackBlockId(playbackBlockId),
         m_startTime(std::chrono::steady_clock::now()),
-        m_lastPlayedBlockId(0) {}
+        m_lastPlayedBlockId(0) {
+    m_audioScratch.assign(blockSize, 0.0f);
+  }
 
   void process(float* const* outputChannelData,
                int numOutputChannels,
@@ -538,6 +559,53 @@ public:
       }
     }
 
+    // Mix placed audio clips. Unlike instrument tracks these have no host process
+    // — the engine renders them here from decoded sources, device-locked to
+    // m_transportSample, and only while the transport is playing. Each region is
+    // rendered mono into the scratch buffer, then panned into the output at the
+    // track's gain (constant-power pan, matching the host mix above).
+    const bool playing =
+        m_playing && m_playing->load(std::memory_order_acquire);
+    if (playing) {
+      for (const auto& track : *tracks) {
+        const auto& regions = track.audioRender;
+        if (!regions || regions->empty()) {
+          continue;
+        }
+        const float gain = track.gainLinear
+                               ? track.gainLinear->load(std::memory_order_relaxed)
+                               : 1.0f;
+        const float pan =
+            track.pan ? track.pan->load(std::memory_order_relaxed) : 0.0f;
+        const float angle = (std::clamp(pan, -1.0f, 1.0f) + 1.0f) * 0.25f *
+                            static_cast<float>(M_PI);
+        for (const auto& region : *regions) {
+          if (!region.source || region.source->empty()) {
+            continue;
+          }
+          std::fill(m_audioScratch.begin(),
+                    m_audioScratch.begin() + numSamples, 0.0f);
+          daw::renderAudioRegionBlock(region.params, region.source->data(),
+                                      region.sourceFrames,
+                                      static_cast<int64_t>(m_transportSample),
+                                      numSamples, m_audioScratch.data());
+          for (int ch = 0; ch < numOutputChannels; ++ch) {
+            float* output = outputChannelData[ch];
+            if (!output) {
+              continue;
+            }
+            const float panGain = (ch == 0) ? std::cos(angle) : std::sin(angle);
+            const float channelGain =
+                gain * (numOutputChannels >= 2 ? panGain : 1.0f);
+            for (int i = 0; i < numSamples; ++i) {
+              output[i] += m_audioScratch[i] * channelGain;
+            }
+          }
+        }
+      }
+      m_transportSample += static_cast<uint64_t>(numSamples);
+    }
+
     captureMasterOutput(outputChannelData, numOutputChannels, numSamples);
 
     // Advance playback clock even if tracks are late to avoid global stalls.
@@ -616,6 +684,10 @@ public:
     m_currentReadBlock = 0;
     m_totalSamplesProcessed = 0;
     m_lastPlayedBlockId = 0;
+    m_transportSample = 0;
+    if (m_audioScratch.size() != m_blockSize) {
+      m_audioScratch.assign(m_blockSize, 0.0f);
+    }
     m_startTime = std::chrono::steady_clock::now();
     if (m_playbackBlockId) {
       m_playbackBlockId->store(0, std::memory_order_release);
@@ -673,6 +745,16 @@ private:
   std::atomic<std::vector<TrackInfo>*> m_tracksHazard{nullptr};
   std::vector<std::shared_ptr<std::vector<TrackInfo>>> m_tracksRetired;
   std::atomic<float> m_trackPeak[daw::kUiMaxTracks]{};
+
+  // Audio-clip playback: a device-locked transport sample position (advances by a
+  // block per callback while playing, reset to 0 on start) and a preallocated
+  // mono scratch buffer for rendering one region before it is panned into the mix.
+  const std::atomic<bool>* m_playing = nullptr;
+  uint64_t m_transportSample = 0;
+  std::vector<float> m_audioScratch;
+
+ public:
+  void setPlaying(const std::atomic<bool>* playing) { m_playing = playing; }
 };
 
 struct ClipSnapshot {
@@ -1072,6 +1154,10 @@ struct TrackRuntime {
     // (edits win over structure until note entry is structural, M3.2).
     std::atomic<bool> arrangementDirty{false};
     std::shared_ptr<const TrackStateSnapshot> trackSnapshot;
+    // This track's placed audio regions, resolved to the sample domain + decoded,
+    // for the audio thread to mix. Published via std::atomic_load/store on the
+    // shared_ptr; empty/null when the track has no audio clips.
+    std::shared_ptr<const AudioRenderList> audioRender;
     daw::HostController controller;
     daw::HostConfig config;
     std::atomic<bool> needsRestart{false};
@@ -2776,6 +2862,89 @@ struct TrackRuntime {
     return buildClipSnapshot(rt.track.clip);
   };
 
+  // Resolve a track's placed AUDIO clips into a sample-domain render list for the
+  // audio thread: decode each source (deduped per rebuild), and convert its
+  // placement to output frames. Musical->sample uses the engine rate at a constant
+  // tempo (variable-tempo audio positioning is a later refinement). Runs off the
+  // audio thread (decodes files); the caller atomic_stores the result into
+  // rt.audioRender. Assumes trackMutex is held for the store reads.
+  auto rebuildAudioRender =
+      [&](const TrackRuntime& rt) -> std::shared_ptr<const AudioRenderList> {
+    auto list = std::make_shared<AudioRenderList>();
+    const double rate = static_cast<double>(engineConfig.sampleRate);
+    const double bpm = tempoProvider.bpmAtNanotick(0);
+    const double samplesPerTick =
+        bpm > 0.0 ? rate * 60.0 /
+                        (bpm * static_cast<double>(
+                                   daw::NanotickConverter::kNanoticksPerQuarter))
+                  : 0.0;
+    auto toSamples = [&](uint64_t ticks) -> int64_t {
+      return static_cast<int64_t>(static_cast<double>(ticks) * samplesPerTick);
+    };
+    // Small per-rebuild decode cache so one file placed twice decodes once.
+    struct Cached {
+      std::string path;
+      std::shared_ptr<const std::vector<float>> samples;
+      uint64_t frames;
+      double srcRate;
+    };
+    std::vector<Cached> cache;
+    for (const auto& pl : rt.sourcePlacements) {
+      if (!pl.at.has_value()) {
+        continue;
+      }
+      const daw::ProjectClip* clip = nullptr;
+      for (const auto& c : rt.ownedClips) {
+        if (c.id == pl.clipId) {
+          clip = &c;
+          break;
+        }
+      }
+      if (!clip || clip->kind != daw::ClipKind::Audio ||
+          clip->audio.sourcePath.empty()) {
+        continue;
+      }
+      std::shared_ptr<const std::vector<float>> src;
+      uint64_t frames = 0;
+      double srcRate = rate;
+      bool have = false;
+      for (const auto& c : cache) {
+        if (c.path == clip->audio.sourcePath) {
+          src = c.samples;
+          frames = c.frames;
+          srcRate = c.srcRate;
+          have = true;
+          break;
+        }
+      }
+      if (!have) {
+        auto dec = daw::decodeAudioFileMono(clip->audio.sourcePath);
+        if (!dec.ok) {
+          continue;  // a missing/unreadable source just does not sound
+        }
+        src = std::make_shared<const std::vector<float>>(std::move(dec.samples));
+        frames = dec.frames;
+        srcRate = dec.sampleRate;
+        cache.push_back({clip->audio.sourcePath, src, frames, srcRate});
+      }
+      const uint64_t lenTicks =
+          pl.lengthNanoticks > 0 ? pl.lengthNanoticks : clip->lengthNanoticks;
+      AudioRegionRender r;
+      r.params.regionStartSample = toSamples(*pl.at);
+      r.params.regionLengthSamples = toSamples(lenTicks);
+      r.params.sourceStartFrame = clip->audio.sourceStartFrame;
+      r.params.sourceRate = srcRate;
+      r.params.engineRate = rate;
+      r.params.gain = static_cast<float>(std::pow(10.0, clip->audio.gainDb / 20.0));
+      r.params.fadeInSamples = toSamples(clip->audio.fadeInNanoticks);
+      r.params.fadeOutSamples = toSamples(clip->audio.fadeOutNanoticks);
+      r.source = std::move(src);
+      r.sourceFrames = frames;
+      list->push_back(std::move(r));
+    }
+    return list;
+  };
+
   // The tick just past the last event in a clip — its content extent.
   auto clipContentEnd = [](const daw::MusicalClip& clip) -> uint64_t {
     uint64_t end = 0;
@@ -3554,6 +3723,10 @@ struct TrackRuntime {
         }
         runtime->arrangementDirty.store(false, std::memory_order_relaxed);
         snapshot = rebuildFlatAndPublish(*runtime);
+        // Decode + resolve this track's placed audio clips for the audio thread.
+        std::atomic_store_explicit(&runtime->audioRender,
+                                   rebuildAudioRender(*runtime),
+                                   std::memory_order_release);
         runtime->track.harmonyQuantize = source.harmonyQuantize;
         if (!source.name.empty()) {
           runtime->trackName = source.name;
@@ -3601,6 +3774,10 @@ struct TrackRuntime {
       // live chain already matches (reopen-same-session): equal plugin paths are
       // a no-op, so this only does work when the chain actually changed.
       rebuildHostForChain(*runtime);
+      // Re-publish the rack now that it holds the project's devices. The
+      // all-tracks snapshot above ran before this loop restored them, so on its
+      // own it would leave a UI showing the pre-load chain.
+      emitChainSnapshot(*runtime);
     }
 
     // Restore plugin state. The chain was just rebuilt from the project above,
@@ -5236,6 +5413,28 @@ struct TrackRuntime {
       }
       transportNanotick.store(clamped, std::memory_order_release);
       std::cout << "UI: Transport SetPosition " << clamped << std::endl;
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::RequestChainSnapshot)) {
+      // A UI that attached after the engine started has never seen a chain
+      // diff, so let it ask. 0xFFFFFFFFu means every track; an unknown track is
+      // simply nothing to publish, not an error.
+      std::vector<TrackRuntime*> targets;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId == 0xFFFFFFFFu) {
+          for (auto& runtime : tracks) {
+            if (runtime) {
+              targets.push_back(runtime.get());
+            }
+          }
+        } else if (payload.trackId < tracks.size() && tracks[payload.trackId]) {
+          targets.push_back(tracks[payload.trackId].get());
+        }
+      }
+      // Outside tracksMutex: emitChainSnapshot takes the per-track lock itself.
+      for (auto* runtime : targets) {
+        emitChainSnapshot(*runtime);
+      }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestClipWindow)) {
       daw::UiClipWindowCommandPayload windowPayload{};
@@ -8098,6 +8297,11 @@ struct TrackRuntime {
           }
           auto it = trackInfoCache.find(trackId);
           if (it != trackInfoCache.end()) {
+            // Refresh the resolved audio-clip snapshot every rebuild (cheap
+            // atomic_load off the audio thread) so newly loaded/edited clips reach
+            // the callback without waiting for the host SHM to re-acquire.
+            it->second.audioRender = std::atomic_load_explicit(
+                &runtime->audioRender, std::memory_order_acquire);
             trackInfos.push_back(it->second);
           } else if (updated) {
             // Updated but invalid; ensure cache entry is removed.
@@ -8245,6 +8449,7 @@ struct TrackRuntime {
           static_cast<uint32_t>(audioBackend->blockSize()),
           engineConfig.numBlocks,
           &audioPlaybackBlockId);
+      audioCallback->setPlaying(&playing);
       audioCallback->resetForStart();
       // DAW_CAPTURE_WAV=<path> records the master output so a take can be
       // analysed offline; DAW_CAPTURE_SECONDS bounds the preallocation.
