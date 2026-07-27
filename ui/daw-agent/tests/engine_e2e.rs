@@ -520,6 +520,22 @@ fn per_device_patchers_assemble_into_pool() {
         2,
         "each device's event_out should survive assembly"
     );
+
+    // Round-trip: save must preserve each device's OWN graph (2 nodes each), not
+    // park the assembled 4-node pool onto one device.
+    let save = session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"perdev_out"}) });
+    assert!(save.ok, "save failed: {save:?}");
+    let doc = read_project(&engine.proj, "perdev_out");
+    let devices = track(&doc, 0)["device_chain"].as_array().unwrap();
+    let with_patcher: Vec<&Value> = devices
+        .iter()
+        .filter(|d| d.get("patcher").is_some())
+        .collect();
+    assert_eq!(with_patcher.len(), 2, "both devices should keep their own patcher: {devices:?}");
+    for d in with_patcher {
+        let nodes = d["patcher"]["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2, "each device's own graph is 2 nodes, not the pooled union: {d:?}");
+    }
 }
 
 /// Track names are published: a fresh track defaults to "Track N", and a loaded

@@ -1314,6 +1314,10 @@ struct TrackRuntime {
   std::cout << "Engine: Ready for tracker input" << std::endl;
 
   daw::PatcherGraphState patcherGraphState;
+  // True when the running pool was assembled from per-device graphs (>= 2 devices
+  // each carrying one) at load. Save then preserves each device's own graph rather
+  // than parking the live single graph on one device (the legacy path).
+  std::atomic<bool> patcherAssembledFromDevices{false};
   std::shared_ptr<daw::PatcherGraph> patcherGraphSnapshot;
   auto updatePatcherGraphSnapshot = [&]() {
     auto snapshot = std::make_shared<daw::PatcherGraph>();
@@ -3126,11 +3130,30 @@ struct TrackRuntime {
       }
       document.tracks.push_back(std::move(track));
     }
-    // The patcher DAG is part of the song. The engine runs one global graph
-    // today, so on save it parks that graph on a device (patchers are per-device
-    // now): the first track's instrument, else its first device. The per-device
-    // format is ready for when each device runs its own.
-    if (!document.tracks.empty() && !document.tracks.front().chain.devices.empty()) {
+    // Persist the patcher execution. Two cases, mirroring load:
+    if (patcherAssembledFromDevices.load(std::memory_order_acquire)) {
+      // Per-device: every device already carries its own graph (load left
+      // device.patcher untouched, only re-pointing the runtime patcherNodeId at
+      // the assembled pool). Normalize each patcher-device's node id back to its
+      // own graph's output so the saved id is device-local and a
+      // load -> save -> load round-trip is stable; the graphs themselves are
+      // written verbatim by saveProject.
+      for (auto& track : document.tracks) {
+        for (auto& device : track.chain.devices) {
+          if (device.patcher.nodes.empty()) {
+            continue;
+          }
+          uint32_t out = 0;
+          if (daw::patcherGraphOutputNode(device.patcher, out)) {
+            device.patcherNodeId = out;
+          }
+        }
+      }
+    } else if (!document.tracks.empty() &&
+               !document.tracks.front().chain.devices.empty()) {
+      // Legacy single graph: the engine runs one global graph that lives only in
+      // patcherGraphState (edited live), so park it on the first track's
+      // instrument (else its first device) so the song round-trips.
       std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
       auto& devices = document.tracks.front().chain.devices;
       daw::Device* target = nullptr;
@@ -3301,6 +3324,7 @@ struct TrackRuntime {
     //
     // A patcher-less project leaves the live audio graph intact rather than wiping
     // it to empty.
+    patcherAssembledFromDevices.store(false, std::memory_order_release);
     size_t deviceGraphCount = 0;
     for (const auto& source : document.tracks) {
       for (const auto& device : source.chain.devices) {
@@ -3366,6 +3390,7 @@ struct TrackRuntime {
             }
           }
         }
+        patcherAssembledFromDevices.store(true, std::memory_order_release);
         DAW_EVENT("project.patcher_assembled")
             .field("devices", static_cast<uint64_t>(outputs.size()))
             .field("nodes", static_cast<uint64_t>(base));
