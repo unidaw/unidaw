@@ -8,6 +8,7 @@
 #include <limits>
 
 #include "apps/patcher_abi.h"
+#include "apps/patcher_assemble.h"
 #include "apps/patcher_graph.h"
 #include "apps/patcher_preset.h"
 #include "apps/patcher_preset_library.h"
@@ -119,9 +120,86 @@ uint32_t runGraphOnce(const daw::PatcherGraph& graph) {
   return 0;
 }
 
+daw::Device makePatcherDevice(uint32_t id, daw::DeviceKind kind,
+                              const daw::PatcherGraph& graph) {
+  daw::Device d;
+  d.id = id;
+  d.kind = kind;
+  d.patcher = graph;
+  return d;
+}
+
+// Builds a small device graph: euclid(0) -> eventOut(1). Output node is eventOut.
+daw::PatcherGraph euclidToEventOut() {
+  daw::PatcherGraph g;
+  daw::PatcherNode euclid;
+  euclid.id = 0;
+  euclid.type = daw::PatcherNodeType::Euclidean;
+  daw::PatcherNode out;
+  out.id = 1;
+  out.type = daw::PatcherNodeType::EventOut;
+  g.nodes = {euclid, out};
+  daw::PatcherEdge e;
+  e.src = {0, daw::kPatcherEventOutputPort};
+  e.dst = {1, daw::kPatcherEventInputPort};
+  e.kind = daw::PatcherPortKind::Event;
+  g.edges = {e};
+  return g;
+}
+
+void testAssemblePatcherPool() {
+  using namespace daw;
+
+  // Two patcher devices, each with its own graph, merge into one pool with
+  // globally unique ids and one output node reported per device.
+  Device a = makePatcherDevice(10, DeviceKind::PatcherEvent, euclidToEventOut());
+  PatcherGraph single;  // one passthrough, no edges -> it is the sink/output
+  PatcherNode pass;
+  pass.id = 0;
+  pass.type = PatcherNodeType::Passthrough;
+  single.nodes = {pass};
+  Device b = makePatcherDevice(20, DeviceKind::PatcherInstrument, single);
+
+  AssembledPatcher merged = assemblePatcherPool({a, b});
+  assert(merged.anyPerDevice);
+  assert(merged.pool.nodes.size() == 3);  // 2 from A, 1 from B
+  assert(merged.pool.edges.size() == 1);
+  // Node ids are unique and contiguous across the two devices.
+  assert(merged.pool.nodes[0].id == 0);
+  assert(merged.pool.nodes[1].id == 1);
+  assert(merged.pool.nodes[2].id == 2);
+  assert(merged.deviceOutputs.size() == 2);
+  assert(merged.deviceOutputs[0].first == 10 && merged.deviceOutputs[0].second == 1);
+  assert(merged.deviceOutputs[1].first == 20 && merged.deviceOutputs[1].second == 2);
+  // The remapped edge points at the merged ids (0 -> 1), not the originals.
+  assert(merged.pool.edges[0].src.nodeId == 0);
+  assert(merged.pool.edges[0].dst.nodeId == 1);
+  // The merged pool builds cleanly and every device output resolves to a node.
+  assert(buildPatcherGraph(merged.pool));
+  for (const auto& [deviceId, outNode] : merged.deviceOutputs) {
+    (void)deviceId;
+    assert(outNode < merged.pool.idToIndex.size());
+    assert(merged.pool.idToIndex[outNode] != kPatcherInvalidNodeIndex);
+  }
+
+  // Non-patcher devices, bypassed devices, and empty graphs are skipped.
+  Device vst = makePatcherDevice(30, DeviceKind::VstInstrument, euclidToEventOut());
+  Device bypassed = makePatcherDevice(40, DeviceKind::PatcherEvent, euclidToEventOut());
+  bypassed.bypass = true;
+  Device empty = makePatcherDevice(50, DeviceKind::PatcherEvent, PatcherGraph{});
+  AssembledPatcher none = assemblePatcherPool({vst, bypassed, empty});
+  assert(!none.anyPerDevice);
+  assert(none.pool.nodes.empty());
+  assert(none.deviceOutputs.empty());
+
+  std::cout << "assemble_patcher_pool: ok" << std::endl;
+}
+
 }  // namespace
 
 int main() {
+  testAssemblePatcherPool();
+
   daw::PatcherGraphState state;
 
   const uint32_t a = daw::addPatcherNode(state, daw::PatcherNodeType::Euclidean);
