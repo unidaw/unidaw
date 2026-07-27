@@ -900,6 +900,44 @@ ok(live && live.named === 1 && live.titles[0] === 'Identity',
 ok(live && live.params[0] === 0, 'a plugin with no parameters draws none',
    JSON.stringify(live.params));
 
+section('minimap and pending diff');
+await page.evaluate(() => window.__uni.view('tracker'));
+await frames();
+const mm = await page.evaluate(() => window.__uni.minimapProbe());
+ok(mm && mm.known && mm.markCount > 0, 'the minimap summarises the song',
+   `${mm && mm.markCount} marks over ${mm && mm.songBeats} beats, ${mm && mm.events} events`);
+// It spans the SONG, not the viewport. The first version grew with wherever the
+// tracker was looking, so scrolling changed the picture's resolution.
+const mmScrolled = await (async () => {
+  await page.evaluate(() => window.__uni.scrollTo(200));
+  await frames();
+  const a = await page.evaluate(() => window.__uni.minimapProbe());
+  await page.evaluate(() => window.__uni.scrollTo(0));
+  await frames();
+  return a;
+})();
+ok(mmScrolled.markCount === mm.markCount && mmScrolled.songTicks === mm.songTicks,
+   'and does not change resolution when you scroll',
+   `${mm.markCount}/${mm.songTicks} vs ${mmScrolled.markCount}/${mmScrolled.songTicks}`);
+
+// The pending diff: a batch proposed but not committed.
+const idle = await page.evaluate(() => window.__uni.pendingProbe());
+ok(idle.status === 'idle', 'the card starts with nothing pending', idle.status);
+const proposed = await page.evaluate(() => window.__uni.propose(
+  [{ type: 'note', track: 0, pitch: 64, tick: 0, dur: 960000, vel: 100 }], 'e2e'));
+ok(proposed.status === 'pending' && /1 note/.test(proposed.summary),
+   'a proposal summarises itself from its ops', proposed.meta);
+// Apply must send BEFORE it commits. It used to flip to applied first, so with no
+// engine the batch was gone and the card claimed a hand-off that reached nothing.
+const cvBefore = (await E()).clipVersion;
+await page.evaluate(() => document.querySelector('.pd-apply').click());
+await page.waitForTimeout(1500);
+const applied = await page.evaluate(() => window.__uni.pendingProbe());
+ok(applied.status === 'applied', 'applying it commits only once the send went out',
+   applied.status + ' — ' + applied.reason);
+ok((await E()).clipVersion > cvBefore, 'and the edit actually reached the engine',
+   `${cvBefore} -> ${(await E()).clipVersion}`);
+
 section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));
 

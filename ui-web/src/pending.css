@@ -40,7 +40,10 @@
   background: transparent;
 }
 
-.pd-head { display: flex; align-items: center; gap: 6px; }
+/* Baseline rather than centre: the title and the summary are two type sizes on
+   one line in the design, and the summary is allowed to run to a second line
+   here — see below — which would drag a centred title down with it. */
+.pd-head { display: flex; align-items: baseline; gap: 6px; }
 
 .pd-title {
   flex: 0 0 auto;
@@ -52,14 +55,17 @@
 .pd-card.applied .pd-title,
 .pd-card.discarded .pd-title { color: var(--base-neutral-600); }
 
-/* The summary rides beside the title and gives way first: a truncated summary
-   still reads, a truncated title stops naming the card. */
+/* Wraps rather than ellipsises, unlike the design's single clipped line. The
+   tail of this string is the part DERIVED from the ops — "3 notes · track 3" —
+   and the head is the proposer's own claim about them. Clipping would keep the
+   claim and drop the evidence, which is backwards for a card whose whole job is
+   to say what is actually about to be sent. */
 .pd-meta {
   flex: 1 1 auto; min-width: 0;
   font-family: var(--font-mono);
   font-size: var(--font-size-inst);
+  line-height: 1.55;
   color: var(--base-neutral-600);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 .pd-reason {

@@ -22,7 +22,7 @@ export default {
     "laneWidth": 148,
     "cellWidth": 76,
     "headerHeight": 24,
-    "minimapWidth": 16
+    "minimapWidth": 30
   },
   "base": {
     "bg": "#161826",
@@ -114,6 +114,12 @@ export default {
     "harmony": {
       "fieldStrong": "rgba(145,132,217,0.20)",
       "fieldSoft": "rgba(145,132,217,0.05)"
+    },
+    "minimap": {
+      "bg": "#14161f",
+      "mark": "#9184d9",
+      "viewport": "#5d5294",
+      "playhead": "#9184d9"
     },
     "trackHue": {
       "0": "oklch(0.75 0.145 35)",

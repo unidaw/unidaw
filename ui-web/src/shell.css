@@ -140,6 +140,18 @@
   position: relative;
 }
 #tracker, #arrange, #mixer, #piano, #patcher { position: absolute; inset: 0; }
+/* The minimap is pinned to the right of the STAGE, outside the horizontally
+   scrolled strip — it spans the song, so it must not move when you scroll
+   across tracks. The surfaces stop short of it. */
+#minimap {
+  position: absolute; top: 0; bottom: 0; right: 0;
+  width: var(--metrics-minimap-width);
+  z-index: 4;
+}
+#tracker { right: var(--metrics-minimap-width); }
+/* Only the tracker has a minimap; the other surfaces own their full width. */
+#arrange, #mixer, #piano, #patcher { right: 0; }
+#pending { flex: 0 0 auto; overflow: hidden; }
 
 #rdock {
   flex: 0 0 var(--shell-dock-w);

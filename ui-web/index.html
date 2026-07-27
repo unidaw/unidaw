@@ -14,6 +14,8 @@
 <link rel="stylesheet" href="src/patcher.css">
 <link rel="stylesheet" href="src/chain.css">
 <link rel="stylesheet" href="src/harmony.css">
+<link rel="stylesheet" href="src/minimap.css">
+<link rel="stylesheet" href="src/pending.css">
 <link rel="stylesheet" href="src/palette.css">
 <link rel="stylesheet" href="src/shell.css">
 <style>
@@ -29,6 +31,7 @@
     <div id="centre">
       <div id="head"></div>
       <div id="stage">
+        <div id="minimap"></div>
         <div id="tracker"></div>
         <div id="arrange" hidden></div>
         <div id="mixer" hidden></div>
@@ -38,6 +41,7 @@
     </div>
     <div id="rdock">
       <div id="harmony"></div>
+      <div id="pending"></div>
       <div id="dock"></div>
     </div>
   </div>
@@ -55,6 +59,11 @@ import M from './design/out/tokens.js';
 import { connectEngine, noEngine } from './src/engine.js';
 import { Chain } from './src/chain.js';
 import { Harmony } from './src/harmony.js';
+import { Minimap } from './src/minimap.js';
+import { buildMinimapModel, createMinimapBuffer } from './src/minimapmodel.js';
+import { Pending } from './src/pending.js';
+import { createPending, propose, applyPending, settlePending,
+         discardPending } from './src/pendingmodel.js';
 import { buildHarmonyModel, createHarmonyBuffer } from './src/harmonymodel.js';
 import { Palette } from './src/palette.js';
 import { buildChainModel, createChainBuffer } from './src/chainmodel.js';
@@ -389,6 +398,43 @@ function measureRoom() {
 }
 addEventListener('resize', () => { measureRoom(); schedule(); });
 
+const minimapHost = document.getElementById('minimap');
+const minimap = new Minimap(minimapHost, {
+  onSeek: (tick) => {
+    conn && conn.send({ type: 'seek', track: state.cursor.track,
+                        tick: Math.max(0, Math.round(tick)) });
+    schedule();
+  },
+});
+const minimapBuf = createMinimapBuffer();
+
+/**
+ * A batch of edits proposed but not committed.
+ *
+ * Nothing in the ENGINE proposes edits — the proposer is whatever is driving the
+ * console, which today is an agent. So this is a staging area between "an agent
+ * decided" and "the song changed", which is the whole point of the design's card:
+ * you see the diff before it lands.
+ */
+const pendingState = createPending();
+const pendingHost = document.getElementById('pending');
+const pendingCard = new Pending(pendingHost, {
+  onApply: () => {
+    // The ops go out FIRST and the model records what actually happened. It used
+    // to commit before the send was known, so with no engine the batch was gone
+    // and the card claimed a hand-off that reached nothing.
+    let sent = false;
+    try {
+      const ops = applyPending(pendingState);
+      sent = !!(conn && conn.sendBatch(ops));
+    } catch (e) { state.reject = e.message; }
+    settlePending(pendingState, sent);
+    if (!sent) state.reject = 'no engine — the batch is still pending';
+    schedule();
+  },
+  onDiscard: () => { discardPending(pendingState); schedule(); },
+});
+
 const harmonyHost = document.getElementById('harmony');
 const harmonyCard = new Harmony(harmonyHost, {});
 const harmonyBuf = createHarmonyBuffer();
@@ -396,6 +442,27 @@ const harmonyBuf = createHarmonyBuffer();
 const chainHost = document.getElementById('chain');
 const chain = new Chain(chainHost, {
   onSelect: (pos) => { state.chainSelected = pos; schedule(); },
+  /**
+   * The rack's "+" card. Adds a PATCHER device, not a VST one.
+   *
+   * A VST device is identified in the chain command only by hostSlotIndex — an
+   * index into a directory scan, which device_chain.h's own comment says names a
+   * different plugin the moment anything is installed. Adding one from a "+"
+   * button would be choosing a plugin by a number that does not durably mean
+   * one. Picking a plugin belongs to the browser rail, once the engine publishes
+   * its scan; until then this adds the kind that needs no plugin identity at all.
+   */
+  onAdd: (track) => {
+    if (!conn || !conn.send({ type: 'adddevice', track, kind: 'patcher event' })) {
+      state.reject = 'no engine';
+    } else {
+      state.reject = null;
+      // The chain republishes on change, so nothing optimistic is needed — but
+      // the params cache is keyed on device id and the engine may reuse one.
+      paramsAsked.clear();
+    }
+    schedule();
+  },
 });
 const chainBuf = createChainBuffer();
 
@@ -1161,6 +1228,18 @@ function draw() {
   }
   if (palette.opened) palette.render();
   drawCrumb();
+  {
+    // Ticks, not rows: a row index is a function of zoom, and the minimap spans
+    // the song rather than the viewport.
+    const zl = ZOOM_LEVELS[state.zoom];
+    minimap.render(buildMinimapModel({
+      engine: state.useEngine === false ? null : engine,
+      startTick: state.start * zl.rowNanoticks,
+      visibleTicks: tracker.poolSize * zl.rowNanoticks,
+    }, minimapBuf));
+  }
+  
+  if (showDock) pendingCard.render(pendingState);
   if (showDock) harmonyCard.render(buildHarmonyModel({
     harmony: engine && state.useEngine !== false ? engine.harmony : null,
     playheadTick: engine ? engine.playheadTick : 0,
@@ -2304,8 +2383,15 @@ window.__uni = {
   pianoProbe: () => piano.probe(),
   patcherProbe: () => patcher.probe(),
   chainProbe: () => chain.probe(),
+  addDevice: (track, kind) => conn && conn.send({ type: 'adddevice',
+    track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' }),
+  delDevice: (track, device) => conn && conn.send({ type: 'deldevice', track, device }),
   deviceParams: () => JSON.parse(JSON.stringify(deviceParams)),
   harmonyProbe: () => harmonyCard.probe(),
+  minimapProbe: () => minimap.probe(),
+  pendingProbe: () => pendingCard.probe(),
+  propose: (ops, label) => { propose(pendingState, { ops, label, version: engine ? engine.clipVersion : -1 });
+                             draw(); return pendingCard.probe(); },
   scales: () => scales,
   paletteProbe: () => palette.probe(),
   paletteMove: (d) => { palette.move(d); draw(); return palette.probe().selected; },

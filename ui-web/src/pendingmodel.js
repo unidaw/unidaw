@@ -134,8 +134,13 @@ export function propose(state, p) {
     }
   }
 
+  // A caller can legitimately re-propose the array applyPending handed back —
+  // it is the model's OWN array, so clearing it here would empty the very thing
+  // the next line reads, producing the empty proposal the guard above exists to
+  // refuse. Copy first when they are the same object.
+  const incoming = ops === state.ops ? ops.slice() : ops;
   state.ops.length = 0;                       // drops the previous batch's refs
-  for (const op of ops) state.ops.push(op);
+  for (const op of incoming) state.ops.push(op);
   state.opCount = state.ops.length;
   state.status = PENDING;
   state.seq++;
@@ -164,11 +169,45 @@ export function propose(state, p) {
  */
 export function applyPending(state) {
   if (state.status !== PENDING) throw new Error('nothing pending to apply');
+  return state.ops;
+}
+
+/**
+ * Record what happened to a batch the caller just tried to send.
+ *
+ * SEPARATE FROM applyPending on purpose. It used to flip to APPLIED and write
+ * "handed N ops to the caller" before the caller had tried the socket — so with
+ * no engine the send failed, the batch was already gone, and the card stood as a
+ * permanent record of a hand-off that reached nothing. Every other write path in
+ * this app checks sendBatch's return BEFORE committing local state, and an API
+ * that makes that order impossible is the wrong API.
+ */
+export function settlePending(state, sent) {
+  if (state.status !== PENDING) return state;
+  if (!sent) {
+    // Still pending, so it can be tried again. The card says why rather than
+    // pretending the click did nothing.
+    state.reason = 'nothing was sent — no engine. The batch is still here.';
+    return state;
+  }
   state.status = APPLIED;
   state.actionable = false;
-  state.reason = 'handed ' + state.opCount + ' op' + (state.opCount === 1 ? '' : 's')
-               + ' to the caller — whether the engine took them shows up as a clipVersion';
-  return state.ops;
+  state.reason = 'sent ' + state.opCount + ' op' + (state.opCount === 1 ? '' : 's')
+               + ' — whether the engine took them shows up as a clipVersion';
+  return state;
+}
+
+/**
+ * Whether the clip has moved since the proposal was composed.
+ *
+ * The button says "Apply · v2141" and that number named where the proposal came
+ * FROM. It was recorded, drawn, and never compared — so it stood still while the
+ * clip moved underneath it, which is the label lying by omission. A caller that
+ * passes the current version gets told.
+ */
+export function isStale(state, currentVersion) {
+  return state.status === PENDING && state.version >= 0
+      && typeof currentVersion === 'number' && currentVersion > state.version;
 }
 
 /** Drop the batch. Nothing was ever sent, so there is nothing to undo. */

@@ -52,6 +52,31 @@
    changes depending on what is switched on. */
 .dv-card.byp { opacity: .45; }
 
+/* The trailing "add a device" card. 52px and dashed, measured off the design's
+   strip; the radius follows the cards beside it rather than the design's 8px,
+   because this panel's cards are already at 3px and one rounder corner in the
+   row reads as a different kind of thing rather than as the same rack.
+
+   `order` rather than DOM position: the card pool appends, so anything the
+   constructor placed at the end stops being last the moment a fifth device
+   arrives. Ordering in CSS keeps it last on screen with no node ever moving. */
+.dv-add {
+  order: 1;
+  flex: 0 0 52px; width: 52px; box-sizing: border-box;
+  display: grid; place-items: center;
+  border: 1px dashed var(--base-neutral-800);
+  border-radius: 3px;
+  color: var(--base-neutral-700);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+/* It has to announce that it is pressable before it is pressed — a dashed box
+   that never reacts is decoration. */
+.dv-add:hover { border-color: var(--base-accent); color: var(--base-accent-ramp-400); }
+
 .dv-card-top { display: flex; align-items: center; gap: 8px; }
 .dv-badge {
   padding: 1px 5px; border-radius: 2px;

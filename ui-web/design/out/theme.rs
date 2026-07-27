@@ -17,7 +17,7 @@ pub mod theme {
     pub const METRICS_LANE_WIDTH: f32 = 148.0;
     pub const METRICS_CELL_WIDTH: f32 = 76.0;
     pub const METRICS_HEADER_HEIGHT: f32 = 24.0;
-    pub const METRICS_MINIMAP_WIDTH: f32 = 16.0;
+    pub const METRICS_MINIMAP_WIDTH: f32 = 30.0;
     pub const BASE_BG: u32 = 0xff161826;
     pub const BASE_SURFACE: u32 = 0xff232532;
     pub const BASE_TEXT: u32 = 0xffe9e9ed;
@@ -84,6 +84,10 @@ pub mod theme {
     pub const UNI_TRACK_TINT_7: u32 = 0x0ab4ff78;
     pub const UNI_HARMONY_FIELD_STRONG: u32 = 0x339184d9;
     pub const UNI_HARMONY_FIELD_SOFT: u32 = 0x0d9184d9;
+    pub const UNI_MINIMAP_BG: u32 = 0xff14161f;
+    pub const UNI_MINIMAP_MARK: u32 = 0xff9184d9;
+    pub const UNI_MINIMAP_VIEWPORT: u32 = 0xff5d5294;
+    pub const UNI_MINIMAP_PLAYHEAD: u32 = 0xff9184d9;
     pub const UNI_TRACK_HUE_0: &str = "oklch(0.75 0.145 35)";
     pub const UNI_TRACK_HUE_1: &str = "oklch(0.81 0.150 88)";
     pub const UNI_TRACK_HUE_2: &str = "oklch(0.78 0.135 155)";

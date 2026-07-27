@@ -120,6 +120,9 @@ export class Pending {
       previewed: vm.previewed,
       engineProposed: false,
       actionable: vm.actionable,
+      // Two proposals can summarise identically and still be different batches
+      // — same counts, same track, different ticks. `seq` is what tells them
+      // apart, and `types`/`ops` are what say how.
       seq: vm.seq,
       domNodes: this.host.querySelectorAll('*').length,
     };

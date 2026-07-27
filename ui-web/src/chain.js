@@ -20,10 +20,20 @@ function text(parent) {
 }
 
 export class Chain {
-  constructor(host, { onSelect } = {}) {
+  /**
+   * @param {HTMLElement} host
+   * @param {{onSelect?: (pos:number) => void, onAdd?: (track:number) => void}} opts
+   *
+   * `onAdd` is called with the track the strip is CURRENTLY showing, not with
+   * whatever the caller thinks the cursor is on — the two differ for a frame
+   * whenever the cursor moves, and a device added to the previous track is the
+   * kind of wrong that looks like nothing happened.
+   */
+  constructor(host, { onSelect, onAdd } = {}) {
     this.host = host;
     this.host.className = 'dv';
     this.onSelect = onSelect;
+    this.onAdd = onAdd;
 
     const head = div('dv-head', host);
     this.label = text(div('dv-label', head));
@@ -36,10 +46,29 @@ export class Chain {
     this.vm = null;
     this._track = null; this._version = null; this._notice = null;
 
+    // Built once, here, and never touched again by a draw.
+    //
+    // It is the FIRST child rather than the last because the pool appends: a
+    // card created on the fifth device would land after anything the constructor
+    // put at the end, so keeping it last in the DOM would mean moving a node
+    // every time the pool grows. CSS `order` puts it last on screen instead,
+    // which costs nothing and never mutates the tree. It is deliberately not a
+    // `.dv-card` — the delegated handler below reads `dataset.pos` off those,
+    // and a card with no position would select NaN.
+    this.addEl = div('dv-add', this.cardsEl);
+    this.addEl.setAttribute('role', 'button');
+    this.addEl.setAttribute('aria-label', 'add a device to this chain');
+    this.addEl.title = 'add a device';
+    text(this.addEl).nodeValue = '+';
+
     // One listener on the container rather than one per card: cards come and go
     // with the pool, and a listener per pooled element is a listener rebound
     // every time the pool grows.
     this.cardsEl.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.dv-add')) {
+        if (this.onAdd) this.onAdd(this.vm ? this.vm.track : -1);
+        return;
+      }
       const card = e.target.closest('.dv-card');
       if (card && this.onSelect) this.onSelect(Number(card.dataset.pos));
     });
@@ -147,6 +176,10 @@ export class Chain {
       version: vm.version,
       cards: vm.cardCount,
       notice: vm.notice,
+      // The affordance is unconditional: a chain the engine has not published is
+      // still a chain a device can be appended to, and hiding the control would
+      // make "we have not read it yet" look like "you may not add one".
+      canAdd: !!this.addEl,
       titles: vm.cards.slice(0, vm.cardCount).map((c) => c.title),
       named: vm.cards.slice(0, vm.cardCount).filter((c) => c.named).length,
       params: vm.cards.slice(0, vm.cardCount).map((c) => c.paramCount),
