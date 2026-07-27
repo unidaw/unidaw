@@ -411,6 +411,8 @@ const chainBuf = createChainBuffer();
  */
 let chains = Object.create(null);
 let chainRev = -1;
+/** Whether the project list has been asked for on this connection. */
+let listRequested = false;
 /** The engine's scale registry: [{id, name, octaveCents, stepCents[]}]. */
 let scales = null;
 
@@ -2036,6 +2038,15 @@ conn = WANTS_ENGINE ? connectEngine({
     reconcileMixer(mixerState, store);
     reconcilePatcher();
     reconcileLoop();
+    // Ask for the project list once the COMMAND socket can actually carry it.
+    // The rail used to request it when you opened it, which was right while it
+    // was an overlay; making it permanent meant nothing ever asked and it sat
+    // empty for a whole session. Not in onStatus: that fires on the STATE
+    // socket, and the command socket is a separate connection that is usually
+    // not open yet — the send would return false and the flag would be spent.
+    if (!listRequested && conn && conn.canSend()) {
+      listRequested = conn.send({ type: 'list' });
+    }
     // A load result. The engine used to accept a malformed project, change
     // nothing, and ack ok — indistinguishable from a load that worked and
     // produced identical content. It reports now, so we can too.
