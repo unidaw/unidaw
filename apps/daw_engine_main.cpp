@@ -35,6 +35,7 @@
 #include "apps/host_controller.h"
 #include "apps/plugin_cache.h"
 #include "apps/patcher_abi.h"
+#include "apps/patcher_assemble.h"
 #include "apps/patcher_graph.h"
 #include "apps/patcher_preset.h"
 #include "apps/patcher_preset_library.h"
@@ -3285,54 +3286,126 @@ struct TrackRuntime {
       }
     }
 
-    // Restore the song's patcher DAG. Patchers are per-device now, but the engine
-    // still executes one global graph, so it takes the first device (in track
-    // then chain order) that carries one; the rest are preserved on save
-    // (round-tripped) but not yet run per-device. A patcher-less (or older)
-    // project leaves the live audio graph intact rather than wiping it to empty.
-    bool patcherLoaded = false;
-    // Patcher execution is engine-lifetime, one shared node pool
-    // (patcherGraphState.graph): each patcher-device selects nodes from it by
-    // device.patcherNodeId (+ per-device euclidean overrides), rather than each
-    // device running an independent graph. So load RESTORES the pool only when the
-    // project authored one — the first device carrying a non-empty patcher wins and
-    // replaces the running graph; a project with no authored patcher leaves the
-    // startup default graph in place (load is a deliberate no-op for it, not a bug).
-    // True per-device graph execution (every device runs its own patcher) is a
-    // larger RT change tracked separately.
+    // Restore the song's patcher execution. Patcher nodes live in one shared pool
+    // (patcherGraphState.graph); the RT scheduler runs each patcher-device's
+    // subgraph independently via a DFS seeded from that device's output node
+    // (device.patcherNodeId) over the pool. Two project shapes map onto that:
+    //
+    //  - Legacy single graph (every project the current save format writes): at
+    //    most one device carries a graph. Load it verbatim, node ids preserved, so
+    //    other devices that tap it by patcherNodeId still resolve.
+    //  - Per-device (two or more devices each carry their own graph): assemble them
+    //    into one pool with globally-unique ids (assemblePatcherPool, offset per
+    //    track so subgraphs stay disjoint) and repoint each runtime device at its
+    //    own output node in the pool. Each device's graph then runs independently.
+    //
+    // A patcher-less project leaves the live audio graph intact rather than wiping
+    // it to empty.
+    size_t deviceGraphCount = 0;
     for (const auto& source : document.tracks) {
-      if (patcherLoaded) {
-        break;
-      }
       for (const auto& device : source.chain.devices) {
-        if (device.patcher.nodes.empty()) {
+        if (!device.patcher.nodes.empty()) {
+          ++deviceGraphCount;
+        }
+      }
+    }
+    if (deviceGraphCount >= 2) {
+      struct DevOut {
+        uint32_t trackId;
+        uint32_t deviceId;
+        uint32_t node;
+      };
+      daw::PatcherGraph pool;
+      std::vector<DevOut> outputs;
+      uint32_t base = 0;
+      for (const auto& source : document.tracks) {
+        daw::AssembledPatcher sub = daw::assemblePatcherPool(source.chain.devices);
+        if (!sub.anyPerDevice) {
           continue;
         }
-        daw::PatcherGraph loadedGraph = device.patcher;
-        if (daw::buildPatcherGraph(loadedGraph)) {
-          {
-            std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
-            patcherGraphState.graph = std::move(loadedGraph);
-            uint32_t nextId = 0;
-            for (const auto& node : patcherGraphState.graph.nodes) {
-              nextId = std::max(nextId, node.id + 1);
-            }
-            patcherGraphState.nextNodeId = nextId;
-          }
-          patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
-          updatePatcherGraphSnapshot();
-          DAW_EVENT("project.patcher_loaded")
-              .field("track", source.trackId)
-              .field("device", device.id)
-              .field("nodes", static_cast<uint64_t>(device.patcher.nodes.size()))
-              .field("edges", static_cast<uint64_t>(device.patcher.edges.size()));
-        } else {
-          DAW_EVENT("project.patcher_invalid")
-              .field("track", source.trackId)
-              .field("device", device.id);
+        for (auto node : sub.pool.nodes) {
+          node.id += base;
+          pool.nodes.push_back(node);
         }
-        patcherLoaded = true;  // engine runs only one graph for now
-        break;
+        for (auto edge : sub.pool.edges) {
+          edge.src.nodeId += base;
+          edge.dst.nodeId += base;
+          pool.edges.push_back(edge);
+        }
+        for (const auto& out : sub.deviceOutputs) {
+          outputs.push_back({source.trackId, out.first, out.second + base});
+        }
+        base += static_cast<uint32_t>(sub.pool.nodes.size());
+      }
+      if (!pool.nodes.empty() && daw::buildPatcherGraph(pool)) {
+        {
+          std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+          patcherGraphState.graph = std::move(pool);
+          patcherGraphState.nextNodeId = base;
+        }
+        patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
+        updatePatcherGraphSnapshot();
+        // Repoint each runtime device at its output node in the assembled pool, so
+        // the RT DFS seeds from the right node.
+        for (const auto& out : outputs) {
+          TrackRuntime* rt = nullptr;
+          {
+            std::lock_guard<std::mutex> lock(tracksMutex);
+            if (out.trackId < tracks.size()) {
+              rt = tracks[out.trackId].get();
+            }
+          }
+          if (!rt) {
+            continue;
+          }
+          std::lock_guard<std::mutex> lock(rt->trackMutex);
+          for (auto& d : rt->track.chain.devices) {
+            if (d.id == out.deviceId) {
+              d.patcherNodeId = out.node;
+              break;
+            }
+          }
+        }
+        DAW_EVENT("project.patcher_assembled")
+            .field("devices", static_cast<uint64_t>(outputs.size()))
+            .field("nodes", static_cast<uint64_t>(base));
+      }
+    } else {
+      bool patcherLoaded = false;
+      for (const auto& source : document.tracks) {
+        if (patcherLoaded) {
+          break;
+        }
+        for (const auto& device : source.chain.devices) {
+          if (device.patcher.nodes.empty()) {
+            continue;
+          }
+          daw::PatcherGraph loadedGraph = device.patcher;
+          if (daw::buildPatcherGraph(loadedGraph)) {
+            {
+              std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+              patcherGraphState.graph = std::move(loadedGraph);
+              uint32_t nextId = 0;
+              for (const auto& node : patcherGraphState.graph.nodes) {
+                nextId = std::max(nextId, node.id + 1);
+              }
+              patcherGraphState.nextNodeId = nextId;
+            }
+            patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
+            updatePatcherGraphSnapshot();
+            DAW_EVENT("project.patcher_loaded")
+                .field("track", source.trackId)
+                .field("device", device.id)
+                .field("nodes", static_cast<uint64_t>(device.patcher.nodes.size()))
+                .field("edges", static_cast<uint64_t>(device.patcher.edges.size()));
+          } else {
+            DAW_EVENT("project.patcher_invalid")
+                .field("track", source.trackId)
+                .field("device", device.id);
+          }
+          patcherLoaded = true;
+          break;
+        }
       }
     }
 

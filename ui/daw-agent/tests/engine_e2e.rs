@@ -442,6 +442,86 @@ fn patcher_graph_published() {
     assert!(!view.edges.is_empty(), "default graph should have an edge");
 }
 
+/// Per-device patcher execution: a project whose track carries TWO patcher devices,
+/// each with its own graph, is assembled into one shared pool on load (globally
+/// unique node ids), so each device's subgraph runs independently. Verified through
+/// the published graph: both devices' euclidean nodes (distinct steps) appear.
+#[test]
+fn per_device_patchers_assemble_into_pool() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("perdev");
+
+    // One patcher device's own graph: euclid(steps/hits) -> event_out, output = 1.
+    let dev = |dev_id: u64, kind: &str, steps: u64, hits: u64| {
+        json!({
+            "device_id": dev_id, "kind": kind, "patcher_node_id": 1, "bypass": false,
+            "patcher": {
+                "nodes": [
+                    { "id": 0, "type": "euclidean",
+                      "euclidean": { "steps": steps, "hits": hits, "offset": 0, "duration_ticks": 0,
+                                     "degree": 1, "octave_offset": 0, "velocity": 100, "base_octave": 4 } },
+                    { "id": 1, "type": "event_out" }
+                ],
+                "edges": [
+                    { "src_node_id": 0, "src_port_id": 1, "dst_node_id": 1, "dst_port_id": 0, "kind": "event" }
+                ]
+            }
+        })
+    };
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "perdev_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ dev(10, "patcher_event", 7, 3), dev(20, "patcher_instrument", 9, 5) ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(
+        engine.proj.join("perdev_in.uniproj.json"),
+        serde_json::to_string_pretty(&proj).unwrap(),
+    )
+    .unwrap();
+
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"perdev_in"}) });
+    assert!(load.ok, "load failed: {load:?}");
+
+    // Poll the published graph until both devices' euclidean nodes (steps 7 and 9)
+    // appear — proof both were assembled into the pool, not just the first.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let view = loop {
+        let v = session.handle().read_patcher();
+        let steps: Vec<i32> =
+            v.nodes.iter().filter(|n| n.node_type == 1).map(|n| n.config[0]).collect();
+        if steps.contains(&7) && steps.contains(&9) {
+            break v;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "assembled per-device pool never published: {:?}",
+            v.nodes.iter().map(|n| (n.node_type, n.config[0])).collect::<Vec<_>>()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // Union pool: two euclidean + two event_out = 4 nodes, two edges, ids unique.
+    assert_eq!(view.nodes.len(), 4, "expected 4 pooled nodes");
+    assert_eq!(view.edges.len(), 2, "expected two edges, one per device");
+    let mut ids: Vec<u32> = view.nodes.iter().map(|n| n.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 4, "node ids must be globally unique in the assembled pool");
+    // Each device keeps its own event_out terminal (type 6).
+    assert_eq!(
+        view.nodes.iter().filter(|n| n.node_type == 6).count(),
+        2,
+        "each device's event_out should survive assembly"
+    );
+}
+
 /// Track names are published: a fresh track defaults to "Track N", and a loaded
 /// project's name flows through so every lane-labelling surface reads one source.
 #[test]
