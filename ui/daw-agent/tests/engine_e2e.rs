@@ -15,6 +15,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use daw_agent::{AgentSession, ToolCall};
+use daw_bridge::layout::{UiCommandPayload, UiCommandType};
 use serde_json::{json, Value};
 
 // One engine at a time.
@@ -577,6 +578,99 @@ fn per_device_patchers_assemble_into_pool() {
         let nodes = d["patcher"]["nodes"].as_array().unwrap();
         assert_eq!(nodes.len(), 2, "each device's own graph is 2 nodes, not the pooled union: {d:?}");
     }
+}
+
+/// B1: a device's real name + parameters are published on RequestDeviceParams
+/// (v17), so the device-chain rack shows the plugin instead of "VST #7". Loads the
+/// Identity plugin (one "gain" param) and reads it back.
+#[test]
+fn device_params_published_on_request() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("devparams");
+
+    // Current Identity build (the per-config path; the flat one is a stale copy).
+    let build = build_dir();
+    let mut vst = build.join("identity_plugin_artefacts/RelWithDebInfo/VST3/Identity.vst3");
+    if !vst.exists() {
+        vst = build.join("identity_plugin_artefacts/VST3/Identity.vst3");
+    }
+    assert!(vst.exists(), "Identity.vst3 not built at {}", vst.display());
+
+    let proj = json!({
+        "schema_version": 4,
+        "meta": { "name": "devparams", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ {
+                "device_id": 0, "kind": "vst_effect", "patcher_node_id": 0, "bypass": false,
+                "vst_ref": { "vendor": "", "name": "Identity", "path": vst.to_str().unwrap(), "uid16": "" }
+            } ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(
+        engine.proj.join("devparams.uniproj.json"),
+        serde_json::to_string_pretty(&proj).unwrap(),
+    )
+    .unwrap();
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"devparams"}) });
+    assert!(load.ok, "load failed: {load:?}");
+
+    // The plugin loads asynchronously in the host; retry the request until its
+    // params appear (or time out).
+    let req = |device_id: u32| {
+        let p = UiCommandPayload {
+            command_type: UiCommandType::RequestDeviceParams as u16,
+            flags: 0,
+            track_id: 0,
+            plugin_index: 0,
+            note_pitch: 0,
+            value0: device_id,
+            note_nanotick_lo: 0,
+            note_nanotick_hi: 0,
+            note_duration_lo: 0,
+            note_duration_hi: 0,
+            base_version: 0,
+        };
+        let _ = session.handle().send_command(p);
+    };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let view = loop {
+        req(0);
+        let v = session.handle().read_device_params();
+        if !v.params.is_empty() {
+            break v;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "device params never published (name={:?}, count={})",
+            v.device_name, v.params.len()
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    };
+
+    // The read-back is the requested device, with a real name and named params.
+    assert_eq!(view.track_id, 0);
+    assert_eq!(view.device_id, 0);
+    assert!(!view.device_name.is_empty(), "device name should be published");
+    assert!(!view.params.is_empty(), "at least one parameter should be published");
+    // Every published param carries a display name, a durable id, and an in-range
+    // normalised value — the three things a rack + a MAP binding need.
+    let named = view.params.iter().filter(|p| !p.name.is_empty()).count();
+    assert!(named > 0, "params should have display names: {:?}",
+            view.params.iter().take(4).map(|p| &p.name).collect::<Vec<_>>());
+    assert!(
+        view.params.iter().any(|p| p.uid16 != [0u8; 16]),
+        "params should carry a durable uid16 to key mappings on"
+    );
+    assert!(
+        view.params.iter().all(|p| p.value >= 0.0 && p.value <= 1.0),
+        "normalised values must be in 0..1"
+    );
 }
 
 /// The scale registry is published (v16) so the harmony + tuning UI can draw the

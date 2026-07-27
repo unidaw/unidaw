@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 16;
+pub const K_SHM_VERSION: u16 = 17;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
@@ -15,6 +15,7 @@ pub const K_UI_MAX_CLIP_CHORDS: usize = 1024;
 pub const K_UI_MAX_HARMONY_EVENTS: usize = 512;
 pub const K_UI_MAX_SCALES: usize = 32;
 pub const K_UI_MAX_SCALE_STEPS: usize = 48;
+pub const K_UI_MAX_DEVICE_PARAMS: usize = 256;
 pub const K_UI_EDIT_BATCH_MAX_OPS: usize = 32;
 pub const K_UI_EDIT_BATCH_CAPACITY: usize = 64;
 pub const K_CHAIN_DEVICE_ID_AUTO: u32 = 0xFFFF_FFFF;
@@ -84,6 +85,8 @@ pub struct ShmHeader {
     pub ui_load_ok: u32,
     // v16: byte offset of the published UiScaleRegion (0 = none).
     pub ui_scales_offset: u64,
+    // v17: byte offset of the UiDeviceParamsRegion (0 = none).
+    pub ui_device_params_offset: u64,
 }
 
 /// v14: a published patcher-graph node. `config` is type-interpreted (see the C++
@@ -135,6 +138,28 @@ pub struct UiScaleRegion {
     pub version: u32,
     pub scale_count: u32,
     pub scales: [UiScale; K_UI_MAX_SCALES],
+}
+
+/// v17: one parameter of a device. `uid16` is the durable id to key mappings on;
+/// `value_milli` is the normalised value * 1000.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiDeviceParam {
+    pub index: u32,
+    pub value_milli: i32,
+    pub uid16: [u8; 16],
+    pub name: [u8; 40],
+    pub display: [u8; 24],
+}
+
+#[repr(C, align(64))]
+pub struct UiDeviceParamsRegion {
+    pub version: u32,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub param_count: u32,
+    pub device_name: [u8; 40],
+    pub params: [UiDeviceParam; K_UI_MAX_DEVICE_PARAMS],
 }
 
 #[repr(C, align(64))]
@@ -434,6 +459,8 @@ pub enum UiCommandType {
     SetPosition = 35,
     /// Rename a track (trackId + name in UiPatcherPresetCommandPayload).
     SetTrackName = 36,
+    // 37-39 reserved for the frontend's read-back request commands (web-ui branch).
+    RequestDeviceParams = 40,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -720,6 +747,18 @@ mod tests {
         assert_eq!(offset_of!(UiScaleRegion, version), 0);
         assert_eq!(offset_of!(UiScaleRegion, scale_count), 4);
         assert_eq!(offset_of!(UiScaleRegion, scales), 8);
+
+        assert_eq!(offset_of!(ShmHeader, ui_device_params_offset), 568); // v17
+        // v17 device-params region layout.
+        assert_eq!(offset_of!(UiDeviceParam, index), 0);
+        assert_eq!(offset_of!(UiDeviceParam, value_milli), 4);
+        assert_eq!(offset_of!(UiDeviceParam, uid16), 8);
+        assert_eq!(offset_of!(UiDeviceParam, name), 24);
+        assert_eq!(offset_of!(UiDeviceParam, display), 64);
+        const_assert_eq!(size_of::<UiDeviceParam>(), 88);
+        assert_eq!(offset_of!(UiDeviceParamsRegion, param_count), 12);
+        assert_eq!(offset_of!(UiDeviceParamsRegion, device_name), 16);
+        assert_eq!(offset_of!(UiDeviceParamsRegion, params), 56);
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
         const_assert_eq!(size_of::<UiPatcherEdge>(), 20);
         const_assert_eq!(size_of::<UiPatcherRegion>(), 5184);

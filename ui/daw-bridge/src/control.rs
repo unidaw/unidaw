@@ -19,9 +19,10 @@ use crate::layout::{
     EventEntry, EventType, RingHeader, ShmHeader, UiChordCommandPayload,
     UiClipExtent, UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot,
     UiCommandPayload, UiHarmonyEvent, UiHarmonySnapshot, UiPatcherEdge, UiPatcherNode,
-    UiPatcherRegion, UiScaleRegion, K_SHM_MAGIC, K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS,
-    K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_SCALES,
-    K_UI_MAX_SCALE_STEPS, K_UI_MAX_TRACKS,
+    UiDeviceParamsRegion, UiPatcherRegion, UiScaleRegion, K_SHM_MAGIC, K_SHM_VERSION,
+    K_UI_MAX_CLIP_EXTENTS, K_UI_MAX_DEVICE_PARAMS, K_UI_MAX_HARMONY_EVENTS,
+    K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_SCALES, K_UI_MAX_SCALE_STEPS,
+    K_UI_MAX_TRACKS,
 };
 use crate::reader::{SeqlockReader, UiSnapshot};
 
@@ -53,6 +54,26 @@ pub struct ScaleView {
     pub name: String,
     pub octave_cents: f64,
     pub step_cents: Vec<f64>,
+}
+
+/// One parameter of a device (v17). `uid16` is the durable id to key a mapping on.
+#[derive(Clone, Debug, Default)]
+pub struct DeviceParamView {
+    pub index: u32,
+    pub value: f32, // 0..1
+    pub uid16: [u8; 16],
+    pub name: String,
+    pub display: String,
+}
+
+/// A device's published parameters, from the last RequestDeviceParams.
+#[derive(Clone, Debug, Default)]
+pub struct DeviceParamsView {
+    pub version: u32,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub device_name: String,
+    pub params: Vec<DeviceParamView>,
 }
 
 pub fn default_shm_name() -> String {
@@ -460,6 +481,40 @@ impl EngineHandle {
             });
         }
         out
+    }
+
+    /// The device-params region (v17), refreshed by RequestDeviceParams. `version`
+    /// bumps per publish; poll it after sending the request. Empty if not published.
+    pub fn read_device_params(&self) -> DeviceParamsView {
+        let off = unsafe { (*self.header).ui_device_params_offset };
+        if off == 0 {
+            return DeviceParamsView::default();
+        }
+        let region = self._mmap.as_ptr().wrapping_add(off as usize)
+            as *const UiDeviceParamsRegion;
+        let cstr = |b: &[u8]| {
+            let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+            String::from_utf8_lossy(&b[..end]).into_owned()
+        };
+        let n = (unsafe { (*region).param_count } as usize).min(K_UI_MAX_DEVICE_PARAMS);
+        let mut view = DeviceParamsView {
+            version: unsafe { (*region).version },
+            track_id: unsafe { (*region).track_id },
+            device_id: unsafe { (*region).device_id },
+            device_name: cstr(unsafe { &(*region).device_name }),
+            params: Vec::with_capacity(n),
+        };
+        for i in 0..n {
+            let p = unsafe { &(*region).params[i] };
+            view.params.push(DeviceParamView {
+                index: p.index,
+                value: p.value_milli as f32 / 1000.0,
+                uid16: p.uid16,
+                name: cstr(&p.name),
+                display: cstr(&p.display),
+            });
+        }
+        view
     }
 
     /// Per-track display names for the current track count (nul-trimmed).
