@@ -82,6 +82,11 @@ enum class UiCommandType : uint16_t {
   SetPosition = 35,
   // Rename a track. Carries trackId + name in UiPatcherPresetCommandPayload.
   SetTrackName = 36,
+  // Re-publish a track's device chain on demand. Chain diffs are otherwise
+  // publish-on-change only, so a UI that attaches to an already-running engine
+  // is blind to the rack until someone edits it. trackId == 0xFFFFFFFFu asks
+  // for every track.
+  RequestChainSnapshot = 37,
 };
 
 constexpr uint16_t kMixerFlagMute = 1u << 0;
