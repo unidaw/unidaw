@@ -360,6 +360,107 @@ fn set_track_name_updates_published_name() {
     }
 }
 
+/// A loaded project's harmony timeline is published (was 0 events before — the
+/// load bumped the version but never armed the snapshot write).
+#[test]
+fn harmony_timeline_published() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("harmony");
+    let proj = json!({
+        "schema_version": 4,
+        "meta": { "name": "harm" },
+        "nanoticks_per_quarter": Q,
+        "harmony_timeline": [
+            { "nanotick": 0, "root": 9, "scale_id": 1, "flags": 0 },       // A minor
+            { "nanotick": 4*Q, "root": 5, "scale_id": 0, "flags": 0 }      // F major
+        ],
+        "tracks": [ { "track_id": 0, "name": "T" } ]
+    });
+    std::fs::write(engine.proj.join("harm.uniproj.json"), serde_json::to_string(&proj).unwrap()).unwrap();
+    let before = session.handle().clip_version();
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"harm"}) });
+    assert!(load.ok, "load: {load:?}");
+    session.handle().wait_for_clip_version(before, before.wrapping_add(1), Duration::from_secs(3));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let h = session.handle().read_harmony();
+        if h.len() == 2 && h[0].root == 9 && h[1].root == 5 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "harmony never published: {:?}", session.handle().read_harmony());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// SetLoopRange is published back so the UI can draw the loop.
+#[test]
+fn loop_range_published() {
+    use daw_bridge::layout::{UiCommandPayload, UiCommandType};
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("looprange");
+    let start = 2 * Q;
+    let end = 6 * Q;
+    // SetLoopRange: start in note_nanotick_lo/hi, end in note_duration_lo/hi.
+    let payload = UiCommandPayload {
+        command_type: UiCommandType::SetLoopRange as u16,
+        flags: 0, track_id: 0, plugin_index: 0, note_pitch: 0, value0: 0,
+        note_nanotick_lo: (start & 0xffff_ffff) as u32,
+        note_nanotick_hi: (start >> 32) as u32,
+        note_duration_lo: (end & 0xffff_ffff) as u32,
+        note_duration_hi: (end >> 32) as u32,
+        base_version: 0,
+    };
+    session.handle().send_command(payload).expect("send SetLoopRange");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if session.handle().loop_range() == (start, end) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "loop range never published: {:?}", session.handle().loop_range());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// A failed LoadProject bumps the load seq with ok=0, so the UI can tell it from
+/// a silent no-op; a good load reports ok=1.
+#[test]
+fn failed_load_surfaces_error() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("loaderr");
+    // A good project.
+    std::fs::write(
+        engine.proj.join("good.uniproj.json"),
+        serde_json::to_string(&json!({
+            "schema_version": 4, "meta": {"name":"good"}, "nanoticks_per_quarter": Q,
+            "tracks": [ { "track_id": 0, "name": "T" } ]
+        })).unwrap(),
+    ).unwrap();
+    // A malformed project: a future schema version is rejected by deserialize.
+    std::fs::write(
+        engine.proj.join("bad.uniproj.json"),
+        r#"{"schema_version": 9999, "tracks": []}"#,
+    ).unwrap();
+
+    let wait_seq = |from: u32, what: &str| -> (u32, u32) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let (seq, ok) = session.handle().load_status();
+            if seq != from {
+                return (seq, ok);
+            }
+            assert!(Instant::now() < deadline, "{what}: load seq never advanced from {from}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let (seq0, _) = session.handle().load_status();
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"good"}) }).ok);
+    let (seq1, ok1) = wait_seq(seq0, "good load");
+    assert_eq!(ok1, 1, "good load should report ok=1");
+    assert!(session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"bad"}) }).ok);
+    let (_seq2, ok2) = wait_seq(seq1, "bad load");
+    assert_eq!(ok2, 0, "malformed load should report ok=0, not a silent no-op");
+}
+
 /// Per-track mixer state written via SetTrackMixer is published back verbatim, so
 /// the UI can render a fader at its true position; the mixer version advances.
 #[test]

@@ -18,9 +18,9 @@ use std::sync::atomic::fence;
 use crate::layout::{
     EventEntry, EventType, RingHeader, ShmHeader, UiChordCommandPayload,
     UiClipExtent, UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot,
-    UiCommandPayload, UiPatcherEdge, UiPatcherNode, UiPatcherRegion, K_SHM_MAGIC,
-    K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES,
-    K_UI_MAX_TRACKS,
+    UiCommandPayload, UiHarmonyEvent, UiHarmonySnapshot, UiPatcherEdge, UiPatcherNode,
+    UiPatcherRegion, K_SHM_MAGIC, K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS,
+    K_UI_MAX_HARMONY_EVENTS, K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_TRACKS,
 };
 use crate::reader::{SeqlockReader, UiSnapshot};
 
@@ -171,6 +171,30 @@ impl EngineHandle {
         unsafe { std::ptr::read_volatile(&(*self.header).ui_clip_version) }
     }
 
+    /// The published loop span in nanoticks (start, end) — mirrors the engine's
+    /// SetLoopRange, so the UI can draw the loop region.
+    pub fn loop_range(&self) -> (u64, u64) {
+        unsafe {
+            (
+                std::ptr::read_volatile(&(*self.header).ui_loop_start),
+                std::ptr::read_volatile(&(*self.header).ui_loop_end),
+            )
+        }
+    }
+
+    /// LoadProject result signal: (seq, ok). `seq` increments once per load
+    /// attempt (watch it move to know a load was processed); `ok` is 1 if the
+    /// last attempt loaded, 0 if it was rejected — so a failed load is not a
+    /// silent no-op.
+    pub fn load_status(&self) -> (u32, u32) {
+        unsafe {
+            (
+                std::ptr::read_volatile(&(*self.header).ui_load_seq),
+                std::ptr::read_volatile(&(*self.header).ui_load_ok),
+            )
+        }
+    }
+
     /// Block until the engine has acknowledged edits that advance the clip
     /// version from `base` to at least `target`, or `timeout` elapses; returns
     /// true if the target was reached. The engine bumps the clip version once
@@ -281,6 +305,34 @@ impl EngineHandle {
             let mut out = Vec::with_capacity(count);
             for i in 0..count {
                 out.push(unsafe { (*region).extents[i] });
+            }
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                return out;
+            }
+        }
+    }
+
+    /// The published harmony timeline (root/scale changes over time), under the
+    /// seqlock. Populated from the project's harmony_timeline on load.
+    pub fn read_harmony(&self) -> Vec<UiHarmonyEvent> {
+        loop {
+            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue;
+            }
+            let off = unsafe { (*self.header).ui_harmony_offset };
+            if off == 0 {
+                return Vec::new();
+            }
+            let snap =
+                self._mmap.as_ptr().wrapping_add(off as usize) as *const UiHarmonySnapshot;
+            let count =
+                (unsafe { (*snap).event_count } as usize).min(K_UI_MAX_HARMONY_EVENTS);
+            let mut out = Vec::with_capacity(count);
+            for i in 0..count {
+                out.push(unsafe { (*snap).events[i] });
             }
             fence(Ordering::Acquire);
             let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };

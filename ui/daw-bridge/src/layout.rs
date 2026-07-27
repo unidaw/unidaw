@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 14;
+pub const K_SHM_VERSION: u16 = 15;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
@@ -73,6 +73,13 @@ pub struct ShmHeader {
     // v14: byte offset of the published UiPatcherRegion (0 = none). Fits the
     // header's tail padding, so the header size is unchanged.
     pub ui_patcher_offset: u64,
+    // v15: loop region (nanoticks), and a load-result signal (ui_load_seq bumps
+    // per LoadProject attempt, ui_load_ok is the last result). Ride the tail
+    // padding; header size unchanged.
+    pub ui_loop_start: u64,
+    pub ui_loop_end: u64,
+    pub ui_load_seq: u32,
+    pub ui_load_ok: u32,
 }
 
 /// v14: a published patcher-graph node. `config` is type-interpreted (see the C++
@@ -675,6 +682,10 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_mixer_version), 328);
         assert_eq!(offset_of!(ShmHeader, ui_track_name), 332); // v13
         assert_eq!(offset_of!(ShmHeader, ui_patcher_offset), 528); // v14 (fits tail padding)
+        assert_eq!(offset_of!(ShmHeader, ui_loop_start), 536); // v15
+        assert_eq!(offset_of!(ShmHeader, ui_loop_end), 544);
+        assert_eq!(offset_of!(ShmHeader, ui_load_seq), 552);
+        assert_eq!(offset_of!(ShmHeader, ui_load_ok), 556);
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
         const_assert_eq!(size_of::<UiPatcherEdge>(), 20);
         const_assert_eq!(size_of::<UiPatcherRegion>(), 5184);
