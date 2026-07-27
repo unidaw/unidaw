@@ -3230,6 +3230,31 @@ struct TrackRuntime {
       nc.id = nextClipId.fetch_add(1, std::memory_order_acq_rel);
       nc.name = "Clip";
       nc.lengthNanoticks = 0;
+      // Inherit the grid of the predecessor clip on this track — the placement with
+      // the greatest anchor before the new one — so a new section keeps the meter you
+      // were working in rather than snapping back to 4/4. Defaults stand when there is
+      // no predecessor.
+      {
+        const daw::ProjectClip* pred = nullptr;
+        uint64_t predAt = 0;
+        for (const auto& p : rt.sourcePlacements) {
+          if (!p.at.has_value() || *p.at >= decision.at) {
+            continue;
+          }
+          if (pred == nullptr || *p.at > predAt) {
+            const size_t oi = findOwned(p.clipId);
+            if (oi < rt.ownedClips.size()) {
+              pred = &rt.ownedClips[oi];
+              predAt = *p.at;
+            }
+          }
+        }
+        if (pred != nullptr) {
+          nc.linesPerBeat = pred->linesPerBeat;
+          nc.timeSigNumerator = pred->timeSigNumerator;
+          nc.timeSigDenominator = pred->timeSigDenominator;
+        }
+      }
       const uint32_t newId = nc.id;
       rt.ownedClips.push_back(std::move(nc));
       rt.editableClipIds.push_back(newId);
