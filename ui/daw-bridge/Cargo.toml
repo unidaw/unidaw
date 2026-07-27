@@ -9,6 +9,9 @@ memmap2 = "0.9"
 static_assertions = "1.1"
 memoffset = "0.9"
 
+[build-dependencies]
+bindgen = "0.70"
+
 [lib]
 name = "daw_bridge"
 path = "src/lib.rs"

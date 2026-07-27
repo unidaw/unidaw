@@ -658,6 +658,40 @@ mod tests {
     use static_assertions::const_assert_eq;
     use std::mem::{align_of, size_of};
 
+    /// The bindgen-generated structs (crate::sys, from the C++ header) byte-match
+    /// the hand-written mirror here. Once this holds, the cutover can replace these
+    /// hand-written structs with the generated ones with no wire change. bindgen's
+    /// own layout_tests already pin the generated structs to the C++; this pins the
+    /// hand-written ones to the generated, closing the loop.
+    #[test]
+    fn bindgen_matches_hand_written() {
+        use crate::sys;
+        macro_rules! same {
+            ($hand:ty, $gen:ty) => {
+                assert_eq!(
+                    size_of::<$hand>(), size_of::<$gen>(),
+                    concat!("size mismatch: ", stringify!($hand))
+                );
+                assert_eq!(
+                    align_of::<$hand>(), align_of::<$gen>(),
+                    concat!("align mismatch: ", stringify!($hand))
+                );
+            };
+        }
+        same!(ShmHeader, sys::daw_ShmHeader);
+        same!(RingHeader, sys::daw_RingHeader);
+        same!(EventEntry, sys::daw_EventEntry);
+        same!(UiEditBatchEntry, sys::daw_UiEditBatchEntry);
+        same!(UiPatcherNode, sys::daw_UiPatcherNode);
+        same!(UiPatcherEdge, sys::daw_UiPatcherEdge);
+        same!(UiPatcherRegion, sys::daw_UiPatcherRegion);
+        same!(UiScale, sys::daw_UiScale);
+        same!(UiScaleRegion, sys::daw_UiScaleRegion);
+        same!(UiDeviceParam, sys::daw_UiDeviceParam);
+        same!(UiDeviceParamsRegion, sys::daw_UiDeviceParamsRegion);
+        same!(UiClipNote, sys::daw_UiClipNote);
+    }
+
     #[test]
     fn clip_window_command_payload_size() {
         assert_eq!(size_of::<UiClipWindowCommandPayload>(), 40);
