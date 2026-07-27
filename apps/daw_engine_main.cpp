@@ -5523,10 +5523,21 @@ struct TrackRuntime {
           uiShm.header->uiDeviceParamsOffset != 0) {
         std::vector<daw::HostParamWire> wire;
         std::string hostName;
+        bool queryOk = false;
         {
           std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-          runtime->controller.requestPluginParams(pluginIndex, wire, hostName);
+          queryOk =
+              runtime->controller.requestPluginParams(pluginIndex, wire, hostName);
         }
+        // The query silently returning empty was invisible; log where it lands so
+        // an empty rack can be told apart from a failed round-trip.
+        DAW_EVENT("device.params_query")
+            .field("track", trackId)
+            .field("device", deviceId)
+            .field("pluginIndex", pluginIndex)
+            .field("ok", queryOk)
+            .field("count", static_cast<uint64_t>(wire.size()))
+            .field("hostName", hostName);
         // Prefer the actually-loaded plugin's name (authoritative) over the stored
         // vstRef name, which can drift if resolution loaded a different plugin.
         const std::string& shownName = !hostName.empty() ? hostName : deviceName;

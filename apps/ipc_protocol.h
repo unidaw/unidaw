@@ -6,7 +6,10 @@ namespace daw {
 
 constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 // 2: ProcessBlockRequest carries transport position for the play head.
-constexpr uint16_t kControlVersion = 2;
+// 3: GetParams + ParamsHeader.pluginName (B1). Bumped so a host built before this
+//    is rejected at the handshake (recvHeader checks the version) instead of
+//    misparsing the larger reply header into a silent empty param list.
+constexpr uint16_t kControlVersion = 3;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,
