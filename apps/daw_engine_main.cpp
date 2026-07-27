@@ -1018,6 +1018,10 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(sizeof(daw::UiScaleRegion), 64);
     header.uiDeviceParamsOffset = offset;  // v17: one device's params (on request)
     offset += daw::alignUp(sizeof(daw::UiDeviceParamsRegion), 64);
+    header.uiAudioSourceOffset = offset;   // v18: audio source/clip metadata table
+    offset += daw::alignUp(sizeof(daw::UiAudioSourceRegion), 64);
+    header.uiWaveformOffset = offset;      // v18: windowed waveform answer slots
+    offset += daw::alignUp(sizeof(daw::UiWaveformRegion), 64);
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
@@ -1069,6 +1073,20 @@ int main(int argc, char** argv) {
       }
       region->scaleCount = count;
       region->version = 1;
+    }
+
+    // v18: initialise the waveform region headers once. The source/clip tables are
+    // filled on project load (rebuildAudioRender); the slots are written on request.
+    if (uiShm.header->uiAudioSourceOffset != 0) {
+      auto* region = reinterpret_cast<daw::UiAudioSourceRegion*>(
+          reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiAudioSourceOffset);
+      region->formatVersion = daw::kWaveformFormatVersion;
+      region->version = 0;
+    }
+    if (uiShm.header->uiWaveformOffset != 0) {
+      auto* region = reinterpret_cast<daw::UiWaveformRegion*>(
+          reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiWaveformOffset);
+      region->slotCount = daw::kUiWaveformSlots;
     }
 
     auto* ringUi = reinterpret_cast<daw::RingHeader*>(

@@ -46,7 +46,10 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 15: loop range read-back (uiLoopStart/uiLoopEnd) + load-result signal
 //     (uiLoadSeq/uiLoadOk). All ride the header's remaining tail padding, so
 //     sizeof(ShmHeader) is unchanged.
-constexpr uint16_t kShmVersion = 17;
+// 18: waveform read-back — UiAudioSourceRegion + UiWaveformRegion (uiAudioSourceOffset
+//     / uiWaveformOffset). The two new u64 offsets grow sizeof(ShmHeader) 576 -> 640,
+//     so this is the first UI-region bump that does NOT ride the header tail padding.
+constexpr uint16_t kShmVersion = 18;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -141,6 +144,13 @@ struct alignas(64) ShmHeader {
   // v17: byte offset of the UiDeviceParamsRegion (0 = none) — one device's
   // parameters, refreshed on RequestDeviceParams.
   uint64_t uiDeviceParamsOffset = 0;
+  // v18: waveform regions. uiAudioSourceOffset -> UiAudioSourceRegion (per-source
+  // metadata + per-clip descriptors, version-gated). uiWaveformOffset ->
+  // UiWaveformRegion (seqlock answer slots for windowed RequestWaveform queries).
+  // These two u64s push sizeof(ShmHeader) past the tail padding (576 -> 640), unlike
+  // v14-v17 — so the Rust mirror's size/offset asserts move with this bump.
+  uint64_t uiAudioSourceOffset = 0;
+  uint64_t uiWaveformOffset = 0;
 };
 
 struct alignas(64) RingHeader {
@@ -308,6 +318,88 @@ struct alignas(64) UiDeviceParamsRegion {
   uint32_t paramCount = 0;
   char deviceName[40] = {};
   UiDeviceParam params[kUiMaxDeviceParams]{};
+};
+
+// v18: waveform read-back. Per decoded audio source the engine holds a min/max
+// pyramid + Q15 level-0 samples (in memory, not SHM); it publishes source/clip
+// METADATA here (UiAudioSourceRegion, version-gated), and answers windowed queries
+// (RequestWaveform) into UiWaveformRegion's seqlock slots. Peaks are pre-gain,
+// pre-fade, in SOURCE frames, anchored to frame 0 — gain/fades/tempo are draw-time.
+constexpr uint32_t kUiMaxAudioSources = 32;
+constexpr uint32_t kUiMaxAudioClips = 64;      // == kUiMaxClipExtents
+constexpr uint32_t kUiWaveformSlots = 4;
+constexpr uint32_t kUiWaveformMaxPairs = 24576;  // per slot, all channels
+constexpr uint32_t kWaveformBaseDecim = 64;      // smallest stored pyramid level
+constexpr uint32_t kWaveformFormatVersion = 1;
+
+struct UiAudioSource {          // 320 B
+  uint32_t sourceId = 0;       //   0  durable for the life of the render list
+  uint32_t contentKeyLo = 0;   //   4  FNV-1a(path,size,mtime_ns,frames,rate,ch,ver)
+  uint32_t contentKeyHi = 0;   //   8  split, not a u64 (JS has no u64 value type)
+  uint32_t sourceChannels = 0; //  12  channels in the FILE
+  uint32_t waveChannels = 0;   //  16  channels published here (min(sourceChannels,2))
+  uint32_t status = 0;         //  20  0 absent, 1 ready, 2 failed
+  uint64_t sourceFrames = 0;   //  24  frames in the SOURCE
+  double sourceRateHz = 0.0;   //  32  the FILE's rate (f64; a pull-down rate drifts)
+  float absPeak = 0.0f;        //  40  max|x| over the whole source, unclamped, pre-gain
+  uint32_t levelMask = 0;      //  44  bit k => a pyramid level at decimation (1<<k)
+  char path[256] = {};         //  48  resolved absolute path, nul-padded
+  uint32_t flags = 0;          // 304  bit0 >2 channels truncated, bit1 |x|>1 seen
+  uint32_t reserved[3] = {};   // 308
+};
+static_assert(sizeof(UiAudioSource) == 320, "UiAudioSource must be 320 bytes");
+
+struct UiAudioClip {            // 64 B
+  uint32_t clipId = 0;          //   0  joins UiClipExtent.clipId
+  uint32_t sourceId = 0;        //   4
+  uint64_t sourceStartFrame = 0;//   8  in-point, SOURCE frames
+  uint64_t clipLengthTicks = 0; //  16  the clip's own extent
+  uint32_t fadeInTicks = 0;     //  24  draw-time
+  uint32_t fadeOutTicks = 0;    //  28  draw-time
+  float gainDb = 0.0f;          //  32  draw-time, NEVER baked into peaks
+  uint32_t flags = 0;           //  36
+  uint32_t reserved[6] = {};    //  40
+};
+static_assert(sizeof(UiAudioClip) == 64, "UiAudioClip must be 64 bytes");
+
+struct alignas(64) UiAudioSourceRegion {   // metadata table, version-gated
+  uint32_t version = 0;         // bumped when either table changes
+  uint32_t sourceCount = 0;
+  uint32_t clipCount = 0;
+  uint32_t audioMapBpmMilli = 0;  // the constant tempo audio is positioned at * 1000
+  uint32_t formatVersion = 0;     // = kWaveformFormatVersion
+  uint32_t reserved[11] = {};
+  UiAudioSource sources[kUiMaxAudioSources]{};
+  UiAudioClip clips[kUiMaxAudioClips]{};
+};
+
+// One answer slot. A windowed min/max reply for one RequestWaveform, published under
+// a seqlock (seq odd while writing). Payload is channel-planar, then column, then
+// (min,max): for channel c column i, pairs[(c*columns + i)*2] and +1. At decimation 1
+// a bucket is one frame, so min == max == the sample — the peak and sample regimes
+// are one mechanism.
+struct alignas(64) UiWaveformSlot {          // 98,368 B
+  ShmAtomicU32 seq{0};          //   0  ODD while writing (seqlock)
+  uint32_t requestSeq = 0;      //   4  echo (identifies the answer)
+  uint32_t sourceId = 0;        //   8  echo
+  uint32_t contentKeyLo = 0;    //  12  echo
+  uint32_t contentKeyHi = 0;    //  16  echo
+  uint32_t decimation = 0;      //  20  frames per bucket; 1 = raw samples
+  uint32_t columns = 0;         //  24  per channel, actually written
+  uint32_t channels = 0;        //  28
+  uint64_t firstFrame = 0;      //  32  always a multiple of decimation
+  uint64_t frameCount = 0;      //  40  = columns * decimation, clipped at EOF
+  uint32_t status = 0;          //  48  0 ok, 1 truncated, 2 notready, 3 badrequest
+  uint32_t flags = 0;           //  52  bit0 window ran past EOF
+  uint32_t formatVersion = 0;   //  56
+  uint32_t reserved = 0;        //  60
+  int16_t pairs[kUiWaveformMaxPairs * 2] = {};   // 64
+};
+
+struct alignas(64) UiWaveformRegion {
+  uint32_t slotCount = 0;
+  uint32_t reserved[15] = {};
+  UiWaveformSlot slots[kUiWaveformSlots]{};
 };
 
 struct UiClipNote {

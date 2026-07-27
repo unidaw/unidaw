@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 17;
+pub const K_SHM_VERSION: u16 = 18;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
@@ -90,6 +90,10 @@ pub struct ShmHeader {
     pub ui_scales_offset: u64,
     // v17: byte offset of the UiDeviceParamsRegion (0 = none).
     pub ui_device_params_offset: u64,
+    // v18: byte offsets of the two waveform regions (0 = none). These two u64s push
+    // sizeof(ShmHeader) 576 -> 640, so the size/offset asserts below moved with v18.
+    pub ui_audio_source_offset: u64,
+    pub ui_waveform_offset: u64,
 }
 
 /// v14: a published patcher-graph node. `config` is type-interpreted (see the C++
@@ -132,6 +136,14 @@ pub struct UiPatcherRegion {
 pub use crate::sys::{
     daw_UiDeviceParam as UiDeviceParam, daw_UiDeviceParamsRegion as UiDeviceParamsRegion,
     daw_UiScale as UiScale, daw_UiScaleRegion as UiScaleRegion,
+};
+
+// v18 waveform regions, generated from shared_memory.h (bindgen's own layout_tests pin
+// their sizes/offsets against the C++ structs).
+pub use crate::sys::{
+    daw_UiAudioClip as UiAudioClip, daw_UiAudioSource as UiAudioSource,
+    daw_UiAudioSourceRegion as UiAudioSourceRegion, daw_UiWaveformRegion as UiWaveformRegion,
+    daw_UiWaveformSlot as UiWaveformSlot,
 };
 
 #[repr(C, align(64))]
@@ -439,6 +451,9 @@ pub enum UiCommandType {
     // 42 = Quit, taken by the frontend on its web-ui branch. Reserved; do not reuse.
     /// Set one plugin parameter from the rack (UiSetParamPayload).
     SetDeviceParam = 43,
+    /// Windowed waveform query (UiWaveformRequestPayload); answered into a
+    /// UiWaveformRegion seqlock slot from the per-source min/max pyramid.
+    RequestWaveform = 44,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -512,6 +527,25 @@ pub struct UiSetParamPayload {
     pub value_milli: u32,
     pub uid16: [u8; 16],
     pub reserved: [u8; 8],
+}
+
+/// A windowed waveform query (UiCommandType::RequestWaveform). Mirrors the C++
+/// UiWaveformRequestPayload (40 bytes). requestSeq is sidecar-allocated; slot =
+/// requestSeq % kUiWaveformSlots. decimation is a power of two >= 1.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiWaveformRequestPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub request_seq: u32,
+    pub source_id: u32,
+    pub decimation: u32,
+    pub first_frame_lo: u32,
+    pub first_frame_hi: u32,
+    pub columns: u32,
+    pub channel_mask: u32,
+    pub reserved0: u32,
+    pub reserved1: u32,
 }
 
 #[repr(C)]
@@ -722,7 +756,7 @@ mod tests {
 
     #[test]
     fn shm_header_layout_matches_cpp() {
-        const_assert_eq!(size_of::<ShmHeader>(), 576);
+        const_assert_eq!(size_of::<ShmHeader>(), 640); // v18: two waveform offsets
         const_assert_eq!(align_of::<ShmHeader>(), 64);
         assert_eq!(offset_of!(ShmHeader, ring_std_offset), 56);
         assert_eq!(offset_of!(ShmHeader, ring_ctrl_offset), 64);
@@ -762,6 +796,8 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_load_ok), 556);
         assert_eq!(offset_of!(ShmHeader, ui_scales_offset), 560); // v16 (fits tail padding)
         assert_eq!(offset_of!(ShmHeader, ui_device_params_offset), 568); // v17
+        assert_eq!(offset_of!(ShmHeader, ui_audio_source_offset), 576); // v18
+        assert_eq!(offset_of!(ShmHeader, ui_waveform_offset), 584);
         // The scale + device-param region structs (v16/v17) are now generated from
         // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
