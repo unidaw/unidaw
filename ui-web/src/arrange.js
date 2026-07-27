@@ -979,6 +979,18 @@ export class Arrange {
       loop: vm.loop.on ? { x: Math.round(vm.loop.x), w: Math.round(vm.loop.w) } : null,
       rulerTicks: vm.rulerCount,
       firstBar: vm.rulerCount ? vm.rulerBar[0] : -1,
+      /**
+       * Ticks between consecutive bar NUMBERS — the song's bar times whatever
+       * stride the ruler thinned to.
+       *
+       * Here because "the ruler is counting in 7/8" was otherwise only assertable
+       * by eye, and a ruler in the wrong meter is the failure that looks most like
+       * success: evenly spaced numbers, ascending, all of them wrong. Divide by
+       * `rulerEvery` for the bar itself.
+       */
+      rulerStrideTicks: vm.rulerCount >= 2
+        ? Math.round((vm.ruler[1] - vm.ruler[0]) * vm.view.ticksPerPixel) : 0,
+      rulerEvery: vm.rulerCount >= 2 ? vm.rulerBar[1] - vm.rulerBar[0] : 0,
       playheadX: Math.round(vm.playheadX),
       domNodes: this.clipPool.length + this.lanePool.length + this.gridPool.length,
       /**

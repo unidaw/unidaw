@@ -37,12 +37,17 @@ export function trackName(engine, t) {
 
 import { DEFAULT_METER, NANOTICKS_PER_QUARTER, ticksPerBar, ticksPerBeat } from './meter.js';
 
-// Kept as exports because callers import them; they are now DERIVED from the song
-// meter rather than asserted, so a project that is not in 4/4 draws its bar lines
-// where its bars are. Still module-level constants until the engine publishes a
-// song meter — see meter.js on why that is one assumption instead of four.
+/**
+ * 4/4's bar and beat, kept as the DEFAULT for callers that have no meter to hand
+ * and as the export the tests import.
+ *
+ * These used to be the only answer. The engine publishes a song time signature now
+ * (kShmVersion 19), so anything that draws bar lines or numbers them takes the
+ * meter as an argument and these are what it falls back to — a project in 7/8 drew
+ * its bar lines every four quarters, which is not a rounding error but a different
+ * piece of music.
+ */
 export const TICKS_PER_BAR = ticksPerBar(DEFAULT_METER);
-const TICKS_PER_BEAT = ticksPerBeat(DEFAULT_METER);
 
 /**
  * Horizontal zoom, in nanoticks per pixel. Coarser than the tracker's because
@@ -159,8 +164,12 @@ export function ticksPerSourceFrame(bpmMilli, rateHz) {
  * click is one unit rather than zero (the engine refuses end <= start), and a
  * drag off the left edge stops at zero.
  */
-export function snapLoop(a, b, fine) {
-  const unit = fine ? TICKS_PER_BAR / 4 : TICKS_PER_BAR;
+export function snapLoop(a, b, fine, meter = DEFAULT_METER) {
+  // `fine` snaps to a BEAT. It used to compute a quarter of a bar, which is the
+  // same thing in 4/4 and in nothing else — in 7/8 a quarter of a bar is 1.75
+  // eighths, a position no note in the project can be on. The constant was hiding
+  // the difference between "a beat" and "a quarter of a bar" by making them equal.
+  const unit = fine ? ticksPerBeat(meter) : ticksPerBar(meter);
   const start = Math.max(0, Math.round(Math.min(a, b) / unit) * unit);
   const end = Math.max(start + unit, Math.round(Math.max(a, b) / unit) * unit);
   return { start, end };
@@ -330,7 +339,13 @@ export function buildArrangeModel(opts, buf) {
     startTick = 0, width = 1200, zoomIndex = 3, tracks: laneCount = 8, loop = null,
     engine = null, laneHeight = 44, cursor = NO_CURSOR,
     selectedPlacement = -1, laneScroll = 0, audio = null, clipMarginPx = 0,
+    // The SONG's meter — what the ruler numbers and where the bar lines go. A clip
+    // in another meter draws its own accents inside those bars; that grid rides on
+    // the clip and is not this.
+    meter = DEFAULT_METER,
   } = opts;
+  const barTicks = ticksPerBar(meter);
+  const beatTicks = ticksPerBeat(meter);
 
   const zoom = ARRANGE_ZOOM[Math.max(0, Math.min(ARRANGE_ZOOM.length - 1, zoomIndex))];
   const tpp = zoom.ticksPerPixel;
@@ -360,17 +375,17 @@ export function buildArrangeModel(opts, buf) {
   // O(timeline) — the timeline is unbounded and there is no zoom at which
   // enumerating all of it becomes acceptable.
   let g = 0;
-  const beatPx = TICKS_PER_BEAT / tpp;
+  const beatPx = beatTicks / tpp;
   // Below ~6px a beat line is noise, so drop to bars only. Deciding this from
   // the projection rather than from the zoom index means it stays right if the
   // zoom table changes.
-  const step = beatPx >= 6 ? TICKS_PER_BEAT : TICKS_PER_BAR;
+  const step = beatPx >= 6 ? beatTicks : barTicks;
   const firstLine = Math.floor(startTick / step);
   const first = firstLine * step;
   // ABSOLUTE x: `tick / tpp`, with no `startTick` in it. See `scrollX`.
   for (let tick = first; tick < endTick && g < buf.grid.length; tick += step) {
     buf.grid[g] = tick / tpp;
-    buf.gridIsBar[g] = tick % TICKS_PER_BAR === 0 ? 1 : 0;
+    buf.gridIsBar[g] = tick % barTicks === 0 ? 1 : 0;
     g++;
   }
   buf.gridCount = g;
@@ -379,10 +394,10 @@ export function buildArrangeModel(opts, buf) {
   // Ruler: bar numbers only, and thinned so the labels never collide. Deciding
   // the stride from the measured pixel width rather than the zoom index means it
   // stays correct if the zoom table changes.
-  const barPx = TICKS_PER_BAR / tpp;
+  const barPx = barTicks / tpp;
   const every = barPx >= 48 ? 1 : barPx >= 24 ? 2 : barPx >= 12 ? 4 : 8;
   let r = 0;
-  const firstBar = Math.floor(startTick / TICKS_PER_BAR);
+  const firstBar = Math.floor(startTick / barTicks);
   // The identity of a LABEL is `bar / every`, not the bar: at every > 1 the bars
   // in between have no label at all, so numbering the pool by the bar would
   // leave `every - 1` slots of every `every` permanently unclaimed and shift the
@@ -390,7 +405,7 @@ export function buildArrangeModel(opts, buf) {
   // `firstBar` itself usually is not one.
   buf.rulerFirst = Math.ceil(firstBar / every);
   for (let bar = firstBar; r < buf.ruler.length; bar++) {
-    const tick = bar * TICKS_PER_BAR;
+    const tick = bar * barTicks;
     if (tick >= endTick) break;
     if (bar % every !== 0) continue;
     buf.ruler[r] = tick / tpp;                 // absolute; see `scrollX`

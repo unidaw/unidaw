@@ -23,7 +23,9 @@ import {
 import { isBlackKey, pitchLabel, fitLowPitch } from '../src/pianomodel.js';
 import { describeConfig, configFields, nudgeConfig,
          NODE_TYPES } from '../src/patchermodel.js';
-import { snapLoop, TICKS_PER_BAR } from '../src/arrangemodel.js';
+import { snapLoop, TICKS_PER_BAR, buildArrangeModel,
+         createArrangeBuffer } from '../src/arrangemodel.js';
+import { buildHarmonyModel, createHarmonyBuffer } from '../src/harmonymodel.js';
 import { velocityText } from '../src/viewmodel.js';
 import { trackName } from '../src/arrangemodel.js';
 import { createField, begin as fBegin, feed as fFeed, cancel as fCancel } from '../src/textfield.js';
@@ -748,4 +750,73 @@ test('unpackClipGrid writes into a caller-owned record', () => {
   // published a smaller grid inherits the previous one's numerator.
   unpackClipGrid(packGrid(4, 4, 2), out);
   assert.deepEqual(out, { linesPerBeat: 4, numerator: 4, denominator: 4 });
+});
+
+// ---------------------------------------------------------------------------
+// The song meter, where it actually reaches the screen.
+//
+// meter.js is tested above as arithmetic. These are the three places that
+// arithmetic becomes a bar line, a bar number or a snap — the places that were
+// counting every project in 4/4 because the constant was baked in at module
+// level, and where being wrong looks exactly like being right.
+
+const SEVEN_EIGHT = { numerator: 7, denominator: 8 };
+const EIGHTH = 480000;                    // 960000 nanoticks per quarter / 2
+const BAR_7_8 = EIGHTH * 7;               // 3360000
+
+test('snapLoop snaps to the bar the project is actually in', () => {
+  // 4/4 is unchanged, so the default still means what every caller assumed.
+  assert.deepEqual(snapLoop(TICKS_PER_BAR * 0.6, TICKS_PER_BAR * 3.4, false),
+                   { start: TICKS_PER_BAR, end: TICKS_PER_BAR * 3 });
+  // In 7/8 the bar is 3,360,000 ticks, so a drag that used to land on 3,840,000
+  // — a position no bar of this project begins on — lands on a real bar line.
+  assert.deepEqual(snapLoop(BAR_7_8 * 0.6, BAR_7_8 * 3.4, false, SEVEN_EIGHT),
+                   { start: BAR_7_8, end: BAR_7_8 * 3 });
+});
+
+test('a fine loop drag snaps to a BEAT, not to a quarter of a bar', () => {
+  // These are the same number in 4/4 and in nothing else, which is how the bug
+  // stayed invisible: `fine` computed TICKS_PER_BAR / 4. In 7/8 that is 1.75
+  // eighths — a position nothing in the project can be on.
+  const got = snapLoop(EIGHTH * 2.6, EIGHTH * 5.4, true, SEVEN_EIGHT);
+  assert.deepEqual(got, { start: EIGHTH * 3, end: EIGHTH * 5 });
+  assert.equal(got.start % EIGHTH, 0, 'and it lands on an eighth, the meter\'s beat');
+});
+
+test('the arrangement rules and numbers bars in the song meter', () => {
+  const buf = createArrangeBuffer(2, 128);
+  const opts = { startTick: 0, width: 800, zoomIndex: 0, tracks: 2,
+                 meter: SEVEN_EIGHT };
+  const m = buildArrangeModel(opts, buf);
+  const tpp = m.view.ticksPerPixel;
+
+  // Bar 1 is at tick 0 and bar 2 at 3,360,000 — NOT at 3,840,000, which is where
+  // a 4/4 ruler puts it and which is a different moment in the music.
+  assert.ok(m.rulerCount >= 2, `at least two bar numbers: ${m.rulerCount}`);
+  assert.equal(buf.rulerBar[0], 1, 'bars are 1-based to the user');
+  assert.equal(buf.ruler[0], 0);
+  assert.equal(buf.ruler[1], BAR_7_8 / tpp, 'bar 2 is one 7/8 bar in');
+
+  // And the gridline flagged as a bar is the same tick. gridIsBar drives a
+  // heavier rule, so a grid that agreed with the ruler by accident at one zoom
+  // and not another would draw the emphasis in the wrong place.
+  const barLines = [];
+  for (let i = 0; i < m.gridCount; i++) if (buf.gridIsBar[i]) barLines.push(buf.grid[i] * tpp);
+  assert.equal(barLines[0], 0);
+  assert.equal(barLines[1], BAR_7_8, 'the emphasised line is on the 7/8 bar too');
+});
+
+test('the harmony card counts the playhead in the song meter', () => {
+  const buf = createHarmonyBuffer(4);
+  // One 7/8 bar plus two eighths = tick 4,320,000, which is bar 2 beat 3 of a
+  // song in 7/8.
+  const tick = BAR_7_8 + EIGHTH * 2;
+  buildHarmonyModel({ harmony: [], playheadTick: tick, meter: SEVEN_EIGHT }, buf);
+  assert.equal(buf.at, 'bar 2.3');
+  // The SAME tick counted in 4/4 is bar 2 beat 1 — the right bar by coincidence
+  // and the wrong beat, which is the more dangerous of the two failures because
+  // the bar number looks plausible. Asserted so that this test cannot pass against
+  // a build that ignores the meter: the two answers have to differ.
+  buildHarmonyModel({ harmony: [], playheadTick: tick }, buf);
+  assert.equal(buf.at, 'bar 2.1');
 });

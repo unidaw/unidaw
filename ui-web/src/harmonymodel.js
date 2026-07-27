@@ -24,11 +24,11 @@
 
 import { DEFAULT_METER, ticksPerBar, ticksPerBeat } from './meter.js';
 
-/** Nanoticks. Same constant the tracker, arrange and piano projections use. */
-// Derived, not asserted. TICKS_PER_BEAT was TICKS_PER_BAR / 4, which is the
-// numerator baked in a second time: in 7/8 a bar is seven beats, not four.
-const TICKS_PER_BAR = ticksPerBar(DEFAULT_METER);
-const TICKS_PER_BEAT = ticksPerBeat(DEFAULT_METER);
+// 4/4, for a caller with no meter to hand. The engine publishes a song time
+// signature now (kShmVersion 19) and `buildHarmonyModel` takes it, so these are the
+// fallback rather than the answer. Derived rather than asserted: TICKS_PER_BEAT was
+// once TICKS_PER_BAR / 4, which is the numerator baked in a second time — in 7/8 a
+// bar is seven beats, not four.
 
 export const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
@@ -117,7 +117,13 @@ export function createHarmonyBuffer(rowCap = 8) {
  */
 export function buildHarmonyModel(opts, buf) {
   const { harmony = null, playheadTick = 0, version = -1, open = true,
-          nameHarmony = null, scales = null } = opts;
+          nameHarmony = null, scales = null,
+          // The SONG meter. Every bar number this card prints — the playhead is at
+          // "bar 5.3", a key change is "since bar 9" — counts in it, and counting
+          // a 7/8 project in 4/4 puts every one of them somewhere else.
+          meter = DEFAULT_METER } = opts;
+  const TICKS_PER_BAR = ticksPerBar(meter);
+  const TICKS_PER_BEAT = ticksPerBeat(meter);
 
   buf.known = !!harmony;
   buf.open = open !== false;

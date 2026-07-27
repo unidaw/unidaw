@@ -139,7 +139,7 @@ function loopOverride() { return loopDrag || loopPending; }
  */
 function setLoopFromDrag(a, b, done, opts = {}) {
   if (opts.cancelled) { loopDrag = null; schedule(); return; }
-  const { start: lo, end: hi } = snapLoop(a, b, opts.fine);
+  const { start: lo, end: hi } = snapLoop(a, b, opts.fine, songMeter());
   loopDrag = { start: lo, end: hi };
   if (!done) { schedule(); return; }
   loopDrag = null;
@@ -1798,7 +1798,7 @@ function drawMixer() {
 const _arrangeOpts = { loop: null, startTick: 0, width: 0, zoomIndex: 0, tracks: 0,
                        engine: null, laneHeight: 0, cursor: { track: 0, tick: 0 },
                        selectedPlacement: -1, audio: null,
-                       clipMarginPx: ARRANGE_CLIP_MARGIN_PX };
+                       clipMarginPx: ARRANGE_CLIP_MARGIN_PX, meter: null };
 let arrangeBufLanes = -1;
 function drawArrange() {
   const lanes = Math.min(state.tracks, 16);
@@ -1813,6 +1813,9 @@ function drawArrange() {
   o.zoomIndex = state.arrangeZoom;
   o.tracks = lanes;
   o.engine = state.useEngine === false ? null : engine;
+  // Where the bar lines go and what the ruler counts. A clip in another meter
+  // draws its own accents inside those bars; that grid rides on the clip.
+  o.meter = songMeter();
   o.laneHeight = ARRANGE_LANE_H;
   // The nested cursor is mutated too — a fresh `{track, tick}` per frame is the
   // same waste one level down.
@@ -1840,7 +1843,7 @@ const paletteHost = document.getElementById('palette');
 // _chromeOpts. Every callee destructures on entry and keeps no reference.
 const _minimapOpts = { engine: null, startTick: 0, visibleTicks: 0 };
 const _harmonyOpts = { harmony: null, playheadTick: 0, version: -1,
-                       nameHarmony: null, scales: null };
+                       nameHarmony: null, scales: null, meter: null };
 const _chainOpts = { track: 0, chains: null, selected: -1, trackName: '', params: null };
 const _entryOverlay = { row: 0, track: 0, col: 0, text: '' };
 const _vmOpts = { startRow: 0, rowCount: 0, tracks: 0, columns: 3, zoomIndex: 2,
@@ -1913,6 +1916,7 @@ function draw() {
     o.version = engine ? engine.harmonyVersion : -1;
     o.nameHarmony = nameHarmony;
     o.scales = scales;
+    o.meter = songMeter();
     harmonyCard.render(buildHarmonyModel(o, harmonyBuf));
   }
   if (showChain) {

@@ -1281,6 +1281,24 @@ if (meters) {
      [...distinct].join(', '));
 }
 
+// And the ARRANGEMENT rules its bars in that meter, which is the other half a user
+// sees. A ruler in the wrong meter is the failure that looks most like success —
+// evenly spaced numbers, ascending, every one of them naming the wrong moment — so
+// this asserts the tick distance rather than that numbers exist.
+await page.evaluate(() => window.__uni.view('arrange'));
+await page.waitForTimeout(200);
+const ruler = await page.evaluate(() => window.__uni.arrangeProbe());
+ok(ruler !== null, 'the arrangement built a model');
+if (ruler) {
+  // 7/8: a beat is an eighth (960000 / 2) and there are seven, so 3,360,000. The
+  // 4/4 answer is 3,840,000, which is what this drew before the meter reached it.
+  const barTicks = ruler.rulerEvery > 0 ? ruler.rulerStrideTicks / ruler.rulerEvery : 0;
+  ok(barTicks === 3360000,
+     'the arrangement rules 7/8 bars, not 4/4 ones',
+     `${barTicks} ticks per bar (4/4 would be 3840000), stride ${ruler.rulerStrideTicks} every ${ruler.rulerEvery}`);
+}
+await page.evaluate(() => window.__uni.view('tracker'));
+
 // And the chrome says it, which is the half a user sees. Asserted on the property
 // rather than on the position of the field: which slot the meter occupies in the
 // chrome is layout, and a test that pins layout fails on every rearrangement.
