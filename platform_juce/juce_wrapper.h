@@ -129,6 +129,8 @@ class IPluginHost {
       double sampleRate, int blockSize) = 0;
 };
 
+struct WaveformPyramid;  // apps/waveform_pyramid.h — built pre-downmix at decode.
+
 // A decoded audio source, downmixed to mono, in float samples. `sampleRate` is
 // the source file's own rate (resample at play time against the engine rate).
 struct DecodedAudio {
@@ -137,6 +139,10 @@ struct DecodedAudio {
   double sampleRate = 0.0;
   uint32_t sourceChannels = 0;     // channels in the source before downmix
   bool ok = false;
+  // The min/max + Q15 pyramid for waveform display, built from the multi-channel
+  // buffer before the mono downmix above (a downmix loses out-of-phase energy, so
+  // it can't drive an honest waveform). Null only when decode failed.
+  std::shared_ptr<const WaveformPyramid> pyramid;
 };
 
 // Decodes an audio file (wav/aiff/flac/... — whatever JUCE's basic formats read)

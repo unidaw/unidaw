@@ -225,6 +225,22 @@ target_include_directories(project_file_tests PRIVATE
 
 target_link_libraries(project_file_tests PRIVATE platform_juce)
 
+# Header-only numeric tests for the waveform pyramid (no JUCE/Boost needed).
+add_executable(waveform_pyramid_tests
+  apps/waveform_pyramid_tests_main.cpp
+)
+target_include_directories(waveform_pyramid_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# Header-only tests for the waveform source registry (content key + interning).
+add_executable(waveform_store_tests
+  apps/waveform_store_tests_main.cpp
+)
+target_include_directories(waveform_store_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 add_executable(audio_io_tests
   apps/audio_io_tests_main.cpp
 )
@@ -290,6 +306,16 @@ add_test(NAME project_file_round_trip
   COMMAND project_file_tests
 )
 set_tests_properties(project_file_round_trip PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME waveform_pyramid
+  COMMAND waveform_pyramid_tests
+)
+set_tests_properties(waveform_pyramid PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME waveform_store
+  COMMAND waveform_store_tests
+)
+set_tests_properties(waveform_store PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME device_chain_defaults
   COMMAND device_chain_tests

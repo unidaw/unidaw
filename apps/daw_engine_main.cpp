@@ -36,6 +36,7 @@
 #include "apps/plugin_cache.h"
 #include "apps/patcher_abi.h"
 #include "apps/audio_region.h"
+#include "apps/waveform_store.h"
 #include "apps/patcher_assemble.h"
 #include "apps/patcher_graph.h"
 #include "apps/patcher_preset.h"
@@ -1638,6 +1639,16 @@ struct TrackRuntime {
   // needs no lock.
   std::vector<daw::ProjectTempoPoint> loadedTempoMap{{0, 120.0}};
 
+  // Directory of the currently-loaded project file, so a clip's relative sourcePath
+  // resolves against the project (portable) rather than the engine's CWD. Set by
+  // loadProjectFromPath before the track loop; read by rebuildAudioRender.
+  std::string loadedProjectDir;
+  // Engine-lifetime registry of decoded audio sources for waveform display: owns the
+  // min/max pyramids the RequestWaveform handler slices, keyed by a stable sourceId.
+  // Populated on the decode funnel (rebuildAudioRender), published to
+  // UiAudioSourceRegion after a load. Read on the uiThread, never the RT callback.
+  daw::WaveformStore waveformStore;
+
   // Need to grab these freshly after connect/reconnect
   auto getRingStd = [&](TrackRuntime& runtime) {
       return daw::makeEventRing(reinterpret_cast<void*>(
@@ -2999,6 +3010,19 @@ struct TrackRuntime {
     return buildClipSnapshot(rt.track.clip);
   };
 
+  // Resolve a clip's sourcePath the one way both the decode funnel and the clip-
+  // descriptor publish must agree on: absolute paths as given; relative paths against
+  // the project directory; then fold '..'/symlinks so one file yields one stable key.
+  auto resolveSourcePath = [&](const std::string& sourcePath) -> std::string {
+    std::filesystem::path sp(sourcePath);
+    std::filesystem::path base = sp.is_absolute() || loadedProjectDir.empty()
+                                     ? sp
+                                     : std::filesystem::path(loadedProjectDir) / sp;
+    std::error_code rec;
+    std::filesystem::path canon = std::filesystem::weakly_canonical(base, rec);
+    return rec ? base.lexically_normal().string() : canon.string();
+  };
+
   // Resolve a track's placed AUDIO clips into a sample-domain render list for the
   // audio thread: decode each source (deduped per rebuild), and convert its
   // placement to output frames. Musical->sample uses the engine rate at a constant
@@ -3020,7 +3044,7 @@ struct TrackRuntime {
     };
     // Small per-rebuild decode cache so one file placed twice decodes once.
     struct Cached {
-      std::string path;
+      std::string path;  // resolved absolute
       std::shared_ptr<const std::vector<float>> samples;
       uint64_t frames;
       double srcRate;
@@ -3041,12 +3065,14 @@ struct TrackRuntime {
           clip->audio.sourcePath.empty()) {
         continue;
       }
+      // Resolve the source relative to the project (portable, not CWD-bound).
+      const std::string resolvedPath = resolveSourcePath(clip->audio.sourcePath);
       std::shared_ptr<const std::vector<float>> src;
       uint64_t frames = 0;
       double srcRate = rate;
       bool have = false;
       for (const auto& c : cache) {
-        if (c.path == clip->audio.sourcePath) {
+        if (c.path == resolvedPath) {
           src = c.samples;
           frames = c.frames;
           srcRate = c.srcRate;
@@ -3055,14 +3081,53 @@ struct TrackRuntime {
         }
       }
       if (!have) {
-        auto dec = daw::decodeAudioFileMono(clip->audio.sourcePath);
+        auto dec = daw::decodeAudioFileMono(resolvedPath);
         if (!dec.ok) {
-          continue;  // a missing/unreadable source just does not sound
+          // Surface the miss: a silent `continue` is how a missing sample file
+          // becomes "the waveform feature is broken" three weeks later. The failed
+          // descriptor lets the UI draw the path instead of an empty box.
+          waveformStore.internFailed(resolvedPath);
+          DAW_EVENT("audio.decode_failed")
+              .field("clip", clip->id)
+              .field("path", resolvedPath);
+          continue;
         }
         src = std::make_shared<const std::vector<float>>(std::move(dec.samples));
         frames = dec.frames;
         srcRate = dec.sampleRate;
-        cache.push_back({clip->audio.sourcePath, src, frames, srcRate});
+        cache.push_back({resolvedPath, src, frames, srcRate});
+
+        // Register the pyramid for waveform display, keyed on a content hash of the
+        // file's identity + decoded shape (contract §5), so two placements share one
+        // entry and a re-bounce in place invalidates it.
+        uint64_t fileSize = 0, mtimeNs = 0;
+        std::error_code sec;
+        auto sz = std::filesystem::file_size(resolvedPath, sec);
+        if (!sec) fileSize = static_cast<uint64_t>(sz);
+        std::error_code tec;
+        auto ft = std::filesystem::last_write_time(resolvedPath, tec);
+        if (!tec) {
+          mtimeNs = static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(
+                  ft.time_since_epoch())
+                  .count());
+        }
+        const uint64_t contentKey = daw::computeWaveformContentKey(
+            resolvedPath, fileSize, mtimeNs, dec.frames, dec.sampleRate,
+            dec.sourceChannels, daw::kDecoderVersion,
+            daw::kWaveformFormatVersion);
+        const auto& py = dec.pyramid;
+        const uint32_t sourceId = waveformStore.internReady(
+            resolvedPath, contentKey, dec.sourceChannels, dec.frames,
+            dec.sampleRate, py ? py->absPeak : 0.0f, py ? py->levelMask : 0u,
+            py && py->channelsTruncated, py && py->clipped, py);
+        DAW_EVENT("audio.source_ready")
+            .field("sourceId", sourceId)
+            .field("frames", dec.frames)
+            .field("channels", dec.sourceChannels)
+            .field("absPeak", py ? py->absPeak : 0.0f)
+            .field("levelMask", py ? py->levelMask : 0u)
+            .field("path", resolvedPath);
       }
       const uint64_t lenTicks =
           pl.lengthNanoticks > 0 ? pl.lengthNanoticks : clip->lengthNanoticks;
@@ -3552,6 +3617,12 @@ struct TrackRuntime {
       return false;
     }
 
+    // Resolve a clip's relative sourcePath against the project file's directory, and
+    // drop the previous project's waveform sources (and pyramids) before the track
+    // loop below re-decodes and repopulates the store — one project's worth resident.
+    loadedProjectDir = std::filesystem::path(path).parent_path().string();
+    waveformStore.beginLoad();
+
     {
       // Lock like addHarmony/removeHarmony and the readers do: load replaces the
       // whole vector, and the UI-publish and audio threads read it concurrently.
@@ -3992,6 +4063,71 @@ struct TrackRuntime {
             .field("bytes", static_cast<uint64_t>(blob.size()))
             .field("ok", ok);
       }
+    }
+
+    // Publish the audio source + clip descriptor tables (contract §2.1). Version-
+    // gated like deviceParams: write both tables, then bump `version` last behind a
+    // release fence so a reader seeing the new version sees complete tables. These
+    // change only at load, so no seqlock — the frontend re-reads on a version move.
+    if (uiShm.header && uiShm.header->uiAudioSourceOffset != 0) {
+      auto* region = reinterpret_cast<daw::UiAudioSourceRegion*>(
+          reinterpret_cast<uint8_t*>(uiShm.base) +
+          uiShm.header->uiAudioSourceOffset);
+      const auto sources = waveformStore.snapshot();
+      uint32_t sourceCount = 0;
+      for (const auto& e : sources) {
+        if (sourceCount >= daw::kUiMaxAudioSources) break;
+        auto& d = region->sources[sourceCount++];
+        d = daw::UiAudioSource{};
+        d.sourceId = e.sourceId;
+        d.contentKeyLo = static_cast<uint32_t>(e.contentKey & 0xffffffffu);
+        d.contentKeyHi = static_cast<uint32_t>(e.contentKey >> 32);
+        d.sourceChannels = e.sourceChannels;
+        d.waveChannels = e.waveChannels;
+        d.status = e.status;
+        d.sourceFrames = e.sourceFrames;
+        d.sourceRateHz = e.sourceRateHz;
+        d.absPeak = e.absPeak;
+        d.levelMask = e.levelMask;
+        std::memcpy(d.path, e.path.c_str(),
+                    std::min(e.path.size(), sizeof(d.path) - 1));
+        d.flags = (e.channelsTruncated ? 1u : 0u) | (e.clipped ? 2u : 0u);
+      }
+      for (uint32_t i = sourceCount; i < daw::kUiMaxAudioSources; ++i) {
+        region->sources[i] = daw::UiAudioSource{};
+      }
+
+      uint32_t clipCount = 0;
+      for (const auto& c : document.clips) {
+        if (c.kind != daw::ClipKind::Audio || c.audio.sourcePath.empty()) {
+          continue;
+        }
+        if (clipCount >= daw::kUiMaxAudioClips) break;
+        auto& d = region->clips[clipCount++];
+        d = daw::UiAudioClip{};
+        d.clipId = c.id;
+        d.sourceId =
+            waveformStore.sourceIdForPath(resolveSourcePath(c.audio.sourcePath));
+        d.sourceStartFrame = c.audio.sourceStartFrame;
+        d.clipLengthTicks = c.lengthNanoticks;
+        d.fadeInTicks = static_cast<uint32_t>(c.audio.fadeInNanoticks);
+        d.fadeOutTicks = static_cast<uint32_t>(c.audio.fadeOutNanoticks);
+        d.gainDb = c.audio.gainDb;
+      }
+      for (uint32_t i = clipCount; i < daw::kUiMaxAudioClips; ++i) {
+        region->clips[i] = daw::UiAudioClip{};
+      }
+
+      region->sourceCount = sourceCount;
+      region->clipCount = clipCount;
+      region->formatVersion = daw::kWaveformFormatVersion;
+      // The constant tempo audio is actually positioned at (bpmAtNanotick(0)) — the
+      // number rebuildAudioRender uses, so drawn == heard even on a tempo-mapped
+      // project where audio is not yet tempo-followed. See contract §2.4.
+      region->audioMapBpmMilli =
+          static_cast<uint32_t>(tempoProvider.bpmAtNanotick(0) * 1000.0 + 0.5);
+      std::atomic_thread_fence(std::memory_order_release);
+      region->version += 1;
     }
 
     // The UI's mirror is now arbitrarily stale, so force a full resync rather

@@ -1,5 +1,7 @@
 #include "platform_juce/juce_wrapper.h"
 
+#include "apps/waveform_pyramid.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -1242,6 +1244,18 @@ DecodedAudio decodeAudioFileMono(const std::string& path) {
   out.frames = static_cast<uint64_t>(frames);
   out.sampleRate = reader->sampleRate;
   out.sourceChannels = static_cast<uint32_t>(channels);
+
+  // Build the waveform pyramid from the multi-channel buffer NOW, before the
+  // downmix below throws the per-channel data away. getReadPointer gives the
+  // planar float channel this reads.
+  {
+    std::vector<const float*> chanPtrs(static_cast<size_t>(channels));
+    for (int c = 0; c < channels; ++c) chanPtrs[c] = buffer.getReadPointer(c);
+    out.pyramid = std::make_shared<const WaveformPyramid>(buildWaveformPyramid(
+        chanPtrs.data(), static_cast<uint32_t>(channels),
+        static_cast<uint64_t>(frames)));
+  }
+
   out.samples.resize(static_cast<size_t>(frames));
   const float invChannels = 1.0f / static_cast<float>(channels);
   for (juce::int64 i = 0; i < frames; ++i) {
