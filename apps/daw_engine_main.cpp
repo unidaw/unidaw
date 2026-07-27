@@ -3291,6 +3291,15 @@ struct TrackRuntime {
     // (round-tripped) but not yet run per-device. A patcher-less (or older)
     // project leaves the live audio graph intact rather than wiping it to empty.
     bool patcherLoaded = false;
+    // Patcher execution is engine-lifetime, one shared node pool
+    // (patcherGraphState.graph): each patcher-device selects nodes from it by
+    // device.patcherNodeId (+ per-device euclidean overrides), rather than each
+    // device running an independent graph. So load RESTORES the pool only when the
+    // project authored one — the first device carrying a non-empty patcher wins and
+    // replaces the running graph; a project with no authored patcher leaves the
+    // startup default graph in place (load is a deliberate no-op for it, not a bug).
+    // True per-device graph execution (every device runs its own patcher) is a
+    // larger RT change tracked separately.
     for (const auto& source : document.tracks) {
       if (patcherLoaded) {
         break;
