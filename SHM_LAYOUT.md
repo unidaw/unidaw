@@ -93,6 +93,11 @@ Offsets within `ShmHeader` (aligned to 64 bytes overall):
   - `uiPatcherOffset`: 528 (byte offset to `UiPatcherRegion`; 0 = none)
   - `UiPatcherRegion` = {version, deviceId, nodeCount, edgeCount, nodes[64], edges[128]}
     (node config is type-interpreted ints; see `shared_memory.h`)
+- v15 loop range + load result (ride the tail padding — header size unchanged):
+  - `uiLoopStart`: 536, `uiLoopEnd`: 544 (nanoticks; mirror SetLoopRange)
+  - `uiLoadSeq`: 552 (bumps per LoadProject attempt), `uiLoadOk`: 556 (1=loaded, 0=rejected)
+  - Also: `uiTrackPeakRms[]` (v-early field @184) is now actually populated —
+    per-track post-fader peak, measured on the audio thread each block.
 
 `sizeof(ShmHeader)` = 576 bytes (aligned to 64; region offsets are computed from
 `sizeof(ShmHeader)`, so growing it shifts the rings/regions automatically).
