@@ -208,6 +208,30 @@ const patcher = new Patcher(patcherHost, {
   onSelect: (id) => { state.selectedNode = id; state.selectedField = 0; schedule(); },
 });
 
+/**
+ * The engine's graph error codes, from daw_engine_main.cpp.
+ *
+ * Numbers, because that is what crosses the wire; named here because "the
+ * engine refused that: code 3" is not an answer to anything. If a code arrives
+ * that is not in this table it is printed as a number rather than swallowed —
+ * a new code the engine learned is still news.
+ */
+const GRAPH_ERRORS = ['', 'no such node type', 'no such node', 'that would make a cycle',
+                      'the engine could not add it', 'that connection is not allowed',
+                      'those ports do not fit'];
+
+/** One engine event as a line a person can read. */
+function describeEngineEvent(e) {
+  if (e.kind === 'patcher-error') {
+    const why = GRAPH_ERRORS[e.code] || ('graph error ' + e.code);
+    // Name the nodes when it is about an edge, the node when it is about a node.
+    if (e.src !== e.dst && (e.src || e.dst)) return `${why} (#${e.src} to #${e.dst})`;
+    return e.node ? `${why} (#${e.node})` : why;
+  }
+  if (e.kind === 'resync') return 'the engine asked for a resync';
+  return `${e.kind.replace('-', ' ')} on track ${e.track} (code ${e.code})`;
+}
+
 /** The engine's node the patcher has selected, or null. */
 function selectedPatcherNode() {
   if (!engine || state.selectedNode < 0) return null;
@@ -1733,6 +1757,24 @@ const WANTS_ENGINE = new URLSearchParams(location.search).get('engine') !== 'off
 // declaration is a temporal-dead-zone throw that kills the whole module.
 conn = WANTS_ENGINE ? connectEngine({
   onStatus: (s, d) => { state.link = s + (d ? ': ' + d : ''); schedule(); },
+  /**
+   * The engine's own refusals, drained from its outbound ring by the sidecar.
+   *
+   * These are the ones nothing else could tell us: a connection the sidecar's
+   * port table thought was fine and the engine's graph did not, a chain error, a
+   * resync. Until this, an edit the ENGINE rejected looked identical to one it
+   * accepted — the command was sent, the ack said ok, and the read-back simply
+   * did not change.
+   */
+  onEngineEvent: (list, missed) => {
+    for (const e of list) {
+      const text = describeEngineEvent(e);
+      state.reject = text;
+      dock.log('err', 'engine: ' + text);
+    }
+    if (missed) dock.log('err', `engine: ${missed} earlier message(s) not kept`);
+    schedule();
+  },
   onAck: (msg) => {
     // The project list comes back on the command socket's ack channel.
     if (typeof msg === 'string' && msg.indexOf('"projects"') >= 0) {

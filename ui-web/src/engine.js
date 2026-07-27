@@ -35,7 +35,7 @@ export function noEngine() {
 }
 
 export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.0.0.1:8175',
-                                onChange, onStatus, onAck } = {}) {
+                                onChange, onStatus, onAck, onEngineEvent } = {}) {
   const store = createStore();
   let ws = null;
   let closed = false;
@@ -55,7 +55,17 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
     ws.onopen = () => { backoff = 250; status('connected'); };
 
     ws.onmessage = (ev) => {
-      if (typeof ev.data === 'string') {          // the sidecar's error channel
+      if (typeof ev.data === 'string') {
+        // Two kinds of text on this socket. {"engine":[...]} is the engine's own
+        // outbound ring, drained by the sidecar — a refusal the engine made that
+        // nothing else can tell us about. Anything else is the sidecar's error
+        // channel, as before. Parse alone in the try; act outside it.
+        let parsed = null;
+        try { parsed = JSON.parse(ev.data); } catch (err) { /* not JSON: raw */ }
+        if (parsed && Array.isArray(parsed.engine)) {
+          onEngineEvent && onEngineEvent(parsed.engine, parsed.missed || 0);
+          return;
+        }
         status('error', ev.data);
         return;
       }

@@ -84,6 +84,9 @@ pub struct EngineHandle {
     _mmap: Mapping,
     header: *const ShmHeader,
     ring_ui: Option<RingView>,
+    /// The engine's OUT ring, which this side consumes. Only present on a
+    /// writable handle: a consumer advances read_index, so draining is a write.
+    ring_out: Option<RingView>,
 }
 
 impl EngineHandle {
@@ -155,10 +158,16 @@ impl EngineHandle {
         } else {
             None
         };
+        let ring_out = if writable {
+            ring_view(mmap.as_ptr() as *mut u8, unsafe { (*header).ring_ui_out_offset })
+        } else {
+            None
+        };
         Ok(Self {
             _mmap: mmap,
             header,
             ring_ui,
+            ring_out,
         })
     }
 
@@ -490,6 +499,32 @@ impl EngineHandle {
             &payload as *const UiClipWindowCommandPayload as *const u8,
             std::mem::size_of::<UiClipWindowCommandPayload>(),
         )
+    }
+
+    /// Drain the engine's outbound diff ring into `out`, up to `max` entries.
+    ///
+    /// SINGLE CONSUMER. This advances the ring's read_index, so exactly one
+    /// thread in one process may call it for a given segment — whatever drains
+    /// it takes the messages away from everyone else. Nothing else consumes this
+    /// ring on the UI segment today (the engine only writes; the C++ device-chain
+    /// tests read their own segments), which is why it is safe to start.
+    ///
+    /// Returns the number drained. An empty ring is the normal case and costs
+    /// two atomic loads.
+    pub fn drain_ui_out(&self, out: &mut Vec<EventEntry>, max: usize) -> usize {
+        let Some(ring) = self.ring_out.as_ref() else { return 0 };
+        let mut read = unsafe { (*ring.header).read_index.load(Ordering::Relaxed) };
+        let write = unsafe { (*ring.header).write_index.load(Ordering::Acquire) };
+        let mut n = 0;
+        while read != write && n < max {
+            out.push(unsafe { *ring.entries.add(read as usize) });
+            read = (read + 1) & ring.mask;
+            n += 1;
+        }
+        if n > 0 {
+            unsafe { (*ring.header).read_index.store(read, Ordering::Release) };
+        }
+        n
     }
 
     /// Writes one command into the UI ring. Returns false when the ring is

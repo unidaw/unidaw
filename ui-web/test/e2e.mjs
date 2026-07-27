@@ -283,18 +283,42 @@ await page.evaluate(([id, n]) => window.__uni.run(`patch ${id} hits ${n}`), [euc
 await page.waitForTimeout(1200);
 
 section('patcher graph edits');
+/**
+ * Wait for the published graph to reach a shape, rather than sleeping.
+ *
+ * The same lesson the aggregate zooms taught: a fixed sleep is a guess about a
+ * round trip, and it passes until the day something ahead of it shifts the
+ * timing. Returns the graph once `want` holds, or the last one seen.
+ */
+const graphUntil = async (want, tries = 40) => {
+  let g = null;
+  for (let i = 0; i < tries; i++) {
+    g = await page.evaluate(() => window.__uni.patcher());
+    if (want(g)) return g;
+    await page.waitForTimeout(100);
+  }
+  return g;
+};
+// Everything below is relative to whatever graph is here, and deletes exactly
+// what it added, by id. It cannot reset first: the patcher graph is ENGINE
+// state, not project state — loading a project leaves it untouched, and only a
+// fresh engine brings back the pristine one. So a run that dies mid-section
+// leaves nodes behind, and the next run must not care.
 const graphWas = await page.evaluate(() => window.__uni.patcher());
 await page.evaluate(() => window.__uni.run('addnode random'));
-await page.waitForTimeout(1400);
-const grown = await page.evaluate(() => window.__uni.patcher());
+const grown = await graphUntil((g) => g.nodes.length === graphWas.nodes.length + 1);
+const wasIds = new Set(graphWas.nodes.map((n) => n.id));
 ok(grown.nodes.length === graphWas.nodes.length + 1, 'a node can be added',
    `${graphWas.nodes.length} -> ${grown.nodes.length} nodes`);
-const added = grown.nodes[grown.nodes.length - 1];
+// The id that is NEW, not the one that is last. Position in the published list
+// is not identity — the same rule the piano roll's selection follows — and
+// "last" is how a test ends up deleting a node the project shipped with.
+const added = grown.nodes.find((n) => !wasIds.has(n.id));
+ok(!!added, 'the new node is identified by its id, not its position');
 // Ports come from the two node types, so nothing here types a port number.
 await page.evaluate(([src, dst]) => window.__uni.run(`link ${src} ${dst}`),
                     [euclid.id, added.id]);
-await page.waitForTimeout(1400);
-const linked = await page.evaluate(() => window.__uni.patcher());
+const linked = await graphUntil((g) => g.edges.some((e) => e.dst === added.id));
 const newEdge = linked.edges.find((e) => e.dst === added.id);
 ok(!!newEdge, 'and connected without anyone naming a port',
    JSON.stringify(linked.edges));
@@ -302,16 +326,39 @@ ok(newEdge && newEdge.srcPort === 1 && newEdge.dstPort === 0 && newEdge.kind ===
    'on the ports the engine expects for that pair', JSON.stringify(newEdge));
 // A pair with no compatible ports is refused, and the refusal reaches the UI —
 // the sidecar's message used to go to a dock nobody had open.
-const audioNode = await page.evaluate(() =>
-  window.__uni.patchNodes().find((n) => n.type === 'audio'));
+// Wait for it rather than reading once: patchNodes() reflects the last frame,
+// and a read taken between frames returns an empty list, not an error.
+let audioNode = null;
+for (let i = 0; i < 40 && !audioNode; i++) {
+  audioNode = await page.evaluate(() =>
+    window.__uni.patchNodes().find((n) => n.type === 'audio') || null);
+  if (!audioNode) await page.waitForTimeout(100);
+}
+ok(!!audioNode, 'the graph has a node with no compatible port to test against');
 await page.evaluate(([a, b]) => window.__uni.run(`link ${a} ${b}`),
                     [euclid.id, audioNode.id]);
 await page.waitForTimeout(900);
 const why = await page.evaluate(() => window.__uni.state().reject);
 ok(/compatible ports/.test(why || ''), 'an impossible connection says why, on screen', String(why));
-await page.evaluate((id) => window.__uni.run(`delnode ${id}`), added.id);
+// A refusal only the ENGINE can make: the sidecar's port table says
+// passthru->passthru is fine, and the engine's graph says it would be a cycle.
+// Before the out ring was drained this looked exactly like success — command
+// sent, ack ok, read-back simply unchanged.
+await page.evaluate(() => window.__uni.run('addnode passthru'));
+const grownIds = new Set(grown.nodes.map((n) => n.id));
+const withLoop = await graphUntil((g) => g.nodes.length === grown.nodes.length + 1);
+const loopNode = (withLoop.nodes.find((n) => !grownIds.has(n.id)) || {}).id;
+const intoIt = linked.edges.find((e) => e.dst === added.id) ? added.id : linked.edges[0].dst;
+await page.evaluate(([a, b]) => window.__uni.run(`link ${a} ${b}`), [intoIt, loopNode]);
 await page.waitForTimeout(1400);
-const shrunk = await page.evaluate(() => window.__uni.patcher());
+await page.evaluate(([a, b]) => window.__uni.run(`link ${a} ${b}`), [loopNode, intoIt]);
+await page.waitForTimeout(1800);
+const cycle = await page.evaluate(() => window.__uni.state().reject);
+ok(/cycle/.test(cycle || ''), "the engine's own refusal reaches the screen", String(cycle));
+await page.evaluate((id) => window.__uni.run(`delnode ${id}`), loopNode);
+await graphUntil((g) => !g.nodes.some((n) => n.id === loopNode));
+await page.evaluate((id) => window.__uni.run(`delnode ${id}`), added.id);
+const shrunk = await graphUntil((g) => g.nodes.length === graphWas.nodes.length);
 ok(shrunk.nodes.length === graphWas.nodes.length, 'and removed again, taking its edge with it',
    `${grown.nodes.length} -> ${shrunk.nodes.length} nodes, ${shrunk.edges.length} edges`);
 

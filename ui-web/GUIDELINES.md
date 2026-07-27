@@ -134,6 +134,31 @@ The same shape applies to anything that makes a decorative element interactive:
 `pointer-events`, `user-select`, and `z-index` were all chosen when nothing had
 to be clickable, and none of them announce that they are now wrong.
 
+### 2.18 The engine's own refusals were on the floor
+
+The engine writes diffs and errors to `ringUiOut` and nothing read it, so a
+refusal only the engine could make — a graph cycle, a chain error, a resync —
+looked exactly like success: command sent, ack ok, read-back simply unchanged.
+The sidecar drains it now and forwards the error kinds as JSON text on the state
+socket.
+
+Two things this ring demands:
+
+- **It is SINGLE CONSUMER.** Whoever drains it takes the messages from everyone
+  else. One thread in the sidecar drains; every client reads a shared buffer with
+  its own cursor. A per-client drain would give each browser tab a random subset
+  of the engine's errors, which is worse than not reading it at all. The C++
+  device-chain tests also read this ring — on their own segments. If anything
+  ever drains `/daw_web_ui` alongside the sidecar, both get partial history.
+- **The note diffs are not forwarded**, and that is a decision, not an oversight:
+  they fire on every edit and `clipVersion` already covers them. They are counted
+  and the count is logged, so the ring never looks quiet while it is busy.
+
+Related engine-state fact worth knowing: **the patcher graph is engine-lifetime
+state, not project state.** Loading a project leaves it untouched; only a fresh
+engine restores the pristine one. A test that edits the graph must delete exactly
+what it added, by id, and must not assume it starts from a known shape.
+
 ### 2.16 A synthesised key is not the key the platform sends
 
 Every `alt+` shortcut in the tracker and piano roll matched on `e.key`, and every

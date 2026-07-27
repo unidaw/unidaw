@@ -22,12 +22,13 @@
 
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
-use daw_bridge::layout::{UiChordCommandPayload, UiCommandPayload, UiCommandType,
+use daw_bridge::layout::{EventEntry, UiChordCommandPayload, UiCommandPayload, UiCommandType,
                         UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
                         UiPatcherPresetCommandPayload};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
@@ -1124,7 +1125,8 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
     }
 }
 
-fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>, viewport: SharedViewport) {
+fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
+         viewport: SharedViewport, events: Arc<EngineEvents>) {
     let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
     let mut ws = match tungstenite::accept(stream) {
         Ok(w) => w,
@@ -1143,6 +1145,10 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>, viewp
             return;
         }
     };
+
+    // Start at the newest, so a client that connects late is not handed a
+    // backlog of errors from before it existed and told they are its own.
+    let mut event_cursor = events.since(0).1;
 
     let period = Duration::from_micros(1_000_000 / hz as u64);
     // Reused across ticks — the steady state allocates nothing, same rule the
@@ -1232,6 +1238,20 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>, viewp
             sent += 1;
         }
 
+        // Engine-originated messages, on the same socket as the frames but as
+        // TEXT — the client already dispatches on the frame type, and these are
+        // rare enough that a JSON line costs nothing. Each client has its own
+        // cursor into the shared buffer, so one tab reading them does not take
+        // them from another.
+        let (msgs, cursor, missed) = events.since(event_cursor);
+        if cursor != event_cursor {
+            event_cursor = cursor;
+            if !msgs.is_empty() || missed > 0 {
+                let body = format!("{{\"engine\":[{}],\"missed\":{missed}}}", msgs.join(","));
+                if ws.send(tungstenite::Message::Text(body)).is_err() { break; }
+            }
+        }
+
         if reported.elapsed() >= Duration::from_secs(10) {
             let secs = started.elapsed().as_secs_f64();
             eprintln!(
@@ -1250,6 +1270,119 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>, viewp
 
     let n = clients.fetch_sub(1, Ordering::Relaxed) - 1;
     eprintln!("sidecar: client gone ({peer}), {n} remain");
+}
+
+/// Decoded engine-to-UI messages, newest last, with a monotonic sequence.
+///
+/// The engine's out ring is SINGLE CONSUMER: whoever drains it takes the
+/// messages away from everyone else. One thread drains, and every connected
+/// client reads from this shared buffer with its own cursor — a per-client
+/// drain would give each browser tab a random subset of the engine's errors,
+/// which is worse than not reading the ring at all.
+#[derive(Default)]
+struct EngineEvents {
+    /// (seq, json). Bounded: an engine spraying errors must not grow this.
+    items: Mutex<VecDeque<(u64, String)>>,
+    next_seq: AtomicU64,
+}
+
+/// How many messages are kept for clients that connect or fall behind.
+const ENGINE_EVENT_CAP: usize = 64;
+
+impl EngineEvents {
+    fn push(&self, json: String) {
+        let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+        let mut q = self.items.lock().unwrap();
+        q.push_back((seq, json));
+        while q.len() > ENGINE_EVENT_CAP { q.pop_front(); }
+    }
+
+    /// Everything newer than `after`, and the new cursor. A client that has
+    /// fallen further behind than the cap silently skips — it is told, because
+    /// "you missed some" is itself information the UI should show.
+    fn since(&self, after: u64) -> (Vec<String>, u64, u64) {
+        let q = self.items.lock().unwrap();
+        let newest = self.next_seq.load(Ordering::Relaxed);
+        if newest == after { return (Vec::new(), after, 0); }
+        let oldest = q.front().map(|(s, _)| *s).unwrap_or(newest);
+        let missed = oldest.saturating_sub(after);
+        let out: Vec<String> = q.iter().filter(|(s, _)| *s >= after).map(|(_, j)| j.clone()).collect();
+        (out, newest, missed)
+    }
+}
+
+/// Turn one EventEntry from the engine's out ring into JSON, or None to drop it.
+///
+/// Only the messages that mean "what you asked for did not happen" are
+/// forwarded. The note diffs (1-3) fire on every edit and are already covered by
+/// clipVersion; forwarding them would be a firehose that buries the one line
+/// somebody needs to read.
+fn decode_engine_event(e: &EventEntry) -> Option<String> {
+    if e.size < 8 { return None; }
+    let p = &e.payload;
+    let u16at = |i: usize| u16::from_le_bytes([p[i], p[i + 1]]);
+    let u32at = |i: usize| u32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+    // Every diff payload starts diff_type:u16, then the error ones carry
+    // error_code:u16 and track_id:u32 in the same place.
+    let diff = u16at(0);
+    let code = u16at(2);
+    let track = u32at(4);
+    let kind = match diff {
+        4 => "resync",
+        6 => "chain-error",
+        8 => "routing-error",
+        10 => "mod-error",
+        13 => "patcher-error",
+        _ => return None,
+    };
+    // The patcher error names the nodes and ports involved, which is the
+    // difference between "that connection was refused" and a usable message.
+    if diff == 13 && e.size >= 32 {
+        return Some(format!(
+            "{{\"kind\":\"{kind}\",\"code\":{code},\"track\":{track},\"node\":{},\
+             \"src\":{},\"dst\":{},\"srcPort\":{},\"dstPort\":{},\"edgeKind\":{}}}",
+            u32at(8), u32at(12), u32at(16), u32at(20), u32at(24), u32at(28)));
+    }
+    Some(format!("{{\"kind\":\"{kind}\",\"code\":{code},\"track\":{track}}}"))
+}
+
+/// Drain the engine's out ring forever, decoding into `events`.
+///
+/// Its own thread with its own writable handle, at a slower cadence than the
+/// publish loop: these are rare, and an error the user reads 50 ms late is not
+/// a worse error.
+fn drain_engine_events(shm: String, events: Arc<EngineEvents>) {
+    const EVERY: Duration = Duration::from_millis(50);
+    const MAX_PER_TICK: usize = 32;
+    let mut handle = EngineHandle::attach(&shm, true).ok();
+    let mut entries: Vec<EventEntry> = Vec::with_capacity(MAX_PER_TICK);
+    let mut last_attach = Instant::now();
+    let mut dropped: u64 = 0;
+    loop {
+        thread::sleep(EVERY);
+        let Some(h) = handle.as_ref() else {
+            // The engine may not be up yet, or may have restarted under us.
+            if last_attach.elapsed() > Duration::from_secs(2) {
+                last_attach = Instant::now();
+                handle = EngineHandle::attach(&shm, true).ok();
+            }
+            continue;
+        };
+        entries.clear();
+        let n = h.drain_ui_out(&mut entries, MAX_PER_TICK);
+        if n == 0 { continue; }
+        for e in &entries {
+            match decode_engine_event(e) {
+                Some(json) => events.push(json),
+                // Counted, not ignored. A silent drop here would make the ring
+                // look quiet when it is busy with things we chose not to name.
+                None => dropped += 1,
+            }
+        }
+        if dropped > 0 && dropped % 256 == 0 {
+            eprintln!("sidecar: {dropped} engine diffs seen and not forwarded (note diffs etc.)");
+        }
+    }
 }
 
 fn main() {
@@ -1300,13 +1433,21 @@ fn main() {
         Err(e) => eprintln!("sidecar: no command port {} ({e}) — read-only", args.cmd_port),
     }
 
+    // One drainer for the whole process, because the ring has one consumer.
+    let events = Arc::new(EngineEvents::default());
+    {
+        let (shm, ev) = (args.shm.clone(), events.clone());
+        thread::spawn(move || drain_engine_events(shm, ev));
+    }
+
     let clients = Arc::new(AtomicU64::new(0));
     for stream in listener.incoming() {
         match stream {
             Ok(s) => {
                 let (shm, hz, c) = (args.shm.clone(), args.hz, clients.clone());
                 let vp = viewport.clone();
-                thread::spawn(move || serve(s, shm, hz, c, vp));
+                let ev = events.clone();
+                thread::spawn(move || serve(s, shm, hz, c, vp, ev));
             }
             Err(e) => eprintln!("sidecar: accept failed: {e}"),
         }
@@ -1453,6 +1594,74 @@ mod tests {
     /// Byte-level layout, which is where this project has been bitten twice.
     /// The values are the ones the READ side reports, so a round trip through
     /// the UI has to come back the same.
+    fn entry(payload: &[u8]) -> EventEntry {
+        let mut e = EventEntry { sample_time: 0, block_id: 0, event_type: 0,
+                                 size: payload.len() as u16, flags: 0, payload: [0u8; 40] };
+        e.payload[..payload.len()].copy_from_slice(payload);
+        e
+    }
+
+    #[test]
+    fn engine_events_name_the_nodes_and_drop_the_firehose() {
+        // A patcher error: diff 13, code 6 (invalid port), track 0, then node,
+        // src, dst, srcPort, dstPort, edgeKind as u32s.
+        let mut p = Vec::new();
+        p.extend_from_slice(&13u16.to_le_bytes());
+        p.extend_from_slice(&6u16.to_le_bytes());
+        p.extend_from_slice(&0u32.to_le_bytes());
+        for v in [3u32, 3, 1, 5, 0, 2] { p.extend_from_slice(&v.to_le_bytes()); }
+        let json = decode_engine_event(&entry(&p)).expect("patcher error");
+        assert!(json.contains("\"kind\":\"patcher-error\""), "{json}");
+        assert!(json.contains("\"code\":6"), "{json}");
+        assert!(json.contains("\"srcPort\":5"), "{json}");
+        assert!(json.contains("\"edgeKind\":2"), "{json}");
+
+        // A note diff is NOT forwarded: it fires on every edit and clipVersion
+        // already covers it. Dropping it is a decision, not an oversight.
+        let mut n = Vec::new();
+        n.extend_from_slice(&1u16.to_le_bytes());
+        n.extend_from_slice(&0u16.to_le_bytes());
+        n.extend_from_slice(&0u32.to_le_bytes());
+        n.resize(32, 0);
+        assert!(decode_engine_event(&entry(&n)).is_none());
+
+        // A short entry cannot be trusted to have the common prefix.
+        assert!(decode_engine_event(&entry(&[13, 0])).is_none());
+
+        // The other error kinds decode from the shared prefix.
+        let mut c = Vec::new();
+        c.extend_from_slice(&6u16.to_le_bytes());
+        c.extend_from_slice(&2u16.to_le_bytes());
+        c.extend_from_slice(&4u32.to_le_bytes());
+        c.resize(32, 0);
+        let json = decode_engine_event(&entry(&c)).expect("chain error");
+        assert_eq!(json, "{\"kind\":\"chain-error\",\"code\":2,\"track\":4}");
+    }
+
+    #[test]
+    fn every_client_reads_every_event_from_its_own_cursor() {
+        let ev = EngineEvents::default();
+        ev.push("{\"a\":1}".into());
+        ev.push("{\"a\":2}".into());
+        // Two clients, independent cursors: the second must not be robbed by
+        // the first. This is the whole reason one thread drains the ring and
+        // the clients read a buffer.
+        let (one, c1, _) = ev.since(0);
+        let (two, c2, _) = ev.since(0);
+        assert_eq!(one.len(), 2);
+        assert_eq!(two.len(), 2);
+        assert_eq!(c1, c2);
+        // Caught up: nothing new, cursor unchanged.
+        let (none, c3, _) = ev.since(c1);
+        assert!(none.is_empty());
+        assert_eq!(c3, c1);
+        // A client further behind than the cap is TOLD it missed some rather
+        // than being handed a partial history that looks complete.
+        for i in 0..(ENGINE_EVENT_CAP as u64 + 5) { ev.push(format!("{{\"n\":{i}}}")); }
+        let (_, _, missed) = ev.since(1);
+        assert!(missed > 0, "a client that fell behind is told");
+    }
+
     #[test]
     fn a_link_resolves_ports_from_the_two_node_types() {
         // euclidean -> passthru: event out 1 to event in 0, kind Event.
