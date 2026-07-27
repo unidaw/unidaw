@@ -11,6 +11,29 @@
 
 import { createStore, decode } from './wire.js';
 
+/**
+ * A connection that connects to nothing.
+ *
+ * The page calls `conn.close()`, `conn.send()` and friends unconditionally, and
+ * making every one of those sites null-check would be eight chances to forget.
+ * This is what `?engine=off` hands back instead: the same shape, every send
+ * refused. `send` returning false is exactly what a real connection with no open
+ * socket returns, so the callers' "no engine" path is the tested one.
+ */
+export function noEngine() {
+  return {
+    store: createStore(),
+    canSend: () => false,
+    send: () => false,
+    sendBatch: () => false,
+    loadProject: () => false,
+    saveProject: () => false,
+    setViewport: () => {},
+    stats: () => ({ framesIn: 0, gaps: 0, lastSeq: -1, connected: false }),
+    close: () => {},
+  };
+}
+
 export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.0.0.1:8175',
                                 onChange, onStatus, onAck } = {}) {
   const store = createStore();

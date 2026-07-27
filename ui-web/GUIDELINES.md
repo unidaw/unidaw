@@ -134,6 +134,35 @@ The same shape applies to anything that makes a decorative element interactive:
 `pointer-events`, `user-select`, and `z-index` were all chosen when nothing had
 to be clickable, and none of them announce that they are now wrong.
 
+### 2.16 A synthesised key is not the key the platform sends
+
+Every `alt+` shortcut in the tracker and piano roll matched on `e.key`, and every
+one of them was dead on macOS — where Option is a COMPOSE modifier, so Option+Q
+delivers `key: 'œ'`, Option+C delivers `'ç'`, Option+S delivers `'ß'`. The tests
+passed throughout, because Playwright synthesises `key: 'q'` for `Alt+Q`, which
+is what Windows sends and macOS does not.
+
+- **Match modifier combos on `e.code`.** It is the physical key and no modifier
+  rewrites it. The cost is that on a non-US physical layout the shortcut follows
+  the key's position rather than its printed letter — the usual trade, and much
+  better than not firing.
+- **When a test synthesises input, know what the platform actually sends.** The
+  e2e now dispatches the real macOS values (`'œ'`/`KeyQ`) as well as the Windows
+  ones. A green test that only ever produced input the platform does not produce
+  is not evidence.
+
+### 2.17 A test that measures the page must not also be a client of the engine
+
+The soak, the goldens, the allocation and frame-work runs all booted the page,
+which connects to `ws://127.0.0.1:8174` at startup. So a four-minute soak ran
+attached to a live engine: it measured the page AND the decode of live frames,
+and put an extra client on a stack another agent might be using.
+
+`?engine=off` boots standalone with a null connection object of the same shape
+(`send` returns false, exactly as a real connection with no socket does), so the
+callers' "no engine" path is the one under test. Only the e2e connects, because
+a live engine is the thing it is testing.
+
 ### 2.2 Two rules from index.html specifically
 
 Five temporal-dead-zone bugs in one file. Four failed loudly — the page did not

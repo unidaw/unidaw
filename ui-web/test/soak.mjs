@@ -36,7 +36,7 @@ await new Promise((r) => srv.listen(0, '127.0.0.1', r));
 
 const br = await chromium.launch({ channel: 'chrome' });
 const page = await br.newPage({ viewport: { width: 1500, height: 760 }, deviceScaleFactor: 2 });
-await page.goto(`http://127.0.0.1:${srv.address().port}/index.html`);
+await page.goto(`http://127.0.0.1:${srv.address().port}/index.html?engine=off`);
 await page.waitForFunction(() => !!window.__uni);
 await page.evaluate(() => document.fonts.ready);
 await page.evaluate(() => window.__uni.reset());

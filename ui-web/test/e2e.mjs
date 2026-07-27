@@ -531,6 +531,37 @@ for (const c of ['follow', 'rename', 'select', 'transpose', 'copy', 'paste', 'cu
   ok(help.includes(c), `the console can ${c}`);
 }
 
+section('modifier keys on macOS');
+// Every alt shortcut used to match on e.key, so on macOS — where Option is a
+// COMPOSE modifier and Option+Q delivers 'œ' — all of them were dead. The tests
+// passed anyway, because Playwright synthesises key 'q' for Alt+Q, which is what
+// Windows sends and macOS does not. These dispatch what macOS actually sends.
+const macAlt = (key, code) => page.evaluate(([k, c]) => {
+  const ev = new KeyboardEvent('keydown',
+    { key: k, code: c, altKey: true, bubbles: true, cancelable: true });
+  window.dispatchEvent(ev);
+  return ev.defaultPrevented;
+}, [key, code]);
+await page.evaluate(() => { window.__uni.view('piano'); window.__uni.pianoAll(true); });
+await frames();
+const modPicked = await page.evaluate(() => window.__uni.pianoSelect(0, 0, 120, 300));
+ok(modPicked > 0, 'a selection to transpose', `${modPicked} notes`);
+const modBefore = await page.evaluate(() => window.__uni.pianoSelected().map((n) => n.pitch));
+ok(await macAlt('œ', 'KeyQ'), 'macOS Option+Q is handled, not ignored');
+await page.waitForTimeout(3500);
+const modAfter = await page.evaluate(() => window.__uni.pianoSelected().map((n) => n.pitch));
+ok(modAfter.length === modBefore.length && modAfter.every((p, i) => p === modBefore[i] + 1),
+   'and actually transposes', `${modBefore.slice(0, 4)} -> ${modAfter.slice(0, 4)}`);
+await macAlt('å', 'KeyA');
+await page.waitForTimeout(3500);
+// The same physical key as WINDOWS sends it — key 'w', not '\u2211' — still
+// reaches the same branch. Alt+W is bound on this surface; Alt+C is a tracker
+// key, and asserting it here tested the surface, not the modifier.
+ok(await macAlt('w', 'KeyW'), 'and the Windows key values still reach it');
+await page.waitForTimeout(3500);
+await macAlt('s', 'KeyS');
+await page.waitForTimeout(3500);
+
 section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));
 

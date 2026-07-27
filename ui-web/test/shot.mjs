@@ -110,7 +110,7 @@ const { server, port } = await serve(root);
 const browser = await chromium.launch({ channel: 'chrome' });
 const page = await browser.newPage({ viewport: { width: 1680, height: 980 }, deviceScaleFactor: 2 });
 page.on('pageerror', (e) => console.log('  [pageerror]', e.message));
-await page.goto(`http://127.0.0.1:${port}/index.html`);
+await page.goto(`http://127.0.0.1:${port}/index.html?engine=off`);
 await page.waitForFunction(() => !!window.__uni);
 // Wait for the vendored fonts to be ready before capturing anything. Without
 // this the first scene is shot mid-swap and differs from every later run by a

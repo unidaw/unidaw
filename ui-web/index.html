@@ -75,7 +75,7 @@
 import { Tracker } from './src/tracker.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
 import M from './design/out/tokens.js';
-import { connectEngine } from './src/engine.js';
+import { connectEngine, noEngine } from './src/engine.js';
 import { createChrome } from './src/chrome.js';
 import { Arrange } from './src/arrange.js';
 import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName,
@@ -1378,6 +1378,21 @@ function moveCursor(fn) {
 
 addEventListener('keydown', (e) => {
   const k = e.key;
+  /**
+   * Which physical key is held with Alt, or '' when Alt is not held.
+   *
+   * Alt combos CANNOT match on e.key. On macOS, Option is a compose modifier:
+   * Option+Q delivers key 'œ', Option+C delivers 'ç', Option+S delivers 'ß'.
+   * Every alt shortcut in this handler matched on e.key and was therefore dead
+   * on the primary platform, while passing every test — Playwright synthesises
+   * key 'q' for Alt+Q, which is what Windows sends and macOS does not.
+   *
+   * e.code is the physical key and is unaffected. The cost is that on a
+   * non-US physical layout these follow the key's position rather than its
+   * printed letter, which is the usual trade for shortcuts and much better than
+   * not firing at all.
+   */
+  const alt = e.altKey ? e.code : '';
   const done = () => { e.preventDefault(); schedule(); };
 
   // 1. Modifier combos first, so nothing below can swallow them.
@@ -1467,13 +1482,13 @@ addEventListener('keydown', (e) => {
     if (k === ' ') { cmd('play'); return done(); }
     if (k === 'Escape') { state.selectedNote = -1; state.pianoSelection = null;
                           state.reject = null; return done(); }
+    if (alt === 'KeyQ' || alt === 'KeyA') { pianoEdit('transpose', alt === 'KeyQ' ? 1 : -1); return done(); }
+    if (alt === 'KeyW' || alt === 'KeyS') { pianoEdit('transpose', alt === 'KeyW' ? 12 : -12); return done(); }
     if (k === 's' && !e.altKey) {
       conn && conn.send({ type: 'seek', track: state.cursor.track,
                           tick: Math.max(0, Math.round(state.pianoStart)) });
       return done();
     }
-    if (e.altKey && (k === 'q' || k === 'a')) { pianoEdit('transpose', k === 'q' ? 1 : -1); return done(); }
-    if (e.altKey && (k === 'w' || k === 's')) { pianoEdit('transpose', k === 'w' ? 12 : -12); return done(); }
     if ((k === 'Backspace' || k === 'Delete') && state.pianoSelection && state.pianoSelection.size) {
       pianoEdit('delete');
       return done();
@@ -1610,13 +1625,15 @@ addEventListener('keydown', (e) => {
     state.cursor.row = Math.max(0, to);
     follow(); return done();
   }
-  if (k === 'c' && e.altKey) { copySelection(); return done(); }
-  if (k === 'v' && e.altKey) { pasteClipboard(); return done(); }
-  if (k === 'x' && e.altKey) { if (copySelection()) deleteSelection(); return done(); }
-  if (k === 'q' && e.altKey) { transposeSelection(1); return done(); }
-  if (k === 'a' && e.altKey) { transposeSelection(-1); return done(); }
-  if (k === 'w' && e.altKey) { transposeSelection(12); return done(); }
-  if (k === 's' && e.altKey) { transposeSelection(-12); return done(); }
+  if (alt === 'KeyC') { copySelection(); return done(); }
+  if (alt === 'KeyV') { pasteClipboard(); return done(); }
+  if (alt === 'KeyX') { if (copySelection()) deleteSelection(); return done(); }
+  if (alt === 'KeyQ') { transposeSelection(1); return done(); }
+  if (alt === 'KeyA') { transposeSelection(-1); return done(); }
+  if (alt === 'KeyW') { transposeSelection(12); return done(); }
+  if (alt === 'KeyS') { transposeSelection(-12); return done(); }
+  // Any other Alt combo is the browser's or the OS's, not ours.
+  if (alt) return;
 
   if (k.length !== 1) return;
   state.reject = null;
@@ -1698,11 +1715,23 @@ addEventListener('beforeunload', saveSession);
 
 draw();
 
+/**
+ * Whether to open a socket at all.
+ *
+ * `?engine=off` boots the page standalone. The fixture-based tests — goldens,
+ * allocation, frame work, the soak — use it, because a test that measures the
+ * page must not also hold a live socket open: the soak ran four minutes attached
+ * to a running engine, which makes it a measurement of two things and puts an
+ * extra client on a stack somebody else may be using. The e2e is the exception
+ * and connects, because a live engine is the thing it is testing.
+ */
+const WANTS_ENGINE = new URLSearchParams(location.search).get('engine') !== 'off';
+
 // Live engine, when the sidecar is up. Falls back to the fixture so the page —
 // and every golden — still renders standalone. Connected after the first draw:
 // connectEngine calls onStatus synchronously, and touching `state` before its
 // declaration is a temporal-dead-zone throw that kills the whole module.
-conn = connectEngine({
+conn = WANTS_ENGINE ? connectEngine({
   onStatus: (s, d) => { state.link = s + (d ? ': ' + d : ''); schedule(); },
   onAck: (msg) => {
     // The project list comes back on the command socket's ack channel.
@@ -1748,7 +1777,10 @@ conn = connectEngine({
     followPlayhead();
     schedule();
   },
-});
+}) : noEngine();
+// Not 'connecting', which would be a lie that never resolves, and short enough
+// that the goldens read as a page rather than a page with a warning on it.
+if (!WANTS_ENGINE) state.link = 'standalone';
 
 /**
  * Remember where you were across a reload.

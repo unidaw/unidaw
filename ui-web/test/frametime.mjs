@@ -36,7 +36,7 @@ await new Promise((r) => srv.listen(0, '127.0.0.1', r));
 // under load, and reports p50 intervals that are impossible on a 60 Hz display.
 const br = await chromium.launch({ channel: 'chrome', headless: false });
 const page = await br.newPage({ viewport: { width: 1500, height: 760 }, deviceScaleFactor: 2 });
-await page.goto(`http://127.0.0.1:${srv.address().port}/index.html`);
+await page.goto(`http://127.0.0.1:${srv.address().port}/index.html?engine=off`);
 await page.waitForFunction(() => !!window.__uni);
 await page.evaluate(() => document.fonts.ready);
 // Pin the data source. Without this the numbers depend on whether a sidecar
