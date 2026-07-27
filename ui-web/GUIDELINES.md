@@ -229,8 +229,8 @@ Ranked by how much they cost to get wrong.
 ### 3.0 This is enforced, not just written down
 
 `npm test` runs the goldens **and** `test/alloc.mjs`, which measures bytes
-allocated per draw and fails above 250. The unfixed renderer allocated ~11,000.
-A rule in a document decays; a failing test does not.
+allocated per draw. The unfixed renderer allocated ~11,000. A rule in a document
+decays; a failing test does not.
 
 If it fails you have added one of these to a per-frame path — all of them
 allocate, and all of them were present at some point in this file's history:
@@ -242,10 +242,48 @@ allocate, and all of them were present at some point in this file's history:
 | `el.textContent = s` | own a Text node, write `.nodeValue` |
 | `el.dataset.foo !== String(x)` | `el._foo !== x`, then write dataset |
 | an unguarded `style.*` write | compare the cached number first |
+| `for (const x of arr)` | an index loop — for-of builds an iterator per call |
+| `{a, b}` passed to a per-frame callee | a module-level scratch object, mutated in place |
+| `.map`/`.filter`/`.find`/`.forEach` | an index loop; the closure is per frame too |
+| a value from a small closed domain | a table built once at load (128 pitches, 256 velocities) |
 | anything O(tree) for a diagnostic | put it on a timer |
 
 The residual is two strings for the one row whose identity genuinely changed —
 its `top` and its `data-row`. That is the floor, not waste.
+
+### 3.0.1 Measure allocation, not retained heap
+
+The first version of `test/alloc.mjs` bracketed the loop with
+`HeapProfiler.collectGarbage` + `Runtime.getHeapUsage`. **That measures what
+SURVIVED**, which is close to the opposite of what this rule is about: every
+allocation a draw makes is dead by the end of the frame, so the collectGarbage
+took it all away before the measurement. It read 14–40 bytes/draw and passed
+while three independent audits were finding hundreds of transient strings per
+frame in the same code. It was not measuring a clean draw path; it was measuring
+the absence of a **leak**, which is a weaker and different property.
+
+The test now uses `HeapProfiler.startSampling` with
+`includeObjectsCollectedByMinorGC`, which counts allocations whether or not they
+survive. It keeps the retained check as a separate assertion, because a leak and
+a churn are both worth failing on and neither implies the other.
+
+The corollary is a general one and it has now caught this project twice: **a
+green test proves nothing until you have checked that it can go red.** Before
+trusting a performance number, break the thing on purpose and confirm the number
+moves.
+
+### 3.0.2 Cover the path the program is actually on
+
+Every scenario in `test/alloc.mjs` loaded the page with `?engine=off`, so for the
+whole life of that file the branch it never measured was the one that runs when a
+project is open: engine notes spelled into cells, harmony fields named, clip
+rails from real placements. `__uni.useBusyEngine()` / `__uni.tickBusy()` exist so
+the measured case is a loaded project, playing.
+
+The same mistake in a different costume: a scenario that only moves a cursor does
+not exercise the list under it. "Patcher moving the field cursor" passed at 14
+bytes/draw while `buildPatcherModel` was allocating 433 bytes per call, because
+the fixture had no selected node with a config.
 
 ### 3.1 Zero allocation in the draw path
 The view-model is pooled and double-buffered; rows, cells, clips and rails are
@@ -274,6 +312,19 @@ Append a Text node at construction and write `.nodeValue`, which mutates in plac
 |---|---:|---:|
 | transform | 1.54 ms | 2.10 ms |
 | naive rebind | **11.66 ms** | **15.11 ms** |
+
+This is a rule for **every** timeline surface, not just the tracker. The
+arrangement and the piano roll each spent their first year positioning every
+clip, note, gridline and ruler tick at `(tick - startTick) / ticksPerPixel`,
+which means a pan rewrites every element's position string — 3.9 KB and 3.6 KB
+per frame respectively, measured, against 0.02 KB at rest. Both now place
+elements at their absolute `tick / ticksPerPixel` inside a wrapper and translate
+the wrapper: **3,981 → 144** and **3,664 → 228** bytes/draw.
+
+The one thing this makes easy to get wrong: a zoom changes `ticksPerPixel` and
+therefore every element's absolute position, so the rebind guard must name the
+zoom. A guard that names only the scroll position leaves everything where it was
+and looks like a zoom that did nothing.
 
 ### 3.4 Recycle the pool as a ring, not a list
 Slot is `row mod poolSize`. Indexing by position shifts every element's identity
@@ -322,6 +373,44 @@ A hand-computed scroll extent forgot the 2px per-track border — 32px across 16
 tracks, leaving the last 30px permanently unreachable. `cellLeft()` and
 `maxScrollX()` measure the real row once per shape change. Forces layout, so it
 runs on resize only.
+
+### 3.12 Never read a box in the draw path
+
+`clientWidth`, `clientHeight` and `getBoundingClientRect()` force the browser to
+flush pending style and layout so it can answer. `draw()` writes styles and then
+read a box, five times over — five synchronous layouts inside one animation
+frame, which is textbook thrashing.
+
+Host boxes come from a `ResizeObserver` (`hostBox` / `boxOf()` in `index.html`),
+which is handed the measurement rather than asking for it. The renderer takes the
+viewport height as an argument instead of re-reading the element it was already
+measured from.
+
+The cached value is `0` when a host is hidden, and `boxOf` falls back to a live
+read in that case — the frame after a view switch unhides a host, the observer
+has not fired yet, and drawing a surface at width 0 for one frame is a flash.
+
+### 3.13 Positions outgrow small integers about nine minutes in
+
+Nanoticks run at 960,000 to the quarter. V8's small-integer range with pointer
+compression is ±2³⁰, which a song passes at roughly bar 280 — about nine minutes
+at 120 BPM. From there **every tick expression in the draw path produces a boxed
+double on the heap**: window bounds, the cursor's position, the minimap's span.
+It costs about a kilobyte a frame and it cannot be guarded away without giving up
+absolute-tick arithmetic.
+
+Two consequences, both of which have bitten:
+
+1. **Do not compute a tick you are not going to use.** `buildViewModel` was
+   computing each row's absolute tick unconditionally when only the fixture and
+   the label rebuild need it — 62 boxed doubles a frame, invisible in any short
+   test.
+2. **A benchmark must say where in the song it stands.** Two scenarios in
+   `test/alloc.mjs` were implicitly running at bar 3,000 because an earlier
+   scenario had scrolled there, and read four times what the same code measures
+   from the top. `test/alloc.mjs` now has a deliberate "hour into the song"
+   scenario with its own limit, and every other scenario resets zoom, scroll and
+   playhead in its setup.
 
 ---
 

@@ -1,0 +1,85 @@
+/* The handle a Splitter renders. Two numbers, three states.
+ *
+ * INVISIBLE UNTIL APPROACHED. Every region already draws its own 1px rule from
+ * shell.css, so a handle that painted a second line beside it would turn one
+ * border into a gutter that looks like a mistake. What the handle adds at rest
+ * is not a mark, it is a TARGET.
+ *
+ * The target is 9px and the mark is 1px, because the boundary a person aims at
+ * is the 1px one and a 1px target cannot be hit — the pointer crosses it between
+ * two frames of any normal movement. 9 is the smallest odd width that still
+ * catches a fast approach from either side at DPR 2.
+ *
+ * The target sits ENTIRELY INSIDE the region rather than straddling its edge.
+ * That is forced, not preferred: #browser, #rdock and #chain all clip their
+ * overflow — #chain through `contain: strict` on the chain strip — and anything
+ * hanging outside the box is neither painted nor hit-testable. Half a handle
+ * that only works on one side is worse than a whole one that is off-centre.
+ *
+ * Colours come from tokens.css. Nothing here names one. */
+
+.sp {
+  --sp-hit: 9px;      /* how far you can miss by */
+  --sp-line: 1px;     /* what you can see */
+
+  position: absolute;
+  /* Above the region's own content, which is usually a surface at `inset: 0`.
+     Below the dock's overlay (7) is not an option — the handle has to win
+     against whatever the region draws under it; 12 clears every z-index the
+     regions themselves use and stays under the shell's overlays at 20+. */
+  z-index: 12;
+  /* Or a trackpad pan or a touch drag claims the gesture and pointermove simply
+     stops arriving, mid-drag, with no error anywhere. */
+  touch-action: none;
+}
+
+.sp-x { top: 0; bottom: 0; width: var(--sp-hit); cursor: col-resize; }
+.sp-y { left: 0; right: 0; height: var(--sp-hit); cursor: row-resize; }
+.sp-right { right: 0; }
+.sp-left { left: 0; }
+.sp-top { top: 0; }
+.sp-bottom { bottom: 0; }
+
+/* The mark: a child of the target rather than the target itself, so the two
+   sizes are independent and the visible line can stay exactly on the edge. */
+.sp::after {
+  content: '';
+  position: absolute;
+  background: transparent;
+}
+.sp-x::after { top: 0; bottom: 0; width: var(--sp-line); }
+.sp-y::after { left: 0; right: 0; height: var(--sp-line); }
+.sp-right::after { right: 0; }
+.sp-left::after { left: 0; }
+.sp-top::after { top: 0; }
+.sp-bottom::after { bottom: 0; }
+
+/* Hover says "this edge moves". Keyboard focus says the same thing louder,
+   because a handle reached by Tab has no pointer sitting on it to explain
+   itself. Dragging is the accent, and thicker: while the pointer is off
+   somewhere else the line is the only feedback that the drag is still live. */
+.sp:hover::after { background: var(--base-neutral-600); }
+.sp:focus-visible::after { background: var(--base-accent); --sp-line: 2px; }
+.sp:focus-visible { outline: none; }
+.sp.on::after { background: var(--base-accent); --sp-line: 2px; }
+
+/* The drag shield: transparent, viewport-filling, and alive only while a drag
+   is. It carries the cursor for the whole window, because pointer capture routes
+   the events and not the cursor, and off the 9px handle the pointer is over
+   regions that draw their own.
+   It must be HIT-TESTABLE — `pointer-events: none` would take it out of hit
+   testing and the cursor with it — and that is harmless: the capture already
+   owns the events, and the shield is gone the moment the capture is.
+   The alternative, a `* { cursor: !important }` rule behind a class on :root,
+   measured 5.73 ms to add and 5.30 ms to remove over the real shell's 4,804
+   nodes. This is one `display` write. */
+.sp-shield {
+  display: none;
+  position: fixed;
+  inset: 0;
+  /* Above the shell's own overlays (help and the palette at 20, the stale
+     banner at 30) for the second a drag lasts. */
+  z-index: 40;
+  cursor: col-resize;
+}
+.sp-shield.y { cursor: row-resize; }

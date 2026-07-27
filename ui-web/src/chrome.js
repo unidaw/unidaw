@@ -7,6 +7,20 @@
 
 const NANOTICKS_PER_QUARTER = 960000;
 const BEATS_PER_BAR = 4;
+const NANOTICKS_PER_SUB = NANOTICKS_PER_QUARTER / 1000;
+
+/**
+ * Every sub-beat field the readout can show, interned at load.
+ *
+ * The third field of "12:3:487" is the one value on this bar that genuinely
+ * changes every frame: it is thousandths of a quarter note, so at 120 BPM it
+ * advances ~2,000 times a second and no guard can stop it moving. What a guard
+ * CAN stop is it costing a string — the domain is 0..999 and bounded by the
+ * modulo that produces it, so a thousand three-character strings built once is
+ * the whole cost, instead of one string per frame for the life of the session.
+ */
+const SUB = new Array(1000);
+for (let i = 0; i < 1000; i++) SUB[i] = (i < 10 ? '00' : i < 100 ? '0' : '') + i;
 
 /** One label whose text is written through an owned Text node. */
 function label(cls, initial = '') {
@@ -60,7 +74,15 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
 
   const pos = document.createElement('div');
   pos.className = 'ch-group';
-  const posLabel = label('ch-pos', '1:1:000');
+  // TWO Text nodes, not one. "bar:beat:" moves a couple of times a second and
+  // the sub-beat moves every frame, so one node means building the whole string
+  // at the rate of its fastest field — the per-frame string factory this bar was
+  // before. Split, the frame's write is `posSub.nodeValue = SUB[n]`: a table
+  // lookup and an assignment, allocating nothing. `.ch-pos` still reads
+  // "1:1:000" to anything asking for its text, since textContent joins them.
+  const posLabel = label('ch-pos', '1:1:');
+  const posSub = document.createTextNode('000');
+  posLabel.appendChild(posSub);
   const tempo = label('ch-meta', '120.00 BPM');
   const sig = label('ch-meta', '4/4');
   pos.append(posLabel, tempo, sig);
@@ -124,6 +146,11 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
 
   // Cached scalars, so a write only happens when the value actually changes.
   let lastTick = -1, lastTransport = -1, lastLink = '', lastOct = -1, lastStep = -1, lastVel = -1, lastReject = '', lastView = '', lastKey = '';
+  // The readout's two halves, cached separately because they move at different
+  // rates. `lastBeat` is the absolute beat index, which is the ONLY thing the
+  // bar and the beat-in-bar are computed from — a tick that moves within a beat
+  // cannot change what that half says, so it is a sufficient key for it.
+  let lastBeat = -1, lastSub = -1;
 
   return {
     /** Called from the draw loop. Must stay allocation-free when nothing moves. */
@@ -153,11 +180,17 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
       if (playheadTick !== lastTick) {
         lastTick = playheadTick;
         const beat = Math.floor(playheadTick / NANOTICKS_PER_QUARTER);
-        const bar = Math.floor(beat / BEATS_PER_BAR) + 1;
-        const inBar = (beat % BEATS_PER_BAR) + 1;
-        const sub = Math.floor((playheadTick % NANOTICKS_PER_QUARTER) / (NANOTICKS_PER_QUARTER / 1000));
-        posLabel.firstChild.nodeValue =
-          bar + ':' + inBar + ':' + (sub < 10 ? '00' : sub < 100 ? '0' : '') + sub;
+        // A beat is 500 ms at 120 BPM, so this concatenation runs about twice a
+        // second rather than sixty times — the rate the value it describes
+        // actually changes at, which is the point of splitting the node.
+        if (beat !== lastBeat) {
+          lastBeat = beat;
+          posLabel.firstChild.nodeValue =
+            (Math.floor(beat / BEATS_PER_BAR) + 1) + ':' + ((beat % BEATS_PER_BAR) + 1) + ':';
+        }
+        // Bounded 0..999 by the modulo above, so the table always has an entry.
+        const sub = Math.floor((playheadTick % NANOTICKS_PER_QUARTER) / NANOTICKS_PER_SUB);
+        if (sub !== lastSub) { lastSub = sub; posSub.nodeValue = SUB[sub]; }
       }
       if (tstate !== lastTransport) {
         lastTransport = tstate;

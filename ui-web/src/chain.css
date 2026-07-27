@@ -11,6 +11,7 @@
 .dv-head {
   flex: 0 0 26px; height: 26px;
   display: flex; align-items: center; gap: 10px;
+  overflow: hidden;
   padding: 0 10px; box-sizing: border-box;
   font-family: var(--font-mono);
   font-size: var(--font-size-fx);
@@ -23,7 +24,14 @@
 .dv-version { color: var(--base-neutral-600); }
 /* Pushed right and dimmed: it is a caveat, not a heading. It has to be readable
    without competing with the track it is about. */
-.dv-notice { margin-left: auto; color: var(--base-neutral-600); }
+.dv-notice { margin-left: auto; min-width: 0; color: var(--base-neutral-600);
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* What the RACK said, as opposed to what the model says about the chain — a
+   refusal it made itself, or one it inferred from the engine never answering.
+   Louder than the notice because it is an answer to something you just did, and
+   empty most of the time, so it takes no room until it has something to say. */
+.dv-said { flex: 0 0 auto; white-space: nowrap; color: var(--uni-text-fx); }
+.dv-said:not(.on) { display: none; }
 
 .dv-cards {
   flex: 1 1 auto; min-height: 0;
@@ -38,6 +46,11 @@
 .dv-card {
   flex: 0 0 232px; width: 232px;
   display: flex; flex-direction: column; gap: 6px;
+  /* The card is exactly as tall as the strip leaves it and never grows: the one
+     part of it with an unbounded number of things in it is the parameter list,
+     and that is the part that scrolls. `min-height: 0` is what lets the list
+     shrink below its content instead of pushing the footer off the bottom. */
+  min-height: 0; overflow: hidden;
   padding: 8px 10px; box-sizing: border-box;
   border: 1px solid var(--uni-rule-track);
   border-radius: 3px;
@@ -89,15 +102,71 @@
   font-size: var(--font-size-inst);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.dv-body { flex: 1 1 auto; color: var(--uni-text-gutter); }
-.dv-foot { color: var(--base-neutral-600); }
+/* Both are ONE line and neither grows. The leftover height belongs to the
+   parameter list; a capability phrase that stretched to fill the card was fine
+   when a card held five rows and is a waste of the only scarce dimension here
+   now that it can hold 256. */
+.dv-body { flex: 0 0 auto; color: var(--uni-text-gutter);
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dv-foot { flex: 0 0 auto; color: var(--base-neutral-600);
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The parameter list: the card's only scrollable region, and the only one whose
+   length the plugin decides. 196px of strip leaves 154 for a card, of which the
+   title, the capability line, the footer and the padding take a fixed ~71 — so
+   this is ~83px, six rows of a possible 256, with the rest a scroll away.
+
+   `contain: strict` for the same reason the tracker grid has it: the rows are
+   absolutely positioned inside a spacer, nothing outside this box depends on
+   what is in it, and eight of these on screen must not cost eight subtree
+   invalidations per frame. */
+.dv-plist {
+  flex: 1 1 auto; min-height: 0;
+  position: relative;
+  overflow-y: auto; overflow-x: hidden;
+  /* The strip itself scrolls horizontally; a list that handed its overscroll to
+     the parent would slide the whole rack sideways at the end of every flick. */
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--base-neutral-800) transparent;
+  contain: strict;
+}
+/* Holds the full extent so the scrollbar tells the truth about how much there
+   is. Height is written by the renderer, from the measured row height. */
+.dv-pspace { position: relative; width: 100%; }
 
 /* Parameter rows, once the device's host has answered. The value is the host's
-   own display string — it knows whether a number is dB, Hz or a note name. */
-.dv-p { display: flex; align-items: center; gap: 6px; height: 13px; }
+   own display string — it knows whether a number is dB, Hz or a note name.
+
+   Absolutely positioned and placed by the row they hold, which is what makes
+   the pool legal as a ring: which slot an element occupies is irrelevant when
+   its position comes from its content. */
+.dv-p { position: absolute; left: 0; right: 0;
+        display: flex; align-items: center; gap: 6px; height: 13px; }
 .dv-p-n { flex: 0 0 62px; color: var(--uni-text-gutter);
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dv-p-bar { flex: 1 1 auto; height: 3px; background: var(--uni-rule-column); border-radius: 2px; }
-.dv-p-fill { height: 100%; background: var(--base-accent); border-radius: 2px; }
+/* 3px of bar in a 13px row is a 3px target. The pseudo-element widens what the
+   pointer can hit to the whole row height without adding a node per row —
+   a pseudo is hit-tested as its originating element. */
+.dv-p-bar { position: relative; flex: 1 1 auto; height: 3px;
+            background: var(--uni-rule-column); border-radius: 2px;
+            cursor: ew-resize; touch-action: none; }
+.dv-p-bar::before { content: ''; position: absolute; inset: -5px 0; }
+.dv-p-bar:hover { background: var(--base-neutral-800); }
+.dv-p-fill { height: 100%; background: var(--base-accent); border-radius: 2px;
+             pointer-events: none; }
 .dv-p-v { flex: 0 0 58px; text-align: right; color: var(--base-accent-ramp-300);
           overflow: hidden; white-space: nowrap; }
+
+/* An edit that has been sent and not yet confirmed. The number under a pending
+   row is what this side ASKED for, and until the plugin's host says otherwise
+   the only honest thing to call it is a request — so it is marked, in the same
+   --uni-text-pending the mixer uses for a fader the engine has not confirmed.
+
+   The NAME changes colour too, and that is the cue that actually works: the fill
+   at 3px is a hair's difference from the accent next to it, and a person needs
+   to be able to tell a request from a fact without comparing two purples. The
+   name goes from the dimmest colour on the row to the brightest. */
+.dv-p.pend .dv-p-n { color: var(--uni-text-pending); }
+.dv-p.pend .dv-p-fill { background: var(--uni-text-pending); }
+.dv-p.pend .dv-p-v { color: var(--uni-text-pending); }

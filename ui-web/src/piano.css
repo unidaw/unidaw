@@ -40,6 +40,10 @@
   border-bottom: 1px solid var(--uni-rule-gutter);
   overflow: hidden; z-index: 2; pointer-events: none;
 }
+/* The ruler's labels scroll; the ruler's background and rule do not. Same box,
+   so the labels sit exactly where they did. */
+.pr-rticks { position: absolute; inset: 0; }
+
 .pr-tick {
   position: absolute; top: 0; left: 0; height: 100%;
   padding-left: 4px; box-sizing: border-box;
@@ -88,8 +92,13 @@
 .pr-note { cursor: grab; }
 .pr-note:active { cursor: grabbing; }
 
+/* Its origin is the ROWS, not the band. The marquee is drawn from the same
+   pointer coordinates the hit test uses, and those are measured from the top of
+   `.pr-rows` — so anchored at the band's top it was drawn one header-height
+   above the pointer, selecting notes it was not covering. Same origin as the
+   grid and the notes; the header is not part of the space you can drag in. */
 .pr-marquee {
-  position: absolute; top: 0; left: 0;
+  position: absolute; top: var(--metrics-header-height); left: 0;
   border: 1px solid var(--base-accent);
   background: var(--uni-surface-selection);
   pointer-events: none; z-index: 2;

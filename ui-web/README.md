@@ -74,7 +74,31 @@ leaves the engine boundary unexercised, and nearly every serious bug in this
 codebase has lived exactly there, so `npm run e2e` covers the other half.
 
 Goldens are committed PNGs; `npm run bless` accepts new ones. Look at the image
-before you bless it.
+before you bless it. That is not a formality — the track headers spent months
+labelled with the *next* track's name, and the last one blank, purely because the
+baseline was blessed with it in place. Sixteen plausible labels photograph
+exactly like sixteen correct ones.
+
+`npm run alloc` measures **bytes allocated per draw**, using the sampling heap
+profiler with `includeObjectsCollectedByMinorGC` — allocation, not retained heap.
+The distinction is the whole point and it is explained at the top of
+`test/alloc.mjs`: the version that bracketed the loop with `collectGarbage`
+reported 14–40 bytes/draw while the renderers were throwing away hundreds of
+strings a frame, because it collected the evidence before measuring it.
+
+Where the draw path stands today, at 1500×760 with a loaded project:
+
+| | bytes/draw |
+|---|---:|
+| tracker, playing | 320 |
+| tracker, scrolling | 703 |
+| arrangement, panning | 143 |
+| piano roll, panning | 225 |
+| mixer, meters moving | 210 |
+| device chain | 19 |
+
+Frame work is under 1% of the 16.6 ms budget on every surface, including a
+busy project three thousand bars in.
 
 ## Before you change anything
 

@@ -446,14 +446,20 @@ ok(rack.params[1] === 3 && rack.params[0] === 0,
 ok(/2 of 4/.test(rack.notice), 'and the strip says how much of the rack has answered',
    rack.notice);
 // Parameter rows sit ABOVE the footer. They were appended after it once, which
-// looked plausible in a screenshot and was wrong.
+// looked plausible in a screenshot and was wrong. They now live in a scroller of
+// their own — a card holds 256 of them and can show six — so the same claim is
+// about where that scroller sits, and that the rows are inside it.
 const order = await page.evaluate(() => {
   const c = [...document.querySelectorAll('.dv-card')][1];
-  return [...c.children].map((x) => x.className);
+  return { kids: [...c.children].map((x) => x.className),
+           rows: c.querySelectorAll('.dv-plist > .dv-pspace > .dv-p').length,
+           loose: c.querySelectorAll(':scope > .dv-p').length };
 });
-ok(order.indexOf('dv-p') > order.indexOf('dv-body')
-   && order.lastIndexOf('dv-p') < order.indexOf('dv-foot'),
-   'parameter rows sit between the body and the footer', order.join(','));
+ok(order.kids.indexOf('dv-plist') > order.kids.indexOf('dv-body')
+   && order.kids.indexOf('dv-plist') < order.kids.indexOf('dv-foot')
+   && order.rows > 0 && order.loose === 0,
+   'the parameter list sits between the body and the footer, and holds the rows',
+   JSON.stringify(order));
 await page.evaluate((p) => window.__uni.loadProject(p), PROJECT);
 await page.waitForTimeout(2500);
 
@@ -637,13 +643,23 @@ await frames();
 const picked = await page.evaluate(() => window.__uni.pianoSelect(0, 0, 120, 300));
 ok(picked > 1, 'marquee selects several notes', `${picked} notes`);
 const pb = await page.evaluate(() => window.__uni.pianoSelected());
+// The marquee's keys must actually RESOLVE to engine notes, which is a
+// different claim from the marquee having found something. They were built by
+// two different pieces of code — `notesInRect` writes the key and `noteKey`
+// reads it — and when those disagreed (a two-part key against a three-part one)
+// this resolved to nothing at all: notes drew unselected and every edit took the
+// "select notes first" path. Nothing below caught it, because `every` on an
+// empty array is true, so the transpose assertion passed by having no notes to
+// contradict it. Assert the non-emptiness before asserting on the contents.
+ok(pb.length === picked, 'and every marquee key resolves to an engine note',
+   `${pb.length} of ${picked}`);
 await page.evaluate(() => window.__uni.pianoEdit('transpose', 12));
 await page.waitForTimeout(3500);
 const pa = await page.evaluate(() => window.__uni.pianoSelected());
 // Both halves matter: every note moves (the batch), and the selection still
 // matches them afterwards (it is keyed on position, not on the note id the
 // engine reassigns when it rewrites).
-ok(pa.length === pb.length && pa.every((n, i) => n.pitch === pb[i].pitch + 12),
+ok(pa.length > 0 && pa.length === pb.length && pa.every((n, i) => n.pitch === pb[i].pitch + 12),
    'the whole selection transposes and survives the edit',
    `${pb.length} notes`);
 await page.evaluate(() => window.__uni.pianoEdit('transpose', -12));
@@ -866,7 +882,11 @@ const modBefore = await page.evaluate(() => window.__uni.pianoSelected().map((n)
 ok(await macAlt('œ', 'KeyQ'), 'macOS Option+Q is handled, not ignored');
 await page.waitForTimeout(3500);
 const modAfter = await page.evaluate(() => window.__uni.pianoSelected().map((n) => n.pitch));
-ok(modAfter.length === modBefore.length && modAfter.every((p, i) => p === modBefore[i] + 1),
+// `> 0` for the same reason as the selection section above: with an empty
+// selection this whole assertion is `true && [].every(...)`, which is true, and
+// the surface it is checking never ran at all.
+ok(modAfter.length > 0 && modAfter.length === modBefore.length
+   && modAfter.every((p, i) => p === modBefore[i] + 1),
    'and actually transposes', `${modBefore.slice(0, 4)} -> ${modAfter.slice(0, 4)}`);
 await macAlt('å', 'KeyA');
 await page.waitForTimeout(3500);

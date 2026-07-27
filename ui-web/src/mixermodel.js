@@ -59,6 +59,12 @@ export function createMixerBuffer(trackCount = 16) {
       track: i, name: '', gain: 0, gainDb: '0.0', pan: 0, panLabel: 'C',
       mute: false, solo: false, dimmed: false, pending: false,
       peak: 0, peakPct: 0, faderPct: 0,
+      // The name the engine published that `name` was derived from. A number,
+      // so it can never equal a string or the undefined a nameless engine
+      // yields, and the first build therefore always computes a name. `gainDb`
+      // and `panLabel` need no such sentinel: they are seeded with exactly what
+      // gainLabel(0) and panLabel(0) return, which is what gain 0 / pan 0 mean.
+      _nameSrc: -1,
     };
   }
   return { strips, stripCount: 0, authoritative: false,
@@ -135,11 +141,20 @@ export function buildMixerModel(opts, buf) {
     const pan = resolve(mixer, engine, t, 'pan', 'mixPan');
     const flags = resolve(mixer, engine, t, 'flags', 'mixFlags');
     s.track = t;
-    s.name = trackName(engine, t);
-    s.gain = gain;
-    s.gainDb = gainLabel(gain);
-    s.pan = pan;
-    s.panLabel = panLabel(pan);
+    // trackName's fallback is String() + padStart() + a concat — three strings
+    // per strip per frame to spell a name that only a rename can change. Keyed
+    // on the published name ITSELF rather than on a version: a rename moves the
+    // name and nothing else, which is precisely how the two track-name bugs in
+    // GUIDELINES 2.1 got onto that list. t is fixed for this strip, so (name, t)
+    // — the whole of trackName's input — is covered.
+    const nm = engine && engine.names ? engine.names[t] : undefined;
+    if (s._nameSrc !== nm) { s._nameSrc = nm; s.name = trackName(engine, t); }
+    // Both labels are pure functions of the value beside them, and both were
+    // rebuilt for every strip on every frame to produce the characters that were
+    // already there. The value we store is the key. Moving a fader now allocates
+    // a string on the frames it actually changes on, and nothing on the rest.
+    if (s.gain !== gain) { s.gain = gain; s.gainDb = gainLabel(gain); }
+    if (s.pan !== pan) { s.pan = pan; s.panLabel = panLabel(pan); }
     s.mute = (flags & FLAG_MUTE) !== 0;
     s.solo = (flags & FLAG_SOLO) !== 0;
     s.pending = mixer.strips[t].pendingUntil >= 0;

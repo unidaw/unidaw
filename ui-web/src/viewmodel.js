@@ -79,13 +79,86 @@ function clipIndexAt(tick, track) {
  * when in fact the frame was delivered in 15 ms and simply had nothing new in it.
  * Rows are a projection of the timeline; content must follow the tick.
  */
+/**
+ * The two bounded string domains the fixture draws from, built once. `DEC2` is
+ * the instrument column (00-99) and `HEX2` the effect column (00-FF); between
+ * them they were `String(h % 100).padStart(2, '0')` and a `toString(16)
+ * .toUpperCase().padStart(2, '0')` chain — five allocations per cell per frame,
+ * for 1,776 cells, to produce one of 356 possible strings.
+ */
+const DEC2 = new Array(100);
+for (let i = 0; i < 100; i++) DEC2[i] = (i < 10 ? '0' : '') + i;
+const HEX2 = new Array(256);
+for (let i = 0; i < 256; i++) HEX2[i] = (i < 16 ? '0' : '') + i.toString(16).toUpperCase();
+/** The fixture's coarse-zoom count pill. A row can span at most 64 sixteenths,
+ *  which is the loop bound below, so the domain is 0..64. */
+const AGG_TEXT = new Array(65);
+for (let i = 0; i < 65; i++) AGG_TEXT[i] = '[' + i + 'x]';
+
+/**
+ * Written into rather than returned fresh: this is called once per cell per
+ * frame — 1,776 objects a frame at the default shape, over 100k/second — and the
+ * caller copies both fields out immediately. The result is only valid until the
+ * next call, which is true of every caller here by construction.
+ */
+const _content = { text: '', kind: 'empty' };
+
+/** What a harmony block says when the caller supplied no speller. Frozen and
+ *  shared rather than built per block per frame. */
+const EMPTY_NAME = Object.freeze({ label: '', sub: '' });
+
+/**
+ * String interning for the effect column and the collision pill.
+ *
+ * These are per-note-per-frame paths whose domains are small and closed but not
+ * dense enough to precompute up front — a retrigger count, a probability, a
+ * count-and-pitch pair. Each table fills the first time a value appears and is
+ * a plain lookup forever after, so the steady state allocates nothing while the
+ * first frame after a project load allocates a handful of strings.
+ *
+ * Array index and Map.get on an existing key both allocate nothing.
+ */
+/**
+ * Row labels, interned by the tick they name.
+ *
+ * The guard below skips the label loop entirely when nothing moved, which covers
+ * playback and editing. Scrolling is the case it cannot help: every row takes a
+ * new tick, so a one-row step rebuilt all 62 labels — ~2.3 KB a frame, measured.
+ * But 61 of those 62 strings are the ones the previous frame already built, one
+ * row further up. Interning turns a scroll into one new string per newly
+ * revealed row, which is the same floor the renderer works to.
+ *
+ * Cleared when the zoom changes, because a tick means a different row label at
+ * every zoom, and cleared again past a cap so a long scroll cannot grow it
+ * without bound. Both are cheap: rebuilding a screenful of labels costs what one
+ * frame of the old behaviour cost.
+ */
+const LABELS = new Map();
+const LABEL_CAP = 8192;
+let labelZoom = -1;
+
+const R_TEXT = [], P_TEXT = [], EVTS = [], PILL_SAME = [];
+function interned(table, prefix, n) {
+  return table[n] !== undefined ? table[n] : (table[n] = prefix + n);
+}
+function pillEvts(n) {
+  return EVTS[n] !== undefined ? EVTS[n] : (EVTS[n] = n + ' evts');
+}
+function pillSame(n, name) {
+  const m = PILL_SAME[n] || (PILL_SAME[n] = new Map());
+  let s = m.get(name);
+  if (s === undefined) { s = n + '× ' + name; m.set(name, s); }
+  return s;
+}
+
 function contentAt(tick, track, col) {
   const h = Math.abs(Math.sin((tick / 60000 + track * 101 + col * 7) * 0.61803) * 10000) | 0;
-  if (h % 5 < 2) return { text: '', kind: 'empty' };
-  if (h % 23 === 0) return { text: 'OFF', kind: 'off' };
-  if (col === 0) return { text: NOTES[h % NOTES.length], kind: 'note' };
-  if (col === 1) return { text: String(h % 100).padStart(2, '0'), kind: 'inst' };
-  return { text: (h % 256).toString(16).toUpperCase().padStart(2, '0'), kind: 'fx' };
+  const o = _content;
+  if (h % 5 < 2) { o.text = ''; o.kind = 'empty'; return o; }
+  if (h % 23 === 0) { o.text = 'OFF'; o.kind = 'off'; return o; }
+  if (col === 0) { o.text = NOTES[h % NOTES.length]; o.kind = 'note'; return o; }
+  if (col === 1) { o.text = DEC2[h % 100]; o.kind = 'inst'; return o; }
+  o.text = HEX2[h % 256]; o.kind = 'fx'; return o;
 }
 
 /**
@@ -128,6 +201,15 @@ export function createBuffer(rowCount, trackCount, columns) {
     zoom: ZOOM_LEVELS[0], tracks: [], rows, clips: [], harmony: [], _harmonyPool: [],
     cursor: { row: 0, track: 0, col: 0 }, playhead: { row: 0 }, selection: null,
     _shape: `${rowCount}x${trackCount}x${columns}`,
+    // The same three numbers the shape string encodes. buildViewModel compares
+    // THESE: building the string only to throw it away was one allocation per
+    // frame to answer a question three integer comparisons answer for nothing.
+    // The string stays because it reads well in a debugger and costs one alloc
+    // per buffer, which happens on a shape change and never in a frame.
+    _rows: rowCount, _trackCount: trackCount, _columns: columns,
+    // What the row labels were last built for. Labels are a pure function of
+    // (startRow, zoom, rowCount) — see the row loop.
+    _labelStart: -1, _labelZoom: -1,
     _clipPool: [],
   };
 }
@@ -148,9 +230,11 @@ export function createBuffer(rowCount, trackCount, columns) {
  * tracker's volume column has always been: two characters covering the whole
  * range instead of two that cover 0-99 and lie about the rest.
  */
+const VELOCITY_TEXT = new Array(256);
+for (let n = 0; n < 256; n++) VELOCITY_TEXT[n] = (n < 16 ? '0' : '') + n.toString(16);
+
 export function velocityText(v) {
-  const n = Math.max(0, Math.min(255, v | 0));
-  return (n < 16 ? '0' : '') + n.toString(16);
+  return VELOCITY_TEXT[Math.max(0, Math.min(255, v | 0))];
 }
 
 export function buildViewModel(opts, buf) {
@@ -182,11 +266,16 @@ export function buildViewModel(opts, buf) {
     nameHarmony = null,
   } = opts;
 
-  const shape = `${rowCount}x${trackCount}x${columns}`;
-  if (!buf || buf._shape !== shape) buf = createBuffer(rowCount, trackCount, columns);
+  if (!buf || buf._rows !== rowCount || buf._trackCount !== trackCount
+      || buf._columns !== columns) {
+    buf = createBuffer(rowCount, trackCount, columns);
+  }
 
   const zoom = ZOOM_LEVELS[zoomIndex];
-  const tickOf = (r) => r * zoom.rowNanoticks;
+  // Was `const tickOf = (r) => r * zoom.rowNanoticks`, which is a closure
+  // allocated on every call — and this is called every frame. It is one
+  // multiply; a name for it is not worth a heap object per frame.
+  const rowTicks = zoom.rowNanoticks;
 
   if (buf.tracks.length !== trackCount) {
     buf.tracks = Array.from({ length: trackCount }, (_, i) => ({
@@ -209,8 +298,8 @@ export function buildViewModel(opts, buf) {
   const blocks = buf.harmony;
   blocks.length = 0;
   if (harmony && harmony.length) {
-    const winStart = tickOf(startRow);
-    const winEnd = tickOf(startRow + rowCount);
+    const winStart = startRow * rowTicks;
+    const winEnd = (startRow + rowCount) * rowTicks;
     const hpool = buf._harmonyPool;
     let bn = 0;
     for (let i = 0; i < harmony.length; i++) {
@@ -220,16 +309,34 @@ export function buildViewModel(opts, buf) {
       const to = i + 1 < harmony.length ? harmony[i + 1].tick : Number.MAX_SAFE_INTEGER;
       if (to <= winStart || from >= winEnd) continue;
       const b = hpool[bn] || (hpool[bn] = { key: '', label: '', sub: '', foot: '',
-                                            startTick: 0, endTick: 0 });
+                                            startTick: 0, endTick: 0,
+                                            _tick: -1, _root: -1, _scaleId: -1 });
       bn++;
-      const named = nameHarmony ? nameHarmony(ev) : { label: '', sub: '' };
-      b.key = ev.tick + ':' + ev.root + ':' + ev.scaleId;
-      b.label = named.label;
-      b.sub = named.sub;
-      // The design pins a root/quant line to the bottom of the span. Root is
-      // the pitch class the engine published; quant is not published, so it is
-      // not claimed.
-      b.foot = 'root ' + ev.root;
+      /**
+       * The block's text, rebuilt only when the EVENT in this slot changes.
+       *
+       * Which pool slot an event lands in depends on the scroll position, so the
+       * guard is keyed on the event's own identity — tick, root and scale — and
+       * not on the slot. Those three are every input to all four strings: `key`
+       * is literally their concatenation, `foot` is the root, and nameHarmony
+       * spells root and scale. A different event in this slot fails the compare
+       * and rebuilds.
+       *
+       * It was unconditional: four string allocations plus whatever nameHarmony
+       * allocates, per visible block, per frame — to spell a chord symbol that
+       * changes when the music changes, which is to say hardly ever.
+       */
+      if (b._tick !== ev.tick || b._root !== ev.root || b._scaleId !== ev.scaleId) {
+        b._tick = ev.tick; b._root = ev.root; b._scaleId = ev.scaleId;
+        const named = nameHarmony ? nameHarmony(ev) : EMPTY_NAME;
+        b.key = ev.tick + ':' + ev.root + ':' + ev.scaleId;
+        b.label = named.label;
+        b.sub = named.sub;
+        // The design pins a root/quant line to the bottom of the span. Root is
+        // the pitch class the engine published; quant is not published, so it is
+        // not claimed.
+        b.foot = 'root ' + ev.root;
+      }
       b.startTick = from;
       b.endTick = Math.min(to, winEnd + zoom.rowNanoticks);
       blocks.push(b);
@@ -237,11 +344,43 @@ export function buildViewModel(opts, buf) {
   }
 
   const rows = buf.rows;
+  /**
+   * Whether the row headings have to be rebuilt at all.
+   *
+   * `index`, `label`, `beat` and `bar` are a pure function of the row's TICK and
+   * nothing else, and a row's tick is `(startRow + ri) * zoom.rowNanoticks`. So
+   * the only two things that can change any of them are the scroll position and
+   * the zoom — rowCount is the third, and a change to it recreates the buffer,
+   * which resets `_labelStart` to -1 and forces a rebuild here.
+   *
+   * Without this the loop built 74 label strings — a template literal, often a
+   * `String().padStart()` inside it — on every frame, to produce exactly the
+   * strings that were already there. During playback, which is when frames are
+   * scarce, the labels are precisely the part of the tracker that does NOT move.
+   */
+  const relabel = buf._labelStart !== startRow || buf._labelZoom !== zoomIndex;
+  buf._labelStart = startRow;
+  buf._labelZoom = zoomIndex;
+  // A tick names a different row at every zoom, so the intern table belongs to
+  // one zoom at a time. Keyed on the zoom rather than cleared by the caller,
+  // because two buffers share it and either can be the one that notices.
+  if (labelZoom !== zoomIndex) { labelZoom = zoomIndex; LABELS.clear(); }
   for (let ri = 0; ri < rowCount; ri++) {
     const r = startRow + ri;
     const cells = rows[ri].cells;
     let ci = 0;
-    const tick = tickOf(r);
+    /**
+     * The row's absolute tick — computed only where it is used.
+     *
+     * There are two users: the fixture, which derives its content from it, and
+     * the label rebuild. The engine branch never touches it, and computing it
+     * anyway is not free: nanoticks run at 960,000 to the quarter, so a song
+     * passes V8's small-integer range about nine minutes in, and from there
+     * every one of these is a boxed double on the heap. Sixty-two of them a
+     * frame is a kilobyte, and it appears only in long projects — which is the
+     * worst way for a cost to arrive.
+     */
+    const tick = (engine && !relabel) ? 0 : r * rowTicks;
 
 
     for (let t = 0; t < trackCount; t++) {
@@ -268,7 +407,7 @@ export function buildViewModel(opts, buf) {
             const sub = tick + k * ZOOM_LEVELS[0].rowNanoticks;
             if (clipIndexAt(sub, t) >= 0 && contentAt(sub, t, c).kind !== 'empty') n++;
           }
-          if (n > 1) { cell.text = `[${n}x]`; cell.kind = 'aggregate'; }
+          if (n > 1) { cell.text = AGG_TEXT[n]; cell.kind = 'aggregate'; }
           else { const g = contentAt(tick, t, c); cell.text = g.text; cell.kind = g.kind; }
         } else {
           const g = contentAt(tick, t, c);
@@ -276,41 +415,62 @@ export function buildViewModel(opts, buf) {
         }
       }
     }
-    // Labels come from the tick too, so a row means the same musical position
-    // at every zoom — that is the whole point of zoom being a projection.
-    const bar = Math.floor(tick / TICKS_PER_BAR) + 1;
-    const beatInBar = Math.floor((tick % TICKS_PER_BAR) / (TICKS_PER_BAR / 4)) + 1;
-    // The sub-beat index is the row's position within the beat ON THIS GRID, not
-    // in fixed 16ths. Hardcoding a 16th (60000nt) made a 12-per-beat grid label
-    // its rows 0,1,2,4,5,6,8 — skipping some numbers and reusing others, so two
-    // different rows could read as the same musical position.
-    const sub = Math.round((tick % (TICKS_PER_BAR / 4)) / zoom.rowNanoticks);
-    const row = rows[ri];
-    row.index = r;
-    row.label = zoom.rowNanoticks >= TICKS_PER_BAR ? `${bar}` : `${bar}:${beatInBar}${sub ? ':' + String(sub).padStart(2, '0') : ''}`;
-    row.beat = tick % (TICKS_PER_BAR / 4) === 0;
-    row.bar = tick % TICKS_PER_BAR === 0;
+    if (relabel) {
+      const row = rows[ri];
+      row.index = r;
+      let label = LABELS.get(tick);
+      if (label === undefined) {
+        // Labels come from the tick too, so a row means the same musical position
+        // at every zoom — that is the whole point of zoom being a projection.
+        const bar = Math.floor(tick / TICKS_PER_BAR) + 1;
+        const beatInBar = Math.floor((tick % TICKS_PER_BAR) / (TICKS_PER_BAR / 4)) + 1;
+        // The sub-beat index is the row's position within the beat ON THIS GRID, not
+        // in fixed 16ths. Hardcoding a 16th (60000nt) made a 12-per-beat grid label
+        // its rows 0,1,2,4,5,6,8 — skipping some numbers and reusing others, so two
+        // different rows could read as the same musical position.
+        const sub = Math.round((tick % (TICKS_PER_BAR / 4)) / zoom.rowNanoticks);
+        label = zoom.rowNanoticks >= TICKS_PER_BAR ? `${bar}` : `${bar}:${beatInBar}${sub ? ':' + DEC2[sub] : ''}`;
+        if (LABELS.size >= LABEL_CAP) LABELS.clear();
+        LABELS.set(tick, label);
+      }
+      row.label = label;
+      row.beat = tick % (TICKS_PER_BAR / 4) === 0;
+      row.bar = tick % TICKS_PER_BAR === 0;
+    }
   }
 
   // Clips overlapping the window. They span rows, which is why the renderer
   // draws rails outside the recycled row band.
+  //
+  // Skipped outright when there is an engine: the block below clears `clips` and
+  // refills it from the engine's real placements, so with a project loaded this
+  // built a list of fixture clips — and a `clip k.t` name string for each — every
+  // frame, for the next statement to throw away. Dead work is not free just
+  // because it is correct.
   const clips = buf.clips;
   clips.length = 0;
   const pool = buf._clipPool;
-  let cn = 0;
-  const winStart = tickOf(startRow), winEnd = tickOf(startRow + rowCount);
-  const kFirst = Math.max(0, Math.floor(winStart / CLIP_TICKS));
-  const kLast = Math.floor(winEnd / CLIP_TICKS);
-  for (let k = kFirst; k <= kLast; k++) {
-    for (let t = 0; t < trackCount; t++) {
-      if ((k + t) % 3 === 0) continue; // gaps — must match clipIndexAt
-      const cl = pool[cn] || (pool[cn] = { id: 0, track: 0, startTick: 0, endTick: 0, name: '', active: false });
-      cn++;
-      cl.id = k * 100 + t; cl.track = t;
-      cl.startTick = k * CLIP_TICKS;
-      cl.endTick = (k + 1) * CLIP_TICKS - TICKS_PER_BAR / 4;   // exclusive
-      cl.name = `clip ${k}.${t}`; cl.active = (k + t) % 7 === 0;
-      clips.push(cl);
+  if (!engine) {
+    let cn = 0;
+    const winStart = startRow * rowTicks, winEnd = (startRow + rowCount) * rowTicks;
+    const kFirst = Math.max(0, Math.floor(winStart / CLIP_TICKS));
+    const kLast = Math.floor(winEnd / CLIP_TICKS);
+    for (let k = kFirst; k <= kLast; k++) {
+      for (let t = 0; t < trackCount; t++) {
+        if ((k + t) % 3 === 0) continue; // gaps — must match clipIndexAt
+        const cl = pool[cn] || (pool[cn] = { id: 0, track: 0, startTick: 0, endTick: 0,
+                                             name: '', active: false, _k: -1, _t: -1 });
+        cn++;
+        cl.id = k * 100 + t; cl.track = t;
+        cl.startTick = k * CLIP_TICKS;
+        cl.endTick = (k + 1) * CLIP_TICKS - TICKS_PER_BAR / 4;   // exclusive
+        // Keyed on the two numbers the name spells. Scrolling changes which
+        // (k, t) lands in a given pool slot, so the guard has to name the clip
+        // rather than the slot.
+        if (cl._k !== k || cl._t !== t) { cl._k = k; cl._t = t; cl.name = `clip ${k}.${t}`; }
+        cl.active = (k + t) % 7 === 0;
+        clips.push(cl);
+      }
     }
   }
 
@@ -319,8 +479,8 @@ export function buildViewModel(opts, buf) {
   // anything durable is stored in ticks rather than rows.
   if (engine) {
     const span = zoom.rowNanoticks;
-    const winStart = tickOf(startRow);
-    const winEnd = tickOf(startRow + rowCount);
+    const winStart = startRow * rowTicks;
+    const winEnd = (startRow + rowCount) * rowTicks;
     // 1 whenever the sidecar is already projecting at our grid, which is the
     // steady state; only a zoom in flight makes it anything else.
     const gridScale = engine.rowGrid > 0 ? zoom.linesPerBeat / engine.rowGrid : 1;
@@ -361,9 +521,13 @@ export function buildViewModel(opts, buf) {
           c0.aggCount = (c0.aggCount || 1) + 1;
           if (c0._same === undefined) c0._same = c0.text;
           if (c0._same !== null && c0._same !== pitchName(n.pitch)) c0._same = null;
-          c0.text = c0._same !== null
-            ? c0.aggCount + '\u00d7 ' + c0._same
-            : c0.aggCount + ' evts';
+          // Interned, because a chord makes this fire on every row that has one
+          // and the cells are cleared each frame \u2014 so a per-cell guard cannot
+          // work here and the string has to come from somewhere. Both domains
+          // are small and closed: counts are how many notes share a row, names
+          // are the 128 pitches. The tables fill once and never again.
+          c0.text = c0._same !== null ? pillSame(c0.aggCount, c0._same)
+                                      : pillEvts(c0.aggCount);
           c0.kind = 'collide';
         } else {
           c0.text = pitchName(n.pitch);
@@ -389,7 +553,8 @@ export function buildViewModel(opts, buf) {
       if (columns > 2 && (n.retrigger || n.probability || n.delayTicks)) {
         const c2 = row.cells[base + 2];
         if (c2) {
-          c2.text = n.retrigger ? 'R' + n.retrigger : n.probability ? 'P' + n.probability : 'D';
+          c2.text = n.retrigger ? interned(R_TEXT, 'R', n.retrigger)
+                  : n.probability ? interned(P_TEXT, 'P', n.probability) : 'D';
           c2.kind = 'fx';
         }
       }
@@ -399,6 +564,9 @@ export function buildViewModel(opts, buf) {
     // brings several per track.
     const pool = buf._clipPool;
     clips.length = 0;
+    // Once, not twice per extent: past ~9 minutes of song this is a boxed
+    // double, and it was being built afresh for each end of every clip's range.
+    const cursorTick = cursor.row * rowTicks;
     for (let i = 0; i < engine.extentCount; i++) {
       const e = engine.extents[i];
       if (e.track >= trackCount) continue;
@@ -411,7 +579,7 @@ export function buildViewModel(opts, buf) {
       // not fire, and a selected clip never looked selected. "Where the cursor
       // is" is the question a tracker can actually answer.
       cl.active = e.track === cursor.track
-               && tickOf(cursor.row) >= e.startTick && tickOf(cursor.row) < e.endTick;
+               && cursorTick >= e.startTick && cursorTick < e.endTick;
       clips.push(cl);
     }
   }

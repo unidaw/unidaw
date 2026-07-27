@@ -336,7 +336,21 @@ export function decode(buf, store) {
 
 const NAMES = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];
 
-/** MIDI pitch to tracker notation, e.g. 60 -> "C-4". Allocates; call sparingly. */
+/**
+ * Every name a MIDI pitch can have, built once.
+ *
+ * This used to be `NAMES[p % 12] + Math.floor(p / 12 - 1)`, which is two string
+ * allocations per call — and it is called once per visible note per frame by the
+ * tracker's view-model and again by the piano roll. A busy screen is a few
+ * hundred notes, so that was a few hundred short-lived strings every 16 ms to
+ * spell out 128 values that never change. The domain is bounded and tiny; the
+ * table costs 128 strings once and nothing thereafter.
+ */
+const PITCH_NAMES = new Array(128);
+for (let p = 0; p < 128; p++) PITCH_NAMES[p] = NAMES[p % 12] + Math.floor(p / 12 - 1);
+
+/** MIDI pitch to tracker notation, e.g. 60 -> "C-4". Allocation-free in range. */
 export function pitchName(p) {
-  return NAMES[p % 12] + Math.floor(p / 12 - 1);
+  return PITCH_NAMES[p] !== undefined ? PITCH_NAMES[p]
+                                      : NAMES[((p % 12) + 12) % 12] + Math.floor(p / 12 - 1);
 }

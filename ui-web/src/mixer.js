@@ -22,6 +22,19 @@ function textDiv(cls, parent) {
   return el;
 }
 
+/**
+ * Meter heights, '0%' through '100%'. The meter is the one write on this surface
+ * that genuinely moves every frame, so building its percentage with toFixed(0)
+ * cost a string per strip per frame — sixteen a frame at 60 fps to say something
+ * from a hundred-and-one value domain. The domain is small and bounded, so the
+ * strings exist once and the per-frame work is an integer compare and an index.
+ */
+const PCT = (() => {
+  const a = new Array(101);
+  for (let i = 0; i <= 100; i++) a[i] = i + '%';
+  return Object.freeze(a);
+})();
+
 export class Mixer {
   constructor(host, { onGain, onPan, onToggle, onRename } = {}) {
     this.host = host;
@@ -42,6 +55,13 @@ export class Mixer {
     this.pool = [];
     this.vm = null;
     this._notice = null;
+    // The rename caret. display() concatenates one onto the field text, so
+    // calling it from the draw built a string every frame for as long as a
+    // rename was open — a mode that lasts for hundreds of frames. The result
+    // depends on nothing but field.text, so it is rebuilt when that moves.
+    // null is the sentinel because '' is a text the field really can hold.
+    this._fieldText = null;
+    this._fieldShown = '';
 
     // One listener for the whole surface rather than per control: strips are
     // pooled and re-bound, so per-element listeners would have to be rebound too.
@@ -80,6 +100,10 @@ export class Mixer {
       el._mute = mute; el._solo = solo;
       el._nameV = null; el._gainV = null; el._panV = null;
       el._faderV = -1; el._meterV = -1; el._muteV = null; el._soloV = null; el._dimV = null;
+      // Whether the strip is shown, as a number. Reading back `el.style.display`
+      // to decide costs a fresh DOMString from the CSSOM binding per strip per
+      // frame; a strip is created visible, so 1 is the truth at this point.
+      el._shownV = 1;
       this.pool.push(el);
     }
     return this.pool[i];
@@ -147,12 +171,19 @@ export class Mixer {
     for (let i = 0; i < vm.stripCount; i++) {
       const s = vm.strips[i];
       const el = this._strip(i);
-      if (el.style.display === 'none') el.style.display = '';
+      if (el._shownV !== 1) { el._shownV = 1; el.style.display = ''; }
       // While renaming, the strip shows what you are typing rather than what the
       // engine still thinks it is called.
-      const shown = i === this.renaming ? display(this.field) : s.name;
-      if (el._nameV !== shown) { el._nameV = shown; el._name.nodeValue = shown; }
       const ren = i === this.renaming;
+      let shown = s.name;
+      if (ren) {
+        if (this._fieldText !== this.field.text) {
+          this._fieldText = this.field.text;
+          this._fieldShown = display(this.field);
+        }
+        shown = this._fieldShown;
+      }
+      if (el._nameV !== shown) { el._nameV = shown; el._name.nodeValue = shown; }
       if (el._renV !== ren) { el._renV = ren; el.classList.toggle('renaming', ren); }
       if (el._gainV !== s.gainDb) { el._gainV = s.gainDb; el._gain.nodeValue = s.gainDb; }
       if (el._panV !== s.panLabel) { el._panV = s.panLabel; el._pan.nodeValue = s.panLabel; }
@@ -164,13 +195,17 @@ export class Mixer {
       if (el._soloV !== s.solo) { el._soloV = s.solo; el._solo.classList.toggle('on', s.solo); }
       if (el._dimV !== s.dimmed) { el._dimV = s.dimmed; el.classList.toggle('dim', s.dimmed); }
       if (el._pendV !== s.pending) { el._pendV = s.pending; el.classList.toggle('pending', s.pending); }
-      // Unguarded on purpose — see the header note.
-      const pct = (s.peakPct * 100).toFixed(0);
-      if (el._meterV !== pct) { el._meterV = pct; el._meterFill.style.height = pct + '%'; }
+      // Recomputed unconditionally on purpose — see the header note. It is an
+      // integer percent, so the compare is on a number and the height comes from
+      // the PCT table; toFixed(0) here built a string per strip per frame purely
+      // to discover, most frames, that the meter had not moved a whole percent.
+      // peakPct is clamped to 0..1 by buildMixerModel, so the index is in range.
+      const pct = Math.round(s.peakPct * 100);
+      if (el._meterV !== pct) { el._meterV = pct; el._meterFill.style.height = PCT[pct]; }
     }
     for (let i = vm.stripCount; i < this.pool.length; i++) {
       const el = this.pool[i];
-      if (el.style.display !== 'none') el.style.display = 'none';
+      if (el._shownV !== 0) { el._shownV = 0; el.style.display = 'none'; }
     }
 
     // The one honest thing this surface can say about itself.

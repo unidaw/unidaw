@@ -95,6 +95,7 @@ export class Harmony {
     this._key = null; this._since = null; this._ver = null; this._at = null;
     this._pos = null; this._fields = null; this._more = null; this._note = null;
     this._tune = null; this._tet = null; this._open = null;
+    this._lhName = null; this._lhN = -1; this._lhOct = -1;
 
     // One listener on the container rather than one per row: rows come and go
     // with the pool, and a listener per pooled element is a listener rebound
@@ -133,7 +134,8 @@ export class Harmony {
       const bar = div('hm-deg-fill', barWrap);
       const c = div('hm-deg-c', row); c.appendChild(document.createTextNode(''));
       row._i = idx.firstChild; row._bar = bar; row._c = c.firstChild;
-      row._iv = null; row._w = null; row._cv = null;
+      // NaN, so the first compare against any real cents value is a miss.
+      row._iv = null; row._w = null; row._cc = NaN; row._co = NaN;
       this.degPool.push(row);
     }
     return this.degPool;
@@ -154,10 +156,18 @@ export class Harmony {
     if (this._tune !== vm.tuningNotice) { this._tune = vm.tuningNotice; this.tuneText.nodeValue = vm.tuningNotice; }
     // The ladder: the design's degree table, real since SHM v16.
     const degPool = this._deg(vm.degreeCount || 0);
-    const head = vm.degreeCount
-      ? vm.scaleName + ' · ' + vm.degreeCount + ' degrees · ' + Math.round(vm.octaveCents) + '¢ octave'
-      : '';
-    if (this._lh !== head) { this._lh = head; this.ladderHead.nodeValue = head; }
+    // The heading is a function of (scaleName, degreeCount, octaveCents) and
+    // nothing else, and all three move only when the scale does. Building it and
+    // then comparing it concatenated four strings on every frame of playback to
+    // discover it had written the same sentence as last time; comparing the three
+    // inputs first builds nothing until one of them actually moves.
+    const oct = Math.round(vm.octaveCents);
+    if (this._lhName !== vm.scaleName || this._lhN !== vm.degreeCount || this._lhOct !== oct) {
+      this._lhName = vm.scaleName; this._lhN = vm.degreeCount; this._lhOct = oct;
+      this.ladderHead.nodeValue = vm.degreeCount
+        ? vm.scaleName + ' · ' + vm.degreeCount + ' degrees · ' + oct + '¢ octave'
+        : '';
+    }
     if (this.ladder) {
       const show = vm.degreeCount > 0 ? '' : 'none';
       if (this.ladder.style.display !== show) this.ladder.style.display = show;
@@ -175,8 +185,17 @@ export class Harmony {
       // The offset from equal temperament is what says "this is microtonal", so
       // it is shown when it is not zero and omitted when it is — a column of
       // "+0.0" teaches nothing.
-      const ct = Math.round(d.cents) + '¢' + (d.offset ? ' ' + (d.offset > 0 ? '+' : '') + d.offset : '');
-      if (row._cv !== ct) { row._cv = ct; row._c.nodeValue = ct; }
+      //
+      // Keyed on the two numbers the string is made of rather than on the string
+      // itself. (cents, offset) is the whole of the input — the degree objects are
+      // rebuilt only when the scale changes, so nothing else can move underneath —
+      // and building first to compare afterwards cost up to four strings per degree
+      // per frame, twelve degrees deep, to write back what was already there.
+      if (row._cc !== d.cents || row._co !== d.offset) {
+        row._cc = d.cents; row._co = d.offset;
+        row._c.nodeValue = Math.round(d.cents) + '¢'
+          + (d.offset ? ' ' + (d.offset > 0 ? '+' : '') + d.offset : '');
+      }
     }
     if (this._key !== vm.key) { this._key = vm.key; this.name.nodeValue = vm.key; }
     if (this._since !== vm.since) { this._since = vm.since; this.since.nodeValue = vm.since; }

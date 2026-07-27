@@ -323,6 +323,29 @@ for (const scene of SCENES) {
   ok(p.rect !== null && p.rect.w > 0, `cell (${p.startRow + 3},2,0) has geometry: ${JSON.stringify(p.rect)}`);
   ok(typeof p.sample === 'string', `cell text readable via data attributes: ${JSON.stringify(p.sample)}`);
 
+  /**
+   * Each track's header names THAT track.
+   *
+   * It did not. `paintHeadLpb` walked `headRow.children[t + 1]`, which was right
+   * when the gutter was the only fixed column and wrong the moment the harmony
+   * header was added beside it: every header then carried the NEXT track's name
+   * and the last one was left blank. It survived because the goldens were
+   * blessed with it in place, and a picture of sixteen plausible labels looks
+   * exactly like a picture of sixteen correct ones.
+   *
+   * So this asserts the correspondence rather than the appearance. It compares
+   * against the tracker's own track list, not against a hardcoded "T01" — the
+   * engine publishes real names and the header must follow them.
+   */
+  const heads = await page.evaluate(() => ({
+    labels: [...document.querySelectorAll('#head .htrack')].map((e) => e.textContent.trim()),
+    names: window.__uni.probe().tracks,
+  }));
+  ok(heads.labels.length === heads.names, `a header per track: ${heads.labels.length}`);
+  ok(heads.labels.every((s) => s.length > 0), `no header left unnamed: ${JSON.stringify(heads.labels.slice(-2))}`);
+  ok(heads.labels.every((s, i) => s.startsWith(`T${String(i + 1).padStart(2, '0')}`)),
+     `header n names track n: ${JSON.stringify(heads.labels.slice(0, 3))}`);
+
   await shoot(scene);
 
 }

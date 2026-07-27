@@ -21,8 +21,27 @@ const BLACK = [false, true, false, true, false, false, true, false, true, false,
 const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
 export function isBlackKey(pitch) { return BLACK[((pitch % 12) + 12) % 12]; }
+
+/**
+ * Every label the key ladder can show, built once.
+ *
+ * The ladder relabels itself on every draw, and `NAMES[i] + (octave)` is two
+ * allocations — the octave number's own string and the concatenation. Only the
+ * Cs are labelled, so that was five or six short-lived strings every 16 ms to
+ * spell out the same five names the ladder showed last frame, and it kept
+ * spelling them while the playhead moved and nothing about the keyboard changed
+ * at all. The domain is the 128 MIDI pitches and a pitch's name never changes,
+ * so the table is the whole answer. Same fix, same reasoning as `PITCH_NAMES`
+ * in wire.js, which the tracker needed for the same reason.
+ */
+const PITCH_LABELS = new Array(128);
+for (let p = 0; p < 128; p++) PITCH_LABELS[p] = NAMES[p % 12] + (Math.floor(p / 12) - 1);
+
+/** MIDI pitch to keyboard notation, e.g. 60 -> "C4". Allocation-free in range. */
 export function pitchLabel(pitch) {
-  return NAMES[((pitch % 12) + 12) % 12] + (Math.floor(pitch / 12) - 1);
+  return PITCH_LABELS[pitch] !== undefined
+    ? PITCH_LABELS[pitch]
+    : NAMES[((pitch % 12) + 12) % 12] + (Math.floor(pitch / 12) - 1);
 }
 
 /** Horizontal zoom, shared shape with arrange but finer — this is an editor. */
@@ -39,7 +58,11 @@ export function createPianoBuffer(noteCapacity = 512, keyCapacity = 128) {
   const notes = new Array(noteCapacity);
   for (let i = 0; i < noteCapacity; i++) {
     notes[i] = { id: 0, pitch: 0, track: 0, tick: 0, x: 0, y: 0, w: 0, h: 0,
-                 velocity: 0, muted: false, isAdd: false, selected: false };
+                 velocity: 0, muted: false, isAdd: false, selected: false,
+                 // The selection key this slot's note has, and the three numbers
+                 // it was built from. Declared here rather than added on first
+                 // use so every slot keeps one shape. See `slotKey`.
+                 _key: '', _kTrack: -1, _kTick: -1, _kPitch: -1 };
   }
   const keys = new Array(keyCapacity);
   for (let i = 0; i < keyCapacity; i++) {
@@ -49,8 +72,13 @@ export function createPianoBuffer(noteCapacity = 512, keyCapacity = 128) {
     notes, noteCount: 0,
     keys, keyCount: 0,
     grid: new Float64Array(512), gridCount: 0, gridIsBar: new Uint8Array(512),
+    gridFirst: 0,
     ruler: new Float64Array(128), rulerBar: new Int32Array(128), rulerCount: 0,
-    view: { startTick: 0, ticksPerPixel: 15000, width: 0, lowPitch: 36, keyHeight: 10 },
+    // `scrollX` is the CONTENT x of the viewport's left edge, i.e. what the
+    // renderer translates the scrolling bands by (negated). See the note on
+    // content coordinates above `buildPianoModel`.
+    view: { startTick: 0, ticksPerPixel: 15000, width: 0, lowPitch: 36, keyHeight: 10,
+            scrollX: 0 },
     playheadX: -1,
     _shape: `${noteCapacity}x${keyCapacity}`,
   };
@@ -73,6 +101,34 @@ export function createPianoBuffer(noteCapacity = 512, keyCapacity = 128) {
  */
 
 /**
+ * Two horizontal coordinate spaces, and which one each number is in.
+ *
+ * **Content x** is `tick / ticksPerPixel` — where a tick sits on an unbounded
+ * strip that does not know the viewport exists. Gridlines, ruler ticks and notes
+ * are laid out in content x, and the renderer slides the whole strip under the
+ * viewport with one transform (GUIDELINES 3.3). Before that, every one of them
+ * carried `- startTick` in its own position, so a horizontal pan moved a few
+ * hundred elements individually and rebuilt a transform string for each: 3,726
+ * bytes a frame inside `piano.js` `render`, measured, against 22 for the same
+ * redraw standing still. Nothing about a note changes when you scroll past it,
+ * and the layout now says so.
+ *
+ * **Viewport x** is content x minus `view.scrollX`: a pixel on the band as the
+ * pointer sees it. Everything OUTSIDE the transformed strips is in viewport x —
+ * the playhead (which moves against a still background, so it costs one string a
+ * frame either way) and the marquee (which is drawn where the pointer is, and
+ * would be wrong if it scrolled). So is every rectangle arriving from an event.
+ *
+ * The conversion is `view.scrollX`, and `notesInRect` is the one place that has
+ * to apply it — it is asked in viewport x about notes stored in content x.
+ *
+ * Vertical is deliberately NOT the same shape. A pitch's y depends on
+ * `lowPitch`, so the pitch window moves by rebinding; that is correct here
+ * because moving it also relabels the key ladder, which no transform can do, and
+ * because it is bound to a keystroke (an octave at a time) rather than to a
+ * frame. `startTick` and `lowPitch` are independent, so a horizontal pan leaves
+ * every y untouched and its guard unfired.
+ *
  * @param {{startTick:number, width:number, height:number, zoomIndex:number,
  *          lowPitch:number, keyHeight:number, engine:object|null,
  *          track:number, allTracks:boolean, selectedNote:number}} opts
@@ -108,6 +164,10 @@ export function buildPianoModel(opts, buf) {
   buf.view.width = width;
   buf.view.lowPitch = lowPitch;
   buf.view.keyHeight = keyHeight;
+  // Content x of the left edge. Computed from the same `tpp` the layout below
+  // uses, so the two cannot disagree about which content space they are in: a
+  // zoom changes both in the same pass or neither.
+  buf.view.scrollX = startTick / tpp;
   buf.zoom = zoom;
 
   // Keys, top to bottom: high pitch at the top, as a keyboard stands.
@@ -127,9 +187,14 @@ export function buildPianoModel(opts, buf) {
   let g = 0;
   const beatPx = TICKS_PER_BEAT / tpp;
   const step = beatPx >= 8 ? TICKS_PER_BEAT / 4 : beatPx >= 4 ? TICKS_PER_BEAT : TICKS_PER_BAR;
-  const first = Math.floor(startTick / step) * step;
-  for (let tick = first; tick < endTick && g < buf.grid.length; tick += step) {
-    buf.grid[g] = (tick - startTick) / tpp;
+  // The ABSOLUTE index of the first line — how many steps from tick 0 it is,
+  // not where it lands in the array. The renderer recycles the gridline pool as
+  // a ring on this number (GUIDELINES 3.4), so a scroll of one step rebinds the
+  // one line that crossed the edge instead of shifting all ninety along by one.
+  const firstGrid = Math.floor(startTick / step);
+  buf.gridFirst = firstGrid;
+  for (let tick = firstGrid * step; tick < endTick && g < buf.grid.length; tick += step) {
+    buf.grid[g] = tick / tpp;                     // content x; see above
     buf.gridIsBar[g] = tick % TICKS_PER_BAR === 0 ? 1 : 0;
     g++;
   }
@@ -142,7 +207,7 @@ export function buildPianoModel(opts, buf) {
     const tick = bar * TICKS_PER_BAR;
     if (tick >= endTick) break;
     if (bar % every !== 0) continue;
-    buf.ruler[r] = (tick - startTick) / tpp;
+    buf.ruler[r] = tick / tpp;                    // content x; see above
     buf.rulerBar[r] = bar + 1;
     r++;
   }
@@ -163,9 +228,10 @@ export function buildPianoModel(opts, buf) {
       d.velocity = src.velocity;
       d.muted = src.muted;
       d.isAdd = src.isAdd;
+      // After track, tick and pitch are set: `slotKey` reads them off the slot.
       d.selected = src.id === selectedNote
-                 || (selection !== null && selection.has(noteKey(src)));
-      d.x = (src.tOn - startTick) / tpp;
+                 || (selection !== null && selection.has(slotKey(d)));
+      d.x = src.tOn / tpp;                        // content x; see above
       d.y = (highPitch - 1 - src.pitch) * keyHeight;
       d.h = keyHeight;
       // A zero-length note is a real thing the engine can hold and it must not
@@ -180,6 +246,11 @@ export function buildPianoModel(opts, buf) {
   buf.dragId = dragId;
   buf.selectedCount = selection ? selection.size : 0;
 
+  // VIEWPORT x, not content x: the playhead is not on a scrolling strip. It has
+  // to be drawn against the still background because it moves while the strip
+  // does not, so putting it on the strip would buy nothing — it would still be
+  // one transform a frame — and would cost it the ability to be clamped to the
+  // visible band.
   buf.playheadX = engine && engine.playheadTick >= startTick && engine.playheadTick < endTick
     ? (engine.playheadTick - startTick) / tpp
     : -1;
@@ -208,20 +279,55 @@ export function buildPianoModel(opts, buf) {
  */
 export function noteKey(n) { return n.track + ':' + n.tOn + ':' + n.pitch; }
 
+/**
+ * The same key as `noteKey`, for the note currently in a view-model slot, built
+ * only when the slot changes hands.
+ *
+ * The model asks "is this note selected?" once per visible note per frame, and
+ * a `Set` of strings can only be asked in strings — so with a marquee up this
+ * was three concatenations per note per frame, a few hundred short-lived strings
+ * every 16 ms to spell out keys that were nearly all the same as last frame's.
+ *
+ * The key is a pure function of (track, tOn, pitch) and the slot carries all
+ * three, so caching it beside them is exact: the string cannot go stale without
+ * one of those numbers moving, and when one moves the guard rebuilds it. Note
+ * that this is keyed on the note's identity and NOT on the slot index — a scroll
+ * hands a slot to a different note, which changes the numbers, which is caught.
+ */
+function slotKey(d) {
+  if (d._kTrack !== d.track || d._kTick !== d.tick || d._kPitch !== d.pitch) {
+    d._kTrack = d.track; d._kTick = d.tick; d._kPitch = d.pitch;
+    d._key = d.track + ':' + d.tick + ':' + d.pitch;
+  }
+  return d._key;
+}
+
 /** The key a note WILL have once it is transposed by `semitones`. */
 export function transposedKey(n, semitones) {
   return n.track + ':' + n.tOn + ':' + (n.pitch + semitones);
 }
 
 export function notesInRect(buf, x0, y0, x1, y1) {
-  const lo = Math.min(x0, x1), hi = Math.max(x0, x1);
+  // The rectangle arrives in VIEWPORT x — it was drawn by a pointer — and the
+  // notes are laid out in CONTENT x. One conversion, at the boundary, so the
+  // overlap test below stays a plain compare in one space.
+  const sx = buf.view.scrollX || 0;
+  const lo = Math.min(x0, x1) + sx, hi = Math.max(x0, x1) + sx;
   const top = Math.min(y0, y1), bot = Math.max(y0, y1);
   const out = new Set();
   for (let i = 0; i < buf.noteCount; i++) {
     const n = buf.notes[i];
     if (n.x + n.w < lo || n.x > hi) continue;
     if (n.y + n.h < top || n.y > bot) continue;
-    out.add(n.track + ':' + n.tick);
+    // `slotKey`, not a hand-rolled key. This built a TWO-part `track:tick` while
+    // `noteKey` — the only thing that ever reads the result — built the
+    // three-part `track:tOn:pitch`. The pitch was added to `noteKey` by the
+    // chord fix documented there and never reached here, so no marquee key ever
+    // matched an engine note: selected notes drew unselected and every
+    // `pianoEdit` on a marquee selection took the "select notes first" path.
+    // The slot carries the same three numbers under the name `tick`, which is
+    // exactly what `slotKey` reads, and it is cached on the slot besides.
+    out.add(slotKey(n));
   }
   return out;
 }
@@ -248,7 +354,14 @@ export function fitLowPitch(engine, visibleKeys, track, allTracks, fallback = 48
   return Math.max(0, Math.min(127 - visibleKeys + 1, Math.round(centre - visibleKeys / 2)));
 }
 
-/** Pixel position back to (pitch, tick), for hit testing and writing. */
+/**
+ * Pixel position back to (pitch, tick), for hit testing and writing.
+ *
+ * `x` is VIEWPORT x — what a pointer event yields once the band's own rect is
+ * subtracted — which is why `startTick` appears here and not in the layout. The
+ * inverse, content x, is `tick / view.ticksPerPixel`; the two differ by
+ * `view.scrollX` and mixing them lands clicks on the wrong notes.
+ */
 export function pitchAtY(view, y, visibleKeys) {
   const high = view.lowPitch + visibleKeys;
   return high - 1 - Math.floor(y / view.keyHeight);

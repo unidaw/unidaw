@@ -94,6 +94,11 @@ export function createHarmonyBuffer(rowCap = 8) {
     _kKeyR: -1, _kKeyS: -1, _kSince: -1, _kBar: -1, _kBeat: -1,
     _kPosI: -2, _kPosN: -1, _kVer: -2,
     _kMoreF: -1, _kMoreN: -1, _kMoreC: -1,
+    // The ladder's key. Declared here rather than sprung into existence on the
+    // first build, so the shape of the buffer is one thing you can read. -1 is
+    // never a value `scales` can take (it is null or an array), so the first
+    // build always happens.
+    _kScale: -2, _kScaleArr: -1,
   };
 }
 
@@ -179,12 +184,28 @@ export function buildHarmonyModel(opts, buf) {
    * on every frame of playback and the rule here is that nothing allocates when
    * nothing changed.
    */
-  const sc = scales && scaleId >= 0 ? scales.find((s) => s.id === scaleId) : null;
+  // An index loop rather than `scales.find((s) => s.id === scaleId)`. The arrow
+  // function is a fresh closure every call and this runs on every frame of
+  // playback, so a search over four entries was costing an allocation a frame to
+  // answer the same question — GUIDELINES 3.0's table, the `find` row.
+  let sc = null;
+  if (scales && scaleId >= 0) {
+    for (let i = 0; i < scales.length; i++) {
+      if (scales[i].id === scaleId) { sc = scales[i]; break; }
+    }
+  }
   buf.tuningKnown = !!sc;
   buf.tuningNotice = !scales ? TUNING_NOTICE : TUNING_READONLY_NOTICE;
-  if (buf._kScale !== (sc ? sc.id : -1) || buf._kScaleN !== (scales ? scales.length : 0)) {
+  // Keyed on the scale id AND the registry array itself, which together name
+  // everything the ladder is computed from: which scale is in force, and which
+  // list that scale came out of. The registry's LENGTH was the wrong second term —
+  // engine.js assigns a whole new array when a registry message arrives, so a
+  // re-published registry of the same size carrying different cents would have
+  // left the previous ladder on screen under an unchanged key. That is exactly the
+  // failure GUIDELINES 2.1 tabulates, and identity has no such gap.
+  if (buf._kScale !== (sc ? sc.id : -1) || buf._kScaleArr !== scales) {
     buf._kScale = sc ? sc.id : -1;
-    buf._kScaleN = scales ? scales.length : 0;
+    buf._kScaleArr = scales;
     buf.scaleName = sc ? sc.name : '';
     buf.octaveCents = sc ? sc.octaveCents : 0;
     buf.degrees.length = 0;

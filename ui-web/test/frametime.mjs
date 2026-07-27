@@ -96,6 +96,30 @@ check('mixer, full redraw', await time(
   () => { window.__uni.useMixerFixture(); },
   (i) => { window.__uni.setPan(i % 8, ((i * 37) % 2000) - 1000); window.__uni.redraw(); }), BUDGET);
 
+/**
+ * A real project, playing — eight tracks and a few thousand notes rather than
+ * useMixedGrid's four lanes and a hundred.
+ *
+ * Everything above it runs against a fixture small enough that the numbers say
+ * little about the loaded case, which is the only case a user is ever in. The
+ * last one sits three thousand bars in, where positions have outgrown V8's
+ * small-integer range and every tick expression is a boxed double — a regime
+ * that only exists in long songs and therefore in no short test.
+ */
+check('tracker, busy project playing', await time(
+  () => { window.__uni.view('tracker'); window.__uni.useBusyEngine(8, 8);
+          window.__uni.setZoom(1); window.__uni.scrollTo(0); },
+  (i) => { window.__uni.tickBusy(1); }), BUDGET);
+
+check('tracker, busy project scrolling', await time(
+  () => { window.__uni.scrollTo(0); window.__uni.goto(0, 0); },
+  (i) => { window.__uni.step(); }), BUDGET);
+
+check('tracker, busy project, hour in', await time(
+  () => { window.__uni.useBusyEngine(8, 8); window.__uni.goto(0, 0);
+          window.__uni.setZoom(4); window.__uni.scrollTo(3000); },
+  (i) => { window.__uni.tickBusy(1); }), BUDGET);
+
 await br.close(); srv.close();
 
 const worst = results.reduce((a, b) => (a.p95 > b.p95 ? a : b));

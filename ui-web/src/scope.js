@@ -83,10 +83,13 @@ export class Scope {
     ctx.stroke();
 
     const step = W / HISTORY;
+    // Every lane strokes in the same colour, and assigning strokeStyle makes the
+    // canvas re-parse the CSS colour string; it was being set once per lane per
+    // frame to the value it already held.
+    ctx.strokeStyle = this.colors.line;
     for (let t = 0; t < n; t++) {
       const base = t * HISTORY;
       const top = t * laneH;
-      ctx.strokeStyle = this.colors.line;
       ctx.beginPath();
       for (let i = 0; i < HISTORY; i++) {
         // Oldest sample at the left: read forward from just past the head.

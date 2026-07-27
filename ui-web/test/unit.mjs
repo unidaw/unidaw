@@ -27,6 +27,9 @@ import { snapLoop, TICKS_PER_BAR } from '../src/arrangemodel.js';
 import { velocityText } from '../src/viewmodel.js';
 import { trackName } from '../src/arrangemodel.js';
 import { createField, begin as fBegin, feed as fFeed, cancel as fCancel } from '../src/textfield.js';
+import { buildChainModel, createChainBuffer, createParamEdits, findParamEdit,
+         setParamEdit, dropParamEdit, reapParamEdits, MAX_PARAMS,
+         EDIT_HOLD_MS } from '../src/chainmodel.js';
 
 test('lcmGrid finds a grid every lane lands on', () => {
   assert.equal(lcmGrid([4, 4, 4]), 4);
@@ -315,4 +318,88 @@ test('the charset is enforced and out-of-set keys do not fall through', () => {
   assert.equal(fFeed(f, '/'), 'consumed');
   fFeed(f, 'd'); fFeed(f, 'e');
   assert.equal(f.text, 'abcd', 'capped at max');
+});
+
+// --- the device rack -------------------------------------------------------
+// The rack draws a card per device and a row per parameter, and Zebra2 has 256
+// of them. Two things are worth testing without a browser: that the model
+// carries all of them without building a string per row per frame, and that an
+// edit in flight settles or expires rather than being adopted on faith.
+
+test('the model carries every parameter the engine published, not the first five', () => {
+  const params = [];
+  for (let k = 0; k < 300; k++) {
+    params.push({ index: k, value: k / 1000, name: 'p' + k, display: k + ' Hz', uid: 'ab' });
+  }
+  const chains = { 0: { track: 0, version: 4, devices: [
+    { id: 7, kind: 4, pos: 0, node: 0xffffffff, slot: 2, caps: 4, bypass: 0 }] } };
+  const buf = createChainBuffer();
+  const vm = buildChainModel(
+    { track: 0, chains, selected: 0, trackName: 'Bass', params: { 7: { name: 'Zebra2', params } } },
+    buf);
+  assert.equal(vm.cards[0].paramCount, MAX_PARAMS, 'capped by the engine region, not by the card');
+  assert.equal(vm.cards[0].params[255].name, 'p255', 'and the last one is really there');
+  // The engine's region holds 256, so 300 means 44 were dropped before we ever
+  // saw them. Saying so is the difference between complete and looking it.
+  assert.equal(vm.cards[0].more, '+44 more');
+  assert.match(vm.cards[0].sub, /256 params · \+44 more/);
+});
+
+test('rebuilding the same rack allocates no new parameter slots or strings', () => {
+  const params = [{ index: 0, value: 0.5, name: 'cutoff', display: '620 Hz', uid: 'ab' },
+                  { index: 1, value: 0.25, name: 'reso', display: '0.25', uid: 'cd' }];
+  const chains = { 0: { track: 0, version: 4, devices: [
+    { id: 7, kind: 4, pos: 0, node: 0xffffffff, slot: 2, caps: 5, bypass: 0 }] } };
+  const opts = { track: 0, chains, selected: 0, trackName: 'Bass',
+                 params: { 7: { name: 'Zebra2', params } } };
+  const buf = createChainBuffer();
+  const a = buildChainModel(opts, buf);
+  const slot0 = a.cards[0].params[0], title = a.cards[0].title;
+  const sub = a.cards[0].sub, caps = a.cards[0].caps;
+  const b = buildChainModel(opts, buf);
+  // Identity, not equality: a new object or a new string here is an allocation
+  // on every frame, which at eight cards of 256 is the whole GUIDELINES 3 budget.
+  assert.equal(b.cards[0].params[0], slot0, 'the parameter slot is reused');
+  assert.equal(b.cards[0].title === title, true, 'the title is not rebuilt');
+  assert.equal(b.cards[0].sub === sub, true, 'nor the footer');
+  assert.equal(b.cards[0].caps === caps, true, 'nor the capability phrase');
+});
+
+test('an edit settles when the engine agrees and expires when it never does', () => {
+  const edits = createParamEdits();
+  setParamEdit(edits, 7, 3, 750, 1000);
+  assert.equal(edits.count, 1);
+  assert.deepEqual([findParamEdit(edits, 7, 3).milli, findParamEdit(edits, 7, 4)], [750, null]);
+  // Still inside the hold, engine still says something else: held, not dropped.
+  assert.equal(reapParamEdits(edits, () => 500, 1500, null), 0);
+  assert.equal(edits.count, 1, 'an engine that has not answered yet is not a refusal');
+  // The engine answers with the value that was asked for.
+  assert.equal(reapParamEdits(edits, () => 750, 1600, null), 0);
+  assert.equal(edits.count, 0, 'an edit that arrived is dropped silently');
+
+  // And one that is never answered.
+  const s = setParamEdit(edits, 7, 3, 750, 1000);
+  assert.equal(reapParamEdits(edits, () => 500, 1000 + EDIT_HOLD_MS + 1, s), 0);
+  assert.equal(edits.count, 1, 'the one under the pointer never expires');
+  assert.equal(reapParamEdits(edits, () => 500, 1000 + EDIT_HOLD_MS + 1, null), 1);
+  assert.equal(edits.count, 0, 'and is reported so the strip can say so');
+
+  // A parameter that is not on screen at all reads as -1, which is not agreement.
+  setParamEdit(edits, 9, 1, 100, 0);
+  assert.equal(reapParamEdits(edits, () => -1, 10, null), 0);
+  assert.equal(edits.count, 1);
+});
+
+test('edits are pooled, and the pool is a pool rather than a leak', () => {
+  const edits = createParamEdits(2);
+  const a = setParamEdit(edits, 1, 0, 10, 0);
+  const b = setParamEdit(edits, 1, 1, 20, 0);
+  assert.equal(setParamEdit(edits, 1, 2, 30, 0), null, 'a full store refuses rather than grows');
+  // Moving an existing one is not a new one.
+  assert.equal(setParamEdit(edits, 1, 0, 40, 5), a);
+  assert.deepEqual([a.milli, a.at, edits.count], [40, 5, 2]);
+  dropParamEdit(edits, a);
+  assert.equal(edits.count, 1);
+  assert.equal(findParamEdit(edits, 1, 1), b, 'dropping one does not lose the other');
+  assert.equal(edits.slots.length, 2, 'and the slots are still there to be reused');
 });

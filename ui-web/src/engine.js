@@ -29,6 +29,7 @@ export function noEngine() {
     loadProject: () => false,
     saveProject: () => false,
     setViewport: () => {},
+    connected: () => false,
     stats: () => ({ framesIn: 0, gaps: 0, lastSeq: -1, connected: false }),
     close: () => {},
   };
@@ -184,6 +185,15 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
       cmdWs.send(lastVp);
       return true;
     },
+    /**
+     * Just the one bit, without the object.
+     *
+     * `stats()` builds a fresh record every call, which is right for the HUD and
+     * for a test reading it once — but the chrome asks "are we live?" on every
+     * frame from updateChrome(), and that was one object per frame to read one
+     * boolean off it. Callers that want the whole record still get it.
+     */
+    connected: () => !!(ws && ws.readyState === 1),
     stats: () => ({ framesIn, gaps, lastSeq, connected: ws && ws.readyState === 1 }),
     close() { closed = true; if (ws) ws.close(); if (cmdWs) cmdWs.close(); },
   };

@@ -18,7 +18,31 @@
 //   - .textContent = (destroys and recreates a Text node — use .nodeValue)
 //   - an unguarded style write (compare a NUMBER you cached, not a string)
 //   - .dataset.foo compared against String(x) rather than a numeric cache
+//   - an object/array literal, a .map/.filter, a for...of, or a closure per frame
 // See GUIDELINES.md section 3.
+//
+// ---------------------------------------------------------------------------
+// WHY THIS MEASURES WHAT IT MEASURES
+//
+// The first version of this file compared `Runtime.getHeapUsage` before and
+// after, with a `HeapProfiler.collectGarbage` on each side. That measures the
+// heap that SURVIVED, which is very nearly the opposite of what this test is
+// about: every allocation the draw path makes is dead by the time the frame
+// ends, so a collectGarbage-bracketed measurement collects it all and reports
+// almost nothing. Three independent audits of the renderers found hundreds of
+// transient strings per frame while that metric was reading 14-40 bytes/draw
+// and passing. It was not measuring a clean draw path; it was measuring the
+// absence of a LEAK, which is a different and much weaker property.
+//
+// This version uses the sampling heap profiler with
+// `includeObjectsCollectedByMinorGC`, which counts allocations whether or not
+// they survive. The numbers it reports are perhaps 5-10% off in either
+// direction — it samples every `SAMPLE_BYTES` rather than instrumenting every
+// allocation — but they are of the right quantity, and they move when the code
+// moves. The retained-heap check is kept as a second, separate assertion,
+// because a leak and a churn are both worth failing on and neither implies the
+// other.
+// ---------------------------------------------------------------------------
 
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
@@ -26,16 +50,26 @@ import { readFileSync } from 'node:fs';
 import { join, extname, normalize, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Thresholds are deliberately loose. Repeated runs of the fixed renderer land
-// anywhere in 1-17 bytes/draw: at 3,000 draws that is under 50 KB total, which is
-// inside the resolution of collectGarbage + getHeapUsage. Chasing that spread
-// would produce a flaky test that everyone learns to ignore.
+// How many bytes between samples. Small enough that a few hundred bytes a frame
+// is many samples over a run, large enough that the profiler does not dominate
+// the thing it is profiling.
+const SAMPLE_BYTES = 256;
+
+// Per-draw allocation budget, in bytes.
 //
-// What this catches is the regression CLASS, which is orders of magnitude away:
-// the unfixed renderer allocated ~11,000 bytes/draw. 250 is ~15x above observed
-// noise and ~44x below a single reintroduced per-frame template literal.
-const STATIC_MAX = 250;
-const SCROLL_MAX = 250;
+// Zero is not achievable and not the goal: a `top` style write on the row that
+// crossed the band edge is a string the DOM requires, and the profiler's own
+// bookkeeping lands in the same measurement. What IS achievable is that a frame
+// costs a handful of strings rather than a few hundred, and these limits are set
+// just above where the fixed paths actually land so that reintroducing one
+// unguarded per-row or per-note string — which is 40x this — cannot pass.
+const CHURN_MAX = 900;
+// Scrolling legitimately rebinds a row per step and repaints the band transform.
+// Every surface now scrolls by translating a container rather than repositioning
+// its contents, so this is close to the flat case: measured 144-720.
+const CHURN_SCROLL_MAX = 1200;
+// Retained growth. Loose, and about leaks rather than churn: see above.
+const RETAINED_MAX = 250;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.woff2': 'font/woff2' };
@@ -59,13 +93,21 @@ const heap = async () => {
   return (await cdp.send('Runtime.getHeapUsage')).usedSize;
 };
 
+/** Total bytes in a sampling profile, survivors and collected alike. */
+function profileBytes(node) {
+  let n = node.selfSize || 0;
+  const kids = node.children || [];
+  for (let i = 0; i < kids.length; i++) n += profileBytes(kids[i]);
+  return n;
+}
+
 const N = 3000;
 
 let fail = 0;
 const check = (v, max, label) => {
   const ok = v <= max;
   if (!ok) fail++;
-  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(38)} ${v.toFixed(1)} bytes/draw   (limit ${max})`);
+  console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label.padEnd(40)} ${v.toFixed(0).padStart(6)} B/draw   (limit ${max})`);
 };
 
 /**
@@ -73,43 +115,124 @@ const check = (v, max, label) => {
  * inside the measured loop may allocate on the test's behalf. state() deep-
  * clones via JSON and inflated an earlier version by 15 bytes/draw: the probe
  * measuring itself, for the third time in this project.
+ *
+ * Returns {churn, retained}: bytes allocated per draw, and bytes still reachable
+ * per draw. The first is the one this file exists for.
  */
 async function measure(setup, body, n = N) {
   if (setup) await page.evaluate(setup);
-  await page.evaluate(body, 300);              // warm
-  const a = await heap();
+  await page.evaluate(body, 300);              // warm: JIT, pool growth, first bind
+  const before = await heap();
+  await cdp.send('HeapProfiler.startSampling', {
+    samplingInterval: SAMPLE_BYTES,
+    includeObjectsCollectedByMinorGC: true,
+    includeObjectsCollectedByMajorGC: true,
+  });
   await page.evaluate(body, n);
-  const b = await heap();
-  return (b - a) / n;
+  const { profile } = await cdp.send('HeapProfiler.stopSampling');
+  const churn = profileBytes(profile.head) / n;
+  const retained = (await heap() - before) / n;
+  return { churn, retained };
 }
 
-console.log(`\n  allocation, ${N} draws each\n`);
+/** Both assertions for one scenario, on one line each. */
+async function scenario(label, setup, body, churnMax = CHURN_MAX) {
+  const { churn, retained } = await measure(setup, body);
+  check(churn, churnMax, label);
+  check(retained, RETAINED_MAX, label + ' (retained)');
+}
 
-// --- tracker -------------------------------------------------------------
-check(await measure(
-  () => { window.__uni.view('tracker'); },
-  (n) => { const at = window.__uni.state().start;
-           for (let i = 0; i < n; i++) window.__uni.scrollTo(at); }),
-  STATIC_MAX, 'tracker at rest');
-check(await measure(null, (n) => { for (let i = 0; i < n; i++) window.__uni.step(); }),
-  SCROLL_MAX, 'tracker scrolling');
+console.log(`\n  allocation, ${N} draws each — churn is what matters\n`);
+
+// Every scenario states where it is — zoom, scroll position, fixture or engine.
+// None of them may inherit that from the scenario before it. Two of these were
+// implicitly running at bar 3,000 and zoom "1 bar" because an earlier scenario
+// had scrolled there, and the numbers were four times what the same code
+// measured from the top of the song. A benchmark that does not say where it
+// stands is measuring something, but not the thing in its name.
+// Spelled out at each site rather than shared: page.evaluate serialises the
+// function and ships it to the browser, so it cannot close over anything
+// declared here in Node. A helper would have looked right and thrown at runtime.
+
+// --- the tracker against a REAL engine frame ------------------------------
+// This is the case the app is actually in when performance matters, and until
+// now it was the one case the file never covered: every scenario below loads
+// `?engine=off`, which takes the fixture branch and never spells a pitch, a
+// velocity, a harmony field or a clip name from engine data.
+await scenario('tracker, engine data, playing',
+  () => { window.__uni.view('tracker'); window.__uni.useBusyEngine(8, 8);
+          window.__uni.setZoom(1); window.__uni.scrollTo(0); },
+  (n) => { for (let i = 0; i < n; i++) window.__uni.tickBusy(1); });
+
+await scenario('tracker, engine data, at rest',
+  () => { window.__uni.setZoom(1); window.__uni.scrollTo(0); window.__uni.goto(0, 0); },
+  (n) => { for (let i = 0; i < n; i++) window.__uni.scrollTo(0); });
+
+await scenario('tracker, engine data, scrolling',
+  () => { window.__uni.setZoom(1); window.__uni.scrollTo(0); window.__uni.goto(0, 0); }, (n) => { for (let i = 0; i < n; i++) window.__uni.step(); },
+  CHURN_SCROLL_MAX);
+
+// The coarse zooms take an entirely different branch — the engine's aggregate
+// contour rather than per-note cells — and nothing measured it before.
+await scenario('tracker, aggregate zoom',
+  // Rebuilt, not just rewound: tickBusy advances the synthetic playhead and
+  // never resets it, so by the time this ran the playhead alone was past the
+  // small-integer range and the scenario was measuring the long-song regime
+  // under the name of the aggregate one.
+  () => { window.__uni.useBusyEngine(8, 8); window.__uni.scrollTo(0);
+          window.__uni.goto(0, 0); window.__uni.setZoom(4); },
+  (n) => { for (let i = 0; i < n; i++) window.__uni.tickBusy(1); });
+
+/**
+ * Deep into a long song, at a coarse zoom. Its own limit, and here is why.
+ *
+ * Nanoticks run at 960,000 to the quarter, so a position passes V8's
+ * small-integer range (2^30 with pointer compression) about nine minutes in at
+ * 120 BPM. Past that, every tick expression in the draw path — a window bound, a
+ * cursor position, the minimap's span — produces a boxed double on the heap
+ * instead of an immediate. Nothing is wrong with the code; the numbers simply
+ * got big. It costs roughly a kilobyte a frame, it cannot be guarded away
+ * without giving up absolute tick arithmetic, and it appears only in long
+ * projects, which is the worst way for a cost to arrive: invisible in every
+ * short test.
+ *
+ * So it is measured deliberately, with a limit of its own, and the day someone
+ * wants it gone the fix is to carry window-relative offsets rather than absolute
+ * ticks through the hot arithmetic.
+ */
+await scenario('tracker, hour into the song',
+  () => { window.__uni.useBusyEngine(8, 8); window.__uni.goto(0, 0);
+          window.__uni.setZoom(4); window.__uni.scrollTo(3000); },
+  (n) => { for (let i = 0; i < n; i++) window.__uni.tickBusy(1); },
+  1200);
+
+// --- the fixture tracker ---------------------------------------------------
+// The fixture derives every cell from the row's tick, so it is the one path that
+// cannot skip the arithmetic above. It ships only behind `?engine=off`.
+await scenario('tracker fixture at rest',
+  () => { window.__uni.useFixture(); window.__uni.view('tracker');
+          window.__uni.setZoom(1); window.__uni.scrollTo(0); window.__uni.goto(0, 0); },
+  (n) => { for (let i = 0; i < n; i++) window.__uni.scrollTo(0); });
+await scenario('tracker fixture scrolling',
+  () => { window.__uni.setZoom(1); window.__uni.scrollTo(0); window.__uni.goto(0, 0); }, (n) => { for (let i = 0; i < n; i++) window.__uni.step(); },
+  CHURN_SCROLL_MAX);
 
 // --- the other surfaces --------------------------------------------------
 // Each was built after the rule was written and none of them was covered by it.
 // A rule enforced on one surface is a rule the next surface does not have.
-check(await measure(
+await scenario('arrange scrolling time',
   () => { window.__uni.useArrangeFixture(); },
-  (n) => { for (let i = 0; i < n; i++) window.__uni.arrangeTo((i % 64) * 240000); }),
-  SCROLL_MAX, 'arrange scrolling time');
+  (n) => { for (let i = 0; i < n; i++) window.__uni.arrangeTo((i % 64) * 240000); },
+  CHURN_SCROLL_MAX);
 
-check(await measure(
+await scenario('piano roll scrolling time',
   () => { window.__uni.usePianoFixture(); },
-  (n) => { for (let i = 0; i < n; i++) window.__uni.pianoTo((i % 64) * 120000); }),
-  SCROLL_MAX, 'piano roll scrolling time');
+  (n) => { for (let i = 0; i < n; i++) window.__uni.pianoTo((i % 64) * 120000); },
+  CHURN_SCROLL_MAX);
 
 // The mixer's meters move every frame by design, so this is the one surface
 // where a redraw legitimately writes on every pass. It still must not allocate.
-check(await measure(
+await scenario('mixer, meters and controls moving',
   () => { window.__uni.useMixerFixture(); },
   // redraw(), not setPan alone: the mixer's setters go through schedule(), which
   // coalesces to one draw per frame, so a loop through them measures almost no
@@ -117,31 +240,34 @@ check(await measure(
   (n) => { for (let i = 0; i < n; i++) {
     window.__uni.setPan(i % 8, ((i * 37) % 2000) - 1000);
     window.__uni.redraw();
-  } }),
-  SCROLL_MAX, 'mixer, meters and controls moving');
+  } });
 
 // The patcher was read-only until config editing landed; a draw that rebuilds a
 // config line per node per frame is exactly the shape that quietly allocates.
-check(await measure(
+await scenario('patcher moving the field cursor',
   () => { window.__uni.usePatcherFixture(); },
   (n) => { for (let i = 0; i < n; i++) {
     window.__uni.patchSelect(i % 5);
     window.__uni.patchField(i % 4);
-  } }),
-  SCROLL_MAX, 'patcher moving the field cursor');
+  } });
+
+// The patcher redrawing with nothing moving: the graph is laid out once and the
+// per-frame cost should be a pass over guards. It shares the frame with the
+// device chain, which is on screen whatever surface you are looking at.
+await scenario('patcher at rest',
+  null, (n) => { for (let i = 0; i < n; i++) window.__uni.redraw(); });
 
 // The device chain redraws with everything else and builds a title string per
 // card. Small surfaces are where the discipline quietly stops being true.
-check(await measure(
+await scenario('device chain, moving the selection',
   () => { window.__uni.useChainFixture(); },
-  (n) => { for (let i = 0; i < n; i++) { window.__uni.chainSelect(i % 4); } }),
-  SCROLL_MAX, 'device chain, moving the selection');
+  (n) => { for (let i = 0; i < n; i++) { window.__uni.chainSelect(i % 4); } });
 
 // The palette filters on every keystroke and is the newest draw path here.
-check(await measure(
+await scenario('palette, moving the selection',
   () => { window.__uni.palette(true); },
-  (n) => { for (let i = 0; i < n; i++) { window.__uni.paletteMove(i % 2 ? 1 : -1); } }),
-  SCROLL_MAX, 'palette, moving the selection');
+  (n) => { for (let i = 0; i < n; i++) { window.__uni.paletteMove(i % 2 ? 1 : -1); } });
+
 await br.close(); srv.close();
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : `${fail} FAILURES — see GUIDELINES.md section 3`}`);

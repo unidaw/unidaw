@@ -17,6 +17,11 @@
 
 const OVERSCAN = 4;
 
+/** The eight per-track hues, as the custom-property values a rail is set to.
+ *  Fixed at load; see paintClips for why they are a table. */
+const TRACK_HUES = [];
+for (let i = 0; i < 8; i++) TRACK_HUES.push('var(--uni-track-hue-' + i + ')');
+
 export class Tracker {
   /**
    * @param {HTMLElement} host
@@ -29,8 +34,10 @@ export class Tracker {
     this.poolSize = 0;
     /** @type {HTMLElement[]} */
     this.pool = [];
-    /** @type {Map<number, HTMLElement>} */
-    this.byRow = new Map();
+    /** How many pool slots the current frame's window claims — see rowEl(). */
+    this._live = 0;
+    /** Whether last frame had a selection; see paintSelection(). */
+    this._hadSel = false;
     /** Fixed pool of rail elements. Clips scroll in and out constantly, and
      *  creating/removing a DOM node per clip per frame churned 219 nodes over a
      *  28-second scroll — allocation and layout in the hot path. Rails are now
@@ -53,6 +60,19 @@ export class Tracker {
 
   /** Size the pool to the viewport. Called on mount and resize only. */
   resize(viewportHeight, rowCount, columns) {
+    // Stored before the early return, because render() reads it every frame to
+    // decide how many rows are actually VISIBLE (as opposed to overscan). It
+    // used to ask `this.host.clientHeight` there, which forces a style and
+    // layout flush in the middle of the draw — and the caller has just measured
+    // the same box to call this, so the number was already in hand.
+    // Compare the INPUTS, then compute. `Math.ceil(h / rowHeight)` is a division
+    // that lands on a fraction, so V8 boxes the intermediate — ~33 bytes a frame
+    // to work out a pool size that has not changed since the window was last
+    // resized. The three inputs decide `need` entirely, so comparing them first
+    // is both cheaper and exact.
+    if (this._viewH === viewportHeight && this.cols === columns
+        && this.tracks === rowCount && this.poolSize > 0) return;
+    this._viewH = viewportHeight;
     const need = Math.ceil(viewportHeight / this.m.rowHeight) + OVERSCAN * 2;
     if (need === this.poolSize && this.cols === columns && this.tracks === rowCount) return;
     this.poolSize = need;
@@ -101,6 +121,19 @@ export class Tracker {
     // The harmony column is a LANE, not a cell — see paintHarmony. The row still
     // reserves its width so the tracks line up with the header.
     row.append(el('div', 'tk-harm-spacer'));
+    /**
+     * The row's cells, flat, in view-model order (track * columns + col).
+     *
+     * Everything that walks a row used to walk `elm.children`, skip the two
+     * non-track children with a `classList.contains('tk-track')` test, then walk
+     * `tr.children` — nine HTMLCollection iterators per row, per frame, in
+     * bindRow, and the same again in paintSelection. That is ~600 iterator
+     * objects a frame to re-derive a list whose contents are fixed the moment
+     * the row is built. Building it once here makes both an index loop, and
+     * incidentally makes cellEl a subscript instead of a querySelector.
+     */
+    const cells = new Array(trackCount * columns);
+    let k = 0;
     for (let t = 0; t < trackCount; t++) {
       const tr = el('div', 'tk-track');
       tr.style.setProperty('--tint', `var(--uni-track-tint-${t % 8})`);
@@ -117,10 +150,16 @@ export class Tracker {
         // at coarse zoom than a count does; see viewmodel.js.
         const bar = el('i', 'tk-bar');
         cell.appendChild(bar);
+        cell._text = cell.firstChild;
+        cell._bar = bar;
+        cell._kindV = null;
         tr.append(cell);
+        cells[k++] = cell;
       }
       row.append(tr);
     }
+    row._cells = cells;
+    row._shown = 1;
     return row;
   }
 
@@ -147,29 +186,30 @@ export class Tracker {
     const gt = elm.firstChild.firstChild;
     if (gt.nodeValue !== row.label) gt.nodeValue = row.label;
 
-    let i = 0;
-    for (const tr of elm.children) {
-      if (!tr.classList.contains('tk-track')) continue;
-      for (const cell of tr.children) {
-        const c = row.cells[i++];
-        const bar = cell.lastChild;
-        if (c.aggCount) {
-          // MIDI 24..96 covers the useful range; clamp rather than scale to the
-          // window, so a mark means the same pitch height on every row.
-          const lo = Math.max(0, Math.min(1, (c.aggLo - 24) / 72));
-          const hi = Math.max(0, Math.min(1, (c.aggHi - 24) / 72));
-          const bottom = (lo * 100) | 0;
-          const height = Math.max(8, ((hi - lo) * 100) | 0);
-          const op = Math.min(1, 0.25 + c.aggCount / 24);
-          if (bar._b !== bottom) { bar._b = bottom; bar.style.bottom = bottom + '%'; }
-          if (bar._h !== height) { bar._h = height; bar.style.height = height + '%'; }
-          if (bar._o !== op) { bar._o = op; bar.style.opacity = op; }
-          if (bar._on !== 1) { bar._on = 1; bar.style.display = 'block'; }
-        } else if (bar._on !== 0) { bar._on = 0; bar.style.display = 'none'; }
-        const tn = cell.firstChild;
-        if (tn.nodeValue !== c.text) tn.nodeValue = c.text;
-        if (cell.dataset.kind !== c.kind) cell.dataset.kind = c.kind;
-      }
+    const cells = elm._cells;
+    const n = Math.min(cells.length, row.cells.length);
+    for (let i = 0; i < n; i++) {
+      const cell = cells[i];
+      const c = row.cells[i];
+      const bar = cell._bar;
+      if (c.aggCount) {
+        // MIDI 24..96 covers the useful range; clamp rather than scale to the
+        // window, so a mark means the same pitch height on every row.
+        const lo = Math.max(0, Math.min(1, (c.aggLo - 24) / 72));
+        const hi = Math.max(0, Math.min(1, (c.aggHi - 24) / 72));
+        const bottom = (lo * 100) | 0;
+        const height = Math.max(8, ((hi - lo) * 100) | 0);
+        const op = Math.min(1, 0.25 + c.aggCount / 24);
+        if (bar._b !== bottom) { bar._b = bottom; bar.style.bottom = bottom + '%'; }
+        if (bar._h !== height) { bar._h = height; bar.style.height = height + '%'; }
+        if (bar._o !== op) { bar._o = op; bar.style.opacity = op; }
+        if (bar._on !== 1) { bar._on = 1; bar.style.display = 'block'; }
+      } else if (bar._on !== 0) { bar._on = 0; bar.style.display = 'none'; }
+      const tn = cell._text;
+      if (tn.nodeValue !== c.text) tn.nodeValue = c.text;
+      // Cached beside the attribute rather than read back off it: `dataset.kind`
+      // is a DOMStringMap lookup per cell per rebind, and there are 1,776 cells.
+      if (cell._kindV !== c.kind) { cell._kindV = c.kind; cell.dataset.kind = c.kind; }
     }
   }
 
@@ -206,17 +246,20 @@ export class Tracker {
     // the deadline. Only the rows a user can actually see have to be right this
     // frame; the overscan exists for scroll headroom and can land in the next
     // one. Deferring it trades one frame of headroom for a zoom step that fits.
-    const visible = Math.min(vm.rows.length, Math.ceil(this.host.clientHeight / this.m.rowHeight) + 1);
+    const visible = Math.min(vm.rows.length,
+                             Math.ceil((this._viewH || 0) / this.m.rowHeight) + 1);
     const limit = needFull ? visible : vm.rows.length;
 
-    this.byRow.clear();
-    for (let i = 0; i < vm.rows.length && i < n; i++) {
+    // How many pool slots this frame's window claims. Kept because rowEl() needs
+    // the same bound to answer "is this row on screen", and recomputing it there
+    // would be two places to get the edge case wrong.
+    this._live = Math.min(vm.rows.length, n);
+    for (let i = 0; i < this._live; i++) {
       const rowIdx = first + i;
       const row = vm.rows[i];
       const elm = this.pool[((rowIdx % n) + n) % n];
-      if (elm.style.display === 'none') elm.style.display = '';
+      if (elm._shown !== 1) { elm._shown = 1; elm.style.display = ''; }
       if (i < limit && (needFull || elm._row !== rowIdx)) this.bindRow(elm, row);
-      this.byRow.set(rowIdx, elm);
     }
 
     if (needFull && limit < vm.rows.length) {
@@ -232,20 +275,25 @@ export class Tracker {
     // Slots not claimed this frame (a short window at the end of the timeline).
     for (let i = vm.rows.length; i < n; i++) {
       const elm = this.pool[(((first + i) % n) + n) % n];
-      if (elm.style.display !== 'none') elm.style.display = 'none';
+      if (elm._shown !== 0) { elm._shown = 0; elm.style.display = 'none'; }
     }
 
-    const sx = -(vm.scrollX || 0), sy = -first * this.m.rowHeight;
+    // Kept POSITIVE and negated inside the string. `-(0)` is `-0`, which is not a
+    // small integer, so V8 boxes a heap number for it — on every frame of a view
+    // that has not moved, which is most of them. Storing the distance and
+    // spelling the direction in the template costs nothing and allocates
+    // nothing.
+    const sx = vm.scrollX || 0, sy = first * this.m.rowHeight;
     if (this._sx !== sx || this._sy !== sy) {
       this._sx = sx; this._sy = sy;
-      const xf = 'translate(' + sx + 'px, ' + sy + 'px)';   // only on movement
+      const xf = 'translate(-' + sx + 'px, -' + sy + 'px)';   // only on movement
       this.band.style.transform = xf;
       this.rails.style.transform = xf;
     }
     // The lane moves vertically with the rows and never horizontally.
     if (this._hy !== sy) {
       this._hy = sy;
-      this.harmLane.style.transform = 'translateY(' + sy + 'px)';
+      this.harmLane.style.transform = 'translateY(-' + sy + 'px)';
     }
     this.paintHarmony(vm, first);
     this.paintClips(vm);
@@ -281,10 +329,11 @@ export class Tracker {
         e.append(lab, foot);
         e._k = k.firstChild; e._s = s.firstChild; e._f = foot.firstChild;
         e._lab = lab; e._foot = foot;
+        e._shown = 1;
         this.harmLane.append(e);
         this.harmPool[i] = e;
       }
-      if (e.style.display === 'none') e.style.display = '';
+      if (e._shown !== 1) { e._shown = 1; e.style.display = ''; }
       const top = (b.startTick / perRow) * rh;
       const height = Math.max(rh, ((b.endTick - b.startTick) / perRow) * rh);
       if (e._t !== top) { e._t = top; e.style.top = top + 'px'; }
@@ -300,7 +349,7 @@ export class Tracker {
     }
     for (let i = vm.harmony.length; i < this.harmPool.length; i++) {
       const e = this.harmPool[i];
-      if (e.style.display !== 'none') e.style.display = 'none';
+      if (e._shown !== 0) { e._shown = 0; e.style.display = 'none'; }
     }
   }
 
@@ -320,18 +369,23 @@ export class Tracker {
         lab.appendChild(document.createTextNode(''));
         r.append(lab);
         r._label = lab.firstChild;
-        r._name = null; r._hue = null;
+        r._name = null; r._hue = -1; r._shown = 1;
         this.rails.append(r);
         this.railPool[i] = r;
       }
       if (r._id !== clip.id) { r._id = clip.id; r.dataset.clip = clip.id; }
-      if (r.style.display === 'none') r.style.display = '';
+      if (r._shown !== 1) { r._shown = 1; r.style.display = ''; }
       if (r._active !== clip.active) { r._active = clip.active; r.classList.toggle('active', clip.active); }
       if (r._name !== clip.name) { r._name = clip.name; r._label.nodeValue = clip.name; }
       // The track's own hue, so a clip is findable across the width of the
       // screen. Eight shades of one accent are not.
-      const hue = 'var(--uni-track-hue-' + (clip.track % 8) + ')';
-      if (r._hue !== hue) { r._hue = hue; r.style.setProperty('--clip', hue); }
+      //
+      // From a table: this was concatenated per rail per frame and only then
+      // compared against the cached copy, which at eight visible clips was the
+      // single largest per-frame allocation in the tracker — ~600 bytes a frame
+      // to rediscover one of eight strings that were fixed at load.
+      const hueIdx = clip.track % 8;
+      if (r._hue !== hueIdx) { r._hue = hueIdx; r.style.setProperty('--clip', TRACK_HUES[hueIdx]); }
       // 2px inset at each end, so consecutive clips show a gap rather than one
       // unbroken bar — the boundary between two clips is information.
       const top = (clip.startTick / perRow) * this.m.rowHeight + 2;
@@ -350,18 +404,38 @@ export class Tracker {
     // then stops mutating the DOM entirely.
     for (let i = vm.clips.length; i < this.railPool.length; i++) {
       const r = this.railPool[i];
-      if (r.style.display !== 'none') r.style.display = 'none';
+      if (r._shown !== 0) { r._shown = 0; r.style.display = 'none'; }
     }
+  }
+
+  /**
+   * The pooled element holding an absolute row, or null when that row is outside
+   * the window this frame.
+   *
+   * This replaces a `Map<rowIdx, element>` that was cleared and refilled with
+   * ~74 entries on every frame — and, worse, was iterated with
+   * `for (const [rowIdx, elm] of map)`, which allocates a two-element array per
+   * entry per frame on top of the iterator. The map was a cache for a formula:
+   * the pool is a ring indexed by `row mod poolSize`, which is the same
+   * arithmetic render() uses to fill it. Recomputing costs a modulo.
+   */
+  rowEl(rowIdx) {
+    const vm = this.vm;
+    if (!vm) return null;
+    const i = rowIdx - vm.window.startRow;
+    if (i < 0 || i >= this._live) return null;
+    const n = this.pool.length;
+    return n ? this.pool[((rowIdx % n) + n) % n] : null;
   }
 
   /** Cursor / playhead / selection: a handful of class toggles, never a rebind. */
   paintState(vm, prev) {
     if (prev) {
-      this.byRow.get(prev.playhead.row)?.classList.remove('playhead');
+      this.rowEl(prev.playhead.row)?.classList.remove('playhead');
       const pc = this.cellEl(prev.cursor);
       pc?.classList.remove('cursor');
     }
-    this.byRow.get(vm.playhead.row)?.classList.add('playhead');
+    this.rowEl(vm.playhead.row)?.classList.add('playhead');
     this.cellEl(vm.cursor)?.classList.add('cursor');
     this.paintSelection(vm);
   }
@@ -377,23 +451,37 @@ export class Tracker {
    */
   paintSelection(vm) {
     const s = vm.selection;
-    for (const [rowIdx, elm] of this.byRow) {
-      const inRows = s && rowIdx >= s.r0 && rowIdx <= s.r1;
-      let f = 0;
-      for (const tr of elm.children) {
-        if (!tr.classList.contains('tk-track')) continue;
-        for (const cell of tr.children) {
-          const on = inRows && f >= s.f0 && f <= s.f1;
-          if (cell._sel !== on) { cell._sel = on; cell.classList.toggle('sel', on); }
-          f++;
-        }
+    // Nothing selected now and nothing selected last frame: there is no cell
+    // whose membership can have changed, so the whole 1,776-cell sweep is
+    // skipped. Selection is null for almost the entire life of the program —
+    // this loop was running sixty times a second to set `false` on cells that
+    // were already false. `_hadSel` rather than a compare against the previous
+    // view-model's selection, because a drag that ends replaces the object with
+    // null and the frame that does so still has to clear the classes.
+    if (!s && !this._hadSel) return;
+    this._hadSel = !!s;
+    const first = vm.window.startRow;
+    const n = this.pool.length;
+    for (let i = 0; i < this._live; i++) {
+      const rowIdx = first + i;
+      const elm = this.pool[((rowIdx % n) + n) % n];
+      const inRows = !!s && rowIdx >= s.r0 && rowIdx <= s.r1;
+      const cells = elm._cells;
+      for (let f = 0; f < cells.length; f++) {
+        const cell = cells[f];
+        const on = inRows && f >= s.f0 && f <= s.f1;
+        if (cell._sel !== on) { cell._sel = on; cell.classList.toggle('sel', on); }
       }
     }
   }
 
+  /** The cell at a (row, track, col) cursor. A subscript into the row's flat
+   *  cell list — it was a `querySelector` with a template-literal selector, so
+   *  every call built a string and made the engine parse it afresh. */
   cellEl(cur) {
-    const row = this.byRow.get(cur.row);
-    return row?.querySelector(`[data-track="${cur.track}"][data-col="${cur.col}"]`) ?? null;
+    const row = this.rowEl(cur.row);
+    if (!row) return null;
+    return row._cells[cur.track * this.cols + cur.col] || null;
   }
 
   /**

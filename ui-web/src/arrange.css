@@ -15,11 +15,24 @@
   background: var(--uni-surface-header-bg);
   border-right: 1px solid var(--uni-rule-gutter);
   z-index: 2;
-  /* Clears the ruler, which lives in the band. Without this every lane head sits
-     one ruler-height above the lane it names — and it still looks plausible. */
-  padding-top: var(--metrics-header-height);
+  position: relative;
   box-sizing: border-box;
 }
+
+/* The track heads, as a strip that scrolls with the lanes.
+   Offset by the ruler's height, which lives in the band: without it every lane
+   head sits one ruler-height above the lane it names — and it still looks
+   plausible. That offset used to be the gutter's own padding-top; padding does
+   not clip, so a head scrolled off the top would have drawn over the ruler's
+   row. The offset moved onto a box that clips instead. */
+.ar-heads {
+  position: absolute; left: 0; right: 0;
+  top: var(--metrics-header-height); bottom: 0;
+  overflow: hidden;
+}
+/* The moving part. Separate from the clipper above because a transform on the
+   clipper takes its clip rectangle along with it and clips nothing. */
+.ar-heads-in { position: absolute; left: 0; right: 0; top: 0; }
 
 .ar-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -74,6 +87,17 @@
   top: var(--metrics-header-height);
 }
 .ar-grid, .ar-lanes { pointer-events: none; }
+
+/* The scrolled part of the time axis. Its contents sit at their absolute x and
+   never move; THIS is what a pan translates — one string a frame instead of one
+   per clip, gridline and ruler tick (GUIDELINES 3.3).
+
+   `inset: 0` so children keep resolving `bottom`/`height: 100%` against the same
+   box they did before the wrapper existed, and no `overflow` of its own: the
+   strips above already clip, and clipping here would cut the axis off at the
+   window's width. `will-change` for the same reason `.tk-band` has it — the band
+   IS the scrolled thing, so promoting it is correct rather than speculative. */
+.ar-scroll { position: absolute; inset: 0; will-change: transform; }
 
 .ar-lane {
   position: absolute; left: 0; right: 0; top: 0;

@@ -399,6 +399,45 @@ function measureRoom() {
 }
 addEventListener('resize', () => { measureRoom(); schedule(); });
 
+/**
+ * The surface hosts' box sizes, refreshed when they change rather than read in
+ * the draw path.
+ *
+ * `clientWidth` and `clientHeight` are not free reads: they force the browser to
+ * flush pending style and layout so it can answer. draw() writes styles and then
+ * reads a box, five times over — a synchronous layout apiece, inside one
+ * animation frame, which is textbook layout thrashing. None of these boxes can
+ * change during a frame; they change when a pane is dragged, a rail opens, or
+ * the window resizes, and a ResizeObserver is precisely the notification for
+ * that.
+ *
+ * A cached 0 means "not measured yet, or the host is hidden". Reading through
+ * boxOf() falls back to a live measurement in that case, which covers the one
+ * frame after a view switch unhides a host — the observer has not fired yet, and
+ * drawing that surface at width 0 for a frame is a visible flash.
+ */
+const hostBox = new WeakMap();
+function boxOf(el, vertical) {
+  let b = hostBox.get(el);
+  if (!b) { b = { w: 0, h: 0 }; hostBox.set(el, b); }
+  if ((vertical ? b.h : b.w) <= 0) { b.w = el.clientWidth; b.h = el.clientHeight; }
+  return vertical ? b.h : b.w;
+}
+const hostRo = new ResizeObserver((entries) => {
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    let b = hostBox.get(e.target);
+    if (!b) { b = { w: 0, h: 0 }; hostBox.set(e.target, b); }
+    // contentBoxSize is what clientWidth/clientHeight report. Taking it off the
+    // entry rather than re-reading the element is the whole point: the observer
+    // is handed the measurement, so nothing here forces a layout either.
+    const cb = e.contentBoxSize && e.contentBoxSize[0];
+    if (cb) { b.w = cb.inlineSize; b.h = cb.blockSize; }
+    else { b.w = e.contentRect.width; b.h = e.contentRect.height; }
+  }
+  schedule();
+});
+
 const minimapHost = document.getElementById('minimap');
 const minimap = new Minimap(minimapHost, {
   onSeek: (tick) => {
@@ -499,6 +538,9 @@ let scales = null;
 const deviceParams = Object.create(null);
 /** Devices we have already asked about, so the rack asks once, not per frame. */
 const paramsAsked = new Set();
+/** Which track the cursor is on, and since when — see the query debounce below. */
+let lastParamTrack = -1;
+let paramTrackSince = 0;
 
 const dockHost = document.getElementById('dock');
 const rdockHost = document.getElementById('rdock');
@@ -529,9 +571,14 @@ function crumbSet(i, cls, text) {
   const el = crumbCell(i, cls);
   if (el._t !== text) { el._t = text; el.firstChild.nodeValue = text; }
 }
+// The project's filename, rebuilt only when the project changes. drawCrumb runs
+// every frame, and `name + '.uni'` was a string per frame whose only purpose was
+// to be compared equal to the one already in the cell.
+let crumbProject = null, crumbFile = '';
 function drawCrumb() {
   const name = state.currentProject || 'untitled';
-  crumbSet(0, 'cr-strong', name + '.uni');
+  if (crumbProject !== name) { crumbProject = name; crumbFile = name + '.uni'; }
+  crumbSet(0, 'cr-strong', crumbFile);
   crumbSet(1, 'cr-sep', '\u00b7');
   crumbSet(2, 'cr-strong', trackName(engine, state.cursor.track));
   crumbSet(3, 'cr-sep', '\u00b7');
@@ -968,6 +1015,7 @@ function buildHead() {
   // compounding, so by track 16 the headers sit 32px left of their columns.
   // Same mistake as the scroll clamp; see GUIDELINES.md 3.11.
   const stride = tracker.trackStride || metrics.cellWidth * state.columns;
+  const heads = [];
   for (let t = 0; t < state.tracks; t++) {
     const el = document.createElement('div'); el.className = 'htrack';
     el.dataset.track = String(t);
@@ -984,7 +1032,23 @@ function buildHead() {
     el.appendChild(lpb);
     el._lpbEl = lpb; el._lpb = -1;
     headRow.append(el);
+    heads.push(el);
   }
+  // The track headers, as an array. paintHeadLpb ran `headRow.children[t + 1]`
+  // per track per frame; `.children` is a live HTMLCollection and indexing it is
+  // a binding call, for a list that cannot change without this function running
+  // again. Same reasoning as the tracker rows' `_cells`.
+  headRow._heads = heads;
+  // What this header was built FOR. draw() used to ask
+  // `headRow.children.length !== state.tracks + 1`, and the harmony column's
+  // header — added later, right above — made that count tracks + 2. So the test
+  // was true on every frame and the entire header strip was destroyed and
+  // rebuilt sixty times a second: ~1.3 KB of garbage per frame and a fresh set
+  // of DOM nodes for the browser to lay out, all of it invisible because the
+  // result looked identical. Naming the shape explicitly means adding another
+  // fixed column cannot silently do this again.
+  headRow._tracks = state.tracks;
+  headRow._stride = stride;
   head.append(headRow);
   paintHeadLpb();
 }
@@ -993,8 +1057,9 @@ function buildHead() {
  *  nothing changed writes nothing — this runs from draw(). */
 function paintHeadLpb() {
   if (!headRow) return;
-  for (let t = 0; t < state.tracks; t++) {
-    const el = headRow.children[t + 1];
+  const heads = headRow._heads;
+  for (let t = 0; t < heads.length; t++) {
+    const el = heads[t];
     if (!el || !el._lpbEl) continue;
     const name = trackName(state.useEngine === false ? null : engine, t);
     if (el._nameVal !== name) { el._nameVal = name; el._nameNode.nodeValue = name; }
@@ -1085,19 +1150,45 @@ const SCALE_NAMES = ['', 'major', 'minor', 'dorian', 'mixolydian'];
  * would get a fix the other did not. The tuning line is honest: the engine
  * publishes no tuning, so every field is 12-TET until it says otherwise.
  */
+/**
+ * The label cache, and the object nameHarmony hands back.
+ *
+ * Both exist because this is a per-frame path twice over: the tracker's harmony
+ * column calls it once per visible field per frame, and the chrome calls it
+ * again through currentKey() on every draw, whatever surface you are looking at.
+ * The old version allocated a fresh object and two or three fresh strings every
+ * single call, to spell a chord symbol that changes when the music changes.
+ *
+ * The label is keyed on (root, scaleId) because those are its only two inputs.
+ * A Map rather than an array because scaleId is the engine's id and is not
+ * promised to stay small or dense; `get` on a present key allocates nothing, and
+ * `set` runs once per distinct chord the project contains.
+ *
+ * The returned object is shared and only valid until the next call — every
+ * caller reads `.label`/`.sub` immediately, which is what makes that legal.
+ */
+const HARMONY_LABELS = new Map();
+const _harmonyName = { label: '', sub: '12-TET' };
 function nameHarmony(e) {
-  const root = NOTE_NAMES[((e.root % 12) + 12) % 12] || '?';
-  return {
-    label: root + ' ' + (SCALE_NAMES[e.scaleId] || ('scale ' + e.scaleId)),
-    sub: '12-TET',
-  };
+  const key = (((e.root % 12) + 12) % 12) * 65536 + e.scaleId;
+  let label = HARMONY_LABELS.get(key);
+  if (label === undefined) {
+    const root = NOTE_NAMES[((e.root % 12) + 12) % 12] || '?';
+    label = root + ' ' + (SCALE_NAMES[e.scaleId] || ('scale ' + e.scaleId));
+    HARMONY_LABELS.set(key, label);
+  }
+  _harmonyName.label = label;
+  return _harmonyName;
 }
 
 function currentKey() {
   if (!engine || !engine.harmony || !engine.harmony.length) return '';
   const tick = engine.playheadTick;
-  let cur = engine.harmony[0];
-  for (const e of engine.harmony) { if (e.tick <= tick) cur = e; else break; }
+  const h = engine.harmony;
+  // An index loop, not `for (const e of h)`: a for-of builds an iterator object
+  // per call, and this is called once per frame from updateChrome().
+  let cur = h[0];
+  for (let i = 0; i < h.length; i++) { if (h[i].tick <= tick) cur = h[i]; else break; }
   return nameHarmony(cur).label;
 }
 
@@ -1108,31 +1199,44 @@ function currentKey() {
  * velocity readout I updated four of them — so the state said 84 and the chrome
  * said 100. Five copies of a field list is five chances to miss one.
  */
+/**
+ * Reused, not rebuilt. This runs once per frame from every surface's draw, and
+ * `chrome.update` destructures its argument on entry and keeps no reference to
+ * it — so there is nothing an object per frame buys over one object mutated in
+ * place. Same for every other `build*Model({...})` options object below: they
+ * are argument lists that JavaScript makes you spell as a heap object, and the
+ * callee reads them once.
+ */
+const _chromeOpts = { playheadTick: 0, transport: 0, linkText: '', octave: 0,
+                      editStep: 0, velocity: 100, rejectText: '', viewName: '',
+                      keyName: '' };
 function updateChrome() {
-  chrome.update({
-    playheadTick: engine ? engine.playheadTick : 0,
-    transport: engine ? engine.transport : 0,
-    linkText: engine && engine.stale ? 'engine gone'
-      : engine && conn && conn.stats().connected ? 'live' : state.link,
-    octave: state.octave,
-    editStep: state.editStep,
-    velocity: state.velocity,
-    rejectText: state.reject || '',
-    viewName: state.view,
-    keyName: currentKey(),
-  });
+  const o = _chromeOpts;
+  o.playheadTick = engine ? engine.playheadTick : 0;
+  o.transport = engine ? engine.transport : 0;
+  o.linkText = engine && engine.stale ? 'engine gone'
+    : engine && conn && conn.connected() ? 'live' : state.link;
+  o.octave = state.octave;
+  o.editStep = state.editStep;
+  o.velocity = state.velocity;
+  o.rejectText = state.reject || '';
+  o.viewName = state.view;
+  o.keyName = currentKey();
+  chrome.update(o);
 }
 
+const _patcherOpts = { engine: null, selectedNode: 0, selectedField: 0, pending: null,
+                       addType: -1, linkFrom: null };
 function drawPatcher() {
   if (!patcherBuf) patcherBuf = createPatcherBuffer(64, 128);
-  patcher.render(buildPatcherModel({
-    engine: state.useEngine === false ? null : engine,
-    selectedNode: state.selectedNode,
-    selectedField: state.selectedField,
-    pending: patchPending,
-    addType: state.patchAddType,
-    linkFrom: state.patchLinkFrom ? state.patchLinkFrom.id : null,
-  }, patcherBuf));
+  const o = _patcherOpts;
+  o.engine = state.useEngine === false ? null : engine;
+  o.selectedNode = state.selectedNode;
+  o.selectedField = state.selectedField;
+  o.pending = patchPending;
+  o.addType = state.patchAddType;
+  o.linkFrom = state.patchLinkFrom ? state.patchLinkFrom.id : null;
+  patcher.render(buildPatcherModel(o, patcherBuf));
   updateChrome();
 }
 
@@ -1147,75 +1251,107 @@ const PIANO_KEY_H = 11;
  */
 function fitPiano() { state.pianoFitPending = true; }
 
+const _pianoOpts = { startTick: 0, width: 0, height: 0, zoomIndex: 0, lowPitch: 0,
+                     keyHeight: 0, engine: null, track: 0, allTracks: false,
+                     selectedNote: 0, selection: null, marquee: null, dragId: undefined };
 function drawPiano() {
   if (!pianoBuf) pianoBuf = createPianoBuffer(512, 128);
-  const usable = pianoHost.clientHeight - 25;
+  const usable = boxOf(pianoHost, true) - 25;
   if (state.pianoFitPending && usable > 0) {
     state.pianoFitPending = false;
     const keys = Math.min(128, Math.ceil(usable / PIANO_KEY_H) + 1);
     state.pianoLow = fitLowPitch(state.useEngine === false ? null : engine,
                                  keys, state.cursor.track, state.pianoAll, state.pianoLow);
   }
-  piano.render(buildPianoModel({
-    startTick: state.pianoStart,
-    width: pianoHost.clientWidth - 58,
-    height: usable,
-    zoomIndex: state.pianoZoom,
-    lowPitch: state.pianoLow,
-    keyHeight: PIANO_KEY_H,
-    engine: state.useEngine === false ? null : engine,
-    track: state.cursor.track,
-    allTracks: state.pianoAll,
-    selectedNote: state.selectedNote,
-    selection: state.pianoSelection,
-    marquee: state.pianoMarquee,
-    dragId: state.pianoDrag ? state.pianoDrag.id : undefined,
-  }, pianoBuf));
+  const o = _pianoOpts;
+  o.startTick = state.pianoStart;
+  o.width = boxOf(pianoHost, false) - 58;
+  o.height = usable;
+  o.zoomIndex = state.pianoZoom;
+  o.lowPitch = state.pianoLow;
+  o.keyHeight = PIANO_KEY_H;
+  o.engine = state.useEngine === false ? null : engine;
+  o.track = state.cursor.track;
+  o.allTracks = state.pianoAll;
+  o.selectedNote = state.selectedNote;
+  o.selection = state.pianoSelection;
+  o.marquee = state.pianoMarquee;
+  o.dragId = state.pianoDrag ? state.pianoDrag.id : undefined;
+  piano.render(buildPianoModel(o, pianoBuf));
   updateChrome();
 }
 
+const _mixerOpts = { tracks: 8, engine: null, mixer: null, mixRevision: 0 };
+// The lane count the mixer buffer was built for. Comparing `mixerBuf._shape`
+// meant `String(n)` — a string built every frame to be thrown away — so the
+// number is kept here instead. Same for the arrangement below.
+let mixerBufTracks = -1;
 function drawMixer() {
   const n = Math.min(state.tracks, 16);
-  if (!mixerBuf || mixerBuf._shape !== String(n)) mixerBuf = createMixerBuffer(n);
+  if (!mixerBuf || mixerBufTracks !== n) { mixerBufTracks = n; mixerBuf = createMixerBuffer(n); }
   // The scope is driven by the ENGINE's rate, not the draw rate: it samples on
   // every published frame (see onChange) and only paints here. Sampling in draw
   // would give it the display's cadence and a history that stretches whenever
   // the browser throttles.
-  scope.resize(mixerHost.clientWidth, 132, window.devicePixelRatio || 1);
+  scope.resize(boxOf(mixerHost, false), 132, window.devicePixelRatio || 1);
   // The tracks that EXIST, not the sixteen strips the mixer can hold. Sixteen
   // lanes in 133px is eight pixels each and the trace is invisible; six is
   // twenty-two and readable, which is the difference between a scope and a
   // decoration.
   scope.render(engine && engine.trackCount ? Math.min(engine.trackCount, 16) : 8);
-  mixer.render(buildMixerModel({
-    tracks: n,
-    engine: state.useEngine === false ? null : engine,
-    mixer: mixerState,
-    mixRevision,
-  }, mixerBuf));
+  const o = _mixerOpts;
+  o.tracks = n;
+  o.engine = state.useEngine === false ? null : engine;
+  o.mixer = mixerState;
+  o.mixRevision = mixRevision;
+  mixer.render(buildMixerModel(o, mixerBuf));
   updateChrome();
 }
 
 /** Arrange draws from the same store; only the projection differs. */
+const _arrangeOpts = { loop: null, startTick: 0, width: 0, zoomIndex: 0, tracks: 0,
+                       engine: null, laneHeight: 0, cursor: { track: 0, tick: 0 },
+                       selectedPlacement: -1 };
+let arrangeBufLanes = -1;
 function drawArrange() {
   const lanes = Math.min(state.tracks, 16);
-  if (!arrangeBuf || arrangeBuf._shape !== `${lanes}x128`) {
+  if (!arrangeBuf || arrangeBufLanes !== lanes) {
+    arrangeBufLanes = lanes;
     arrangeBuf = createArrangeBuffer(lanes, 128);
   }
-  const vm = buildArrangeModel({
-    loop: loopOverride(),
-    startTick: state.arrangeStart,
-    width: arrangeHost.clientWidth - metrics.gutterWidth,
-    zoomIndex: state.arrangeZoom,
-    tracks: lanes,
-    engine: state.useEngine === false ? null : engine,
-    laneHeight: ARRANGE_LANE_H,
-    cursor: { track: state.cursor.track, tick: tickOfCursorRow() },
-    selectedPlacement: state.selectedPlacement,
-  }, arrangeBuf);
-  arrange.render(vm);
+  const o = _arrangeOpts;
+  o.loop = loopOverride();
+  o.startTick = state.arrangeStart;
+  o.width = boxOf(arrangeHost, false) - metrics.gutterWidth;
+  o.zoomIndex = state.arrangeZoom;
+  o.tracks = lanes;
+  o.engine = state.useEngine === false ? null : engine;
+  o.laneHeight = ARRANGE_LANE_H;
+  // The nested cursor is mutated too — a fresh `{track, tick}` per frame is the
+  // same waste one level down.
+  o.cursor.track = state.cursor.track;
+  o.cursor.tick = tickOfCursorRow();
+  o.selectedPlacement = state.selectedPlacement;
+  arrange.render(buildArrangeModel(o, arrangeBuf));
   updateChrome();
 }
+
+// Looked up once. `getElementById` on every frame is a small cost and an
+// entirely avoidable one — every other host in this file is already resolved at
+// load, and this one was not.
+const paletteHost = document.getElementById('palette');
+
+// The rest of draw()'s argument objects, hoisted for the reason given above
+// _chromeOpts. Every callee destructures on entry and keeps no reference.
+const _minimapOpts = { engine: null, startTick: 0, visibleTicks: 0 };
+const _harmonyOpts = { harmony: null, playheadTick: 0, version: -1,
+                       nameHarmony: null, scales: null };
+const _chainOpts = { track: 0, chains: null, selected: -1, trackName: '', params: null };
+const _entryOverlay = { row: 0, track: 0, col: 0, text: '' };
+const _vmOpts = { startRow: 0, rowCount: 0, tracks: 0, columns: 3, zoomIndex: 2,
+                  cursor: null, playheadRow: 0, selection: null, engine: null,
+                  pending: null, pendingCount: 0, entryOverlay: null,
+                  harmony: null, nameHarmony: null };
 
 function draw() {
   if (helpHost.hidden === state.helpOpen) helpHost.hidden = !state.helpOpen;
@@ -1237,27 +1373,30 @@ function draw() {
   // The minimap belongs to the tracker alone.
   const wantMinimap = state.view === 'tracker';
   if (minimapHost.hidden === wantMinimap) minimapHost.hidden = !wantMinimap;
-  const paletteHost = document.getElementById('palette');
   if (paletteHost.hidden === palette.opened) {
     paletteHost.hidden = !palette.opened;
     if (palette.opened) palette.focus();
   }
   if (palette.opened) palette.render();
   drawCrumb();
-  {
+  // Only when it is on screen. This ran unconditionally — projecting the whole
+  // song's density and painting a canvas for a strip that `hidden` had already
+  // removed from the layout, on every frame of every other surface.
+  if (wantMinimap) {
     // Ticks, not rows: a row index is a function of zoom, and the minimap spans
     // the song rather than the viewport.
     const zl = ZOOM_LEVELS[state.zoom];
-    minimap.render(buildMinimapModel({
-      engine: state.useEngine === false ? null : engine,
-      startTick: state.start * zl.rowNanoticks,
-      visibleTicks: tracker.poolSize * zl.rowNanoticks,
-    }, minimapBuf));
+    const o = _minimapOpts;
+    o.engine = state.useEngine === false ? null : engine;
+    o.startTick = state.start * zl.rowNanoticks;
+    o.visibleTicks = tracker.poolSize * zl.rowNanoticks;
+    minimap.render(buildMinimapModel(o, minimapBuf));
   }
-  
+
   if (showDock) pendingCard.render(pendingState);
-  if (showDock) harmonyCard.render(buildHarmonyModel({
-    harmony: engine && state.useEngine !== false ? engine.harmony : null,
+  if (showDock) {
+    const o = _harmonyOpts;
+    o.harmony = engine && state.useEngine !== false ? engine.harmony : null;
     // THE CURSOR'S tick on the tracker, the playhead's everywhere else.
     //
     // The card answered "what is playing", which is the wrong question while you
@@ -1265,33 +1404,57 @@ function draw() {
     // minor, because the playhead had not moved. In a tracker the cursor is where
     // your attention is, so that is the harmony worth naming; on the other
     // surfaces there is no cell cursor and the playhead is the only answer.
-    playheadTick: state.view === 'tracker' ? tickOfCursorRow()
-                                           : (engine ? engine.playheadTick : 0),
-    version: engine ? engine.harmonyVersion : -1,
-    nameHarmony,
-    scales,
-  }, harmonyBuf));
+    o.playheadTick = state.view === 'tracker' ? tickOfCursorRow()
+                                              : (engine ? engine.playheadTick : 0);
+    o.version = engine ? engine.harmonyVersion : -1;
+    o.nameHarmony = nameHarmony;
+    o.scales = scales;
+    harmonyCard.render(buildHarmonyModel(o, harmonyBuf));
+  }
   if (showChain) {
-    // Ask for each visible device's parameters once. The engine answers one
-    // device per query, so this walks the rack rather than asking for all of it:
-    // a request per frame would be a query storm against the plugin hosts.
+    /**
+     * Ask for the visible devices' parameters — once each, and only once the
+     * cursor has SETTLED on a track.
+     *
+     * A parameter query is a blocking round trip from the engine to a plugin
+     * host. Firing one the instant the cursor touches a track meant walking
+     * across six tracks fired six host queries, none of whose answers anybody
+     * looked at, while the audio thread was running. Cheap on this side and not
+     * on the other, which is the kind of cost that does not show up until it is
+     * someone else's problem.
+     *
+     * A quarter second of stillness is the difference between "I am looking at
+     * this track" and "I am passing through it".
+     */
     const here = chains[state.cursor.track];
-    if (here && conn && conn.canSend()) {
-      for (const d of here.devices || []) {
-        const key = state.cursor.track + ':' + d.id;
+    if (state.cursor.track !== lastParamTrack) {
+      lastParamTrack = state.cursor.track;
+      paramTrackSince = performance.now();
+    }
+    const settled = performance.now() - paramTrackSince > 250;
+    // An index loop and an integer key. The old form built a `track:id` string
+    // per device per frame purely to probe a Set, and a for-of iterator on top —
+    // and it did so on every frame forever, because once every device has been
+    // asked the loop still walks the whole chain to discover there is nothing
+    // left to ask. Device ids are engine-assigned and small, so packing the pair
+    // into one number is exact and free.
+    if (settled && here && here.devices && conn && conn.canSend()) {
+      const devs = here.devices;
+      for (let i = 0; i < devs.length; i++) {
+        const key = state.cursor.track * 65536 + devs[i].id;
         if (paramsAsked.has(key)) continue;
         paramsAsked.add(key);
-        conn.send({ type: 'reqparams', track: state.cursor.track, device: d.id });
+        conn.send({ type: 'reqparams', track: state.cursor.track, device: devs[i].id });
         break;                        // one per frame; the rest follow
       }
     }
-    chain.render(buildChainModel({
-      track: state.cursor.track,
-      chains,
-      selected: state.chainSelected,
-      trackName: trackName(engine, state.cursor.track),
-      params: deviceParams,
-    }, chainBuf));
+    const o = _chainOpts;
+    o.track = state.cursor.track;
+    o.chains = chains;
+    o.selected = state.chainSelected;
+    o.trackName = trackName(engine, state.cursor.track);
+    o.params = deviceParams;
+    chain.render(buildChainModel(o, chainBuf));
   }
   // One scheduler, two surfaces. Hiding the other host rather than unmounting it
   // keeps its pools warm, so switching views costs no rebuild.
@@ -1309,27 +1472,38 @@ function draw() {
   if (wantMixer) return drawMixer();
   if (wantPiano) return drawPiano();
   if (wantPatcher) return drawPatcher();
-  const shapeChanged = tracker.poolSize === 0 || !headRow || headRow.children.length !== state.tracks + 1;
-  tracker.resize(host.clientHeight, state.tracks, state.columns);
-  if (shapeChanged) buildHead();
+  // Resize FIRST: the header's track width comes from the renderer's measured
+  // stride, so building the header before the pool exists bakes in the fallback
+  // width and every column sits wrong until something else forces a rebuild.
+  tracker.resize(boxOf(host, true), state.tracks, state.columns);
+  const stride = tracker.trackStride || metrics.cellWidth * state.columns;
+  if (!headRow || headRow._tracks !== state.tracks || headRow._stride !== stride) buildHead();
   paintHeadLpb();
   if (headRow && headRow._x !== state.scrollX) {
     headRow._x = state.scrollX;
-    headRow.style.transform = 'translateX(' + (-state.scrollX) + 'px)';
+    // Negated inside the string, not before it: `-0` is a heap double in V8, and
+    // this is a guarded write whose input is 0 for most of a session.
+    headRow.style.transform = 'translateX(-' + state.scrollX + 'px)';
   }
   bi ^= 1;
-  const vm = bufs[bi] = buildViewModel({
-    startRow: state.start, rowCount: tracker.poolSize,
-    tracks: state.tracks, columns: state.columns, zoomIndex: state.zoom,
-    cursor: state.cursor, playheadRow: state.playhead, selection: state.selection,
-    engine: state.useEngine === false ? null : engine,
-    pending, pendingCount,
-    entryOverlay: entry.active
-      ? { row: entry.row, track: entry.track, col: entry.col, text: entry.text }
-      : null,
-    harmony: engine && state.useEngine !== false ? engine.harmony : null,
-    nameHarmony: nameHarmony,
-  }, bufs[bi]);
+  const o = _vmOpts;
+  o.startRow = state.start; o.rowCount = tracker.poolSize;
+  o.tracks = state.tracks; o.columns = state.columns; o.zoomIndex = state.zoom;
+  o.cursor = state.cursor; o.playheadRow = state.playhead; o.selection = state.selection;
+  o.engine = state.useEngine === false ? null : engine;
+  o.pending = pending; o.pendingCount = pendingCount;
+  // The overlay object is reused as well, and nulled rather than dropped so the
+  // build sees the same shape whether or not a cell is being typed into.
+  if (entry.active) {
+    _entryOverlay.row = entry.row; _entryOverlay.track = entry.track;
+    _entryOverlay.col = entry.col; _entryOverlay.text = entry.text;
+    o.entryOverlay = _entryOverlay;
+  } else {
+    o.entryOverlay = null;
+  }
+  o.harmony = engine && state.useEngine !== false ? engine.harmony : null;
+  o.nameHarmony = nameHarmony;
+  const vm = bufs[bi] = buildViewModel(o, bufs[bi]);
   vm.scrollX = state.scrollX;
   updateChrome();
   // The sidecar owns the projection and the aggregation, so it needs to know
@@ -1407,7 +1581,7 @@ function followPlayhead() {
 }
 
 function follow() {
-  const visible = Math.max(1, Math.floor(host.clientHeight / metrics.rowHeight));
+  const visible = Math.max(1, Math.floor(boxOf(host, true) / metrics.rowHeight));
   const centre = Math.floor(visible / 2);
   state.start = Math.max(0, Math.min(state.cursor.row - centre, Math.max(0, TOTAL_ROWS - visible)));
 
@@ -1417,7 +1591,7 @@ function follow() {
   // Geometry comes from the renderer's measurement, not from re-deriving the
   // box model here. The cell's left edge and the scroll extent both include the
   // per-track borders, which arithmetic kept forgetting.
-  const viewW = host.clientWidth;
+  const viewW = boxOf(host, false);
   const cellL = tracker.cellLeft(state.cursor.track, state.cursor.col);
   const cellR = cellL + metrics.cellWidth;
   const gutter = metrics.gutterWidth;                 // sticky: always covers the left edge
@@ -1428,10 +1602,13 @@ function follow() {
 }
 
 let dirty = false;
+// Hoisted: this is handed to requestAnimationFrame once per frame, and an arrow
+// written inline is a fresh closure each time. It captures nothing.
+function onFrame() { dirty = false; draw(); }
 function schedule() {
   if (dirty) return;
   dirty = true;
-  requestAnimationFrame(() => { dirty = false; draw(); });
+  requestAnimationFrame(onFrame);
 }
 
 function scrollTo(row) {
@@ -2093,6 +2270,13 @@ const WANTS_ENGINE = new URLSearchParams(location.search).get('engine') !== 'off
 
 // The first paint must know what fits; the resize listener only fires on change.
 measureRoom();
+// Watch the four hosts whose box the draw path needs. Registered here rather
+// than beside each host's declaration so there is one list to keep in step with
+// boxOf()'s callers, and so it runs once every host exists.
+hostRo.observe(host);
+hostRo.observe(arrangeHost);
+hostRo.observe(pianoHost);
+hostRo.observe(mixerHost);
 
 // Live engine, when the sidecar is up. Falls back to the fixture so the page —
 // and every golden — still renders standalone. Connected after the first draw:
@@ -2338,6 +2522,84 @@ window.__uni = {
                  if (state.hudFrozen) hudText.nodeValue = 'fixture';
                  draw(); },
   /**
+   * A busy project, playing.
+   *
+   * The allocation test used to run every scenario against `?engine=off`, so the
+   * branch that matters — the one that spells a pitch, a velocity and a harmony
+   * field for every visible note on every frame — was never measured. This is
+   * that branch: eight tracks of dense notes, four key changes, real placements,
+   * track names and a coarse-zoom aggregate, all shaped exactly like what
+   * `wire.js` decodes off the socket.
+   *
+   * Nothing here is random: a fixture that differs between runs makes a
+   * regression indistinguishable from noise.
+   */
+  useBusyEngine: (tracks = 8, bars = 8) => {
+    state.useEngine = true; state.hudFrozen = true;
+    conn.close(); hudText.nodeValue = 'busy-engine';
+    state.zoom = 1; state.start = 0; state.scrollX = 0; state.tracks = tracks;
+    const notes = [], names = [], lpb = [];
+    const rows = bars * 16;                       // 1/16 rows over the whole span
+    for (let t = 0; t < tracks; t++) {
+      names.push('track ' + t);
+      lpb.push(4);
+      for (let r = 0; r < rows; r++) {
+        if ((r * 7 + t * 3) % 5 === 0) continue;  // a deterministic scatter of rests
+        notes.push({ tOn: r * 240000, tOff: 0, id: t * 10000 + r,
+                     pitch: 36 + ((r * 5 + t * 7) % 48),
+                     velocity: 20 + ((r * 13 + t) % 108), column: 0, track: t,
+                     retrigger: r % 11 === 0 ? 1 + (r % 3) : 0,
+                     probability: r % 17 === 0 ? 50 : 0, delayTicks: 0,
+                     row: r, muted: r % 23 === 0, isAdd: r % 19 === 0,
+                     placementId: t + 1 });
+      }
+    }
+    const extents = [];
+    for (let t = 0; t < tracks; t++) {
+      extents.push({ placementId: t + 1, track: t, startTick: 0,
+                     endTick: bars * 3840000, name: 'clip ' + t });
+    }
+    const harmony = [
+      { tick: 0, root: 9, scaleId: 2 }, { tick: 2 * 3840000, root: 5, scaleId: 1 },
+      { tick: 4 * 3840000, root: 0, scaleId: 1 }, { tick: 6 * 3840000, root: 7, scaleId: 3 },
+    ];
+    const aggRows = bars * 4, aggTracks = tracks;
+    const aggCount = new Uint32Array(aggRows * aggTracks);
+    const aggLo = new Uint8Array(aggRows * aggTracks);
+    const aggHi = new Uint8Array(aggRows * aggTracks);
+    for (let i = 0; i < aggCount.length; i++) {
+      aggCount[i] = (i * 3) % 9; aggLo[i] = 36 + (i % 24); aggHi[i] = 60 + (i % 30);
+    }
+    engine = { ok: true, seq: 1, playheadTick: 0, visualSample: 0, clipVersion: 1,
+               harmonyVersion: 1, harmony, transport: 1, trackCount: tracks,
+               peaks: new Float32Array(tracks), peakCount: tracks,
+               notes, noteCount: notes.length, names,
+               aggCount, aggRep: new Uint8Array(aggRows * aggTracks), aggLo, aggHi,
+               aggRows, aggTracks,
+               extents, extentCount: extents.length, extentsRevision: 1,
+               mixGain: new Int32Array(16), mixPan: new Int32Array(16),
+               mixFlags: new Uint8Array(16), mixCount: tracks, mixerVersion: 1,
+               loopStart: 0, loopEnd: bars * 3840000,
+               lpb: Uint8Array.from(lpb), notesRevision: 1, aggRevision: 1, rowGrid: 4 };
+    draw();
+  },
+  /**
+   * Advance the synthetic playhead one 1/16 and redraw, as playback would.
+   *
+   * This is the state the app is in when performance actually matters — every
+   * other scenario in the allocation test drives a keystroke, which is not what
+   * runs sixty times a second for minutes at a time.
+   */
+  tickBusy: (steps = 1) => {
+    if (!engine) return 0;
+    for (let i = 0; i < steps; i++) {
+      engine.playheadTick += 240000;
+      state.playhead = tickToRow(engine.playheadTick);
+      draw();
+    }
+    return engine.playheadTick;
+  },
+  /**
    * A synthetic engine frame where lanes DISAGREE about their grid: track 0 at
    * 4/beat, track 1 at 3 (triplets), track 2 at 6 (sextuplets), track 3 at 4.
    *
@@ -2450,6 +2712,9 @@ window.__uni = {
   patchNudge: (dir) => { const r = nudgePatcher(dir); draw(); return !!r; },
   // The console's own two, so a test and an agent read the same thing the dock
   // prints and drive it through the same function.
+  // The cursor, for tests and agents. `dockApi.goto` is the same movement the
+  // console command performs, so the two cannot drift.
+  goto: (row, track) => dockApi.goto(row, track),
   patchNodes: () => dockApi.nodes(),
   patch: (id, field, steps) => { const r = dockApi.patch(id, field, steps); draw(); return r; },
   pianoZoom: (z) => { state.pianoZoom = z; draw(); },

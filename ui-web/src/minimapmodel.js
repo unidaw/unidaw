@@ -145,6 +145,14 @@ export function createMinimapBuffer(maxMarks = MAX_MARKS) {
     _songTicks: -1,
     _beatsPerMark: -1,
     _cap: maxMarks,
+
+    /** The cached content scan and its own key — a strict subset of the one
+     *  above, because where the material ends does not depend on how the column
+     *  is bucketed. -2 so the first call rescans even with no engine attached. */
+    _content: 0,
+    _cNotesRev: -2,
+    _cNoteCount: -2,
+    _cExtRev: -2,
   };
 }
 
@@ -204,7 +212,26 @@ export function buildMinimapModel(opts, buf) {
   buf.known = !!engine;
   buf.playheadTick = playheadTick;
 
-  const content = engine ? contentEndOf(engine) : 0;
+  // -1 for "there is no engine", which wire.js's counters can never be: they
+  // start at 0 and only climb. So no-engine and empty-engine are different keys,
+  // and a page booted with ?engine=off does not rescan nothing every frame.
+  const notesRev = engine ? engine.notesRevision : -1;
+  const noteCount = engine ? engine.noteCount : -1;
+  const extRev = engine ? engine.extentsRevision : -1;
+
+  // Where the song stops, cached on the same key. This is not a string or an
+  // object, so it is not the allocation this pass is about — it is a SCAN, over
+  // every extent and, on a feed that has published none, over every note. On
+  // stress-512 that fallback is 80,896 iterations, and it ran on every frame of
+  // playback to produce a number that only moves when an edit lands. The key is
+  // the whole of what contentEndOf reads: which notes (notesRevision, noteCount)
+  // and which extents (extentsRevision, which wire.js bumps on a count change as
+  // well as a field change).
+  if (buf._cNotesRev !== notesRev || buf._cNoteCount !== noteCount || buf._cExtRev !== extRev) {
+    buf._cNotesRev = notesRev; buf._cNoteCount = noteCount; buf._cExtRev = extRev;
+    buf._content = engine ? contentEndOf(engine) : 0;
+  }
+  const content = buf._content;
   buf.contentTicks = content;
 
   // The column spans the MATERIAL, and never the viewport. Letting it stretch to
@@ -234,12 +261,6 @@ export function buildMinimapModel(opts, buf) {
   buf.ticksPerMark = beatsPerMark * TICKS_PER_BEAT;
   buf.markCount = markCount;
 
-  // -1 for "there is no engine", which wire.js's counters can never be: they
-  // start at 0 and only climb. So no-engine and empty-engine are different keys,
-  // and a page booted with ?engine=off does not rescan nothing every frame.
-  const notesRev = engine ? engine.notesRevision : -1;
-  const noteCount = engine ? engine.noteCount : -1;
-  const extRev = engine ? engine.extentsRevision : -1;
   const stale = buf._notesRev !== notesRev
     || buf._noteCount !== noteCount
     || buf._extRev !== extRev

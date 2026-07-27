@@ -1,50 +1,157 @@
-/* Patcher. Tokens only. */
+/* Patcher. Tokens only — no hex here; see design/tokens.json.
+
+   NOTE what is deliberately absent: `.pt-node` has no width and no height.
+   The view-model computes them, because it also lays the graph out and aims the
+   cables at the boxes' edges. When the two disagreed — a 210x76 rule against a
+   220x98 model — every cable started 10px past the node and 11px above its
+   centre, which is what "cables wrong" looked like. One owner per number. */
 
 .pt {
   position: absolute; inset: 0;
-  background: var(--uni-surface-tracker-bg);
-  overflow: auto;
+  display: flex; flex-direction: column;
+  overflow: hidden;
   font-family: var(--font-mono);
   font-size: var(--font-size-fx);
   letter-spacing: var(--font-tracking-fx);
 }
 
-.pt-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.pt-edge { fill: none; stroke: var(--uni-rule-track); stroke-width: 1.5; }
+/* The viewport. The graph is bigger than it whenever the project is, and the
+   notice below must not scroll away with the nodes. */
+.pt-scroll { flex: 1 1 auto; min-height: 0; position: relative; overflow: auto; }
+
+/* The graph's own extent, sized from the model. The dot grid is what makes a
+   drag or a scroll legible as motion rather than as boxes teleporting. */
+.pt-canvas {
+  position: relative;
+  min-width: 100%; min-height: 100%;
+  background-color: var(--uni-surface-tracker-bg);
+  background-image: radial-gradient(circle at 1px 1px, var(--uni-rule-column) 1px, transparent 0);
+  background-size: 28px 28px;
+}
+
+/* `overflow: visible` because a cable's control points reach outside its own
+   bounding box on a steep run, and clipping them cuts the curve in half. */
+.pt-edges { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+
+.pt-edge {
+  fill: none;
+  stroke: var(--uni-patcher-wire);
+  stroke-width: var(--uni-patcher-wire-width);
+  stroke-linecap: round;
+  /* Cables sit behind the boxes and read as the graph's connective tissue, not
+     as its subject. The design draws them at half opacity for the same reason. */
+  opacity: .62;
+}
 /* Event, audio and control carry different things; drawing them alike would
-   hide the one thing an edge has to tell you. */
-.pt-edge.event   { stroke: var(--base-accent); }
-.pt-edge.audio   { stroke: var(--uni-text-fx); stroke-dasharray: 5 3; }
-.pt-edge.control { stroke: var(--uni-text-gutter); stroke-dasharray: 2 3; }
+   hide the one thing a cable has to tell you. A cable is the same colour as the
+   ports it joins — they are one object, and two colours for one connection is
+   how you get someone tracing the wrong end. */
+.pt-edge.event   { stroke: var(--uni-patcher-port-event); }
+.pt-edge.audio   { stroke: var(--uni-patcher-port-audio); stroke-width: 2.2px; }
+.pt-edge.control { stroke: var(--uni-patcher-port-control); stroke-dasharray: 3 6; }
 
 .pt-nodes { position: absolute; inset: 0; }
 
 .pt-node {
   position: absolute; top: 0; left: 0;
-  width: 210px; height: 76px;
   box-sizing: border-box;
-  padding: 7px 9px;
-  background: var(--uni-surface-header-bg);
-  border: 1px solid var(--uni-rule-track);
-  border-radius: 3px;
+  background: var(--uni-patcher-node-bg);
+  border-radius: 8px;
+  /* A ring rather than a border: the box's width is the model's, and a border
+     would make the painted box 2px wider than the one the cables aim at. */
+  box-shadow: 0 0 0 1px var(--uni-patcher-node-border);
   cursor: pointer;
 }
-.pt-node.sel { border-color: var(--base-accent); }
-
-.pt-type { color: var(--uni-text-instrument); font-size: var(--font-size-inst); }
-.pt-id { position: absolute; top: 7px; right: 9px; color: var(--uni-text-gutter); }
-.pt-cfg { margin-top: 6px; color: var(--base-text); line-height: 1.35;
-          overflow: hidden; }
-
-.pt-field {
-  position: absolute; bottom: 5px; right: 9px;
-  color: var(--base-accent);
+.pt-node.sel {
+  box-shadow: 0 0 0 1px var(--uni-patcher-node-border-sel),
+              0 0 0 4px var(--uni-surface-selection);
 }
 
+.pt-head {
+  display: flex; align-items: center; gap: 8px;
+  height: var(--metrics-header-height); box-sizing: border-box;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--uni-rule-column);
+  border-radius: 8px 8px 0 0;
+  background: var(--uni-surface-header-bg);
+}
+.pt-type { flex: 1 1 auto; color: var(--uni-text-note); font-size: var(--font-size-inst);
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pt-id { flex: 0 0 auto; color: var(--uni-text-gutter); }
+.pt-node.sel .pt-type { color: var(--base-accent-ramp-300); }
+
+.pt-body { padding: 8px 10px; }
+
+/* "This type has settings and the engine has not sent their values" — which is
+   not the same as "this type has no settings", and an empty box says neither. */
+.pt-empty { color: var(--uni-text-empty); }
+
+/* One row per named config field. Same 13px row as the device chain's
+   parameters, so a patcher node and a rack card read as one kit. */
+.pt-row { display: flex; align-items: center; gap: 6px; height: 13px; }
+.pt-row-n { flex: 0 0 46px; color: var(--uni-text-gutter);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pt-row-bar { flex: 1 1 auto; height: 3px; background: var(--uni-rule-column); border-radius: 2px; }
+.pt-row-fill { height: 100%; background: var(--base-accent); border-radius: 2px; opacity: .8; }
+.pt-row-v { flex: 0 0 58px; text-align: right; color: var(--base-neutral-400);
+            overflow: hidden; white-space: nowrap; }
+/* The field the keyboard is on. It is marked where the value is rather than in a
+   corner, because "up changes this" is a statement about one row. */
+.pt-row.sel .pt-row-n { color: var(--base-accent-ramp-300); }
+.pt-row.sel .pt-row-v { color: var(--base-accent-ramp-200); }
+.pt-row.sel .pt-row-fill { opacity: 1; }
+
+/* Ports. 10px, centred on the node's edge, ringed in their kind's colour with
+   the canvas showing through the middle — measured off the design, which draws
+   exactly this and hangs the label outside the box. */
+.pt-port {
+  position: absolute;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--uni-surface-tracker-bg);
+  box-shadow: 0 0 0 2px var(--uni-patcher-wire);
+}
+.pt-port.in  { left: -5px; }
+.pt-port.out { right: -5px; }
+.pt-port.event   { box-shadow: 0 0 0 2px var(--uni-patcher-port-event); }
+.pt-port.audio   { box-shadow: 0 0 0 2px var(--uni-patcher-port-audio); }
+.pt-port.control { box-shadow: 0 0 0 2px var(--uni-patcher-port-control); }
+
+.pt-port-lbl {
+  position: absolute; top: -3px;
+  padding: 0 3px;
+  border-radius: 2px;
+  background: var(--uni-surface-tracker-bg);
+  white-space: nowrap;
+  opacity: .85;
+  /* The label is outside the node, over the canvas and sometimes over a cable.
+     It must not eat the click that selects the node it belongs to. */
+  pointer-events: none;
+}
+.pt-port.in  .pt-port-lbl { right: 16px; }
+.pt-port.out .pt-port-lbl { left: 16px; }
+.pt-port.event   .pt-port-lbl { color: var(--uni-patcher-port-event); }
+.pt-port.audio   .pt-port-lbl { color: var(--uni-patcher-port-audio); }
+.pt-port.control .pt-port-lbl { color: var(--uni-patcher-port-control); }
+
 .pt-notice {
-  position: absolute; left: 0; right: 0; bottom: 0;
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 14px;
   padding: 5px 10px;
   color: var(--uni-text-gutter);
   background: var(--uni-surface-header-bg);
   border-top: 1px solid var(--uni-rule-gutter);
 }
+.pt-notice-text { flex: 1 1 auto; min-width: 0;
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The cable key. Three kinds that differ only in colour and dash are three
+   kinds nobody can name. */
+.pt-key { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; }
+.pt-key-item { display: flex; align-items: center; gap: 5px; }
+.pt-key-label { color: var(--uni-text-gutter); }
+.pt-key-swatch { width: 14px; height: 2px; border-radius: 1px; }
+.pt-key-swatch.event   { background: var(--uni-patcher-port-event); }
+.pt-key-swatch.audio   { background: var(--uni-patcher-port-audio); height: 3px; }
+.pt-key-swatch.control { background: repeating-linear-gradient(to right,
+                           var(--uni-patcher-port-control) 0 3px, transparent 3px 9px); }

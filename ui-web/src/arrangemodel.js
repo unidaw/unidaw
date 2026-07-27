@@ -12,13 +12,27 @@
 // exactly why GUIDELINES 2 says anything durable is expressed in ticks.
 
 /**
+ * The fallback names, built once each and kept.
+ *
+ * `'T' + String(t + 1).padStart(2, '0')` is three strings per call, and the call
+ * happens once per track per frame from four surfaces — arrange's lanes, the
+ * mixer's strips, the piano roll's header and the tracker's breadcrumb — for as
+ * long as the engine has published no names, which is every fixture run and
+ * every frame before the first engine frame lands. There is exactly one possible
+ * answer per track index, so the index is the whole key and an entry can never
+ * go stale; a name the engine did publish still wins over it, below.
+ */
+const FALLBACK_NAMES = [];
+
+/**
  * A track's name. The engine publishes these (SHM v13) and falls back to
  * "Track N" itself, so an empty string here means the engine has not spoken yet
  * — not that the track is unnamed.
  */
 export function trackName(engine, t) {
   const n = engine && engine.names && engine.names[t];
-  return n || 'T' + String(t + 1).padStart(2, '0');
+  if (n) return n;
+  return FALLBACK_NAMES[t] || (FALLBACK_NAMES[t] = 'T' + String(t + 1).padStart(2, '0'));
 }
 
 export const TICKS_PER_BAR = 3840000;
@@ -37,6 +51,73 @@ export const ARRANGE_ZOOM = [
   { index: 4, ticksPerPixel: 120000, label: 'bar/32px' },
   { index: 5, ticksPerPixel: 240000, label: 'bar/16px' },
 ];
+
+/**
+ * Wheel deltas, in pixels. A wheel does not speak one unit: Chrome sends pixels,
+ * Firefox sends lines, and a few devices send pages, so `deltaMode` decides what
+ * the number means. Reading it as pixels everywhere makes the identical gesture
+ * sixteen times smaller on Firefox — and looks perfectly correct on the machine
+ * it was written on, which is why this is a named conversion rather than a
+ * multiplier buried in the handler.
+ */
+const DOM_DELTA_LINE = 1, DOM_DELTA_PAGE = 2;
+
+/** One line, when the device counts in lines. Chrome's own line height. */
+export const WHEEL_LINE_PX = 16;
+
+/**
+ * A delta at or above this is one discrete notch of a mouse wheel.
+ *
+ * A mouse notch arrives as a single 100-120px delta; a trackpad pinch arrives as
+ * a stream of one- and two-pixel deltas. One zoom step per EVENT makes a pinch
+ * cross the whole zoom table before the fingers have moved a centimetre; a fixed
+ * pixel accumulator makes a mouse feel stuck. So the two are told apart by size
+ * and handled differently, and which device the author owns stops deciding
+ * whether the other one is usable.
+ */
+export const WHEEL_NOTCH_PX = 50;
+
+/** Accumulated pixels per zoom step for fine devices (a trackpad pinch). */
+export const WHEEL_PINCH_PX = 24;
+
+/** A wheel delta in pixels, whatever unit the device used to express it. */
+export function wheelPixels(delta, deltaMode, pageSize) {
+  if (deltaMode === DOM_DELTA_LINE) return delta * WHEEL_LINE_PX;
+  if (deltaMode === DOM_DELTA_PAGE) return delta * pageSize;
+  return delta;
+}
+
+/** A zoom index clamped into the table above. */
+export function clampZoom(i) {
+  return Math.max(0, Math.min(ARRANGE_ZOOM.length - 1, i));
+}
+
+/** Nanoticks per pixel at a zoom index, clamped. */
+export function ticksPerPixelAt(zoomIndex) {
+  return ARRANGE_ZOOM[clampZoom(zoomIndex)].ticksPerPixel;
+}
+
+/**
+ * The start tick that leaves `anchorTick` under `pointerX` at `ticksPerPixel`.
+ *
+ * This is the whole difference between zoom that feels like zoom and zoom that
+ * feels like teleporting. The bar under the pointer is the one being looked at;
+ * anchoring on the viewport edge instead slides it out from under the cursor,
+ * so every step has to be followed by a scroll to find the material again.
+ *
+ * Clamped at zero, which is the one place the anchor is NOT preserved: zooming
+ * out near the start of the song would need negative time to hold it. Losing the
+ * anchor there is right — showing time before the beginning is not.
+ *
+ * Takes a ticks-per-pixel rather than a zoom index on purpose. The arrangement
+ * and the piano roll have different zoom tables and the identical axis, so the
+ * arithmetic that keeps a tick still belongs to neither table; passing the index
+ * would have made this the arrangement's, and the piano roll would have grown a
+ * second copy that drifts.
+ */
+export function anchoredStart(anchorTick, pointerX, ticksPerPixel) {
+  return Math.max(0, anchorTick - pointerX * ticksPerPixel);
+}
 
 /**
  * Snap a dragged loop span to bars, or to beats when `fine`.
@@ -71,14 +152,58 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
     lanes, laneCount,
     clips, clipCount: 0,
     view: { startTick: 0, ticksPerPixel: 60000, width: 0 },
-    /** Bar lines to draw, as x positions. Pooled like everything else. */
+    /**
+     * How far the time axis is scrolled, in pixels: `startTick / ticksPerPixel`.
+     *
+     * Every x below — gridlines, ruler ticks, clips — is ABSOLUTE, measured from
+     * tick 0 and not from the window's left edge, so that panning changes none of
+     * them and the renderer moves the whole axis with one transform instead of
+     * rebuilding a position string per element per frame (GUIDELINES 3.3). This
+     * is the offset that transform is built from, and the only thing here that
+     * moves during a pan. Zoom is the exception and has to be: it changes
+     * `ticksPerPixel`, so every absolute x moves and a zoom IS a full rebind.
+     */
+    scrollX: 0,
+    /**
+     * Bar and beat lines to draw, as ABSOLUTE x positions, plus the index of the
+     * first one. The index is the line's identity — `tick / step` — and the
+     * renderer slots the pool by it modulo the pool size (GUIDELINES 3.4), so a
+     * pan past one line rebinds one element rather than shuffling every line
+     * down by one and rebinding all of them.
+     */
     grid: new Float64Array(256), gridCount: 0, gridIsBar: new Uint8Array(256),
-    /** The loop region in pixels, or null when there is none. */
+    gridFirst: 0,
+    /**
+     * The loop region in pixels, or null when there is none. Deliberately in
+     * VIEWPORT pixels, not absolute: it is clamped to the window so that a loop
+     * longer than the screen stays a screen-sized box, and it moves every frame
+     * of a drag or a pan by nature. One guarded string is its floor.
+     */
     loop: { x: 0, w: 0, on: false },
-    /** Numbered bar ticks for the ruler: x plus the bar number to print. */
+    /**
+     * Numbered bar ticks for the ruler: absolute x plus the bar number to print,
+     * and the identity index of the first, which is `bar / every` — see `grid`.
+     */
     ruler: new Float64Array(128), rulerBar: new Int32Array(128), rulerCount: 0,
+    rulerFirst: 0,
+    /** Also viewport pixels, and for the same reason as `loop`. */
     playheadX: -1,
+    /**
+     * How far the lane strip is scrolled down, in pixels.
+     *
+     * Kept OUT of `lanes[].y` and `clips[].x/w` on purpose: those stay in
+     * content space, so the renderer can move the whole strip with one transform
+     * rather than rebinding every lane and clip (GUIDELINES 3.3). It is also the
+     * only coordinate here that is legitimately in pixels — a scroll offset is a
+     * viewport fact, not a durable one, and nothing stores it past the session.
+     */
+    laneScroll: 0,
     cursor: { track: 0, tick: 0 },
+    /**
+     * The selection, split into the two numbers it is made of. See the clip
+     * loop in `buildArrangeModel` for why it is not compared as a string.
+     */
+    _selKey: undefined, _selTrack: -1, _selTick: -1,
     _shape: `${laneCount}x${clipCapacity}`,
   };
 }
@@ -100,6 +225,13 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
  */
 
 /**
+ * The cursor a caller that has none gets. A `{track, tick}` literal in the
+ * default position below would be built on every call that omits it, and this
+ * function runs once a frame; the two fields are only ever read from here.
+ */
+const NO_CURSOR = Object.freeze({ track: 0, tick: 0 });
+
+/**
  * Build the arrange model for a visible time window.
  *
  * `loop` is the caller's in-flight loop span, which wins over the engine's.
@@ -111,8 +243,8 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
 export function buildArrangeModel(opts, buf) {
   const {
     startTick = 0, width = 1200, zoomIndex = 3, tracks: laneCount = 8, loop = null,
-    engine = null, laneHeight = 44, cursor = { track: 0, tick: 0 },
-    selectedPlacement = -1,
+    engine = null, laneHeight = 44, cursor = NO_CURSOR,
+    selectedPlacement = -1, laneScroll = 0,
   } = opts;
 
   const zoom = ARRANGE_ZOOM[Math.max(0, Math.min(ARRANGE_ZOOM.length - 1, zoomIndex))];
@@ -122,7 +254,12 @@ export function buildArrangeModel(opts, buf) {
   buf.view.startTick = startTick;
   buf.view.ticksPerPixel = tpp;
   buf.view.width = width;
+  buf.scrollX = startTick / tpp;
   buf.zoom = zoom;
+  // Only the floor is enforced here. The ceiling is how much lane strip does not
+  // fit, which is a measured box and not something this file may re-derive
+  // (GUIDELINES 3.11) — the renderer clamps it against the real one.
+  buf.laneScroll = Math.max(0, laneScroll);
 
   for (let t = 0; t < laneCount && t < buf.lanes.length; t++) {
     const lane = buf.lanes[t];
@@ -143,13 +280,16 @@ export function buildArrangeModel(opts, buf) {
   // the projection rather than from the zoom index means it stays right if the
   // zoom table changes.
   const step = beatPx >= 6 ? TICKS_PER_BEAT : TICKS_PER_BAR;
-  const first = Math.floor(startTick / step) * step;
+  const firstLine = Math.floor(startTick / step);
+  const first = firstLine * step;
+  // ABSOLUTE x: `tick / tpp`, with no `startTick` in it. See `scrollX`.
   for (let tick = first; tick < endTick && g < buf.grid.length; tick += step) {
-    buf.grid[g] = (tick - startTick) / tpp;
+    buf.grid[g] = tick / tpp;
     buf.gridIsBar[g] = tick % TICKS_PER_BAR === 0 ? 1 : 0;
     g++;
   }
   buf.gridCount = g;
+  buf.gridFirst = firstLine;
 
   // Ruler: bar numbers only, and thinned so the labels never collide. Deciding
   // the stride from the measured pixel width rather than the zoom index means it
@@ -158,15 +298,37 @@ export function buildArrangeModel(opts, buf) {
   const every = barPx >= 48 ? 1 : barPx >= 24 ? 2 : barPx >= 12 ? 4 : 8;
   let r = 0;
   const firstBar = Math.floor(startTick / TICKS_PER_BAR);
+  // The identity of a LABEL is `bar / every`, not the bar: at every > 1 the bars
+  // in between have no label at all, so numbering the pool by the bar would
+  // leave `every - 1` slots of every `every` permanently unclaimed and shift the
+  // rest on every pan. Set from the first label actually emitted, because
+  // `firstBar` itself usually is not one.
+  buf.rulerFirst = Math.ceil(firstBar / every);
   for (let bar = firstBar; r < buf.ruler.length; bar++) {
     const tick = bar * TICKS_PER_BAR;
     if (tick >= endTick) break;
     if (bar % every !== 0) continue;
-    buf.ruler[r] = (tick - startTick) / tpp;
+    buf.ruler[r] = tick / tpp;                 // absolute; see `scrollX`
     buf.rulerBar[r] = bar + 1;                 // bars are 1-based to the user
     r++;
   }
   buf.rulerCount = r;
+
+  // The selection arrives as the string key "track:startTick" (see
+  // `placementKey`), and asking "is this clip the selected one?" used to build
+  // that string for every visible clip on every frame — a string per clip per
+  // frame to compare two numbers that were already in hand. Split it once
+  // instead, keyed on the string itself, which is the entire input: nothing can
+  // change the answer without changing the key, and the split only re-runs when
+  // the user selects something.
+  if (buf._selKey !== selectedPlacement) {
+    buf._selKey = selectedPlacement;
+    const colon = typeof selectedPlacement === 'string' ? selectedPlacement.indexOf(':') : -1;
+    // -1 for "nothing selected": no extent has a negative track or start tick,
+    // so a cleared selection cannot accidentally match a clip.
+    buf._selTrack = colon > 0 ? +selectedPlacement.slice(0, colon) : -1;
+    buf._selTick = colon > 0 ? +selectedPlacement.slice(colon + 1) : -1;
+  }
 
   // Clips overlapping the window. Placements are already bounded by the engine
   // (64 extents), but windowing here keeps the renderer's work proportional to
@@ -183,7 +345,9 @@ export function buildArrangeModel(opts, buf) {
       cl.track = e.track;
       cl.startTick = e.startTick;
       cl.endTick = e.endTick;
-      cl.x = (e.startTick - startTick) / tpp;
+      // Absolute, like the grid: a clip that nobody moved does not move, so a
+      // pan writes nothing for it. Its WIDTH was already startTick-independent.
+      cl.x = e.startTick / tpp;
       // A placement narrower than a pixel still has to be visible: a clip you
       // cannot see is a clip you cannot click, and zooming out must not make
       // material silently disappear.
@@ -195,7 +359,7 @@ export function buildArrangeModel(opts, buf) {
     // selection keyed on it would silently jump to a different clip after an
     // edit. Position is stable and disappears when the clip does, which is what
     // a selection should do. Switch to the id when it becomes stable.
-    cl.selected = placementKey(e) === selectedPlacement;
+    cl.selected = e.track === buf._selTrack && e.startTick === buf._selTick;
     }
   }
   buf.clipCount = c;
@@ -226,7 +390,13 @@ export function buildArrangeModel(opts, buf) {
   return buf;
 }
 
-/** The stable identity of a placement for selection purposes. See above. */
+/**
+ * The stable identity of a placement for selection purposes. See above.
+ *
+ * This is the definition of the format; the draw path deliberately does not
+ * call it, because building the key per clip per frame is a string per clip per
+ * frame. It compares the two numbers the key is made of instead.
+ */
 export function placementKey(e) { return e.track + ':' + e.startTick; }
 
 /** x -> tick, for hit testing and click-to-position. */
