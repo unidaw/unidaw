@@ -1,0 +1,152 @@
+/* The harmony card, at the top of the right dock.
+ *
+ * Boxes measured off design/redesign/Uni.dc.html at 1680x1000, not guessed: the
+ * card is 331px wide (the 332px dock less its rule), the head is 34px with 11px
+ * side padding, the key line 2px/11px/8px with a 7px baseline gap, the mapping
+ * box 6px/8px inside a 1px 6px-radius border, and the list rows 16px tall with a
+ * 1px gap and 8px between columns. Colours come from tokens.css; nothing here
+ * names a hex. Where the design's colour is between two tokens the token wins —
+ * a card that is one shade off is better than a second source of truth. */
+
+.hm {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-bottom: 1px solid var(--base-neutral-800);
+  font-family: var(--font-chrome);
+}
+
+.hm-head {
+  flex: 0 0 34px; height: 34px;
+  display: flex; align-items: center;
+  padding: 0 11px; box-sizing: border-box;
+}
+.hm-title { display: flex; align-items: center; gap: 6px; }
+.hm-title.act { cursor: pointer; }
+.hm-title > i { font-size: var(--font-size-gutter); color: var(--uni-text-gutter); }
+.hm-label {
+  font-size: var(--font-size-inst);
+  letter-spacing: .14em;
+  color: var(--base-accent);
+}
+
+/* Sized and bordered like the design's TET group, holding one chip instead of
+   three. It is a readout of what the engine's scales ARE, not a choice between
+   tunings the engine does not publish — so it takes the design's INACTIVE chip
+   colours and no pointer affordance at all. */
+.hm-chips {
+  margin-left: auto;
+  display: flex; gap: 2px;
+  padding: 1px;
+  border: 1px solid var(--base-neutral-900);
+  border-radius: 5px;
+}
+.hm-chip {
+  padding: 3px 7px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-inst);
+  color: var(--base-neutral-600);
+  cursor: default;
+}
+
+.hm-body { display: flex; flex-direction: column; }
+
+.hm-key {
+  padding: 2px 11px 8px;
+  display: flex; align-items: baseline; gap: 7px;
+  font-family: var(--font-mono);
+}
+/* The one display size on the surface. No token names it — the tokens describe
+   the tracker's type scale, and this line is the answer to "what key am I in",
+   which is the largest question the dock asks. */
+.hm-name { font-size: 16px; color: var(--base-text); }
+.hm-since { font-size: var(--font-size-inst); color: var(--base-accent-ramp-600); }
+.hm-version { margin-left: auto; font-size: var(--font-size-inst); color: var(--base-neutral-600); }
+
+/* The design's "17-4 -> G4 +38c -> 391.27 Hz" slot, carrying the mapping this
+   card can actually make: where the playhead is, which published event that
+   lands in, and the raw fields that event carries. */
+.hm-map {
+  margin: 0 11px 8px;
+  padding: 6px 8px; box-sizing: border-box;
+  display: flex; align-items: center; gap: 7px;
+  border: 1px solid var(--base-neutral-900);
+  border-radius: 6px;
+  background: var(--uni-surface-off-grid);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-cell);
+  white-space: nowrap; overflow: hidden;
+}
+.hm-at { color: var(--uni-text-pending); }
+.hm-arrow { color: var(--base-accent-ramp-700); }
+.hm-pos { color: var(--base-text); }
+/* Left-packed like the design's chain, not spread: a value that changes column
+   as the text beside it grows is harder to read than one that simply follows. */
+.hm-fields { color: var(--uni-text-note); }
+
+/* The timeline itself, in the ladder's place: real events, real bars, the one in
+   force highlighted. This is the part of the design's table that has data. */
+.hm-rows {
+  padding: 0 11px;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.hm-rows.act .hm-row { cursor: pointer; }
+.hm-row {
+  height: 16px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 6px; box-sizing: border-box;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+}
+.hm-row.cur { background: var(--uni-surface-cursor-cell); }
+.hm-num { flex: 0 0 20px; width: 20px; font-size: var(--font-size-gutter); color: var(--uni-text-gutter); }
+.hm-rname {
+  flex: 1 1 auto; min-width: 0;
+  font-size: var(--font-size-gutter); color: var(--base-neutral-500);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hm-rat { flex: 0 0 auto; font-size: var(--font-size-inst); color: var(--base-neutral-600); }
+.hm-row.cur .hm-num { color: var(--base-accent-ramp-300); }
+.hm-row.cur .hm-rname { color: var(--base-text); }
+.hm-row.cur .hm-rat { color: var(--uni-text-pending); }
+
+/* Says the list is a window. A truncated list that does not admit it looks
+   complete, which is the same class of quiet wrongness as a made-up cents value. */
+.hm-more {
+  padding: 4px 17px 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-empty);
+}
+.hm-note {
+  padding: 0 11px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-inst);
+  color: var(--base-neutral-600);
+}
+
+/* Where the degree ladder would be. It stays a labelled section rather than
+   disappearing, because "this card has no tuning in it" is a smaller claim than
+   "this build has no tuning at all", and the second is the true one. */
+.hm-tune {
+  margin: 8px 11px 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--uni-rule-column);
+  display: flex; align-items: baseline; gap: 8px;
+}
+.hm-tune-label {
+  flex: 0 0 auto;
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--base-accent-ramp-700);
+}
+.hm-tune-text {
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  line-height: 1.5;
+  color: var(--base-neutral-600);
+}

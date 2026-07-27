@@ -579,6 +579,23 @@ fn per_device_patchers_assemble_into_pool() {
     }
 }
 
+/// The scale registry is published (v16) so the harmony + tuning UI can draw the
+/// real cents ladder. Read-only, written once at startup.
+#[test]
+fn scale_registry_published() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("scales");
+    let scales = session.handle().read_scales();
+    assert!(!scales.is_empty(), "scale registry should be published");
+    let major = scales.iter().find(|s| s.id == 1).expect("Major scale (id 1) present");
+    assert_eq!(major.name, "Major");
+    assert_eq!(major.step_cents.len(), 7, "Major has 7 degrees: {major:?}");
+    assert_eq!(major.step_cents[0], 0.0);
+    assert_eq!(major.step_cents[1], 200.0, "milli-cents -> cents conversion");
+    assert_eq!(major.step_cents[6], 1100.0);
+    assert_eq!(major.octave_cents, 1200.0);
+}
+
 /// Track names are published: a fresh track defaults to "Track N", and a loaded
 /// project's name flows through so every lane-labelling surface reads one source.
 #[test]

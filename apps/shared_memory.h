@@ -31,7 +31,7 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 15: loop range read-back (uiLoopStart/uiLoopEnd) + load-result signal
 //     (uiLoadSeq/uiLoadOk). All ride the header's remaining tail padding, so
 //     sizeof(ShmHeader) is unchanged.
-constexpr uint16_t kShmVersion = 15;
+constexpr uint16_t kShmVersion = 16;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -115,6 +115,9 @@ struct alignas(64) ShmHeader {
   // "same content". Ride the header's tail padding; sizeof(ShmHeader) unchanged.
   uint32_t uiLoadSeq = 0;
   uint32_t uiLoadOk = 0;
+  // v16: byte offset of the published UiScaleRegion (0 = none) — the scale
+  // registry for the harmony + tuning UI. Read-only, written once at startup.
+  uint64_t uiScalesOffset = 0;
 };
 
 struct alignas(64) RingHeader {
@@ -236,6 +239,27 @@ struct alignas(64) UiPatcherRegion {
   uint32_t edgeCount = 0;
   UiPatcherNode nodes[kUiMaxPatcherNodes]{};
   UiPatcherEdge edges[kUiMaxPatcherEdges]{};
+};
+
+// v16: the scale registry, published once so the harmony + tuning UI can show the
+// real cents ladder for each scale (12/19/31-TET, just intonation, ...) rather
+// than only a key label. Read-only — the engine's registry is static. Cents are
+// milli-cents (cents * 1000) to keep the region integer + exact.
+constexpr uint32_t kUiMaxScales = 32;
+constexpr uint32_t kUiMaxScaleSteps = 48;
+
+struct UiScale {
+  uint32_t id = 0;
+  uint32_t stepCount = 0;
+  int32_t octaveMilliCents = 1200000;  // the octave interval, cents * 1000
+  char name[24] = {};                  // nul-padded display name
+  int32_t stepMilliCents[kUiMaxScaleSteps] = {};  // each step's cents * 1000
+};
+
+struct alignas(64) UiScaleRegion {
+  uint32_t version = 0;
+  uint32_t scaleCount = 0;
+  UiScale scales[kUiMaxScales]{};
 };
 
 struct UiClipNote {

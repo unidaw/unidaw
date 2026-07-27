@@ -1003,6 +1003,8 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(sizeof(daw::UiClipExtentRegion), 64);
     header.uiPatcherOffset = offset;  // v14: published patcher graph
     offset += daw::alignUp(sizeof(daw::UiPatcherRegion), 64);
+    header.uiScalesOffset = offset;  // v16: scale registry read-back
+    offset += daw::alignUp(sizeof(daw::UiScaleRegion), 64);
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
@@ -1025,6 +1027,36 @@ int main(int argc, char** argv) {
     uiShm.header->uiVersion.store(0, std::memory_order_release);
     uiShm.header->uiClipVersion = 0;
     uiShm.header->uiHarmonyVersion = 0;
+
+    // v16: publish the scale registry once — it is static, so the harmony + tuning
+    // UI reads it after attach and never needs an update. Cents in milli-cents.
+    if (uiShm.header->uiScalesOffset != 0) {
+      auto* region = reinterpret_cast<daw::UiScaleRegion*>(
+          reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiScalesOffset);
+      const auto& scales = daw::ScaleRegistry::instance().scales();
+      uint32_t count = 0;
+      for (const auto& scale : scales) {
+        if (count >= daw::kUiMaxScales) {
+          break;
+        }
+        daw::UiScale& out = region->scales[count++];
+        out.id = scale.id;
+        out.octaveMilliCents =
+            static_cast<int32_t>(std::llround(daw::intervalToCents(scale.octave) * 1000.0));
+        std::memset(out.name, 0, sizeof(out.name));
+        std::memcpy(out.name, scale.name.data(),
+                    std::min(scale.name.size(), sizeof(out.name) - 1));
+        const uint32_t steps = static_cast<uint32_t>(
+            std::min<size_t>(scale.steps.size(), daw::kUiMaxScaleSteps));
+        out.stepCount = steps;
+        for (uint32_t i = 0; i < steps; ++i) {
+          out.stepMilliCents[i] = static_cast<int32_t>(
+              std::llround(daw::intervalToCents(scale.steps[i]) * 1000.0));
+        }
+      }
+      region->scaleCount = count;
+      region->version = 1;
+    }
 
     auto* ringUi = reinterpret_cast<daw::RingHeader*>(
         reinterpret_cast<uint8_t*>(uiShm.base) + header.ringUiOffset);
