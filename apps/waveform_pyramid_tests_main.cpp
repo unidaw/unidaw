@@ -105,6 +105,79 @@ int main() {
     CHECK(umin == -32767 && umax == 32767);
   }
 
+  // --- sliceWaveform: the three regimes answer one window with one output shape ---
+  {
+    const uint32_t sel0[1] = {0};
+    std::vector<int16_t> out(64 * 2, 0);
+
+    // decimation 1 is degenerate: each column is one sample, min == max.
+    auto r1 = sliceWaveform(p, sel0, 1, /*firstFrame*/ 128, /*decim*/ 1,
+                            /*cols*/ 16, out.data());
+    CHECK(r1.columns == 16 && !r1.truncated);
+    for (uint32_t i = 0; i < 16; ++i) {
+      const int16_t s = p.level0[128 + i];
+      CHECK(out[i * 2] == s && out[i * 2 + 1] == s);
+    }
+
+    // A stored decimation (64) slices the level directly and equals a fresh scan of
+    // level 0 — the fast path and the slow path are bit-identical.
+    std::vector<int16_t> slice(8 * 2, 0), scan(8 * 2, 0);
+    auto rs = sliceWaveform(p, sel0, 1, 0, 64, 8, slice.data());
+    CHECK(rs.columns == 8);
+    for (uint32_t b = 0; b < 8; ++b) {
+      int16_t lo = INT16_MAX, hi = INT16_MIN;
+      for (uint32_t f = b * 64; f < (b + 1) * 64; ++f) {
+        lo = std::min(lo, p.level0[f]);
+        hi = std::max(hi, p.level0[f]);
+      }
+      scan[b * 2] = lo;
+      scan[b * 2 + 1] = hi;
+    }
+    CHECK(slice == scan);
+
+    // A non-stored decimation (8) scans level 0; check the alternating-±1 region.
+    auto r8 = sliceWaveform(p, sel0, 1, 256, 8, 4, out.data());
+    CHECK(r8.columns == 4);
+    for (uint32_t i = 0; i < 4; ++i) {
+      CHECK(out[i * 2] == -32767 && out[i * 2 + 1] == 32767);
+    }
+
+    // A window offset by whole buckets picks the right buckets of the stored level.
+    auto rw = sliceWaveform(p, sel0, 1, 128, 64, 2, out.data());
+    const auto& L = p.levelPairs[0];  // decim-64 level
+    CHECK(rw.columns == 2);
+    CHECK(out[0] == L[(128 / 64) * 2] && out[1] == L[(128 / 64) * 2 + 1]);
+    CHECK(out[2] == L[(192 / 64) * 2] && out[3] == L[(192 / 64) * 2 + 1]);
+
+    // Past EOF: 8 columns of 64 from frame 256 in a 512-frame source -> 4 available.
+    auto re = sliceWaveform(p, sel0, 1, 256, 64, 8, out.data());
+    CHECK(re.columns == 4 && re.truncated && re.pastEof);
+    CHECK(re.frameCount == 256);
+
+    // firstFrame at/after EOF returns nothing but flags the overrun.
+    auto rz = sliceWaveform(p, sel0, 1, 512, 64, 4, out.data());
+    CHECK(rz.columns == 0 && rz.pastEof);
+  }
+
+  // Channel selection: on a stereo pyramid, selecting only ch1 writes ch1's data at
+  // output plane 0.
+  {
+    std::vector<float> l(64), r(64);
+    for (uint64_t i = 0; i < 64; ++i) {
+      l[i] = (i % 2 == 0) ? 1.0f : -1.0f;
+      r[i] = -l[i];
+    }
+    const float* st[2] = {l.data(), r.data()};
+    const auto sp = buildWaveformPyramid(st, 2, 64, 64);
+    const uint32_t sel1[1] = {1};
+    int16_t out1[2] = {0, 0};
+    auto rc = sliceWaveform(sp, sel1, 1, 0, 64, 1, out1);
+    CHECK(rc.columns == 1);
+    const uint32_t bkt = sp.bucketsAtLevel(0);
+    const auto& LP = sp.levelPairs[0];
+    CHECK(out1[0] == LP[(1 * bkt) * 2] && out1[1] == LP[(1 * bkt) * 2 + 1]);
+  }
+
   if (g_fail == 0) std::printf("waveform_pyramid: all assertions passed\n");
   return g_fail == 0 ? 0 : 1;
 }

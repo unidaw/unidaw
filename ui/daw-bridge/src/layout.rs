@@ -16,6 +16,11 @@ pub const K_UI_MAX_HARMONY_EVENTS: usize = 512;
 pub const K_UI_MAX_SCALES: usize = 32;
 pub const K_UI_MAX_SCALE_STEPS: usize = 48;
 pub const K_UI_MAX_DEVICE_PARAMS: usize = 256;
+// v18 waveform region sizes — mirror shared_memory.h kUi* constants.
+pub const K_UI_MAX_AUDIO_SOURCES: usize = 32;
+pub const K_UI_MAX_AUDIO_CLIPS: usize = 64;
+pub const K_UI_WAVEFORM_SLOTS: usize = 4;
+pub const K_UI_WAVEFORM_MAX_PAIRS: usize = 24576;
 pub const K_UI_EDIT_BATCH_MAX_OPS: usize = 32;
 pub const K_UI_EDIT_BATCH_CAPACITY: usize = 64;
 pub const K_CHAIN_DEVICE_ID_AUTO: u32 = 0xFFFF_FFFF;
@@ -803,5 +808,22 @@ mod tests {
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
         const_assert_eq!(size_of::<UiPatcherEdge>(), 20);
         const_assert_eq!(size_of::<UiPatcherRegion>(), 5184);
+        // v18 waveform structs are bindgen-generated; pin the element sizes, then tie
+        // each hand constant to the generated region size so neither can drift: if a
+        // K_* count is wrong the region no longer sums, and this fails to compile.
+        const_assert_eq!(size_of::<UiAudioSource>(), 320);
+        const_assert_eq!(size_of::<UiAudioClip>(), 64);
+        const_assert_eq!(
+            size_of::<UiAudioSourceRegion>(),
+            64 + K_UI_MAX_AUDIO_SOURCES * 320 + K_UI_MAX_AUDIO_CLIPS * 64
+        );
+        const_assert_eq!(
+            size_of::<UiWaveformSlot>(),
+            64 + K_UI_WAVEFORM_MAX_PAIRS * 4 // 64 B header + [i16; MAX_PAIRS*2]
+        );
+        const_assert_eq!(
+            size_of::<UiWaveformRegion>(),
+            64 + K_UI_WAVEFORM_SLOTS * size_of::<UiWaveformSlot>()
+        );
     }
 }
