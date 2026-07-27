@@ -138,6 +138,18 @@ done
 # host — checked in host_controller.cpp rather than assumed.
 sleep 1
 
+# The plugin cache is MACHINE state — which plugins are installed — but the engine
+# reads it relative to its working directory, so a fresh build dir has none and the
+# engine comes up able to resolve a plugin's path and unable to load it. That looks
+# like a working stack: projects open, tracks appear, and every device query returns
+# an empty parameter list from a host that never instantiated anything. Cost half an
+# hour of blaming the engine. Say so rather than let it be silent.
+if [ ! -s "$RUNDIR/plugin_cache.json" ]; then
+  say "WARNING: no plugin_cache.json in $RUNDIR — hosts will load no plugins."
+  say "         Copy one from another build dir, or scan: the cache is machine state,"
+  say "         not tree state, so a copy is legitimate."
+fi
+
 [ -x "$ENGINE" ] || { say "no engine at $ENGINE — run: cmake --build build --target daw_engine"; exit 1; }
 [ -x "$HOST" ] || { say "no host at $HOST — run: cmake --build build --target juce_host_process"; exit 1; }
 

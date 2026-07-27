@@ -115,8 +115,13 @@ export function buildChainModel(opts, buf) {
           name: q.name,
           // The host's own display string when it has one — it knows whether a
           // value is dB, Hz or a note name, and this side does not.
-          display: q.display || (Math.round(q.value / 10) / 100).toFixed(2),
-          frac: Math.max(0, Math.min(1, q.value / 1000)),
+          display: q.display || q.value.toFixed(2),
+          // ALREADY NORMALISED. The engine publishes milli-units and the bridge
+          // divides by 1000 before it reaches here, so dividing again put every
+          // bar at a thousandth of its length — all of them empty, next to
+          // values that were right. A bar that is always zero beside a correct
+          // number is worse than no bar: it reads as "this parameter is off".
+          frac: Math.max(0, Math.min(1, q.value)),
         });
       }
       c.more = dp.params.length > SHOWN ? '+' + (dp.params.length - SHOWN) + ' more' : '';

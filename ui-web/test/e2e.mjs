@@ -884,21 +884,30 @@ section('device rack, live');
 // `rack` replaces the graph and reloading webtest does not put it back. Run
 // earlier, it broke the patcher sections that follow it. The rule: a check that
 // mutates state a later check reads has to go after it, or not mutate.
-await page.evaluate(() => window.__uni.loadProject('rack'));
+// maximal, not rack: rack's vst_ref names "Identity", which is built but never
+// scanned into the plugin cache, so it cannot resolve and falls back to whatever
+// sits at host slot 0. maximal names Zebra2, which IS in the cache.
+await page.evaluate(() => window.__uni.loadProject('maximal'));
 let live = null;
-for (let i = 0; i < 60 && !(live && live.named); i++) {
+for (let i = 0; i < 90 && !(live && live.params && live.params[0] > 0); i++) {
   await page.waitForTimeout(200);
   live = await page.evaluate(() => window.__uni.chainProbe());
 }
-ok(live && live.cards === 1, 'a real project with a device chain draws it',
+ok(live && live.cards >= 1, 'a real project with a device chain draws it',
    JSON.stringify(live && live.titles));
-ok(live && live.named === 1 && live.titles[0] === 'Identity',
+ok(live && live.named >= 1 && live.titles[0] === 'Zebra2',
    'and the name comes from the plugin host, not from here', JSON.stringify(live.titles));
-// Identity exposes no parameters, which the ENGINE reports as paramCount 0 —
-// verified at the source with the bridge, not inferred from an empty list on
-// this side. The card is a name with no rows, and that is correct.
-ok(live && live.params[0] === 0, 'a plugin with no parameters draws none',
+// The parameters are the plugin's own, queried from its host. This returned zero
+// for a long time and the cause was environmental: the engine reads its plugin
+// cache relative to its working directory, and a fresh build dir has none — so it
+// could resolve a plugin's path and never load it, and every query answered from
+// a host with no instance.
+ok(live && live.params[0] > 0, 'and its parameters come back from the host',
    JSON.stringify(live.params));
+const bars = await page.evaluate(() => [...document.querySelectorAll('.dv-p-fill')]
+  .map((e) => e.style.width));
+ok(bars.length > 0 && bars.some((w) => w !== '0%' && w !== ''),
+   'and the value bars are drawn at their real lengths', JSON.stringify(bars.slice(0, 5)));
 
 section('minimap and pending diff');
 await page.evaluate(() => window.__uni.view('tracker'));
