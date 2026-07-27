@@ -1371,8 +1371,33 @@ function commitToken(text) {
     if (!writeChord({ degree: r.degree - 1, quality: 0, inv: 0, oct: r.octave,
                       spread: 0, ht: 0, hv: 0, dur: 0 })) return;
   } else {
+    /**
+     * A token that means nothing STAYS ON SCREEN, in the cell it was typed into.
+     *
+     * It used to put a sentence in the chrome and leave the grid untouched, so
+     * the evidence of what you typed was gone the moment you looked away from a
+     * status line at the top of the window — while the cell you were looking at
+     * showed whatever was there before, which is indistinguishable from the
+     * write having succeeded and done nothing.
+     *
+     * ARCHITECTURE_REVIEW Movement 1 item 12 states the rule: an unrecognised
+     * token is a red cell, never a silent no-op. The cursor stays put too, so
+     * the thing to fix is under the thing that is blinking.
+     */
+    state.badToken = { row: state.cursor.row, track: state.cursor.track,
+                       col: state.cursor.col, text, why: r.why || 'not a token' };
     state.reject = r.why || ('cannot write "' + text + '"');
+    // The dock is the closest thing to the lint surface the review asks for, and
+    // it is where a person looks for what went wrong.
+    dock.log('err', text + ' — ' + state.badToken.why);
     return;                            // cursor stays put so it can be fixed
+  }
+  // A write that took clears the mark: the cell now says something real, and a
+  // red cell that outlived its cause would be the same lie in the other direction.
+  if (state.badToken && state.badToken.row === state.cursor.row
+      && state.badToken.track === state.cursor.track
+      && state.badToken.col === state.cursor.col) {
+    state.badToken = null;
   }
   state.reject = null;
   state.cursor.row += state.editStep;
@@ -1608,7 +1633,7 @@ const _entryOverlay = { row: 0, track: 0, col: 0, text: '' };
 const _vmOpts = { startRow: 0, rowCount: 0, tracks: 0, columns: 3, zoomIndex: 2,
                   cursor: null, playheadRow: 0, selection: null, engine: null,
                   pending: null, pendingCount: 0, entryOverlay: null,
-                  harmony: null, nameHarmony: null };
+                  badToken: null, harmony: null, nameHarmony: null };
 
 function draw() {
   if (helpHost.hidden === state.helpOpen) helpHost.hidden = !state.helpOpen;
@@ -1767,6 +1792,7 @@ function draw() {
   } else {
     o.entryOverlay = null;
   }
+  o.badToken = state.badToken;
   o.harmony = engine && state.useEngine !== false ? engine.harmony : null;
   o.nameHarmony = nameHarmony;
   const vm = bufs[bi] = buildViewModel(o, bufs[bi]);

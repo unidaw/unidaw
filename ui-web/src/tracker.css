@@ -287,3 +287,22 @@
 .ch-tab.on { color: var(--base-accent); border-color: var(--base-accent); }
 .ch-tab-key { font-size: 8px; color: var(--base-neutral-800); }
 .ch-tab.on .ch-tab-key { color: var(--base-accent-ramp-700); }
+
+/* A token that was typed and meant nothing.
+ *
+ * Louder than a rejection in the chrome, and in the place it happened. It used to
+ * be a sentence in a status line at the top of the window while the cell showed
+ * whatever was there before — which is indistinguishable from the write having
+ * succeeded and changed nothing. ARCHITECTURE_REVIEW Movement 1 item 12: an
+ * unrecognised token is a red cell, never a silent no-op.
+ *
+ * The text is what was typed, not what is in the music, so it is marked as not
+ * belonging: the same red the dock uses for an error, over a wash of it, so the
+ * cell reads as wrong at a glance from across the grid rather than only when
+ * you are looking straight at it. */
+.tk-cell[data-kind="bad"] {
+  color: var(--uni-text-fx);
+  background: color-mix(in srgb, var(--uni-text-fx) 18%, transparent);
+  text-decoration: underline wavy;
+  text-decoration-skip-ink: none;
+}

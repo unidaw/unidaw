@@ -66,6 +66,20 @@ const SCENES = [
   // The token buffer is the ONLY thing that waits for Enter, and it is only ever
   // opened by `@`. Every other keystroke commits on the keydown.
   { name: 'token-entry', setup: async (p) => { await p.keyboard.press('@'); for (const c of '3^7') await p.keyboard.press(c); } },
+  // A token that means nothing STAYS, in the cell it was typed into.
+  // ARCHITECTURE_REVIEW Movement 1 item 12: a red cell, never a silent no-op.
+  { name: 'bad-token', badToken: true, setup: async (p) => {
+      // Scenes share one page, and `token-entry` above deliberately leaves its
+      // buffer OPEN. Starting from whatever it left behind made this scene type
+      // into that buffer and commit something else entirely — which is how it
+      // first "failed": not because the feature was broken, but because the
+      // scene was measuring a different keystroke sequence than it described.
+      await p.keyboard.press('Escape');
+      await p.evaluate(() => window.__uni.goto(0, 0));
+      await p.keyboard.press('@');
+      for (const c of '99') await p.keyboard.press(c);
+      await p.keyboard.press('Enter');
+    } },
 ];
 
 /** Above this many perceptibly-differing pixels it is a change, not antialiasing. */
@@ -322,6 +336,41 @@ for (const scene of SCENES) {
   ok(p.poolSize < 90, `pool is viewport-sized, not timeline-sized: ${p.poolSize}`);
   ok(p.rect !== null && p.rect.w > 0, `cell (${p.startRow + 3},2,0) has geometry: ${JSON.stringify(p.rect)}`);
   ok(typeof p.sample === 'string', `cell text readable via data attributes: ${JSON.stringify(p.sample)}`);
+
+  if (scene.badToken) {
+    /**
+     * A rejected token is a RED CELL, at the cursor, holding what was typed.
+     *
+     * Asserted rather than left to the picture, because a screenshot cannot tell
+     * "the cell is marked" from "the cell shows what was there before" — which is
+     * the whole failure this replaces. Before this, an unrecognised token put a
+     * sentence in the chrome and left the grid untouched, so the evidence was
+     * gone the moment you looked away from a status line.
+     */
+    const bad = await page.evaluate(() => {
+      const els = [...document.querySelectorAll('.tk-cell[data-kind="bad"]')];
+      const st = window.__uni.state();
+      return {
+        count: els.length,
+        text: els[0] ? els[0].textContent : null,
+        track: els[0] ? Number(els[0].dataset.track) : -1,
+        col: els[0] ? Number(els[0].dataset.col) : -1,
+        row: els[0] ? Number(els[0].closest('.tk-row').dataset.row) : -1,
+        cursor: { row: st.cursor.row, track: st.cursor.track, col: st.cursor.col },
+        reject: document.querySelector('.ch-reject')?.textContent ?? '',
+      };
+    });
+    ok(bad.count === 1, `exactly one cell is marked bad: ${bad.count}`);
+    // The buffer keeps the '@' that opened it, so that is what was typed.
+    ok(bad.text === '@99', `and it holds what was typed: ${JSON.stringify(bad.text)}`);
+    // At the CURSOR, which stays put so the thing to fix is under the thing that
+    // is blinking.
+    ok(bad.row === bad.cursor.row && bad.track === bad.cursor.track
+       && bad.col === bad.cursor.col,
+       `at the cursor: ${bad.row},${bad.track},${bad.col} vs ` +
+       `${bad.cursor.row},${bad.cursor.track},${bad.cursor.col}`);
+    ok(bad.reject.length > 0, `and the chrome says why: ${JSON.stringify(bad.reject)}`);
+  }
 
   /**
    * Each track's header names THAT track.

@@ -191,7 +191,7 @@ function contentAt(tick, track, col) {
  * comparing this frame against TWO frames ago and miss a change that landed in
  * between. The signature describes the world, not a particular buffer.
  */
-const SIG = { zoomIndex: -1, pendingCount: -1, overlayLen: -1,
+const SIG = { zoomIndex: -1, pendingCount: -1, overlayLen: -1, badKey: -2,
               notesRevision: -2, aggRevision: -2, rowGrid: -2 };
 let contentRevision = 0;
 
@@ -282,6 +282,15 @@ export function buildViewModel(opts, buf) {
      * across tracks whose clips disagree. See meter.js.
      */
     meter = DEFAULT_METER,
+    /**
+     * A token that was typed and meant nothing, as {row, track, col, text, why}.
+     *
+     * Drawn OVER whatever the engine says is in that cell, like the entry
+     * overlay, because it is the same kind of thing: what the user put there,
+     * which has not become part of the music. Unlike the overlay it survives the
+     * keystroke — that is the point of it.
+     */
+    badToken = null,
   } = opts;
 
   if (!buf || buf._rows !== rowCount || buf._trackCount !== trackCount
@@ -664,6 +673,16 @@ export function buildViewModel(opts, buf) {
     if (cell) { cell.text = e.text; cell.kind = 'pending'; }
   }
 
+  // Before the entry overlay, so that typing into a cell that is already marked
+  // shows what you are typing rather than what failed last time.
+  if (badToken) {
+    const row = rows[badToken.row - startRow];
+    if (row) {
+      const cell = row.cells[badToken.track * columns + badToken.col];
+      if (cell) { cell.text = badToken.text; cell.kind = 'bad'; }
+    }
+  }
+
   if (entryOverlay) {
     const ri = entryOverlay.row - startRow;
     const row = rows[ri];
@@ -683,12 +702,19 @@ export function buildViewModel(opts, buf) {
   {
     const s = SIG;
     const overlayLen = entryOverlay ? entryOverlay.text.length + 1 : 0;
+    // The mark is an input to what a cell says, so it belongs in the signature.
+    // Keyed on its position and text rather than on its presence: moving one bad
+    // token to another cell changes two cells and no count.
+    const badKey = badToken
+      ? badToken.row * 1e6 + badToken.track * 1e3 + badToken.col + badToken.text.length
+      : -1;
     if (s.zoomIndex !== zoomIndex || s.pendingCount !== pendingCount
-        || s.overlayLen !== overlayLen
+        || s.overlayLen !== overlayLen || s.badKey !== badKey
         || s.notesRevision !== (engine ? engine.notesRevision : -1)
         || s.aggRevision !== (engine ? engine.aggRevision : -1)
         || s.rowGrid !== (engine ? engine.rowGrid : -1)) {
       s.zoomIndex = zoomIndex; s.pendingCount = pendingCount; s.overlayLen = overlayLen;
+      s.badKey = badKey;
       s.notesRevision = engine ? engine.notesRevision : -1;
       s.aggRevision = engine ? engine.aggRevision : -1;
       s.rowGrid = engine ? engine.rowGrid : -1;
