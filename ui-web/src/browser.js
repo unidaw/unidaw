@@ -152,7 +152,14 @@ const TITLE_PLUG_PENDING = 'the plugin catalogue has not arrived yet';
 /** A pooled row record. Grown once per shape change, mutated in place after. */
 export function makeRow() {
   return { kind: KIND_PROJECT, name: '', meta: '', badge: '', mark: '',
-           lower: '', ok: true, recent: false, instrument: false, plugin: null };
+           lower: '', ok: true, recent: false, instrument: false, plugin: null,
+           // Where this plugin sits in the ENGINE's scan, which is how the engine
+           // is asked to insert one. Stored explicitly rather than inferred from
+           // the row's position: the rail filters and the view is a list of
+           // indices into a list, so "the third row on screen" is not the third
+           // plugin, and an insert keyed on a position that moves is the bug in
+           // GUIDELINES 2.1 with a plugin on the end of it. -1 = not a plugin.
+           pluginIndex: -1 };
 }
 
 /**
@@ -188,7 +195,7 @@ export function setProjectRow(row, name, at) {
  * A failed scan keeps its row and wears the scanner's error as its meta line.
  * Filtering it out would answer "why is Zebra not in the list" with silence.
  */
-export function setPluginRow(row, p) {
+export function setPluginRow(row, p, at) {
   const e = p || {};
   const name = e.name || e.path || '(unnamed)';
   const vendor = e.vendor || '';
@@ -201,6 +208,10 @@ export function setPluginRow(row, p) {
   row.instrument = !!e.is_instrument;
   row.recent = false;
   row.plugin = p || null;
+  // fillRows hands us the index into the catalogue it was given, which is the
+  // same array the engine scanned into pluginCache.entries — so this is the
+  // hostSlotIndex an AddDevice needs.
+  row.pluginIndex = at === undefined ? -1 : at;
   // Vendor and format when it worked; the reason when it did not. A row that
   // showed "u-he · VST3" for something that failed to load would be describing
   // a plugin this machine cannot actually offer.

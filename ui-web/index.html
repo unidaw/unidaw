@@ -342,9 +342,44 @@ function nudgePatcher(dir) {
 // you have to go and investigate elsewhere.
 // Declared ABOVE the handler that reads them: `const` does not hoist, and four
 // temporal-dead-zone bugs in this file is four more than enough (GUIDELINES 2.2).
-const PLUGIN_INSERT_REFUSAL = 'adding a plugin needs the engine to record its '
-  + 'durable identity (vstRef) rather than a scan index — not yet available';
 const PLUGIN_SCAN_REFUSAL = 'that plugin did not scan: ';
+const PLUGIN_NO_SLOT = 'that plugin has no place in the engine\'s scan, so it cannot be named';
+
+/**
+ * The device kinds the engine counts as instruments — device_chain.h's
+ * DeviceKind, mirrored because the rule below depends on it.
+ *
+ * A chain may hold exactly one (device_chain.cpp isInstrumentKind/hasInstrument),
+ * which is a real musical rule and not a limitation: a track is one voice.
+ */
+const KIND_PATCHER_INSTRUMENT = 1;
+const KIND_VST_INSTRUMENT = 3;
+function chainHasInstrument(track) {
+  const here = chains[track];
+  const devices = here && here.devices;
+  if (!devices) return false;
+  for (let i = 0; i < devices.length; i++) {
+    const k = devices[i].kind;
+    if (k === KIND_PATCHER_INSTRUMENT || k === KIND_VST_INSTRUMENT) return true;
+  }
+  return false;
+}
+
+/**
+ * The plugin an AddDevice was just sent for, so the answer can be checked.
+ *
+ * The insert selects a plugin by its INDEX in the engine's scan, and the
+ * catalogue this side lists is a snapshot of the file the engine scanned. If
+ * anything rescans in between, that index means a different plugin — the same
+ * shape as the vstRef bug one level up, and it cannot be prevented from here
+ * because the command carries no room for an identity.
+ *
+ * So it is detected instead. The rack republishes on change; when it does, the
+ * device that arrived is compared against the plugin that was asked for, and a
+ * mismatch is reported rather than drawn. A wrong plugin that announces itself is
+ * recoverable; one that looks right is not.
+ */
+let pendingInsert = null;
 
 const browserHost = document.getElementById('browser');
 const browser = new Browser(browserHost, {
@@ -386,11 +421,7 @@ const browser = new Browser(browserHost, {
    */
   onOpen: (row) => {
     if (!row) return;
-    if (row.kind === KIND_PLUGIN) {
-      state.reject = row.ok ? PLUGIN_INSERT_REFUSAL : PLUGIN_SCAN_REFUSAL + row.meta;
-      schedule();
-      return;
-    }
+    if (row.kind === KIND_PLUGIN) { insertPlugin(row); return; }
     const name = row.name;
     if (!conn || !conn.loadProject(name)) { state.reject = 'no engine'; schedule(); return; }
     state.currentProject = name;
@@ -399,6 +430,81 @@ const browser = new Browser(browserHost, {
     schedule();
   },
 });
+
+/**
+ * Put a plugin from the rail into the cursor's track.
+ *
+ * The engine identifies a VST in AddDevice by `hostSlotIndex` — an index into its
+ * plugin scan — and until recently stored only that, so a project saved after an
+ * insert named its plugin by a number that meant something else the moment
+ * anything was installed. The engine now fills `vstRef` (vendor, name, path,
+ * uid16) from the entry that index resolved to, which is what makes this safe to
+ * wire at all: the index is used once, at insert, and the durable identity is what
+ * gets written down.
+ *
+ * An instrument and an effect are different device kinds and the catalogue already
+ * says which this is, so nobody is asked to choose twice.
+ */
+function insertPlugin(row) {
+  if (!row.ok) { state.reject = PLUGIN_SCAN_REFUSAL + row.meta; schedule(); return; }
+  if (!(row.pluginIndex >= 0)) { state.reject = PLUGIN_NO_SLOT; schedule(); return; }
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return; }
+  const track = state.cursor.track;
+  // Checked HERE rather than left to the engine. A chain holds one instrument,
+  // and the engine enforces it by returning a chain error whose code the UI can
+  // only render as "chain error on track 0 (code 1)" — true, and useless. The
+  // rule is knowable from the chain we already hold, so it is worth saying
+  // properly: the same refusal, in words a person can act on.
+  if (row.instrument && chainHasInstrument(track)) {
+    state.reject = 'track ' + (track + 1) + ' already has an instrument — '
+                 + 'remove it first, or add this on another track';
+    schedule();
+    return;
+  }
+  const ok = conn.send({ type: 'adddevice', track,
+                         kind: row.instrument ? 'vst instrument' : 'vst effect',
+                         slot: row.pluginIndex });
+  if (!ok) { state.reject = 'no engine'; schedule(); return; }
+  // What was asked for, so the chain that comes back can be checked against it.
+  pendingInsert = { track, name: row.name, at: performance.now() };
+  // The rack caches parameters by device id and the engine may reuse one, so the
+  // cache has to go — same reason the "+" card clears it.
+  paramsAsked.clear();
+  state.reject = null;
+  // The rail has done its job; the thing you just added is in the rack, which is
+  // on screen. Leaving the rail open over it hides the result of the action.
+  state.browserOpen = false;
+  schedule();
+}
+
+/**
+ * Check an insert against what came back, once.
+ *
+ * Called when the rack republishes. The engine names a device from the plugin it
+ * actually loaded, so a name that does not contain what was asked for means the
+ * index resolved somewhere else — a rescan between the catalogue being read and
+ * the command being sent. Compared loosely (case-insensitive containment) because
+ * a host may decorate the name, and the question here is "is this a different
+ * plugin", not "is this string equal".
+ */
+function checkPendingInsert() {
+  if (!pendingInsert) return;
+  const here = chains[pendingInsert.track];
+  const devices = here && here.devices;
+  if (!devices || !devices.length) return;
+  const got = devices[devices.length - 1];
+  const gotName = (got && got.name) || '';
+  const want = pendingInsert.name;
+  if (gotName) {
+    const a = gotName.toLowerCase(), b = want.toLowerCase();
+    if (!a.includes(b) && !b.includes(a)) {
+      state.reject = 'asked for "' + want + '" and the engine loaded "' + gotName
+                   + '" — the plugin scan moved under us; press r to re-read it';
+    }
+    pendingInsert = null;
+    schedule();
+  }
+}
 
 /**
  * Adopt a `{"type":"plugins"}` reply.
@@ -2495,6 +2601,9 @@ conn = WANTS_ENGINE ? connectEngine({
     // chainVersion won, and merging here would reintroduce the question it
     // answered.
     for (const c of list) chains[c.track] = c;
+    // An insert is answered by the rack republishing, so this is where the answer
+    // can be checked against what was asked for.
+    checkPendingInsert();
     schedule();
   },
   onEngineEvent: (list, missed) => {
