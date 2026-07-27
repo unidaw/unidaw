@@ -65,6 +65,28 @@ const SCENES = [
   { name: 'patcher', patcher: true, setup: async (p) => p.evaluate(() => window.__uni.usePatcherFixture()) },
   { name: 'dock', dock: true, setup: async (p) => p.evaluate(() => window.__uni.useDockFixture()) },
   { name: 'browser', browser: true, setup: async (p) => p.evaluate(() => window.__uni.useBrowserFixture()) },
+  // Driven with REAL keystrokes, which is the whole point of this scene. The
+  // palette had a bug where every non-printable key was applied twice — ArrowDown
+  // moved the selection two rows, Enter ran a command and then ran whatever had
+  // become selected — because the app's keydown listener is in the capture phase
+  // and the palette input's own listener runs afterwards on the way back up. Both
+  // called feed(). Nothing that drives feed() DIRECTLY can see that: the alloc
+  // test's `paletteMove` and any __uni helper both bypass the wiring that was
+  // broken. Only a real key press goes through both handlers.
+  { name: 'palette', palette: true, setup: async (p) => {
+      await p.keyboard.press('Meta+k');
+      // WAIT FOR FOCUS before pressing anything. Without this the arrows arrive
+      // while the input has not been focused yet, so the event's target is the
+      // body, the input's own handler never runs, and only the app's handler acts
+      // — one move, the right answer, for entirely the wrong reason. Written
+      // without this line the scene passed against the BUGGY build too, which is
+      // the failure GUIDELINES 2.1.1 is about: the fixture only tests where you
+      // point it, and it was pointed a few milliseconds short of the defect.
+      await p.waitForFunction(() => document.activeElement
+        && document.activeElement.classList.contains('pl-input'));
+      await p.keyboard.press('ArrowDown');
+      await p.keyboard.press('ArrowDown');
+    } },
   { name: 'piano', piano: true, setup: async (p) => p.evaluate(() => window.__uni.usePianoFixture()) },
   { name: 'piano-zoomed', piano: true, setup: async (p) => p.evaluate(() => {
       window.__uni.usePianoFixture(); window.__uni.pianoZoom(5); }) },
@@ -417,6 +439,25 @@ for (const scene of SCENES) {
     console.log(`  ${d.lines} lines, ${d.commands.length} commands`);
     await shoot(scene);
     continue;
+  }
+
+  if (scene.palette) {
+    const pal = await page.evaluate(() => {
+      const items = [...document.querySelectorAll('.pl-item')];
+      const sel = document.querySelector('.pl-item.sel');
+      return { count: items.length, index: sel ? items.indexOf(sel) : -1,
+               open: !!document.querySelector('.pl-item') };
+    });
+    ok(pal.open, 'the palette opened on the app shortcut');
+    ok(pal.count > 0, `commands listed: ${pal.count}`);
+    // TWO presses, so the selection must be on row 2. This is the assertion that
+    // catches the double-apply: it landed on row 4, which reads as "a list that
+    // scrolls fast" rather than as a bug, and is exactly the kind of wrong a
+    // screenshot cannot report. It is stated as the count of presses rather than
+    // as a literal so the intent survives a change to how many rows are visible.
+    const presses = 2;
+    ok(pal.index === presses,
+       `${presses} presses move the selection ${presses} rows, not ${presses * 2}: row ${pal.index}`);
   }
 
   if (scene.browser) {

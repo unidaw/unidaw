@@ -2479,7 +2479,21 @@ addEventListener('keydown', (e) => {
   //      modifier combos above, which is what "palette" means.
   if (palette.opened) {
     const act = palette.feed(k);
-    if (act !== 'ignore') return done();
+    // stopPropagation, not just preventDefault, and this is the whole fix for a
+    // real bug: ArrowDown moved the selection TWO rows, Enter ran the command and
+    // then ran whatever had just become selected.
+    //
+    // The palette's input has its own keydown handler for exactly these keys —
+    // deliberately, so that a focused field behaves when the app is not listening.
+    // But THIS listener is registered in the CAPTURE phase (see the bottom of this
+    // handler), so it runs on the way DOWN to the input, and the stopPropagation()
+    // the input's handler calls is far too late to prevent it. Both handlers ran,
+    // both called feed(), and feed() is not idempotent.
+    //
+    // Stopping here is what makes "one implementation of each key, called once"
+    // true. Only when the palette actually consumed the key: a printable falls
+    // through as 'ignore' and must reach the input, which is what types the filter.
+    if (act !== 'ignore') { e.stopPropagation(); return done(); }
   }
 
   // 2.05 ANY open text field owns the keyboard, before the global shortcuts.
@@ -3191,6 +3205,14 @@ window.__uni = {
                  pluginCache = null; pluginError = '';
                  browser.setPlugins(null, ''); browser.setQuery(''); browser.setCategory('all');
                  state.dockOpen = false; dock.clear(); state.helpOpen = false;
+                 // The palette, back to cold, for the same reason as the rail and
+                 // the dock above — it was simply the one modal this list had
+                 // missed. A scene that inherited it drew the whole overlay across
+                 // the next fixture: adding a palette scene made the FIVE goldens
+                 // that follow it differ by millions of pixels each, which reads as
+                 // a catastrophic regression in the piano roll and the mixer rather
+                 // than as one line absent from here.
+                 palette.close(); palette.selected = 0;
                  state.selectedNode = -1; state.selectedField = 0; patchPending.clear();
                  // The audio side, back to cold. A scene that inherited a source
                  // table would draw waveforms inside another scene's regions —
