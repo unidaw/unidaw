@@ -883,6 +883,56 @@ fn loop_range_published() {
     }
 }
 
+/// The engine publishes the current tempo (milli-BPM, at the playhead) and the map's
+/// point count, and honors SetTempo: flatten (flags=1) and insert-or-replace a point
+/// (flags=0). This is what makes the chrome's BPM field real and editable.
+#[test]
+fn tempo_read_back_and_set() {
+    use daw_bridge::layout::{UiCommandPayload, UiCommandType};
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("tempo");
+
+    let tempo = || session.handle().snapshot().map(|s| (s.ui_tempo_milli_bpm, s.ui_tempo_point_count));
+    let wait_tempo = |want: (u32, u32), what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            if tempo() == Some(want) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{what}: tempo is {:?}, wanted {:?}", tempo(), want);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let set = |milli: u32, pos: u64, flags: u16| {
+        session
+            .handle()
+            .send_command(UiCommandPayload {
+                command_type: UiCommandType::SetTempo as u16,
+                flags,
+                track_id: 0,
+                plugin_index: 0,
+                note_pitch: 0,
+                value0: milli,
+                note_nanotick_lo: (pos & 0xffff_ffff) as u32,
+                note_nanotick_hi: (pos >> 32) as u32,
+                note_duration_lo: 0,
+                note_duration_hi: 0,
+                base_version: 0,
+            })
+            .expect("send SetTempo");
+    };
+
+    // Default: 120.000 BPM, one point.
+    wait_tempo((120_000, 1), "default tempo");
+    // Flatten to 90 (flags=1) — one point, ignores position.
+    set(90_000, 12345, 1);
+    wait_tempo((90_000, 1), "after flatten");
+    // Insert a second point at a later position (flags=0). The playhead is at 0, so
+    // the read-back tempo stays 90 (the point at/before 0) but the count grows to 2.
+    set(140_000, 4 * Q, 0);
+    wait_tempo((90_000, 2), "after insert point");
+}
+
 /// A failed LoadProject bumps the load seq with ok=0, so the UI can tell it from
 /// a silent no-op; a good load reports ok=1.
 #[test]
