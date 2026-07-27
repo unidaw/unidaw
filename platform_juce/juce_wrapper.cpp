@@ -1175,4 +1175,66 @@ std::vector<PluginScanResult> scanVst3File(const std::string& path,
   return results;
 }
 
+DecodedAudio decodeAudioFileMono(const std::string& path) {
+  DecodedAudio out;
+  juce::AudioFormatManager formats;
+  formats.registerBasicFormats();
+  std::unique_ptr<juce::AudioFormatReader> reader(
+      formats.createReaderFor(juce::File(juce::String(path))));
+  if (!reader) {
+    return out;
+  }
+  const int channels = static_cast<int>(reader->numChannels);
+  const juce::int64 frames = reader->lengthInSamples;
+  if (channels <= 0 || frames <= 0) {
+    return out;
+  }
+  juce::AudioBuffer<float> buffer(channels, static_cast<int>(frames));
+  buffer.clear();
+  reader->read(&buffer, 0, static_cast<int>(frames), 0, true, true);
+
+  out.frames = static_cast<uint64_t>(frames);
+  out.sampleRate = reader->sampleRate;
+  out.sourceChannels = static_cast<uint32_t>(channels);
+  out.samples.resize(static_cast<size_t>(frames));
+  const float invChannels = 1.0f / static_cast<float>(channels);
+  for (juce::int64 i = 0; i < frames; ++i) {
+    float sum = 0.0f;
+    for (int c = 0; c < channels; ++c) {
+      sum += buffer.getSample(c, static_cast<int>(i));
+    }
+    out.samples[static_cast<size_t>(i)] = sum * invChannels;
+  }
+  out.ok = true;
+  return out;
+}
+
+bool writeWavMono(const std::string& path, const float* samples, uint64_t frames,
+                  double sampleRate) {
+  if (!samples || sampleRate <= 0.0) {
+    return false;
+  }
+  juce::File file{juce::String(path)};
+  file.deleteFile();
+  std::unique_ptr<juce::FileOutputStream> stream(file.createOutputStream());
+  if (!stream) {
+    return false;
+  }
+  juce::WavAudioFormat wav;
+  std::unique_ptr<juce::AudioFormatWriter> writer(
+      wav.createWriterFor(stream.get(), sampleRate, 1, 16, {}, 0));
+  if (!writer) {
+    return false;
+  }
+  stream.release();  // the writer owns the stream now
+  juce::AudioBuffer<float> buffer(1, static_cast<int>(frames));
+  for (uint64_t i = 0; i < frames; ++i) {
+    buffer.setSample(0, static_cast<int>(i), samples[i]);
+  }
+  const bool ok =
+      writer->writeFromAudioSampleBuffer(buffer, 0, static_cast<int>(frames));
+  writer.reset();  // flush + close
+  return ok;
+}
+
 }  // namespace daw

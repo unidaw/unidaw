@@ -244,6 +244,182 @@ fn roundtrip_preserves_placements() {
     assert_eq!(clip7["notes"].as_array().unwrap().len(), 2);
 }
 
+/// The M3.2 fix: editing a note *inside* a loaded placement mutates that
+/// placement's clip in place (structural note entry), so a load -> edit -> save
+/// keeps the arrangement's two-placement structure instead of flattening it. The
+/// added note lands in the second placement's clip at the clip-relative tick; the
+/// first placement's clip is untouched.
+#[test]
+fn edit_inside_placement_lands_in_its_clip() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("editin");
+    let one_bar = 4 * Q;
+    let two_bars = 8 * Q;
+
+    // Two distinct clips, one placement each: clip 10 at bar 0, clip 20 at bar 2.
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "editin_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [],
+        "clips": [
+            { "id": 10, "name": "A", "length": one_bar,
+              "notes": [ { "nanotick": 0, "duration": Q/2, "pitch": 60, "velocity": 100, "column": 0, "note_id": 1001 } ],
+              "chords": [] },
+            { "id": 20, "name": "B", "length": one_bar,
+              "notes": [ { "nanotick": 0, "duration": Q/2, "pitch": 64, "velocity": 100, "column": 0, "note_id": 2001 } ],
+              "chords": [] }
+        ],
+        "tracks": [ {
+            "track_id": 0, "name": "Track 1", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [], "mod_links": [],
+            "placements": [
+                { "clip_id": 10, "at": 0, "length": one_bar, "notes": [], "chords": [], "mutes": [] },
+                { "clip_id": 20, "at": two_bars, "length": one_bar, "notes": [], "chords": [], "mutes": [] }
+            ]
+        } ]
+    });
+    std::fs::write(
+        engine.proj.join("editin_in.uniproj.json"),
+        serde_json::to_string_pretty(&proj).unwrap(),
+    )
+    .unwrap();
+
+    let before = session.handle().clip_version();
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"editin_in"}) });
+    assert!(load.ok, "load failed: {load:?}");
+    assert!(
+        session.handle().wait_for_clip_version(before, before.wrapping_add(1), Duration::from_secs(3)),
+        "load was not applied"
+    );
+
+    // Add a note one quarter into the *second* placement (absolute two_bars + Q).
+    // It must land inside clip 20 at clip-relative tick Q — not clip 10, not a new
+    // clip out on its own.
+    let edit = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({"track":0,"pitches":[72],"start": two_bars + Q,"step":Q,"duration":Q/2}),
+    });
+    assert!(edit.ok, "edit failed: {edit:?}");
+
+    let save = session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"editin_out"}) });
+    assert!(save.ok, "save failed: {save:?}");
+
+    let doc = read_project(&engine.proj, "editin_out");
+    let pls = track(&doc, 0)["placements"].as_array().unwrap().clone();
+    assert_eq!(pls.len(), 2, "two-placement structure not preserved: {pls:?}");
+    let mut ats: Vec<u64> = pls.iter().map(|p| p["at"].as_u64().unwrap()).collect();
+    ats.sort_unstable();
+    assert_eq!(ats, vec![0, two_bars], "placement anchors moved: {ats:?}");
+
+    let clip_of = |at: u64| -> Value {
+        let cid = pls.iter().find(|p| p["at"].as_u64() == Some(at)).unwrap()["clip_id"].as_u64().unwrap();
+        doc["clips"].as_array().unwrap().iter()
+            .find(|c| c["id"].as_u64() == Some(cid)).expect("placement's clip re-emitted").clone()
+    };
+
+    // First placement's clip is untouched: still exactly its one base note.
+    let first = clip_of(0);
+    let first_notes = first["notes"].as_array().unwrap();
+    assert_eq!(first_notes.len(), 1, "first clip changed: {first:?}");
+    assert_eq!(first_notes[0]["pitch"].as_u64(), Some(60));
+
+    // Second placement's clip now has the base note plus the edit, at rel 0 and Q.
+    let second = clip_of(two_bars);
+    let notes = second["notes"].as_array().unwrap();
+    assert_eq!(notes.len(), 2, "edit did not land in the second clip: {second:?}");
+    let mut by_tick: Vec<(u64, u64)> = notes.iter()
+        .map(|n| (n["nanotick"].as_u64().unwrap(), n["pitch"].as_u64().unwrap()))
+        .collect();
+    by_tick.sort_unstable();
+    assert_eq!(by_tick, vec![(0, 64), (Q, 72)], "second clip contents wrong: {notes:?}");
+}
+
+/// Regression: writing a note PAST the end of all material must grow the song, not
+/// silently vanish. patternTicks defaults to one bar, so a write at row 20 (== 5*Q)
+/// is past the end — the frontend's reproduction. The note must appear in the
+/// derived clip with room to sound, and persist.
+#[test]
+fn write_past_pattern_end_creates_material() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("pastend");
+
+    let far = 5 * Q; // row 20 at 4 rows/beat — past the 1-bar default pattern
+    let a = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({"track":0,"pitches":[67],"start":far,"step":Q,"duration":0}),
+    });
+    assert!(a.ok, "write past end failed: {a:?}");
+
+    // Visible in the derived (flat) clip the UI reads, with a positive length.
+    let obs = session.execute(&ToolCall { tool: "observe".into(), args: json!({}) });
+    assert!(obs.ok, "observe failed: {obs:?}");
+    let note = obs.output["tracks"][0]["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["pitch"].as_u64() == Some(67))
+        .unwrap_or_else(|| panic!("note past the end vanished from the clip: {}", obs.output));
+    assert_eq!(note["nanotick"].as_u64(), Some(far), "note landed at the wrong tick: {note}");
+    assert!(note["duration"].as_u64().unwrap() > 0, "note past the end has no length: {note}");
+
+    // And it persists on disk.
+    assert!(session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"pastend_out"}) }).ok);
+    let doc = read_project(&engine.proj, "pastend_out");
+    let pitches: Vec<u64> = doc["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|c| c["notes"].as_array().unwrap())
+        .map(|n| n["pitch"].as_u64().unwrap())
+        .collect();
+    assert!(pitches.contains(&67), "note past the end was not saved: {}", doc["clips"]);
+}
+
+/// Undo/redo of a structural edit is a whole-store swap: after two note adds, one
+/// undo restores the store to a single note, and a redo brings the second back.
+#[test]
+fn undo_redo_structural_edit() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("undo");
+
+    let a = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({"track":0,"pitches":[60],"start":0,"step":Q,"duration":Q}),
+    });
+    assert!(a.ok, "add A failed: {a:?}");
+    let b = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({"track":0,"pitches":[62],"start":Q,"step":Q,"duration":Q}),
+    });
+    assert!(b.ok, "add B failed: {b:?}");
+
+    let pitches_after = |name: &str| -> Vec<u64> {
+        let doc = read_project(&engine.proj, name);
+        let mut ps: Vec<u64> = doc["clips"].as_array().unwrap().iter()
+            .flat_map(|c| c["notes"].as_array().unwrap())
+            .map(|n| n["pitch"].as_u64().unwrap())
+            .collect();
+        ps.sort_unstable();
+        ps
+    };
+
+    assert!(session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"undo_two"}) }).ok);
+    assert_eq!(pitches_after("undo_two"), vec![60, 62], "both notes present before undo");
+
+    let u = session.execute(&ToolCall { tool: "undo".into(), args: json!({}) });
+    assert!(u.ok && u.output["applied"].as_bool() == Some(true), "undo not applied: {u:?}");
+    assert!(session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"undo_one"}) }).ok);
+    assert_eq!(pitches_after("undo_one"), vec![60], "undo should leave just the first note");
+
+    let r = session.execute(&ToolCall { tool: "redo".into(), args: json!({}) });
+    assert!(r.ok && r.output["applied"].as_bool() == Some(true), "redo not applied: {r:?}");
+    assert!(session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"undo_redo"}) }).ok);
+    assert_eq!(pitches_after("undo_redo"), vec![60, 62], "redo should restore the second note");
+}
+
 /// The agent loop (perceive -> decide -> act) drives the real engine: a scripted
 /// decider adds notes then saves, and the loop stops when the script runs out.
 #[test]
@@ -305,6 +481,102 @@ fn patcher_graph_published() {
     assert_eq!(euclid.config[0], 16, "euclidean steps"); // steps
     assert_eq!(euclid.config[1], 5, "euclidean hits"); // hits
     assert!(!view.edges.is_empty(), "default graph should have an edge");
+}
+
+/// Per-device patcher execution: a project whose track carries TWO patcher devices,
+/// each with its own graph, is assembled into one shared pool on load (globally
+/// unique node ids), so each device's subgraph runs independently. Verified through
+/// the published graph: both devices' euclidean nodes (distinct steps) appear.
+#[test]
+fn per_device_patchers_assemble_into_pool() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("perdev");
+
+    // One patcher device's own graph: euclid(steps/hits) -> event_out, output = 1.
+    let dev = |dev_id: u64, kind: &str, steps: u64, hits: u64| {
+        json!({
+            "device_id": dev_id, "kind": kind, "patcher_node_id": 1, "bypass": false,
+            "patcher": {
+                "nodes": [
+                    { "id": 0, "type": "euclidean",
+                      "euclidean": { "steps": steps, "hits": hits, "offset": 0, "duration_ticks": 0,
+                                     "degree": 1, "octave_offset": 0, "velocity": 100, "base_octave": 4 } },
+                    { "id": 1, "type": "event_out" }
+                ],
+                "edges": [
+                    { "src_node_id": 0, "src_port_id": 1, "dst_node_id": 1, "dst_port_id": 0, "kind": "event" }
+                ]
+            }
+        })
+    };
+    let proj = json!({
+        "schema_version": 2,
+        "meta": { "name": "perdev_in", "created_utc": 0, "modified_utc": 0 },
+        "nanoticks_per_quarter": Q,
+        "tempo_map": [ { "nanotick": 0, "bpm": 120 } ],
+        "harmony_timeline": [], "clips": [],
+        "tracks": [ {
+            "track_id": 0, "name": "T", "harmony_quantize": 0, "lines_per_beat": 4,
+            "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+            "device_chain": [ dev(10, "patcher_event", 7, 3), dev(20, "patcher_instrument", 9, 5) ],
+            "mod_links": [], "placements": []
+        } ]
+    });
+    std::fs::write(
+        engine.proj.join("perdev_in.uniproj.json"),
+        serde_json::to_string_pretty(&proj).unwrap(),
+    )
+    .unwrap();
+
+    let load = session.execute(&ToolCall { tool: "load".into(), args: json!({"name":"perdev_in"}) });
+    assert!(load.ok, "load failed: {load:?}");
+
+    // Poll the published graph until both devices' euclidean nodes (steps 7 and 9)
+    // appear — proof both were assembled into the pool, not just the first.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let view = loop {
+        let v = session.handle().read_patcher();
+        let steps: Vec<i32> =
+            v.nodes.iter().filter(|n| n.node_type == 1).map(|n| n.config[0]).collect();
+        if steps.contains(&7) && steps.contains(&9) {
+            break v;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "assembled per-device pool never published: {:?}",
+            v.nodes.iter().map(|n| (n.node_type, n.config[0])).collect::<Vec<_>>()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    // Union pool: two euclidean + two event_out = 4 nodes, two edges, ids unique.
+    assert_eq!(view.nodes.len(), 4, "expected 4 pooled nodes");
+    assert_eq!(view.edges.len(), 2, "expected two edges, one per device");
+    let mut ids: Vec<u32> = view.nodes.iter().map(|n| n.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), 4, "node ids must be globally unique in the assembled pool");
+    // Each device keeps its own event_out terminal (type 6).
+    assert_eq!(
+        view.nodes.iter().filter(|n| n.node_type == 6).count(),
+        2,
+        "each device's event_out should survive assembly"
+    );
+
+    // Round-trip: save must preserve each device's OWN graph (2 nodes each), not
+    // park the assembled 4-node pool onto one device.
+    let save = session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"perdev_out"}) });
+    assert!(save.ok, "save failed: {save:?}");
+    let doc = read_project(&engine.proj, "perdev_out");
+    let devices = track(&doc, 0)["device_chain"].as_array().unwrap();
+    let with_patcher: Vec<&Value> = devices
+        .iter()
+        .filter(|d| d.get("patcher").is_some())
+        .collect();
+    assert_eq!(with_patcher.len(), 2, "both devices should keep their own patcher: {devices:?}");
+    for d in with_patcher {
+        let nodes = d["patcher"]["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2, "each device's own graph is 2 nodes, not the pooled union: {d:?}");
+    }
 }
 
 /// Track names are published: a fresh track defaults to "Track N", and a loaded

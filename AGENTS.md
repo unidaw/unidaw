@@ -3,6 +3,98 @@
 This document is the canonical brief and working agreement for agents in this
 repo. It should be kept up to date as the project evolves.
 
+## Current environment & workflow (updated 2026-07-27)
+
+Practical, verified operational knowledge. Where this conflicts with older
+sections below, this wins (the design intent below is still valid; some
+milestone/UI specifics predate the web-UI switch).
+
+**Repo layout**
+- `apps/` — the C++ engine (`daw_engine_main.cpp`, ~8k lines) + all C++ headers
+  (clip model, scheduler, patcher, SHM) and their test mains (`*_tests_main.cpp`).
+- `platform_juce/` — the ONLY place JUCE is used (`juce_wrapper.{h,cpp}`): plugin
+  hosting, audio backend, and audio-file decode/encode. The engine talks to JUCE
+  only through this wrapper.
+- `patcher_rust/` — Rust DSP node kernels (euclidean/LFO/random-degree/...),
+  linked into the engine via the C ABI in `apps/patcher_abi.h` (weak symbols).
+- `ui/` — Rust: `daw-bridge` (SHM layout mirror + `EngineHandle` readers/writers),
+  `daw-agent` (agent harness, tools, `tests/engine_e2e.rs`), `daw-cli`. The old
+  Rust/GPUI `daw-app` was REMOVED — ignore any reference to it below.
+- `ui-web/` — the web UI (JS/TS). Built by the `frontend` agent, served by a Rust
+  sidecar that mmaps the engine UI SHM read-only.
+- `tools/` — `perceptual.py` (objective audio metrics), `svg2png.sh`, etc.
+- `build/` — CMake output (git-ignored).
+
+**Build.** `cmake -S . -B build && cmake --build build`. Always build after edits.
+Note: the clang **language server** reports false `'platform_juce/juce_wrapper.h'
+file not found` / `undeclared identifier 'daw'` diagnostics because it lacks the
+repo include root — the actual `cmake --build` is authoritative, ignore the LSP
+noise.
+
+**Tests.**
+- C++: `ctest --test-dir build` (31 tests). Pure-logic suites live in
+  `phase3_tests` (`--test <name>`: `note_entry`, `placement_schedule`,
+  `audio_region`, ...); patcher in `patcher_graph_tests`.
+- Rust e2e: `cd ui/daw-agent && cargo test`. `tests/engine_e2e.rs` spawns
+  `build/daw_engine` in **test mode**, serialized (one engine at a time via a
+  `SERIAL` mutex), each test using a unique SHM/project tag (duplicate tags
+  collide → flake). Build the C++ targets first.
+
+**Running the engine.** Two modes:
+- **Test mode** (`DAW_ENGINE_TEST_MODE=1`): headless, NO real audio device, driven
+  over the command ring. This is what e2e uses.
+- **Normal mode** (env unset): opens the real CoreAudio device (present here,
+  44100 Hz) and starts the audio callback. Required for the capture tap.
+- Run from `build/` so it finds `./juce_host_process` (spawned per track,
+  relative to cwd). Key env: `DAW_UI_SHM_NAME`, `DAW_PROJECT_DIR`,
+  `--run-seconds N` (timed self-exit that flushes captures).
+
+**Objective audio check (no ears).** `DAW_CAPTURE_WAV=<path>
+DAW_CAPTURE_SECONDS=<n>` records the master output to a wav on shutdown (normal
+mode only). `python3 tools/perceptual.py <wav> [--expect-audio|--expect-silence]`
+prints level/spectral metrics and asserts. Verified working here (a no-instrument
+run reads `pk 0.00`). Recipe:
+```
+cd build && DAW_UI_SHM_NAME=/x_$$ DAW_PROJECT_DIR=/tmp/x_$$ \
+  DAW_CAPTURE_WAV=/tmp/take.wav DAW_CAPTURE_SECONDS=3 ./daw_engine --run-seconds 2
+python3 ../tools/perceptual.py --expect-audio /tmp/take.wav
+```
+
+**Multi-agent collaboration.** Two agents work in parallel over a file bus at
+`/tmp/dawagents/` (`send.mjs <from> <to> "subj"` + body on stdin; `poll.mjs
+backend`; `watch-next.mjs backend` as a background watcher). This agent is
+`backend` (C++ engine + `ui/daw-bridge`/`daw-agent`); `frontend` builds the web UI
++ sidecar in a `daw-web` worktree. Poll at each turn start; re-arm the watcher
+(fires once, on any bus append — including your own posts).
+
+**SHM contract.** `apps/shared_memory.h` ↔ `ui/daw-bridge/src/layout.rs` are
+lockstep (C++ `static_assert`s / Rust `offset_of!` asserts), `kShmVersion` = 15.
+Any header/struct change bumps the version in BOTH + updates the offset asserts.
+See `SHM_LAYOUT.md`.
+
+**Architecture facts worth knowing before editing the engine:**
+- **Note entry is structural**: `clips + placements` (per-track `sourcePlacements`
+  + `ownedClips`) are the note store; the flat `track.clip` is a DERIVED cache the
+  audio thread reads. Edits mutate the store (copy-on-write) then re-derive. Undo
+  is a whole-track store swap.
+- **Per-device patchers execute**: each device's own patcher graph is assembled
+  into the one shared pool at load (globally-unique ids); the RT scheduler already
+  DFS-runs each device's subgraph from its output node.
+- **Threading**: a `producer` thread advances the transport and schedules events
+  to per-track VST **host processes** (separate processes that render audio into
+  SHM block rings); a master audio callback (`EngineAudioCallback::process`) mixes
+  those host blocks by block-id into the output device, with a capture tap on the
+  master mix. Audio clips (M4) have no host — the engine itself must generate their
+  samples and mix them in the callback, synced to the transport sample clock.
+- The engine publishes per-track state (chain/routing/mod/automation + patcher
+  node ids) to the audio thread via each track's `trackSnapshot`, rebuilt by the
+  edit-command handlers and (now) on project load.
+
+Note on numbering: the code comments call the audio movement "Movement 4"; the
+"Milestone 4" section below is an older label for the projection-UI work. The
+current active work is the audio engine.
+
+
 ## Project summary
 - Building a precise, malleable DAW with a single canonical clip model that
   serves both tracker and piano roll views.

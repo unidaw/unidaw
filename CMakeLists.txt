@@ -225,6 +225,14 @@ target_include_directories(project_file_tests PRIVATE
 
 target_link_libraries(project_file_tests PRIVATE platform_juce)
 
+add_executable(audio_io_tests
+  apps/audio_io_tests_main.cpp
+)
+target_include_directories(audio_io_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(audio_io_tests PRIVATE platform_juce)
+
 add_executable(device_chain_tests
   apps/device_chain_tests_main.cpp
   apps/device_chain.cpp
@@ -365,6 +373,16 @@ add_test(NAME phase3_automation_ring
           --plugin ${CMAKE_BINARY_DIR}/identity_plugin_artefacts/VST3/Identity.vst3
 )
 set_tests_properties(phase3_automation_ring PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME phase3_audio_region
+  COMMAND phase3_tests --test audio_region
+)
+set_tests_properties(phase3_audio_region PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME audio_io
+  COMMAND audio_io_tests
+)
+set_tests_properties(audio_io PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME phase3_harmony_quantize
   COMMAND phase3_tests --test harmony_quantize

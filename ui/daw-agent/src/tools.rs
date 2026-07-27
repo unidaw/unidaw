@@ -115,6 +115,16 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                 }
             }),
         },
+        ToolSpec {
+            name: "undo",
+            description: "Undo the last note/chord edit, restoring the track's previous clips + placements.",
+            params: json!({ "type": "object", "properties": {} }),
+        },
+        ToolSpec {
+            name: "redo",
+            description: "Redo the last undone note/chord edit.",
+            params: json!({ "type": "object", "properties": {} }),
+        },
     ]
 }
 
@@ -142,6 +152,8 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "save" => named(handle, UiCommandType::SaveProject, &call.args, "saved"),
         "load" => named(handle, UiCommandType::LoadProject, &call.args, "loaded"),
         "set_track_name" => set_track_name(handle, &call.args),
+        "undo" => undo_redo(handle, UiCommandType::Undo),
+        "redo" => undo_redo(handle, UiCommandType::Redo),
         other => ToolResult::err(format!("unknown tool {other:?}")),
     }
 }
@@ -216,6 +228,33 @@ fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
     }))
 }
 
+// Undo or redo the last structural (note/chord) edit. The engine keeps the undo
+// stack; the agent just sends the command tagged with the current clip version and
+// waits for the one-version bump a store swap produces. `applied=false` means the
+// stack was empty (nothing happened), never a silent error.
+fn undo_redo(handle: &EngineHandle, cmd: UiCommandType) -> ToolResult {
+    let base = handle.clip_version();
+    let payload = UiCommandPayload {
+        command_type: cmd as u16,
+        flags: 0,
+        track_id: 0,
+        plugin_index: 0,
+        note_pitch: 0,
+        value0: 0,
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: base,
+    };
+    if let Err(e) = handle.send_command(payload) {
+        return ToolResult::err(e);
+    }
+    let applied =
+        handle.wait_for_clip_version(base, base.wrapping_add(1), std::time::Duration::from_secs(2));
+    ToolResult::ok(json!({ "applied": applied }))
+}
+
 fn transport(handle: &EngineHandle, args: &Value) -> ToolResult {
     let action = match args.get("action").and_then(|v| v.as_str()) {
         Some(a) => a,
@@ -224,7 +263,7 @@ fn transport(handle: &EngineHandle, args: &Value) -> ToolResult {
     let playing = handle.snapshot().map(|s| s.ui_transport_state != 0).unwrap_or(false);
 
     // stop and seek are distinct commands, not toggles.
-    let mut send = |cmd: UiCommandType, pos: u64| -> ToolResult {
+    let send = |cmd: UiCommandType, pos: u64| -> ToolResult {
         let payload = UiCommandPayload {
             command_type: cmd as u16,
             flags: 0,
@@ -356,7 +395,7 @@ mod tests {
             // yields exactly the "unknown tool" message.
             let recognized = match call.tool.as_str() {
                 "observe" | "add_notes" | "transport" | "save" | "load"
-                | "set_track_name" => true,
+                | "set_track_name" | "undo" | "redo" => true,
                 _ => false,
             };
             assert!(recognized, "manifest tool {:?} has no dispatch arm", spec.name);

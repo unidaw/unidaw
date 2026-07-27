@@ -21,6 +21,7 @@
 #include "apps/musical_structures.h"
 #include "apps/placement_schedule.h"
 #include "apps/note_entry.h"
+#include "apps/audio_region.h"
 #include "apps/scale_library.h"
 #include "apps/time_base.h"
 #include "apps/ui_snapshot.h"
@@ -752,6 +753,99 @@ bool runRowOpExpandTest() {
   return true;
 }
 
+// M4: the pure audio-region renderer — resample a source window into an output
+// block with gain + linear fades, the sample-domain analogue of the note
+// scheduler, unit-tested off the audio thread.
+bool runAudioRegionTest() {
+  auto fail = [](const char* m) {
+    std::cerr << "audio_region: " << m << std::endl;
+    return false;
+  };
+  auto approx = [](float a, float b) {
+    const float d = a - b;
+    return (d < 0 ? -d : d) < 1e-3f;
+  };
+
+  // A ramp source: source[i] == i, so a read maps position -> value directly.
+  std::vector<float> ramp(1000);
+  for (size_t i = 0; i < ramp.size(); ++i) {
+    ramp[i] = static_cast<float>(i);
+  }
+
+  // 1) Same rate, unity gain, no fade, in-point 5: out frame f in the region
+  //    reads source[5 + (f - start)].
+  {
+    daw::AudioRegionParams p;
+    p.regionStartSample = 100;
+    p.regionLengthSamples = 50;
+    p.sourceStartFrame = 5;
+    std::vector<float> out(200, 0.0f);
+    daw::renderAudioRegionBlock(p, ramp.data(), ramp.size(), 80, 200, out.data());
+    if (!approx(out[99 - 80], 0.0f)) return fail("frame before region must stay silent");
+    if (!approx(out[100 - 80], 5.0f)) return fail("region start reads the in-point");
+    if (!approx(out[120 - 80], 25.0f)) return fail("region frame 20 -> source 25");
+    if (!approx(out[149 - 80], 54.0f)) return fail("region last frame -> source 54");
+    if (!approx(out[150 - 80], 0.0f)) return fail("frame at region end must be silent");
+  }
+
+  // 2) Gain scales every frame.
+  {
+    daw::AudioRegionParams p;
+    p.regionStartSample = 0;
+    p.regionLengthSamples = 50;
+    p.gain = 0.5f;
+    std::vector<float> out(50, 0.0f);
+    daw::renderAudioRegionBlock(p, ramp.data(), ramp.size(), 0, 50, out.data());
+    if (!approx(out[20], 10.0f)) return fail("gain 0.5 should halve the sample");
+  }
+
+  // 3) Resampling: a source at 1.5x the engine rate reads 1.5 source frames per
+  //    output frame, linearly interpolated (rel 1 -> source pos 1.5 -> 1.5).
+  {
+    daw::AudioRegionParams p;
+    p.regionStartSample = 0;
+    p.regionLengthSamples = 50;
+    p.sourceRate = 72000.0;
+    p.engineRate = 48000.0;
+    std::vector<float> out(50, 0.0f);
+    daw::renderAudioRegionBlock(p, ramp.data(), ramp.size(), 0, 50, out.data());
+    if (!approx(out[1], 1.5f)) return fail("resample interp: rel 1 -> 1.5");
+    if (!approx(out[10], 15.0f)) return fail("resample: rel 10 -> source 15");
+  }
+
+  // 4) Linear fades on a constant source (== the envelope).
+  {
+    std::vector<float> flat(200, 1.0f);
+    daw::AudioRegionParams p;
+    p.regionStartSample = 0;
+    p.regionLengthSamples = 50;
+    p.fadeInSamples = 10;
+    p.fadeOutSamples = 10;
+    std::vector<float> out(50, 0.0f);
+    daw::renderAudioRegionBlock(p, flat.data(), flat.size(), 0, 50, out.data());
+    if (!approx(out[0], 0.0f)) return fail("fade-in starts at 0");
+    if (!approx(out[5], 0.5f)) return fail("fade-in half way");
+    if (!approx(out[10], 1.0f)) return fail("past fade-in is full gain");
+    if (!approx(out[45], 0.5f)) return fail("fade-out half way");
+    if (!approx(out[40], 1.0f)) return fail("fade-out starts at full");
+  }
+
+  // 5) Reading past the end of the source contributes nothing.
+  {
+    daw::AudioRegionParams p;
+    p.regionStartSample = 0;
+    p.regionLengthSamples = 50;
+    p.sourceStartFrame = 995;  // source has 1000 frames
+    std::vector<float> out(50, 0.0f);
+    daw::renderAudioRegionBlock(p, ramp.data(), ramp.size(), 0, 50, out.data());
+    if (!approx(out[4], 999.0f)) return fail("last in-range frame reads source 999");
+    if (!approx(out[10], 0.0f)) return fail("past the source end must be silent");
+  }
+
+  std::cout << "audio_region: ok" << std::endl;
+  return true;
+}
+
 // M3.3a: the pure placement scheduler — clip-relative +at with looping. This is
 // the coordinate change M3 turns on, unit-tested off the audio thread.
 bool runPlacementScheduleTest() {
@@ -1335,6 +1429,7 @@ int runAllTests(const std::string& pluginPath) {
       {"row_op_expand", [](const std::string&) { return runRowOpExpandTest(); }},
       {"placement_schedule", [](const std::string&) { return runPlacementScheduleTest(); }},
       {"note_entry", [](const std::string&) { return runNoteEntryTest(); }},
+      {"audio_region", [](const std::string&) { return runAudioRegionTest(); }},
       {"resync_mismatch", [](const std::string&) { return runResyncMismatchTest(); }},
       {"pulse_full", runPulseFullTest},
       {"note_off_full", runNoteOffFullTest},
@@ -1380,6 +1475,7 @@ int main(int argc, char** argv) {
       testName != "undo_stack" && testName != "note_duration" &&
       testName != "row_op_probability" && testName != "row_op_expand" &&
       testName != "placement_schedule" && testName != "note_entry" &&
+      testName != "audio_region" &&
       testName != "resync_mismatch" &&
       testName != "pulse_full" && testName != "note_off_full" &&
       testName != "resurrection_full" && testName != "composition_full" &&
@@ -1432,6 +1528,9 @@ int main(int argc, char** argv) {
   }
   if (testName == "note_entry") {
     return runNoteEntryTest() ? 0 : 1;
+  }
+  if (testName == "audio_region") {
+    return runAudioRegionTest() ? 0 : 1;
   }
   if (testName == "resync_mismatch") {
     return runResyncMismatchTest() ? 0 : 1;

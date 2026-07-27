@@ -35,6 +35,8 @@
 #include "apps/host_controller.h"
 #include "apps/plugin_cache.h"
 #include "apps/patcher_abi.h"
+#include "apps/audio_region.h"
+#include "apps/patcher_assemble.h"
 #include "apps/patcher_graph.h"
 #include "apps/patcher_preset.h"
 #include "apps/patcher_preset_library.h"
@@ -313,6 +315,19 @@ bool writeWav16(const std::string& path,
   return static_cast<bool>(out);
 }
 
+// One placed audio region resolved for the audio thread: the sample-domain params
+// (position/length in engine output frames, computed from its placement) plus the
+// decoded mono source it reads. Shared by shared_ptr so the audio thread never
+// touches the decode or the store.
+struct AudioRegionRender {
+  daw::AudioRegionParams params;
+  std::shared_ptr<const std::vector<float>> source;
+  uint64_t sourceFrames = 0;
+};
+// A track's audio regions, published as an immutable snapshot the audio callback
+// reads lock-free (rebuilt on load/edit, like the note clip snapshot).
+using AudioRenderList = std::vector<AudioRegionRender>;
+
 class EngineAudioCallback {
 public:
   struct TrackInfo {
@@ -333,6 +348,11 @@ public:
     // Which published slot (uiTrackPeakRms[uiSlot]) this track's level goes to —
     // the track's index in the UI track list, not its push position here.
     uint32_t uiSlot = 0;
+    // This track's placed audio clips, resolved + decoded. A RESOLVED shared_ptr
+    // (not atomic-loaded here — that would hit libc++'s __sp_mut spinlock on the
+    // audio thread, see the note below); it is kept alive by the hazard-protected
+    // track list, and republished by rebuilding the list when audio clips change.
+    std::shared_ptr<const AudioRenderList> audioRender;
   };
 
   // Per-slot output peak, written by the audio thread each block and read by the
@@ -353,7 +373,9 @@ public:
         m_resetPending(false),
         m_playbackBlockId(playbackBlockId),
         m_startTime(std::chrono::steady_clock::now()),
-        m_lastPlayedBlockId(0) {}
+        m_lastPlayedBlockId(0) {
+    m_audioScratch.assign(blockSize, 0.0f);
+  }
 
   void process(float* const* outputChannelData,
                int numOutputChannels,
@@ -537,6 +559,53 @@ public:
       }
     }
 
+    // Mix placed audio clips. Unlike instrument tracks these have no host process
+    // — the engine renders them here from decoded sources, device-locked to
+    // m_transportSample, and only while the transport is playing. Each region is
+    // rendered mono into the scratch buffer, then panned into the output at the
+    // track's gain (constant-power pan, matching the host mix above).
+    const bool playing =
+        m_playing && m_playing->load(std::memory_order_acquire);
+    if (playing) {
+      for (const auto& track : *tracks) {
+        const auto& regions = track.audioRender;
+        if (!regions || regions->empty()) {
+          continue;
+        }
+        const float gain = track.gainLinear
+                               ? track.gainLinear->load(std::memory_order_relaxed)
+                               : 1.0f;
+        const float pan =
+            track.pan ? track.pan->load(std::memory_order_relaxed) : 0.0f;
+        const float angle = (std::clamp(pan, -1.0f, 1.0f) + 1.0f) * 0.25f *
+                            static_cast<float>(M_PI);
+        for (const auto& region : *regions) {
+          if (!region.source || region.source->empty()) {
+            continue;
+          }
+          std::fill(m_audioScratch.begin(),
+                    m_audioScratch.begin() + numSamples, 0.0f);
+          daw::renderAudioRegionBlock(region.params, region.source->data(),
+                                      region.sourceFrames,
+                                      static_cast<int64_t>(m_transportSample),
+                                      numSamples, m_audioScratch.data());
+          for (int ch = 0; ch < numOutputChannels; ++ch) {
+            float* output = outputChannelData[ch];
+            if (!output) {
+              continue;
+            }
+            const float panGain = (ch == 0) ? std::cos(angle) : std::sin(angle);
+            const float channelGain =
+                gain * (numOutputChannels >= 2 ? panGain : 1.0f);
+            for (int i = 0; i < numSamples; ++i) {
+              output[i] += m_audioScratch[i] * channelGain;
+            }
+          }
+        }
+      }
+      m_transportSample += static_cast<uint64_t>(numSamples);
+    }
+
     captureMasterOutput(outputChannelData, numOutputChannels, numSamples);
 
     // Advance playback clock even if tracks are late to avoid global stalls.
@@ -615,6 +684,10 @@ public:
     m_currentReadBlock = 0;
     m_totalSamplesProcessed = 0;
     m_lastPlayedBlockId = 0;
+    m_transportSample = 0;
+    if (m_audioScratch.size() != m_blockSize) {
+      m_audioScratch.assign(m_blockSize, 0.0f);
+    }
     m_startTime = std::chrono::steady_clock::now();
     if (m_playbackBlockId) {
       m_playbackBlockId->store(0, std::memory_order_release);
@@ -672,6 +745,16 @@ private:
   std::atomic<std::vector<TrackInfo>*> m_tracksHazard{nullptr};
   std::vector<std::shared_ptr<std::vector<TrackInfo>>> m_tracksRetired;
   std::atomic<float> m_trackPeak[daw::kUiMaxTracks]{};
+
+  // Audio-clip playback: a device-locked transport sample position (advances by a
+  // block per callback while playing, reset to 0 on start) and a preallocated
+  // mono scratch buffer for rendering one region before it is panned into the mix.
+  const std::atomic<bool>* m_playing = nullptr;
+  uint64_t m_transportSample = 0;
+  std::vector<float> m_audioScratch;
+
+ public:
+  void setPlaying(const std::atomic<bool>* playing) { m_playing = playing; }
 };
 
 struct ClipSnapshot {
@@ -1052,11 +1135,17 @@ struct TrackRuntime {
     // trackMutex; set on load.
     std::vector<ClipExtentInfo> clipExtents;
     std::shared_ptr<const ClipSnapshot> clipSnapshot;
-    // The placement list this track loaded from (project-level clips are held
-    // engine-wide). The runtime plays a flattened clip, so this is what save
-    // emits to keep the arrangement's structure — provided the track hasn't been
-    // edited live. Guarded by trackMutex; set on load.
+    // The note store (M3.2 structural reroute): this track's placements plus the
+    // clips they reference, both owned per-track (copy-on-write from the loaded
+    // project). track.clip is DERIVED from these by flattenPlacements after every
+    // edit; edits mutate the store, not track.clip. Both guarded by trackMutex.
     std::vector<daw::ProjectPlacement> sourcePlacements;
+    std::vector<daw::ProjectClip> ownedClips;
+    // Clip ids this track created or copy-on-write-forked (i.e. owns exclusively
+    // and may edit in place). A loaded clip id NOT here is pristine — shared with
+    // the project/other tracks — so the first edit forks it to a fresh id before
+    // mutating, keeping save ids collision-free without content comparison.
+    std::vector<uint32_t> editableClipIds;
     // Display name, published so every lane-labelling surface shares one source.
     // Guarded by trackMutex; defaults to "Track N", set from the project on load.
     std::string trackName;
@@ -1065,6 +1154,10 @@ struct TrackRuntime {
     // (edits win over structure until note entry is structural, M3.2).
     std::atomic<bool> arrangementDirty{false};
     std::shared_ptr<const TrackStateSnapshot> trackSnapshot;
+    // This track's placed audio regions, resolved to the sample domain + decoded,
+    // for the audio thread to mix. Published via std::atomic_load/store on the
+    // shared_ptr; empty/null when the track has no audio clips.
+    std::shared_ptr<const AudioRenderList> audioRender;
     daw::HostController controller;
     daw::HostConfig config;
     std::atomic<bool> needsRestart{false};
@@ -1307,6 +1400,10 @@ struct TrackRuntime {
   std::cout << "Engine: Ready for tracker input" << std::endl;
 
   daw::PatcherGraphState patcherGraphState;
+  // True when the running pool was assembled from per-device graphs (>= 2 devices
+  // each carrying one) at load. Save then preserves each device's own graph rather
+  // than parking the live single graph on one device (the legacy path).
+  std::atomic<bool> patcherAssembledFromDevices{false};
   std::shared_ptr<daw::PatcherGraph> patcherGraphSnapshot;
   auto updatePatcherGraphSnapshot = [&]() {
     auto snapshot = std::make_shared<daw::PatcherGraph>();
@@ -1387,9 +1484,30 @@ struct TrackRuntime {
   // projectLoadSeq bumps once per load attempt, projectLoadOk holds its result.
   std::atomic<uint32_t> projectLoadSeq{0};
   std::atomic<uint32_t> projectLoadOk{0};
+  // Allocator for new/copy-on-write clip ids across all tracks' ownedClips.
+  // Seeded past every loaded clip id so a fresh id never collides with a
+  // retained one. Bumped when a track creates a clip or COW-forks a loaded one.
+  std::atomic<uint32_t> nextClipId{1};
+  // A structural (note/chord) edit records its undo as a whole-track store swap:
+  // the track's placements + owned clips + editable-id set before and after the
+  // edit. Undo restores `before` and re-derives; redo restores `after`. Robust by
+  // construction — no re-resolution that could land on the wrong placement after
+  // the layout has moved. Harmony edits keep their existing absolute-tick undo.
+  struct TrackStoreState {
+    std::vector<daw::ProjectPlacement> placements;
+    std::vector<daw::ProjectClip> clips;
+    std::vector<uint32_t> editable;
+  };
+  struct EngineUndoEntry {
+    bool structural = false;
+    uint32_t trackId = 0;
+    TrackStoreState before;
+    TrackStoreState after;
+    daw::UndoEntry harmony{};  // used only when !structural
+  };
   std::mutex undoMutex;
-  std::vector<daw::UndoEntry> undoStack;
-  std::vector<daw::UndoEntry> redoStack;
+  std::vector<EngineUndoEntry> undoStack;
+  std::vector<EngineUndoEntry> redoStack;
   std::mutex harmonyMutex;
   std::vector<daw::HarmonyEvent> harmonyEvents;
 
@@ -2513,10 +2631,20 @@ struct TrackRuntime {
     }
   };
 
-  auto pushUndo = [&](const daw::UndoEntry& entry) {
+  auto pushUndo = [&](EngineUndoEntry entry) {
     std::lock_guard<std::mutex> lock(undoMutex);
-    undoStack.push_back(entry);
+    undoStack.push_back(std::move(entry));
     redoStack.clear();
+  };
+
+  // Harmony edits keep their absolute-tick undo, wrapped as a non-structural entry
+  // so they share one heterogeneous undo stack with structural store swaps.
+  auto pushHarmonyUndo = [&](const daw::UndoEntry& undo) {
+    EngineUndoEntry e;
+    e.structural = false;
+    e.trackId = undo.trackId;
+    e.harmony = undo;
+    pushUndo(std::move(e));
   };
 
   auto invertUndoEntry = [&](const daw::UndoEntry& entry) -> daw::UndoEntry {
@@ -2586,7 +2714,7 @@ struct TrackRuntime {
         undo.harmonyRoot = root;
         undo.harmonyScaleId = scaleId;
       }
-      pushUndo(undo);
+      pushHarmonyUndo(undo);
     }
     harmonyDirty.store(true, std::memory_order_release);
     const uint32_t nextVersion =
@@ -2629,7 +2757,7 @@ struct TrackRuntime {
       undo.nanotick = nanotick;
       undo.harmonyRoot = removedEvent.root;
       undo.harmonyScaleId = removedEvent.scaleId;
-      pushUndo(undo);
+      pushHarmonyUndo(undo);
     }
     harmonyDirty.store(true, std::memory_order_release);
     const uint32_t nextVersion =
@@ -2653,6 +2781,394 @@ struct TrackRuntime {
   };
   auto pluginStateFileName = [](uint32_t trackId, uint32_t deviceId) -> std::string {
     return "t" + std::to_string(trackId) + "_d" + std::to_string(deviceId) + ".bin";
+  };
+
+  // The flatten window for a track: past every placement's resolved end, at least
+  // one pattern bar. Used so a note stretched or looped past the old arrangement
+  // end still lands in the derived flat clip.
+  auto trackWindowEnd = [&](const TrackRuntime& rt) -> uint64_t {
+    uint64_t end = patternTicks;
+    for (const auto& pl : rt.sourcePlacements) {
+      if (!pl.at.has_value()) {
+        continue;
+      }
+      uint64_t clipLen = 0;
+      uint64_t contentEnd = 0;
+      for (const auto& c : rt.ownedClips) {
+        if (c.id == pl.clipId) {
+          clipLen = c.lengthNanoticks;
+          for (const auto& e : c.clip.events()) {
+            uint64_t dur = 0;
+            if (e.type == daw::MusicalEventType::Note) {
+              dur = e.payload.note.durationNanoticks;
+            } else if (e.type == daw::MusicalEventType::Chord) {
+              dur = e.payload.chord.durationNanoticks;
+            }
+            contentEnd = std::max(contentEnd, e.nanotickOffset + dur);
+          }
+          break;
+        }
+      }
+      // A placement reaches at + its timeline extent. For a linear length-0 clip
+      // that extent IS its content, so a note entered past patternTicks stays
+      // inside the flatten window — otherwise it is scheduled out of range and
+      // silently vanishes from the derived clip.
+      const uint64_t extent = pl.lengthNanoticks > 0
+                                  ? pl.lengthNanoticks
+                                  : (clipLen > 0 ? clipLen : contentEnd);
+      end = std::max(end, *pl.at + std::max(extent, contentEnd));
+    }
+    return end;
+  };
+
+  // The single funnel for the structural note store: re-derive track.clip and the
+  // rail extents from (sourcePlacements + ownedClips) and return a fresh snapshot.
+  // Assumes runtime->trackMutex is held; the caller atomic_stores the returned
+  // snapshot after unlocking. The audio thread reads only the snapshot, so
+  // track.clip being derived is invisible to it.
+  auto rebuildFlatAndPublish =
+      [&](TrackRuntime& rt) -> std::shared_ptr<const ClipSnapshot> {
+    const uint64_t windowEnd = trackWindowEnd(rt);
+    daw::MusicalClip flat;
+    for (const auto& ev :
+         daw::flattenPlacements(rt.sourcePlacements, rt.ownedClips, windowEnd)) {
+      flat.addEvent(ev);
+    }
+    rt.track.clip = std::move(flat);
+    rt.clipExtents.clear();
+    for (size_t i = 0; i < rt.sourcePlacements.size(); ++i) {
+      const auto& pl = rt.sourcePlacements[i];
+      if (!pl.at.has_value()) {
+        continue;
+      }
+      ClipExtentInfo ext;
+      ext.placementId = static_cast<uint32_t>(i);
+      ext.clipId = pl.clipId;
+      ext.at = *pl.at;
+      uint64_t length = pl.lengthNanoticks;
+      for (const auto& c : rt.ownedClips) {
+        if (c.id == pl.clipId) {
+          if (length == 0) {
+            length = c.lengthNanoticks;
+          }
+          ext.name = c.name;
+          ext.isAudio = c.kind == daw::ClipKind::Audio;
+          break;
+        }
+      }
+      ext.endTick = *pl.at + length;
+      rt.clipExtents.push_back(std::move(ext));
+    }
+    return buildClipSnapshot(rt.track.clip);
+  };
+
+  // Resolve a track's placed AUDIO clips into a sample-domain render list for the
+  // audio thread: decode each source (deduped per rebuild), and convert its
+  // placement to output frames. Musical->sample uses the engine rate at a constant
+  // tempo (variable-tempo audio positioning is a later refinement). Runs off the
+  // audio thread (decodes files); the caller atomic_stores the result into
+  // rt.audioRender. Assumes trackMutex is held for the store reads.
+  auto rebuildAudioRender =
+      [&](const TrackRuntime& rt) -> std::shared_ptr<const AudioRenderList> {
+    auto list = std::make_shared<AudioRenderList>();
+    const double rate = static_cast<double>(engineConfig.sampleRate);
+    const double bpm = tempoProvider.bpmAtNanotick(0);
+    const double samplesPerTick =
+        bpm > 0.0 ? rate * 60.0 /
+                        (bpm * static_cast<double>(
+                                   daw::NanotickConverter::kNanoticksPerQuarter))
+                  : 0.0;
+    auto toSamples = [&](uint64_t ticks) -> int64_t {
+      return static_cast<int64_t>(static_cast<double>(ticks) * samplesPerTick);
+    };
+    // Small per-rebuild decode cache so one file placed twice decodes once.
+    struct Cached {
+      std::string path;
+      std::shared_ptr<const std::vector<float>> samples;
+      uint64_t frames;
+      double srcRate;
+    };
+    std::vector<Cached> cache;
+    for (const auto& pl : rt.sourcePlacements) {
+      if (!pl.at.has_value()) {
+        continue;
+      }
+      const daw::ProjectClip* clip = nullptr;
+      for (const auto& c : rt.ownedClips) {
+        if (c.id == pl.clipId) {
+          clip = &c;
+          break;
+        }
+      }
+      if (!clip || clip->kind != daw::ClipKind::Audio ||
+          clip->audio.sourcePath.empty()) {
+        continue;
+      }
+      std::shared_ptr<const std::vector<float>> src;
+      uint64_t frames = 0;
+      double srcRate = rate;
+      bool have = false;
+      for (const auto& c : cache) {
+        if (c.path == clip->audio.sourcePath) {
+          src = c.samples;
+          frames = c.frames;
+          srcRate = c.srcRate;
+          have = true;
+          break;
+        }
+      }
+      if (!have) {
+        auto dec = daw::decodeAudioFileMono(clip->audio.sourcePath);
+        if (!dec.ok) {
+          continue;  // a missing/unreadable source just does not sound
+        }
+        src = std::make_shared<const std::vector<float>>(std::move(dec.samples));
+        frames = dec.frames;
+        srcRate = dec.sampleRate;
+        cache.push_back({clip->audio.sourcePath, src, frames, srcRate});
+      }
+      const uint64_t lenTicks =
+          pl.lengthNanoticks > 0 ? pl.lengthNanoticks : clip->lengthNanoticks;
+      AudioRegionRender r;
+      r.params.regionStartSample = toSamples(*pl.at);
+      r.params.regionLengthSamples = toSamples(lenTicks);
+      r.params.sourceStartFrame = clip->audio.sourceStartFrame;
+      r.params.sourceRate = srcRate;
+      r.params.engineRate = rate;
+      r.params.gain = static_cast<float>(std::pow(10.0, clip->audio.gainDb / 20.0));
+      r.params.fadeInSamples = toSamples(clip->audio.fadeInNanoticks);
+      r.params.fadeOutSamples = toSamples(clip->audio.fadeOutNanoticks);
+      r.source = std::move(src);
+      r.sourceFrames = frames;
+      list->push_back(std::move(r));
+    }
+    return list;
+  };
+
+  // The tick just past the last event in a clip — its content extent.
+  auto clipContentEnd = [](const daw::MusicalClip& clip) -> uint64_t {
+    uint64_t end = 0;
+    for (const auto& e : clip.events()) {
+      uint64_t dur = 0;
+      if (e.type == daw::MusicalEventType::Note) {
+        dur = e.payload.note.durationNanoticks;
+      } else if (e.type == daw::MusicalEventType::Chord) {
+        dur = e.payload.chord.durationNanoticks;
+      }
+      end = std::max(end, e.nanotickOffset + dur);
+    }
+    return end;
+  };
+
+  // Where a structural edit at an absolute tick lands: an index into ownedClips,
+  // the clip-relative tick, and the covering placement.
+  struct EditTarget {
+    bool valid = false;
+    size_t ownedIndex = 0;      // index into runtime->ownedClips
+    uint64_t relTick = 0;       // clip-relative tick to edit at
+    size_t placementIndex = 0;  // index into runtime->sourcePlacements
+    uint32_t clipId = 0;
+    uint64_t placementAt = 0;   // the placement's absolute anchor
+  };
+
+  // Locate the owned clip a structural edit at absTick belongs to, via the shared
+  // resolveNoteEntry rule. For an add (createIfMissing), CreateNew allocates a new
+  // empty clip+placement anchored to the bar; for a remove it returns
+  // {valid=false} instead (nothing outside a clip to remove). Does NOT copy-on-
+  // write fork — the caller forks (forkOwnedClip) only after an edit that actually
+  // changed the clip, so a no-op remove never churns clip ids. Assumes trackMutex
+  // is held.
+  auto locateEditTarget = [&](TrackRuntime& rt, uint64_t absTick,
+                              bool createIfMissing) -> EditTarget {
+    const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
+    std::vector<daw::PlacementSpan> spans;
+    for (size_t i = 0; i < rt.sourcePlacements.size(); ++i) {
+      const auto& pl = rt.sourcePlacements[i];
+      if (!pl.at.has_value()) {
+        continue;
+      }
+      uint64_t clipLen = 0;
+      uint64_t contentEnd = 0;
+      for (const auto& c : rt.ownedClips) {
+        if (c.id == pl.clipId) {
+          clipLen = c.lengthNanoticks;
+          contentEnd = clipContentEnd(c.clip);
+          break;
+        }
+      }
+      // Coverage extent for the note-entry rule: an explicit placement length,
+      // else the clip's own loop length, else (a linear length-0 clip) its
+      // content extent — the same span a save would segment, so live entry and a
+      // later reload agree on where one clip ends and the next begins.
+      const uint64_t effLen = pl.lengthNanoticks > 0
+                                  ? pl.lengthNanoticks
+                                  : (clipLen > 0 ? clipLen : contentEnd);
+      spans.push_back(daw::PlacementSpan{*pl.at, effLen, clipLen, i});
+    }
+    const auto decision = daw::resolveNoteEntry(spans, absTick, bar, bar);
+
+    auto findOwned = [&](uint32_t clipId) -> size_t {
+      for (size_t i = 0; i < rt.ownedClips.size(); ++i) {
+        if (rt.ownedClips[i].id == clipId) {
+          return i;
+        }
+      }
+      return rt.ownedClips.size();
+    };
+
+    EditTarget t;
+    if (decision.kind == daw::NoteEntryKind::CreateNew) {
+      if (!createIfMissing) {
+        return t;  // a remove outside every clip: nothing to do
+      }
+      daw::ProjectClip nc;
+      nc.id = nextClipId.fetch_add(1, std::memory_order_acq_rel);
+      nc.name = "Clip";
+      nc.lengthNanoticks = 0;
+      const uint32_t newId = nc.id;
+      rt.ownedClips.push_back(std::move(nc));
+      rt.editableClipIds.push_back(newId);
+      daw::ProjectPlacement pl;
+      pl.clipId = newId;
+      pl.at = decision.at;
+      pl.lengthNanoticks = 0;
+      rt.sourcePlacements.push_back(std::move(pl));
+      t.valid = true;
+      t.ownedIndex = rt.ownedClips.size() - 1;
+      t.relTick = decision.clipRelativeTick;
+      t.placementIndex = rt.sourcePlacements.size() - 1;
+      t.clipId = newId;
+      t.placementAt = decision.at;
+      return t;
+    }
+    // InsidePlacement / StretchPlacement: the covering placement's owned clip.
+    const size_t pi = decision.placementIndex;
+    if (pi >= rt.sourcePlacements.size()) {
+      return t;  // invalid
+    }
+    const uint32_t clipId = rt.sourcePlacements[pi].clipId;
+    const size_t oi = findOwned(clipId);
+    if (oi >= rt.ownedClips.size()) {
+      return t;  // no owned clip for this placement (should not happen)
+    }
+    t.valid = true;
+    t.ownedIndex = oi;
+    t.relTick = decision.clipRelativeTick;
+    t.placementIndex = pi;
+    t.clipId = clipId;
+    t.placementAt = *rt.sourcePlacements[pi].at;
+    return t;
+  };
+
+  auto isEditableClip = [&](const TrackRuntime& rt, uint32_t id) -> bool {
+    for (uint32_t e : rt.editableClipIds) {
+      if (e == id) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Copy-on-write: after an edit that changed a pristine (still-shared) loaded
+  // clip, give it a fresh id and repoint this track's placements, so save never
+  // emits two divergent clips under one id. No-op once the clip is track-owned.
+  auto forkOwnedClip = [&](TrackRuntime& rt, size_t ownedIndex) {
+    if (ownedIndex >= rt.ownedClips.size()) {
+      return;
+    }
+    const uint32_t oldId = rt.ownedClips[ownedIndex].id;
+    if (isEditableClip(rt, oldId)) {
+      return;
+    }
+    const uint32_t newId = nextClipId.fetch_add(1, std::memory_order_acq_rel);
+    rt.ownedClips[ownedIndex].id = newId;
+    for (auto& p : rt.sourcePlacements) {
+      if (p.clipId == oldId) {
+        p.clipId = newId;
+      }
+    }
+    rt.editableClipIds.push_back(newId);
+  };
+
+  // Grow the target clip's loop length (and any explicit placement length) to
+  // contain its content after an edit, so the flatten's "beyond clip length" guard
+  // never drops a just-stretched note. A linear length-0 clip stays 0 (it plays
+  // once, no loop, so nothing is dropped and nothing needs growing).
+  auto growLengthsForContent = [&](TrackRuntime& rt, const EditTarget& t) {
+    if (t.ownedIndex >= rt.ownedClips.size()) {
+      return;
+    }
+    const uint64_t contentEnd = clipContentEnd(rt.ownedClips[t.ownedIndex].clip);
+    auto& clip = rt.ownedClips[t.ownedIndex];
+    if (clip.lengthNanoticks > 0) {
+      clip.lengthNanoticks = std::max(clip.lengthNanoticks, contentEnd);
+    }
+    if (t.placementIndex < rt.sourcePlacements.size()) {
+      auto& pl = rt.sourcePlacements[t.placementIndex];
+      if (pl.lengthNanoticks > 0) {
+        pl.lengthNanoticks = std::max(pl.lengthNanoticks, contentEnd);
+      }
+    }
+  };
+
+  auto snapshotTrackStore = [&](const TrackRuntime& rt) -> TrackStoreState {
+    TrackStoreState s;
+    s.placements = rt.sourcePlacements;
+    s.clips = rt.ownedClips;
+    s.editable = rt.editableClipIds;
+    return s;
+  };
+
+  auto pushStructuralUndo = [&](uint32_t trackId, TrackStoreState before,
+                                TrackStoreState after) {
+    EngineUndoEntry e;
+    e.structural = true;
+    e.trackId = trackId;
+    e.before = std::move(before);
+    e.after = std::move(after);
+    pushUndo(std::move(e));
+  };
+
+  // Tell an incremental UI to pull a fresh clip window after a whole-store change
+  // it cannot diff note-by-note (an undo/redo store swap).
+  auto emitClipResync = [&](uint32_t trackId, uint32_t clipVersionValue) {
+    daw::UiDiffPayload diff{};
+    diff.diffType = static_cast<uint16_t>(daw::UiDiffType::ResyncNeeded);
+    diff.trackId = trackId;
+    diff.clipVersion = clipVersionValue;
+    emitUiDiff(diff);
+  };
+
+  // Restore a track's structural store (placements + owned clips + editable ids)
+  // to a captured state and re-derive/publish the flat clip. The engine-local undo
+  // stack's structural entries call this with `before` (undo) or `after` (redo).
+  auto restoreTrackStore = [&](uint32_t trackId,
+                               const TrackStoreState& state) -> bool {
+    TrackRuntime* runtime = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      if (trackId < tracks.size()) {
+        runtime = tracks[trackId].get();
+      }
+    }
+    if (!runtime) {
+      return false;
+    }
+    std::shared_ptr<const ClipSnapshot> snapshot;
+    {
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      runtime->sourcePlacements = state.placements;
+      runtime->ownedClips = state.clips;
+      runtime->editableClipIds = state.editable;
+      runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+      snapshot = rebuildFlatAndPublish(*runtime);
+    }
+    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
+                               std::memory_order_release);
+    clipDirty.store(true, std::memory_order_release);
+    const uint32_t v = clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    emitClipResync(trackId, v);
+    return true;
   };
 
   // Snapshots the live session into a ProjectDocument and writes it. Each
@@ -2700,8 +3216,8 @@ struct TrackRuntime {
       track.name = "Track " + std::to_string(runtime->trackId + 1);
       track.linesPerBeat = runtime->linesPerBeat.load(std::memory_order_relaxed);
       daw::MusicalClip trackClip;
-      bool trackDirty = false;
       std::vector<daw::ProjectPlacement> trackPlacements;
+      std::vector<daw::ProjectClip> trackOwnedClips;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         track.harmonyQuantize = runtime->track.harmonyQuantize;
@@ -2715,18 +3231,17 @@ struct TrackRuntime {
         track.chain = runtime->track.chain;
         track.modLinks = runtime->track.modRegistry.links;
         trackClip = runtime->track.clip;
-        trackDirty = runtime->arrangementDirty.load(std::memory_order_relaxed);
         trackPlacements = runtime->sourcePlacements;
+        trackOwnedClips = runtime->ownedClips;
       }
-      // A track that loaded from placements and hasn't been edited live re-emits
-      // exactly those placements plus the clips they reference, so a load->save
-      // round-trip preserves the arrangement's structure (multiple placements,
-      // additive overrides). A track edited live (arrangementDirty) no longer
-      // matches those placements, so it falls through to the flatten below — the
-      // edit is preserved as one clip at=0, the structure isn't (until note entry
-      // becomes structural, M3.2). A never-loaded track has no source placements
-      // and also flattens.
-      if (!trackDirty && !trackPlacements.empty()) {
+      // The per-track structural store is authoritative for every track that has
+      // any notes: note entry now edits the owned clips + placements in place (the
+      // flat clip is derived), so save just re-emits them. Copy-on-write kept each
+      // edited clip's id unique, so clips dedup across tracks by id alone — no
+      // content comparison, no collision. This is what makes a load -> edit -> save
+      // preserve the arrangement's structure (multiple placements, per-placement
+      // overrides), the M3.2 bug the reroute fixes.
+      if (!trackPlacements.empty()) {
         for (const auto& pl : trackPlacements) {
           bool present = false;
           for (const auto& c : document.clips) {
@@ -2738,7 +3253,7 @@ struct TrackRuntime {
           if (present) {
             continue;
           }
-          for (const auto& c : retainedClips) {
+          for (const auto& c : trackOwnedClips) {
             if (c.id == pl.clipId) {
               document.clips.push_back(c);
               break;
@@ -2747,6 +3262,9 @@ struct TrackRuntime {
         }
         track.placements = std::move(trackPlacements);
       } else if (!trackClip.events().empty()) {
+        // Defensive fallback only: track.clip is derived from the store, so an
+        // empty store means an empty flat clip. Kept so a stray flat clip is still
+        // segmented into clips rather than silently dropped.
         // No authored placement layout (a live-edited or never-loaded track), so
         // derive clips from the notes: segment them by proximity so "no notes
         // outside clips" holds on disk with sensible boundaries, rather than
@@ -2796,11 +3314,30 @@ struct TrackRuntime {
       }
       document.tracks.push_back(std::move(track));
     }
-    // The patcher DAG is part of the song. The engine runs one global graph
-    // today, so on save it parks that graph on a device (patchers are per-device
-    // now): the first track's instrument, else its first device. The per-device
-    // format is ready for when each device runs its own.
-    if (!document.tracks.empty() && !document.tracks.front().chain.devices.empty()) {
+    // Persist the patcher execution. Two cases, mirroring load:
+    if (patcherAssembledFromDevices.load(std::memory_order_acquire)) {
+      // Per-device: every device already carries its own graph (load left
+      // device.patcher untouched, only re-pointing the runtime patcherNodeId at
+      // the assembled pool). Normalize each patcher-device's node id back to its
+      // own graph's output so the saved id is device-local and a
+      // load -> save -> load round-trip is stable; the graphs themselves are
+      // written verbatim by saveProject.
+      for (auto& track : document.tracks) {
+        for (auto& device : track.chain.devices) {
+          if (device.patcher.nodes.empty()) {
+            continue;
+          }
+          uint32_t out = 0;
+          if (daw::patcherGraphOutputNode(device.patcher, out)) {
+            device.patcherNodeId = out;
+          }
+        }
+      }
+    } else if (!document.tracks.empty() &&
+               !document.tracks.front().chain.devices.empty()) {
+      // Legacy single graph: the engine runs one global graph that lives only in
+      // patcherGraphState (edited live), so park it on the first track's
+      // instrument (else its first device) so the song round-trips.
       std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
       auto& devices = document.tracks.front().chain.devices;
       daw::Device* target = nullptr;
@@ -2889,6 +3426,20 @@ struct TrackRuntime {
       std::lock_guard<std::mutex> lock(loadedClipsMutex);
       loadedClips = document.clips;
     }
+    // Seed the clip-id allocator past every loaded id so a created/COW-forked
+    // clip never collides with a retained one.
+    {
+      uint32_t maxId = 0;
+      for (const auto& c : document.clips) {
+        maxId = std::max(maxId, c.id);
+      }
+      uint32_t expected = nextClipId.load(std::memory_order_relaxed);
+      const uint32_t want = maxId + 1;
+      while (expected < want &&
+             !nextClipId.compare_exchange_weak(expected, want,
+                                               std::memory_order_acq_rel)) {
+      }
+    }
     harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
     // Arm the harmony publish gate. The snapshot write is gated by harmonyDirty
     // (an interactive-edit signal); bumping only harmonyVersion moved the
@@ -2942,45 +3493,162 @@ struct TrackRuntime {
       }
     }
 
-    // Restore the song's patcher DAG. Patchers are per-device now, but the engine
-    // still executes one global graph, so it takes the first device (in track
-    // then chain order) that carries one; the rest are preserved on save
-    // (round-tripped) but not yet run per-device. A patcher-less (or older)
-    // project leaves the live audio graph intact rather than wiping it to empty.
-    bool patcherLoaded = false;
+    // Restore the song's patcher execution. Patcher nodes live in one shared pool
+    // (patcherGraphState.graph); the RT scheduler runs each patcher-device's
+    // subgraph independently via a DFS seeded from that device's output node
+    // (device.patcherNodeId) over the pool. Two project shapes map onto that:
+    //
+    //  - Legacy single graph (every project the current save format writes): at
+    //    most one device carries a graph. Load it verbatim, node ids preserved, so
+    //    other devices that tap it by patcherNodeId still resolve.
+    //  - Per-device (two or more devices each carry their own graph): assemble them
+    //    into one pool with globally-unique ids (assemblePatcherPool, offset per
+    //    track so subgraphs stay disjoint) and repoint each runtime device at its
+    //    own output node in the pool. Each device's graph then runs independently.
+    //
+    // A patcher-less project leaves the live audio graph intact rather than wiping
+    // it to empty.
+    patcherAssembledFromDevices.store(false, std::memory_order_release);
+    size_t deviceGraphCount = 0;
     for (const auto& source : document.tracks) {
-      if (patcherLoaded) {
-        break;
-      }
       for (const auto& device : source.chain.devices) {
-        if (device.patcher.nodes.empty()) {
+        if (!device.patcher.nodes.empty()) {
+          ++deviceGraphCount;
+        }
+      }
+    }
+    if (deviceGraphCount >= 2) {
+      struct DevOut {
+        uint32_t trackId;
+        uint32_t deviceId;
+        uint32_t node;
+      };
+      daw::PatcherGraph pool;
+      std::vector<DevOut> outputs;
+      uint32_t base = 0;
+      for (const auto& source : document.tracks) {
+        daw::AssembledPatcher sub = daw::assemblePatcherPool(source.chain.devices);
+        if (!sub.anyPerDevice) {
           continue;
         }
-        daw::PatcherGraph loadedGraph = device.patcher;
-        if (daw::buildPatcherGraph(loadedGraph)) {
-          {
-            std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
-            patcherGraphState.graph = std::move(loadedGraph);
-            uint32_t nextId = 0;
-            for (const auto& node : patcherGraphState.graph.nodes) {
-              nextId = std::max(nextId, node.id + 1);
-            }
-            patcherGraphState.nextNodeId = nextId;
-          }
-          patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
-          updatePatcherGraphSnapshot();
-          DAW_EVENT("project.patcher_loaded")
-              .field("track", source.trackId)
-              .field("device", device.id)
-              .field("nodes", static_cast<uint64_t>(device.patcher.nodes.size()))
-              .field("edges", static_cast<uint64_t>(device.patcher.edges.size()));
-        } else {
-          DAW_EVENT("project.patcher_invalid")
-              .field("track", source.trackId)
-              .field("device", device.id);
+        for (auto node : sub.pool.nodes) {
+          node.id += base;
+          pool.nodes.push_back(node);
         }
-        patcherLoaded = true;  // engine runs only one graph for now
-        break;
+        for (auto edge : sub.pool.edges) {
+          edge.src.nodeId += base;
+          edge.dst.nodeId += base;
+          pool.edges.push_back(edge);
+        }
+        for (const auto& out : sub.deviceOutputs) {
+          outputs.push_back({source.trackId, out.first, out.second + base});
+        }
+        base += static_cast<uint32_t>(sub.pool.nodes.size());
+      }
+      if (!pool.nodes.empty() && daw::buildPatcherGraph(pool)) {
+        {
+          std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+          patcherGraphState.graph = std::move(pool);
+          patcherGraphState.nextNodeId = base;
+        }
+        patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
+        updatePatcherGraphSnapshot();
+        // Repoint each runtime device at its output node in the assembled pool, so
+        // the RT DFS seeds from the right node.
+        for (const auto& out : outputs) {
+          TrackRuntime* rt = nullptr;
+          {
+            std::lock_guard<std::mutex> lock(tracksMutex);
+            if (out.trackId < tracks.size()) {
+              rt = tracks[out.trackId].get();
+            }
+          }
+          if (!rt) {
+            continue;
+          }
+          std::lock_guard<std::mutex> lock(rt->trackMutex);
+          for (auto& d : rt->track.chain.devices) {
+            if (d.id == out.deviceId) {
+              d.patcherNodeId = out.node;
+              break;
+            }
+          }
+        }
+        patcherAssembledFromDevices.store(true, std::memory_order_release);
+        DAW_EVENT("project.patcher_assembled")
+            .field("devices", static_cast<uint64_t>(outputs.size()))
+            .field("nodes", static_cast<uint64_t>(base));
+      }
+    } else {
+      bool patcherLoaded = false;
+      for (const auto& source : document.tracks) {
+        if (patcherLoaded) {
+          break;
+        }
+        for (const auto& device : source.chain.devices) {
+          if (device.patcher.nodes.empty()) {
+            continue;
+          }
+          daw::PatcherGraph loadedGraph = device.patcher;
+          if (daw::buildPatcherGraph(loadedGraph)) {
+            {
+              std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+              patcherGraphState.graph = std::move(loadedGraph);
+              uint32_t nextId = 0;
+              for (const auto& node : patcherGraphState.graph.nodes) {
+                nextId = std::max(nextId, node.id + 1);
+              }
+              patcherGraphState.nextNodeId = nextId;
+            }
+            patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
+            updatePatcherGraphSnapshot();
+            DAW_EVENT("project.patcher_loaded")
+                .field("track", source.trackId)
+                .field("device", device.id)
+                .field("nodes", static_cast<uint64_t>(device.patcher.nodes.size()))
+                .field("edges", static_cast<uint64_t>(device.patcher.edges.size()));
+          } else {
+            DAW_EVENT("project.patcher_invalid")
+                .field("track", source.trackId)
+                .field("device", device.id);
+          }
+          patcherLoaded = true;
+          break;
+        }
+      }
+    }
+
+    // The audio thread reads each track's per-track state — chain devices (and
+    // their patcherNodeId, repointed by the assembly above), routing, mod links,
+    // automation — from its published trackSnapshot. Load mutated the live tracks
+    // without republishing, so the RT would keep running the pre-load snapshot;
+    // refresh every track's snapshot now so the loaded state actually takes effect.
+    {
+      std::vector<TrackRuntime*> loaded;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        for (auto& runtime : tracks) {
+          if (runtime) {
+            loaded.push_back(runtime.get());
+          }
+        }
+      }
+      for (auto* runtime : loaded) {
+        std::shared_ptr<const TrackStateSnapshot> snap;
+        {
+          std::lock_guard<std::mutex> tlock(runtime->trackMutex);
+          snap = buildTrackSnapshot(runtime->track);
+        }
+        std::atomic_store_explicit(&runtime->trackSnapshot, snap,
+                                   std::memory_order_release);
+        // Publish the loaded rack (chain / routing / mod links) so a UI attached
+        // to the running engine — or a sidecar that started after it — sees it
+        // without waiting for an edit. These diffs are otherwise emit-on-change
+        // only, leaving a fresh UI blind at load. (Called outside trackMutex; each
+        // emitter takes the lock itself.)
+        emitChainSnapshot(*runtime);
+        emitRoutingSnapshot(*runtime);
+        emitModSnapshot(*runtime);
       }
     }
 
@@ -3030,47 +3698,35 @@ struct TrackRuntime {
       std::shared_ptr<const ClipSnapshot> snapshot;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        // M3.3: flatten this track's placements into one absolute-tick clip the
-        // scheduler plays directly (base - mutes + adds, looped to fill each
-        // placement, at +at; audio clips skipped). flattenPlacements is the shared
-        // definition the live note-entry path also rebuilds from.
-        daw::MusicalClip flat;
-        for (const auto& ev :
-             daw::flattenPlacements(source.placements, document.clips, arrangementEnd)) {
-          flat.addEvent(ev);
-        }
-        runtime->track.clip = std::move(flat);
-        // Retain the placement list so save can re-emit it (and its clips) as
-        // long as the track stays clean; the flat clip above is only the
-        // playback form. A live edit sets arrangementDirty and save flattens.
+        // M3.2 structural store: this track owns its placements + copies of the
+        // clips they reference; track.clip and the rails are DERIVED from them by
+        // rebuildFlatAndPublish. Editing later mutates this store, not track.clip.
         runtime->sourcePlacements = source.placements;
-        runtime->arrangementDirty.store(false, std::memory_order_relaxed);
-        // M3.4: retain the track's placed clips as rail extents. Loose session
-        // placements (null at) have no timeline position and are not published.
-        runtime->clipExtents.clear();
-        for (size_t i = 0; i < source.placements.size(); ++i) {
-          const auto& pl = source.placements[i];
-          if (!pl.at.has_value()) {
-            continue;
-          }
-          ClipExtentInfo ext;
-          ext.placementId = static_cast<uint32_t>(i);
-          ext.clipId = pl.clipId;
-          ext.at = *pl.at;
-          uint64_t length = pl.lengthNanoticks;
-          for (const auto& c : document.clips) {
-            if (c.id == pl.clipId) {
-              if (length == 0) {
-                length = c.lengthNanoticks;
-              }
-              ext.name = c.name;
-              ext.isAudio = c.kind == daw::ClipKind::Audio;
+        runtime->ownedClips.clear();
+        for (const auto& pl : source.placements) {
+          bool have = false;
+          for (const auto& oc : runtime->ownedClips) {
+            if (oc.id == pl.clipId) {
+              have = true;
               break;
             }
           }
-          ext.endTick = *pl.at + length;
-          runtime->clipExtents.push_back(std::move(ext));
+          if (have) {
+            continue;
+          }
+          for (const auto& c : document.clips) {
+            if (c.id == pl.clipId) {
+              runtime->ownedClips.push_back(c);
+              break;
+            }
+          }
         }
+        runtime->arrangementDirty.store(false, std::memory_order_relaxed);
+        snapshot = rebuildFlatAndPublish(*runtime);
+        // Decode + resolve this track's placed audio clips for the audio thread.
+        std::atomic_store_explicit(&runtime->audioRender,
+                                   rebuildAudioRender(*runtime),
+                                   std::memory_order_release);
         runtime->track.harmonyQuantize = source.harmonyQuantize;
         if (!source.name.empty()) {
           runtime->trackName = source.name;
@@ -3109,7 +3765,7 @@ struct TrackRuntime {
         runtime->linesPerBeat.store(
             source.linesPerBeat == 0 ? 4u : source.linesPerBeat,
             std::memory_order_relaxed);
-        snapshot = buildClipSnapshot(runtime->track.clip);
+        // snapshot already built by rebuildFlatAndPublish above.
       }
       std::atomic_store_explicit(&runtime->clipSnapshot,
                                  snapshot,
@@ -3118,6 +3774,10 @@ struct TrackRuntime {
       // live chain already matches (reopen-same-session): equal plugin paths are
       // a no-op, so this only does work when the chain actually changed.
       rebuildHostForChain(*runtime);
+      // Re-publish the rack now that it holds the project's devices. The
+      // all-tracks snapshot above ran before this loop restored them, so on its
+      // own it would leave a UI showing the pre-load chain.
+      emitChainSnapshot(*runtime);
     }
 
     // Restore plugin state. The chain was just rebuilt from the project above,
@@ -3239,6 +3899,16 @@ struct TrackRuntime {
     return false;
   };
 
+  // A clip-edit diff carries the edited note's tick in clip-relative space (the
+  // owned clip the edit ran on). Shift it back onto the arrangement timeline by
+  // the placement anchor before it goes to the UI, which speaks absolute ticks.
+  auto shiftDiffTick = [](daw::UiDiffPayload& d, uint64_t placementAt) {
+    uint64_t t = (static_cast<uint64_t>(d.noteNanotickHi) << 32) | d.noteNanotickLo;
+    t += placementAt;
+    d.noteNanotickLo = static_cast<uint32_t>(t & 0xffffffffu);
+    d.noteNanotickHi = static_cast<uint32_t>((t >> 32) & 0xffffffffu);
+  };
+
   auto applyAddNote = [&](uint32_t trackId,
                           uint64_t nanotick,
                           uint64_t duration,
@@ -3265,56 +3935,71 @@ struct TrackRuntime {
     const uint8_t column = static_cast<uint8_t>(flags & 0xffu);
     const bool isNoteOff = velocity == 0 && duration == 0;
 
-    // Where a note runs to when nothing follows it in its column.
+    // Where a note runs to when nothing follows it in its column. A note entered
+    // PAST the current span (loop/pattern end) still needs room to sound, or it
+    // lands with zero length and vanishes — so the span always reaches at least
+    // the end of the bar containing the note. Writing past the end grows the song.
     uint64_t spanEnd = loopEndNanotick.load(std::memory_order_acquire);
     if (spanEnd <= loopStartNanotick.load(std::memory_order_acquire)) {
       spanEnd = patternTicks;
     }
+    {
+      const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
+      const uint64_t barAfter = (nanotick / bar + 1) * bar;
+      spanEnd = std::max(spanEnd, barAfter);
+    }
 
     std::optional<daw::ClipEditResult> result;
     std::shared_ptr<const ClipSnapshot> snapshot;
+    bool noOp = false;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
-      if (isNoteOff) {
-        result = daw::endNoteInColumn(runtime->track.clip,
-                                      trackId,
-                                      nanotick,
-                                      column,
-                                      clipVersion,
-                                      recordUndo);
-        if (!result) {
-          // Nothing was sounding, so the edit is a no-op — but the UI already
-          // reserved a clip version for it.
-          consumeClipVersionForNoOp();
-        }
+      // Structural store: the edit targets the owned clip covering this tick
+      // (a new clip for a note-on out on its own), at the clip-relative tick.
+      // track.clip is re-derived from the store afterward, so the audio thread
+      // and the UI see exactly the same flat result as before this reroute.
+      TrackStoreState before = snapshotTrackStore(*runtime);
+      EditTarget target = locateEditTarget(*runtime, nanotick, /*create=*/!isNoteOff);
+      if (!target.valid) {
+        // An OFF (or edit) with no clip to land in — nothing to do.
+        consumeClipVersionForNoOp();
+        noOp = true;
       } else {
-        result = daw::addNoteToClip(runtime->track.clip,
-                                    trackId,
-                                    nanotick,
-                                    duration,
-                                    pitch,
-                                    velocity,
-                                    flags,
-                                    clipVersion,
-                                    recordUndo,
-                                    spanEnd,
-                                    noteIdOverride);
-      }
-      if (result) {
-        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
-        snapshot = buildClipSnapshot(runtime->track.clip);
+        const uint64_t relSpanEnd =
+            spanEnd > target.placementAt ? spanEnd - target.placementAt : 0;
+        daw::MusicalClip& clip = runtime->ownedClips[target.ownedIndex].clip;
+        if (isNoteOff) {
+          result = daw::endNoteInColumn(clip, trackId, target.relTick, column,
+                                        clipVersion, recordUndo);
+          if (!result) {
+            consumeClipVersionForNoOp();
+            noOp = true;
+          }
+        } else {
+          result = daw::addNoteToClip(clip, trackId, target.relTick, duration,
+                                      pitch, velocity, flags, clipVersion,
+                                      recordUndo, relSpanEnd, noteIdOverride);
+        }
+        if (result) {
+          forkOwnedClip(*runtime, target.ownedIndex);
+          growLengthsForContent(*runtime, target);
+          shiftDiffTick(result->diff, target.placementAt);
+          runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+          snapshot = rebuildFlatAndPublish(*runtime);
+          if (recordUndo) {
+            pushStructuralUndo(trackId, std::move(before),
+                               snapshotTrackStore(*runtime));
+          }
+        }
       }
     }
     if (!result) {
+      (void)noOp;
       return false;
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
     clipDirty.store(true, std::memory_order_release);
     emitUiDiff(result->diff);
-
-    if (result->undo) {
-      pushUndo(*result->undo);
-    }
     return true;
   };
 
@@ -3339,16 +4024,24 @@ struct TrackRuntime {
     std::shared_ptr<const ClipSnapshot> snapshot;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
-      result = daw::removeNoteFromClip(runtime->track.clip,
-                                       trackId,
-                                       nanotick,
-                                       pitch,
-                                       flags,
-                                       clipVersion,
-                                       recordUndo);
-      if (result) {
-        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
-        snapshot = buildClipSnapshot(runtime->track.clip);
+      TrackStoreState before = snapshotTrackStore(*runtime);
+      // A remove never creates a clip: a tick outside every clip is a no-op.
+      EditTarget target = locateEditTarget(*runtime, nanotick, /*create=*/false);
+      if (target.valid) {
+        daw::MusicalClip& clip = runtime->ownedClips[target.ownedIndex].clip;
+        result = daw::removeNoteFromClip(clip, trackId, target.relTick, pitch,
+                                         flags, clipVersion, recordUndo);
+        if (result) {
+          forkOwnedClip(*runtime, target.ownedIndex);
+          growLengthsForContent(*runtime, target);
+          shiftDiffTick(result->diff, target.placementAt);
+          runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+          snapshot = rebuildFlatAndPublish(*runtime);
+          if (recordUndo) {
+            pushStructuralUndo(trackId, std::move(before),
+                               snapshotTrackStore(*runtime));
+          }
+        }
       }
     }
     if (!result) {
@@ -3364,10 +4057,6 @@ struct TrackRuntime {
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
     clipDirty.store(true, std::memory_order_release);
     emitUiDiff(result->diff);
-
-    if (result->undo) {
-      pushUndo(*result->undo);
-    }
     return true;
   };
 
@@ -3424,31 +4113,57 @@ struct TrackRuntime {
     event.payload.chord.humanizeTiming = humanizeTiming;
     event.payload.chord.humanizeVelocity = humanizeVelocity;
     std::shared_ptr<const ClipSnapshot> snapshot;
+    uint64_t diffTick = nanotick;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
-      runtime->track.clip.removeChordAt(nanotick, column);
-      runtime->track.clip.removeNoteAt(nanotick, column);
+      TrackStoreState before = snapshotTrackStore(*runtime);
+      // Structural store: a chord lands in the owned clip covering this tick (a
+      // fresh clip if it is out on its own), at the clip-relative tick. The chord
+      // ops below run in that clip's tick space; the derived flat clip re-places
+      // it at the same absolute tick the UI sees.
+      EditTarget target = locateEditTarget(*runtime, nanotick, /*create=*/true);
+      if (!target.valid) {
+        consumeClipVersionForNoOp();
+        return false;
+      }
+      const uint64_t relTick = target.relTick;
+      const uint64_t placementAt = target.placementAt;
+      diffTick = placementAt + relTick;
+      daw::MusicalClip& clip = runtime->ownedClips[target.ownedIndex].clip;
+      clip.removeChordAt(relTick, column);
+      clip.removeNoteAt(relTick, column);
       // A chord is a length-bearing event in the column, exactly like a note:
       // it ends whatever was sounding here, and its own length is stored, not
       // inferred at playback.
-      if (daw::MusicalEvent* sounding =
-              runtime->track.clip.soundingEventInColumn(nanotick, column)) {
-        daw::MusicalClip::truncateEventTo(*sounding, nanotick);
+      if (daw::MusicalEvent* sounding = clip.soundingEventInColumn(relTick, column)) {
+        daw::MusicalClip::truncateEventTo(*sounding, relTick);
       }
       if (duration == 0) {
         uint64_t spanEnd = loopEndNanotick.load(std::memory_order_acquire);
         if (spanEnd <= loopStartNanotick.load(std::memory_order_acquire)) {
           spanEnd = patternTicks;
         }
-        const auto next =
-            runtime->track.clip.nextEventTickInColumn(nanotick, column);
-        const uint64_t end = next.value_or(spanEnd);
-        duration = end > nanotick ? end - nanotick : 0;
+        // A chord entered past the current span still needs room to sound; reach
+        // at least the end of its bar so writing past the end grows the song.
+        const uint64_t barTicks = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
+        spanEnd = std::max(spanEnd, (nanotick / barTicks + 1) * barTicks);
+        const uint64_t relSpanEnd =
+            spanEnd > placementAt ? spanEnd - placementAt : 0;
+        const auto next = clip.nextEventTickInColumn(relTick, column);
+        const uint64_t end = next.value_or(relSpanEnd);
+        duration = end > relTick ? end - relTick : 0;
       }
+      event.nanotickOffset = relTick;
       event.payload.chord.durationNanoticks = duration;
-      runtime->track.clip.addEvent(std::move(event));
+      clip.addEvent(std::move(event));
+      forkOwnedClip(*runtime, target.ownedIndex);
+      growLengthsForContent(*runtime, target);
       runtime->arrangementDirty.store(true, std::memory_order_relaxed);
-      snapshot = buildClipSnapshot(runtime->track.clip);
+      snapshot = rebuildFlatAndPublish(*runtime);
+      if (recordUndo) {
+        pushStructuralUndo(trackId, std::move(before),
+                           snapshotTrackStore(*runtime));
+      }
     }
 
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
@@ -3459,8 +4174,8 @@ struct TrackRuntime {
     diffPayload.diffType = static_cast<uint16_t>(daw::UiChordDiffType::AddChord);
     diffPayload.trackId = trackId;
     diffPayload.clipVersion = nextClipVersion;
-    diffPayload.nanotickLo = static_cast<uint32_t>(nanotick & 0xffffffffu);
-    diffPayload.nanotickHi = static_cast<uint32_t>((nanotick >> 32) & 0xffffffffu);
+    diffPayload.nanotickLo = static_cast<uint32_t>(diffTick & 0xffffffffu);
+    diffPayload.nanotickHi = static_cast<uint32_t>((diffTick >> 32) & 0xffffffffu);
     diffPayload.durationLo = static_cast<uint32_t>(duration & 0xffffffffu);
     diffPayload.durationHi = static_cast<uint32_t>((duration >> 32) & 0xffffffffu);
     diffPayload.chordId = chordId;
@@ -3474,29 +4189,12 @@ struct TrackRuntime {
     diffPayload.flags = static_cast<uint16_t>(humanizeTiming & 0xffu) |
                         static_cast<uint16_t>((humanizeVelocity & 0xffu) << 8);
     emitChordDiff(diffPayload);
-    if (recordUndo) {
-      daw::UndoEntry undo{};
-      undo.type = daw::UndoType::RemoveChord;
-      undo.trackId = trackId;
-      undo.nanotick = nanotick;
-      undo.duration = duration;
-      undo.chordId = chordId;
-      undo.chordDegree = degree;
-      undo.chordQuality = quality;
-      undo.chordInversion = inversion;
-      undo.chordBaseOctave = baseOctave;
-      undo.chordColumn = column;
-      undo.chordSpreadNanoticks = spreadNanoticks;
-      undo.chordHumanizeTiming = humanizeTiming;
-      undo.chordHumanizeVelocity = humanizeVelocity;
-      pushUndo(undo);
-    }
     return true;
   };
 
   auto emitRemoveChordDiff = [&](uint32_t trackId,
                                  const daw::MusicalClip::RemovedChord& removed,
-                                 bool recordUndo) -> bool {
+                                 uint64_t absTick) -> bool {
     clipDirty.store(true, std::memory_order_release);
     const uint32_t nextClipVersion =
         clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -3504,8 +4202,8 @@ struct TrackRuntime {
     diffPayload.diffType = static_cast<uint16_t>(daw::UiChordDiffType::RemoveChord);
     diffPayload.trackId = trackId;
     diffPayload.clipVersion = nextClipVersion;
-    diffPayload.nanotickLo = static_cast<uint32_t>(removed.nanotick & 0xffffffffu);
-    diffPayload.nanotickHi = static_cast<uint32_t>((removed.nanotick >> 32) & 0xffffffffu);
+    diffPayload.nanotickLo = static_cast<uint32_t>(absTick & 0xffffffffu);
+    diffPayload.nanotickHi = static_cast<uint32_t>((absTick >> 32) & 0xffffffffu);
     diffPayload.durationLo = static_cast<uint32_t>(removed.duration & 0xffffffffu);
     diffPayload.durationHi = static_cast<uint32_t>((removed.duration >> 32) & 0xffffffffu);
     diffPayload.chordId = removed.chordId;
@@ -3519,24 +4217,18 @@ struct TrackRuntime {
     diffPayload.flags = static_cast<uint16_t>(removed.humanizeTiming & 0xffu) |
                         static_cast<uint16_t>((removed.humanizeVelocity & 0xffu) << 8);
     emitChordDiff(diffPayload);
-    if (recordUndo) {
-      daw::UndoEntry undo{};
-      undo.type = daw::UndoType::AddChord;
-      undo.trackId = trackId;
-      undo.nanotick = removed.nanotick;
-      undo.duration = removed.duration;
-      undo.chordId = removed.chordId;
-      undo.chordDegree = removed.degree;
-      undo.chordQuality = removed.quality;
-      undo.chordInversion = removed.inversion;
-      undo.chordBaseOctave = removed.baseOctave;
-      undo.chordColumn = removed.column;
-      undo.chordSpreadNanoticks = removed.spreadNanoticks;
-      undo.chordHumanizeTiming = removed.humanizeTiming;
-      undo.chordHumanizeVelocity = removed.humanizeVelocity;
-      pushUndo(undo);
-    }
     return true;
+  };
+
+  // The absolute anchor of the first placement referencing an owned clip id
+  // (0 if none) — used to shift a clip-relative remove result onto the timeline.
+  auto firstPlacementAtForClip = [&](const TrackRuntime& rt, uint32_t clipId) -> uint64_t {
+    for (const auto& pl : rt.sourcePlacements) {
+      if (pl.clipId == clipId && pl.at.has_value()) {
+        return *pl.at;
+      }
+    }
+    return 0;
   };
 
   auto applyRemoveChord = [&](uint32_t trackId,
@@ -3555,12 +4247,25 @@ struct TrackRuntime {
     }
     std::optional<daw::MusicalClip::RemovedChord> removed;
     std::shared_ptr<const ClipSnapshot> snapshot;
+    uint64_t absTick = 0;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
-      removed = runtime->track.clip.removeChordById(chordId);
-      if (removed) {
-        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
-        snapshot = buildClipSnapshot(runtime->track.clip);
+      TrackStoreState before = snapshotTrackStore(*runtime);
+      // A chord id lives in exactly one owned clip; find and remove it there.
+      for (size_t oi = 0; oi < runtime->ownedClips.size(); ++oi) {
+        removed = runtime->ownedClips[oi].clip.removeChordById(chordId);
+        if (removed) {
+          absTick = firstPlacementAtForClip(*runtime, runtime->ownedClips[oi].id) +
+                    removed->nanotick;
+          forkOwnedClip(*runtime, oi);
+          runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+          snapshot = rebuildFlatAndPublish(*runtime);
+          if (recordUndo) {
+            pushStructuralUndo(trackId, std::move(before),
+                               snapshotTrackStore(*runtime));
+          }
+          break;
+        }
       }
     }
     if (!removed) {
@@ -3570,7 +4275,7 @@ struct TrackRuntime {
       return false;
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
-    return emitRemoveChordDiff(trackId, *removed, recordUndo);
+    return emitRemoveChordDiff(trackId, *removed, absTick);
   };
 
   auto applyRemoveChordAt = [&](uint32_t trackId,
@@ -3590,12 +4295,24 @@ struct TrackRuntime {
     }
     std::optional<daw::MusicalClip::RemovedChord> removed;
     std::shared_ptr<const ClipSnapshot> snapshot;
+    uint64_t absTick = nanotick;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
-      removed = runtime->track.clip.removeChordAt(nanotick, column);
-      if (removed) {
-        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
-        snapshot = buildClipSnapshot(runtime->track.clip);
+      TrackStoreState before = snapshotTrackStore(*runtime);
+      EditTarget target = locateEditTarget(*runtime, nanotick, /*create=*/false);
+      if (target.valid) {
+        removed = runtime->ownedClips[target.ownedIndex].clip.removeChordAt(
+            target.relTick, column);
+        if (removed) {
+          absTick = target.placementAt + removed->nanotick;
+          forkOwnedClip(*runtime, target.ownedIndex);
+          runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+          snapshot = rebuildFlatAndPublish(*runtime);
+          if (recordUndo) {
+            pushStructuralUndo(trackId, std::move(before),
+                               snapshotTrackStore(*runtime));
+          }
+        }
       }
     }
     if (!removed) {
@@ -3606,7 +4323,7 @@ struct TrackRuntime {
       return false;
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
-    return emitRemoveChordDiff(trackId, *removed, recordUndo);
+    return emitRemoveChordDiff(trackId, *removed, absTick);
   };
 
   auto applyUndoEntry = [&](const daw::UndoEntry& entry,
@@ -4697,6 +5414,28 @@ struct TrackRuntime {
       transportNanotick.store(clamped, std::memory_order_release);
       std::cout << "UI: Transport SetPosition " << clamped << std::endl;
     } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::RequestChainSnapshot)) {
+      // A UI that attached after the engine started has never seen a chain
+      // diff, so let it ask. 0xFFFFFFFFu means every track; an unknown track is
+      // simply nothing to publish, not an error.
+      std::vector<TrackRuntime*> targets;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId == 0xFFFFFFFFu) {
+          for (auto& runtime : tracks) {
+            if (runtime) {
+              targets.push_back(runtime.get());
+            }
+          }
+        } else if (payload.trackId < tracks.size() && tracks[payload.trackId]) {
+          targets.push_back(tracks[payload.trackId].get());
+        }
+      }
+      // Outside tracksMutex: emitChainSnapshot takes the per-track lock itself.
+      for (auto* runtime : targets) {
+        emitChainSnapshot(*runtime);
+      }
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestClipWindow)) {
       daw::UiClipWindowCommandPayload windowPayload{};
       std::memcpy(&windowPayload, entry.payload, sizeof(windowPayload));
@@ -4721,21 +5460,33 @@ struct TrackRuntime {
                                       payload.trackId)) {
         return;
       }
-      std::optional<daw::UndoEntry> undo;
+      std::optional<EngineUndoEntry> undo;
       {
         std::lock_guard<std::mutex> lock(undoMutex);
         if (!undoStack.empty()) {
-          undo = undoStack.back();
+          undo = std::move(undoStack.back());
           undoStack.pop_back();
         }
       }
       if (!undo) {
         return;
       }
-      const daw::UndoEntry redoEntry = invertUndoEntry(*undo);
-      if (applyUndoEntry(*undo, false)) {
-        std::lock_guard<std::mutex> lock(undoMutex);
-        redoStack.push_back(redoEntry);
+      if (undo->structural) {
+        // Store swap: restore the track's pre-edit placements + clips.
+        if (restoreTrackStore(undo->trackId, undo->before)) {
+          std::lock_guard<std::mutex> lock(undoMutex);
+          redoStack.push_back(std::move(*undo));
+        }
+      } else {
+        const daw::UndoEntry redoHarmony = invertUndoEntry(undo->harmony);
+        if (applyUndoEntry(undo->harmony, false)) {
+          EngineUndoEntry e;
+          e.structural = false;
+          e.trackId = redoHarmony.trackId;
+          e.harmony = redoHarmony;
+          std::lock_guard<std::mutex> lock(undoMutex);
+          redoStack.push_back(std::move(e));
+        }
       }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::Redo)) {
@@ -4744,21 +5495,33 @@ struct TrackRuntime {
                                       payload.trackId)) {
         return;
       }
-      std::optional<daw::UndoEntry> redo;
+      std::optional<EngineUndoEntry> redo;
       {
         std::lock_guard<std::mutex> lock(undoMutex);
         if (!redoStack.empty()) {
-          redo = redoStack.back();
+          redo = std::move(redoStack.back());
           redoStack.pop_back();
         }
       }
       if (!redo) {
         return;
       }
-      const daw::UndoEntry undoEntry = invertUndoEntry(*redo);
-      if (applyUndoEntry(*redo, false)) {
-        std::lock_guard<std::mutex> lock(undoMutex);
-        undoStack.push_back(undoEntry);
+      if (redo->structural) {
+        // Store swap: re-apply the track's post-edit placements + clips.
+        if (restoreTrackStore(redo->trackId, redo->after)) {
+          std::lock_guard<std::mutex> lock(undoMutex);
+          undoStack.push_back(std::move(*redo));
+        }
+      } else {
+        const daw::UndoEntry undoHarmony = invertUndoEntry(redo->harmony);
+        if (applyUndoEntry(redo->harmony, false)) {
+          EngineUndoEntry e;
+          e.structural = false;
+          e.trackId = undoHarmony.trackId;
+          e.harmony = undoHarmony;
+          std::lock_guard<std::mutex> lock(undoMutex);
+          undoStack.push_back(std::move(e));
+        }
       }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTrackMixer)) {
@@ -7534,6 +8297,11 @@ struct TrackRuntime {
           }
           auto it = trackInfoCache.find(trackId);
           if (it != trackInfoCache.end()) {
+            // Refresh the resolved audio-clip snapshot every rebuild (cheap
+            // atomic_load off the audio thread) so newly loaded/edited clips reach
+            // the callback without waiting for the host SHM to re-acquire.
+            it->second.audioRender = std::atomic_load_explicit(
+                &runtime->audioRender, std::memory_order_acquire);
             trackInfos.push_back(it->second);
           } else if (updated) {
             // Updated but invalid; ensure cache entry is removed.
@@ -7681,6 +8449,7 @@ struct TrackRuntime {
           static_cast<uint32_t>(audioBackend->blockSize()),
           engineConfig.numBlocks,
           &audioPlaybackBlockId);
+      audioCallback->setPlaying(&playing);
       audioCallback->resetForStart();
       // DAW_CAPTURE_WAV=<path> records the master output so a take can be
       // analysed offline; DAW_CAPTURE_SECONDS bounds the preallocation.

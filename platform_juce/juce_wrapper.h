@@ -126,6 +126,25 @@ class IPluginHost {
       const std::string& path, double sampleRate, int blockSize) = 0;
 };
 
+// A decoded audio source, downmixed to mono, in float samples. `sampleRate` is
+// the source file's own rate (resample at play time against the engine rate).
+struct DecodedAudio {
+  std::vector<float> samples;      // mono, `frames` long
+  uint64_t frames = 0;
+  double sampleRate = 0.0;
+  uint32_t sourceChannels = 0;     // channels in the source before downmix
+  bool ok = false;
+};
+
+// Decodes an audio file (wav/aiff/flac/... — whatever JUCE's basic formats read)
+// fully into memory, downmixing to mono. `ok` is false if the file can't be read.
+DecodedAudio decodeAudioFileMono(const std::string& path);
+
+// Writes a mono float buffer as a 16-bit wav. Used by the offline bounce and by
+// tests that need a known source. Returns false on any I/O error.
+bool writeWavMono(const std::string& path, const float* samples, uint64_t frames,
+                  double sampleRate);
+
 std::unique_ptr<IRuntime> createJuceRuntime();
 std::unique_ptr<IAudioBackend> createAudioBackend();
 std::unique_ptr<IPluginHost> createPluginHost();
