@@ -63,18 +63,6 @@ const blocked = (cond, label, why, detail = '') => {
 };
 const section = (s) => console.log(`\n[${s}]`);
 
-/**
- * Engine defect, reported to backend 2026-07-27.
- *
- * A WriteNote past the end of every placement on a track is silently dropped
- * since the structural note-entry reroute: it acks ok and advances clipVersion,
- * and no note appears. Writing INSIDE the material — even into an empty row —
- * works, so the dividing line is the placement, not the note. These checks write
- * at row 40, which is past the end on webtest's track 0.
- */
-const WRITE_PAST_END =
-  'engine drops a note written past the end of every placement (reported 2026-07-27)';
-
 const browser = await chromium.launch({ channel: 'chrome' });
 const page = await browser.newPage({ viewport: { width: 1680, height: 980 } });
 const errors = [];
@@ -170,19 +158,38 @@ const wrote = await page.evaluate(() => window.__uni.selected().length);
 ok(wrote >= 0, 'cursor note readable');
 await run('del');
 const deleted = await engineUntil((e) => e.clipVersion > after);
-blocked(deleted.clipVersion > after, 'a delete moves it again', WRITE_PAST_END,
-        `${after} -> ${deleted.clipVersion}`);
+ok(deleted.clipVersion > after, 'a delete moves it again', `${after} -> ${deleted.clipVersion}`);
+
+// Writing PAST THE END of the material, explicitly. This regressed once when
+// note entry became structural: the write acked ok, advanced clipVersion, and no
+// note appeared, because there was no placement to put it in. The indirect
+// checks above caught it only as "the count did not move"; this one names the
+// behaviour, so the next regression says what broke.
+await run('goto 40 0');
+const emptyBefore = await page.evaluate(() => window.__uni.selected().length);
+ok(emptyBefore === 0, 'row 40 is past the end of the material', `${emptyBefore} notes`);
+await run('note 67');
+const past = await engineUntil(() => true, 100) && await (async () => {
+  for (let i = 0; i < 40; i++) {
+    const s = await page.evaluate(() => window.__uni.selected());
+    if (s.length) return s;
+    await page.waitForTimeout(100);
+  }
+  return [];
+})();
+ok(past.length === 1 && past[0].pitch === 67,
+   'a note written past the end lands where it was typed', JSON.stringify(past));
+await run('del');
+await engineUntil(() => true, 100);
 
 section('undo / redo');
 const beforeUndo = (await E()).noteCount;
 await run('note 71');
 const afterWrite = (await engineUntil((e) => e.noteCount !== beforeUndo)).noteCount;
-blocked(afterWrite !== beforeUndo, 'a write changes the note count', WRITE_PAST_END,
-        `${beforeUndo} -> ${afterWrite}`);
+ok(afterWrite !== beforeUndo, 'a write changes the note count', `${beforeUndo} -> ${afterWrite}`);
 await run('undo');
 const undone = await engineUntil((e) => e.noteCount !== afterWrite);
-blocked(undone.noteCount !== afterWrite, 'undo takes it back', WRITE_PAST_END,
-        `${afterWrite} -> ${undone.noteCount}`);
+ok(undone.noteCount !== afterWrite, 'undo takes it back', `${afterWrite} -> ${undone.noteCount}`);
 await run('redo');
 const redone = await engineUntil((e) => e.noteCount === afterWrite);
 ok(redone.noteCount === afterWrite, 'redo puts it back', `${undone.noteCount} -> ${redone.noteCount}`);
