@@ -549,15 +549,27 @@ ok(newEdge && newEdge.srcPort === 1 && newEdge.dstPort === 0 && newEdge.kind ===
    'on the ports the engine expects for that pair', JSON.stringify(newEdge));
 // A pair with no compatible ports is refused, and the refusal reaches the UI —
 // the sidecar's message used to go to a dock nobody had open.
-// Wait for it rather than reading once: patchNodes() reflects the last frame,
-// and a read taken between frames returns an empty list, not an error.
+// This check needs a node with no compatible port. Rather than assume the graph
+// has one, MAKE one — the patcher graph is engine-lifetime state, so whatever a
+// previous run or a differently-shaped project left behind is what this run
+// starts from, and asserting on somebody else's leftovers is how a test becomes
+// a report about history. The UI can add a node, so the test uses that.
 let audioNode = null;
 for (let i = 0; i < 40 && !audioNode; i++) {
   audioNode = await page.evaluate(() =>
     window.__uni.patchNodes().find((n) => n.type === 'audio') || null);
   if (!audioNode) await page.waitForTimeout(100);
 }
-ok(!!audioNode, 'the graph has a node with no compatible port to test against');
+if (!audioNode) {
+  await page.evaluate(() => window.__uni.run('addnode audio'));
+  for (let i = 0; i < 40 && !audioNode; i++) {
+    await page.waitForTimeout(150);
+    audioNode = await page.evaluate(() =>
+      window.__uni.patchNodes().find((n) => n.type === 'audio') || null);
+  }
+}
+ok(!!audioNode, 'a node with no compatible port exists to test against',
+   audioNode ? 'audio #' + audioNode.id : 'could not add one');
 await page.evaluate(([a, b]) => window.__uni.run(`link ${a} ${b}`),
                     [euclid.id, audioNode.id]);
 await page.waitForTimeout(900);
@@ -567,23 +579,36 @@ ok(/compatible ports/.test(why || ''), 'an impossible connection says why, on sc
 // passthru->passthru is fine, and the engine's graph says it would be a cycle.
 // Before the out ring was drained this looked exactly like success — command
 // sent, ack ok, read-back simply unchanged.
+// Build BOTH ends of the cycle here rather than reusing whatever the graph
+// already holds. The patcher graph is engine-lifetime state, so a run inherits
+// whatever the last one left — and a test that reasons about inherited topology
+// is a test about history. Two fresh passthrus, linked in both directions: the
+// second link is a cycle whatever else exists.
+const before2 = await page.evaluate(() => window.__uni.patcher());
+const ids0 = new Set(before2.nodes.map((n) => n.id));
 await page.evaluate(() => window.__uni.run('addnode passthru'));
-const grownIds = new Set(grown.nodes.map((n) => n.id));
-const withLoop = await graphUntil((g) => g.nodes.length === grown.nodes.length + 1);
-const loopNode = (withLoop.nodes.find((n) => !grownIds.has(n.id)) || {}).id;
-const intoIt = linked.edges.find((e) => e.dst === added.id) ? added.id : linked.edges[0].dst;
-await page.evaluate(([a, b]) => window.__uni.run(`link ${a} ${b}`), [intoIt, loopNode]);
-await page.waitForTimeout(1400);
-await page.evaluate(([a, b]) => window.__uni.run(`link ${a} ${b}`), [loopNode, intoIt]);
+const g1 = await graphUntil((g) => g.nodes.some((n) => !ids0.has(n.id)));
+const cycA = g1.nodes.find((n) => !ids0.has(n.id)).id;
+const ids1 = new Set(g1.nodes.map((n) => n.id));
+await page.evaluate(() => window.__uni.run('addnode passthru'));
+const g2 = await graphUntil((g) => g.nodes.some((n) => !ids1.has(n.id)));
+const cycB = g2.nodes.find((n) => !ids1.has(n.id)).id;
+await page.evaluate(([a, b]) => window.__uni.run(`link ${a} ${b}`), [cycA, cycB]);
+await graphUntil((g) => g.edges.some((e) => e.src === cycA && e.dst === cycB));
+await page.evaluate(() => window.__uni.state && window.__uni.run('state'));
+await page.evaluate(([a, b]) => window.__uni.run(`link ${a} ${b}`), [cycB, cycA]);
 await page.waitForTimeout(1800);
 const cycle = await page.evaluate(() => window.__uni.state().reject);
 ok(/cycle/.test(cycle || ''), "the engine's own refusal reaches the screen", String(cycle));
-await page.evaluate((id) => window.__uni.run(`delnode ${id}`), loopNode);
-await graphUntil((g) => !g.nodes.some((n) => n.id === loopNode));
+for (const id of [cycA, cycB]) {
+  await page.evaluate((n) => window.__uni.run(`delnode ${n}`), id);
+  await graphUntil((g) => !g.nodes.some((n) => n.id === id));
+}
 await page.evaluate((id) => window.__uni.run(`delnode ${id}`), added.id);
-const shrunk = await graphUntil((g) => g.nodes.length === graphWas.nodes.length);
-ok(shrunk.nodes.length === graphWas.nodes.length, 'and removed again, taking its edge with it',
-   `${grown.nodes.length} -> ${shrunk.nodes.length} nodes, ${shrunk.edges.length} edges`);
+const shrunk = await graphUntil((g) => !g.nodes.some((n) => n.id === added.id));
+ok(!shrunk.nodes.some((n) => n.id === added.id),
+   'and removed again, taking its edge with it',
+   `#${added.id} gone, ${shrunk.nodes.length} nodes, ${shrunk.edges.length} edges`);
 
 section('piano roll selection');
 await page.evaluate(() => { window.__uni.view('piano'); window.__uni.pianoAll(true); });
@@ -831,6 +856,28 @@ ok(await macAlt('w', 'KeyW'), 'and the Windows key values still reach it');
 await page.waitForTimeout(3500);
 await macAlt('s', 'KeyS');
 await page.waitForTimeout(3500);
+
+section('device rack, live');
+// LAST, deliberately. This loads a different project, and the patcher graph is
+// ENGINE-lifetime state rather than project state (GUIDELINES 2.18) — loading
+// `rack` replaces the graph and reloading webtest does not put it back. Run
+// earlier, it broke the patcher sections that follow it. The rule: a check that
+// mutates state a later check reads has to go after it, or not mutate.
+await page.evaluate(() => window.__uni.loadProject('rack'));
+let live = null;
+for (let i = 0; i < 60 && !(live && live.named); i++) {
+  await page.waitForTimeout(200);
+  live = await page.evaluate(() => window.__uni.chainProbe());
+}
+ok(live && live.cards === 1, 'a real project with a device chain draws it',
+   JSON.stringify(live && live.titles));
+ok(live && live.named === 1 && live.titles[0] === 'Identity',
+   'and the name comes from the plugin host, not from here', JSON.stringify(live.titles));
+// Identity exposes no parameters, which the ENGINE reports as paramCount 0 —
+// verified at the source with the bridge, not inferred from an empty list on
+// this side. The card is a name with no rows, and that is correct.
+ok(live && live.params[0] === 0, 'a plugin with no parameters draws none',
+   JSON.stringify(live.params));
 
 section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));
