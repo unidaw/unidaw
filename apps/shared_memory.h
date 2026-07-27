@@ -49,7 +49,10 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 18: waveform read-back — UiAudioSourceRegion + UiWaveformRegion (uiAudioSourceOffset
 //     / uiWaveformOffset). The two new u64 offsets grow sizeof(ShmHeader) 576 -> 640,
 //     so this is the first UI-region bump that does NOT ride the header tail padding.
-constexpr uint16_t kShmVersion = 18;
+// 19: song time signature read-back (uiSongTimeSigNum/uiSongTimeSigDen) for the
+//     ruler + time gutter. Two u32s ride the header's alignment tail padding, so
+//     sizeof(ShmHeader) is unchanged (640).
+constexpr uint16_t kShmVersion = 19;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -151,6 +154,11 @@ struct alignas(64) ShmHeader {
   // v14-v17 — so the Rust mirror's size/offset asserts move with this bump.
   uint64_t uiAudioSourceOffset = 0;
   uint64_t uiWaveformOffset = 0;
+  // v19: the song's time signature, for the arrangement ruler + the tracker's time
+  // gutter (a clip's own meter is separate, on UiClipExtent). Two u32s fit the header's
+  // 64-byte-alignment tail padding, so sizeof(ShmHeader) stays 640.
+  uint32_t uiSongTimeSigNum = 4;
+  uint32_t uiSongTimeSigDen = 4;
 };
 
 struct alignas(64) RingHeader {

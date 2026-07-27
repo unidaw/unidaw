@@ -8937,6 +8937,11 @@ struct TrackRuntime {
             loopStartNanotick.load(std::memory_order_acquire);
         uiShm.header->uiLoopEnd =
             loopEndNanotick.load(std::memory_order_acquire);
+        // v19: the song's time signature, for the ruler + time gutter.
+        uiShm.header->uiSongTimeSigNum =
+            songTimeSigNum.load(std::memory_order_relaxed);
+        uiShm.header->uiSongTimeSigDen =
+            songTimeSigDen.load(std::memory_order_relaxed);
         // v15: load-result signal (ok read before seq, matching the writer order).
         uiShm.header->uiLoadOk = projectLoadOk.load(std::memory_order_acquire);
         uiShm.header->uiLoadSeq = projectLoadSeq.load(std::memory_order_acquire);

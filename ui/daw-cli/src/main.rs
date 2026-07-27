@@ -130,6 +130,10 @@ fn get_transport(handle: &EngineHandle) -> i32 {
         snapshot.ui_tempo_milli_bpm as f64 / 1000.0
     );
     println!("  \"tempo_point_count\": {},", snapshot.ui_tempo_point_count);
+    println!(
+        "  \"song_time_sig\": \"{}/{}\",",
+        snapshot.ui_song_time_sig_num, snapshot.ui_song_time_sig_den
+    );
     println!("  \"track_count\": {},", handle.track_count());
     println!("  \"clip_version\": {}", handle.clip_version());
     println!("}}");
