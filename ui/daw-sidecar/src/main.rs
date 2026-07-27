@@ -38,7 +38,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 11;
+const WIRE_VERSION: u16 = 12;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -52,7 +52,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 116;
+const FULL_HEADER_BYTES: usize = 124;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
 const NOTE_BYTES: usize = 40;
 
@@ -272,6 +272,19 @@ struct Frame {
     /// with {"ok":true} and silently changed nothing.
     load_seq: u32,
     load_ok: u32,
+    /// The tempo AT THE PLAYHEAD, in milli-BPM (120000 = 120), and how many
+    /// points the project's tempo map has (1 = constant).
+    ///
+    /// Milli-BPM rather than a float on purpose: the chrome guards its readout on
+    /// the value having changed, and a float that jitters in its last digit
+    /// defeats every such guard — it would rebuild the string sixty times a
+    /// second to print the same number. An integer compares exactly.
+    ///
+    /// The point count is not decoration either: it is what lets the chrome say
+    /// "128" when the song is 128 throughout and "128"-at-a-position when it is
+    /// not, which are different claims.
+    tempo_milli_bpm: u32,
+    tempo_point_count: u32,
     /// The harmony timeline: (nanotick, root, scale_id) per key change. The
     /// chrome showed a hardcoded "C major" before this, which was wrong for
     /// three quarters of the maximal project.
@@ -344,7 +357,9 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&f.loop_start.to_le_bytes());              // 92
     out.extend_from_slice(&f.loop_end.to_le_bytes());                // 100
     out.extend_from_slice(&f.load_seq.to_le_bytes());                // 108
-    out.extend_from_slice(&f.load_ok.to_le_bytes());                 // 112, to 116
+    out.extend_from_slice(&f.load_ok.to_le_bytes());                 // 112
+    out.extend_from_slice(&f.tempo_milli_bpm.to_le_bytes());         // 116
+    out.extend_from_slice(&f.tempo_point_count.to_le_bytes());       // 120, to 124
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
     // variable section and nothing here noticed.
@@ -481,6 +496,12 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     let (lseq, lok) = h.load_status();
     out.load_seq = lseq;
     out.load_ok = lok;
+    // Read inside the same seqlock frame as the playhead, engine-side, so the
+    // tempo we forward is the tempo AT the position we forward — not the tempo a
+    // block later, which is a different number the moment a song has a change in
+    // it.
+    out.tempo_milli_bpm = snap.ui_tempo_milli_bpm;
+    out.tempo_point_count = snap.ui_tempo_point_count;
 
     // Keyed on the engine's own harmony version, which moves only on a change.
     if !out.harmony_ever_read || f_harmony_stale(out) {
@@ -1160,6 +1181,42 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         // the publish loop below notices.
         p.command_type = UiCommandType::RequestDeviceParams as u16;
         p.value0 = parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32;
+    } else if body.contains("\"settempo\"") {
+        // {"type":"settempo","milliBpm":128000}                  — the whole song
+        // {"type":"settempo","milliBpm":128000,"tick":7680000}   — from here on
+        //
+        // milliBpm, not bpm: `parse_num` reads integers, so `"bpm":128.5` would
+        // parse as 128 and the half would vanish without a word. It is also the
+        // engine's own unit, so the number that comes back in the next frame is
+        // the number that went out — which is what lets the UI tell "the engine
+        // took it" from "the engine rounded it".
+        //
+        // Absence of "tick" is what means "the whole song", and it maps to the
+        // engine's flags=1 (flatten the map). That is deliberately not the same
+        // as `"tick":0`, which replaces the point AT zero and leaves any later
+        // tempo changes standing. Someone typing a BPM into the transport bar
+        // means the first thing; a tempo lane means the second.
+        let milli = parse_num(body, "\"milliBpm\"").unwrap_or(0);
+        // The engine ignores a non-positive tempo silently, on the far side of an
+        // IPC boundary. Refuse here, where the UI is listening.
+        if milli <= 0 { return Err("a tempo must be greater than zero"); }
+        // 10..=1000 BPM. Not arbitrary: below 10 a bar is longer than most
+        // sessions and above 1000 a sixteenth is shorter than an audio block, so
+        // either end is a typo rather than a tempo. The engine will take any
+        // positive number, which is why the check belongs here.
+        if !(10_000..=1_000_000).contains(&milli) {
+            return Err("tempo must be between 10 and 1000 BPM");
+        }
+        p.command_type = UiCommandType::SetTempo as u16;
+        p.value0 = milli as u32;
+        match parse_num(body, "\"tick\"") {
+            Some(t) if t >= 0 => {
+                p.flags = 0;
+                p.note_nanotick_lo = t as u32;
+                p.note_nanotick_hi = ((t as u64) >> 32) as u32;
+            }
+            _ => p.flags = 1,
+        }
     } else if body.contains("\"loop\"") {
         // Start and end, not tick and dur: the engine reads the end as an
         // absolute nanotick out of the duration field, and calling the second
@@ -2527,6 +2584,49 @@ mod tests {
             r#"{"type":"patchlink","src":2,"srcType":1,"dst":2,"dstType":2}"#).unwrap().err(),
                    Some("a node cannot connect to itself"));
         assert!(build_patcher_graph(r#"{"type":"note","pitch":60}"#).is_none());
+    }
+
+    #[test]
+    fn set_tempo_distinguishes_the_whole_song_from_a_point() {
+        // No "tick" => flatten the map. This is the transport-bar BPM edit.
+        let p = build_command(r#"{"type":"settempo","milliBpm":128000}"#).expect("settempo");
+        assert_eq!(p.command_type, UiCommandType::SetTempo as u16);
+        assert_eq!(p.value0, 128_000);
+        assert_eq!(p.flags, 1, "no position means the whole song");
+
+        // A "tick" => insert-or-replace a point there, leaving later changes be.
+        let p = build_command(r#"{"type":"settempo","milliBpm":90000,"tick":4294967296}"#)
+            .expect("settempo at a point");
+        assert_eq!(p.flags, 0, "a position means one point");
+        assert_eq!(p.value0, 90_000);
+        assert_eq!(p.note_nanotick_lo, 0);
+        assert_eq!(p.note_nanotick_hi, 1);
+
+        // `"tick":0` is NOT the same as no tick: it replaces the point at zero
+        // and leaves any later tempo change standing. Conflating the two would
+        // make a tempo-lane edit at bar 1 silently wipe the rest of the map.
+        let p = build_command(r#"{"type":"settempo","milliBpm":90000,"tick":0}"#).expect("at 0");
+        assert_eq!(p.flags, 0);
+        assert_eq!(p.note_nanotick_lo, 0);
+    }
+
+    #[test]
+    fn set_tempo_refuses_a_tempo_no_one_could_have_meant() {
+        // The engine ignores a non-positive tempo on the far side of an IPC
+        // boundary, where nothing on the socket ever hears about it.
+        assert_eq!(build_command(r#"{"type":"settempo","milliBpm":0}"#).err(),
+                   Some("a tempo must be greater than zero"));
+        assert_eq!(build_command(r#"{"type":"settempo","milliBpm":-120000}"#).err(),
+                   Some("a tempo must be greater than zero"));
+        // Below 10 BPM a bar outlasts most sessions; above 1000 a sixteenth is
+        // shorter than an audio block. Either end is a typo.
+        assert_eq!(build_command(r#"{"type":"settempo","milliBpm":9999}"#).err(),
+                   Some("tempo must be between 10 and 1000 BPM"));
+        assert_eq!(build_command(r#"{"type":"settempo","milliBpm":1000001}"#).err(),
+                   Some("tempo must be between 10 and 1000 BPM"));
+        // ...and the edges themselves are allowed.
+        assert!(build_command(r#"{"type":"settempo","milliBpm":10000}"#).is_ok());
+        assert!(build_command(r#"{"type":"settempo","milliBpm":1000000}"#).is_ok());
     }
 
     #[test]

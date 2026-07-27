@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 11;
+export const WIRE_VERSION = 12;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 116;  // ...+ mixer 8 + counts 16 + loop 16 + load 8
+const HEADER_BYTES = 124;  // ...+ mixer 8 + counts 16 + loop 16 + load 8 + tempo 8
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -73,6 +73,20 @@ export function createStore() {
     loopStart: 0, loopEnd: 0,
     /** A load result: seq bumps per attempt, ok says whether it took. */
     loadSeq: 0, loadOk: 1,
+    /**
+     * The tempo AT THE PLAYHEAD in milli-BPM, and how many points the project's
+     * tempo map has (1 = constant tempo, 0 = the engine has not said).
+     *
+     * Milli-BPM as an integer, deliberately. The chrome guards its readout on
+     * this value having changed, and a float that jitters in its last digit
+     * defeats the guard — it would rebuild the string every frame to print the
+     * same number. The engine publishes an integer for exactly this reason.
+     *
+     * Seeded at 120000 rather than 0 because 120 is what a project with no tempo
+     * of its own plays at, and a transport bar reading "0.00 BPM" for the first
+     * frame after connecting is a worse lie than the one this replaces.
+     */
+    tempoMilliBpm: 120000, tempoPointCount: 0,
     /** The patcher graph (SHM v14). One global graph today; the shape does not
      *  change when it becomes per-device. */
     patcherVersion: -1, patcherDevice: 0, patcherNodes: [], patcherEdges: [],
@@ -150,6 +164,8 @@ export function decode(buf, store) {
   store.loopEnd = Number(v.getBigUint64(100, true));
   store.loadSeq = v.getUint32(108, true);
   store.loadOk = v.getUint32(112, true);
+  store.tempoMilliBpm = v.getUint32(116, true) || 120000;
+  store.tempoPointCount = v.getUint32(120, true);
   const aggN = aggRows * aggTracks;
   const varBefore = harmonyCount * HARMONY_BYTES + nameCount * NAME_BYTES + nodeCount * PATCHER_NODE_BYTES
                   + edgeCount * PATCHER_EDGE_BYTES + mixCount * MIXER_BYTES;

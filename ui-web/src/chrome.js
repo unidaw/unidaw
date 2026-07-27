@@ -22,6 +22,11 @@ const NANOTICKS_PER_SUB = NANOTICKS_PER_QUARTER / 1000;
 const SUB = new Array(1000);
 for (let i = 0; i < 1000; i++) SUB[i] = (i < 10 ? '00' : i < 100 ? '0' : '') + i;
 
+/** Two digits after the point, for the tempo. Same reasoning as SUB: a closed
+ *  domain, built once, rather than a `toFixed(2)` per change. */
+const HUNDREDTHS = new Array(100);
+for (let i = 0; i < 100; i++) HUNDREDTHS[i] = (i < 10 ? '0' : '') + i;
+
 /** One label whose text is written through an owned Text node. */
 function label(cls, initial = '') {
   const el = document.createElement('span');
@@ -84,6 +89,9 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
   const posSub = document.createTextNode('000');
   posLabel.appendChild(posSub);
   const tempo = label('ch-meta', '120.00 BPM');
+  // Seeded to what the store seeds tempoMilliBpm to, so the first update is a
+  // no-op rather than a rewrite of the same string.
+  let lastTempo = 120000, lastTempoVaries = false;
   const sig = label('ch-meta', '4/4');
   pos.append(posLabel, tempo, sig);
 
@@ -155,7 +163,30 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
   return {
     /** Called from the draw loop. Must stay allocation-free when nothing moves. */
     update({ playheadTick, transport: tstate, linkText, octave, editStep,
-             velocity = 100, rejectText = '', viewName = '', keyName = '' }) {
+             velocity = 100, rejectText = '', viewName = '', keyName = '',
+             tempoMilliBpm = 120000, tempoPointCount = 0 }) {
+      /**
+       * The project's tempo, at the playhead.
+       *
+       * This label read a hardcoded "120.00 BPM" from the day it was written,
+       * through every project that was not 120 and every tempo change inside
+       * one. The engine publishes it now, as an integer in thousandths, and
+       * that integer is what the guard compares — a float would jitter in its
+       * last digit and rebuild the string every frame to print the same number.
+       *
+       * The dot after the number means the song's tempo VARIES and this is
+       * merely the tempo here. Without it, scrolling the playhead across a
+       * change looks like the readout glitching rather than like the music
+       * doing what it was written to do.
+       */
+      if (tempoMilliBpm !== lastTempo || (tempoPointCount > 1) !== lastTempoVaries) {
+        lastTempo = tempoMilliBpm;
+        lastTempoVaries = tempoPointCount > 1;
+        const whole = (tempoMilliBpm / 1000) | 0;
+        const frac = tempoMilliBpm % 1000;
+        tempo.firstChild.nodeValue =
+          whole + '.' + HUNDREDTHS[(frac / 10) | 0] + ' BPM' + (lastTempoVaries ? ' ·' : '');
+      }
       if (velocity !== lastVel) { lastVel = velocity; velLabel.firstChild.nodeValue = 'vel ' + velocity; }
       // The key CHANGES: it is resolved from the harmony timeline at the
       // playhead, so it moves during playback rather than being a caption. A

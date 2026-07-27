@@ -602,6 +602,26 @@ const dockApi = {
   listProjects: () => conn && conn.send({ type: 'list' }),
   transport: (what) => cmd(what),
   seek: (tick) => conn && conn.send({ type: 'seek', track: state.cursor.track, tick: Math.max(0, tick) }),
+  /**
+   * Set the tempo. `tempo(128)` sets the whole song; `tempo(128, tick)` inserts
+   * or replaces a point there and leaves later changes alone.
+   *
+   * Those are genuinely different edits and the difference is the presence of a
+   * position, not a flag — passing 0 as the position means "the point at bar 1",
+   * which is not the same as "the song". BPM is accepted as a decimal here
+   * because a person types 128.5; it goes on the wire in thousandths, which is
+   * the engine's own unit, so the number that comes back is the number that
+   * went out.
+   */
+  tempo: (bpm, tick) => {
+    const milli = Math.round(Number(bpm) * 1000);
+    if (!Number.isFinite(milli) || milli <= 0) throw new Error('a tempo must be a positive number');
+    const msg = { type: 'settempo', milliBpm: milli };
+    if (tick !== undefined) msg.tick = Math.max(0, Math.round(tick));
+    if (!conn || !conn.send(msg)) throw new Error('no engine');
+    schedule();
+    return bpm;
+  },
   note: (pitch, dur, vel) => {
     const base = engine ? engine.clipVersion : 0;
     const d = dur === undefined || Number.isNaN(dur) ? laneRowTicks(state.cursor.track) : dur;
@@ -1209,7 +1229,7 @@ function currentKey() {
  */
 const _chromeOpts = { playheadTick: 0, transport: 0, linkText: '', octave: 0,
                       editStep: 0, velocity: 100, rejectText: '', viewName: '',
-                      keyName: '' };
+                      keyName: '', tempoMilliBpm: 120000, tempoPointCount: 0 };
 function updateChrome() {
   const o = _chromeOpts;
   o.playheadTick = engine ? engine.playheadTick : 0;
@@ -1222,6 +1242,10 @@ function updateChrome() {
   o.rejectText = state.reject || '';
   o.viewName = state.view;
   o.keyName = currentKey();
+  // 120000 when there is no engine, which is what the fixture plays at — not 0,
+  // which would put "0.00 BPM" on screen for every golden and every headless run.
+  o.tempoMilliBpm = engine && engine.tempoMilliBpm ? engine.tempoMilliBpm : 120000;
+  o.tempoPointCount = engine ? engine.tempoPointCount : 0;
   chrome.update(o);
 }
 
@@ -2282,7 +2306,25 @@ hostRo.observe(mixerHost);
 // and every golden — still renders standalone. Connected after the first draw:
 // connectEngine calls onStatus synchronously, and touching `state` before its
 // declaration is a temporal-dead-zone throw that kills the whole module.
+/**
+ * Which sidecar to talk to: the one belonging to the page you loaded.
+ *
+ * These were hardcoded to 8174/8175, which meant a second stack could not be
+ * used at all — `tools/webstack.sh` happily brings one up on its own shared
+ * memory segment and its own ports, and then its page connects to the FIRST
+ * stack's engine. You get a window that looks right, reports "live", and is
+ * driving somebody else's project. The script already derives its sidecar ports
+ * as page+1 and page+2; this is the other half of that agreement.
+ *
+ * Falls back to the default pair when the page is opened from a file:// URL or
+ * any other origin with no port, which is where the constants came from.
+ */
+const PAGE_PORT = Number(location.port) || 8173;
+const WS_STATE_URL = `ws://127.0.0.1:${PAGE_PORT + 1}`;
+const WS_CMD_URL = `ws://127.0.0.1:${PAGE_PORT + 2}`;
 conn = WANTS_ENGINE ? connectEngine({
+  url: WS_STATE_URL,
+  cmdUrl: WS_CMD_URL,
   onStatus: (s, d) => { state.link = s + (d ? ': ' + d : ''); schedule(); },
   /**
    * The engine's own refusals, drained from its outbound ring by the sidecar.
@@ -2715,6 +2757,9 @@ window.__uni = {
   // The cursor, for tests and agents. `dockApi.goto` is the same movement the
   // console command performs, so the two cannot drift.
   goto: (row, track) => dockApi.goto(row, track),
+  tempo: (bpm, tick) => (bpm === undefined
+    ? (engine ? { bpm: engine.tempoMilliBpm / 1000, points: engine.tempoPointCount } : null)
+    : dockApi.tempo(bpm, tick)),
   patchNodes: () => dockApi.nodes(),
   patch: (id, field, steps) => { const r = dockApi.patch(id, field, steps); draw(); return r; },
   pianoZoom: (z) => { state.pianoZoom = z; draw(); },

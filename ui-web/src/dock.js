@@ -38,6 +38,16 @@ export function createCommands(api) {
     play: { help: 'play/pause toggle', run: () => { api.transport('play'); return 'toggle'; } },
     stop: { help: 'stop and rewind', run: () => { api.transport('stop'); return 'stop'; } },
     seek: { help: 'seek <tick>', run: (a) => { api.seek(num(a[0], 0)); return 'seek ' + num(a[0], 0); } },
+    // Two arities on purpose: `tempo 128` is the whole song, `tempo 128 <tick>`
+    // is one point from there on. Omitting the position is what means "all of
+    // it" — `tempo 128 0` replaces the point at bar 1 and leaves later tempo
+    // changes standing, which is a different edit and a person means it.
+    tempo: { help: 'tempo <bpm> [tick] — whole song, or one point from <tick>', run: (a) => {
+      const bpm = num(a[0], 0);
+      if (!(bpm > 0)) throw new Error('tempo needs a bpm: ' + (a[0] === undefined ? '(none)' : a[0]));
+      api.tempo(bpm, a[1] === undefined ? undefined : num(a[1]));
+      return 'tempo ' + bpm + (a[1] === undefined ? ' (whole song)' : ' from ' + num(a[1]));
+    } },
     note: { help: 'note <pitch> [dur] [vel] — at the cursor', run: (a) => {
       const p = num(a[0], 60);
       if (!(p >= 0 && p <= 127)) throw new Error('pitch out of range: ' + a[0]);
