@@ -3449,6 +3449,32 @@ struct TrackRuntime {
       }
     }
 
+    // The audio thread reads each track's per-track state — chain devices (and
+    // their patcherNodeId, repointed by the assembly above), routing, mod links,
+    // automation — from its published trackSnapshot. Load mutated the live tracks
+    // without republishing, so the RT would keep running the pre-load snapshot;
+    // refresh every track's snapshot now so the loaded state actually takes effect.
+    {
+      std::vector<TrackRuntime*> loaded;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        for (auto& runtime : tracks) {
+          if (runtime) {
+            loaded.push_back(runtime.get());
+          }
+        }
+      }
+      for (auto* runtime : loaded) {
+        std::shared_ptr<const TrackStateSnapshot> snap;
+        {
+          std::lock_guard<std::mutex> tlock(runtime->trackMutex);
+          snap = buildTrackSnapshot(runtime->track);
+        }
+        std::atomic_store_explicit(&runtime->trackSnapshot, snap,
+                                   std::memory_order_release);
+      }
+    }
+
     // Report plugin identity before touching anything: a project that silently
     // loads the wrong plugin, or none, is worse than one that says so.
     for (const auto& source : document.tracks) {
