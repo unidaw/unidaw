@@ -36,6 +36,7 @@
 #include "apps/plugin_cache.h"
 #include "apps/patcher_abi.h"
 #include "apps/audio_region.h"
+#include "apps/clip_grid.h"
 #include "apps/waveform_store.h"
 #include "apps/patcher_assemble.h"
 #include "apps/patcher_graph.h"
@@ -1893,7 +1894,35 @@ struct TrackRuntime {
         out.placementId = ext.placementId;
         out.clipId = ext.clipId;
         out.trackId = runtime->trackId;
-        out.flags = ext.isAudio ? daw::kUiClipExtentAudio : 0u;
+        uint32_t extFlags = ext.isAudio ? daw::kUiClipExtentAudio : 0u;
+        // Pack the clip's own musical grid into the spare flag bits (0 => the reader
+        // falls back to the song meter). Clamp + refuse loudly per the three rules.
+        for (const auto& oc : runtime->ownedClips) {
+          if (oc.id != ext.clipId) {
+            continue;
+          }
+          const auto g = daw::packClipGrid(oc.linesPerBeat, oc.timeSigNumerator,
+                                           oc.timeSigDenominator);
+          extFlags |= g.bits;
+          if (g.outcome == daw::ClipGridOutcome::ClampedLpb ||
+              g.outcome == daw::ClipGridOutcome::ClampedNum) {
+            DAW_EVENT("project.meter_clamped")
+                .field("clip", ext.clipId)
+                .field("field",
+                       std::string(g.outcome == daw::ClipGridOutcome::ClampedLpb
+                                       ? "lines_per_beat"
+                                       : "time_sig_numerator"))
+                .field("asked", g.asked)
+                .field("stored", g.stored);
+          } else if (g.outcome == daw::ClipGridOutcome::RefusedDen) {
+            DAW_EVENT("project.meter_refused")
+                .field("clip", ext.clipId)
+                .field("field", std::string("time_sig_denominator"))
+                .field("asked", g.asked);
+          }
+          break;
+        }
+        out.flags = extFlags;
         out.startTick = ext.at;
         out.endTick = ext.endTick;
         std::memset(out.name, 0, sizeof(out.name));
