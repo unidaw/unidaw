@@ -24,6 +24,7 @@ import { isBlackKey, pitchLabel, fitLowPitch } from '../src/pianomodel.js';
 import { describeConfig, configFields, nudgeConfig,
          NODE_TYPES } from '../src/patchermodel.js';
 import { snapLoop, TICKS_PER_BAR } from '../src/arrangemodel.js';
+import { velocityText } from '../src/viewmodel.js';
 import { trackName } from '../src/arrangemodel.js';
 import { createField, begin as fBegin, feed as fFeed, cancel as fCancel } from '../src/textfield.js';
 
@@ -192,6 +193,20 @@ test('patcher config is named per type, or shown as nothing', () => {
   assert.match(lfo, /depth 0\.75/);
   // A type with no table shows NOTHING, not eight anonymous numbers.
   assert.equal(describeConfig(NODE_TYPES.indexOf('kernel'), [1, 2, 3, 4, 5, 6, 7, 8]), '');
+});
+
+test('a velocity is two hex digits, over the whole range', () => {
+  // It was the last two DECIMAL digits, so 100 read as "00" and 127 as "27" —
+  // wrong, and wrong in the way that does not announce itself, because both are
+  // valid-looking velocities.
+  assert.equal(velocityText(0), '00');
+  assert.equal(velocityText(12), '0c');
+  assert.equal(velocityText(100), '64');
+  assert.equal(velocityText(127), '7f');
+  // Clamped rather than allowed to produce three characters, which would widen
+  // the column the grid is measured against.
+  assert.equal(velocityText(999), 'ff');
+  assert.equal(velocityText(-5), '00');
 });
 
 test('a dragged loop snaps, normalises and is never empty', () => {

@@ -28,10 +28,11 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
-use daw_bridge::layout::{EventEntry, UiChordCommandPayload, UiCommandPayload, UiCommandType,
+use daw_bridge::layout::{EventEntry, UiChainCommandPayload, UiChordCommandPayload,
+                        UiCommandPayload, UiCommandType,
                         UiDiffType, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
                         UiPatcherPresetCommandPayload, K_CHAIN_DEVICE_ID_AUTO,
-                        K_CHAIN_TRACK_ALL};
+                        K_CHAIN_TRACK_ALL, K_HOST_SLOT_DIRECT};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
 
 /// Wire format, little-endian. The frontend decodes with a DataView.
@@ -658,6 +659,22 @@ fn parse_str<'a>(txt: &'a str, key: &str) -> Option<&'a str> {
     Some(&after[..close])
 }
 
+/// `key`'s value when it is genuinely a JSON string, and None when it is a
+/// number or absent.
+///
+/// `parse_str` takes the next quoted run ANYWHERE after the key, which is right
+/// where every caller writes a string and wrong where a field may be either: on
+/// `{"kind":3,"slot":1}` it returns `slot`. This one insists on the colon and the
+/// opening quote, so a numeric value reads as "not a string" rather than as the
+/// name of the field after it.
+fn parse_str_value<'a>(txt: &'a str, key: &str) -> Option<&'a str> {
+    let i = txt.find(key)? + key.len();
+    let rest = txt[i..].trim_start().strip_prefix(':')?.trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
 /// A project name has to survive being joined to a directory on the engine side,
 /// where it becomes `<dir>/<name>.uniproj.json`. Anything that could climb out of
 /// that directory is refused here, at the process boundary that faces the socket,
@@ -910,6 +927,110 @@ fn build_patcher_graph(body: &str) -> Option<Result<UiPatcherGraphCommandPayload
     Some(Ok(p))
 }
 
+/// DeviceKind, from apps/device_chain.h, in the enum's own order.
+///
+/// The same five ui-web's `DEVICE_KINDS` lists, because both are that enum. This
+/// copy is here rather than only there for the reason the port table above is:
+/// engine vocabulary belongs as close to the engine as the wire allows, and a
+/// name the engine does not have must be refused before it becomes an integer.
+const DEVICE_KINDS: [&str; 5] = [
+    "patcher event",
+    "patcher instrument",
+    "patcher audio",
+    "vst instrument",
+    "vst effect",
+];
+
+/// The kind a chain command names, as the engine's DeviceKind number.
+///
+/// Accepted by name or by number, because both callers exist: a UI that read a
+/// chain snapshot has the number, a person or an agent typing a command has the
+/// word. Anything else is refused rather than sent — the engine derives a
+/// device's capability mask from its kind with a switch that falls through to
+/// `DeviceCapabilityNone`, so an unknown kind arrives as a device that consumes
+/// nothing, produces nothing, and looks like a device.
+fn device_kind(body: &str) -> Result<u32, &'static str> {
+    const UNKNOWN: &str = "no such device kind - it is one of patcher event, \
+                           patcher instrument, patcher audio, vst instrument, vst effect";
+    if let Some(name) = parse_str_value(body, "\"kind\"") {
+        return DEVICE_KINDS
+            .iter()
+            .position(|k| k.eq_ignore_ascii_case(name))
+            .map(|i| i as u32)
+            .ok_or(UNKNOWN);
+    }
+    match parse_num(body, "\"kind\"") {
+        Some(k) if (0..DEVICE_KINDS.len() as i64).contains(&k) => Ok(k as u32),
+        _ => Err(UNKNOWN),
+    }
+}
+
+/// Add a device to a track's chain, or remove one from it.
+///
+///   {"type":"adddevice","track":0,"kind":"patcher event"}
+///   {"type":"adddevice","track":0,"kind":4,"slot":2}
+///   {"type":"deldevice","track":0,"device":7}
+///
+/// `UiChainCommandPayload`, not `UiCommandPayload` — the engine matches the entry
+/// SIZE first and dispatches on commandType second, so a chain edit in the
+/// generic shape is dropped without a word.
+///
+/// The engine numbers the new device itself (`kChainDeviceIdAuto`) and appends
+/// it: an id chosen here would race every other writer on the ring, and there is
+/// no position to insert at until something can express one.
+fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static str>> {
+    let add = body.contains("\"adddevice\"");
+    let del = body.contains("\"deldevice\"");
+    if !(add || del) { return None; }
+    let mut p = UiChainCommandPayload {
+        command_type: UiCommandType::None as u16,
+        flags: 0,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        base_version: parse_num(body, "\"base\"").unwrap_or(0).max(0) as u32,
+        device_id: K_CHAIN_DEVICE_ID_AUTO,
+        device_kind: 0,
+        insert_index: K_CHAIN_DEVICE_ID_AUTO,
+        // NOT 0. Node ids start at 0, so a zero here silently binds the new
+        // device to whichever node the global patcher graph numbered first; the
+        // engine resolves an unknown id to nothing, which is what "this device
+        // has no patcher node yet" should mean.
+        patcher_node_id: K_CHAIN_DEVICE_ID_AUTO,
+        host_slot_index: K_HOST_SLOT_DIRECT,
+        bypass: 0,
+        reserved: [0; 4],
+    };
+    if del {
+        // There is no sentinel for "remove whichever": kChainDeviceIdAuto is an
+        // id no chain holds, so a missing one would travel to the engine and come
+        // back as chain error 2 — a refusal about a device nobody named.
+        let Some(id) = parse_num(body, "\"device\"").filter(|id| *id >= 0) else {
+            return Some(Err("deldevice needs the id of the device to remove"));
+        };
+        p.command_type = UiCommandType::RemoveDevice as u16;
+        p.device_id = id as u32;
+        return Some(Ok(p));
+    }
+    let kind = match device_kind(body) { Ok(k) => k, Err(why) => return Some(Err(why)) };
+    p.command_type = UiCommandType::AddDevice as u16;
+    p.device_kind = kind;
+    // hostSlotIndex is an index into the engine's plugin scan, and a VST device
+    // without one is a device pointing at whatever the scan happened to list
+    // first. There is nowhere in 40 bytes to put a path or a VstRef, so the
+    // caller has to say which slot and this refuses when it does not. A patcher
+    // device is not hosted out of process at all: it keeps the direct sentinel,
+    // which is what makes its card read "in-process" rather than "slot 0".
+    let vst = kind == 3 || kind == 4;
+    match parse_num(body, "\"slot\"") {
+        Some(s) if s >= 0 => p.host_slot_index = s as u32,
+        Some(_) => return Some(Err("a host slot index cannot be negative")),
+        None if vst => return Some(Err(
+            "adding a VST device needs a slot - the engine resolves a plugin by \
+             its scan index and the command has no room for a path")),
+        None => {}
+    }
+    Some(Ok(p))
+}
+
 fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_named(body) { return r; }
 
@@ -1109,6 +1230,27 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                 Ok(p) => match handle.send_patcher_config(p) {
                                     Ok(()) => format!("{{\"ok\":true,\"type\":{},\"node\":{}}}",
                                                       p.command_type, p.node_id),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // Chain edits: add or remove a device. Own payload again.
+                        //
+                        // The reply names what was sent rather than what
+                        // happened — the engine assigns the id, and whether the
+                        // chain took the device arrives later as a ChainSnapshot
+                        // or a ChainError on the outbound ring.
+                        if let Some(r) = build_chain_edit(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_chain_command(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"type\":{},\"track\":{},\"device\":{},\"kind\":{},\"slot\":{}}}",
+                                        p.command_type, p.track_id, p.device_id,
+                                        p.device_kind, p.host_slot_index),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };
@@ -2291,6 +2433,94 @@ mod tests {
         assert_eq!(build_patcher_config(r#"{"type":"patchcfg","nodeType":99}"#).unwrap().err(),
                    Some("no config layout for that node type"));
         assert!(build_patcher_config(r#"{"type":"note","pitch":60}"#).is_none());
+    }
+
+    #[test]
+    fn a_device_kind_is_accepted_by_name_or_by_the_number_the_chain_publishes() {
+        assert_eq!(device_kind(r#"{"kind":"patcher event"}"#), Ok(0));
+        assert_eq!(device_kind(r#"{"kind":"VST Effect"}"#), Ok(4), "case does not matter");
+        assert_eq!(device_kind(r#"{"kind":3}"#), Ok(3));
+        // The number after the key, not the name of the field that follows it —
+        // the loose string parser returns "slot" for this and would have sent
+        // whatever kind that resolved to.
+        assert_eq!(device_kind(r#"{"kind":2,"slot":1}"#), Ok(2));
+    }
+
+    #[test]
+    fn an_unknown_device_kind_is_refused_rather_than_sent_as_a_number() {
+        // DeviceKind stops at 4. The engine's capability switch falls through to
+        // "no capabilities" for anything past it, so a 9 would be added as a real
+        // device that can neither consume nor produce anything.
+        assert!(device_kind(r#"{"kind":9}"#).is_err());
+        assert!(device_kind(r#"{"kind":-1}"#).is_err());
+        assert!(device_kind(r#"{"kind":"reverb"}"#).is_err());
+        assert!(device_kind(r#"{"track":0}"#).is_err(), "a missing kind is not a default");
+        assert_eq!(
+            build_chain_edit(r#"{"type":"adddevice","track":0,"kind":9}"#).unwrap().err(),
+            device_kind(r#"{"kind":9}"#).err());
+    }
+
+    #[test]
+    fn adding_a_device_lets_the_engine_number_it_and_appends_it() {
+        let p = build_chain_edit(r#"{"type":"adddevice","track":2,"kind":"patcher audio"}"#)
+            .expect("recognised").expect("built");
+        assert_eq!(p.command_type, UiCommandType::AddDevice as u16);
+        assert_eq!(p.command_type, 14, "the engine's own number for it");
+        assert_eq!(p.track_id, 2);
+        assert_eq!(p.device_kind, 2);
+        assert_eq!(p.device_id, K_CHAIN_DEVICE_ID_AUTO, "the engine assigns the id");
+        assert_eq!(p.insert_index, K_CHAIN_DEVICE_ID_AUTO, "appended");
+        // Node ids start at 0, so 0 would bind the new device to the graph's
+        // first node instead of to none.
+        assert_eq!(p.patcher_node_id, K_CHAIN_DEVICE_ID_AUTO, "no patcher node yet");
+        assert_eq!(p.bypass, 0);
+    }
+
+    #[test]
+    fn a_patcher_device_is_added_in_process_rather_than_in_slot_zero() {
+        let p = build_chain_edit(r#"{"type":"adddevice","kind":0}"#).unwrap().unwrap();
+        assert_eq!(p.host_slot_index, K_HOST_SLOT_DIRECT);
+        assert_ne!(p.host_slot_index, 0, "slot 0 is a real plugin in the scan");
+    }
+
+    #[test]
+    fn a_vst_device_without_a_slot_is_refused_rather_than_pointed_at_the_first_plugin() {
+        // The 40-byte payload carries an index into the engine's plugin scan and
+        // nothing else — no path, no VstRef — so there is no honest default.
+        assert!(build_chain_edit(r#"{"type":"adddevice","kind":"vst effect"}"#)
+                .unwrap().is_err());
+        assert!(build_chain_edit(r#"{"type":"adddevice","kind":3}"#).unwrap().is_err());
+        let p = build_chain_edit(r#"{"type":"adddevice","kind":"vst effect","slot":2}"#)
+            .unwrap().unwrap();
+        assert_eq!(p.device_kind, 4);
+        assert_eq!(p.host_slot_index, 2);
+    }
+
+    #[test]
+    fn removing_a_device_needs_the_id_and_carries_nothing_else() {
+        let p = build_chain_edit(r#"{"type":"deldevice","track":1,"device":7}"#)
+            .expect("recognised").expect("built");
+        assert_eq!(p.command_type, UiCommandType::RemoveDevice as u16);
+        assert_eq!(p.command_type, 15, "the engine's own number for it");
+        assert_eq!(p.track_id, 1);
+        assert_eq!(p.device_id, 7);
+        // "deldevice" must not be read as the device id by a parser looking for
+        // the key "device" inside it.
+        assert_eq!(build_chain_edit(r#"{"type":"deldevice","device":0}"#).unwrap().unwrap()
+                   .device_id, 0, "device 0 is a device, not a missing id");
+        assert!(build_chain_edit(r#"{"type":"deldevice","track":1}"#).unwrap().is_err());
+        assert!(build_chain_edit(r#"{"type":"deldevice","device":-1}"#).unwrap().is_err());
+    }
+
+    #[test]
+    fn a_chain_edit_does_not_answer_for_any_other_command() {
+        assert!(build_chain_edit(r#"{"type":"note","pitch":60}"#).is_none());
+        assert!(build_chain_edit(r#"{"type":"patchadd","nodeType":4}"#).is_none());
+        // The generic builder must not claim one either — it would send 40 bytes
+        // the engine reads as some other command entirely.
+        assert!(build_command(r#"{"type":"adddevice","kind":0}"#).is_err());
+        assert!(build_command(r#"{"type":"deldevice","device":7}"#).is_err(),
+                "deldevice is not the note command delete");
     }
 
     #[test]

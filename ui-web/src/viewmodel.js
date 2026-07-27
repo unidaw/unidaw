@@ -138,6 +138,21 @@ export function createBuffer(rowCount, trackCount, columns) {
  *          zoomIndex?:number, cursor?:{row:number,track:number,col:number},
  *          playheadRow?:number, selection?:any}} opts
  */
+/**
+ * A velocity, as two hex digits.
+ *
+ * It was `('0' + v).slice(-2)` — the last two DECIMAL digits — so every velocity
+ * from 100 up was silently mangled into a plausible low one: 100 read as "00",
+ * 127 as "27". Wrong, and wrong in the way that does not announce itself, since
+ * both are valid-looking velocities. Hex is what the design shows and what a
+ * tracker's volume column has always been: two characters covering the whole
+ * range instead of two that cover 0-99 and lie about the rest.
+ */
+export function velocityText(v) {
+  const n = Math.max(0, Math.min(255, v | 0));
+  return (n < 16 ? '0' : '') + n.toString(16);
+}
+
 export function buildViewModel(opts, buf) {
   const {
     startRow, rowCount, tracks: trackCount, columns = 3,
@@ -333,18 +348,43 @@ export function buildViewModel(opts, buf) {
         // overlap — M3 allows it. Silently letting the second overwrite the first
         // is the contentAt bug again: a position key losing data while rendering
         // something plausible. Make the collision visible instead.
-        if (c0.kind === 'note' && c0._row === ri) { c0.text = '**'; c0.kind = 'collide'; }
-        else {
+        if ((c0.kind === 'note' || c0.kind === 'muted' || c0.kind === 'add'
+             || c0.kind === 'collide') && c0._row === ri) {
+          // More than one note on this (row, track). '**' said only "more than
+          // one", which is the least useful true thing a cell can say — you had
+          // to open the piano roll to find out whether it was a chord, a
+          // flam, or two takes of the same note.
+          //
+          // A pill instead: "4x C-4" when every hit is the same pitch, "3 evts"
+          // when they differ. Those are different musical situations and the
+          // tracker should not make you leave to tell them apart.
+          c0.aggCount = (c0.aggCount || 1) + 1;
+          if (c0._same === undefined) c0._same = c0.text;
+          if (c0._same !== null && c0._same !== pitchName(n.pitch)) c0._same = null;
+          c0.text = c0._same !== null
+            ? c0.aggCount + '\u00d7 ' + c0._same
+            : c0.aggCount + ' evts';
+          c0.kind = 'collide';
+        } else {
           c0.text = pitchName(n.pitch);
           // Muted base notes still ship — draw them struck out. Adds carry
           // provenance so an override reads differently from the shared clip.
           c0.kind = n.muted ? 'muted' : n.isAdd ? 'add' : 'note';
           c0._row = ri;
+          // Reset the pill's accumulators: this cell holds one note again.
+          c0.aggCount = 0;
+          c0._same = undefined;
         }
       }
       if (columns > 1) {
         const c1 = row.cells[base + 1];
-        if (c1) { c1.text = ('0' + n.velocity).slice(-2); c1.kind = 'inst'; }
+        if (c1) {
+          // One velocity is a number; several are not, and printing the last
+          // one to arrive would be a number nobody could act on.
+          c1.text = c0 && c0.kind === 'collide' && c0._same === null
+            ? 'mix' : velocityText(n.velocity);
+          c1.kind = 'inst';
+        }
       }
       if (columns > 2 && (n.retrigger || n.probability || n.delayTicks)) {
         const c2 = row.cells[base + 2];

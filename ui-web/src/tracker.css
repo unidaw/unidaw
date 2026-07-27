@@ -61,6 +61,20 @@
   letter-spacing: var(--font-tracking-fx);
 }
 
+/* An aggregation pill: several events in one cell. Bordered rather than plain,
+   because "3x C-4" in the same style as "C-4" reads as a stranger note name.
+   Slightly smaller so the border does not push the cell wider than its column. */
+.tk-cell[data-kind="collide"] {
+  font-size: var(--font-size-fx);
+}
+.tk-cell[data-kind="collide"]::before {
+  content: '';
+  position: absolute; inset: 1px 2px;
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
 .tk-row {
   position: absolute;
   left: 0;

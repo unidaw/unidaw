@@ -16,7 +16,7 @@ use memmap2::{Mmap, MmapMut, MmapOptions};
 use std::sync::atomic::fence;
 
 use crate::layout::{
-    EventEntry, EventType, RingHeader, ShmHeader, UiChordCommandPayload,
+    EventEntry, EventType, RingHeader, ShmHeader, UiChainCommandPayload, UiChordCommandPayload,
     UiClipExtent, UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot,
     UiCommandPayload, UiHarmonyEvent, UiHarmonySnapshot, UiPatcherEdge, UiPatcherNode,
     UiDeviceParamsRegion, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
@@ -576,6 +576,17 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const UiPatcherGraphCommandPayload as *const u8,
             std::mem::size_of::<UiPatcherGraphCommandPayload>(),
+        )
+    }
+
+    /// Add, remove, move or update a device on a track's chain. Same story
+    /// again: the engine matches this size FIRST and only then looks at
+    /// commandType, so a chain edit sent in a UiCommandPayload is not refused —
+    /// it is read as some other command's fields, or ignored entirely.
+    pub fn send_chain_command(&self, payload: UiChainCommandPayload) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const UiChainCommandPayload as *const u8,
+            std::mem::size_of::<UiChainCommandPayload>(),
         )
     }
 

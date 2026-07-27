@@ -313,6 +313,27 @@ ok(barLoop.start === 2 * 3840000 && barLoop.end === 6 * 3840000,
    'the console sets it in the bar numbers the ruler prints',
    JSON.stringify(barLoop));
 
+section('aggregation pills');
+// maximal has several notes landing on one row, which webtest does not.
+await page.evaluate(() => window.__uni.loadProject('maximal'));
+await page.waitForTimeout(3000);
+await page.evaluate(() => { window.__uni.view('tracker'); window.__uni.setZoom(3); });
+await frames();
+const pills = await page.evaluate(() => [...document.querySelectorAll('.tk-cell[data-kind="collide"]')]
+  .map((e) => e.textContent).filter(Boolean));
+ok(pills.length > 0, 'several events in one cell become a pill', JSON.stringify(pills.slice(0, 4)));
+// The whole point: "**" said only "more than one", which is the least useful true
+// thing a cell can say. A pill distinguishes a doubled note from a chord.
+ok(pills.some((p) => /^\d+ evts$/.test(p)), 'differing pitches read as a count',
+   JSON.stringify(pills.filter((p) => /evts/.test(p)).slice(0, 2)));
+ok(!pills.some((p) => p === '**'), 'and nothing still says just "**"');
+const vels = await page.evaluate(() => [...document.querySelectorAll('.tk-cell[data-kind="inst"]')]
+  .map((e) => e.textContent).filter(Boolean));
+ok(vels.every((v) => v === 'mix' || /^[0-9a-f]{2}$/.test(v)),
+   'velocities are two hex digits, or "mix" under a pill', JSON.stringify(vels.slice(0, 6)));
+await page.evaluate((p) => window.__uni.loadProject(p), PROJECT);
+await page.waitForTimeout(2500);
+
 section('clip rails');
 await page.evaluate(() => window.__uni.view('tracker'));
 await page.evaluate(() => window.__uni.run('goto 2 1'));

@@ -25,6 +25,11 @@ pub const K_CHAIN_DEVICE_ID_AUTO: u32 = 0xFFFF_FFFF;
 /// request, and folding them together would make a rename of either one silently
 /// change the other.
 pub const K_CHAIN_TRACK_ALL: u32 = 0xFFFF_FFFF;
+/// `hostSlotIndex` meaning "this device is not hosted out of process at all"
+/// (`kHostSlotIndexDirect`). Distinct from `K_CHAIN_DEVICE_ID_AUTO`, which in the
+/// same field would mean an unassigned slot — a patcher device HAS no slot, and
+/// the two must not read the same on a card.
+pub const K_HOST_SLOT_DIRECT: u32 = 0xFFFF_FFFE;
 pub const UI_CLIP_WINDOW_FLAG_COMPLETE: u32 = 1 << 0;
 pub const UI_CLIP_WINDOW_FLAG_RESYNC: u32 = 1 << 1;
 
@@ -736,6 +741,18 @@ mod tests {
         const_assert_eq!(size_of::<UiClipExtent>(), 64);
         assert_eq!(offset_of!(UiClipExtent, start_tick), 16);
         assert_eq!(offset_of!(UiClipExtent, name), 32);
+    }
+
+    /// The engine dispatches a chain command on the entry SIZE before it looks
+    /// at commandType, so a payload that is not exactly 40 bytes is not refused
+    /// — it is dropped while the ack still says ok. GUIDELINES 2.3.
+    #[test]
+    fn ui_chain_command_payload_layout_matches_cpp() {
+        const_assert_eq!(size_of::<UiChainCommandPayload>(), 40);
+        assert_eq!(offset_of!(UiChainCommandPayload, device_id), 12);
+        assert_eq!(offset_of!(UiChainCommandPayload, device_kind), 16);
+        assert_eq!(offset_of!(UiChainCommandPayload, insert_index), 20);
+        assert_eq!(offset_of!(UiChainCommandPayload, host_slot_index), 28);
     }
 
     #[test]

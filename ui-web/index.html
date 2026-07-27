@@ -2092,6 +2092,16 @@ conn = WANTS_ENGINE ? connectEngine({
       if (!first && store.loadSeq !== 0) {
         state.reject = store.loadOk ? null : 'the engine refused that project';
       }
+      // A load replaces the devices, and a device ID DOES NOT SURVIVE IT — every
+      // project starts numbering at 0, so the name and parameters cached against
+      // device 0 belong to the previous project's device 0. Loading `rack` after
+      // `maximal` showed rack's Identity card labelled "Zebra2", which is the
+      // "an identifier that moves is not an identity" rule (GUIDELINES 2.1) in
+      // its purest form: the key stood still and everything under it changed.
+      for (const k of Object.keys(deviceParams)) delete deviceParams[k];
+      paramsAsked.clear();
+      for (const k of Object.keys(chains)) delete chains[k];
+      chainRev = -1;
     }
     scope.push(store.peaks, store.peakCount);
     state.playhead = tickToRow(store.playheadTick);
