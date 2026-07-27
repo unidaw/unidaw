@@ -5584,12 +5584,29 @@ struct TrackRuntime {
           hostIndex++;
         }
       }
+      bool forwarded = false;
       if (runtime && found) {
         const float normalized =
             std::clamp(static_cast<float>(sp.valueMilli) / 1000.0f, 0.0f, 1.0f);
         std::lock_guard<std::mutex> lock(runtime->controllerMutex);
-        runtime->controller.sendSetParam(pluginIndex, sp.uid16, normalized);
+        forwarded = runtime->controller.sendSetParam(pluginIndex, sp.uid16, normalized);
       }
+      // Always log the write. The host stores the value atomically, but it only
+      // takes effect when the plugin next processes a block — so on a headless
+      // engine (no audio device driving the callback) the store is real yet never
+      // applied, and used to be completely silent. audioActive says whether any
+      // block has played; !audioActive + forwarded = "stored, nothing to apply it".
+      const bool audioActive =
+          audioPlaybackBlockId.load(std::memory_order_acquire) > 0;
+      DAW_EVENT("device.set_param")
+          .field("track", sp.trackId)
+          .field("device", sp.deviceId)
+          .field("pluginIndex", pluginIndex)
+          .field("valueMilli", sp.valueMilli)
+          .field("found", found)
+          .field("forwarded", forwarded)
+          .field("playing", playing.load(std::memory_order_acquire))
+          .field("audioActive", audioActive);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestDeviceParams)) {
       // Publish one device's parameters into UiDeviceParamsRegion so the rack can
