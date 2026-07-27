@@ -5463,7 +5463,6 @@ struct TrackRuntime {
       transportNanotick.store(clamped, std::memory_order_release);
       std::cout << "UI: Transport SetPosition " << clamped << std::endl;
     } else if (payload.commandType ==
-<<<<<<< HEAD
                static_cast<uint16_t>(daw::UiCommandType::RequestChainSnapshot)) {
       // A UI that attached after the engine started has never seen a chain
       // diff, so let it ask. 0xFFFFFFFFu means every track; an unknown track is
@@ -5484,7 +5483,8 @@ struct TrackRuntime {
       // Outside tracksMutex: emitChainSnapshot takes the per-track lock itself.
       for (auto* runtime : targets) {
         emitChainSnapshot(*runtime);
-=======
+      }
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestDeviceParams)) {
       // Publish one device's parameters into UiDeviceParamsRegion so the rack can
       // show real names + values. trackId + value0 (deviceId). The host query is a
@@ -5561,7 +5561,6 @@ struct TrackRuntime {
         region->paramCount = n;
         std::atomic_thread_fence(std::memory_order_release);
         region->version += 1;
->>>>>>> main
       }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RequestClipWindow)) {

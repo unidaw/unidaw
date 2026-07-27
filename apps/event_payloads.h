@@ -82,19 +82,15 @@ enum class UiCommandType : uint16_t {
   SetPosition = 35,
   // Rename a track. Carries trackId + name in UiPatcherPresetCommandPayload.
   SetTrackName = 36,
-<<<<<<< HEAD
   // Re-publish a track's device chain on demand. Chain diffs are otherwise
   // publish-on-change only, so a UI that attaches to an already-running engine
   // is blind to the rack until someone edits it. trackId == 0xFFFFFFFFu asks
   // for every track.
   RequestChainSnapshot = 37,
-=======
-  // 37-39 reserved for the frontend's read-back request commands
-  // (RequestChainSnapshot etc., on the web-ui branch).
+  // 38-39 remain reserved for the rest of that family (routing, mod).
   // Publish one device's parameters into UiDeviceParamsRegion: trackId + value0 =
   // deviceId. Lets the device-chain rack pull a device's real name + param list.
   RequestDeviceParams = 40,
->>>>>>> main
 };
 
 constexpr uint16_t kMixerFlagMute = 1u << 0;
