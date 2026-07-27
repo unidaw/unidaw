@@ -1607,6 +1607,12 @@ struct TrackRuntime {
   // needs no lock.
   std::vector<daw::ProjectTempoPoint> loadedTempoMap{{0, 120.0}};
 
+  // The song's time signature, adopted on load. Read on the audio callback (plugin
+  // play head) and the publish thread (transport read-back), written on the UI thread
+  // at load — relaxed atomics, since a meter one block stale is invisible.
+  std::atomic<uint32_t> songTimeSigNum{4};
+  std::atomic<uint32_t> songTimeSigDen{4};
+
   // Directory of the currently-loaded project file, so a clip's relative sourcePath
   // resolves against the project (portable) rather than the engine's CWD. Set by
   // loadProjectFromPath before the track loop; read by rebuildAudioRender.
@@ -3359,6 +3365,9 @@ struct TrackRuntime {
     // Re-emit the full retained tempo map so a load->save round-trip keeps tempo
     // changes, not just the current tempo. (A never-loaded session defaults to 120.)
     document.tempoMap = loadedTempoMap;
+    // Re-emit the adopted song time signature so it survives a load->save.
+    document.songTimeSigNumerator = songTimeSigNum.load(std::memory_order_relaxed);
+    document.songTimeSigDenominator = songTimeSigDen.load(std::memory_order_relaxed);
     document.harmonyTimeline = harmonyEvents;
 
     std::vector<TrackRuntime*> runtimes;
@@ -3603,6 +3612,14 @@ struct TrackRuntime {
     loadedTempoMap = document.tempoMap.empty()
                          ? std::vector<daw::ProjectTempoPoint>{{0, 120.0}}
                          : document.tempoMap;
+    // Adopt the song time signature, so the plugin play head's bar start and the
+    // transport read-back stop assuming 4/4.
+    songTimeSigNum.store(
+        document.songTimeSigNumerator ? document.songTimeSigNumerator : 4,
+        std::memory_order_relaxed);
+    songTimeSigDen.store(
+        document.songTimeSigDenominator ? document.songTimeSigDenominator : 4,
+        std::memory_order_relaxed);
     std::vector<daw::TempoPoint> tempoPoints;
     tempoPoints.reserve(loadedTempoMap.size());
     for (const auto& pt : loadedTempoMap) {
@@ -8342,8 +8359,8 @@ struct TrackRuntime {
         // Current-position tempo (not the initial one) so a tempo-synced plugin
         // follows tempo_map changes, matching the ProcessBlockRequest play head.
         transportPayload.tempoBpm = tempoProvider.bpmAtNanotick(blockStartTicks);
-        transportPayload.timeSigNum = 4;  // TODO: time signature is not yet modelled
-        transportPayload.timeSigDen = 4;
+        transportPayload.timeSigNum = songTimeSigNum.load(std::memory_order_relaxed);
+        transportPayload.timeSigDen = songTimeSigDen.load(std::memory_order_relaxed);
         transportPayload.playState = isPlaying ? 1 : 0;
         std::memcpy(transportEntry.payload, &transportPayload, sizeof(transportPayload));
         daw::ringWrite(ringCtrl, transportEntry);
@@ -8655,7 +8672,14 @@ struct TrackRuntime {
           transport.ppqPosition =
               static_cast<double>(blockStartTicks) /
               static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter);
-          const double beatsPerBar = 4.0;
+          // Quarter notes per bar = numerator * 4 / denominator (ppq counts quarters),
+          // so a 7/8 bar is 3.5 quarters and a tempo-synced plugin's bar start is
+          // right in any meter, not just 4/4.
+          const uint32_t tsNum = songTimeSigNum.load(std::memory_order_relaxed);
+          const uint32_t tsDen = songTimeSigDen.load(std::memory_order_relaxed);
+          const double beatsPerBar =
+              tsDen > 0 ? static_cast<double>(tsNum) * 4.0 / static_cast<double>(tsDen)
+                        : 4.0;
           transport.ppqPositionOfLastBarStart =
               std::floor(transport.ppqPosition / beatsPerBar) * beatsPerBar;
           transport.isPlaying = playing.load(std::memory_order_acquire);
