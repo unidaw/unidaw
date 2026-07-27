@@ -1052,11 +1052,12 @@ struct TrackRuntime {
     // trackMutex; set on load.
     std::vector<ClipExtentInfo> clipExtents;
     std::shared_ptr<const ClipSnapshot> clipSnapshot;
-    // The placement list this track loaded from (project-level clips are held
-    // engine-wide). The runtime plays a flattened clip, so this is what save
-    // emits to keep the arrangement's structure — provided the track hasn't been
-    // edited live. Guarded by trackMutex; set on load.
+    // The note store (M3.2 structural reroute): this track's placements plus the
+    // clips they reference, both owned per-track (copy-on-write from the loaded
+    // project). track.clip is DERIVED from these by flattenPlacements after every
+    // edit; edits mutate the store, not track.clip. Both guarded by trackMutex.
     std::vector<daw::ProjectPlacement> sourcePlacements;
+    std::vector<daw::ProjectClip> ownedClips;
     // Display name, published so every lane-labelling surface shares one source.
     // Guarded by trackMutex; defaults to "Track N", set from the project on load.
     std::string trackName;
@@ -1387,6 +1388,10 @@ struct TrackRuntime {
   // projectLoadSeq bumps once per load attempt, projectLoadOk holds its result.
   std::atomic<uint32_t> projectLoadSeq{0};
   std::atomic<uint32_t> projectLoadOk{0};
+  // Allocator for new/copy-on-write clip ids across all tracks' ownedClips.
+  // Seeded past every loaded clip id so a fresh id never collides with a
+  // retained one. Bumped when a track creates a clip or COW-forks a loaded one.
+  std::atomic<uint32_t> nextClipId{1};
   std::mutex undoMutex;
   std::vector<daw::UndoEntry> undoStack;
   std::vector<daw::UndoEntry> redoStack;
@@ -2655,6 +2660,70 @@ struct TrackRuntime {
     return "t" + std::to_string(trackId) + "_d" + std::to_string(deviceId) + ".bin";
   };
 
+  // The flatten window for a track: past every placement's resolved end, at least
+  // one pattern bar. Used so a note stretched or looped past the old arrangement
+  // end still lands in the derived flat clip.
+  auto trackWindowEnd = [&](const TrackRuntime& rt) -> uint64_t {
+    uint64_t end = patternTicks;
+    for (const auto& pl : rt.sourcePlacements) {
+      if (!pl.at.has_value()) {
+        continue;
+      }
+      uint64_t len = pl.lengthNanoticks;
+      if (len == 0) {
+        for (const auto& c : rt.ownedClips) {
+          if (c.id == pl.clipId) {
+            len = c.lengthNanoticks;
+            break;
+          }
+        }
+      }
+      end = std::max(end, *pl.at + len);
+    }
+    return end;
+  };
+
+  // The single funnel for the structural note store: re-derive track.clip and the
+  // rail extents from (sourcePlacements + ownedClips) and return a fresh snapshot.
+  // Assumes runtime->trackMutex is held; the caller atomic_stores the returned
+  // snapshot after unlocking. The audio thread reads only the snapshot, so
+  // track.clip being derived is invisible to it.
+  auto rebuildFlatAndPublish =
+      [&](TrackRuntime& rt) -> std::shared_ptr<const ClipSnapshot> {
+    const uint64_t windowEnd = trackWindowEnd(rt);
+    daw::MusicalClip flat;
+    for (const auto& ev :
+         daw::flattenPlacements(rt.sourcePlacements, rt.ownedClips, windowEnd)) {
+      flat.addEvent(ev);
+    }
+    rt.track.clip = std::move(flat);
+    rt.clipExtents.clear();
+    for (size_t i = 0; i < rt.sourcePlacements.size(); ++i) {
+      const auto& pl = rt.sourcePlacements[i];
+      if (!pl.at.has_value()) {
+        continue;
+      }
+      ClipExtentInfo ext;
+      ext.placementId = static_cast<uint32_t>(i);
+      ext.clipId = pl.clipId;
+      ext.at = *pl.at;
+      uint64_t length = pl.lengthNanoticks;
+      for (const auto& c : rt.ownedClips) {
+        if (c.id == pl.clipId) {
+          if (length == 0) {
+            length = c.lengthNanoticks;
+          }
+          ext.name = c.name;
+          ext.isAudio = c.kind == daw::ClipKind::Audio;
+          break;
+        }
+      }
+      ext.endTick = *pl.at + length;
+      rt.clipExtents.push_back(std::move(ext));
+    }
+    return buildClipSnapshot(rt.track.clip);
+  };
+
   // Snapshots the live session into a ProjectDocument and writes it. Each
   // track is copied under its own mutex so the document is consistent per
   // track without stalling audio behind one global lock.
@@ -2889,6 +2958,20 @@ struct TrackRuntime {
       std::lock_guard<std::mutex> lock(loadedClipsMutex);
       loadedClips = document.clips;
     }
+    // Seed the clip-id allocator past every loaded id so a created/COW-forked
+    // clip never collides with a retained one.
+    {
+      uint32_t maxId = 0;
+      for (const auto& c : document.clips) {
+        maxId = std::max(maxId, c.id);
+      }
+      uint32_t expected = nextClipId.load(std::memory_order_relaxed);
+      const uint32_t want = maxId + 1;
+      while (expected < want &&
+             !nextClipId.compare_exchange_weak(expected, want,
+                                               std::memory_order_acq_rel)) {
+      }
+    }
     harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
     // Arm the harmony publish gate. The snapshot write is gated by harmonyDirty
     // (an interactive-edit signal); bumping only harmonyVersion moved the
@@ -3030,47 +3113,31 @@ struct TrackRuntime {
       std::shared_ptr<const ClipSnapshot> snapshot;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        // M3.3: flatten this track's placements into one absolute-tick clip the
-        // scheduler plays directly (base - mutes + adds, looped to fill each
-        // placement, at +at; audio clips skipped). flattenPlacements is the shared
-        // definition the live note-entry path also rebuilds from.
-        daw::MusicalClip flat;
-        for (const auto& ev :
-             daw::flattenPlacements(source.placements, document.clips, arrangementEnd)) {
-          flat.addEvent(ev);
-        }
-        runtime->track.clip = std::move(flat);
-        // Retain the placement list so save can re-emit it (and its clips) as
-        // long as the track stays clean; the flat clip above is only the
-        // playback form. A live edit sets arrangementDirty and save flattens.
+        // M3.2 structural store: this track owns its placements + copies of the
+        // clips they reference; track.clip and the rails are DERIVED from them by
+        // rebuildFlatAndPublish. Editing later mutates this store, not track.clip.
         runtime->sourcePlacements = source.placements;
-        runtime->arrangementDirty.store(false, std::memory_order_relaxed);
-        // M3.4: retain the track's placed clips as rail extents. Loose session
-        // placements (null at) have no timeline position and are not published.
-        runtime->clipExtents.clear();
-        for (size_t i = 0; i < source.placements.size(); ++i) {
-          const auto& pl = source.placements[i];
-          if (!pl.at.has_value()) {
-            continue;
-          }
-          ClipExtentInfo ext;
-          ext.placementId = static_cast<uint32_t>(i);
-          ext.clipId = pl.clipId;
-          ext.at = *pl.at;
-          uint64_t length = pl.lengthNanoticks;
-          for (const auto& c : document.clips) {
-            if (c.id == pl.clipId) {
-              if (length == 0) {
-                length = c.lengthNanoticks;
-              }
-              ext.name = c.name;
-              ext.isAudio = c.kind == daw::ClipKind::Audio;
+        runtime->ownedClips.clear();
+        for (const auto& pl : source.placements) {
+          bool have = false;
+          for (const auto& oc : runtime->ownedClips) {
+            if (oc.id == pl.clipId) {
+              have = true;
               break;
             }
           }
-          ext.endTick = *pl.at + length;
-          runtime->clipExtents.push_back(std::move(ext));
+          if (have) {
+            continue;
+          }
+          for (const auto& c : document.clips) {
+            if (c.id == pl.clipId) {
+              runtime->ownedClips.push_back(c);
+              break;
+            }
+          }
         }
+        runtime->arrangementDirty.store(false, std::memory_order_relaxed);
+        snapshot = rebuildFlatAndPublish(*runtime);
         runtime->track.harmonyQuantize = source.harmonyQuantize;
         if (!source.name.empty()) {
           runtime->trackName = source.name;
@@ -3109,7 +3176,7 @@ struct TrackRuntime {
         runtime->linesPerBeat.store(
             source.linesPerBeat == 0 ? 4u : source.linesPerBeat,
             std::memory_order_relaxed);
-        snapshot = buildClipSnapshot(runtime->track.clip);
+        // snapshot already built by rebuildFlatAndPublish above.
       }
       std::atomic_store_explicit(&runtime->clipSnapshot,
                                  snapshot,
