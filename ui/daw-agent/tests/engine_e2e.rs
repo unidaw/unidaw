@@ -337,6 +337,47 @@ fn edit_inside_placement_lands_in_its_clip() {
     assert_eq!(by_tick, vec![(0, 64), (Q, 72)], "second clip contents wrong: {notes:?}");
 }
 
+/// Regression: writing a note PAST the end of all material must grow the song, not
+/// silently vanish. patternTicks defaults to one bar, so a write at row 20 (== 5*Q)
+/// is past the end — the frontend's reproduction. The note must appear in the
+/// derived clip with room to sound, and persist.
+#[test]
+fn write_past_pattern_end_creates_material() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("pastend");
+
+    let far = 5 * Q; // row 20 at 4 rows/beat — past the 1-bar default pattern
+    let a = session.execute(&ToolCall {
+        tool: "add_notes".into(),
+        args: json!({"track":0,"pitches":[67],"start":far,"step":Q,"duration":0}),
+    });
+    assert!(a.ok, "write past end failed: {a:?}");
+
+    // Visible in the derived (flat) clip the UI reads, with a positive length.
+    let obs = session.execute(&ToolCall { tool: "observe".into(), args: json!({}) });
+    assert!(obs.ok, "observe failed: {obs:?}");
+    let note = obs.output["tracks"][0]["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["pitch"].as_u64() == Some(67))
+        .unwrap_or_else(|| panic!("note past the end vanished from the clip: {}", obs.output));
+    assert_eq!(note["nanotick"].as_u64(), Some(far), "note landed at the wrong tick: {note}");
+    assert!(note["duration"].as_u64().unwrap() > 0, "note past the end has no length: {note}");
+
+    // And it persists on disk.
+    assert!(session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"pastend_out"}) }).ok);
+    let doc = read_project(&engine.proj, "pastend_out");
+    let pitches: Vec<u64> = doc["clips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|c| c["notes"].as_array().unwrap())
+        .map(|n| n["pitch"].as_u64().unwrap())
+        .collect();
+    assert!(pitches.contains(&67), "note past the end was not saved: {}", doc["clips"]);
+}
+
 /// Undo/redo of a structural edit is a whole-store swap: after two note adds, one
 /// undo restores the store to a single note, and a redo brings the second back.
 #[test]

@@ -2706,16 +2706,31 @@ struct TrackRuntime {
       if (!pl.at.has_value()) {
         continue;
       }
-      uint64_t len = pl.lengthNanoticks;
-      if (len == 0) {
-        for (const auto& c : rt.ownedClips) {
-          if (c.id == pl.clipId) {
-            len = c.lengthNanoticks;
-            break;
+      uint64_t clipLen = 0;
+      uint64_t contentEnd = 0;
+      for (const auto& c : rt.ownedClips) {
+        if (c.id == pl.clipId) {
+          clipLen = c.lengthNanoticks;
+          for (const auto& e : c.clip.events()) {
+            uint64_t dur = 0;
+            if (e.type == daw::MusicalEventType::Note) {
+              dur = e.payload.note.durationNanoticks;
+            } else if (e.type == daw::MusicalEventType::Chord) {
+              dur = e.payload.chord.durationNanoticks;
+            }
+            contentEnd = std::max(contentEnd, e.nanotickOffset + dur);
           }
+          break;
         }
       }
-      end = std::max(end, *pl.at + len);
+      // A placement reaches at + its timeline extent. For a linear length-0 clip
+      // that extent IS its content, so a note entered past patternTicks stays
+      // inside the flatten window — otherwise it is scheduled out of range and
+      // silently vanishes from the derived clip.
+      const uint64_t extent = pl.lengthNanoticks > 0
+                                  ? pl.lengthNanoticks
+                                  : (clipLen > 0 ? clipLen : contentEnd);
+      end = std::max(end, *pl.at + std::max(extent, contentEnd));
     }
     return end;
   };
@@ -3709,10 +3724,18 @@ struct TrackRuntime {
     const uint8_t column = static_cast<uint8_t>(flags & 0xffu);
     const bool isNoteOff = velocity == 0 && duration == 0;
 
-    // Where a note runs to when nothing follows it in its column.
+    // Where a note runs to when nothing follows it in its column. A note entered
+    // PAST the current span (loop/pattern end) still needs room to sound, or it
+    // lands with zero length and vanishes — so the span always reaches at least
+    // the end of the bar containing the note. Writing past the end grows the song.
     uint64_t spanEnd = loopEndNanotick.load(std::memory_order_acquire);
     if (spanEnd <= loopStartNanotick.load(std::memory_order_acquire)) {
       spanEnd = patternTicks;
+    }
+    {
+      const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
+      const uint64_t barAfter = (nanotick / bar + 1) * bar;
+      spanEnd = std::max(spanEnd, barAfter);
     }
 
     std::optional<daw::ClipEditResult> result;
@@ -3909,6 +3932,10 @@ struct TrackRuntime {
         if (spanEnd <= loopStartNanotick.load(std::memory_order_acquire)) {
           spanEnd = patternTicks;
         }
+        // A chord entered past the current span still needs room to sound; reach
+        // at least the end of its bar so writing past the end grows the song.
+        const uint64_t barTicks = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
+        spanEnd = std::max(spanEnd, (nanotick / barTicks + 1) * barTicks);
         const uint64_t relSpanEnd =
             spanEnd > placementAt ? spanEnd - placementAt : 0;
         const auto next = clip.nextEventTickInColumn(relTick, column);
