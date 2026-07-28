@@ -103,12 +103,19 @@ pub struct ShmHeader {
     // alignment tail padding, so sizeof(ShmHeader) stays 640.
     pub ui_song_time_sig_num: u32,
     pub ui_song_time_sig_den: u32,
-    // v20: child-track structure (Movement 4). parent_id 0 = top-level, else the
-    // parent track_id; flags bit0 = collapsed. Fill the header's tail padding, so
-    // sizeof(ShmHeader) stays 640.
+    // v20: child-track structure (Movement 4). flags bit0 = collapsed, bit1 = has
+    // parent (parent_id is a valid track id, so 0 alone can't distinguish "top-level"
+    // from "child of track 0" — read parent_id ONLY when HAS_PARENT is set). Fill the
+    // header's tail padding, so sizeof(ShmHeader) stays 640.
     pub ui_track_parent_id: [u32; K_UI_MAX_TRACKS],
     pub ui_track_flags: [u8; K_UI_MAX_TRACKS],
 }
+
+/// uiTrackFlags bits (Movement 4).
+pub const UI_TRACK_FLAG_COLLAPSED: u8 = 1 << 0;
+/// Set when ui_track_parent_id is meaningful; without it, parent_id 0 is ambiguous
+/// (top-level vs child of track 0).
+pub const UI_TRACK_FLAG_HAS_PARENT: u8 = 1 << 1;
 
 /// v14: a published patcher-graph node. `config` is type-interpreted (see the C++
 /// UiPatcherNode doc): Euclidean/RandomDegree ints; Lfo floats as milli-units.

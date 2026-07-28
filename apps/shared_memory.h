@@ -177,6 +177,10 @@ struct alignas(64) ShmHeader {
 
 // uiTrackFlags bits.
 constexpr uint32_t kUiTrackFlagCollapsed = 1u << 0;
+// Set when uiTrackParentId is meaningful. Necessary because parentId 0 is a VALID
+// track id (track 0, the most likely parent), so 0 alone cannot distinguish "top-level"
+// from "child of track 0". Read the parent only when this bit is set (Movement 4).
+constexpr uint32_t kUiTrackFlagHasParent = 1u << 1;
 
 struct alignas(64) RingHeader {
   uint32_t capacity = 0;
