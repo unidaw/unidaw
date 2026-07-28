@@ -83,6 +83,18 @@ const st = () => page.evaluate(() => {
 const names = () => page.evaluate(() => window.__uni.names());
 const probe = () => page.evaluate(() => window.__uni.probe());
 
+/**
+ * How many device cards are actually ON SCREEN.
+ *
+ * NOT `querySelectorAll('.dv-card').length`. The rack pools its nodes and hides
+ * the spares rather than removing them (chain.js is explicit about this), so the
+ * raw count never goes down and a working delete reads as a dead button. That
+ * cost a long detour: the model said `titles: []` while the DOM said 1.
+ */
+const visibleCards = () => page.evaluate(
+  () => [...document.querySelectorAll('.dv-card')]
+    .filter((e) => e.getBoundingClientRect().width > 4 && e.offsetParent !== null).length);
+
 /** Click the middle of the first element matching `sel`, if it is really there. */
 async function clickSel(sel, label) {
   const at = await page.evaluate((s) => {
@@ -272,6 +284,190 @@ await page.keyboard.press('Space');
 await settle(300);
 if (!meters) gap('hear the song', 'no mixer probe to read levels from');
 else ok(true, 'transport ran and the mixer reported', JSON.stringify(meters).slice(0, 120));
+
+// ---------------------------------------------------------------------------
+step('11. put an instrument on a track');
+// Move to a track that has no instrument first. The default project already has
+// one on track 0, and the app says so plainly — "track 1 already has an
+// instrument — remove it first, or add this on another track". The first version
+// of this step loaded onto the occupied track, got refused, and reported the
+// refusal as "you cannot load a plugin". The app was right and the test was
+// wrong; a rejection with a reason is a feature, and a test has to read it.
+await page.keyboard.press('F1');
+await settle(300);
+await page.mouse.click(grid ? grid.x : 800, grid ? grid.y : 500);
+await page.keyboard.press('Tab');                    // next track
+await settle(400);
+await page.keyboard.press('Meta+b');                 // the rail
+await settle(600);
+const railOpen = await page.evaluate(() => !!document.querySelector('.br-item'));
+if (!railOpen) {
+  gap('load an instrument', 'the browser rail shows no items');
+} else {
+  // Find a plugin the way a person does: type part of its name into the search.
+  await page.evaluate(() => document.querySelector('.br-input').focus());
+  await page.keyboard.type('zebra');
+  await settle(700);
+  const first = await page.evaluate(() => {
+    const it = document.querySelector('.br-item');
+    if (!it) return null;
+    const r = it.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, text: it.textContent.slice(0, 40) };
+  });
+  if (!first) {
+    gap('load an instrument', 'searching the rail for "zebra" matched nothing');
+  } else {
+    ok(true, 'the rail can be searched', first.text.replace(/\s+/g, ' '));
+    const devsBefore = await visibleCards();
+    await page.mouse.dblclick(first.x, first.y);      // double-click loads it
+    await settle(2500);
+    const devsAfter = await visibleCards();
+    if (devsAfter <= devsBefore) {
+      const why = await page.evaluate(() => window.__uni.state().reject);
+      gap('load an instrument from the rail',
+          `device count stayed at ${devsAfter}${why ? ` — app said: "${why}"` : ''}`);
+    } else {
+      ok(true, 'double-clicking a plugin puts it on the track',
+         `${devsBefore} -> ${devsAfter}`);
+    }
+  }
+  await page.keyboard.press('Escape');
+  await settle(300);
+}
+
+// ---------------------------------------------------------------------------
+step('12. select, copy, paste');
+await page.keyboard.press('F1');
+await settle(400);
+if (grid) {
+  await page.mouse.click(grid.x, grid.y);
+  await settle(200);
+  // Shift+Down extends a selection, ⌘C copies, move, ⌘V pastes.
+  // Back to track 0, where step 4 wrote the notes — step 11 left the cursor on
+  // track 1 to find an empty instrument slot. A selection on the wrong track is
+  // empty, and an empty clipboard is indistinguishable from a broken one.
+  await page.keyboard.press('Shift+Tab');
+  await settle(250);
+  // Go to the TOP, where the notes actually are. The first version walked up a
+  // fixed number of rows from wherever the cursor happened to be, landed on rows
+  // 12-16, selected four empty rows and reported copy/paste as broken — the test
+  // was measuring an empty selection, not the clipboard.
+  await page.keyboard.press('Home');
+  await settle(200);
+  const atTop = (await st()).cursor;
+  if (atTop.row !== 0) {
+    for (let i = 0; i < atTop.row + 2; i++) await page.keyboard.press('ArrowUp');
+    await settle(200);
+  }
+  for (let i = 0; i < 4; i++) await page.keyboard.press('Shift+ArrowDown');
+  await settle(300);
+  const sel = await page.evaluate(() => window.__uni.selection && window.__uni.selection());
+  ok(!!sel, 'shift+arrows make a selection', JSON.stringify(sel));
+  const nBefore = (await st()).engine.noteCount;
+  await page.keyboard.press('Meta+c');
+  await settle(250);
+  for (let i = 0; i < 8; i++) await page.keyboard.press('ArrowDown');
+  await settle(200);
+  await page.keyboard.press('Meta+v');
+  await settle(900);
+  const nAfter = (await st()).engine.noteCount;
+  if (nAfter <= nBefore) {
+    gap('copy and paste notes', `note count stayed at ${nAfter} after ⌘C then ⌘V`);
+  } else {
+    ok(true, 'copy and paste duplicates notes', `${nBefore} -> ${nAfter}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+step('13. undo what you just did');
+const beforeUndo = (await st()).engine.noteCount;
+await page.keyboard.press('Meta+z');
+await settle(900);
+const afterUndo = (await st()).engine.noteCount;
+if (afterUndo === beforeUndo) {
+  gap('undo', `⌘Z left the note count at ${afterUndo}`);
+} else {
+  ok(true, 'undo takes the last edit back', `${beforeUndo} -> ${afterUndo}`);
+  await page.keyboard.press('Meta+Shift+z');
+  await settle(900);
+  const afterRedo = (await st()).engine.noteCount;
+  ok(afterRedo === beforeUndo, 'and redo puts it back',
+     `${afterUndo} -> ${afterRedo}`);
+}
+
+// ---------------------------------------------------------------------------
+step('14. set the tempo');
+await page.keyboard.press('Slash');
+await settle(250);
+await page.keyboard.type('tempo 96');
+await page.keyboard.press('Enter');
+await settle(900);
+await page.keyboard.press('Escape');
+await settle(250);
+const bpm = await page.evaluate(() => {
+  const el = document.querySelector('.ch-bpm, .ch-tempo');
+  if (el) return el.textContent;
+  return (document.querySelector('#chrome') || {}).textContent || '';
+});
+ok(/96/.test(bpm), 'the tempo command changes the tempo', String(bpm).slice(0, 60).replace(/\s+/g, ' '));
+
+// ---------------------------------------------------------------------------
+step('15. delete a device with its own button');
+const hadCards = await visibleCards();
+if (!hadCards) {
+  gap('remove a device', 'no device on the cursor track to remove');
+} else {
+  dialogAnswer = 'accept';
+  const clicked = await clickSel('.dv-del', 'the device rack has a delete control');
+  if (clicked) {
+    // The removal now sends a follow-up reqchain, so the rack updates a round
+    // trip later than the click. Wait for the count to actually change rather
+    // than for a number of milliseconds I guessed.
+    await page.waitForFunction(
+      (n) => [...document.querySelectorAll('.dv-card')]
+        .filter((e) => e.getBoundingClientRect().width > 4 && e.offsetParent !== null).length < n,
+      hadCards, { timeout: 6000 }).catch(() => {});
+    await settle(300);
+    const left = await visibleCards();
+    // Name the track on both sides. The rack draws the CURSOR's track, so a
+    // delete that "does nothing" is often a delete aimed somewhere else.
+    const where = await page.evaluate(() => {
+      const c = window.__uni.chainProbe();
+      return { rack: c.track, cursor: window.__uni.state().cursor.track, ver: c.version,
+               titles: c.titles };
+    });
+    ok(left < hadCards, 'the delete control removes the device',
+       `${hadCards} -> ${left}  (rack shows track ${where.rack}, cursor on `
+       + `${where.cursor}, chain v${where.ver}, ${JSON.stringify(where.titles)})`);
+    ok(/Remove /.test(String(lastDialog)), 'and asks first, by name', String(lastDialog));
+  }
+}
+
+// ---------------------------------------------------------------------------
+step('16. remove a track');
+const trBefore = (await st()).engine.trackCount;
+dialogAnswer = 'accept';
+const delTrackHit = await page.evaluate(() => {
+  const b = [...document.querySelectorAll('.ch-btn')]
+    .find((e) => /remove .*track/i.test(e.title || ''));
+  if (!b) return null;
+  const r = b.getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+});
+if (!delTrackHit) {
+  gap('remove a track', 'no chrome button whose title mentions removing a track');
+} else {
+  await page.mouse.click(delTrackHit.x, delTrackHit.y);
+  await settle(1200);
+  const trAfter = (await st()).engine.trackCount;
+  // The slot is tombstoned, so the EXTENT can stay the same — what must change is
+  // how many lanes are drawn.
+  const lanes = await page.evaluate(
+    () => [...document.querySelectorAll('.tk-row[data-row="0"] .tk-track')]
+      .filter((e) => e.getBoundingClientRect().width > 0).length);
+  ok(lanes < trBefore, 'removing a track takes its lane off screen',
+     `${trBefore} tracks -> ${lanes} lanes drawn (extent ${trAfter})`);
+}
 
 // ---------------------------------------------------------------------------
 step('page errors');

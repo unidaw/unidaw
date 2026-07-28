@@ -277,6 +277,37 @@ function sendGraph(msg) {
   return true;
 }
 
+/**
+ * Remove a device from a track.
+ *
+ * A named function because three callers need it — the rack's delete button, the
+ * Backspace binding, and the __uni hook — and the first two were written against
+ * `dockApi.delDevice`, which does not exist. The confirm appeared, the user said
+ * yes, and the call threw `dockApi.delDevice is not a function`: the most
+ * expensive possible moment to fail, after consent and before the work.
+ */
+function delDevice(track, device) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  conn.send({ type: 'deldevice', track, device });
+  /**
+   * ...and then ask what the chain is now.
+   *
+   * The engine publishes a chain diff when a device is ADDED and does not when
+   * one is REMOVED. So the removal really happened — a later `reqchain` proves
+   * it, the version had moved 4 to 6 — while the rack went on drawing the card
+   * that was gone. You deleted a plugin and it sat there, which reads as the
+   * delete having failed, so you press it again.
+   *
+   * The request is queued behind the removal on the same ring, so it is answered
+   * after it. Reported to backend as an asymmetry worth fixing at the source;
+   * asking is correct regardless, and cheap.
+   */
+  conn.send({ type: 'reqchain', track });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
 /** Add a node of the armed type. */
 function addPatcherNode() {
   return sendGraph({ type: 'patchadd', nodeType: state.patchAddType, track: 0 });
@@ -758,7 +789,7 @@ const chain = new Chain(chainHost, {
   // by name.
   onDelete: ({ track, device, title }) => {
     if (!confirm(`Remove ${title}? This cannot be undone.`)) return;
-    dockApi.delDevice(track, device);
+    delDevice(track, device);
   },
   onSelect: (pos) => {
     state.chainSelected = pos;
@@ -2888,6 +2919,21 @@ addEventListener('keydown', (e) => {
     }
     if (c === 'k') { palette.toggle(); return done(); }
     /**
+     * Copy, cut and paste on the keys everybody already knows.
+     *
+     * These have only ever been Alt+C / Alt+V / Alt+X — the tracker convention,
+     * kept because Alt combos are free in a browser tab. But ⌘C and ⌘V are what a
+     * hand reaches for without deciding to, and a range you selected and cannot
+     * copy is worse than one you can copy two ways. Both work now.
+     *
+     * Above the text-field guard's sibling cases and inside the modifier block,
+     * so a field still gets its own ⌘C: the guard at 0.1 returns before this
+     * whenever the event came from an <input>.
+     */
+    if (c === 'c') { copySelection(); return done(); }
+    if (c === 'x') { if (copySelection()) deleteSelection(); return done(); }
+    if (c === 'v') { pasteClipboard(); return done(); }
+    /**
      * A new song.
      *
      * CHROME RESERVES Cmd+N for a new window and a page cannot intercept it, so
@@ -3012,7 +3058,7 @@ addEventListener('keydown', (e) => {
         const card = chain.vm && chain.vm.cards && chain.vm.cards[state.chainSelected];
         const what = (card && card.title) || 'this device';
         if (confirm(`Remove ${what}? This cannot be undone.`)) {
-          dockApi.delDevice(state.cursor.track, dev.id);
+          delDevice(state.cursor.track, dev.id);
           // Step the selection back so it lands on a card that still exists.
           state.chainSelected = Math.max(0, state.chainSelected - 1);
         }
@@ -3189,6 +3235,23 @@ addEventListener('keydown', (e) => {
     return;
   }
 
+  /**
+   * 2.9 Shift+arrows extend the selection.
+   *
+   * ABOVE plain navigation, which is the entire fix: this test used to sit two
+   * hundred lines further down, and `if (k === 'ArrowDown')` below matched
+   * Shift+ArrowDown just as happily as ArrowDown, moved the cursor and returned.
+   * The selection branch was unreachable — dead code that read as a feature.
+   * Selecting a range with the keyboard, and therefore copy, cut and transpose
+   * over a range, has never worked.
+   */
+  if (e.shiftKey && (k === 'ArrowDown' || k === 'ArrowUp')) {
+    const to = state.cursor.row + (k === 'ArrowDown' ? 1 : -1);
+    extendSelection(Math.max(0, to));
+    state.cursor.row = Math.max(0, to);
+    follow(); return done();
+  }
+
   // 3. Navigation.
   if (k === 'ArrowDown') { moveCursor(() => state.cursor.row++); follow(); return done(); }
   if (k === 'ArrowUp') { moveCursor(() => { state.cursor.row = Math.max(0, state.cursor.row - 1); }); follow(); return done(); }
@@ -3260,14 +3323,8 @@ addEventListener('keydown', (e) => {
     return done();
   }
 
-  // Selection operations. Shift+arrows extend, then these act on the range — or
-  // on the cursor's own note when nothing is selected, so they are never inert.
-  if (e.shiftKey && (k === 'ArrowDown' || k === 'ArrowUp')) {
-    const to = state.cursor.row + (k === 'ArrowDown' ? 1 : -1);
-    extendSelection(Math.max(0, to));
-    state.cursor.row = Math.max(0, to);
-    follow(); return done();
-  }
+  // Selection operations act on the range that Shift+arrows built — see section
+  // 2.9 above, which has to run BEFORE plain navigation or it never runs at all.
   if (alt === 'KeyC') { copySelection(); return done(); }
   if (alt === 'KeyV') { pasteClipboard(); return done(); }
   if (alt === 'KeyX') { if (copySelection()) deleteSelection(); return done(); }
@@ -4217,7 +4274,7 @@ window.__uni = {
   chainProbe: () => chain.probe(),
   addDevice: (track, kind) => conn && conn.send({ type: 'adddevice',
     track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' }),
-  delDevice: (track, device) => conn && conn.send({ type: 'deldevice', track, device }),
+  delDevice,                          // the same function the button and the key call
   addTrack, removeTrack,
   deviceParams: () => JSON.parse(JSON.stringify(deviceParams)),
   harmonyProbe: () => harmonyCard.probe(),

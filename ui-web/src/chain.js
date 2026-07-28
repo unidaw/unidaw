@@ -63,13 +63,19 @@ export class Chain {
    * falsey return leaves the bar where the plugin says it is and puts the reason
    * on the strip, rather than showing a value nobody has accepted.
    */
-  constructor(host, { onSelect, onAdd, onParam, onOpenEditor } = {}) {
+  constructor(host, { onSelect, onAdd, onParam, onOpenEditor, onDelete } = {}) {
     this.host = host;
     this.host.className = 'dv';
     this.onSelect = onSelect;
     this.onOpenEditor = onOpenEditor;
     this.onAdd = onAdd;
     this.onParam = onParam;
+    // Destructured here or it does not exist. index.html passed `onDelete`, the
+    // button rendered, the hit test found it, `_down` matched `.dv-del` — and
+    // `this.onDelete` was undefined, so the branch fell straight through and the
+    // click did nothing at all. No error, nothing on screen: a control that is
+    // present, reachable and inert. Only pressing it finds this.
+    this.onDelete = onDelete;
 
     const head = div('dv-head', host);
     this.label = text(div('dv-label', head));
