@@ -1299,6 +1299,29 @@ if (ruler) {
 }
 await page.evaluate(() => window.__uni.view('tracker'));
 
+// AND THE TRACKER DRAWS IT, which is the last link in the chain and the only one
+// a user actually sees. `meter` is a good shape for this by accident of how it was
+// built: the song is 7/8, and so is track 0's clip — so that lane agrees with the
+// gutter and must NOT carry a column, while tracks 1 (5/4) and 2 (4/4) disagree
+// and must. A build that showed the column everywhere, or nowhere, passes every
+// other check in this section.
+await page.evaluate(() => window.__uni.view('tracker'));
+await page.waitForTimeout(200);
+const laneCols = await page.evaluate(() => {
+  const out = [];
+  for (let t = 0; t < 3; t++) {
+    const e = document.querySelector(`.tk-lane-bar[data-track="${t}"]`);
+    out.push(e ? (e.getBoundingClientRect().width > 0 ? 1 : 0) : -1);
+  }
+  const shown = document.querySelector('.tk-lane-bar[data-track="1"]');
+  return { out, text: shown ? shown.textContent : null };
+});
+ok(JSON.stringify(laneCols.out) === '[0,1,1]',
+   'the bar column appears on the lanes that disagree with the song, and only those',
+   `${JSON.stringify(laneCols.out)} for [7/8 clip in a 7/8 song, 5/4, 4/4]`);
+ok(laneCols.text && /^\d+:\d+$/.test(laneCols.text),
+   `and it reads a bar:beat: ${JSON.stringify(laneCols.text)}`);
+
 // And the chrome says it, which is the half a user sees. Asserted on the property
 // rather than on the position of the field: which slot the meter occupies in the
 // chrome is layout, and a test that pins layout fails on every rearrangement.
