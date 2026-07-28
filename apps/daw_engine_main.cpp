@@ -1657,6 +1657,12 @@ struct TrackRuntime {
   std::vector<std::unique_ptr<TrackRuntime>> tracks;
   tracks.reserve(daw::kUiMaxTracks);
   std::mutex tracksMutex;
+  // Movement 4: how many tracks the UI should see. The `tracks` vector only ever grows
+  // (a runtime is reused, never removed), so publishing tracks.size() leaves phantom
+  // lanes from a larger project loaded before a smaller one. This is set to the loaded
+  // document's track count and extended as aux children are appended, so the published
+  // count is honest. Starts equal to whatever the startup creates.
+  std::atomic<uint32_t> liveTrackCount{0};
   TrackRuntime* uiTrack = nullptr;
   {
     auto runtime = setupTrackRuntime(0, pluginPath, !spawnHost, true);
@@ -1679,6 +1685,9 @@ struct TrackRuntime {
       tracks.push_back(std::move(runtime));
     }
   }
+
+  liveTrackCount.store(static_cast<uint32_t>(tracks.size()),
+                       std::memory_order_relaxed);
 
   daw::LatencyManager latencyMgr;
   const auto& engineConfig = tracks.front()->config;
@@ -2635,6 +2644,12 @@ struct TrackRuntime {
             .field("plane_offset", static_cast<uint64_t>(planeOffset))
             .field("channels", static_cast<uint64_t>(b.channelCount));
         tracks.push_back(std::move(child));
+        // The child extends the visible track set.
+        uint32_t seen = liveTrackCount.load(std::memory_order_relaxed);
+        while (childId + 1 > seen &&
+               !liveTrackCount.compare_exchange_weak(seen, childId + 1,
+                                                     std::memory_order_relaxed)) {
+        }
       }
     }
   };
@@ -4466,6 +4481,13 @@ struct TrackRuntime {
         runtime->mixSolo.store(source.mixer.solo, std::memory_order_relaxed);
         runtime->parentId.store(source.parentId, std::memory_order_relaxed);
         runtime->collapsed.store(source.collapsed, std::memory_order_relaxed);
+        // A document track is never an aux child — clear the flag in case this slot
+        // held a child of a previously loaded project, so it doesn't route audio from a
+        // stale parent's aux plane.
+        runtime->isAuxChild.store(false, std::memory_order_release);
+        runtime->auxParentTrackId.store(0, std::memory_order_relaxed);
+        runtime->auxBusChannelCount.store(0, std::memory_order_relaxed);
+        runtime->childrenReconciled.store(false, std::memory_order_relaxed);
         runtime->linesPerBeat.store(
             source.linesPerBeat == 0 ? 4u : source.linesPerBeat,
             std::memory_order_relaxed);
@@ -4523,6 +4545,22 @@ struct TrackRuntime {
         if (inDocument(runtime->trackId)) {
           continue;
         }
+        // A track the new project doesn't define must not linger as a phantom lane:
+        // reset its published name and, if it was an aux child of the old project,
+        // deactivate it (a stale child of a project the user closed). The name/child
+        // reset happens even for an already-blank track, since uiTrackName + parentId
+        // are published independently of the clip arrangement.
+        {
+          std::lock_guard<std::mutex> tlock(runtime->trackMutex);
+          runtime->trackName = "Track " + std::to_string(runtime->trackId + 1);
+        }
+        if (runtime->isAuxChild.load(std::memory_order_acquire)) {
+          runtime->isAuxChild.store(false, std::memory_order_release);
+          runtime->parentId.store(0, std::memory_order_relaxed);
+          runtime->auxParentTrackId.store(0, std::memory_order_relaxed);
+          runtime->auxBusChannelCount.store(0, std::memory_order_relaxed);
+          runtime->childrenReconciled.store(false, std::memory_order_relaxed);
+        }
         std::shared_ptr<const ClipSnapshot> snapshot;
         {
           std::lock_guard<std::mutex> tlock(runtime->trackMutex);
@@ -4544,6 +4582,11 @@ struct TrackRuntime {
         }
       }
     }
+    // The UI should see exactly the loaded document's tracks (aux children re-extend
+    // this as they are derived). This is what stops a smaller project loaded after a
+    // larger one from leaving phantom lanes.
+    liveTrackCount.store(static_cast<uint32_t>(document.tracks.size()),
+                         std::memory_order_release);
 
     // Restore plugin state. The chain was just rebuilt from the project above,
     // so on a clean reopen the live chain matches the saved one and state lands;
@@ -9744,8 +9787,15 @@ struct TrackRuntime {
         uiShm.header->uiTempoMilliBpm = static_cast<uint32_t>(std::lround(
             tempoProvider.bpmAtNanotick(uiBlockStartTicks) * 1000.0));
         uiShm.header->uiTempoPointCount = tempoProvider.pointCount();
-        uiShm.header->uiTrackCount = static_cast<uint32_t>(
-            std::min<size_t>(trackSnapshot.size(), maxUiTracks));
+        // Publish the live track count (document tracks + aux children), not the
+        // never-shrinking runtime vector size, so a smaller project loaded after a
+        // larger one shows the right number of lanes. Clamp to the runtime count in
+        // case a child append is mid-flight.
+        const uint32_t publishedTrackCount = std::min<uint32_t>(
+            std::min<uint32_t>(liveTrackCount.load(std::memory_order_acquire),
+                               static_cast<uint32_t>(trackSnapshot.size())),
+            maxUiTracks);
+        uiShm.header->uiTrackCount = publishedTrackCount;
         for (uint32_t i = 0; i < daw::kUiMaxTracks; ++i) {
           uiShm.header->uiLinesPerBeat[i] =
               i < trackSnapshot.size()
@@ -9753,16 +9803,24 @@ struct TrackRuntime {
                         trackSnapshot[i]->linesPerBeat.load(std::memory_order_relaxed),
                         255u))
                   : 0;
-          // v20 child-track structure (Movement 4): parent id + collapsed flag.
+          // v20 child-track structure (Movement 4): parent id + flags. HasParent is
+          // set for a genuine child (an aux stem) so the reader never confuses "child of
+          // track 0" with "top-level" — parentId 0 is a valid id, so the sentinel alone
+          // can't say. parentId is meaningful only when HasParent is set.
           uiShm.header->uiTrackParentId[i] =
               i < trackSnapshot.size()
                   ? trackSnapshot[i]->parentId.load(std::memory_order_relaxed)
                   : 0;
-          uiShm.header->uiTrackFlags[i] =
-              (i < trackSnapshot.size() &&
-               trackSnapshot[i]->collapsed.load(std::memory_order_relaxed))
-                  ? static_cast<uint8_t>(daw::kUiTrackFlagCollapsed)
-                  : 0;
+          uint8_t trackFlags = 0;
+          if (i < trackSnapshot.size()) {
+            if (trackSnapshot[i]->collapsed.load(std::memory_order_relaxed)) {
+              trackFlags |= static_cast<uint8_t>(daw::kUiTrackFlagCollapsed);
+            }
+            if (trackSnapshot[i]->isAuxChild.load(std::memory_order_relaxed)) {
+              trackFlags |= static_cast<uint8_t>(daw::kUiTrackFlagHasParent);
+            }
+          }
+          uiShm.header->uiTrackFlags[i] = trackFlags;
           // Per-track output peak the audio thread measured this block (0 for
           // absent/silent tracks). Slot i == track i, matching the mixer fields.
           uiShm.header->uiTrackPeakRms[i] =
@@ -9826,7 +9884,9 @@ struct TrackRuntime {
         for (uint32_t i = 0; i < daw::kUiMaxTracks; ++i) {
           char* dst = uiShm.header->uiTrackName[i];
           std::memset(dst, 0, daw::kUiTrackNameBytes);
-          if (i < trackSnapshot.size()) {
+          // Only publish names for live tracks; a slot past the live count is a phantom
+          // from a larger project and must read blank, not its old name.
+          if (i < publishedTrackCount && i < trackSnapshot.size()) {
             std::lock_guard<std::mutex> lock(trackSnapshot[i]->trackMutex);
             const std::string& n = trackSnapshot[i]->trackName;
             std::memcpy(dst, n.data(),
