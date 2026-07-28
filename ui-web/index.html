@@ -18,6 +18,7 @@
 <link rel="stylesheet" href="src/pending.css">
 <link rel="stylesheet" href="src/palette.css">
 <link rel="stylesheet" href="src/shell.css">
+<link rel="stylesheet" href="src/splitter.css">
 <style>
   html, body { margin: 0; height: 100%; background: var(--uni-surface-tracker-bg); color: var(--base-text); }
   body { font-family: var(--font-chrome); font-size: var(--font-size-chrome); overflow: hidden; }
@@ -80,6 +81,7 @@ import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch,
          notesInRect, noteKey, transposedKey } from './src/pianomodel.js';
 import { Browser, KIND_PLUGIN } from './src/browser.js';
 import { Dock } from './src/dock.js';
+import { createPanes } from './src/panes.js';
 import { createHelp, GLOBAL_KEYS, SURFACE_KEYS } from './src/help.js';
 import { Patcher } from './src/patcher.js';
 import { buildPatcherModel, createPatcherBuffer, configFields, nudgeConfig,
@@ -1337,6 +1339,22 @@ const dockApi = {
   cut: () => copySelection() && deleteSelection(),
 };
 const dock = new Dock(dockHost, dockApi);
+
+/**
+ * Make the shell's regions resizable and its dock cells collapsible.
+ *
+ * Built AFTER the panes that own the headers, because the fold controls are
+ * appended into those headers and a header that does not exist yet gets no
+ * button — silently, since `querySelector` returning null is not an error.
+ *
+ * A resize changes how many rows and tracks fit, which every surface measures,
+ * so `onSize` redraws. `onEnd` saves, once per completed drag rather than per
+ * pointermove.
+ */
+const panes = createPanes({
+  onSize: () => { tracker.measure(); schedule(); },
+  onEnd: saveSession,
+});
 // The palette runs the SAME registry the console does — one grammar, two ways in.
 // A second command list would be a second thing to keep in step, and the whole
 // point of the dock's grammar is that there is only one.
@@ -3712,6 +3730,10 @@ function saveSession() {
       view: state.view, zoom: state.zoom, octave: state.octave, editStep: state.editStep,
       arrangeZoom: state.arrangeZoom, pianoZoom: state.pianoZoom, pianoAll: state.pianoAll,
       project: state.currentProject,
+      // How the frame is laid out is part of where you left off, as much as the
+      // zoom is. A dock dragged wider that snaps back on reload has not been
+      // resized, it has been previewed.
+      panes: panes.sizes(), folded: panes.folded(),
     }));
   } catch (e) { /* private mode, quota — not worth breaking the app over */ }
 }
@@ -3735,6 +3757,11 @@ function restoreSession() {
   if (Number.isFinite(s.arrangeZoom)) state.arrangeZoom = Math.max(0, Math.min(ARRANGE_ZOOM.length - 1, s.arrangeZoom));
   if (Number.isFinite(s.pianoZoom)) state.pianoZoom = Math.max(0, Math.min(PIANO_ZOOM.length - 1, s.pianoZoom));
   state.pianoAll = !!s.pianoAll;
+  // Clamped inside restoreSplitterSizes against the CURRENT window, because a
+  // 900px rail saved on a wide monitor and restored into a narrow one would
+  // leave no centre at all — and the number came off disk, so it can be anything.
+  panes.restore(s.panes);
+  panes.setFolded(s.folded);
   return s.project || null;
 }
 

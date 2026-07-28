@@ -12,6 +12,24 @@
   z-index: 7;
 }
 
+/* The pane's name bar. It survives a collapse — it is what you click to get the
+   pane back — so it is the one part of the dock that is never hidden. */
+.dk-head {
+  display: flex; align-items: baseline; gap: 8px;
+  height: var(--rdock-head-h);
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  flex: 0 0 auto;
+}
+.dk-name {
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--uni-text-dim);
+}
+.dk-hint {
+  font-size: 10px; color: var(--uni-text-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 .dk-log {
   flex: 1 1 auto;
   overflow-y: auto;

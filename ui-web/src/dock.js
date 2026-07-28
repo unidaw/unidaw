@@ -377,6 +377,23 @@ export class Dock {
     this.api = api;
     this.commands = createCommands(api);
 
+    /**
+     * A header, so the pane says what it is.
+     *
+     * Jaakko, looking at the right-hand side: "is that supposed to be the agent
+     * pane?" It was, and nothing on it said so — a console with an unlabelled
+     * log and a bare `>` is indistinguishable from a status readout until you
+     * type into it. The design names this pane; the build had not.
+     *
+     * It is also where the fold control goes: a cell you can collapse needs a bar
+     * that survives the collapse, or there is nothing left to click to get it
+     * back.
+     */
+    const head = div('dk-head', host);
+    // Written once at construction, so no per-draw guard is owed.
+    div('dk-name', head).textContent = 'AGENT';
+    div('dk-hint', head).textContent = 'runs the same commands you do';
+
     this.logEl = div('dk-log', host);
     const row = div('dk-row', host);
     this.prompt = div('dk-prompt', row);

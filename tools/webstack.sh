@@ -220,7 +220,17 @@ if ! lsof -nP -iTCP:$PORT -sTCP:LISTEN >/dev/null 2>&1; then
   # the caller's stdin keeps an automated caller waiting for EOF forever — this
   # script hung a five-minute tool timeout exactly once, on the one run where the
   # page server was not already up and this branch actually executed.
-  ( cd "$WEB/ui-web" && nohup python3 -m http.server "$PORT" --bind 127.0.0.1 \
+  # test/serve.mjs, not `python3 -m http.server`. The python one sends
+  # Last-Modified and NO Cache-Control, and a response with a validator but no
+  # freshness directive lets the browser invent a lifetime of its own (RFC 9111
+  # 4.2.2) — so a tab left open across a work session keeps serving the copy it
+  # already has and never asks whether index.html changed.
+  #
+  # That cost a whole afternoon: space-to-play, wheel scrolling and the track
+  # buttons were each reported dead while passing in a fresh browser, because the
+  # report and the test were looking at different builds of the page. serve.mjs
+  # sends no-store and exists for that one line.
+  ( cd "$WEB/ui-web" && nohup node test/serve.mjs "$PORT" \
       > /tmp/page.log 2>&1 < /dev/null & )
   sleep 1
 fi

@@ -72,7 +72,11 @@ const CHURN_SCROLL_MAX = 1200;
 const RETAINED_MAX = 250;
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.woff2': 'font/woff2' };
+// '.mjs' is here because leaving it out cost an hour: a module served as
+// application/octet-stream is REFUSED by the browser, so window.__uni never
+// appeared and this suite died on a waitForFunction timeout thirty lines later,
+// naming nothing. The app is fine; the server was lying about what it sent.
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.woff2': 'font/woff2' };
 const srv = createServer((q, r) => {
   const p = join(root, normalize(decodeURI(q.url.split('?')[0])));
   let b; try { b = readFileSync(p); } catch { r.writeHead(404); return r.end(); }

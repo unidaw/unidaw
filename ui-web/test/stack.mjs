@@ -1,0 +1,179 @@
+/**
+ * A disposable engine + sidecar + page server, for tests that edit documents.
+ *
+ * The e2e suite used to run against whatever stack happened to be up — which in
+ * practice was Jaakko's, the one he was using. Every run added devices, wrote
+ * notes and loaded projects into a long-lived engine, so runs were not
+ * independent: the first pass was green, the third failed twelve checks, and the
+ * fourth crashed. I started diagnosing a patcher bug that did not exist. The
+ * suite had simply been editing the same document all afternoon.
+ *
+ * A test that edits state must own the state it edits. This starts a private
+ * engine on its own shared-memory segment, with its own COPY of the projects
+ * directory, and its own ports; nothing it does can reach the stack a person is
+ * using, and every run begins from the same bytes.
+ *
+ * Ports are FOUND, not fixed, so two runs can coexist — CI, or me running the
+ * suite while Jaakko has the app open, or the several `tools/webstack.sh`
+ * instances other agents keep alive in this repo. See findFreeBase.
+ */
+
+import { spawn } from 'node:child_process';
+import { mkdtempSync, cpSync, rmSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));   // repo root
+const UIWEB = fileURLToPath(new URL('..', import.meta.url));
+
+const bin = (p) => join(ROOT, p);
+
+/** Wait until `probe()` is true, or throw with a diagnosis. */
+async function until(probe, what, ms = 25000, every = 250) {
+  const t0 = Date.now();
+  for (;;) {
+    let ok = false;
+    try { ok = await probe(); } catch { ok = false; }
+    if (ok) return;
+    if (Date.now() - t0 > ms) throw new Error(`stack: timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, every));
+  }
+}
+
+async function listening(port) {
+  // A connect attempt, not a fetch: the sidecar's ports speak websocket and a
+  // GET would be answered oddly or not at all. All we need to know is that
+  // something has bound the port.
+  const net = await import('node:net');
+  return new Promise((resolve) => {
+    const s = net.connect({ port, host: '127.0.0.1' }, () => { s.destroy(); resolve(true); });
+    s.on('error', () => resolve(false));
+    setTimeout(() => { s.destroy(); resolve(false); }, 400);
+  });
+}
+
+/**
+ * Refuse a port somebody else is already on.
+ *
+ * Without this the harness "came up in 11ms" — it had found a stack from a
+ * previous run still listening, attached the tests to it, and reported success.
+ * Every guarantee this file exists to make (own engine, own documents, same
+ * bytes every run) was void, silently, in the one direction that looks like
+ * everything working.
+ */
+async function demandFree(ports) {
+  for (const p of ports) {
+    if (await listening(p)) {
+      throw new Error(`stack: port ${p} is already in use — a previous run is still `
+                    + `up, or something else has it. Refusing to attach to it.`);
+    }
+  }
+}
+
+/**
+ * @param {object} opts
+ * @param {number} [opts.base] page port; sidecar takes base+1 and base+2, which
+ *   is the relationship index.html hardcodes.
+ * @param {string} [opts.shm] shared-memory name.
+ * @param {boolean} [opts.keepDir] leave the project copy on disk for inspection.
+ */
+/**
+ * Three CONSECUTIVE free ports.
+ *
+ * Consecutive because index.html derives its sockets from the page port —
+ * `ws://127.0.0.1:{port+1}` for state and `+2` for commands — so the triple is
+ * the unit, not the single port.
+ *
+ * Found rather than fixed. A fixed base collided with `tools/webstack.sh`, which
+ * several agents run in this repo at once; the harness then attached to a stack
+ * it did not start and did not control, and reported "up in 11ms". Asking the OS
+ * for a port it is willing to give is the only version of this that cannot be
+ * wrong about who owns it.
+ */
+async function findFreeBase(tries = 40) {
+  const net = await import('node:net');
+  const grab = () => new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.on('error', reject);
+    s.listen(0, '127.0.0.1', () => {
+      const { port } = s.address();
+      s.close(() => resolve(port));
+    });
+  });
+  for (let i = 0; i < tries; i++) {
+    const p = await grab();
+    // The OS gave us p; p+1 and p+2 are only ours if nobody else holds them.
+    if (!(await listening(p + 1)) && !(await listening(p + 2))) return p;
+  }
+  throw new Error('stack: could not find three consecutive free ports');
+}
+
+export async function startStack({ base = 0, shm = '', keepDir = false } = {}) {
+  const procs = [];
+  if (!base) base = await findFreeBase();
+  // The segment name has to be unique too, or two runs share one engine's memory
+  // — the same collision one layer down, and a much harder one to see.
+  if (!shm) shm = `/daw_e2e_${base}`;
+  const root = mkdtempSync(join(tmpdir(), 'uni-e2e-'));
+  // The WHOLE presets tree, not just projects/. An audio clip stores its file as
+  // `../audio/waveform_probe.wav` — relative to the project directory — so a copy
+  // of projects/ alone leaves every audio source dangling one level up. Copying
+  // presets/ and pointing DAW_PROJECT_DIR at its projects/ keeps the relative
+  // paths meaning what they meant in the repo.
+  //
+  // A copy, not the real thing, so a test that saves cannot rewrite the fixtures
+  // everything else reads.
+  cpSync(join(ROOT, 'presets'), root, { recursive: true });
+  const dir = join(root, 'projects');
+
+  const engineBin = bin('build/daw_engine');
+  const hostBin = bin('build/juce_host_process');
+  const sidecarBin = bin('ui/target/release/daw-sidecar');
+  for (const [p, what] of [[engineBin, 'daw_engine'], [sidecarBin, 'daw-sidecar']]) {
+    if (!existsSync(p)) throw new Error(`stack: ${what} not built at ${p}`);
+  }
+
+  await demandFree([base, base + 1, base + 2]);
+
+  const env = {
+    ...process.env,
+    DAW_UI_SHM_NAME: shm,
+    DAW_PROJECT_DIR: dir,
+    DAW_HOST_BINARY: hostBin,
+  };
+  // Logs to disk, not /dev/null. The first version discarded them, so when the
+  // engine fell back to a stand-in plugin the only evidence was a wrong device
+  // name three sections into the suite.
+  const { openSync } = await import('node:fs');
+  const log = (name) => openSync(join(root, name + '.log'), 'a');
+  const engine = spawn(engineBin, [], {
+    env, cwd: bin('build'), stdio: ['ignore', log('engine'), log('engine')],
+  });
+  procs.push(engine);
+
+  const sidecar = spawn(sidecarBin, [
+    '--shm', shm, '--port', String(base + 1), '--cmd-port', String(base + 2),
+    '--keep-engine', '--plugin-cache', bin('build/plugin_cache.json'),
+  ], { env, cwd: ROOT, stdio: ['ignore', log('sidecar'), log('sidecar')] });
+  procs.push(sidecar);
+
+  const server = spawn(process.execPath, [join(UIWEB, 'test/serve.mjs'), String(base)],
+                       { cwd: UIWEB, stdio: ['ignore', log('serve'), log('serve')] });
+  procs.push(server);
+
+  await until(() => listening(base), `page server on ${base}`);
+  await until(() => listening(base + 1), `sidecar on ${base + 1}`);
+
+  const stop = () => {
+    for (const p of procs) { try { p.kill('SIGTERM'); } catch {} }
+    // The engine spawns plugin hosts of its own; they exit with it, but give
+    // them a moment before the directory goes.
+    setTimeout(() => {
+      if (!keepDir) { try { rmSync(root, { recursive: true, force: true }); } catch {} }
+    }, 500);
+  };
+  process.on('exit', stop);
+
+  return { url: `http://127.0.0.1:${base}/index.html`, dir, root, shm, base, stop };
+}

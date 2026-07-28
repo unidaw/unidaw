@@ -34,7 +34,22 @@ import { chromium } from 'playwright';
 import { rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-const URL = process.env.UNI_URL || 'http://127.0.0.1:8173/index.html';
+/**
+ * By default this suite brings up its OWN engine, sidecar and page server and
+ * tears them down again.
+ *
+ * It used to attach to whatever was already running, which in practice meant the
+ * stack Jaakko was working in. Every run added devices, wrote notes and loaded
+ * projects into an engine that outlived it, so the runs were not independent:
+ * green, then twelve failures, then a crash, with nothing in the suite changed
+ * between them. A test that edits state has to own the state it edits.
+ *
+ * Set UNI_URL to point it at a stack you already have — useful for reproducing
+ * something a person is looking at, and the reason that path still exists.
+ */
+const OWN_STACK = !process.env.UNI_URL;
+const stack = OWN_STACK ? await (await import('./stack.mjs')).startStack() : null;
+const URL = process.env.UNI_URL || stack.url;
 const PROJECT = process.env.UNI_PROJECT || 'webtest';
 
 let fail = 0, count = 0;
@@ -84,6 +99,7 @@ const connected = await page.waitForFunction(() => window.__uni.canSend(), null,
 if (!connected) {
   console.log('\n  no engine — start one with tools/webstack.sh\n');
   await browser.close();
+  if (stack) stack.stop();
   process.exit(2);
 }
 
@@ -1493,6 +1509,85 @@ section('multi-out child tracks');
   }
 }
 
+section('resizable and collapsible panes');
+{
+  // splitter.js was complete — handles, keyboard, clamping, persistence — and
+  // `new Splitter` appeared NOWHERE, so nothing in the shell could be resized and
+  // splitter.css was not even linked. Drags here, not setSize() calls: the bug
+  // was the absence of the wiring, and only a real drag exercises the wiring.
+  const box = (id) => page.evaluate((i) => {
+    const e = document.getElementById(i);
+    if (!e) return null;
+    const r = e.getBoundingClientRect();
+    return { w: Math.round(r.width), h: Math.round(r.height) };
+  }, id);
+  const handle = (hostId, sel) => page.evaluate(([i, s]) => {
+    const el = document.getElementById(i) && document.getElementById(i).querySelector(s);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  }, [hostId, sel]);
+
+  const dockBefore = await box('rdock');
+  const hDock = await handle('rdock', '.sp-left');
+  ok(!!hDock, 'the right dock has a drag handle');
+  if (hDock) {
+    await page.mouse.move(hDock.x, hDock.y);
+    await page.mouse.down();
+    await page.mouse.move(hDock.x - 100, hDock.y, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    const after = await box('rdock');
+    ok(after.w > dockBefore.w, 'dragging it widens the dock',
+       `${dockBefore.w} -> ${after.w}`);
+  }
+
+  const harmBefore = await box('harmony');
+  const hHarm = await handle('harmony', '.sp-bottom');
+  if (hHarm) {
+    await page.mouse.move(hHarm.x, hHarm.y);
+    await page.mouse.down();
+    await page.mouse.move(hHarm.x, hHarm.y + 80, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    const after = await box('harmony');
+    ok(after.h > harmBefore.h, 'and the dock cells resize against each other',
+       `harmony ${harmBefore.h} -> ${after.h}`);
+  }
+
+  // Fold, then UNfold by clicking the same control. The control has to survive
+  // its own collapse and stay hit-testable: the first build clipped it behind the
+  // cell below, where it still reported an 18px rect and could not be clicked.
+  const foldAt = () => page.evaluate(() => {
+    const el = document.getElementById('pending').querySelector('.cell-fold');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const x = r.x + r.width / 2, y = r.y + r.height / 2;
+    const top = document.elementFromPoint(x, y);
+    return { x, y, reachable: !!(top && top.closest('.cell-fold')) };
+  });
+  const pendBefore = await box('pending');
+  let f = await foldAt();
+  ok(f && f.reachable, 'the pending cell has a reachable fold control');
+  if (f && f.reachable) {
+    await page.mouse.click(f.x, f.y);
+    await page.waitForTimeout(300);
+    const folded = await box('pending');
+    ok(folded.h < pendBefore.h, 'clicking it collapses the cell',
+       `${pendBefore.h} -> ${folded.h}`);
+    f = await foldAt();
+    ok(f && f.reachable,
+       'and the control is STILL reachable once collapsed — measured by hit test, '
+       + 'not by rect: a clipped button reports a rect and cannot be clicked');
+    if (f && f.reachable) {
+      await page.mouse.click(f.x, f.y);
+      await page.waitForTimeout(300);
+      const back = await box('pending');
+      ok(back.h > folded.h, 'so the cell can be brought back', `-> ${back.h}`);
+    }
+  }
+}
+
 section('keyboard focus between panes');
 {
   // Driven with REAL clicks and REAL keys, deliberately. The bug this covers —
@@ -1522,7 +1617,10 @@ section('keyboard focus between panes');
     if (r.width < 10 || r.height < 10) return null;
     return { x: r.x + r.width / 2, y: r.y + 30 };
   });
+  const cardCount = () => page.evaluate(() => document.querySelectorAll('.dv-card').length);
+  const cardsAtStart = await cardCount();
   let card = await findCard();
+  let weAddedOne = false;
   if (!card) {
     // Make one rather than skipping. A focus test that only runs on projects
     // that happen to have a device is a focus test that does not run, and this
@@ -1530,6 +1628,7 @@ section('keyboard focus between panes');
     await page.evaluate(() => window.__uni.addDevice(0, 'patcher event'));
     await page.waitForTimeout(1200);
     card = await findCard();
+    weAddedOne = !!card;
   }
   if (!card) {
     blocked(false, 'keyboard focus follows the rack',
@@ -1574,6 +1673,31 @@ section('keyboard focus between panes');
     const clicked = await F();
     ok(clicked.focus === 'centre', 'and clicking the grid reclaims it',
        JSON.stringify(clicked));
+
+    /**
+     * Put back what we took.
+     *
+     * The engine outlives the suite, so a test that adds a device adds one EVERY
+     * run. After a few runs the patcher section started failing on a node count
+     * that had nothing to do with the patcher, and I began diagnosing a bug that
+     * did not exist — the suite had simply been editing the same document all
+     * afternoon. GUIDELINES 2.1.2 is about goldens, but the principle is the
+     * same: a test whose result depends on how many times it has been run is not
+     * measuring the thing it names.
+     */
+    if (weAddedOne) {
+      await page.evaluate(() => {
+        const c = document.querySelector('.dv-card');
+        if (c) window.__uni.delDevice(0, c._devId);
+      });
+      await page.waitForTimeout(900);
+      const left = await cardCount();
+      // Back to the count we found, NOT to zero: earlier sections add devices of
+      // their own and those are not ours to remove. Asserting zero here made this
+      // fail for doing its job correctly.
+      ok(left === cardsAtStart, 'the test removes the device it added',
+         `${cardsAtStart} -> ${left}`);
+    }
   }
 }
 
@@ -1654,6 +1778,7 @@ section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));
 
 await browser.close();
+if (stack) stack.stop();
 if (blockedList.length) {
   console.log(`\n${blockedList.length} BLOCKED on a defect elsewhere:`);
   for (const b of blockedList) console.log(`  - ${b}`);

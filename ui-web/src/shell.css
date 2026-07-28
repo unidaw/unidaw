@@ -22,6 +22,12 @@
   --shell-rail-w: 266px;
   --shell-dock-w: 332px;
   --shell-chain-h: 196px;
+  /* The right dock's cells. Defaults are what they measured at when they were
+     content-sized, EXCEPT pending, which measured 83px and could not show its
+     own text — it gets room to be read. */
+  --rdock-harmony-h: 345px;
+  --rdock-pending-h: 150px;
+  --rdock-head-h: 26px;
   --shell-minimap-w: 30px;
 }
 
@@ -173,8 +179,6 @@
 #tracker { right: var(--metrics-minimap-width); }
 /* Only the tracker has a minimap; the other surfaces own their full width. */
 #arrange, #mixer, #piano, #patcher { right: 0; }
-#pending { flex: 0 0 auto; overflow: hidden; }
-
 #rdock {
   flex: 0 0 var(--shell-dock-w);
   width: var(--shell-dock-w);
@@ -185,11 +189,67 @@
   background: var(--uni-surface-header-bg);
   overflow: hidden;
 }
-/* The harmony card takes what it needs; the agent takes the rest, because the
-   agent's log is the thing that grows without bound and it is the one that
-   should scroll rather than push. */
-#harmony { flex: 0 0 auto; overflow: hidden; }
-#dock { flex: 1 1 auto; min-height: 0; position: relative; }
+/* The harmony card and the pending card are DRAGGABLE now; the agent still takes
+   the rest, because its log is the thing that grows without bound and it is the
+   one that should scroll rather than push.
+
+   `0 0 var(--...)` rather than `0 0 auto`: a content-sized cell cannot be
+   resized, and the pending card being content-sized is why it sat at 83px with
+   its text clipped while 300px of empty log went spare underneath it. */
+#harmony { flex: 0 0 var(--rdock-harmony-h); height: var(--rdock-harmony-h); overflow: hidden; position: relative; }
+#pending { flex: 0 0 var(--rdock-pending-h); height: var(--rdock-pending-h); overflow: hidden; position: relative; }
+/* `inset: auto` and `height: auto` are NOT tidying — they are the fix for a real
+   overlap. dock.css still describes the dock as the overlay it used to be:
+   `position: absolute; left: 0; right: 0; bottom: 16px; height: 240px`. The id
+   here beats the class for `position`, so the dock became `relative` — but
+   `bottom: 16px` on a relatively positioned box does not mean "sit 16px from the
+   bottom", it means "shift 16px UP from where you would have been". So the dock
+   has been drawing 16px over the cell above it since the shell was built, and
+   `height: 240px` was fighting the flex basis at the same time.
+   It only became visible when a collapsed pending cell was thin enough for the
+   overlap to swallow it whole, and it read as a dead button. */
+#dock {
+  flex: 1 1 auto; min-height: 0;
+  position: relative;
+  inset: auto; height: auto;
+}
+
+/* Collapsed: the header stays, the body goes. A collapsed cell you cannot see
+   the name of is a cell you cannot get back. --rdock-head-h is the header, and
+   every one of these three draws one. */
+#harmony.cell-collapsed, #pending.cell-collapsed {
+  flex: 0 0 var(--rdock-head-h) !important;
+  height: var(--rdock-head-h) !important;
+}
+#dock.cell-collapsed { flex: 0 0 var(--rdock-head-h) !important; min-height: 0; }
+/* The BODIES go, never the headers — and pending's header lives inside its card,
+   so the card must stay and lose its contents instead. Hiding .pd-card outright
+   took the fold button with it and left a collapsed cell with nothing to click. */
+.cell-collapsed .hm-body,
+.cell-collapsed .pd-reason, .cell-collapsed .pd-acts,
+.cell-collapsed .dk-log, .cell-collapsed .dk-row {
+  display: none;
+}
+
+/* ...and the surviving header has to be REACHABLE, not merely present.
+   .pd-card is inset 8px inside #pending, so a cell collapsed to the header
+   height clipped its own header away: the button still reported an 18px rect
+   (getBoundingClientRect does not know about a clipping ancestor) while
+   elementFromPoint at those coordinates returned the agent header underneath.
+   It looked exactly like a dead button, and a probe that only measured the rect
+   agreed it was fine. Flush to the top when collapsed, so what is measured is
+   what can be clicked. */
+#pending.cell-collapsed .pd-card {
+  padding: 0 9px;
+  border-color: transparent;
+  background: transparent;
+  height: var(--rdock-head-h);
+  justify-content: center;
+}
+/* The splitter between two cells is meaningless when one of them is collapsed:
+   dragging it would set a height the collapse rule overrides, so the handle
+   would move and nothing would happen. */
+.cell-collapsed > .sp-bottom { display: none; }
 
 #chain {
   flex: 0 0 var(--shell-chain-h);
@@ -243,3 +303,22 @@
   font-family: var(--font-mono); font-size: var(--font-size-inst);
   letter-spacing: var(--font-tracking-fx);
 }
+
+/* The fold control every dock cell carries.
+   Pushed to the right of whatever else the header holds, so the three headers
+   agree about where the control is even though their contents do not. */
+.cell-fold {
+  margin-left: auto;
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--uni-text-fx);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: .55;
+}
+.cell-fold:hover { opacity: 1; color: var(--base-accent); }
+.cell-fold:focus-visible { outline: 1px solid var(--base-accent); opacity: 1; }
