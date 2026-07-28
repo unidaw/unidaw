@@ -1448,12 +1448,19 @@ function buildHead() {
   // Same mistake as the scroll clamp; see GUIDELINES.md 3.11.
   const stride = tracker.trackStride
     || metrics.cellWidth * state.columns + metrics.laneBarWidth;   // cold start, before measure()
+  // PER TRACK, because tracks are no longer all one width: a lane carries its bar
+  // readout only when its bars are not the song's. One shared stride would put
+  // every header after the first deviating track 40px out, which reads as the
+  // header being broken rather than as the widths having become non-uniform.
+  const widthOf = (t) => (tracker.trackWidth && t < tracker.trackCountMeasured
+    ? tracker.trackWidth[t] : stride);
   const heads = [];
   for (let t = 0; t < state.tracks; t++) {
     const el = document.createElement('div'); el.className = 'htrack';
     el.dataset.track = String(t);
-    el.style.width = `${stride}px`;
-    el.style.flex = `0 0 ${stride}px`;
+    const w = widthOf(t);
+    el.style.width = `${w}px`;
+    el.style.flex = `0 0 ${w}px`;
     const nm = document.createTextNode('');
     el.appendChild(nm);
     el._nameNode = nm; el._nameVal = null;
@@ -1482,6 +1489,7 @@ function buildHead() {
   // fixed column cannot silently do this again.
   headRow._tracks = state.tracks;
   headRow._stride = stride;
+  headRow._laneSig = tracker._laneSig;
   head.append(headRow);
   paintHeadLpb();
 }
@@ -1988,7 +1996,13 @@ function draw() {
   tracker.resize(boxOf(host, true), state.tracks, state.columns);
   const stride = tracker.trackStride
     || metrics.cellWidth * state.columns + metrics.laneBarWidth;   // cold start, before measure()
-  if (!headRow || headRow._tracks !== state.tracks || headRow._stride !== stride) buildHead();
+  // Rebuilt on the lane-visibility signature too, not only on the stride. Which
+  // lanes carry a bar readout changes individual track WIDTHS while leaving the
+  // widest one alone, so a stride-only test misses it entirely and every header
+  // after the first deviating track sits 40px out — GUIDELINES 2.1 again: the
+  // content moved and the key the consumer watched did not.
+  if (!headRow || headRow._tracks !== state.tracks || headRow._stride !== stride
+      || headRow._laneSig !== tracker._laneSig) buildHead();
   paintHeadLpb();
   if (headRow && headRow._x !== state.scrollX) {
     headRow._x = state.scrollX;

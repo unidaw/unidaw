@@ -75,6 +75,41 @@ import { DEFAULT_METER, createPosition, positionOf, sameMeter,
 /** A clip's meter, written in place per extent. One record, never per frame. */
 const _clipMeter = { numerator: 4, denominator: 4 };
 
+/**
+ * Whether a track's bars are the SONG's bars.
+ *
+ * A lane only earns a readout when it disagrees with the gutter; otherwise the
+ * column repeats what is already on screen, one column per track, forever. Two
+ * ways to disagree, and both matter:
+ *
+ *   - the clip's METER differs, so its bars are a different length; or
+ *   - the clip's ORIGIN is not on a song bar, so its bars are the same length and
+ *     start somewhere else. A 4/4 clip dropped a sixteenth late is in the song's
+ *     meter and still needs its own numbering, which is exactly the case a
+ *     meter-only test would call "no deviation" and leave unreadable.
+ *
+ * Computed over EVERY extent on the track, not the visible ones. A track whose
+ * bridge alone is in 7/8 must carry the column at every scroll position — a lane
+ * that grows a column when you scroll into the bridge and loses it on the way out
+ * shifts the layout under the pointer, which is worse than a redundant column.
+ */
+function computeLaneShow(engine, buf, meter, trackCount) {
+  const songBar = ticksPerBar(meter);
+  if (buf._laneShow.length < trackCount) buf._laneShow = new Uint8Array(trackCount * 2);
+  buf._laneShow.fill(0, 0, trackCount);
+  for (let i = 0; i < engine.extentCount; i++) {
+    const e = engine.extents[i];
+    if (e.track >= trackCount || e.audio) continue;
+    const g = e.grid;
+    const meterDiffers = !!g && (g.numerator !== meter.numerator
+                                 || g.denominator !== meter.denominator);
+    if (meterDiffers || e.startTick % songBar !== 0) buf._laneShow[e.track] = 1;
+  }
+  let sig = 0;
+  for (let t = 0; t < trackCount && t < 32; t++) sig |= buf._laneShow[t] << t;
+  return sig;
+}
+
 function reduceExtents(engine, buf, rowTicks, meter) {
   const n = engine.extentCount;
   if (buf._extStartRow.length < n) {
@@ -395,6 +430,8 @@ export function createBuffer(rowCount, trackCount, columns) {
     _extRowsPerBar: new Float64Array(0),
     _extRowsPerBeat: new Float64Array(0),
     _extAudio: new Int32Array(0),
+    /** Per track, whether its bars differ from the song's. See computeLaneShow. */
+    _laneShow: new Uint8Array(0),
   };
 }
 
@@ -589,6 +626,10 @@ export function buildViewModel(opts, buf) {
    * playhead does none of it.
    */
   const extRev = engine ? engine.extentsRevision : -1;
+  // Which lanes have earned a readout, as a bitmask the renderer can compare in
+  // one integer. Recomputed with the extents; it changes on a load or a clip edit
+  // and never inside a scroll.
+  const laneShowSig = engine ? computeLaneShow(engine, buf, meter, trackCount) : 0;
   const laneStale = relabel || buf._laneExtRev !== extRev;
   buf._laneExtRev = extRev;
   buf._labelStart = startRow;
@@ -1078,6 +1119,8 @@ export function buildViewModel(opts, buf) {
   }
   buf.contentRevision = contentRevision;
 
+  buf.laneShow = engine ? buf._laneShow : null;
+  buf.laneShowSig = laneShowSig;
   buf.window.startRow = startRow; buf.window.rowCount = rowCount;
   buf.zoom = zoom;
   buf.cursor.row = cursor.row; buf.cursor.track = cursor.track; buf.cursor.col = cursor.col;

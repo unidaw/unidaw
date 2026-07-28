@@ -32,8 +32,13 @@ export class Tracker {
     this.m = metrics;
     this.vm = null;
     this.poolSize = 0;
-    /** Measured in measure(); 0 until the first pool row exists. */
-    this.laneBarWidth = 0;
+    /** Per-track geometry, filled by measure(). Tracks are not a uniform width:
+     *  a lane carries its bar readout only when its bars are not the song's. */
+    this.trackLeft = null; this.trackWidth = null; this.laneBarW = null;
+    this.trackCountMeasured = 0;
+    this.widestTrack = 0;
+    /** The lane-visibility bitmask currently applied to the pool. */
+    this._laneSig = -1;
     /** @type {HTMLElement[]} */
     this.pool = [];
     /** How many pool slots the current frame's window claims — see rowEl(). */
@@ -94,27 +99,87 @@ export class Tracker {
    *
    * Forces layout, so it runs on shape change only, never per frame.
    */
+  /**
+   * Track geometry, measured off the DOM.
+   *
+   * Per track rather than one stride, because a lane carries its bar readout only
+   * when its bars are not the song's — so tracks are no longer all the same width.
+   * `trackStride` survives as the widest track, which is what the header's cold
+   * start and the scroll clamp want; everything that positions a cell uses the
+   * per-track offset.
+   *
+   * Measured, never derived from the tokens (GUIDELINES 3.11): the box model lives
+   * in the stylesheet, and a second copy here is how a hit test and a paint end up
+   * disagreeing by a border width.
+   */
   measure() {
     const row = this.pool[0];
     if (!row) return;
     this.contentWidth = row.scrollWidth;
     const tracks = row.querySelectorAll('.tk-track');
     this.stripLeft = tracks[0] ? tracks[0].offsetLeft : this.m.gutterWidth;
-    this.trackStride = tracks.length > 1 ? tracks[1].offsetLeft - tracks[0].offsetLeft
-                                         : this.m.cellWidth * this.cols;
-    // MEASURED off the DOM, not read from the token, for the same reason the
-    // stride is: GUIDELINES 3.11 — the box model lives in the stylesheet and
-    // duplicating it here is how the hit test and the paint disagree by a border.
-    const first = tracks[0] && tracks[0].firstElementChild;
-    this.laneBarWidth = first && first.classList.contains('tk-lane-bar')
-      ? first.offsetWidth : 0;
+    const n = tracks.length;
+    if (!this.trackLeft || this.trackLeft.length < n) {
+      this.trackLeft = new Float64Array(n * 2);
+      this.trackWidth = new Float64Array(n * 2);
+      this.laneBarW = new Float64Array(n * 2);
+    }
+    let widest = 0;
+    for (let t = 0; t < n; t++) {
+      const tr = tracks[t];
+      this.trackLeft[t] = tr.offsetLeft - this.stripLeft;
+      this.trackWidth[t] = tr.offsetWidth;
+      const first = tr.firstElementChild;
+      this.laneBarW[t] = first && first.classList.contains('tk-lane-bar')
+        ? first.offsetWidth : 0;
+      if (tr.offsetWidth > widest) widest = tr.offsetWidth;
+    }
+    this.trackCountMeasured = n;
+    this.trackStride = n > 1 ? tracks[1].offsetLeft - tracks[0].offsetLeft
+                             : (widest || this.m.cellWidth * this.cols);
+    this.widestTrack = widest || this.m.cellWidth * this.cols;
+  }
+
+  /**
+   * Show or hide each lane's readout, and re-measure when the set changes.
+   *
+   * `display: none` rather than a zero width, so the track's box genuinely shrinks
+   * and `measure()` sees it. Guarded on a bitmask: this walks every row and every
+   * track, and the answer changes on a project load or a clip edit, never inside a
+   * scroll. Re-measuring is not optional — every cell position, the hit test, the
+   * header and the scroll clamp are derived from widths that just changed.
+   */
+  applyLaneShow(laneShow, sig) {
+    if (this._laneSig === sig) return false;
+    this._laneSig = sig;
+    for (let i = 0; i < this.pool.length; i++) {
+      const lanes = this.pool[i]._lanes;
+      if (!lanes) continue;
+      for (let t = 0; t < lanes.length; t++) {
+        lanes[t].classList.toggle('no-lane', !(laneShow && laneShow[t]));
+      }
+    }
+    this.measure();
+    return true;
   }
 
   /** Left edge of a cell, in band coordinates. Uses measured stride, so it
    *  stays correct whatever the CSS borders do. */
   cellLeft(track, col) {
-    return this.stripLeft + track * this.trackStride
-         + this.laneBarWidth + col * this.m.cellWidth;
+    const left = this.trackLeft && track < this.trackCountMeasured
+      ? this.trackLeft[track] : track * this.trackStride;
+    const lb = this.laneBarW && track < this.trackCountMeasured ? this.laneBarW[track] : 0;
+    return this.stripLeft + left + lb + col * this.m.cellWidth;
+  }
+
+  /** Which track a band-relative x falls in, or -1. Linear because tracks are no
+   *  longer a uniform stride and sixteen is the cap. */
+  trackAt(rel) {
+    const n = this.trackCountMeasured || 0;
+    for (let t = 0; t < n; t++) {
+      if (rel >= this.trackLeft[t] && rel < this.trackLeft[t] + this.trackWidth[t]) return t;
+    }
+    return -1;
   }
 
   /** How far right the band can travel before the strip's end meets the edge. */
@@ -305,6 +370,11 @@ export class Tracker {
     const prev = this.vm;
     this.vm = vm;
     const first = vm.window.startRow;
+
+    // Which lanes carry a readout, BEFORE anything is positioned: it changes track
+    // widths, and every cell position, the hit test and the scroll clamp are
+    // derived from those. Guarded on a bitmask, so a scroll costs one compare.
+    const laneChanged = this.applyLaneShow(vm.laneShow, vm.laneShowSig | 0);
 
     // A ring, not a list. Pool slot is `row mod poolSize`, so a row keeps the
     // same element until it leaves the window entirely — scrolling one row
@@ -583,16 +653,16 @@ export class Tracker {
     if (x < this.stripLeft || y < 0) return null;
     const row = this.vm.window.startRow + Math.floor(y / this.m.rowHeight);
     const rel = x - this.stripLeft;
-    const track = Math.floor(rel / this.trackStride);
+    const track = this.trackAt(rel);
     if (track < 0 || track >= this.tracks) return null;
     // A click on the bar readout is not a click on a cell. Returning null here is
     // the same answer the gutter already gives — there is nothing to type into a
     // readout, and resolving it to column 0 would put the cursor a column to the
-    // left of wherever the user actually pointed on every lane.
-    const inTrack = rel - track * this.trackStride;
-    if (inTrack < this.laneBarWidth) return null;
+    // left of wherever the user actually pointed.
+    const inTrack = rel - this.trackLeft[track];
+    if (inTrack < this.laneBarW[track]) return null;
     const col = Math.min(this.cols - 1,
-                         Math.floor((inTrack - this.laneBarWidth) / this.m.cellWidth));
+                         Math.floor((inTrack - this.laneBarW[track]) / this.m.cellWidth));
     return { row, track, col };
   }
 

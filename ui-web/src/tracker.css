@@ -148,6 +148,12 @@
 .tk-track.lbeat { box-shadow: inset 0 1px 0 var(--uni-rule-gutter); }
 .tk-track.lbar > .tk-lane-bar { opacity: 1; }
 
+/* A lane whose bars ARE the song's bars carries no readout: the gutter already
+   says it, and one redundant column per track is most of the tracker's width.
+   display:none rather than a zero width, so the track's box genuinely shrinks and
+   measure() sees the new geometry. */
+.tk-track.no-lane > .tk-lane-bar { display: none; }
+
 .tk-cell {
   width: var(--metrics-cell-width);
   flex: 0 0 var(--metrics-cell-width);

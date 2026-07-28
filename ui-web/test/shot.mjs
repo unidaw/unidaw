@@ -116,6 +116,13 @@ const SCENES = [
     } },
 ];
 
+/** Which lanes show their bar readout, as an exact list. */
+function assert_shown(got, want) {
+  ok(JSON.stringify(got) === JSON.stringify(want),
+     `the column appears on exactly the deviating lanes: ${JSON.stringify(got)}`,
+     );
+}
+
 /** Above this many perceptibly-differing pixels it is a change, not antialiasing. */
 const NOISE_PX = 16;
 
@@ -459,7 +466,19 @@ for (const scene of SCENES) {
       };
       return { t0r1: read(1, 0), t0r17: read(17, 0), t1r2: read(2, 1), t1r14: read(14, 1),
                t2r0: read(0, 2), t3gap: read(18, 3), t3r2: read(2, 3), t4r0: read(0, 4),
-               width: (() => { const e = document.querySelector('.tk-lane-bar');
+               // Which lanes actually SHOW the column, measured rather than read
+               // off a class: an element with display:none still reports its
+               // textContent, so every assertion above passes on a hidden lane.
+               shown: [0, 1, 2, 3, 4].map((t) => {
+                 const e = document.querySelector(`.tk-lane-bar[data-track="${t}"]`);
+                 return e ? (e.getBoundingClientRect().width > 0 ? 1 : 0) : -1;
+               }),
+               // Track boxes, to prove they are genuinely different widths now.
+               trackW: [0, 1, 2, 3, 4].map((t) => {
+                 const e = document.querySelector(`.tk-row .tk-track:nth-child(${t + 3})`);
+                 return e ? Math.round(e.getBoundingClientRect().width) : -1;
+               }),
+               width: (() => { const e = document.querySelector('.tk-lane-bar[data-track="0"]');
                                return e ? Math.round(e.getBoundingClientRect().width) : -1; })() };
     });
     // A 4/4 clip starting a 1/16 in: its bar 1 beat 1 is row 1, not row 0. A build
@@ -487,9 +506,71 @@ for (const scene of SCENES) {
        `and says nothing in the gap between them: ${JSON.stringify(lanes.t3gap)}`);
     ok(lanes.t4r0 && lanes.t4r0.text === '',
        `nor does an audio region, whose meter is an engine default: ${JSON.stringify(lanes.t4r0)}`);
-    // The box is always there, even blank: measure() derives the track stride from
-    // it, so a readout that collapsed would desynchronise the header and hit test.
-    ok(lanes.width === 40, `the readout keeps its width: ${lanes.width}px`);
+    // THE POINT OF THE COLUMN BEING CONDITIONAL. A lane earns it by disagreeing
+    // with the gutter, in one of two ways: a different meter, or an origin that is
+    // not on a song bar. The song here is 7/8.
+    //   0  4/4 at tick 240000 — same-length bars in the wrong place, and a
+    //      meter-only test would wrongly call this "no deviation"
+    //   1  3/4 — a different meter outright
+    //   2  no grid, origin 0 — genuinely the song's own bars, so no column
+    //   3  a second clip at 5,760,000, which is not a multiple of a 7/8 bar
+    //   4  audio, whose packed meter is an engine default
+    assert_shown(lanes.shown, [1, 1, 0, 1, 0]);
+    // And the tracks are therefore NOT all one width, which is what forced the
+    // renderer's single `trackStride` to become a per-track array.
+    ok(lanes.trackW[0] !== lanes.trackW[2],
+       `tracks are no longer a uniform width: ${JSON.stringify(lanes.trackW)}`);
+    ok(lanes.width === 40, `a shown readout is its full width: ${lanes.width}px`);
+
+    // THE HEADER MUST FOLLOW. Non-uniform track widths are exactly the case where
+    // a header built from one shared stride drifts: every header after the first
+    // deviating track sits 40px out, and it compounds. Compared as left edges,
+    // which is what a user sees line up or not.
+    const align = await page.evaluate(() => {
+      const row = document.querySelector('.tk-row');
+      const trs = [...row.querySelectorAll('.tk-track')];
+      const hds = [...document.querySelectorAll('.htrack')];
+      const out = [];
+      for (let t = 0; t < Math.min(trs.length, hds.length); t++) {
+        out.push(Math.round(hds[t].getBoundingClientRect().left
+                            - trs[t].getBoundingClientRect().left));
+      }
+      return out;
+    });
+    const worst = align.reduce((a, b) => Math.max(a, Math.abs(b)), 0);
+    ok(worst <= 1, `every header sits over its track: worst drift ${worst}px`,
+       JSON.stringify(align));
+
+    // AND THE HIT TEST. It used to divide by one stride; with ragged tracks it has
+    // to find the track by its measured box, and subtract that track's OWN readout
+    // width before resolving a column. Driven through the real hitTest with real
+    // coordinates taken off the rendered cells, so it cannot agree with the
+    // renderer by sharing its arithmetic.
+    const hits = await page.evaluate(() => {
+      const probe = (track, col) => {
+        const c = document.querySelector(
+          `.tk-row[data-row="4"] .tk-cell[data-track="${track}"][data-col="${col}"]`);
+        if (!c) return null;
+        const b = c.getBoundingClientRect();
+        const h = window.__uni.clickAt(b.left + b.width / 2, b.top + b.height / 2);
+        return h ? `${h.track},${h.col}` : 'null';
+      };
+      // A lane WITH a readout and a lane without, so a single-stride hit test
+      // cannot pass both.
+      const withCol = [probe(1, 0), probe(1, 2)];
+      const without = [probe(2, 0), probe(2, 2)];
+      // And the readout itself: pointing at a bar number is not pointing at a cell.
+      const lb = document.querySelector('.tk-row[data-row="4"] .tk-lane-bar[data-track="1"]');
+      const r = lb.getBoundingClientRect();
+      const onReadout = window.__uni.clickAt(r.left + r.width / 2, r.top + r.height / 2);
+      return { withCol, without, onReadout: onReadout ? `${onReadout.track},${onReadout.col}` : 'null' };
+    });
+    ok(hits.withCol.join(' ') === '1,0 1,2',
+       `a click lands in the right cell on a lane WITH a readout: ${JSON.stringify(hits.withCol)}`);
+    ok(hits.without.join(' ') === '2,0 2,2',
+       `and on a lane without one: ${JSON.stringify(hits.without)}`);
+    ok(hits.onReadout === 'null',
+       `a click on the readout is not a click on a cell: ${hits.onReadout}`);
   }
 
   if (scene.palette) {
