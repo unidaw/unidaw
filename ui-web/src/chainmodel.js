@@ -128,6 +128,23 @@ function busPartialText(have, want) {
   return t;
 }
 
+/**
+ * The key a device's parameters are stored and looked up under.
+ *
+ * (track, device), never device alone. DEVICE IDS ARE PER-TRACK: in
+ * presets/projects/maximal.uniproj.json all six tracks have a device with
+ * `device_id: 0`, so a map keyed on the id alone has ONE slot for every track's
+ * first device. The last answer to arrive wins and every track's rack shows that
+ * plugin's name and parameters — six tracks all reporting "Analog Heat", and a
+ * plugin you just added never appearing because the slot is already full.
+ *
+ * The REQUEST side already keyed on the pair; only the store and the lookup did
+ * not, so the right question was asked and the answer was filed under the wrong
+ * name. Exported so there is one definition rather than two that agree until
+ * somebody edits one.
+ */
+export function paramKey(track, device) { return track * 65536 + device; }
+
 export function createChainBuffer(cap = 16) {
   const cards = new Array(cap);
   for (let i = 0; i < cap; i++) {
@@ -196,7 +213,7 @@ export function buildChainModel(opts, buf) {
   // the device list is an iterator object per frame for a count of at most 16.
   let named = 0;
   for (let i = 0; i < devices.length; i++) {
-    const dp = params ? params[devices[i].id] : null;
+    const dp = params ? params[paramKey(track, devices[i].id)] : null;
     if (dp && dp.name) named++;
   }
   if (!devices.length) {
@@ -253,7 +270,7 @@ export function buildChainModel(opts, buf) {
 
     // The plugin's own name once the host has answered, and what it IS until
     // then. Both are true statements; only one of them is the device's name.
-    const dp = params ? params[d.id] : null;
+    const dp = params ? params[paramKey(track, d.id)] : null;
     const nm = (dp && dp.name) ? dp.name : null;
     c.named = !!nm;
     if (c._tName !== nm || c._tKind !== d.kind || c._tId !== d.id) {

@@ -33,7 +33,7 @@ import { fillRows, setProjectRow, setPluginRow, makeRow,
          KIND_PROJECT, KIND_PLUGIN } from '../src/browser.js';
 import { ticksPerBar, ticksPerBeat, positionOf, createPosition, sameMeter,
          meterText } from '../src/meter.js';
-import { buildChainModel, createChainBuffer, createParamEdits, findParamEdit,
+import { buildChainModel, createChainBuffer, paramKey, createParamEdits, findParamEdit,
          setParamEdit, dropParamEdit, reapParamEdits, MAX_PARAMS,
          EDIT_HOLD_MS } from '../src/chainmodel.js';
 import { createCommands, checkArgs, runCommand, parseHelpArgs } from '../src/dock.js';
@@ -1256,4 +1256,174 @@ test('every command a key points at actually exists', () => {
   for (const [key, op] of Object.entries(ALT_OPS)) {
     if (op.cmd) assert.ok(cmds[op.cmd], `Alt+${key} -> ${op.cmd} exists`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// ONE NAMESPACE, THREE SURFACES.
+//
+// ARCHITECTURE_REVIEW section 4 item 2: every operation reachable from a
+// keystroke, the palette, `daw-cli` and the agent — "one namespace, one op
+// registry, and a build-time assertion that every registered op has a palette
+// entry and a CLI path... it is simultaneously the AI's entire API."
+//
+// There is no single registry today; there are three lists that disagree, and
+// nothing noticed:
+//
+//   dock + palette   36 commands   ui-web/src/dock.js
+//   daw-cli do       11 verbs      ui/daw-cli/src/main.rs
+//   agent manifest    8 tools      ui/daw-agent/src/tools.rs
+//
+// This table IS the namespace, until something generates the three from one
+// source. It is deliberately explicit: every dock command must appear here with
+// either the name it goes by on each surface or a recorded reason it has none.
+// Adding a command without deciding fails the first assertion below.
+//
+// The two coverage assertions are RATCHETS rather than a wall. The gap is real
+// and pre-existing; a test that simply fails is one nobody can run. These say the
+// gap may not GROW, and may not silently shrink either — closing one without
+// updating the list fails too, so the list cannot rot into a lie.
+
+/**
+ * `cli` and `agent` are the name that operation goes by on that surface, or null
+ * with a `why`:
+ *   'view'    — view state. An agent driving a headless engine has no viewport,
+ *               so there is nothing for it to address. Not a gap.
+ *   'ask'     — introspection the other surfaces answer differently (the agent
+ *               has `observe`, the CLI has `get`). Not a gap.
+ *   'gap'     — a DOCUMENT operation with no programmatic path. A real hole:
+ *               an agent that can write a note but cannot undo it is half-built.
+ */
+const OP_REGISTRY = {
+  // Covered on all three.
+  load:      { cli: 'load',        agent: 'load' },
+  save:      { cli: 'save',        agent: 'save' },
+  note:      { cli: 'note',        agent: 'add_notes' },
+  play:      { cli: 'play',        agent: 'transport' },
+  // Covered on two.
+  del:       { cli: 'delete-note', agent: null, why: 'gap' },
+  tempo:     { cli: 'set-tempo',   agent: null, why: 'gap' },
+  gain:      { cli: 'mixer',       agent: null, why: 'gap' },
+  mute:      { cli: 'mixer',       agent: null, why: 'gap' },
+  solo:      { cli: 'mixer',       agent: null, why: 'gap' },
+  undo:      { cli: null,          agent: 'undo',           why: 'gap' },
+  redo:      { cli: null,          agent: 'redo',           why: 'gap' },
+  rename:    { cli: null,          agent: 'set_track_name', why: 'gap' },
+  stop:      { cli: null,          agent: 'transport',      why: 'gap' },
+  // Document operations with NO programmatic path at all. The real hole.
+  clear:     { cli: null, agent: null, why: 'gap' },
+  copy:      { cli: null, agent: null, why: 'gap' },
+  cut:       { cli: null, agent: null, why: 'gap' },
+  paste:     { cli: null, agent: null, why: 'gap' },
+  transpose: { cli: null, agent: null, why: 'gap' },
+  loop:      { cli: null, agent: null, why: 'gap' },
+  seek:      { cli: null, agent: null, why: 'gap' },
+  addnode:   { cli: null, agent: null, why: 'gap' },
+  delnode:   { cli: null, agent: null, why: 'gap' },
+  link:      { cli: null, agent: null, why: 'gap' },
+  patch:     { cli: null, agent: null, why: 'gap' },
+  // View state. An agent has no viewport to address.
+  fold:      { cli: null, agent: null, why: 'view' },
+  follow:    { cli: null, agent: null, why: 'view' },
+  goto:      { cli: null, agent: null, why: 'view' },
+  oct:       { cli: null, agent: null, why: 'view' },
+  select:    { cli: null, agent: null, why: 'view' },
+  view:      { cli: null, agent: null, why: 'view' },
+  zoom:      { cli: null, agent: null, why: 'view' },
+  // Introspection, answered differently on each surface.
+  engine:    { cli: null, agent: null, why: 'ask' },
+  help:      { cli: null, agent: null, why: 'ask' },
+  nodes:     { cli: null, agent: null, why: 'ask' },
+  projects:  { cli: null, agent: null, why: 'ask' },
+  state:     { cli: null, agent: null, why: 'ask' },
+};
+
+/** Ops with no CLI path today. This list may SHRINK, never grow. */
+const CLI_GAP = ['addnode', 'clear', 'copy', 'cut', 'delnode', 'link', 'loop',
+                 'paste', 'patch', 'redo', 'rename', 'seek', 'stop', 'transpose', 'undo'];
+/** Ops with no agent tool today. Same rule. */
+const AGENT_GAP = ['addnode', 'clear', 'copy', 'cut', 'del', 'delnode', 'gain', 'link',
+                   'loop', 'mute', 'paste', 'patch', 'seek', 'solo', 'tempo', 'transpose'];
+
+test('every dock command is in the op registry', () => {
+  // The forcing function: a new command cannot be added without deciding whether
+  // it needs a CLI path and an agent tool. That decision is the whole point —
+  // "mouse-only means unnameable means unscriptable", and the same is true of
+  // palette-only.
+  const cmds = Object.keys(createCommands(stubApi())).sort();
+  const missing = cmds.filter((c) => !(c in OP_REGISTRY));
+  assert.deepEqual(missing, [],
+    'a command with no registry entry — give it a surface or a recorded reason');
+  const stale = Object.keys(OP_REGISTRY).filter((c) => !cmds.includes(c));
+  assert.deepEqual(stale, [], 'a registry entry for a command that no longer exists');
+});
+
+test('the CLI really implements every path the registry claims', async () => {
+  // Read daw-cli's source, so the registry is checked against the CODE rather
+  // than against itself. A name here that the CLI does not implement would record
+  // an operation as covered when it is not — worse than recording it as a gap.
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../../ui/daw-cli/src/main.rs', import.meta.url), 'utf8');
+  const verbs = new Set([...src.matchAll(/Some\(&"([a-z-]+)"\)/g)].map((m) => m[1]));
+  assert.ok(verbs.size > 5, `daw-cli's dispatch was parsed: ${verbs.size} verbs`);
+  for (const [op, e] of Object.entries(OP_REGISTRY)) {
+    if (e.cli) assert.ok(verbs.has(e.cli), `${op} claims CLI verb "${e.cli}", which does not exist`);
+  }
+});
+
+test('the agent really implements every tool the registry claims', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../../ui/daw-agent/src/tools.rs', import.meta.url), 'utf8');
+  const tools = new Set([...src.matchAll(/name:\s*"([a-z_]+)"/g)].map((m) => m[1]));
+  assert.ok(tools.size > 3, `the agent manifest was parsed: ${tools.size} tools`);
+  for (const [op, e] of Object.entries(OP_REGISTRY)) {
+    if (e.agent) assert.ok(tools.has(e.agent), `${op} claims agent tool "${e.agent}", which does not exist`);
+  }
+});
+
+test('the programmatic gap does not grow, and cannot rot', () => {
+  // A ratchet, not a wall. The gap is real and pre-existing; a test that just
+  // fails is a test nobody runs. This one fails when the gap GROWS — a new
+  // document operation with no CLI path — and equally when it SHRINKS without
+  // the list being updated, so the list cannot decay into a comforting lie.
+  const doc = (e) => e.why === 'gap' || !e.why;
+  const cliGap = Object.entries(OP_REGISTRY)
+    .filter(([, e]) => doc(e) && !e.cli).map(([k]) => k).sort();
+  const agentGap = Object.entries(OP_REGISTRY)
+    .filter(([, e]) => doc(e) && !e.agent).map(([k]) => k).sort();
+  assert.deepEqual(cliGap, [...CLI_GAP].sort(),
+    'the set of ops with no CLI path changed — update CLI_GAP and say why');
+  assert.deepEqual(agentGap, [...AGENT_GAP].sort(),
+    'the set of ops with no agent tool changed — update AGENT_GAP and say why');
+});
+
+test('two tracks with the same device id do not share one plugin', () => {
+  // DEVICE IDS ARE PER-TRACK. In presets/projects/maximal.uniproj.json all six
+  // tracks have a device with `device_id: 0`, so a parameter map keyed on the id
+  // ALONE has one slot for every track's first device: the last answer to arrive
+  // wins and every track's rack shows that plugin. Reported from the app as
+  // "I added Zebralette but the chain shows Analog Heat on all channels" — and
+  // the plugin you just added never appears, because the slot is already full.
+  //
+  // The REQUEST side always keyed on the pair, so the right question was asked
+  // and the answer was filed under the wrong name.
+  const chains = {
+    0: { track: 0, version: 1, devices: [{ id: 0, kind: 1, pos: 0, node: -1, slot: 0, caps: 0, bypass: 0 }] },
+    1: { track: 1, version: 1, devices: [{ id: 0, kind: 1, pos: 0, node: -1, slot: 0, caps: 0, bypass: 0 }] },
+  };
+  const params = {
+    [paramKey(0, 0)]: { track: 0, device: 0, name: 'Analog Heat', params: [] },
+    [paramKey(1, 0)]: { track: 1, device: 0, name: 'Zebralette', params: [] },
+  };
+  const buf = createChainBuffer(4);
+  const a = buildChainModel({ track: 0, chains, params, selected: -1, trackName: 'T1' }, buf);
+  assert.equal(a.cards[0].title, 'Analog Heat', 'track 0 shows its own plugin');
+  const b = buildChainModel({ track: 1, chains, params, selected: -1, trackName: 'T2' }, buf);
+  assert.equal(b.cards[0].title, 'Zebralette', 'and track 1 shows ITS own, not track 0\'s');
+});
+
+test('the parameter key names the track as well as the device', () => {
+  // The whole bug in one line: keyed on the device alone these collide.
+  assert.notEqual(paramKey(0, 0), paramKey(1, 0));
+  assert.notEqual(paramKey(1, 0), paramKey(0, 1));
+  assert.equal(paramKey(0, 0), 0);
 });

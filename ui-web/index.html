@@ -66,7 +66,7 @@ import { createPending, propose, applyPending, settlePending,
          discardPending } from './src/pendingmodel.js';
 import { buildHarmonyModel, createHarmonyBuffer } from './src/harmonymodel.js';
 import { Palette } from './src/palette.js';
-import { buildChainModel, createChainBuffer } from './src/chainmodel.js';
+import { buildChainModel, createChainBuffer, paramKey } from './src/chainmodel.js';
 import { createChrome, VIEW_TABS } from './src/chrome.js';
 import { Arrange, ARRANGE_CLIP_MARGIN_PX } from './src/arrange.js';
 import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName,
@@ -2632,13 +2632,31 @@ addEventListener('keydown', (e) => {
 
   // 2.5 View switch, and arrange's own navigation. Arrange has no rows and no
   //     cell editing, so it must not fall through into the tracker's keys.
-  if (k === 'Tab') {
+  /**
+   * CTRL+Tab cycles the surfaces; plain Tab belongs to the surface you are in.
+   *
+   * Tab used to switch views, which spent the most reachable key on the rarest
+   * action. In a tracker Tab means "next track" — it is what every tracker since
+   * the eighties has meant by it, and it is a per-keystroke move you make
+   * constantly, where changing surface is a per-minute one. Ctrl is the modifier
+   * because Cmd+Tab is the OS application switcher on macOS and will never reach
+   * a page.
+   */
+  if (k === 'Tab' && (e.ctrlKey || e.metaKey)) {
     const order = ['tracker', 'arrange', 'piano', 'mixer', 'patcher'];
     const i = order.indexOf(state.view);
     state.view = order[(i + (e.shiftKey ? order.length - 1 : 1)) % order.length];
     // Opening the piano roll on whatever pitch window was last used shows empty
     // sky more often than not; fit it to the material on entry.
     if (state.view === 'piano') fitPiano();
+    return done();
+  }
+  // Plain Tab in the tracker: the next track, wrapping. Column-preserving, so
+  // tabbing across a row keeps you in the note column rather than dropping you
+  // into whichever column the previous track left the cursor in.
+  if (k === 'Tab' && state.view === 'tracker') {
+    const n = Math.max(1, state.tracks);
+    state.cursor.track = (state.cursor.track + (e.shiftKey ? n - 1 : 1)) % n;
     return done();
   }
   if (state.view === 'piano') {
@@ -2985,7 +3003,10 @@ conn = WANTS_ENGINE ? connectEngine({
    * rack shows several cards at once — dropping the previous one would make the
    * strip flicker between "named" and "unnamed" as you clicked along it.
    */
-  onDeviceParams: (dp) => { deviceParams[dp.device] = dp; schedule(); },
+  // Filed under (track, device), never the device alone — see paramKey. Device
+  // ids are per-track, so `deviceParams[0]` was one slot shared by every track's
+  // first device and the last answer to land won it.
+  onDeviceParams: (dp) => { deviceParams[paramKey(dp.track, dp.device)] = dp; schedule(); },
   /**
    * The audio source table, and which clip reads which source.
    *
@@ -4088,12 +4109,12 @@ window.__uni = {
     // actually in most of the time: a rack part-way through being told what it
     // holds. A fixture where everything has answered would not exercise the
     // "asking the hosts" line at all.
-    deviceParams[7] = { device: 7, name: 'Identity', params: [
+    deviceParams[paramKey(0, 7)] = { track: 0, device: 7, name: 'Identity', params: [
       { index: 0, value: 620, name: 'cutoff', display: '620 Hz' },
       { index: 1, value: 310, name: 'reso', display: '0.31' },
       { index: 2, value: 880, name: 'drive', display: '+8.8 dB' },
     ] };
-    deviceParams[12] = { device: 12, name: 'Valhalla Delay', params: [
+    deviceParams[paramKey(0, 12)] = { track: 0, device: 12, name: 'Valhalla Delay', params: [
       { index: 0, value: 187, name: 'time', display: '3/16' },
       { index: 1, value: 540, name: 'feedback', display: '0.54' },
     ] };
