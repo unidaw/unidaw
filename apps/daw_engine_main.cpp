@@ -1624,6 +1624,10 @@ struct TrackRuntime {
     std::mutex paramMirrorMutex;
     std::mutex controllerMutex;
     std::atomic<bool> active{false};
+    // v22 add/remove track: a tombstoned slot — the track was removed but its slot is kept
+    // so neighbours' ids don't renumber. Published with kUiTrackFlagAbsent, skipped by save
+    // and the mix, refillable by AddTrack. A live track has this false.
+    std::atomic<bool> removed{false};
     std::atomic<bool> mirrorPending{false};
     std::atomic<uint64_t> mirrorGateSampleTime{0};
     std::atomic<bool> mirrorPrimed{false};
@@ -2501,6 +2505,9 @@ struct TrackRuntime {
     // Mark as inactive immediately to stop audio callback from reading
     runtime.active.store(false, std::memory_order_release);
     runtime.hostReady.store(false, std::memory_order_release);
+    // Arming a host means this slot is a live track again — clear any v22 tombstone so a
+    // slot reused by load/ensureTrack/AddTrack isn't published absent.
+    runtime.removed.store(false, std::memory_order_release);
 
     std::lock_guard<std::mutex> lock(runtime.controllerMutex);
     runtime.controller.disconnect();
@@ -2874,6 +2881,7 @@ struct TrackRuntime {
         rt->auxBusChannelOffset.store(planeOffset, std::memory_order_relaxed);
         rt->auxBusChannelCount.store(b.channelCount, std::memory_order_relaxed);
         rt->childrenReconciled.store(false, std::memory_order_relaxed);
+        rt->removed.store(false, std::memory_order_release);  // reused slot is live again
         rt->isAuxChild.store(true, std::memory_order_release);  // last: makes it a child
         placed = true;
       } else if (childId == tracks.size()) {
@@ -4144,8 +4152,10 @@ struct TrackRuntime {
     for (auto* runtime : runtimes) {
       // Aux children are DERIVED from a multi-out plugin at load, never persisted —
       // saving one would reload as a phantom top-level track. Slots past the live count
-      // are leftovers of a larger project the user closed; skip those too.
+      // are leftovers of a larger project the user closed; skip those too. A tombstoned
+      // slot (v22 RemoveTrack) is a hole kept only to hold an id put — never persist it.
       if (runtime->isAuxChild.load(std::memory_order_acquire) ||
+          runtime->removed.load(std::memory_order_acquire) ||
           runtime->trackId >= liveTrackCount.load(std::memory_order_acquire)) {
         continue;
       }
@@ -6565,6 +6575,149 @@ struct TrackRuntime {
       const bool on =
           (payload.flags & daw::kPreviewNoteFlagOn) != 0 && velocity > 0;
       enqueuePreview(payload.trackId, pitch, velocity, on);
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::AddTrack)) {
+      // Append an empty top-level track at the current extent. Its id == slot index and is
+      // stable. Reuses a leftover/tombstone slot at the extent (bring up a bare host and
+      // blank it), else creates a fresh runtime. Refused at the cap.
+      const uint32_t slot = liveTrackCount.load(std::memory_order_acquire);
+      if (slot >= daw::kUiMaxTracks) {
+        std::cerr << "UI: AddTrack refused — at track cap " << daw::kUiMaxTracks
+                  << std::endl;
+      } else {
+        TrackRuntime* existing = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(tracksMutex);
+          if (slot < tracks.size()) {
+            existing = tracks[slot].get();
+          }
+        }
+        bool ok = true;
+        if (existing) {
+          ok = restartTrackHost(*existing, {});
+          if (ok) {
+            {
+              std::lock_guard<std::mutex> tlock(existing->trackMutex);
+              existing->track.chain = daw::TrackChain{};
+              existing->sourcePlacements.clear();
+              existing->ownedClips.clear();
+              existing->editableClipIds.clear();
+              existing->arrangementDirty.store(false, std::memory_order_relaxed);
+              existing->trackName = "Track " + std::to_string(slot + 1);
+              existing->trackSnapshot = buildTrackSnapshot(existing->track);
+            }
+            existing->isAuxChild.store(false, std::memory_order_release);
+            existing->parentId.store(0, std::memory_order_relaxed);
+            existing->collapsed.store(false, std::memory_order_relaxed);
+            existing->childrenReconciled.store(false, std::memory_order_relaxed);
+            existing->removed.store(false, std::memory_order_release);
+            auto snapshot = rebuildFlatAndPublish(*existing);
+            if (snapshot) {
+              std::atomic_store_explicit(&existing->clipSnapshot, snapshot,
+                                         std::memory_order_release);
+            }
+          }
+        } else {
+          auto rt = setupTrackRuntime(slot, "", false, true);
+          if (!rt) {
+            ok = false;
+          } else {
+            std::lock_guard<std::mutex> lock(tracksMutex);
+            tracks.push_back(std::move(rt));
+          }
+        }
+        if (ok) {
+          uint32_t seen = liveTrackCount.load(std::memory_order_relaxed);
+          while (slot + 1 > seen &&
+                 !liveTrackCount.compare_exchange_weak(seen, slot + 1,
+                                                       std::memory_order_relaxed)) {
+          }
+          std::cout << "UI: AddTrack -> track " << slot << std::endl;
+        } else {
+          std::cerr << "UI: AddTrack failed to bring up track " << slot << std::endl;
+        }
+      }
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::RemoveTrack)) {
+      // Tombstone the target track (stable id == slot) + its aux children. The slot is
+      // kept (kUiTrackFlagAbsent) so neighbours keep their ids; trailing tombstones are
+      // trimmed so removing from the end shrinks the extent. Rejects a child id.
+      const uint32_t targetId = payload.trackId;
+      std::vector<TrackRuntime*> toRemove;
+      bool rejected = false;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        for (auto& rt : tracks) {
+          if (!rt) {
+            continue;
+          }
+          const bool isChild = rt->isAuxChild.load(std::memory_order_acquire);
+          if (rt->trackId == targetId) {
+            if (isChild) {
+              rejected = true;
+              break;
+            }
+            toRemove.push_back(rt.get());
+          } else if (isChild &&
+                     rt->auxParentTrackId.load(std::memory_order_relaxed) == targetId) {
+            toRemove.push_back(rt.get());
+          }
+        }
+      }
+      if (rejected) {
+        std::cerr << "UI: RemoveTrack rejected — track " << targetId
+                  << " is an aux child (managed via its parent's buses)" << std::endl;
+      } else if (toRemove.empty()) {
+        std::cerr << "UI: RemoveTrack — no track with id " << targetId << std::endl;
+      } else {
+        for (TrackRuntime* rt : toRemove) {
+          // Tear the host down and blank the track, mirroring the load-clear sequence, then
+          // mark it a tombstone. Runs on the command thread with no tracksMutex held, so
+          // taking controllerMutex is safe.
+          {
+            std::lock_guard<std::mutex> clock(rt->controllerMutex);
+            rt->needsRestart.store(false, std::memory_order_release);
+            rt->hostReady.store(false, std::memory_order_release);
+            rt->active.store(false, std::memory_order_release);
+            rt->hostGaveUp.store(false, std::memory_order_release);
+            rt->watchdog.reset();
+            rt->controller.disconnect();
+            rt->config.pluginPaths.clear();
+            rt->config.pluginNames.clear();
+            rt->lastAuxOutMask = 0;
+            rt->lastSidechainMask = 0;
+          }
+          {
+            std::lock_guard<std::mutex> tlock(rt->trackMutex);
+            rt->track.chain = daw::TrackChain{};
+            rt->sourcePlacements.clear();
+            rt->ownedClips.clear();
+            rt->editableClipIds.clear();
+            rt->arrangementDirty.store(false, std::memory_order_relaxed);
+          }
+          rt->isAuxChild.store(false, std::memory_order_release);
+          rt->parentId.store(0, std::memory_order_relaxed);
+          rt->childrenReconciled.store(false, std::memory_order_relaxed);
+          rt->removed.store(true, std::memory_order_release);
+        }
+        // Trim trailing tombstones so a remove-from-the-end shrinks the extent (and the
+        // freed slot is reused by the next AddTrack).
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        uint32_t extent = liveTrackCount.load(std::memory_order_relaxed);
+        while (extent > 0) {
+          const uint32_t last = extent - 1;
+          if (last < tracks.size() && tracks[last] &&
+              tracks[last]->removed.load(std::memory_order_acquire)) {
+            extent = last;
+          } else {
+            break;
+          }
+        }
+        liveTrackCount.store(extent, std::memory_order_release);
+        std::cout << "UI: RemoveTrack " << targetId << " (+"
+                  << (toRemove.size() - 1) << " children), extent now " << extent
+                  << std::endl;
+      }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::TogglePlay)) {
       const bool next = !playing.load(std::memory_order_acquire);
@@ -10222,8 +10375,18 @@ struct TrackRuntime {
             if (trackSnapshot[i]->isAuxChild.load(std::memory_order_relaxed)) {
               trackFlags |= static_cast<uint8_t>(daw::kUiTrackFlagHasParent);
             }
+            // v22: a removed slot inside the extent is a tombstone — the reader keeps its
+            // id put and skips it rather than drawing a phantom lane.
+            if (trackSnapshot[i]->removed.load(std::memory_order_relaxed)) {
+              trackFlags |= static_cast<uint8_t>(daw::kUiTrackFlagAbsent);
+            }
           }
           uiShm.header->uiTrackFlags[i] = trackFlags;
+          // v22: the STABLE per-slot id. It equals the slot index today (the engine never
+          // renumbers a slot), but publishing it explicitly is the identity contract the UI
+          // keys on — never the flat visual position, which moves as tombstones open/close.
+          uiShm.header->uiTrackId[i] =
+              i < trackSnapshot.size() ? trackSnapshot[i]->trackId : i;
           // Per-track output peak the audio thread measured this block (0 for
           // absent/silent tracks). Slot i == track i, matching the mixer fields.
           uiShm.header->uiTrackPeakRms[i] =

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 21;
+pub const K_SHM_VERSION: u16 = 22;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
@@ -120,6 +120,11 @@ pub struct ShmHeader {
     // header's tail padding, so sizeof(ShmHeader) stays 640.
     pub ui_track_parent_id: [u32; K_UI_MAX_TRACKS],
     pub ui_track_flags: [u8; K_UI_MAX_TRACKS],
+    // v22: a STABLE per-slot track id. The engine never renumbers a slot (RemoveTrack
+    // tombstones it via UI_TRACK_FLAG_ABSENT, AddTrack refills the lowest tombstone or
+    // appends), so ui_track_count is the EXTENT: iterate 0..count, SKIP absent slots, and
+    // key selection/cursor/caches on ui_track_id — never the flat visual position.
+    pub ui_track_id: [u32; K_UI_MAX_TRACKS],
 }
 
 /// uiTrackFlags bits (Movement 4).
@@ -127,6 +132,9 @@ pub const UI_TRACK_FLAG_COLLAPSED: u8 = 1 << 0;
 /// Set when ui_track_parent_id is meaningful; without it, parent_id 0 is ambiguous
 /// (top-level vs child of track 0).
 pub const UI_TRACK_FLAG_HAS_PARENT: u8 = 1 << 1;
+/// v22: this slot is a tombstone — a removed track whose id is retired but whose slot is
+/// kept so neighbours don't renumber. Skip absent slots when drawing/iterating.
+pub const UI_TRACK_FLAG_ABSENT: u8 = 1 << 2;
 
 /// v14: a published patcher-graph node. `config` is type-interpreted (see the C++
 /// UiPatcherNode doc): Euclidean/RandomDegree ints; Lfo floats as milli-units.
@@ -561,6 +569,12 @@ pub enum UiCommandType {
     /// Reuses UiCommandPayload: trackId, note_pitch = pitch, value0 = velocity,
     /// flags bit0 = on. Held, out of band — never recorded, undoable, or dirtying.
     PreviewNote = 45,
+    /// Append an empty top-level track at the current extent (v1: append only). The new
+    /// track's id == its stable slot; RemoveTrack never renumbers neighbours.
+    AddTrack = 46,
+    /// Remove the track whose stable id is in trackId, tombstoning its slot
+    /// (UI_TRACK_FLAG_ABSENT). Takes its aux children with it; rejects a child id.
+    RemoveTrack = 47,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -914,7 +928,7 @@ mod tests {
 
     #[test]
     fn shm_header_layout_matches_cpp() {
-        const_assert_eq!(size_of::<ShmHeader>(), 3072); // v21: kUiMaxTracks 8 -> 64
+        const_assert_eq!(size_of::<ShmHeader>(), 3328); // v22: + ui_track_id[64]
         const_assert_eq!(align_of::<ShmHeader>(), 64);
         assert_eq!(offset_of!(ShmHeader, ring_std_offset), 56);
         assert_eq!(offset_of!(ShmHeader, ring_ctrl_offset), 64);
@@ -959,6 +973,7 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_song_time_sig_den), 2724);
         assert_eq!(offset_of!(ShmHeader, ui_track_parent_id), 2728); // v20
         assert_eq!(offset_of!(ShmHeader, ui_track_flags), 2984);
+        assert_eq!(offset_of!(ShmHeader, ui_track_id), 3048); // v22 (appended at the end)
         // The scale + device-param region structs (v16/v17) are now generated from
         // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
