@@ -368,22 +368,61 @@ class JucePluginInstance final : public IPluginInstance {
 
     instance_->setPlayHead(&playHead_);
     instance_->setNonRealtime(false);
-    juce::AudioProcessor::BusesLayout layout;
-    const int inputChannels = instance_->getTotalNumInputChannels();
-    if (numOutputs == 1) {
-      layout.outputBuses.add(juce::AudioChannelSet::mono());
-      if (inputChannels > 0) {
-        layout.inputBuses.add(juce::AudioChannelSet::mono());
-      }
-    } else if (numOutputs >= 2) {
-      layout.outputBuses.add(juce::AudioChannelSet::stereo());
-      if (inputChannels > 0) {
-        layout.inputBuses.add(juce::AudioChannelSet::stereo());
-      }
+
+    // Negotiate against the plugin's REAL bus topology (Movement 4 foundation).
+    // The old code built a fixed one-input/one-output mono-or-stereo BusesLayout and
+    // ignored setBusesLayout's return, so a multi-bus plugin (a multi-out instrument's
+    // aux stems, an effect's sidechain input) silently kept its own layout while the
+    // host still assumed `numOutputs` channels. Now we start from the plugin's current
+    // layout — which has one entry per declared bus — set the MAIN in/out bus to the
+    // host width, disable every non-main bus for now (aux outs, sidechain in; later
+    // phases enable + route them), and honour the result: if the plugin rejects the
+    // layout (e.g. a fixed bus it cannot disable), fall back to its own default so it
+    // still runs rather than silently mismatching.
+    const juce::AudioChannelSet mainSet = numOutputs == 1
+                                              ? juce::AudioChannelSet::mono()
+                                              : juce::AudioChannelSet::stereo();
+    const bool wantsInput = instance_->getTotalNumInputChannels() > 0;
+    juce::AudioProcessor::BusesLayout layout = instance_->getBusesLayout();
+    for (int b = 0; b < layout.outputBuses.size(); ++b) {
+      layout.outputBuses.getReference(b) =
+          b == 0 ? mainSet : juce::AudioChannelSet::disabled();
     }
-    instance_->enableAllBuses();
-    instance_->setBusesLayout(layout);
-    instance_->setPlayConfigDetails(inputChannels, numOutputs, sampleRate, blockSize);
+    for (int b = 0; b < layout.inputBuses.size(); ++b) {
+      layout.inputBuses.getReference(b) =
+          (b == 0 && wantsInput) ? mainSet : juce::AudioChannelSet::disabled();
+    }
+    const bool layoutApplied = instance_->setBusesLayout(layout);
+    if (!layoutApplied) {
+      instance_->enableAllBuses();  // plugin rejected it — keep its own default
+    }
+    instance_->setPlayConfigDetails(instance_->getTotalNumInputChannels(),
+                                    instance_->getTotalNumOutputChannels(),
+                                    sampleRate, blockSize);
+
+    // Observability for the bus foundation: report the plugin's real topology + the
+    // negotiated result so a multi-bus plugin (multi-out instrument, sidechain effect)
+    // is visible in the host log. One line at prepare (load), off the RT path. This is
+    // the data phase 2 will put on the wire.
+    {
+      const int outBuses = instance_->getBusCount(false);
+      const int inBuses = instance_->getBusCount(true);
+      std::cerr << "plugin buses: \"" << instance_->getName().toStdString()
+                << "\" applied=" << (layoutApplied ? 1 : 0) << " out[" << outBuses
+                << "]=";
+      for (int b = 0; b < outBuses; ++b) {
+        const auto* bus = instance_->getBus(false, b);
+        std::cerr << (b ? "," : "") << instance_->getChannelCountOfBus(false, b)
+                  << (bus && bus->isEnabled() ? "" : "(off)");
+      }
+      std::cerr << " in[" << inBuses << "]=";
+      for (int b = 0; b < inBuses; ++b) {
+        const auto* bus = instance_->getBus(true, b);
+        std::cerr << (b ? "," : "") << instance_->getChannelCountOfBus(true, b)
+                  << (bus && bus->isEnabled() ? "" : "(off)");
+      }
+      std::cerr << std::endl;
+    }
     if (instance_->getNumPrograms() > 0) {
       instance_->setCurrentProgram(0);
     }
