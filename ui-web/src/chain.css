@@ -189,3 +189,21 @@
 /* More buses than the wire's cap of 32. This one never resolves, so it is marked
    rather than dimmed: the list on screen is genuinely incomplete. */
 .dv-bus.trunc { color: var(--uni-text-warn, var(--uni-text-fx)); opacity: 1; }
+
+/* Open the plugin's own window. Quiet until you want it: the rack is for reading
+   a chain at a glance, and a loud button on every card would compete with the
+   device names for the eye. */
+.dv-open {
+  position: absolute; top: 6px; right: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-fx);
+  background: transparent;
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 3px;
+  padding: 1px 5px;
+  cursor: pointer;
+  opacity: .5;
+}
+.dv-open:hover { opacity: 1; border-color: var(--base-accent); color: var(--base-accent); }

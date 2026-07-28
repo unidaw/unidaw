@@ -660,6 +660,8 @@ const harmonyBuf = createHarmonyBuffer();
 
 const chainHost = document.getElementById('chain');
 const chain = new Chain(chainHost, {
+  // The same path the `editor` command takes, not a second one.
+  onOpenEditor: ({ track, device }) => dockApi.openEditor(track, device),
   onSelect: (pos) => {
     state.chainSelected = pos;
     // A patcher device's card is a way INTO its graph. Selecting one and having

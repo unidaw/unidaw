@@ -63,10 +63,11 @@ export class Chain {
    * falsey return leaves the bar where the plugin says it is and puts the reason
    * on the strip, rather than showing a value nobody has accepted.
    */
-  constructor(host, { onSelect, onAdd, onParam } = {}) {
+  constructor(host, { onSelect, onAdd, onParam, onOpenEditor } = {}) {
     this.host = host;
     this.host.className = 'dv';
     this.onSelect = onSelect;
+    this.onOpenEditor = onOpenEditor;
     this.onAdd = onAdd;
     this.onParam = onParam;
 
@@ -211,6 +212,25 @@ export class Chain {
       // footer because the two answer different questions — the footer is where the
       // device sits in the chain, this is what it can route — and because it is the
       // one line that changes when a plugin renegotiates its layout.
+      /**
+       * Open the plugin's own window.
+       *
+       * The engine has accepted OpenPluginEditor since before this UI existed and
+       * nothing ever sent it — "how do I open the plugin UI" had the answer "you
+       * can't", for a capability that was already there. A command reached it
+       * first; a command you have to know the name and the device id of is only
+       * half-reachable, so it gets the button it should always have had.
+       *
+       * Only meaningful for a device with an editor, and the rack does not know
+       * which those are — the engine publishes no has_editor flag. Shown for all
+       * of them rather than guessed at: a button that does nothing on a device
+       * with no window is a smaller lie than a missing button on one that has.
+       */
+      const open = document.createElement('button');
+      open.className = 'dv-open';
+      open.title = 'Open the plugin\'s own window';
+      open.appendChild(document.createTextNode('open'));
+      el.append(open);
       const bus = div('dv-bus', el);
       el._busEl = bus;
       el._badge = text(badge);
@@ -233,6 +253,17 @@ export class Chain {
   _down(e) {
     if (e.target.closest('.dv-add')) {
       if (this.onAdd) this.onAdd(this.vm ? this.vm.track : -1);
+      return;
+    }
+    // Before the card's own select: the button is inside the card, so a click on
+    // it is also a click on the card, and selecting underneath would be a second
+    // thing happening that nobody asked for.
+    const opener = e.target.closest('.dv-open');
+    if (opener) {
+      const c = opener.closest('.dv-card');
+      if (c && this.onOpenEditor) {
+        this.onOpenEditor({ track: this.vm ? this.vm.track : -1, device: c._devId });
+      }
       return;
     }
     const card = e.target.closest('.dv-card');

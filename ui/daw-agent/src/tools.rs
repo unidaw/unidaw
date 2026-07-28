@@ -125,6 +125,74 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             description: "Redo the last undone note/chord edit.",
             params: json!({ "type": "object", "properties": {} }),
         },
+        // The document operations. Until these existed an agent could add a note
+        // and not remove one, set no tempo, and touch no fader — so "make the bass
+        // quieter" had nothing under it and the model had to say so.
+        ToolSpec {
+            name: "delete_note",
+            description: "Delete the note at a tick on a track. Ticks are absolute nanoticks;                           960000 per quarter note.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "tick"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "tick": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "set_tempo",
+            description: "Set the tempo in BPM. With no tick the whole song becomes this tempo;                           with a tick it inserts a tempo change at that point.",
+            params: json!({
+                "type": "object",
+                "required": ["bpm"],
+                "properties": {
+                    "bpm": { "type": "number", "minimum": 10, "maximum": 1000 },
+                    "tick": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "set_mixer",
+            description: "Set a track's gain, pan, mute or solo. Gain is in dB (0 is unity,                           negative is quieter); pan is -1 hard left to 1 hard right.",
+            params: json!({
+                "type": "object",
+                "required": ["track"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "gain_db": { "type": "number", "minimum": -60, "maximum": 12 },
+                    "pan": { "type": "number", "minimum": -1, "maximum": 1 },
+                    "mute": { "type": "boolean" },
+                    "solo": { "type": "boolean" },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "set_loop",
+            description: "Set the loop range, in absolute nanoticks. The end must be after                           the start.",
+            params: json!({
+                "type": "object",
+                "required": ["start", "end"],
+                "properties": {
+                    "start": { "type": "integer", "minimum": 0 },
+                    "end": { "type": "integer", "minimum": 1 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "preview_note",
+            description: "Sound a pitch on a track WITHOUT writing it — for auditioning.                           Held: send on=true, then on=false for the same pitch to release it.",
+            params: json!({
+                "type": "object",
+                "required": ["pitch"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "pitch": { "type": "integer", "minimum": 0, "maximum": 127 },
+                    "velocity": { "type": "integer", "minimum": 1, "maximum": 127 },
+                    "on": { "type": "boolean" },
+                },
+            }),
+        },
     ]
 }
 
@@ -154,6 +222,11 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "set_track_name" => set_track_name(handle, &call.args),
         "undo" => undo_redo(handle, UiCommandType::Undo),
         "redo" => undo_redo(handle, UiCommandType::Redo),
+        "delete_note" => delete_note(handle, &call.args),
+        "set_tempo" => set_tempo(handle, &call.args),
+        "set_mixer" => set_mixer(handle, &call.args),
+        "set_loop" => set_loop(handle, &call.args),
+        "preview_note" => preview_note(handle, &call.args),
         other => ToolResult::err(format!("unknown tool {other:?}")),
     }
 }
@@ -232,6 +305,135 @@ fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
 // stack; the agent just sends the command tagged with the current clip version and
 // waits for the one-version bump a store swap produces. `applied=false` means the
 // stack was empty (nothing happened), never a silent error.
+/// One command with no arguments beyond a track and a tick, sent and awaited.
+///
+/// Every document tool below has the same shape — build a payload, send it, wait
+/// for the clip version to move — so it is written once. The alternative is nine
+/// copies of a twelve-field struct literal, and nine chances for one field to be
+/// wrong in a way nothing catches: `base_version` in particular, which is what
+/// makes an edit reconcile rather than race.
+fn send_edit(handle: &EngineHandle, mut p: UiCommandPayload, out: Value) -> ToolResult {
+    let base = handle.clip_version();
+    p.base_version = base;
+    if let Err(e) = handle.send_command(p) {
+        return ToolResult::err(e);
+    }
+    let applied =
+        handle.wait_for_clip_version(base, base.wrapping_add(1), std::time::Duration::from_secs(2));
+    let mut v = out;
+    if let Value::Object(ref mut m) = v {
+        m.insert("applied".into(), json!(applied));
+    }
+    ToolResult::ok(v)
+}
+
+/// A payload with everything zeroed but the command. The struct has twelve fields
+/// and most tools set three of them.
+fn blank(cmd: UiCommandType) -> UiCommandPayload {
+    UiCommandPayload {
+        command_type: cmd as u16,
+        flags: 0, track_id: 0, plugin_index: 0, note_pitch: 0, value0: 0,
+        note_nanotick_lo: 0, note_nanotick_hi: 0,
+        note_duration_lo: 0, note_duration_hi: 0, base_version: 0,
+    }
+}
+
+fn delete_note(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("delete_note needs \"track\"");
+    };
+    let Some(tick) = arg_u64(args, "tick") else {
+        return ToolResult::err("delete_note needs \"tick\"");
+    };
+    let mut p = blank(UiCommandType::DeleteNote);
+    p.track_id = track as u32;
+    p.note_nanotick_lo = (tick & 0xffff_ffff) as u32;
+    p.note_nanotick_hi = (tick >> 32) as u32;
+    send_edit(handle, p, json!({ "deleted": { "track": track, "tick": tick } }))
+}
+
+fn set_tempo(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(bpm) = args.get("bpm").and_then(|v| v.as_f64()) else {
+        return ToolResult::err("set_tempo needs \"bpm\"");
+    };
+    if !(10.0..=1000.0).contains(&bpm) {
+        return ToolResult::err("tempo must be between 10 and 1000 BPM");
+    }
+    let mut p = blank(UiCommandType::SetTempo);
+    p.value0 = (bpm * 1000.0).round() as u32;
+    // flags 1 = flatten the map to this one tempo, which is what "set the tempo"
+    // means with no position given. A tick makes it a point instead.
+    match arg_u64(args, "tick") {
+        Some(t) => {
+            p.note_nanotick_lo = (t & 0xffff_ffff) as u32;
+            p.note_nanotick_hi = (t >> 32) as u32;
+        }
+        None => p.flags = 1,
+    }
+    send_edit(handle, p, json!({ "bpm": bpm }))
+}
+
+fn set_mixer(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("set_mixer needs \"track\"");
+    };
+    let mut p = blank(UiCommandType::SetTrackMixer);
+    p.track_id = track as u32;
+    // Gain in millibels and pan in thousandths, as the engine carries them; the
+    // tool takes dB and -1..1 because that is what a caller means, and converting
+    // here keeps the unit confusion in one place rather than in every prompt.
+    let gain_db = args.get("gain_db").and_then(|v| v.as_f64());
+    let pan = args.get("pan").and_then(|v| v.as_f64());
+    let mute = args.get("mute").and_then(|v| v.as_bool());
+    let solo = args.get("solo").and_then(|v| v.as_bool());
+    if gain_db.is_none() && pan.is_none() && mute.is_none() && solo.is_none() {
+        return ToolResult::err("set_mixer needs at least one of gain_db, pan, mute, solo");
+    }
+    let millibels = (gain_db.unwrap_or(0.0) * 100.0).round() as i32;
+    let thousandths = (pan.unwrap_or(0.0).clamp(-1.0, 1.0) * 1000.0).round() as i32;
+    p.value0 = millibels as u32;
+    p.note_pitch = thousandths as u32;
+    p.flags = (if mute.unwrap_or(false) { 1 } else { 0 })
+            | (if solo.unwrap_or(false) { 2 } else { 0 });
+    send_edit(handle, p, json!({
+        "track": track, "gain_db": gain_db, "pan": pan, "mute": mute, "solo": solo }))
+}
+
+fn set_loop(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(start), Some(end)) = (arg_u64(args, "start"), arg_u64(args, "end")) else {
+        return ToolResult::err("set_loop needs \"start\" and \"end\" in nanoticks");
+    };
+    if end <= start {
+        return ToolResult::err("the loop's end must be after its start");
+    }
+    let mut p = blank(UiCommandType::SetLoopRange);
+    p.note_nanotick_lo = (start & 0xffff_ffff) as u32;
+    p.note_nanotick_hi = (start >> 32) as u32;
+    p.note_duration_lo = (end & 0xffff_ffff) as u32;
+    p.note_duration_hi = (end >> 32) as u32;
+    send_edit(handle, p, json!({ "start": start, "end": end }))
+}
+
+/// Sound a pitch WITHOUT writing it (kUiCommandType 45).
+///
+/// Deliberately not awaited on the clip version: a preview never touches the clip
+/// store, so waiting for a version that will not move would block for the timeout
+/// and then report `applied: false` about a note that played perfectly.
+fn preview_note(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(pitch) = arg_u64(args, "pitch").filter(|p| *p <= 127) else {
+        return ToolResult::err("preview_note needs \"pitch\" in 0..127");
+    };
+    let mut p = blank(UiCommandType::PreviewNote);
+    p.track_id = arg_u64(args, "track").unwrap_or(0) as u32;
+    p.note_pitch = pitch as u32;
+    p.value0 = arg_u64(args, "velocity").unwrap_or(100).min(127) as u32;
+    p.flags = if args.get("on").and_then(|v| v.as_bool()).unwrap_or(true) { 1 } else { 0 };
+    match handle.send_command(p) {
+        Ok(()) => ToolResult::ok(json!({ "pitch": pitch, "on": p.flags == 1 })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 fn undo_redo(handle: &EngineHandle, cmd: UiCommandType) -> ToolResult {
     let base = handle.clip_version();
     let payload = UiCommandPayload {
@@ -386,19 +588,29 @@ mod tests {
 
     #[test]
     fn every_manifest_tool_has_a_dispatch_arm() {
+        // The arms are read from execute() ITSELF rather than copied into a second
+        // list here. The copy is what this test used to be, and it is the shape it
+        // exists to prevent: adding a tool to the manifest and to the dispatch left
+        // the test's private list stale, so it failed on a tool that was in fact
+        // wired. A test that keeps its own copy of the thing it checks is checking
+        // the copy.
+        let src = include_str!("tools.rs");
+        let body = &src[src.find("pub fn execute(").expect("execute exists")..];
+        let body = &body[..body.find("\n}").expect("execute ends")];
+        let arms: Vec<&str> = body
+            .match_indices("\" =>")
+            .filter_map(|(i, _)| {
+                let head = &body[..i];
+                head.rfind('"').map(|q| &head[q + 1..])
+            })
+            .collect();
+        assert!(arms.len() > 5, "execute()'s arms were parsed: {arms:?}");
         // execute must recognize every advertised tool. We can't touch the engine
         // here, so we only assert the tool is not reported "unknown"; a missing
         // required arg is an acceptable (recognized) error.
         for spec in tool_manifest() {
-            let call = ToolCall { tool: spec.name.to_string(), args: json!({}) };
-            // Route only through the arg-independent recognition: an unknown tool
-            // yields exactly the "unknown tool" message.
-            let recognized = match call.tool.as_str() {
-                "observe" | "add_notes" | "transport" | "save" | "load"
-                | "set_track_name" | "undo" | "redo" => true,
-                _ => false,
-            };
-            assert!(recognized, "manifest tool {:?} has no dispatch arm", spec.name);
+            assert!(arms.contains(&spec.name),
+                    "manifest tool {:?} has no dispatch arm in execute()", spec.name);
         }
     }
 
