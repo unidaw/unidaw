@@ -331,6 +331,27 @@ fn flag_f64(args: &[String], key: &str, default: f64) -> Result<f64, String> {
     }
 }
 
+fn preview_command(args: &[String]) -> Result<UiCommandPayload, String> {
+    let track = flag_u64(args, "--track", Some(0))? as u32;
+    let pitch = flag_u64(args, "--pitch", Some(60))?.min(127) as u32;
+    let velocity = flag_u64(args, "--velocity", Some(100))?.min(127) as u32;
+    // --on 1 = note-on (default), --on 0 = note-off for this pitch.
+    let on = flag_u64(args, "--on", Some(1))? != 0;
+    Ok(UiCommandPayload {
+        command_type: UiCommandType::PreviewNote as u16,
+        flags: if on { daw_bridge::layout::PREVIEW_NOTE_FLAG_ON } else { 0 },
+        track_id: track,
+        plugin_index: 0,
+        note_pitch: pitch,
+        value0: velocity,
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    })
+}
+
 fn mixer_command(args: &[String]) -> Result<UiCommandPayload, String> {
     let track = flag_u64(args, "--track", Some(0))? as u32;
     let gain_db = flag_f64(args, "--gain-db", 0.0)?;
@@ -883,6 +904,22 @@ fn main() {
                         }
                     }
                 }
+                Some(&"preview") => match preview_command(&args) {
+                    Ok(payload) => match handle.send_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"preview\" }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("daw-cli: {err}");
+                        2
+                    }
+                },
                 Some(&"notes") => write_notes(&handle, &args),
                 Some(&"mixer") => match mixer_command(&args) {
                     Ok(payload) => match handle.send_command(payload) {

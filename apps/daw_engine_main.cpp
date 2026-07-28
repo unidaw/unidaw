@@ -32,6 +32,7 @@
 #include "apps/audio_shm.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
+#include "apps/rt_thread.h"
 #include "apps/host_controller.h"
 #include "apps/plugin_cache.h"
 #include "apps/patcher_abi.h"
@@ -421,6 +422,10 @@ public:
         m_startTime(std::chrono::steady_clock::now()),
         m_lastPlayedBlockId(0) {
     m_audioScratch.assign(blockSize, 0.0f);
+    // Preallocate the widest possible master (surround on a narrower device), so the
+    // audio thread never allocates when a wider master is active.
+    m_masterBuffer.assign(static_cast<size_t>(kMaxMasterChannels) * blockSize, 0.0f);
+    m_masterPtrs.assign(kMaxMasterChannels, nullptr);
     // Preallocate the PDC delay rings once, here off the audio thread. Zero-filled so
     // a slot whose compensation engages before it has pushed a full ring reads silence,
     // not garbage. Sized [slots][channels][capacity].
@@ -431,15 +436,34 @@ public:
   void process(float* const* outputChannelData,
                int numOutputChannels,
                int numSamples) {
-    // Clear output buffers
-    for (int ch = 0; ch < numOutputChannels; ++ch) {
-      if (outputChannelData[ch]) {
-        std::memset(outputChannelData[ch], 0, numSamples * sizeof(float));
+    if (numSamples != (int)m_blockSize) {
+      for (int ch = 0; ch < numOutputChannels; ++ch) {
+        if (outputChannelData[ch]) {
+          std::memset(outputChannelData[ch], 0, numSamples * sizeof(float));
+        }
       }
+      return;
     }
 
-    if (numSamples != (int)m_blockSize) {
-      return;
+    // Movement 4 surround: choose the effective master. When m_masterChannels is wider
+    // than the audio device, the mix runs into the virtual m_masterBuffer and is
+    // downmixed to the device at the end (the testing path); a real surround device
+    // mixes straight into its own buffers at its own channel count.
+    float* const* master = outputChannelData;
+    int masterCh = numOutputChannels;
+    const bool virtualMaster = m_masterChannels > numOutputChannels;
+    if (virtualMaster) {
+      masterCh = std::min<int>(m_masterChannels, static_cast<int>(kMaxMasterChannels));
+      for (int ch = 0; ch < masterCh; ++ch) {
+        m_masterPtrs[ch] =
+            m_masterBuffer.data() + static_cast<size_t>(ch) * m_blockSize;
+      }
+      master = m_masterPtrs.data();
+    }
+    for (int ch = 0; ch < masterCh; ++ch) {
+      if (master[ch]) {
+        std::memset(master[ch], 0, numSamples * sizeof(float));
+      }
     }
 
     if (m_resetPending.exchange(false, std::memory_order_acq_rel)) {
@@ -492,6 +516,8 @@ public:
 
     bool hasActiveTrack = false;
     bool playedBlock = false;
+    bool starvedThisCallback = false;  // an active track's block wasn't ready yet
+    uint32_t starveGap = 0;            // how many blocks short the worst track was
 
     // Solo is exclusive across the whole bus, so it has to be resolved before
     // any track is summed.
@@ -539,6 +565,14 @@ public:
 
       // Check if the block we want is ready
       if (completed < nextBlockToPlay) {
+        // Starve: this active track owes us nextBlockToPlay but has only rendered up
+        // to `completed`. The track contributes silence this callback (a dropout).
+        // Record the shortfall so a reporter can quantify glitching.
+        starvedThisCallback = true;
+        const uint32_t gap = nextBlockToPlay - completed;
+        if (gap > starveGap) {
+          starveGap = gap;
+        }
         continue;
       }
 
@@ -571,7 +605,7 @@ public:
       const uint64_t planeBase = track.planeByteOffset;
       const uint32_t planeStrideCh = track.planeStrideChannels;
       const int mixChanCount = static_cast<int>(track.mixChannelCount);
-      for (int ch = 0; ch < std::min(numOutputChannels, mixChanCount); ++ch) {
+      for (int ch = 0; ch < std::min(masterCh, mixChanCount); ++ch) {
         // Extra safety checks
         if (!track.shmView || !track.shmBase || !track.header) {
           break;
@@ -594,7 +628,7 @@ public:
           continue;
         }
 
-        float* output = outputChannelData[ch];
+        float* output = master[ch];
         if (!output) {
           continue;
         }
@@ -603,14 +637,25 @@ public:
             track.gainLinear ? track.gainLinear->load(std::memory_order_relaxed) : 1.0f;
         const float pan =
             track.pan ? track.pan->load(std::memory_order_relaxed) : 0.0f;
-        // Constant power: a centred track is -3 dB per side rather than
-        // getting louder when panned hard.
-        const float angle = (std::clamp(pan, -1.0f, 1.0f) + 1.0f) * 0.25f *
-                            static_cast<float>(M_PI);
-        // cos/sin give the conventional -3 dB per side at centre, so total
-        // power is constant as the track is panned.
-        const float panGain = (ch == 0) ? std::cos(angle) : std::sin(angle);
-        const float channelGain = gain * (numOutputChannels >= 2 ? panGain : 1.0f);
+        // Layout-aware placement onto an N-channel master (Movement 4 surround):
+        //  - a MULTICHANNEL source (a plugin/child whose output is already a surround
+        //    bus) maps channel i -> master channel i at unity — it is already placed, so
+        //    a stereo pan law would smear it;
+        //  - a STEREO source pans across the master's front L/R (channels 0/1) with the
+        //    conventional constant-power cos/sin (-3 dB per side at centre); the other
+        //    master channels (centre, LFE, surrounds) get nothing, which is the correct
+        //    phantom-centre behaviour for a stereo track;
+        //  - a MONO source (or a mono master) is unity on its single channel.
+        float channelGain;
+        if (mixChanCount >= 3) {
+          channelGain = gain;
+        } else if (masterCh >= 2 && mixChanCount == 2) {
+          const float angle = (std::clamp(pan, -1.0f, 1.0f) + 1.0f) * 0.25f *
+                              static_cast<float>(M_PI);
+          channelGain = gain * ((ch == 0) ? std::cos(angle) : std::sin(angle));
+        } else {
+          channelGain = gain;
+        }
 
         // Per-track gain and constant-power pan. The old code multiplied every
         // track by a fixed 0.5 to hide clipping, which made the summing bus a
@@ -719,14 +764,17 @@ public:
                                       region.sourceFrames,
                                       static_cast<int64_t>(m_transportSample),
                                       numSamples, m_audioScratch.data());
-          for (int ch = 0; ch < numOutputChannels; ++ch) {
-            float* output = outputChannelData[ch];
+          // An audio clip is a mono source: place it in the master's front L/R phantom
+          // (constant-power cos/sin), leaving centre/LFE/surrounds silent on an
+          // N-channel master rather than smearing the mono into every channel.
+          for (int ch = 0; ch < std::min(masterCh, 2); ++ch) {
+            float* output = master[ch];
             if (!output) {
               continue;
             }
             const float panGain = (ch == 0) ? std::cos(angle) : std::sin(angle);
             const float channelGain =
-                gain * (numOutputChannels >= 2 ? panGain : 1.0f);
+                gain * (masterCh >= 2 ? panGain : 1.0f);
             for (int i = 0; i < numSamples; ++i) {
               output[i] += m_audioScratch[i] * channelGain;
             }
@@ -736,11 +784,34 @@ public:
       m_transportSample += static_cast<uint64_t>(numSamples);
     }
 
-    captureMasterOutput(outputChannelData, numOutputChannels, numSamples);
+    // Capture the FULL master (all N channels) so a surround mix is verifiable, then, if
+    // the master is wider than the device, downmix its first device-many channels to the
+    // hardware so a stereo device still hears the front L/R.
+    captureMasterOutput(master, masterCh, numSamples);
+    if (virtualMaster) {
+      for (int ch = 0; ch < numOutputChannels; ++ch) {
+        if (outputChannelData[ch] && ch < masterCh && master[ch]) {
+          std::memcpy(outputChannelData[ch], master[ch],
+                      static_cast<size_t>(numSamples) * sizeof(float));
+        }
+      }
+    }
 
     // Advance playback clock even if tracks are late to avoid global stalls.
     if (playedBlock || hasActiveTrack) {
       m_lastPlayedBlockId = nextBlockToPlay;
+    }
+
+    // Underrun telemetry: count callbacks that had work to play and, of those, how many
+    // dropped at least one track because its block hadn't been rendered in time.
+    if (hasActiveTrack) {
+      m_activeCallbacks.fetch_add(1, std::memory_order_relaxed);
+      if (starvedThisCallback) {
+        m_starveCallbacks.fetch_add(1, std::memory_order_relaxed);
+        if (starveGap > m_worstStarveGap.load(std::memory_order_relaxed)) {
+          m_worstStarveGap.store(starveGap, std::memory_order_relaxed);
+        }
+      }
     }
   }
 
@@ -755,6 +826,17 @@ public:
 
   bool capturing() const { return !m_capture.empty(); }
   int captureChannels() const { return m_captureChannels; }
+
+  // Underrun telemetry snapshot for a low-priority reporter (see the members below).
+  uint64_t starveCallbacks() const {
+    return m_starveCallbacks.load(std::memory_order_relaxed);
+  }
+  uint64_t activeCallbacks() const {
+    return m_activeCallbacks.load(std::memory_order_relaxed);
+  }
+  uint32_t worstStarveGap() const {
+    return m_worstStarveGap.load(std::memory_order_relaxed);
+  }
 
   /// The captured take in chronological order, oldest retained sample first.
   std::vector<float> captureTake() const {
@@ -863,6 +945,15 @@ private:
   uint64_t m_totalSamplesProcessed = 0;
   uint32_t m_lastPlayedBlockId = 0;  // Track which block we played last
 
+  // Underrun telemetry (Movement 4 stability). A "starve" is a callback that wanted a
+  // fresh block for an active track but the producer/host had not delivered it yet — an
+  // audible dropout. Counting them turns "feels glitchy" into a number, and lets the
+  // pipeline depth be tuned to the minimum that keeps this at zero. Written only by the
+  // audio thread, read by a low-priority reporter, so relaxed atomics suffice.
+  std::atomic<uint64_t> m_starveCallbacks{0};   // callbacks that dropped >=1 track
+  std::atomic<uint64_t> m_activeCallbacks{0};   // callbacks with >=1 active track
+  std::atomic<uint32_t> m_worstStarveGap{0};    // largest (want - completed) seen
+
   // The audio callback must not touch a lock, and libc++ implements the
   // atomic_load(shared_ptr*) free functions with a global spinlock table
   // (__sp_mut) — not lock-free — which the callback would contend with every
@@ -908,8 +999,25 @@ private:
   uint64_t m_transportSample = 0;
   std::vector<float> m_audioScratch;
 
+  // Movement 4 surround master. The mix places tracks across an N-channel master. When
+  // that master is WIDER than the audio device (a 5.1 mix on a stereo device — the
+  // testing/virtual path, requested via DAW_MASTER_CHANNELS), the mix runs into
+  // m_masterBuffer and its first device-many channels are copied to the device below,
+  // while all N reach the capture. A real surround device needs none of this: the mix
+  // uses the device buffers directly at the device's own channel count.
+  static constexpr uint32_t kMaxMasterChannels = 8;  // up to 7.1
+  int m_masterChannels = 0;                          // 0 = follow the device
+  std::vector<float> m_masterBuffer;                 // kMaxMasterChannels * blockSize
+  std::vector<float*> m_masterPtrs;
+
  public:
   void setPlaying(const std::atomic<bool>* playing) { m_playing = playing; }
+  // A wider-than-device master for surround (DAW_MASTER_CHANNELS). 0/negative follows
+  // the device. Clamped to kMaxMasterChannels.
+  void setMasterChannels(int channels) {
+    m_masterChannels =
+        channels > 0 ? std::min<int>(channels, kMaxMasterChannels) : 0;
+  }
 
   // Movement 4 PDC: set one slot's compensation delay in samples (clamped to the ring
   // capacity) and the global max latency that gates the whole stage. Called from the
@@ -1098,7 +1206,19 @@ int main(int argc, char** argv) {
   // reach the engine for its child tracks. Sized once here for every host; a track
   // without a multi-out plugin just never writes it.
   baseConfig.numAuxChannelsOut = kMaxAuxOutputChannels;
-  baseConfig.numBlocks = 4; // Increase block count for deeper pipeline/safety
+  // Pipeline depth: how many blocks the producer may run ahead of the audio device.
+  // It is the entire headroom for absorbing jitter in async out-of-process host
+  // rendering — a deeper pipeline glitches less under heavy real plugins but adds
+  // latency (each block is blockSize/sampleRate seconds), so it is the direct knob for
+  // the glitch<->latency trade. Default 4 (~46 ms at 512/44.1k); DAW_ENGINE_NUM_BLOCKS
+  // tunes it per setup. Clamped to [2, 32] — below 2 the ring can't double-buffer.
+  baseConfig.numBlocks = 4;
+  if (const char* nbEnv = std::getenv("DAW_ENGINE_NUM_BLOCKS")) {
+    const int want = std::atoi(nbEnv);
+    if (want >= 2) {
+      baseConfig.numBlocks = static_cast<uint32_t>(std::min(want, 32));
+    }
+  }
   baseConfig.ringUiCapacity = 1024;
   const uint32_t uiDiffRingCapacity = 1024;
 
@@ -1115,8 +1235,17 @@ int main(int argc, char** argv) {
   }
   if (audioBackend && audioBackend->openDefaultDevice(2)) {
     baseConfig.sampleRate = audioBackend->sampleRate();
+    // Adopt the device's ACTUAL buffer size too (not just its sample rate). The whole
+    // pipeline — per-track SHM block stride, the producer, and the audio callback — must
+    // agree on samples-per-block; the callback is built from the device size, so if the
+    // device's buffer is anything but the 512 default (a smaller/larger native size, or
+    // a DAW_ENGINE_BUFFER_SIZE override) the host would render mis-sized blocks and the
+    // callback would read past them. Adopting it here keeps every stage consistent.
+    if (audioBackend->blockSize() > 0) {
+      baseConfig.blockSize = static_cast<uint32_t>(audioBackend->blockSize());
+    }
     std::cout << "Audio device sample rate: " << baseConfig.sampleRate << " Hz"
-              << std::endl;
+              << ", buffer: " << baseConfig.blockSize << " samples" << std::endl;
   } else {
     std::cerr << "No audio device; using " << baseConfig.sampleRate
               << " Hz for offline timing" << std::endl;
@@ -1800,6 +1929,32 @@ struct TrackRuntime {
   std::atomic<uint32_t> modVersion{0};
   std::atomic<uint32_t> nextNoteId{1};
   std::atomic<uint32_t> nextChordId{1};
+
+  // PreviewNote (keyjazz): the UI command thread enqueues auditions here and the producer
+  // — the sole writer of the per-track event rings — drains and injects them, so each ring
+  // keeps a single writer. heldPreview tracks sustained pitches per track so Stop (and a
+  // dropped keyup) can flush them to note-offs. One mutex guards both.
+  struct PreviewNoteReq {
+    uint32_t trackId;
+    uint8_t pitch;
+    uint8_t velocity;
+    bool on;
+  };
+  std::mutex previewMutex;
+  std::vector<PreviewNoteReq> pendingPreviewNotes;
+  std::unordered_map<uint32_t, std::vector<uint8_t>> heldPreview;  // trackId -> held pitches
+  // Enqueue an audition and update the held-pitch set. Caller holds nothing; this locks.
+  auto enqueuePreview = [&](uint32_t trackId, uint8_t pitch, uint8_t velocity, bool on) {
+    std::lock_guard<std::mutex> lock(previewMutex);
+    pendingPreviewNotes.push_back({trackId, pitch, velocity, on});
+    auto& held = heldPreview[trackId];
+    const auto it = std::find(held.begin(), held.end(), pitch);
+    if (on) {
+      if (it == held.end()) held.push_back(pitch);
+    } else if (it != held.end()) {
+      held.erase(it);
+    }
+  };
   std::atomic<bool> harmonyDirty{true};
   std::atomic<uint32_t> harmonyVersion{0};
   std::atomic<uint32_t> patcherGraphVersion{0};
@@ -6379,6 +6534,18 @@ struct TrackRuntime {
       const uint16_t flags = payload.flags;
       applyRemoveNote(payload.trackId, noteNanotick, pitch, flags, true);
     } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::PreviewNote)) {
+      // Keyjazz: audition a pitch on the track's instrument without touching the clip
+      // store. Enqueue for the producer to inject into the track's event ring. Velocity 0
+      // on an on-gesture is a note-off (running-status convention) so a key can't stick.
+      const uint8_t pitch =
+          static_cast<uint8_t>(std::min<uint32_t>(payload.notePitch, 127));
+      const uint8_t velocity =
+          static_cast<uint8_t>(std::min<uint32_t>(payload.value0, 127));
+      const bool on =
+          (payload.flags & daw::kPreviewNoteFlagOn) != 0 && velocity > 0;
+      enqueuePreview(payload.trackId, pitch, velocity, on);
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::TogglePlay)) {
       const bool next = !playing.load(std::memory_order_acquire);
       playing.store(next, std::memory_order_release);
@@ -6390,6 +6557,17 @@ struct TrackRuntime {
       // together so the next Play starts clean.
       playing.store(false, std::memory_order_release);
       resetTimeline.store(true, std::memory_order_release);
+      // Flush any sustained preview notes: enqueue a note-off for every held pitch so a
+      // dropped keyup (or a Stop mid-audition) can't leave a stuck voice.
+      {
+        std::lock_guard<std::mutex> lock(previewMutex);
+        for (auto& [trackId, held] : heldPreview) {
+          for (const uint8_t pitch : held) {
+            pendingPreviewNotes.push_back({trackId, pitch, 0, false});
+          }
+          held.clear();
+        }
+      }
       std::cout << "UI: Transport Stop" << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetPosition)) {
@@ -7040,6 +7218,9 @@ struct TrackRuntime {
   std::cerr << "UI: command thread launched" << std::endl;
 
   std::thread producer([&] {
+    // The producer renders/dispatches each block ahead of the device and paces to it;
+    // any preemption here directly starves the ring. Raise it above background/UI work.
+    daw::elevateToAudioPriority();
     const auto blockDuration =
         std::chrono::duration<double>(
             static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
@@ -9086,6 +9267,15 @@ struct TrackRuntime {
         }
       }
 
+      // Drain queued keyjazz auditions once for this block; the per-track loop below
+      // injects each into its track's event ring. Reqs for a track that is absent or
+      // whose host isn't ready this block are simply not written (silence, no error).
+      std::vector<PreviewNoteReq> previewThisBlock;
+      {
+        std::lock_guard<std::mutex> lock(previewMutex);
+        previewThisBlock.swap(pendingPreviewNotes);
+      }
+
       for (auto* runtime : trackSnapshot) {
         if (!runtime->hostReady.load(std::memory_order_acquire)) {
           continue;
@@ -9120,6 +9310,31 @@ struct TrackRuntime {
         transportPayload.playState = isPlaying ? 1 : 0;
         std::memcpy(transportEntry.payload, &transportPayload, sizeof(transportPayload));
         daw::ringWrite(ringCtrl, transportEntry);
+
+        // Inject this track's queued keyjazz auditions at the block boundary. Out of band:
+        // these come straight from the keyboard, never the clip store, so they play (and
+        // hold, and sustain in chords) without being recorded. Note-off carries no noteId;
+        // the plugin matches it by pitch+channel. Plays whether or not the transport runs.
+        for (const auto& req : previewThisBlock) {
+          if (req.trackId != runtime->trackId) {
+            continue;
+          }
+          daw::EventEntry previewEntry;
+          previewEntry.sampleTime = pluginSampleStart;
+          previewEntry.blockId = blockId;
+          previewEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
+          previewEntry.size = sizeof(daw::MidiPayload);
+          daw::MidiPayload previewPayload{};
+          previewPayload.status = req.on ? 0x90 : 0x80;
+          previewPayload.data1 = req.pitch;
+          previewPayload.data2 = req.on ? req.velocity : 0;
+          previewPayload.channel = 0;
+          previewPayload.tuningCents = 0;
+          previewPayload.noteId =
+              req.on ? nextNoteId.fetch_add(1, std::memory_order_acq_rel) : 0;
+          std::memcpy(previewEntry.payload, &previewPayload, sizeof(previewPayload));
+          daw::ringWrite(ringStd, previewEntry);
+        }
 
         if (runtime->mirrorPending.load(std::memory_order_acquire) &&
             !runtime->mirrorPrimed.load(std::memory_order_acquire)) {
@@ -10096,6 +10311,20 @@ struct TrackRuntime {
           &audioPlaybackBlockId);
       audioCallback->setPlaying(&playing);
       audioCallback->resetForStart();
+      // Movement 4 surround master: the mix width follows the device, but
+      // DAW_MASTER_CHANNELS forces a wider (e.g. 5.1) master for placement + capture
+      // even on a stereo device — the device just hears the downmixed front L/R.
+      int masterChannels = std::max(2, audioBackend->outputChannels());
+      if (const char* mc = std::getenv("DAW_MASTER_CHANNELS")) {
+        const int parsed = std::atoi(mc);
+        if (parsed > masterChannels) {
+          masterChannels = std::min(parsed, 8);
+          audioCallback->setMasterChannels(masterChannels);
+          std::cout << "Surround master: " << masterChannels
+                    << " channels (device has " << audioBackend->outputChannels()
+                    << ")" << std::endl;
+        }
+      }
       // DAW_CAPTURE_WAV=<path> records the master output so a take can be
       // analysed offline; DAW_CAPTURE_SECONDS bounds the preallocation.
       if (const char* capturePath = std::getenv("DAW_CAPTURE_WAV")) {
@@ -10109,7 +10338,7 @@ struct TrackRuntime {
           }
           const auto frames =
               static_cast<size_t>(audioBackend->sampleRate() * seconds);
-          audioCallback->enableCapture(frames, 2);
+          audioCallback->enableCapture(frames, masterChannels);
           DAW_EVENT("audio.capture_armed")
               .field("path", std::string(capturePath))
               .field("seconds", seconds);
@@ -10125,6 +10354,32 @@ struct TrackRuntime {
     }
   }
 
+  // Underrun reporter: a low-priority watcher that stays silent while the audio thread
+  // meets every block deadline and speaks up the moment it starts dropping blocks, so
+  // glitching is reported as a concrete count rather than a vague feeling. It never
+  // touches the audio thread beyond reading relaxed atomics.
+  std::thread xrunReporter;
+  if (!testMode && audioCallback) {
+    xrunReporter = std::thread([&] {
+      uint64_t lastStarve = 0;
+      while (running.load()) {
+        for (int i = 0; i < 20 && running.load(); ++i) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        const uint64_t starve = audioCallback->starveCallbacks();
+        if (starve > lastStarve) {
+          std::cerr << "Engine: audio underrun — " << (starve - lastStarve)
+                    << " dropout callback(s) in the last ~2s (" << starve
+                    << " total, worst shortfall " << audioCallback->worstStarveGap()
+                    << " blocks). Raise DAW_ENGINE_NUM_BLOCKS (deeper pipeline) or "
+                    << "DAW_ENGINE_BUFFER_SIZE (bigger device buffer) if audible."
+                    << std::endl;
+          lastStarve = starve;
+        }
+      }
+    });
+  }
+
   if (runSeconds >= 0) {
     std::this_thread::sleep_for(std::chrono::seconds(runSeconds));
     running.store(false);
@@ -10136,11 +10391,19 @@ struct TrackRuntime {
   uiThread.join();
   producer.join();
   consumer.join();
+  if (xrunReporter.joinable()) {
+    xrunReporter.join();
+  }
 
   // Stop audio output
   if (audioBackend && audioCallback) {
     audioBackend->stop();
     std::cout << "Audio output stopped" << std::endl;
+    const uint64_t starve = audioCallback->starveCallbacks();
+    const uint64_t active = audioCallback->activeCallbacks();
+    std::cout << "Audio underrun summary: " << starve << " of " << active
+              << " playback callbacks dropped a track (worst shortfall "
+              << audioCallback->worstStarveGap() << " blocks)." << std::endl;
     // Audio is stopped, so the capture buffer is quiescent and safe to write.
     if (audioCallback->capturing()) {
       const char* capturePath = std::getenv("DAW_CAPTURE_WAV");

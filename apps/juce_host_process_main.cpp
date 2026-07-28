@@ -26,6 +26,7 @@
 
 #include "apps/audio_shm.h"
 #include "apps/event_payloads.h"
+#include "apps/rt_thread.h"
 #include "apps/event_ring.h"
 #include "apps/ipc_protocol.h"
 #include "apps/ipc_io.h"
@@ -943,6 +944,10 @@ void requestStopDispatchLoop() {
 }
 
 void runControlLoop(HostState& state) {
+  // This loop renders every plugin block inline (handleProcessBlock -> plugin process),
+  // so it is on the audio-critical path even though it also fields control messages.
+  // Raise it above background/UI work so the scheduler does not preempt a render.
+  daw::elevateToAudioPriority();
   while (true) {
     daw::ControlHeader header;
     if (!daw::recvHeader(state.clientFd, header)) {

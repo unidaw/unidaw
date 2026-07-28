@@ -118,9 +118,19 @@ enum class UiCommandType : uint16_t {
   SetDeviceParam = 43,
   // Windowed waveform query (UiWaveformRequestPayload). The engine answers into a
   // UiWaveformRegion seqlock slot from the per-source min/max pyramid — no host
-  // round-trip. Next free is 45.
+  // round-trip.
   RequestWaveform = 44,
+  // Audition a pitch on a track's instrument WITHOUT writing it (keyjazz / edit-mode-off
+  // keyboard). Reuses UiCommandPayload: trackId, notePitch = pitch, value0 = velocity
+  // (0 treated as note-off), flags bit0 = on (1 = note-on, 0 = note-off for this pitch).
+  // Held until the matching off; out of band — never recorded, undoable, or dirtying.
+  // The engine injects it into the track's event ring from the producer; a track with no
+  // ready host is silently dropped, and Stop flushes any held preview notes. Next free 46.
+  PreviewNote = 45,
 };
+
+// PreviewNote flags: bit0 set = note-on, clear = note-off for (trackId, notePitch).
+constexpr uint16_t kPreviewNoteFlagOn = 1u << 0;
 
 constexpr uint16_t kMixerFlagMute = 1u << 0;
 constexpr uint16_t kMixerFlagSolo = 1u << 1;
