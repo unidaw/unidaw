@@ -3560,10 +3560,32 @@ function restoreSession() {
   return s.project || null;
 }
 
+/**
+ * A deep copy, frozen all the way down.
+ *
+ * The copy is so a probe cannot reach in and corrupt live state by accident.
+ * The FREEZE is so it cannot try: assigning to a plain copy succeeds silently
+ * and changes nothing, and a probe that does `state().cursor.track = 1` then
+ * reads the panel back gets a truthful answer to a question it never actually
+ * asked. That cost me a false bug report — I read "the chain panel is stuck on
+ * track 0" out of a cursor that had never moved, and only real keypresses
+ * showed the panel had been following the cursor correctly the whole time.
+ *
+ * Frozen, the same probe throws in strict mode (modules are strict) and says so
+ * on the spot. Same principle as the collision pill and the parent_id sentinel:
+ * a write that goes nowhere must not look like a write that went somewhere.
+ */
+function frozenCopy(o) {
+  if (o === null || typeof o !== 'object') return o;
+  const c = Array.isArray(o) ? o.map(frozenCopy) : {};
+  if (!Array.isArray(o)) for (const k in o) c[k] = frozenCopy(o[k]);
+  return Object.freeze(c);
+}
+
 // Agent / test surface. Structure, not pixels — this is requirement (d).
 window.__uni = {
   probe: () => tracker.probe(),
-  state: () => JSON.parse(JSON.stringify(state)),
+  state: () => frozenCopy(state),
   scrollTo,
   clickAt: (x, y) => { const h2 = tracker.hitTest(x, y, state.scrollX); if (h2) {
     state.cursor.row = h2.row; state.cursor.track = h2.track; state.cursor.col = h2.col; draw(); } return h2; },
