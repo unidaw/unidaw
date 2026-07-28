@@ -1406,6 +1406,15 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
    */
   roomForRail: true, roomForDock: true, roomForChain: true,
   followPlayhead: true,
+  /**
+   * Whether a note key WRITES or merely plays.
+   *
+   * Every tracker since the eighties has this, and defaults it off, so the
+   * keyboard is an instrument until you arm it. Defaulted ON here because that is
+   * what this app has always done and flipping it would change what every
+   * existing keystroke means; the toggle is the new thing, not the default.
+   */
+  editMode: true,
   selectedNode: -1, selectedField: 0, patchAddType: 1, patchLinkFrom: null,
   chainSelected: -1,
   currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
@@ -1750,7 +1759,8 @@ function songMeter() {
 const _chromeOpts = { playheadTick: 0, transport: 0, linkText: '', octave: 0,
                       editStep: 0, velocity: 100, rejectText: '', viewName: '',
                       keyName: '', digitMode: '', tempoMilliBpm: 120000,
-                      tempoPointCount: 0, meter: null };
+                      tempoPointCount: 0, meter: null,
+                      editMode: true, followPlayhead: false };
 function updateChrome() {
   const o = _chromeOpts;
   o.playheadTick = engine ? engine.playheadTick : 0;
@@ -1773,6 +1783,8 @@ function updateChrome() {
   o.tempoMilliBpm = engine && engine.tempoMilliBpm ? engine.tempoMilliBpm : 120000;
   o.tempoPointCount = engine ? engine.tempoPointCount : 0;
   o.meter = songMeter();
+  o.editMode = state.editMode;
+  o.followPlayhead = state.followPlayhead;
   chrome.update(o);
 }
 
@@ -2182,6 +2194,30 @@ function followPlayhead() {
       state.pianoStart = Math.max(0, tick - span / 4);
     }
   }
+}
+
+/**
+ * Sound a pitch without writing it — the other half of keyjazz.
+ *
+ * A placeholder with a real shape. The engine has no note-preview command:
+ * WriteNote is the only note command and it edits the document, so there is
+ * nothing to send yet. Requested from backend as PreviewNote(45), held rather
+ * than fire-and-forget so a sustained key sustains and chords work.
+ *
+ * Written now, and called from the key handler now, so that when the command
+ * lands this is a one-line change at a site that is already exercised — rather
+ * than a feature that has to be threaded through the keyboard afterwards. It
+ * reports through the same reject line every other refusal uses, once, so the
+ * silence is explained rather than merely quiet.
+ */
+let auditionTold = false;
+function auditionPitch(pitch) {
+  if (!auditionTold) {
+    auditionTold = true;
+    state.reject = 'edit mode is off — the key does not write. Auditioning needs '
+                 + 'an engine command that does not exist yet';
+  }
+  void pitch;
 }
 
 function follow() {
@@ -2731,7 +2767,21 @@ addEventListener('keydown', (e) => {
   }
   if (state.view === 'mixer') {
     if (k === ' ') { cmd('play'); return done(); }
-    if (k === 'Escape') { state.reject = null; return done(); }
+    if (k === 'Escape') {
+      /**
+       * Cancel if there is something to cancel; otherwise toggle EDIT MODE.
+       *
+       * Renoise's grammar, and it is the right one: Escape already means "undo
+       * the thing I am in the middle of", and when you are in the middle of
+       * nothing the useful meaning is "stop the keyboard writing". A bare letter
+       * could not do this — every letter is a piano key — so it had to be Escape
+       * or a modifier combo, and a modifier combo for the mode you toggle most is
+       * the wrong way round.
+       */
+      if (state.reject) { state.reject = null; return done(); }
+      state.editMode = !state.editMode;
+      return done();
+    }
     if (k === 'r') { mixer.beginRename(state.cursor.track); return done(); }
     return;
   }
@@ -2798,7 +2848,17 @@ addEventListener('keydown', (e) => {
   if (k === '-' || k === '_') { moveCursor(() => { state.zoom = Math.max(0, state.zoom - 1); }); return done(); }
   if (k === '+' || k === '=') { moveCursor(() => { state.zoom = Math.min(ZOOM_LEVELS.length - 1, state.zoom + 1); }); return done(); }
   if (k === ' ') { cmd('play'); return done(); }
-  if (k === 'F') { state.followPlayhead = !state.followPlayhead; return done(); }
+  /**
+   * Follow the playhead. Either case.
+   *
+   * Only capital F was bound, so lowercase `f` fell through to note entry and was
+   * refused with "f is not a piano key" — which is true, and useless: `f` is not
+   * a piano key in ANY octave (the map is 23567qwertyuizsxdcvgbhnjm), so nothing
+   * was ever going to want it there. A key that is bound in one case only reads
+   * as a key that does not work, because nobody reaches for Shift to toggle
+   * something.
+   */
+  if (k === 'f' || k === 'F') { state.followPlayhead = !state.followPlayhead; return done(); }
   if (k === 'Escape') { state.reject = null; return done(); }
 
   // 5. Editing at the cursor.
@@ -2854,6 +2914,12 @@ addEventListener('keydown', (e) => {
     if (state.entryMode === 'degree' && deg >= 0) { typeDegree(deg); return done(); }
     const pitch = pitchOf(k.toLowerCase(), state.octave);
     if (pitch >= 0) {
+      // Out of edit mode the key is an instrument, not a typewriter: no write, no
+      // cursor advance. Auditioning the pitch needs an engine command that does
+      // not exist yet (WriteNote is the only note command and it edits), so for
+      // now this is silent — which is still the difference between a keyboard
+      // that destroys your pattern and one that does not.
+      if (!state.editMode) { auditionPitch(pitch); return done(); }
       writePitch(pitch);
       state.cursor.row += state.editStep; follow();
       return done();

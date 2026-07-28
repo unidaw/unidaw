@@ -139,7 +139,23 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
   // will do, next to the octave and the step it will do it at.
   const digitMode = label('ch-mode', '');
   let lastDigitMode = null;
-  entry.append(viewLabel, octLabel, stepLabel, velLabel, digitMode);
+  /**
+   * The two MODES a keystroke passes through, shown because a mode you cannot
+   * see is a mode you cannot trust.
+   *
+   * `f` has toggled playhead follow since it was written and nothing on screen
+   * ever said which way it was set, so pressing it was a coin flip you resolved
+   * by watching whether the view moved. Edit mode has the same problem and worse
+   * consequences: the difference between a keyboard that plays and one that
+   * writes is not something to discover by typing.
+   *
+   * Written as the mode that is ON, not as a label plus a value — "EDIT" and
+   * "FOLLOW" read at a glance where "edit: off" has to be parsed.
+   */
+  const editMode = label('ch-mode', '');
+  const followMode = label('ch-mode', '');
+  let lastEdit = null, lastFollow = null;
+  entry.append(viewLabel, octLabel, stepLabel, velLabel, digitMode, editMode, followMode);
 
   const scales = document.createElement('button');
   scales.className = 'ch-btn ch-scales';
@@ -179,10 +195,23 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
     update({ playheadTick, transport: tstate, linkText, octave, editStep,
              velocity = 100, rejectText = '', viewName = '', keyName = '',
              tempoMilliBpm = 120000, tempoPointCount = 0, meter = DEFAULT_METER,
-             digitMode: digitModeText = '' }) {
+             digitMode: digitModeText = '',
+             editMode: editOn = true, followPlayhead: followOn = false }) {
       if (digitModeText !== lastDigitMode) {
         lastDigitMode = digitModeText;
         digitMode.firstChild.nodeValue = digitModeText;
+      }
+      // Both guarded on the boolean, and both write the mode that is ON rather
+      // than a label and a value: "EDIT" reads at a glance where "edit: off" has
+      // to be parsed, and these sit next to five other fields.
+      if (editOn !== lastEdit) {
+        lastEdit = editOn;
+        editMode.firstChild.nodeValue = editOn ? 'EDIT' : 'jam';
+        editMode.classList.toggle('off', !editOn);
+      }
+      if (followOn !== lastFollow) {
+        lastFollow = followOn;
+        followMode.firstChild.nodeValue = followOn ? 'follow' : '';
       }
       // Guarded on the two numbers, not on the record: the engine will republish a
       // meter on every frame, and a guard keyed on object identity would rebuild

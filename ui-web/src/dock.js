@@ -48,6 +48,9 @@ function div(cls, parent) {
 
 /** Frozen so a shared empty spec cannot be pushed onto by mistake. */
 const NONE = Object.freeze([]);
+/** An optional on|off word. Absent means "toggle", which is what a key does. */
+const ON_OFF = Object.freeze({ name: 'on|off', type: 'enum', values: ['on', 'off'],
+                               optional: true });
 
 // Sixteen mixer strips exist (`createMixerState(16)` in index.html), and the
 // tracker's cursor is clamped to the same count. `gain 16 0` indexed past the
@@ -256,6 +259,11 @@ export function createCommands(api) {
     // Collapse is a VIEW decision, and it still gets a command: hard requirement 4
     // is that an agent can drive the UI, and a fold reachable only by a keystroke
     // is a fold an agent cannot reach. The op-registry test enforces exactly this.
+    // Edit mode: whether a note key writes or plays. A command as well as a key
+    // so it is nameable — a mode you can only reach by a keystroke is a mode you
+    // cannot ask about, and Escape is not a discoverable place to look for it.
+    edit: { help: 'edit [on|off] — whether note keys write', args: [ON_OFF],
+      run: (a) => (api.edit(a[0] === undefined ? undefined : a[0] === 'on') ? 'edit on' : 'edit off') },
     fold: { help: 'fold <track> — hide a parent\'s child tracks', args: [A_TRACK],
       run: (a) => { const t = Number(a[0]); return api.fold(t) ? 'fold ' + t : 'not a parent'; } },
     solo: { help: 'solo <track>', args: [A_TRACK],

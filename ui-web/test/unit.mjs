@@ -1322,6 +1322,10 @@ const OP_REGISTRY = {
   link:      { cli: null, agent: null, why: 'gap' },
   patch:     { cli: null, agent: null, why: 'gap' },
   // View state. An agent has no viewport to address.
+  // Edit mode is a property of the KEYBOARD, and an agent has no keyboard — it
+  // calls add_notes, which writes regardless. So this is view state for the same
+  // reason zoom is, even though it is a command a human wants in the palette.
+  edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },
   goto:      { cli: null, agent: null, why: 'view' },
