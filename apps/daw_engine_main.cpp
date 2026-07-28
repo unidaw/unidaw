@@ -216,6 +216,10 @@ constexpr uint32_t kPatcherMaxModOutputs = 8;
 // Movement 4 sidechain: stereo key input carried in the per-track input plane after the
 // main channels. The sidechain occupies [numChannelsOut, numChannelsOut + this).
 constexpr uint32_t kSidechainChannels = 2;
+// Movement 4 multi-out: channels reserved for the aux OUTPUT plane per track, sized so a
+// generous multi-out instrument (up to 16 stereo stems) fits. A track with no multi-out
+// plugin leaves it silent; the cost is one plane of this width in each host's SHM.
+constexpr uint32_t kMaxAuxOutputChannels = 32;
 
 struct PatcherNodeBuffer {
   std::array<daw::EventEntry, kPatcherNodeCapacity> events{};
@@ -1044,6 +1048,10 @@ int main(int argc, char** argv) {
   // just leaves those channels silent, and a plugin without a sidechain bus ignores
   // them. This is what lets the engine key a compressor off another track's output.
   baseConfig.numChannelsIn = baseConfig.numChannelsOut + kSidechainChannels;
+  // Movement 4 multi-out: reserve the aux OUTPUT plane so a multi-out instrument's stems
+  // reach the engine for its child tracks. Sized once here for every host; a track
+  // without a multi-out plugin just never writes it.
+  baseConfig.numAuxChannelsOut = kMaxAuxOutputChannels;
   baseConfig.numBlocks = 4; // Increase block count for deeper pipeline/safety
   baseConfig.ringUiCapacity = 1024;
   const uint32_t uiDiffRingCapacity = 1024;
@@ -1384,10 +1392,11 @@ struct TrackRuntime {
     std::shared_ptr<const AudioRenderList> audioRender;
     daw::HostController controller;
     daw::HostConfig config;
-    // Movement 4: the sidechain mask last sent on SetChain, so a sidechain toggle with
-    // an otherwise-unchanged chain still re-reconciles. Guarded by controllerMutex like
-    // config. 0 = no sidechain, matching a freshly launched host.
+    // Movement 4: the sidechain / aux-output masks last sent on SetChain, so toggling
+    // either with an otherwise-unchanged chain still re-reconciles. Guarded by
+    // controllerMutex like config. 0 = none, matching a freshly launched host.
     uint32_t lastSidechainMask = 0;
+    uint32_t lastAuxOutMask = 0;
     std::atomic<bool> needsRestart{false};
     std::atomic<bool> restartInFlight{false};
     std::atomic<bool> hostReady{false};
@@ -2346,6 +2355,7 @@ struct TrackRuntime {
     std::vector<std::string> pluginPaths;
     std::vector<std::string> pluginNames;
     bool hasSidechainSource = false;
+    uint32_t auxOutMask = 0;
     {
       std::lock_guard<std::mutex> lock(runtime.trackMutex);
       hasSidechainSource =
@@ -2364,6 +2374,14 @@ struct TrackRuntime {
                     << device.id << std::endl;
           continue;
         }
+        // Movement 4 multi-out: split this plugin's outputs into child tracks when the
+        // device asks for it. The "multiout" name is a test trigger for the fake fixture;
+        // auto-detecting aux buses from the first busLayout is the follow-on that makes
+        // this default-on for real drum plugins.
+        const uint32_t hostIndex = static_cast<uint32_t>(pluginPaths.size());
+        if (hostIndex < 32 && device.vstRef.name == "multiout") {
+          auxOutMask |= (1u << hostIndex);
+        }
         pluginPaths.push_back(*path);
         // The project's intended plugin name selects the right one out of a
         // multi-plugin bundle host-side (Zebra2.vst3 holds several).
@@ -2379,13 +2397,15 @@ struct TrackRuntime {
     // path but changes the name, and that still needs a reconcile.
     if (runtime.config.pluginPaths != pluginPaths ||
         runtime.config.pluginNames != pluginNames ||
-        runtime.lastSidechainMask != sidechainMask) {
+        runtime.lastSidechainMask != sidechainMask ||
+        runtime.lastAuxOutMask != auxOutMask) {
       const bool hostRunning = runtime.hostReady.load(std::memory_order_acquire);
       {
         std::lock_guard<std::mutex> lock(runtime.controllerMutex);
         runtime.config.pluginPaths = pluginPaths;
         runtime.config.pluginNames = pluginNames;
         runtime.lastSidechainMask = sidechainMask;
+        runtime.lastAuxOutMask = auxOutMask;
       }
       if (hostRunning) {
         // Reconcile the chain in the running host: unchanged plugins are
@@ -2398,7 +2418,8 @@ struct TrackRuntime {
         bool reconciled = false;
         {
           std::lock_guard<std::mutex> lock(runtime.controllerMutex);
-          reconciled = runtime.controller.sendSetChain(refs, sidechainMask);
+          reconciled =
+              runtime.controller.sendSetChain(refs, sidechainMask, auxOutMask);
         }
         if (reconciled) {
           // Voice-reset the track: drop active notes so a removed plugin
@@ -9200,6 +9221,9 @@ struct TrackRuntime {
   std::thread consumer([&] {
     uint32_t currentBlockId = 1;
     uint64_t lastOverflowLogged = 0;
+    // Movement 4 multi-out: per-track bitmask of aux channels already logged as active,
+    // so the aux-plane peak diagnostic reports each stem once as it first produces sound.
+    std::unordered_map<uint32_t, uint32_t> auxBusPeakLogged;
     std::unordered_map<uint32_t, uint64_t> ringStdDropLogged;
     std::unordered_map<uint32_t, EngineAudioCallback::TrackInfo> trackInfoCache;
     // Mixer read-back: publish per-track gain/pan/mute/solo every frame, but only
@@ -9287,6 +9311,56 @@ struct TrackRuntime {
           }
         }
         audioCallback->updateTracks(trackInfos);
+
+        // Movement 4 multi-out: for a track whose plugin splits its outputs, read the aux
+        // OUTPUT plane's per-channel peak from the latest completed block and log each
+        // channel once as it first produces sound. This proves each stem reaches the
+        // engine on its own channel — the foundation the child tracks route to master.
+        for (auto* runtime : trackSnapshot) {
+          if (runtime->lastAuxOutMask == 0 ||
+              !runtime->hostReady.load(std::memory_order_acquire)) {
+            continue;
+          }
+          auto shmView = runtime->controller.sharedMemory();
+          if (!shmView || !shmView->base || !shmView->header ||
+              !shmView->completedBlockId) {
+            continue;
+          }
+          const daw::ShmHeader* h = shmView->header;
+          const uint32_t completed =
+              shmView->completedBlockId->load(std::memory_order_acquire);
+          if (completed == 0 || h->numBlocks == 0 || kMaxAuxOutputChannels == 0) {
+            continue;
+          }
+          const size_t auxOffset = daw::auxOutputPlaneOffset(*h);
+          const size_t stride = h->channelStrideBytes;
+          const size_t blockBytes =
+              static_cast<size_t>(kMaxAuxOutputChannels) * stride;
+          const size_t block = static_cast<size_t>(completed % h->numBlocks);
+          uint32_t& logged = auxBusPeakLogged[runtime->trackId];
+          for (uint32_t ch = 0; ch < kMaxAuxOutputChannels && ch < 32; ++ch) {
+            const size_t off = auxOffset + block * blockBytes +
+                               static_cast<size_t>(ch) * stride;
+            if (off + static_cast<size_t>(engineConfig.blockSize) * sizeof(float) >
+                shmView->size) {
+              break;
+            }
+            const float* data = reinterpret_cast<const float*>(
+                reinterpret_cast<const uint8_t*>(shmView->base) + off);
+            float peak = 0.0f;
+            for (uint32_t i = 0; i < engineConfig.blockSize; ++i) {
+              const float m = data[i] < 0.0f ? -data[i] : data[i];
+              if (m > peak) peak = m;
+            }
+            if (peak > 0.01f && (logged & (1u << ch)) == 0) {
+              logged |= (1u << ch);
+              DAW_EVENT("multiout.aux_active")
+                  .field("track", runtime->trackId)
+                  .field("aux_channel", ch)
+                  .field("peak_milli", static_cast<uint64_t>(peak * 1000.0f));
+            }
+          }
+        }
 
         // Movement 4 PDC: recompute delay compensation from every track's cached chain
         // latency (set by emitChainSnapshot's control round-trip — read here, no IPC).

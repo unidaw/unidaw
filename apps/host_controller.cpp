@@ -214,6 +214,7 @@ bool HostController::connect(const HostConfig& config) {
   request.blockSize = config.blockSize;
   request.numChannelsIn = config.numChannelsIn;
   request.numChannelsOut = config.numChannelsOut;
+  request.numAuxChannelsOut = config.numAuxChannelsOut;
   request.numBlocks = config.numBlocks;
   request.ringStdCapacity = config.ringStdCapacity;
   request.ringCtrlCapacity = config.ringCtrlCapacity;
@@ -539,7 +540,7 @@ bool HostController::sendPluginState(uint32_t pluginIndex,
 }
 
 bool HostController::sendSetChain(const std::vector<PluginRef>& refs,
-                                  uint32_t sidechainMask) {
+                                  uint32_t sidechainMask, uint32_t auxOutMask) {
   // Each entry is path\0name\0 (v4). The name lets the host pick the right plugin
   // out of a multi-plugin bundle; an empty name means "take the first type".
   std::vector<uint8_t> block;
@@ -554,6 +555,7 @@ bool HostController::sendSetChain(const std::vector<PluginRef>& refs,
   header.count = static_cast<uint32_t>(refs.size());
   header.byteCount = static_cast<uint32_t>(block.size());
   header.sidechainMask = sidechainMask;
+  header.auxOutMask = auxOutMask;
   std::memcpy(payload.data(), &header, sizeof(header));
   if (!block.empty()) {
     std::memcpy(payload.data() + sizeof(header), block.data(), block.size());

@@ -36,7 +36,11 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 // 8: ChainHeader gains sidechainMask — a per-plugin bit telling the host to enable that
 //    plugin's sidechain (aux) input bus at prepare (Movement 4 sidechain). An old host
 //    would misread the larger header, so gate it. Host↔engine only; kShmVersion stands.
-constexpr uint16_t kControlVersion = 8;
+// 9: HelloRequest gains numAuxChannelsOut (aux OUTPUT plane width) and ChainHeader gains
+//    auxOutMask (enable a plugin's aux output buses) — Movement 4 multi-out. Both headers
+//    grow, so an old host would misparse; gate it. Still host↔engine only; the aux plane
+//    sits right after the main output plane at a computed offset, kShmVersion stands.
+constexpr uint16_t kControlVersion = 9;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,
@@ -156,6 +160,10 @@ struct ChainHeader {
   // a sidechain route bound and declares an aux input bus; 0 = the pre-sidechain
   // behaviour (all non-main buses disabled).
   uint32_t sidechainMask = 0;
+  // Movement 4 multi-out: bit i set = enable plugin[i]'s aux OUTPUT buses at prepare, so
+  // a multi-out instrument's stems reach the aux output plane. Bit set only when the
+  // engine wants that plugin's buses split to child tracks; 0 = aux outputs disabled.
+  uint32_t auxOutMask = 0;
 };
 
 struct ControlHeader {
@@ -174,6 +182,12 @@ struct HelloRequest {
   uint32_t ringStdCapacity = 0;
   uint32_t ringCtrlCapacity = 0;
   uint32_t ringUiCapacity = 0;
+  // Movement 4 multi-out: channels reserved for the AUX OUTPUT plane, which the host
+  // lays out immediately after the main output plane. A multi-out instrument's aux
+  // buses (a drum plugin's stems) are written there; the engine reads each bus's slice
+  // for its child track. 0 = no aux plane (the pre-multi-out layout). numChannelsOut
+  // stays the MAIN width, so the master mix + sidechain offset are unchanged.
+  uint32_t numAuxChannelsOut = 0;
   double sampleRate = 0.0;
 };
 

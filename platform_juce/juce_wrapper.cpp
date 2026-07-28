@@ -383,7 +383,7 @@ class JucePluginInstance final : public IPluginInstance {
   }
 
   void prepare(double sampleRate, int blockSize, int numOutputs,
-               bool enableSidechain = false) override {
+               bool enableSidechain = false, bool enableAuxOut = false) override {
     if (!instance_) {
       return;
     }
@@ -407,8 +407,14 @@ class JucePluginInstance final : public IPluginInstance {
     const bool wantsInput = instance_->getTotalNumInputChannels() > 0;
     juce::AudioProcessor::BusesLayout layout = instance_->getBusesLayout();
     for (int b = 0; b < layout.outputBuses.size(); ++b) {
-      layout.outputBuses.getReference(b) =
-          b == 0 ? mainSet : juce::AudioChannelSet::disabled();
+      // Main bus to host width; aux OUTPUT buses (a multi-out instrument's stems) kept
+      // at their own declared layout when requested, else disabled (Movement 4). Opt-in
+      // so a normal plugin still presents a single stereo output.
+      if (b == 0) {
+        layout.outputBuses.getReference(b) = mainSet;
+      } else if (!enableAuxOut) {
+        layout.outputBuses.getReference(b) = juce::AudioChannelSet::disabled();
+      }
     }
     // Movement 4 sidechain: when asked, enable the FIRST aux input bus (index 1) — the
     // conventional sidechain/key input — at the host width. Enabled only on request so
@@ -493,7 +499,8 @@ class JucePluginInstance final : public IPluginInstance {
 
   void process(const float* const* inputs, int numInputs,
                float* const* outputs, int numOutputs, int numFrames,
-               const MidiEvents& events, int64_t samplePosition) override {
+               const MidiEvents& events, int64_t samplePosition,
+               float* const* auxOutputs = nullptr, int numAuxOutputs = 0) override {
     if (!instance_ || outputs == nullptr || numOutputs <= 0 || numFrames <= 0) {
       return;
     }
@@ -573,6 +580,33 @@ class JucePluginInstance final : public IPluginInstance {
           std::copy(src, src + numFrames, dest);
         } else {
           std::fill(dest, dest + numFrames, 0.0f);
+        }
+      }
+      // Movement 4 multi-out: hand the aux OUTPUT bus channels (everything past the main
+      // bus) to the caller. JUCE lays outputs out as [main..., aux...], so the aux buses
+      // are the scratch channels after numOutputs; a bus the plugin didn't fill reads
+      // silence. Only meaningful when a scratch buffer was used (an aux plugin always
+      // scratches, since totalOut > numOutputs).
+      if (auxOutputs && numAuxOutputs > 0) {
+        const int available =
+            std::max(0, bufferToProcess->getNumChannels() - numOutputs);
+        for (int ch = 0; ch < numAuxOutputs; ++ch) {
+          if (!auxOutputs[ch]) {
+            continue;
+          }
+          if (ch < available && (numOutputs + ch) < pluginOutputs_) {
+            const auto* src = bufferToProcess->getReadPointer(numOutputs + ch);
+            std::copy(src, src + numFrames, auxOutputs[ch]);
+          } else {
+            std::fill(auxOutputs[ch], auxOutputs[ch] + numFrames, 0.0f);
+          }
+        }
+      }
+    } else if (auxOutputs && numAuxOutputs > 0) {
+      // No scratch (plugin has no aux output channels): the aux planes get silence.
+      for (int ch = 0; ch < numAuxOutputs; ++ch) {
+        if (auxOutputs[ch]) {
+          std::fill(auxOutputs[ch], auxOutputs[ch] + numFrames, 0.0f);
         }
       }
     }
@@ -976,9 +1010,10 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   }
 
   void prepare(double, int blockSize, int numOutputs,
-               bool enableSidechain = false) override {
+               bool enableSidechain = false, bool enableAuxOut = false) override {
     outputChannels_ = numOutputs;
     sidechainEnabled_ = enableSidechain;
+    auxOutEnabled_ = enableAuxOut;
     // Size the latency delay ring to hold one full latency window plus a block, so a
     // pulse generated this block reads out latencySamples_ later without wrapping into
     // itself. Zero-filled: the first latencySamples_ of output are silence, exactly as
@@ -999,9 +1034,48 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
                int numOutputs,
                int numFrames,
                const MidiEvents& events,
-               int64_t) override {
+               int64_t,
+               float* const* auxOutputs = nullptr,
+               int numAuxOutputs = 0) override {
     for (int ch = 0; ch < numOutputs; ++ch) {
       std::fill(outputs[ch], outputs[ch] + numFrames, 0.0f);
+    }
+    for (int ch = 0; ch < numAuxOutputs; ++ch) {
+      if (auxOutputs && auxOutputs[ch]) {
+        std::fill(auxOutputs[ch], auxOutputs[ch] + numFrames, 0.0f);
+      }
+    }
+
+    // Multi-out fixture: with aux outputs enabled, route each note to output bus
+    // (pitch % numBuses) — bus 0 is the main output, bus k>0 lands on aux bus k-1. So a
+    // note at pitch 60 goes to main, 61 to aux bus 0, 62 to aux bus 1, letting a test
+    // prove each stem reaches its own child track. Pulses are 10 samples, like the
+    // single-bus path.
+    if (auxOutEnabled_) {
+      const int numBuses = 1 + kFakeAuxOutBuses;
+      const float gain = gain_;
+      for (const auto& event : events) {
+        const uint8_t status = event.status & 0xF0u;
+        if (status != 0x90u || event.data2 == 0) {
+          continue;
+        }
+        const int bus = event.data1 % numBuses;
+        const int start = std::max(0, event.sampleOffset);
+        const int end = std::min(numFrames, start + 10);
+        if (bus == 0) {
+          for (int ch = 0; ch < numOutputs; ++ch) {
+            for (int i = start; i < end; ++i) outputs[ch][i] += gain;
+          }
+        } else {
+          for (int ch = 0; ch < kFakeAuxBusChannels; ++ch) {
+            const int idx = (bus - 1) * kFakeAuxBusChannels + ch;
+            if (auxOutputs && idx < numAuxOutputs && auxOutputs[idx]) {
+              for (int i = start; i < end; ++i) auxOutputs[idx][i] += gain;
+            }
+          }
+        }
+      }
+      return;
     }
 
     // Sidechain fixture: with the key input enabled, pass the SIDECHAIN bus straight to
@@ -1074,7 +1148,11 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   int inputChannels() const override {
     return sidechainEnabled_ ? (kFakeMainInputChannels + kFakeSidechainChannels) : 0;
   }
-  int outputChannels() const override { return outputChannels_; }
+  int outputChannels() const override {
+    return auxOutEnabled_
+               ? (outputChannels_ + kFakeAuxOutBuses * kFakeAuxBusChannels)
+               : outputChannels_;
+  }
   int latencySamples() const override { return latencySamples_; }
   std::vector<BusInfo> busLayout() const override {
     std::vector<BusInfo> buses;
@@ -1113,6 +1191,25 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
     out.name = "Main";
     out.layout = outputChannels_ == 1 ? "Mono" : "Stereo";
     buses.push_back(out);
+    // Multi-out fixture: kFakeAuxOutBuses stereo aux output buses (the "stems"), each
+    // offset by its channels — the shape a drum plugin's kick/snare/hat outs take.
+    if (auxOutEnabled_) {
+      int offset = outputChannels_;
+      for (int b = 0; b < kFakeAuxOutBuses; ++b) {
+        BusInfo aux;
+        aux.isInput = false;
+        aux.index = b + 1;
+        aux.isMain = false;
+        aux.enabled = true;
+        aux.channelCount = kFakeAuxBusChannels;
+        aux.channelOffset = offset;
+        aux.layoutId = 2;
+        aux.name = "Stem " + std::to_string(b + 1);
+        aux.layout = "Stereo";
+        buses.push_back(aux);
+        offset += kFakeAuxBusChannels;
+      }
+    }
     return buses;
   }
   bool loadVst3PresetFile(const std::string&) override { return false; }
@@ -1163,6 +1260,8 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
  private:
   static constexpr int kFakeMainInputChannels = 2;
   static constexpr int kFakeSidechainChannels = 2;
+  static constexpr int kFakeAuxOutBuses = 2;      // stereo stems the fixture emits
+  static constexpr int kFakeAuxBusChannels = 2;
   std::vector<ParamInfo> params_;
   float gain_ = 1.0f;
   int outputChannels_ = 2;
@@ -1174,6 +1273,8 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   uint32_t delayWrite_ = 0;
   // Sidechain fixture: when true, process() passes the sidechain input to the output.
   bool sidechainEnabled_ = false;
+  // Multi-out fixture: when true, notes route to output bus (pitch % (1+auxBuses)).
+  bool auxOutEnabled_ = false;
 };
 
 class JucePluginHost final : public IPluginHost {

@@ -108,17 +108,22 @@ class IPluginInstance {
  public:
   virtual ~IPluginInstance() = default;
 
-  // enableSidechain (Movement 4): enable the plugin's sidechain (aux) input bus, so a
-  // keyed effect (a compressor ducked by another track) receives its key signal. Off =
-  // the default (only the main bus enabled). Governs the negotiated bus layout, so it
-  // must be known here, not toggled later.
+  // enableSidechain / enableAuxOut (Movement 4): enable the plugin's sidechain (aux)
+  // INPUT bus (a compressor keyed by another track) and/or its aux OUTPUT buses (a
+  // multi-out instrument's stems). Both are off by default (only the main bus enabled)
+  // and both govern the negotiated bus layout, so they must be known here.
   virtual void prepare(double sampleRate, int blockSize, int numOutputs,
-                       bool enableSidechain = false) = 0;
+                       bool enableSidechain = false, bool enableAuxOut = false) = 0;
   // Called before process() for the same block.
   virtual void setTransport(const TransportInfo& transport) = 0;
+  // auxOutputs (Movement 4 multi-out): when non-null, the plugin's aux OUTPUT bus
+  // channels (everything after the main bus) are written here — numAuxOutputs planar
+  // channels of numFrames — so the engine can split a multi-out instrument's stems to
+  // child tracks. The main output still goes to `outputs`. Null = main output only.
   virtual void process(const float* const* inputs, int numInputs,
                        float* const* outputs, int numOutputs, int numFrames,
-                       const MidiEvents& events, int64_t samplePosition) = 0;
+                       const MidiEvents& events, int64_t samplePosition,
+                       float* const* auxOutputs = nullptr, int numAuxOutputs = 0) = 0;
 
   virtual std::string name() const = 0;
   virtual std::string vendor() const = 0;
