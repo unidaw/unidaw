@@ -2,6 +2,11 @@
 <meta charset="utf-8">
 <title>Uni — tracker</title>
 <link rel="stylesheet" href="src/fonts.css">
+<!-- Inline, so it costs no request and cannot 404. Every page load was asking for
+     /favicon.ico and being refused, which put a console error in front of every
+     test that asserts the app threw nothing. A tab also deserves a mark: with
+     several stacks open at once on different ports, they were indistinguishable. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23181822'/%3E%3Crect x='3' y='3' width='2' height='10' fill='%237b6cf6'/%3E%3Crect x='7' y='5' width='2' height='8' fill='%237b6cf6'/%3E%3Crect x='11' y='2' width='2' height='11' fill='%237b6cf6'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="src/icons/phosphor.css">
 <link rel="stylesheet" href="src/tokens.css">
 <link rel="stylesheet" href="src/tracker.css">
@@ -2832,6 +2837,36 @@ addEventListener('keydown', (e) => {
       state.focus = 'centre';
       return done();
     }
+  }
+
+  /**
+   * 0.1 A TEXT FIELD OWNS ITS OWN KEYS.
+   *
+   * This listener is registered `{ capture: true }`, so it runs BEFORE any
+   * element's own handler — and `done()` calls preventDefault(), which is
+   * precisely what stops an <input> from inserting the character. So every text
+   * field in the application was unusable: you could focus the console with `/`,
+   * watch `document.activeElement` become `.dk-input`, type, and get nothing.
+   * Same for the browser rail's search, which listens for `input` events that
+   * could never fire.
+   *
+   * The dock tried to defend itself with `e.stopPropagation()` in its own
+   * handler, and that is powerless here: by the time the target sees the event,
+   * the capturing listener has already run and already prevented it.
+   *
+   * Nothing in any suite caught this, because every one of them types by calling
+   * `__uni.run(line)` — which hands the console a string directly and never
+   * presses a key. The only way to see it is to press keys.
+   *
+   * The surface switches above still win, deliberately: leaving a surface is
+   * never what you meant to type, and being stuck inside a text box with no way
+   * out is worse than losing an F-key. Everything else — including ⌘Z, which
+   * inside a field means "undo my typing", not "undo the song" — belongs to the
+   * field.
+   */
+  const el = e.target;
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+    return;                    // NOT done(): no preventDefault, let it type
   }
 
   // 1. Modifier combos first, so nothing below can swallow them. Cmd on macOS,
