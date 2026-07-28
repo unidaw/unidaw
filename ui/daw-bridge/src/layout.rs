@@ -4,12 +4,12 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 20;
+pub const K_SHM_VERSION: u16 = 21;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
 
-pub const K_UI_MAX_TRACKS: usize = 8;
+pub const K_UI_MAX_TRACKS: usize = 64;
 pub const K_UI_MAX_CLIP_NOTES: usize = 4096;
 pub const K_UI_MAX_CLIP_CHORDS: usize = 1024;
 pub const K_UI_MAX_HARMONY_EVENTS: usize = 512;
@@ -834,7 +834,7 @@ mod tests {
 
     #[test]
     fn shm_header_layout_matches_cpp() {
-        const_assert_eq!(size_of::<ShmHeader>(), 640); // v18: two waveform offsets
+        const_assert_eq!(size_of::<ShmHeader>(), 3072); // v21: kUiMaxTracks 8 -> 64
         const_assert_eq!(align_of::<ShmHeader>(), 64);
         assert_eq!(offset_of!(ShmHeader, ring_std_offset), 56);
         assert_eq!(offset_of!(ShmHeader, ring_ctrl_offset), 64);
@@ -854,32 +854,31 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_harmony_offset), 168);
         assert_eq!(offset_of!(ShmHeader, ui_harmony_bytes), 176);
         assert_eq!(offset_of!(ShmHeader, ui_track_peak_rms), 184);
-        // v9 tail fields; header size stays 256 (they fit inside the align(64)
-        // padding after the peak-rms array).
-        assert_eq!(offset_of!(ShmHeader, ui_clip_all_offset), 216);
-        assert_eq!(offset_of!(ShmHeader, ui_clip_all_bytes), 224);
-        assert_eq!(offset_of!(ShmHeader, ring_ui_agent_offset), 232);
-        assert_eq!(offset_of!(ShmHeader, ui_lines_per_beat), 240);
-        assert_eq!(offset_of!(ShmHeader, ui_clip_extent_offset), 248);
-        // v12 mixer read-back; grows the header to 384.
-        assert_eq!(offset_of!(ShmHeader, ui_track_gain_millibels), 256);
-        assert_eq!(offset_of!(ShmHeader, ui_track_pan_thousandths), 288);
-        assert_eq!(offset_of!(ShmHeader, ui_track_mix_flags), 320);
-        assert_eq!(offset_of!(ShmHeader, ui_mixer_version), 328);
-        assert_eq!(offset_of!(ShmHeader, ui_track_name), 332); // v13
-        assert_eq!(offset_of!(ShmHeader, ui_patcher_offset), 528); // v14 (fits tail padding)
-        assert_eq!(offset_of!(ShmHeader, ui_loop_start), 536); // v15
-        assert_eq!(offset_of!(ShmHeader, ui_loop_end), 544);
-        assert_eq!(offset_of!(ShmHeader, ui_load_seq), 552);
-        assert_eq!(offset_of!(ShmHeader, ui_load_ok), 556);
-        assert_eq!(offset_of!(ShmHeader, ui_scales_offset), 560); // v16 (fits tail padding)
-        assert_eq!(offset_of!(ShmHeader, ui_device_params_offset), 568); // v17
-        assert_eq!(offset_of!(ShmHeader, ui_audio_source_offset), 576); // v18
-        assert_eq!(offset_of!(ShmHeader, ui_waveform_offset), 584);
-        assert_eq!(offset_of!(ShmHeader, ui_song_time_sig_num), 592); // v19
-        assert_eq!(offset_of!(ShmHeader, ui_song_time_sig_den), 596);
-        assert_eq!(offset_of!(ShmHeader, ui_track_parent_id), 600); // v20
-        assert_eq!(offset_of!(ShmHeader, ui_track_flags), 632);
+        // v21: kUiMaxTracks 8 -> 64 widened every per-track array, so all offsets after
+        // the first one (ui_track_peak_rms) shifted. Recomputed from the C++ header.
+        assert_eq!(offset_of!(ShmHeader, ui_clip_all_offset), 440);
+        assert_eq!(offset_of!(ShmHeader, ui_clip_all_bytes), 448);
+        assert_eq!(offset_of!(ShmHeader, ring_ui_agent_offset), 456);
+        assert_eq!(offset_of!(ShmHeader, ui_lines_per_beat), 464);
+        assert_eq!(offset_of!(ShmHeader, ui_clip_extent_offset), 528);
+        assert_eq!(offset_of!(ShmHeader, ui_track_gain_millibels), 536);
+        assert_eq!(offset_of!(ShmHeader, ui_track_pan_thousandths), 792);
+        assert_eq!(offset_of!(ShmHeader, ui_track_mix_flags), 1048);
+        assert_eq!(offset_of!(ShmHeader, ui_mixer_version), 1112);
+        assert_eq!(offset_of!(ShmHeader, ui_track_name), 1116); // v13
+        assert_eq!(offset_of!(ShmHeader, ui_patcher_offset), 2656); // v14
+        assert_eq!(offset_of!(ShmHeader, ui_loop_start), 2664); // v15
+        assert_eq!(offset_of!(ShmHeader, ui_loop_end), 2672);
+        assert_eq!(offset_of!(ShmHeader, ui_load_seq), 2680);
+        assert_eq!(offset_of!(ShmHeader, ui_load_ok), 2684);
+        assert_eq!(offset_of!(ShmHeader, ui_scales_offset), 2688); // v16
+        assert_eq!(offset_of!(ShmHeader, ui_device_params_offset), 2696); // v17
+        assert_eq!(offset_of!(ShmHeader, ui_audio_source_offset), 2704); // v18
+        assert_eq!(offset_of!(ShmHeader, ui_waveform_offset), 2712);
+        assert_eq!(offset_of!(ShmHeader, ui_song_time_sig_num), 2720); // v19
+        assert_eq!(offset_of!(ShmHeader, ui_song_time_sig_den), 2724);
+        assert_eq!(offset_of!(ShmHeader, ui_track_parent_id), 2728); // v20
+        assert_eq!(offset_of!(ShmHeader, ui_track_flags), 2984);
         // The scale + device-param region structs (v16/v17) are now generated from
         // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
