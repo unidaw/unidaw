@@ -438,6 +438,12 @@ const SIG = { zoomIndex: -1, pendingCount: -1, overlayLen: -1, badKey: -2,
               extentsRevision: -2 };
 let contentRevision = 0;
 
+/**
+ * Cells per note column: the note, its velocity, its effect. A track shows
+ * `noteColumns` of these side by side.
+ */
+export const FIELDS_PER_NOTE = 3;
+
 export function createBuffer(rowCount, trackCount, columns) {
   const rows = new Array(rowCount);
   for (let i = 0; i < rowCount; i++) {
@@ -565,7 +571,10 @@ export function velocityText(v) {
 
 export function buildViewModel(opts, buf) {
   const {
-    startRow, rowCount, tracks: trackCount, columns = 3,
+    startRow, rowCount, tracks: trackCount, columns = FIELDS_PER_NOTE,
+    // How many note columns each track shows. `columns` is the total cell stride
+    // per track and stays authoritative for indexing; this says how to divide it.
+    noteColumns = Math.max(1, Math.floor(columns / FIELDS_PER_NOTE)),
     zoomIndex = 2, cursor = { row: startRow, track: 0, col: 0 },
     playheadRow = startRow, selection = null,
     // When present, cells come from the engine instead of the fixture. The
@@ -1040,13 +1049,27 @@ export function buildViewModel(opts, buf) {
       const ri = scaled >= startRow ? scaled - startRow : ((n.tOn - winStart) / span) | 0;
       const row = rows[ri];
       if (!row) continue;
-      const base = n.track * columns;
+      /**
+       * The note's OWN column, not always the track's first.
+       *
+       * A track shows `noteColumns` of them, three cells each, and the engine has
+       * carried a per-note `column` all along. Placing every note at the track's
+       * base is what turned a three-note chord into one cell reading "3 evts"
+       * with no way to see or edit what was in it.
+       *
+       * Clamped rather than trusted: `column` is a byte off the wire, and a note
+       * claiming column 200 must land somewhere real instead of writing past the
+       * row. It lands in the last column the track has, where it will collide
+       * visibly — which is the honest outcome for data this file cannot place.
+       */
+      const nc = Math.min(noteColumns - 1, Math.max(0, n.column | 0));
+      const base = n.track * columns + nc * FIELDS_PER_NOTE;
       const c0 = row.cells[base];
       if (c0) {
-        // Two notes can legitimately land on one (row, track) once placements can
-        // overlap — M3 allows it. Silently letting the second overwrite the first
-        // is the contentAt bug again: a position key losing data while rendering
-        // something plausible. Make the collision visible instead.
+        // Two notes can still land on one cell — same row, same track, same
+        // COLUMN. That is genuinely ambiguous data rather than a chord, so it
+        // keeps the pill: a position key losing data while rendering something
+        // plausible is the contentAt bug, and the pill is what makes it visible.
         if ((c0.kind === 'note' || c0.kind === 'muted' || c0.kind === 'add'
              || c0.kind === 'collide') && c0._row === ri) {
           // More than one note on this (row, track). '**' said only "more than

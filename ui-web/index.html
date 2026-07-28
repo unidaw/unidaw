@@ -127,6 +127,47 @@ const tracker = new Tracker(host, metrics);
 const arrangeHost = document.getElementById('arrange');
 // The stage owns the split between the arrangement and the roll.
 const stageEl = document.getElementById('stage');
+
+/**
+ * How many cells one note column costs: the note, its velocity, its effect.
+ *
+ * A TRACK now shows `noteColumns * FIELDS_PER_NOTE` of them, so two notes on one
+ * row live in two columns instead of collapsing into "2 evts". The engine has
+ * carried a per-note `column` since before the web UI existed, and the page
+ * never sent one — so every note it wrote went to column 0 and simultaneous
+ * notes collided BY CONSTRUCTION. That is the whole of the "there's no way for
+ * me to edit or even view the data" complaint.
+ *
+ * Global rather than per-track for now: `track * columns + col` is the field
+ * index the cursor, the selection and the renderer all share, and making the
+ * stride vary per track changes every one of those. A track that needs one
+ * column shows empty cells where a busier track has notes, which is what a
+ * tracker looks like anyway.
+ */
+/**
+ * How many note columns a track shows.
+ *
+ * Not derived alone: a track needs an EMPTY column before a second note can be
+ * typed into it, and a count derived purely from the notes present can never
+ * offer one. Asking for more is how a chord gets written; the count still rises
+ * by itself for a project that already uses more than you asked for.
+ */
+function uniNoteColumns(n) {
+  if (n !== undefined) {
+    state.noteColumnsWanted = Math.max(1, Math.min(MAX_NOTE_COLUMNS, Math.floor(n) || 1));
+    _noteColsRev = -1;                   // force the derivation to run again
+    schedule();
+  }
+  return state.noteColumns;
+}
+
+const FIELDS_PER_NOTE = 3;
+/** Most note columns a track may show. Renoise stops at 12; this is a screen. */
+const MAX_NOTE_COLUMNS = 8;
+/** Which field of a note column this cell is: 0 note, 1 velocity, 2 effect. */
+const fieldOfCol = (col) => col % FIELDS_PER_NOTE;
+/** Which note column this cell belongs to. */
+const noteColOf = (col) => Math.floor(col / FIELDS_PER_NOTE);
 const arrange = new Arrange(arrangeHost, metrics, {
   onLoop: (a, b, done, opts) => setLoopFromDrag(a, b, done, opts),
   /**
@@ -1185,6 +1226,23 @@ const SURFACE_TITLE = {
 // Named rather than inline so `window.__uni` can hand an agent the SAME function
 // the console calls, not a second one that has to be kept in step with it.
 const dockApi = {
+  // The console reaches the SAME functions the buttons and keys do. These three
+  // were added to __uni only, so `add-track`, `remove-track` and `columns` all
+  // called undefined and threw the moment anyone typed them — the registry test
+  // checks that a command is DECLARED, not that its api method exists.
+  addTrack: () => addTrack(),
+  removeTrack: (t) => removeTrack(t),
+  noteColumns: (n) => uniNoteColumns(n),
+  /**
+   * Whether note keys write. The `edit` command has always called this and it
+   * has never existed, so typing `edit` in the console threw — the toggle was
+   * reachable only from ⌘E.
+   */
+  edit: (on) => {
+    state.editMode = on === undefined ? !state.editMode : !!on;
+    schedule();
+    return state.editMode;
+  },
   setView: (v) => { if (v) { state.view = v; if (v === 'piano') fitPiano(); } schedule(); return state.view; },
   load: (n) => { const ok = conn && conn.loadProject(n); if (ok) state.currentProject = n; return ok; },
   save: (n) => { const ok = conn && conn.saveProject(n); if (ok) state.currentProject = n; return ok; },
@@ -1216,7 +1274,10 @@ const dockApi = {
     const d = dur === undefined || Number.isNaN(dur) ? laneRowTicks(state.cursor.track) : dur;
     const v = vel === undefined || Number.isNaN(vel) ? state.velocity : vel;
     if (!conn || !conn.send({ type: 'note', track: state.cursor.track, pitch,
-                              tick: tickOfCursorRow(), dur: d, vel: v })) throw new Error('no engine');
+                              tick: tickOfCursorRow(), dur: d, vel: v,
+                              // WHICH note column. Omitting this is why every
+                              // note the UI ever wrote landed in column 0.
+                              column: noteColOf(state.cursor.col) })) throw new Error('no engine');
     addPending(state.cursor.row, state.cursor.track, 0, pitchToToken(pitch), base);
     schedule();
   },
@@ -1640,7 +1701,8 @@ let lastLoadSeq = -1;
 const collapsed = new Uint8Array(64);
 let collapsedAny = false;
 
-const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', selection: null,
+const state = { start: 0, scrollX: 0, tracks: 16, columns: FIELDS_PER_NOTE,
+  noteColumns: 1, noteColumnsWanted: 1, link: 'connecting', selection: null,
   // Entry state, shown in the chrome so you can see what you are typing into.
   octave: 4, editStep: 1, velocity: 100, zoom: 3, digitCell: -1, digitAcc: 0,
   /**
@@ -1894,7 +1956,7 @@ function tickOfCursorRow() {
  * value digits commit on their own keystroke and never come through here.
  */
 function commitToken(text) {
-  const r = parseToken(text, state.cursor.col);
+  const r = parseToken(text, fieldOfCol(state.cursor.col));
   if (r.kind === 'note') {
     if (!writePitch(r.pitch)) return;
   } else if (r.kind === 'off') {
@@ -2060,9 +2122,11 @@ function updateChrome() {
   o.keyName = currentKey();
   // What a DIGIT does where the cursor is. The three columns read digits
   // differently and nothing on screen said which — see typeDegree.
-  o.digitMode = state.cursor.col === 0
+  // Position WITHIN the note column, not the absolute column index: with more
+  // than one note column, column 3 is another note field, not an effect.
+  o.digitMode = fieldOfCol(state.cursor.col) === 0
                   ? (state.entryMode === 'degree' ? '#=deg' : '#=note')
-              : state.cursor.col === 1 ? '#=vel' : '#=fx';
+              : fieldOfCol(state.cursor.col) === 1 ? '#=vel' : '#=fx';
   // 120000 when there is no engine, which is what the fixture plays at — not 0,
   // which would put "0.00 BPM" on screen for every golden and every headless run.
   o.tempoMilliBpm = engine && engine.tempoMilliBpm ? engine.tempoMilliBpm : 120000;
@@ -2212,6 +2276,48 @@ const _harmonyOpts = { harmony: null, playheadTick: 0, version: -1,
                        nameHarmony: null, scales: null, meter: null };
 const _chainOpts = { track: 0, chains: null, selected: -1, trackName: '', params: null };
 const _entryOverlay = { row: 0, track: 0, col: 0, text: '' };
+/**
+ * How many note columns the tracker shows, from what the song actually uses.
+ *
+ * Derived rather than configured: the engine already says which column each note
+ * is in, so the grid can be exactly as wide as the music needs and no wider. A
+ * song with one note per row keeps the single column it has always had.
+ *
+ * Recomputed only when the note set changes. It is a scan over every note, and
+ * doing that per frame at 60fps on a song with thousands of them is the kind of
+ * cost this file spends its comments avoiding.
+ */
+let _noteColsRev = -1;
+function syncNoteColumns() {
+  const rev = engine && state.useEngine !== false ? engine.notesRevision : -1;
+  if (rev === _noteColsRev) return;
+  _noteColsRev = rev;
+  let hi = 0;
+  if (engine && state.useEngine !== false) {
+    for (let i = 0; i < engine.noteCount; i++) {
+      const c = engine.notes[i].column | 0;
+      if (c > hi) hi = c;
+    }
+  }
+  // At least as many as the music uses, and never fewer than the user asked for.
+  // Derived-only was a deadlock: you cannot write a note into a second column
+  // until a second column exists, and a second column only existed once a note
+  // was in it. `state.noteColumnsWanted` is the way out — see `columns` in the
+  // console — and the derived count still grows on its own when a project is
+  // loaded that already uses more.
+  const want = Math.min(MAX_NOTE_COLUMNS,
+                        Math.max(1, hi + 1, state.noteColumnsWanted || 1));
+  if (want === state.noteColumns) return;
+  state.noteColumns = want;
+  state.columns = want * FIELDS_PER_NOTE;
+  // The cursor's field index is relative to a stride that just changed; keep it
+  // inside the new one rather than leaving it pointing past the last column.
+  if (state.cursor.col >= state.columns) state.cursor.col = state.columns - 1;
+  // The renderer's pools and the header are both built from the stride.
+  tracker.resize(boxOf(host, true), state.tracks, state.columns);
+  tracker.measure();
+}
+
 const _vmOpts = { startRow: 0, rowCount: 0, tracks: 0, columns: 3, zoomIndex: 2,
                   cursor: null, playheadRow: 0, selection: null, engine: null,
                   pending: null, pendingCount: 0, entryOverlay: null,
@@ -2407,9 +2513,11 @@ function draw() {
   // width and every column sits wrong until something else forces a rebuild.
   tracker.resize(boxOf(host, true), state.tracks, state.columns);
   bi ^= 1;
+  syncNoteColumns();
   const o = _vmOpts;
   o.startRow = state.start; o.rowCount = tracker.poolSize;
   o.tracks = state.tracks; o.columns = state.columns; o.zoomIndex = state.zoom;
+  o.noteColumns = state.noteColumns;
   o.cursor = state.cursor; o.playheadRow = state.playhead; o.selection = state.selection;
   o.engine = state.useEngine === false ? null : engine;
   o.pending = pending; o.pendingCount = pendingCount;
@@ -2856,7 +2964,7 @@ function typeValue(digit) {
   // Checked before the note lookup: on this column the missing piece is the
   // command, not the note, and reporting "no note here" would send you looking
   // for the wrong thing.
-  if (state.cursor.col !== 1) {
+  if (fieldOfCol(state.cursor.col) !== 1) {
     state.reject = 'effect column needs an engine param path';
     return false;
   }
@@ -3460,7 +3568,7 @@ addEventListener('keydown', (e) => {
   if (k.length !== 1) return;
   state.reject = null;
 
-  if (state.cursor.col === 0) {
+  if (fieldOfCol(state.cursor.col) === 0) {
     if (k.toLowerCase() === NOTE_OFF_KEY) {
       noteOffAtCursor();
       state.cursor.row += state.editStep; follow();
@@ -4398,6 +4506,15 @@ window.__uni = {
     track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' }),
   delDevice,                          // the same function the button and the key call
   addTrack, removeTrack,
+  /**
+   * How many note columns a track shows.
+   *
+   * Not derived alone: a track needs an EMPTY column before a second note can be
+   * typed into it, and a count derived purely from the notes present can never
+   * offer one. Asking for more is how a chord gets written; the count still rises
+   * by itself for a project that already uses more than you asked for.
+   */
+  noteColumns: (n) => uniNoteColumns(n),
   deviceParams: () => JSON.parse(JSON.stringify(deviceParams)),
   harmonyProbe: () => harmonyCard.probe(),
   minimapProbe: () => minimap.probe(),
@@ -4520,8 +4637,12 @@ window.__uni = {
     stale: engine.stale, noteCount: engine.noteCount, trackCount: engine.trackCount,
   } : null),
   notes: () => (engine ? engine.notes.slice(0, engine.noteCount)
+    // `col` is the NOTE COLUMN within the track — the engine's own field, which
+    // decides whether two notes on one row are a chord in two columns or a
+    // collision in one. It was decoded off the wire and never exposed, so
+    // nothing could ask the question.
     .map(n => ({ t: n.tOn, off: n.tOff, dur: n.tOff - n.tOn, p: n.pitch,
-                 row: n.row, tr: n.track, id: n.id })) : null),
+                 row: n.row, tr: n.track, col: n.column, id: n.id })) : null),
   /**
    * A synthetic store for the arrange view, including an AUDIO region — schema
    * v3 ships those with UI_CLIP_EXTENT_AUDIO and they render differently, so a

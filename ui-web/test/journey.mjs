@@ -77,6 +77,7 @@ const st = () => page.evaluate(() => {
     view: s.view, focus: s.focus, zoom: s.zoom, octave: s.octave, editMode: s.editMode,
     cursor: { row: s.cursor.row, track: s.cursor.track, col: s.cursor.col },
     tracks: s.tracks, project: s.currentProject, reject: s.reject,
+    columns: s.columns, noteColumns: s.noteColumns,
     engine: e,
   };
 });
@@ -467,6 +468,69 @@ if (!delTrackHit) {
       .filter((e) => e.getBoundingClientRect().width > 0).length);
   ok(lanes < trBefore, 'removing a track takes its lane off screen',
      `${trBefore} tracks -> ${lanes} lanes drawn (extent ${trAfter})`);
+}
+
+// ---------------------------------------------------------------------------
+step('17. two notes on one row, in two cells');
+{
+  // Jaakko: "there should only ever be one event per cell". The engine has
+  // carried a per-note column since before this UI existed and the page never
+  // sent one, so every note it wrote went to column 0 and a chord collapsed into
+  // a cell reading "2 evts" that could not be opened, read or edited.
+  await page.keyboard.press('F1');
+  await settle(400);
+  const cell = await page.evaluate(() => {
+    const host = document.getElementById('tracker').getBoundingClientRect();
+    for (const e of document.querySelectorAll('.tk-track .tk-cell')) {
+      const r = e.getBoundingClientRect();
+      if (r.width < 5 || r.y < host.y + 60 || r.y > host.y + host.height - 60) continue;
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      const top = document.elementFromPoint(x, y);
+      if (top && (top === e || e.contains(top))) return { x, y };
+    }
+    return null;
+  });
+  if (!cell) {
+    gap('write a chord', 'no reachable tracker cell');
+  } else {
+    await page.mouse.click(cell.x, cell.y);
+    await settle(250);
+    if (!(await st()).editMode) { await page.keyboard.press('Meta+e'); await settle(250); }
+    const cols0 = (await st()).noteColumns;
+    // Ask for a second column first. A count derived only from the notes present
+    // is a deadlock — no note can be written into a column that does not exist,
+    // and the column only appears once a note is in it.
+    await page.keyboard.press('Slash');
+    await settle(250);
+    await page.keyboard.type('columns 2');
+    await page.keyboard.press('Enter');
+    await settle(500);
+    await page.keyboard.press('Escape');
+    await settle(300);
+    await page.mouse.click(cell.x, cell.y);
+    await settle(250);
+    // First note in whatever column the cursor is in.
+    await page.keyboard.press('z');
+    await settle(600);
+    // Step RIGHT by a whole note column (three fields) and play another.
+    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowRight');
+    await settle(250);
+    await page.keyboard.press('x');
+    await settle(900);
+    const after = await st();
+    ok(after.noteColumns >= 2,
+       'writing in the second column widens the track to two note columns',
+       `${cols0} -> ${after.noteColumns}`);
+    // The two notes must be in two CELLS, not one cell claiming "2 evts".
+    const shape = await page.evaluate(() => {
+      const texts = [...document.querySelectorAll('.tk-cell')]
+        .map((e) => (e.textContent || '').trim()).filter(Boolean);
+      return { evts: texts.filter((t) => /evts/.test(t)).length,
+               notes: texts.filter((t) => /^[A-G][-#]?\d$/.test(t)).length };
+    });
+    ok(shape.notes >= 2, 'both notes are readable as notes',
+       `${shape.notes} note cells, ${shape.evts} collision pills`);
+  }
 }
 
 // ---------------------------------------------------------------------------

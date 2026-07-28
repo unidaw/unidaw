@@ -545,18 +545,66 @@ test('a project row leaves its meta line to the renderer', () => {
 // and accepted a missing one.
 
 /** Every api method the grammar reaches, recording what it was handed. */
+/**
+ * Every method name the host promises the console.
+ *
+ * Kept as a list so the test below can be exact about which one is missing —
+ * `add-track`, `remove-track` and `columns` all shipped calling functions that
+ * existed on __uni and NOT on the object the dock is handed, so each threw "is
+ * not a function" the moment anyone typed it. The op-registry test did not
+ * notice, because it checks that a command is DECLARED, not that it can run.
+ */
+const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
+                     'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
+                     'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
+                     'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
+                     'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice',
+                     'addDevice', 'openEditor', 'newSong', 'fold', 'edit'];
+
 function stubApi() {
   const calls = [];
   const api = { calls };
-  for (const k of ['setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
-                   'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
-                   'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
-                   'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
-                   'cut']) {
+  for (const k of API_METHODS) {
     api[k] = (...args) => { calls.push(k + '(' + args.join(',') + ')'); return 0; };
   }
   return api;
 }
+
+/** A plausible value for one argument of a command's schema. */
+function sampleArg(a) {
+  if (a.type === 'enum') return a.values[0];
+  if (a.type === 'text') return 'x';
+  const lo = a.min !== undefined ? a.min : 1;
+  const hi = a.max !== undefined ? a.max : lo + 1;
+  return String(Math.min(hi, Math.max(lo, 1)));
+}
+
+test('every console command can actually run', () => {
+  // Calls each one with arguments its own schema accepts, against an api that
+  // has every method the host promises. A command that reaches for something
+  // else throws TypeError here instead of the first time a person types it.
+  //
+  // This is the check that `add-track`, `remove-track` and `columns` needed and
+  // did not have: all three were declared, listed in the op registry, covered by
+  // the CLI-parity ratchet — and dead.
+  const api = stubApi();
+  const cmds = createCommands(api);
+  const broken = [];
+  for (const [name, cmd] of Object.entries(cmds)) {
+    const args = (cmd.args || []).filter((a) => !a.optional).map(sampleArg);
+    try {
+      // The HOST object, which is not the api: `clear` calls x.clear() on it.
+      cmd.run(args, { print: () => {}, clear: () => {}, api });
+    } catch (e) {
+      // A command may legitimately refuse these arguments; only a missing method
+      // is a defect here.
+      if (/is not a function|undefined is not|Cannot read propert/.test(String(e.message))) {
+        broken.push(`${name}: ${e.message}`);
+      }
+    }
+  }
+  assert.deepEqual(broken, [], `console commands calling nothing:\n  ${broken.join('\n  ')}`);
+});
 
 test('every command’s prose and its schema describe the same arguments', () => {
   const cmds = createCommands(stubApi());
@@ -1375,6 +1423,11 @@ const OP_REGISTRY = {
   // v22 (AddTrack=46/RemoveTrack=47). daw-cli shipped its verbs in the same
   // commit the engine did, so these are covered on the CLI from day one; the
   // agent manifest still owes them.
+  // The tracker's note-column count. No CLI or agent path yet: it is a VIEW
+  // setting today, not a document edit, so an agent scripting a song does not
+  // need it — but the moment column assignment becomes part of writing a chord,
+  // it does. Recorded rather than waved through.
+  columns:        { cli: null,           agent: null, why: 'gap' },
   'add-track':    { cli: 'add-track',    agent: null, why: 'gap' },
   'remove-track': { cli: 'remove-track', agent: null, why: 'gap' },
   save:      { cli: 'save',        agent: 'save' },
@@ -1423,13 +1476,13 @@ const OP_REGISTRY = {
 };
 
 /** Ops with no CLI path today. This list may SHRINK, never grow. */
-const CLI_GAP = ['addnode', 'clear', 'copy', 'cut', 'deldevice', 'delnode', 'editor',
-                 'link', 'loop', 'new', 'paste', 'patch', 'redo', 'rename', 'seek',
-                 'stop', 'transpose', 'undo'];
+const CLI_GAP = ['addnode', 'clear', 'columns', 'copy', 'cut', 'deldevice', 'delnode',
+                 'editor', 'link', 'loop', 'new', 'paste', 'patch', 'redo', 'rename',
+                 'seek', 'stop', 'transpose', 'undo'];
 /** Ops with no agent tool today. Same rule. */
-const AGENT_GAP = ['add-track', 'addnode', 'clear', 'copy', 'cut', 'del', 'deldevice',
-                   'delnode', 'editor', 'gain', 'link', 'loop', 'mute', 'new', 'paste',
-                   'patch', 'remove-track', 'seek', 'solo', 'tempo', 'transpose'];
+const AGENT_GAP = ['add-track', 'addnode', 'clear', 'columns', 'copy', 'cut', 'del',
+                   'deldevice', 'delnode', 'editor', 'gain', 'link', 'loop', 'mute', 'new',
+                   'paste', 'patch', 'remove-track', 'seek', 'solo', 'tempo', 'transpose'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether
