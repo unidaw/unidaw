@@ -2361,6 +2361,11 @@ fn diff_type_name(t: u16) -> &'static str {
         5 => "chain-snapshot", 6 => "chain-error", 7 => "routing-snapshot",
         8 => "routing-error", 9 => "mod-snapshot", 10 => "mod-error",
         11 => "mod-link-uid", 12 => "patcher-delta", 13 => "patcher-error",
+        // v20 (Movement 4): one per audio bus, after that device's chain snapshot.
+        // Named before it has a consumer on purpose — the histogram is how anyone
+        // finds out a capability is publishing, and "unknown=16" is exactly the
+        // reading that makes a live feature look like noise.
+        14 => "device-bus",
         _ => "unknown",
     }
 }
@@ -2400,7 +2405,12 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<Chain
         };
         entries.clear();
         let n = h.drain_ui_out(&mut entries, MAX_PER_TICK);
-        if n == 0 { continue; }
+        // NO early return on an empty tick. The histogram below used to sit under
+        // `if n == 0 { continue; }`, so it could only ever print on a tick that
+        // happened to drain something — and diffs arrive in a BURST at load and
+        // then stop. The one shape the ring actually has was the one shape the
+        // diagnostic could not report, which is how "device-bus=16" looked exactly
+        // like a silent ring for a whole afternoon.
         for e in &entries {
             if e.size >= 2 {
                 let t = u16::from_le_bytes([e.payload[0], e.payload[1]]) as usize;
