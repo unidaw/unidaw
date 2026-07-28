@@ -1562,6 +1562,27 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         p.note_nanotick_hi = (start >> 32) as u32;
         p.note_duration_lo = end as u32;
         p.note_duration_hi = (end >> 32) as u32;
+    } else if is_type(body, "preview") {
+        /*
+         * Sound a pitch without writing it (kUiCommandType 45).
+         *
+         * Held: on=1 at keydown, on=0 at keyup, so a sustained key sustains and a
+         * chord is several on=1. Out of band — the engine injects it straight into
+         * the track's instrument and it never reaches the clip store, so it is not
+         * recorded, not undoable and does not dirty the project. It is a sound,
+         * not an edit.
+         *
+         * Checked BEFORE the "note" arm, and with is_type rather than a substring:
+         * `{"type":"preview","pitch":60}` contains no "note" today, but the arm
+         * below matches on a substring and the two would collide the moment either
+         * message grew a field named for the other.
+         */
+        p.command_type = UiCommandType::PreviewNote as u16;
+        p.note_pitch = parse_num(body, "\"pitch\"").unwrap_or(60).clamp(0, 127) as u32;
+        p.value0 = parse_num(body, "\"vel\"").unwrap_or(100).clamp(0, 127) as u32;
+        // Anything but an explicit 0 is a note-on: a keyup that lost its field
+        // should not silently become a stuck voice.
+        p.flags = if parse_num(body, "\"on\"").unwrap_or(1) != 0 { 1 } else { 0 };
     } else if body.contains("\"note\"") {
         let dur = parse_num(body, "\"dur\"").unwrap_or(960_000).max(1) as u64;
         p.command_type = UiCommandType::WriteNote as u16;

@@ -2243,15 +2243,51 @@ function followPlayhead() {
  * reports through the same reject line every other refusal uses, once, so the
  * silence is explained rather than merely quiet.
  */
-let auditionTold = false;
-function auditionPitch(pitch) {
-  if (!auditionTold) {
-    auditionTold = true;
-    state.reject = 'edit mode is off — the key does not write. Auditioning needs '
-                 + 'an engine command that does not exist yet';
-  }
-  void pitch;
+/**
+ * Which pitches are sounding, so every note-on gets exactly one note-off.
+ *
+ * A Set keyed on `track * 128 + pitch`, because the same pitch held on two tracks
+ * is two voices and releasing one must not silence the other. Bounded by
+ * construction — 128 pitches times the track cap — and cleared on blur, because a
+ * key released while the window is not focused never delivers its keyup and would
+ * otherwise leave a voice sounding with nothing on screen able to stop it.
+ */
+const sounding = new Set();
+const voiceKey = (track, pitch) => track * 128 + pitch;
+
+function auditionOn(pitch) {
+  const k = voiceKey(state.cursor.track, pitch);
+  // The OS repeats a held key. Retriggering on every repeat turns a held note into
+  // a machine-gun; backend de-dupes a second on for a held pitch to a no-op, and
+  // not sending it at all is cheaper than having the engine ignore it.
+  if (sounding.has(k)) return;
+  sounding.add(k);
+  conn && conn.send({ type: 'preview', track: state.cursor.track,
+                      pitch, vel: state.velocity, on: 1 });
 }
+
+function auditionOff(pitch, track) {
+  const t = track === undefined ? state.cursor.track : track;
+  const k = voiceKey(t, pitch);
+  if (!sounding.delete(k)) return;
+  conn && conn.send({ type: 'preview', track: t, pitch, vel: 0, on: 0 });
+}
+
+/**
+ * Release everything. Called on keyup for one pitch and on blur for all of them.
+ *
+ * The engine also flushes held previews on Stop, which is the backstop for a
+ * dropped keyup — but a note left sounding because the window lost focus is a
+ * note the user cannot stop without finding the transport, so this is the half
+ * that has to be here.
+ */
+function auditionAllOff() {
+  for (const k of sounding) {
+    conn && conn.send({ type: 'preview', track: (k / 128) | 0, pitch: k % 128, vel: 0, on: 0 });
+  }
+  sounding.clear();
+}
+addEventListener('blur', auditionAllOff);
 
 function follow() {
   const visible = Math.max(1, Math.floor(boxOf(host, true) / metrics.rowHeight));
@@ -2574,6 +2610,20 @@ function moveCursor(fn) {
   fn();
 }
 
+/**
+ * Note-off. The page has never had a keyup handler because nothing it did was
+ * held — a note was written and that was the end of it.
+ *
+ * Unconditional on edit mode: if the mode is toggled while a key is down, the
+ * keyup still has to release the voice that the keydown started, or the toggle
+ * strands it. Same reason it does not check the view.
+ */
+addEventListener('keyup', (e) => {
+  if (!sounding.size) return;
+  const pitch = pitchOf(e.key.toLowerCase(), state.octave);
+  if (pitch >= 0) auditionOff(pitch);
+});
+
 addEventListener('keydown', (e) => {
   const k = e.key;
   /**
@@ -2633,6 +2683,21 @@ addEventListener('keydown', (e) => {
      * one that works in a browser tab today.
      */
     if (c === 'n') { dockApi.newSong(); return done(); }
+    /**
+     * Edit mode. Cmd/Ctrl+E, because Escape is not available.
+     *
+     * Escape was the first choice — it is Renoise's key and the right muscle
+     * memory — and it does not work here: this app has a focus model Renoise does
+     * not, so Escape is already "leave the browser rail", then "cancel the token
+     * buffer", then "dismiss the rejection". Pressing it did one of those three
+     * before it ever reached the mode, so the toggle needed one press or three
+     * and you could not tell which without looking at what was on screen.
+     *
+     * A mode key that is sometimes a dismiss key is worse than either. Escape
+     * keeps its dismissals; this gets its own binding, and `edit` in the palette
+     * for anyone who does not know it.
+     */
+    if (c === 'e') { state.editMode = !state.editMode; return done(); }
     if (c === 'j') {
       if (state.focus === 'dock') state.dockOpen = false;
       else { state.dockOpen = true; dock.focus(); }
@@ -2825,18 +2890,7 @@ addEventListener('keydown', (e) => {
   if (state.view === 'mixer') {
     if (k === ' ') { cmd('play'); return done(); }
     if (k === 'Escape') {
-      /**
-       * Cancel if there is something to cancel; otherwise toggle EDIT MODE.
-       *
-       * Renoise's grammar, and it is the right one: Escape already means "undo
-       * the thing I am in the middle of", and when you are in the middle of
-       * nothing the useful meaning is "stop the keyboard writing". A bare letter
-       * could not do this — every letter is a piano key — so it had to be Escape
-       * or a modifier combo, and a modifier combo for the mode you toggle most is
-       * the wrong way round.
-       */
-      if (state.reject) { state.reject = null; return done(); }
-      state.editMode = !state.editMode;
+      state.reject = null;
       return done();
     }
     if (k === 'r') { mixer.beginRename(state.cursor.track); return done(); }
@@ -2976,7 +3030,7 @@ addEventListener('keydown', (e) => {
       // not exist yet (WriteNote is the only note command and it edits), so for
       // now this is silent — which is still the difference between a keyboard
       // that destroys your pattern and one that does not.
-      if (!state.editMode) { auditionPitch(pitch); return done(); }
+      if (!state.editMode) { auditionOn(pitch); return done(); }
       writePitch(pitch);
       state.cursor.row += state.editStep; follow();
       return done();
@@ -3844,6 +3898,9 @@ window.__uni = {
   newSong: (name) => dockApi.newSong(name),
   openEditor: (track, device) => dockApi.openEditor(track, device),
   playFrom: (row) => dockApi.playFrom(row),
+  /** Which preview voices are sounding, as track:pitch — so a test can prove a
+   *  note-on is matched by exactly one note-off rather than trusting the wire. */
+  sounding: () => [...sounding].map((k) => ((k / 128) | 0) + ':' + (k % 128)),
   folded: () => Array.from(collapsed.slice(0, state.tracks)),
   // The same function the rack's drag calls, not a copy of it.
   audioSources: () => ({ sources: audioSources, clips: audioClips, bpmMilli: audioBpmMilli }),
