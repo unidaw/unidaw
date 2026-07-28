@@ -567,6 +567,14 @@ size_t ringBytesForEntrySize(uint32_t capacity, size_t entrySize);
 size_t sharedMemorySize(const ShmHeader& header,
                         uint32_t ringStdCapacity,
                         uint32_t ringCtrlCapacity,
-                        uint32_t ringUiCapacity);
+                        uint32_t ringUiCapacity,
+                        uint32_t numAuxChannelsOut = 0);
+
+// Byte offset of the aux OUTPUT plane (Movement 4 multi-out): the region right after
+// the main output plane where the host writes a multi-out plugin's aux buses. Derived
+// from audioOutOffset + the main plane size, so host and engine agree without a header
+// field. Each block holds numAuxChannelsOut channels; bus k's channel c is at
+// auxOutputPlaneOffset + block*numAux*stride + (busChannelOffset+c)*stride.
+size_t auxOutputPlaneOffset(const ShmHeader& header);
 
 }  // namespace daw

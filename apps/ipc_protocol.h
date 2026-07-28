@@ -28,7 +28,19 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 //    A host without the handler would silently drop it, so gate it at the handshake.
 // 6: GetBusLayout — the engine asks the host for a plugin's negotiated bus topology
 //    (Movement 4). An old host would drop it, so it is handshake-gated like the rest.
-constexpr uint16_t kControlVersion = 6;
+// 7: GetLatency — the engine asks the host for the chain's processing latency (sum of
+//    every plugin's getLatencySamples) so it can delay-compensate lower-latency tracks
+//    against the highest-latency one (Movement 4 PDC). Host↔engine only; the frontend
+//    contract (kShmVersion) is untouched. Handshake-gated so an old host can't answer
+//    a query it doesn't implement with a misparsed reply.
+// 8: ChainHeader gains sidechainMask — a per-plugin bit telling the host to enable that
+//    plugin's sidechain (aux) input bus at prepare (Movement 4 sidechain). An old host
+//    would misread the larger header, so gate it. Host↔engine only; kShmVersion stands.
+// 9: HelloRequest gains numAuxChannelsOut (aux OUTPUT plane width) and ChainHeader gains
+//    auxOutMask (enable a plugin's aux output buses) — Movement 4 multi-out. Both headers
+//    grow, so an old host would misparse; gate it. Still host↔engine only; the aux plane
+//    sits right after the main output plane at a computed offset, kShmVersion stands.
+constexpr uint16_t kControlVersion = 9;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,
@@ -58,6 +70,13 @@ enum class ControlMessageType : uint16_t {
   // the reply is BusLayoutHeader{pluginIndex,busCount,byteCount} + busCount
   // HostBusWire. Off the RT path, same shape as GetParams.
   GetBusLayout = 11,
+  // Report the chain's processing latency (Movement 4 PDC). Request carries a
+  // LatencyHeader whose contents the host ignores (the body must be non-empty — the
+  // control loop only dispatches when header.size > 0). The reply is
+  // LatencyHeader{pluginCount,totalSamples,byteCount} followed by pluginCount int32
+  // per-plugin latencies. The engine aligns on totalSamples; per-plugin values are for
+  // display. Off the RT path.
+  GetLatency = 12,
 };
 
 // Cap on parameters returned per query — a scrollable rack shows plenty within
@@ -106,6 +125,18 @@ struct HostBusWire {
   char name[24]{};
 };
 
+// GetLatency reply header (Movement 4 PDC). The host sums every plugin's reported
+// processing latency into totalSamples — the value the engine delay-compensates on —
+// and follows this header with `pluginCount` int32 per-plugin latencies for display.
+// A plugin that reports no latency contributes 0; the sum is what a track's output is
+// delayed by, so a lower-latency track is padded to match the chain's worst offender.
+struct LatencyHeader {
+  uint32_t pluginCount = 0;    // per-plugin values that follow (<= kMaxParamsPerQuery)
+  uint32_t totalSamples = 0;   // sum of all plugins' latency = the track's chain latency
+  uint32_t byteCount = 0;      // pluginCount * sizeof(int32_t)
+  uint32_t reserved = 0;
+};
+
 // SetParam payload: set plugin[pluginIndex]'s parameter identified by uid16 to
 // `normalized` (0..1). uid16 is the same durable key GetParams returns, so a mapping
 // survives a plugin version change; the host resolves it to its stableId.
@@ -123,6 +154,16 @@ struct StateHeader {
 struct ChainHeader {
   uint32_t count = 0;      // number of null-terminated paths that follow
   uint32_t byteCount = 0;  // total bytes of the path block
+  // Movement 4 sidechain: bit i set = enable plugin[i]'s sidechain (aux) input bus at
+  // prepare, so the engine can key a compressor off another track. The host feeds that
+  // bus from the track's widened input plane. Bit set only for a plugin that both has
+  // a sidechain route bound and declares an aux input bus; 0 = the pre-sidechain
+  // behaviour (all non-main buses disabled).
+  uint32_t sidechainMask = 0;
+  // Movement 4 multi-out: bit i set = enable plugin[i]'s aux OUTPUT buses at prepare, so
+  // a multi-out instrument's stems reach the aux output plane. Bit set only when the
+  // engine wants that plugin's buses split to child tracks; 0 = aux outputs disabled.
+  uint32_t auxOutMask = 0;
 };
 
 struct ControlHeader {
@@ -141,6 +182,12 @@ struct HelloRequest {
   uint32_t ringStdCapacity = 0;
   uint32_t ringCtrlCapacity = 0;
   uint32_t ringUiCapacity = 0;
+  // Movement 4 multi-out: channels reserved for the AUX OUTPUT plane, which the host
+  // lays out immediately after the main output plane. A multi-out instrument's aux
+  // buses (a drum plugin's stems) are written there; the engine reads each bus's slice
+  // for its child track. 0 = no aux plane (the pre-multi-out layout). numChannelsOut
+  // stays the MAIN width, so the master mix + sidechain offset are unchanged.
+  uint32_t numAuxChannelsOut = 0;
   double sampleRate = 0.0;
 };
 

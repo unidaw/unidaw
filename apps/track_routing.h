@@ -22,6 +22,11 @@ struct TrackRouting {
   TrackRoute midiOut{};
   TrackRoute audioIn{};
   TrackRoute audioOut{TrackRouteKind::Master, 0, 0};
+  // Movement 4 sidechain: where this track's sidechain (key) input comes from. Kind
+  // Track = another track's output feeds the first chain plugin's sidechain input bus
+  // (e.g. a compressor keyed off the kick). None = no sidechain. The source's output
+  // is pulled one block late, which a dynamics processor's attack absorbs.
+  TrackRoute sidechain{};
   bool preFaderSend = true;
 };
 

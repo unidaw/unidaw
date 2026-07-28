@@ -214,6 +214,7 @@ bool HostController::connect(const HostConfig& config) {
   request.blockSize = config.blockSize;
   request.numChannelsIn = config.numChannelsIn;
   request.numChannelsOut = config.numChannelsOut;
+  request.numAuxChannelsOut = config.numAuxChannelsOut;
   request.numBlocks = config.numBlocks;
   request.ringStdCapacity = config.ringStdCapacity;
   request.ringCtrlCapacity = config.ringCtrlCapacity;
@@ -473,6 +474,51 @@ bool HostController::requestBusLayout(uint32_t pluginIndex,
   return true;
 }
 
+bool HostController::requestChainLatency(uint32_t& outTotalSamples,
+                                         std::vector<int32_t>& outPerPlugin) {
+  outTotalSamples = 0;
+  outPerPlugin.clear();
+  std::lock_guard<std::mutex> lock(socketMutex_);
+  if (socketFd_ < 0) {
+    return false;
+  }
+  // Send a LatencyHeader as the request body — its contents are ignored host-side, but
+  // the body must be non-empty: the host's control loop only dispatches a message when
+  // header.size > 0, so a zero-length request would be silently skipped and this call
+  // would block forever waiting for a reply that never comes.
+  LatencyHeader request{};
+  if (!sendMessage(socketFd_, ControlMessageType::GetLatency, &request,
+                   sizeof(request))) {
+    return false;
+  }
+  ControlHeader header;
+  if (!recvHeader(socketFd_, header)) {
+    return false;
+  }
+  if (header.type != static_cast<uint16_t>(ControlMessageType::GetLatency) ||
+      header.size < sizeof(LatencyHeader)) {
+    return false;
+  }
+  std::vector<uint8_t> payload(header.size);
+  if (!readAll(socketFd_, payload.data(), payload.size())) {
+    return false;
+  }
+  LatencyHeader response{};
+  std::memcpy(&response, payload.data(), sizeof(response));
+  outTotalSamples = response.totalSamples;
+  const size_t available = payload.size() - sizeof(LatencyHeader);
+  const uint32_t count = std::min<uint32_t>(response.pluginCount, kMaxParamsPerQuery);
+  const size_t needed = static_cast<size_t>(count) * sizeof(int32_t);
+  if (needed > available) {
+    return false;
+  }
+  outPerPlugin.resize(count);
+  if (count > 0) {
+    std::memcpy(outPerPlugin.data(), payload.data() + sizeof(LatencyHeader), needed);
+  }
+  return true;
+}
+
 bool HostController::sendPluginState(uint32_t pluginIndex,
                                      const std::vector<uint8_t>& data) {
   std::lock_guard<std::mutex> lock(socketMutex_);
@@ -493,7 +539,8 @@ bool HostController::sendPluginState(uint32_t pluginIndex,
                      payload.size());
 }
 
-bool HostController::sendSetChain(const std::vector<PluginRef>& refs) {
+bool HostController::sendSetChain(const std::vector<PluginRef>& refs,
+                                  uint32_t sidechainMask, uint32_t auxOutMask) {
   // Each entry is path\0name\0 (v4). The name lets the host pick the right plugin
   // out of a multi-plugin bundle; an empty name means "take the first type".
   std::vector<uint8_t> block;
@@ -507,6 +554,8 @@ bool HostController::sendSetChain(const std::vector<PluginRef>& refs) {
   ChainHeader header{};
   header.count = static_cast<uint32_t>(refs.size());
   header.byteCount = static_cast<uint32_t>(block.size());
+  header.sidechainMask = sidechainMask;
+  header.auxOutMask = auxOutMask;
   std::memcpy(payload.data(), &header, sizeof(header));
   if (!block.empty()) {
     std::memcpy(payload.data() + sizeof(header), block.data(), block.size());

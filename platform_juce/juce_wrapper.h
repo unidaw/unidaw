@@ -108,12 +108,22 @@ class IPluginInstance {
  public:
   virtual ~IPluginInstance() = default;
 
-  virtual void prepare(double sampleRate, int blockSize, int numOutputs) = 0;
+  // enableSidechain / enableAuxOut (Movement 4): enable the plugin's sidechain (aux)
+  // INPUT bus (a compressor keyed by another track) and/or its aux OUTPUT buses (a
+  // multi-out instrument's stems). Both are off by default (only the main bus enabled)
+  // and both govern the negotiated bus layout, so they must be known here.
+  virtual void prepare(double sampleRate, int blockSize, int numOutputs,
+                       bool enableSidechain = false, bool enableAuxOut = false) = 0;
   // Called before process() for the same block.
   virtual void setTransport(const TransportInfo& transport) = 0;
+  // auxOutputs (Movement 4 multi-out): when non-null, the plugin's aux OUTPUT bus
+  // channels (everything after the main bus) are written here — numAuxOutputs planar
+  // channels of numFrames — so the engine can split a multi-out instrument's stems to
+  // child tracks. The main output still goes to `outputs`. Null = main output only.
   virtual void process(const float* const* inputs, int numInputs,
                        float* const* outputs, int numOutputs, int numFrames,
-                       const MidiEvents& events, int64_t samplePosition) = 0;
+                       const MidiEvents& events, int64_t samplePosition,
+                       float* const* auxOutputs = nullptr, int numAuxOutputs = 0) = 0;
 
   virtual std::string name() const = 0;
   virtual std::string vendor() const = 0;
@@ -123,6 +133,9 @@ class IPluginInstance {
   virtual int numParameters() const = 0;
   virtual int inputChannels() const = 0;
   virtual int outputChannels() const = 0;
+  // Samples of processing latency the plugin reports (getLatencySamples), for delay
+  // compensation. Valid after prepare().
+  virtual int latencySamples() const = 0;
   // The plugin's negotiated bus topology, valid after prepare() (empty before). The
   // engine + UI read this to see and address stems, aux, and sidechain buses.
   virtual std::vector<BusInfo> busLayout() const = 0;

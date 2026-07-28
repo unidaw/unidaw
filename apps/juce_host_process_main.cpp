@@ -62,17 +62,27 @@ struct HostState {
                        // two devices can share a bundle path but differ by plugin
     double preparedSampleRate = 0.0;  // rate this instance was prepared at; a reused
                                       // slot is re-prepared if the device rate changed
+    bool preparedSidechain = false;   // whether the sidechain bus was enabled at prepare;
+                                      // a reused slot re-prepares if this changed (M4)
+    bool preparedAuxOut = false;      // whether aux OUTPUT buses were enabled at prepare
+                                      // (M4 multi-out); re-prepares if this changed
   };
   std::vector<PluginSlot> plugins;
   std::mutex pluginsMutex;
   std::vector<float*> inputPtrs;
   std::vector<float*> outputPtrs;
+  std::vector<float*> auxOutputPtrs;  // M4 multi-out: per-block aux plane channels
   std::vector<std::string> pluginPaths;
   std::vector<std::string> pluginNames;  // parallel to pluginPaths (may be shorter)
   std::vector<float> chainBufferA;
   std::vector<float> chainBufferB;
   std::vector<float*> chainPtrsA;
   std::vector<float*> chainPtrsB;
+  // Movement 4 multi-out: the aux OUTPUT plane's byte offset + width, set at Hello. The
+  // last chain plugin's aux output bus channels are written here for the engine to split
+  // into child tracks. 0 width = no aux plane.
+  size_t audioAuxOutOffset = 0;
+  uint32_t numAuxChannelsOut = 0;
   bool testMode = false;
   std::atomic<bool> pluginsLoading{false};
   std::atomic<bool> pluginsReady{false};
@@ -161,7 +171,9 @@ std::optional<HostState::PluginSlot> loadPluginSlot(daw::IPluginHost& host,
                                                     const std::string& name,
                                                     double sampleRate,
                                                     uint32_t blockSize,
-                                                    uint32_t numChannelsOut) {
+                                                    uint32_t numChannelsOut,
+                                                    bool enableSidechain = false,
+                                                    bool enableAuxOut = false) {
   if (!std::filesystem::exists(path)) {
     std::cerr << "Plugin path not found: " << path << std::endl;
     return std::nullopt;
@@ -171,12 +183,15 @@ std::optional<HostState::PluginSlot> loadPluginSlot(daw::IPluginHost& host,
     std::cerr << "Failed to load plugin in host process: " << path << std::endl;
     return std::nullopt;
   }
-  instance->prepare(sampleRate, blockSize, static_cast<int>(numChannelsOut));
+  instance->prepare(sampleRate, blockSize, static_cast<int>(numChannelsOut),
+                    enableSidechain, enableAuxOut);
   HostState::PluginSlot slot;
   slot.instance = std::move(instance);
   slot.path = path;
   slot.name = name;
   slot.preparedSampleRate = sampleRate;
+  slot.preparedSidechain = enableSidechain;
+  slot.preparedAuxOut = enableAuxOut;
   for (const auto& param : slot.instance->parameters()) {
     const auto uid16 = daw::hashStableId16(param.stableId);
     slot.paramIdByUid16.emplace(uid16Key(uid16.data()), param.stableId);
@@ -213,7 +228,8 @@ void resizeChainBuffers(HostState& state, size_t pluginCount,
 // already-loaded instance whenever the path is unchanged so only a genuinely
 // new plugin is instantiated — that is what keeps a chain edit from dropping
 // audio for the seconds a full reload takes. MUST run on the message thread.
-void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired) {
+void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired,
+                    uint32_t sidechainMask = 0, uint32_t auxOutMask = 0) {
   if (!state.header) {
     return;
   }
@@ -233,7 +249,15 @@ void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired
   std::vector<HostState::PluginSlot> next;
   next.reserve(desired.size());
   std::vector<bool> reused(current.size(), false);
+  uint32_t desiredIndex = 0;
   for (const auto& ref : desired) {
+    // Movement 4: bit i of sidechainMask/auxOutMask enables plugin[i]'s sidechain input
+    // bus / aux output buses.
+    const bool wantSidechain =
+        (desiredIndex < 32) && ((sidechainMask >> desiredIndex) & 1u) != 0u;
+    const bool wantAuxOut =
+        (desiredIndex < 32) && ((auxOutMask >> desiredIndex) & 1u) != 0u;
+    ++desiredIndex;
     // Reuse the first unclaimed loaded slot with a matching path AND name,
     // preserving its instance and dialled-in state. Name matters because two
     // devices can point at one bundle but different plugins inside it.
@@ -245,13 +269,20 @@ void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired
         // would keep playing at the wrong rate — 48k content on a 44.1k device is
         // ~8.8% off in pitch and tempo-sync. Re-prepare only when the rate actually
         // changed, so normal chain edits (rate unchanged) still preserve DSP state.
-        if (current[i].preparedSampleRate != sampleRate) {
-          std::cerr << "Host: re-preparing " << ref.path << " from "
-                    << current[i].preparedSampleRate << " to " << sampleRate
-                    << " Hz" << std::endl;
+        if (current[i].preparedSampleRate != sampleRate ||
+            current[i].preparedSidechain != wantSidechain ||
+            current[i].preparedAuxOut != wantAuxOut) {
+          std::cerr << "Host: re-preparing " << ref.path << " (rate "
+                    << current[i].preparedSampleRate << "->" << sampleRate
+                    << ", sidechain " << current[i].preparedSidechain << "->"
+                    << wantSidechain << ", auxOut " << current[i].preparedAuxOut
+                    << "->" << wantAuxOut << ")" << std::endl;
           current[i].instance->prepare(sampleRate, blockSize,
-                                       static_cast<int>(numChannelsOut));
+                                       static_cast<int>(numChannelsOut),
+                                       wantSidechain, wantAuxOut);
           current[i].preparedSampleRate = sampleRate;
+          current[i].preparedSidechain = wantSidechain;
+          current[i].preparedAuxOut = wantAuxOut;
         }
         next.push_back(std::move(current[i]));
         reused[i] = true;
@@ -263,7 +294,8 @@ void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired
       continue;
     }
     if (auto slot = loadPluginSlot(*state.pluginHost, ref.path, ref.name,
-                                   sampleRate, blockSize, numChannelsOut)) {
+                                   sampleRate, blockSize, numChannelsOut,
+                                   wantSidechain, wantAuxOut)) {
       next.push_back(std::move(*slot));
     } else {
       // Keep a null-instance placeholder rather than dropping the slot, so the host's
@@ -420,10 +452,12 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
   header.channelStrideBytes =
       static_cast<uint32_t>(daw::channelStrideBytes(request.blockSize));
 
+  state.numAuxChannelsOut = request.numAuxChannelsOut;
   const size_t shmSize = daw::sharedMemorySize(header,
                                                request.ringStdCapacity,
                                                request.ringCtrlCapacity,
-                                               request.ringUiCapacity);
+                                               request.ringUiCapacity,
+                                               request.numAuxChannelsOut);
   if (::ftruncate(state.shmFd, static_cast<off_t>(shmSize)) != 0) {
     std::cerr << "ftruncate failed: " << std::strerror(errno) << std::endl;
     return false;
@@ -451,6 +485,13 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
   offset += daw::alignUp(inBlockBytes, 64);
   header.audioOutOffset = offset;
   offset += daw::alignUp(outBlockBytes, 64);
+  // Movement 4: the aux OUTPUT plane follows the main output plane; the engine derives
+  // this same offset via auxOutputPlaneOffset(header). 0 aux channels = 0 bytes, so the
+  // rings sit exactly where they did before multi-out.
+  const size_t auxBlockBytes = static_cast<size_t>(request.numAuxChannelsOut) * stride *
+                               header.numBlocks;
+  state.audioAuxOutOffset = offset;
+  offset += daw::alignUp(auxBlockBytes, 64);
   header.ringStdOffset = offset;
   offset += daw::alignUp(daw::ringBytes(request.ringStdCapacity), 64);
   header.ringCtrlOffset = offset;
@@ -498,6 +539,7 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
   state.ringCtrl = daw::makeEventRing(state.shmBase, header.ringCtrlOffset);
   state.outputPtrs.resize(header.numChannelsOut, nullptr);
   state.inputPtrs.resize(header.numChannelsIn, nullptr);
+  state.auxOutputPtrs.resize(state.numAuxChannelsOut, nullptr);
 
   daw::HelloResponse response;
   response.shmSizeBytes = shmSize;
@@ -559,6 +601,19 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
                                                  *state.header,
                                                  blockIndex,
                                                  ch);
+  }
+  // Movement 4 multi-out: the aux OUTPUT plane's per-block channel pointers. The plane
+  // sits at audioAuxOutOffset with numAuxChannelsOut channels per block; the multi-out
+  // plugin writes its stems here and the engine reads each bus's slice for its child.
+  if (state.numAuxChannelsOut > 0 && state.audioAuxOutOffset > 0) {
+    const size_t stride = state.header->channelStrideBytes;
+    const size_t blockBytes = static_cast<size_t>(state.numAuxChannelsOut) * stride;
+    for (uint32_t ch = 0; ch < state.numAuxChannelsOut; ++ch) {
+      state.auxOutputPtrs[ch] = reinterpret_cast<float*>(
+          reinterpret_cast<uint8_t*>(state.shmBase) + state.audioAuxOutOffset +
+          static_cast<size_t>(blockIndex) * blockBytes +
+          static_cast<size_t>(ch) * stride);
+    }
   }
 
   std::unique_lock<std::mutex> pluginLock(state.pluginsMutex);
@@ -777,13 +832,20 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
           }
         }
       } else {
+        // Movement 4 multi-out: a plugin prepared with aux outputs writes its stems to
+        // the shared aux plane. Only the multi-out plugin is flagged, so at most one
+        // writer per host.
+        const bool writeAux = slot.preparedAuxOut && state.numAuxChannelsOut > 0 &&
+                              !state.auxOutputPtrs.empty();
         slot.instance->process(pluginInputPtrs,
                                pluginInputCount,
                                outputPtrs,
                                numOutputs,
                                static_cast<int>(state.header->blockSize),
                                events,
-                               static_cast<int64_t>(blockStart));
+                               static_cast<int64_t>(blockStart),
+                               writeAux ? state.auxOutputPtrs.data() : nullptr,
+                               writeAux ? static_cast<int>(state.numAuxChannelsOut) : 0);
       }
       inputPtrs = outputPtrs;
       numInputs = numOutputs;
@@ -1087,6 +1149,44 @@ void runControlLoop(HostState& state) {
             break;
           }
         }
+      } else if (type == daw::ControlMessageType::GetLatency) {
+        // Movement 4 PDC: report each plugin's processing latency and the chain total.
+        // The engine delay-compensates lower-latency tracks against the highest, so it
+        // needs the sum a track's output is delayed by. Request is the bare header
+        // (no body); we always answer so a chain with no reported latency reads 0, not
+        // "unknown". Off the RT path, under the plugins lock.
+        std::vector<int32_t> perPlugin;
+        uint64_t total = 0;
+        {
+          std::lock_guard<std::mutex> lock(state.pluginsMutex);
+          const uint32_t n = std::min<uint32_t>(
+              static_cast<uint32_t>(state.plugins.size()), daw::kMaxParamsPerQuery);
+          perPlugin.reserve(n);
+          for (uint32_t i = 0; i < n; ++i) {
+            const int32_t l = (state.plugins[i].instance &&
+                               !state.plugins[i].bypass)
+                                  ? std::max(0, state.plugins[i].instance->latencySamples())
+                                  : 0;
+            perPlugin.push_back(l);
+            total += static_cast<uint64_t>(l);
+          }
+        }
+        daw::LatencyHeader responseHeader{};
+        responseHeader.pluginCount = static_cast<uint32_t>(perPlugin.size());
+        responseHeader.totalSamples =
+            static_cast<uint32_t>(std::min<uint64_t>(total, 0xFFFFFFFFull));
+        responseHeader.byteCount =
+            static_cast<uint32_t>(perPlugin.size() * sizeof(int32_t));
+        std::vector<uint8_t> reply(sizeof(responseHeader) + responseHeader.byteCount);
+        std::memcpy(reply.data(), &responseHeader, sizeof(responseHeader));
+        if (!perPlugin.empty()) {
+          std::memcpy(reply.data() + sizeof(responseHeader), perPlugin.data(),
+                      responseHeader.byteCount);
+        }
+        if (!daw::sendMessage(state.clientFd, daw::ControlMessageType::GetLatency,
+                              reply.data(), reply.size())) {
+          break;
+        }
       } else if (type == daw::ControlMessageType::SetState) {
         if (payload.size() >= sizeof(daw::StateHeader)) {
           daw::StateHeader request{};
@@ -1134,15 +1234,17 @@ void runControlLoop(HostState& state) {
           // Instantiation must run on the message thread; the control loop is a
           // separate thread. Post the reconcile and wait for it, so the reply
           // to the next command reflects the new chain.
+          const uint32_t sidechainMask = header.sidechainMask;
+          const uint32_t auxOutMask = header.auxOutMask;
           if (auto* manager = juce::MessageManager::getInstanceWithoutCreating()) {
             juce::WaitableEvent done;
-            manager->callAsync([&state, refs, &done]() {
-              reconcileChain(state, refs);
+            manager->callAsync([&state, refs, sidechainMask, auxOutMask, &done]() {
+              reconcileChain(state, refs, sidechainMask, auxOutMask);
               done.signal();
             });
             done.wait();
           } else {
-            reconcileChain(state, refs);
+            reconcileChain(state, refs, sidechainMask, auxOutMask);
           }
         }
       } else if (type == daw::ControlMessageType::Shutdown) {

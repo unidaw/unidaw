@@ -24,6 +24,11 @@ struct HostConfig {
   double sampleRate = 48000.0;
   uint32_t numChannelsIn = 0;
   uint32_t numChannelsOut = 2;
+  // Movement 4 multi-out: channels reserved for the aux OUTPUT plane (a multi-out
+  // instrument's stems). 0 = no aux plane. The engine sizes this generously so any
+  // hosted plugin's aux buses fit; a track without a multi-out plugin just leaves it
+  // silent.
+  uint32_t numAuxChannelsOut = 0;
   uint32_t numBlocks = 3;
   uint32_t ringStdCapacity = 1024;
   uint32_t ringCtrlCapacity = 128;
@@ -84,9 +89,20 @@ class HostController {
   bool requestBusLayout(uint32_t pluginIndex, std::vector<HostBusWire>& out,
                         bool& outTruncated);
 
+  // Report the chain's processing latency (Movement 4 PDC): outTotalSamples is the
+  // sum every plugin's output is delayed by (what the engine aligns tracks on);
+  // outPerPlugin holds the individual values for display. Blocking request/response,
+  // same socket discipline; false on any socket/parse error.
+  bool requestChainLatency(uint32_t& outTotalSamples,
+                           std::vector<int32_t>& outPerPlugin);
+
   // Reconciles the host's plugin chain to `pluginPaths` in place, so a chain
   // edit reuses unchanged plugins instead of restarting the whole host.
-  bool sendSetChain(const std::vector<PluginRef>& refs);
+  // sidechainMask / auxOutMask: bit i enables plugin[i]'s sidechain (aux) INPUT bus /
+  // aux OUTPUT buses at prepare (Movement 4). 0 = the pre-multi-out behaviour (all
+  // non-main buses disabled).
+  bool sendSetChain(const std::vector<PluginRef>& refs, uint32_t sidechainMask = 0,
+                    uint32_t auxOutMask = 0);
 
   bool sendOpenEditor(uint32_t pluginIndex);
   bool sendSetBypass(uint32_t pluginIndex, bool bypass);

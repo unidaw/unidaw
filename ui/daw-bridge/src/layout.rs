@@ -698,7 +698,9 @@ pub struct UiChainDiffPayload {
 
 /// v20 (Movement 4): on a ChainSnapshot diff, `flags` low byte is the count of
 /// DeviceBus diffs that follow for this device (so a reader draws once); bit8 =
-/// bus list truncated at the cap.
+/// bus list truncated at the cap. NOTE: this is `UiChainDiffPayload.flags` (u16, at
+/// payload offset 2) — NOT `EventEntry.flags` (u32). Both have a `flags`; decode from
+/// the payload's, or a plugin reporting N buses under a busCount of 0 is your only tell.
 pub const UI_CHAIN_DIFF_BUS_COUNT_MASK: u16 = 0x00ff;
 pub const UI_CHAIN_DIFF_BUS_TRUNCATED: u16 = 1 << 8;
 
