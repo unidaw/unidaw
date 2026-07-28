@@ -12,6 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
 import {
@@ -854,6 +855,75 @@ function gridEngine(lpb) {
   };
 }
 
+test('every icon the app names exists in the bundled set', () => {
+  // A misnamed icon class is not an error anywhere: the <i> renders, the button
+  // has a real bounding box and reports a real rect to a probe, and nothing is
+  // drawn inside it. That is exactly how the device-chain Open button shipped
+  // invisible — I probed it, got a rect back, and told Jaakko it was there.
+  // I then reached for `ph-rows-minus`, which does not exist either.
+  //
+  // The set is a vendored CSS file, so this is a cheap, total check.
+  const css = readFileSync(new URL('../src/icons/phosphor.css', import.meta.url), 'utf8');
+  const have = new Set();
+  for (const m of css.matchAll(/^\.ph\.(ph-[a-z0-9-]+):before/gm)) have.add(m[1]);
+  assert.ok(have.size > 100, `parsed the icon set: ${have.size} icons`);
+
+  const files = ['../src/chrome.js', '../src/chain.js', '../src/dock.js',
+                 '../src/arrange.js', '../src/mixer.js', '../index.html'];
+  const missing = [];
+  for (const f of files) {
+    let src;
+    try { src = readFileSync(new URL(f, import.meta.url), 'utf8'); } catch { continue; }
+    for (const m of src.matchAll(/['"`]ph ph-([a-z0-9-]+)/g)) {
+      const name = 'ph-' + m[1];
+      if (!have.has(name)) missing.push(`${f.replace('../', '')}: ${name}`);
+    }
+  }
+  assert.deepEqual(missing, [], `icons named but not in the set:\n  ${missing.join('\n  ')}`);
+});
+
+test('a removed track takes no width and its neighbours keep their ids', () => {
+  // kShmVersion 22: RemoveTrack tombstones the slot rather than compacting the
+  // array, so `uiTrackCount` is the EXTENT and slot 1 here is a hole. The lane
+  // must vanish; tracks 0 and 2 must stay at ids 0 and 2. Compaction would move
+  // track 2 to slot 1 and silently repoint every cursor, selection and per-track
+  // cache keyed on the index — the failure this contract exists to avoid.
+  const ABSENT = 1 << 2;
+  const tracks = 3, rowCount = 8;
+  const engine = gridEngine([4, 4, 4]);
+  engine.trackParent = Uint32Array.from([0, 0, 0]);
+  engine.trackFlags = Uint8Array.from([0, ABSENT, 0]);
+  const buf = createBuffer(rowCount, tracks, 3);
+  const vm = buildViewModel({ startRow: 0, rowCount, tracks, columns: 3,
+                              zoomIndex: 1, engine }, buf);
+  assert.equal(vm.laneHidden[1], 1, 'the tombstoned lane is hidden');
+  assert.equal(vm.laneHidden[0], 0, 'the track before it is not');
+  assert.equal(vm.laneHidden[2], 0, 'and neither is the one after');
+
+  // The cells still carry their ORIGINAL track ids. The hole is a drawing
+  // decision, never a renumbering.
+  const ids = new Set();
+  for (const cell of vm.rows[0].cells) ids.add(cell.track);
+  assert.ok(ids.has(0) && ids.has(2), `tracks 0 and 2 survive: ${[...ids]}`);
+});
+
+test('a tombstone with a stale parent id does not walk into the ancestor check', () => {
+  // A removed slot's parent_id is whatever it was before removal. Reading it
+  // could hide an unrelated lane, or spin if it points at another tombstone, so
+  // ABSENT is checked before the walk and not inside it.
+  const ABSENT = 1 << 2, HAS_PARENT = 1 << 1;
+  const tracks = 3, rowCount = 4;
+  const engine = gridEngine([4, 4, 4]);
+  engine.trackParent = Uint32Array.from([2, 0, 1]);          // deliberately cyclic
+  engine.trackFlags = Uint8Array.from([0, ABSENT | HAS_PARENT, 0]);
+  const buf = createBuffer(rowCount, tracks, 3);
+  const vm = buildViewModel({ startRow: 0, rowCount, tracks, columns: 3,
+                              zoomIndex: 1, engine }, buf);
+  assert.equal(vm.laneHidden[1], 1, 'the tombstone is hidden');
+  assert.equal(vm.laneHidden[0], 0, 'and it did not drag a live lane down with it');
+  assert.equal(vm.laneHidden[2], 0);
+});
+
 /** How many of `rowCount` rows are marked off-grid on each track. */
 function offGridPerTrack(lpb, zoomIndex, rowCount) {
   const tracks = lpb.length;
@@ -1302,6 +1372,11 @@ const OP_REGISTRY = {
   new:       { cli: null, agent: null, why: 'gap' },
   deldevice: { cli: null, agent: null, why: 'gap' },
   editor:    { cli: null, agent: null, why: 'gap' },
+  // v22 (AddTrack=46/RemoveTrack=47). daw-cli shipped its verbs in the same
+  // commit the engine did, so these are covered on the CLI from day one; the
+  // agent manifest still owes them.
+  'add-track':    { cli: 'add-track',    agent: null, why: 'gap' },
+  'remove-track': { cli: 'remove-track', agent: null, why: 'gap' },
   save:      { cli: 'save',        agent: 'save' },
   note:      { cli: 'note',        agent: 'add_notes' },
   play:      { cli: 'play',        agent: 'transport' },
@@ -1352,9 +1427,9 @@ const CLI_GAP = ['addnode', 'clear', 'copy', 'cut', 'deldevice', 'delnode', 'edi
                  'link', 'loop', 'new', 'paste', 'patch', 'redo', 'rename', 'seek',
                  'stop', 'transpose', 'undo'];
 /** Ops with no agent tool today. Same rule. */
-const AGENT_GAP = ['addnode', 'clear', 'copy', 'cut', 'del', 'deldevice', 'delnode',
-                   'editor', 'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
-                   'seek', 'solo', 'tempo', 'transpose'];
+const AGENT_GAP = ['add-track', 'addnode', 'clear', 'copy', 'cut', 'del', 'deldevice',
+                   'delnode', 'editor', 'gain', 'link', 'loop', 'mute', 'new', 'paste',
+                   'patch', 'remove-track', 'seek', 'solo', 'tempo', 'transpose'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether

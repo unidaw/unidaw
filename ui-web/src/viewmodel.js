@@ -97,6 +97,20 @@ const _clipMeter = { numerator: 4, denominator: 4 };
 const HAS_PARENT = 1 << 1;
 
 /**
+ * uiTrackFlags bit 2 (kShmVersion 22): this slot is a TOMBSTONE — a track that
+ * was removed. The slot stays in the array so the tracks after it keep their
+ * ids, and `uiTrackCount` is now the EXTENT (highest live slot + 1) rather than
+ * a dense count.
+ *
+ * Which is the collapse case exactly: a lane that must not be drawn and must not
+ * renumber its neighbours. So it takes the same route — zero width — instead of
+ * growing a second, parallel notion of "lane that isn't there". Renumbering
+ * around a hole would make lane position and track id two different things, and
+ * every command keyed on a track index would have to learn the difference.
+ */
+const ABSENT = 1 << 2;
+
+/**
  * Which lanes are hidden because an ancestor is collapsed.
  *
  * A child track is an ORDINARY track (kShmVersion 20) — same flat index, same
@@ -121,6 +135,10 @@ function computeLaneHidden(engine, buf, trackCount, override) {
   const parent = engine.trackParent, flags = engine.trackFlags;
   if (!parent || !flags) return 0;
   for (let t = 0; t < trackCount; t++) {
+    // A removed slot is hidden outright, before the ancestor walk: it has no
+    // parent worth reading and nothing to draw. Checked first so a tombstone
+    // whose stale parent_id still points somewhere cannot walk anywhere.
+    if ((flags[t] & ABSENT) !== 0) { buf._laneHidden[t] = 1; continue; }
     /**
      * Walk up while the track HAS a parent, read from the flag and not from the
      * id.

@@ -1613,6 +1613,18 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
             Some(t) if t >= 0 => t as u32,
             _ => K_CHAIN_TRACK_ALL,
         };
+    } else if is_type(body, "addtrack") {
+        // v1 APPENDS at the extent — no insert-after, no fields read. The engine
+        // refuses at kUiMaxTracks rather than growing past what the UI region can
+        // publish, so a full song reports "no" instead of losing a track quietly.
+        p.command_type = UiCommandType::AddTrack as u16;
+    } else if is_type(body, "removetrack") {
+        // track_id is the STABLE id, already parsed above from "track". The engine
+        // tombstones the slot instead of compacting, so the tracks after it keep
+        // their ids and every cursor, selection and per-track cache keyed on an
+        // index stays pointing where it was. A child id is rejected engine-side:
+        // aux stems are views into their parent's buses and go when it goes.
+        p.command_type = UiCommandType::RemoveTrack as u16;
     } else if body.contains("\"undo\"") {
         p.command_type = UiCommandType::Undo as u16;
     } else if body.contains("\"redo\"") {
@@ -2889,7 +2901,33 @@ mod tests {
         assert_eq!(ty(r#"{"type":"seek","tick":960000}"#), Some(UiCommandType::SetPosition as u16));
         assert_eq!(ty(r#"{"type":"delete","track":2,"tick":0}"#), Some(UiCommandType::DeleteNote as u16));
         assert_eq!(ty(r#"{"type":"undo"}"#), Some(UiCommandType::Undo as u16));
+        assert_eq!(ty(r#"{"type":"addtrack"}"#), Some(UiCommandType::AddTrack as u16));
+        assert_eq!(ty(r#"{"type":"removetrack","track":2}"#),
+                   Some(UiCommandType::RemoveTrack as u16));
         assert_eq!(ty(r#"{"type":"nonsense"}"#), None);
+    }
+
+    #[test]
+    fn remove_track_carries_the_track_id() {
+        // The whole point of the v22 contract is that this id is STABLE — the
+        // engine tombstones that slot and leaves later ids alone. Sending the
+        // wrong number here removes somebody else's track, and unlike a wrong
+        // note it cannot be undone in v1.
+        let p = build_command(r#"{"type":"removetrack","track":5}"#).expect("builds");
+        assert_eq!(p.command_type, UiCommandType::RemoveTrack as u16);
+        assert_eq!(p.track_id, 5);
+    }
+
+    /// `is_type`, not `contains` — a project or track named "addtrack" must not
+    /// be able to add a track. Same class of bug as the save/load and deldevice
+    /// dispatches, which were silent in both directions.
+    #[test]
+    fn a_project_named_addtrack_does_not_add_a_track() {
+        let ty = |body: &str| build_command(body).ok().map(|p| p.command_type);
+        assert_eq!(ty(r#"{"type":"load","name":"addtrack"}"#),
+                   Some(UiCommandType::LoadProject as u16));
+        assert_eq!(ty(r#"{"type":"rename","track":0,"name":"removetrack"}"#),
+                   Some(UiCommandType::SetTrackName as u16));
     }
 
     /// A rejected name has to be distinguishable from a verb we do not know.

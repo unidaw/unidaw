@@ -101,6 +101,11 @@ const chrome = createChrome(document.getElementById('chrome'), {
   onView: (v) => { state.view = v; if (v === 'piano') fitPiano(); state.focus = 'centre'; schedule(); },
   onPlay: () => cmd('play'),
   onStop: () => { cmd('stop'); state.reject = null; schedule(); },
+  // Hoisted through, not inlined: the same two functions back the dock commands
+  // and the __uni hooks, so the button cannot grow behaviour the scriptable path
+  // does not have. That divergence is the bug this app keeps finding.
+  onAddTrack: () => addTrack(),
+  onRemoveTrack: () => removeTrack(),
 });
 // No write path yet — the command ring needs a channel the write-only socket
 // does not have. The buttons exist and say so rather than pretending.
@@ -268,6 +273,85 @@ function sendGraph(msg) {
 /** Add a node of the armed type. */
 function addPatcherNode() {
   return sendGraph({ type: 'patchadd', nodeType: state.patchAddType, track: 0 });
+}
+
+/**
+ * The engine's ceiling on tracks — kUiMaxTracks. Not a style choice: it is how
+ * many the shared-memory region can publish, so a 65th track would exist in the
+ * document and be invisible to every reader.
+ */
+const MAX_TRACKS = 64;
+
+/**
+ * Append a track (kShmVersion 22, AddTrack=46). v1 appends at the extent — there
+ * is no insert-after until the engine grows a display-order field — so the new
+ * lane always arrives at the end, which is at least somewhere you can predict.
+ *
+ * The cap is checked HERE as well as in the engine. The engine refuses loudly and
+ * publishes nothing, which is correct but arrives as silence: the button would
+ * look broken. Saying why locally costs one comparison.
+ */
+function addTrack() {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; return false; }
+  const live = engine ? engine.trackCount : 0;
+  if (live >= MAX_TRACKS) {
+    state.reject = `${MAX_TRACKS} tracks is the limit`;
+    schedule();
+    return false;
+  }
+  conn.send({ type: 'addtrack' });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
+ * Remove a track by its STABLE id (RemoveTrack=47).
+ *
+ * Confirmed, because v1 is not undoable: track structure is outside the
+ * store-swap undo model, which swaps clips and placements. Backend has logged
+ * making it undoable as follow-up work, and this confirm comes out when that
+ * lands — a confirm is what you do when you cannot offer undo, not a substitute
+ * for it.
+ *
+ * Refuses a child track locally as well as engine-side. An aux stem is a view
+ * into its parent's bus rather than a track in its own right, so the honest
+ * answer names the parent instead of failing silently on a rejected command.
+ */
+function removeTrack(track) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; return false; }
+  const t = track === undefined ? state.cursor.track : track;
+  if (!engine || t < 0 || t >= engine.trackCount) {
+    state.reject = 'no such track'; schedule(); return false;
+  }
+  const flags = engine.trackFlags ? engine.trackFlags[t] : 0;
+  if ((flags & 2) !== 0) {
+    state.reject = 'that is an aux stem — remove its instrument instead';
+    schedule();
+    return false;
+  }
+  // The last track is not removable. An empty track list has no cursor to put
+  // anywhere and nothing to draw, and "delete everything" is what New Song is.
+  let live = 0;
+  for (let i = 0; i < engine.trackCount; i++) if ((engine.trackFlags[i] & 4) === 0) live++;
+  if (live <= 1) { state.reject = 'the last track cannot be removed'; schedule(); return false; }
+
+  const name = trackName(engine, t) || `track ${t + 1}`;
+  if (!confirm(`Remove ${name}? This cannot be undone.`)) return false;
+  conn.send({ type: 'removetrack', track: t });
+  // Step the cursor off the track that is about to become a tombstone. The slot
+  // stays in the array by design, so nothing moves it for us, and a cursor left
+  // sitting on a removed lane would take keystrokes into a track that is gone.
+  if (state.cursor.track === t) {
+    let n = -1;
+    for (let i = 0; i < engine.trackCount; i++) {
+      if (i !== t && (engine.trackFlags[i] & 4) === 0) { n = i; if (i > t) break; }
+    }
+    if (n >= 0) state.cursor.track = n;
+  }
+  state.reject = null;
+  schedule();
+  return true;
 }
 
 /** Remove the selected node. Its edges go with it, on the engine's side. */
@@ -3915,9 +3999,14 @@ window.__uni = {
       const f = engine.trackFlags[t];
       // `hasParent` is the field that makes `parent` readable: 0 is a valid track
       // id, so the id alone cannot say whether there IS a parent.
+      // `absent` (v22 bit2) is a removed slot. Reported rather than filtered out
+      // here, because the whole point of the tombstone is that the slot is still
+      // THERE and still holds its id — a probe that silently skipped it could not
+      // tell "removed, ids preserved" from "compacted and renumbered", which is
+      // exactly the distinction this contract turns on.
       out.push({ track: t, hasParent: (f & 2) !== 0,
                  parent: (f & 2) !== 0 ? engine.trackParent[t] : -1,
-                 collapsed: (f & 1) !== 0 });
+                 collapsed: (f & 1) !== 0, absent: (f & 4) !== 0 });
     }
     return out;
   },
@@ -3973,6 +4062,7 @@ window.__uni = {
   addDevice: (track, kind) => conn && conn.send({ type: 'adddevice',
     track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' }),
   delDevice: (track, device) => conn && conn.send({ type: 'deldevice', track, device }),
+  addTrack, removeTrack,
   deviceParams: () => JSON.parse(JSON.stringify(deviceParams)),
   harmonyProbe: () => harmonyCard.probe(),
   minimapProbe: () => minimap.probe(),

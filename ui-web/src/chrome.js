@@ -64,7 +64,8 @@ export const VIEW_TABS = [
   { view: 'mixer', label: 'MIXER', key: 'F8' },
 ];
 
-export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
+export function createChrome(host, { onPlay, onStop, onScales, onView,
+                                     onAddTrack, onRemoveTrack } = {}) {
   host.className = 'chrome';
 
   const brand = document.createElement('div');
@@ -176,11 +177,27 @@ export function createChrome(host, { onPlay, onStop, onScales, onView } = {}) {
   const link = label('ch-link', 'connecting');
   right.append(reject, link, scales);
 
-  host.append(brand, transport, pos, entry, tabs, right);
+  // Track structure. In the chrome rather than in the tracker and the arrange
+  // view separately: tracks are a property of the song, not of the surface you
+  // happen to be looking at, and one implementation cannot drift from the other.
+  // Titled with what they do to the SONG, since "+" alone next to a transport
+  // reads as "add a bar" about as easily as "add a track".
+  const tracks = document.createElement('div');
+  tracks.className = 'ch-group';
+  // ph-rows-plus-bottom exists in the bundled set; there is no ph-rows-minus, and
+  // naming one would have shipped a button that renders and cannot be seen — the
+  // Open-button bug again. ph-minus is the pair that actually exists.
+  const addTrk = button('', 'ph ph-rows-plus-bottom', 'Add a track (append)');
+  const delTrk = button('', 'ph ph-minus', 'Remove the cursor’s track');
+  tracks.append(addTrk, delTrk);
+
+  host.append(brand, transport, pos, entry, tracks, tabs, right);
 
   if (onPlay) play.addEventListener('click', onPlay);
   if (onStop) stop.addEventListener('click', onStop);
   if (onScales) scales.addEventListener('click', onScales);
+  if (onAddTrack) addTrk.addEventListener('click', onAddTrack);
+  if (onRemoveTrack) delTrk.addEventListener('click', onRemoveTrack);
 
   // Cached scalars, so a write only happens when the value actually changes.
   let lastTick = -1, lastTransport = -1, lastLink = '', lastOct = -1, lastStep = -1, lastVel = -1, lastReject = '', lastView = '', lastKey = '';

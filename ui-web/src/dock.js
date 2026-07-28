@@ -291,6 +291,16 @@ export function createCommands(api) {
     follow: { help: 'follow [on|off] — keep the playhead in view',
       args: [oneOf(['on', 'off'], true)],
       run: (a) => 'follow ' + (api.follow(a[0] === undefined ? undefined : a[0] !== 'off') ? 'on' : 'off') },
+    'add-track': { help: 'add-track — append a track at the end',
+      args: [],
+      run: () => (api.addTrack() ? 'track added' : 'refused') },
+    // Takes the track explicitly rather than defaulting to the cursor. Every
+    // other destructive op here names its target, and a remove that quietly
+    // means "wherever the cursor happens to be" is the one command where
+    // guessing is expensive — v1 has no undo for it.
+    'remove-track': { help: 'remove-track <track>',
+      args: [A_TRACK],
+      run: (a) => (api.removeTrack(Number(a[0])) ? 'track removed' : 'refused') },
     rename: { help: 'rename <track> <name>',
       args: [A_TRACK, { name: 'name', type: 'text', rest: true }],
       run: (a) => {
