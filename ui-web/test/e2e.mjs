@@ -1449,28 +1449,47 @@ section('multi-out child tracks');
       + 'DAW_USE_FAKE_IDENTITY=1, and currently also a FRESH engine: see the '
       + 'order-dependence note above)');
   } else {
-    ok(mo.tree.length === 3, `a parent and its stems: ${mo.tree.length} tracks`);
+    // A parent and two stems is three tracks. It reports eight after an earlier
+    // load: the children are appended after the PREVIOUS project's track count
+    // rather than the new document's, so tracks 1-5 are empty leftovers named
+    // "Track 2".."Track 6". Reported to backend — the load-clear shrinks the count
+    // for a plain project but not when child creation follows it.
+    ok(mo.tree.length === 3, `a parent and its stems: ${mo.tree.length} tracks`,
+       JSON.stringify(mo.names));
     ok(mo.tree[0].hasParent === false, 'the instrument track is top-level');
     // THE CASE THE OLD CONTRACT COULD NOT EXPRESS: children OF TRACK 0.
     ok(kids.length === 2 && kids.every((t) => t.parent === 0),
        `both stems are children of track 0: ${JSON.stringify(kids)}`);
-    ok(mo.names[1].startsWith(mo.names[0]) && mo.names[2].startsWith(mo.names[0]),
-       `and are named after their parent: ${JSON.stringify(mo.names)}`);
+    // Indexed by the CHILDREN's own track ids. Slots 1 and 2 are whatever the
+    // previous project left behind — the engine appends children after the old
+    // track count — so a positional check tests the leftovers, not the stems.
+    ok(kids.every((k) => mo.names[k.track] && mo.names[k.track].startsWith(mo.names[0])),
+       `and are named after their parent: ${JSON.stringify(kids.map((k) => mo.names[k.track]))}`);
 
     // Folding the parent takes its stems off screen and leaves it there. Measured
     // as width, because a stem hidden by renumbering rather than by width would
     // shift every track id after it — which is the thing the zero-width approach
     // exists to avoid.
-    const folded = await page.evaluate(() => {
-      const w = () => [...document.querySelectorAll('.tk-row[data-row="0"] .tk-track')]
-        .map((e) => Math.round(e.getBoundingClientRect().width));
-      const before = w();
-      const took = window.__uni.fold(0);
-      return { took, before, after: w() };
-    });
+    // Two evaluates with a frame between them. `fold()` goes through schedule(),
+    // which coalesces to one draw on the next animation frame — measuring in the
+    // same evaluate reads the widths BEFORE the redraw and reports that nothing
+    // moved, which is indistinguishable from a fold that does not work.
+    const w = () => page.evaluate(
+      () => [...document.querySelectorAll('.tk-row[data-row="0"] .tk-track')]
+        .map((e) => Math.round(e.getBoundingClientRect().width)));
+    const before = await w();
+    const took = await page.evaluate(() => window.__uni.fold(0));
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const folded = { took, before, after: await w() };
     ok(folded.took === true, 'folding the instrument is accepted — it has children');
-    ok(folded.after[0] > 0 && folded.after[1] === 0 && folded.after[2] === 0,
-       `and its stems fold away while it stays: ${JSON.stringify(folded.after)}`);
+    // Keyed on the CHILDREN's own indices, not on 1 and 2. The engine appends
+    // children after whatever tracks already exist, so their position is not
+    // fixed — asserting slots 1 and 2 tests the fixture's layout rather than the
+    // fold.
+    const kidIdx = kids.map((k) => k.track);
+    ok(folded.after[0] > 0 && kidIdx.every((i) => folded.after[i] === 0),
+       `its stems fold away while it stays: parent ${folded.after[0]}px, `
+       + `stems ${JSON.stringify(kidIdx.map((i) => folded.after[i]))}`);
   }
 }
 

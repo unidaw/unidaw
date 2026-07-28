@@ -39,7 +39,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 14;
+const WIRE_VERSION: u16 = 15;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -53,7 +53,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 128;
+const FULL_HEADER_BYTES: usize = 136;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
 const NOTE_BYTES: usize = 40;
 
@@ -253,7 +253,21 @@ struct Frame {
     /// projection: to render a lane on its own grid, and to compute the tick a
     /// write targets. Only the read half knew about it, which is why a note
     /// written for display row 1 landed at row 4.
-    lpb: [u8; 8],
+    /**
+     * Per-track lines-per-beat, for as many tracks as the PAGE can draw.
+     *
+     * Sixteen, not the engine's kUiMaxTracks — which is 64 as of kShmVersion 21
+     * and will grow again. The renderer caps at 16 lanes and clamps
+     * `state.tracks` to min(trackCount, 16), so sending 64 would be 48 bytes a
+     * frame for lanes nobody draws; sending 8, which is what this was until v21
+     * widened the engine's array, silently left lanes 8-15 with no grid at all
+     * and they fell back to the zoom's own — a wrong grid that looks like a
+     * choice.
+     *
+     * TIED TO THE RENDERER'S LANE CAP. Widen the cap and this widens with it, or
+     * the same silence comes back one lane further out.
+     */
+    lpb: [u8; 16],
     /// Real clip placements from the engine. placement_id, clip_id, track,
     /// flags, start/end tick, name. Loose session placements are excluded
     /// upstream. `flags` bit0 is UI_CLIP_EXTENT_AUDIO — an audio region, which
@@ -369,26 +383,28 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&f.agg_tracks.to_le_bytes());
     out.extend_from_slice(&(f.extents.len() as u16).to_le_bytes());
     out.extend_from_slice(&f.lpb);
-    out.extend_from_slice(&f.mixer_version.to_le_bytes());
-    out.extend_from_slice(&(f.mixer.len() as u16).to_le_bytes());  // 72
-    // 74 was a pad; the harmony count took it rather than being appended after
+    // lpb is 16 bytes now, not 8 (kShmVersion 21 widened the engine's array to 64
+    // and the page draws 16 lanes), so every offset from here on moved by 8.
+    out.extend_from_slice(&f.mixer_version.to_le_bytes());           // 76
+    out.extend_from_slice(&(f.mixer.len() as u16).to_le_bytes());    // 80
+    // 82 was a pad; the harmony count took it rather than being appended after
     // it, which is what a two-byte shift of everything downstream looks like
     // when you get it wrong — names decode empty and every pitch reads 0.
-    out.extend_from_slice(&(f.harmony.len() as u16).to_le_bytes());  // 74
-    out.extend_from_slice(&(f.names.len() as u16).to_le_bytes());    // 76
-    out.extend_from_slice(&f.patcher_version.to_le_bytes());         // 78
-    out.extend_from_slice(&f.patcher_device.to_le_bytes());          // 82
-    out.extend_from_slice(&(f.patcher_nodes.len() as u16).to_le_bytes());  // 86
-    out.extend_from_slice(&(f.patcher_edges.len() as u16).to_le_bytes());  // 88
-    out.extend_from_slice(&0u16.to_le_bytes());                      // 90, pad
-    out.extend_from_slice(&f.loop_start.to_le_bytes());              // 92
+    out.extend_from_slice(&(f.harmony.len() as u16).to_le_bytes());  // 82
+    out.extend_from_slice(&(f.names.len() as u16).to_le_bytes());    // 84
+    out.extend_from_slice(&f.patcher_version.to_le_bytes());         // 86
+    out.extend_from_slice(&f.patcher_device.to_le_bytes());          // 90
+    out.extend_from_slice(&(f.patcher_nodes.len() as u16).to_le_bytes());  // 94
+    out.extend_from_slice(&(f.patcher_edges.len() as u16).to_le_bytes());  // 96
+    out.extend_from_slice(&0u16.to_le_bytes());                      // 98, pad
+    out.extend_from_slice(&f.loop_start.to_le_bytes());              // 132
     out.extend_from_slice(&f.loop_end.to_le_bytes());                // 100
     out.extend_from_slice(&f.load_seq.to_le_bytes());                // 108
-    out.extend_from_slice(&f.load_ok.to_le_bytes());                 // 112
+    out.extend_from_slice(&f.load_ok.to_le_bytes());                 // 128
     out.extend_from_slice(&f.tempo_milli_bpm.to_le_bytes());         // 116
     out.extend_from_slice(&f.tempo_point_count.to_le_bytes());       // 120
     out.extend_from_slice(&f.song_time_sig_num.to_le_bytes());       // 124
-    out.extend_from_slice(&f.song_time_sig_den.to_le_bytes());       // 126, to 128
+    out.extend_from_slice(&f.song_time_sig_den.to_le_bytes());       // 134, to 136
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
     // variable section and nothing here noticed.
@@ -512,8 +528,8 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     // sextuplets onto quarter rows, where they silently overwrote each other and
     // still rendered a plausible-looking pattern. SHM v10 publishes it so the
     // client never has to guess.
-    let lpb = snap.ui_lines_per_beat;
-    out.lpb = lpb;
+    // The first 16 of the engine's 64, which is what the page can draw.
+    out.lpb.copy_from_slice(&snap.ui_lines_per_beat[..16]);
 
     // Cheap: read_mixer is a seqlock read of a fixed-size row. Guarded on the
     // engine's own version so an unchanged mixer costs one atomic load.

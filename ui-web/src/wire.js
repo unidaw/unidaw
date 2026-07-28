@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 14;
+export const WIRE_VERSION = 15;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 128;  // ...+ mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4
+const HEADER_BYTES = 136;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -151,7 +151,7 @@ export function createStore() {
     patcherVersion: -1, patcherDevice: 0, patcherNodes: [], patcherEdges: [],
     /** Per-track lines_per_beat. Needed to render a lane on its own grid AND to
      *  compute the tick a write targets — both halves of the projection. */
-    lpb: new Uint8Array(8),
+    lpb: new Uint8Array(16),
     /** The lines-per-beat the incoming rows are projected in. Part of the note
      *  cache key: zoom moves every row without touching clipVersion or
      *  noteCount, so a cache keyed only on those serves rows from the old grid. */
@@ -210,27 +210,33 @@ export function decode(buf, store) {
   const aggRows = v.getUint32(52, true);
   const aggTracks = v.getUint16(56, true);
   const extentCount = v.getUint16(58, true);
-  for (let i = 0; i < 8; i++) store.lpb[i] = v.getUint8(60 + i);
-  const mixerVersion = v.getUint32(68, true);
-  const mixCount = v.getUint16(72, true);
-  const harmonyCount = v.getUint16(74, true);
-  const nameCount = v.getUint16(76, true);
-  const patcherVersion = v.getUint32(78, true);
-  const patcherDevice = v.getUint32(82, true);
-  const nodeCount = v.getUint16(86, true);
-  const edgeCount = v.getUint16(88, true);
-  store.loopStart = Number(v.getBigUint64(92, true));
-  store.loopEnd = Number(v.getBigUint64(100, true));
-  store.loadSeq = v.getUint32(108, true);
-  store.loadOk = v.getUint32(112, true);
-  store.tempoMilliBpm = v.getUint32(116, true) || 120000;
-  store.tempoPointCount = v.getUint32(120, true);
+  // Sixteen lanes' worth, matching what the renderer can draw. This was 8 until
+  // kShmVersion 21 widened the engine's own array to 64: at 8 the lanes past the
+  // eighth silently had NO grid and fell back to the zoom's, which is a wrong grid
+  // that looks like a choice. Every offset below shifted by 8 when it widened —
+  // GUIDELINES 2.3, and the reason the encoder asserts its own header length and a
+  // Rust test reads these literals.
+  for (let i = 0; i < 16; i++) store.lpb[i] = v.getUint8(60 + i);
+  const mixerVersion = v.getUint32(76, true);
+  const mixCount = v.getUint16(80, true);
+  const harmonyCount = v.getUint16(82, true);
+  const nameCount = v.getUint16(84, true);
+  const patcherVersion = v.getUint32(86, true);
+  const patcherDevice = v.getUint32(90, true);
+  const nodeCount = v.getUint16(94, true);
+  const edgeCount = v.getUint16(96, true);
+  store.loopStart = Number(v.getBigUint64(100, true));
+  store.loopEnd = Number(v.getBigUint64(108, true));
+  store.loadSeq = v.getUint32(116, true);
+  store.loadOk = v.getUint32(120, true);
+  store.tempoMilliBpm = v.getUint32(124, true) || 120000;
+  store.tempoPointCount = v.getUint32(128, true);
   // `|| 4` on both: the sidecar already defaults them, so a zero here means a
   // frame from something older or a field mislaid, and 4/4 is the assumption the
   // whole page made before v19 anyway. A zero denominator would divide by zero in
   // every bar computation downstream of this line.
-  store.songTimeSigNum = v.getUint16(124, true) || 4;
-  store.songTimeSigDen = v.getUint16(126, true) || 4;
+  store.songTimeSigNum = v.getUint16(132, true) || 4;
+  store.songTimeSigDen = v.getUint16(134, true) || 4;
   // The child-track block is LAST in the frame, so its offset is everything else
   // added up. Decoded after the sections it follows — see PARENT_AT below.
 
