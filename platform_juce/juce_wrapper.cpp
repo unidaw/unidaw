@@ -400,26 +400,39 @@ class JucePluginInstance final : public IPluginInstance {
                                     instance_->getTotalNumOutputChannels(),
                                     sampleRate, blockSize);
 
-    // Observability for the bus foundation: report the plugin's real topology + the
-    // negotiated result so a multi-bus plugin (multi-out instrument, sidechain effect)
-    // is visible in the host log. One line at prepare (load), off the RT path. This is
-    // the data phase 2 will put on the wire.
-    {
-      const int outBuses = instance_->getBusCount(false);
-      const int inBuses = instance_->getBusCount(true);
-      std::cerr << "plugin buses: \"" << instance_->getName().toStdString()
-                << "\" applied=" << (layoutApplied ? 1 : 0) << " out[" << outBuses
-                << "]=";
-      for (int b = 0; b < outBuses; ++b) {
-        const auto* bus = instance_->getBus(false, b);
-        std::cerr << (b ? "," : "") << instance_->getChannelCountOfBus(false, b)
-                  << (bus && bus->isEnabled() ? "" : "(off)");
+    // Capture the negotiated bus topology (Movement 4). This is the structured data
+    // the engine + UI read to see and address stems/aux/sidechain buses — channelOffset
+    // is each bus's first channel in the flat process buffer, and `layout` keeps the
+    // AudioChannelSet so a surround bus round-trips as a real channel set. Built once at
+    // prepare (off the RT path). A concise line also lands in the host log.
+    busLayout_.clear();
+    for (int dir = 0; dir < 2; ++dir) {
+      const bool isInput = dir == 0;
+      const int busCount = instance_->getBusCount(isInput);
+      int offset = 0;
+      for (int b = 0; b < busCount; ++b) {
+        const auto* bus = instance_->getBus(isInput, b);
+        BusInfo info;
+        info.isInput = isInput;
+        info.index = b;
+        info.isMain = b == 0;
+        info.enabled = bus != nullptr && bus->isEnabled();
+        info.channelCount = instance_->getChannelCountOfBus(isInput, b);
+        info.channelOffset = offset;  // disabled buses contribute 0, so offset holds
+        info.name = bus != nullptr ? bus->getName().toStdString() : std::string();
+        info.layout = bus != nullptr
+                          ? bus->getCurrentLayout().getDescription().toStdString()
+                          : std::string();
+        busLayout_.push_back(std::move(info));
+        offset += info.channelCount;
       }
-      std::cerr << " in[" << inBuses << "]=";
-      for (int b = 0; b < inBuses; ++b) {
-        const auto* bus = instance_->getBus(true, b);
-        std::cerr << (b ? "," : "") << instance_->getChannelCountOfBus(true, b)
-                  << (bus && bus->isEnabled() ? "" : "(off)");
+    }
+    {
+      std::cerr << "plugin buses: \"" << instance_->getName().toStdString()
+                << "\" applied=" << (layoutApplied ? 1 : 0);
+      for (const auto& info : busLayout_) {
+        std::cerr << " " << (info.isInput ? "in" : "out") << info.index << ":"
+                  << info.channelCount << (info.enabled ? "" : "(off)");
       }
       std::cerr << std::endl;
     }
@@ -533,6 +546,8 @@ class JucePluginInstance final : public IPluginInstance {
   }
 
   int outputChannels() const override { return pluginOutputs_; }
+
+  std::vector<BusInfo> busLayout() const override { return busLayout_; }
 
   bool loadVst3PresetFile(const std::string& path) override {
     if (!instance_) {
@@ -869,6 +884,7 @@ class JucePluginInstance final : public IPluginInstance {
   std::string version_;
   std::array<uint8_t, 16> uid16_;
   int pluginOutputs_ = 0;
+  std::vector<BusInfo> busLayout_;
   juce::AudioBuffer<float> scratch_;
   std::vector<ParamInfo> params_;
   std::vector<juce::AudioProcessorParameter*> paramPointers_;
@@ -935,6 +951,18 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   int numParameters() const override { return static_cast<int>(params_.size()); }
   int inputChannels() const override { return 0; }
   int outputChannels() const override { return outputChannels_; }
+  std::vector<BusInfo> busLayout() const override {
+    BusInfo out;
+    out.isInput = false;
+    out.index = 0;
+    out.isMain = true;
+    out.enabled = true;
+    out.channelCount = outputChannels_;
+    out.channelOffset = 0;
+    out.name = "Main";
+    out.layout = outputChannels_ == 1 ? "Mono" : "Stereo";
+    return {out};
+  }
   bool loadVst3PresetFile(const std::string&) override { return false; }
 
   const std::vector<ParamInfo>& parameters() const override { return params_; }

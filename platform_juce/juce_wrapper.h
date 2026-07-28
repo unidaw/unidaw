@@ -86,6 +86,23 @@ struct TransportInfo {
   bool isPlaying = false;
 };
 
+// One audio bus of a hosted plugin (Movement 4). A plugin declares an ordered list of
+// input and output buses per direction; the main bus is index 0, aux/sidechain/stem
+// buses follow. `channelOffset` is the bus's first channel in the flat process buffer,
+// so the engine can address a single bus's slice without re-deriving it. `layout` is
+// the AudioChannelSet description ("Mono", "Stereo", "5.1", "Ambisonic") so a surround
+// bus round-trips as a real channel set, not just a count.
+struct BusInfo {
+  bool isInput = false;
+  int index = 0;
+  bool isMain = false;
+  bool enabled = false;
+  int channelCount = 0;
+  int channelOffset = 0;
+  std::string name;
+  std::string layout;
+};
+
 class IPluginInstance {
  public:
   virtual ~IPluginInstance() = default;
@@ -105,6 +122,9 @@ class IPluginInstance {
   virtual int numParameters() const = 0;
   virtual int inputChannels() const = 0;
   virtual int outputChannels() const = 0;
+  // The plugin's negotiated bus topology, valid after prepare() (empty before). The
+  // engine + UI read this to see and address stems, aux, and sidechain buses.
+  virtual std::vector<BusInfo> busLayout() const = 0;
   virtual bool loadVst3PresetFile(const std::string& path) = 0;
 
   virtual const std::vector<ParamInfo>& parameters() const = 0;
