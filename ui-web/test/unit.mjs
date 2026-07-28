@@ -1203,7 +1203,9 @@ const KEY_OPS = {
   // Editing.
   Delete: { cmd: 'del' }, Backspace: { cmd: 'del' },
   c: { cmd: 'copy' }, s: { cmd: 'save' }, S: { cmd: 'save' },
-  Enter: { nav: true },        // commits an open buffer; `note`/`chord` write directly
+  // Commits an open token buffer; with none open it plays from the cursor row,
+  // which is `seek` + `play` and reachable as both.
+  Enter: { nav: true },
   Escape: { nav: true },       // cancels; nothing to commit through a command
   // Views and panels.
   p: { cmd: 'view' }, r: { cmd: 'view' }, t: { cmd: 'view' },
@@ -1296,6 +1298,10 @@ test('every command a key points at actually exists', () => {
 const OP_REGISTRY = {
   // Covered on all three.
   load:      { cli: 'load',        agent: 'load' },
+  // New this session, all three still owed a programmatic path.
+  new:       { cli: null, agent: null, why: 'gap' },
+  deldevice: { cli: null, agent: null, why: 'gap' },
+  editor:    { cli: null, agent: null, why: 'gap' },
   save:      { cli: 'save',        agent: 'save' },
   note:      { cli: 'note',        agent: 'add_notes' },
   play:      { cli: 'play',        agent: 'transport' },
@@ -1342,11 +1348,13 @@ const OP_REGISTRY = {
 };
 
 /** Ops with no CLI path today. This list may SHRINK, never grow. */
-const CLI_GAP = ['addnode', 'clear', 'copy', 'cut', 'delnode', 'link', 'loop',
-                 'paste', 'patch', 'redo', 'rename', 'seek', 'stop', 'transpose', 'undo'];
+const CLI_GAP = ['addnode', 'clear', 'copy', 'cut', 'deldevice', 'delnode', 'editor',
+                 'link', 'loop', 'new', 'paste', 'patch', 'redo', 'rename', 'seek',
+                 'stop', 'transpose', 'undo'];
 /** Ops with no agent tool today. Same rule. */
-const AGENT_GAP = ['addnode', 'clear', 'copy', 'cut', 'del', 'delnode', 'gain', 'link',
-                   'loop', 'mute', 'paste', 'patch', 'seek', 'solo', 'tempo', 'transpose'];
+const AGENT_GAP = ['addnode', 'clear', 'copy', 'cut', 'del', 'deldevice', 'delnode',
+                   'editor', 'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
+                   'seek', 'solo', 'tempo', 'transpose'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether
@@ -1452,7 +1460,6 @@ test('the parameter key names the track as well as the device', () => {
 
 /** Engine commands with no frontend caller, and why. This list may SHRINK. */
 const ENGINE_UNUSED = {
-  OpenPluginEditor: 'gap — the rack has no way to open a plugin\'s own window',
   AddModLink: 'gap — modulation cannot be wired from the UI',
   RemoveModLink: 'gap — nor unwired',
   SetTrackRouting: 'gap — routing is authored in the project file only',

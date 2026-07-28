@@ -807,6 +807,39 @@ fn list_plugins(path: &str) -> String {
     format!("{{\"ok\":true,\"pluginCache\":{text}}}")
 }
 
+/**
+ * Write the smallest valid project: one track, 4/4, 120 BPM, nothing on it.
+ *
+ * Schema 4 with an explicit empty `clips` and one `placements`-less track — a
+ * document the engine's reader accepts and that says nothing it does not mean.
+ * No devices, no notes, no harmony: a new song should not arrive with opinions.
+ *
+ * `safe_name` is the same gate `load` and `save` use, so `new` cannot write
+ * outside the project directory by a name the other two would have refused.
+ */
+fn new_project(dir: &str, name: &str) -> Result<(), &'static str> {
+    if !safe_name(name) { return Err("bad project name"); }
+    let path = std::path::Path::new(dir).join(format!("{name}.uniproj.json"));
+    // Refuses rather than clobbers. Overwriting a song is not something to do as
+    // a side effect of the shortcut for "start something".
+    if path.exists() { return Err("a project by that name already exists"); }
+    let doc = format!(
+        "{{\"schema_version\":4,\
+          \"meta\":{{\"name\":\"{name}\",\"created_utc\":0,\"modified_utc\":0}},\
+          \"timebase\":{{\"nanoticks_per_quarter\":960000,\
+                          \"time_sig_numerator\":4,\"time_sig_denominator\":4}},\
+          \"nanoticks_per_quarter\":960000,\
+          \"tempo_map\":[{{\"nanotick\":0,\"bpm\":120.0}}],\
+          \"harmony_timeline\":[],\"clips\":[],\
+          \"tracks\":[{{\"track_id\":0,\"name\":\"Track 1\",\"harmony_quantize\":false,\
+                        \"lines_per_beat\":4,\
+                        \"mixer\":{{\"gain_db\":0.0,\"pan\":0.0,\"mute\":false,\"solo\":false}},\
+                        \"device_chain\":[],\"mod_links\":[],\"placements\":[]}}]}}");
+    std::fs::create_dir_all(dir).map_err(|_| "cannot create the project directory")?;
+    std::fs::write(&path, doc).map_err(|_| "cannot write the project")?;
+    Ok(())
+}
+
 fn list_projects(dir: &str) -> String {
     let mut items: Vec<(std::time::SystemTime, String)> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
@@ -876,11 +909,14 @@ fn safe_name(name: &str) -> bool {
 /// Commands that carry a name ride in the same 40-byte slot as the rest; see
 /// `UiPatcherPresetCommandPayload::as_command`.
 fn build_named(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
-    let ty = if body.contains("\"load\"") {
+    // is_type on all three. These were the last `contains` dispatches left, so a
+    // project named "save" was claimed by SaveProject and a track renamed to
+    // "load" by LoadProject — silent in both directions.
+    let ty = if is_type(body, "load") {
         UiCommandType::LoadProject
-    } else if body.contains("\"save\"") {
+    } else if is_type(body, "save") {
         UiCommandType::SaveProject
-    } else if body.contains("\"rename\"") {
+    } else if is_type(body, "rename") {
         UiCommandType::SetTrackName
     } else {
         return None;                       // not a named command at all
@@ -1165,9 +1201,16 @@ fn device_kind(body: &str) -> Result<u32, &'static str> {
 /// it: an id chosen here would race every other writer on the ring, and there is
 /// no position to insert at until something can express one.
 fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static str>> {
-    let add = body.contains("\"adddevice\"");
-    let del = body.contains("\"deldevice\"");
-    if !(add || del) { return None; }
+    // is_type, not `contains`: a project named "deldevice" would otherwise be
+    // claimed by this builder — the same substring bug we fixed for the other
+    // verbs, which is silent when it fires.
+    let add = is_type(body, "adddevice");
+    let del = is_type(body, "deldevice");
+    // Open a plugin's own editor window. The engine has accepted this since
+    // before the web UI existed and nothing ever sent it: "how do I open the
+    // plugin UI" had the answer "you can't", for a command that was already there.
+    let open = is_type(body, "openeditor");
+    if !(add || del || open) { return None; }
     let mut p = UiChainCommandPayload {
         command_type: UiCommandType::None as u16,
         flags: 0,
@@ -1185,6 +1228,14 @@ fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static
         bypass: 0,
         reserved: [0; 4],
     };
+    if open {
+        let Some(id) = parse_num(body, "\"device\"").filter(|id| *id >= 0) else {
+            return Some(Err("openeditor needs the device id"));
+        };
+        p.command_type = UiCommandType::OpenPluginEditor as u16;
+        p.device_id = id as u32;
+        return Some(Ok(p));
+    }
     if del {
         // There is no sentinel for "remove whichever": kChainDeviceIdAuto is an
         // id no chain holds, so a missing one would travel to the engine and come
@@ -1648,6 +1699,45 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         // the engine publishes no project index.
                         if is_type(&t, "list") {
                             let reply = list_projects(&projects);
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+                        /*
+                         * A NEW SONG.
+                         *
+                         * Answered here rather than by the engine, and with no new
+                         * command type, because the engine already has the only
+                         * hard part: LoadProject. An empty document is a file the
+                         * sidecar can write — it owns the project directory
+                         * already, for `list` — so `new` is "compose the smallest
+                         * valid document, write it, load it".
+                         *
+                         * Before this there was no way to start a song at all. The
+                         * only route was to open a preset and overwrite it, so
+                         * every project began as somebody else's and inherited its
+                         * tempo, meter, track names and devices. It is the first
+                         * thing anyone does with a DAW and it was the one thing
+                         * the app could not do.
+                         *
+                         * REFUSES TO CLOBBER. A name that already exists comes back
+                         * as an error rather than silently replacing a song — the
+                         * one operation you cannot undo is the one that must ask.
+                         */
+                        if is_type(&t, "new") {
+                            let name = parse_str(&t, "\"name\"").unwrap_or("untitled");
+                            let reply = match new_project(&projects, name) {
+                                Ok(()) => {
+                                    // Load it through the ordinary path, so a new
+                                    // song arrives by exactly the same route as an
+                                    // opened one and nothing downstream has a
+                                    // second case to handle.
+                                    let p = UiPatcherPresetCommandPayload::named(
+                                        UiCommandType::LoadProject, name);
+                                    let _ = handle.send_command(p.as_command());
+                                    format!("{{\"ok\":true,\"new\":\"{name}\"}}")
+                                }
+                                Err(e) => format!("{{\"ok\":false,\"error\":\"{e}\"}}"),
+                            };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }

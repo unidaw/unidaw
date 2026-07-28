@@ -200,6 +200,20 @@ export function createCommands(api) {
     // the view to "trackr", which hides every surface and blames nothing.
     view: { help: 'view <tracker|arrange|piano|mixer|patcher>', args: [oneOf(VIEWS)],
       run: (a) => 'view ' + api.setView(a[0]) },
+    // Start a song. There was no way to do this: the only route was to open a
+    // preset and overwrite it, so every project began as somebody else's.
+    new: { help: 'new [name] — an empty song', args: [{ name: 'name', type: 'text', optional: true }],
+      run: (a) => (api.newSong(a[0]) ? 'new ' + (a[0] || 'untitled') : 'no engine') },
+    // Remove a device. `adddevice` had a path and this did not, which is a plain
+    // asymmetry: you could fill a chain and never empty it.
+    deldevice: { help: 'deldevice <track> <device>',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 }],
+      run: (a) => (api.delDevice(Number(a[0]), Number(a[1])) ? 'removed' : 'no engine') },
+    // Open a plugin's own window. The engine has accepted OpenPluginEditor since
+    // before this UI existed and nothing ever sent it.
+    editor: { help: 'editor <track> <device> — open the plugin\'s own window',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 }],
+      run: (a) => (api.openEditor(Number(a[0]), Number(a[1])) ? 'opened' : 'no engine') },
     load: { help: 'load <project>', args: [{ name: 'project', type: 'text' }],
       run: (a) => { api.load(a[0]); return 'loading ' + a[0]; } },
     save: { help: 'save <project>', args: [{ name: 'project', type: 'text' }],

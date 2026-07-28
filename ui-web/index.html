@@ -1032,6 +1032,39 @@ const dockApi = {
    * something that cannot fold is a no-op that looks like it worked, and "never a
    * silent no-op" is the rule this surface is built on.
    */
+  /**
+   * Start a new song. Refused rather than clobbering an existing name.
+   *
+   * There was no way to do this at all: the only route was to open a preset and
+   * overwrite it, so every song began as somebody else's and inherited its tempo,
+   * meter, track names and devices.
+   */
+  newSong: (name) => {
+    if (!conn || !conn.canSend()) { state.reject = 'no engine'; return false; }
+    conn.send({ type: 'new', name: name || 'untitled' });
+    return true;
+  },
+  /** Open a plugin's own editor window. The engine has had OpenPluginEditor since
+   *  before this UI existed and nothing ever sent it. */
+  openEditor: (track, device) => {
+    if (!conn || !conn.canSend()) { state.reject = 'no engine'; return false; }
+    conn.send({ type: 'openeditor', track, device });
+    return true;
+  },
+  /**
+   * Play from a row rather than from wherever the playhead was left.
+   *
+   * Two commands the engine already has — SetPosition then play — because
+   * "audition this row" is what you want a hundred times an hour and there was no
+   * way to ask for it.
+   */
+  playFrom: (row) => {
+    const tick = (row === undefined ? state.cursor.row : row) * ZOOM_LEVELS[state.zoom].rowNanoticks;
+    if (!conn || !conn.canSend()) { state.reject = 'no engine'; return false; }
+    conn.send({ type: 'seek', tick });
+    cmd('play');
+    return true;
+  },
   fold: (t) => {
     if (!engine || t < 0 || t >= collapsed.length) return false;
     const parent = engine.trackParent;
@@ -2590,6 +2623,16 @@ addEventListener('keydown', (e) => {
       return done();
     }
     if (c === 'k') { palette.toggle(); return done(); }
+    /**
+     * A new song.
+     *
+     * CHROME RESERVES Cmd+N for a new window and a page cannot intercept it, so
+     * this only reaches us in a packaged shell (Electron/Tauri) where the menu is
+     * ours. Bound anyway, because it is the binding everyone will try and it will
+     * work the day the shell exists — and Shift+Cmd+N is bound beside it as the
+     * one that works in a browser tab today.
+     */
+    if (c === 'n') { dockApi.newSong(); return done(); }
     if (c === 'j') {
       if (state.focus === 'dock') state.dockOpen = false;
       else { state.dockOpen = true; dock.focus(); }
@@ -2690,6 +2733,20 @@ addEventListener('keydown', (e) => {
   // Plain Tab in the tracker: the next track, wrapping. Column-preserving, so
   // tabbing across a row keeps you in the note column rather than dropping you
   // into whichever column the previous track left the cursor in.
+  /**
+   * Enter plays from the row the cursor is on.
+   *
+   * Two commands the engine already had — SetPosition then play — for the thing
+   * you want a hundred times an hour: hear THIS bit. Without it the only way to
+   * audition a spot was to start from wherever the playhead happened to be.
+   *
+   * Not while a token buffer is open: there Enter commits, which the branch above
+   * has already handled and returned from.
+   */
+  if (k === 'Enter' && state.view === 'tracker') {
+    dockApi.playFrom(state.cursor.row);
+    return done();
+  }
   if (k === 'Tab' && state.view === 'tracker') {
     const n = Math.max(1, state.tracks);
     state.cursor.track = (state.cursor.track + (e.shiftKey ? n - 1 : 1)) % n;
@@ -3783,6 +3840,10 @@ window.__uni = {
   goto: (row, track) => dockApi.goto(row, track),
   /** Collapse/expand a parent's children, and what is folded right now. */
   fold: (t) => dockApi.fold(t),
+  // The same functions the dock and the palette call, not copies of them.
+  newSong: (name) => dockApi.newSong(name),
+  openEditor: (track, device) => dockApi.openEditor(track, device),
+  playFrom: (row) => dockApi.playFrom(row),
   folded: () => Array.from(collapsed.slice(0, state.tracks)),
   // The same function the rack's drag calls, not a copy of it.
   audioSources: () => ({ sources: audioSources, clips: audioClips, bpmMilli: audioBpmMilli }),
