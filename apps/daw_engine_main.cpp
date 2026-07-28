@@ -421,6 +421,10 @@ public:
         m_startTime(std::chrono::steady_clock::now()),
         m_lastPlayedBlockId(0) {
     m_audioScratch.assign(blockSize, 0.0f);
+    // Preallocate the widest possible master (surround on a narrower device), so the
+    // audio thread never allocates when a wider master is active.
+    m_masterBuffer.assign(static_cast<size_t>(kMaxMasterChannels) * blockSize, 0.0f);
+    m_masterPtrs.assign(kMaxMasterChannels, nullptr);
     // Preallocate the PDC delay rings once, here off the audio thread. Zero-filled so
     // a slot whose compensation engages before it has pushed a full ring reads silence,
     // not garbage. Sized [slots][channels][capacity].
@@ -431,15 +435,34 @@ public:
   void process(float* const* outputChannelData,
                int numOutputChannels,
                int numSamples) {
-    // Clear output buffers
-    for (int ch = 0; ch < numOutputChannels; ++ch) {
-      if (outputChannelData[ch]) {
-        std::memset(outputChannelData[ch], 0, numSamples * sizeof(float));
+    if (numSamples != (int)m_blockSize) {
+      for (int ch = 0; ch < numOutputChannels; ++ch) {
+        if (outputChannelData[ch]) {
+          std::memset(outputChannelData[ch], 0, numSamples * sizeof(float));
+        }
       }
+      return;
     }
 
-    if (numSamples != (int)m_blockSize) {
-      return;
+    // Movement 4 surround: choose the effective master. When m_masterChannels is wider
+    // than the audio device, the mix runs into the virtual m_masterBuffer and is
+    // downmixed to the device at the end (the testing path); a real surround device
+    // mixes straight into its own buffers at its own channel count.
+    float* const* master = outputChannelData;
+    int masterCh = numOutputChannels;
+    const bool virtualMaster = m_masterChannels > numOutputChannels;
+    if (virtualMaster) {
+      masterCh = std::min<int>(m_masterChannels, static_cast<int>(kMaxMasterChannels));
+      for (int ch = 0; ch < masterCh; ++ch) {
+        m_masterPtrs[ch] =
+            m_masterBuffer.data() + static_cast<size_t>(ch) * m_blockSize;
+      }
+      master = m_masterPtrs.data();
+    }
+    for (int ch = 0; ch < masterCh; ++ch) {
+      if (master[ch]) {
+        std::memset(master[ch], 0, numSamples * sizeof(float));
+      }
     }
 
     if (m_resetPending.exchange(false, std::memory_order_acq_rel)) {
@@ -571,7 +594,7 @@ public:
       const uint64_t planeBase = track.planeByteOffset;
       const uint32_t planeStrideCh = track.planeStrideChannels;
       const int mixChanCount = static_cast<int>(track.mixChannelCount);
-      for (int ch = 0; ch < std::min(numOutputChannels, mixChanCount); ++ch) {
+      for (int ch = 0; ch < std::min(masterCh, mixChanCount); ++ch) {
         // Extra safety checks
         if (!track.shmView || !track.shmBase || !track.header) {
           break;
@@ -594,7 +617,7 @@ public:
           continue;
         }
 
-        float* output = outputChannelData[ch];
+        float* output = master[ch];
         if (!output) {
           continue;
         }
@@ -603,14 +626,25 @@ public:
             track.gainLinear ? track.gainLinear->load(std::memory_order_relaxed) : 1.0f;
         const float pan =
             track.pan ? track.pan->load(std::memory_order_relaxed) : 0.0f;
-        // Constant power: a centred track is -3 dB per side rather than
-        // getting louder when panned hard.
-        const float angle = (std::clamp(pan, -1.0f, 1.0f) + 1.0f) * 0.25f *
-                            static_cast<float>(M_PI);
-        // cos/sin give the conventional -3 dB per side at centre, so total
-        // power is constant as the track is panned.
-        const float panGain = (ch == 0) ? std::cos(angle) : std::sin(angle);
-        const float channelGain = gain * (numOutputChannels >= 2 ? panGain : 1.0f);
+        // Layout-aware placement onto an N-channel master (Movement 4 surround):
+        //  - a MULTICHANNEL source (a plugin/child whose output is already a surround
+        //    bus) maps channel i -> master channel i at unity — it is already placed, so
+        //    a stereo pan law would smear it;
+        //  - a STEREO source pans across the master's front L/R (channels 0/1) with the
+        //    conventional constant-power cos/sin (-3 dB per side at centre); the other
+        //    master channels (centre, LFE, surrounds) get nothing, which is the correct
+        //    phantom-centre behaviour for a stereo track;
+        //  - a MONO source (or a mono master) is unity on its single channel.
+        float channelGain;
+        if (mixChanCount >= 3) {
+          channelGain = gain;
+        } else if (masterCh >= 2 && mixChanCount == 2) {
+          const float angle = (std::clamp(pan, -1.0f, 1.0f) + 1.0f) * 0.25f *
+                              static_cast<float>(M_PI);
+          channelGain = gain * ((ch == 0) ? std::cos(angle) : std::sin(angle));
+        } else {
+          channelGain = gain;
+        }
 
         // Per-track gain and constant-power pan. The old code multiplied every
         // track by a fixed 0.5 to hide clipping, which made the summing bus a
@@ -719,14 +753,17 @@ public:
                                       region.sourceFrames,
                                       static_cast<int64_t>(m_transportSample),
                                       numSamples, m_audioScratch.data());
-          for (int ch = 0; ch < numOutputChannels; ++ch) {
-            float* output = outputChannelData[ch];
+          // An audio clip is a mono source: place it in the master's front L/R phantom
+          // (constant-power cos/sin), leaving centre/LFE/surrounds silent on an
+          // N-channel master rather than smearing the mono into every channel.
+          for (int ch = 0; ch < std::min(masterCh, 2); ++ch) {
+            float* output = master[ch];
             if (!output) {
               continue;
             }
             const float panGain = (ch == 0) ? std::cos(angle) : std::sin(angle);
             const float channelGain =
-                gain * (numOutputChannels >= 2 ? panGain : 1.0f);
+                gain * (masterCh >= 2 ? panGain : 1.0f);
             for (int i = 0; i < numSamples; ++i) {
               output[i] += m_audioScratch[i] * channelGain;
             }
@@ -736,7 +773,18 @@ public:
       m_transportSample += static_cast<uint64_t>(numSamples);
     }
 
-    captureMasterOutput(outputChannelData, numOutputChannels, numSamples);
+    // Capture the FULL master (all N channels) so a surround mix is verifiable, then, if
+    // the master is wider than the device, downmix its first device-many channels to the
+    // hardware so a stereo device still hears the front L/R.
+    captureMasterOutput(master, masterCh, numSamples);
+    if (virtualMaster) {
+      for (int ch = 0; ch < numOutputChannels; ++ch) {
+        if (outputChannelData[ch] && ch < masterCh && master[ch]) {
+          std::memcpy(outputChannelData[ch], master[ch],
+                      static_cast<size_t>(numSamples) * sizeof(float));
+        }
+      }
+    }
 
     // Advance playback clock even if tracks are late to avoid global stalls.
     if (playedBlock || hasActiveTrack) {
@@ -908,8 +956,25 @@ private:
   uint64_t m_transportSample = 0;
   std::vector<float> m_audioScratch;
 
+  // Movement 4 surround master. The mix places tracks across an N-channel master. When
+  // that master is WIDER than the audio device (a 5.1 mix on a stereo device — the
+  // testing/virtual path, requested via DAW_MASTER_CHANNELS), the mix runs into
+  // m_masterBuffer and its first device-many channels are copied to the device below,
+  // while all N reach the capture. A real surround device needs none of this: the mix
+  // uses the device buffers directly at the device's own channel count.
+  static constexpr uint32_t kMaxMasterChannels = 8;  // up to 7.1
+  int m_masterChannels = 0;                          // 0 = follow the device
+  std::vector<float> m_masterBuffer;                 // kMaxMasterChannels * blockSize
+  std::vector<float*> m_masterPtrs;
+
  public:
   void setPlaying(const std::atomic<bool>* playing) { m_playing = playing; }
+  // A wider-than-device master for surround (DAW_MASTER_CHANNELS). 0/negative follows
+  // the device. Clamped to kMaxMasterChannels.
+  void setMasterChannels(int channels) {
+    m_masterChannels =
+        channels > 0 ? std::min<int>(channels, kMaxMasterChannels) : 0;
+  }
 
   // Movement 4 PDC: set one slot's compensation delay in samples (clamped to the ring
   // capacity) and the global max latency that gates the whole stage. Called from the
@@ -10031,6 +10096,20 @@ struct TrackRuntime {
           &audioPlaybackBlockId);
       audioCallback->setPlaying(&playing);
       audioCallback->resetForStart();
+      // Movement 4 surround master: the mix width follows the device, but
+      // DAW_MASTER_CHANNELS forces a wider (e.g. 5.1) master for placement + capture
+      // even on a stereo device — the device just hears the downmixed front L/R.
+      int masterChannels = std::max(2, audioBackend->outputChannels());
+      if (const char* mc = std::getenv("DAW_MASTER_CHANNELS")) {
+        const int parsed = std::atoi(mc);
+        if (parsed > masterChannels) {
+          masterChannels = std::min(parsed, 8);
+          audioCallback->setMasterChannels(masterChannels);
+          std::cout << "Surround master: " << masterChannels
+                    << " channels (device has " << audioBackend->outputChannels()
+                    << ")" << std::endl;
+        }
+      }
       // DAW_CAPTURE_WAV=<path> records the master output so a take can be
       // analysed offline; DAW_CAPTURE_SECONDS bounds the preallocation.
       if (const char* capturePath = std::getenv("DAW_CAPTURE_WAV")) {
@@ -10044,7 +10123,7 @@ struct TrackRuntime {
           }
           const auto frames =
               static_cast<size_t>(audioBackend->sampleRate() * seconds);
-          audioCallback->enableCapture(frames, 2);
+          audioCallback->enableCapture(frames, masterChannels);
           DAW_EVENT("audio.capture_armed")
               .field("path", std::string(capturePath))
               .field("seconds", seconds);
