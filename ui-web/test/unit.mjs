@@ -1430,9 +1430,9 @@ const OP_REGISTRY = {
   columns:        { cli: null,           agent: null, why: 'gap' },
   // Harmony had no programmatic path at all until now — readable from every
   // surface, writable from none. daw-cli has had `do harmony` the whole time.
-  harmony:        { cli: 'harmony',       agent: null, why: 'gap' },
-  'add-track':    { cli: 'add-track',    agent: null, why: 'gap' },
-  'remove-track': { cli: 'remove-track', agent: null, why: 'gap' },
+  harmony:        { cli: 'harmony',       agent: 'set_harmony' },
+  'add-track':    { cli: 'add-track',    agent: 'add_track' },
+  'remove-track': { cli: 'remove-track', agent: 'remove_track' },
   save:      { cli: 'save',        agent: 'save' },
   note:      { cli: 'note',        agent: 'add_notes' },
   play:      { cli: 'play',        agent: 'transport' },
@@ -1483,10 +1483,9 @@ const CLI_GAP = ['addnode', 'clear', 'columns', 'copy', 'cut', 'deldevice', 'del
                  'editor', 'link', 'loop', 'new', 'paste', 'patch', 'redo', 'rename',
                  'seek', 'stop', 'transpose', 'undo'];
 /** Ops with no agent tool today. Same rule. */
-const AGENT_GAP = ['add-track', 'addnode', 'clear', 'columns', 'copy', 'cut', 'del',
-                   'deldevice', 'delnode', 'editor', 'gain', 'harmony', 'link', 'loop',
-                   'mute', 'new', 'paste', 'patch', 'remove-track', 'seek', 'solo',
-                   'tempo', 'transpose'];
+const AGENT_GAP = ['addnode', 'clear', 'columns', 'copy', 'cut', 'del', 'deldevice',
+                   'delnode', 'editor', 'gain', 'link', 'loop', 'mute', 'new', 'paste',
+                   'patch', 'seek', 'solo', 'tempo', 'transpose'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether

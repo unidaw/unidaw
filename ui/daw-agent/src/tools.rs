@@ -141,6 +141,39 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "add_track",
+            description: "Append an empty track to the song. It arrives at the end with no \
+                          instrument on it; load one with a device command, or write notes \
+                          to it straight away.",
+            params: json!({ "type": "object", "properties": {} }),
+        },
+        ToolSpec {
+            name: "remove_track",
+            description: "Remove a track by its stable id. Its slot is kept as a tombstone so \
+                          the tracks after it do NOT renumber — an id you hold stays valid. \
+                          This cannot be undone.",
+            params: json!({
+                "type": "object",
+                "required": ["track"],
+                "properties": { "track": { "type": "integer", "minimum": 0 } },
+            }),
+        },
+        ToolSpec {
+            name: "set_harmony",
+            description: "Set the key from a point in the song onwards. `root` is a pitch \
+                          class, 0 = C through 11 = B. `scale` is the engine's scale id: \
+                          1 major, 2 minor, 3 dorian, 4 mixolydian.",
+            params: json!({
+                "type": "object",
+                "required": ["root", "scale"],
+                "properties": {
+                    "root": { "type": "integer", "minimum": 0, "maximum": 11 },
+                    "scale": { "type": "integer", "minimum": 0 },
+                    "tick": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_tempo",
             description: "Set the tempo in BPM. With no tick the whole song becomes this tempo;                           with a tick it inserts a tempo change at that point.",
             params: json!({
@@ -223,6 +256,9 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "undo" => undo_redo(handle, UiCommandType::Undo),
         "redo" => undo_redo(handle, UiCommandType::Redo),
         "delete_note" => delete_note(handle, &call.args),
+        "add_track" => add_track(handle),
+        "remove_track" => remove_track(handle, &call.args),
+        "set_harmony" => set_harmony(handle, &call.args),
         "set_tempo" => set_tempo(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
@@ -350,6 +386,50 @@ fn delete_note(handle: &EngineHandle, args: &Value) -> ToolResult {
     p.note_nanotick_lo = (tick & 0xffff_ffff) as u32;
     p.note_nanotick_hi = (tick >> 32) as u32;
     send_edit(handle, p, json!({ "deleted": { "track": track, "tick": tick } }))
+}
+
+/// Append a track. No arguments: v1 of AddTrack always appends, because
+/// inserting needs a display-order field the engine does not have yet.
+fn add_track(handle: &EngineHandle) -> ToolResult {
+    send_edit(handle, blank(UiCommandType::AddTrack), json!({ "added": true }))
+}
+
+/// Remove a track by its STABLE id.
+///
+/// The engine tombstones the slot rather than compacting, so ids an agent is
+/// holding stay valid across a removal — which is the whole reason to address
+/// tracks by id rather than by position.
+fn remove_track(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("remove_track needs \"track\"");
+    };
+    let mut p = blank(UiCommandType::RemoveTrack);
+    p.track_id = track as u32;
+    send_edit(handle, p, json!({ "removed": track }))
+}
+
+/// Set the key at a point on the harmony timeline.
+///
+/// Root and scale ride in note_pitch and value0 — where the engine reads them —
+/// and the command is validated against the HARMONY version, which is a
+/// different counter from the clip's.
+fn set_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(root) = arg_u64(args, "root") else {
+        return ToolResult::err("set_harmony needs \"root\" (0 = C .. 11 = B)");
+    };
+    let Some(scale) = arg_u64(args, "scale") else {
+        return ToolResult::err("set_harmony needs \"scale\" (1 major, 2 minor, 3 dorian, 4 mixolydian)");
+    };
+    if root > 11 {
+        return ToolResult::err("root is a pitch class: 0 = C through 11 = B");
+    }
+    let mut p = blank(UiCommandType::WriteHarmony);
+    p.note_pitch = root as u32;
+    p.value0 = scale as u32;
+    let tick = arg_u64(args, "tick").unwrap_or(0);
+    p.note_nanotick_lo = (tick & 0xffff_ffff) as u32;
+    p.note_nanotick_hi = (tick >> 32) as u32;
+    send_edit(handle, p, json!({ "root": root, "scale": scale, "tick": tick }))
 }
 
 fn set_tempo(handle: &EngineHandle, args: &Value) -> ToolResult {
