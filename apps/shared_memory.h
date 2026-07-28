@@ -56,12 +56,17 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //     multi-out plugin's output buses become collapsible child tracks, plus per-bus
 //     topology on the chain stream (UiBusDiffPayload). The header arrays ride the tail
 //     padding, so sizeof(ShmHeader) is still 640.
-constexpr uint16_t kShmVersion = 20;
+// 21: Movement 4 — kUiMaxTracks 8 -> 64 so a multi-out drum rack (up to 16 stereo stems
+//     + its parent) fits without forking the track model (a child is an ordinary track).
+//     Every per-track header array grows, so sizeof(ShmHeader) grows well past 640 and
+//     every region offset shifts (computed from sizeof, so it moves automatically). A
+//     lockstep bump: the Rust mirror + sidecar rebuild against 64.
+constexpr uint16_t kShmVersion = 21;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
 
-constexpr uint32_t kUiMaxTracks = 8;
+constexpr uint32_t kUiMaxTracks = 64;
 constexpr uint32_t kUiMaxClipNotes = 4096;
 constexpr uint32_t kUiMaxClipChords = 1024;
 constexpr uint32_t kUiMaxClipExtents = 64;  // clip boxes across all tracks (M3.4)
