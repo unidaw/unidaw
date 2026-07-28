@@ -229,7 +229,13 @@ export class Chain {
       const open = document.createElement('button');
       open.className = 'dv-open';
       open.title = 'Open the plugin\'s own window';
-      open.appendChild(document.createTextNode('open'));
+      // An icon, not the word: the card is 232px wide and every pixel of it is
+      // spoken for by the device's name and its parameters. `arrow-square-out` is
+      // the same glyph every application uses for "this opens somewhere else",
+      // which is exactly what it does.
+      const openIcon = document.createElement('i');
+      openIcon.className = 'ph ph-arrow-square-out';
+      open.appendChild(openIcon);
       el.append(open);
       const bus = div('dv-bus', el);
       el._busEl = bus;

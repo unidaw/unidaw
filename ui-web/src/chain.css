@@ -51,6 +51,11 @@
      and that is the part that scrolls. `min-height: 0` is what lets the list
      shrink below its content instead of pushing the footer off the bottom. */
   min-height: 0; overflow: hidden;
+  /* A positioning context for the open button, which is absolute. Without this it
+     anchors to whatever ancestor happens to be positioned and `overflow: hidden`
+     above then clips it out of existence — the button rendered, reported a real
+     width to a probe, and could not be seen. */
+  position: relative;
   padding: 8px 10px; box-sizing: border-box;
   border: 1px solid var(--uni-rule-track);
   border-radius: 3px;
@@ -195,14 +200,14 @@
    device names for the eye. */
 .dv-open {
   position: absolute; top: 6px; right: 6px;
-  font-family: var(--font-mono);
-  font-size: var(--font-size-fx);
-  letter-spacing: var(--font-tracking-fx);
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  font-size: 13px;
   color: var(--uni-text-fx);
   background: transparent;
   border: 1px solid var(--uni-rule-column);
   border-radius: 3px;
-  padding: 1px 5px;
+  padding: 0;
   cursor: pointer;
   opacity: .5;
 }
