@@ -11,6 +11,7 @@
     "perf": "node test/frametime.mjs",
     "e2e": "node test/e2e.mjs",
     "journey": "node test/journey.mjs",
+    "audible": "node test/audible.mjs",
     "soak": "node test/soak.mjs",
     "unit": "node --test test/unit.mjs"
   },

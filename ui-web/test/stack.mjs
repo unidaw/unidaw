@@ -109,7 +109,15 @@ async function findFreeBase(tries = 40) {
   throw new Error('stack: could not find three consecutive free ports');
 }
 
-export async function startStack({ base = 0, shm = '', keepDir = false } = {}) {
+/**
+ * @param {string} [opts.capture] write the engine's master output here as WAV.
+ *   The engine takes this at startup only, so a test that wants to hear what it
+ *   built has to ask for it before the first note exists.
+ * @param {number} [opts.captureSeconds] how much to keep.
+ */
+export async function startStack({ base = 0, shm = '', keepDir = false,
+                                   capture = '', captureSeconds = 30,
+                                   runSeconds = 0 } = {}) {
   const procs = [];
   if (!base) base = await findFreeBase();
   // The segment name has to be unique too, or two runs share one engine's memory
@@ -142,12 +150,21 @@ export async function startStack({ base = 0, shm = '', keepDir = false } = {}) {
     DAW_PROJECT_DIR: dir,
     DAW_HOST_BINARY: hostBin,
   };
+  if (capture) {
+    env.DAW_CAPTURE_WAV = capture;
+    env.DAW_CAPTURE_SECONDS = String(captureSeconds);
+  }
   // Logs to disk, not /dev/null. The first version discarded them, so when the
   // engine fell back to a stand-in plugin the only evidence was a wrong device
   // name three sections into the suite.
   const { openSync } = await import('node:fs');
   const log = (name) => openSync(join(root, name + '.log'), 'a');
-  const engine = spawn(engineBin, [], {
+  // `--run-seconds` matters for capture: the engine writes the WAV when its
+  // capture window CLOSES, and a SIGTERM on the way out skips that entirely — the
+  // first version of the audio test killed the engine and then looked for a file
+  // that was never going to exist.
+  const engineArgs = runSeconds ? ['--run-seconds', String(runSeconds)] : [];
+  const engine = spawn(engineBin, engineArgs, {
     env, cwd: bin('build'), stdio: ['ignore', log('engine'), log('engine')],
   });
   procs.push(engine);
@@ -175,5 +192,6 @@ export async function startStack({ base = 0, shm = '', keepDir = false } = {}) {
   };
   process.on('exit', stop);
 
-  return { url: `http://127.0.0.1:${base}/index.html`, dir, root, shm, base, stop };
+  return { url: `http://127.0.0.1:${base}/index.html`, dir, root, shm, base,
+           capture, stop };
 }
