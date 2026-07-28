@@ -312,7 +312,10 @@ static_assert(sizeof(UiChainDiffPayload) == 40,
 
 // v20 (Movement 4): on a ChainSnapshot diff, `flags` carries the count of DeviceBus
 // diffs that follow for this device, so a reader knows when the bus set is complete
-// and draws once instead of stereo-then-rearranging.
+// and draws once instead of stereo-then-rearranging. NOTE FOR READERS: this is
+// UiChainDiffPayload.flags (u16, at payload offset 2) — NOT EventEntry.flags (u32).
+// Both structs have a field named `flags`; decode busCount from the PAYLOAD's, or a
+// live plugin reporting N buses under a busCount of 0 is the first you'll hear of it.
 constexpr uint16_t kUiChainDiffBusCountMask = 0x00ff;  // low byte: bus count (<=32)
 constexpr uint16_t kUiChainDiffBusTruncated = 1u << 8;  // more buses than the cap
 
