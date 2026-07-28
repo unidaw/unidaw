@@ -3045,6 +3045,42 @@ conn = WANTS_ENGINE ? connectEngine({
     (window.__acks || (window.__acks = [])).push(state.ack); },
   onChange: (store) => {
     engine = store;
+    /**
+     * The project has as many tracks as the ENGINE says, not sixteen.
+     *
+     * `state.tracks` was a hardcoded 16 and nothing ever moved it, so a
+     * three-track project drew thirteen phantom lanes named T04..T16 — lanes that
+     * can never hold anything, because the engine's own cap is eight
+     * (kUiMaxTracks). Half the tracker's width, and every one of them looked like
+     * an empty track you could write into.
+     *
+     * Clamped to 16 as well: that is the renderer's lane cap, and a project with
+     * more tracks than the tracker can draw should not silently size the pool past
+     * what it will show.
+     *
+     * Only from a live engine. The fixtures set `state.tracks` themselves and are
+     * the reason this cannot simply read the store unconditionally — a fixture
+     * with no engine would collapse to zero lanes.
+     *
+     * The cursor and the selection are pulled back with it. A track count that
+     * SHRINKS — loading a smaller project, which is the common case — otherwise
+     * leaves the cursor on a lane that no longer exists, and every edit from there
+     * addresses a track the engine does not have.
+     */
+    if (state.useEngine !== false && store.trackCount > 0) {
+      const n = Math.min(store.trackCount, 16);
+      if (state.tracks !== n) {
+        state.tracks = n;
+        if (state.cursor.track >= n) state.cursor.track = n - 1;
+        // Dropped rather than clamped: a selection whose far edge was on a track
+        // that no longer exists is not a smaller selection, it is a different one,
+        // and silently reshaping it is how a paste lands somewhere nobody chose.
+        if (state.selection) {
+          const maxField = n * state.columns - 1;
+          if (state.selection.f1 > maxField) state.selection = null;
+        }
+      }
+    }
     reapPending(store.clipVersion, performance.now());
     // Mixer edits reconcile on the engine's mixer version, the same way note
     // edits reconcile on the clip version.
