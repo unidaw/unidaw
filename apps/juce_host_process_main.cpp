@@ -613,6 +613,12 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
           reinterpret_cast<uint8_t*>(state.shmBase) + state.audioAuxOutOffset +
           static_cast<size_t>(blockIndex) * blockBytes +
           static_cast<size_t>(ch) * stride);
+      // Zero the aux slot every block up front. The multi-out plugin overwrites what it
+      // fills; a bus it does not fill — or a bypassed/removed plugin that writes no aux
+      // at all — must read silence, not the stale audio a persistent child track would
+      // otherwise loop into the master.
+      std::fill(state.auxOutputPtrs[ch],
+                state.auxOutputPtrs[ch] + state.header->blockSize, 0.0f);
     }
   }
 
