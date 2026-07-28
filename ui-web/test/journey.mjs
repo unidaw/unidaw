@@ -791,6 +791,129 @@ await settle(800);
 }
 
 // ---------------------------------------------------------------------------
+step('25. edit what is in a cell');
+await page.keyboard.press('F1');
+await settle(400);
+{
+  // A FINE zoom. The sweep above finishes at "4 bars per row", where a row is a
+  // summary of sixteen bars rather than a position — so "the note at the cursor"
+  // has no single tick, and a delete aimed at one lands nowhere near it.
+  await page.keyboard.press('Slash');
+  await settle(200);
+  await page.keyboard.type('zoom 1');
+  await page.keyboard.press('Enter');
+  await settle(400);
+  await page.keyboard.press('Escape');
+  await settle(300);
+  // Put the cursor on a note that exists, by asking where one is.
+  const at = await page.evaluate(() => {
+    const ns = window.__uni.notes() || [];
+    const tree = window.__uni.trackTree() || [];
+    const live = new Set(tree.filter((t) => !t.absent).map((t) => t.track));
+    const n = ns.find((x) => live.has(x.tr));
+    return n ? { row: n.row, track: n.tr, pitch: n.p } : null;
+  });
+  if (!at) {
+    gap('edit a note', 'no note on a live track to edit');
+  } else {
+    await page.keyboard.press('Slash');
+    await settle(200);
+    // 0-BASED. `goto <row>` has min: 0 in its own schema; the +1 I assumed put
+    // the cursor one row past the note and made the two edits below look
+    // like missing features.
+    await page.keyboard.type(`goto ${at.row} ${at.track}`);
+    await page.keyboard.press('Enter');
+    await settle(500);
+    await page.keyboard.press('Escape');
+    await settle(300);
+    // `goto` names a row and a track and says nothing about the COLUMN, so the
+    // cursor keeps whichever note column it was left in — the chord step above
+    // leaves it in the second one. The note is in the first, and "no note here"
+    // was the app being right about a cell that really is empty.
+    let cur = (await st()).cursor;
+    while (cur.col > 0) { await page.keyboard.press('ArrowLeft'); cur = (await st()).cursor; }
+    ok(cur.row === at.row && cur.track === at.track && cur.col === 0,
+       'the cursor can be put on a note',
+       `asked ${at.row}/${at.track}, got ${cur.row}/${cur.track} col ${cur.col}`);
+
+    // Transpose it with the keyboard, then check the pitch really moved.
+    const before = await page.evaluate(
+      ([r, t]) => (window.__uni.notes() || [])
+        .filter((n) => n.row === r && n.tr === t).map((n) => n.p).sort(),
+      [at.row, at.track]);
+    await page.keyboard.press('Slash');
+    await settle(200);
+    await page.keyboard.type(`select ${at.row} ${at.row} ${at.track}`);
+    await page.keyboard.press('Enter');
+    await settle(400);
+    await page.keyboard.type('transpose 12');
+    await page.keyboard.press('Enter');
+    await settle(900);
+    await page.keyboard.press('Escape');
+    await settle(300);
+    const afterP = await page.evaluate(
+      ([r, t]) => (window.__uni.notes() || [])
+        .filter((n) => n.row === r && n.tr === t).map((n) => n.p).sort(),
+      [at.row, at.track]);
+    if (JSON.stringify(before) === JSON.stringify(afterP)) {
+      gap('transpose a selection', `pitches unchanged: ${JSON.stringify(before)}`);
+    } else {
+      ok(true, 'transposing a selection moves the pitches',
+         `${JSON.stringify(before)} -> ${JSON.stringify(afterP)}`);
+    }
+
+    // ...and delete it.
+    const nBefore = (await st()).engine.noteCount;
+    await page.keyboard.press('Slash');
+    await settle(200);
+    await page.keyboard.type(`del`);
+    await page.keyboard.press('Enter');
+    await settle(900);
+    await page.keyboard.press('Escape');
+    await settle(300);
+    const nAfter = (await st()).engine.noteCount;
+    if (nAfter >= nBefore) {
+      const why = (await st()).reject;
+      const where = await page.evaluate(() => {
+        const s = window.__uni.state();
+        const ns = (window.__uni.notes() || [])
+          .filter((n) => n.tr === s.cursor.track && n.row === s.cursor.row);
+        return { cursor: s.cursor, here: ns.map((n) => `${n.p}@col${n.col}`) };
+      });
+      gap('delete a note',
+          `count stayed at ${nAfter}${why ? ` — app said: "${why}"` : ''}; `
+          + `cursor ${JSON.stringify(where.cursor)}, notes on that row ${JSON.stringify(where.here)}`);
+    }
+    else ok(true, 'and a note can be deleted', `${nBefore} -> ${nAfter}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+step('26. the harmony pane');
+{
+  // The harmony timeline is a document feature — the right-hand pane shows the
+  // key, the scale and the degrees, and the tracker has a harmony column — and
+  // there is NO command for it. The console's vocabulary is
+  //   add-track addnode clear columns copy cut del deldevice delnode edit editor
+  //   engine fold follow gain goto help link load loop mute new nodes note oct
+  //   paste patch play projects redo remove-track rename save seek select solo
+  //   state stop tempo transpose undo view zoom
+  // and nothing in it sets a key or a scale. So harmony can be READ from every
+  // surface and WRITTEN from none — the same shape as delDevice before it got a
+  // button: a capability with no way in.
+  const cmds = await page.evaluate(() => Object.keys(window.__uni.commands
+    ? window.__uni.commands() : {}));
+  const canSetKey = cmds.some((c) => /harmony|key|scale/i.test(c));
+  if (!canSetKey) {
+    gap('set the key or scale',
+        'no console command touches harmony — it can be read everywhere and '
+        + 'written nowhere');
+  } else {
+    ok(true, 'there is a command for harmony', cmds.filter((c) => /harmony|key|scale/i.test(c)).join(' '));
+  }
+}
+
+// ---------------------------------------------------------------------------
 step('page errors');
 ok(errors.length === 0, 'nothing threw during the whole journey',
    errors.slice(0, 3).join(' | '));

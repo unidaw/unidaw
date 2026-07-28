@@ -2950,6 +2950,11 @@ function noteAtCursor() {
   for (let i = 0; i < engine.noteCount; i++) {
     const n = engine.notes[i];
     if (n.track !== state.cursor.track) continue;
+    // The cursor's own note column. A track showing three of them has three
+    // different notes on one row, and "the note at the cursor" is one of them —
+    // returning the first match made Delete and the entry guard both act on
+    // whichever note happened to come first in the array.
+    if ((n.column | 0) !== noteColOf(state.cursor.col)) continue;
     const r = scale === 1 ? n.row : Math.round(n.row * scale);
     if (r === state.cursor.row) return n;
   }
@@ -2993,11 +2998,28 @@ function noteOffAtCursor() {
 
 function deleteAtCursor() {
   if (!conn) { state.reject = 'no engine'; return false; }
+  /**
+   * At an aggregate zoom a row is a SUMMARY, not a position.
+   *
+   * "1 bar" and "4 bars" per row mean the cursor names sixteen bars of music at
+   * once, so `tickOfCursorRow()` is the start of that span and not the tick of
+   * any particular note. The delete went out addressed to a tick nothing was on,
+   * the engine matched nothing, and the UI said nothing — the note stayed and
+   * the command reported success. Refusing by name is the whole difference
+   * between "that did not work" and "I wonder what happened".
+   */
+  if (ZOOM_LEVELS[state.zoom].aggregate) {
+    state.reject = `zoom in to edit — a row here is ${ZOOM_LEVELS[state.zoom].label}`;
+    return false;
+  }
   // Nothing here to delete is a fact worth reporting. Sending the command anyway
   // and saying "delete" reads as success, and the engine quietly ignores it.
   if (engine && !noteAtCursor()) { state.reject = 'no note here'; return false; }
   const base = engine ? engine.clipVersion : 0;
-  if (!conn.send({ type: 'delete', track: state.cursor.track, tick: tickOfCursorRow() })) return false;
+  if (!conn.send({ type: 'delete', track: state.cursor.track, tick: tickOfCursorRow(),
+                   // WHICH column's note. Without it, deleting in the second
+                   // column removes the first column's note instead.
+                   column: noteColOf(state.cursor.col) })) return false;
   addPending(state.cursor.row, state.cursor.track, 0, '', base);
   return true;
 }

@@ -1480,6 +1480,12 @@ fn build_waveform_request(body: &str) -> Option<Result<UiWaveformRequestPayload,
     }))
 }
 
+/// The note column a command names, as the engine wants it: the low byte of
+/// `flags`. Absent means column 0, which is what a single-column tracker sends.
+fn note_column(body: &str) -> u16 {
+    (parse_num(body, "\"column\"").unwrap_or(0).clamp(0, 255) as u16) & 0xff
+}
+
 fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_named(body) { return r; }
 
@@ -1590,8 +1596,18 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         p.value0 = parse_num(body, "\"vel\"").unwrap_or(100).clamp(0, 127) as u32;
         p.note_duration_lo = dur as u32;
         p.note_duration_hi = (dur >> 32) as u32;
+        // WHICH NOTE COLUMN. The engine has read this off the low byte of flags
+        // since before the web UI existed — `applyAddNote` opens with
+        // `const uint8_t column = flags & 0xff` — and this builder dropped it, so
+        // every note the UI ever wrote landed in column 0 and a second note on the
+        // same row REPLACED the first instead of sitting beside it. build_chord
+        // three hundred lines up has always sent it; notes never did.
+        p.flags = note_column(body);
     } else if body.contains("\"delete\"") {
         p.command_type = UiCommandType::DeleteNote as u16;
+        // Same byte, same reason: with more than one note column, deleting by
+        // (track, tick) alone removes whichever the engine matches first.
+        p.flags = note_column(body);
     } else if body.contains("\"mixer\"") {
         // Gain is signed millibels and pan signed thousandths, but the payload
         // fields are u32 — bit-cast rather than clamp, since the engine reads
@@ -2905,6 +2921,26 @@ mod tests {
         assert_eq!(ty(r#"{"type":"removetrack","track":2}"#),
                    Some(UiCommandType::RemoveTrack as u16));
         assert_eq!(ty(r#"{"type":"nonsense"}"#), None);
+    }
+
+    /// The engine reads the note column off the low byte of `flags`
+    /// (`applyAddNote`: `const uint8_t column = flags & 0xff`). This builder used
+    /// to drop it, so every note the UI wrote landed in column 0 and a second
+    /// note on one row replaced the first instead of sitting beside it.
+    #[test]
+    fn a_note_carries_its_column() {
+        let p = build_command(r#"{"type":"note","track":0,"pitch":67,"tick":0,"column":2}"#)
+            .expect("builds");
+        assert_eq!(p.command_type, UiCommandType::WriteNote as u16);
+        assert_eq!(p.flags & 0xff, 2);
+        // ...and so does the delete, or removing in one column takes another's note.
+        let d = build_command(r#"{"type":"delete","track":0,"tick":0,"column":2}"#)
+            .expect("builds");
+        assert_eq!(d.command_type, UiCommandType::DeleteNote as u16);
+        assert_eq!(d.flags & 0xff, 2);
+        // Absent means column 0 — what a single-column tracker sends.
+        let z = build_command(r#"{"type":"note","track":0,"pitch":60,"tick":0}"#).expect("builds");
+        assert_eq!(z.flags & 0xff, 0);
     }
 
     #[test]
