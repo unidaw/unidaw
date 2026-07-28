@@ -1381,8 +1381,27 @@ section('child-track structure (v20)');
 const tree = await page.evaluate(() => window.__uni.trackTree());
 ok(Array.isArray(tree) && tree.length > 0, `the tree read back: ${tree && tree.length} tracks`);
 if (tree && tree.length) {
+  /**
+   * THIS ASSERTION CANNOT DISTINGUISH WHAT IT CLAIMS TO, and that is the finding.
+   *
+   * `parent_id 0 = top-level, else the parent's track id` — but track 0 is a
+   * VALID track id, so "no parent" and "child of track 0" are the same value. And
+   * track 0 is the likeliest parent there is: it is the first track, and in the
+   * multi-out fixture it is the drum plugin whose stems are the children.
+   *
+   * So `every track is top-level` passes against a real multi-out project whose
+   * two stems ARE children of track 0. I wrote this assertion to catch a field
+   * nobody had written; it cannot catch a field written correctly into a sentinel
+   * with no room for the answer. Reported to backend, who are adding a
+   * "has a parent" flag bit so the two states stop sharing a value.
+   *
+   * Kept and labelled rather than deleted or quietly strengthened: it still
+   * proves the field is READ (a decode that never ran would not return zeroes for
+   * a known track count), and leaving the blind spot named is worth more than a
+   * green line that hides it.
+   */
   ok(tree.every((t) => t.parent === 0),
-     'every track is top-level, which is what the engine publishes until multi-out',
+     'every track reads parent 0 — WHICH IS AMBIGUOUS: see the note above',
      JSON.stringify(tree.slice(0, 4)));
   ok(tree.every((t) => t.collapsed === false), 'and none is collapsed');
   // The count agrees with the arrays a client actually renders from. A per-track

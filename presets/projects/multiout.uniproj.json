@@ -1,0 +1,129 @@
+{
+  "schema_version": 4,
+  "meta": {
+    "name": "multiout",
+    "created_utc": 0,
+    "modified_utc": 0
+  },
+  "timebase": {
+    "nanoticks_per_quarter": 960000
+  },
+  "nanoticks_per_quarter": 960000,
+  "tempo_map": [
+    {
+      "nanotick": 0,
+      "bpm": 120.0
+    }
+  ],
+  "harmony_timeline": [],
+  "clips": [
+    {
+      "id": 1,
+      "name": "kit",
+      "length": 3840000,
+      "lines_per_beat": 4,
+      "time_sig_numerator": 4,
+      "time_sig_denominator": 4,
+      "kind": "symbolic",
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 480000,
+          "pitch": 61,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 1
+        },
+        {
+          "nanotick": 960000,
+          "duration": 480000,
+          "pitch": 62,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 2
+        },
+        {
+          "nanotick": 1920000,
+          "duration": 480000,
+          "pitch": 61,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 3
+        },
+        {
+          "nanotick": 2880000,
+          "duration": 480000,
+          "pitch": 62,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 4
+        }
+      ],
+      "chords": []
+    }
+  ],
+  "tracks": [
+    {
+      "track_id": 0,
+      "name": "Drums",
+      "harmony_quantize": false,
+      "lines_per_beat": 4,
+      "mixer": {
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "device_id": 0,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 0,
+          "host_slot_index": 4294967294,
+          "bypass": false,
+          "vst_ref": {
+            "vendor": "",
+            "name": "multiout",
+            "path": "",
+            "uid16": ""
+          }
+        }
+      ],
+      "mod_links": [],
+      "placements": [
+        {
+          "clip_id": 1,
+          "at": 0,
+          "length": 3840000,
+          "notes": [],
+          "chords": [],
+          "mutes": []
+        }
+      ]
+    }
+  ]
+}
