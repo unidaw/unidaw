@@ -28,6 +28,12 @@ pub struct UiSnapshot {
     /// separate, on UiClipExtent.
     pub ui_song_time_sig_num: u32,
     pub ui_song_time_sig_den: u32,
+    /// v20: child-track structure (Movement 4). `parent_id` 0 = top-level, else the
+    /// parent's track_id; bit0 of `flags` = collapsed. Children are ORDINARY tracks
+    /// in these same flat arrays — collapse is a drawing decision, never a change to
+    /// what exists — so a reader that ignores both still renders every track.
+    pub ui_track_parent_id: [u32; K_UI_MAX_TRACKS],
+    pub ui_track_flags: [u8; K_UI_MAX_TRACKS],
 }
 
 pub struct SeqlockReader {
@@ -66,6 +72,8 @@ impl SeqlockReader {
             let ui_lines_per_beat = unsafe { (*self.header).ui_lines_per_beat };
             let ui_song_time_sig_num = unsafe { (*self.header).ui_song_time_sig_num };
             let ui_song_time_sig_den = unsafe { (*self.header).ui_song_time_sig_den };
+            let ui_track_parent_id = unsafe { (*self.header).ui_track_parent_id };
+            let ui_track_flags = unsafe { (*self.header).ui_track_flags };
 
             fence(Ordering::Acquire);
             let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
@@ -88,6 +96,8 @@ impl SeqlockReader {
                     ui_lines_per_beat,
                     ui_song_time_sig_num,
                     ui_song_time_sig_den,
+                    ui_track_parent_id,
+                    ui_track_flags,
                 });
             }
         }

@@ -39,7 +39,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 13;
+const WIRE_VERSION: u16 = 14;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -307,6 +307,11 @@ struct Frame {
     /// four more chances to mislay a field.
     song_time_sig_num: u16,
     song_time_sig_den: u16,
+    /// v20: (parent_id, flags) per track. parent_id 0 = top-level; flags bit0 =
+    /// collapsed. A child is an ORDINARY track in every other array — collapse is a
+    /// drawing decision and never changes what exists, so a client that ignores
+    /// both still renders the whole project.
+    track_parent: Vec<(u32, u8)>,
     /// The harmony timeline: (nanotick, root, scale_id) per key change. The
     /// chrome showed a hardcoded "C major" before this, which was wrong for
     /// three quarters of the maximal project.
@@ -451,6 +456,18 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.extend_from_slice(&count.to_le_bytes());
         out.push(rep); out.push(lo); out.push(hi); out.push(0);
     }
+    // v20 child-track structure, LAST in the frame on purpose.
+    //
+    // Appended rather than folded into the mixer's 12-byte record, because that
+    // record's stride is load-bearing for everything after it and GUIDELINES 2.3
+    // is a list of the two times widening one shifted the whole tail. Nothing
+    // follows this, so nothing can be shifted by it. Counted by `track_count`,
+    // which the header already carries.
+    for &(parent, flags) in &f.track_parent {
+        out.extend_from_slice(&parent.to_le_bytes());   // 0
+        out.push(flags);                                // 4
+        out.push(0); out.push(0); out.push(0);          // 8 bytes each
+    }
 }
 
 /// Whether the harmony we hold is out of date. Its own version, not the clip
@@ -534,6 +551,10 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
                             else { snap.ui_song_time_sig_num.min(u16::MAX as u32) as u16 };
     out.song_time_sig_den = if snap.ui_song_time_sig_den == 0 { 4 }
                             else { snap.ui_song_time_sig_den.min(u16::MAX as u32) as u16 };
+    out.track_parent.clear();
+    for t in 0..(snap.ui_track_count as usize).min(snap.ui_track_parent_id.len()) {
+        out.track_parent.push((snap.ui_track_parent_id[t], snap.ui_track_flags[t]));
+    }
 
     // Keyed on the engine's own harmony version, which moves only on a change.
     if !out.harmony_ever_read || f_harmony_stale(out) {

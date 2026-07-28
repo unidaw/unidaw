@@ -1330,6 +1330,33 @@ const chromeMeter = await page.evaluate(
 ok(chromeMeter.includes('7/8'),
    'the chrome counts the song in 7/8', JSON.stringify(chromeMeter));
 
+section('child-track structure (v20)');
+/**
+ * The fields exist and read as top-level before anything creates a child.
+ *
+ * Worth asserting NOW rather than with the multi-out feature. These arrive on the
+ * wire one bump ahead of the engine populating them, so this is the only window in
+ * which "every track is top-level and expanded" is a claim about a field that is
+ * being read rather than one that is merely absent — and a read-back that first
+ * appears alongside the feature cannot tell a correct default from a field nobody
+ * ever wrote. It is also the whole point of the design: a child is an ORDINARY
+ * track in the same flat arrays, so a client that ignores both fields still draws
+ * the entire project.
+ */
+const tree = await page.evaluate(() => window.__uni.trackTree());
+ok(Array.isArray(tree) && tree.length > 0, `the tree read back: ${tree && tree.length} tracks`);
+if (tree && tree.length) {
+  ok(tree.every((t) => t.parent === 0),
+     'every track is top-level, which is what the engine publishes until multi-out',
+     JSON.stringify(tree.slice(0, 4)));
+  ok(tree.every((t) => t.collapsed === false), 'and none is collapsed');
+  // The count agrees with the arrays a client actually renders from. A per-track
+  // block that decoded short would read as "top-level" for the tail and look right.
+  const names = await page.evaluate(() => window.__uni.names());
+  ok(names && names.length >= tree.length,
+     `and it is as long as the track list it describes: ${tree.length} vs ${names && names.length}`);
+}
+
 section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));
 

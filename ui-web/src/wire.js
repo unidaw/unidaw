@@ -7,7 +7,7 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 13;
+export const WIRE_VERSION = 14;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
@@ -130,6 +130,22 @@ export function createStore() {
      * divides by a zero denominator.
      */
     songTimeSigNum: 4, songTimeSigDen: 4,
+    /**
+     * Child-track structure (kShmVersion 20). `trackParent[t]` is 0 for a
+     * top-level track, else its parent's track id; bit0 of `trackFlags[t]` is
+     * collapsed.
+     *
+     * A child is an ORDINARY track in every other array — same flat index, same
+     * name, same lanes, same mixer strip. Collapse is a decision about what to
+     * DRAW and never about what exists, which is why a collapsed parent still
+     * publishes its children's rails: hiding and dropping are different, and only
+     * one of them is recoverable.
+     *
+     * Fixed arrays, sized to the engine's track cap and reused: this is read per
+     * frame and a fresh array per frame is the allocation the renderer was built
+     * to avoid.
+     */
+    trackParent: new Uint32Array(16), trackFlags: new Uint8Array(16),
     /** The patcher graph (SHM v14). One global graph today; the shape does not
      *  change when it becomes per-device. */
     patcherVersion: -1, patcherDevice: 0, patcherNodes: [], patcherEdges: [],
@@ -215,6 +231,9 @@ export function decode(buf, store) {
   // every bar computation downstream of this line.
   store.songTimeSigNum = v.getUint16(124, true) || 4;
   store.songTimeSigDen = v.getUint16(126, true) || 4;
+  // The child-track block is LAST in the frame, so its offset is everything else
+  // added up. Decoded after the sections it follows — see PARENT_AT below.
+
   const aggN = aggRows * aggTracks;
   const varBefore = harmonyCount * HARMONY_BYTES + nameCount * NAME_BYTES + nodeCount * PATCHER_NODE_BYTES
                   + edgeCount * PATCHER_EDGE_BYTES + mixCount * MIXER_BYTES;
@@ -404,6 +423,38 @@ export function decode(buf, store) {
   }
   store.aggRows = aggRows;
   store.aggTracks = aggTracks;
+
+  /**
+   * Child-track structure (v20), last in the frame.
+   *
+   * Its offset is everything before it added up, which is exactly why it is last:
+   * a section appended at the end cannot shift anything, and GUIDELINES 2.3 is a
+   * list of the two times widening a record in the middle shifted the whole tail
+   * and made every field after it decode as garbage.
+   *
+   * Bounds-checked rather than assumed. A frame that stops short here is a frame
+   * from something older or a count that disagrees, and reading past the end of a
+   * DataView throws — which would take down the socket handler and, with it, the
+   * whole UI, to report a field nothing yet draws with.
+   */
+  {
+    const at = AFTER_MIXER + peakCount * 4 + noteCount * NOTE_BYTES
+             + extentCount * EXTENT_BYTES + aggN * 8;
+    const tc = store.trackCount;
+    const have = Math.max(0, Math.min(tc, (buf.byteLength - at) >> 3));
+    if (store.trackParent.length < tc) {
+      store.trackParent = new Uint32Array(tc);
+      store.trackFlags = new Uint8Array(tc);
+    }
+    for (let t = 0; t < have; t++) {
+      store.trackParent[t] = v.getUint32(at + t * 8, true);
+      store.trackFlags[t] = v.getUint8(at + t * 8 + 4);
+    }
+    // Anything the frame did not carry reads as top-level and expanded, which is
+    // what every track is until the engine starts creating children from a
+    // multi-out plugin's aux buses.
+    for (let t = have; t < tc; t++) { store.trackParent[t] = 0; store.trackFlags[t] = 0; }
+  }
 
   store.ok = true;
   return true;

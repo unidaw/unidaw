@@ -3437,6 +3437,24 @@ window.__uni = {
                        denominator: e.grid.denominator } : null,
     })),
   } : null),
+  /**
+   * Child-track structure (kShmVersion 20). `parent` 0 means top-level.
+   *
+   * Exposed before anything draws with it, deliberately: the fields are on the
+   * wire now and the engine will not start CREATING children until the multi-out
+   * phase, so this is the window in which "every track is top-level and expanded"
+   * can be asserted as the baseline. A read-back that only arrives with the
+   * feature cannot tell a correct default from a field that was never populated.
+   */
+  trackTree: () => {
+    if (!engine) return null;
+    const out = [];
+    for (let t = 0; t < engine.trackCount; t++) {
+      out.push({ track: t, parent: engine.trackParent[t],
+                 collapsed: (engine.trackFlags[t] & 1) !== 0 });
+    }
+    return out;
+  },
   names: () => (engine ? engine.names.slice() : null),
   harmony: () => (engine ? engine.harmony.slice() : null),
   key: () => currentKey(),
