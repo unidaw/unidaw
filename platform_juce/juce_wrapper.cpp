@@ -1059,7 +1059,12 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
         if (status != 0x90u || event.data2 == 0) {
           continue;
         }
-        const int bus = event.data1 % numBuses;
+        // Multitimbral routing: a note on MIDI channel k lands on output bus k (the
+        // MIDI-per-bus case). Channel 0 falls back to pitch-based routing, which keeps
+        // the single-stream separation test (pitch % numBuses) working.
+        const int bus = (event.channel != 0)
+                            ? (event.channel % numBuses)
+                            : (event.data1 % numBuses);
         const int start = std::max(0, event.sampleOffset);
         const int end = std::min(numFrames, start + 10);
         if (bus == 0) {

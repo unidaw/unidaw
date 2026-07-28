@@ -2260,6 +2260,15 @@ struct TrackRuntime {
       [&](const TrackRuntime& runtime,
           uint32_t hostSlotIndex) -> std::optional<std::string> {
     if (hostSlotIndex == daw::kHostSlotIndexDirect) {
+      // "Direct" means the engine's default plugin. Resolve it from the STABLE
+      // baseConfig, not runtime.config.pluginPaths — the latter is overwritten by every
+      // rebuildHostForChain, so a Direct device would otherwise inherit whatever plugin
+      // the previously loaded project left behind (a multi-out project opened after a
+      // real-plugin project loaded the wrong instance and produced no stems). Real
+      // projects pin devices to a cache index, so this branch is the test/default path.
+      if (!baseConfig.pluginPaths.empty()) {
+        return baseConfig.pluginPaths.front();
+      }
       if (!runtime.config.pluginPaths.empty()) {
         return runtime.config.pluginPaths.front();
       }
@@ -7134,7 +7143,21 @@ struct TrackRuntime {
                              uint32_t currentBlockId,
                              daw::EventRingView& ringStd,
                              std::vector<daw::EventEntry>* routedMidi) -> bool {
+        // Movement 4 MIDI-per-bus: an aux child's notes are tagged with its bus's MIDI
+        // channel and rendered into the PARENT's ring (the caller passes the parent's
+        // ringStd), so a multitimbral instrument routes channel k to its output bus k.
+        // A normal track uses channel 0.
+        const uint8_t midiChannel =
+            runtime.isAuxChild.load(std::memory_order_relaxed)
+                ? static_cast<uint8_t>(
+                      runtime.auxBusIndex.load(std::memory_order_relaxed) & 0x0Fu)
+                : 0u;
         auto chainConsumesMidi = [&]() -> bool {
+          // A child has no chain of its own; its notes feed the parent's instrument, so
+          // it always "consumes MIDI" for scheduling purposes.
+          if (runtime.isAuxChild.load(std::memory_order_relaxed)) {
+            return true;
+          }
           for (const auto& device : trackState.chainDevices) {
             if (device.kind != daw::DeviceKind::VstInstrument &&
                 device.kind != daw::DeviceKind::VstEffect) {
@@ -7790,7 +7813,7 @@ struct TrackRuntime {
               offPayload.status = 0x80;
               offPayload.data1 = activeNote.pitch;
               offPayload.data2 = 0;
-              offPayload.channel = 0;
+              offPayload.channel = midiChannel;
               offPayload.tuningCents = activeNote.tuningCents;
               offPayload.noteId = activeNote.noteId;
               std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
@@ -7826,7 +7849,7 @@ struct TrackRuntime {
               offPayload.status = 0x80;
               offPayload.data1 = activeNote.pitch;
               offPayload.data2 = 0;
-              offPayload.channel = 0;
+              offPayload.channel = midiChannel;
               offPayload.tuningCents = activeNote.tuningCents;
               offPayload.noteId = activeNote.noteId;
               std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
@@ -7864,7 +7887,7 @@ struct TrackRuntime {
             midiPayload.status = 0x90;
             midiPayload.data1 = pitch;
             midiPayload.data2 = velocity;
-            midiPayload.channel = 0;
+            midiPayload.channel = midiChannel;
             midiPayload.tuningCents = noteTuningCents;
             midiPayload.noteId = noteId;
             std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
@@ -7910,7 +7933,7 @@ struct TrackRuntime {
                 offPayload.status = 0x80;
                 offPayload.data1 = pitch;
                 offPayload.data2 = 0;
-                offPayload.channel = 0;
+                offPayload.channel = midiChannel;
                 offPayload.tuningCents = noteTuningCents;
                 offPayload.noteId = noteId;
                 std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
@@ -7984,7 +8007,7 @@ struct TrackRuntime {
                   offPayload.status = 0x80;
                   offPayload.data1 = activeNote.pitch;
                   offPayload.data2 = 0;
-                  offPayload.channel = 0;
+                  offPayload.channel = midiChannel;
                   offPayload.tuningCents = activeNote.tuningCents;
                   offPayload.noteId = activeNote.noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
@@ -8110,7 +8133,7 @@ struct TrackRuntime {
                 const uint8_t velocity = clampMidi(static_cast<int>(baseVelocity) + velJitter);
                 const uint8_t pitch = clampMidi(chordPitches[i].midi);
                 const float tuningCents = chordPitches[i].cents;
-                const uint8_t channel = 0;
+                const uint8_t channel = midiChannel;
                 const uint32_t noteId = nextNoteId.fetch_add(1, std::memory_order_acq_rel);
 
                 daw::EventEntry midiEntry;
@@ -8317,7 +8340,7 @@ struct TrackRuntime {
             offPayload.status = 0x80;
             offPayload.data1 = activeNote.pitch;
             offPayload.data2 = 0;
-            offPayload.channel = 0;
+            offPayload.channel = midiChannel;
             offPayload.tuningCents = activeNote.tuningCents;
             offPayload.noteId = activeNote.noteId;
             std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
@@ -8590,7 +8613,7 @@ struct TrackRuntime {
             const uint8_t velocity = logic.velocity != 0 ? logic.velocity : 100;
             const uint8_t pitch = clampMidi(resolved.midi);
             const float tuningCents = resolved.cents;
-            const uint8_t channel = 0;
+            const uint8_t channel = midiChannel;
             const uint32_t noteId =
                 nextNoteId.fetch_add(1, std::memory_order_acq_rel);
 
@@ -9036,6 +9059,27 @@ struct TrackRuntime {
         } else if (mirrorOnly) {
           std::cout << "Producer: Skipping renderTrack for track "
                     << runtime->trackId << " (mirrorOnly)" << std::endl;
+        }
+
+        // Movement 4 MIDI-per-bus: render each aux child's notes into THIS parent host's
+        // ring — tagged (inside renderTrack) with the child's bus MIDI channel — before
+        // the parent's ProcessBlock, so a multitimbral instrument routes channel k to its
+        // output bus k and the child's audio is that bus's stem. Same single producer
+        // thread + same ring, so there is no writer race.
+        if (!mirrorOnly && isPlaying) {
+          for (auto* child : trackSnapshot) {
+            if (!child->isAuxChild.load(std::memory_order_acquire) ||
+                child->auxParentTrackId.load(std::memory_order_relaxed) !=
+                    runtime->trackId) {
+              continue;
+            }
+            auto childStatePtr = std::atomic_load_explicit(
+                &child->trackSnapshot, std::memory_order_acquire);
+            const auto& childState =
+                childStatePtr ? *childStatePtr : kEmptyTrackState;
+            renderTrack(*child, childState, blockStartTicks, blockEndTicks,
+                        sampleStart, blockId, ringStd, nullptr);
+          }
         }
 
         struct SegmentInfo {
