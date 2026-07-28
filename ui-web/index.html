@@ -4799,8 +4799,11 @@ window.__uni = {
     // decides whether two notes on one row are a chord in two columns or a
     // collision in one. It was decoded off the wire and never exposed, so
     // nothing could ask the question.
+    // `vel` too: velocity is a column you can type into, so a test that types
+    // one needs to be able to read it back.
     .map(n => ({ t: n.tOn, off: n.tOff, dur: n.tOff - n.tOn, p: n.pitch,
-                 row: n.row, tr: n.track, col: n.column, id: n.id })) : null),
+                 vel: n.velocity, row: n.row, tr: n.track, col: n.column,
+                 id: n.id })) : null),
   /**
    * A synthetic store for the arrange view, including an AUDIO region — schema
    * v3 ships those with UI_CLIP_EXTENT_AUDIO and they render differently, so a

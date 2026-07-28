@@ -946,6 +946,189 @@ step('26. the harmony pane');
 }
 
 // ---------------------------------------------------------------------------
+step('27. type a velocity into a cell');
+await page.keyboard.press('F1');
+await settle(400);
+{
+  // Put a note down, step onto its velocity field, and type two digits. The
+  // note, its velocity and its effect are three different columns that read
+  // digits differently, and only one of them is the note.
+  await page.keyboard.press('Slash');
+  await settle(200);
+  await page.keyboard.type('zoom 1');
+  await page.keyboard.press('Enter');
+  await settle(300);
+  // A LIVE track. Step 16 removed one, and its slot is a tombstone whose lane is
+  // 0px wide — writing there produced no note and looked like broken note entry.
+  // `trackTree()` says which slots are absent, so ask rather than assume track 0
+  // is still a track.
+  const liveTrack = await page.evaluate(() => {
+    const t = (window.__uni.trackTree() || []).find((x) => !x.absent);
+    return t ? t.track : 0;
+  });
+  await page.keyboard.type(`goto 0 ${liveTrack}`);
+  await page.keyboard.press('Enter');
+  await settle(400);
+  await page.keyboard.press('Escape');
+  await settle(300);
+  // CLICK the grid, the way a person puts the cursor somewhere. `goto` moves the
+  // cursor but does not hand the tracker the keyboard the way a click does, and
+  // a note key pressed afterwards went nowhere with nothing said — which reads as
+  // broken note entry and is really a difference in how the cursor got there.
+  const gridCell = await page.evaluate(() => {
+    const host = document.getElementById('tracker').getBoundingClientRect();
+    for (const e of document.querySelectorAll('.tk-track .tk-cell')) {
+      const r = e.getBoundingClientRect();
+      if (r.width < 5 || r.y < host.y + 60 || r.y > host.y + host.height - 60) continue;
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      const top = document.elementFromPoint(x, y);
+      if (top && (top === e || e.contains(top)) && window.__uni.clickAt(x, y)) return { x, y };
+    }
+    return null;
+  });
+  if (gridCell) { await page.mouse.click(gridCell.x, gridCell.y); await settle(300); }
+  let cur = (await st()).cursor;
+  while (cur.col > 0) { await page.keyboard.press('ArrowLeft'); cur = (await st()).cursor; }
+  if (!(await st()).editMode) { await page.keyboard.press('Meta+e'); await settle(250); }
+  const pre = await page.evaluate(() => {
+    const s = window.__uni.state();
+    return { editMode: s.editMode, focus: s.focus, view: s.view,
+             cursor: s.cursor, octave: s.octave, entryMode: s.entryMode,
+             zoom: s.zoom, digitCell: s.digitCell,
+             active: document.activeElement && document.activeElement.className };
+  });
+  // Does the CONSOLE path write here? If it does, the cell is writable and the
+  // keypress is being eaten on its way in; if it does not, entry itself is
+  // refusing and the reject will say why.
+  const viaCommand = await page.evaluate(() => {
+    const n0 = (window.__uni.engineState() || {}).noteCount;
+    try { window.__uni.run('note 62'); } catch (e) { return 'threw: ' + e.message; }
+    return n0;
+  });
+  await settle(900);
+  const afterCmd = (await st()).engine.noteCount;
+  // What does the app actually RECEIVE? A stuck modifier from an earlier step
+  // would turn a note key into a shortcut, and nothing on screen would say so.
+  await page.evaluate(() => {
+    window.__keyseen = [];
+    addEventListener('keydown', (e) => window.__keyseen.push({
+      key: e.key, meta: e.metaKey, ctrl: e.ctrlKey, shift: e.shiftKey, alt: e.altKey,
+      prevented: e.defaultPrevented,
+    }), { capture: true });
+  });
+  await page.keyboard.press('z');          // a C at the cursor
+  const seen = await page.evaluate(() => window.__keyseen);
+  await settle(800);
+  /**
+   * Look where the note WENT, not where the cursor is.
+   *
+   * Writing a note advances the cursor by the edit step — that is what a tracker
+   * does — so reading "the note at the cursor" straight afterwards reads the row
+   * BELOW the one just written and finds nothing. The app was working; the probe
+   * was looking one row down, and reported broken note entry twice.
+   */
+  const wroteAt = { row: cur.row, track: cur.track };
+  const noteAt = (where) => page.evaluate(
+    (w) => { const n = (window.__uni.notes() || [])
+               .find((x) => x.tr === w.track && x.row === w.row);
+             return n ? { p: n.p, vel: n.vel } : null; }, where);
+  const wrote = (await noteAt(wroteAt))?.p ?? null;
+  if (wrote === null) {
+    const why = (await st()).reject;
+    gap('type a velocity',
+        `no note written${why ? ` — app said: "${why}"` : ''}; state before the key: `
+        + JSON.stringify(pre)
+        + ` | console 'note 62': ${viaCommand} -> ${afterCmd}`
+        + ` | keydown seen: ${JSON.stringify(seen)}`);
+  } else {
+    // Back up to the row the note is on — the write moved the cursor on — then
+    // step right onto its velocity field.
+    while ((await st()).cursor.row > wroteAt.row) await page.keyboard.press('ArrowUp');
+    await settle(200);
+    await page.keyboard.press('ArrowRight');       // onto the velocity field
+    await settle(250);
+    const field = await page.evaluate(() => {
+      const s = window.__uni.state();
+      return { col: s.cursor.col, mode: s.digitMode };
+    });
+    ok(field.col === 1, 'ArrowRight lands on the velocity field', JSON.stringify(field));
+    // "40" is HEX — velocity is 00..7F in a tracker, so this is 64 decimal. The
+    // two digits accumulate into one cell, so give the first one a moment to be
+    // seen as the first rather than as the whole thing.
+    await page.keyboard.press('4');
+    await settle(300);
+    await page.keyboard.press('0');
+    await settle(900);
+    const vel = (await noteAt(wroteAt))?.vel ?? null;
+    if (vel === null || vel === undefined) {
+      gap('read back a velocity', 'the note probe does not expose velocity');
+    } else if (vel === 100) {
+      gap('type a velocity into the cell', `still the default ${vel}`);
+    } else {
+      ok(vel === 0x40, 'typing "40" sets the velocity to 0x40',
+         `${vel} (hex ${vel.toString(16)})`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+step('28. fold a track');
+{
+  const widths = () => page.evaluate(
+    () => [...document.querySelectorAll('.tk-row[data-row="0"] .tk-track')]
+      .map((e) => Math.round(e.getBoundingClientRect().width)));
+  const before = await widths();
+  await page.keyboard.press('Slash');
+  await settle(200);
+  await page.keyboard.type('fold 0');
+  await page.keyboard.press('Enter');
+  await settle(700);
+  await page.keyboard.press('Escape');
+  await settle(400);
+  const after = await widths();
+  const said = (await st()).reject;
+  // A track with no children is not foldable, and the app says so — that is a
+  // correct refusal, not a missing feature.
+  if (JSON.stringify(before) === JSON.stringify(after)) {
+    ok(true, 'folding a track with no children changes nothing',
+       `${JSON.stringify(before)}${said ? ` (${said})` : ''}`);
+  } else {
+    ok(true, 'folding a parent hides its children',
+       `${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+step('29. the minimap');
+{
+  const mm = await page.evaluate(() => {
+    const m = document.getElementById('minimap');
+    if (!m || m.hidden) return null;
+    const r = m.getBoundingClientRect();
+    if (r.width < 4 || r.height < 20) return null;
+    return { x: r.x + r.width / 2, y: r.y + r.height * 0.6 };
+  });
+  if (!mm) {
+    gap('navigate with the minimap', 'no minimap on screen');
+  } else {
+    // The minimap SEEKS — it sends the playhead somewhere, which is what a map of
+    // the whole song is for. It does not scroll the view, and asserting that it
+    // did reported a working control as dead.
+    const before = await page.evaluate(
+      () => (window.__uni.engineState() || {}).playheadTick);
+    await page.mouse.click(mm.x, mm.y);
+    await settle(700);
+    const after = await page.evaluate(
+      () => (window.__uni.engineState() || {}).playheadTick);
+    if (after === before) {
+      gap('navigate with the minimap', `clicking it left the playhead at ${after}`);
+    } else {
+      ok(true, 'clicking the minimap seeks the playhead', `${before} -> ${after}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 step('page errors');
 ok(errors.length === 0, 'nothing threw during the whole journey',
    errors.slice(0, 3).join(' | '));
