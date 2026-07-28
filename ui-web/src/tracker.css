@@ -115,6 +115,39 @@
   border-right: var(--uni-rule-track-width) solid var(--uni-rule-track);
 }
 
+/* The lane's clip-local bar:beat.
+   FIXED width, and the box is always there — blank means an empty Text node, never
+   `display: none` and never a width that follows its text. measure() derives
+   trackStride from offsetLeft and resize() early-returns unless the viewport,
+   column count or track count changed, so a readout that changed size would leave
+   the stride stale forever and desynchronise the header, the hit test and the
+   scroll clamp from the thing they measure. */
+.tk-lane-bar {
+  width: var(--metrics-lane-bar-width);
+  flex: 0 0 var(--metrics-lane-bar-width);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 4px;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-gutter);
+  letter-spacing: var(--font-tracking-gutter);
+  color: var(--uni-text-gutter);
+  opacity: .55;
+  border-right: var(--uni-rule-column-width) solid var(--uni-rule-column);
+  pointer-events: none;
+}
+/* This lane's OWN bar and beat, which in a polyrhythm are not the row's.
+   Drawn as an inset top rule so it reads as a horizontal division of the lane,
+   the same language `.tk-row.bar` uses for the song — and NOT as a background,
+   because `.tk-track`'s background is spent on the per-track tint. */
+.tk-track.lbar { box-shadow: inset 0 1px 0 var(--uni-rule-track); }
+.tk-track.lbeat { box-shadow: inset 0 1px 0 var(--uni-rule-gutter); }
+.tk-track.lbar > .tk-lane-bar { opacity: 1; }
+
 .tk-cell {
   width: var(--metrics-cell-width);
   flex: 0 0 var(--metrics-cell-width);

@@ -92,6 +92,7 @@ const metrics = {
   gutterWidth: M.metrics.gutterWidth,
   laneWidth: M.metrics.laneWidth,
   cellWidth: M.metrics.cellWidth,
+  laneBarWidth: M.metrics.laneBarWidth,
 };
 
 const host = document.getElementById('tracker');
@@ -1445,7 +1446,8 @@ function buildHead() {
   // cellWidth * columns. The arithmetic omits the per-track border — 2px each,
   // compounding, so by track 16 the headers sit 32px left of their columns.
   // Same mistake as the scroll clamp; see GUIDELINES.md 3.11.
-  const stride = tracker.trackStride || metrics.cellWidth * state.columns;
+  const stride = tracker.trackStride
+    || metrics.cellWidth * state.columns + metrics.laneBarWidth;   // cold start, before measure()
   const heads = [];
   for (let t = 0; t < state.tracks; t++) {
     const el = document.createElement('div'); el.className = 'htrack';
@@ -1984,7 +1986,8 @@ function draw() {
   // stride, so building the header before the pool exists bakes in the fallback
   // width and every column sits wrong until something else forces a rebuild.
   tracker.resize(boxOf(host, true), state.tracks, state.columns);
-  const stride = tracker.trackStride || metrics.cellWidth * state.columns;
+  const stride = tracker.trackStride
+    || metrics.cellWidth * state.columns + metrics.laneBarWidth;   // cold start, before measure()
   if (!headRow || headRow._tracks !== state.tracks || headRow._stride !== stride) buildHead();
   paintHeadLpb();
   if (headRow && headRow._x !== state.scrollX) {
@@ -3320,6 +3323,53 @@ window.__uni = {
    * Rows are the viewport's (zoom 0 = 12/beat, the LCM), which is what the
    * sidecar now emits. A lane appears on every (12 / itsLpb)-th row.
    */
+  /**
+   * Clips that each carry their OWN meter and grid, at their own origins.
+   *
+   * This is the fixture the per-lane readout is actually tested by, and it has to
+   * exist because NOTHING else publishes a clip grid: useMixedGrid ships
+   * `extents: []`, useBusyEngine's extents have no `grid` key, and every placement
+   * in presets/ is `at: 0`. So "clip bar 1 is not song bar 1" — the entire point of
+   * the feature — had no fixture, and a build that simply reprinted the song gutter
+   * once per lane would have passed every check in the repo (GUIDELINES 2.1.1).
+   *
+   * Each lane is a different question:
+   *   0  4/4 lpb4, starting at a NON-zero, non-bar-aligned tick
+   *   1  3/4 lpb4, a different meter AND a different origin from lane 0
+   *   2  grid null — counted in the SONG's meter, which is not the same claim
+   *      as being in 4/4
+   *   3  two clips with a GAP between them, so "no clip here" is drawn
+   *   4  audio, whose packed meter is an engine default rather than an authored
+   *      one and must therefore read blank
+   */
+  useClipMeters: () => {
+    state.useEngine = true; state.hudFrozen = true;
+    conn.close(); hudText.nodeValue = 'clip-meters';
+    state.zoom = 1; state.start = 0; state.scrollX = 0; state.tracks = 5;
+    const Q = 960000;
+    const ext = (track, startTick, bars, barTicks, grid, audio) => ({
+      placementId: track * 10 + 1, clipId: track * 10 + 1, track,
+      flags: audio ? 1 : 0, startTick, endTick: startTick + bars * barTicks,
+      name: audio ? 'audio' : 'clip', audio: !!audio, grid });
+    const extents = [
+      ext(0, Q / 4, 4, Q * 4, { linesPerBeat: 4, numerator: 4, denominator: 4 }),
+      ext(1, Q / 2, 4, Q * 3, { linesPerBeat: 4, numerator: 3, denominator: 4 }),
+      ext(2, 0, 4, Q * 4, null),
+      ext(3, 0, 1, Q * 4, { linesPerBeat: 4, numerator: 4, denominator: 4 }),
+      ext(3, Q * 6, 2, Q * 4, { linesPerBeat: 4, numerator: 4, denominator: 4 }),
+      ext(4, 0, 4, Q * 4, { linesPerBeat: 4, numerator: 4, denominator: 4 }, true),
+    ];
+    engine = { ok: true, seq: 1, playheadTick: 0, visualSample: 0, clipVersion: 1,
+               harmonyVersion: 0, transport: 0, trackCount: 5,
+               peaks: new Float32Array(5), peakCount: 0,
+               notes: [], noteCount: 0,
+               aggCount: new Uint32Array(0), aggRep: new Uint8Array(0),
+               aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
+               extents, extentCount: extents.length, extentsRevision: 1,
+               lpb: Uint8Array.from([4, 4, 4, 4, 4]), notesRevision: 1, aggRevision: 1,
+               songTimeSigNum: 7, songTimeSigDen: 8 };
+    draw();
+  },
   useMixedGrid: () => {
     // useEngine TRUE — the socket is closed so nothing overwrites the store, but
     // draw() must take the engine path or this renders the fixture instead and

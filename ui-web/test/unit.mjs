@@ -999,3 +999,104 @@ test('moving a clip bumps the content revision even with no note edit', () => {
   assert.notEqual(buf.contentRevision, before,
                   'the renderer is told the rows changed');
 });
+
+// ---------------------------------------------------------------------------
+// The per-lane clip-local readout.
+
+test('a lane reads its position in ITS clip, from the clip\'s own start', () => {
+  // 3/4, four lines per quarter, starting one 1/16 into the song — deliberately
+  // not on a song bar, because "clip bar 1 is not song bar 1" is the entire point
+  // and every placement in presets/ is at tick 0.
+  //
+  // At zoom 1 a row is 240000 ticks. A 3/4 bar is 2,880,000 = 12 rows; a beat is
+  // 960000 = 4 rows.
+  const engine = gridEngine([4]);
+  const START = 240000;
+  engine.extents = [{ placementId: 1, clipId: 1, track: 0, flags: 0,
+                      startTick: START, endTick: START + 2880000 * 3, name: 'waltz',
+                      audio: false, grid: { linesPerBeat: 4, numerator: 3, denominator: 4 } }];
+  engine.extentCount = 1;
+  engine.extentsRevision = 1;
+
+  const buf = createBuffer(20, 1, 3);
+  const vm = buildViewModel({ startRow: 0, rowCount: 20, tracks: 1, columns: 3,
+                              zoomIndex: 1, engine }, buf);
+  const at = (r) => ({ text: vm.rows[r].laneBar[0], acc: vm.rows[r].laneAcc[0] });
+
+  assert.deepEqual(at(1), { text: '1:1', acc: 3 }, 'the clip starts at ITS bar 1 beat 1');
+  assert.deepEqual(at(2), { text: '1:1', acc: 0 }, 'still beat 1, no accent');
+  assert.deepEqual(at(5), { text: '1:2', acc: 2 }, 'four rows on is beat 2');
+  assert.deepEqual(at(9), { text: '1:3', acc: 2 }, 'and beat 3');
+  assert.deepEqual(at(13), { text: '2:1', acc: 3 }, 'twelve rows on is bar 2 — 3/4, not 4/4');
+  // The song gutter is unmoved and still counts song bars: row 13 is tick
+  // 3,120,000, which is inside song bar 1 of a 4/4 song. Both readings on screen
+  // at once is the point — the lane says where you are in the clip, the gutter
+  // says where the clip is.
+  assert.equal(vm.rows[13].label, '1:4:01', 'the song gutter still counts the song');
+  assert.equal(vm.rows[0].laneBar[0], '', 'before the clip, the lane says nothing');
+});
+
+test('a lane with no clip, and an audio region, both read blank', () => {
+  const engine = gridEngine([4, 4]);
+  engine.extents = [
+    // Audio: the engine packs a grid for these too, without checking the clip
+    // kind, so what arrives is the 4/4 default rather than an authored meter.
+    { placementId: 1, clipId: 1, track: 0, flags: 1, startTick: 0, endTick: 960000 * 8,
+      name: 'a', audio: true, grid: { linesPerBeat: 4, numerator: 4, denominator: 4 } },
+  ];
+  engine.extentCount = 1;
+  engine.extentsRevision = 1;
+
+  const buf = createBuffer(4, 2, 3);
+  const vm = buildViewModel({ startRow: 0, rowCount: 4, tracks: 2, columns: 3,
+                              zoomIndex: 1, engine }, buf);
+  assert.equal(vm.rows[0].laneBar[0], '', 'no bar numbers off a default meter');
+  assert.equal(vm.rows[0].laneAcc[0], 0, 'and no accents either');
+  assert.equal(vm.rows[0].laneBar[1], '', 'a lane with no clip at all says nothing');
+});
+
+test('a clip with no published grid is counted in the song meter', () => {
+  // linesPerBeat 0 is the sentinel for "no grid", which means COUNT ME IN THE
+  // SONG'S METER — not "I am in 4/4". For a song in 7/8 those differ.
+  const engine = gridEngine([4]);
+  engine.extents = [{ placementId: 1, clipId: 1, track: 0, flags: 0,
+                      startTick: 0, endTick: 3360000 * 4, name: 'plain',
+                      audio: false, grid: null }];
+  engine.extentCount = 1;
+  engine.extentsRevision = 1;
+
+  const buf = createBuffer(20, 1, 3);
+  // Song in 7/8: a bar is 7 eighths = 3,360,000 ticks = 14 rows at zoom 1.
+  const vm = buildViewModel({ startRow: 0, rowCount: 20, tracks: 1, columns: 3,
+                              zoomIndex: 1, engine,
+                              meter: { numerator: 7, denominator: 8 } }, buf);
+  assert.equal(vm.rows[0].laneBar[0], '1:1');
+  assert.equal(vm.rows[14].laneBar[0], '2:1', 'fourteen rows on, so it counted 7/8');
+  assert.notEqual(vm.rows[16].laneBar[0], '2:1', 'and not 4/4, which would put bar 2 at row 16');
+});
+
+test('a clip changing meter refreshes the readout without scrolling', () => {
+  // The readout is guarded so a frame that only advances the playhead does not
+  // recompute it — four Float64Array reads and two divisions per lane per row is
+  // 745 B/draw of heap numbers otherwise. The guard's KEY is the whole question:
+  // it watches the window, the zoom, the song meter AND extentsRevision. Drop the
+  // last and this is the case that breaks — same scroll position, different clip.
+  const engine = gridEngine([4]);
+  engine.extents = [{ placementId: 1, clipId: 1, track: 0, flags: 0,
+                      startTick: 0, endTick: 960000 * 16, name: 'c', audio: false,
+                      grid: { linesPerBeat: 4, numerator: 4, denominator: 4 } }];
+  engine.extentCount = 1;
+  engine.extentsRevision = 1;
+
+  const buf = createBuffer(20, 1, 3);
+  const opts = { startRow: 0, rowCount: 20, tracks: 1, columns: 3, zoomIndex: 1, engine };
+  buildViewModel(opts, buf);
+  assert.equal(buf.rows[16].laneBar[0], '2:1', '4/4: bar 2 is 16 rows in');
+
+  // Same window, same zoom, same song meter. Only the clip changed.
+  engine.extents[0].grid.numerator = 3;
+  engine.extentsRevision = 2;
+  buildViewModel(opts, buf);
+  assert.equal(buf.rows[12].laneBar[0], '2:1', '3/4: bar 2 is 12 rows in');
+  assert.notEqual(buf.rows[16].laneBar[0], '2:1', 'and row 16 is no longer bar 2');
+});

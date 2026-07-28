@@ -1,6 +1,6 @@
 import { pitchName } from './wire.js';
 import { DEFAULT_METER, createPosition, positionOf, sameMeter,
-         ticksPerBar, NANOTICKS_PER_QUARTER } from './meter.js';
+         ticksPerBar, ticksPerBeat, NANOTICKS_PER_QUARTER } from './meter.js';
 // The view-model: plain data describing exactly what is on screen right now.
 //
 // This is the boundary the whole frontend is built around. The renderer consumes
@@ -45,7 +45,18 @@ import { DEFAULT_METER, createPosition, positionOf, sameMeter,
  *                      these are Float64Array and not Int32Array;
  *   phase              the clip's start modulo a quarter note, which is all the
  *                      grid test needs of its anchor (see below);
- *   lpb                the clip's own lines-per-beat, 0 when it publishes none.
+ *   lpb                the clip's own lines-per-beat, 0 when it publishes none;
+ *   rowsPerBar         how many display rows one of THIS clip's bars occupies;
+ *   rowsPerBeat        the same for one of its beats;
+ *   audio              1 when the region is audio, which has no authored meter.
+ *
+ * TWO SENSES OF "BEAT", and they are not interchangeable. `lines_per_beat` is
+ * lines per QUARTER NOTE — `LaneGrid::row_nanoticks` is `960000 / lines_per_beat`
+ * and never consults a time signature, which is why ZOOM_LEVELS above is
+ * 960000/lpb at every non-aggregate index. `meter.js`'s `ticksPerBeat` is the
+ * musical beat, the meter's denominator unit: in 6/8 that is an eighth. The row
+ * SUBDIVISION comes from the first; the bar and beat NUMBERS come from the second.
+ * Crossing them draws a 6/8 clip as 6/4.
  *
  * THE GRID TEST, and why phase is enough. A row is on a clip's grid when
  *
@@ -61,7 +72,10 @@ import { DEFAULT_METER, createPosition, positionOf, sameMeter,
  * loop reduces `tick` once per row; this reduces `clipStart` once per frame. Every
  * value the inner test touches is then below 960000 and stays a small integer.
  */
-function reduceExtents(engine, buf, rowTicks) {
+/** A clip's meter, written in place per extent. One record, never per frame. */
+const _clipMeter = { numerator: 4, denominator: 4 };
+
+function reduceExtents(engine, buf, rowTicks, meter) {
   const n = engine.extentCount;
   if (buf._extStartRow.length < n) {
     // Grown, never per frame: extentCount changes on a project load.
@@ -70,14 +84,28 @@ function reduceExtents(engine, buf, rowTicks) {
     buf._extPhase = new Int32Array(n * 2);
     buf._extLpb = new Int32Array(n * 2);
     buf._extTrack = new Int32Array(n * 2);
+    buf._extRowsPerBar = new Float64Array(n * 2);
+    buf._extRowsPerBeat = new Float64Array(n * 2);
+    buf._extAudio = new Int32Array(n * 2);
   }
   for (let i = 0; i < n; i++) {
     const e = engine.extents[i];
+    const g = e.grid;
     buf._extTrack[i] = e.track;
     buf._extStartRow[i] = e.startTick / rowTicks;
     buf._extEndRow[i] = e.endTick / rowTicks;
     buf._extPhase[i] = e.startTick % NANOTICKS_PER_QUARTER;
-    buf._extLpb[i] = e.grid && e.grid.linesPerBeat > 0 ? e.grid.linesPerBeat : 0;
+    buf._extLpb[i] = g && g.linesPerBeat > 0 ? g.linesPerBeat : 0;
+    buf._extAudio[i] = e.audio ? 1 : 0;
+    // A clip with no published grid is counted in the SONG's meter — that is what
+    // the sentinel means, and it is not the same claim as "this clip is in 4/4".
+    // The numerator is guarded because positionOf divides by it; the engine caps
+    // it above zero, so this is for a fixture or a future producer, and it costs
+    // one test per extent per frame rather than one per cell.
+    _clipMeter.numerator = (g && g.numerator) || meter.numerator || 4;
+    _clipMeter.denominator = (g && g.denominator) || meter.denominator || 4;
+    buf._extRowsPerBar[i] = ticksPerBar(_clipMeter) / rowTicks;
+    buf._extRowsPerBeat[i] = ticksPerBeat(_clipMeter) / rowTicks;
   }
   return n;
 }
@@ -203,6 +231,37 @@ let labelMeter = null;
 /** positionOf's output. One record, reused: this runs per visible row per frame. */
 const _pos = createPosition();
 
+/**
+ * The clip-local readouts, interned on THEIR OWN CONTENT rather than on position.
+ *
+ * `LABELS` above has to be guarded by `labelZoom` and `labelMeter` and cleared
+ * when either moves, because its key is an absolute tick — and a tick names a
+ * different bar under a different zoom or meter. That guard is the whole reason
+ * that table is delicate.
+ *
+ * This one is keyed on `bar * 64 + beat`, which IS the string: two lanes in
+ * different meters that both land on "2:3" want the same "2:3". No zoom guard, no
+ * meter guard, and no way for one lane to read another's label. `beat` is bounded
+ * by the numerator, which the engine caps at 31, so 64 leaves no aliasing.
+ */
+const LANE_LABELS = new Map();
+const LANE_LABEL_CAP = 8192;
+function laneLabel(bar, beat) {
+  // `| 0` on the key, not decoration. These arrive from Math.floor over Float64Array
+  // reads, so they are DOUBLES even when their values are whole — and Map.get with
+  // a non-Smi key boxes a HeapNumber for the lookup, every lane, every row, every
+  // frame. Measured at 745 B/draw during playback against a 900 B budget that the
+  // rest of the tracker also has to fit inside.
+  const key = (bar * 64 + beat) | 0;
+  let s = LANE_LABELS.get(key);
+  if (s === undefined) {
+    if (LANE_LABELS.size >= LANE_LABEL_CAP) LANE_LABELS.clear();
+    s = bar + ':' + beat;
+    LANE_LABELS.set(key, s);
+  }
+  return s;
+}
+
 const R_TEXT = [], P_TEXT = [], EVTS = [], PILL_SAME = [];
 function interned(table, prefix, n) {
   return table[n] !== undefined ? table[n] : (table[n] = prefix + n);
@@ -276,7 +335,24 @@ export function createBuffer(rowCount, trackCount, columns) {
                        // mean both is how a renderer ends up drawing a range that
                        // is really a single note.
                        pitch: -1 };
-    rows[i] = { index: 0, label: '', beat: false, bar: false, cells };
+    rows[i] = { index: 0, label: '', beat: false, bar: false, cells,
+                /**
+                 * The CLIP-LOCAL position of this row on each lane, and that
+                 * lane's own accents.
+                 *
+                 * In the row literal rather than bolted on later: a field added to
+                 * a pooled object after creation forces a hidden-class transition
+                 * the first time it is written, on the first frame that has clip
+                 * grids in it. `laneAcc` packs bit 0 = on this clip's bar, bit 1 =
+                 * on its beat, because a Uint8Array of flags is one allocation for
+                 * the buffer's life and an array of small objects is one per lane
+                 * per row.
+                 *
+                 * Both are trackCount-sized, so the buffer's existing shape guard
+                 * (_rows/_trackCount/_columns) already covers them.
+                 */
+                laneBar: new Array(trackCount).fill(''),
+                laneAcc: new Uint8Array(trackCount) };
   }
   return {
     window: { startRow: 0, rowCount },
@@ -292,6 +368,8 @@ export function createBuffer(rowCount, trackCount, columns) {
     // What the row labels were last built for. Labels are a pure function of
     // (startRow, zoom, rowCount) — see the row loop.
     _labelStart: -1, _labelZoom: -1, _labelMeter: null,
+    /** The extents revision the per-lane readouts were built for. */
+    _laneExtRev: -2,
     _clipPool: [],
     /**
      * Per track, the index of the clip extent that answered the previous row.
@@ -314,6 +392,9 @@ export function createBuffer(rowCount, trackCount, columns) {
     _extPhase: new Int32Array(0),
     _extLpb: new Int32Array(0),
     _extTrack: new Int32Array(0),
+    _extRowsPerBar: new Float64Array(0),
+    _extRowsPerBeat: new Float64Array(0),
+    _extAudio: new Int32Array(0),
   };
 }
 
@@ -487,9 +568,29 @@ export function buildViewModel(opts, buf) {
   // extentCount iterations of arithmetic, and a guard that got the key wrong would
   // serve the row loop a stale clip map — GUIDELINES 2.1, and the failure would be
   // rows going dead in the wrong places, which reads as a grid bug.
-  const extN = engine ? reduceExtents(engine, buf, rowTicks) : 0;
+  const extN = engine ? reduceExtents(engine, buf, rowTicks, meter) : 0;
   const relabel = buf._labelStart !== startRow || buf._labelZoom !== zoomIndex
                   || !sameMeter(buf._labelMeter, meter);
+  /**
+   * Whether the per-lane readouts need rebuilding.
+   *
+   * They are a pure function of four things: which absolute rows are on screen,
+   * the zoom, the clip extents, and the song meter (which a clip with no grid of
+   * its own is counted in). `relabel` already watches the first, second and
+   * fourth; `extentsRevision` is the third, and it is the one a plain `relabel`
+   * guard would have missed — a clip moving or changing meter at an unchanged
+   * scroll position is exactly the case, and GUIDELINES 2.1 is a list of times
+   * that shape has bitten.
+   *
+   * Worth guarding rather than recomputing: the readout is four Float64Array reads
+   * and two divisions per lane per row, and doubles that come out of a typed array
+   * are heap numbers. Unguarded it measured 745 B/draw during playback, against a
+   * 900 B budget the whole tracker shares. Guarded, a frame that only advances the
+   * playhead does none of it.
+   */
+  const extRev = engine ? engine.extentsRevision : -1;
+  const laneStale = relabel || buf._laneExtRev !== extRev;
+  buf._laneExtRev = extRev;
   buf._labelStart = startRow;
   buf._labelZoom = zoomIndex;
   buf._labelMeter = meter;
@@ -502,7 +603,8 @@ export function buildViewModel(opts, buf) {
   }
   for (let ri = 0; ri < rowCount; ri++) {
     const r = startRow + ri;
-    const cells = rows[ri].cells;
+    const row = rows[ri];
+    const cells = row.cells;
     let ci = 0;
     /**
      * The row's absolute tick.
@@ -579,6 +681,75 @@ export function buildViewModel(opts, buf) {
         // as on-grid at every zoom but the finest. That is the bug in GUIDELINES
         // 2.1.1's table. Integers divide exactly or they do not; nothing rounds.
         offGrid = lpb > 0 && (((tickMod - phase) * lpb) % NANOTICKS_PER_QUARTER) !== 0;
+
+        /**
+         * This lane's own position in its own clip, in ROW space.
+         *
+         * Computed here rather than in the `relabel` block below, deliberately.
+         * That guard names startRow, zoomIndex and the SONG meter — none of which
+         * move when a clip does. Put the lane readout behind it and dragging a
+         * clip leaves every lane number stale at an unchanged scroll position,
+         * which is GUIDELINES 2.1 written out longhand.
+         *
+         * `ei < 0` is the ONLY signal for "no clip under this row" on the engine
+         * path: `inClip` is hardcoded true above and the 'outside' kind is emitted
+         * only by the fixture. Branch on the extent, never on the kind.
+         *
+         * Blank rather than the song's bars where there is no clip. The gutter on
+         * the left already answers the song question, and repeating it per lane
+         * would put a confident number under material that does not exist.
+         *
+         * Audio regions read blank too. The engine packs a grid for them — it
+         * looks the clip up by id and writes linesPerBeat and the time signature
+         * without checking the kind — so what arrives is the 4/4 default rather
+         * than an authored meter, and printing bar numbers off a default is a
+         * fabrication that looks like a fact.
+         */
+        if (!laneStale) { /* the readout below is still valid */ }
+        else if (ei >= 0 && !buf._extAudio[ei]) {
+          const perBar = buf._extRowsPerBar[ei];
+          const perBeat = buf._extRowsPerBeat[ei];
+          const d = r - buf._extStartRow[ei];
+          const barIdx = Math.floor(d / perBar) | 0;
+          const inBar = d - barIdx * perBar;
+          const beatIdx = Math.floor(inBar / perBeat) | 0;
+          row.laneBar[t] = laneLabel(barIdx + 1, beatIdx + 1);
+          row.laneAcc[t] = (inBar === 0 ? 1 : 0)
+                         | (inBar - beatIdx * perBeat === 0 ? 2 : 0);
+        } else {
+          row.laneBar[t] = '';
+          row.laneAcc[t] = 0;
+        }
+      } else {
+        /**
+         * The fixture has clips too — regularly spaced pseudo-clips, four bars
+         * each — and they get a readout for the same reason everything else here
+         * does: a fixture that leaves a feature blank tests the width of a column
+         * and nothing inside it. Every golden would show an empty 40px strip per
+         * lane and pass, which is GUIDELINES 2.1.1 with the fixture pointed at a
+         * feature it does not exercise.
+         *
+         * Written even when there is no clip, not skipped. The rows are POOLED and
+         * this array is reused across fixtures and engines; leaving it alone lets
+         * a lane keep the number a previous project wrote there — the same bug the
+         * pitch ribbon had, in the same place, for the same reason.
+         */
+        const ki = laneStale ? clipIndexAt(tick, t) : -2;
+        if (ki === -2) { /* still valid */ }
+        else if (ki >= 0) {
+          const d = (tick - ki * CLIP_TICKS) / rowTicks;
+          const perBar = FIXTURE_TICKS_PER_BAR / rowTicks;
+          const perBeat = perBar / DEFAULT_METER.numerator;
+          const barIdx = Math.floor(d / perBar) | 0;
+          const inBar = d - barIdx * perBar;
+          const beatIdx = Math.floor(inBar / perBeat) | 0;
+          row.laneBar[t] = laneLabel(barIdx + 1, beatIdx + 1);
+          row.laneAcc[t] = (inBar === 0 ? 1 : 0)
+                         | (inBar - beatIdx * perBeat === 0 ? 2 : 0);
+        } else {
+          row.laneBar[t] = '';
+          row.laneAcc[t] = 0;
+        }
       }
       for (let c = 0; c < columns; c++) {
         if (engine) {
@@ -614,7 +785,6 @@ export function buildViewModel(opts, buf) {
       }
     }
     if (relabel) {
-      const row = rows[ri];
       row.index = r;
       // OUTSIDE the cache check, deliberately. `_pos` is one shared record and the
       // accent flags below are read from it unconditionally, so filling it only on

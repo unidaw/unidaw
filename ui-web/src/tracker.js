@@ -32,6 +32,8 @@ export class Tracker {
     this.m = metrics;
     this.vm = null;
     this.poolSize = 0;
+    /** Measured in measure(); 0 until the first pool row exists. */
+    this.laneBarWidth = 0;
     /** @type {HTMLElement[]} */
     this.pool = [];
     /** How many pool slots the current frame's window claims — see rowEl(). */
@@ -100,12 +102,19 @@ export class Tracker {
     this.stripLeft = tracks[0] ? tracks[0].offsetLeft : this.m.gutterWidth;
     this.trackStride = tracks.length > 1 ? tracks[1].offsetLeft - tracks[0].offsetLeft
                                          : this.m.cellWidth * this.cols;
+    // MEASURED off the DOM, not read from the token, for the same reason the
+    // stride is: GUIDELINES 3.11 — the box model lives in the stylesheet and
+    // duplicating it here is how the hit test and the paint disagree by a border.
+    const first = tracks[0] && tracks[0].firstElementChild;
+    this.laneBarWidth = first && first.classList.contains('tk-lane-bar')
+      ? first.offsetWidth : 0;
   }
 
   /** Left edge of a cell, in band coordinates. Uses measured stride, so it
    *  stays correct whatever the CSS borders do. */
   cellLeft(track, col) {
-    return this.stripLeft + track * this.trackStride + col * this.m.cellWidth;
+    return this.stripLeft + track * this.trackStride
+         + this.laneBarWidth + col * this.m.cellWidth;
   }
 
   /** How far right the band can travel before the strip's end meets the edge. */
@@ -134,9 +143,33 @@ export class Tracker {
      */
     const cells = new Array(trackCount * columns);
     let k = 0;
+    const laneBars = new Array(trackCount);
+    const laneEls = new Array(trackCount);
     for (let t = 0; t < trackCount; t++) {
       const tr = el('div', 'tk-track');
       tr.style.setProperty('--tint', `var(--uni-track-tint-${t % 8})`);
+      /**
+       * The lane's clip-local bar:beat readout — the FIRST child of the track,
+       * before its cells.
+       *
+       * Deliberately not a cell and deliberately not in `row._cells`. That array
+       * is what paintSelection sweeps by flat field index and what cellEl
+       * subscripts as `track * cols + col`; putting a fourth element per track in
+       * it would shift every field index in the program. Staying out of it is what
+       * keeps `state.columns` at 3, so the cursor, the selection and the clipboard
+       * are untouched by this feature.
+       *
+       * No `data-col`, and not `.tk-cell`: anything that finds a cell by those
+       * must not find this. It is a readout — there is nothing to type into it.
+       */
+      const lb = el('div', 'tk-lane-bar');
+      lb.dataset.track = String(t);
+      lb.appendChild(document.createTextNode(''));
+      lb._text = lb.firstChild;
+      lb._accV = -1;
+      tr.append(lb);
+      laneBars[t] = lb;
+      laneEls[t] = tr;
       for (let c = 0; c < columns; c++) {
         const cell = el('div', 'tk-cell');
         cell.dataset.track = String(t);
@@ -159,6 +192,8 @@ export class Tracker {
       row.append(tr);
     }
     row._cells = cells;
+    row._laneBars = laneBars;
+    row._lanes = laneEls;
     row._shown = 1;
     return row;
   }
@@ -185,6 +220,33 @@ export class Tracker {
     elm.classList.toggle('beat', row.beat && !row.bar);
     const gt = elm.firstChild.firstChild;
     if (gt.nodeValue !== row.label) gt.nodeValue = row.label;
+
+    /**
+     * Each lane's own bar:beat, and its own accents.
+     *
+     * Guarded on both, like every other write here: the readout changes on a
+     * handful of rows per scroll, and rebinding a Text node that already says the
+     * right thing invalidates style and paint for nothing.
+     *
+     * The accent goes on the LANE element, not on the row: that is the whole point
+     * of it. A row is a bar in the song's meter; a lane is a bar in its clip's, and
+     * in a polyrhythm those are different rows. The classes are toggled from a
+     * cached number so a lane that did not change costs one integer compare.
+     */
+    const lanes = elm._laneBars, lel = elm._lanes;
+    const ln = Math.min(lanes.length, row.laneBar.length);
+    for (let t = 0; t < ln; t++) {
+      const lb = lanes[t];
+      const txt = row.laneBar[t];
+      if (lb._text.nodeValue !== txt) lb._text.nodeValue = txt;
+      const acc = row.laneAcc[t];
+      if (lb._accV !== acc) {
+        lb._accV = acc;
+        const e = lel[t];
+        e.classList.toggle('lbar', (acc & 1) !== 0);
+        e.classList.toggle('lbeat', (acc & 2) !== 0 && (acc & 1) === 0);
+      }
+    }
 
     const cells = elm._cells;
     const n = Math.min(cells.length, row.cells.length);
@@ -523,7 +585,14 @@ export class Tracker {
     const rel = x - this.stripLeft;
     const track = Math.floor(rel / this.trackStride);
     if (track < 0 || track >= this.tracks) return null;
-    const col = Math.min(this.cols - 1, Math.floor((rel - track * this.trackStride) / this.m.cellWidth));
+    // A click on the bar readout is not a click on a cell. Returning null here is
+    // the same answer the gutter already gives — there is nothing to type into a
+    // readout, and resolving it to column 0 would put the cursor a column to the
+    // left of wherever the user actually pointed on every lane.
+    const inTrack = rel - track * this.trackStride;
+    if (inTrack < this.laneBarWidth) return null;
+    const col = Math.min(this.cols - 1,
+                         Math.floor((inTrack - this.laneBarWidth) / this.m.cellWidth));
     return { row, track, col };
   }
 

@@ -65,6 +65,11 @@ const SCENES = [
   { name: 'patcher', patcher: true, setup: async (p) => p.evaluate(() => window.__uni.usePatcherFixture()) },
   { name: 'dock', dock: true, setup: async (p) => p.evaluate(() => window.__uni.useDockFixture()) },
   { name: 'browser', browser: true, setup: async (p) => p.evaluate(() => window.__uni.useBrowserFixture()) },
+  // Clips that each carry their own meter, at their own origins. See the fixture
+  // in index.html: five lanes, five different questions, and the only place in the
+  // repo where a clip's bar 1 is not the song's bar 1.
+  { name: 'clip-meters', clipMeters: true,
+    setup: async (p) => p.evaluate(() => window.__uni.useClipMeters()) },
   // Driven with REAL keystrokes, which is the whole point of this scene. The
   // palette had a bug where every non-printable key was applied twice — ArrowDown
   // moved the selection two rows, Enter ran a command and then ran whatever had
@@ -439,6 +444,52 @@ for (const scene of SCENES) {
     console.log(`  ${d.lines} lines, ${d.commands.length} commands`);
     await shoot(scene);
     continue;
+  }
+
+  if (scene.clipMeters) {
+    const lanes = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.tk-row')]
+        .sort((a, b) => Number(a.dataset.row) - Number(b.dataset.row));
+      const read = (r, t) => {
+        const row = rows.find((x) => Number(x.dataset.row) === r);
+        if (!row) return null;
+        const el = row.querySelector(`.tk-lane-bar[data-track="${t}"]`);
+        return el ? { text: el.textContent,
+                      bar: el.parentElement.classList.contains('lbar') } : null;
+      };
+      return { t0r1: read(1, 0), t0r17: read(17, 0), t1r2: read(2, 1), t1r14: read(14, 1),
+               t2r0: read(0, 2), t3gap: read(18, 3), t3r2: read(2, 3), t4r0: read(0, 4),
+               width: (() => { const e = document.querySelector('.tk-lane-bar');
+                               return e ? Math.round(e.getBoundingClientRect().width) : -1; })() };
+    });
+    // A 4/4 clip starting a 1/16 in: its bar 1 beat 1 is row 1, not row 0. A build
+    // that reprinted the song gutter per lane would say "1:1" at row 0.
+    ok(lanes.t0r1 && lanes.t0r1.text === '1:1' && lanes.t0r1.bar,
+       `lane 0 starts its own bar 1 where the CLIP starts: ${JSON.stringify(lanes.t0r1)}`);
+    ok(lanes.t0r17 && lanes.t0r17.text === '2:1',
+       `and its bar 2 is 16 rows on, in 4/4: ${JSON.stringify(lanes.t0r17)}`);
+    // 3/4 at a different origin: bar 2 arrives 12 rows in, not 16.
+    ok(lanes.t1r2 && lanes.t1r2.text === '1:1' && lanes.t1r2.bar,
+       `lane 1 has its own origin: ${JSON.stringify(lanes.t1r2)}`);
+    ok(lanes.t1r14 && lanes.t1r14.text === '2:1',
+       `and counts 3/4, so bar 2 is 12 rows on: ${JSON.stringify(lanes.t1r14)}`);
+    // grid null means "count me in the SONG's meter", which here is 7/8 — a
+    // different answer from 4/4, which is the whole reason the sentinel exists.
+    ok(lanes.t2r0 && lanes.t2r0.text === '1:1',
+       `a clip with no grid still reads: ${JSON.stringify(lanes.t2r0)}`);
+    // The gap between two clips, and the audio lane, both read blank.
+    // Track 3 holds two clips with a gap: rows 0-15 are the first, 16-23 are
+    // nothing, 24 on are the second. The gap is the case that proves the readout
+    // follows the CLIPS and not the track.
+    ok(lanes.t3r2 && lanes.t3r2.text !== '',
+       `track 3 reads inside its first clip: ${JSON.stringify(lanes.t3r2)}`);
+    ok(lanes.t3gap && lanes.t3gap.text === '',
+       `and says nothing in the gap between them: ${JSON.stringify(lanes.t3gap)}`);
+    ok(lanes.t4r0 && lanes.t4r0.text === '',
+       `nor does an audio region, whose meter is an engine default: ${JSON.stringify(lanes.t4r0)}`);
+    // The box is always there, even blank: measure() derives the track stride from
+    // it, so a readout that collapsed would desynchronise the header and hit test.
+    ok(lanes.width === 40, `the readout keeps its width: ${lanes.width}px`);
   }
 
   if (scene.palette) {

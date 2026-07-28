@@ -21,6 +21,7 @@ export default {
     "harmonyWidth": 132,
     "laneWidth": 148,
     "cellWidth": 76,
+    "laneBarWidth": 40,
     "headerHeight": 24,
     "minimapWidth": 30
   },
