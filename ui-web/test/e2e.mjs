@@ -1382,33 +1382,96 @@ const tree = await page.evaluate(() => window.__uni.trackTree());
 ok(Array.isArray(tree) && tree.length > 0, `the tree read back: ${tree && tree.length} tracks`);
 if (tree && tree.length) {
   /**
-   * THIS ASSERTION CANNOT DISTINGUISH WHAT IT CLAIMS TO, and that is the finding.
+   * `meter` has no multi-out instrument, so every track is genuinely top-level.
    *
-   * `parent_id 0 = top-level, else the parent's track id` — but track 0 is a
-   * VALID track id, so "no parent" and "child of track 0" are the same value. And
-   * track 0 is the likeliest parent there is: it is the first track, and in the
-   * multi-out fixture it is the drum plugin whose stems are the children.
-   *
-   * So `every track is top-level` passes against a real multi-out project whose
-   * two stems ARE children of track 0. I wrote this assertion to catch a field
-   * nobody had written; it cannot catch a field written correctly into a sentinel
-   * with no room for the answer. Reported to backend, who are adding a
-   * "has a parent" flag bit so the two states stop sharing a value.
-   *
-   * Kept and labelled rather than deleted or quietly strengthened: it still
-   * proves the field is READ (a decode that never ran would not return zeroes for
-   * a known track count), and leaving the blind spot named is worth more than a
-   * green line that hides it.
+   * Asserted on `hasParent`, NOT on `parent === 0`. That was the original check
+   * and it could not distinguish what it claimed to: `parent_id 0` meant
+   * "top-level", but 0 is a valid track id and track 0 is the likeliest parent
+   * there is — so it went green against a real multi-out project whose stems were
+   * children of track 0. Backend added `kUiTrackFlagHasParent` (bit 1) at my
+   * asking; the id is meaningful only when the flag is set, and now the two states
+   * have two values.
    */
-  ok(tree.every((t) => t.parent === 0),
-     'every track reads parent 0 — WHICH IS AMBIGUOUS: see the note above',
+  ok(tree.every((t) => t.hasParent === false),
+     'a project with no multi-out instrument has no children',
      JSON.stringify(tree.slice(0, 4)));
+  ok(tree.every((t) => t.parent === -1),
+     'and a top-level track reports no parent id at all, rather than zero');
   ok(tree.every((t) => t.collapsed === false), 'and none is collapsed');
-  // The count agrees with the arrays a client actually renders from. A per-track
-  // block that decoded short would read as "top-level" for the tail and look right.
   const names = await page.evaluate(() => window.__uni.names());
   ok(names && names.length >= tree.length,
-     `and it is as long as the track list it describes: ${tree.length} vs ${names && names.length}`);
+     `the tree is as long as the track list it describes: ${tree.length} vs ${names && names.length}`);
+}
+
+section('multi-out child tracks');
+/**
+ * A plugin's aux output buses become child TRACKS — ordinary tracks with a parent.
+ *
+ * Needs the fake identity host, since the multi-out instrument is synthesised:
+ * DAW_USE_FAKE_IDENTITY=1 ./tools/webstack.sh. Without it the project loads with
+ * one track and no children, which is a correct engine and a useless test, so it
+ * says so rather than passing vacuously.
+ */
+{
+  const mSeq = await page.evaluate(() => window.__uni.loadStatus().seq);
+  await page.evaluate(() => window.__uni.loadProject('multiout'));
+  await page.waitForFunction((s0) => {
+    const l = window.__uni.loadStatus(); return l && l.seq > s0 && l.ok;
+  }, mSeq, { timeout: 8000 }).catch(() => {});
+  // Then wait for the CHILDREN, not for a fixed interval. The load ack says the
+  // document was read; the stems appear once the engine has instantiated the
+  // plugin and negotiated its buses, which is a plugin round trip later. A 600ms
+  // sleep was enough after a cold boot and not enough here, and the difference
+  // showed up as this whole section skipping itself — a test that reports "not
+  // applicable" when it is merely early is worse than one that fails.
+  await page.waitForFunction(
+    () => window.__uni.trackTree().some((t) => t.hasParent),
+    null, { timeout: 8000 }).catch(() => {});
+
+  const mo = await page.evaluate(() => ({
+    tree: window.__uni.trackTree(), names: window.__uni.names(),
+  }));
+  const kids = mo.tree.filter((t) => t.hasParent);
+  if (!kids.length) {
+    // Two reasons this can be empty, and they are worth telling apart in the
+    // message rather than lumping into "not applicable":
+    //
+    //  1. the engine has no fake identity host, so there is no multi-out
+    //     instrument to create stems from — run the stack with
+    //     DAW_USE_FAKE_IDENTITY=1 and this section asserts instead of skipping;
+    //
+    //  2. ORDER. On a fresh engine `load multiout` creates its children; after
+    //     ANY earlier project load the same load logs
+    //     `project.plugin_missing name:"multiout" match:"none"` and creates none.
+    //     Reported to backend with a two-line repro. This section sits late in the
+    //     file, so it currently hits that path even with the flag set.
+    console.log('  SKIP  multi-out children  (no children published — needs '
+      + 'DAW_USE_FAKE_IDENTITY=1, and currently also a FRESH engine: see the '
+      + 'order-dependence note above)');
+  } else {
+    ok(mo.tree.length === 3, `a parent and its stems: ${mo.tree.length} tracks`);
+    ok(mo.tree[0].hasParent === false, 'the instrument track is top-level');
+    // THE CASE THE OLD CONTRACT COULD NOT EXPRESS: children OF TRACK 0.
+    ok(kids.length === 2 && kids.every((t) => t.parent === 0),
+       `both stems are children of track 0: ${JSON.stringify(kids)}`);
+    ok(mo.names[1].startsWith(mo.names[0]) && mo.names[2].startsWith(mo.names[0]),
+       `and are named after their parent: ${JSON.stringify(mo.names)}`);
+
+    // Folding the parent takes its stems off screen and leaves it there. Measured
+    // as width, because a stem hidden by renumbering rather than by width would
+    // shift every track id after it — which is the thing the zero-width approach
+    // exists to avoid.
+    const folded = await page.evaluate(() => {
+      const w = () => [...document.querySelectorAll('.tk-row[data-row="0"] .tk-track')]
+        .map((e) => Math.round(e.getBoundingClientRect().width));
+      const before = w();
+      const took = window.__uni.fold(0);
+      return { took, before, after: w() };
+    });
+    ok(folded.took === true, 'folding the instrument is accepted — it has children');
+    ok(folded.after[0] > 0 && folded.after[1] === 0 && folded.after[2] === 0,
+       `and its stems fold away while it stays: ${JSON.stringify(folded.after)}`);
+  }
 }
 
 section('page errors');

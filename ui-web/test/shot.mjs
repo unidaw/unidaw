@@ -540,6 +540,34 @@ for (const scene of SCENES) {
       ok(t.widths.every((w) => w > 0),
          `nothing is folded to begin with: ${JSON.stringify(t.widths)}`);
       ok(t.folded.every((f) => f === 0), 'and nothing is marked folded');
+
+      /**
+       * THE AMBIGUITY THE HAS_PARENT FLAG EXISTS FOR.
+       *
+       * Tracks 0 and 5 are top-level, and a top-level track's `parent_id` is 0 —
+       * the same value a genuine child of track 0 carries. Read the id alone and
+       * every top-level track looks like a child of track 0, so folding track 0
+       * would hide the entire project.
+       *
+       * Track 0 has no children, so the fold must be REFUSED and nothing may move.
+       * Without the flag this returns true and takes tracks 1 and 5 with it.
+       */
+      const zero = await page.evaluate(() => {
+        const before = [0, 1, 2, 3, 4, 5].map((i) => {
+          const e = document.querySelector(`.tk-row[data-row="0"] .tk-track:nth-child(${i + 3})`);
+          return e ? Math.round(e.getBoundingClientRect().width) : -1;
+        });
+        const took = window.__uni.fold(0);
+        const after = [0, 1, 2, 3, 4, 5].map((i) => {
+          const e = document.querySelector(`.tk-row[data-row="0"] .tk-track:nth-child(${i + 3})`);
+          return e ? Math.round(e.getBoundingClientRect().width) : -1;
+        });
+        return { took, before, after };
+      });
+      ok(zero.took === false,
+         'folding a track with no children is refused, not silently accepted');
+      ok(JSON.stringify(zero.after) === JSON.stringify(zero.before),
+         `and nothing moves — top-level tracks are not children of track 0: ${JSON.stringify(zero.after)}`);
     }
   }
 

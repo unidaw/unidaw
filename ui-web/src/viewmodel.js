@@ -93,6 +93,9 @@ const _clipMeter = { numerator: 4, denominator: 4 };
  * that grows a column when you scroll into the bridge and loses it on the way out
  * shifts the layout under the pointer, which is worse than a redundant column.
  */
+/** uiTrackFlags bit 1: this track's `parent_id` is meaningful. See the walk below. */
+const HAS_PARENT = 1 << 1;
+
 /**
  * Which lanes are hidden because an ancestor is collapsed.
  *
@@ -118,13 +121,28 @@ function computeLaneHidden(engine, buf, trackCount, override) {
   const parent = engine.trackParent, flags = engine.trackFlags;
   if (!parent || !flags) return 0;
   for (let t = 0; t < trackCount; t++) {
-    // parent_id 0 means top-level, so track 0 can never be a child and the walk
-    // always terminates at it.
-    let p = parent[t], hops = 0;
-    while (p > 0 && p < trackCount && hops++ < trackCount) {
+    /**
+     * Walk up while the track HAS a parent, read from the flag and not from the
+     * id.
+     *
+     * `parent_id 0` cannot mean "top-level": track 0 is a valid track and is the
+     * likeliest parent there is — the first track, and the plugin whose aux buses
+     * become stems. So "no parent" and "child of track 0" shared one value and a
+     * whole multi-out tree read as flat. Backend added
+     * `kUiTrackFlagHasParent` (bit 1) at my asking; the id is meaningful only
+     * when it is set, and it is set only for a genuine child.
+     *
+     * Bounded by the track count, and the ancestor walk is kept even though the
+     * multi-out invariant is depth 1 (a stem's parent is always its plugin's
+     * track, never another stem). It costs nothing, and a cycle terminates
+     * instead of hanging the draw.
+     */
+    let p = t, hops = 0;
+    while ((flags[p] & HAS_PARENT) !== 0 && hops++ < trackCount) {
+      p = parent[p];
+      if (p >= trackCount) break;
       const collapsed = override ? override[p] : (flags[p] & 1) !== 0;
       if (collapsed) { buf._laneHidden[t] = 1; break; }
-      p = parent[p];
     }
   }
   let sig = 0;

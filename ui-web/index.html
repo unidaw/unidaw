@@ -1036,8 +1036,14 @@ const dockApi = {
     if (!engine || t < 0 || t >= collapsed.length) return false;
     const parent = engine.trackParent;
     if (!parent) return false;
+    const flags = engine.trackFlags;
     let kids = 0;
-    for (let k = 0; k < state.tracks; k++) if (parent[k] === t && k !== t) kids++;
+    // A child is one whose HAS_PARENT bit is set AND whose parent is this track.
+    // Matching on the id alone counts every top-level track as a child of track 0,
+    // because `parent_id 0` is what an absent parent used to look like.
+    for (let k = 0; k < state.tracks; k++) {
+      if (k !== t && flags && (flags[k] & 2) !== 0 && parent[k] === t) kids++;
+    }
     if (!kids) return false;
     collapsed[t] = collapsed[t] ? 0 : 1;
     collapsedAny = false;
@@ -1045,7 +1051,8 @@ const dockApi = {
     // The cursor comes out with the fold. Left inside, it sits on a lane that is
     // zero pixels wide — the cell is still addressable, so every edit still lands
     // correctly, and none of it is visible. That is worse than moving it.
-    if (collapsed[t] && parent[state.cursor.track] === t) state.cursor.track = t;
+    if (collapsed[t] && engine.trackFlags && (engine.trackFlags[state.cursor.track] & 2) !== 0
+        && parent[state.cursor.track] === t) state.cursor.track = t;
     schedule();
     return true;
   },
@@ -3477,8 +3484,14 @@ window.__uni = {
     conn.close(); hudText.nodeValue = 'child-tracks';
     state.zoom = 1; state.start = 0; state.scrollX = 0; state.tracks = 6;
     collapsed.fill(0); collapsedAny = false;
+    // parent ids, and the HAS_PARENT bit that makes them readable. Tracks 2, 3, 4
+    // are children of track 1. Track 0 and track 5 are top-level and their parent
+    // id is meaningless — which is the whole point of the flag: `parent_id 0` is
+    // indistinguishable from "child of track 0" without it, and the fixture puts a
+    // real child of a NON-zero parent alongside top-level tracks so a build that
+    // read the id alone gets a different tree.
     const parent = new Uint32Array([0, 0, 1, 1, 1, 0]);
-    const flags = new Uint8Array(6);
+    const flags = new Uint8Array([0, 0, 2, 2, 2, 0]);
     engine = { ok: true, seq: 1, playheadTick: 0, visualSample: 0, clipVersion: 1,
                harmonyVersion: 0, transport: 0, trackCount: 6,
                peaks: new Float32Array(6), peakCount: 0,
@@ -3593,8 +3606,12 @@ window.__uni = {
     if (!engine) return null;
     const out = [];
     for (let t = 0; t < engine.trackCount; t++) {
-      out.push({ track: t, parent: engine.trackParent[t],
-                 collapsed: (engine.trackFlags[t] & 1) !== 0 });
+      const f = engine.trackFlags[t];
+      // `hasParent` is the field that makes `parent` readable: 0 is a valid track
+      // id, so the id alone cannot say whether there IS a parent.
+      out.push({ track: t, hasParent: (f & 2) !== 0,
+                 parent: (f & 2) !== 0 ? engine.trackParent[t] : -1,
+                 collapsed: (f & 1) !== 0 });
     }
     return out;
   },
