@@ -76,7 +76,7 @@ import { buildChainModel, createChainBuffer, paramKey } from './src/chainmodel.j
 import { createChrome, VIEW_TABS } from './src/chrome.js';
 import { Arrange, ARRANGE_CLIP_MARGIN_PX } from './src/arrange.js';
 import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName,
-         TICKS_PER_BAR, snapLoop, wheelPixels } from './src/arrangemodel.js';
+         TICKS_PER_BAR, snapLoop, wheelPixels, clampZoom } from './src/arrangemodel.js';
 import { Mixer } from './src/mixer.js';
 import { Scope } from './src/scope.js';
 import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
@@ -127,6 +127,30 @@ const tracker = new Tracker(host, metrics);
 const arrangeHost = document.getElementById('arrange');
 const arrange = new Arrange(arrangeHost, metrics, {
   onLoop: (a, b, done, opts) => setLoopFromDrag(a, b, done, opts),
+  /**
+   * Wheel navigation: zoom under the pointer, pan sideways, scroll lanes.
+   *
+   * arrange.js has had all three since it was written — anchored zoom that keeps
+   * the tick under the cursor still, a pixel-for-pixel horizontal pan, a clamped
+   * lane scroll — and `onNav` was never passed. `_wheel` returns on its first
+   * line when it is missing, so the whole gesture set was inert: the wheel did
+   * nothing at all over the arrangement, in any combination of modifiers.
+   *
+   * Third time in this shell: splitter.js unbuilt, delDevice unreachable, and
+   * now this. The code is right, the surface is right, and nobody joined them.
+   *
+   * `why` says which gesture it was; the zoom index and start tick are already
+   * clamped by the caller against the zoom table and zero.
+   */
+  onNav: (zoomIndex, startTick, laneScroll, why) => {
+    state.arrangeZoom = clampZoom(zoomIndex);
+    state.arrangeStart = Math.max(0, startTick);
+    state.arrangeLaneScroll = Math.max(0, laneScroll);
+    // A wheel is a request to look somewhere, so it takes the view off the
+    // playhead — the same bargain the tracker's wheel makes.
+    if (why === 'pan' || why === 'lanes') state.followPlayhead = false;
+    schedule();
+  },
 });
 const ARRANGE_LANE_H = 44;
 
@@ -1604,7 +1628,8 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   entryMode: 'pitch',
   // Which surface is showing. Both consume the same engine store; only the
   // projection differs, which is the whole point of the view-model boundary.
-  projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, selectedPlacement: null,
+  projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, arrangeLaneScroll: 0,
+  selectedPlacement: null,
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
   pianoSelection: null, pianoMarquee: null, pianoDrag: null,
   pianoFitPending: false, browserOpen: true, dockOpen: true, helpOpen: false,
@@ -2121,6 +2146,10 @@ function drawArrange() {
   o.cursor.track = state.cursor.track;
   o.cursor.tick = tickOfCursorRow();
   o.selectedPlacement = state.selectedPlacement;
+  // How far the lane strip is scrolled. The model has always accepted this and
+  // always received the default 0, so the arrangement could not be scrolled
+  // vertically no matter how many tracks a song had.
+  o.laneScroll = state.arrangeLaneScroll;
   // The audio side, refreshed into the hoisted record rather than rebuilt: both
   // tables are REPLACED on a project load, so the record cannot simply hold the
   // ones it saw at startup.
@@ -2300,7 +2329,23 @@ function draw() {
   if (pianoHost.hidden === wantPiano) pianoHost.hidden = !wantPiano;
   const trackerOn = !wantArrange && !wantMixer && !wantPiano && !wantPatcher;
   const disp = trackerOn ? '' : 'none';
-  if (host.style.display !== disp) { host.style.display = disp; head.style.display = disp; }
+  if (host.style.display !== disp) {
+    host.style.display = disp;
+    head.style.display = disp;
+    /**
+     * Re-measure on the way BACK IN.
+     *
+     * While the tracker is display:none every offset it can read is zero, so
+     * `measure()` now refuses to record one — which means whatever it holds is
+     * from before it was hidden. If a pane was dragged in the meantime, that
+     * geometry is stale: lanes are where they used to be, and a click lands a
+     * track or two off, or nowhere.
+     *
+     * Measured on the transition rather than every frame, and after the display
+     * is set, so the boxes being read are the ones now on screen.
+     */
+    if (trackerOn) tracker.measure();
+  }
   if (wantArrange) return drawArrange();
   if (wantMixer) return drawMixer();
   if (wantPiano) return drawPiano();

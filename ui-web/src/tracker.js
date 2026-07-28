@@ -144,6 +144,25 @@ export class Tracker {
   measure() {
     const row = this.pool[0];
     if (!row) return;
+    /**
+     * A HIDDEN SURFACE MEASURES AS ZERO, AND ZERO IS NOT A MEASUREMENT.
+     *
+     * `display: none` makes every offsetLeft and offsetWidth 0, so measuring the
+     * tracker while another surface is up recorded stripLeft 0, trackWidth 0 for
+     * every lane, and a trackStride guessed from the cell width. hitTest then
+     * refused every point in the grid — `track >= this.tracks` — and clicking
+     * anywhere did nothing at all. Not "slightly wrong": 612 clickable cells
+     * became 0.
+     *
+     * Reaching it took only resizing a pane while looking at the arrangement and
+     * then switching back, which is an ordinary thing to do, and it left the
+     * tracker mouse-dead with nothing on screen to say so.
+     *
+     * Returning keeps the last real measurement, which is stale but survivable;
+     * the caller re-measures when the surface is shown again.
+     */
+    const box = this.host.getBoundingClientRect();
+    if (box.width < 1 || box.height < 1) return;
     this.contentWidth = row.scrollWidth;
     const tracks = row.querySelectorAll('.tk-track');
     this.stripLeft = tracks[0] ? tracks[0].offsetLeft : this.m.gutterWidth;

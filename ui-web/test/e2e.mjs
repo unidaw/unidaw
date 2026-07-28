@@ -1509,6 +1509,57 @@ section('multi-out child tracks');
   }
 }
 
+section('arrangement navigation');
+{
+  // arrange.js has had anchored zoom, horizontal pan and lane scrolling since it
+  // was written, and `onNav` was never passed to its constructor — so `_wheel`
+  // returned on its first line and the wheel did nothing over the arrangement in
+  // any combination of modifiers. Real wheel events, because the bug WAS the
+  // wiring and a probe that calls the model directly cannot see wiring.
+  await page.evaluate((pr) => window.__uni.loadProject(pr), PROJECT);
+  await page.waitForTimeout(800);
+  await page.keyboard.press('F2');
+  await page.waitForTimeout(500);
+  const A = () => page.evaluate(() => {
+    const s = window.__uni.state(), a = window.__uni.arrangeProbe();
+    return { zoom: s.arrangeZoom, start: s.arrangeStart, ls: a.laneScroll, max: a.maxLaneScroll };
+  });
+  ok((await page.evaluate(() => window.__uni.state().view)) === 'arrange',
+     'F2 reaches the arrangement');
+  const at = await page.evaluate(() => {
+    const r = document.getElementById('arrange').getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await page.mouse.move(at.x, at.y);
+
+  const a0 = await A();
+  await page.keyboard.down('Shift');
+  for (let i = 0; i < 3; i++) await page.mouse.wheel(0, 120);
+  await page.keyboard.up('Shift');
+  await page.waitForTimeout(350);
+  const a1 = await A();
+  ok(a1.start > a0.start, 'shift-wheel pans the arrangement along time',
+     `${a0.start} -> ${a1.start}`);
+
+  // Start from a zoom that has room to go in. An earlier section leaves the
+  // arrangement at index 0, the finest, and "zoom in" there correctly does
+  // nothing — which reads as a broken gesture.
+  for (let i = 0; i < 3; i++) { await page.keyboard.press('Minus'); }
+  await page.waitForTimeout(300);
+  const aMid = await A();
+  await page.keyboard.down('Meta');
+  for (let i = 0; i < 3; i++) await page.mouse.wheel(0, -120);
+  await page.keyboard.up('Meta');
+  await page.waitForTimeout(350);
+  const a2 = await A();
+  ok(a2.zoom < aMid.zoom, 'cmd-wheel zooms in', `zoom ${aMid.zoom} -> ${a2.zoom}`);
+
+  await page.keyboard.press('Minus');
+  await page.waitForTimeout(250);
+  const a3 = await A();
+  ok(a3.zoom > a2.zoom, 'and the keyboard zooms out', `zoom ${a2.zoom} -> ${a3.zoom}`);
+}
+
 section('resizable and collapsible panes');
 {
   // splitter.js was complete — handles, keyboard, clamping, persistence — and
@@ -1586,6 +1637,23 @@ section('resizable and collapsible panes');
       ok(back.h > folded.h, 'so the cell can be brought back', `-> ${back.h}`);
     }
   }
+
+  /**
+   * Put the layout back.
+   *
+   * A section that resizes the shell and walks away changes where everything is
+   * for every section after it. The focus checks below then clicked a grid cell
+   * that was sitting under the widened dock, no pointerdown reached the tracker,
+   * and "clicking the grid reclaims focus" failed for a reason that had nothing
+   * to do with focus. Double-click is the splitter's own reset-to-home.
+   */
+  for (const [host, sel] of [['rdock', '.sp-left'], ['harmony', '.sp-bottom']]) {
+    const h = await handle(host, sel);
+    if (!h) continue;
+    await page.mouse.dblclick(h.x, h.y);
+    await page.waitForTimeout(200);
+  }
+  await page.waitForTimeout(300);
 }
 
 section('keyboard focus between panes');
@@ -1617,7 +1685,11 @@ section('keyboard focus between panes');
     if (r.width < 10 || r.height < 10) return null;
     return { x: r.x + r.width / 2, y: r.y + 30 };
   });
-  const cardCount = () => page.evaluate(() => document.querySelectorAll('.dv-card').length);
+  // VISIBLE cards. The rack pools its nodes and hides the spares, so the raw
+  // querySelectorAll count never falls and a working delete reads as a dead one.
+  const cardCount = () => page.evaluate(
+    () => [...document.querySelectorAll('.dv-card')]
+      .filter((e) => e.offsetParent !== null && e.getBoundingClientRect().width > 4).length);
   const cardsAtStart = await cardCount();
   let card = await findCard();
   let weAddedOne = false;
@@ -1636,7 +1708,10 @@ section('keyboard focus between panes');
   } else {
     const F = () => page.evaluate(() => {
       const s = window.__uni.state();
-      return { focus: s.focus, sel: s.chainSelected, row: s.cursor.row };
+      const cells = [...document.querySelectorAll('.tk-cell')]
+        .filter((e) => { const r = e.getBoundingClientRect(); return r.width > 4 && r.height > 4; });
+      return { focus: s.focus, sel: s.chainSelected, row: s.cursor.row,
+               view: s.view, cells: cells.length };
     });
     await page.mouse.click(card.x, card.y);
     await page.waitForTimeout(300);
@@ -1668,11 +1743,59 @@ section('keyboard focus between panes');
     // Clicking the grid must also reclaim it, or the rack keeps focus forever.
     await page.mouse.click(card.x, card.y);
     await page.waitForTimeout(250);
-    await page.mouse.click(700, 400);
+    // A REAL cell, measured now. (700,400) was a guess that stopped landing on
+    // the grid once the pane section above resized the dock — the click hit
+    // nothing, the tracker's pointerdown never ran, and focus correctly stayed
+    // where it was. A coordinate that used to be inside the grid is not a test.
+    const cell = await page.evaluate(() => {
+      // Any cell that is actually laid out. Pinning a row index assumed the
+      // tracker had rendered that row; when it had not, querySelector returned
+      // null, no click happened, and focus correctly stayed put.
+      // Laid out AND on top. The panes section above widens the dock and heightens
+      // the chain strip, so plenty of cells still have a rect while sitting
+      // underneath another region — clicking one of those hits the region, the
+      // tracker never sees a pointerdown, and focus correctly does not move.
+      // Inside a TRACK lane. `.tk-cell` also matches the time and harmony gutter
+      // columns, and `hitTest` rightly refuses those — so the click landed at
+      // x=274 in the gutter, returned no hit, and the tracker never set focus.
+      // Well inside the tracker's own box. `r.y > 100` was a guess and it let
+      // through a cell at y=114 that sits under the column header, where
+      // hitTest correctly finds nothing. Measure against the surface, not
+      // against a number.
+      // The cell nearest the MIDDLE of the tracker, not the first one in document
+      // order. The first is at the left edge, where the sticky time gutter sits
+      // over the strip: the click landed at x=274, hitTest found nothing, and
+      // the tracker never saw a pointerdown. hitTest is right; the coordinate
+      // was not.
+      const host = document.getElementById('tracker').getBoundingClientRect();
+      const cx = host.x + host.width / 2, cy = host.y + host.height / 2;
+      // Ask the TRACKER whether the point is live, rather than inferring it from
+      // the DOM. `hitTest` refuses the time gutter, the per-lane bar column and
+      // anything past the last track, and which pixels those are depends on the
+      // meters of the clips currently loaded and on how far the strip is
+      // scrolled — both of which earlier sections change. A cell element with a
+      // rect is not the same claim as a point the tracker will accept.
+      let c = null, best = Infinity;
+      for (const e of document.querySelectorAll('.tk-track .tk-cell')) {
+        const r = e.getBoundingClientRect();
+        if (r.width < 5 || r.height < 5) continue;
+        const x = r.x + r.width / 2, y = r.y + r.height / 2;
+        const top = document.elementFromPoint(x, y);
+        if (!(top && (top === e || e.contains(top)))) continue;
+        if (!window.__uni.clickAt(x, y)) continue;      // the tracker says no
+        const d = Math.abs(x - cx) + Math.abs(y - cy);
+        if (d < best) { best = d; c = e; }
+      }
+      if (!c) return null;
+      const r = c.getBoundingClientRect();
+      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    });
+    ok(!!cell, 'there is a grid cell the tracker will accept a click on');
+    if (cell) await page.mouse.click(cell.x, cell.y);
     await page.waitForTimeout(250);
     const clicked = await F();
     ok(clicked.focus === 'centre', 'and clicking the grid reclaims it',
-       JSON.stringify(clicked));
+       `${JSON.stringify(clicked)} clicked=${JSON.stringify(cell)}`);
 
     /**
      * Put back what we took.
