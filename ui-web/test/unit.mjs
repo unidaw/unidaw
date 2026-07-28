@@ -941,3 +941,61 @@ test('a clip carries its grid, and its own start is the anchor', () => {
   // would not, the exact inverse of the above.
   assert.ok(!onGrid.includes(4), 'row 4 is on-grid only if the anchor were the song origin');
 });
+
+// ---------------------------------------------------------------------------
+// Two caches that were serving the wrong answer.
+
+test('a row that hits the label cache still gets its OWN accents', () => {
+  // `_pos` is one shared record. positionOf() used to fill it only when the label
+  // was a cache MISS, while the bar and beat flags were read from it every time —
+  // so a row whose label came from the intern table published the accents of
+  // whatever tick last missed. The labels stayed right, which is what made it hard
+  // to see: the stripes moved, the numbers did not.
+  const ROWS = 8;
+  const buf = createBuffer(ROWS, 1, 3);
+  const opts = { startRow: 0, rowCount: ROWS, tracks: 1, columns: 3, zoomIndex: 3 };
+
+  // Fill the cache for rows 0..7 ...
+  buildViewModel({ ...opts, startRow: 0 }, buf);
+  // ... then for a window that ends on a row which is NOT a bar, so the shared
+  // record is left holding onBar=false.
+  buildViewModel({ ...opts, startRow: 100 }, buf);
+  assert.equal(buf.rows[ROWS - 1].bar, false, 'row 107 is mid-bar, as the setup needs');
+
+  // Now every row 0..7 is a cache HIT. Row 0 is tick 0, which is a bar in any
+  // meter; if it reports otherwise it is wearing row 107's accents.
+  buildViewModel({ ...opts, startRow: 0 }, buf);
+  assert.equal(buf.rows[0].bar, true, 'tick 0 is a bar');
+  assert.equal(buf.rows[0].label, '1:1', 'and its label agrees, which it always did');
+  assert.equal(buf.rows[4].bar, true, 'so is the next one, four quarters on');
+  assert.equal(buf.rows[1].bar, false, 'and row 1 is not');
+});
+
+test('moving a clip bumps the content revision even with no note edit', () => {
+  // A clip's own lines-per-beat and meter are packed into UiClipExtent.flags, and
+  // they decide which rows are off-grid. `extentsRevision` is the only thing that
+  // moves when they change: notesRevision, aggRevision and rowGrid all stand still.
+  // Without it in the signature the view-model computes the new marking correctly
+  // and the renderer never rebinds the rows whose index did not move, so the old
+  // grid stays on screen — GUIDELINES 2.1, from the inside.
+  const engine = gridEngine([4]);
+  engine.extents = [{ placementId: 1, clipId: 1, track: 0, flags: 0,
+                      startTick: 0, endTick: 960000 * 8, name: 'a', audio: false,
+                      grid: { linesPerBeat: 4, numerator: 4, denominator: 4 } }];
+  engine.extentCount = 1;
+  engine.extentsRevision = 1;
+
+  const buf = createBuffer(8, 1, 3);
+  const opts = { startRow: 0, rowCount: 8, tracks: 1, columns: 3, zoomIndex: 0, engine };
+  buildViewModel(opts, buf);
+  const before = buf.contentRevision;
+
+  // The clip becomes triplets. Nothing else about the world changes — no note is
+  // added, moved or deleted, and the aggregates are untouched.
+  engine.extents[0].grid.linesPerBeat = 3;
+  engine.extentsRevision = 2;
+  buildViewModel(opts, buf);
+
+  assert.notEqual(buf.contentRevision, before,
+                  'the renderer is told the rows changed');
+});

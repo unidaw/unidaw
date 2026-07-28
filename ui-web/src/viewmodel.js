@@ -248,7 +248,16 @@ function contentAt(tick, track, col) {
  * between. The signature describes the world, not a particular buffer.
  */
 const SIG = { zoomIndex: -1, pendingCount: -1, overlayLen: -1, badKey: -2,
-              notesRevision: -2, aggRevision: -2, rowGrid: -2 };
+              notesRevision: -2, aggRevision: -2, rowGrid: -2,
+              // The RAILS, which are not decoration: a clip's own lines-per-beat
+              // and meter are packed into UiClipExtent.flags, and `extentsRevision`
+              // is what moves when they do (wire.js). Without it here, changing a
+              // clip's meter or moving a clip changes which rows are off-grid, the
+              // view-model computes the new marking correctly, and the renderer
+              // never rebinds the rows whose INDEX did not move — so the old grid
+              // stays on screen. GUIDELINES 2.1, from the inside: content changed
+              // while every key the consumer watches stood still.
+              extentsRevision: -2 };
 let contentRevision = 0;
 
 export function createBuffer(rowCount, trackCount, columns) {
@@ -607,11 +616,22 @@ export function buildViewModel(opts, buf) {
     if (relabel) {
       const row = rows[ri];
       row.index = r;
+      // OUTSIDE the cache check, deliberately. `_pos` is one shared record and the
+      // accent flags below are read from it unconditionally, so filling it only on
+      // a miss published the flags of whatever tick last MISSED — a row that hit
+      // the intern table got another row's bar and beat stripes. Scroll down past
+      // the cached range and back and the accents move to the wrong rows, while
+      // the labels stay right, because the labels are the thing the cache is for.
+      //
+      // Cheap to always do: this whole block runs only when `relabel` is set (the
+      // window, the zoom or the song meter moved), and positionOf is arithmetic
+      // into a caller-owned record — no allocation. The cache still saves what it
+      // was built to save, which is the string construction below.
+      positionOf(tick, meter, zoom.rowNanoticks, _pos);
       let label = LABELS.get(tick);
       if (label === undefined) {
         // Labels come from the tick too, so a row means the same musical position
         // at every zoom — that is the whole point of zoom being a projection.
-        positionOf(tick, meter, zoom.rowNanoticks, _pos);
         const bar = _pos.bar;
         const beatInBar = _pos.beat;
         // The sub-beat index is the row's position within the beat ON THIS GRID, not
@@ -875,12 +895,14 @@ export function buildViewModel(opts, buf) {
         || s.overlayLen !== overlayLen || s.badKey !== badKey
         || s.notesRevision !== (engine ? engine.notesRevision : -1)
         || s.aggRevision !== (engine ? engine.aggRevision : -1)
-        || s.rowGrid !== (engine ? engine.rowGrid : -1)) {
+        || s.rowGrid !== (engine ? engine.rowGrid : -1)
+        || s.extentsRevision !== (engine ? engine.extentsRevision : -1)) {
       s.zoomIndex = zoomIndex; s.pendingCount = pendingCount; s.overlayLen = overlayLen;
       s.badKey = badKey;
       s.notesRevision = engine ? engine.notesRevision : -1;
       s.aggRevision = engine ? engine.aggRevision : -1;
       s.rowGrid = engine ? engine.rowGrid : -1;
+      s.extentsRevision = engine ? engine.extentsRevision : -1;
       contentRevision++;
     }
   }
