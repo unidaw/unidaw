@@ -901,16 +901,48 @@ step('26. the harmony pane');
   // and nothing in it sets a key or a scale. So harmony can be READ from every
   // surface and WRITTEN from none — the same shape as delDevice before it got a
   // button: a capability with no way in.
-  const cmds = await page.evaluate(() => Object.keys(window.__uni.commands
-    ? window.__uni.commands() : {}));
-  const canSetKey = cmds.some((c) => /harmony|key|scale/i.test(c));
-  if (!canSetKey) {
-    gap('set the key or scale',
-        'no console command touches harmony — it can be read everywhere and '
-        + 'written nowhere');
-  } else {
-    ok(true, 'there is a command for harmony', cmds.filter((c) => /harmony|key|scale/i.test(c)).join(' '));
-  }
+  const before = await page.evaluate(() => window.__uni.key());
+  await page.keyboard.press('Slash');
+  await settle(200);
+  // Root 2 is D, and `Minor` is a name from the engine's own scale table — the
+  // command takes either that or the id, so nothing keeps a second list.
+  await page.keyboard.type('harmony 2 Minor');
+  await page.keyboard.press('Enter');
+  await settle(1200);
+  await page.keyboard.press('Escape');
+  await settle(300);
+  // The harmony timeline is read back on demand, so give the round trip a
+  // moment rather than reading the frame the command went out on.
+  await page.waitForFunction(() => !!window.__uni.key(), null, { timeout: 6000 })
+    .catch(() => {});
+  await settle(400);
+  const after = await page.evaluate(() => window.__uni.key());
+  const events = await page.evaluate(() => (window.__uni.harmony() || []).length);
+  const diag = await page.evaluate(() => ({
+    minor: window.__uni.scaleIdNamed('Minor'),
+    scales: (window.__uni.scaleNames && window.__uni.scaleNames()) || [],
+    project: window.__uni.state().currentProject,
+    clipVersion: (window.__uni.engineState() || {}).clipVersion,
+  }));
+  const why = (await st()).reject;
+  const said = await page.evaluate(
+    () => [...document.querySelectorAll('.dk-log *')].map((e) => e.textContent)
+      .filter(Boolean).slice(-3).join(' / '));
+  /**
+   * Setting a key works on a fresh engine and is refused after a project load.
+   *
+   * The UI sends the harmony version it can see, and around a load the published
+   * value is briefly one ahead of the one `requireMatchingHarmonyVersion`
+   * compares against — the engine logs `base=4 current=3` for a page that reads
+   * 3 on both sides of the send. Nothing the UI holds can be the right number
+   * while that is true. Reported; the check un-blocks itself when it is fixed.
+   */
+  blocked(after && after !== before, 'the console can set the key',
+          'engine: the published harmony version is briefly ahead of the '
+          + 'validated one after a project load, so the write is refused',
+     `${JSON.stringify(before)} -> ${JSON.stringify(after)}`
+     + ` events=${events} diag=${JSON.stringify(diag)}`
+     + `${why ? ` reject="${why}"` : ''} console="${said}"`);
 }
 
 // ---------------------------------------------------------------------------

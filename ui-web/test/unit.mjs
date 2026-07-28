@@ -559,7 +559,7 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
                      'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice',
-                     'addDevice', 'openEditor', 'newSong', 'fold', 'edit'];
+                     'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony'];
 
 function stubApi() {
   const calls = [];
@@ -1428,6 +1428,9 @@ const OP_REGISTRY = {
   // need it — but the moment column assignment becomes part of writing a chord,
   // it does. Recorded rather than waved through.
   columns:        { cli: null,           agent: null, why: 'gap' },
+  // Harmony had no programmatic path at all until now — readable from every
+  // surface, writable from none. daw-cli has had `do harmony` the whole time.
+  harmony:        { cli: 'harmony',       agent: null, why: 'gap' },
   'add-track':    { cli: 'add-track',    agent: null, why: 'gap' },
   'remove-track': { cli: 'remove-track', agent: null, why: 'gap' },
   save:      { cli: 'save',        agent: 'save' },
@@ -1481,8 +1484,9 @@ const CLI_GAP = ['addnode', 'clear', 'columns', 'copy', 'cut', 'deldevice', 'del
                  'seek', 'stop', 'transpose', 'undo'];
 /** Ops with no agent tool today. Same rule. */
 const AGENT_GAP = ['add-track', 'addnode', 'clear', 'columns', 'copy', 'cut', 'del',
-                   'deldevice', 'delnode', 'editor', 'gain', 'link', 'loop', 'mute', 'new',
-                   'paste', 'patch', 'remove-track', 'seek', 'solo', 'tempo', 'transpose'];
+                   'deldevice', 'delnode', 'editor', 'gain', 'harmony', 'link', 'loop',
+                   'mute', 'new', 'paste', 'patch', 'remove-track', 'seek', 'solo',
+                   'tempo', 'transpose'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether
@@ -1596,7 +1600,6 @@ const ENGINE_UNUSED = {
   SavePatcherPreset: 'gap — a patcher graph cannot be saved as a preset',
   SetTrackHarmonyQuantize: 'gap — the per-track harmony quantize flag is unreachable',
   DeleteChord: 'gap — a chord can be written and not removed',
-  WriteHarmony: 'gap — the harmony timeline is read-only in the UI',
   DeleteHarmony: 'gap — same',
   RequestClipWindow: 'the sidecar owns the viewport and asks on the client\'s behalf',
   // These four are referenced by NAME elsewhere but never sent as a command from

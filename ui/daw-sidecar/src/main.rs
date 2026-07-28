@@ -1629,6 +1629,20 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
             Some(t) if t >= 0 => t as u32,
             _ => K_CHAIN_TRACK_ALL,
         };
+    } else if is_type(body, "harmony") {
+        // A key change on the harmony timeline.
+        //
+        // The engine has taken WriteHarmony since long before the web UI, and
+        // daw-cli builds it — but this sidecar had no verb for it, so harmony
+        // could be READ from every surface in the app and WRITTEN from none. The
+        // right-hand pane shows the key, the scale and its degrees; the tracker
+        // has a harmony column; nothing could change any of it.
+        //
+        // Root and scale ride in note_pitch and value0, which is where the engine
+        // reads them from — not a shape I chose, but the one that already exists.
+        p.command_type = UiCommandType::WriteHarmony as u16;
+        p.note_pitch = (parse_num(body, "\"root\"").unwrap_or(0).rem_euclid(12)) as u32;
+        p.value0 = parse_num(body, "\"scale\"").unwrap_or(0).max(0) as u32;
     } else if is_type(body, "addtrack") {
         // v1 APPENDS at the extent — no insert-after, no fields read. The engine
         // refuses at kUiMaxTracks rather than growing past what the UI region can
@@ -2917,6 +2931,8 @@ mod tests {
         assert_eq!(ty(r#"{"type":"seek","tick":960000}"#), Some(UiCommandType::SetPosition as u16));
         assert_eq!(ty(r#"{"type":"delete","track":2,"tick":0}"#), Some(UiCommandType::DeleteNote as u16));
         assert_eq!(ty(r#"{"type":"undo"}"#), Some(UiCommandType::Undo as u16));
+        assert_eq!(ty(r#"{"type":"harmony","root":2,"scale":3,"tick":0}"#),
+                   Some(UiCommandType::WriteHarmony as u16));
         assert_eq!(ty(r#"{"type":"addtrack"}"#), Some(UiCommandType::AddTrack as u16));
         assert_eq!(ty(r#"{"type":"removetrack","track":2}"#),
                    Some(UiCommandType::RemoveTrack as u16));

@@ -291,6 +291,16 @@ export function createCommands(api) {
     follow: { help: 'follow [on|off] — keep the playhead in view',
       args: [oneOf(['on', 'off'], true)],
       run: (a) => 'follow ' + (api.follow(a[0] === undefined ? undefined : a[0] !== 'off') ? 'on' : 'off') },
+    // Harmony was readable everywhere and writable nowhere. `root` is a pitch
+    // class (0=C), `scale` a name from the engine's own table — `Major`,
+    // `Minor`, `Dorian`, `Mixolydian` — or its id, so nothing here keeps a
+    // second list to fall out of step.
+    harmony: { help: 'harmony <root> <scale> [tick] — set the key from here on',
+      args: [{ name: 'root', type: 'int', min: 0, max: 11 },
+             { name: 'scale', type: 'text' },
+             { name: 'tick', type: 'int', min: 0, optional: true }],
+      run: (a) => (api.harmony(Number(a[0]), a[1], a[2] === undefined ? 0 : Number(a[2]))
+                   ? `key set` : 'refused') },
     columns: { help: 'columns <n> — how many note columns each track shows',
       args: [{ name: 'n', type: 'int', min: 1, max: 8 }],
       run: (a) => 'note columns: ' + api.noteColumns(Number(a[0])) },

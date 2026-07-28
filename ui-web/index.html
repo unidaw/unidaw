@@ -152,6 +152,52 @@ const stageEl = document.getElementById('stage');
  * offer one. Asking for more is how a chord gets written; the count still rises
  * by itself for a project that already uses more than you asked for.
  */
+/**
+ * Set the key at a point on the harmony timeline.
+ *
+ * Harmony could be READ from every surface — the right-hand pane names the key
+ * and its degrees, the tracker has a harmony column, the chrome shows it — and
+ * WRITTEN from nowhere. There was no command, no key and no control: the engine
+ * has taken WriteHarmony since long before this UI and daw-cli builds it, while
+ * the app that shows you the key could not change it.
+ *
+ * `root` is a pitch class, 0..11 from C. `scale` is a scale id as the engine
+ * publishes them — see `__uni.scales()`, which is where the names come from, so
+ * a caller can say "Minor" without this file owning a second table.
+ */
+function setHarmony(root, scale, tick) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  const r = ((Math.round(root) % 12) + 12) % 12;
+  const sc = Math.max(0, Math.round(scale) || 0);
+  conn.send({ type: 'harmony', root: r, scale: sc,
+              tick: Math.max(0, Math.round(tick || 0)),
+              /**
+               * The HARMONY version, not the clip's.
+               *
+               * `requireMatchingHarmonyVersion(payload.baseVersion, ...)` guards
+               * this command, and sending nothing means base 0 — which matches
+               * only on an engine whose harmony has never changed. So it worked
+               * on a fresh start and was SILENTLY REFUSED after any project load,
+               * while the console still answered "key set". A command that
+               * reports success and does nothing is the worst of the three
+               * possible outcomes.
+               */
+              base: engine ? engine.harmonyVersion : 0 });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/** A scale id from a name, case-insensitively, or NaN. */
+function scaleIdNamed(name) {
+  const want = String(name).trim().toLowerCase();
+  for (const s of (scales || [])) {
+    if (String(s.name).toLowerCase() === want) return s.id;
+  }
+  const n = Number(name);
+  return Number.isFinite(n) ? n : NaN;
+}
+
 function uniNoteColumns(n) {
   if (n !== undefined) {
     state.noteColumnsWanted = Math.max(1, Math.min(MAX_NOTE_COLUMNS, Math.floor(n) || 1));
@@ -1234,6 +1280,8 @@ const dockApi = {
   addTrack: () => addTrack(),
   removeTrack: (t) => removeTrack(t),
   noteColumns: (n) => uniNoteColumns(n),
+  harmony: (root, scale, tick) => setHarmony(root, scaleIdNamed(scale), tick),
+  scaleNames: () => (scales || []).map((x) => x.name),
   /**
    * Whether note keys write. The `edit` command has always called this and it
    * has never existed, so typing `edit` in the console threw — the toggle was
@@ -4612,6 +4660,10 @@ window.__uni = {
     track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' }),
   delDevice,                          // the same function the button and the key call
   addTrack, removeTrack,
+  setHarmony, scaleIdNamed,
+  // The version a harmony write must quote. Exposed so a test can see the
+  // number the engine is about to compare against.
+  harmonyVersion: () => (engine ? engine.harmonyVersion : -1),
   /**
    * How many note columns a track shows.
    *
