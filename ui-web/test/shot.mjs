@@ -536,6 +536,34 @@ for (const scene of SCENES) {
          `their headers fold with them: ${JSON.stringify(t.heads.slice(2, 5))}`);
       ok(t.heads[5] > 0, `and the one after does not: ${t.heads[5]}px`);
       ok(t.folded[1] === 1, 'the parent is marked folded');
+
+      // AND IT SURVIVES A RESIZE. `resize()` throws the row pool away and rebuilds
+      // it from rows that carry no lane classes at all; `applyLaneShow` then
+      // early-returns because its signature is unchanged, so nothing re-applies
+      // them. Measured before the fix: fold a parent, change the window height,
+      // and the collapsed children reappear at full width while folded() still
+      // reports them folded — and it never heals, because only toggling the fold
+      // again moves that signature. Worse when the widest track is unaffected:
+      // the header's key is unchanged too, so headers end up 40px left of the
+      // lanes they label, permanently.
+      const after = await page.evaluate(async () => {
+        const w = () => [...document.querySelectorAll('.tk-row[data-row="0"] .tk-track')]
+          .map((e) => Math.round(e.getBoundingClientRect().width));
+        const before = w();
+        // A real size change, which is what rebuilds the pool.
+        document.getElementById('tracker').style.height = '600px';
+        window.dispatchEvent(new Event('resize'));
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const mid = w();
+        document.getElementById('tracker').style.height = '';
+        window.dispatchEvent(new Event('resize'));
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        return { before, mid, folded: window.__uni.folded() };
+      });
+      ok(JSON.stringify(after.mid) === JSON.stringify(after.before),
+         'the fold survives a window resize',
+         `${JSON.stringify(after.before)} -> ${JSON.stringify(after.mid)}`);
+      ok(after.folded[1] === 1, 'and the parent is still marked folded afterwards');
     } else {
       ok(t.widths.every((w) => w > 0),
          `nothing is folded to begin with: ${JSON.stringify(t.widths)}`);
@@ -639,6 +667,29 @@ for (const scene of SCENES) {
     ok(lanes.trackW[0] !== lanes.trackW[2],
        `tracks are no longer a uniform width: ${JSON.stringify(lanes.trackW)}`);
     ok(lanes.width === 40, `a shown readout is its full width: ${lanes.width}px`);
+
+    // CLIP RAILS sit at each track's own right edge. Nothing asserted a rail's x
+    // until an adversarial review measured them: on this very fixture they were
+    // drawn at 766/1036/1306/1576/1846 against real right edges of
+    // 773/1043/1273/1543/1773, so one rail sat 33px inside the NEXT lane and one
+    // fell past the end of the strip and was clipped away entirely. The scene
+    // asserted headers and hit-testing across these ragged widths and never
+    // looked at the thing the widths were most likely to break.
+    const rails = await page.evaluate(() => {
+      const row = document.querySelector('.tk-row');
+      const right = [...row.querySelectorAll('.tk-track')]
+        .map((e) => Math.round(e.getBoundingClientRect().right));
+      const rail = [...document.querySelectorAll('.tk-rail')]
+        .filter((e) => e.style.display !== 'none')
+        .map((e) => Math.round(e.getBoundingClientRect().left));
+      return { right, rail: [...new Set(rail)].sort((a, b) => a - b) };
+    });
+    const nearRight = rails.rail.every((x) =>
+      rails.right.some((r) => Math.abs(r - x - 7) <= 2));
+    ok(rails.rail.length > 0, `rails are drawn: ${rails.rail.length}`);
+    ok(nearRight,
+       'every rail sits at its own track\'s right edge',
+       `rails ${JSON.stringify(rails.rail)} vs track rights ${JSON.stringify(rails.right)}`);
 
     // THE HEADER MUST FOLLOW. Non-uniform track widths are exactly the case where
     // a header built from one shared stride drifts: every header after the first

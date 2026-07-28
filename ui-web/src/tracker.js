@@ -100,6 +100,23 @@ export class Tracker {
     this.band.textContent = '';
     this.pool = Array.from({ length: need }, () => this.makeRow(rowCount, columns));
     this.band.append(...this.pool);
+    /**
+     * The new rows carry NO lane classes, so the cached signatures must stop
+     * claiming they do.
+     *
+     * `applyLaneShow` early-returns when the signature is unchanged — which after
+     * a pool rebuild is exactly the wrong answer, because the rows it would have
+     * styled no longer exist. Measured: fold a parent, resize the window, and the
+     * collapsed children reappear at full width while `folded()` still reports
+     * them folded. It does not heal, because nothing else changes those
+     * signatures; only toggling the fold again does.
+     *
+     * Worse when the widest track is unaffected: `trackStride` does not change
+     * either, so buildHead's key is unchanged too and the header is never rebuilt
+     * — leaving headers 40px left of the lanes they label, permanently.
+     */
+    this._laneSig = -1;
+    this._hiddenSig = -1;
     this.measure();
   }
 
@@ -596,7 +613,29 @@ export class Tracker {
         ((clip.endTick - clip.startTick) / perRow) * this.m.rowHeight - 4);
       // Tucked inside the track's LAST column rather than sitting on the border,
       // where it would be indistinguishable from the rule already there.
-      const left = this.stripLeft + clip.track * this.trackStride + this.trackStride - 7;
+      /**
+       * The rail sits at the track's own RIGHT edge, from its measured box.
+       *
+       * This was `clip.track * trackStride + trackStride`, which is only the right
+       * edge while every track is the same width — and they have not been since a
+       * lane started carrying a bar readout only when its bars differ from the
+       * song's. Measured on the clip-meters fixture, whose widths are
+       * 270/270/230/270/230: rails landed at 766/1036/1306/1576/1846 against real
+       * right edges of 773/1043/1273/1543/1773, so track 2's rail was drawn 33px
+       * INSIDE track 3's lane and track 4's fell 73px past the end of the strip
+       * and was clipped away entirely — that clip simply had no rail.
+       *
+       * Every other consumer of this geometry moved to the per-track arrays; this
+       * one line did not, and no assertion looked at a rail's x.
+       */
+      const measured = this.trackLeft && clip.track < this.trackCountMeasured;
+      const tLeft = measured ? this.trackLeft[clip.track] : clip.track * this.trackStride;
+      const tWidth = measured ? this.trackWidth[clip.track] : this.trackStride;
+      // A folded lane has no width, so it has nowhere to put a rail. Hidden rather
+      // than positioned: at width 0 the expression below lands 7px into the lane
+      // to its LEFT, which draws a sliver belonging to a track you cannot see.
+      if (measured && tWidth === 0) { if (r._shown !== 0) { r._shown = 0; r.style.display = 'none'; } continue; }
+      const left = this.stripLeft + tLeft + tWidth - 7;
       const width = 5;
       if (r._top !== top) { r._top = top; r.style.top = top + 'px'; }
       if (r._h !== height) { r._h = height; r.style.height = height + 'px'; }

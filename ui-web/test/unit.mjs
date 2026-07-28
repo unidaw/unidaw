@@ -1431,3 +1431,69 @@ test('the parameter key names the track as well as the device', () => {
   assert.notEqual(paramKey(1, 0), paramKey(0, 1));
   assert.equal(paramKey(0, 0), 0);
 });
+
+// ---------------------------------------------------------------------------
+// THE FOURTH LIST: what the ENGINE can do.
+//
+// The op-registry test above compares the dock, the CLI and the agent — three
+// lists that all describe the UI. None of them says what the APPLICATION is
+// capable of. That is the engine's `UiCommandType`, and comparing against it
+// found eleven commands the engine accepts and the frontend never sends:
+// OpenPluginEditor, the two mod-link commands, SetTrackRouting, MoveDevice,
+// SavePatcherPreset, SetTrackHarmonyQuantize, the harmony pair, DeleteChord and
+// SetDeviceEuclideanConfig.
+//
+// Every one of those is capability that exists, is tested engine-side, and
+// cannot be reached. "How do I open the plugin UI" has the answer "you can't,
+// and the command has been sitting there unused" — which is exactly the kind of
+// thing a registry that only audits the UI can never tell you.
+//
+// So this reads the engine's own header and holds the frontend to it.
+
+/** Engine commands with no frontend caller, and why. This list may SHRINK. */
+const ENGINE_UNUSED = {
+  OpenPluginEditor: 'gap — the rack has no way to open a plugin\'s own window',
+  AddModLink: 'gap — modulation cannot be wired from the UI',
+  RemoveModLink: 'gap — nor unwired',
+  SetTrackRouting: 'gap — routing is authored in the project file only',
+  SetDeviceEuclideanConfig: 'gap — the euclidean device cannot be configured',
+  MoveDevice: 'gap — devices cannot be reordered in the chain',
+  SavePatcherPreset: 'gap — a patcher graph cannot be saved as a preset',
+  SetTrackHarmonyQuantize: 'gap — the per-track harmony quantize flag is unreachable',
+  DeleteChord: 'gap — a chord can be written and not removed',
+  WriteHarmony: 'gap — the harmony timeline is read-only in the UI',
+  DeleteHarmony: 'gap — same',
+  RequestClipWindow: 'the sidecar owns the viewport and asks on the client\'s behalf',
+  // These four are referenced by NAME elsewhere but never sent as a command from
+  // a frontend path, which is the distinction this test draws: a struct that
+  // mentions an enum is not a caller.
+  LoadPluginOnTrack: 'gap — the rack inserts with AddDevice; this older path is unused',
+  SetAutomationTarget: 'gap — automation has no UI at all',
+  UpdateDevice: 'gap — a device\'s config cannot be edited after it is added',
+  SetModSourceValue: 'gap — macro/mod values are unreachable',
+};
+
+test('every engine command has a caller, or a recorded reason it has none', async () => {
+  const { readFileSync } = await import('node:fs');
+  const hdr = readFileSync(new URL('../../apps/event_payloads.h', import.meta.url), 'utf8');
+  const block = hdr.slice(hdr.indexOf('enum class UiCommandType'));
+  const names = [...block.slice(0, block.indexOf('};')).matchAll(/^\s+([A-Z][A-Za-z]+) = \d+,/gm)]
+    .map((m) => m[1]).filter((n) => n !== 'None');
+  assert.ok(names.length > 15, `the engine's command enum was parsed: ${names.length}`);
+
+  // The sidecar is the UI's only path to the ring, so a command the sidecar never
+  // names is a command the UI cannot send. The agent has its own ring and its own
+  // reach, so it counts as a caller too.
+  const callers = ['../../ui/daw-sidecar/src/main.rs', '../../ui/daw-agent/src/tools.rs']
+    .map((f) => readFileSync(new URL(f, import.meta.url), 'utf8')).join('\n');
+
+  const unused = names.filter((n) => !new RegExp(`UiCommandType::${n}\\b`).test(callers));
+  const unexplained = unused.filter((n) => !(n in ENGINE_UNUSED));
+  assert.deepEqual(unexplained, [],
+    'an engine command nothing calls and nothing explains — wire it or record why');
+  // And the reverse, so the list cannot rot: something listed as unused that has
+  // since been wired must be removed, or the list stops describing the code.
+  const stale = Object.keys(ENGINE_UNUSED).filter((n) => !unused.includes(n));
+  assert.deepEqual(stale, [],
+    'listed as unused but something calls it now — delete the entry');
+});
