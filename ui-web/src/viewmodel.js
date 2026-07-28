@@ -369,7 +369,26 @@ export function createBuffer(rowCount, trackCount, columns) {
                        // zoom, versus THE note here — and overloading one pair to
                        // mean both is how a renderer ends up drawing a range that
                        // is really a single note.
-                       pitch: -1 };
+                       pitch: -1,
+                       /**
+                        * Where in this ROW the note actually sounds, in whole
+                        * percent, or -1 for "exactly on the row".
+                        *
+                        * A tracker draws a note on a row, but a RECORDED note
+                        * almost never lands on one — it lands near one. Showing
+                        * only the row is the lie every tracker tells; showing only
+                        * a "D" in the effect column, which is what this did
+                        * before, says a deviation exists without saying which way
+                        * or how far. ARCHITECTURE_REVIEW Movement 1 item 13 asks
+                        * for the note kept exact and the deviation made visible,
+                        * and this is the visible half.
+                        *
+                        * Quantised to percent on purpose: a cell is 76px, so a
+                        * percent is under a pixel, and an integer keeps the
+                        * renderer's guard an integer compare and its style write
+                        * an interned string.
+                        */
+                       dev: -1 };
     rows[i] = { index: 0, label: '', beat: false, bar: false, cells,
                 /**
                  * The CLIP-LOCAL position of this row on each lane, and that
@@ -795,7 +814,7 @@ export function buildViewModel(opts, buf) {
       for (let c = 0; c < columns; c++) {
         if (engine) {
           const cl = cells[ci++];
-          cl.text = ''; cl.aggCount = 0; cl.pitch = -1;
+          cl.text = ''; cl.aggCount = 0; cl.pitch = -1; cl.dev = -1;
           cl.kind = offGrid ? 'offgrid' : 'empty';
           continue;
         }
@@ -808,6 +827,7 @@ export function buildViewModel(opts, buf) {
         // and therefore no pitches. Every field the other branch writes has to be
         // cleared here, or the pool remembers.
         cell.pitch = -1;
+        cell.dev = -1;
         if (!inClip) { cell.text = ''; cell.kind = 'outside'; continue; }
         if (zoom.aggregate && c === 0) {
           // A coarse row spans many finer rows; count the events that fall in it.
@@ -959,6 +979,12 @@ export function buildViewModel(opts, buf) {
           // The contour ribbon's datum. Set alongside the text because it is the
           // same fact — what note is here — read at a glance instead of read.
           c0.pitch = n.pitch;
+          // ...and WHERE IN THE ROW it actually sounds. Only at the zooms where a
+          // row is a position rather than a summary: at "1 bar" per row the cell
+          // holds a count, and a deviation mark inside it would be pointing at a
+          // note the cell is not showing.
+          c0.dev = (!zoom.aggregate && n.delayTicks > 0 && rowTicks > 0)
+            ? Math.min(99, Math.round((n.delayTicks / rowTicks) * 100)) : -1;
           // Muted base notes still ship — draw them struck out. Adds carry
           // provenance so an override reads differently from the shared clip.
           c0.kind = n.muted ? 'muted' : n.isAdd ? 'add' : 'note';

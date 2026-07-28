@@ -22,6 +22,16 @@ const OVERSCAN = 4;
 const TRACK_HUES = [];
 for (let i = 0; i < 8; i++) TRACK_HUES.push('var(--uni-track-hue-' + i + ')');
 
+/**
+ * '0%'..'99%', built once.
+ *
+ * A hundred possible values and one of them written per marked cell per frame:
+ * exactly the domain that is small, closed and dense enough to precompute, which
+ * is the same argument the velocity and effect columns already make.
+ */
+const DEV_PCT = new Array(100);
+for (let i = 0; i < 100; i++) DEV_PCT[i] = i + '%';
+
 export class Tracker {
   /**
    * @param {HTMLElement} host
@@ -251,6 +261,7 @@ export class Tracker {
         cell._text = cell.firstChild;
         cell._bar = bar;
         cell._kindV = null;
+        cell._devV = -1;
         tr.append(cell);
         cells[k++] = cell;
       }
@@ -318,6 +329,32 @@ export class Tracker {
     for (let i = 0; i < n; i++) {
       const cell = cells[i];
       const c = row.cells[i];
+
+      /**
+       * Where in the row the note actually sounds.
+       *
+       * Drawn with a pseudo-element rather than a real one: this would otherwise
+       * be 768 more DOM nodes on a 16-track viewport, for a mark that is absent
+       * from most cells most of the time. `--dev` is the only thing written, and
+       * the percentage strings are interned — a style write per cell per frame to
+       * produce one of a hundred possible strings is the shape GUIDELINES 3 exists
+       * to catch.
+       *
+       * Guarded on the integer, so a cell whose note has not moved costs one
+       * compare. The class carries whether there is a mark at all, so the common
+       * case — a note exactly on its row — writes nothing.
+       */
+      if (cell._devV !== c.dev) {
+        const had = cell._devV >= 0;
+        cell._devV = c.dev;
+        if (c.dev >= 0) {
+          cell.style.setProperty('--dev', DEV_PCT[c.dev]);
+          if (!had) cell.classList.add('dev');
+        } else if (had) {
+          cell.classList.remove('dev');
+        }
+      }
+
       const bar = cell._bar;
       /**
        * The pitch mark. Two things share one pooled element because they are the

@@ -453,6 +453,53 @@ for (const scene of SCENES) {
     continue;
   }
 
+  if (scene.contour) {
+    // The deviation hairline: WHERE IN THE ROW a note actually sounds.
+    // Asserted from the DOM rather than the view-model, because the whole feature
+    // is one CSS custom property and a class — a model that computes the right
+    // number and a renderer that writes it nowhere look identical from the model.
+    const dev = await page.evaluate(() => {
+      const marked = [...document.querySelectorAll('.tk-cell.dev')];
+      const pcts = marked.map((e) => e.style.getPropertyValue('--dev'));
+      const clean = [...document.querySelectorAll('.tk-cell[data-track="0"][data-col="0"]')]
+        .filter((e) => e.classList.contains('dev')).length;
+      return { n: marked.length, pcts: [...new Set(pcts)].sort(), track0: clean };
+    });
+    ok(dev.n > 0, `notes off their row are marked: ${dev.n} cells`);
+    // The three offsets the fixture plants, and nothing else. A renderer that
+    // wrote a constant would show one value; one that mixed up rowTicks would show
+    // values that are not these.
+    ok(dev.pcts.join(' ') === '25% 50% 75%',
+       `and marked at their real offsets: ${JSON.stringify(dev.pcts)}`);
+    // Track 0 is deliberately clean, so "on the row" and "near the row" are both
+    // on screen — a build that marked every note would pass the two checks above.
+    ok(dev.track0 === 0, `a note exactly on its row carries no mark: ${dev.track0}`);
+    // AND IT IS ACTUALLY PAINTED. Everything above proves a custom property was
+    // set and a class was added, which is exactly what a rule that never matched
+    // would also look like — the same gap that let three hidden lanes pass their
+    // assertions earlier. Read from the pseudo-element's computed style and from
+    // the position it resolves to, so a mark drawn at the wrong offset fails too.
+    const painted = await page.evaluate(() => {
+      const el = document.querySelector('.tk-cell.dev');
+      if (!el) return null;
+      const cs = getComputedStyle(el, '::after');
+      const box = el.getBoundingClientRect();
+      const pct = parseFloat(el.style.getPropertyValue('--dev'));
+      return { content: cs.content, width: cs.width, opacity: cs.opacity,
+               left: cs.left, cellW: Math.round(box.width), pct };
+    });
+    ok(painted && painted.content !== 'none',
+       `the mark exists as a pseudo-element: ${JSON.stringify(painted && painted.content)}`);
+    ok(painted && parseFloat(painted.width) > 0 && parseFloat(painted.opacity) > 0,
+       `with a width and an opacity: ${painted && painted.width} @ ${painted && painted.opacity}`);
+    // The offset resolves against the CELL, so a rule that positioned against the
+    // row or the track would land somewhere plausible and wrong.
+    const want = painted ? Math.round(painted.cellW * painted.pct / 100) : -1;
+    const got = painted ? Math.round(parseFloat(painted.left)) : -2;
+    ok(Math.abs(got - want) <= 1,
+       `and it sits at its note's offset inside the cell: ${got}px of ${painted && painted.cellW}px, wanted ${want}px`);
+  }
+
   if (scene.clipMeters) {
     const lanes = await page.evaluate(() => {
       const rows = [...document.querySelectorAll('.tk-row')]

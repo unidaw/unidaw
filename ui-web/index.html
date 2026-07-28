@@ -3396,9 +3396,16 @@ window.__uni = {
     for (let t = 0; t < 4; t++) {
       const stride = 12 / lpb[t];
       for (let k = 0; k * stride < 48; k++) {           // four beats of each lane
-        notes.push({ tOn: k * stride * 80000, tOff: 0, id: t * 100 + k,
+        // Every third note sits OFF its row, by a quarter, a half and three
+        // quarters of a row in turn. Recorded material is never exactly on the
+        // grid, and a fixture where every note is makes the deviation mark
+        // untestable — the feature would render nothing and every golden would
+        // agree with it (GUIDELINES 2.1.1). Track 0 is left clean so that "on the
+        // row" and "near the row" are both on screen at once.
+        const dev = (t === 0 || k % 3) ? 0 : [20000, 40000, 60000][(k / 3) % 3];
+        notes.push({ tOn: k * stride * 80000 + dev, tOff: 0, id: t * 100 + k,
                      pitch: 48 + t * 5 + (k % 5), velocity: 100, column: 0, track: t,
-                     retrigger: 0, probability: 100, delayTicks: 0, row: k * stride,
+                     retrigger: 0, probability: 100, delayTicks: dev, row: k * stride,
                      muted: false, isAdd: false, placementId: 1 });
       }
     }
