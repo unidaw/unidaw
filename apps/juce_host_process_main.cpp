@@ -52,6 +52,8 @@ struct HostState {
   daw::BlockMailbox* mailbox = nullptr;
   daw::EventRingView ringStd;
   daw::EventRingView ringCtrl;
+  bool renderPrioritySet = false;  // realtime scheduling applied once the block period
+                                   // is known (first ProcessBlock); see handleProcessBlock
   std::unique_ptr<daw::IRuntime> runtime;
   std::unique_ptr<daw::IPluginHost> pluginHost;
   struct PluginSlot {
@@ -585,6 +587,28 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
 bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& request) {
   if (state.header == nullptr || state.mailbox == nullptr) {
     return false;
+  }
+
+  // Promote this thread (which renders the block) to realtime once, now that the block
+  // period is known from the SHM header. A time-constraint thread runs by the audio
+  // deadline and preempts background/UI work, so the render no longer needs a deep
+  // pipeline to hide scheduler jitter — that is what makes the low-latency depth safe.
+  if (!state.renderPrioritySet && state.header->sampleRate > 0.0 &&
+      state.header->blockSize > 0) {
+    const double blockMs = static_cast<double>(state.header->blockSize) /
+                           state.header->sampleRate * 1000.0;
+    // DAW_ENGINE_NO_RT falls back to plain QoS (escape hatch / A-B measurement).
+    if (std::getenv("DAW_ENGINE_NO_RT") != nullptr) {
+      daw::elevateToAudioPriority();
+      std::cerr << "Host: render thread QoS (realtime disabled by DAW_ENGINE_NO_RT)"
+                << std::endl;
+    } else {
+      // Allow up to ~80% of the period for the plugin render, deadline at the period edge.
+      const bool rt = daw::setRealtimeThreadPriority(blockMs, blockMs * 0.8, blockMs);
+      std::cerr << "Host: render thread " << (rt ? "REALTIME" : "QoS (RT unavailable)")
+                << " @ " << blockMs << " ms block period" << std::endl;
+    }
+    state.renderPrioritySet = true;
   }
 
   const uint64_t blockStart = request.pluginSampleStart;
