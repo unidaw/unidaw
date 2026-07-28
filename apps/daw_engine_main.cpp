@@ -1663,6 +1663,11 @@ struct TrackRuntime {
   // document's track count and extended as aux children are appended, so the published
   // count is honest. Starts equal to whatever the startup creates.
   std::atomic<uint32_t> liveTrackCount{0};
+  // True while a project load is mutating the track set (adopting document tracks,
+  // tearing down leftovers, setting liveTrackCount). The consumer defers deriving aux
+  // children until it clears, so a child is never placed against a half-updated track
+  // set — e.g. before the load-clear has torn down the leftover it would recycle.
+  std::atomic<bool> loadInProgress{false};
   TrackRuntime* uiTrack = nullptr;
   {
     auto runtime = setupTrackRuntime(0, pluginPath, !spawnHost, true);
@@ -1956,6 +1961,13 @@ struct TrackRuntime {
   };
 
   auto enqueueMirrorReplay = [&](TrackRuntime& runtime) {
+    // An aux child has no host of its own to mirror params to; when its notes overflow
+    // the PARENT's ring, flagging the CHILD's mirror would set mirrorPending that the
+    // priming/clearing loops (both hostReady-gated) can never service, permanently
+    // wedging the whole producer into mirrorOnly. A child is never mirrored.
+    if (runtime.isAuxChild.load(std::memory_order_acquire)) {
+      return;
+    }
     runtime.mirrorGateSampleTime.store(0, std::memory_order_release);
     runtime.mirrorPending.store(true, std::memory_order_release);
     runtime.mirrorPrimed.store(false, std::memory_order_release);
@@ -2398,9 +2410,18 @@ struct TrackRuntime {
       if (!newRuntime) {
         return nullptr;
       }
+      uint32_t newSize = 0;
       {
         std::lock_guard<std::mutex> lock(tracksMutex);
         tracks.push_back(std::move(newRuntime));
+        newSize = static_cast<uint32_t>(tracks.size());
+      }
+      // A track added here (e.g. loading a plugin onto a fresh lane) must count toward
+      // the published track set, or the honest-count publish (uiTrackCount clamped to
+      // liveTrackCount) would create it, play it, yet hide it from the UI.
+      uint32_t seen = liveTrackCount.load(std::memory_order_relaxed);
+      while (newSize > seen && !liveTrackCount.compare_exchange_weak(
+                                   seen, newSize, std::memory_order_relaxed)) {
       }
     }
     {
@@ -2635,25 +2656,67 @@ struct TrackRuntime {
       if (exists) {
         continue;
       }
-      if (tracks.size() >= daw::kUiMaxTracks) {
+      // Place the child at the first slot AFTER the document + already-derived children
+      // (liveTrackCount), REUSING the runtime there. That slot is a leftover from a
+      // previously loaded (larger) project or a former child of this one; reusing it,
+      // rather than appending at the never-shrinking tracks.size(), is what makes a
+      // 1-track multi-out project show [parent, stem1, stem2] and keeps a reload from
+      // growing the vector two slots at a time until the budget breaks.
+      const uint32_t childId = liveTrackCount.load(std::memory_order_relaxed);
+      if (childId >= daw::kUiMaxTracks) {
         DAW_EVENT("multiout.child_budget_full")
             .field("parent", parent.trackId)
             .field("cap", static_cast<uint64_t>(daw::kUiMaxTracks));
         break;
       }
-      const uint32_t childId = static_cast<uint32_t>(tracks.size());
-      auto child = setupAuxChildRuntime(
-          childId, parent.trackId, b.index, planeOffset, b.channelCount,
-          parentName + " / Stem " + std::to_string(b.index));
-      if (child) {
+      const std::string childName =
+          parentName + " / Stem " + std::to_string(b.index);
+      bool placed = false;
+      if (childId < tracks.size() && tracks[childId]) {
+        // Repurpose the slot right after the document into this stem's child. By the
+        // time the consumer runs this, that slot is already hostless — either a former
+        // child (never had a host) or a leftover the load-clear tore down — so no host
+        // teardown is needed here (which would mean taking controllerMutex under
+        // tracksMutex). Just retarget it as a child.
+        TrackRuntime* rt = tracks[childId].get();
+        rt->needsRestart.store(false, std::memory_order_release);
+        rt->hostReady.store(false, std::memory_order_release);
+        rt->active.store(false, std::memory_order_release);
+        {
+          std::lock_guard<std::mutex> tlock(rt->trackMutex);
+          rt->track.chain = daw::TrackChain{};
+          rt->sourcePlacements.clear();
+          rt->ownedClips.clear();
+          rt->editableClipIds.clear();
+          rt->arrangementDirty.store(false, std::memory_order_relaxed);
+          rt->trackName = childName;
+          rt->trackSnapshot = buildTrackSnapshot(rt->track);
+        }
+        rt->parentId.store(parent.trackId, std::memory_order_relaxed);
+        rt->collapsed.store(false, std::memory_order_relaxed);
+        rt->auxParentTrackId.store(parent.trackId, std::memory_order_relaxed);
+        rt->auxBusIndex.store(b.index, std::memory_order_relaxed);
+        rt->auxBusChannelOffset.store(planeOffset, std::memory_order_relaxed);
+        rt->auxBusChannelCount.store(b.channelCount, std::memory_order_relaxed);
+        rt->childrenReconciled.store(false, std::memory_order_relaxed);
+        rt->isAuxChild.store(true, std::memory_order_release);  // last: makes it a child
+        placed = true;
+      } else if (childId == tracks.size()) {
+        auto child = setupAuxChildRuntime(childId, parent.trackId, b.index, planeOffset,
+                                          b.channelCount, childName);
+        if (child) {
+          tracks.push_back(std::move(child));
+          placed = true;
+        }
+      }
+      if (placed) {
         DAW_EVENT("multiout.child_created")
             .field("parent", parent.trackId)
             .field("child", childId)
             .field("bus", static_cast<uint64_t>(b.index))
             .field("plane_offset", static_cast<uint64_t>(planeOffset))
             .field("channels", static_cast<uint64_t>(b.channelCount));
-        tracks.push_back(std::move(child));
-        // The child extends the visible track set.
+        // The child extends the visible track set to exactly cover it.
         uint32_t seen = liveTrackCount.load(std::memory_order_relaxed);
         while (childId + 1 > seen &&
                !liveTrackCount.compare_exchange_weak(seen, childId + 1,
@@ -3904,6 +3967,13 @@ struct TrackRuntime {
       nextClipId = std::max(nextClipId, c.id + 1);
     }
     for (auto* runtime : runtimes) {
+      // Aux children are DERIVED from a multi-out plugin at load, never persisted —
+      // saving one would reload as a phantom top-level track. Slots past the live count
+      // are leftovers of a larger project the user closed; skip those too.
+      if (runtime->isAuxChild.load(std::memory_order_acquire) ||
+          runtime->trackId >= liveTrackCount.load(std::memory_order_acquire)) {
+        continue;
+      }
       daw::ProjectTrack track;
       track.trackId = runtime->trackId;
       track.name = "Track " + std::to_string(runtime->trackId + 1);
@@ -4107,6 +4177,13 @@ struct TrackRuntime {
     if (!daw::loadProject(document, path, error)) {
       return false;
     }
+    // Hold off aux-child derivation until this load has finished mutating the track set
+    // (adopt, tear down leftovers, set liveTrackCount). Cleared on every exit path.
+    loadInProgress.store(true, std::memory_order_release);
+    struct LoadGuard {
+      std::atomic<bool>& flag;
+      ~LoadGuard() { flag.store(false, std::memory_order_release); }
+    } loadGuard{loadInProgress};
 
     // Resolve a clip's relative sourcePath against the project file's directory, and
     // drop the previous project's waveform sources (and pyramids) before the track
@@ -4569,6 +4646,28 @@ struct TrackRuntime {
           runtime->auxParentTrackId.store(0, std::memory_order_relaxed);
           runtime->auxBusChannelCount.store(0, std::memory_order_relaxed);
           runtime->childrenReconciled.store(false, std::memory_order_relaxed);
+        }
+        // Tear down the host this slot carried (the closed project's plugin) so it stops
+        // processing + frees the process, and clear its chain. A slot past the new
+        // document is then either recycled as an aux child or left blank + hostless —
+        // never a running ghost mixed into or restarted behind the new project. Runs on
+        // the command thread with no tracksMutex held, so taking controllerMutex is safe.
+        {
+          std::lock_guard<std::mutex> clock(runtime->controllerMutex);
+          runtime->needsRestart.store(false, std::memory_order_release);
+          runtime->hostReady.store(false, std::memory_order_release);
+          runtime->active.store(false, std::memory_order_release);
+          runtime->hostGaveUp.store(false, std::memory_order_release);
+          runtime->watchdog.reset();
+          runtime->controller.disconnect();
+          runtime->config.pluginPaths.clear();
+          runtime->config.pluginNames.clear();
+          runtime->lastAuxOutMask = 0;
+          runtime->lastSidechainMask = 0;
+        }
+        {
+          std::lock_guard<std::mutex> tlock(runtime->trackMutex);
+          runtime->track.chain = daw::TrackChain{};
         }
         std::shared_ptr<const ClipSnapshot> snapshot;
         {
@@ -9138,6 +9237,13 @@ struct TrackRuntime {
                     runtime->trackId) {
               continue;
             }
+            // MIDI has 16 channels (0..15); channel 0 is the parent's own bus. A child
+            // for aux bus >= 16 has no distinct channel to steer on (16 & 0x0F == 0 would
+            // alias onto the parent's channel), so skip its MIDI. Its AUDIO still works
+            // — the aux plane carries 32 channels = up to 16 stereo stems.
+            if (child->auxBusIndex.load(std::memory_order_relaxed) > 15u) {
+              continue;
+            }
             auto childStatePtr = std::atomic_load_explicit(
                 &child->trackSnapshot, std::memory_order_acquire);
             const auto& childState =
@@ -9323,7 +9429,18 @@ struct TrackRuntime {
           }
           if (routingSnapshot.sidechain.kind == daw::TrackRouteKind::Track) {
             TrackRuntime* src = findTrackRuntime(routingSnapshot.sidechain.trackId);
-            if (src && src != runtime &&
+            // Hold the SOURCE track's controllerMutex while reading its SHM: the restart
+            // worker reassigns src's shmView_ (a non-atomic shared_ptr) + munmaps the old
+            // SHM under this same lock, so an unsynchronized sharedMemory() copy would be
+            // a data race + use-after-free. try_lock (never block) so a source restart
+            // just skips the key this block; this track already holds its own
+            // controllerMutex, so try-then-skip also avoids a lock-order deadlock.
+            std::unique_lock<std::mutex> srcLock;
+            if (src && src != runtime) {
+              srcLock = std::unique_lock<std::mutex>(src->controllerMutex,
+                                                     std::try_to_lock);
+            }
+            if (src && src != runtime && srcLock.owns_lock() &&
                 src->hostReady.load(std::memory_order_acquire)) {
               auto srcView = src->controller.sharedMemory();
               if (srcView && srcView->base && srcView->header &&
@@ -9563,7 +9680,7 @@ struct TrackRuntime {
       // derive its child tracks from the negotiated bus layout (one round-trip per chain
       // build, gated by childrenReconciled). Done before snapshotTracks so freshly
       // appended children are published this same cycle.
-      {
+      if (!loadInProgress.load(std::memory_order_acquire)) {
         auto parents = snapshotTracks();
         for (auto* runtime : parents) {
           if (runtime->isAuxChild.load(std::memory_order_acquire) ||
@@ -9707,6 +9824,13 @@ struct TrackRuntime {
         for (auto* runtime : trackSnapshot) {
           if (runtime->lastAuxOutMask == 0 ||
               !runtime->hostReady.load(std::memory_order_acquire)) {
+            continue;
+          }
+          // controllerMutex guards shmView_ against the restart worker's reassignment;
+          // try_lock so a mid-restart track just skips its diagnostic this cycle.
+          std::unique_lock<std::mutex> diagLock(runtime->controllerMutex,
+                                                std::try_to_lock);
+          if (!diagLock.owns_lock()) {
             continue;
           }
           auto shmView = runtime->controller.sharedMemory();
