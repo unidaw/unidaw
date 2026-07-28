@@ -746,8 +746,20 @@ const chainHost = document.getElementById('chain');
 const chain = new Chain(chainHost, {
   // The same path the `editor` command takes, not a second one.
   onOpenEditor: ({ track, device }) => dockApi.openEditor(track, device),
+  // Removing a device is not undoable, and unlike a note it is not obvious what
+  // was lost — a chain with one fewer box in it looks like a chain. So it asks,
+  // by name.
+  onDelete: ({ track, device, title }) => {
+    if (!confirm(`Remove ${title}? This cannot be undone.`)) return;
+    dockApi.delDevice(track, device);
+  },
   onSelect: (pos) => {
     state.chainSelected = pos;
+    // Selecting a card takes the keyboard. It did not, and that is the whole bug:
+    // you would click a device, press Backspace, and delete a NOTE — because the
+    // rack had a selection but the tracker still had the keys, and nothing on
+    // screen said which was which.
+    state.focus = 'chain';
     // A patcher device's card is a way INTO its graph. Selecting one and having
     // to go and find the patcher yourself is the kind of gap that makes a rack
     // feel like a list rather than a thing you can open.
@@ -2196,6 +2208,32 @@ function draw() {
     o.trackName = trackName(engine, state.cursor.track);
     o.params = deviceParams;
     chain.render(buildChainModel(o, chainBuf));
+    /**
+     * A non-tracker pane holds the keyboard only WHILE something is selected in
+     * it. Delete the selected device and the selection is gone, so the focus goes
+     * home to the tracker on its own.
+     *
+     * An invariant checked here rather than a line in the delete handler, because
+     * the selection can go away in more ways than one: the device is removed, the
+     * cursor moves to a track with no devices, the engine republishes a shorter
+     * chain, a project is loaded. Every one of those would otherwise leave the
+     * keyboard parked in a pane with nothing in it — which is the original bug
+     * (keys going somewhere the eye is not) wearing the opposite sign.
+     */
+    if (state.focus === 'chain') {
+      const devs = (here && here.devices) || [];
+      if (state.chainSelected < 0 || state.chainSelected >= devs.length) {
+        state.focus = 'centre';
+        state.chainSelected = -1;
+      }
+    }
+    // Say which pane has the keyboard. Guarded on the flag rather than written
+    // every frame, per GUIDELINES 3 — a classList write is a style invalidation.
+    const rackFocused = state.focus === 'chain';
+    if (chainHost._focused !== rackFocused) {
+      chainHost._focused = rackFocused;
+      chainHost.classList.toggle('pane-focus', rackFocused);
+    }
   }
   // One scheduler, two surfaces. Hiding the other host rather than unmounting it
   // keeps its pools warm, so switching views costs no rebuild.
@@ -2897,6 +2935,58 @@ addEventListener('keydown', (e) => {
   }
 
 
+  /**
+   * 2.4 The rack owns the keyboard while a device is selected.
+   *
+   * Same rule as the rail above, and it was missing: selecting a device set
+   * `chainSelected` and nothing else, so every key still went to the tracker.
+   * Backspace on a selected device deleted a note. The selection was real and the
+   * focus was a fiction.
+   *
+   * Escape hands the keyboard back, exactly as it does for the rail, rather than
+   * clearing the selection — you can be looking at a device and typing in the
+   * tracker, you just have to say so.
+   */
+  if (state.focus === 'chain') {
+    if (k === 'Escape') { state.focus = 'centre'; state.chainSelected = -1; return done(); }
+    if (k === 'Backspace' || k === 'Delete') {
+      const here = chains[state.cursor.track];
+      const devs = (here && here.devices) || [];
+      const dev = devs[state.chainSelected];
+      if (dev) {
+        // Same title the card shows and the mouse path asks about, so the two
+        // routes to the same destructive action cannot describe it differently.
+        const card = chain.vm && chain.vm.cards && chain.vm.cards[state.chainSelected];
+        const what = (card && card.title) || 'this device';
+        if (confirm(`Remove ${what}? This cannot be undone.`)) {
+          dockApi.delDevice(state.cursor.track, dev.id);
+          // Step the selection back so it lands on a card that still exists.
+          state.chainSelected = Math.max(0, state.chainSelected - 1);
+        }
+      }
+      return done();
+    }
+    if (k === 'ArrowRight') {
+      // Clamped, not incremented freely: the invariant below drops focus back to
+      // the tracker when the selection points past the end, so an unclamped
+      // ArrowRight would silently throw you out of the pane you are navigating.
+      const here = chains[state.cursor.track];
+      const last = (((here && here.devices) || []).length) - 1;
+      state.chainSelected = Math.min(last, state.chainSelected + 1);
+      return done();
+    }
+    if (k === 'ArrowLeft') { state.chainSelected = Math.max(0, state.chainSelected - 1); return done(); }
+    if (k === 'Enter') {
+      const here = chains[state.cursor.track];
+      const dev = (here && here.devices || [])[state.chainSelected];
+      if (dev) dockApi.openEditor(state.cursor.track, dev.id);
+      return done();
+    }
+    // Everything else falls THROUGH deliberately: transport, view switching and
+    // the chords below are global, and swallowing them here would make the rack
+    // a place where the space bar stops working.
+  }
+
   // 2.5 View switch, and arrange's own navigation. Arrange has no rows and no
   //     cell editing, so it must not fall through into the tracker's keys.
   /**
@@ -3200,6 +3290,10 @@ arrangeHost.addEventListener('pointerdown', (e) => {
 host.addEventListener('pointerdown', (e) => {
   const hit = tracker.hitTest(e.clientX, e.clientY, state.scrollX);
   if (!hit) return;
+  // Clicking the grid takes the keyboard back from whichever pane had it. The
+  // rack keeps focus until something else asks for it, and "something else" has
+  // to include the obvious one: clicking on the notes.
+  state.focus = 'centre';
   host.setPointerCapture(e.pointerId);
   dragAnchor = hit;
   state.cursor.row = hit.row; state.cursor.track = hit.track; state.cursor.col = hit.col;

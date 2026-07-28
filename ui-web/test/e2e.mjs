@@ -1493,6 +1493,90 @@ section('multi-out child tracks');
   }
 }
 
+section('keyboard focus between panes');
+{
+  // Driven with REAL clicks and REAL keys, deliberately. The bug this covers —
+  // Backspace on a selected device deleting a note in the tracker — was invisible
+  // to every existing test because they all call __uni hooks, which route by
+  // intent instead of by focus. A hook cannot reproduce "the keys went to the
+  // wrong pane", because a hook never asks which pane has the keys.
+  // Off the fixture AND back to the tracker: the section above leaves a
+  // multi-out fixture showing, and a card rect measured while another surface is
+  // up is a rect for something that is not on screen. The first version of this
+  // test clicked those coordinates, hit the tracker underneath, and reported the
+  // focus bug as still present — a false failure that looked exactly like a real
+  // one.
+  await page.evaluate((pr) => window.__uni.loadProject(pr), PROJECT);
+  await page.waitForTimeout(700);
+  await page.evaluate(() => { window.__uni.view('tracker'); window.__uni.chainSelect(-1); });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  let asked = null;
+  page.on('dialog', async (d) => { asked = d.message(); await d.dismiss(); });
+
+  const findCard = () => page.evaluate(() => {
+    const c = document.querySelector('.dv-card');
+    if (!c) return null;
+    const r = c.getBoundingClientRect();
+    // A card that is not laid out has a zero rect and clicking it hits whatever
+    // is behind it. Refuse to measure one.
+    if (r.width < 10 || r.height < 10) return null;
+    return { x: r.x + r.width / 2, y: r.y + 30 };
+  });
+  let card = await findCard();
+  if (!card) {
+    // Make one rather than skipping. A focus test that only runs on projects
+    // that happen to have a device is a focus test that does not run, and this
+    // covers a bug that reached the user.
+    await page.evaluate(() => window.__uni.addDevice(0, 'patcher event'));
+    await page.waitForTimeout(1200);
+    card = await findCard();
+  }
+  if (!card) {
+    blocked(false, 'keyboard focus follows the rack',
+            'no device card on screen — needs a project with a device on track 0');
+  } else {
+    const F = () => page.evaluate(() => {
+      const s = window.__uni.state();
+      return { focus: s.focus, sel: s.chainSelected, row: s.cursor.row };
+    });
+    await page.mouse.click(card.x, card.y);
+    await page.waitForTimeout(300);
+    const onCard = await F();
+    ok(onCard.focus === 'chain', 'clicking a device gives the rack the keyboard',
+       JSON.stringify(onCard));
+    const ring = await page.evaluate(
+      () => document.getElementById('chain').classList.contains('pane-focus'));
+    ok(ring, 'and the rack SHOWS that it has it — a selection that looks like '
+           + 'focus and is not is worse than no selection');
+
+    const notesBefore = await page.evaluate(() => window.__uni.selected().length);
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(400);
+    ok(asked !== null && /Remove /.test(asked || ''),
+       'Backspace there offers to remove the DEVICE', JSON.stringify(asked));
+    ok(!/Remove (\d+)\?/.test(asked || ''),
+       'and names it, rather than printing its numeric kind', JSON.stringify(asked));
+    const notesAfter = await page.evaluate(() => window.__uni.selected().length);
+    ok(notesBefore === notesAfter, 'and does not touch the tracker\'s notes',
+       `${notesBefore} -> ${notesAfter}`);
+
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    const back = await F();
+    ok(back.focus === 'centre', 'Escape hands the keyboard back to the tracker',
+       JSON.stringify(back));
+
+    // Clicking the grid must also reclaim it, or the rack keeps focus forever.
+    await page.mouse.click(card.x, card.y);
+    await page.waitForTimeout(250);
+    await page.mouse.click(700, 400);
+    await page.waitForTimeout(250);
+    const clicked = await F();
+    ok(clicked.focus === 'centre', 'and clicking the grid reclaims it',
+       JSON.stringify(clicked));
+  }
+}
+
 section('wheel scrolling');
 {
   // The tracker had no wheel handling at all — the arrange view did, which is

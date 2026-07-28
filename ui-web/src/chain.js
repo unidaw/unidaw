@@ -236,7 +236,26 @@ export class Chain {
       const openIcon = document.createElement('i');
       openIcon.className = 'ph ph-arrow-square-out';
       open.appendChild(openIcon);
-      el.append(open);
+      /**
+       * Remove the device.
+       *
+       * The rack could add a device and could not remove one. `delDevice` existed
+       * as a __uni hook the whole time, with no button, no key and no dock
+       * command behind it — reachable from a test and from nowhere a person can
+       * point at. Jaakko asked "how do I delete a device from the device chain"
+       * and the honest answer was "you cannot".
+       *
+       * The op-registry test knew: it had `deldevice` recorded as a gap. Recording
+       * a hole is not the same as closing one, and a ratchet that permits an entry
+       * forever is a list of things nobody is going to do.
+       */
+      const del = document.createElement('button');
+      del.className = 'dv-del';
+      del.title = 'Remove this device';
+      const delIcon = document.createElement('i');
+      delIcon.className = 'ph ph-trash';
+      del.appendChild(delIcon);
+      el.append(open, del);
       const bus = div('dv-bus', el);
       el._busEl = bus;
       el._badge = text(badge);
@@ -269,6 +288,20 @@ export class Chain {
       const c = opener.closest('.dv-card');
       if (c && this.onOpenEditor) {
         this.onOpenEditor({ track: this.vm ? this.vm.track : -1, device: c._devId });
+      }
+      return;
+    }
+    const remover = e.target.closest('.dv-del');
+    if (remover) {
+      const c = remover.closest('.dv-card');
+      if (c && this.onDelete) {
+        const pos = Number(c.dataset.pos);
+        // The card's OWN title, not the raw device. `kind` is a number, so
+        // `dev.name || dev.kind` asked "Remove 3?" — the vm already resolves a
+        // plugin name, or a readable kind, and that is what the card is showing.
+        const card = this.vm && this.vm.cards && this.vm.cards[pos];
+        this.onDelete({ track: this.vm ? this.vm.track : -1, device: c._devId,
+                        pos, title: (card && card.title) || 'this device' });
       }
       return;
     }
