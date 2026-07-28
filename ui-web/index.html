@@ -1060,12 +1060,49 @@ const dockApi = {
    * "audition this row" is what you want a hundred times an hour and there was no
    * way to ask for it.
    */
-  playFrom: (row) => {
-    const tick = (row === undefined ? state.cursor.row : row) * ZOOM_LEVELS[state.zoom].rowNanoticks;
+  /**
+   * Play ONE ROW — every note on it, across every track — and nothing else.
+   *
+   * Not the transport. Seeking and pressing play was the first version and it is
+   * a different gesture: it starts the song from here and keeps going, where what
+   * you want a hundred times an hour is to hear THIS line. In a tracker Enter has
+   * always meant the second thing, and the two are not substitutes — you cannot
+   * step through two adjacent rows by starting playback twice.
+   *
+   * Built on preview notes, so it sounds without writing, without moving the
+   * playhead, and without the transport running. Press it twice and you hear two
+   * rows, because each press is self-contained.
+   *
+   * Read from the engine's NOTES, not from the view-model's cells. A cell keeps
+   * one pitch — it is what the contour ribbon draws — so a row holding two notes
+   * on one track renders as "2 evts" and would have auditioned as one of them.
+   * Hearing half a row is worse than hearing none, because nothing tells you it
+   * was half.
+   */
+  playRow: (row) => {
     if (!conn || !conn.canSend()) { state.reject = 'no engine'; return false; }
-    conn.send({ type: 'seek', tick });
-    cmd('play');
-    return true;
+    const r = row === undefined ? state.cursor.row : row;
+    if (!engine || !engine.noteCount) { state.reject = 'nothing on this row'; return false; }
+    // How long the row lasts, in real time, so the audition is as long as the row
+    // is rather than an arbitrary blip. A row is rowNanoticks at the project's
+    // tempo; 960000 nanoticks is a quarter, and a quarter is 60/bpm seconds.
+    const bpm = (engine && engine.tempoMilliBpm ? engine.tempoMilliBpm : 120000) / 1000;
+    const rowMs = (ZOOM_LEVELS[state.zoom].rowNanoticks / 960000) * (60000 / bpm);
+    let n = 0;
+    for (let i = 0; i < engine.noteCount; i++) {
+      const note = engine.notes[i];
+      if (note.row !== r || note.muted) continue;
+      const track = note.track, pitch = note.pitch;
+      conn.send({ type: 'preview', track, pitch, vel: state.velocity, on: 1 });
+      // Released on a timer rather than held: a row audition has a length, and
+      // there is no key to let go of. Capped so a four-bar row at coarse zoom
+      // does not leave a note sounding for half a minute.
+      setTimeout(() => conn && conn.send({ type: 'preview', track, pitch, vel: 0, on: 0 }),
+                 Math.min(2000, Math.max(120, rowMs)));
+      n++;
+    }
+    if (!n) state.reject = 'nothing on this row';
+    return n > 0;
   },
   fold: (t) => {
     if (!engine || t < 0 || t >= collapsed.length) return false;
@@ -2801,17 +2838,19 @@ addEventListener('keydown', (e) => {
   // tabbing across a row keeps you in the note column rather than dropping you
   // into whichever column the previous track left the cursor in.
   /**
-   * Enter plays from the row the cursor is on.
+   * Enter plays the row the cursor is on, then steps to the next.
    *
-   * Two commands the engine already had — SetPosition then play — for the thing
-   * you want a hundred times an hour: hear THIS bit. Without it the only way to
-   * audition a spot was to start from wherever the playhead happened to be.
+   * One row, not the transport — see playRow. Pressing it twice plays two
+   * consecutive rows, which is how you audition a phrase a line at a time.
    *
    * Not while a token buffer is open: there Enter commits, which the branch above
    * has already handled and returned from.
    */
   if (k === 'Enter' && state.view === 'tracker') {
-    dockApi.playFrom(state.cursor.row);
+    dockApi.playRow(state.cursor.row);
+    // Advance like a write does, so pressing Enter twice steps down and plays two
+    // rows rather than the same one twice.
+    state.cursor.row += Math.max(1, state.editStep); follow();
     return done();
   }
   if (k === 'Tab' && state.view === 'tracker') {
@@ -3899,7 +3938,7 @@ window.__uni = {
   // The same functions the dock and the palette call, not copies of them.
   newSong: (name) => dockApi.newSong(name),
   openEditor: (track, device) => dockApi.openEditor(track, device),
-  playFrom: (row) => dockApi.playFrom(row),
+  playRow: (row) => dockApi.playRow(row),
   /** Which preview voices are sounding, as track:pitch — so a test can prove a
    *  note-on is matched by exactly one note-off rather than trusting the wire. */
   sounding: () => [...sounding].map((k) => ((k / 128) | 0) + ':' + (k % 128)),
