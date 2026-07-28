@@ -427,6 +427,18 @@ export class Dock {
 
   focus() { this.input.focus(); }
 
+  /**
+   * Give the keyboard back.
+   *
+   * `api.close()` moved `state.focus` off the dock and left the input holding DOM
+   * focus, so the app believed the tracker had the keyboard while the browser
+   * went on delivering every keystroke to a text field. `?` vanished into the
+   * console; so did every other key the app reads. Two notions of focus that can
+   * disagree are one notion too many — the same failure as a selection that looks
+   * like focus and is not, from the other side.
+   */
+  blur() { if (document.activeElement === this.input) this.input.blur(); }
+
   recall(d) {
     if (!this.history.length) return;
     this.historyAt = Math.max(0, Math.min(this.history.length - 1,

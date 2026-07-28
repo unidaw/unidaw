@@ -2391,6 +2391,21 @@ function draw() {
     o.meter = songMeter();
     harmonyCard.render(buildHarmonyModel(o, harmonyBuf));
   }
+  /**
+   * DOM focus follows the app's idea of focus.
+   *
+   * The console's input kept BROWSER focus after `state.focus` moved away, so
+   * every key went into a text field while the app believed the tracker had
+   * them: `?` vanished into the console, and so did anything else the app reads.
+   * Two notions of focus that can disagree are one too many — the same failure
+   * as a selection that looks like focus and is not, from the other side.
+   *
+   * OUTSIDE the chain block: focus can leave the dock by Escape, by a click
+   * elsewhere or by a view switch, and none of those has anything to do with
+   * whether the device rack happens to be on screen.
+   */
+  if (state.focus !== 'dock') dock.blur();
+
   if (showChain) {
     /**
      * Ask for the visible devices' parameters — once each, and only once the

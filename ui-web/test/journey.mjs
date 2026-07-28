@@ -534,6 +534,132 @@ step('17. two notes on one row, in two cells');
 }
 
 // ---------------------------------------------------------------------------
+step('18. mix it');
+await page.keyboard.press('F8');
+await settle(600);
+{
+  const strip = await page.evaluate(() => {
+    const f = document.querySelector('.mx-fader, .mx-gain, [class*=fader]');
+    if (!f) return null;
+    const r = f.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, h: r.height, cls: f.className };
+  });
+  if (!strip) {
+    gap('set a level with the mouse', 'no fader element in the mixer');
+  } else {
+    const before = await page.evaluate(() => window.__uni.mixerProbe().detail[0].db);
+    // Drag the fader down a little.
+    await page.mouse.move(strip.x, strip.y);
+    await page.mouse.down();
+    await page.mouse.move(strip.x, strip.y + Math.max(20, strip.h * 0.2), { steps: 8 });
+    await page.mouse.up();
+    await settle(600);
+    const after = await page.evaluate(() => window.__uni.mixerProbe().detail[0].db);
+    if (before === after) gap('set a level by dragging the fader', `still ${after} dB`);
+    else ok(true, 'dragging a fader changes the level', `${before} -> ${after} dB`);
+  }
+  // Mute from the console, which every surface shares.
+  await page.keyboard.press('Slash');
+  await settle(250);
+  await page.keyboard.type('mute 0');
+  await page.keyboard.press('Enter');
+  await settle(700);
+  await page.keyboard.press('Escape');
+  await settle(250);
+  const muted = await page.evaluate(() => window.__uni.mixerProbe().detail[0]);
+  ok(muted && (muted.mute === true || muted.mute === 1 || muted.muted === true),
+     'the console can mute a track', JSON.stringify(muted).slice(0, 90));
+}
+
+// ---------------------------------------------------------------------------
+step('19. set a loop by dragging the ruler');
+await page.keyboard.press('F2');
+await settle(600);
+{
+  const ruler = await page.evaluate(() => {
+    const r = document.querySelector('.ar-ruler');
+    if (!r) return null;
+    const b = r.getBoundingClientRect();
+    return { y: b.y + b.height / 2, x0: b.x + b.width * 0.15, x1: b.x + b.width * 0.45 };
+  });
+  if (!ruler) {
+    gap('set a loop', 'no ruler in the arrangement');
+  } else {
+    const before = await page.evaluate(() => window.__uni.loop && window.__uni.loop());
+    await page.mouse.move(ruler.x0, ruler.y);
+    await page.mouse.down();
+    await page.mouse.move(ruler.x1, ruler.y, { steps: 12 });
+    await page.mouse.up();
+    await settle(800);
+    const after = await page.evaluate(() => window.__uni.loop && window.__uni.loop());
+    if (JSON.stringify(before) === JSON.stringify(after)) {
+      gap('set a loop by dragging the ruler', `loop unchanged: ${JSON.stringify(after)}`);
+    } else {
+      ok(true, 'dragging the ruler sets the loop', JSON.stringify(after));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+step('20. the patcher');
+await page.keyboard.press('F3');
+await settle(700);
+ok((await st()).view === 'patcher', 'F3 reaches the patcher', (await st()).view);
+{
+  const before = await page.evaluate(
+    () => (window.__uni.patcherProbe ? window.__uni.patcherProbe().nodes : -1));
+  await page.keyboard.press('Slash');
+  await settle(250);
+  // A REAL node type. NODE_TYPES is kernel/euclidean/passthru/audio/lfo/random/
+  // out — "gain" is not one, so the command refused correctly and the test read
+  // the refusal as a missing feature.
+  await page.keyboard.type('addnode lfo');
+  await page.keyboard.press('Enter');
+  await settle(900);
+  await page.keyboard.press('Escape');
+  await settle(300);
+  const after = await page.evaluate(
+    () => (window.__uni.patcherProbe ? window.__uni.patcherProbe().nodes : -1));
+  if (after <= before) gap('add a patcher node from the console', `${before} -> ${after} nodes`);
+  else ok(true, 'the console adds a patcher node', `${before} -> ${after} nodes`);
+}
+
+// ---------------------------------------------------------------------------
+step('21. ask for help');
+await page.keyboard.press('F1');
+await settle(400);
+{
+  // Ask the app AND look at the panel: `helpOpen` is the intent, the box on
+  // screen is whether it arrived. Checking only the second made a working help
+  // key read as missing when the measurement was taken a frame too early.
+  const helpState = async () => page.evaluate(() => {
+    const h = document.getElementById('help');
+    return { open: window.__uni.state().helpOpen,
+             shown: !!(h && !h.hidden && h.getBoundingClientRect().height > 40) };
+  });
+  const before = await helpState();
+  // Escape first, unconditionally. `?` is handled well down the key chain, after
+  // the token buffer — so a half-typed cell entry left over from an earlier step
+  // eats it, and help "does not open" for a reason that has nothing to do with
+  // help. Clearing the buffer is what a person does without thinking about it.
+  await page.keyboard.press('Escape');
+  await settle(300);
+  await page.keyboard.press('?');
+  await settle(600);
+  const after = await helpState();
+  const ctx = await page.evaluate(() => {
+    const s = window.__uni.state();
+    return { view: s.view, focus: s.focus, active: document.activeElement
+             && document.activeElement.className, dockOpen: s.dockOpen,
+             browserOpen: s.browserOpen };
+  });
+  ok(after.open && after.shown, 'help opens on ?',
+     `${JSON.stringify(after)} ctx=${JSON.stringify(ctx)}`);
+  await page.keyboard.press('Escape');
+  await settle(300);
+}
+
+// ---------------------------------------------------------------------------
 step('page errors');
 ok(errors.length === 0, 'nothing threw during the whole journey',
    errors.slice(0, 3).join(' | '));
