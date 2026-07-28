@@ -107,11 +107,22 @@ projection is correct.** Measured across the table:
 | 2 | 2/beat | **0/37** | **0/37** | **0/37** |
 | 3 | 1/beat | **0/37** | **0/37** | **0/37** |
 
-Zoom 0 is right: a lane occupies every (axis / itsLpb)-th row. At every other zoom
-nothing is marked off-grid at all, so the tracker offers a writable cell on every
+Zoom 0 was right: a lane occupies every (axis / itsLpb)-th row. At every other zoom
+nothing was marked off-grid at all, so the tracker offered a writable cell on every
 row of a triplet lane whose rows sit at 1/3-beat positions a 4/beat axis cannot
-express. The cause is one rounding — `Math.round(4 / 3)` is `1`, and `r % 1` is
-always `0`, so "incommensurable" becomes "every row is fine".
+express. The cause was one rounding — `Math.round(4 / 3)` is `1`, and `r % 1` is
+always `0`, so "incommensurable" became "every row is fine".
+
+FIXED, and the table is kept as the evidence rather than deleted. The test is in
+ticks now, and multiplied through by lines-per-beat instead of dividing by it:
+
+    ((tick - clipStart) * lpb) % 960000 === 0
+
+960000/lpb is not an integer for every lpb the engine can publish — 7 gives
+137142.857 — so multiplying is what makes it exact for all of them. Integers divide
+or they do not; nothing rounds. A unit test sweeps all four non-aggregate zooms with
+expectations derived from the meter rather than transcribed from a run, so they
+cannot inherit a bug from the implementation they check.
 
 The lesson is not about grids. It is 2.1 applied to the TEST: **the fixture's
 coverage was itself a key that stood still while the thing it tested varied.** A
