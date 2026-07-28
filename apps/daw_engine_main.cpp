@@ -402,6 +402,11 @@ public:
         m_startTime(std::chrono::steady_clock::now()),
         m_lastPlayedBlockId(0) {
     m_audioScratch.assign(blockSize, 0.0f);
+    // Preallocate the PDC delay rings once, here off the audio thread. Zero-filled so
+    // a slot whose compensation engages before it has pushed a full ring reads silence,
+    // not garbage. Sized [slots][channels][capacity].
+    m_pdcRing.assign(static_cast<size_t>(daw::kUiMaxTracks) * kPdcChannels * kPdcCapacity,
+                     0.0f);
   }
 
   void process(float* const* outputChannelData,
@@ -463,6 +468,7 @@ public:
     // track thus reads silence rather than a stale level.
     for (uint32_t s = 0; s < daw::kUiMaxTracks; ++s) {
       m_trackPeak[s].store(0.0f, std::memory_order_relaxed);
+      m_pdcAdvanced[s] = false;  // PDC: which slots fed their delay line this block
     }
 
     bool hasActiveTrack = false;
@@ -526,6 +532,18 @@ public:
       // Mix this track's audio into output, measuring its post-fader peak for
       // the meter as we go (max abs of what we actually add to the bus).
       float trackPeak = 0.0f;
+      // Movement 4 PDC: this track's compensation delay, in samples. Gated on the
+      // global max latency so a session with no reported plugin latency skips the ring
+      // entirely (comp stays 0 -> the fast path below). startW is the delay ring's
+      // write cursor, snapshotted so every channel advances from the same position.
+      const uint32_t pdcSlot = track.uiSlot;
+      const uint32_t comp =
+          (m_pdcMaxLatency.load(std::memory_order_acquire) > 0 &&
+           pdcSlot < daw::kUiMaxTracks)
+              ? m_pdcComp[pdcSlot].load(std::memory_order_relaxed)
+              : 0;
+      const uint32_t pdcStartW =
+          (comp > 0 && pdcSlot < daw::kUiMaxTracks) ? m_pdcWrite[pdcSlot] : 0;
       for (int ch = 0; ch < std::min(numOutputChannels, (int)track.header->numChannelsOut); ++ch) {
         // Extra safety checks
         if (!track.shmView || !track.shmBase || !track.header) {
@@ -572,17 +590,76 @@ public:
         // track by a fixed 0.5 to hide clipping, which made the summing bus a
         // lie: levels were neither unity nor measurable. Tracks now sum at
         // their own gain, so clipping is visible rather than pre-attenuated.
-        for (int i = 0; i < std::min(numSamples, (int)m_blockSize); ++i) {
-          const float sample = trackChannel[i] * channelGain;
-          output[i] += sample;
-          const float mag = sample < 0.0f ? -sample : sample;
-          if (mag > trackPeak) {
-            trackPeak = mag;
+        const int n = std::min(numSamples, (int)m_blockSize);
+        if (comp == 0 || ch >= (int)kPdcChannels) {
+          // PDC fast path (no compensation for this slot, or a channel beyond the
+          // delay's width): mix the track's output straight in.
+          for (int i = 0; i < n; ++i) {
+            const float sample = trackChannel[i] * channelGain;
+            output[i] += sample;
+            const float mag = sample < 0.0f ? -sample : sample;
+            if (mag > trackPeak) {
+              trackPeak = mag;
+            }
+          }
+        } else {
+          // PDC delay: push the raw sample into this (slot,channel) ring and read the
+          // one `comp` samples behind it, so this track lands aligned with the highest-
+          // latency track instead of ahead of it. Gain/pan apply after the delay.
+          float* ring = m_pdcRing.data() +
+                        (static_cast<size_t>(pdcSlot) * kPdcChannels + ch) * kPdcCapacity;
+          uint32_t w = pdcStartW;
+          for (int i = 0; i < n; ++i) {
+            ring[w] = trackChannel[i];
+            const uint32_t r = (w + kPdcCapacity - comp) % kPdcCapacity;
+            const float delayed = ring[r];
+            w = (w + 1 == kPdcCapacity) ? 0 : w + 1;
+            const float sample = delayed * channelGain;
+            output[i] += sample;
+            const float mag = sample < 0.0f ? -sample : sample;
+            if (mag > trackPeak) {
+              trackPeak = mag;
+            }
           }
         }
       }
+      // PDC: commit this slot's shared write cursor once, after all channels advanced
+      // it identically, and mark it fed so the silence pass below skips it.
+      if (comp > 0 && pdcSlot < daw::kUiMaxTracks) {
+        m_pdcWrite[pdcSlot] =
+            (pdcStartW + std::min(numSamples, (int)m_blockSize)) % kPdcCapacity;
+        m_pdcAdvanced[pdcSlot] = true;
+      }
       if (track.uiSlot < daw::kUiMaxTracks) {
         m_trackPeak[track.uiSlot].store(trackPeak, std::memory_order_relaxed);
+      }
+    }
+
+    // PDC: keep every compensated slot's delay line time-aligned even when its track
+    // did not mix this block (muted, soloed out, still buffering, or absent). Feeding
+    // silence is the faithful history of a track that emitted nothing — without it, a
+    // returning track would replay the stale samples sitting in the ring as a burst.
+    // Skipped entirely when no plugin reports latency (the gate is false).
+    if (m_pdcMaxLatency.load(std::memory_order_relaxed) > 0) {
+      for (uint32_t s = 0; s < daw::kUiMaxTracks; ++s) {
+        if (m_pdcAdvanced[s]) {
+          continue;
+        }
+        const uint32_t comp = m_pdcComp[s].load(std::memory_order_relaxed);
+        if (comp == 0) {
+          continue;
+        }
+        const uint32_t startW = m_pdcWrite[s];
+        for (uint32_t ch = 0; ch < kPdcChannels; ++ch) {
+          float* ring = m_pdcRing.data() +
+                        (static_cast<size_t>(s) * kPdcChannels + ch) * kPdcCapacity;
+          uint32_t w = startW;
+          for (int i = 0; i < numSamples; ++i) {
+            ring[w] = 0.0f;
+            w = (w + 1 == kPdcCapacity) ? 0 : w + 1;
+          }
+        }
+        m_pdcWrite[s] = (startW + numSamples) % kPdcCapacity;
       }
     }
 
@@ -773,6 +850,31 @@ private:
   std::vector<std::shared_ptr<std::vector<TrackInfo>>> m_tracksRetired;
   std::atomic<float> m_trackPeak[daw::kUiMaxTracks]{};
 
+  // --- Movement 4 PDC (plugin delay compensation) ---------------------------------
+  // A hosted plugin with processing latency returns its output that many samples late,
+  // so a track with a look-ahead limiter or linear-phase EQ drifts behind a dry track.
+  // Compensation delays every lower-latency track by (maxLatency - trackLatency) so all
+  // land together, aligned to the worst offender. The delay is a per-slot ring the
+  // audio thread pushes the track's raw output through before gain/pan; the control
+  // side sets the per-slot amount and the global max via the atomics below.
+  //
+  // The rings are preallocated once (RT-safe: never resized on the audio thread) and
+  // sized to a generous cap — far beyond any real plugin's latency (32768 @48k =
+  // 0.68s). The whole stage is gated on m_pdcMaxLatency > 0, so a session with no
+  // reported latency (the common case) pays nothing: the gate is false and no ring is
+  // ever touched. kPdcChannels is the master width the delay must carry; stereo today,
+  // widened when the master goes surround (Phase 6).
+  static constexpr uint32_t kPdcCapacity = 32768;
+  static constexpr uint32_t kPdcChannels = 2;
+  std::atomic<uint32_t> m_pdcMaxLatency{0};
+  std::atomic<uint32_t> m_pdcComp[daw::kUiMaxTracks]{};
+  // Ring storage: [slot][channel][sample], flat. writePos is the per-slot cursor,
+  // owned by the audio thread; a chain edit that changes the compensation reuses the
+  // same ring (a brief discontinuity on an edit is expected, as in any DAW).
+  std::vector<float> m_pdcRing;
+  uint32_t m_pdcWrite[daw::kUiMaxTracks]{};
+  bool m_pdcAdvanced[daw::kUiMaxTracks]{};
+
   // Audio-clip playback: a device-locked transport sample position (advances by a
   // block per callback while playing, reset to 0 on start) and a preallocated
   // mono scratch buffer for rendering one region before it is panned into the mix.
@@ -782,6 +884,21 @@ private:
 
  public:
   void setPlaying(const std::atomic<bool>* playing) { m_playing = playing; }
+
+  // Movement 4 PDC: set one slot's compensation delay in samples (clamped to the ring
+  // capacity) and the global max latency that gates the whole stage. Called from the
+  // consumer thread whenever a chain edit changes any track's latency; the audio thread
+  // reads these atomics each block. Setting max last means the gate opens only after
+  // every slot's amount is in place.
+  void setPdcCompensation(uint32_t slot, uint32_t samples) {
+    if (slot < daw::kUiMaxTracks) {
+      m_pdcComp[slot].store(std::min(samples, kPdcCapacity - 1),
+                            std::memory_order_relaxed);
+    }
+  }
+  void setPdcMaxLatency(uint32_t samples) {
+    m_pdcMaxLatency.store(samples, std::memory_order_release);
+  }
 };
 
 struct ClipSnapshot {
@@ -869,6 +986,14 @@ int main(int argc, char** argv) {
   if (const char* env = std::getenv("DAW_PATCHER_PARALLEL")) {
     patcherParallel = std::string(env) == "1";
   }
+  // Movement 4 PDC kill-switch. Off = compensation active (the default). Set to "1"
+  // to force zero compensation across all tracks — an A/B escape hatch (some engineers
+  // want plugin latency left uncompensated for tracking) and the lever the PDC audio
+  // test toggles to show alignment appears only when compensation runs.
+  const bool pdcDisabled = [] {
+    const char* env = std::getenv("DAW_DISABLE_PDC");
+    return env != nullptr && std::string(env) == "1";
+  }();
   // Trace every scheduled note-on (tick + pitch) to the event log. Off by
   // default; a verification aid — counts and times the notes the scheduler
   // actually emits, independent of any synth's audio. Runs on the producer
@@ -1215,6 +1340,12 @@ struct TrackRuntime {
     // does not act on them yet (children are created in the multi-out phase).
     std::atomic<uint32_t> parentId{0};
     std::atomic<bool> collapsed{false};
+    // Movement 4 PDC: the chain's total reported processing latency (sum of every
+    // plugin's getLatencySamples), cached here by emitChainSnapshot's control-thread
+    // round-trip. The consumer loop reads it (plus every other track's) to find the
+    // max-latency track and delay-compensate the rest against it. 0 = no latency /
+    // not yet queried, which means no compensation — the safe default.
+    std::atomic<uint32_t> pluginLatencySamples{0};
     std::mutex trackMutex;
     // M3.4: this track's placed clips, for publishing rails. Guarded by
     // trackMutex; set on load.
@@ -2466,6 +2597,10 @@ struct TrackRuntime {
       std::lock_guard<std::mutex> lock(runtime.trackMutex);
       devices = runtime.track.chain.devices;
     }
+    // Movement 4 PDC: an empty chain has no processing latency. A non-empty chain's
+    // total is queried from the host after the device loop below; storing 0 up front
+    // keeps the empty-chain early return honest.
+    runtime.pluginLatencySamples.store(0, std::memory_order_relaxed);
     const uint32_t version =
         chainVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
     if (devices.empty()) {
@@ -2551,6 +2686,29 @@ struct TrackRuntime {
 
       if (resolves) {
         ++hostIndex;
+      }
+    }
+
+    // Movement 4 PDC: query the chain's total processing latency (sum of every hosted
+    // plugin's getLatencySamples) so the consumer loop can delay-compensate this track
+    // against the highest-latency one. One control round-trip per chain edit, off the
+    // RT path; a host that isn't up yet leaves the cached 0 (no compensation) until the
+    // next emit. hostIndex > 0 means at least one device resolved to a live host.
+    if (hostIndex > 0) {
+      uint32_t totalLatency = 0;
+      std::vector<int32_t> perPlugin;
+      bool ok = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime.controllerMutex);
+        ok = runtime.controller.requestChainLatency(totalLatency, perPlugin);
+      }
+      if (ok) {
+        runtime.pluginLatencySamples.store(totalLatency, std::memory_order_relaxed);
+        if (totalLatency > 0) {
+          DAW_EVENT("pdc.chain_latency")
+              .field("track", runtime.trackId)
+              .field("samples", totalLatency);
+        }
       }
     }
   };
@@ -9016,6 +9174,37 @@ struct TrackRuntime {
           }
         }
         audioCallback->updateTracks(trackInfos);
+
+        // Movement 4 PDC: recompute delay compensation from every track's cached chain
+        // latency (set by emitChainSnapshot's control round-trip — read here, no IPC).
+        // Align all tracks to the highest-latency one: comp = maxLatency - trackLatency.
+        // Slots with no track fall to 0. Pushed every rebuild so a fresh callback and a
+        // chain edit both converge; setPdcMaxLatency last so the gate opens only once
+        // every slot's amount is in place, and the whole thing is a no-op (gate false)
+        // whenever no plugin reports latency.
+        uint32_t maxLatency = 0;
+        if (!pdcDisabled) {
+          for (auto* runtime : trackSnapshot) {
+            maxLatency = std::max(
+                maxLatency,
+                runtime->pluginLatencySamples.load(std::memory_order_relaxed));
+          }
+        }
+        uint32_t compForSlot[daw::kUiMaxTracks] = {0};
+        if (!pdcDisabled) {
+          for (auto* runtime : trackSnapshot) {
+            const uint32_t slot = runtime->trackId;
+            if (slot < daw::kUiMaxTracks) {
+              compForSlot[slot] =
+                  maxLatency -
+                  runtime->pluginLatencySamples.load(std::memory_order_relaxed);
+            }
+          }
+        }
+        for (uint32_t s = 0; s < daw::kUiMaxTracks; ++s) {
+          audioCallback->setPdcCompensation(s, compForSlot[s]);
+        }
+        audioCallback->setPdcMaxLatency(maxLatency);
       }
       for (auto* runtime : trackSnapshot) {
         if (runtime->needsRestart.load(std::memory_order_acquire)) {

@@ -123,6 +123,9 @@ class IPluginInstance {
   virtual int numParameters() const = 0;
   virtual int inputChannels() const = 0;
   virtual int outputChannels() const = 0;
+  // Samples of processing latency the plugin reports (getLatencySamples), for delay
+  // compensation. Valid after prepare().
+  virtual int latencySamples() const = 0;
   // The plugin's negotiated bus topology, valid after prepare() (empty before). The
   // engine + UI read this to see and address stems, aux, and sidechain buses.
   virtual std::vector<BusInfo> busLayout() const = 0;

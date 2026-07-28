@@ -1087,6 +1087,44 @@ void runControlLoop(HostState& state) {
             break;
           }
         }
+      } else if (type == daw::ControlMessageType::GetLatency) {
+        // Movement 4 PDC: report each plugin's processing latency and the chain total.
+        // The engine delay-compensates lower-latency tracks against the highest, so it
+        // needs the sum a track's output is delayed by. Request is the bare header
+        // (no body); we always answer so a chain with no reported latency reads 0, not
+        // "unknown". Off the RT path, under the plugins lock.
+        std::vector<int32_t> perPlugin;
+        uint64_t total = 0;
+        {
+          std::lock_guard<std::mutex> lock(state.pluginsMutex);
+          const uint32_t n = std::min<uint32_t>(
+              static_cast<uint32_t>(state.plugins.size()), daw::kMaxParamsPerQuery);
+          perPlugin.reserve(n);
+          for (uint32_t i = 0; i < n; ++i) {
+            const int32_t l = (state.plugins[i].instance &&
+                               !state.plugins[i].bypass)
+                                  ? std::max(0, state.plugins[i].instance->latencySamples())
+                                  : 0;
+            perPlugin.push_back(l);
+            total += static_cast<uint64_t>(l);
+          }
+        }
+        daw::LatencyHeader responseHeader{};
+        responseHeader.pluginCount = static_cast<uint32_t>(perPlugin.size());
+        responseHeader.totalSamples =
+            static_cast<uint32_t>(std::min<uint64_t>(total, 0xFFFFFFFFull));
+        responseHeader.byteCount =
+            static_cast<uint32_t>(perPlugin.size() * sizeof(int32_t));
+        std::vector<uint8_t> reply(sizeof(responseHeader) + responseHeader.byteCount);
+        std::memcpy(reply.data(), &responseHeader, sizeof(responseHeader));
+        if (!perPlugin.empty()) {
+          std::memcpy(reply.data() + sizeof(responseHeader), perPlugin.data(),
+                      responseHeader.byteCount);
+        }
+        if (!daw::sendMessage(state.clientFd, daw::ControlMessageType::GetLatency,
+                              reply.data(), reply.size())) {
+          break;
+        }
       } else if (type == daw::ControlMessageType::SetState) {
         if (payload.size() >= sizeof(daw::StateHeader)) {
           daw::StateHeader request{};

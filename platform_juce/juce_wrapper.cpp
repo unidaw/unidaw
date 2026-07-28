@@ -573,6 +573,10 @@ class JucePluginInstance final : public IPluginInstance {
 
   std::vector<BusInfo> busLayout() const override { return busLayout_; }
 
+  int latencySamples() const override {
+    return instance_ ? instance_->getLatencySamples() : 0;
+  }
+
   bool loadVst3PresetFile(const std::string& path) override {
     if (!instance_) {
       return false;
@@ -921,7 +925,13 @@ class JucePluginInstance final : public IPluginInstance {
 
 class FakeIdentityPluginInstance final : public IPluginInstance {
  public:
-  FakeIdentityPluginInstance() {
+  // latencySamples models a real plugin's reported processing latency: the instance
+  // both REPORTS it (getLatencySamples -> the GetLatency wire) and APPLIES it (delays
+  // its output by that many samples, as an internal look-ahead/oversampling plugin
+  // would). That makes it the fixture for an end-to-end PDC null test — a latent track
+  // and a dry one land aligned only if compensation actually delayed the dry one.
+  explicit FakeIdentityPluginInstance(int latencySamples = 0)
+      : latencySamples_(std::max(0, latencySamples)) {
     ParamInfo gainInfo;
     gainInfo.stableId = "index:0";
     gainInfo.index = 0;
@@ -933,8 +943,17 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
     params_.push_back(std::move(gainInfo));
   }
 
-  void prepare(double, int, int numOutputs) override {
+  void prepare(double, int blockSize, int numOutputs) override {
     outputChannels_ = numOutputs;
+    // Size the latency delay ring to hold one full latency window plus a block, so a
+    // pulse generated this block reads out latencySamples_ later without wrapping into
+    // itself. Zero-filled: the first latencySamples_ of output are silence, exactly as
+    // a real latent plugin ramps up.
+    if (latencySamples_ > 0) {
+      delayLen_ = static_cast<uint32_t>(latencySamples_ + std::max(1, blockSize) + 1);
+      delayRing_.assign(delayLen_, 0.0f);
+      delayWrite_ = 0;
+    }
   }
 
   // The identity plugin has no time-dependent behaviour.
@@ -951,7 +970,10 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
       std::fill(outputs[ch], outputs[ch] + numFrames, 0.0f);
     }
 
+    // Build this block's dry mono output from note-ons (a 10-sample pulse each), then
+    // either write it straight to every channel or push it through the latency ring.
     const float gain = gain_;
+    dryScratch_.assign(numFrames, 0.0f);
     for (const auto& event : events) {
       const uint8_t status = event.status & 0xF0u;
       if (status != 0x90u || event.data2 == 0) {
@@ -959,12 +981,35 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
       }
       const int start = std::max(0, event.sampleOffset);
       const int end = std::min(numFrames, start + 10);
-      for (int ch = 0; ch < numOutputs; ++ch) {
-        for (int i = start; i < end; ++i) {
-          outputs[ch][i] += gain;
-        }
+      for (int i = start; i < end; ++i) {
+        dryScratch_[i] += gain;
       }
     }
+
+    if (latencySamples_ <= 0 || delayLen_ == 0) {
+      for (int ch = 0; ch < numOutputs; ++ch) {
+        for (int i = 0; i < numFrames; ++i) {
+          outputs[ch][i] += dryScratch_[i];
+        }
+      }
+      return;
+    }
+
+    // Latent path: delay the dry signal by latencySamples_ through the ring, then fan
+    // the delayed sample out to every channel. Models a plugin whose output trails its
+    // input — the offset PDC exists to remove.
+    uint32_t w = delayWrite_;
+    const uint32_t lat = static_cast<uint32_t>(latencySamples_);
+    for (int i = 0; i < numFrames; ++i) {
+      delayRing_[w] = dryScratch_[i];
+      const uint32_t r = (w + delayLen_ - lat) % delayLen_;
+      const float delayed = delayRing_[r];
+      w = (w + 1 == delayLen_) ? 0 : w + 1;
+      for (int ch = 0; ch < numOutputs; ++ch) {
+        outputs[ch][i] += delayed;
+      }
+    }
+    delayWrite_ = w;
   }
 
   std::string name() const override { return "Identity"; }
@@ -975,6 +1020,7 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   int numParameters() const override { return static_cast<int>(params_.size()); }
   int inputChannels() const override { return 0; }
   int outputChannels() const override { return outputChannels_; }
+  int latencySamples() const override { return latencySamples_; }
   std::vector<BusInfo> busLayout() const override {
     BusInfo out;
     out.isInput = false;
@@ -1037,6 +1083,12 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   std::vector<ParamInfo> params_;
   float gain_ = 1.0f;
   int outputChannels_ = 2;
+  // Test-latency simulation (see the constructor comment). 0 = a plain identity plugin.
+  int latencySamples_ = 0;
+  std::vector<float> delayRing_;
+  std::vector<float> dryScratch_;
+  uint32_t delayLen_ = 0;
+  uint32_t delayWrite_ = 0;
 };
 
 class JucePluginHost final : public IPluginHost {
@@ -1054,7 +1106,14 @@ class JucePluginHost final : public IPluginHost {
       if (std::string(env) == "1") {
         const auto filename = juce::File(path).getFileName();
         if (filename == "Identity.vst3") {
-          return std::make_unique<FakeIdentityPluginInstance>();
+          // A "latency:N" desiredName gives the fake N samples of reported+applied
+          // processing latency, for the PDC null test. Any other name = plain identity.
+          int fakeLatency = 0;
+          const std::string prefix = "latency:";
+          if (desiredName.rfind(prefix, 0) == 0) {
+            fakeLatency = std::atoi(desiredName.c_str() + prefix.size());
+          }
+          return std::make_unique<FakeIdentityPluginInstance>(fakeLatency);
         }
       }
     }

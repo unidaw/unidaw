@@ -84,6 +84,13 @@ class HostController {
   bool requestBusLayout(uint32_t pluginIndex, std::vector<HostBusWire>& out,
                         bool& outTruncated);
 
+  // Report the chain's processing latency (Movement 4 PDC): outTotalSamples is the
+  // sum every plugin's output is delayed by (what the engine aligns tracks on);
+  // outPerPlugin holds the individual values for display. Blocking request/response,
+  // same socket discipline; false on any socket/parse error.
+  bool requestChainLatency(uint32_t& outTotalSamples,
+                           std::vector<int32_t>& outPerPlugin);
+
   // Reconciles the host's plugin chain to `pluginPaths` in place, so a chain
   // edit reuses unchanged plugins instead of restarting the whole host.
   bool sendSetChain(const std::vector<PluginRef>& refs);

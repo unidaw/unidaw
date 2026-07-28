@@ -28,7 +28,12 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 //    A host without the handler would silently drop it, so gate it at the handshake.
 // 6: GetBusLayout — the engine asks the host for a plugin's negotiated bus topology
 //    (Movement 4). An old host would drop it, so it is handshake-gated like the rest.
-constexpr uint16_t kControlVersion = 6;
+// 7: GetLatency — the engine asks the host for the chain's processing latency (sum of
+//    every plugin's getLatencySamples) so it can delay-compensate lower-latency tracks
+//    against the highest-latency one (Movement 4 PDC). Host↔engine only; the frontend
+//    contract (kShmVersion) is untouched. Handshake-gated so an old host can't answer
+//    a query it doesn't implement with a misparsed reply.
+constexpr uint16_t kControlVersion = 7;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,
@@ -58,6 +63,13 @@ enum class ControlMessageType : uint16_t {
   // the reply is BusLayoutHeader{pluginIndex,busCount,byteCount} + busCount
   // HostBusWire. Off the RT path, same shape as GetParams.
   GetBusLayout = 11,
+  // Report the chain's processing latency (Movement 4 PDC). Request carries a
+  // LatencyHeader whose contents the host ignores (the body must be non-empty — the
+  // control loop only dispatches when header.size > 0). The reply is
+  // LatencyHeader{pluginCount,totalSamples,byteCount} followed by pluginCount int32
+  // per-plugin latencies. The engine aligns on totalSamples; per-plugin values are for
+  // display. Off the RT path.
+  GetLatency = 12,
 };
 
 // Cap on parameters returned per query — a scrollable rack shows plenty within
@@ -104,6 +116,18 @@ struct HostBusWire {
   uint16_t layoutId = 0;
   uint16_t channelOffset = 0;
   char name[24]{};
+};
+
+// GetLatency reply header (Movement 4 PDC). The host sums every plugin's reported
+// processing latency into totalSamples — the value the engine delay-compensates on —
+// and follows this header with `pluginCount` int32 per-plugin latencies for display.
+// A plugin that reports no latency contributes 0; the sum is what a track's output is
+// delayed by, so a lower-latency track is padded to match the chain's worst offender.
+struct LatencyHeader {
+  uint32_t pluginCount = 0;    // per-plugin values that follow (<= kMaxParamsPerQuery)
+  uint32_t totalSamples = 0;   // sum of all plugins' latency = the track's chain latency
+  uint32_t byteCount = 0;      // pluginCount * sizeof(int32_t)
+  uint32_t reserved = 0;
 };
 
 // SetParam payload: set plugin[pluginIndex]'s parameter identified by uid16 to
