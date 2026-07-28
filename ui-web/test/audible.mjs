@@ -86,10 +86,63 @@ await page.waitForTimeout(2500);
 console.log(`\nlistening to ${stack.url}\n${'='.repeat(60)}`);
 
 // ---------------------------------------------------------------------------
-step('load a song that has an instrument in it');
-// `maximal` names Zebra2, which is in the plugin cache — `rack` names Identity,
-// which is built and never scanned, so it resolves to whatever sits at slot 0.
-await page.evaluate(() => window.__uni.loadProject('maximal'));
+step('write a one-note song, so the question is exact');
+/**
+ * ONE track, ONE instrument, ONE short note.
+ *
+ * `maximal` was the wrong instrument for this: six tracks whose plugin hosts
+ * finish loading at different moments, so how much of the song actually played
+ * varied by a factor of three between runs, and with it whether a ringing tail
+ * was even detectable. The note-off question — does a 0.125-second note stop
+ * after 0.125 seconds — needs a song where nothing else is making noise.
+ *
+ * Written into the stack's own project directory, which is a disposable copy.
+ */
+{
+  const { writeFileSync } = await import('node:fs');
+  const Q = 960000;                                    // nanoticks per quarter
+  const doc = {
+    schema_version: 4,
+    meta: { name: 'onenote', created_utc: 0, modified_utc: 0 },
+    timebase: { nanoticks_per_quarter: Q, time_sig_numerator: 4, time_sig_denominator: 4 },
+    nanoticks_per_quarter: Q,
+    tempo_map: [{ nanotick: 0, bpm: 120.0 }],
+    harmony_timeline: [],
+    clips: [{
+      // LONG. At 120bpm a 16-quarter clip loops every eight seconds, and the
+      // repeat landed inside the window this test calls a gap — so the loop
+      // read as a stuck note. 240 quarters is two minutes: nothing repeats
+      // inside the ten seconds of playback below.
+      id: 1, name: 'one', length: Q * 240, lines_per_beat: 4, kind: 'symbolic',
+      time_sig_numerator: 4, time_sig_denominator: 4,
+      // 240000 ticks = an eighth of a second at 120bpm.
+      // Four short notes over two seconds, then nothing. Enough sound to be a
+      // stretch rather than a click, and a definite end to listen for: the last
+      // note stops at 1.625s and everything after that must be silence.
+      notes: [0, 480000, 960000, 1440000].map((t, i) => ({
+        nanotick: t, duration: 240000, pitch: 60 + i * 4, velocity: 110,
+        column: 0, note_id: i + 1,
+      })),
+      chords: [],
+    }],
+    tracks: [{
+      track_id: 0, name: 'One', harmony_quantize: false, lines_per_beat: 4,
+      mixer: { gain_db: 0.0, pan: 0.0, mute: false, solo: false },
+      device_chain: [{
+        device_id: 0, kind: 'vst_instrument', capability_mask: 5, patcher_node_id: 0,
+        host_slot_index: 4294967294, bypass: false,
+        vst_ref: { vendor: '', name: 'Zebralette',
+                   path: '/Library/Audio/Plug-Ins/VST3/Zebra2.vst3', uid16: '' },
+      }],
+      mod_links: [],
+      placements: [{ clip_id: 1, at: 0, length: Q * 240, notes: [], chords: [], mutes: [] }],
+    }],
+  };
+  writeFileSync(join(stack.dir, 'onenote.uniproj.json'), JSON.stringify(doc));
+}
+
+step('load it');
+await page.evaluate(() => window.__uni.loadProject('onenote'));
 // Wait for the chain to report a real device rather than for a guessed delay:
 // six plugin hosts have to launch, and how long that takes is not this test's
 // business to predict.
@@ -103,11 +156,22 @@ await page.waitForFunction(
 // it resolves the real plugin, and playing against the stand-in produces a
 // capture of perfect silence — which reads as "the song makes no sound" when
 // what happened is that the test did not wait for the instrument.
+/**
+ * The REAL instrument, not the stand-in.
+ *
+ * The engine loads an Identity plug-in on a track while it resolves what the
+ * project actually asked for, and Identity makes no sound. Waiting for "a named
+ * device with at least one parameter" was satisfied by the stand-in immediately,
+ * so the test played a silent track and reported that the app makes no sound.
+ * Zebralette publishes 256 parameters; anything past a handful means the plugin
+ * host answered for the thing the project names.
+ */
 await page.waitForFunction(
   () => { const c = window.__uni.chainProbe();
-          return c && c.cards >= 1 && c.named >= 1
-                 && c.params && c.params[0] > 0; },
-  null, { timeout: 40000 }).catch(() => {});
+          return c && c.cards >= 1 && c.titles && c.titles[0]
+                 && !/^Identity/.test(c.titles[0])
+                 && c.params && c.params[0] > 8; },
+  null, { timeout: 45000 }).catch(() => {});
 const chain = await page.evaluate(() => window.__uni.chainProbe());
 ok(chain && chain.cards >= 1 && chain.named >= 1,
    'the project has a loaded instrument on the cursor track',
@@ -127,15 +191,29 @@ ok(notes > 0, 'and notes to play', `${notes} notes`);
  * Reporting a machine that was busy as "the song makes no sound" is the kind of
  * flake that teaches people to ignore a suite.
  */
-const armed = !!(chain && chain.named >= 1 && notes > 0);
+const armed = !!(chain && chain.titles && chain.titles[0]
+                 && !/^Identity/.test(chain.titles[0]) && notes > 0);
 
 // ---------------------------------------------------------------------------
 step('press play, wait, press stop — with the keyboard');
 // Silence first, so the capture has a quiet head to compare against.
 await page.waitForTimeout(1500);
 const quietUntil = Date.now();
+// REWIND FIRST. Play starts from wherever the playhead was left, and earlier
+// steps move it — so the four notes at the top of the song were simply never
+// reached, and the capture was a silence that looked like a broken instrument.
+// Stop halts AND rewinds, which is exactly what is wanted here.
+await page.evaluate(() => {
+  const b = [...document.querySelectorAll('.ch-btn')]
+    .find((e) => /stop/i.test(e.title || ''));
+  if (b) b.click();
+});
+await page.waitForTimeout(700);
 await page.keyboard.press('Space');
-await page.waitForTimeout(6000);
+const playedAtMs = Date.now() - captureT0;
+// The notes run for under two seconds; play well past them so the silence AFTER
+// them happens while the transport is still going.
+await page.waitForTimeout(9000);
 await page.keyboard.press('Space');
 const stoppedAtMs = Date.now() - captureT0;
 // ...and a quiet tail. Long enough that a release tail is over and anything
@@ -213,6 +291,36 @@ if (!existsSync(WAV)) {
    * "does the sound END" check.
    */
   /**
+   * THE GAP BETWEEN THE NOTES, WHILE THE TRANSPORT IS STILL RUNNING.
+   *
+   * This is the assertion that catches the real defect, and getting here took a
+   * wrong turn worth recording: the first version listened AFTER pressing Stop,
+   * and Stop flushes every held voice. So a song that rang continuously went
+   * quiet the moment the test asked, and the bug hid behind the very gesture
+   * used to look for it.
+   *
+   * The four notes end 1.6 seconds in. From three seconds after play until just
+   * before stop, nothing is scheduled, so the master output must be silent while
+   * the transport is still running. One 0.125-second note that goes on sounding
+   * is exactly what fails here.
+   */
+  const perSlice0 = sum.seconds / envelope(mono, rate).length;
+  const envAll = envelope(mono, rate);
+  const gapFrom = Math.floor(((playedAtMs / 1000) + 3) / perSlice0);
+  const gapTo = Math.floor(((stoppedAtMs / 1000) - 0.5) / perSlice0);
+  if (armed && gapTo > gapFrom + 4) {
+    const gap = envAll.slice(gapFrom, gapTo);
+    const gapPeak = gap.reduce((m, v) => Math.max(m, v), 0);
+    blocked(gapPeak < floor,
+            'the song is SILENT between notes while still playing',
+            'sound continues with nothing scheduled — the usual cause is a note '
+            + 'GENERATOR on the track (a euclidean or random_degree node in the '
+            + "device's patcher graph), which is not a defect but is invisible",
+            `gap ${(gapFrom * perSlice0).toFixed(1)}-${(gapTo * perSlice0).toFixed(1)}s `
+            + `peak ${gapPeak.toFixed(4)} vs floor ${floor.toFixed(4)}`);
+  }
+
+  /**
    * Does silence ARRIVE?
    *
    * The transport was stopped six seconds before the capture ends, and a release
@@ -235,8 +343,8 @@ if (!existsSync(WAV)) {
   const tailPeak = tail.reduce((m, v) => Math.max(m, v), 0);
   blocked(tailPeak < floor,
           'and the song goes SILENT after the transport stops',
-          'engine: note-off is not honoured — a 0.125s note sounds for 7s, and '
-          + 'changing its duration changes nothing (reported to backend)',
+          'sound outlives the transport — check for a note generator in the '
+          + "device's patcher graph before suspecting note-off",
           `stopped at ${(stoppedAtMs / 1000).toFixed(1)}s, tail peak `
           + `${tailPeak.toFixed(4)} vs floor ${floor.toFixed(4)} `
           + `(${tail.length} slices from ${(tailFrom * perSlice).toFixed(1)}s)`);
