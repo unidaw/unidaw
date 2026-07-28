@@ -387,6 +387,18 @@ public:
     // audio thread, see the note below); it is kept alive by the hazard-protected
     // track list, and republished by rebuilding the list when audio clips change.
     std::shared_ptr<const AudioRenderList> audioRender;
+    // Movement 4 multi-out: an aux CHILD reads a bus slice of the parent's aux output
+    // plane instead of its own main output. When isAuxChild, shmView/header/
+    // completedBlockId/hostReady/active all point at the PARENT's (aux data is produced
+    // by the parent's host in lockstep with its completedBlockId), while gain/pan/mute/
+    // solo stay the child's own. The mix reads planeByteOffset (= aux plane base + this
+    // bus's channel offset) with planeStrideChannels-wide blocks (the aux plane is
+    // numAuxChannelsOut-wide, NOT numChannelsOut) for mixChannelCount channels. For a
+    // normal track these mirror the main plane, so the mix path is uniform.
+    bool isAuxChild = false;
+    uint64_t planeByteOffset = 0;      // base of this track's audio in the SHM
+    uint32_t planeStrideChannels = 0;  // channels per block in that plane
+    uint32_t mixChannelCount = 0;      // channels this track contributes to the master
   };
 
   // Per-slot output peak, written by the audio thread each block and read by the
@@ -551,19 +563,26 @@ public:
               : 0;
       const uint32_t pdcStartW =
           (comp > 0 && pdcSlot < daw::kUiMaxTracks) ? m_pdcWrite[pdcSlot] : 0;
-      for (int ch = 0; ch < std::min(numOutputChannels, (int)track.header->numChannelsOut); ++ch) {
+      // Movement 4: an aux child reads a bus slice of the parent's aux plane; a normal
+      // track reads its main output plane. planeByteOffset/planeStrideChannels/
+      // mixChannelCount carry the right base + block stride + width for either (the aux
+      // plane is numAuxChannelsOut-wide, not numChannelsOut — using the wrong stride
+      // reads the wrong block for every block past 0).
+      const uint64_t planeBase = track.planeByteOffset;
+      const uint32_t planeStrideCh = track.planeStrideChannels;
+      const int mixChanCount = static_cast<int>(track.mixChannelCount);
+      for (int ch = 0; ch < std::min(numOutputChannels, mixChanCount); ++ch) {
         // Extra safety checks
         if (!track.shmView || !track.shmBase || !track.header) {
           break;
         }
 
         const uint64_t stride = track.header->channelStrideBytes;
-        const uint64_t blockBytes =
-            static_cast<uint64_t>(track.header->numChannelsOut) * stride;
+        const uint64_t blockBytes = static_cast<uint64_t>(planeStrideCh) * stride;
         const uint64_t block = track.header->numBlocks > 0
             ? static_cast<uint64_t>(blockToRead % track.header->numBlocks)
             : 0;
-        const uint64_t offset = track.header->audioOutOffset + block * blockBytes +
+        const uint64_t offset = planeBase + block * blockBytes +
                                 static_cast<uint64_t>(ch) * stride;
         if (offset + stride > track.shmSize) {
           continue;
@@ -1352,10 +1371,23 @@ struct TrackRuntime {
     // LaneGrid per track. The engine doesn't use it — timing is grid-independent.
     std::atomic<uint32_t> linesPerBeat{4};
     // Movement 4 child-track structure: parentId 0 = top-level, else the parent
-    // track_id; collapsed hides children in the UI. Published per track; the engine
-    // does not act on them yet (children are created in the multi-out phase).
+    // track_id; collapsed hides children in the UI. Published per track.
     std::atomic<uint32_t> parentId{0};
     std::atomic<bool> collapsed{false};
+    // Movement 4 multi-out: an aux CHILD track is an ordinary runtime with NO host — its
+    // audio is a view into the parent's aux output plane (bus k's channels). isAuxChild
+    // gates it out of every host/producer/restart loop; auxParentTrackId names the parent
+    // whose SHM + host readiness it borrows; auxBusChannelOffset/Count locate this bus's
+    // slice within the aux plane. Created + torn down by reconcileChildTracks.
+    std::atomic<bool> isAuxChild{false};
+    std::atomic<uint32_t> auxParentTrackId{0};
+    std::atomic<uint32_t> auxBusChannelOffset{0};
+    std::atomic<uint32_t> auxBusChannelCount{0};
+    std::atomic<uint32_t> auxBusIndex{0};  // which output bus (1..) this child mirrors
+    // Set once the consumer has derived this parent's children from its bus layout;
+    // reset whenever the chain is rebuilt so a newly-added multi-out plugin re-derives.
+    // Gates the one-per-chain-build busLayout round-trip.
+    std::atomic<bool> childrenReconciled{false};
     // Movement 4 PDC: the chain's total reported processing latency (sum of every
     // plugin's getLatencySamples), cached here by emitChainSnapshot's control-thread
     // round-trip. The consumer loop reads it (plus every other track's) to find the
@@ -2352,6 +2384,11 @@ struct TrackRuntime {
   };
 
   auto rebuildHostForChain = [&](TrackRuntime& runtime) {
+    // Movement 4: an aux child has no host of its own — its audio is a view into the
+    // parent's aux plane. Never launch/reconcile a host for it.
+    if (runtime.isAuxChild.load(std::memory_order_acquire)) {
+      return;
+    }
     std::vector<std::string> pluginPaths;
     std::vector<std::string> pluginNames;
     bool hasSidechainSource = false;
@@ -2407,6 +2444,9 @@ struct TrackRuntime {
         runtime.lastSidechainMask = sidechainMask;
         runtime.lastAuxOutMask = auxOutMask;
       }
+      // The chain changed: re-derive children from the new bus layout once the host is
+      // ready again (the consumer picks this up).
+      runtime.childrenReconciled.store(false, std::memory_order_release);
       if (hostRunning) {
         // Reconcile the chain in the running host: unchanged plugins are
         // reused, only a genuinely new one is loaded, and audio keeps playing.
@@ -2454,7 +2494,124 @@ struct TrackRuntime {
     applyHostBypassStates(runtime);
   };
 
+  // Movement 4 multi-out: a hostless CHILD track, built as an ordinary runtime (buffers
+  // and all, so every all-tracks loop stays safe) but with an empty chain and no host.
+  // It carries the aux-view fields that point the mixer at bus `busIndex` of the parent's
+  // aux output plane. Appended to `tracks` at a contiguous id by reconcileChildTracks.
+  auto setupAuxChildRuntime = [&](uint32_t childId, uint32_t parentTrackId,
+                                  uint32_t busIndex, uint32_t busChannelOffset,
+                                  uint32_t busChannelCount,
+                                  const std::string& name)
+      -> std::unique_ptr<TrackRuntime> {
+    auto runtime = setupTrackRuntime(childId, "", false, false);
+    if (!runtime) {
+      return nullptr;
+    }
+    runtime->track.chain = daw::TrackChain{};  // no plugins
+    runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
+    runtime->trackName = name;
+    runtime->parentId.store(parentTrackId, std::memory_order_relaxed);
+    runtime->collapsed.store(false, std::memory_order_relaxed);
+    runtime->isAuxChild.store(true, std::memory_order_release);
+    runtime->auxParentTrackId.store(parentTrackId, std::memory_order_relaxed);
+    runtime->auxBusIndex.store(busIndex, std::memory_order_relaxed);
+    runtime->auxBusChannelOffset.store(busChannelOffset, std::memory_order_relaxed);
+    runtime->auxBusChannelCount.store(busChannelCount, std::memory_order_relaxed);
+    return runtime;
+  };
+
+  // Movement 4 multi-out: (re)derive child tracks for a parent whose plugin splits its
+  // outputs. Queries the flagged plugin's negotiated bus layout, then for each enabled
+  // aux OUTPUT bus ensures a child runtime exists (idempotent — never duplicates on a
+  // re-run). Child audio is a view into that bus's slice of the parent's aux plane; the
+  // aux plane offset of bus B is its plugin channelOffset minus the main width. Removal
+  // of children when a plugin is unloaded is a later refinement; today they persist and
+  // read silence once the parent stops writing that bus.
+  auto reconcileChildTracks = [&](TrackRuntime& parent) {
+    if (parent.isAuxChild.load(std::memory_order_acquire)) {
+      return;
+    }
+    if (!parent.hostReady.load(std::memory_order_acquire)) {
+      return;  // host must be up to report its buses
+    }
+    uint32_t mask = 0;
+    {
+      std::lock_guard<std::mutex> lock(parent.controllerMutex);
+      mask = parent.lastAuxOutMask;
+    }
+    if (mask == 0) {
+      return;
+    }
+    uint32_t hostIndex = 0;
+    for (uint32_t m = mask; (m & 1u) == 0u && hostIndex < 32; m >>= 1) {
+      ++hostIndex;
+    }
+    std::vector<daw::HostBusWire> buses;
+    bool truncated = false;
+    {
+      std::lock_guard<std::mutex> lock(parent.controllerMutex);
+      parent.controller.requestBusLayout(hostIndex, buses, truncated);
+    }
+    std::string parentName;
+    {
+      std::lock_guard<std::mutex> lock(parent.trackMutex);
+      parentName = parent.trackName;
+    }
+    std::lock_guard<std::mutex> lock(tracksMutex);
+    for (const auto& b : buses) {
+      const bool isInput = (b.flags & 1u) != 0u;
+      const bool isMain = (b.flags & 2u) != 0u;
+      const bool enabled = (b.flags & 4u) != 0u;
+      if (isInput || isMain || !enabled || b.index == 0 || b.channelCount == 0) {
+        continue;  // only enabled aux OUTPUT buses become children
+      }
+      if (b.channelOffset < baseConfig.numChannelsOut) {
+        continue;  // aux buses sit after the main channels
+      }
+      const uint32_t planeOffset =
+          static_cast<uint32_t>(b.channelOffset) - baseConfig.numChannelsOut;
+      if (planeOffset + b.channelCount > kMaxAuxOutputChannels) {
+        continue;  // beyond the reserved aux plane
+      }
+      bool exists = false;
+      for (auto& rt : tracks) {
+        if (rt && rt->isAuxChild.load(std::memory_order_relaxed) &&
+            rt->auxParentTrackId.load(std::memory_order_relaxed) == parent.trackId &&
+            rt->auxBusIndex.load(std::memory_order_relaxed) == b.index) {
+          exists = true;
+          break;
+        }
+      }
+      if (exists) {
+        continue;
+      }
+      if (tracks.size() >= daw::kUiMaxTracks) {
+        DAW_EVENT("multiout.child_budget_full")
+            .field("parent", parent.trackId)
+            .field("cap", static_cast<uint64_t>(daw::kUiMaxTracks));
+        break;
+      }
+      const uint32_t childId = static_cast<uint32_t>(tracks.size());
+      auto child = setupAuxChildRuntime(
+          childId, parent.trackId, b.index, planeOffset, b.channelCount,
+          parentName + " / Stem " + std::to_string(b.index));
+      if (child) {
+        DAW_EVENT("multiout.child_created")
+            .field("parent", parent.trackId)
+            .field("child", childId)
+            .field("bus", static_cast<uint64_t>(b.index))
+            .field("plane_offset", static_cast<uint64_t>(planeOffset))
+            .field("channels", static_cast<uint64_t>(b.channelCount));
+        tracks.push_back(std::move(child));
+      }
+    }
+  };
+
   auto scheduleHostRestart = [&](TrackRuntime& runtime) {
+    // Movement 4: an aux child has no host to (re)start.
+    if (runtime.isAuxChild.load(std::memory_order_acquire)) {
+      return;
+    }
     // A track we've given up on stays dead until the chain is rebuilt; don't
     // re-arm the restart loop for it.
     if (runtime.hostGaveUp.load(std::memory_order_acquire)) {
@@ -2635,6 +2792,10 @@ struct TrackRuntime {
   };
 
   auto emitChainSnapshot = [&](TrackRuntime& runtime) {
+    // Movement 4: an aux child has no host chain to enumerate.
+    if (runtime.isAuxChild.load(std::memory_order_acquire)) {
+      return;
+    }
     auto ringUiOut = getRingUiOut();
     if (ringUiOut.mask == 0) {
       return;
@@ -9246,6 +9407,23 @@ struct TrackRuntime {
         lastOverflowLogged = overflowTick;
       }
 
+      // Movement 4 multi-out: once a parent's host is ready with aux buses enabled,
+      // derive its child tracks from the negotiated bus layout (one round-trip per chain
+      // build, gated by childrenReconciled). Done before snapshotTracks so freshly
+      // appended children are published this same cycle.
+      {
+        auto parents = snapshotTracks();
+        for (auto* runtime : parents) {
+          if (runtime->isAuxChild.load(std::memory_order_acquire) ||
+              runtime->childrenReconciled.load(std::memory_order_acquire) ||
+              !runtime->hostReady.load(std::memory_order_acquire)) {
+            continue;
+          }
+          reconcileChildTracks(*runtime);
+          runtime->childrenReconciled.store(true, std::memory_order_release);
+        }
+      }
+
       auto trackSnapshot = snapshotTracks();
       for (auto* runtime : trackSnapshot) {
         const uint64_t drops = runtime->ringStdDropCount.load(std::memory_order_relaxed);
@@ -9267,6 +9445,11 @@ struct TrackRuntime {
         std::vector<EngineAudioCallback::TrackInfo> trackInfos;
         for (auto* runtime : trackSnapshot) {
           const uint32_t trackId = runtime->trackId;
+          // Aux children have no host of their own; they are synthesized from their
+          // parent's SHM in the pass right after this loop.
+          if (runtime->isAuxChild.load(std::memory_order_acquire)) {
+            continue;
+          }
           if (!runtime->hostReady.load(std::memory_order_acquire)) {
             trackInfoCache.erase(trackId);
             continue;
@@ -9292,6 +9475,13 @@ struct TrackRuntime {
                 info.shmSize = shmView->size;
                 info.trackId = trackId;
                 info.uiSlot = trackId;  // == this track's published slot
+                // Movement 4: a normal track reads its own main output plane. (An aux
+                // child, handled in the pass below, overrides these to a bus slice of
+                // its parent's aux plane.)
+                info.isAuxChild = false;
+                info.planeByteOffset = shmView->header->audioOutOffset;
+                info.planeStrideChannels = shmView->header->numChannelsOut;
+                info.mixChannelCount = shmView->header->numChannelsOut;
                 trackInfoCache[trackId] = info;
                 updated = true;
               }
@@ -9309,6 +9499,52 @@ struct TrackRuntime {
             // Updated but invalid; ensure cache entry is removed.
             trackInfoCache.erase(trackId);
           }
+        }
+
+        // Movement 4 multi-out: synthesize a TrackInfo for each aux child from its
+        // PARENT's live SHM. A child borrows the parent's shmView/header/completedBlockId
+        // /hostReady/active (the aux data is produced by the parent's host in lockstep
+        // with its completed block) but keeps its OWN gain/pan/mute/solo and uiSlot, and
+        // reads a bus slice of the parent's aux output plane. The parent's shmView is
+        // found among the just-built infos, so a child rides the same hazard-protected
+        // publish and holds a copy of the parent's shmView shared_ptr — the parent's SHM
+        // cannot be unmapped while the child references it.
+        // Snapshot parent infos BY VALUE: pushing children below can reallocate
+        // trackInfos, so a pointer into it would dangle. A TrackInfo copy just bumps the
+        // shmView/audioRender shared_ptr refcounts.
+        std::unordered_map<uint32_t, EngineAudioCallback::TrackInfo> parentInfo;
+        for (const auto& ti : trackInfos) {
+          parentInfo[ti.trackId] = ti;
+        }
+        for (auto* runtime : trackSnapshot) {
+          if (!runtime->isAuxChild.load(std::memory_order_acquire)) {
+            continue;
+          }
+          const uint32_t parentId =
+              runtime->auxParentTrackId.load(std::memory_order_relaxed);
+          auto pit = parentInfo.find(parentId);
+          if (pit == parentInfo.end() || !pit->second.header) {
+            continue;  // parent not live yet — child stays silent this cycle
+          }
+          const EngineAudioCallback::TrackInfo& parent = pit->second;
+          const uint64_t stride = parent.header->channelStrideBytes;
+          const uint32_t busOffset =
+              runtime->auxBusChannelOffset.load(std::memory_order_relaxed);
+          EngineAudioCallback::TrackInfo child = parent;  // share SHM view + host gates
+          child.gainLinear = &runtime->mixGainLinear;
+          child.pan = &runtime->mixPan;
+          child.mute = &runtime->mixMute;
+          child.solo = &runtime->mixSolo;
+          child.trackId = runtime->trackId;
+          child.uiSlot = runtime->trackId;
+          child.audioRender.reset();  // a child has no clips
+          child.isAuxChild = true;
+          child.planeByteOffset = daw::auxOutputPlaneOffset(*parent.header) +
+                                  static_cast<uint64_t>(busOffset) * stride;
+          child.planeStrideChannels = kMaxAuxOutputChannels;
+          child.mixChannelCount =
+              runtime->auxBusChannelCount.load(std::memory_order_relaxed);
+          trackInfos.push_back(std::move(child));
         }
         audioCallback->updateTracks(trackInfos);
 
@@ -9381,11 +9617,23 @@ struct TrackRuntime {
         if (!pdcDisabled) {
           for (auto* runtime : trackSnapshot) {
             const uint32_t slot = runtime->trackId;
-            if (slot < daw::kUiMaxTracks) {
-              compForSlot[slot] =
-                  maxLatency -
-                  runtime->pluginLatencySamples.load(std::memory_order_relaxed);
+            if (slot >= daw::kUiMaxTracks) {
+              continue;
             }
+            // Movement 4: a child's aux samples already carry the PARENT's plugin
+            // latency (read at the parent's completed block), so it must inherit the
+            // parent's compensation — treating it as an independent 0-latency track
+            // would over-delay it relative to the parent's other buses.
+            uint32_t lat = runtime->pluginLatencySamples.load(std::memory_order_relaxed);
+            if (runtime->isAuxChild.load(std::memory_order_acquire)) {
+              const uint32_t pid =
+                  runtime->auxParentTrackId.load(std::memory_order_relaxed);
+              if (pid < trackSnapshot.size()) {
+                lat = trackSnapshot[pid]->pluginLatencySamples.load(
+                    std::memory_order_relaxed);
+              }
+            }
+            compForSlot[slot] = maxLatency - lat;
           }
         }
         for (uint32_t s = 0; s < daw::kUiMaxTracks; ++s) {
