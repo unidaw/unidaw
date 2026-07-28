@@ -99,8 +99,9 @@ struct BusInfo {
   bool enabled = false;
   int channelCount = 0;
   int channelOffset = 0;
+  uint16_t layoutId = 0;  // stable UiBusLayoutId (0 = discrete/unknown, key on count)
   std::string name;
-  std::string layout;
+  std::string layout;     // AudioChannelSet description, for display
 };
 
 class IPluginInstance {

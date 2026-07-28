@@ -1033,6 +1033,60 @@ void runControlLoop(HostState& state) {
             break;
           }
         }
+      } else if (type == daw::ControlMessageType::GetBusLayout) {
+        // Movement 4: enumerate the plugin's negotiated audio buses so the engine can
+        // stream bus topology to the UI. HostBusWire.flags: bit0 isInput, bit1 isMain,
+        // bit2 enabled (documented in ipc_protocol.h).
+        if (payload.size() >= sizeof(daw::BusLayoutHeader)) {
+          daw::BusLayoutHeader request{};
+          std::memcpy(&request, payload.data(), sizeof(request));
+          std::vector<daw::HostBusWire> buses;
+          uint32_t truncated = 0;
+          {
+            std::lock_guard<std::mutex> lock(state.pluginsMutex);
+            if (request.pluginIndex < state.plugins.size() &&
+                state.plugins[request.pluginIndex].instance) {
+              const auto infos =
+                  state.plugins[request.pluginIndex].instance->busLayout();
+              const uint32_t total = static_cast<uint32_t>(infos.size());
+              const uint32_t n = std::min<uint32_t>(total, daw::kMaxBusesPerQuery);
+              truncated = total > n ? 1u : 0u;
+              buses.reserve(n);
+              for (uint32_t i = 0; i < n; ++i) {
+                const auto& info = infos[i];
+                daw::HostBusWire w{};
+                w.flags = static_cast<uint16_t>((info.isInput ? 1u : 0u) |
+                                                (info.isMain ? 2u : 0u) |
+                                                (info.enabled ? 4u : 0u));
+                w.index = static_cast<uint8_t>(info.index);
+                w.channelCount = static_cast<uint8_t>(info.channelCount);
+                w.layoutId = info.layoutId;
+                w.channelOffset = static_cast<uint16_t>(info.channelOffset);
+                std::memcpy(w.name, info.name.data(),
+                            std::min(info.name.size(), sizeof(w.name) - 1));
+                buses.push_back(w);
+              }
+            }
+          }
+          daw::BusLayoutHeader responseHeader{};
+          responseHeader.pluginIndex = request.pluginIndex;
+          responseHeader.busCount = static_cast<uint32_t>(buses.size());
+          responseHeader.byteCount =
+              static_cast<uint32_t>(buses.size() * sizeof(daw::HostBusWire));
+          responseHeader.truncated = truncated;
+          std::vector<uint8_t> reply(sizeof(responseHeader) +
+                                     responseHeader.byteCount);
+          std::memcpy(reply.data(), &responseHeader, sizeof(responseHeader));
+          if (!buses.empty()) {
+            std::memcpy(reply.data() + sizeof(responseHeader), buses.data(),
+                        responseHeader.byteCount);
+          }
+          if (!daw::sendMessage(state.clientFd,
+                                daw::ControlMessageType::GetBusLayout, reply.data(),
+                                reply.size())) {
+            break;
+          }
+        }
       } else if (type == daw::ControlMessageType::SetState) {
         if (payload.size() >= sizeof(daw::StateHeader)) {
           daw::StateHeader request{};

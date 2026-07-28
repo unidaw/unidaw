@@ -430,6 +430,49 @@ bool HostController::requestPluginParams(uint32_t pluginIndex,
   return true;
 }
 
+bool HostController::requestBusLayout(uint32_t pluginIndex,
+                                      std::vector<HostBusWire>& out,
+                                      bool& outTruncated) {
+  out.clear();
+  outTruncated = false;
+  std::lock_guard<std::mutex> lock(socketMutex_);
+  if (socketFd_ < 0) {
+    return false;
+  }
+  BusLayoutHeader request{};
+  request.pluginIndex = pluginIndex;
+  if (!sendMessage(socketFd_, ControlMessageType::GetBusLayout, &request,
+                   sizeof(request))) {
+    return false;
+  }
+  ControlHeader header;
+  if (!recvHeader(socketFd_, header)) {
+    return false;
+  }
+  if (header.type != static_cast<uint16_t>(ControlMessageType::GetBusLayout) ||
+      header.size < sizeof(BusLayoutHeader)) {
+    return false;
+  }
+  std::vector<uint8_t> payload(header.size);
+  if (!readAll(socketFd_, payload.data(), payload.size())) {
+    return false;
+  }
+  BusLayoutHeader response{};
+  std::memcpy(&response, payload.data(), sizeof(response));
+  outTruncated = response.truncated != 0;
+  const size_t available = payload.size() - sizeof(BusLayoutHeader);
+  const uint32_t count = std::min<uint32_t>(response.busCount, kMaxBusesPerQuery);
+  const size_t needed = static_cast<size_t>(count) * sizeof(HostBusWire);
+  if (needed > available) {
+    return false;
+  }
+  out.resize(count);
+  if (count > 0) {
+    std::memcpy(out.data(), payload.data() + sizeof(BusLayoutHeader), needed);
+  }
+  return true;
+}
+
 bool HostController::sendPluginState(uint32_t pluginIndex,
                                      const std::vector<uint8_t>& data) {
   std::lock_guard<std::mutex> lock(socketMutex_);

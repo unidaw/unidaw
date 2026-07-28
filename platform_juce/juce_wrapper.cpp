@@ -345,6 +345,27 @@ class EnginePlayHead final : public juce::AudioPlayHead {
   TransportInfo transport_{};
 };
 
+// Map a JUCE AudioChannelSet to the stable UiBusLayoutId the UI keys on (see
+// shared_memory.h). 0 = discrete/unknown — the UI keys on the channel count there.
+static uint16_t busLayoutIdFor(const juce::AudioChannelSet& set) {
+  using S = juce::AudioChannelSet;
+  if (set == S::mono()) return 1;
+  if (set == S::stereo()) return 2;
+  if (set == S::createLCR()) return 3;
+  if (set == S::createLRS()) return 4;
+  if (set == S::quadraphonic()) return 5;
+  if (set == S::create5point0()) return 6;
+  if (set == S::create5point1()) return 7;
+  if (set == S::create6point0()) return 8;
+  if (set == S::create6point1()) return 9;
+  if (set == S::create7point0()) return 10;
+  if (set == S::create7point1()) return 11;
+  if (set == S::ambisonic(1)) return 12;
+  if (set == S::ambisonic(2)) return 13;
+  if (set == S::ambisonic(3)) return 14;
+  return 0;
+}
+
 class JucePluginInstance final : public IPluginInstance {
  public:
   explicit JucePluginInstance(std::unique_ptr<juce::AudioPluginInstance> instance,
@@ -423,6 +444,9 @@ class JucePluginInstance final : public IPluginInstance {
         info.layout = bus != nullptr
                           ? bus->getCurrentLayout().getDescription().toStdString()
                           : std::string();
+        info.layoutId = bus != nullptr
+                            ? busLayoutIdFor(bus->getCurrentLayout())
+                            : 0;
         busLayout_.push_back(std::move(info));
         offset += info.channelCount;
       }
@@ -959,6 +983,7 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
     out.enabled = true;
     out.channelCount = outputChannels_;
     out.channelOffset = 0;
+    out.layoutId = outputChannels_ == 1 ? 1 : 2;
     out.name = "Main";
     out.layout = outputChannels_ == 1 ? "Mono" : "Stereo";
     return {out};

@@ -87,6 +87,11 @@ struct ProjectPlacement {
 struct ProjectTrack {
   uint32_t trackId = 0;
   std::string name;
+  // Movement 4 child-track structure: a child is a real track fed from a plugin
+  // output bus instead of a clip. parentId 0 = top-level, else the parent track_id;
+  // `collapsed` hides the children in the UI (a view filter, never a data change).
+  uint32_t parentId = 0;
+  bool collapsed = false;
   bool harmonyQuantize = false;
   // Rows one beat is cut into for this lane's tracker grid (Mock B per-lane
   // grids): 4 = 16ths, 3 = triplets. The engine persists this but does not use

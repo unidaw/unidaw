@@ -121,6 +121,10 @@ enum class UiDiffType : uint16_t {
   ModLinkUid16 = 11,
   PatcherGraphDelta = 12,
   PatcherGraphError = 13,
+  // v20 (Movement 4): one per audio bus of a device, streamed right after that
+  // device's ChainSnapshot diff. See UiBusDiffPayload + the invalidation rule in
+  // shared_memory.h (a ChainSnapshot replaces the device's whole bus set).
+  DeviceBus = 14,
 };
 
 enum class UiHarmonyDiffType : uint16_t {
@@ -305,6 +309,36 @@ struct UiChainDiffPayload {
 
 static_assert(sizeof(UiChainDiffPayload) == 40,
               "UiChainDiffPayload must fit EventEntry payload");
+
+// v20 (Movement 4): on a ChainSnapshot diff, `flags` carries the count of DeviceBus
+// diffs that follow for this device, so a reader knows when the bus set is complete
+// and draws once instead of stereo-then-rearranging.
+constexpr uint16_t kUiChainDiffBusCountMask = 0x00ff;  // low byte: bus count (<=32)
+constexpr uint16_t kUiChainDiffBusTruncated = 1u << 8;  // more buses than the cap
+
+// v20: one audio bus of a hosted plugin, streamed right after that device's
+// ChainSnapshot diff (UiDiffType::DeviceBus). `channelOffset` is the bus's first
+// channel in the flat process buffer as it exists POST-negotiation; `layoutId` is the
+// stable UiBusLayoutId (name is for display). `name` is nul-PADDED and an exactly-22-
+// char name carries no terminator, so bound decoding by the field width.
+struct UiBusDiffPayload {
+  uint16_t diffType = static_cast<uint16_t>(UiDiffType::DeviceBus);
+  uint16_t flags = 0;       // bit0 isInput, bit1 isMain, bit2 enabled
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint8_t index = 0;        // bus index within its direction
+  uint8_t channelCount = 0;
+  uint16_t layoutId = 0;    // UiBusLayoutId
+  uint16_t channelOffset = 0;
+  char name[22] = {};
+};
+
+static_assert(sizeof(UiBusDiffPayload) == 40,
+              "UiBusDiffPayload must fit EventEntry payload");
+
+constexpr uint16_t kUiBusDiffInput = 1u << 0;
+constexpr uint16_t kUiBusDiffMain = 1u << 1;
+constexpr uint16_t kUiBusDiffEnabled = 1u << 2;
 
 struct UiChainErrorPayload {
   uint16_t diffType = static_cast<uint16_t>(UiDiffType::None);
