@@ -70,7 +70,7 @@ import { buildChainModel, createChainBuffer, paramKey } from './src/chainmodel.j
 import { createChrome, VIEW_TABS } from './src/chrome.js';
 import { Arrange, ARRANGE_CLIP_MARGIN_PX } from './src/arrange.js';
 import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName,
-         TICKS_PER_BAR, snapLoop } from './src/arrangemodel.js';
+         TICKS_PER_BAR, snapLoop, wheelPixels } from './src/arrangemodel.js';
 import { Mixer } from './src/mixer.js';
 import { Scope } from './src/scope.js';
 import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
@@ -3140,6 +3140,51 @@ host.addEventListener('pointerup', (e) => {
   dragAnchor = null;
   if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId);
 });
+
+// Wheel over the tracker: vertical scrolls rows, shift-wheel scrolls the track
+// strip sideways. Both move the VIEW ONLY — the cursor stays put, like PageUp
+// and PageDown, so scrolling to look at something never changes where the next
+// keystroke lands.
+//
+// Pixels accumulate across events instead of each event converting to whole
+// rows on its own. A trackpad sends streams of one- and two-pixel deltas, and
+// rounding each independently either discards all of them or jumps a full row
+// per event, depending which way you round. Keeping the remainder is what makes
+// a slow trackpad drag continuous while a mouse notch still moves a predictable
+// number of rows. See WHEEL_LINE_PX in arrangemodel for why the unit conversion
+// is a named function and not a multiplier inlined here.
+let wheelAccY = 0;
+host.addEventListener('wheel', (e) => {
+  const viewH = boxOf(host, true), viewW = boxOf(host, false);
+  // Shift-wheel is how a mouse asks for horizontal; a trackpad sends a real
+  // deltaX and needs no modifier. Honour whichever the device produced. With
+  // shift held a mouse still reports its notch on deltaY, so read that.
+  const sideways = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
+  if (sideways) {
+    const px = wheelPixels(e.deltaX || e.deltaY, e.deltaMode, viewW);
+    if (!px) return;
+    e.preventDefault();
+    state.scrollX = Math.max(0, Math.min(state.scrollX + px, tracker.maxScrollX(viewW)));
+  } else {
+    const px = wheelPixels(e.deltaY, e.deltaMode, viewH);
+    if (!px) return;
+    e.preventDefault();
+    wheelAccY += px;
+    // Truncate toward zero, so a remainder of either sign keeps its direction.
+    const rows = (wheelAccY / metrics.rowHeight) | 0;
+    if (!rows) return;                       // sub-row travel: nothing to redraw
+    wheelAccY -= rows * metrics.rowHeight;
+    const visible = Math.max(1, Math.floor(viewH / metrics.rowHeight));
+    state.start = Math.max(0, Math.min(state.start + rows,
+                                       Math.max(0, TOTAL_ROWS - visible)));
+  }
+  // Hand-scrolling and follow-the-playhead both own state.start, and follow runs
+  // every frame — it would drag the view back before you saw it. Reaching for the
+  // wheel means you want to look somewhere, so it wins and follow turns itself
+  // off, the same bargain the arrow keys already make above.
+  state.followPlayhead = false;
+  schedule();
+}, { passive: false });
 
 addEventListener('resize', schedule);
 

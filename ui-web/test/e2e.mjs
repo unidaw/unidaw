@@ -1493,6 +1493,79 @@ section('multi-out child tracks');
   }
 }
 
+section('wheel scrolling');
+{
+  // The tracker had no wheel handling at all — the arrange view did, which is
+  // exactly the shape of gap the op-registry test cannot see, because both
+  // surfaces "support scrolling" as far as any list of ops is concerned.
+  // Off the fixture first. The section above folds a multi-out parent, and a
+  // folded fixture's stems are 0px wide — leaving the strip narrower than the
+  // window, so maxScrollX is 0 and shift-wheel correctly does nothing. That
+  // reads as a wheel bug and is not one.
+  await page.evaluate((pr) => window.__uni.loadProject(pr), PROJECT);
+  await page.waitForTimeout(600);
+  await page.evaluate(() => window.__uni.view('tracker'));
+  await page.evaluate(() => { window.__uni.scrollTo(0); window.__uni.follow(true); });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const S = () => page.evaluate(() => ({ start: window.__uni.state().start,
+                                         scrollX: window.__uni.state().scrollX,
+                                         follow: window.__uni.state().followPlayhead }));
+  const box = await page.evaluate(() => {
+    const r = document.body.getBoundingClientRect();
+    return { x: r.width / 2, y: r.height / 2 };
+  });
+  await page.mouse.move(box.x, box.y);
+  const before = await S();
+  for (let i = 0; i < 3; i++) await page.mouse.wheel(0, 120);
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const down = await S();
+  ok(down.start > before.start, 'wheel down scrolls the tracker',
+     `${before.start} -> ${down.start}`);
+  // Follow owns state.start every frame; if the wheel did not disengage it the
+  // view would spring back and the scroll would look like it did nothing.
+  ok(down.follow === false, 'scrolling by hand turns playhead-follow off');
+
+  for (let i = 0; i < 60; i++) await page.mouse.wheel(0, -120);
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const top = await S();
+  ok(top.start === 0, 'scrolling past the top clamps at row 0', `start=${top.start}`);
+
+  // Narrow the window first. At the suite's 1680px this project's tracks all fit,
+  // maxScrollX is 0, and "shift-wheel does nothing" is the CORRECT answer — so
+  // asserting movement at that width tests the fixture's track count rather than
+  // the handler, and fails for a reason that has nothing to do with the wheel.
+  await page.setViewportSize({ width: 640, height: 900 });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await page.mouse.move(320, 450);
+  const narrow = await S();
+  await page.keyboard.down('Shift');
+  for (let i = 0; i < 3; i++) await page.mouse.wheel(0, 120);
+  await page.keyboard.up('Shift');
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const side = await S();
+  ok(side.scrollX > narrow.scrollX, 'shift-wheel scrolls the track strip sideways',
+     `${narrow.scrollX} -> ${side.scrollX}`);
+  ok(side.start === narrow.start, 'shift-wheel does not also move rows',
+     `start ${narrow.start} -> ${side.start}`);
+
+  // ...and it must stop at the right-hand end rather than scrolling into blank
+  // space, which is the failure the vertical clamp above exists to catch too.
+  await page.keyboard.down('Shift');
+  for (let i = 0; i < 80; i++) await page.mouse.wheel(0, 120);
+  await page.keyboard.up('Shift');
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const end = await S();
+  await page.keyboard.down('Shift');
+  for (let i = 0; i < 5; i++) await page.mouse.wheel(0, 120);
+  await page.keyboard.up('Shift');
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const past = await S();
+  ok(past.scrollX === end.scrollX, 'and clamps at the right-hand end',
+     `${end.scrollX} -> ${past.scrollX}`);
+  await page.setViewportSize({ width: 1680, height: 980 });
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+}
+
 section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));
 
