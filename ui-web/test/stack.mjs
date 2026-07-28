@@ -115,9 +115,16 @@ async function findFreeBase(tries = 40) {
  *   built has to ask for it before the first note exists.
  * @param {number} [opts.captureSeconds] how much to keep.
  */
+/**
+ * @param {number} [opts.numBlocks] pipeline depth, DAW_ENGINE_NUM_BLOCKS.
+ *   A test machine also running several browsers and engines starves the audio
+ *   producer: 1237 of 2759 playback callbacks dropped a track in one run, and the
+ *   capture came out as perfect silence. That is not the application failing, it
+ *   is the box being busy, and a deeper pipeline is the documented lever for it.
+ */
 export async function startStack({ base = 0, shm = '', keepDir = false,
                                    capture = '', captureSeconds = 30,
-                                   runSeconds = 0 } = {}) {
+                                   runSeconds = 0, numBlocks = 0 } = {}) {
   const procs = [];
   if (!base) base = await findFreeBase();
   // The segment name has to be unique too, or two runs share one engine's memory
@@ -154,6 +161,7 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
     env.DAW_CAPTURE_WAV = capture;
     env.DAW_CAPTURE_SECONDS = String(captureSeconds);
   }
+  if (numBlocks) env.DAW_ENGINE_NUM_BLOCKS = String(numBlocks);
   // Logs to disk, not /dev/null. The first version discarded them, so when the
   // engine fell back to a stand-in plugin the only evidence was a wrong device
   // name three sections into the suite.

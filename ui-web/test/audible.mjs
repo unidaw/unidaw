@@ -60,6 +60,15 @@ const step = (s) => console.log(`\n[${s}]`);
 // to load, and the play/stop window to happen inside it.
 const stack = await startStack({ capture: WAV, captureSeconds: CAPTURE_SECONDS,
                                  runSeconds: CAPTURE_SECONDS + 6,
+                                 // A deeper pipeline. Without it this test is
+                                 // silent about one run in four, because the
+                                 // machine running it is also running Chrome and
+                                 // several plugin hosts and the audio producer
+                                 // starves — 1237 of 2759 callbacks dropped a
+                                 // track in the run I caught. The question here
+                                 // is what the app plays, not how it behaves
+                                 // when starved; that belongs in its own test.
+                                 numBlocks: 8,
                                  keepDir: !!process.env.UNI_KEEP });
 /**
  * Roughly when the capture started, so later moments can be located INSIDE it.
@@ -311,12 +320,13 @@ if (!existsSync(WAV)) {
   if (armed && gapTo > gapFrom + 4) {
     const gap = envAll.slice(gapFrom, gapTo);
     const gapPeak = gap.reduce((m, v) => Math.max(m, v), 0);
-    blocked(gapPeak < floor,
-            'the song is SILENT between notes while still playing',
-            'sound continues with nothing scheduled — the usual cause is a note '
-            + 'GENERATOR on the track (a euclidean or random_degree node in the '
-            + "device's patcher graph), which is not a defect but is invisible",
-            `gap ${(gapFrom * perSlice0).toFixed(1)}-${(gapTo * perSlice0).toFixed(1)}s `
+    // A plain assertion: with no generator on the track this holds every run.
+    // If it ever fails, the first thing to check is a euclidean or random_degree
+    // node in the device's patcher graph — that is what it caught last time, and
+    // it is not a defect, only an invisible one.
+    ok(gapPeak < floor,
+       'the song is SILENT between notes while still playing',
+       `gap ${(gapFrom * perSlice0).toFixed(1)}-${(gapTo * perSlice0).toFixed(1)}s `
             + `peak ${gapPeak.toFixed(4)} vs floor ${floor.toFixed(4)}`);
   }
 
@@ -341,11 +351,9 @@ if (!existsSync(WAV)) {
                             Math.floor(((stoppedAtMs / 1000) + 3) / perSlice));
   const tail = env.slice(tailFrom);
   const tailPeak = tail.reduce((m, v) => Math.max(m, v), 0);
-  blocked(tailPeak < floor,
-          'and the song goes SILENT after the transport stops',
-          'sound outlives the transport — check for a note generator in the '
-          + "device's patcher graph before suspecting note-off",
-          `stopped at ${(stoppedAtMs / 1000).toFixed(1)}s, tail peak `
+  ok(tailPeak < floor,
+     'and the song goes SILENT after the transport stops',
+     `stopped at ${(stoppedAtMs / 1000).toFixed(1)}s, tail peak `
           + `${tailPeak.toFixed(4)} vs floor ${floor.toFixed(4)} `
           + `(${tail.length} slices from ${(tailFrom * perSlice).toFixed(1)}s)`);
   ok(frac < 0.98, 'and it is not one unbroken wall of sound',
