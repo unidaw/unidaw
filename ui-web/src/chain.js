@@ -206,11 +206,19 @@ export class Chain {
       el._rows = [];
       el._scrollTop = 0; el._spaceH = -1;
       const foot = div('dv-foot', el);
+      // The device's audio buses, on its own line: "8 out · 1 in", or "buses 3/8"
+      // while they are still arriving. Its own element rather than folded into the
+      // footer because the two answer different questions — the footer is where the
+      // device sits in the chain, this is what it can route — and because it is the
+      // one line that changes when a plugin renegotiates its layout.
+      const bus = div('dv-bus', el);
+      el._busEl = bus;
       el._badge = text(badge);
       el._title = text(title);
       el._body = text(body);
       el._foot = text(foot);
-      el._b = null; el._t = null; el._y = null; el._f = null;
+      el._bus = text(bus);
+      el._b = null; el._t = null; el._y = null; el._f = null; el._bt = null;
       el._sel = null; el._byp = null;
       // `null` rather than -1: a chain position of -1 is not a thing the engine
       // publishes, but a cache that starts at a real value is one write away
@@ -350,6 +358,19 @@ export class Chain {
       if (el._y !== body) { el._y = body; el._body.nodeValue = body; }
       this._params(el, c);
       if (el._f !== c.sub) { el._f = c.sub; el._foot.nodeValue = c.sub; }
+      if (el._bt !== c.busText) {
+        el._bt = c.busText;
+        el._bus.nodeValue = c.busText;
+        // Hidden rather than blank when a device publishes no buses: an empty line
+        // still takes its height, and every non-plugin device in the rack would
+        // grow a gap where a fact about plugins used to be.
+        const bd = c.busText ? '' : 'none';
+        if (el._busEl.style.display !== bd) el._busEl.style.display = bd;
+        // Incomplete and truncated are different states and read differently: one
+        // resolves in a frame, the other never will.
+        el._busEl.classList.toggle('partial', c.busPartial);
+        el._busEl.classList.toggle('trunc', c.busTruncated);
+      }
       if (el._sel !== c.selected) { el._sel = c.selected; el.classList.toggle('sel', c.selected); }
       if (el._byp !== c.bypass) { el._byp = c.bypass; el.classList.toggle('byp', c.bypass); }
       // Keyed on the number rather than on the string it renders to. The old

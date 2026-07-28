@@ -97,12 +97,49 @@ function createParamSlot() {
   };
 }
 
+/**
+ * The bus summary, interned on its own content.
+ *
+ * The domain is tiny — a device has at most 32 buses — and the string is a pure
+ * function of two small counts, so the key IS the content and there is nothing to
+ * invalidate. Same reasoning as the lane labels in viewmodel.js: a table keyed on a
+ * POSITION needs a guard and a clear; a table keyed on what it spells does not.
+ */
+const BUS_TEXT = new Map();
+function busSummary(ins, outs) {
+  const key = ins * 64 + outs;
+  let t = BUS_TEXT.get(key);
+  if (t === undefined) {
+    t = outs && ins ? outs + ' out \u00b7 ' + ins + ' in'
+      : outs ? outs + ' out'
+      : ins ? ins + ' in'
+      : '';
+    BUS_TEXT.set(key, t);
+  }
+  return t;
+}
+
+/** "3/8" while a device's buses are still arriving. Same interning argument. */
+const BUS_PARTIAL = new Map();
+function busPartialText(have, want) {
+  const key = have * 64 + want;
+  let t = BUS_PARTIAL.get(key);
+  if (t === undefined) { t = 'buses ' + have + '/' + want; BUS_PARTIAL.set(key, t); }
+  return t;
+}
+
 export function createChainBuffer(cap = 16) {
   const cards = new Array(cap);
   for (let i = 0; i < cap; i++) {
     cards[i] = { id: 0, kind: 0, badge: '', title: '', pos: 0,
                  sub: '', caps: '', bypass: false, selected: false, patcherNode: -1,
                  named: false, params: [], paramCount: 0, more: '',
+                 // The device's audio buses (kShmVersion 20): what it can actually
+                 // route, which is the difference between "a plugin" and "a plugin
+                 // with eight stems and a sidechain input". Empty until the engine
+                 // publishes a chain that carries them.
+                 busText: '', busTruncated: false, busPartial: false,
+                 _bKey: -1,
                  // Memo keys for the three strings this card builds. Named for
                  // what they cache so a fourth input added to one of them is
                  // obviously missing from its key.
@@ -181,6 +218,39 @@ export function buildChainModel(opts, buf) {
     c.id = d.id;
     c.kind = d.kind;
     c.badge = KIND_BADGE[d.kind] || 'DEV';
+
+    /**
+     * The device's buses, and — the part that matters — whether we have them ALL.
+     *
+     * `busCount` is what the engine said was coming; `buses.length` is what has
+     * arrived. While those differ the set is INCOMPLETE, and the card says so
+     * instead of summarising what it happens to hold. A rack that renders "2 out"
+     * from the first two of eight and silently becomes "8 out" a frame later is the
+     * draw-then-rearrange this field was added to prevent — and it is worse than
+     * saying nothing, because the wrong number is one somebody might act on.
+     *
+     * Guarded on a key built from the three inputs, so a device whose buses have
+     * not moved costs one integer compare per draw rather than a walk of its list.
+     */
+    const bl = d.buses;
+    const bn = bl ? bl.length : 0;
+    const want = d.busCount || 0;
+    const bKey = (want << 12) | (bn << 4) | (d.busTruncated ? 1 : 0);
+    if (c._bKey !== bKey) {
+      c._bKey = bKey;
+      c.busTruncated = !!d.busTruncated;
+      c.busPartial = bn < want;
+      if (!want && !bn) {
+        c.busText = '';
+      } else if (bn < want) {
+        c.busText = busPartialText(bn, want);
+      } else {
+        let ins = 0, outs = 0;
+        for (let k = 0; k < bn; k++) { if (bl[k].input) ins++; else outs++; }
+        c.busText = busSummary(ins, outs);
+      }
+    }
+
     // The plugin's own name once the host has answered, and what it IS until
     // then. Both are true statements; only one of them is the device's name.
     const dp = params ? params[d.id] : null;

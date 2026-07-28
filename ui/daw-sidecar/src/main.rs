@@ -2122,7 +2122,9 @@ impl EngineEvents {
 }
 
 /// One device in a track's chain, as the engine published it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Not Copy any more: a device owns its bus list. The store REUSES devices across
+// snapshots rather than reallocating, so the Vec is cleared, not dropped.
+#[derive(Clone, Debug, Default, PartialEq)]
 struct ChainDevice {
     id: u32,
     kind: u32,
@@ -2131,16 +2133,49 @@ struct ChainDevice {
     slot: u32,
     caps: u32,
     bypass: u32,
+    /// How many DeviceBus diffs the engine says are coming for this device, and
+    /// whether it had more than the cap. Read from the ChainSnapshot's `flags`, not
+    /// its payload, which is full.
+    ///
+    /// This is the field that lets the rack draw ONCE. Without it, three buses
+    /// received out of four is indistinguishable from a device that has three, so
+    /// the rack draws three and rearranges when the fourth lands — which is the
+    /// stereo-then-rearrange this whole design exists to avoid.
+    bus_count: u8,
+    bus_truncated: bool,
+    /// Reused across snapshots, cleared rather than dropped, like `devices`.
+    buses: Vec<DeviceBus>,
+}
+
+/// One audio bus of a hosted plugin (v20).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct DeviceBus {
+    is_input: bool,
+    is_main: bool,
+    enabled: bool,
+    index: u8,
+    channel_count: u8,
+    layout_id: u16,
+    channel_offset: u16,
+    name: String,
 }
 
 /// One ChainSnapshot entry off the ring: which track and which version it
 /// belongs to, plus the device it describes — `None` for the empty-chain
 /// sentinel, which is a statement about the chain rather than a device in it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct ChainEntry {
     track: u32,
     version: u32,
     device: Option<ChainDevice>,
+}
+
+/// One DeviceBus diff off the ring, still keyed by the device it belongs to.
+#[derive(Clone, Debug)]
+struct BusEntry {
+    track: u32,
+    device: u32,
+    bus: DeviceBus,
 }
 
 /// A track's chain as accumulated so far, plus the version it was published at.
@@ -2202,7 +2237,7 @@ impl ChainStore {
             // it is the newer one.
             return;
         }
-        match entry.device {
+        match entry.device.clone() {
             Some(d) => slot.devices.push(d),
             // The empty-chain sentinel. The clear above IS the whole update: a
             // track whose chain was emptied must show zero devices, not the ones
@@ -2254,13 +2289,61 @@ impl ChainStore {
                 if j > 0 { out.push(','); }
                 out.push_str(&format!(
                     "{{\"id\":{},\"kind\":{},\"pos\":{},\"node\":{},\"slot\":{},\
-                     \"caps\":{},\"bypass\":{}}}",
-                    d.id, d.kind, d.pos, d.node, d.slot, d.caps, d.bypass));
+                     \"caps\":{},\"bypass\":{},\"busCount\":{},\"busTruncated\":{},\"buses\":[",
+                    d.id, d.kind, d.pos, d.node, d.slot, d.caps, d.bypass,
+                    d.bus_count, d.bus_truncated));
+                for (k, b) in d.buses.iter().enumerate() {
+                    if k > 0 { out.push(','); }
+                    // The name is the ONLY free text on this wire, and it comes from
+                    // a plugin. Escaped rather than trusted: a bus called
+                    // `Out "A"` would otherwise produce JSON the page cannot parse,
+                    // and the failure would be the whole rack going blank rather
+                    // than one label looking odd.
+                    let name: String = b.name.chars()
+                        .filter(|c| *c >= ' ' && *c != '"' && *c != '\\')
+                        .collect();
+                    out.push_str(&format!(
+                        "{{\"input\":{},\"main\":{},\"enabled\":{},\"index\":{},\
+                         \"channels\":{},\"layoutId\":{},\"offset\":{},\"name\":\"{}\"}}",
+                        b.is_input, b.is_main, b.enabled, b.index,
+                        b.channel_count, b.layout_id, b.channel_offset, name));
+                }
+                out.push_str("]}");
             }
             out.push_str("]}");
         }
         out.push_str(&format!("],\"rev\":{rev}}}"));
         Some((out, rev))
+    }
+
+    /// Attach one bus to the device it belongs to.
+    ///
+    /// A device's bus set is REPLACED by its ChainSnapshot, never merged into —
+    /// backend wrote that rule into shared_memory.h at my asking, and it matters
+    /// because device ids are REUSED. Without it a new plugin inherits the previous
+    /// occupant's buses and draws a rack that is entirely plausible and wrong.
+    /// `apply` already clears `devices` on a new version, so the buses go with them
+    /// and this only ever appends to a set the current snapshot started.
+    ///
+    /// A bus for a device we have not seen is DROPPED, not buffered. The engine
+    /// emits the snapshot first and the ring is ordered, so out-of-order here means
+    /// the snapshot was lost — and holding buses for a device that may never arrive
+    /// is how a store grows without bound while looking healthy.
+    fn apply_bus(&self, entry: &BusEntry) -> bool {
+        let mut tracks = self.tracks.lock().unwrap();
+        let Some(t) = tracks.iter_mut().find(|t| t.track == entry.track) else { return false };
+        let Some(d) = t.devices.iter_mut().find(|d| d.id == entry.device) else { return false };
+        // Idempotent on (direction, index): the engine re-emits a device's buses on
+        // every republish, and a ring that redelivers must not double the list.
+        if let Some(slot) = d.buses.iter_mut()
+            .find(|b| b.is_input == entry.bus.is_input && b.index == entry.bus.index) {
+            *slot = entry.bus.clone();
+        } else {
+            d.buses.push(entry.bus.clone());
+        }
+        drop(tracks);
+        self.revision.fetch_add(1, Ordering::AcqRel);
+        true
     }
 
     #[cfg(test)]
@@ -2299,7 +2382,52 @@ fn decode_chain_snapshot(e: &EventEntry) -> Option<ChainEntry> {
             slot: u32at(28),
             caps: u32at(32),
             bypass: u32at(36),
+            // From the PAYLOAD's `flags` at offset 2 — UiChainDiffPayload's own
+            // field — not from EventEntry.flags. I read the wrong struct first and
+            // the test helper encoded the same misreading, so the two agreed with
+            // each other and both were wrong; what caught it was a real plugin
+            // reporting two buses under a busCount of zero. The mask constants are
+            // u16 (kUiChainDiffBusCountMask), which is the tell: EventEntry.flags
+            // is u32.
+            bus_count: (u16at(2) & 0x00ff) as u8,
+            bus_truncated: (u16at(2) & 0x0100) != 0,
+            buses: Vec::new(),
         }),
+    })
+}
+
+/// Decode one DeviceBus diff (v20), or None if this entry is not one.
+///
+/// `name` is nul-PADDED and an exactly-22-character name carries NO terminator, so
+/// the scan is bounded by the field width and stops at the first nul. Scanning for
+/// a terminator instead walks off the end of the payload into the next field, which
+/// on a full-width name is guaranteed rather than unlucky.
+fn decode_device_bus(e: &EventEntry) -> Option<BusEntry> {
+    if (e.size as usize) < 40 { return None; }
+    let p = &e.payload;
+    let u16at = |i: usize| u16::from_le_bytes([p[i], p[i + 1]]);
+    let u32at = |i: usize| u32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+    if u16at(0) != UiDiffType::DeviceBus as u16 { return None; }
+    let flags = u16at(2);
+    let mut name = String::new();
+    for k in 0..22 {
+        let c = p[18 + k];
+        if c == 0 { break; }
+        name.push(c as char);
+    }
+    Some(BusEntry {
+        track: u32at(4),
+        device: u32at(8),
+        bus: DeviceBus {
+            is_input: (flags & 1) != 0,
+            is_main: (flags & 2) != 0,
+            enabled: (flags & 4) != 0,
+            index: p[12],
+            channel_count: p[13],
+            layout_id: u16at(14),
+            channel_offset: u16at(16),
+            name,
+        },
     })
 }
 
@@ -2422,6 +2550,16 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<Chain
             // bury the errors the queue exists for.
             if let Some(chain) = decode_chain_snapshot(e) {
                 chains.apply(&chain);
+                continue;
+            }
+            // Buses are STATE too, and they belong to the device the snapshot just
+            // described — same reasoning as the chain itself. A bus whose device we
+            // never saw is counted as not-forwarded rather than dropped in silence:
+            // the ring is ordered and the snapshot comes first, so that can only
+            // mean the snapshot was lost, which is worth seeing in the histogram.
+            if let Some(bus) = decode_device_bus(e) {
+                if chains.apply_bus(&bus) { continue; }
+                dropped += 1;
                 continue;
             }
             match decode_engine_event(e) {
@@ -2680,6 +2818,154 @@ mod tests {
         e
     }
 
+    /// A ChainSnapshot with a bus count on the ENTRY's flags, not its payload.
+    fn chain_entry_with_buses(track: u32, version: u32, device_id: u32,
+                              bus_count: u8, truncated: bool) -> EventEntry {
+        // Written into the PAYLOAD at offset 2, where UiChainDiffPayload.flags is.
+        // The first version of this helper set EventEntry.flags instead, matching a
+        // decoder that read the same wrong field — so the test passed against a
+        // build that could never work against the engine. A helper that encodes the
+        // implementation's assumption rather than the contract's proves nothing.
+        let mut e = chain_entry(track, version, device_id, 0);
+        let f: u16 = bus_count as u16 | if truncated { 0x0100 } else { 0 };
+        e.payload[2..4].copy_from_slice(&f.to_le_bytes());
+        e
+    }
+
+    fn bus_entry(track: u32, device: u32, index: u8, is_input: bool,
+                 name: &str) -> EventEntry {
+        let mut p = Vec::new();
+        p.extend_from_slice(&(UiDiffType::DeviceBus as u16).to_le_bytes());   // 0
+        let flags: u16 = if is_input { 1 } else { 0 } | 2 | 4;                // main+enabled
+        p.extend_from_slice(&flags.to_le_bytes());                            // 2
+        p.extend_from_slice(&track.to_le_bytes());                            // 4
+        p.extend_from_slice(&device.to_le_bytes());                           // 8
+        p.push(index);                                                        // 12
+        p.push(2);                                                            // 13 channels
+        p.extend_from_slice(&2u16.to_le_bytes());                             // 14 layoutId stereo
+        p.extend_from_slice(&(index as u16 * 2).to_le_bytes());               // 16 offset
+        let mut nm = [0u8; 22];
+        for (i, c) in name.bytes().take(22).enumerate() { nm[i] = c; }
+        p.extend_from_slice(&nm);                                             // 18..40
+        entry(&p)
+    }
+
+    #[test]
+    fn a_bus_decodes_every_field_from_its_own_offset() {
+        let e = bus_entry(3, 77, 1, false, "Individual Out 3/4");
+        let b = decode_device_bus(&e).expect("decodes");
+        assert_eq!(b.track, 3);
+        assert_eq!(b.device, 77);
+        assert_eq!(b.bus.index, 1);
+        assert_eq!(b.bus.is_input, false);
+        assert_eq!(b.bus.is_main, true);
+        assert_eq!(b.bus.enabled, true);
+        assert_eq!(b.bus.channel_count, 2);
+        assert_eq!(b.bus.layout_id, 2);
+        assert_eq!(b.bus.channel_offset, 2);
+        assert_eq!(b.bus.name, "Individual Out 3/4");
+        // A chain snapshot is not a bus and vice versa; each decoder must refuse
+        // the other or a mis-typed entry decodes as a plausible record of the
+        // wrong kind.
+        assert!(decode_chain_snapshot(&e).is_none());
+        assert!(decode_device_bus(&chain_entry(3, 1, 77, 0)).is_none());
+    }
+
+    #[test]
+    fn a_full_width_bus_name_has_no_terminator() {
+        // 22 characters exactly: nul-PADDED means there is no nul to find, so a
+        // decoder that scanned for one would walk off the end of the payload. The
+        // scan is bounded by the field width instead.
+        let name = "ABCDEFGHIJKLMNOPQRSTUV";
+        assert_eq!(name.len(), 22);
+        let b = decode_device_bus(&bus_entry(0, 1, 0, false, name)).expect("decodes");
+        assert_eq!(b.bus.name, name);
+        // And a longer one is truncated at the field, not read past it.
+        let b2 = decode_device_bus(&bus_entry(0, 1, 0, false, "ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+            .expect("decodes");
+        assert_eq!(b2.bus.name, name);
+    }
+
+    #[test]
+    fn bus_count_rides_the_entry_flags_so_a_reader_can_draw_once() {
+        let store = ChainStore::default();
+        apply_chain(&store, &chain_entry_with_buses(1, 1, 50, 4, false));
+        let d = store.devices_of(1);
+        assert_eq!(d[0].bus_count, 4, "four are coming");
+        assert_eq!(d[0].buses.len(), 0, "none have arrived yet");
+        assert!(!d[0].bus_truncated);
+        // Without this the rack cannot tell three-of-four from a device with three,
+        // so it draws three and rearranges — the failure the whole design avoids.
+        apply_chain(&store, &chain_entry_with_buses(1, 2, 50, 33, true));
+        let d2 = store.devices_of(1);
+        assert_eq!(d2[0].bus_count, 33);
+        assert!(d2[0].bus_truncated, "more buses than the cap, said out loud");
+    }
+
+    #[test]
+    fn a_chain_snapshot_replaces_a_devices_buses_rather_than_merging() {
+        // THE rule, and it is in shared_memory.h because device ids are REUSED.
+        // Merge instead and a new plugin inherits the previous occupant's buses:
+        // a rack that is entirely plausible and completely wrong.
+        let store = ChainStore::default();
+        apply_chain(&store, &chain_entry_with_buses(1, 1, 50, 2, false));
+        for i in 0..2u8 {
+            let e = bus_entry(1, 50, i, false, "Out");
+            let b = decode_device_bus(&e).unwrap();
+            assert!(store.apply_bus(&b), "the device exists, so the bus lands");
+        }
+        assert_eq!(store.devices_of(1)[0].buses.len(), 2);
+
+        // A new snapshot for the same track: the old device, and its buses, go.
+        apply_chain(&store, &chain_entry_with_buses(1, 2, 50, 1, false));
+        assert_eq!(store.devices_of(1)[0].buses.len(), 0,
+                   "the previous version's buses did not survive the replacement");
+    }
+
+    #[test]
+    fn a_bus_for_an_unknown_device_is_refused_rather_than_buffered() {
+        // The ring is ordered and the snapshot comes first, so this can only mean
+        // the snapshot was lost. Holding the bus for a device that may never arrive
+        // is how a store grows without bound while looking healthy.
+        let store = ChainStore::default();
+        let b = decode_device_bus(&bus_entry(9, 999, 0, false, "Out")).unwrap();
+        assert!(!store.apply_bus(&b), "refused, and the caller counts it");
+    }
+
+    #[test]
+    fn re_emitting_a_bus_updates_it_instead_of_doubling_the_list() {
+        // The engine re-emits a device's buses on every republish, and a ring that
+        // redelivers must not grow the list. Keyed on (direction, index), which is
+        // the identity backend gave these.
+        let store = ChainStore::default();
+        apply_chain(&store, &chain_entry_with_buses(1, 1, 50, 1, false));
+        for _ in 0..3 {
+            let b = decode_device_bus(&bus_entry(1, 50, 0, false, "Main")).unwrap();
+            assert!(store.apply_bus(&b));
+        }
+        assert_eq!(store.devices_of(1)[0].buses.len(), 1);
+        // ...but an input bus 0 and an output bus 0 are DIFFERENT buses.
+        let bi = decode_device_bus(&bus_entry(1, 50, 0, true, "Sidechain")).unwrap();
+        assert!(store.apply_bus(&bi));
+        assert_eq!(store.devices_of(1)[0].buses.len(), 2);
+    }
+
+    #[test]
+    fn a_bus_name_cannot_break_the_json() {
+        // The only free text on this wire, and it comes from a plugin. A bus called
+        // `Out "A"` would otherwise emit JSON the page cannot parse, and the failure
+        // is the whole rack going blank rather than one label looking odd.
+        let store = ChainStore::default();
+        apply_chain(&store, &chain_entry_with_buses(1, 1, 50, 1, false));
+        let b = decode_device_bus(&bus_entry(1, 50, 0, false, "Out \"A\" \\ x")).unwrap();
+        assert!(store.apply_bus(&b));
+        let (json, _) = store.changed_since(0).expect("a body");
+        assert!(!json.contains("\"A\""), "the quotes did not survive into the JSON");
+        assert!(json.contains("\"buses\":["), "and the array is still there");
+        // Balanced quotes is the property that actually matters.
+        assert_eq!(json.matches('"').count() % 2, 0, "quotes are balanced");
+    }
+
     #[test]
     fn engine_events_name_the_nodes_and_drop_the_firehose() {
         // A patcher error: diff 13, code 6 (invalid port), track 0, then node,
@@ -2800,6 +3086,11 @@ mod tests {
         // test: a payload read two bytes off still yields a plausible chain.
         assert_eq!(devices[2], ChainDevice {
             id: 102, kind: 7, pos: 2, node: 11, slot: 2, caps: 3, bypass: 1,
+            // No buses on this fixture's entries: `bus_count` rides the EventEntry's
+            // flags, which `chain_entry` leaves zero. A device with no buses and a
+            // device whose buses have not arrived look the same here, which is
+            // exactly what `bus_count` exists to separate — see the bus tests below.
+            bus_count: 0, bus_truncated: false, buses: Vec::new(),
         });
 
         // Another track is its own chain and its own version; one track's

@@ -170,3 +170,22 @@
 .dv-p.pend .dv-p-n { color: var(--uni-text-pending); }
 .dv-p.pend .dv-p-fill { background: var(--uni-text-pending); }
 .dv-p.pend .dv-p-v { color: var(--uni-text-pending); }
+
+/* The device's audio buses. Quieter than the title and louder than the footer:
+   "8 out · 1 in" is a fact about what the device can route, which matters when you
+   are wiring stems and is noise the rest of the time. */
+.dv-bus {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-fx);
+  opacity: .8;
+  margin-top: 2px;
+}
+/* Still arriving. Dimmed, because the number in it is a progress report and not a
+   description of the device — reading it as one is the mistake busCount exists to
+   prevent. */
+.dv-bus.partial { opacity: .45; }
+/* More buses than the wire's cap of 32. This one never resolves, so it is marked
+   rather than dimmed: the list on screen is genuinely incomplete. */
+.dv-bus.trunc { color: var(--uni-text-warn, var(--uni-text-fx)); opacity: 1; }

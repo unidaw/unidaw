@@ -1080,6 +1080,41 @@ section('device parameters');
  */
 await page.evaluate(() => window.__uni.loadProject('rack'));
 await page.waitForTimeout(2000);
+
+// The device's AUDIO BUSES (kShmVersion 20), which is what tells a stereo effect
+// from a plugin with eight stems and a sidechain input. These ride the chain
+// snapshot rather than a request, so they are here the moment the chain is.
+{
+  const d = await page.evaluate(() => {
+    const c = window.__uni.chains();
+    const t = c && c['0'];
+    return t && t.devices.length ? t.devices[0] : null;
+  });
+  ok(d !== null, 'the rack project published a device');
+  if (d) {
+    // COMPLETE, not partial. busCount is the field I held the version bump for:
+    // without it, two buses received out of eight is indistinguishable from a
+    // device that has two, and the rack draws the wrong number and then changes
+    // it. Asserting the two AGREE is what proves the count is real rather than
+    // defaulted — it read 0 against two live buses until I fixed which struct's
+    // `flags` it came from.
+    ok(d.busCount === d.buses.length && d.busCount > 0,
+       `every bus the engine promised arrived: ${d.buses.length}/${d.busCount}`);
+    ok(d.busTruncated === false, 'and none were dropped at the cap');
+    // Direction, and a name that came from the plugin rather than from us.
+    const ins = d.buses.filter((b) => b.input);
+    const outs = d.buses.filter((b) => !b.input);
+    ok(ins.length > 0 && outs.length > 0,
+       `inputs and outputs are told apart: ${outs.length} out, ${ins.length} in`);
+    ok(d.buses.every((b) => typeof b.name === 'string' && b.name.length > 0),
+       `each bus carries its own name: ${JSON.stringify(d.buses.map((b) => b.name))}`);
+    // layoutId is the stable enum I asked for so caches key on an integer rather
+    // than a display string; 2 is stereo.
+    ok(d.buses.every((b) => b.layoutId >= 0 && b.channels > 0),
+       `and a layout id and channel count: ${JSON.stringify(d.buses.map((b) => [b.layoutId, b.channels]))}`);
+  }
+}
+
 await page.evaluate(() => window.__uni.reqParams(0, 0));
 await page.waitForTimeout(1500);
 const beforeP = await page.evaluate(() => {

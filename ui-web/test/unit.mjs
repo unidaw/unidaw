@@ -1100,3 +1100,73 @@ test('a clip changing meter refreshes the readout without scrolling', () => {
   assert.equal(buf.rows[12].laneBar[0], '2:1', '3/4: bar 2 is 12 rows in');
   assert.notEqual(buf.rows[16].laneBar[0], '2:1', 'and row 16 is no longer bar 2');
 });
+
+// ---------------------------------------------------------------------------
+// Device buses (kShmVersion 20), and the one rule that makes them drawable.
+
+/** A chain entry with `n` of `want` buses delivered. */
+function chainWithBuses(n, want, opts = {}) {
+  const buses = [];
+  for (let i = 0; i < n; i++) {
+    buses.push({ input: !!opts.input && i === 0, main: i === 0, enabled: true,
+                 index: i, channels: 2, layoutId: 2, offset: i * 2, name: 'Out ' + i });
+  }
+  return { 0: { track: 0, version: 1, devices: [{
+    id: 7, kind: 1, pos: 0, node: -1, slot: 0, caps: 0, bypass: 0,
+    busCount: want, busTruncated: !!opts.truncated, buses }] } };
+}
+
+test('a device summarises its buses only once they have all arrived', () => {
+  const buf = createChainBuffer(4);
+  // Eight coming, two here. The card must NOT say "2 out" — that is a number a
+  // user might act on, and it is wrong. This is the whole reason busCount is on
+  // the wire, and the reason I held the version bump for it.
+  let vm = buildChainModel({ track: 0, chains: chainWithBuses(2, 8), selected: -1,
+                             trackName: 'T1' }, buf);
+  assert.equal(vm.cards[0].busPartial, true);
+  assert.equal(vm.cards[0].busText, 'buses 2/8');
+
+  // All eight: now it describes the device.
+  vm = buildChainModel({ track: 0, chains: chainWithBuses(8, 8), selected: -1,
+                         trackName: 'T1' }, buf);
+  assert.equal(vm.cards[0].busPartial, false);
+  assert.equal(vm.cards[0].busText, '8 out');
+});
+
+test('inputs and outputs are counted apart', () => {
+  const buf = createChainBuffer(4);
+  // A sidechain input is not a stem, and a rack that added them together would
+  // report a 2-out plugin with a sidechain as having three outputs.
+  const vm = buildChainModel({ track: 0, chains: chainWithBuses(3, 3, { input: true }),
+                               selected: -1, trackName: 'T1' }, buf);
+  assert.equal(vm.cards[0].busText, '2 out · 1 in');
+});
+
+test('a device with no buses says nothing rather than zero', () => {
+  const buf = createChainBuffer(4);
+  const vm = buildChainModel({ track: 0, chains: chainWithBuses(0, 0), selected: -1,
+                               trackName: 'T1' }, buf);
+  assert.equal(vm.cards[0].busText, '', 'no line at all');
+  assert.equal(vm.cards[0].busPartial, false, 'and it is not "still arriving"');
+});
+
+test('truncation is a different state from still-arriving', () => {
+  const buf = createChainBuffer(4);
+  // 32 is the wire's cap. "There were more" never resolves, where "3 of 8" does —
+  // so they must not render as the same thing.
+  const vm = buildChainModel({ track: 0, chains: chainWithBuses(32, 33, { truncated: true }),
+                               selected: -1, trackName: 'T1' }, buf);
+  assert.equal(vm.cards[0].busTruncated, true);
+  assert.equal(vm.cards[0].busPartial, true, '32 of 33 is also incomplete');
+});
+
+test('the bus summary is guarded and interned', () => {
+  const buf = createChainBuffer(4);
+  const chains = chainWithBuses(8, 8);
+  const vm1 = buildChainModel({ track: 0, chains, selected: -1, trackName: 'T1' }, buf);
+  const first = vm1.cards[0].busText;
+  const vm2 = buildChainModel({ track: 0, chains, selected: -1, trackName: 'T1' }, buf);
+  // The SAME string object, not an equal one: this runs per card per draw and the
+  // rack is redrawn on every frame the view is open.
+  assert.ok(first === vm2.cards[0].busText, 'no string is built on an unchanged draw');
+});
