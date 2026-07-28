@@ -1560,6 +1560,93 @@ section('arrangement navigation');
   ok(a3.zoom > a2.zoom, 'and the keyboard zooms out', `zoom ${a2.zoom} -> ${a3.zoom}`);
 }
 
+section('clips answer to the pointer');
+{
+  // The band had no pointer handling at all — only the ruler and the wheel — so a
+  // clip could be looked at and nothing else.
+  await page.evaluate(() => window.__uni.loadProject('maximal'));
+  await page.waitForTimeout(1500);
+  await page.keyboard.press('F2');
+  await page.waitForTimeout(600);
+  // Bring the view back to the top of the song. The navigation section above
+  // pans and zooms, and it leaves the arrangement looking at empty timeline —
+  // `clips=0` with six lanes drawn. Setup, not the thing under test: the click
+  // below is still a real one.
+  await page.evaluate(() => {
+    const st = window.__uni.state;                 // frozen copy — use the ops
+    window.__uni.run('goto 1 1');
+  });
+  await page.keyboard.press('Home');
+  await page.waitForTimeout(500);
+  // The FIRST VISIBLE clip. The arrangement pools its clip elements like the rack
+  // pools its cards, so `querySelector('.ar-clip')` hands back a hidden spare and
+  // the section reports "no clip on screen" while six are drawn.
+  const clipAt = () => page.evaluate(() => {
+    for (const c of document.querySelectorAll('.ar-clip')) {
+      const r = c.getBoundingClientRect();
+      if (r.width < 6 || r.height < 6) continue;
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      const top = document.elementFromPoint(x, y);
+      if (!(top && (top === c || c.contains(top)))) continue;
+      return { x, y };
+    }
+    return null;
+  });
+  const geom = () => page.evaluate(() => {
+    const st = window.__uni.state();
+    const a = document.getElementById('arrange').getBoundingClientRect();
+    const pi = document.getElementById('piano');
+    return { sel: st.selectedPlacement, roll: st.rollOpen,
+             arrangeH: Math.round(a.height), pianoShown: !pi.hidden,
+             pianoH: Math.round(pi.getBoundingClientRect().height),
+             outlined: document.querySelectorAll('.ar-clip.sel').length };
+  });
+  // Wait for clips to actually be drawn rather than for a guessed delay: the
+  // project load, the engine's reply and the next frame are three separate
+  // waits, and 1500ms happened to cover two of them.
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('.ar-clip')]
+      .some((e) => e.getBoundingClientRect().width > 6),
+    null, { timeout: 8000 }).catch(() => {});
+  const c = await clipAt();
+  if (!c) {
+    const why = await page.evaluate(() => {
+      const a = window.__uni.arrangeProbe();
+      return `view=${window.__uni.state().view} lanes=${a.lanes} clips=${a.clips} `
+           + `elems=${document.querySelectorAll('.ar-clip').length}`;
+    });
+    blocked(false, 'clips answer to the pointer', why);
+  } else {
+    await page.mouse.click(c.x, c.y);
+    await page.waitForTimeout(400);
+    const picked = await geom();
+    ok(!!picked.sel, 'clicking a clip selects it', JSON.stringify(picked.sel));
+    // The model outlines the clip whose "track:tick" matches. An object here
+    // would have selected something and drawn nothing.
+    ok(picked.outlined === 1, 'and the selection is drawn on it',
+       `${picked.outlined} outlined`);
+
+    const beforeOpen = await geom();
+    await page.mouse.dblclick(c.x, c.y);
+    await page.waitForTimeout(700);
+    const opened = await geom();
+    ok(opened.roll === true, 'double-clicking it opens the roll');
+    ok(opened.pianoShown && opened.pianoH > 100,
+       'the roll is ON SCREEN, under the arrangement', `${opened.pianoH}px`);
+    ok(opened.arrangeH < beforeOpen.arrangeH,
+       'and the arrangement makes room rather than being replaced',
+       `${beforeOpen.arrangeH} -> ${opened.arrangeH}`);
+
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(400);
+    const closed = await geom();
+    ok(closed.roll === false && closed.arrangeH > opened.arrangeH,
+       'Escape puts the roll away and gives the room back',
+       `${opened.arrangeH} -> ${closed.arrangeH}`);
+    ok(!!closed.sel, 'and the clip stays selected — one Escape, one dismissal');
+  }
+}
+
 section('resizable and collapsible panes');
 {
   // splitter.js was complete — handles, keyboard, clamping, persistence — and

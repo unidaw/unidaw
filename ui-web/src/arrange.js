@@ -133,7 +133,7 @@ export class Arrange {
    * to log or distinguish them; every one of them means the user is driving, so
    * any playhead-following should stop on all three.
    */
-  constructor(host, metrics, { onLoop, onNav } = {}) {
+  constructor(host, metrics, { onLoop, onNav, onClipSelect, onClipOpen } = {}) {
     this.host = host;
     this.metrics = metrics;
     this.host.className = 'ar';
@@ -141,6 +141,8 @@ export class Arrange {
     // question, and this file knows about pixels. The caller snaps.
     this.onLoop = onLoop;
     this.onNav = onNav;
+    this.onClipSelect = onClipSelect;
+    this.onClipOpen = onClipOpen;
 
     this.gutter = div('ar-gutter', host);
     // Two boxes, not one: the outer clips at the lane strip's top edge so a head
@@ -219,6 +221,33 @@ export class Arrange {
     // page would then page-zoom on ctrl+wheel underneath a surface that believed
     // it had handled the gesture. Stating it here also survives the move.
     this.host.addEventListener('wheel', (e) => this._wheel(e), { passive: false });
+
+    /**
+     * Clips answer to the pointer.
+     *
+     * The band had no pointer handling at all — only the ruler, for the loop, and
+     * the wheel. So a clip could be looked at and nothing else: not selected, not
+     * opened, not addressed by any gesture. An arrangement you cannot point at is
+     * a picture of an arrangement.
+     *
+     * A clip is identified here by (track, startTick) — what the element already
+     * carries. That is positional, and it is what there is: the engine publishes
+     * no placement id, so a stable one has been requested. Content-derived beats
+     * an index into a list that reorders, which is the failure that has now
+     * turned up three times in this codebase.
+     */
+    this.clipsIn.addEventListener('pointerdown', (e) => {
+      const el = e.target.closest('.ar-clip');
+      if (!el || !this.onClipSelect) return;
+      this.onClipSelect({ track: el._pTrack, tick: el._pTick });
+    });
+    // dblclick, not a hand-rolled double pointerdown: the browser already knows
+    // the platform's interval and its slop radius, and both differ per OS.
+    this.clipsIn.addEventListener('dblclick', (e) => {
+      const el = e.target.closest('.ar-clip');
+      if (!el || !this.onClipOpen) return;
+      this.onClipOpen({ track: el._pTrack, tick: el._pTick });
+    });
     this._zoomAccum = 0;
     this._lastNav = '';
 

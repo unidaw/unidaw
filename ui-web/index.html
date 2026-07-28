@@ -125,6 +125,8 @@ function cmd(what) {
 const hud = document.getElementById('hud');
 const tracker = new Tracker(host, metrics);
 const arrangeHost = document.getElementById('arrange');
+// The stage owns the split between the arrangement and the roll.
+const stageEl = document.getElementById('stage');
 const arrange = new Arrange(arrangeHost, metrics, {
   onLoop: (a, b, done, opts) => setLoopFromDrag(a, b, done, opts),
   /**
@@ -142,6 +144,40 @@ const arrange = new Arrange(arrangeHost, metrics, {
    * `why` says which gesture it was; the zoom index and start tick are already
    * clamped by the caller against the zoom table and zero.
    */
+  /**
+   * Clicking a clip selects it.
+   *
+   * Stored as the "track:tick" STRING the model already parses (arrangemodel
+   * splits on the colon to decide which clip to outline). An object would have
+   * been a second shape for one fact, and the outline simply would not have
+   * drawn — the selection would exist and be invisible.
+   */
+  onClipSelect: ({ track, tick }) => {
+    state.selectedPlacement = `${track}:${tick}`;
+    // The rack, the roll and the breadcrumb all follow the cursor's track, so
+    // selecting a clip moves the cursor onto its lane. Otherwise you select a
+    // clip on track 4 and everything else keeps talking about track 0.
+    if (Number.isFinite(track) && track >= 0) state.cursor.track = track;
+    schedule();
+  },
+  /**
+   * Double-clicking a clip opens it in the roll, BELOW the arrangement.
+   *
+   * Both stay on screen — that is the design, and it is the point: choosing
+   * which clip to work on and working on it are the same activity, and a build
+   * that swaps between two full-window surfaces turns the arrangement into a
+   * menu you visit.
+   */
+  onClipOpen: ({ track, tick }) => {
+    state.selectedPlacement = `${track}:${tick}`;
+    if (Number.isFinite(track) && track >= 0) state.cursor.track = track;
+    // Put the roll where the clip is, so opening one shows its notes rather
+    // than wherever the roll happened to be left.
+    if (Number.isFinite(tick)) state.pianoStart = Math.max(0, tick);
+    state.rollOpen = true;
+    state.pianoFitPending = true;      // pick a sensible pitch window for it
+    schedule();
+  },
   onNav: (zoomIndex, startTick, laneScroll, why) => {
     state.arrangeZoom = clampZoom(zoomIndex);
     state.arrangeStart = Math.max(0, startTick);
@@ -1630,6 +1666,8 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting'
   // projection differs, which is the whole point of the view-model boundary.
   projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, arrangeLaneScroll: 0,
   selectedPlacement: null,
+  // The roll shares the stage with the arrangement when a clip is open.
+  rollOpen: false,
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
   pianoSelection: null, pianoMarquee: null, pianoDrag: null,
   pianoFitPending: false, browserOpen: true, dockOpen: true, helpOpen: false,
@@ -2323,10 +2361,22 @@ function draw() {
   const v = state.view;
   const wantArrange = v === 'arrange', wantMixer = v === 'mixer', wantPiano = v === 'piano';
   const wantPatcher = v === 'patcher';
+  /**
+   * The roll rides UNDER the arrangement while a clip is open.
+   *
+   * So the piano surface is visible for two different reasons — because it is
+   * the chosen surface, or because the arrangement is showing a clip in it — and
+   * the split class is what tells #stage to give each an edge to stop at.
+   */
+  const splitRoll = wantArrange && state.rollOpen;
+  const showPiano = wantPiano || splitRoll;
+  if (stageEl.classList.contains('stage-split') !== splitRoll) {
+    stageEl.classList.toggle('stage-split', splitRoll);
+  }
   if (patcherHost.hidden === wantPatcher) patcherHost.hidden = !wantPatcher;
   if (arrangeHost.hidden === wantArrange) arrangeHost.hidden = !wantArrange;
   if (mixerHost.hidden === wantMixer) mixerHost.hidden = !wantMixer;
-  if (pianoHost.hidden === wantPiano) pianoHost.hidden = !wantPiano;
+  if (pianoHost.hidden === showPiano) pianoHost.hidden = !showPiano;
   const trackerOn = !wantArrange && !wantMixer && !wantPiano && !wantPatcher;
   const disp = trackerOn ? '' : 'none';
   if (host.style.display !== disp) {
@@ -2346,7 +2396,9 @@ function draw() {
      */
     if (trackerOn) tracker.measure();
   }
-  if (wantArrange) return drawArrange();
+  // Both, in order, when the stage is split: the roll draws into the strip the
+  // arrangement left for it.
+  if (wantArrange) { drawArrange(); if (splitRoll) drawPiano(); return; }
   if (wantMixer) return drawMixer();
   if (wantPiano) return drawPiano();
   if (wantPatcher) return drawPatcher();
@@ -3256,6 +3308,31 @@ addEventListener('keydown', (e) => {
     return;
   }
   if (state.view === 'arrange') {
+    /**
+     * Escape closes the roll, and only then clears the selection.
+     *
+     * Ordered, because Escape is already several dismissals deep everywhere else
+     * in this handler and the one people mean first is "put that panel away". A
+     * single Escape that did both would leave nothing to press to keep a clip
+     * selected while closing the editor.
+     */
+    if (k === 'Escape') {
+      if (state.rollOpen) { state.rollOpen = false; return done(); }
+      if (state.selectedPlacement) { state.selectedPlacement = null; return done(); }
+      state.reject = null;
+      return done();
+    }
+    // Enter opens the selected clip in the roll — the keyboard's version of the
+    // double-click, so the gesture is not mouse-only.
+    if (k === 'Enter' && state.selectedPlacement) {
+      state.rollOpen = true;
+      // "track:tick" — the same encoding the model reads.
+      const colon = String(state.selectedPlacement).indexOf(':');
+      const tick = colon > 0 ? +String(state.selectedPlacement).slice(colon + 1) : 0;
+      state.pianoStart = Math.max(0, Number.isFinite(tick) ? tick : 0);
+      state.pianoFitPending = true;
+      return done();
+    }
     if (k.startsWith('Arrow') || k === 'PageUp' || k === 'PageDown' || k === 'Home') {
       state.followPlayhead = false;
     }

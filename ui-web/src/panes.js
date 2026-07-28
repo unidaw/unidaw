@@ -103,6 +103,14 @@ export function createPanes({ onSize = () => {}, onEnd = () => {} } = {}) {
     min: MIN_CELL, max: () => Math.max(MIN_CELL, innerHeight * 0.7), home: 150,
   });
 
+  // The roll, when it shares the stage with the arrangement. Grabbed on its TOP
+  // edge — the boundary with the arrangement above it — so dragging up gives the
+  // roll more room, which is the direction the handle's position implies.
+  add($('piano'), {
+    key: 'rollH', edge: 'top', prop: '--stage-roll-h', label: 'Scale roll height',
+    min: 120, max: () => Math.max(120, innerHeight * 0.7), home: 300,
+  });
+
   const folds = [
     collapseButton($('harmony'), '.hm-head', () => { onSize(); onEnd(); }),
     collapseButton($('pending'), '.pd-head', () => { onSize(); onEnd(); }),

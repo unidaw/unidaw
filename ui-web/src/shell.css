@@ -28,6 +28,8 @@
   --rdock-harmony-h: 345px;
   --rdock-pending-h: 150px;
   --rdock-head-h: 26px;
+  /* How tall the roll is when it shares the stage with the arrangement. */
+  --stage-roll-h: 300px;
   --shell-minimap-w: 30px;
 }
 
@@ -322,3 +324,25 @@
 }
 .cell-fold:hover { opacity: 1; color: var(--base-accent); }
 .cell-fold:focus-visible { outline: 1px solid var(--base-accent); opacity: 1; }
+
+/* THE ARRANGEMENT AND THE ROLL, AT THE SAME TIME.
+ *
+ * The design puts the scale roll UNDER the arrangement — you pick a clip up
+ * there and edit its notes down here, both on screen, because deciding which
+ * clip to work on and working on it are the same activity. The build had them as
+ * two full-window surfaces you swapped between, which makes the arrangement a
+ * menu you visit rather than the thing you are arranging in.
+ *
+ * Both surfaces are already `position: absolute; inset: 0` inside #stage, so
+ * splitting is a matter of giving each an edge to stop at. --stage-roll-h is
+ * dragged by a Splitter, like every other region.
+ */
+#stage.stage-split #arrange { bottom: var(--stage-roll-h); }
+#stage.stage-split #piano {
+  top: auto;
+  height: var(--stage-roll-h);
+  border-top: 1px solid var(--uni-rule-gutter);
+}
+/* The roll needs its own containing block for the splitter handle, exactly as
+   #rdock did. */
+#piano { position: absolute; }
