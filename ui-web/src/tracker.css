@@ -154,6 +154,14 @@
    measure() sees the new geometry. */
 .tk-track.no-lane > .tk-lane-bar { display: none; }
 
+/* A lane whose parent is collapsed. Zero width rather than `display: none` on the
+   track itself, so the element stays in the flow and measure() reads a real box for
+   it — a removed track would make offsetLeft skip an index and every lane after it
+   would be measured as the wrong track. */
+.tk-track.folded {
+  width: 0; flex: 0 0 0; overflow: hidden; border-right-width: 0;
+}
+
 /* WHERE IN THE ROW the note actually sounds — a hairline at its true position
    inside the cell, from the note's own delay.
    A pseudo-element, so it costs no DOM node in a pool of 768 cells. Absent unless

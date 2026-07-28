@@ -1025,6 +1025,30 @@ const dockApi = {
     schedule();
   },
   del: () => { if (!deleteAtCursor()) throw new Error(state.reject || 'nothing deleted'); schedule(); },
+  /**
+   * Collapse or expand a parent's children. Returns false if the track has none.
+   *
+   * Refused rather than accepted-and-ignored on a track with no children: folding
+   * something that cannot fold is a no-op that looks like it worked, and "never a
+   * silent no-op" is the rule this surface is built on.
+   */
+  fold: (t) => {
+    if (!engine || t < 0 || t >= collapsed.length) return false;
+    const parent = engine.trackParent;
+    if (!parent) return false;
+    let kids = 0;
+    for (let k = 0; k < state.tracks; k++) if (parent[k] === t && k !== t) kids++;
+    if (!kids) return false;
+    collapsed[t] = collapsed[t] ? 0 : 1;
+    collapsedAny = false;
+    for (let k = 0; k < collapsed.length; k++) if (collapsed[k]) { collapsedAny = true; break; }
+    // The cursor comes out with the fold. Left inside, it sits on a lane that is
+    // zero pixels wide — the cell is still addressable, so every edit still lands
+    // correctly, and none of it is visible. That is worse than moving it.
+    if (collapsed[t] && parent[state.cursor.track] === t) state.cursor.track = t;
+    schedule();
+    return true;
+  },
   goto: (row, track) => {
     state.cursor.row = Math.max(0, row);
     if (track !== undefined) state.cursor.track = Math.max(0, Math.min(state.tracks - 1, track));
@@ -1312,6 +1336,21 @@ let lastViewportKey = -1;
 // engine keeps publishing the last result indefinitely, so a page opened after
 // someone typed a bad project name greeted every visitor with the refusal.
 let lastLoadSeq = -1;
+/**
+ * Which parents the USER has collapsed, by track index.
+ *
+ * The engine publishes a `collapsed` flag (kShmVersion 20) and has no command to
+ * change it yet, so this is the view's own answer and it wins while it exists.
+ * When a command lands the engine's flag becomes authoritative and this becomes
+ * the optimistic half — the shape every other edit here already has.
+ *
+ * A fixed array rather than a Set: it is read per track per frame by the
+ * view-model, and a Set lookup per lane per frame is a hash per lane per frame for
+ * a domain of at most 64 small integers.
+ */
+const collapsed = new Uint8Array(64);
+let collapsedAny = false;
+
 const state = { start: 0, scrollX: 0, tracks: 16, columns: 3, link: 'connecting', selection: null,
   // Entry state, shown in the chrome so you can see what you are typing into.
   octave: 4, editStep: 1, velocity: 100, zoom: 3, digitCell: -1, digitAcc: 0,
@@ -1454,6 +1493,9 @@ function buildHead() {
   // header being broken rather than as the widths having become non-uniform.
   const widthOf = (t) => (tracker.trackWidth && t < tracker.trackCountMeasured
     ? tracker.trackWidth[t] : stride);
+  // A folded lane measures zero, so its header follows for free — the header's
+  // width comes from the MEASURED track box, which is the whole reason that is
+  // measured rather than computed.
   const heads = [];
   for (let t = 0; t < state.tracks; t++) {
     const el = document.createElement('div'); el.className = 'htrack';
@@ -1461,6 +1503,11 @@ function buildHead() {
     const w = widthOf(t);
     el.style.width = `${w}px`;
     el.style.flex = `0 0 ${w}px`;
+    // A zero-width header still draws its own border, so three folded children
+    // leave a 6px stripe where nothing is. The track element already zeroes its
+    // border when folded; the header has to agree or the two disagree by exactly
+    // the thing that is supposed to have disappeared.
+    if (w === 0) el.classList.add('folded');
     const nm = document.createTextNode('');
     el.appendChild(nm);
     el._nameNode = nm; el._nameVal = null;
@@ -1490,6 +1537,7 @@ function buildHead() {
   headRow._tracks = state.tracks;
   headRow._stride = stride;
   headRow._laneSig = tracker._laneSig;
+  headRow._hiddenSig = tracker._hiddenSig;
   head.append(headRow);
   paintHeadLpb();
 }
@@ -1994,22 +2042,6 @@ function draw() {
   // stride, so building the header before the pool exists bakes in the fallback
   // width and every column sits wrong until something else forces a rebuild.
   tracker.resize(boxOf(host, true), state.tracks, state.columns);
-  const stride = tracker.trackStride
-    || metrics.cellWidth * state.columns + metrics.laneBarWidth;   // cold start, before measure()
-  // Rebuilt on the lane-visibility signature too, not only on the stride. Which
-  // lanes carry a bar readout changes individual track WIDTHS while leaving the
-  // widest one alone, so a stride-only test misses it entirely and every header
-  // after the first deviating track sits 40px out — GUIDELINES 2.1 again: the
-  // content moved and the key the consumer watched did not.
-  if (!headRow || headRow._tracks !== state.tracks || headRow._stride !== stride
-      || headRow._laneSig !== tracker._laneSig) buildHead();
-  paintHeadLpb();
-  if (headRow && headRow._x !== state.scrollX) {
-    headRow._x = state.scrollX;
-    // Negated inside the string, not before it: `-0` is a heap double in V8, and
-    // this is a guarded write whose input is 0 for most of a session.
-    headRow.style.transform = 'translateX(-' + state.scrollX + 'px)';
-  }
   bi ^= 1;
   const o = _vmOpts;
   o.startRow = state.start; o.rowCount = tracker.poolSize;
@@ -2033,6 +2065,11 @@ function draw() {
   // different meter draws its own accents inside one of them; that grid comes off
   // the clip, not off this.
   o.meter = songMeter();
+  // Only when something is actually collapsed. Passing the array unconditionally
+  // would make the view-model prefer an all-zero override to the engine's own
+  // flags, so a project that loaded with a parent already collapsed would draw it
+  // open — the override silently becoming the only source rather than an override.
+  o.collapsedOverride = collapsedAny ? collapsed : null;
   const vm = bufs[bi] = buildViewModel(o, bufs[bi]);
   vm.scrollX = state.scrollX;
   updateChrome();
@@ -2053,6 +2090,36 @@ function draw() {
     conn.setViewport(zl.aggregate ? 1 : zl.linesPerBeat, vpFirst, vpRows);
   }
   tracker.render(vm);
+
+  /**
+   * The header, AFTER the renderer has measured.
+   *
+   * Its track widths come from the measured track boxes, and `render` is what
+   * applies the fold and the bar-column visibility and then re-measures. Built
+   * before that — which is where this used to sit — it takes the PREVIOUS frame's
+   * geometry, stamps the current signature on itself, and never rebuilds: the
+   * headers of three folded children stayed 270px wide over lanes that were zero.
+   * A derived value has to come after the thing it derives from, and stamping the
+   * key of a state you have not read yet is how that goes wrong quietly.
+   */
+  const stride = tracker.trackStride
+    || metrics.cellWidth * state.columns + metrics.laneBarWidth;   // cold start, before measure()
+  // Keyed on the stride AND on both visibility signatures. Which lanes carry a bar
+  // readout, and which are folded under a collapsed parent, both change individual
+  // track widths while leaving the widest one alone — so a stride-only test misses
+  // each of them and every header past the change sits over the wrong lane. That is
+  // GUIDELINES 2.1 twice in one line: the key has to name everything the value is
+  // computed from, and "the widths" has three inputs now.
+  if (!headRow || headRow._tracks !== state.tracks || headRow._stride !== stride
+      || headRow._laneSig !== tracker._laneSig
+      || headRow._hiddenSig !== tracker._hiddenSig) buildHead();
+  paintHeadLpb();
+  if (headRow && headRow._x !== state.scrollX) {
+    headRow._x = state.scrollX;
+    // Negated inside the string, not before it: `-0` is a heap double in V8, and
+    // this is a guarded write whose input is 0 for most of a session.
+    headRow.style.transform = 'translateX(-' + state.scrollX + 'px)';
+  }
   // The node count is an O(tree) walk. Sampling it every frame cost ~7 ms —
   // more than the render it was reporting on. Diagnostics must not be in the
   // hot path; refresh it on a timer instead.
@@ -3392,6 +3459,39 @@ window.__uni = {
    *   4  audio, whose packed meter is an engine default rather than an authored
    *      one and must therefore read blank
    */
+  /**
+   * A parent track with children, which is what multi-out produces.
+   *
+   * The engine does not create children yet — Movement 4 phase 5 — but the FIELDS
+   * are on the wire (kShmVersion 20), so collapse can be built and tested before
+   * the thing it collapses exists. That is the same reason the v20 read-back was
+   * asserted early: a default and an unwritten field look identical, and the only
+   * moment you can tell them apart is before the feature lands.
+   *
+   * Track 1 is a drum plugin with three stems (2, 3, 4) and track 5 is an ordinary
+   * track after them — so "hide the children" and "hide everything below the
+   * parent" are different answers and the fixture can tell them apart.
+   */
+  useChildTracks: () => {
+    state.useEngine = true; state.hudFrozen = true;
+    conn.close(); hudText.nodeValue = 'child-tracks';
+    state.zoom = 1; state.start = 0; state.scrollX = 0; state.tracks = 6;
+    collapsed.fill(0); collapsedAny = false;
+    const parent = new Uint32Array([0, 0, 1, 1, 1, 0]);
+    const flags = new Uint8Array(6);
+    engine = { ok: true, seq: 1, playheadTick: 0, visualSample: 0, clipVersion: 1,
+               harmonyVersion: 0, transport: 0, trackCount: 6,
+               peaks: new Float32Array(6), peakCount: 0,
+               notes: [], noteCount: 0,
+               aggCount: new Uint32Array(0), aggRep: new Uint8Array(0),
+               aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
+               extents: [], extentCount: 0, extentsRevision: 1,
+               lpb: Uint8Array.from([4, 4, 4, 4, 4, 4]), notesRevision: 1, aggRevision: 1,
+               songTimeSigNum: 4, songTimeSigDen: 4,
+               names: ['Bass', 'Drums', 'Kick', 'Snare', 'Hats', 'Pad'],
+               trackParent: parent, trackFlags: flags };
+    draw();
+  },
   useClipMeters: () => {
     state.useEngine = true; state.hudFrozen = true;
     conn.close(); hudText.nodeValue = 'clip-meters';
@@ -3498,7 +3598,12 @@ window.__uni = {
     }
     return out;
   },
-  names: () => (engine ? engine.names.slice() : null),
+  // `engine.names` is absent on the fixtures that never set it, so the guard is on
+  // the ARRAY and not just on the engine. Reading `.slice()` off undefined threw
+  // inside a probe, which took down the whole golden run and reported it as no
+  // failures at all — a probe that can throw is worse than a probe that returns
+  // nothing, because it takes the harness with it.
+  names: () => (engine && engine.names ? engine.names.slice() : null),
   harmony: () => (engine ? engine.harmony.slice() : null),
   key: () => currentKey(),
   // How the app spells the Nth harmony event. Exposed so a test can assert the
@@ -3527,6 +3632,11 @@ window.__uni = {
   loadStatus: () => (engine ? { seq: engine.loadSeq, ok: engine.loadOk } : null),
   mixerProbe: () => mixer.probe(),
   scopeProbe: () => scope.probe(),
+  /** Push one frame's worth of levels into the scope's ring, as the engine does.
+   *  Exposed so a test can prove the paint guard releases when data arrives — a
+   *  guard nothing can show un-skipping is a guard nobody can trust. */
+  scopeSample: () => { scope.push(engine ? engine.peaks : null,
+                                 engine ? engine.trackCount : 8); draw(); },
   peaks: () => (engine ? Array.from(engine.peaks.slice(0, Math.max(engine.peakCount, 8))) : null),
   aggregates: () => (engine ? { rows: engine.aggRows, tracks: engine.aggTracks,
     counts: Array.from(engine.aggCount.slice(0, 24)),
@@ -3567,6 +3677,9 @@ window.__uni = {
   // The cursor, for tests and agents. `dockApi.goto` is the same movement the
   // console command performs, so the two cannot drift.
   goto: (row, track) => dockApi.goto(row, track),
+  /** Collapse/expand a parent's children, and what is folded right now. */
+  fold: (t) => dockApi.fold(t),
+  folded: () => Array.from(collapsed.slice(0, state.tracks)),
   // The same function the rack's drag calls, not a copy of it.
   audioSources: () => ({ sources: audioSources, clips: audioClips, bpmMilli: audioBpmMilli }),
   /**

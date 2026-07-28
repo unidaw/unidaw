@@ -253,6 +253,11 @@ export function createCommands(api) {
       } },
     mute: { help: 'mute <track>', args: [A_TRACK],
       run: (a) => { const t = Number(a[0]); api.strip(t, 'mute'); return 'mute t' + t; } },
+    // Collapse is a VIEW decision, and it still gets a command: hard requirement 4
+    // is that an agent can drive the UI, and a fold reachable only by a keystroke
+    // is a fold an agent cannot reach. The op-registry test enforces exactly this.
+    fold: { help: 'fold <track> — hide a parent\'s child tracks', args: [A_TRACK],
+      run: (a) => { const t = Number(a[0]); return api.fold(t) ? 'fold ' + t : 'not a parent'; } },
     solo: { help: 'solo <track>', args: [A_TRACK],
       run: (a) => { const t = Number(a[0]); api.strip(t, 'solo'); return 'solo t' + t; } },
     state: { help: 'dump UI state', args: NONE, run: () => JSON.stringify(api.state()) },

@@ -49,6 +49,8 @@ export class Tracker {
     this.widestTrack = 0;
     /** The lane-visibility bitmask currently applied to the pool. */
     this._laneSig = -1;
+    /** ...and which lanes are folded away under a collapsed parent. */
+    this._hiddenSig = -1;
     /** @type {HTMLElement[]} */
     this.pool = [];
     /** How many pool slots the current frame's window claims — see rowEl(). */
@@ -159,14 +161,20 @@ export class Tracker {
    * scroll. Re-measuring is not optional — every cell position, the hit test, the
    * header and the scroll clamp are derived from widths that just changed.
    */
-  applyLaneShow(laneShow, sig) {
-    if (this._laneSig === sig) return false;
+  applyLaneShow(laneShow, sig, laneHidden, hiddenSig) {
+    if (this._laneSig === sig && this._hiddenSig === hiddenSig) return false;
     this._laneSig = sig;
+    this._hiddenSig = hiddenSig;
     for (let i = 0; i < this.pool.length; i++) {
       const lanes = this.pool[i]._lanes;
       if (!lanes) continue;
       for (let t = 0; t < lanes.length; t++) {
         lanes[t].classList.toggle('no-lane', !(laneShow && laneShow[t]));
+        // A lane whose parent is collapsed takes no width. NOT removed and not
+        // renumbered: the track keeps its published index, so the cursor, the
+        // selection's field indices and every track-keyed command are untouched.
+        // Collapse is what is drawn, never what exists.
+        lanes[t].classList.toggle('folded', !!(laneHidden && laneHidden[t]));
       }
     }
     this.measure();
@@ -411,7 +419,8 @@ export class Tracker {
     // Which lanes carry a readout, BEFORE anything is positioned: it changes track
     // widths, and every cell position, the hit test and the scroll clamp are
     // derived from those. Guarded on a bitmask, so a scroll costs one compare.
-    const laneChanged = this.applyLaneShow(vm.laneShow, vm.laneShowSig | 0);
+    const laneChanged = this.applyLaneShow(vm.laneShow, vm.laneShowSig | 0,
+                                           vm.laneHidden, vm.laneHiddenSig | 0);
 
     // A ring, not a list. Pool slot is `row mod poolSize`, so a row keeps the
     // same element until it leaves the window entirely — scrolling one row

@@ -93,6 +93,54 @@ const _clipMeter = { numerator: 4, denominator: 4 };
  * that grows a column when you scroll into the bridge and loses it on the way out
  * shifts the layout under the pointer, which is worse than a redundant column.
  */
+/**
+ * Which lanes are hidden because an ancestor is collapsed.
+ *
+ * A child track is an ORDINARY track (kShmVersion 20) — same flat index, same
+ * name, same mixer strip — and collapse is a decision about what to DRAW, never
+ * about what exists. A collapsed parent still has its children, still plays them,
+ * still publishes their rails; they simply take no width.
+ *
+ * Hidden by giving the lane ZERO WIDTH rather than by renumbering. Track ids stay
+ * the flat index the engine publishes, so the cursor, the selection's field
+ * indices (`track * columns + col`) and every command keyed on a track index are
+ * untouched. Renumbering would make lane position and track id two different
+ * things, and every one of those would have to learn the difference.
+ *
+ * Walks ANCESTORS, not just the parent: a collapsed grandparent hides a child
+ * whose own parent is expanded. Bounded by trackCount so a cycle in parent_id —
+ * which the engine should never publish and which would otherwise hang the draw —
+ * terminates instead.
+ */
+function computeLaneHidden(engine, buf, trackCount, override) {
+  if (buf._laneHidden.length < trackCount) buf._laneHidden = new Uint8Array(trackCount * 2);
+  buf._laneHidden.fill(0, 0, trackCount);
+  const parent = engine.trackParent, flags = engine.trackFlags;
+  if (!parent || !flags) return 0;
+  for (let t = 0; t < trackCount; t++) {
+    // parent_id 0 means top-level, so track 0 can never be a child and the walk
+    // always terminates at it.
+    let p = parent[t], hops = 0;
+    while (p > 0 && p < trackCount && hops++ < trackCount) {
+      const collapsed = override ? override[p] : (flags[p] & 1) !== 0;
+      if (collapsed) { buf._laneHidden[t] = 1; break; }
+      p = parent[p];
+    }
+  }
+  let sig = 0;
+  for (let t = 0; t < trackCount && t < 32; t++) sig |= buf._laneHidden[t] << t;
+  return sig;
+}
+
+/** How many lanes a collapsed parent is standing in for. */
+function countChildren(engine, trackCount, t) {
+  const parent = engine.trackParent;
+  if (!parent) return 0;
+  let n = 0;
+  for (let k = 0; k < trackCount; k++) if (parent[k] === t) n++;
+  return n;
+}
+
 function computeLaneShow(engine, buf, meter, trackCount) {
   const songBar = ticksPerBar(meter);
   if (buf._laneShow.length < trackCount) buf._laneShow = new Uint8Array(trackCount * 2);
@@ -451,6 +499,8 @@ export function createBuffer(rowCount, trackCount, columns) {
     _extAudio: new Int32Array(0),
     /** Per track, whether its bars differ from the song's. See computeLaneShow. */
     _laneShow: new Uint8Array(0),
+    /** Per track, whether an ancestor is collapsed. See computeLaneHidden. */
+    _laneHidden: new Uint8Array(0),
   };
 }
 
@@ -521,6 +571,16 @@ export function buildViewModel(opts, buf) {
      * keystroke — that is the point of it.
      */
     badToken = null,
+    /**
+     * A per-track override of the engine's `collapsed` flag, or null to use it.
+     *
+     * Collapsing is a view decision and the engine has no command for it yet, so
+     * the UI holds its own answer. Kept as an OVERRIDE rather than as the only
+     * source: when a command exists the engine's flag becomes authoritative and
+     * this becomes the optimistic half, which is the same shape every other edit
+     * on this surface already has.
+     */
+    collapsedOverride = null,
   } = opts;
 
   if (!buf || buf._rows !== rowCount || buf._trackCount !== trackCount
@@ -649,6 +709,8 @@ export function buildViewModel(opts, buf) {
   // one integer. Recomputed with the extents; it changes on a load or a clip edit
   // and never inside a scroll.
   const laneShowSig = engine ? computeLaneShow(engine, buf, meter, trackCount) : 0;
+  const laneHiddenSig = engine
+    ? computeLaneHidden(engine, buf, trackCount, collapsedOverride) : 0;
   const laneStale = relabel || buf._laneExtRev !== extRev;
   buf._laneExtRev = extRev;
   buf._labelStart = startRow;
@@ -1147,6 +1209,8 @@ export function buildViewModel(opts, buf) {
 
   buf.laneShow = engine ? buf._laneShow : null;
   buf.laneShowSig = laneShowSig;
+  buf.laneHidden = engine ? buf._laneHidden : null;
+  buf.laneHiddenSig = laneHiddenSig;
   buf.window.startRow = startRow; buf.window.rowCount = rowCount;
   buf.zoom = zoom;
   buf.cursor.row = cursor.row; buf.cursor.track = cursor.track; buf.cursor.col = cursor.col;

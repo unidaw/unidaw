@@ -140,6 +140,15 @@
   border-right: var(--uni-rule-track-width) solid var(--uni-rule-track);
 }
 
+/* A header whose lane is folded away under a collapsed parent.
+   Written as `#head .htrack.folded` and kept HERE rather than in tracker.css: the
+   base rule above is `#head .htrack`, and an id beats two classes, so the same
+   declaration written next to the fold logic simply lost. Zero really means zero —
+   a border on a zero-width box is still 2px of visible stripe, and three folded
+   children leave a 6px comb where the fold is supposed to have removed
+   everything. */
+#head .htrack.folded { border-width: 0; padding: 0; overflow: hidden; }
+
 /* Where a surface actually draws. Position:relative so the surfaces can stay
    absolutely positioned inside it — they were written against `inset: 0` and
    there is no reason to rewrite five renderers to move the frame around them. */

@@ -20,6 +20,12 @@ const HISTORY = 512;
 
 export class Scope {
   constructor(canvas, trackCount = 16) {
+    // What the last paint was for. -1 head so the first render always runs.
+    this._pHead = -1; this._pN = -1; this._pW = -1; this._pH = -1;
+    /** How many times the canvas has actually been repainted. The guard above is
+     *  only worth having if something can show it skipping, and only SAFE if
+     *  something can show it not skipping when the ring moves. */
+    this.paints = 0;
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
     this.tracks = trackCount;
@@ -52,6 +58,9 @@ export class Scope {
 
   resize(cssW, cssH, dpr) {
     if (this.w === cssW && this.h === cssH && this.dpr === dpr) return;
+    // Invalidate the paint guard: assigning canvas.width below clears the backing
+    // store, so the next render must run even if the ring has not advanced.
+    this._pHead = -1;
     this.w = cssW; this.h = cssH; this.dpr = dpr;
     this.canvas.width = Math.max(1, Math.round(cssW * dpr));
     this.canvas.height = Math.max(1, Math.round(cssH * dpr));
@@ -68,6 +77,30 @@ export class Scope {
     const { ctx } = this;
     const n = Math.max(1, Math.min(count, this.tracks));
     const W = this.canvas.width, H = this.canvas.height;
+
+    /**
+     * Nothing to redraw unless something moved.
+     *
+     * The picture is a pure function of (head, lane count, canvas size): the ring
+     * is written by the ENGINE's frames, not by draws, so between two paints with
+     * no new sample the output is identical to the pixel. Painting it anyway is
+     * 8 lanes x 512 points of path per frame, and Chrome allocates for every
+     * segment — measured at 48.6 KB/draw against a budget of 900 B for the whole
+     * mixer, which is 54x the limit for a picture that did not change.
+     *
+     * This is GUIDELINES 3.6 — guard every write — applied to a canvas. Every DOM
+     * write on this surface is compared before it is made; a canvas is the one
+     * place where "just repaint it" felt free, and it is the most expensive
+     * surface in the program.
+     *
+     * The size is in the key because resizing CLEARS the backing store, so a
+     * canvas that changed shape has to be repainted even though the data did not.
+     */
+    if (this._pHead === this.head && this._pN === n
+        && this._pW === W && this._pH === H) return;
+    this._pHead = this.head; this._pN = n; this._pW = W; this._pH = H;
+    this.paints++;
+
     const laneH = H / n;
 
     ctx.fillStyle = this.colors.bg;
@@ -110,6 +143,7 @@ export class Scope {
     const prev = (this.head + HISTORY - 1) % HISTORY;
     for (let t = 0; t < this.tracks; t++) last.push(this.history[t * HISTORY + prev]);
     return { history: HISTORY, tracks: this.tracks, head: this.head,
-             width: this.canvas.width, height: this.canvas.height, last };
+             width: this.canvas.width, height: this.canvas.height, last,
+             paints: this.paints };
   }
 }

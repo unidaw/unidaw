@@ -78,6 +78,14 @@ const SCENES = [
   // called feed(). Nothing that drives feed() DIRECTLY can see that: the alloc
   // test's `paletteMove` and any __uni helper both bypass the wiring that was
   // broken. Only a real key press goes through both handlers.
+  // A parent with children, folded and unfolded. The engine does not create
+  // children yet, so this is the only place collapse can be exercised — and
+  // building it now means it works the day they populate.
+  { name: 'child-tracks', childTracks: true,
+    setup: async (p) => p.evaluate(() => window.__uni.useChildTracks()) },
+  { name: 'child-tracks-folded', childTracks: true, folded: true,
+    setup: async (p) => p.evaluate(() => {
+      window.__uni.useChildTracks(); window.__uni.fold(1); }) },
   { name: 'palette', palette: true, setup: async (p) => {
       await p.keyboard.press('Meta+k');
       // WAIT FOR FOCUS before pressing anything. Without this the arrows arrive
@@ -500,6 +508,41 @@ for (const scene of SCENES) {
        `and it sits at its note's offset inside the cell: ${got}px of ${painted && painted.cellW}px, wanted ${want}px`);
   }
 
+  if (scene.childTracks) {
+    const t = await page.evaluate(() => {
+      const w = (i) => {
+        const e = document.querySelector(`.tk-row[data-row="0"] .tk-track:nth-child(${i + 3})`);
+        return e ? Math.round(e.getBoundingClientRect().width) : -1;
+      };
+      const hw = (i) => {
+        const e = document.querySelectorAll('.htrack')[i];
+        return e ? Math.round(e.getBoundingClientRect().width) : -1;
+      };
+      return { widths: [0, 1, 2, 3, 4, 5].map(w), heads: [0, 1, 2, 3, 4, 5].map(hw),
+               folded: window.__uni.folded(), cursor: window.__uni.state().cursor.track };
+    });
+    if (scene.folded) {
+      // Tracks 2-4 are track 1's children. Folded, they take no width; the parent
+      // and the unrelated track after them keep theirs. A fold that hid everything
+      // BELOW the parent would take track 5 too, which is why the fixture puts an
+      // ordinary track after the children.
+      ok(t.widths[1] > 0, `the parent stays: ${t.widths[1]}px`);
+      ok(t.widths[2] === 0 && t.widths[3] === 0 && t.widths[4] === 0,
+         `its children take no width: ${JSON.stringify(t.widths.slice(2, 5))}`);
+      ok(t.widths[5] > 0, `and an unrelated track after them is untouched: ${t.widths[5]}px`);
+      // The HEADER has to follow, or every header past the fold sits over the
+      // wrong lane — the failure the per-track width work exists to prevent.
+      ok(t.heads[2] === 0 && t.heads[3] === 0 && t.heads[4] === 0,
+         `their headers fold with them: ${JSON.stringify(t.heads.slice(2, 5))}`);
+      ok(t.heads[5] > 0, `and the one after does not: ${t.heads[5]}px`);
+      ok(t.folded[1] === 1, 'the parent is marked folded');
+    } else {
+      ok(t.widths.every((w) => w > 0),
+         `nothing is folded to begin with: ${JSON.stringify(t.widths)}`);
+      ok(t.folded.every((f) => f === 0), 'and nothing is marked folded');
+    }
+  }
+
   if (scene.clipMeters) {
     const lanes = await page.evaluate(() => {
       const rows = [...document.querySelectorAll('.tk-row')]
@@ -696,6 +739,32 @@ for (const scene of SCENES) {
     // than on the DOM — there is no DOM to assert on, which is the point.
     const sc = await page.evaluate(() => window.__uni.feedScope(600));
     ok(sc && sc.head > 0, `scope ring advanced: head ${sc && sc.head}`);
+
+    /**
+     * The scope's paint guard, both ways.
+     *
+     * It is the most expensive surface in the program — 8 lanes x 512 points of
+     * canvas path — and it was repainting an identical picture on every draw, at
+     * 48.6 KB/draw against a 900 B budget for the whole mixer. The ring is written
+     * by the ENGINE's frames, not by draws, so between two draws with no new
+     * sample the output is the same to the pixel.
+     *
+     * A guard is only worth having if something can show it SKIPPING, and only
+     * safe if something can show it NOT skipping when the data moves. Both here:
+     * redraws with no new sample must not repaint, and one new sample must.
+     */
+    const guard = await page.evaluate(() => {
+      const before = window.__uni.scopeProbe().paints;
+      for (let i = 0; i < 10; i++) window.__uni.redraw();
+      const idle = window.__uni.scopeProbe().paints;
+      window.__uni.scopeSample();          // one engine frame's worth
+      window.__uni.redraw();
+      return { before, idle, after: window.__uni.scopeProbe().paints };
+    });
+    ok(guard.idle === guard.before,
+       `ten redraws with no new sample repaint nothing: ${guard.before} -> ${guard.idle}`);
+    ok(guard.after === guard.idle + 1,
+       `and one new sample repaints exactly once: ${guard.idle} -> ${guard.after}`);
     const ink = await page.evaluate(() => {
       const c = document.querySelector('.mx-scope');
       const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
@@ -831,11 +900,23 @@ for (const scene of SCENES) {
   const heads = await page.evaluate(() => ({
     labels: [...document.querySelectorAll('#head .htrack')].map((e) => e.textContent.trim()),
     names: window.__uni.probe().tracks,
+    // The engine's own names, when it has published any. Without them every
+    // header falls back to T01, T02, ... — which is what this used to assume
+    // unconditionally, so a fixture that named its tracks failed an assertion
+    // about ORDER for having names at all.
+    real: window.__uni.names(),
   }));
   ok(heads.labels.length === heads.names, `a header per track: ${heads.labels.length}`);
   ok(heads.labels.every((s) => s.length > 0), `no header left unnamed: ${JSON.stringify(heads.labels.slice(-2))}`);
-  ok(heads.labels.every((s, i) => s.startsWith(`T${String(i + 1).padStart(2, '0')}`)),
-     `header n names track n: ${JSON.stringify(heads.labels.slice(0, 3))}`);
+  // Header n names track n — the off-by-one this was written for. Checked against
+  // whatever the track is actually called: the engine's name where there is one,
+  // the fallback where there is not. A header list shifted by one fails either way,
+  // which is the whole point; the literal "T01" was never the property.
+  ok(heads.labels.every((s, i) => {
+    const want = heads.real && heads.real[i]
+      ? heads.real[i] : `T${String(i + 1).padStart(2, '0')}`;
+    return s.startsWith(want);
+  }), `header n names track n: ${JSON.stringify(heads.labels.slice(0, 3))}`);
 
   await shoot(scene);
 
