@@ -108,7 +108,12 @@ class IPluginInstance {
  public:
   virtual ~IPluginInstance() = default;
 
-  virtual void prepare(double sampleRate, int blockSize, int numOutputs) = 0;
+  // enableSidechain (Movement 4): enable the plugin's sidechain (aux) input bus, so a
+  // keyed effect (a compressor ducked by another track) receives its key signal. Off =
+  // the default (only the main bus enabled). Governs the negotiated bus layout, so it
+  // must be known here, not toggled later.
+  virtual void prepare(double sampleRate, int blockSize, int numOutputs,
+                       bool enableSidechain = false) = 0;
   // Called before process() for the same block.
   virtual void setTransport(const TransportInfo& transport) = 0;
   virtual void process(const float* const* inputs, int numInputs,

@@ -578,6 +578,7 @@ std::string serializeProject(const ProjectDocument& document) {
     writeRoute(writer, "midi_out", track.routing.midiOut);
     writeRoute(writer, "audio_in", track.routing.audioIn);
     writeRoute(writer, "audio_out", track.routing.audioOut);
+    writeRoute(writer, "sidechain", track.routing.sidechain);
     writer.key("pre_fader_send", track.routing.preFaderSend);
     writer.endChildObject();
 
@@ -816,6 +817,9 @@ bool deserializeProject(const std::string& json,
         }
         if (const auto child = routing->get_child_optional("audio_out")) {
           track.routing.audioOut = readRoute(*child);
+        }
+        if (const auto child = routing->get_child_optional("sidechain")) {
+          track.routing.sidechain = readRoute(*child);
         }
         track.routing.preFaderSend = routing->get<bool>("pre_fader_send", true);
       }

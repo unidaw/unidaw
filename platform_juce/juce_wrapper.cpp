@@ -382,7 +382,8 @@ class JucePluginInstance final : public IPluginInstance {
     playHead_.update(transport);
   }
 
-  void prepare(double sampleRate, int blockSize, int numOutputs) override {
+  void prepare(double sampleRate, int blockSize, int numOutputs,
+               bool enableSidechain = false) override {
     if (!instance_) {
       return;
     }
@@ -409,11 +410,25 @@ class JucePluginInstance final : public IPluginInstance {
       layout.outputBuses.getReference(b) =
           b == 0 ? mainSet : juce::AudioChannelSet::disabled();
     }
+    // Movement 4 sidechain: when asked, enable the FIRST aux input bus (index 1) — the
+    // conventional sidechain/key input — at the host width. Enabled only on request so
+    // a plugin with many input buses (VCV's in[8]) is untouched by default. If the
+    // plugin rejects the sidechain layout we retry without it, then fall back, so a
+    // plugin that simply has no sidechain still prepares rather than failing.
     for (int b = 0; b < layout.inputBuses.size(); ++b) {
+      const bool isMain = b == 0;
+      const bool isSidechain = enableSidechain && b == 1;
       layout.inputBuses.getReference(b) =
-          (b == 0 && wantsInput) ? mainSet : juce::AudioChannelSet::disabled();
+          ((isMain && wantsInput) || isSidechain) ? mainSet
+                                                  : juce::AudioChannelSet::disabled();
     }
-    const bool layoutApplied = instance_->setBusesLayout(layout);
+    bool layoutApplied = instance_->setBusesLayout(layout);
+    if (!layoutApplied && enableSidechain && layout.inputBuses.size() > 1) {
+      // The plugin refused the sidechain bus at host width; retry with it disabled so
+      // the main path still negotiates (the key input just won't be available).
+      layout.inputBuses.getReference(1) = juce::AudioChannelSet::disabled();
+      layoutApplied = instance_->setBusesLayout(layout);
+    }
     if (!layoutApplied) {
       instance_->enableAllBuses();  // plugin rejected it — keep its own default
     }
@@ -487,26 +502,43 @@ class JucePluginInstance final : public IPluginInstance {
     juce::AudioBuffer<float> buffer(outputs, numOutputs, numFrames);
     juce::AudioBuffer<float>* bufferToProcess = &buffer;
 
-    if (inputs != nullptr && numInputs > 0) {
-      const int channelsToCopy = std::min(numInputs, numOutputs);
-      for (int ch = 0; ch < channelsToCopy; ++ch) {
-        const float* src = inputs[ch];
-        float* dest = buffer.getWritePointer(ch);
-        std::copy(src, src + numFrames, dest);
-      }
-      for (int ch = channelsToCopy; ch < numOutputs; ++ch) {
-        std::fill(buffer.getWritePointer(ch), buffer.getWritePointer(ch) + numFrames, 0.0f);
-      }
-    }
-
-    if (pluginOutputs_ > 0 && pluginOutputs_ != numOutputs) {
-      scratch_.setSize(pluginOutputs_, numFrames, false, false, true);
+    // The process buffer must hold every channel the plugin touches. JUCE lays a plugin
+    // out as [main-in, aux-in...] for inputs and [main-out, aux-out...] for outputs,
+    // sharing one buffer — so a sidechained effect (main 2 + sidechain 2 in, 2 out)
+    // needs a 4-channel buffer with the key signal in channels [2,3]. We scratch it when
+    // the plugin's channel count differs from the caller's output array — either extra
+    // outputs (a mono plugin on a stereo bus, the pre-existing case) or extra inputs (a
+    // sidechain). A plain in-place effect/instrument still processes the output buffer
+    // directly, unchanged.
+    const int totalIn = instance_ ? instance_->getTotalNumInputChannels() : numInputs;
+    const bool outputMismatch = pluginOutputs_ > 0 && pluginOutputs_ != numOutputs;
+    const bool hasAuxInput = totalIn > numOutputs;  // sidechain / extra input buses
+    if (outputMismatch || hasAuxInput) {
+      const int bufChannels =
+          std::max({pluginOutputs_ > 0 ? pluginOutputs_ : numOutputs, totalIn, numOutputs});
+      scratch_.setSize(bufChannels, numFrames, false, false, true);
       scratch_.clear();
       bufferToProcess = &scratch_;
-    } else {
-      if (inputs == nullptr || numInputs == 0) {
-        buffer.clear();
+    }
+
+    if (inputs != nullptr && numInputs > 0) {
+      // Copy each provided input channel straight across: channel order already matches
+      // the plugin's expected [main..., sidechain...] layout.
+      const int channelsToCopy = std::min(numInputs, bufferToProcess->getNumChannels());
+      for (int ch = 0; ch < channelsToCopy; ++ch) {
+        const float* src = inputs[ch];
+        if (src) {
+          std::copy(src, src + numFrames, bufferToProcess->getWritePointer(ch));
+        }
       }
+      if (bufferToProcess == &buffer) {
+        for (int ch = channelsToCopy; ch < numOutputs; ++ch) {
+          std::fill(buffer.getWritePointer(ch), buffer.getWritePointer(ch) + numFrames,
+                    0.0f);
+        }
+      }
+    } else if (bufferToProcess == &buffer) {
+      buffer.clear();
     }
 
     bool useVst3Events = false;
@@ -943,8 +975,10 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
     params_.push_back(std::move(gainInfo));
   }
 
-  void prepare(double, int blockSize, int numOutputs) override {
+  void prepare(double, int blockSize, int numOutputs,
+               bool enableSidechain = false) override {
     outputChannels_ = numOutputs;
+    sidechainEnabled_ = enableSidechain;
     // Size the latency delay ring to hold one full latency window plus a block, so a
     // pulse generated this block reads out latencySamples_ later without wrapping into
     // itself. Zero-filled: the first latencySamples_ of output are silence, exactly as
@@ -959,8 +993,8 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   // The identity plugin has no time-dependent behaviour.
   void setTransport(const TransportInfo&) override {}
 
-  void process(const float* const*,
-               int,
+  void process(const float* const* inputs,
+               int numInputs,
                float* const* outputs,
                int numOutputs,
                int numFrames,
@@ -968,6 +1002,22 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
                int64_t) override {
     for (int ch = 0; ch < numOutputs; ++ch) {
       std::fill(outputs[ch], outputs[ch] + numFrames, 0.0f);
+    }
+
+    // Sidechain fixture: with the key input enabled, pass the SIDECHAIN bus straight to
+    // the output (ignoring MIDI). The sidechain occupies the input channels after the
+    // main bus — the host lays out [main..., sidechain...] — so a null test proves the
+    // key signal actually reached the plugin: the sidechained track's output equals the
+    // source track's output, sample for sample.
+    if (sidechainEnabled_) {
+      const int mainCh = kFakeMainInputChannels;
+      for (int ch = 0; ch < numOutputs; ++ch) {
+        const int scIndex = mainCh + ch;
+        if (inputs && scIndex < numInputs && inputs[scIndex]) {
+          std::copy(inputs[scIndex], inputs[scIndex] + numFrames, outputs[ch]);
+        }
+      }
+      return;
     }
 
     // Build this block's dry mono output from note-ons (a 10-sample pulse each), then
@@ -1018,10 +1068,40 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   std::string version() const override { return "1.0"; }
   std::array<uint8_t, 16> pluginUid16() const override { return {}; }
   int numParameters() const override { return static_cast<int>(params_.size()); }
-  int inputChannels() const override { return 0; }
+  // With the sidechain enabled the fixture declares a main input bus plus a sidechain
+  // input bus, so the host lays out [main..., sidechain...] and process() can read the
+  // key from the channels after the main bus.
+  int inputChannels() const override {
+    return sidechainEnabled_ ? (kFakeMainInputChannels + kFakeSidechainChannels) : 0;
+  }
   int outputChannels() const override { return outputChannels_; }
   int latencySamples() const override { return latencySamples_; }
   std::vector<BusInfo> busLayout() const override {
+    std::vector<BusInfo> buses;
+    if (sidechainEnabled_) {
+      BusInfo mainIn;
+      mainIn.isInput = true;
+      mainIn.index = 0;
+      mainIn.isMain = true;
+      mainIn.enabled = true;
+      mainIn.channelCount = kFakeMainInputChannels;
+      mainIn.channelOffset = 0;
+      mainIn.layoutId = 2;
+      mainIn.name = "Main";
+      mainIn.layout = "Stereo";
+      buses.push_back(mainIn);
+      BusInfo sc;
+      sc.isInput = true;
+      sc.index = 1;
+      sc.isMain = false;
+      sc.enabled = true;
+      sc.channelCount = kFakeSidechainChannels;
+      sc.channelOffset = kFakeMainInputChannels;
+      sc.layoutId = 2;
+      sc.name = "Sidechain";
+      sc.layout = "Stereo";
+      buses.push_back(sc);
+    }
     BusInfo out;
     out.isInput = false;
     out.index = 0;
@@ -1032,7 +1112,8 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
     out.layoutId = outputChannels_ == 1 ? 1 : 2;
     out.name = "Main";
     out.layout = outputChannels_ == 1 ? "Mono" : "Stereo";
-    return {out};
+    buses.push_back(out);
+    return buses;
   }
   bool loadVst3PresetFile(const std::string&) override { return false; }
 
@@ -1080,6 +1161,8 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   bool openEditor() override { return false; }
 
  private:
+  static constexpr int kFakeMainInputChannels = 2;
+  static constexpr int kFakeSidechainChannels = 2;
   std::vector<ParamInfo> params_;
   float gain_ = 1.0f;
   int outputChannels_ = 2;
@@ -1089,6 +1172,8 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   std::vector<float> dryScratch_;
   uint32_t delayLen_ = 0;
   uint32_t delayWrite_ = 0;
+  // Sidechain fixture: when true, process() passes the sidechain input to the output.
+  bool sidechainEnabled_ = false;
 };
 
 class JucePluginHost final : public IPluginHost {

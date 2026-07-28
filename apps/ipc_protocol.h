@@ -33,7 +33,10 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 //    against the highest-latency one (Movement 4 PDC). Host↔engine only; the frontend
 //    contract (kShmVersion) is untouched. Handshake-gated so an old host can't answer
 //    a query it doesn't implement with a misparsed reply.
-constexpr uint16_t kControlVersion = 7;
+// 8: ChainHeader gains sidechainMask — a per-plugin bit telling the host to enable that
+//    plugin's sidechain (aux) input bus at prepare (Movement 4 sidechain). An old host
+//    would misread the larger header, so gate it. Host↔engine only; kShmVersion stands.
+constexpr uint16_t kControlVersion = 8;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,
@@ -147,6 +150,12 @@ struct StateHeader {
 struct ChainHeader {
   uint32_t count = 0;      // number of null-terminated paths that follow
   uint32_t byteCount = 0;  // total bytes of the path block
+  // Movement 4 sidechain: bit i set = enable plugin[i]'s sidechain (aux) input bus at
+  // prepare, so the engine can key a compressor off another track. The host feeds that
+  // bus from the track's widened input plane. Bit set only for a plugin that both has
+  // a sidechain route bound and declares an aux input bus; 0 = the pre-sidechain
+  // behaviour (all non-main buses disabled).
+  uint32_t sidechainMask = 0;
 };
 
 struct ControlHeader {

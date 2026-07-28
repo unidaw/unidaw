@@ -213,6 +213,9 @@ std::string defaultPluginCachePath() {
 constexpr uint32_t kPatcherScratchpadCapacity = 1024;
 constexpr uint32_t kPatcherNodeCapacity = 1024;
 constexpr uint32_t kPatcherMaxModOutputs = 8;
+// Movement 4 sidechain: stereo key input carried in the per-track input plane after the
+// main channels. The sidechain occupies [numChannelsOut, numChannelsOut + this).
+constexpr uint32_t kSidechainChannels = 2;
 
 struct PatcherNodeBuffer {
   std::array<daw::EventEntry, kPatcherNodeCapacity> events{};
@@ -1035,7 +1038,12 @@ int main(int argc, char** argv) {
     baseConfig.pluginNames = {""};  // name-agnostic; rebuildHostForChain fills it
   }
   baseConfig.sampleRate = 48000.0;  // fallback only; overridden by the device
-  baseConfig.numChannelsIn = 2;
+  // The per-track input plane carries the main input in channels [0, numChannelsOut)
+  // and a stereo sidechain (key) input in the channels after it (Movement 4). Widening
+  // it unconditionally keeps the SHM layout uniform; a track with no sidechain route
+  // just leaves those channels silent, and a plugin without a sidechain bus ignores
+  // them. This is what lets the engine key a compressor off another track's output.
+  baseConfig.numChannelsIn = baseConfig.numChannelsOut + kSidechainChannels;
   baseConfig.numBlocks = 4; // Increase block count for deeper pipeline/safety
   baseConfig.ringUiCapacity = 1024;
   const uint32_t uiDiffRingCapacity = 1024;
@@ -1376,6 +1384,10 @@ struct TrackRuntime {
     std::shared_ptr<const AudioRenderList> audioRender;
     daw::HostController controller;
     daw::HostConfig config;
+    // Movement 4: the sidechain mask last sent on SetChain, so a sidechain toggle with
+    // an otherwise-unchanged chain still re-reconciles. Guarded by controllerMutex like
+    // config. 0 = no sidechain, matching a freshly launched host.
+    uint32_t lastSidechainMask = 0;
     std::atomic<bool> needsRestart{false};
     std::atomic<bool> restartInFlight{false};
     std::atomic<bool> hostReady{false};
@@ -1427,6 +1439,10 @@ struct TrackRuntime {
     std::vector<float> inboundAudioBuffer;
     std::vector<float> inputAudioBuffer;
     std::vector<float*> inputAudioChannels;
+    // Movement 4 sidechain: the key signal pulled from the source track's output this
+    // block, kSidechainChannels planar channels of blockSize each. Written straight into
+    // the host input plane's sidechain channels. Producer-thread local, no lock needed.
+    std::vector<float> sidechainInputBuffer;
     std::vector<daw::EventEntry> inboundMidiEvents;
     std::vector<daw::EventEntry> inboundMidiScratch;
     std::mutex inboundMutex;
@@ -2329,8 +2345,11 @@ struct TrackRuntime {
   auto rebuildHostForChain = [&](TrackRuntime& runtime) {
     std::vector<std::string> pluginPaths;
     std::vector<std::string> pluginNames;
+    bool hasSidechainSource = false;
     {
       std::lock_guard<std::mutex> lock(runtime.trackMutex);
+      hasSidechainSource =
+          runtime.track.routing.sidechain.kind == daw::TrackRouteKind::Track;
       const auto& devices = runtime.track.chain.devices;
       pluginPaths.reserve(devices.size());
       pluginNames.reserve(devices.size());
@@ -2351,15 +2370,22 @@ struct TrackRuntime {
         pluginNames.push_back(device.vstRef.name);
       }
     }
+    // Movement 4: bit 0 keys the first plugin's sidechain when a source is bound. A
+    // change here re-reconciles even if the plugin list is unchanged, so toggling the
+    // sidechain re-prepares the plugin with its key bus enabled.
+    const uint32_t sidechainMask =
+        (hasSidechainSource && !pluginPaths.empty()) ? 1u : 0u;
     // Compare names too: swapping to another plugin in the SAME bundle keeps the
     // path but changes the name, and that still needs a reconcile.
     if (runtime.config.pluginPaths != pluginPaths ||
-        runtime.config.pluginNames != pluginNames) {
+        runtime.config.pluginNames != pluginNames ||
+        runtime.lastSidechainMask != sidechainMask) {
       const bool hostRunning = runtime.hostReady.load(std::memory_order_acquire);
       {
         std::lock_guard<std::mutex> lock(runtime.controllerMutex);
         runtime.config.pluginPaths = pluginPaths;
         runtime.config.pluginNames = pluginNames;
+        runtime.lastSidechainMask = sidechainMask;
       }
       if (hostRunning) {
         // Reconcile the chain in the running host: unchanged plugins are
@@ -2372,7 +2398,7 @@ struct TrackRuntime {
         bool reconciled = false;
         {
           std::lock_guard<std::mutex> lock(runtime.controllerMutex);
-          reconciled = runtime.controller.sendSetChain(refs);
+          reconciled = runtime.controller.sendSetChain(refs, sidechainMask);
         }
         if (reconciled) {
           // Voice-reset the track: drop active notes so a removed plugin
@@ -4212,6 +4238,11 @@ struct TrackRuntime {
           }
         }
         runtime->track.chain = std::move(loadedChain);
+        // Adopt the project's routing so track-to-track sends and the sidechain source
+        // survive a reopen (previously the runtime kept its default master-out routing
+        // and a saved sidechain/send was silently dropped). Read by rebuildHostForChain
+        // below and by the producer's routing, both under this same trackMutex.
+        runtime->track.routing = source.routing;
         runtime->mixGainLinear.store(
             static_cast<float>(std::pow(10.0, source.mixer.gainDb / 20.0)),
             std::memory_order_relaxed);
@@ -4229,6 +4260,19 @@ struct TrackRuntime {
       std::atomic_store_explicit(&runtime->clipSnapshot,
                                  snapshot,
                                  std::memory_order_release);
+      // Republish the track-state snapshot now that the chain, routing (sidechain +
+      // sends), and mod links are restored. The snapshot built before this loop ran
+      // holds the pre-load defaults, so without this the producer keeps routing to
+      // master and never reads the project's sidechain source.
+      {
+        std::shared_ptr<const TrackStateSnapshot> snap;
+        {
+          std::lock_guard<std::mutex> tlock(runtime->trackMutex);
+          snap = buildTrackSnapshot(runtime->track);
+        }
+        std::atomic_store_explicit(&runtime->trackSnapshot, snap,
+                                   std::memory_order_release);
+      }
       // Spawn or reconcile the host for the restored chain. Idempotent when the
       // live chain already matches (reopen-same-session): equal plugin paths are
       // a no-op, so this only does work when the chain actually changed.
@@ -8927,6 +8971,61 @@ struct TrackRuntime {
                   const_cast<daw::ShmHeader*>(header)) +
               offset);
         };
+
+        // Movement 4 sidechain: pull the key signal from the source track's output into
+        // this track's sidechain buffer, written below into the host input plane's
+        // sidechain channels [numChannelsOut, numChannelsIn). The source's latest
+        // COMPLETED block is read — one to two blocks old, which a dynamics processor's
+        // attack absorbs — and holding the shmView shared_ptr keeps it alive across the
+        // read even if the source host restarts. Silence when unbound or not ready.
+        {
+          const size_t scSamples =
+              static_cast<size_t>(kSidechainChannels) * engineConfig.blockSize;
+          if (runtime->sidechainInputBuffer.size() != scSamples) {
+            runtime->sidechainInputBuffer.assign(scSamples, 0.0f);
+          } else {
+            std::fill(runtime->sidechainInputBuffer.begin(),
+                      runtime->sidechainInputBuffer.end(), 0.0f);
+          }
+          if (routingSnapshot.sidechain.kind == daw::TrackRouteKind::Track) {
+            TrackRuntime* src = findTrackRuntime(routingSnapshot.sidechain.trackId);
+            if (src && src != runtime &&
+                src->hostReady.load(std::memory_order_acquire)) {
+              auto srcView = src->controller.sharedMemory();
+              if (srcView && srcView->base && srcView->header &&
+                  srcView->completedBlockId) {
+                const daw::ShmHeader* sh = srcView->header;
+                const uint32_t completed =
+                    srcView->completedBlockId->load(std::memory_order_acquire);
+                const uint64_t frameBytes =
+                    static_cast<uint64_t>(engineConfig.blockSize) * sizeof(float);
+                if (completed > 0 && sh->numBlocks > 0 && sh->numChannelsOut > 0 &&
+                    sh->channelStrideBytes >= frameBytes) {
+                  const uint64_t stride = sh->channelStrideBytes;
+                  const uint64_t blockBytes =
+                      static_cast<uint64_t>(sh->numChannelsOut) * stride;
+                  const uint64_t srcBlock =
+                      static_cast<uint64_t>(completed % sh->numBlocks);
+                  for (uint32_t j = 0; j < kSidechainChannels; ++j) {
+                    const uint32_t srcCh =
+                        j < sh->numChannelsOut ? j : (sh->numChannelsOut - 1);
+                    const uint64_t off = sh->audioOutOffset + srcBlock * blockBytes +
+                                         static_cast<uint64_t>(srcCh) * stride;
+                    if (off + frameBytes > srcView->size) {
+                      continue;
+                    }
+                    const float* srcChannel = reinterpret_cast<const float*>(
+                        reinterpret_cast<const uint8_t*>(srcView->base) + off);
+                    std::copy(srcChannel, srcChannel + engineConfig.blockSize,
+                              runtime->sidechainInputBuffer.data() +
+                                  static_cast<size_t>(j) * engineConfig.blockSize);
+                  }
+                }
+              }
+            }
+          }
+        }
+
         for (size_t segIndex = 0; segIndex < segments.size(); ++segIndex) {
           const auto& segment = segments[segIndex];
           const uint16_t segmentStart = segment.start;
@@ -8934,6 +9033,20 @@ struct TrackRuntime {
           for (uint32_t ch = 0; ch < engineConfig.numChannelsIn; ++ch) {
             float* input = safeAudioInPtr(blockIndex, ch);
             if (!input) {
+              continue;
+            }
+            // Movement 4: channels after the main bus carry the sidechain (key) input,
+            // the same for every segment (it feeds the first plugin's sidechain bus).
+            if (ch >= engineConfig.numChannelsOut) {
+              const size_t base = static_cast<size_t>(ch - engineConfig.numChannelsOut) *
+                                  engineConfig.blockSize;
+              if (base + engineConfig.blockSize <=
+                  runtime->sidechainInputBuffer.size()) {
+                std::memcpy(input, runtime->sidechainInputBuffer.data() + base,
+                            static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
+              } else {
+                std::fill(input, input + engineConfig.blockSize, 0.0f);
+              }
               continue;
             }
             if (segIndex == 0) {

@@ -62,6 +62,8 @@ struct HostState {
                        // two devices can share a bundle path but differ by plugin
     double preparedSampleRate = 0.0;  // rate this instance was prepared at; a reused
                                       // slot is re-prepared if the device rate changed
+    bool preparedSidechain = false;   // whether the sidechain bus was enabled at prepare;
+                                      // a reused slot re-prepares if this changed (M4)
   };
   std::vector<PluginSlot> plugins;
   std::mutex pluginsMutex;
@@ -161,7 +163,8 @@ std::optional<HostState::PluginSlot> loadPluginSlot(daw::IPluginHost& host,
                                                     const std::string& name,
                                                     double sampleRate,
                                                     uint32_t blockSize,
-                                                    uint32_t numChannelsOut) {
+                                                    uint32_t numChannelsOut,
+                                                    bool enableSidechain = false) {
   if (!std::filesystem::exists(path)) {
     std::cerr << "Plugin path not found: " << path << std::endl;
     return std::nullopt;
@@ -171,12 +174,14 @@ std::optional<HostState::PluginSlot> loadPluginSlot(daw::IPluginHost& host,
     std::cerr << "Failed to load plugin in host process: " << path << std::endl;
     return std::nullopt;
   }
-  instance->prepare(sampleRate, blockSize, static_cast<int>(numChannelsOut));
+  instance->prepare(sampleRate, blockSize, static_cast<int>(numChannelsOut),
+                    enableSidechain);
   HostState::PluginSlot slot;
   slot.instance = std::move(instance);
   slot.path = path;
   slot.name = name;
   slot.preparedSampleRate = sampleRate;
+  slot.preparedSidechain = enableSidechain;
   for (const auto& param : slot.instance->parameters()) {
     const auto uid16 = daw::hashStableId16(param.stableId);
     slot.paramIdByUid16.emplace(uid16Key(uid16.data()), param.stableId);
@@ -213,7 +218,8 @@ void resizeChainBuffers(HostState& state, size_t pluginCount,
 // already-loaded instance whenever the path is unchanged so only a genuinely
 // new plugin is instantiated — that is what keeps a chain edit from dropping
 // audio for the seconds a full reload takes. MUST run on the message thread.
-void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired) {
+void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired,
+                    uint32_t sidechainMask = 0) {
   if (!state.header) {
     return;
   }
@@ -233,7 +239,12 @@ void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired
   std::vector<HostState::PluginSlot> next;
   next.reserve(desired.size());
   std::vector<bool> reused(current.size(), false);
+  uint32_t desiredIndex = 0;
   for (const auto& ref : desired) {
+    // Movement 4: bit i of sidechainMask enables plugin[i]'s sidechain input bus.
+    const bool wantSidechain =
+        (desiredIndex < 32) && ((sidechainMask >> desiredIndex) & 1u) != 0u;
+    ++desiredIndex;
     // Reuse the first unclaimed loaded slot with a matching path AND name,
     // preserving its instance and dialled-in state. Name matters because two
     // devices can point at one bundle but different plugins inside it.
@@ -245,13 +256,17 @@ void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired
         // would keep playing at the wrong rate — 48k content on a 44.1k device is
         // ~8.8% off in pitch and tempo-sync. Re-prepare only when the rate actually
         // changed, so normal chain edits (rate unchanged) still preserve DSP state.
-        if (current[i].preparedSampleRate != sampleRate) {
-          std::cerr << "Host: re-preparing " << ref.path << " from "
-                    << current[i].preparedSampleRate << " to " << sampleRate
-                    << " Hz" << std::endl;
+        if (current[i].preparedSampleRate != sampleRate ||
+            current[i].preparedSidechain != wantSidechain) {
+          std::cerr << "Host: re-preparing " << ref.path << " (rate "
+                    << current[i].preparedSampleRate << "->" << sampleRate
+                    << ", sidechain " << current[i].preparedSidechain << "->"
+                    << wantSidechain << ")" << std::endl;
           current[i].instance->prepare(sampleRate, blockSize,
-                                       static_cast<int>(numChannelsOut));
+                                       static_cast<int>(numChannelsOut),
+                                       wantSidechain);
           current[i].preparedSampleRate = sampleRate;
+          current[i].preparedSidechain = wantSidechain;
         }
         next.push_back(std::move(current[i]));
         reused[i] = true;
@@ -263,7 +278,8 @@ void reconcileChain(HostState& state, const std::vector<daw::PluginRef>& desired
       continue;
     }
     if (auto slot = loadPluginSlot(*state.pluginHost, ref.path, ref.name,
-                                   sampleRate, blockSize, numChannelsOut)) {
+                                   sampleRate, blockSize, numChannelsOut,
+                                   wantSidechain)) {
       next.push_back(std::move(*slot));
     } else {
       // Keep a null-instance placeholder rather than dropping the slot, so the host's
@@ -1172,15 +1188,16 @@ void runControlLoop(HostState& state) {
           // Instantiation must run on the message thread; the control loop is a
           // separate thread. Post the reconcile and wait for it, so the reply
           // to the next command reflects the new chain.
+          const uint32_t sidechainMask = header.sidechainMask;
           if (auto* manager = juce::MessageManager::getInstanceWithoutCreating()) {
             juce::WaitableEvent done;
-            manager->callAsync([&state, refs, &done]() {
-              reconcileChain(state, refs);
+            manager->callAsync([&state, refs, sidechainMask, &done]() {
+              reconcileChain(state, refs, sidechainMask);
               done.signal();
             });
             done.wait();
           } else {
-            reconcileChain(state, refs);
+            reconcileChain(state, refs, sidechainMask);
           }
         }
       } else if (type == daw::ControlMessageType::Shutdown) {

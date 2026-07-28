@@ -93,7 +93,9 @@ class HostController {
 
   // Reconciles the host's plugin chain to `pluginPaths` in place, so a chain
   // edit reuses unchanged plugins instead of restarting the whole host.
-  bool sendSetChain(const std::vector<PluginRef>& refs);
+  // sidechainMask: bit i enables plugin[i]'s sidechain (aux) input bus at prepare
+  // (Movement 4). 0 = the pre-sidechain behaviour (all non-main buses disabled).
+  bool sendSetChain(const std::vector<PluginRef>& refs, uint32_t sidechainMask = 0);
 
   bool sendOpenEditor(uint32_t pluginIndex);
   bool sendSetBypass(uint32_t pluginIndex, bool bypass);

@@ -538,7 +538,8 @@ bool HostController::sendPluginState(uint32_t pluginIndex,
                      payload.size());
 }
 
-bool HostController::sendSetChain(const std::vector<PluginRef>& refs) {
+bool HostController::sendSetChain(const std::vector<PluginRef>& refs,
+                                  uint32_t sidechainMask) {
   // Each entry is path\0name\0 (v4). The name lets the host pick the right plugin
   // out of a multi-plugin bundle; an empty name means "take the first type".
   std::vector<uint8_t> block;
@@ -552,6 +553,7 @@ bool HostController::sendSetChain(const std::vector<PluginRef>& refs) {
   ChainHeader header{};
   header.count = static_cast<uint32_t>(refs.size());
   header.byteCount = static_cast<uint32_t>(block.size());
+  header.sidechainMask = sidechainMask;
   std::memcpy(payload.data(), &header, sizeof(header));
   if (!block.empty()) {
     std::memcpy(payload.data() + sizeof(header), block.data(), block.size());
