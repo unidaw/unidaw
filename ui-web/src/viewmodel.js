@@ -26,6 +26,62 @@ import { DEFAULT_METER, createPosition, positionOf, sameMeter,
 // linesPerBeat is what LaneGrid takes, so the sidecar can build the same grid
 // we are describing. It is not restricted to powers of two — 3 is a triplet
 // grid, which is exactly the case JS tick/rowNanoticks division cannot express.
+/**
+ * Reduce every clip extent to the four small numbers the row loop needs, ONCE per
+ * frame, into typed arrays the loop can read without boxing anything.
+ *
+ * This exists because the obvious version — ask "which clip covers this tick on
+ * this track" per (row, track) — costs 907 B/draw an hour into a song, measured.
+ * The reason is GUIDELINES 3.13: nanoticks run at 960,000 to the quarter, so past
+ * about nine minutes every tick is a heap double, and handing one to a function
+ * 768 times a frame boxes it 768 times. Nothing about the arithmetic is expensive;
+ * the SIZE of the numbers is.
+ *
+ * So the large numbers are collapsed here, `extentCount` times rather than
+ * `rows x tracks` times, and what the loop sees is:
+ *
+ *   startRow / endRow  the extent's span in ROW indices — a few thousand, and
+ *                      fractional only when a clip starts mid-row, which is why
+ *                      these are Float64Array and not Int32Array;
+ *   phase              the clip's start modulo a quarter note, which is all the
+ *                      grid test needs of its anchor (see below);
+ *   lpb                the clip's own lines-per-beat, 0 when it publishes none.
+ *
+ * THE GRID TEST, and why phase is enough. A row is on a clip's grid when
+ *
+ *     (tick - clipStart) % (960000 / lpb) === 0
+ *
+ * Multiplying through by lpb removes the division, which matters because 960000 /
+ * lpb is not an integer for every lpb the engine can publish — 7 gives
+ * 137142.857, and an exact test on that is not exact:
+ *
+ *     ((tick - clipStart) * lpb) % 960000 === 0
+ *
+ * and modular arithmetic lets both operands be reduced mod 960000 first. The row
+ * loop reduces `tick` once per row; this reduces `clipStart` once per frame. Every
+ * value the inner test touches is then below 960000 and stays a small integer.
+ */
+function reduceExtents(engine, buf, rowTicks) {
+  const n = engine.extentCount;
+  if (buf._extStartRow.length < n) {
+    // Grown, never per frame: extentCount changes on a project load.
+    buf._extStartRow = new Float64Array(n * 2);
+    buf._extEndRow = new Float64Array(n * 2);
+    buf._extPhase = new Int32Array(n * 2);
+    buf._extLpb = new Int32Array(n * 2);
+    buf._extTrack = new Int32Array(n * 2);
+  }
+  for (let i = 0; i < n; i++) {
+    const e = engine.extents[i];
+    buf._extTrack[i] = e.track;
+    buf._extStartRow[i] = e.startTick / rowTicks;
+    buf._extEndRow[i] = e.endTick / rowTicks;
+    buf._extPhase[i] = e.startTick % NANOTICKS_PER_QUARTER;
+    buf._extLpb[i] = e.grid && e.grid.linesPerBeat > 0 ? e.grid.linesPerBeat : 0;
+  }
+  return n;
+}
+
 /** Smallest grid that can represent all of `lpbs` exactly. */
 export function lcmGrid(lpbs) {
   const gcd = (a, b) => (b ? gcd(b, a % b) : a);
@@ -228,6 +284,27 @@ export function createBuffer(rowCount, trackCount, columns) {
     // (startRow, zoom, rowCount) — see the row loop.
     _labelStart: -1, _labelZoom: -1, _labelMeter: null,
     _clipPool: [],
+    /**
+     * Per track, the index of the clip extent that answered the previous row.
+     *
+     * Rows are built in ascending tick order and a clip spans many of them, so
+     * the extent that covered the last row almost always covers this one too.
+     * Checking it first turns the per-cell lookup into one comparison; only a
+     * clip boundary costs a scan. Without the hint this is rows x tracks x
+     * extents every frame, which is the shape that looks free in a fixture with
+     * three clips and is not free in a real arrangement.
+     */
+    _gridCursor: new Int32Array(trackCount).fill(-1),
+    /**
+     * Clip extents reduced to small numbers, rebuilt once per frame by
+     * `reduceExtents`. Grown on a project load, never in a frame. See that
+     * function for why the row loop cannot be allowed to touch a raw tick.
+     */
+    _extStartRow: new Float64Array(0),
+    _extEndRow: new Float64Array(0),
+    _extPhase: new Int32Array(0),
+    _extLpb: new Int32Array(0),
+    _extTrack: new Int32Array(0),
   };
 }
 
@@ -396,6 +473,12 @@ export function buildViewModel(opts, buf) {
   // is bar 5 in 4/4 and bar 6 in 7/8. Leaving it out is GUIDELINES 2.1 — content
   // changing while the key stands still — and it would show as bar numbers that
   // never update after a meter change, which reads as the meter not having taken.
+  // Every clip extent collapsed to small numbers, before the row loop touches any
+  // of them. Unconditional rather than guarded on extentsRevision: it is
+  // extentCount iterations of arithmetic, and a guard that got the key wrong would
+  // serve the row loop a stale clip map — GUIDELINES 2.1, and the failure would be
+  // rows going dead in the wrong places, which reads as a grid bug.
+  const extN = engine ? reduceExtents(engine, buf, rowTicks) : 0;
   const relabel = buf._labelStart !== startRow || buf._labelZoom !== zoomIndex
                   || !sameMeter(buf._labelMeter, meter);
   buf._labelStart = startRow;
@@ -413,30 +496,86 @@ export function buildViewModel(opts, buf) {
     const cells = rows[ri].cells;
     let ci = 0;
     /**
-     * The row's absolute tick — computed only where it is used.
+     * The row's absolute tick.
      *
-     * There are two users: the fixture, which derives its content from it, and
-     * the label rebuild. The engine branch never touches it, and computing it
-     * anyway is not free: nanoticks run at 960,000 to the quarter, so a song
-     * passes V8's small-integer range about nine minutes in, and from there
-     * every one of these is a boxed double on the heap. Sixty-two of them a
-     * frame is a kilobyte, and it appears only in long projects — which is the
-     * worst way for a cost to arrive.
+     * This used to be skipped on the engine path — `(engine && !relabel) ? 0 :
+     * ...` — because nanoticks run at 960,000 to the quarter, so a song passes
+     * V8's small-integer range about nine minutes in and every one of these
+     * becomes a boxed double (GUIDELINES 3.13). The engine branch now needs it:
+     * a lane's grid belongs to the CLIP under the row, and finding that clip is
+     * a question about where the row IS. Measured by test/alloc.mjs rather than
+     * assumed — the "hour into the song" scenario exists for exactly this.
      */
-    const tick = (engine && !relabel) ? 0 : r * rowTicks;
+    const tick = r * rowTicks;
+    /**
+     * The row's position within a quarter note — the only part of it the per-lane
+     * grid test needs, and small enough to stay a machine integer for the whole
+     * length of a song. Reduced once per row rather than once per (row, track):
+     * see `reduceExtents` for why a raw tick must not reach the inner loop.
+     */
+    const tickMod = tick % NANOTICKS_PER_QUARTER;
 
 
     for (let t = 0; t < trackCount; t++) {
       const inClip = engine ? true : clipIndexAt(tick, t) >= 0;
+      /**
+       * Whether this row exists on THIS lane's grid.
+       *
+       * A lane only has rows where its own grid lands; elsewhere there is no cell
+       * to write into, and drawing an empty one implies you could. Computed once
+       * per (row, track) rather than per column — all three columns of a cell
+       * share a position, so asking three times was three answers to one question.
+       *
+       * THE GRID BELONGS TO THE CLIP, not to the track. Clips run in sequence and
+       * may each carry their own lines-per-beat (kShmVersion 19), so a lane's grid
+       * changes down the timeline — a verse in 4 and a bridge in 3 on one track is
+       * the case this has to get right, and a per-track lines-per-beat cannot
+       * express it. `engine.lpb[t]` is the fallback while the engine still
+       * publishes it, and the zoom's own grid is the fallback below that, which is
+       * the "everything is writable" behaviour from before any of this existed.
+       *
+       * Anchored at the CLIP's start, not at the song's origin. A clip's grid is a
+       * property of the clip, so moving a clip must not resubdivide it; anchoring
+       * at zero would make a clip's rows depend on where it happens to sit.
+       */
+      let offGrid = false;
+      if (engine) {
+        // The covering extent, found with the previous row's answer tried first.
+        // A clip spans many rows, so that hint hits on all but the boundary rows
+        // and this is one comparison rather than a scan. Both the hint check and
+        // the scan compare ROW indices from the typed arrays — no tick crosses
+        // this loop, which is the whole point of reduceExtents.
+        let ei = -1;
+        const hint = buf._gridCursor[t];
+        if (hint >= 0 && hint < extN && buf._extTrack[hint] === t
+            && r >= buf._extStartRow[hint] && r < buf._extEndRow[hint]) {
+          ei = hint;
+        } else {
+          for (let i = 0; i < extN; i++) {
+            if (buf._extTrack[i] === t && r >= buf._extStartRow[i] && r < buf._extEndRow[i]) {
+              ei = i; break;
+            }
+          }
+          buf._gridCursor[t] = ei;
+        }
+        // The clip's own grid; the per-track lines-per-beat while the engine still
+        // publishes one; the zoom's own grid below that, which is the "every row
+        // is writable" behaviour from before any of this existed.
+        const lpb = (ei >= 0 && buf._extLpb[ei]) || engine.lpb[t] || zoom.linesPerBeat;
+        const phase = ei >= 0 ? buf._extPhase[ei] : 0;
+        // Exact for EVERY lines-per-beat, including the ones that do not divide a
+        // quarter note. The row-stride version this replaces was
+        // `Math.round(zoom.linesPerBeat / lpb)`, and `Math.round(4 / 3)` is 1 — so
+        // `r % 1`, which is 0 for every row, and a triplet lane reported every row
+        // as on-grid at every zoom but the finest. That is the bug in GUIDELINES
+        // 2.1.1's table. Integers divide exactly or they do not; nothing rounds.
+        offGrid = lpb > 0 && (((tickMod - phase) * lpb) % NANOTICKS_PER_QUARTER) !== 0;
+      }
       for (let c = 0; c < columns; c++) {
         if (engine) {
           const cl = cells[ci++];
           cl.text = ''; cl.aggCount = 0; cl.pitch = -1;
-          // A lane only has rows where its own grid lands. Elsewhere there is no
-          // cell to write into — showing an empty one would imply you could.
-          const laneLpb = engine.lpb[t] || zoom.linesPerBeat;
-          const stride = zoom.linesPerBeat / laneLpb;
-          cl.kind = (stride >= 1 && r % Math.round(stride) !== 0) ? 'offgrid' : 'empty';
+          cl.kind = offGrid ? 'offgrid' : 'empty';
           continue;
         }
         const cell = cells[ci++];

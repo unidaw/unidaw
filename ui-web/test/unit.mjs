@@ -13,7 +13,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { lcmGrid, ZOOM_LEVELS } from '../src/viewmodel.js';
+import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
 import {
   parseToken, parseChord, pitchOf, pitchToToken, hexValue, shiftDigit, NOTE_KEYS,
 } from '../src/entry.js';
@@ -819,4 +819,125 @@ test('the harmony card counts the playhead in the song meter', () => {
   // a build that ignores the meter: the two answers have to differ.
   buildHarmonyModel({ harmony: [], playheadTick: tick }, buf);
   assert.equal(buf.at, 'bar 2.1');
+});
+
+// ---------------------------------------------------------------------------
+// Per-lane grids, swept across the zoom axis.
+//
+// GUIDELINES 2.1.1 is about this exact test not existing. `useMixedGrid` was
+// built to catch the projection bug and did not, because the golden that uses it
+// is shot at zoom 0 — the ONE zoom where the projection was already correct. At
+// every other zoom nothing was marked off-grid at all, so the tracker offered a
+// writable cell on every row of a triplet lane whose rows sit at 1/3-beat
+// positions a 4/beat axis cannot express.
+//
+// The cause was one rounding: the test was a stride in ROWS,
+// `Math.round(zoom.linesPerBeat / lpb)`, and `Math.round(4 / 3)` is 1, so `r % 1`
+// — which is 0 for every row. "Incommensurable" became "every row is fine".
+//
+// So this sweeps the axis instead of sampling it. The numbers are derived from
+// the meter, not copied from a run: a lane at `lpb` lines per quarter has a row
+// every 960000/lpb ticks, and a display row at `rowTicks` lands on it only when
+// rowTicks * r is a multiple of that.
+
+/** A minimal engine store: per-track lines-per-beat, no clips, no notes. */
+function gridEngine(lpb) {
+  return {
+    ok: true, seq: 1, playheadTick: 0, visualSample: 0, clipVersion: 1,
+    harmonyVersion: 0, transport: 0, trackCount: lpb.length,
+    peaks: new Float32Array(4), peakCount: 0,
+    notes: [], noteCount: 0,
+    aggCount: new Uint32Array(0), aggRep: new Uint8Array(0),
+    aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
+    extents: [], extentCount: 0, extentsRevision: 1,
+    lpb: Uint8Array.from(lpb), notesRevision: 1, aggRevision: 1,
+  };
+}
+
+/** How many of `rowCount` rows are marked off-grid on each track. */
+function offGridPerTrack(lpb, zoomIndex, rowCount) {
+  const tracks = lpb.length;
+  const buf = createBuffer(rowCount, tracks, 3);
+  const vm = buildViewModel({ startRow: 0, rowCount, tracks, columns: 3,
+                              zoomIndex, engine: gridEngine(lpb) }, buf);
+  const out = new Array(tracks).fill(0);
+  for (let ri = 0; ri < rowCount; ri++) {
+    for (const cell of vm.rows[ri].cells) {
+      if (cell.col === 0 && cell.kind === 'offgrid') out[cell.track]++;
+    }
+  }
+  return out;
+}
+
+test('a lane is off-grid exactly where its own grid does not land', () => {
+  const LPB = [4, 3, 6];
+  const ROWS = 37;                       // the row count GUIDELINES 2.1.1 measured
+
+  // Derived from the meter rather than transcribed, so the expectation cannot
+  // inherit a bug from the implementation it is checking.
+  const expected = (zoomIndex) => LPB.map((lpb) => {
+    const laneRowTicks = 960000 / lpb;
+    let off = 0;
+    for (let r = 0; r < ROWS; r++) {
+      if ((r * ZOOM_LEVELS[zoomIndex].rowNanoticks) % laneRowTicks !== 0) off++;
+    }
+    return off;
+  });
+
+  for (let z = 0; z <= 3; z++) {         // every non-aggregate zoom, not just one
+    assert.deepEqual(offGridPerTrack(LPB, z, ROWS), expected(z),
+                     `zoom ${z} (${ZOOM_LEVELS[z].label})`);
+  }
+});
+
+test('the zoom sweep is what catches it — zoom 0 alone does not', () => {
+  const LPB = [4, 3, 6], ROWS = 37;
+  // Zoom 0 was ALWAYS right, which is why a golden shot there passed throughout.
+  assert.deepEqual(offGridPerTrack(LPB, 0, ROWS), [24, 27, 18],
+                   'the table in GUIDELINES 2.1.1, unchanged');
+  // These three are the regression. The old code reported 0 off-grid on every
+  // lane at every one of these zooms — a triplet lane offering a writable cell on
+  // every 1/16 row. If this ever reads [0,0,0] again the rounding is back.
+  assert.deepEqual(offGridPerTrack(LPB, 1, ROWS), [0, 27, 18], 'zoom 1, 1/16');
+  assert.deepEqual(offGridPerTrack(LPB, 2, ROWS), [0, 18, 0], 'zoom 2, 1/8');
+  // A quarter note is a whole number of rows in every one of these lanes, so at
+  // 1/4 they genuinely all land. Asserted so the sweep has a negative case: a
+  // build that marked everything off-grid would pass the three above.
+  assert.deepEqual(offGridPerTrack(LPB, 3, ROWS), [0, 0, 0], 'zoom 3, 1/4');
+});
+
+test('a clip carries its grid, and its own start is the anchor', () => {
+  const ROWS = 16;
+  const engine = gridEngine([4]);
+  // One clip, triplets, starting one 1/16 into the song — deliberately NOT on the
+  // song's own grid. Its rows are every 320000 ticks FROM ITS START, so the rows
+  // it lands on are not the ones it would land on anchored at zero. That is the
+  // difference between a clip's grid being a property of the clip and being a
+  // property of where the clip happens to sit.
+  const START = 240000;
+  engine.extents = [{ placementId: 1, clipId: 1, track: 0, flags: 0,
+                      startTick: START, endTick: START + 960000 * 8, name: 'trip',
+                      audio: false, grid: { linesPerBeat: 3, numerator: 4, denominator: 4 } }];
+  engine.extentCount = 1;
+
+  const buf = createBuffer(ROWS, 1, 3);
+  const vm = buildViewModel({ startRow: 0, rowCount: ROWS, tracks: 1, columns: 3,
+                              zoomIndex: 0, engine }, buf);   // zoom 0 = 80000/row
+  const onGrid = [];
+  for (let ri = 0; ri < ROWS; ri++) {
+    const c = vm.rows[ri].cells.find((x) => x.col === 0);
+    if (c.kind !== 'offgrid') onGrid.push(ri);
+  }
+  // Rows before the clip fall back to the track's own lpb of 4 (240000 ticks), so
+  // rows 0..2 are governed by that; from row 3 (tick 240000) the clip takes over
+  // and its rows are every 4th from there.
+  assert.ok(onGrid.includes(3), 'the clip\'s first row is on its grid');
+  assert.ok(onGrid.includes(7), 'and every 4th row after it (320000 ticks apart)');
+  assert.ok(onGrid.includes(11), 'and the next');
+  assert.ok(!onGrid.includes(5), 'a row between them is not');
+  assert.ok(!onGrid.includes(9), 'nor this one');
+  // The anchor is what this test is really about: anchored at ZERO instead, a
+  // triplet grid lands on rows 0,4,8,12 — so row 4 would be on-grid and row 3
+  // would not, the exact inverse of the above.
+  assert.ok(!onGrid.includes(4), 'row 4 is on-grid only if the anchor were the song origin');
 });
