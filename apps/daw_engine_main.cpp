@@ -65,6 +65,24 @@
 
 namespace {
 
+// Keystroke forwarding: map a forwarded editor key (JUCE key code, uppercase-ASCII for
+// letters) to a MIDI pitch using the classic tracker keyboard — the Z row is the lower
+// octave (base C4 = 60), the Q row the octave above. Returns -1 for a non-note key.
+int keyCodeToPitch(int keyCode) {
+  switch (keyCode) {
+    // Lower octave (C4..): Z S X D C V G B H N J M
+    case 'Z': return 60; case 'S': return 61; case 'X': return 62; case 'D': return 63;
+    case 'C': return 64; case 'V': return 65; case 'G': return 66; case 'B': return 67;
+    case 'H': return 68; case 'N': return 69; case 'J': return 70; case 'M': return 71;
+    // Upper octave (C5..): Q 2 W 3 E R 5 T 6 Y 7 U I
+    case 'Q': return 72; case '2': return 73; case 'W': return 74; case '3': return 75;
+    case 'E': return 76; case 'R': return 77; case '5': return 78; case 'T': return 79;
+    case '6': return 80; case 'Y': return 81; case '7': return 82; case 'U': return 83;
+    case 'I': return 84;
+    default: return -1;
+  }
+}
+
 std::string trackSocketPath(uint32_t trackId) {
   if (const char* prefix = std::getenv("DAW_HOST_SOCKET_PREFIX")) {
     std::string base(prefix);
@@ -9402,6 +9420,40 @@ struct TrackRuntime {
         auto ringStd = getRingStd(*runtime);
         if (ringCtrl.mask == 0 || ringStd.mask == 0) {
           continue;
+        }
+
+        // Keystroke forwarding (kControlVersion 10): drain any keys this track's plugin
+        // editor forwarded and turn them into transport / keyjazz. Only a focused editor
+        // ever writes here, so an idle track's ring is simply empty. Space toggles play;
+        // the tracker key rows audition a pitch via the same out-of-band PreviewNote path
+        // (held: keydown = note-on, keyup = note-off).
+        if (auto keyShm = runtime->controller.sharedMemory();
+            keyShm && keyShm->base && keyShm->header) {
+          auto keyRing =
+              daw::makeEventRing(keyShm->base, daw::hostKeyRingOffset(*keyShm->header));
+          if (keyRing.mask != 0) {
+            daw::EventEntry keyEntry;
+            while (daw::ringPop(keyRing, keyEntry)) {
+              if (keyEntry.type != static_cast<uint16_t>(daw::EventType::HostKey)) {
+                continue;
+              }
+              daw::KeyEventPayload kp{};
+              std::memcpy(&kp, keyEntry.payload, sizeof(kp));
+              const bool down = kp.isDown != 0;
+              if (kp.keyCode == 32) {  // space -> transport toggle, on keydown
+                if (down) {
+                  playing.store(!playing.load(std::memory_order_acquire),
+                                std::memory_order_release);
+                }
+              } else {
+                const int pitch = keyCodeToPitch(kp.keyCode);
+                if (pitch >= 0) {
+                  enqueuePreview(runtime->trackId, static_cast<uint8_t>(pitch),
+                                 down ? 100 : 0, down);
+                }
+              }
+            }
+          }
         }
 
         daw::EventEntry transportEntry;

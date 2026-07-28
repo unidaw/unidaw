@@ -40,7 +40,12 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 //    auxOutMask (enable a plugin's aux output buses) — Movement 4 multi-out. Both headers
 //    grow, so an old host would misparse; gate it. Still host↔engine only; the aux plane
 //    sits right after the main output plane at a computed offset, kShmVersion stands.
-constexpr uint16_t kControlVersion = 9;
+// 10: host->engine key ring (keystroke forwarding). The plugin-editor window fills a small
+//    ring (EventType::HostKey) with keys the plugin didn't consume; the engine drains it
+//    into transport/keyjazz. The ring sits right after the mailbox at a computed offset
+//    (hostKeyRingOffset), so it needs no ShmHeader field — host↔engine only, kShmVersion
+//    stands. Gated here because an old host wouldn't allocate/init the ring.
+constexpr uint16_t kControlVersion = 10;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,

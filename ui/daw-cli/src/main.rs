@@ -367,6 +367,22 @@ fn preview_command(args: &[String]) -> Result<UiCommandPayload, String> {
     })
 }
 
+fn open_editor_command(track: u32, device: u32) -> UiCommandPayload {
+    UiCommandPayload {
+        command_type: UiCommandType::OpenPluginEditor as u16,
+        flags: 0,
+        track_id: track,
+        plugin_index: 0,
+        note_pitch: 0,
+        value0: device,
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    }
+}
+
 fn track_structure_command(command: UiCommandType, track: u32) -> UiCommandPayload {
     UiCommandPayload {
         command_type: command as u16,
@@ -985,6 +1001,20 @@ fn main() {
                         2
                     }
                 },
+                Some(&"open-editor") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    match handle.send_command(open_editor_command(track, device)) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"open-editor\", \"track\": {track}, \"device\": {device} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
                 Some(&"notes") => write_notes(&handle, &args),
                 Some(&"mixer") => match mixer_command(&args) {
                     Ok(payload) => match handle.send_command(payload) {

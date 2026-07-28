@@ -245,6 +245,16 @@ enum class EventType : uint16_t {
   UiHarmonyDiff = 7,
   UiChordDiff = 8,
   MusicalLogic = 9,
+  HostKey = 10,  // host->engine: a plugin-editor key the plugin didn't consume
+};
+
+// Payload of a HostKey EventEntry (keystroke forwarding). Written by the host's editor
+// window into the key ring, drained by the engine. keyCode is JUCE's KeyPress key code
+// (ASCII-ish; e.g. 32 = space); isDown = 1 for press, 0 for release (sustained keyjazz).
+struct KeyEventPayload {
+  int32_t keyCode = 0;
+  uint8_t isDown = 0;
+  uint8_t reserved[3]{};
 };
 
 struct alignas(64) BlockMailbox {
@@ -599,5 +609,13 @@ size_t sharedMemorySize(const ShmHeader& header,
 // field. Each block holds numAuxChannelsOut channels; bus k's channel c is at
 // auxOutputPlaneOffset + block*numAux*stride + (busChannelOffset+c)*stride.
 size_t auxOutputPlaneOffset(const ShmHeader& header);
+
+// Host->engine key-event ring (keystroke forwarding). A small ring the plugin-editor
+// window fills with keys the plugin didn't consume; the engine drains it and turns them
+// into transport / keyjazz. It sits right after the mailbox at a COMPUTED offset (like the
+// aux plane) so it needs no ShmHeader field and thus no kShmVersion bump — it is entirely
+// host<->engine (kControlVersion). Fixed small capacity; keystrokes are sparse.
+constexpr uint32_t kHostKeyRingCapacity = 64;
+size_t hostKeyRingOffset(const ShmHeader& header);
 
 }  // namespace daw
