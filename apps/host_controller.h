@@ -79,6 +79,11 @@ class HostController {
                            std::vector<HostParamWire>& out,
                            std::string& outPluginName);
 
+  // Enumerate a plugin's negotiated audio buses (Movement 4) for the engine to
+  // stream to the UI. Blocking request/response, same socket discipline.
+  bool requestBusLayout(uint32_t pluginIndex, std::vector<HostBusWire>& out,
+                        bool& outTruncated);
+
   // Reconciles the host's plugin chain to `pluginPaths` in place, so a chain
   // edit reuses unchanged plugins instead of restarting the whole host.
   bool sendSetChain(const std::vector<PluginRef>& refs);

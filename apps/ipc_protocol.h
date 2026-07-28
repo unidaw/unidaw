@@ -26,7 +26,9 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 //    path and load garbage, so the version gate must reject it.
 // 5: SetParam — set one plugin parameter by durable uid16 (the UI rack's knob write).
 //    A host without the handler would silently drop it, so gate it at the handshake.
-constexpr uint16_t kControlVersion = 5;
+// 6: GetBusLayout — the engine asks the host for a plugin's negotiated bus topology
+//    (Movement 4). An old host would drop it, so it is handshake-gated like the rest.
+constexpr uint16_t kControlVersion = 6;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,
@@ -51,6 +53,11 @@ enum class ControlMessageType : uint16_t {
   // GetParams. Payload is SetParamRequest. Fire-and-forget (no reply); the host's
   // setter is an atomic store, safe from the control thread.
   SetParam = 10,
+  // Enumerate one plugin's negotiated audio buses (Movement 4) so the engine can
+  // stream bus topology to the UI. Request payload is BusLayoutHeader{pluginIndex};
+  // the reply is BusLayoutHeader{pluginIndex,busCount,byteCount} + busCount
+  // HostBusWire. Off the RT path, same shape as GetParams.
+  GetBusLayout = 11,
 };
 
 // Cap on parameters returned per query — a scrollable rack shows plenty within
@@ -74,6 +81,29 @@ struct HostParamWire {
   char stableId[48]{};       // plugin-stable id (JUCE param id), nul-padded
   char name[48]{};           // display name
   char display[24]{};        // current value text ("0.62", "440 Hz")
+};
+
+// Cap on buses returned per GetBusLayout query (Movement 4). Matches
+// kMaxBusesPerDevice in shared_memory.h; bounds the IPC reply.
+constexpr uint32_t kMaxBusesPerQuery = 32;
+
+struct BusLayoutHeader {
+  uint32_t pluginIndex = 0;
+  uint32_t busCount = 0;   // buses in this reply (<= kMaxBusesPerQuery)
+  uint32_t byteCount = 0;  // busCount * sizeof(HostBusWire)
+  uint32_t truncated = 0;  // 1 if the plugin had more buses than the cap
+};
+
+// One audio bus on the wire (host -> engine). Fixed-size so the reply is a flat array.
+// channelOffset is the bus's first channel in the flat process buffer post-negotiation;
+// layoutId is UiBusLayoutId; name is nul-padded/truncated.
+struct HostBusWire {
+  uint16_t flags = 0;        // bit0 isInput, bit1 isMain, bit2 enabled
+  uint8_t index = 0;
+  uint8_t channelCount = 0;
+  uint16_t layoutId = 0;
+  uint16_t channelOffset = 0;
+  char name[24]{};
 };
 
 // SetParam payload: set plugin[pluginIndex]'s parameter identified by uid16 to

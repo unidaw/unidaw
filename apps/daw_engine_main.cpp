@@ -1242,6 +1242,11 @@ struct TrackRuntime {
     // Per-lane tracker subdivision (Mock B grids); published so the UI builds a
     // LaneGrid per track. The engine doesn't use it — timing is grid-independent.
     std::atomic<uint32_t> linesPerBeat{4};
+    // Movement 4 child-track structure: parentId 0 = top-level, else the parent
+    // track_id; collapsed hides children in the UI. Published per track; the engine
+    // does not act on them yet (children are created in the multi-out phase).
+    std::atomic<uint32_t> parentId{0};
+    std::atomic<bool> collapsed{false};
     std::mutex trackMutex;
     // M3.4: this track's placed clips, for publishing rails. Guarded by
     // trackMutex; set on load.
@@ -2510,10 +2515,31 @@ struct TrackRuntime {
       daw::ringWrite(ringUiOut, diffEntry);
       return;
     }
+    uint32_t hostIndex = 0;
     for (uint32_t i = 0; i < devices.size(); ++i) {
       const auto& device = devices[i];
+      // Movement 4: a VST device that resolves to a host plugin carries a bus
+      // topology. The host index is the compacted position among resolvable VST
+      // devices — the same walk the param read-back uses, so it stays aligned.
+      const bool isVst = device.kind == daw::DeviceKind::VstInstrument ||
+                         device.kind == daw::DeviceKind::VstEffect;
+      const bool resolves =
+          isVst &&
+          resolveDevicePluginPath(runtime, device.hostSlotIndex).has_value();
+      std::vector<daw::HostBusWire> buses;
+      bool busTruncated = false;
+      if (resolves) {
+        std::lock_guard<std::mutex> lock(runtime.controllerMutex);
+        runtime.controller.requestBusLayout(hostIndex, buses, busTruncated);
+      }
+
       daw::UiChainDiffPayload diffPayload{};
       diffPayload.diffType = static_cast<uint16_t>(daw::UiDiffType::ChainSnapshot);
+      // busCount + truncated ride the flags so a reader knows when the bus set is
+      // complete and draws once (see the invalidation rule in shared_memory.h).
+      diffPayload.flags = static_cast<uint16_t>(
+          (buses.size() & daw::kUiChainDiffBusCountMask) |
+          (busTruncated ? daw::kUiChainDiffBusTruncated : 0u));
       diffPayload.trackId = runtime.trackId;
       diffPayload.chainVersion = version;
       diffPayload.deviceId = device.id;
@@ -2530,6 +2556,34 @@ struct TrackRuntime {
       diffEntry.size = sizeof(daw::UiChainDiffPayload);
       std::memcpy(diffEntry.payload, &diffPayload, sizeof(diffPayload));
       daw::ringWrite(ringUiOut, diffEntry);
+
+      // One DeviceBus diff per bus, immediately after this device's snapshot diff.
+      // HostBusWire.flags and UiBusDiffPayload.flags share the bit layout (bit0 input,
+      // bit1 main, bit2 enabled), so it copies straight across.
+      for (const auto& bus : buses) {
+        daw::UiBusDiffPayload busPayload{};
+        busPayload.trackId = runtime.trackId;
+        busPayload.deviceId = device.id;
+        busPayload.flags = bus.flags;
+        busPayload.index = bus.index;
+        busPayload.channelCount = bus.channelCount;
+        busPayload.layoutId = bus.layoutId;
+        busPayload.channelOffset = bus.channelOffset;
+        std::memcpy(busPayload.name, bus.name,
+                    std::min(::strnlen(bus.name, sizeof(bus.name)),
+                             sizeof(busPayload.name)));
+        daw::EventEntry busEntry;
+        busEntry.sampleTime = 0;
+        busEntry.blockId = 0;
+        busEntry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+        busEntry.size = sizeof(daw::UiBusDiffPayload);
+        std::memcpy(busEntry.payload, &busPayload, sizeof(busPayload));
+        daw::ringWrite(ringUiOut, busEntry);
+      }
+
+      if (resolves) {
+        ++hostIndex;
+      }
     }
   };
 
@@ -3463,6 +3517,8 @@ struct TrackRuntime {
       daw::ProjectTrack track;
       track.trackId = runtime->trackId;
       track.name = "Track " + std::to_string(runtime->trackId + 1);
+      track.parentId = runtime->parentId.load(std::memory_order_relaxed);
+      track.collapsed = runtime->collapsed.load(std::memory_order_relaxed);
       track.linesPerBeat = runtime->linesPerBeat.load(std::memory_order_relaxed);
       daw::MusicalClip trackClip;
       std::vector<daw::ProjectPlacement> trackPlacements;
@@ -4037,6 +4093,8 @@ struct TrackRuntime {
                               std::memory_order_relaxed);
         runtime->mixMute.store(source.mixer.mute, std::memory_order_relaxed);
         runtime->mixSolo.store(source.mixer.solo, std::memory_order_relaxed);
+        runtime->parentId.store(source.parentId, std::memory_order_relaxed);
+        runtime->collapsed.store(source.collapsed, std::memory_order_relaxed);
         runtime->linesPerBeat.store(
             source.linesPerBeat == 0 ? 4u : source.linesPerBeat,
             std::memory_order_relaxed);
@@ -9070,6 +9128,16 @@ struct TrackRuntime {
                   ? static_cast<uint8_t>(std::min<uint32_t>(
                         trackSnapshot[i]->linesPerBeat.load(std::memory_order_relaxed),
                         255u))
+                  : 0;
+          // v20 child-track structure (Movement 4): parent id + collapsed flag.
+          uiShm.header->uiTrackParentId[i] =
+              i < trackSnapshot.size()
+                  ? trackSnapshot[i]->parentId.load(std::memory_order_relaxed)
+                  : 0;
+          uiShm.header->uiTrackFlags[i] =
+              (i < trackSnapshot.size() &&
+               trackSnapshot[i]->collapsed.load(std::memory_order_relaxed))
+                  ? static_cast<uint8_t>(daw::kUiTrackFlagCollapsed)
                   : 0;
           // Per-track output peak the audio thread measured this block (0 for
           // absent/silent tracks). Slot i == track i, matching the mixer fields.

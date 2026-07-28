@@ -52,7 +52,11 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 19: song time signature read-back (uiSongTimeSigNum/uiSongTimeSigDen) for the
 //     ruler + time gutter. Two u32s ride the header's alignment tail padding, so
 //     sizeof(ShmHeader) is unchanged (640).
-constexpr uint16_t kShmVersion = 19;
+// 20: Movement 4 — child-track structure (uiTrackParentId/uiTrackFlags) so a
+//     multi-out plugin's output buses become collapsible child tracks, plus per-bus
+//     topology on the chain stream (UiBusDiffPayload). The header arrays ride the tail
+//     padding, so sizeof(ShmHeader) is still 640.
+constexpr uint16_t kShmVersion = 20;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -159,7 +163,20 @@ struct alignas(64) ShmHeader {
   // 64-byte-alignment tail padding, so sizeof(ShmHeader) stays 640.
   uint32_t uiSongTimeSigNum = 4;
   uint32_t uiSongTimeSigDen = 4;
+  // v20: child-track structure for multi-out (Ableton-style collapsible children). A
+  // child is a REAL track, fed from a plugin output bus instead of a clip, published
+  // in the same per-track arrays as any other so every surface keeps working and the
+  // flat track index is preserved. uiTrackParentId: 0 = top-level, else the parent
+  // track_id. uiTrackFlags bit0 = collapsed — a UI-side filter only; a collapsed
+  // parent STILL publishes its children's rails (collapse changes what is drawn, never
+  // what exists). These fill the header's 64-byte-alignment tail padding, so
+  // sizeof(ShmHeader) stays 640.
+  uint32_t uiTrackParentId[kUiMaxTracks]{};
+  uint8_t uiTrackFlags[kUiMaxTracks]{};
 };
+
+// uiTrackFlags bits.
+constexpr uint32_t kUiTrackFlagCollapsed = 1u << 0;
 
 struct alignas(64) RingHeader {
   uint32_t capacity = 0;
@@ -326,6 +343,41 @@ struct alignas(64) UiDeviceParamsRegion {
   uint32_t paramCount = 0;
   char deviceName[40] = {};
   UiDeviceParam params[kUiMaxDeviceParams]{};
+};
+
+// v20 (Movement 4): a hosted plugin's audio bus topology, published on the chain
+// STREAM (UiBusDiffPayload in event_payloads.h) rather than a region — same lifetime
+// as the chain, so the rack draws stems correctly on first paint instead of drawing
+// stereo and rearranging.
+//
+// INVALIDATION RULE (stated, not left to emission order, because device ids are
+// REUSED): a ChainSnapshot diff for a device REPLACES that device's ENTIRE bus set.
+// Every DeviceBus diff that follows belongs to the snapshot that preceded it; any bus
+// a reader held for that device before it is gone. Always a full replacement, never a
+// merge — so a bus that vanishes on renegotiation is removed, and a reused device id
+// never inherits the previous plugin's buses. The ChainSnapshot diff carries busCount
+// (in its `flags`, low byte) so a reader knows when the set is complete and draws once.
+constexpr uint32_t kMaxBusesPerDevice = 32;
+
+// A stable id for an AudioChannelSet, published alongside the human-readable name so
+// the UI keys caches/guards on an integer, not a per-frame string compare. 0 =
+// discrete/unknown (key on the channel count instead); the rest are canonical sets.
+enum class UiBusLayoutId : uint16_t {
+  Discrete = 0,
+  Mono = 1,
+  Stereo = 2,
+  Lcr = 3,
+  Lrs = 4,
+  Quad = 5,
+  Surround5_0 = 6,
+  Surround5_1 = 7,
+  Surround6_0 = 8,
+  Surround6_1 = 9,
+  Surround7_0 = 10,
+  Surround7_1 = 11,
+  Ambisonic1 = 12,
+  Ambisonic2 = 13,
+  Ambisonic3 = 14,
 };
 
 // v18: waveform read-back. Per decoded audio source the engine holds a min/max

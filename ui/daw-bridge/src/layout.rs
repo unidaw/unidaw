@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 19;
+pub const K_SHM_VERSION: u16 = 20;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
@@ -114,6 +114,11 @@ pub struct ShmHeader {
     // alignment tail padding, so sizeof(ShmHeader) stays 640.
     pub ui_song_time_sig_num: u32,
     pub ui_song_time_sig_den: u32,
+    // v20: child-track structure (Movement 4). parent_id 0 = top-level, else the
+    // parent track_id; flags bit0 = collapsed. Fill the header's tail padding, so
+    // sizeof(ShmHeader) stays 640.
+    pub ui_track_parent_id: [u32; K_UI_MAX_TRACKS],
+    pub ui_track_flags: [u8; K_UI_MAX_TRACKS],
 }
 
 /// v14: a published patcher-graph node. `config` is type-interpreted (see the C++
@@ -567,6 +572,9 @@ pub enum UiDiffType {
     ModLinkUid16 = 11,
     PatcherGraphDelta = 12,
     PatcherGraphError = 13,
+    /// v20 (Movement 4): one per audio bus of a device, streamed after that device's
+    /// ChainSnapshot diff. See UiBusDiffPayload.
+    DeviceBus = 14,
 }
 
 #[repr(u16)]
@@ -687,6 +695,34 @@ pub struct UiChainDiffPayload {
     pub capability_mask: u32,
     pub bypass: u32,
 }
+
+/// v20 (Movement 4): on a ChainSnapshot diff, `flags` low byte is the count of
+/// DeviceBus diffs that follow for this device (so a reader draws once); bit8 =
+/// bus list truncated at the cap.
+pub const UI_CHAIN_DIFF_BUS_COUNT_MASK: u16 = 0x00ff;
+pub const UI_CHAIN_DIFF_BUS_TRUNCATED: u16 = 1 << 8;
+
+/// v20: one audio bus of a hosted plugin, streamed after the device's ChainSnapshot
+/// diff. `channel_offset` is the bus's first channel in the flat post-negotiation
+/// buffer; `layout_id` is the stable UiBusLayoutId. `name` is nul-PADDED — an exactly-
+/// 22-char name has no terminator, so bound decoding by the field width.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiBusDiffPayload {
+    pub diff_type: u16,
+    pub flags: u16, // bit0 isInput, bit1 isMain, bit2 enabled
+    pub track_id: u32,
+    pub device_id: u32,
+    pub index: u8,
+    pub channel_count: u8,
+    pub layout_id: u16,
+    pub channel_offset: u16,
+    pub name: [u8; 22],
+}
+
+pub const UI_BUS_DIFF_INPUT: u16 = 1 << 0;
+pub const UI_BUS_DIFF_MAIN: u16 = 1 << 1;
+pub const UI_BUS_DIFF_ENABLED: u16 = 1 << 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -907,11 +943,14 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_waveform_offset), 584);
         assert_eq!(offset_of!(ShmHeader, ui_song_time_sig_num), 592); // v19
         assert_eq!(offset_of!(ShmHeader, ui_song_time_sig_den), 596);
+        assert_eq!(offset_of!(ShmHeader, ui_track_parent_id), 600); // v20
+        assert_eq!(offset_of!(ShmHeader, ui_track_flags), 632);
         // The scale + device-param region structs (v16/v17) are now generated from
         // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
         const_assert_eq!(size_of::<UiPatcherEdge>(), 20);
         const_assert_eq!(size_of::<UiPatcherRegion>(), 5184);
+        const_assert_eq!(size_of::<UiBusDiffPayload>(), 40); // v20, fits EventEntry
         // v18 waveform structs are bindgen-generated; pin the element sizes, then tie
         // each hand constant to the generated region size so neither can drift: if a
         // K_* count is wrong the region no longer sums, and this fails to compile.

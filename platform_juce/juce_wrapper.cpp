@@ -345,6 +345,27 @@ class EnginePlayHead final : public juce::AudioPlayHead {
   TransportInfo transport_{};
 };
 
+// Map a JUCE AudioChannelSet to the stable UiBusLayoutId the UI keys on (see
+// shared_memory.h). 0 = discrete/unknown — the UI keys on the channel count there.
+static uint16_t busLayoutIdFor(const juce::AudioChannelSet& set) {
+  using S = juce::AudioChannelSet;
+  if (set == S::mono()) return 1;
+  if (set == S::stereo()) return 2;
+  if (set == S::createLCR()) return 3;
+  if (set == S::createLRS()) return 4;
+  if (set == S::quadraphonic()) return 5;
+  if (set == S::create5point0()) return 6;
+  if (set == S::create5point1()) return 7;
+  if (set == S::create6point0()) return 8;
+  if (set == S::create6point1()) return 9;
+  if (set == S::create7point0()) return 10;
+  if (set == S::create7point1()) return 11;
+  if (set == S::ambisonic(1)) return 12;
+  if (set == S::ambisonic(2)) return 13;
+  if (set == S::ambisonic(3)) return 14;
+  return 0;
+}
+
 class JucePluginInstance final : public IPluginInstance {
  public:
   explicit JucePluginInstance(std::unique_ptr<juce::AudioPluginInstance> instance,
@@ -368,22 +389,77 @@ class JucePluginInstance final : public IPluginInstance {
 
     instance_->setPlayHead(&playHead_);
     instance_->setNonRealtime(false);
-    juce::AudioProcessor::BusesLayout layout;
-    const int inputChannels = instance_->getTotalNumInputChannels();
-    if (numOutputs == 1) {
-      layout.outputBuses.add(juce::AudioChannelSet::mono());
-      if (inputChannels > 0) {
-        layout.inputBuses.add(juce::AudioChannelSet::mono());
-      }
-    } else if (numOutputs >= 2) {
-      layout.outputBuses.add(juce::AudioChannelSet::stereo());
-      if (inputChannels > 0) {
-        layout.inputBuses.add(juce::AudioChannelSet::stereo());
+
+    // Negotiate against the plugin's REAL bus topology (Movement 4 foundation).
+    // The old code built a fixed one-input/one-output mono-or-stereo BusesLayout and
+    // ignored setBusesLayout's return, so a multi-bus plugin (a multi-out instrument's
+    // aux stems, an effect's sidechain input) silently kept its own layout while the
+    // host still assumed `numOutputs` channels. Now we start from the plugin's current
+    // layout — which has one entry per declared bus — set the MAIN in/out bus to the
+    // host width, disable every non-main bus for now (aux outs, sidechain in; later
+    // phases enable + route them), and honour the result: if the plugin rejects the
+    // layout (e.g. a fixed bus it cannot disable), fall back to its own default so it
+    // still runs rather than silently mismatching.
+    const juce::AudioChannelSet mainSet = numOutputs == 1
+                                              ? juce::AudioChannelSet::mono()
+                                              : juce::AudioChannelSet::stereo();
+    const bool wantsInput = instance_->getTotalNumInputChannels() > 0;
+    juce::AudioProcessor::BusesLayout layout = instance_->getBusesLayout();
+    for (int b = 0; b < layout.outputBuses.size(); ++b) {
+      layout.outputBuses.getReference(b) =
+          b == 0 ? mainSet : juce::AudioChannelSet::disabled();
+    }
+    for (int b = 0; b < layout.inputBuses.size(); ++b) {
+      layout.inputBuses.getReference(b) =
+          (b == 0 && wantsInput) ? mainSet : juce::AudioChannelSet::disabled();
+    }
+    const bool layoutApplied = instance_->setBusesLayout(layout);
+    if (!layoutApplied) {
+      instance_->enableAllBuses();  // plugin rejected it — keep its own default
+    }
+    instance_->setPlayConfigDetails(instance_->getTotalNumInputChannels(),
+                                    instance_->getTotalNumOutputChannels(),
+                                    sampleRate, blockSize);
+
+    // Capture the negotiated bus topology (Movement 4). This is the structured data
+    // the engine + UI read to see and address stems/aux/sidechain buses — channelOffset
+    // is each bus's first channel in the flat process buffer, and `layout` keeps the
+    // AudioChannelSet so a surround bus round-trips as a real channel set. Built once at
+    // prepare (off the RT path). A concise line also lands in the host log.
+    busLayout_.clear();
+    for (int dir = 0; dir < 2; ++dir) {
+      const bool isInput = dir == 0;
+      const int busCount = instance_->getBusCount(isInput);
+      int offset = 0;
+      for (int b = 0; b < busCount; ++b) {
+        const auto* bus = instance_->getBus(isInput, b);
+        BusInfo info;
+        info.isInput = isInput;
+        info.index = b;
+        info.isMain = b == 0;
+        info.enabled = bus != nullptr && bus->isEnabled();
+        info.channelCount = instance_->getChannelCountOfBus(isInput, b);
+        info.channelOffset = offset;  // disabled buses contribute 0, so offset holds
+        info.name = bus != nullptr ? bus->getName().toStdString() : std::string();
+        info.layout = bus != nullptr
+                          ? bus->getCurrentLayout().getDescription().toStdString()
+                          : std::string();
+        info.layoutId = bus != nullptr
+                            ? busLayoutIdFor(bus->getCurrentLayout())
+                            : 0;
+        busLayout_.push_back(std::move(info));
+        offset += info.channelCount;
       }
     }
-    instance_->enableAllBuses();
-    instance_->setBusesLayout(layout);
-    instance_->setPlayConfigDetails(inputChannels, numOutputs, sampleRate, blockSize);
+    {
+      std::cerr << "plugin buses: \"" << instance_->getName().toStdString()
+                << "\" applied=" << (layoutApplied ? 1 : 0);
+      for (const auto& info : busLayout_) {
+        std::cerr << " " << (info.isInput ? "in" : "out") << info.index << ":"
+                  << info.channelCount << (info.enabled ? "" : "(off)");
+      }
+      std::cerr << std::endl;
+    }
     if (instance_->getNumPrograms() > 0) {
       instance_->setCurrentProgram(0);
     }
@@ -494,6 +570,8 @@ class JucePluginInstance final : public IPluginInstance {
   }
 
   int outputChannels() const override { return pluginOutputs_; }
+
+  std::vector<BusInfo> busLayout() const override { return busLayout_; }
 
   bool loadVst3PresetFile(const std::string& path) override {
     if (!instance_) {
@@ -830,6 +908,7 @@ class JucePluginInstance final : public IPluginInstance {
   std::string version_;
   std::array<uint8_t, 16> uid16_;
   int pluginOutputs_ = 0;
+  std::vector<BusInfo> busLayout_;
   juce::AudioBuffer<float> scratch_;
   std::vector<ParamInfo> params_;
   std::vector<juce::AudioProcessorParameter*> paramPointers_;
@@ -896,6 +975,19 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   int numParameters() const override { return static_cast<int>(params_.size()); }
   int inputChannels() const override { return 0; }
   int outputChannels() const override { return outputChannels_; }
+  std::vector<BusInfo> busLayout() const override {
+    BusInfo out;
+    out.isInput = false;
+    out.index = 0;
+    out.isMain = true;
+    out.enabled = true;
+    out.channelCount = outputChannels_;
+    out.channelOffset = 0;
+    out.layoutId = outputChannels_ == 1 ? 1 : 2;
+    out.name = "Main";
+    out.layout = outputChannels_ == 1 ? "Mono" : "Stereo";
+    return {out};
+  }
   bool loadVst3PresetFile(const std::string&) override { return false; }
 
   const std::vector<ParamInfo>& parameters() const override { return params_; }
