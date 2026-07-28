@@ -421,6 +421,20 @@ public:
         m_playbackBlockId(playbackBlockId),
         m_startTime(std::chrono::steady_clock::now()),
         m_lastPlayedBlockId(0) {
+    // How many blocks behind the freshest rendered block the callback plays. This is the
+    // callback's slice of the transport-to-ear latency; the old fixed 2 was pure safety
+    // margin. With realtime-scheduled rendering the host keeps the next block ready, so 1
+    // is enough. DAW_ENGINE_PLAY_MARGIN tunes it; clamped to [1, numBlocks-1] so it can't
+    // reference a block already evicted from the (numBlocks-deep) ring.
+    uint32_t margin = 1;
+    if (const char* env = std::getenv("DAW_ENGINE_PLAY_MARGIN")) {
+      const int parsed = std::atoi(env);
+      if (parsed >= 1) {
+        margin = static_cast<uint32_t>(parsed);
+      }
+    }
+    const uint32_t maxMargin = numBlocks > 1 ? numBlocks - 1 : 1;
+    m_playMargin = std::min(margin, maxMargin);
     m_audioScratch.assign(blockSize, 0.0f);
     // Preallocate the widest possible master (surround on a narrower device), so the
     // audio thread never allocates when a wider master is active.
@@ -555,12 +569,12 @@ public:
 
       // If we haven't started yet, sync to the most recent block.
       if (m_lastPlayedBlockId == 0 && completed > 0) {
-        nextBlockToPlay = completed > 2 ? completed - 2 : 1;
+        nextBlockToPlay = completed > m_playMargin ? completed - m_playMargin : 1;
       }
       // If we're falling behind the ring, jump forward to the freshest block.
       if (completed > m_lastPlayedBlockId &&
           completed - m_lastPlayedBlockId > m_numBlocks) {
-        nextBlockToPlay = completed > 2 ? completed - 2 : 1;
+        nextBlockToPlay = completed > m_playMargin ? completed - m_playMargin : 1;
       }
 
       // Check if the block we want is ready
@@ -938,6 +952,7 @@ private:
   double m_sampleRate;
   uint32_t m_blockSize;
   uint32_t m_numBlocks;
+  uint32_t m_playMargin = 1;  // blocks behind the freshest rendered block the callback plays
   std::atomic<uint32_t> m_currentReadBlock;
   std::atomic<bool> m_resetPending;
   std::atomic<uint32_t>* m_playbackBlockId;
@@ -1208,11 +1223,13 @@ int main(int argc, char** argv) {
   baseConfig.numAuxChannelsOut = kMaxAuxOutputChannels;
   // Pipeline depth: how many blocks the producer may run ahead of the audio device.
   // It is the entire headroom for absorbing jitter in async out-of-process host
-  // rendering — a deeper pipeline glitches less under heavy real plugins but adds
-  // latency (each block is blockSize/sampleRate seconds), so it is the direct knob for
-  // the glitch<->latency trade. Default 4 (~46 ms at 512/44.1k); DAW_ENGINE_NUM_BLOCKS
-  // tunes it per setup. Clamped to [2, 32] — below 2 the ring can't double-buffer.
-  baseConfig.numBlocks = 4;
+  // rendering AND the dominant transport-to-ear latency (each block is
+  // blockSize/sampleRate seconds), so it is the direct knob for the glitch<->latency
+  // trade. Default 3 (~23 ms transport-to-ear at 512/44.1k, + the device buffer): with
+  // the render thread realtime-scheduled a 2-block-deep pipeline holds without starving,
+  // measured. A heavier real-plugin session that the underrun reporter flags can raise it
+  // via DAW_ENGINE_NUM_BLOCKS. Clamped to [2, 32] — below 2 the ring can't double-buffer.
+  baseConfig.numBlocks = 3;
   if (const char* nbEnv = std::getenv("DAW_ENGINE_NUM_BLOCKS")) {
     const int want = std::atoi(nbEnv);
     if (want >= 2) {
@@ -1832,6 +1849,9 @@ struct TrackRuntime {
 
   // Track audio playback position for synchronization
   std::atomic<uint32_t> audioPlaybackBlockId{0};
+  // Last steady-state pipeline depth (producer blocks ahead of the device) sampled by the
+  // reporter while playing — the transport-to-ear latency in blocks.
+  std::atomic<uint32_t> observedPipelineBlocks{0};
 
   std::unique_ptr<daw::IRuntime> audioRuntime;
   std::unique_ptr<EngineAudioCallback> audioCallback;
@@ -10360,7 +10380,12 @@ struct TrackRuntime {
   // touches the audio thread beyond reading relaxed atomics.
   std::thread xrunReporter;
   if (!testMode && audioCallback) {
-    xrunReporter = std::thread([&] {
+    const double blockMs = engineConfig.sampleRate > 0.0
+        ? static_cast<double>(engineConfig.blockSize) /
+              engineConfig.sampleRate * 1000.0
+        : 0.0;
+    const bool latencyReport = std::getenv("DAW_ENGINE_LATENCY_REPORT") != nullptr;
+    xrunReporter = std::thread([&, blockMs, latencyReport] {
       uint64_t lastStarve = 0;
       while (running.load()) {
         for (int i = 0; i < 20 && running.load(); ++i) {
@@ -10375,6 +10400,21 @@ struct TrackRuntime {
                     << "DAW_ENGINE_BUFFER_SIZE (bigger device buffer) if audible."
                     << std::endl;
           lastStarve = starve;
+        }
+        // Pipeline depth = how many blocks the producer is ahead of the block the device
+        // is playing. This IS the transport-to-ear latency (plus the device's own output
+        // buffer), so it is the number the low-latency work has to drive down.
+        if (playing.load(std::memory_order_acquire)) {
+          const uint32_t produced = nextBlockId.load(std::memory_order_relaxed);
+          const uint32_t playingId =
+              audioPlaybackBlockId.load(std::memory_order_acquire);
+          const uint32_t depth = produced > playingId ? produced - playingId : 0;
+          observedPipelineBlocks.store(depth, std::memory_order_relaxed);
+          if (latencyReport) {
+            std::cerr << "Engine: pipeline depth " << depth << " blocks (~"
+                      << (depth * blockMs) << " ms transport-to-ear, + device buffer)"
+                      << std::endl;
+          }
         }
       }
     });
@@ -10401,9 +10441,16 @@ struct TrackRuntime {
     std::cout << "Audio output stopped" << std::endl;
     const uint64_t starve = audioCallback->starveCallbacks();
     const uint64_t active = audioCallback->activeCallbacks();
+    const uint32_t depth = observedPipelineBlocks.load(std::memory_order_relaxed);
+    const double blockMs = engineConfig.sampleRate > 0.0
+        ? static_cast<double>(engineConfig.blockSize) /
+              engineConfig.sampleRate * 1000.0
+        : 0.0;
     std::cout << "Audio underrun summary: " << starve << " of " << active
               << " playback callbacks dropped a track (worst shortfall "
-              << audioCallback->worstStarveGap() << " blocks)." << std::endl;
+              << audioCallback->worstStarveGap() << " blocks). Pipeline depth "
+              << depth << " blocks (~" << (depth * blockMs)
+              << " ms transport-to-ear, + device buffer)." << std::endl;
     // Audio is stopped, so the capture buffer is quiescent and safe to write.
     if (audioCallback->capturing()) {
       const char* capturePath = std::getenv("DAW_CAPTURE_WAV");

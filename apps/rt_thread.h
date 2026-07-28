@@ -19,7 +19,12 @@
 // thread that overruns a computation budget.
 
 #if defined(__APPLE__)
+#include <pthread.h>
 #include <pthread/qos.h>
+#include <mach/mach_init.h>
+#include <mach/mach_time.h>
+#include <mach/thread_act.h>
+#include <mach/thread_policy.h>
 #endif
 
 namespace daw {
@@ -29,6 +34,57 @@ namespace daw {
 inline void elevateToAudioPriority() {
 #if defined(__APPLE__)
   pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+}
+
+// Promote the CALLING thread to true realtime (mach time-constraint) scheduling, tied to
+// the audio block period. This is what CoreAudio's own IO thread uses: the scheduler
+// promises the thread the CPU once per `periodMs`, expecting it to need about
+// `computeMs` of work and to finish within `constraintMs`. A realtime thread preempts
+// normal and even USER_INTERACTIVE threads, so a block render is no longer at the mercy
+// of background/UI work — which is exactly what lets the pipeline run shallow (low
+// latency) without starving. Best-effort: on failure or off-Apple it falls back to the
+// USER_INTERACTIVE QoS and returns false.
+//
+// computeMs should be a generous estimate of the per-block CPU cost: if a thread
+// habitually overruns it the system may stop honoring the realtime designation, so it is
+// better to over- than under-state it. constraintMs is the hard deadline (<= periodMs).
+inline bool setRealtimeThreadPriority(double periodMs,
+                                      double computeMs,
+                                      double constraintMs) {
+#if defined(__APPLE__)
+  mach_timebase_info_data_t timebase{};
+  if (mach_timebase_info(&timebase) != KERN_SUCCESS || timebase.numer == 0) {
+    elevateToAudioPriority();
+    return false;
+  }
+  // Convert milliseconds to mach absolute-time ticks: ticks = ns * denom / numer.
+  const auto msToAbs = [&](double ms) -> uint32_t {
+    const double ticks = ms * 1.0e6 * static_cast<double>(timebase.denom) /
+                         static_cast<double>(timebase.numer);
+    return static_cast<uint32_t>(ticks);
+  };
+  thread_time_constraint_policy_data_t policy{};
+  policy.period = msToAbs(periodMs);
+  policy.computation = msToAbs(computeMs);
+  policy.constraint = msToAbs(constraintMs);
+  policy.preemptible = 1;
+  const kern_return_t rc = thread_policy_set(
+      pthread_mach_thread_np(pthread_self()),
+      THREAD_TIME_CONSTRAINT_POLICY,
+      reinterpret_cast<thread_policy_t>(&policy),
+      THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+  if (rc != KERN_SUCCESS) {
+    elevateToAudioPriority();
+    return false;
+  }
+  return true;
+#else
+  (void)periodMs;
+  (void)computeMs;
+  (void)constraintMs;
+  elevateToAudioPriority();
+  return false;
 #endif
 }
 
