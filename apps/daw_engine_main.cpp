@@ -32,6 +32,7 @@
 #include "apps/audio_shm.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
+#include "apps/rt_thread.h"
 #include "apps/host_controller.h"
 #include "apps/plugin_cache.h"
 #include "apps/patcher_abi.h"
@@ -7103,6 +7104,9 @@ struct TrackRuntime {
   std::cerr << "UI: command thread launched" << std::endl;
 
   std::thread producer([&] {
+    // The producer renders/dispatches each block ahead of the device and paces to it;
+    // any preemption here directly starves the ring. Raise it above background/UI work.
+    daw::elevateToAudioPriority();
     const auto blockDuration =
         std::chrono::duration<double>(
             static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
