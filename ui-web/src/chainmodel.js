@@ -183,7 +183,11 @@ export function createChainBuffer(cap = 16) {
  * the same.
  */
 export function buildChainModel(opts, buf) {
-  const { track = 0, chains = null, selected = -1, trackName = '', params = null } = opts;
+  const { track = 0, chains = null, selected = -1, trackName = '', params = null,
+          // Which device the published patcher graph belongs to, and what is in
+          // it. A generator node emits notes of its own, and until now nothing
+          // anywhere said so — see `generators` below.
+          patcherDevice = -1, generators = '' } = opts;
   const entry = chains ? chains[track] : null;
 
   buf.track = track;
@@ -349,14 +353,31 @@ export function buildChainModel(opts, buf) {
     c.caps = describeCaps(d.caps);
     c.bypass = !!d.bypass;
     c.selected = i === selected;
+    // `generators` is part of the key: it can change while the slot, node and
+    // parameter count all stay put, which is GUIDELINES 2.1 exactly — content
+    // moving under a key that did not.
     if (c._sSlot !== d.slot || c._sNode !== c.patcherNode
-        || c._sCount !== shown || c._sMore !== moreCount) {
+        || c._sCount !== shown || c._sMore !== moreCount
+        || c._sGen !== generators) {
       c._sSlot = d.slot; c._sNode = c.patcherNode;
-      c._sCount = shown; c._sMore = moreCount;
+      c._sCount = shown; c._sMore = moreCount; c._sGen = generators;
       c.sub = d.slot === HOST_SLOT_DIRECT
         ? 'in-process'
         : (d.slot === DEVICE_ID_AUTO ? 'slot unassigned' : 'slot ' + d.slot);
       if (c.patcherNode >= 0) c.sub += ' · node ' + c.patcherNode;
+      /**
+       * SAY WHEN A DEVICE IS MAKING ITS OWN NOTES.
+       *
+       * Jaakko spent an evening hearing notes that were not in his clip, and I
+       * spent it blaming note-off and then MIDI routing. They were a euclidean
+       * generator and a random_degree node in this device's patcher graph,
+       * playing alongside the sequencer. Everything was working; nothing said it
+       * was happening.
+       *
+       * The graph was reachable the whole time — F3, if you knew — and the fix
+       * is not more places to look, it is one line on the card that owns it.
+       */
+      if (generators && d.id === patcherDevice) c.sub += ' · ' + generators;
       // The count belongs on screen, not just in the scrollbar: six rows of 256
       // with a thin scrollbar reads as "this plugin has six parameters" unless
       // something says otherwise. This is the something.

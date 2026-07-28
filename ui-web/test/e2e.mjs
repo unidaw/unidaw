@@ -1560,6 +1560,46 @@ section('arrangement navigation');
   ok(a3.zoom > a2.zoom, 'and the keyboard zooms out', `zoom ${a2.zoom} -> ${a3.zoom}`);
 }
 
+section('a device that makes its own notes says so');
+{
+  /**
+   * The evening this exists for: Jaakko heard notes that were not in his clip,
+   * and the cause was a euclidean generator and a random_degree node in the
+   * device's patcher graph, playing alongside the sequencer. Everything worked.
+   * Nothing said it was happening — the graph was reachable by pressing F3, if
+   * you knew, and the tracker showed only the clip.
+   *
+   * `generator.uniproj.json` is that shape reduced to one track, one note and
+   * one graph.
+   */
+  const feet = () => page.evaluate(
+    () => [...document.querySelectorAll('.dv-foot')].map((e) => e.textContent).join(' | '));
+
+  /**
+   * The quiet case FIRST, and this order is load-bearing.
+   *
+   * A patcher graph is ENGINE-lifetime state, not project state — loading
+   * another song does not take it away. So once `generator` has been loaded the
+   * nodes are still live, and a card still saying "generates" is telling the
+   * truth. Checking the clean project afterwards asserted the opposite of what
+   * is actually the case.
+   */
+  await page.evaluate((pr) => window.__uni.loadProject(pr), PROJECT);
+  await page.waitForTimeout(1800);
+  const plain = await feet();
+  ok(!/generates:/.test(plain), 'a device with no graph says nothing about generating',
+     plain);
+
+  await page.evaluate(() => window.__uni.loadProject('generator'));
+  await page.waitForFunction(
+    () => { const c = window.__uni.chainProbe(); return c && c.cards >= 1; },
+    null, { timeout: 20000 }).catch(() => {});
+  await page.waitForTimeout(1800);
+  const foot = await feet();
+  ok(/generates:/.test(foot), 'and one WITH a generator says so', foot);
+  ok(/euclidean/.test(foot), 'naming what is generating', foot);
+}
+
 section('clips answer to the pointer');
 {
   // The band had no pointer handling at all — only the ruler and the wheel — so a

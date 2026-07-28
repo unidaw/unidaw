@@ -647,6 +647,7 @@ const browser = new Browser(browserHost, {
     if (!row) return;
     if (row.kind === KIND_PLUGIN) { insertPlugin(row); return; }
     const name = row.name;
+    forgetPatcherGraph();
     if (!conn || !conn.loadProject(name)) { state.reject = 'no engine'; schedule(); return; }
     state.currentProject = name;
     state.browserOpen = false;
@@ -1244,7 +1245,8 @@ const dockApi = {
     return state.editMode;
   },
   setView: (v) => { if (v) { state.view = v; if (v === 'piano') fitPiano(); } schedule(); return state.view; },
-  load: (n) => { const ok = conn && conn.loadProject(n); if (ok) state.currentProject = n; return ok; },
+  load: (n) => { forgetPatcherGraph();
+                 const ok = conn && conn.loadProject(n); if (ok) state.currentProject = n; return ok; },
   save: (n) => { const ok = conn && conn.saveProject(n); if (ok) state.currentProject = n; return ok; },
   listProjects: () => conn && conn.send({ type: 'list' }),
   transport: (what) => cmd(what),
@@ -2274,6 +2276,67 @@ const paletteHost = document.getElementById('palette');
 const _minimapOpts = { engine: null, startTick: 0, visibleTicks: 0 };
 const _harmonyOpts = { harmony: null, playheadTick: 0, version: -1,
                        nameHarmony: null, scales: null, meter: null };
+/**
+ * The node types that make notes on their own.
+ *
+ * NODE_TYPES is kernel, euclidean, passthru, audio, lfo, random, out. Of those,
+ * euclidean and random EMIT events without being asked — the rest transform or
+ * route what is already there. That distinction is the whole point here: a
+ * device with an lfo on it is being modulated, a device with a euclidean on it
+ * is playing music nobody wrote down.
+ */
+const GENERATOR_TYPES = new Set(['euclidean', 'random']);
+
+/**
+ * Forget the cached patcher graph, because a different song is loading.
+ *
+ * The engine publishes a graph when one is asked for, and publishes NOTHING when
+ * a project without graphs loads — so the page keeps the last one it saw, and
+ * the rack told a project with no generator that it had a euclidean. A label
+ * that can be wrong is worse than no label: this one exists to be believed.
+ */
+function forgetPatcherGraph() {
+  _genText = '';
+  _genSeen = -1;
+  _genVersion = engine ? engine.patcherVersion : -1;
+}
+
+/**
+ * What the published patcher graph generates, as a phrase for the card.
+ *
+ * Interned on the node set, because the string would otherwise be rebuilt every
+ * frame for a value that changes when a graph is loaded and never again.
+ */
+let _genText = '', _genVersion = -1, _genSeen = -1;
+function generatorPhrase() {
+  if (!engine || !engine.patcherNodes) return '';
+  // Nothing published since the last project load: whatever is cached belongs to
+  // the previous song. See forgetPatcherGraph().
+  if (engine.patcherVersion === _genVersion) return '';
+  /**
+   * Keyed on the ENGINE'S OWN VERSION, and nothing else.
+   *
+   * The first version built a `id:type,` string over every node to decide
+   * whether the answer had changed — per frame, forever, for a value that
+   * changes when a graph loads and never again. 1367 B/draw against a 900 limit,
+   * and the string was pure garbage every time it agreed with itself.
+   *
+   * The region carries a version that increments exactly when its contents
+   * change. That is the key; comparing two integers is the whole check.
+   */
+  if (engine.patcherVersion === _genSeen) return _genText;
+  _genSeen = engine.patcherVersion;
+  let found = '';
+  for (const n of engine.patcherNodes) {
+    const name = NODE_TYPES[n.type] || '';
+    if (!GENERATOR_TYPES.has(name)) continue;
+    if (found.indexOf(name) >= 0) continue;
+    found = found ? found + ' + ' + name : name;
+  }
+  _genText = found ? 'generates: ' + found : '';
+  return _genText;
+}
+
 const _chainOpts = { track: 0, chains: null, selected: -1, trackName: '', params: null };
 const _entryOverlay = { row: 0, track: 0, col: 0, text: '' };
 /**
@@ -2449,6 +2512,11 @@ function draw() {
     o.selected = state.chainSelected;
     o.trackName = trackName(engine, state.cursor.track);
     o.params = deviceParams;
+    // Which device the published graph belongs to, and what that graph MAKES.
+    // Without this the rack can show a plugin sitting quietly while a euclidean
+    // node inside it plays a part nobody wrote.
+    o.patcherDevice = engine ? engine.patcherDevice : -1;
+    o.generators = generatorPhrase();
     chain.render(buildChainModel(o, chainBuf));
     /**
      * A non-tracker pane holds the keyboard only WHILE something is selected in
@@ -4418,7 +4486,8 @@ window.__uni = {
   },
   // currentProject is set here too, not only in the rail: it seeds save-as, and a
   // project opened from the dock or a test is just as much "the open project".
-  loadProject: (name) => { const ok = conn && conn.loadProject(name);
+  loadProject: (name) => { forgetPatcherGraph();
+                           const ok = conn && conn.loadProject(name);
                            if (ok) state.currentProject = name; return ok; },
   saveProject: (name) => { const ok = conn && conn.saveProject(name);
                            if (ok) state.currentProject = name; return ok; },
