@@ -499,10 +499,16 @@ pub enum UiCommandType {
     /// Windowed waveform query (UiWaveformRequestPayload); answered into a
     /// UiWaveformRegion seqlock slot from the per-source min/max pyramid.
     RequestWaveform = 44,
+    /// Audition a pitch on a track's instrument without writing it (keyjazz).
+    /// Reuses UiCommandPayload: trackId, note_pitch = pitch, value0 = velocity,
+    /// flags bit0 = on. Held, out of band — never recorded, undoable, or dirtying.
+    PreviewNote = 45,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
 pub const MIXER_FLAG_SOLO: u16 = 1 << 1;
+/// PreviewNote flags: bit0 set = note-on, clear = note-off.
+pub const PREVIEW_NOTE_FLAG_ON: u16 = 1 << 0;
 
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

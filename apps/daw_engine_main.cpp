@@ -1897,6 +1897,32 @@ struct TrackRuntime {
   std::atomic<uint32_t> modVersion{0};
   std::atomic<uint32_t> nextNoteId{1};
   std::atomic<uint32_t> nextChordId{1};
+
+  // PreviewNote (keyjazz): the UI command thread enqueues auditions here and the producer
+  // — the sole writer of the per-track event rings — drains and injects them, so each ring
+  // keeps a single writer. heldPreview tracks sustained pitches per track so Stop (and a
+  // dropped keyup) can flush them to note-offs. One mutex guards both.
+  struct PreviewNoteReq {
+    uint32_t trackId;
+    uint8_t pitch;
+    uint8_t velocity;
+    bool on;
+  };
+  std::mutex previewMutex;
+  std::vector<PreviewNoteReq> pendingPreviewNotes;
+  std::unordered_map<uint32_t, std::vector<uint8_t>> heldPreview;  // trackId -> held pitches
+  // Enqueue an audition and update the held-pitch set. Caller holds nothing; this locks.
+  auto enqueuePreview = [&](uint32_t trackId, uint8_t pitch, uint8_t velocity, bool on) {
+    std::lock_guard<std::mutex> lock(previewMutex);
+    pendingPreviewNotes.push_back({trackId, pitch, velocity, on});
+    auto& held = heldPreview[trackId];
+    const auto it = std::find(held.begin(), held.end(), pitch);
+    if (on) {
+      if (it == held.end()) held.push_back(pitch);
+    } else if (it != held.end()) {
+      held.erase(it);
+    }
+  };
   std::atomic<bool> harmonyDirty{true};
   std::atomic<uint32_t> harmonyVersion{0};
   std::atomic<uint32_t> patcherGraphVersion{0};
@@ -6476,6 +6502,18 @@ struct TrackRuntime {
       const uint16_t flags = payload.flags;
       applyRemoveNote(payload.trackId, noteNanotick, pitch, flags, true);
     } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::PreviewNote)) {
+      // Keyjazz: audition a pitch on the track's instrument without touching the clip
+      // store. Enqueue for the producer to inject into the track's event ring. Velocity 0
+      // on an on-gesture is a note-off (running-status convention) so a key can't stick.
+      const uint8_t pitch =
+          static_cast<uint8_t>(std::min<uint32_t>(payload.notePitch, 127));
+      const uint8_t velocity =
+          static_cast<uint8_t>(std::min<uint32_t>(payload.value0, 127));
+      const bool on =
+          (payload.flags & daw::kPreviewNoteFlagOn) != 0 && velocity > 0;
+      enqueuePreview(payload.trackId, pitch, velocity, on);
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::TogglePlay)) {
       const bool next = !playing.load(std::memory_order_acquire);
       playing.store(next, std::memory_order_release);
@@ -6487,6 +6525,17 @@ struct TrackRuntime {
       // together so the next Play starts clean.
       playing.store(false, std::memory_order_release);
       resetTimeline.store(true, std::memory_order_release);
+      // Flush any sustained preview notes: enqueue a note-off for every held pitch so a
+      // dropped keyup (or a Stop mid-audition) can't leave a stuck voice.
+      {
+        std::lock_guard<std::mutex> lock(previewMutex);
+        for (auto& [trackId, held] : heldPreview) {
+          for (const uint8_t pitch : held) {
+            pendingPreviewNotes.push_back({trackId, pitch, 0, false});
+          }
+          held.clear();
+        }
+      }
       std::cout << "UI: Transport Stop" << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetPosition)) {
@@ -9153,6 +9202,15 @@ struct TrackRuntime {
         }
       }
 
+      // Drain queued keyjazz auditions once for this block; the per-track loop below
+      // injects each into its track's event ring. Reqs for a track that is absent or
+      // whose host isn't ready this block are simply not written (silence, no error).
+      std::vector<PreviewNoteReq> previewThisBlock;
+      {
+        std::lock_guard<std::mutex> lock(previewMutex);
+        previewThisBlock.swap(pendingPreviewNotes);
+      }
+
       for (auto* runtime : trackSnapshot) {
         if (!runtime->hostReady.load(std::memory_order_acquire)) {
           continue;
@@ -9187,6 +9245,31 @@ struct TrackRuntime {
         transportPayload.playState = isPlaying ? 1 : 0;
         std::memcpy(transportEntry.payload, &transportPayload, sizeof(transportPayload));
         daw::ringWrite(ringCtrl, transportEntry);
+
+        // Inject this track's queued keyjazz auditions at the block boundary. Out of band:
+        // these come straight from the keyboard, never the clip store, so they play (and
+        // hold, and sustain in chords) without being recorded. Note-off carries no noteId;
+        // the plugin matches it by pitch+channel. Plays whether or not the transport runs.
+        for (const auto& req : previewThisBlock) {
+          if (req.trackId != runtime->trackId) {
+            continue;
+          }
+          daw::EventEntry previewEntry;
+          previewEntry.sampleTime = pluginSampleStart;
+          previewEntry.blockId = blockId;
+          previewEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
+          previewEntry.size = sizeof(daw::MidiPayload);
+          daw::MidiPayload previewPayload{};
+          previewPayload.status = req.on ? 0x90 : 0x80;
+          previewPayload.data1 = req.pitch;
+          previewPayload.data2 = req.on ? req.velocity : 0;
+          previewPayload.channel = 0;
+          previewPayload.tuningCents = 0;
+          previewPayload.noteId =
+              req.on ? nextNoteId.fetch_add(1, std::memory_order_acq_rel) : 0;
+          std::memcpy(previewEntry.payload, &previewPayload, sizeof(previewPayload));
+          daw::ringWrite(ringStd, previewEntry);
+        }
 
         if (runtime->mirrorPending.load(std::memory_order_acquire) &&
             !runtime->mirrorPrimed.load(std::memory_order_acquire)) {
