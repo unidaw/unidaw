@@ -805,11 +805,28 @@ class JucePluginInstance final : public IPluginInstance {
             owner(ownerIn) {
         setUsingNativeTitleBar(true);
         setResizable(true, true);
+        setWantsKeyboardFocus(true);
       }
       void closeButtonPressed() override {
         if (owner) {
           owner->closeEditorWindow();
         }
+      }
+      // PROBE (keystroke-forwarding groundwork): keys the plugin's editor did NOT consume
+      // bubble up to the hosting window. Log them so we can confirm, per plugin, that the
+      // host actually sees keystrokes before building the SHM ring that forwards them to
+      // the engine. Returns false so nothing is consumed (transparent to the plugin).
+      // DAW_HOST_KEY_PROBE=1 enables it. A fully-native plugin view may swallow keys and
+      // never reach here — that is exactly what this probe tells us.
+      bool keyPressed(const juce::KeyPress& key) override {
+        if (std::getenv("DAW_HOST_KEY_PROBE") != nullptr) {
+          std::cerr << "HOST_KEY: code=" << key.getKeyCode()
+                    << " char='" << juce::String::charToString(key.getTextCharacter())
+                       .toStdString()
+                    << "' mods=" << key.getModifiers().getRawFlags()
+                    << " desc=" << key.getTextDescription().toStdString() << std::endl;
+        }
+        return false;  // never consume — this is a transparent probe
       }
       JucePluginInstance* owner = nullptr;
     };
