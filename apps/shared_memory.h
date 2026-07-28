@@ -61,7 +61,11 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //     Every per-track header array grows, so sizeof(ShmHeader) grows well past 640 and
 //     every region offset shifts (computed from sizeof, so it moves automatically). A
 //     lockstep bump: the Rust mirror + sidecar rebuild against 64.
-constexpr uint16_t kShmVersion = 21;
+// 22: add/remove track — a STABLE per-slot uiTrackId + a kUiTrackFlagAbsent tombstone bit,
+//     so RemoveTrack retires an id without renumbering its neighbours. uiTrackCount becomes
+//     the extent; iterate skipping absent slots, key on uiTrackId. uiTrackId[] grows the
+//     header (region offsets shift automatically); lockstep with the Rust mirror.
+constexpr uint16_t kShmVersion = 22;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -178,6 +182,13 @@ struct alignas(64) ShmHeader {
   // sizeof(ShmHeader) stays 640.
   uint32_t uiTrackParentId[kUiMaxTracks]{};
   uint8_t uiTrackFlags[kUiMaxTracks]{};
+  // v22: a STABLE per-slot track id, so add/remove-track can keep identity put. The engine
+  // never renumbers a slot: RemoveTrack tombstones it (kUiTrackFlagAbsent) rather than
+  // shifting its neighbours, and AddTrack refills the lowest tombstone or appends. So
+  // uiTrackCount is the EXTENT (highest live slot + 1) and callers iterate 0..uiTrackCount
+  // skipping absent slots, keying selection/cursor/caches on uiTrackId — never on the flat
+  // visual position, which moves as tombstones open and close.
+  uint32_t uiTrackId[kUiMaxTracks]{};
 };
 
 // uiTrackFlags bits.
@@ -186,6 +197,9 @@ constexpr uint32_t kUiTrackFlagCollapsed = 1u << 0;
 // track id (track 0, the most likely parent), so 0 alone cannot distinguish "top-level"
 // from "child of track 0". Read the parent only when this bit is set (Movement 4).
 constexpr uint32_t kUiTrackFlagHasParent = 1u << 1;
+// v22: this slot is a tombstone — a removed track whose id is retired but whose slot is
+// kept so its neighbours' ids don't renumber. Skip absent slots when drawing/iterating.
+constexpr uint32_t kUiTrackFlagAbsent = 1u << 2;
 
 struct alignas(64) RingHeader {
   uint32_t capacity = 0;

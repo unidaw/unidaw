@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Check AddTrack/RemoveTrack with STABLE ids (v22, Option B). Start from a 1-track project,
+# append two tracks (ids 1, 2), remove the MIDDLE one (id 1), and save. The saved project
+# must contain tracks 0 and 2 — proving (a) AddTrack created real tracks, (b) RemoveTrack
+# dropped the right one, and (c) the id of the track AFTER the removed one did NOT
+# renumber to 1: identity stayed put, which is the whole point of the tombstone model.
+# Also confirms the engine stays up through add/remove/save (no crash).
+#
+# Needs a real audio device (non-test mode) + the C++ and daw-cli targets built.
+#   tools/add_remove_track_check.sh
+#
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BUILD="$ROOT/build"
+CLI="$ROOT/ui/target/debug/daw-cli"
+Q=960000
+TMP="$(mktemp -d)"
+SHM="/addrm_check_$$"
+
+[ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
+[ -x "$CLI" ] || { echo "build daw-cli first"; exit 2; }
+
+python3 - "$TMP/one.uniproj.json" "$Q" <<'PY'
+import json,sys
+out,Q=sys.argv[1],int(sys.argv[2]); DIRECT=4294967294
+def routing():
+    r=lambda k="none":{"kind":k,"track_id":0,"input_id":0}
+    return {"midi_in":r(),"midi_out":r(),"audio_in":r(),"audio_out":r("master"),"pre_fader_send":True}
+def dev(): return {"device_id":0,"kind":"vst_instrument","capability_mask":5,"patcher_node_id":0,"host_slot_index":DIRECT,"bypass":False,"vst_ref":{"vendor":"","name":"identity","path":"","uid16":""}}
+clip={"id":1,"name":"n","length":4*Q,"lines_per_beat":4,"time_sig_numerator":4,"time_sig_denominator":4,"kind":"symbolic",
+      "notes":[{"nanotick":Q,"duration":Q,"pitch":60,"velocity":100,"column":0,"note_id":1}],"chords":[]}
+pl={"clip_id":1,"at":0,"length":4*Q,"notes":[],"chords":[],"mutes":[]}
+tr={"track_id":0,"name":"T0","harmony_quantize":False,"lines_per_beat":4,"mixer":{"gain_db":0.0,"pan":0.0,"mute":False,"solo":False},"routing":routing(),"device_chain":[dev()],"mod_links":[],"placements":[pl]}
+json.dump({"schema_version":4,"meta":{"name":"one"},"nanoticks_per_quarter":Q,"tempo_map":[{"nanotick":0,"bpm":120.0}],"harmony_timeline":[],"clips":[clip],"tracks":[tr]},open(out,"w"))
+PY
+
+( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --run-seconds 12 >"$TMP/eng.log" 2>&1 ) &
+ENG=$!
+sleep 2
+DAW_UI_SHM_NAME="$SHM" "$CLI" do load one --force >/dev/null 2>&1 || true
+sleep 1
+before="$(DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null | grep -oE '"track_count": [0-9]+' | grep -oE '[0-9]+' || echo -1)"
+DAW_UI_SHM_NAME="$SHM" "$CLI" do add-track --force >/dev/null 2>&1 || true; sleep 0.4   # -> track 1
+DAW_UI_SHM_NAME="$SHM" "$CLI" do add-track --force >/dev/null 2>&1 || true; sleep 0.4   # -> track 2
+after_add="$(DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null | grep -oE '"track_count": [0-9]+' | grep -oE '[0-9]+' || echo -1)"
+DAW_UI_SHM_NAME="$SHM" "$CLI" do remove-track --track 1 --force >/dev/null 2>&1 || true; sleep 0.4
+# Save under a new name and read back the surviving track ids.
+DAW_UI_SHM_NAME="$SHM" "$CLI" do save result --force >/dev/null 2>&1 || true
+sleep 0.6
+wait "$ENG"; ENG_RC=$?
+
+IDS="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(str(t["track_id"]) for t in d.get("tracks",[])))' "$TMP/result.uniproj.json" 2>/dev/null || echo ERR)"
+echo "track_count before add : $before (expect 1)"
+echo "track_count after 2 adds: $after_add (expect 3)"
+echo "AddTrack log            : $(grep -c 'AddTrack ->' "$TMP/eng.log") lines (expect 2)"
+echo "RemoveTrack log         : $(grep 'RemoveTrack ' "$TMP/eng.log" | head -1)"
+echo "saved track ids         : [$IDS] (expect [0,2] — id 2 did NOT renumber to 1)"
+echo "engine exit code        : $ENG_RC (expect 0)"
+
+rm -rf "$TMP"
+ok=1
+[ "$before" = "1" ] || { echo "FAIL: expected 1 track before add"; ok=0; }
+[ "$after_add" = "3" ] || { echo "FAIL: expected 3 tracks after two adds"; ok=0; }
+[ "$IDS" = "0,2" ] || { echo "FAIL: saved ids not [0,2] — id stability broken"; ok=0; }
+[ "$ENG_RC" = "0" ] || { echo "FAIL: engine did not exit cleanly"; ok=0; }
+[ "$ok" = "1" ] && echo "add_remove_track_check: PASS — add/remove work and ids stay stable across a middle removal" \
+                || { echo "add_remove_track_check: FAIL"; exit 1; }

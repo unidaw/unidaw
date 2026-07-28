@@ -367,6 +367,22 @@ fn preview_command(args: &[String]) -> Result<UiCommandPayload, String> {
     })
 }
 
+fn track_structure_command(command: UiCommandType, track: u32) -> UiCommandPayload {
+    UiCommandPayload {
+        command_type: command as u16,
+        flags: 0,
+        track_id: track,
+        plugin_index: 0,
+        note_pitch: 0,
+        value0: 0,
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    }
+}
+
 fn mixer_command(args: &[String]) -> Result<UiCommandPayload, String> {
     let track = flag_u64(args, "--track", Some(0))? as u32;
     let gain_db = flag_f64(args, "--gain-db", 0.0)?;
@@ -923,6 +939,40 @@ fn main() {
                     Ok(payload) => match handle.send_command(payload) {
                         Ok(()) => {
                             println!("{{ \"sent\": \"preview\" }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("daw-cli: {err}");
+                        2
+                    }
+                },
+                Some(&"add-track") => {
+                    match handle.send_command(track_structure_command(
+                        UiCommandType::AddTrack,
+                        0,
+                    )) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"add-track\" }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
+                Some(&"remove-track") => match flag_u64(&args, "--track", None) {
+                    Ok(track) => match handle.send_command(track_structure_command(
+                        UiCommandType::RemoveTrack,
+                        track as u32,
+                    )) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"remove-track\", \"track\": {track} }}");
                             0
                         }
                         Err(err) => {

@@ -106,8 +106,16 @@ enum class UiCommandType : uint16_t {
   // (0 treated as note-off), flags bit0 = on (1 = note-on, 0 = note-off for this pitch).
   // Held until the matching off; out of band — never recorded, undoable, or dirtying.
   // The engine injects it into the track's event ring from the producer; a track with no
-  // ready host is silently dropped, and Stop flushes any held preview notes. Next free 46.
+  // ready host is silently dropped, and Stop flushes any held preview notes.
   PreviewNote = 45,
+  // Append an empty top-level track at the current extent (v1: append only). The new
+  // track's id == its slot index and is stable — RemoveTrack never renumbers neighbours.
+  // Refused at kUiMaxTracks. No payload fields beyond commandType are read.
+  AddTrack = 46,
+  // Remove the track whose stable id is in trackId, tombstoning its slot (kUiTrackFlagAbsent)
+  // rather than renumbering. Takes the track's aux children with it; rejects a child id.
+  // Not undoable in v1 (the UI confirms). Next free 48.
+  RemoveTrack = 47,
 };
 
 // PreviewNote flags: bit0 set = note-on, clear = note-off for (trackId, notePitch).
