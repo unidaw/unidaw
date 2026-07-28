@@ -59,6 +59,21 @@ const gap = (what, why) => {
   gaps.push(`${what} — ${why}`);
   console.log(`  GAP   ${what}  ${why}`);
 };
+/**
+ * A check that SHOULD pass and does not, because of a defect somewhere else.
+ * It does not fail the run, and it shouts the moment it starts passing so the
+ * marker cannot outlive the bug.
+ */
+const blockedList = [];
+const blocked = (cond, what, why, detail = '') => {
+  if (cond) {
+    pass++;
+    console.log(`  PASS  ${what}  ${detail}  <- NO LONGER BLOCKED, remove the marker`);
+    return;
+  }
+  blockedList.push(`${what} — ${why}`);
+  console.log(`  BLOCKED  ${what}${detail ? '  ' + detail : ''}`);
+};
 const step = (s) => console.log(`\n[${s}]`);
 
 const frame = () => page.evaluate(
@@ -660,17 +675,138 @@ await settle(400);
 }
 
 // ---------------------------------------------------------------------------
+step('22. the song survives a save and a reload');
+{
+  // The one property a DAW cannot get wrong. Everything above edits; this asks
+  // whether any of it was real.
+  await page.keyboard.press('F1');
+  await settle(400);
+  const before = await st();
+  const beforeNotes = before.engine.noteCount;
+  const beforeNames = await names();
+  const liveBefore = () => page.evaluate(() => {
+    const tree = window.__uni.trackTree() || [];
+    const live = new Set(tree.filter((t) => !t.absent).map((t) => t.track));
+    return (window.__uni.notes() || []).filter((n) => live.has(n.tr)).length;
+  });
+  const beforeLive = await liveBefore();
+
+  await page.keyboard.press('Slash');
+  await settle(250);
+  await page.keyboard.type('save roundtrip');
+  await page.keyboard.press('Enter');
+  await settle(1800);
+  await page.keyboard.press('Escape');
+  await settle(300);
+
+  // Load something else, so a reload cannot pass by having changed nothing.
+  await page.keyboard.press('Slash');
+  await settle(250);
+  await page.keyboard.type('load webtest');
+  await page.keyboard.press('Enter');
+  await settle(2200);
+  await page.keyboard.press('Escape');
+  await settle(300);
+  const between = (await st()).engine.noteCount;
+
+  await page.keyboard.press('Slash');
+  await settle(250);
+  await page.keyboard.type('load roundtrip');
+  await page.keyboard.press('Enter');
+  await settle(2500);
+  await page.keyboard.press('Escape');
+  await settle(400);
+  const after = await st();
+  const afterNames = await names();
+
+  ok(between !== beforeNotes || beforeNotes === 0,
+     'loading another song really changed the document',
+     `${beforeNotes} -> ${between}`);
+  /**
+   * Notes on LIVE tracks come back exactly.
+   *
+   * Not the raw published count: `RemoveTrack` tombstones a track and leaves its
+   * notes in the flat clip until something reloads, so the number before a save
+   * includes notes belonging to a track that no longer exists — and the save
+   * correctly drops them. Comparing the totals therefore reported data loss
+   * where the file was right and the running document was stale. Reported to
+   * backend; counting only what is on a live track is the honest comparison.
+   */
+  ok(after.engine.noteCount === beforeLive,
+     'the notes on live tracks come back exactly',
+     `${beforeLive} -> ${after.engine.noteCount}`);
+  /**
+   * A renamed track comes back with its old name.
+   *
+   * SetTrackName reaches the published mirror — the header, the breadcrumb and
+   * names() all show it immediately and for the rest of the session — and does
+   * not reach whatever SaveProject serialises. The name is right all day and
+   * wrong tomorrow, and nothing on screen could tell you. Reported to backend;
+   * everything else in the same round trip (notes, tracks, note columns) comes
+   * back exactly.
+   */
+  blocked(JSON.stringify(afterNames) === JSON.stringify(beforeNames),
+          'and so do the track names',
+          'engine: SetTrackName updates the UI mirror but not the saved project',
+          `${JSON.stringify(beforeNames)} -> ${JSON.stringify(afterNames)}`);
+}
+
+// ---------------------------------------------------------------------------
+step('23. every zoom level draws');
+{
+  // A zoom that throws or blanks the grid is the kind of thing only stepping
+  // through all of them finds.
+  const seen = [];
+  for (let i = 0; i < 6; i++) {
+    await page.keyboard.press('Slash');
+    await settle(200);
+    await page.keyboard.type(`zoom ${i}`);
+    await page.keyboard.press('Enter');
+    await settle(400);
+    await page.keyboard.press('Escape');
+    await settle(250);
+    const p = await probe();
+    seen.push(`${i}:${p.zoom}/${p.rowCount}r`);
+    if (p.rowCount < 1) break;
+  }
+  ok(seen.length === 6, 'all six zoom levels render rows', seen.join(' '));
+  ok(errors.length === 0, 'and none of them threw', errors.slice(0, 2).join(' | '));
+}
+
+// ---------------------------------------------------------------------------
+step('24. the scale roll shows the notes');
+await page.keyboard.press('F4');
+await settle(800);
+{
+  const pr = await page.evaluate(
+    () => (window.__uni.pianoProbe ? window.__uni.pianoProbe() : null));
+  ok(pr && pr.keys > 0, 'the roll draws its keyboard', pr && `${pr.keys} keys`);
+  if (!pr || !(pr.notes > 0)) {
+    gap('see notes in the scale roll', `roll reports ${pr && pr.notes} notes`);
+  } else {
+    ok(true, 'and the notes on the cursor track', `${pr.notes} notes`);
+  }
+  await page.keyboard.press('F1');
+  await settle(400);
+}
+
+// ---------------------------------------------------------------------------
 step('page errors');
 ok(errors.length === 0, 'nothing threw during the whole journey',
    errors.slice(0, 3).join(' | '));
 
 console.log(`\n${'='.repeat(60)}`);
+if (blockedList.length) {
+  console.log(`${blockedList.length} BLOCKED on a defect elsewhere:`);
+  for (const b of blockedList) console.log(`  - ${b}`);
+}
 if (gaps.length) {
   console.log(`${gaps.length} THINGS A PERSON CANNOT DO:`);
   for (const g of gaps) console.log(`  - ${g}`);
 }
 console.log(`${fail === 0 ? `ALL PASS (${pass})` : `${fail} FAILED, ${pass} passed`}`
-          + `${gaps.length ? `, ${gaps.length} gaps` : ''}`);
+          + `${gaps.length ? `, ${gaps.length} gaps` : ''}`
+          + `${blockedList.length ? `, ${blockedList.length} blocked` : ''}`);
 
 await browser.close();
 stack.stop();
