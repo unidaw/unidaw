@@ -515,6 +515,8 @@ public:
 
     bool hasActiveTrack = false;
     bool playedBlock = false;
+    bool starvedThisCallback = false;  // an active track's block wasn't ready yet
+    uint32_t starveGap = 0;            // how many blocks short the worst track was
 
     // Solo is exclusive across the whole bus, so it has to be resolved before
     // any track is summed.
@@ -562,6 +564,14 @@ public:
 
       // Check if the block we want is ready
       if (completed < nextBlockToPlay) {
+        // Starve: this active track owes us nextBlockToPlay but has only rendered up
+        // to `completed`. The track contributes silence this callback (a dropout).
+        // Record the shortfall so a reporter can quantify glitching.
+        starvedThisCallback = true;
+        const uint32_t gap = nextBlockToPlay - completed;
+        if (gap > starveGap) {
+          starveGap = gap;
+        }
         continue;
       }
 
@@ -790,6 +800,18 @@ public:
     if (playedBlock || hasActiveTrack) {
       m_lastPlayedBlockId = nextBlockToPlay;
     }
+
+    // Underrun telemetry: count callbacks that had work to play and, of those, how many
+    // dropped at least one track because its block hadn't been rendered in time.
+    if (hasActiveTrack) {
+      m_activeCallbacks.fetch_add(1, std::memory_order_relaxed);
+      if (starvedThisCallback) {
+        m_starveCallbacks.fetch_add(1, std::memory_order_relaxed);
+        if (starveGap > m_worstStarveGap.load(std::memory_order_relaxed)) {
+          m_worstStarveGap.store(starveGap, std::memory_order_relaxed);
+        }
+      }
+    }
   }
 
   // Records the summed master output so a rendered passage can be analysed
@@ -803,6 +825,17 @@ public:
 
   bool capturing() const { return !m_capture.empty(); }
   int captureChannels() const { return m_captureChannels; }
+
+  // Underrun telemetry snapshot for a low-priority reporter (see the members below).
+  uint64_t starveCallbacks() const {
+    return m_starveCallbacks.load(std::memory_order_relaxed);
+  }
+  uint64_t activeCallbacks() const {
+    return m_activeCallbacks.load(std::memory_order_relaxed);
+  }
+  uint32_t worstStarveGap() const {
+    return m_worstStarveGap.load(std::memory_order_relaxed);
+  }
 
   /// The captured take in chronological order, oldest retained sample first.
   std::vector<float> captureTake() const {
@@ -910,6 +943,15 @@ private:
   std::chrono::steady_clock::time_point m_startTime;
   uint64_t m_totalSamplesProcessed = 0;
   uint32_t m_lastPlayedBlockId = 0;  // Track which block we played last
+
+  // Underrun telemetry (Movement 4 stability). A "starve" is a callback that wanted a
+  // fresh block for an active track but the producer/host had not delivered it yet — an
+  // audible dropout. Counting them turns "feels glitchy" into a number, and lets the
+  // pipeline depth be tuned to the minimum that keeps this at zero. Written only by the
+  // audio thread, read by a low-priority reporter, so relaxed atomics suffice.
+  std::atomic<uint64_t> m_starveCallbacks{0};   // callbacks that dropped >=1 track
+  std::atomic<uint64_t> m_activeCallbacks{0};   // callbacks with >=1 active track
+  std::atomic<uint32_t> m_worstStarveGap{0};    // largest (want - completed) seen
 
   // The audio callback must not touch a lock, and libc++ implements the
   // atomic_load(shared_ptr*) free functions with a global spinlock table
@@ -1136,7 +1178,19 @@ int main(int argc, char** argv) {
   // reach the engine for its child tracks. Sized once here for every host; a track
   // without a multi-out plugin just never writes it.
   baseConfig.numAuxChannelsOut = kMaxAuxOutputChannels;
-  baseConfig.numBlocks = 4; // Increase block count for deeper pipeline/safety
+  // Pipeline depth: how many blocks the producer may run ahead of the audio device.
+  // It is the entire headroom for absorbing jitter in async out-of-process host
+  // rendering — a deeper pipeline glitches less under heavy real plugins but adds
+  // latency (each block is blockSize/sampleRate seconds), so it is the direct knob for
+  // the glitch<->latency trade. Default 4 (~46 ms at 512/44.1k); DAW_ENGINE_NUM_BLOCKS
+  // tunes it per setup. Clamped to [2, 32] — below 2 the ring can't double-buffer.
+  baseConfig.numBlocks = 4;
+  if (const char* nbEnv = std::getenv("DAW_ENGINE_NUM_BLOCKS")) {
+    const int want = std::atoi(nbEnv);
+    if (want >= 2) {
+      baseConfig.numBlocks = static_cast<uint32_t>(std::min(want, 32));
+    }
+  }
   baseConfig.ringUiCapacity = 1024;
   const uint32_t uiDiffRingCapacity = 1024;
 
@@ -1148,8 +1202,17 @@ int main(int argc, char** argv) {
   std::unique_ptr<daw::IAudioBackend> audioBackend = daw::createAudioBackend();
   if (audioBackend && audioBackend->openDefaultDevice(2)) {
     baseConfig.sampleRate = audioBackend->sampleRate();
+    // Adopt the device's ACTUAL buffer size too (not just its sample rate). The whole
+    // pipeline — per-track SHM block stride, the producer, and the audio callback — must
+    // agree on samples-per-block; the callback is built from the device size, so if the
+    // device's buffer is anything but the 512 default (a smaller/larger native size, or
+    // a DAW_ENGINE_BUFFER_SIZE override) the host would render mis-sized blocks and the
+    // callback would read past them. Adopting it here keeps every stage consistent.
+    if (audioBackend->blockSize() > 0) {
+      baseConfig.blockSize = static_cast<uint32_t>(audioBackend->blockSize());
+    }
     std::cout << "Audio device sample rate: " << baseConfig.sampleRate << " Hz"
-              << std::endl;
+              << ", buffer: " << baseConfig.blockSize << " samples" << std::endl;
   } else {
     std::cerr << "No audio device; using " << baseConfig.sampleRate
               << " Hz for offline timing" << std::endl;
@@ -10139,6 +10202,32 @@ struct TrackRuntime {
     }
   }
 
+  // Underrun reporter: a low-priority watcher that stays silent while the audio thread
+  // meets every block deadline and speaks up the moment it starts dropping blocks, so
+  // glitching is reported as a concrete count rather than a vague feeling. It never
+  // touches the audio thread beyond reading relaxed atomics.
+  std::thread xrunReporter;
+  if (!testMode && audioCallback) {
+    xrunReporter = std::thread([&] {
+      uint64_t lastStarve = 0;
+      while (running.load()) {
+        for (int i = 0; i < 20 && running.load(); ++i) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        const uint64_t starve = audioCallback->starveCallbacks();
+        if (starve > lastStarve) {
+          std::cerr << "Engine: audio underrun — " << (starve - lastStarve)
+                    << " dropout callback(s) in the last ~2s (" << starve
+                    << " total, worst shortfall " << audioCallback->worstStarveGap()
+                    << " blocks). Raise DAW_ENGINE_NUM_BLOCKS (deeper pipeline) or "
+                    << "DAW_ENGINE_BUFFER_SIZE (bigger device buffer) if audible."
+                    << std::endl;
+          lastStarve = starve;
+        }
+      }
+    });
+  }
+
   if (runSeconds >= 0) {
     std::this_thread::sleep_for(std::chrono::seconds(runSeconds));
     running.store(false);
@@ -10150,11 +10239,19 @@ struct TrackRuntime {
   uiThread.join();
   producer.join();
   consumer.join();
+  if (xrunReporter.joinable()) {
+    xrunReporter.join();
+  }
 
   // Stop audio output
   if (audioBackend && audioCallback) {
     audioBackend->stop();
     std::cout << "Audio output stopped" << std::endl;
+    const uint64_t starve = audioCallback->starveCallbacks();
+    const uint64_t active = audioCallback->activeCallbacks();
+    std::cout << "Audio underrun summary: " << starve << " of " << active
+              << " playback callbacks dropped a track (worst shortfall "
+              << audioCallback->worstStarveGap() << " blocks)." << std::endl;
     // Audio is stopped, so the capture buffer is quiescent and safe to write.
     if (audioCallback->capturing()) {
       const char* capturePath = std::getenv("DAW_CAPTURE_WAV");

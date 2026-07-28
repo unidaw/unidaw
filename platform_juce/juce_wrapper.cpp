@@ -251,6 +251,25 @@ class JuceAudioBackend final : public IAudioBackend,
       return false;
     }
 
+    // DAW_ENGINE_BUFFER_SIZE requests a specific device buffer size. A larger buffer
+    // gives each out-of-process host more wall-clock time per block, which is the most
+    // direct lever against underruns with heavy real plugins (at the cost of latency);
+    // a smaller one lowers latency. Left unset, the device keeps its own default.
+    if (const char* bufEnv = std::getenv("DAW_ENGINE_BUFFER_SIZE")) {
+      const int want = std::atoi(bufEnv);
+      if (want > 0) {
+        auto setup = deviceManager_.getAudioDeviceSetup();
+        setup.bufferSize = want;
+        setup.useDefaultInputChannels = true;
+        setup.useDefaultOutputChannels = true;
+        const juce::String setErr = deviceManager_.setAudioDeviceSetup(setup, true);
+        if (setErr.isNotEmpty()) {
+          std::cerr << "Requested buffer size " << want << " rejected: "
+                    << setErr.toStdString() << " (keeping device default)" << std::endl;
+        }
+      }
+    }
+
     if (auto* device = deviceManager_.getCurrentAudioDevice()) {
       sampleRate_ = device->getCurrentSampleRate();
       blockSize_ = device->getCurrentBufferSizeSamples();
@@ -1037,6 +1056,23 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
                int64_t,
                float* const* auxOutputs = nullptr,
                int numAuxOutputs = 0) override {
+    // Test-only CPU load: DAW_FAKE_BUSY_US busy-waits this many microseconds per block,
+    // simulating a heavy real plugin so the engine's underrun handling and the pipeline-
+    // depth / buffer-size levers can be exercised deterministically. Read once; unset
+    // (zero) is the normal no-op path and adds nothing to a real render.
+    static const long kBusyMicros = [] {
+      const char* e = std::getenv("DAW_FAKE_BUSY_US");
+      return e ? std::max(0L, std::atol(e)) : 0L;
+    }();
+    if (kBusyMicros > 0) {
+      const auto deadline = std::chrono::steady_clock::now() +
+                            std::chrono::microseconds(kBusyMicros);
+      volatile double sink = 0.0;
+      while (std::chrono::steady_clock::now() < deadline) {
+        sink += 1.0;  // volatile: keep the busy-wait from being optimized away
+      }
+      (void)sink;
+    }
     for (int ch = 0; ch < numOutputs; ++ch) {
       std::fill(outputs[ch], outputs[ch] + numFrames, 0.0f);
     }
