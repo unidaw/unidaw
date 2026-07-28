@@ -397,13 +397,23 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&(f.patcher_nodes.len() as u16).to_le_bytes());  // 94
     out.extend_from_slice(&(f.patcher_edges.len() as u16).to_le_bytes());  // 96
     out.extend_from_slice(&0u16.to_le_bytes());                      // 98, pad
-    out.extend_from_slice(&f.loop_start.to_le_bytes());              // 132
-    out.extend_from_slice(&f.loop_end.to_le_bytes());                // 100
-    out.extend_from_slice(&f.load_seq.to_le_bytes());                // 108
-    out.extend_from_slice(&f.load_ok.to_le_bytes());                 // 128
-    out.extend_from_slice(&f.tempo_milli_bpm.to_le_bytes());         // 116
-    out.extend_from_slice(&f.tempo_point_count.to_le_bytes());       // 120
-    out.extend_from_slice(&f.song_time_sig_num.to_le_bytes());       // 124
+    // Checkpoints, not just a total. The trailing comments are the map and a map
+    // cannot be verified — when the lpb block widened from 8 to 16 every offset
+    // after it moved, and a careless renumber left the COMMENTS scrambled
+    // (loop_start said 132, load_ok said 128) while the writes stayed correct.
+    // Nothing caught it: the final length still came to 136 and the drift test
+    // compares two totals. Two fields SWAPPED would survive both the same way, and
+    // the page would read them swapped with no error anywhere.
+    debug_assert_eq!(out.len(), 100, "loop range starts at 100");
+    out.extend_from_slice(&f.loop_start.to_le_bytes());              // 100
+    out.extend_from_slice(&f.loop_end.to_le_bytes());                // 108
+    out.extend_from_slice(&f.load_seq.to_le_bytes());                // 116
+    out.extend_from_slice(&f.load_ok.to_le_bytes());                 // 120
+    debug_assert_eq!(out.len(), 124, "tempo starts at 124");
+    out.extend_from_slice(&f.tempo_milli_bpm.to_le_bytes());         // 124
+    out.extend_from_slice(&f.tempo_point_count.to_le_bytes());       // 128
+    debug_assert_eq!(out.len(), 132, "the song meter starts at 132");
+    out.extend_from_slice(&f.song_time_sig_num.to_le_bytes());       // 132
     out.extend_from_slice(&f.song_time_sig_den.to_le_bytes());       // 134, to 136
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
@@ -3712,6 +3722,86 @@ mod tests {
     /// reinterprets every field after it. `main` re-checks at startup and refuses
     /// to run, which is the right behaviour but arrives after someone has already
     /// pushed. This is the same check at the time it is cheap to act on.
+    /// Every header field is at the offset the page reads it from.
+    ///
+    /// The length assertions and the wire.js drift test both compare TOTALS, and a
+    /// total is blind to the two mistakes this layout actually makes. When the
+    /// per-track lines-per-beat block widened from 8 to 16 every offset after it
+    /// moved, and a careless renumber left the trailing comments scrambled —
+    /// loop_start said 132, load_ok said 128 — while the writes stayed correct.
+    /// Nothing caught it, because 136 is still 136. And SWAPPING two equal-width
+    /// fields survives every length check there is: the page then reads load_seq
+    /// out of load_ok and neither side errors.
+    ///
+    /// So this pins each field to its offset BY VALUE. Every field gets a distinct
+    /// sentinel and is read back from the exact byte range wire.js reads it from —
+    /// the offsets here are copied from the DECODER, not from the encoder, so the
+    /// two are being compared rather than agreeing with themselves.
+    #[test]
+    fn every_header_field_is_where_the_page_reads_it() {
+        let mut f = Frame::default();
+        f.seq = 0x1122_3344_5566_7788;
+        f.playhead_nanotick = 0x0102_0304_0506_0708;
+        f.visual_sample = 0x1111_2222_3333_4444;
+        f.clip_version = 0xAABB_CCDD;
+        f.harmony_version = 0x1234_5678;
+        f.transport = 0x0BAD;
+        f.track_count = 0x0C0D;
+        f.notes_grid = 0x0E0F;
+        f.agg_rows = 0x2233_4455;
+        f.mixer_version = 0x3344_5566;
+        f.patcher_version = 0x4455_6677;
+        f.patcher_device = 0x5566_7788;
+        f.loop_start = 0x0A0B_0C0D_0E0F_1011;
+        f.loop_end = 0x1112_1314_1516_1718;
+        f.load_seq = 0x6677_8899;
+        f.load_ok = 0x7788_99AA;
+        f.tempo_milli_bpm = 0x8899_AABB;
+        f.tempo_point_count = 0x99AA_BBCC;
+        f.song_time_sig_num = 7;
+        f.song_time_sig_den = 8;
+        f.lpb[0] = 3;
+        f.lpb[15] = 12;
+
+        let mut out = Vec::new();
+        encode(&f, &mut out);
+
+        let u16at = |i: usize| u16::from_le_bytes([out[i], out[i + 1]]);
+        let u32at = |i: usize| u32::from_le_bytes([out[i], out[i + 1], out[i + 2], out[i + 3]]);
+        let u64at = |i: usize| u64::from_le_bytes([
+            out[i], out[i + 1], out[i + 2], out[i + 3],
+            out[i + 4], out[i + 5], out[i + 6], out[i + 7]]);
+
+        assert_eq!(u32at(0), WIRE_MAGIC, "magic @0");
+        assert_eq!(u16at(4), WIRE_VERSION, "version @4");
+        assert_eq!(u64at(8), f.seq, "seq @8");
+        assert_eq!(u64at(16), f.playhead_nanotick, "playhead @16");
+        assert_eq!(u64at(24), f.visual_sample, "visual sample @24");
+        assert_eq!(u32at(32), f.clip_version, "clip version @32");
+        assert_eq!(u32at(36), f.harmony_version, "harmony version @36");
+        assert_eq!(u16at(40), f.transport, "transport @40");
+        assert_eq!(u16at(42), f.track_count, "track count @42");
+        assert_eq!(u16at(46) as u32, f.notes_grid, "notes grid @46");
+        assert_eq!(u32at(52), f.agg_rows, "agg rows @52");
+        // The lines-per-beat block: 16 wide since v21, and its FIRST and LAST bytes
+        // are checked, because a width mistake moves only the far end.
+        assert_eq!(out[60], 3, "lpb[0] @60");
+        assert_eq!(out[75], 12, "lpb[15] @75 — the block is 16 wide, not 8");
+        assert_eq!(u32at(76), f.mixer_version, "mixer version @76");
+        assert_eq!(u32at(86), f.patcher_version, "patcher version @86");
+        assert_eq!(u32at(90), f.patcher_device, "patcher device @90");
+        assert_eq!(u64at(100), f.loop_start, "loop start @100");
+        assert_eq!(u64at(108), f.loop_end, "loop end @108");
+        // These two are the swap this test exists for: same width, adjacent, and
+        // indistinguishable to every length check in the file.
+        assert_eq!(u32at(116), f.load_seq, "load seq @116");
+        assert_eq!(u32at(120), f.load_ok, "load ok @120");
+        assert_eq!(u32at(124), f.tempo_milli_bpm, "tempo @124");
+        assert_eq!(u32at(128), f.tempo_point_count, "tempo points @128");
+        assert_eq!(u16at(132), f.song_time_sig_num, "song meter numerator @132");
+        assert_eq!(u16at(134), f.song_time_sig_den, "song meter denominator @134");
+    }
+
     #[test]
     fn the_header_is_the_length_it_says_it_is() {
         let mut probe = Vec::new();
