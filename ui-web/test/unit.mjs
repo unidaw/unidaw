@@ -1170,3 +1170,90 @@ test('the bus summary is guarded and interned', () => {
   // rack is redrawn on every frame the view is open.
   assert.ok(first === vm2.cards[0].busText, 'no string is built on an unchanged draw');
 });
+
+// ---------------------------------------------------------------------------
+// The op registry: everything the keyboard can do, something else can do too.
+//
+// ARCHITECTURE_REVIEW Movement 2 item 21. Hard requirement 4 is that the UI is
+// AI-OPERABLE — an agent must be able to drive it — and an action reachable only
+// by a keystroke is an action an agent cannot reach. The dock and the palette
+// share one command table (`createCommands`), so a command covers both; the gap
+// this closes is a keystroke with no command behind it.
+//
+// The table below is read against index.html's ACTUAL source rather than against
+// a second list, for the reason the wire-drift tests are: a duplicate of a thing
+// is not a check on it. A new key added to the handler fails here until it is
+// either given a command or explicitly recorded as navigation.
+
+/**
+ * Every key the app's handler matches on, and how an agent reaches the same
+ * thing. `cmd` names the command; `nav` means it only moves the cursor or the
+ * viewport, which `goto`, `select` and `zoom` already cover.
+ */
+const KEY_OPS = {
+  // Transport and time.
+  ' ': { cmd: 'play' }, '`': { cmd: 'stop' },
+  // Navigation. An agent addresses rows and tracks directly rather than walking
+  // to them, so these need no command of their own — but they are listed, not
+  // omitted, so that "no command" stays a decision rather than an oversight.
+  ArrowUp: { nav: true }, ArrowDown: { nav: true },
+  ArrowLeft: { nav: true }, ArrowRight: { nav: true },
+  PageUp: { nav: true }, PageDown: { nav: true },
+  Home: { nav: true }, Tab: { nav: true },
+  // Editing.
+  Delete: { cmd: 'del' }, Backspace: { cmd: 'del' },
+  c: { cmd: 'copy' }, s: { cmd: 'save' }, S: { cmd: 'save' },
+  Enter: { nav: true },        // commits an open buffer; `note`/`chord` write directly
+  Escape: { nav: true },       // cancels; nothing to commit through a command
+  // Views and panels.
+  p: { cmd: 'view' }, r: { cmd: 'view' }, t: { cmd: 'view' },
+  f: { cmd: 'follow' }, F: { cmd: 'follow' },
+  '?': { nav: true },          // help overlay: a view of the keymap, not an edit
+  // Zoom and octave.
+  '[': { cmd: 'zoom' }, ']': { cmd: 'zoom' },
+  '-': { cmd: 'oct' }, '_': { cmd: 'oct' }, '+': { cmd: 'oct' }, '=': { cmd: 'oct' },
+  '/': { cmd: 'oct' }, '.': { cmd: 'oct' }, ',': { cmd: 'oct' }, ';': { cmd: 'oct' },
+  a: { nav: true },            // note-off in the pitch column; `note` covers writes
+};
+
+/** The Alt combos, matched on e.code because Option is a compose key on macOS. */
+const ALT_OPS = {
+  KeyA: { cmd: 'select' }, KeyC: { cmd: 'copy' }, KeyQ: { cmd: 'transpose' },
+  KeyS: { cmd: 'solo' }, KeyV: { cmd: 'paste' }, KeyW: { cmd: 'mute' },
+  KeyX: { cmd: 'cut' },
+};
+
+test('every key the app handles is reachable another way', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+
+  const keys = new Set();
+  for (const m of src.matchAll(/\bk === '((?:[^'\\]|\\.)+)'/g)) keys.add(m[1]);
+  const alts = new Set();
+  for (const m of src.matchAll(/\balt === '([^']+)'/g)) alts.add(m[1]);
+
+  // If this ever reads zero the regex has stopped matching the source and the
+  // whole test has quietly become a no-op — the failure mode a source-reading
+  // check has to guard against.
+  assert.ok(keys.size > 20, `the handler was actually parsed: ${keys.size} keys`);
+  assert.ok(alts.size > 3, `and its alt combos: ${alts.size}`);
+
+  const unlisted = [...keys].filter((k) => !(k in KEY_OPS));
+  assert.deepEqual(unlisted, [],
+    'a key with no command and no recorded reason — give it one of the two');
+  const unlistedAlt = [...alts].filter((k) => !(k in ALT_OPS));
+  assert.deepEqual(unlistedAlt, [], 'same for an alt combo');
+});
+
+test('every command a key points at actually exists', () => {
+  // The other direction: the table above is only worth having if the names in it
+  // are real. A typo would otherwise record an action as covered by a command
+  // that does not exist, which is worse than recording it as uncovered.
+  const cmds = createCommands(stubApi());
+  for (const [key, op] of Object.entries(KEY_OPS)) {
+    if (op.cmd) assert.ok(cmds[op.cmd], `${JSON.stringify(key)} -> ${op.cmd} exists`);
+  }
+  for (const [key, op] of Object.entries(ALT_OPS)) {
+    if (op.cmd) assert.ok(cmds[op.cmd], `Alt+${key} -> ${op.cmd} exists`);
+  }
+});
