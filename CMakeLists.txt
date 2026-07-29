@@ -271,6 +271,14 @@ target_include_directories(event_ring_mpsc_tests PRIVATE
 find_package(Threads REQUIRED)
 target_link_libraries(event_ring_mpsc_tests PRIVATE Threads::Threads)
 
+# M3.22: the song's time-signature map and bar numbering across changes.
+add_executable(time_signature_tests
+  apps/time_signature_tests_main.cpp
+)
+target_include_directories(time_signature_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # M3.22: the tempo integral — absolute musical time <-> wall time across a tempo map.
 add_executable(tempo_integral_tests
   apps/tempo_integral_tests_main.cpp
@@ -392,6 +400,11 @@ add_test(NAME lint
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
 )
 set_tests_properties(lint PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME time_signature
+  COMMAND time_signature_tests
+)
+set_tests_properties(time_signature PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME tempo_integral
   COMMAND tempo_integral_tests
@@ -627,6 +640,7 @@ foreach(daw_test_target
     clip_grid_tests
     lane_quantize_tests
     tempo_integral_tests
+    time_signature_tests
     event_ring_mpsc_tests
     audio_io_tests
     device_chain_tests

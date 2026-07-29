@@ -510,6 +510,22 @@ std::string serializeProject(const ProjectDocument& document) {
   writer.key("time_sig_denominator", document.songTimeSigDenominator);
   writer.endChildObject();
 
+  // M3.22: the song's time-signature map. Written only when there IS one, so a project
+  // in a single meter is byte-identical to what it was before this field existed —
+  // successive saves of an unchanged document have to stay identical, and an empty
+  // array in every file would make every old project show a diff on first save.
+  if (!document.timeSigMap.empty()) {
+    writer.beginArray("time_sig_map");
+    for (const auto& point : document.timeSigMap) {
+      writer.beginArrayElement();
+      writer.key("nanotick", point.nanotick);
+      writer.key("numerator", point.sig.numerator);
+      writer.key("denominator", point.sig.denominator);
+      writer.endArrayElement();
+    }
+    writer.endArray();
+  }
+
   writer.beginArray("tempo_map");
   for (const auto& point : document.tempoMap) {
     writer.beginArrayElement();
@@ -742,6 +758,17 @@ bool deserializeProject(const std::string& json,
       root.get<uint32_t>("timebase.time_sig_numerator", 4);
   parsed.songTimeSigDenominator =
       root.get<uint32_t>("timebase.time_sig_denominator", 4);
+  if (const auto sigMap = root.get_child_optional("time_sig_map")) {
+    for (const auto& entry : *sigMap) {
+      daw::TimeSignaturePoint point;
+      point.nanotick = entry.second.get<uint64_t>("nanotick", 0);
+      point.sig.numerator =
+          entry.second.get<uint32_t>("numerator", parsed.songTimeSigNumerator);
+      point.sig.denominator =
+          entry.second.get<uint32_t>("denominator", parsed.songTimeSigDenominator);
+      parsed.timeSigMap.push_back(point);
+    }
+  }
 
   parsed.tempoMap.clear();
   if (const auto tempo = root.get_child_optional("tempo_map")) {

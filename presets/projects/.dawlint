@@ -1,0 +1,14 @@
+# Findings daw_lint should treat as INTENTIONAL for the projects in this directory.
+# One per line: "<code>" for every scope, or "<code> <scope>" for one.
+#
+# This file exists so a deliberate choice can be declared once instead of being quieted
+# by editing the fixture, or — worse — by nobody running the linter any more. Every
+# suppression here is still COUNTED and reported in daw_lint's summary line, so it can
+# be audited rather than forgotten.
+
+# These fixtures reference `Identity`, the repo's own test plugin, by NAME with no path.
+# That is what makes them portable: the Identity build product lives at a different
+# absolute path in every build directory, so a path would break the fixture on every
+# machine but the one that wrote it. Resolution by name is weaker than by path — it will
+# silently pick a different build — and for a test fixture that is the right trade.
+device-plugin-by-name-only

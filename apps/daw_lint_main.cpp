@@ -14,6 +14,25 @@
 // about what a project means — a linter with its own parser lints a different document.
 //
 //   daw_lint <project.uniproj.json> [--history <history.jsonl>] [--strict] [--quiet]
+//                                   [--max-per-rule N] [--allow CODE[ SCOPE]]
+//                                   [--ignore-file PATH]
+//
+// STAYING USABLE is a feature, not a courtesy. A linter that prints sixty thousand
+// findings, or that cannot be told "yes, on purpose", gets muted within a week — and a
+// muted linter is worse than none, because its silence reads as approval. Two
+// mechanisms, both of which REPORT what they hid:
+//
+//   --max-per-rule N (default 10)  after N findings of one code, the rest become a
+//                                  count. The pile is the point in a stress fixture;
+//                                  seeing it 60,811 times is not.
+//   .dawlint                       a file beside the project listing findings declared
+//                                  intentional, one per line, "<code>" or
+//                                  "<code> <scope>", # for comments. --allow adds one
+//                                  from the command line; --ignore-file points at
+//                                  another.
+//
+// Neither is silent. The summary always states how many findings were capped and how
+// many were suppressed, so a suppression can be audited rather than forgotten.
 //
 // Exit 0 = no errors (warnings alone still exit 0, unless --strict), 1 = errors found,
 // 2 = the input could not be read or parsed.
@@ -50,6 +69,47 @@ struct Finding {
 };
 
 std::vector<Finding> g_findings;
+
+// A finding declared intentional. An empty scope matches every scope for that code.
+struct Allowance {
+  std::string code;
+  std::string scope;
+};
+std::vector<Allowance> g_allowed;
+
+bool isAllowed(const Finding& finding) {
+  for (const auto& a : g_allowed) {
+    if (a.code == finding.code && (a.scope.empty() || a.scope == finding.scope)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Reads a .dawlint file: one declaration per line, "<code>" or "<code> <scope>",
+// blank lines and # comments ignored. Returns false only if the path was given and
+// could not be opened — a MISSING default .dawlint is normal and not an error.
+bool loadAllowFile(const std::string& path, bool required) {
+  std::ifstream in(path);
+  if (!in) {
+    return !required;
+  }
+  std::string line;
+  while (std::getline(in, line)) {
+    const auto hash = line.find('#');
+    if (hash != std::string::npos) {
+      line = line.substr(0, hash);
+    }
+    std::istringstream fields(line);
+    Allowance a;
+    if (!(fields >> a.code)) {
+      continue;
+    }
+    fields >> a.scope;  // optional
+    g_allowed.push_back(std::move(a));
+  }
+  return true;
+}
 
 void report(Severity severity, std::string code, std::string scope, std::string detail) {
   g_findings.push_back({severity, std::move(code), std::move(scope), std::move(detail)});
@@ -486,12 +546,26 @@ void checkHistory(const std::string& path) {
 int main(int argc, char** argv) {
   std::string projectPath;
   std::string historyPath;
+  std::string ignoreFile;
   bool strict = false;
   bool quiet = false;
+  uint32_t maxPerRule = 10;
   for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
     if (arg == "--history" && i + 1 < argc) {
       historyPath = argv[++i];
+    } else if (arg == "--ignore-file" && i + 1 < argc) {
+      ignoreFile = argv[++i];
+    } else if (arg == "--max-per-rule" && i + 1 < argc) {
+      maxPerRule = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 10));
+    } else if (arg == "--allow" && i + 1 < argc) {
+      // "--allow code" or "--allow 'code scope'".
+      std::istringstream fields(argv[++i]);
+      Allowance a;
+      if (fields >> a.code) {
+        fields >> a.scope;
+        g_allowed.push_back(std::move(a));
+      }
     } else if (arg == "--strict") {
       strict = true;
     } else if (arg == "--quiet") {
@@ -508,8 +582,9 @@ int main(int argc, char** argv) {
   }
   if (projectPath.empty()) {
     std::fprintf(stderr,
-                 "usage: daw_lint <project.uniproj.json> [--history <history.jsonl>]"
-                 " [--strict] [--quiet]\n");
+                 "usage: daw_lint <project.uniproj.json> [--history <history.jsonl>]\n"
+                 "                [--strict] [--quiet] [--max-per-rule N]\n"
+                 "                [--allow \"CODE [SCOPE]\"] [--ignore-file PATH]\n");
     return 2;
   }
 
@@ -529,6 +604,21 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  // Declarations of intent: an explicit --ignore-file if given, otherwise a .dawlint
+  // beside the project. Beside the project on purpose — the declaration belongs with
+  // the thing it is about, so a fixture directory carries its own and moving the
+  // project moves its exemptions with it.
+  if (!ignoreFile.empty()) {
+    if (!loadAllowFile(ignoreFile, /*required=*/true)) {
+      std::fprintf(stderr, "daw_lint: cannot read %s\n", ignoreFile.c_str());
+      return 2;
+    }
+  } else {
+    const auto beside =
+        std::filesystem::path(projectPath).parent_path() / ".dawlint";
+    loadAllowFile(beside.string(), /*required=*/false);
+  }
+
   checkGlobals(doc);
   checkClipsAndPlacements(doc);
   checkTracks(doc);
@@ -543,8 +633,26 @@ int main(int argc, char** argv) {
 
   uint32_t errors = 0;
   uint32_t warnings = 0;
+  uint32_t suppressed = 0;
+  uint32_t capped = 0;
+  std::map<std::string, uint32_t> shownPerRule;
+  std::map<std::string, uint32_t> cappedPerRule;
   for (const auto& finding : g_findings) {
+    if (isAllowed(finding)) {
+      ++suppressed;
+      continue;
+    }
+    // Counted BEFORE the cap: the cap changes what is printed, never the verdict.
+    // Capping a rule into silence and then exiting 0 would be a linter lying about
+    // what it found.
     (finding.severity == Severity::Error ? errors : warnings)++;
+    uint32_t& shown = shownPerRule[finding.code];
+    if (maxPerRule > 0 && shown >= maxPerRule) {
+      ++cappedPerRule[finding.code];
+      ++capped;
+      continue;
+    }
+    ++shown;
     if (!quiet) {
       std::printf("%s %s %s: %s\n",
                   finding.severity == Severity::Error ? "error" : "warning",
@@ -552,7 +660,20 @@ int main(int argc, char** argv) {
     }
   }
   if (!quiet) {
-    std::printf("daw_lint: %u error(s), %u warning(s)\n", errors, warnings);
+    for (const auto& [code, more] : cappedPerRule) {
+      std::printf("  ... and %u more %s (raise --max-per-rule to see them)\n", more,
+                  code.c_str());
+    }
+    std::printf("daw_lint: %u error(s), %u warning(s)", errors, warnings);
+    if (suppressed > 0) {
+      // Always stated. A suppression nobody can see is how a linter stops meaning
+      // anything without anyone deciding that it should.
+      std::printf(", %u declared intentional", suppressed);
+    }
+    if (capped > 0) {
+      std::printf(", %u not shown", capped);
+    }
+    std::printf("\n");
   }
   if (errors > 0) return 1;
   if (strict && warnings > 0) return 1;

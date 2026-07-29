@@ -142,18 +142,27 @@ class TempoMapProvider final : public ITempoProvider {
     if (points.empty()) {
       points.push_back({0, 120.0});
     }
-    std::sort(points.begin(), points.end(),
-              [](const TempoPoint& a, const TempoPoint& b) {
-                return a.nanotick < b.nanotick;
-              });
+    // STABLE, so points at the same tick keep the order they were written in.
+    std::stable_sort(points.begin(), points.end(),
+                     [](const TempoPoint& a, const TempoPoint& b) {
+                       return a.nanotick < b.nanotick;
+                     });
     // Two points at the same tick would make a zero-length segment, and then a seconds
     // query landing exactly there could pick either — keep the LAST, which is what a
-    // later edit at the same position means.
-    points.erase(std::unique(points.begin(), points.end(),
-                             [](const TempoPoint& a, const TempoPoint& b) {
-                               return a.nanotick == b.nanotick;
-                             }),
-                 points.end());
+    // later edit at the same position means. std::unique keeps the FIRST of a run,
+    // which is the opposite, so this walks and overwrites instead.
+    {
+      std::vector<TempoPoint> deduped;
+      deduped.reserve(points.size());
+      for (const auto& p : points) {
+        if (!deduped.empty() && deduped.back().nanotick == p.nanotick) {
+          deduped.back() = p;
+        } else {
+          deduped.push_back(p);
+        }
+      }
+      points = std::move(deduped);
+    }
     // The map must start at 0, or everything before the first point has no defined
     // tempo and the integral has no origin.
     if (points.front().nanotick != 0) {

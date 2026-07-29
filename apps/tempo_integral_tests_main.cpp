@@ -119,6 +119,11 @@ int main() {
     tempo.setMap({{0, 120.0}, {kBar, 60.0}, {kBar, 240.0}});
     const long double atBar = tempo.secondsAtNanotick(kBar);
     checkNear(atBar, 2.0L, 1e-9L, "duplicate tick: time to the point is unambiguous");
+    // WHICH duplicate survives is part of the contract, not an accident: the LAST, so
+    // a later edit at the same position wins. 240 bpm makes the next bar 1.0 s, 60 bpm
+    // would make it 4.0 s.
+    checkNear(tempo.secondsAtNanotick(2 * kBar) - atBar, 1.0L, 1e-9L,
+              "duplicate tick: the LAST point wins (240 bpm, not 60)");
     // Whichever of the two survives, time must keep increasing past it.
     if (!(tempo.secondsAtNanotick(kBar + kQuarter) > atBar)) {
       std::printf("FAIL duplicate tick: time stalled after the duplicate\n");
