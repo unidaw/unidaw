@@ -8,6 +8,7 @@
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 
+#include "apps/patcher_assemble.h"
 #include "apps/patcher_preset.h"
 
 namespace daw {
@@ -942,32 +943,32 @@ bool deserializeProject(const std::string& json,
         }
       }
 
-      // Schema <= 3 had one patcher per track. Read it, then migrate it onto a
-      // device (patchers are per-device from v4): prefer the instrument, else the
-      // first device; if the track has no devices the graph is dropped (there is
-      // nothing for it to drive). A v4 file has no track-level "patcher", so this
-      // is inert on reload.
+      // Schema <= 3 stored one patcher per track. A patcher is now a DEVICE: it has
+      // a POSITION in the signal path, so "did that note come from before or after
+      // the instrument?" has an answer — which a track-level graph never did, and
+      // which is the source of every phantom-note investigation. So migrate a legacy
+      // track-level patcher into a PatcherEvent device at the HEAD of the chain,
+      // feeding whatever follows it. NEVER dropped: a track with no other devices
+      // still keeps its generator (silently losing one is worse than the confusion
+      // it once caused). A v4+ file has no track-level "patcher", so this is inert on
+      // reload.
       if (const auto patcherTree = tree.get_child_optional("patcher")) {
-        if (!readPatcherGraphTree(*patcherTree, 2, track.patcher, error)) {
+        PatcherGraph legacy;
+        if (!readPatcherGraphTree(*patcherTree, 2, legacy, error)) {
           return false;
         }
-      }
-      if (!track.patcher.nodes.empty() && !track.chain.devices.empty()) {
-        Device* target = nullptr;
-        for (auto& d : track.chain.devices) {
-          if (d.kind == DeviceKind::VstInstrument ||
-              d.kind == DeviceKind::PatcherInstrument) {
-            target = &d;
-            break;
+        if (!legacy.nodes.empty()) {
+          Device patcherDev;
+          patcherDev.id = kDeviceIdAuto;  // addDevice assigns a fresh, unique id
+          patcherDev.kind = DeviceKind::PatcherEvent;
+          patcherDev.capabilityMask = DeviceCapabilityProducesMidi;
+          uint32_t outNode = 0;
+          if (patcherGraphOutputNode(legacy, outNode)) {
+            patcherDev.patcherNodeId = outNode;
           }
+          patcherDev.patcher = std::move(legacy);
+          addDevice(track.chain, std::move(patcherDev), /*insertIndex=*/0);
         }
-        if (!target) {
-          target = &track.chain.devices.front();
-        }
-        if (target->patcher.nodes.empty()) {
-          target->patcher = std::move(track.patcher);
-        }
-        track.patcher = PatcherGraph{};  // migrated; not re-emitted
       }
 
       parsed.tracks.push_back(std::move(track));
