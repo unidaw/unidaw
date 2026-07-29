@@ -1,6 +1,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstring>
+#include <set>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -203,6 +204,21 @@ int main() {
   badRemove.deviceId = 9999;
   assert(sendChainCommand(ringUi, badRemove));
 
+  // A mod link needs two devices that EXIST, with the source ahead of the target in
+  // the chain — the engine validates both and answers ModError otherwise. The link
+  // below used to name devices 0 and 1, which nothing had created (device 42 was added
+  // and then removed above), so the engine rejected it and no ModSnapshot was ever
+  // emitted. The test could not tell, because it dispatched diffs by size and its
+  // asserts were compiled out. Create the two devices the link refers to.
+  daw::UiChainCommandPayload modSourceDevice = addPayload;
+  modSourceDevice.deviceId = 10;
+  modSourceDevice.insertIndex = 0;
+  assert(sendChainCommand(ringUi, modSourceDevice));
+  daw::UiChainCommandPayload modTargetDevice = addPayload;
+  modTargetDevice.deviceId = 11;
+  modTargetDevice.insertIndex = 1;
+  assert(sendChainCommand(ringUi, modTargetDevice));
+
   daw::UiTrackRoutingPayload routingPayload{};
   routingPayload.commandType =
       static_cast<uint16_t>(daw::UiCommandType::SetTrackRouting);
@@ -218,9 +234,9 @@ int main() {
   modPayload.commandType = static_cast<uint16_t>(daw::UiCommandType::AddModLink);
   modPayload.trackId = 0;
   modPayload.linkId = 7;
-  modPayload.sourceDeviceId = 0;
+  modPayload.sourceDeviceId = 10;
   modPayload.sourceId = 0;
-  modPayload.targetDeviceId = 1;
+  modPayload.targetDeviceId = 11;
   modPayload.targetId = 0;
   modPayload.depth = 0.5f;
   modPayload.bias = 0.1f;
@@ -302,6 +318,7 @@ int main() {
   bool sawModUid = false;
   bool sawPatcherDelta = false;
   bool sawVstInstrument = false;
+  std::set<uint16_t> seenDiffTypes;
   daw::EventRingView ringUiOut =
       daw::makeEventRing(base, header->ringUiOutOffset);
   if (ringUiOut.mask != 0) {
@@ -314,52 +331,46 @@ int main() {
         continue;
       }
       if (diffEntry.type == static_cast<uint16_t>(daw::EventType::UiDiff)) {
-        if (diffEntry.size == sizeof(daw::UiChainDiffPayload)) {
-          daw::UiChainDiffPayload diff{};
-          std::memcpy(&diff, diffEntry.payload, sizeof(diff));
-          if (diff.diffType ==
-              static_cast<uint16_t>(daw::UiDiffType::ChainSnapshot)) {
+        // Dispatch on diffType, which is what actually discriminates these payloads —
+        // NOT on size. UiChainDiffPayload and UiChainErrorPayload are both 40 bytes, so
+        // the size-based chain that used to be here routed every ChainError into the
+        // ChainSnapshot branch and `sawError` could never be set. It went unnoticed
+        // because RelWithDebInfo defines NDEBUG and compiled the assert away.
+        uint16_t diffType = 0;
+        std::memcpy(&diffType, diffEntry.payload, sizeof(diffType));
+        // Record everything that arrived, so a failure below says WHICH diff was
+        // missing and what came instead — a bare "sawMod is false" sends the reader
+        // hunting through the engine with no idea whether the diff was absent, was an
+        // error diff, or was decoded as the wrong type.
+        seenDiffTypes.insert(diffType);
+        switch (static_cast<daw::UiDiffType>(diffType)) {
+          case daw::UiDiffType::ChainSnapshot: {
+            daw::UiChainDiffPayload diff{};
+            std::memcpy(&diff, diffEntry.payload, sizeof(diff));
             sawSnapshot = true;
             if (diff.deviceKind ==
                 static_cast<uint32_t>(daw::DeviceKind::VstInstrument)) {
               sawVstInstrument = true;
             }
+            break;
           }
-        } else if (diffEntry.size == sizeof(daw::UiChainErrorPayload)) {
-          daw::UiChainErrorPayload diff{};
-          std::memcpy(&diff, diffEntry.payload, sizeof(diff));
-          if (diff.diffType ==
-              static_cast<uint16_t>(daw::UiDiffType::ChainError)) {
+          case daw::UiDiffType::ChainError:
             sawError = true;
-          }
-        } else if (diffEntry.size == sizeof(daw::UiTrackRoutingDiffPayload)) {
-          daw::UiTrackRoutingDiffPayload diff{};
-          std::memcpy(&diff, diffEntry.payload, sizeof(diff));
-          if (diff.diffType ==
-              static_cast<uint16_t>(daw::UiDiffType::RoutingSnapshot)) {
+            break;
+          case daw::UiDiffType::RoutingSnapshot:
             sawRouting = true;
-          }
-        } else if (diffEntry.size == sizeof(daw::UiModLinkDiffPayload)) {
-          daw::UiModLinkDiffPayload diff{};
-          std::memcpy(&diff, diffEntry.payload, sizeof(diff));
-          if (diff.diffType ==
-              static_cast<uint16_t>(daw::UiDiffType::ModSnapshot)) {
+            break;
+          case daw::UiDiffType::ModSnapshot:
             sawMod = true;
-          }
-        } else if (diffEntry.size == sizeof(daw::UiModLinkUid16DiffPayload)) {
-          daw::UiModLinkUid16DiffPayload diff{};
-          std::memcpy(&diff, diffEntry.payload, sizeof(diff));
-          if (diff.diffType ==
-              static_cast<uint16_t>(daw::UiDiffType::ModLinkUid16)) {
+            break;
+          case daw::UiDiffType::ModLinkUid16:
             sawModUid = true;
-          }
-        } else if (diffEntry.size == sizeof(daw::UiPatcherGraphDiffPayload)) {
-          daw::UiPatcherGraphDiffPayload diff{};
-          std::memcpy(&diff, diffEntry.payload, sizeof(diff));
-          if (diff.diffType ==
-              static_cast<uint16_t>(daw::UiDiffType::PatcherGraphDelta)) {
+            break;
+          case daw::UiDiffType::PatcherGraphDelta:
             sawPatcherDelta = true;
-          }
+            break;
+          default:
+            break;
         }
       }
       if (sawSnapshot && sawError && sawRouting && sawMod && sawModUid &&
@@ -368,6 +379,11 @@ int main() {
       }
     }
   }
+  std::cout << "device_chain_ui: diff types seen =";
+  for (uint16_t t : seenDiffTypes) {
+    std::cout << " " << t;
+  }
+  std::cout << std::endl;
   assert(sawSnapshot);
   assert(sawError);
   assert(sawRouting);

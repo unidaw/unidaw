@@ -9002,7 +9002,7 @@ struct TrackRuntime {
             }
           }
           daw::PatcherContext ctx{};
-          ctx.abi_version = 4;
+          ctx.abi_version = daw::kPatcherAbiVersion;
           ctx.node_id = node.id;
           ctx.seed = projectSeed.load(std::memory_order_relaxed);
           ctx.block_start_tick = windowStartTicks;
@@ -10290,7 +10290,7 @@ struct TrackRuntime {
           }
         }
         daw::PatcherContext ctx{};
-        ctx.abi_version = 4;
+        ctx.abi_version = daw::kPatcherAbiVersion;
         ctx.node_id = nodeId;
         ctx.seed = projectSeed.load(std::memory_order_relaxed);
         ctx.block_start_tick = blockStartTicks;

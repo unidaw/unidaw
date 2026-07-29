@@ -861,17 +861,30 @@ bool deserializeProject(const std::string& json,
           }
           if (const auto euclid = deviceTree.get_child_optional("euclidean")) {
             device.hasEuclideanConfig = true;
-            device.euclideanConfig.steps = euclid->get<uint32_t>("steps", 0);
-            device.euclideanConfig.hits = euclid->get<uint32_t>("hits", 0);
-            device.euclideanConfig.offset = euclid->get<uint32_t>("offset", 0);
+            // A MISSING key falls back to the struct's default, never to 0. Falling
+            // back to 0 is what created the "0 means unset" sentinel downstream: the
+            // DSP had to guess that a zero meant "absent" and substitute a default,
+            // which made `hits 0` play five hits while the read-back cheerfully
+            // reported 0. Defaults belong in one place — the struct — and an explicit
+            // 0 in a file now means 0. The preset path (deserializeEuclidean) already
+            // did this; only the project path did not.
+            const daw::PatcherEuclideanConfig euclidDefaults{};
+            device.euclideanConfig.steps =
+                euclid->get<uint32_t>("steps", euclidDefaults.steps);
+            device.euclideanConfig.hits =
+                euclid->get<uint32_t>("hits", euclidDefaults.hits);
+            device.euclideanConfig.offset =
+                euclid->get<uint32_t>("offset", euclidDefaults.offset);
             device.euclideanConfig.duration_ticks =
-                euclid->get<uint64_t>("duration_ticks", 0);
-            device.euclideanConfig.degree = euclid->get<uint32_t>("degree", 0);
+                euclid->get<uint64_t>("duration_ticks", euclidDefaults.duration_ticks);
+            device.euclideanConfig.degree =
+                euclid->get<uint32_t>("degree", euclidDefaults.degree);
             device.euclideanConfig.octave_offset =
-                euclid->get<int32_t>("octave_offset", 0);
-            device.euclideanConfig.velocity = euclid->get<uint32_t>("velocity", 0);
+                euclid->get<int32_t>("octave_offset", euclidDefaults.octave_offset);
+            device.euclideanConfig.velocity =
+                euclid->get<uint32_t>("velocity", euclidDefaults.velocity);
             device.euclideanConfig.base_octave =
-                euclid->get<uint32_t>("base_octave", 0);
+                euclid->get<uint32_t>("base_octave", euclidDefaults.base_octave);
           }
           // v4: this device's patcher DAG (patcher-preset schema 2, as the
           // per-track read below).

@@ -321,6 +321,31 @@ target_include_directories(device_chain_ui_live_tests PRIVATE
 
 target_link_libraries(device_chain_ui_live_tests PRIVATE platform_juce)
 
+# assert() is the assertion mechanism in several of these test mains, and CMake's
+# RelWithDebInfo (the default build here) passes -DNDEBUG, which compiles every one of
+# them away. Those binaries then run to completion and exit 0 having verified NOTHING —
+# 161 assertions across four files were dead when this was noticed. Undefine NDEBUG for
+# test targets only, so a test that asserts actually asserts.
+foreach(daw_test_target
+    patcher_tests
+    patcher_graph_tests
+    project_file_tests
+    waveform_pyramid_tests
+    waveform_store_tests
+    waveform_fixture_tests
+    clip_grid_tests
+    event_ring_mpsc_tests
+    audio_io_tests
+    device_chain_tests
+    device_chain_ui_tests
+    device_chain_ui_live_tests
+    phase2_tests
+    phase3_tests)
+  if (TARGET ${daw_test_target})
+    target_compile_options(${daw_test_target} PRIVATE -UNDEBUG)
+  endif()
+endforeach()
+
 enable_testing()
 
 add_test(NAME patcher_resolution

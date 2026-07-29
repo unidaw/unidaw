@@ -8,8 +8,14 @@ const DEFAULT_BPM: f64 = 120.0;
 const EUCLIDEAN_STEPS: u32 = 16;
 const EUCLIDEAN_HITS: u32 = 5;
 const EUCLIDEAN_OFFSET: u32 = 0;
+// These are the NO-CONFIG fallbacks — used only when a node arrives with a null or
+// undersized config block, i.e. never in a loaded project. They mirror the defaults in
+// PatcherEuclideanConfig (apps/patcher_abi.h); a config that IS present is taken
+// verbatim, zeros included.
 const EUCLIDEAN_DEGREE: u8 = 1;
 const EUCLIDEAN_OCTAVE_OFFSET: i8 = 0;
+const EUCLIDEAN_VELOCITY: u8 = 100;
+const EUCLIDEAN_BASE_OCTAVE: u8 = 4;
 const EUCLIDEAN_MAX_STEPS: usize = 64;
 const MUSICAL_LOGIC_KIND_GATE: u8 = 1;
 const MUSICAL_LOGIC_KIND_DEGREE: u8 = 2;
@@ -252,16 +258,42 @@ pub extern "C" fn patcher_process_euclidean(ctx: *mut PatcherContext) {
         let mut hits = EUCLIDEAN_HITS;
         let mut offset = EUCLIDEAN_OFFSET;
         let mut duration_ticks = 0u64;
+        // These four were in the config, stored, round-tripped through the read-back and
+        // drawn as turnable controls — and this function hard-zeroed them into the
+        // payload, so four of the node's seven knobs did nothing. Measured and reported
+        // by the frontend: a nine-octave change to base_octave moved the zero-crossing
+        // rate 18% (i.e. not at all), while the same harness turning a wired knob moved
+        // RMS by 5.6x. A control that looks operable and is not costs more than one that
+        // is visibly inert, because the user spends their time doubting their ears.
+        let mut degree = EUCLIDEAN_DEGREE;
+        let mut octave_offset = EUCLIDEAN_OCTAVE_OFFSET;
+        let mut velocity = EUCLIDEAN_VELOCITY;
+        let mut base_octave = EUCLIDEAN_BASE_OCTAVE;
         if !ctx_ref.node_config.is_null()
             && ctx_ref.node_config_size as usize >= core::mem::size_of::<PatcherEuclideanConfig>()
         {
             let config = &*(ctx_ref.node_config as *const PatcherEuclideanConfig);
-            steps = if config.steps == 0 { steps } else { config.steps };
-            hits = if config.hits == 0 { hits } else { config.hits };
+            // 0 MEANS 0. This used to read "0 means the caller left it unset, so use
+            // the default", which made `hits 0` play five hits while the read-back
+            // reported 0 — a confidently wrong number, and it stole the one natural
+            // spelling of "this generator is in the graph and emitting nothing".
+            // Defaults now come from the config struct itself, applied where the file
+            // is parsed, so a zero that arrives here was actually asked for.
+            steps = config.steps;
+            hits = config.hits;
             offset = config.offset;
             duration_ticks = config.duration_ticks;
+            degree = config.degree;
+            octave_offset = config.octave_offset;
+            velocity = config.velocity;
+            base_octave = config.base_octave;
         }
 
+        // Zero steps is not a pattern, and dividing by it panics. `hits == 0` needs no
+        // guard: bjorklund of zero hits is a pattern of rests, which is the point.
+        if steps == 0 {
+            return;
+        }
         let loop_ticks = NANOTICKS_PER_QUARTER * 4;
         let step_ticks = loop_ticks / steps as u64;
         if loop_ticks == 0 || step_ticks == 0 {
@@ -308,8 +340,14 @@ pub extern "C" fn patcher_process_euclidean(ctx: *mut PatcherContext) {
                     payload: [0u8; 40],
                 };
                 let payload = MusicalLogicPayload {
-                    degree: 0,
-                    octave_offset: 0,
+                    // Downstream nodes may override some of these — random_degree
+                    // replaces degree and velocity from its own config, which is what
+                    // putting a randomiser in the path means. euclidean -> event_out is
+                    // a legal graph too, and there these are the only source of pitch and
+                    // velocity; octave_offset and base_octave survive random_degree in
+                    // every graph.
+                    degree,
+                    octave_offset,
                     _pad0: [0u8; 2],
                     chord_id: 0,
                     duration_ticks: if duration_ticks == 0 {
@@ -318,8 +356,8 @@ pub extern "C" fn patcher_process_euclidean(ctx: *mut PatcherContext) {
                         duration_ticks
                     },
                     priority_hint: 0,
-                    velocity: 0,
-                    base_octave: 0,
+                    velocity,
+                    base_octave,
                     metadata: {
                         let mut data = [0u8; 21];
                         data[0] = MUSICAL_LOGIC_KIND_GATE;
@@ -361,16 +399,14 @@ pub extern "C" fn patcher_process_random_degree(ctx: *mut PatcherContext) {
         if !ctx_ref.node_config.is_null()
             && ctx_ref.node_config_size as usize >= core::mem::size_of::<PatcherRandomDegreeConfig>()
         {
+            // 0 MEANS 0 here too — see patcher_process_euclidean. `degree` is the SIZE
+            // of the random range, so 0 and 1 both mean "always degree 0"; that is what
+            // degree_max below clamps, and it is a range being empty rather than a
+            // sentinel being decoded.
             let cfg = &*(ctx_ref.node_config as *const PatcherRandomDegreeConfig);
-            if cfg.degree != 0 {
-                config.degree = cfg.degree;
-            }
-            if cfg.velocity != 0 {
-                config.velocity = cfg.velocity;
-            }
-            if cfg.duration_ticks != 0 {
-                config.duration_ticks = cfg.duration_ticks;
-            }
+            config.degree = cfg.degree;
+            config.velocity = cfg.velocity;
+            config.duration_ticks = cfg.duration_ticks;
         }
         let degree_max = config.degree.max(1);
         // Seeding needs a musical position, not an audio-block one. The old
