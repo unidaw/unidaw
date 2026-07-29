@@ -1403,7 +1403,16 @@ fn main() {
                 },
                 Some(&"rename") => {
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
-                    let name = flag(&args, "--name").unwrap_or_default();
+                    // REQUIRED. Defaulting to an empty string sent a rename the engine
+                    // then ignored, while the CLI printed `"sent": "rename"` — the exact
+                    // silent-success shape being hunted out of this codebase.
+                    let name = match flag(&args, "--name") {
+                        Some(n) if !n.is_empty() => n,
+                        _ => {
+                            eprintln!("daw-cli: --name is required and must not be empty");
+                            std::process::exit(2)
+                        }
+                    };
                     let mut bytes = [0u8; 28];
                     let src = name.as_bytes();
                     let len = src.len().min(bytes.len());

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "apps/time_signature_map.h"
@@ -149,5 +150,83 @@ class SectionList {
  private:
   std::vector<Section> sections_;  // ORDER IS THE ARRANGEMENT — never sorted
 };
+
+// M3.23: a RIPPLE — what a section-length edit does to the material after it.
+//
+// Inserting bars into the intro must carry the verse and the chorus along with it, or the
+// edit silently overwrites them. That makes a section edit a TRANSACTION over placements,
+// not a change to one number, and it is the only place in this design where a section
+// edit touches a placement's stored tick.
+//
+// SHRINK IS REFUSED, NOT CLAMPED, when the bars being removed hold anything. Clamping
+// would pin every placement in the vacated range to a single tick — silently stacking
+// them on top of each other — and deleting them would throw away work the user did not
+// ask to lose. Refusing leaves the decision with the person: empty the bars first, or
+// don't shrink.
+enum class RippleOutcome {
+  Ok,
+  RefusedContentInVacatedRange,
+};
+
+struct RippleResult {
+  RippleOutcome outcome = RippleOutcome::Ok;
+  // How many placements the ripple would move. Reported so a caller can say what
+  // happened rather than just that something did.
+  uint32_t moved = 0;
+  // On refusal: the first placement id sitting in the range that would be removed, so
+  // the message can point at it instead of saying "something is in the way".
+  uint32_t blockingPlacementId = 0;
+};
+
+// Computes the ripple WITHOUT applying it, so a caller can refuse the whole command
+// before mutating anything — a half-applied ripple across several tracks is a corrupted
+// arrangement, and there is no undo entry that would put it back.
+//
+// `spans` is (placementId, at, endTick) for every non-loose placement on every track.
+inline RippleResult planRipple(
+    const std::vector<std::tuple<uint32_t, uint64_t, uint64_t>>& spans,
+    uint64_t fromTick, int64_t delta) {
+  RippleResult result;
+  if (delta == 0) {
+    return result;
+  }
+  if (delta < 0) {
+    const uint64_t magnitude = static_cast<uint64_t>(-delta);
+    const uint64_t vacatedStart =
+        fromTick > magnitude ? fromTick - magnitude : 0;
+    // Anything OVERLAPPING the bars being removed blocks the shrink — not just a
+    // placement that starts there. A placement straddling the boundary would otherwise
+    // be silently truncated.
+    for (const auto& [id, at, end] : spans) {
+      if (end > vacatedStart && at < fromTick) {
+        result.outcome = RippleOutcome::RefusedContentInVacatedRange;
+        result.blockingPlacementId = id;
+        return result;
+      }
+    }
+  }
+  for (const auto& [id, at, end] : spans) {
+    (void)end;
+    if (at >= fromTick) {
+      ++result.moved;
+    }
+  }
+  return result;
+}
+
+// Where a placement lands under a ripple. Saturating at 0 for a negative delta, though
+// planRipple refuses the case that would actually need it — belt and braces, because
+// this is the function that writes the number.
+inline uint64_t rippleTick(uint64_t at, uint64_t fromTick, int64_t delta) {
+  if (at < fromTick || delta == 0) {
+    return at;
+  }
+  if (delta > 0) {
+    const uint64_t d = static_cast<uint64_t>(delta);
+    return (at > UINT64_MAX - d) ? UINT64_MAX : at + d;
+  }
+  const uint64_t d = static_cast<uint64_t>(-delta);
+  return at > d ? at - d : 0;
+}
 
 }  // namespace daw

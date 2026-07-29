@@ -7242,10 +7242,29 @@ struct TrackRuntime {
           runtime = tracks[namePayload.trackId].get();
         }
       }
-      if (runtime && !name.empty()) {
-        std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        runtime->trackName = std::move(name);
+      if (!runtime) {
+        DAW_EVENT("track.rename_rejected")
+            .field("track", namePayload.trackId)
+            .field("reason", "no_such_track");
+        return;
       }
+      if (name.empty()) {
+        // An empty name is not a rename, and silently doing nothing is how a caller with
+        // a payload bug concludes the engine is broken. A track with no name of its own
+        // falls back to "Track N" at save time; clearing one is not expressible and does
+        // not need to be.
+        DAW_EVENT("track.rename_rejected")
+            .field("track", namePayload.trackId)
+            .field("reason", "empty_name");
+        return;
+      }
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        runtime->trackName = name;
+      }
+      DAW_EVENT("track.renamed")
+          .field("track", namePayload.trackId)
+          .field("name", name);
       return;
     }
     if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
