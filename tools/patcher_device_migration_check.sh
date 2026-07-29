@@ -48,7 +48,12 @@ scenario() {
   local tmp take shm
   tmp="$(mktemp -d)"; take="$tmp/$name.wav"; shm="/patmig_${name}_$$"
   printf '%s\n' "$json" > "$tmp/$name.uniproj.json"
+  # A deeper pipeline than the 3-block default: Zebra2 on a wireless output device
+  # cannot keep 3 blocks fed here, and a starved producer emits silence that looks
+  # exactly like a broken generator. This test is about whether the graph GENERATES,
+  # so buy the producer enough slack that scheduling is not the variable under test.
   ( cd "$BUILD" && DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$tmp" \
+      DAW_ENGINE_NUM_BLOCKS=8 \
       DAW_CAPTURE_WAV="$take" DAW_CAPTURE_SECONDS=12 \
       ./daw_engine --run-seconds 14 >"$tmp/engine.log" 2>&1 ) &
   local eng=$!
@@ -68,8 +73,23 @@ scenario() {
   if python3 "$ROOT/tools/perceptual.py" --expect-audio "$take" >/dev/null 2>&1; then
     echo "  [$name] PASS: patcher device produced audio"
   elif [ "$ok" = "1" ]; then
-    echo "  [$name] FAIL (audio): graph ran but the capture was silent (generation broken, or widen the window on a busy box)"
-    ok=0
+    # Distinguish "the generator produced nothing" from "the machine never let the
+    # producer run". A starved pipeline outputs silence for reasons that have nothing
+    # to do with the patcher, and reporting that as a generation failure sends the
+    # next reader hunting through the patcher code for a bug that is not there.
+    starved="$(sed -n 's/.*summary: \([0-9]*\) of \([0-9]*\) playback callbacks.*/\1 \2/p' \
+                 "$tmp/engine.log" | tail -1)"
+    dropped="${starved%% *}"; total="${starved##* }"
+    if [ -n "$dropped" ] && [ -n "$total" ] && [ "$total" -gt 0 ] \
+       && [ $((dropped * 2)) -gt "$total" ]; then
+      echo "  [$name] INCONCLUSIVE: the audio pipeline starved ($dropped of $total callbacks"
+      echo "        dropped a track), so the silence says nothing about the patcher. Raise"
+      echo "        DAW_ENGINE_NUM_BLOCKS or use a wired output device and re-run."
+      ok=0
+    else
+      echo "  [$name] FAIL (audio): graph ran, pipeline was fed, and the capture was still silent"
+      ok=0
+    fi
   fi
   rm -rf "$tmp"
   [ "$ok" = "1" ]

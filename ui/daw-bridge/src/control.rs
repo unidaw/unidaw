@@ -271,6 +271,19 @@ impl EngineHandle {
         unsafe { std::ptr::read_volatile(&(*self.header).ui_clip_version) }
     }
 
+    /// M2.17: the base version to present for an edit to `track_id`. Acceptance is
+    /// per track in the engine, so the global counter is the WRONG base — another
+    /// author typing on a different track moves it, and this edit is then refused as
+    /// stale even though nothing touched this track. The per-track counter is
+    /// published in that track's clip snapshot. Falls back to the global for a track
+    /// with no published snapshot, which is the same fallback the engine guard makes.
+    pub fn clip_version_for_track(&self, track_id: u32) -> u32 {
+        match self.read_track_clip(track_id) {
+            Some(snapshot) => snapshot.clip_version,
+            None => self.clip_version(),
+        }
+    }
+
     /// The published loop span in nanoticks (start, end) — mirrors the engine's
     /// SetLoopRange, so the UI can draw the loop region.
     pub fn loop_range(&self) -> (u64, u64) {

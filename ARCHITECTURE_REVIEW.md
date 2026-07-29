@@ -187,7 +187,7 @@ The tracker is the only finished thing in the repo and the only thing that can b
 *Ends with: a tool you would use daily and cannot buy. Per-lane grids + typed row ops + visible deviation + honest metering exists nowhere.*
 
 ### Movement 2 — Two authors (2–3 weeks)
-17. Per-track version counters replacing the global `clipVersion`; conflicts return an error, the caller re-reads. No rebase.
+17. Per-track version counters replacing the global `clipVersion`; conflicts return an error, the caller re-reads. No rebase. **DONE (M2.17).** Each `TrackRuntime` owns a `trackClipVersion`; acceptance compares that, and the track's published clip snapshot carries it as the base to present (no header change — the field was already per track). The global counter stays as the publishers' "something moved" signal. Global-scope ops (undo/redo, load, harmony) are still gated on the global, since they can touch any track. Proven by `tools/per_track_version_check.sh`, which captures both bases BEFORE either write — with the fix, track 1's edit lands after track 0's; without it, track 1 is rejected. A stale edit to the *same* track is still refused, so the fix did not just switch checking off.
 18. Multi-producer command ring; `daw-cli do` drops `--force`.
 19. `history.jsonl`: append every accepted command as `{seq, ts, author, scope, baseVersion, op, params}`. **No inverses yet** — that is 32 correct inverses plus schema-version replay, and it is the single most under-estimated line in the panel's material ("roughly an afternoon"). As a diagnostic + crash-recovery + "what changed since Tuesday" artifact it is nearly free and immediately useful.
 20. The deterministic linter, over the document and over `history.jsonl`.
