@@ -265,6 +265,41 @@ const arrange = new Arrange(arrangeHost, metrics, {
     state.pianoFitPending = true;      // pick a sensible pitch window for it
     schedule();
   },
+  /**
+   * A finished drag: move, trim, or drag to another lane.
+   *
+   * Sent as ONE command, which is the whole reason the engine's ResizePlacement
+   * carries a start and a length together. A left-edge trim is both edges
+   * moving; expressing it as a move followed by a resize would make the clip
+   * travel through a position nobody asked for, visible for a frame and audible
+   * if it happens during playback.
+   *
+   * Nothing is applied locally. The block does not move until the engine
+   * publishes it moved — see `_clipGhost`. That is slower by a frame and it is
+   * the honest version: the engine CLAMPS a move that would cross a neighbour,
+   * so a clip drawn where the pointer left it would be showing a position the
+   * song does not have.
+   */
+  onClipEdit: ({ op, id, track, at, len, toTrack, startUnchanged, laneRefused }) => {
+    // A drag that crossed lanes when the engine cannot. Said out loud rather
+    // than swallowed: the horizontal half still happened, and a gesture whose
+    // vertical half silently did nothing reads as the app being broken.
+    if (laneRefused) state.reject = 'moving a clip between tracks is not supported yet';
+    if (!Number.isFinite(id) || id < 0) return;
+    const msg = { type: 'placement', op, track, id };
+    if (op === 'move') {
+      msg.at = Math.round(at);
+      if (toTrack !== undefined) msg.toTrack = toTrack;
+    } else {
+      // A right-edge drag omits `at` entirely, which the sidecar turns into the
+      // "leave it" sentinel. Sending the unchanged start instead would work
+      // today and break the moment the engine starts treating a start it was
+      // given as a deliberate reposition.
+      if (!startUnchanged) msg.at = Math.round(at);
+      msg.len = Math.round(len);
+    }
+    send(msg);
+  },
   onNav: (zoomIndex, startTick, laneScroll, why) => {
     state.arrangeZoom = clampZoom(zoomIndex);
     state.arrangeStart = Math.max(0, startTick);
@@ -288,6 +323,38 @@ const ARRANGE_LANE_H = 44;
 let loopDrag = null;
 let loopPending = null;
 function loopOverride() { return loopDrag || loopPending; }
+
+/**
+ * The placement the selection points at, as the engine describes it.
+ *
+ * The SELECTION is (track, startTick) — content-derived, because that is what
+ * survives the extents reordering under it. A COMMAND needs the placement id,
+ * which only the engine's own record has. So this is the one place the two
+ * identities meet, and it is a lookup rather than a stored id on purpose: an id
+ * captured at selection time is stale the moment anything else edits the song,
+ * and "stale id that still resolves to a different clip" is the failure this
+ * codebase has now hit three times.
+ *
+ * Returns null when the selection names nothing — a clip deleted from another
+ * pane, or a project loaded since. Every caller treats that as "do nothing",
+ * which is right: acting on a guess here moves the wrong clip.
+ */
+function selectedPlacement() {
+  const key = state.selectedPlacement;
+  if (!key || !engine) return null;
+  const colon = String(key).indexOf(':');
+  if (colon <= 0) return null;
+  const track = +String(key).slice(0, colon);
+  const tick = +String(key).slice(colon + 1);
+  for (let i = 0; i < engine.extentCount; i++) {
+    const e = engine.extents[i];
+    if (e.track === track && e.startTick === tick) {
+      return { id: e.placementId, track: e.track, clipId: e.clipId,
+               startTick: e.startTick, endTick: e.endTick };
+    }
+  }
+  return null;
+}
 
 /**
  * Snap a dragged loop to whole bars, or to beats with Shift held.
@@ -1311,6 +1378,60 @@ const dockApi = {
     if (!conn || !conn.canSend()) return false;
     return conn.send({ type: 'forget' });
   },
+  /*
+   * PLACEMENTS, by name.
+   *
+   * The arrangement's gestures are a mouse drag, and "mouse-only means
+   * unnameable means unscriptable" is the rule this app is built on. These are
+   * the same four operations the drag produces, reachable from the console and
+   * from a test — which is also the only way the drag itself can be tested
+   * without synthesising pointer events with the right capture semantics.
+   *
+   * `clip` here is a PLACEMENT id, not a clip id, everywhere except addClip.
+   */
+  moveClip: (id, track, at, toTrack) => {
+    const msg = { type: 'placement', op: 'move', id: Number(id),
+                  track: Number(track), at: Math.max(0, Math.round(Number(at))) };
+    if (toTrack !== undefined && toTrack !== null) msg.toTrack = Number(toTrack);
+    return send(msg);
+  },
+  trimClip: (id, track, at, len) => {
+    const msg = { type: 'placement', op: 'resize', id: Number(id), track: Number(track) };
+    // Undefined means "leave this edge", which is what makes a one-edge trim one
+    // command. Passing the current value instead would work today and stop
+    // working the moment the engine treats a given start as a reposition.
+    if (at !== undefined && at !== null) msg.at = Math.max(0, Math.round(Number(at)));
+    if (len !== undefined && len !== null) msg.len = Math.max(1, Math.round(Number(len)));
+    return send(msg);
+  },
+  delClip: (id, track) =>
+    send({ type: 'placement', op: 'remove', id: Number(id), track: Number(track) }),
+  addClip: (clipId, track, at, len) =>
+    send({ type: 'placement', op: 'add', clip: Number(clipId), track: Number(track),
+           at: Math.max(0, Math.round(Number(at))), len: Math.max(1, Math.round(Number(len))) }),
+  /**
+   * How long a bar is, right now.
+   *
+   * The console talks in bars because that is what the ruler is numbered in, and
+   * a bar is only 4/4's bar in 4/4. Asking the page rather than importing a
+   * constant is what keeps `move-clip 3 0 5` meaning the fifth bar in a 7/8
+   * project too — the mistake `snapLoop` documents, which produces positions no
+   * note in the song can be on.
+   */
+  ticksPerBar: () => ticksPerBar(songMeter()),
+  /** What the arrangement is showing, so a caller can find a clip to address. */
+  clips: () => {
+    if (!engine) return [];
+    const out = [];
+    for (let i = 0; i < engine.extentCount; i++) {
+      const e = engine.extents[i];
+      out.push({ id: e.placementId, clip: e.clipId, track: e.track,
+                 at: e.startTick, len: e.endTick - e.startTick, name: e.name });
+    }
+    return out;
+  },
+  /** The selected placement, resolved to what a command needs. */
+  selectedClip: () => selectedPlacement(),
   scaleNames: () => (scales || []).map((x) => x.name),
   /**
    * Whether note keys write. The `edit` command has always called this and it
@@ -3624,6 +3745,23 @@ addEventListener('keydown', (e) => {
       state.pianoFitPending = true;
       return done();
     }
+    /**
+     * Backspace removes the selected clip.
+     *
+     * Only WITH a selection, which is the rule the rack learned the hard way:
+     * a pane that answers to a destructive key whether or not anything is
+     * selected there is a pane that eats keystrokes meant for the tracker.
+     *
+     * No confirm, unlike a device. This one is undoable — placement ops go
+     * through the store, which the undo swap already covers — and a confirm on
+     * an undoable action trains people to dismiss confirms.
+     */
+    if ((k === 'Backspace' || k === 'Delete') && state.selectedPlacement) {
+      const p = selectedPlacement();
+      if (p) { send({ type: 'placement', op: 'remove', track: p.track, id: p.id });
+               state.selectedPlacement = null; }
+      return done();
+    }
     if (k.startsWith('Arrow') || k === 'PageUp' || k === 'PageDown' || k === 'Home') {
       state.followPlayhead = false;
     }
@@ -4323,6 +4461,15 @@ function frozenCopy(o) {
 // Agent / test surface. Structure, not pixels — this is requirement (d).
 window.__uni = {
   probe: () => tracker.probe(),
+  // The arrangement, by name. Delegated rather than reimplemented: these are
+  // the SAME functions the console and the drag call, which is the whole rule
+  // `dockApi` exists for.
+  clips: () => dockApi.clips(),
+  selectedClip: () => dockApi.selectedClip(),
+  moveClip: (id, track, at, toTrack) => dockApi.moveClip(id, track, at, toTrack),
+  trimClip: (id, track, at, len) => dockApi.trimClip(id, track, at, len),
+  delClip: (id, track) => dockApi.delClip(id, track),
+  addClip: (clipId, track, at, len) => dockApi.addClip(clipId, track, at, len),
   state: () => frozenCopy(state),
   scrollTo,
   clickAt: (x, y) => { const h2 = tracker.hitTest(x, y, state.scrollX); if (h2) {

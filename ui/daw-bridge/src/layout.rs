@@ -575,7 +575,47 @@ pub enum UiCommandType {
     /// Remove the track whose stable id is in trackId, tombstoning its slot
     /// (UI_TRACK_FLAG_ABSENT). Takes its aux children with it; rejects a child id.
     RemoveTrack = 47,
+    /*
+     * PLACEMENT OPS (48-51). Where a clip sits on the timeline, rather than what
+     * is inside it — the arrangement, as opposed to the notes.
+     *
+     * All four reuse UiCommandPayload and key on `value0` = the placement's
+     * STABLE id. That id used to be the list index, which is why a drag could
+     * not be keyed on it: any concurrent edit — the agent, another pane, an
+     * undo — renumbered the thing under the mouse mid-gesture. It is a real
+     * monotonic id on the placement now, so it survives edits and the undo
+     * store-swap. Same lesson as ui_track_id, learned the same way.
+     *
+     * Overlaps CLAMP rather than refuse. That is right for a mouse and wrong for
+     * an agent, so the caller is expected to compare what it asked for against
+     * what comes back published and report the difference. See placement_move in
+     * the sidecar.
+     */
+    /// Move a placement in time, and optionally to another track. trackId =
+    /// source track, value0 = placement id, nanotick = the new `at`, note_pitch
+    /// = the destination track id or PLACEMENT_SAME_TRACK to stay put.
+    MovePlacement = 48,
+    /// Delete a placement. trackId, value0 = placement id.
+    RemovePlacement = 49,
+    /// Retime a placement: nanotick = new start, duration = new length, either
+    /// or both PLACEMENT_UNCHANGED. Both in ONE op deliberately — a left-edge
+    /// trim is a start and a length together, and sending Move then Resize makes
+    /// the clip visibly jump through an intermediate position.
+    ResizePlacement = 50,
+    /// Place a clip on a track. trackId, value0 = clip id, nanotick = at,
+    /// duration = length.
+    AddPlacement = 51,
 }
+
+/// "Leave this field alone" in ResizePlacement.
+///
+/// All-ones, which a real nanotick can never be: the engine's tick space is
+/// bounded well under 2^63, so no legitimate start or length can collide with
+/// it. Chosen that way on purpose — a sentinel inside the value range is how
+/// `parent_id` bit us, where 0 meant both "track 0" and "no parent".
+pub const PLACEMENT_UNCHANGED: u64 = u64::MAX;
+/// "Do not change lane" in MovePlacement, in the note_pitch field.
+pub const PLACEMENT_SAME_TRACK: u32 = u32::MAX;
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
 pub const MIXER_FLAG_SOLO: u16 = 1 << 1;

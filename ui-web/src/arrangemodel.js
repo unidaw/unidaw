@@ -176,6 +176,81 @@ export function snapLoop(a, b, fine, meter = DEFAULT_METER) {
 }
 
 /**
+ * Where a clip drag lands.
+ *
+ * Here rather than in the view for the same reason `snapLoop` is: it is a pile
+ * of musical edge cases, every one of which is wrong on the first attempt and
+ * invisible in a screenshot. Dragging a clip off the left edge, trimming an edge
+ * past the other one, moving a clip onto a lane that is not there — each has a
+ * right answer, and none of them is the arithmetic.
+ *
+ * `mode` is 'move', 'trim-l' or 'trim-r'.
+ *
+ * Returns the placement's new geometry plus `changed`, which the caller uses to
+ * decide whether to send anything at all. A gesture that ends where it started
+ * is the commonest gesture there is — a click — and it must not become a command
+ * that dirties the project and costs an undo step.
+ */
+export function dragPlacement(clip, mode, deltaTicks, deltaLanes, opts = {}) {
+  const meter = opts.meter || DEFAULT_METER;
+  const laneCount = opts.laneCount === undefined ? 1 : opts.laneCount;
+  const unit = opts.fine ? ticksPerBeat(meter) : ticksPerBar(meter);
+  const snap = (t) => Math.round(t / unit) * unit;
+  const len = clip.endTick - clip.startTick;
+  let { startTick, endTick, track } = clip;
+
+  if (mode === 'move') {
+    // LENGTH IS PRESERVED, including at the wall. Clamping the start to zero and
+    // leaving the end where the pointer put it would silently shorten a clip
+    // dragged off the left edge — a move that resizes, which is not a thing the
+    // user asked for and not a thing they would notice until playback.
+    startTick = Math.max(0, snap(clip.startTick + deltaTicks));
+    endTick = startTick + len;
+    track = Math.min(laneCount - 1, Math.max(0, clip.track + (deltaLanes | 0)));
+  } else if (mode === 'trim-l') {
+    // A clip may not be trimmed to nothing, and it may not be trimmed THROUGH
+    // its other edge — dragging the left handle past the right one would produce
+    // a negative length, which reaches the engine as an enormous unsigned one.
+    startTick = Math.max(0, Math.min(endTick - unit, snap(clip.startTick + deltaTicks)));
+  } else if (mode === 'trim-r') {
+    endTick = Math.max(startTick + unit, snap(clip.endTick + deltaTicks));
+  }
+
+  return { startTick, endTick, track,
+           changed: startTick !== clip.startTick || endTick !== clip.endTick
+                    || track !== clip.track };
+}
+
+/**
+ * How wide a trim handle is, in CSS pixels.
+ *
+ * Shared with `arrange.css`, which cannot import it — so a test reads the
+ * stylesheet and asserts the two agree. A handle whose cursor appears somewhere
+ * other than where the drag begins is the worst version of this: it looks
+ * correct and does the wrong thing on the pixels either side of the seam.
+ */
+export const CLIP_HANDLE_PX = 6;
+
+/**
+ * Which part of a clip the pointer is on: its body, or one of its trim handles.
+ *
+ * The handle is a fixed number of PIXELS, not a fraction of the width, because
+ * it is a target for a finger or a mouse and neither gets more precise when the
+ * clip is longer. The fraction version made a two-bar clip almost entirely
+ * handle and a thirty-two-bar clip almost entirely body.
+ *
+ * A clip too narrow to hold two handles and a body is all body. Given the model
+ * draws anything down to 2px wide, the alternative is a clip that can be trimmed
+ * to nothing and never moved.
+ */
+export function clipZoneAt(localX, width, handlePx = CLIP_HANDLE_PX) {
+  if (width < handlePx * 3) return 'move';
+  if (localX < handlePx) return 'trim-l';
+  if (localX > width - handlePx) return 'trim-r';
+  return 'move';
+}
+
+/**
  * Reusable buffer. Same discipline as the tracker's: the draw path allocates
  * nothing, so the pools are sized once and mutated in place.
  */
@@ -356,6 +431,12 @@ export function buildArrangeModel(opts, buf) {
   buf.view.width = width;
   buf.scrollX = startTick / tpp;
   buf.zoom = zoom;
+  // The meter the VIEW snaps in. Exposed rather than re-derived because a drag
+  // must land on the same bar lines the ruler drew — a 7/8 project snapping to
+  // 4/4 bars puts clips on positions no note in it can be on, which is the exact
+  // mistake `snapLoop` documents one screen up.
+  buf.meter = meter;
+  buf.laneHeight = laneHeight;
   // Only the floor is enforced here. The ceiling is how much lane strip does not
   // fit, which is a measured box and not something this file may re-derive
   // (GUIDELINES 3.11) — the renderer clamps it against the real one.

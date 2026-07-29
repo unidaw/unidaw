@@ -24,8 +24,8 @@ import {
 import { isBlackKey, pitchLabel, fitLowPitch } from '../src/pianomodel.js';
 import { describeConfig, configFields, nudgeConfig,
          NODE_TYPES } from '../src/patchermodel.js';
-import { snapLoop, TICKS_PER_BAR, buildArrangeModel,
-         createArrangeBuffer } from '../src/arrangemodel.js';
+import { snapLoop, TICKS_PER_BAR, buildArrangeModel, dragPlacement, clipZoneAt,
+         CLIP_HANDLE_PX, createArrangeBuffer } from '../src/arrangemodel.js';
 import { buildHarmonyModel, createHarmonyBuffer } from '../src/harmonymodel.js';
 import { velocityText } from '../src/viewmodel.js';
 import { trackName } from '../src/arrangemodel.js';
@@ -234,6 +234,99 @@ test('a dragged loop snaps, normalises and is never empty', () => {
   assert.deepEqual(snapLoop(0, BAR / 4 * 1.4, true), { start: 0, end: BAR / 4 });
   // Never negative, however far left the drag goes.
   assert.equal(snapLoop(-BAR * 5, BAR, false).start, 0);
+});
+
+test('a dragged clip moves without resizing, and stops at the wall', () => {
+  const BAR = TICKS_PER_BAR;
+  const clip = { startTick: BAR * 4, endTick: BAR * 6, track: 1 };   // two bars long
+  const opts = { laneCount: 4 };
+
+  // An ordinary move: snapped, same length, same lane.
+  const r = dragPlacement(clip, 'move', BAR * 2.4, 0, opts);
+  assert.deepEqual([r.startTick, r.endTick, r.track], [BAR * 6, BAR * 8, 1]);
+  assert.equal(r.changed, true);
+
+  // THE ONE THAT MATTERS. Dragged off the left edge, the clip stops at zero and
+  // KEEPS ITS LENGTH. Clamping only the start would leave the end where the
+  // pointer put it — a move that silently shortens the clip, which the user
+  // would not discover until it played.
+  const wall = dragPlacement(clip, 'move', -BAR * 99, 0, opts);
+  assert.deepEqual([wall.startTick, wall.endTick], [0, BAR * 2]);
+
+  // Lanes clamp to what exists, in both directions.
+  assert.equal(dragPlacement(clip, 'move', 0, +99, opts).track, 3);
+  assert.equal(dragPlacement(clip, 'move', 0, -99, opts).track, 0);
+
+  // A gesture that ends where it began sends NOTHING. This is a click, which is
+  // the commonest gesture there is; turning it into a command would dirty the
+  // project and cost an undo step for touching a clip.
+  assert.equal(dragPlacement(clip, 'move', 0, 0, opts).changed, false);
+  // And so does a wobble smaller than the snap unit.
+  assert.equal(dragPlacement(clip, 'move', BAR * 0.1, 0, opts).changed, false);
+});
+
+test('a trimmed clip cannot be pulled through its own other edge', () => {
+  const BAR = TICKS_PER_BAR;
+  const clip = { startTick: BAR * 4, endTick: BAR * 6, track: 0 };
+  const opts = { laneCount: 4 };
+
+  // Left handle: the start moves, the end does not.
+  const l = dragPlacement(clip, 'trim-l', -BAR * 2, 0, opts);
+  assert.deepEqual([l.startTick, l.endTick], [BAR * 2, BAR * 6]);
+  // Right handle: the end moves, the start does not.
+  const r = dragPlacement(clip, 'trim-r', BAR * 3, 0, opts);
+  assert.deepEqual([r.startTick, r.endTick], [BAR * 4, BAR * 9]);
+
+  // Dragged past the far edge, each stops one unit short of it. A negative
+  // length is the dangerous case: it reaches the engine as an enormous UNSIGNED
+  // one, so the clip does not vanish — it swallows the song.
+  const crossed = dragPlacement(clip, 'trim-l', BAR * 99, 0, opts);
+  assert.deepEqual([crossed.startTick, crossed.endTick], [BAR * 5, BAR * 6]);
+  assert.ok(crossed.endTick > crossed.startTick);
+  const crossedR = dragPlacement(clip, 'trim-r', -BAR * 99, 0, opts);
+  assert.deepEqual([crossedR.startTick, crossedR.endTick], [BAR * 4, BAR * 5]);
+
+  // Fine mode trims by the beat, so the minimum is a beat rather than a bar.
+  const fine = dragPlacement(clip, 'trim-l', BAR * 99, 0, { ...opts, fine: true });
+  assert.equal(fine.startTick, BAR * 6 - BAR / 4);
+  // A trim never changes lane, however far the pointer wandered vertically.
+  assert.equal(dragPlacement(clip, 'trim-r', BAR, 3, opts).track, 0);
+  // Nor does it ever go negative at the left wall.
+  assert.equal(dragPlacement({ startTick: 0, endTick: BAR, track: 0 },
+                             'trim-l', -BAR * 9, 0, opts).startTick, 0);
+});
+
+test('a clip narrow enough to be all handle is all body instead', () => {
+  // Handles are PIXELS, because they are a target for a pointer and a pointer
+  // does not get more precise when the clip is longer.
+  assert.equal(clipZoneAt(2, 200), 'trim-l');
+  assert.equal(clipZoneAt(100, 200), 'move');
+  assert.equal(clipZoneAt(197, 200), 'trim-r');
+  // Exactly on the boundary is the body: a handle is what you must reach INTO.
+  assert.equal(clipZoneAt(6, 200), 'move');
+  assert.equal(clipZoneAt(194, 200), 'move');
+  // The model draws clips down to 2px. Under three handles' worth there is no
+  // room for a body, and a clip that can only be trimmed and never moved is
+  // worse than one that cannot be trimmed.
+  assert.equal(clipZoneAt(0, 10), 'move');
+  assert.equal(clipZoneAt(9, 10), 'move');
+});
+
+test('the trim handle the cursor shows is the one the drag begins in', async () => {
+  // The stylesheet cannot import the constant, so the two are checked against
+  // each other here. A cursor that appears somewhere other than where the drag
+  // starts is the worst version of this bug: it looks right, and does the wrong
+  // thing on the few pixels either side of the seam — which is exactly where
+  // people aim, because that is where the cursor changed.
+  const { readFileSync } = await import('node:fs');
+  const css = readFileSync(new URL('../src/arrange.css', import.meta.url), 'utf8');
+  const rule = css.match(/\.ar-clip::before,\s*\.ar-clip::after\s*\{[^}]*\}/);
+  assert.ok(rule, 'the handle rule is gone — did the selector change?');
+  const width = rule[0].match(/width:\s*(\d+)px/);
+  assert.ok(width, 'the handle rule has no width');
+  assert.equal(Number(width[1]), CLIP_HANDLE_PX,
+    'arrange.css and clipZoneAt disagree about how wide a trim handle is');
+  assert.ok(/cursor:\s*col-resize/.test(rule[0]), 'a handle with no cursor is invisible');
 });
 
 test('a nudge clamps, and leaves every other value exactly as it was read', () => {
@@ -559,7 +652,9 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
                      'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice',
-                     'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask', 'forget'];
+                     'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask', 'forget',
+                     'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
+                     'selectedClip', 'ticksPerBar'];
 
 function stubApi() {
   const calls = [];
@@ -1470,6 +1565,19 @@ const OP_REGISTRY = {
   select:    { cli: null, agent: null, why: 'view' },
   view:      { cli: null, agent: null, why: 'view' },
   zoom:      { cli: null, agent: null, why: 'view' },
+  /*
+   * PLACEMENTS. Where a clip sits, as opposed to what is in it — the first
+   * DOCUMENT operations to ship on all three surfaces on the day they landed.
+   *
+   * They are here because "mouse-only means unnameable means unscriptable" is
+   * the rule, and an arrangement you can only edit by dragging is an arrangement
+   * no test and no agent can build. The drag and these call the same functions.
+   */
+  clips:        { cli: null,          agent: 'clips',           why: 'gap' },
+  'move-clip':  { cli: null,          agent: 'move_clip',       why: 'gap' },
+  'trim-clip':  { cli: null,          agent: 'trim_clip',       why: 'gap' },
+  'del-clip':   { cli: null,          agent: 'remove_clip',     why: 'gap' },
+  'add-clip':   { cli: null,          agent: 'add_clip',        why: 'gap' },
   // The agent's conversation, not the song. There is nothing for the CLI to do
   // with it (each invocation is already a fresh conversation) and giving the
   // agent a tool to clear its own memory is asking it to decide when to forget
@@ -1484,9 +1592,10 @@ const OP_REGISTRY = {
 };
 
 /** Ops with no CLI path today. This list may SHRINK, never grow. */
-const CLI_GAP = ['addnode', 'clear', 'columns', 'copy', 'cut', 'deldevice', 'delnode',
-                 'editor', 'link', 'loop', 'new', 'paste', 'patch', 'redo', 'rename',
-                 'seek', 'stop', 'transpose', 'undo'];
+const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cut',
+                 'del-clip', 'deldevice', 'delnode', 'editor', 'link', 'loop',
+                 'move-clip', 'new', 'paste', 'patch', 'redo', 'rename', 'seek',
+                 'stop', 'transpose', 'trim-clip', 'undo'];
 /** Ops with no agent tool today. Same rule. */
 const AGENT_GAP = ['addnode', 'clear', 'columns', 'copy', 'cut', 'del', 'deldevice',
                    'delnode', 'editor', 'gain', 'link', 'loop', 'mute', 'new', 'paste',

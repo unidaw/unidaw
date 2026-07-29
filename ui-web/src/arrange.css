@@ -142,6 +142,35 @@
    too narrow to hold a stripe. */
 .ar-clip.audio.failed { border-color: var(--uni-text-fx); border-style: solid; }
 .ar-clip.sel { border-color: var(--base-accent); }
+/* The trim handles, shown as a cursor rather than as furniture.
+   Drawing two grab-bars on every clip would put ornament on the one surface that
+   is mostly ornament already; the cursor says the same thing and says it only
+   while you are close enough to use it. Kept in sync with `clipZoneAt`'s 6px by
+   the test that measures both. */
+.ar-clip::before, .ar-clip::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 6px;
+  cursor: col-resize;
+}
+.ar-clip::before { left: 0; }
+.ar-clip::after { right: 0; }
+/* Under three handles' worth there is no body left, so the whole block moves and
+   the handles must not claim the pointer. Matches `clipZoneAt`'s narrow case —
+   a clip that could only be trimmed and never moved would be worse than one that
+   cannot be trimmed. */
+.ar-clip.narrow::before, .ar-clip.narrow::after { display: none; }
+.ar-clip.dragging { opacity: 0.45; }
+
+/* Where a dragged clip will land. See `_clipGhost`: the real block does not move
+   until the engine says it did, so this is the only thing that follows the
+   pointer — and when the engine clamps, the gap between the two is on screen. */
+.ar-ghost {
+  position: absolute; top: 0; left: 0;
+  box-sizing: border-box;
+  border: 1px dashed var(--base-accent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--base-accent) 12%, transparent);
+  pointer-events: none;
+}
 
 .ar-clip-name {
   padding: 2px 5px;

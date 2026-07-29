@@ -301,6 +301,56 @@ export function createCommands(api) {
              { name: 'tick', type: 'int', min: 0, optional: true }],
       run: (a) => (api.harmony(Number(a[0]), a[1], a[2] === undefined ? 0 : Number(a[2]))
                    ? `key set` : 'refused') },
+    /*
+     * PLACEMENTS. The arrangement's drag, said in words.
+     *
+     * Every one of these takes the placement id explicitly rather than acting on
+     * the selection. The rack's `remove-track` note applies: a destructive or
+     * repositioning command that means "whatever happens to be selected" is the
+     * one place guessing is expensive, and `clips` prints the ids.
+     */
+    clips: { help: 'clips — list the placements in the arrangement',
+      args: [],
+      run: () => {
+        const cs = api.clips();
+        if (!cs.length) return 'no clips';
+        // Ticks are unreadable; bars are what the ruler shows. Length in bars
+        // too, so "4" reads as four bars rather than 3840000.
+        const bar = api.ticksPerBar();
+        return cs.map((c) => `${c.id}: tr${c.track} bar ${(c.at / bar + 1).toFixed(2)}`
+                           + ` len ${(c.len / bar).toFixed(2)} ${c.name || ''}`.trimEnd())
+                 .join('\n');
+      } },
+    'move-clip': { help: 'move-clip <id> <track> <bar> [toTrack] — 1-based bar',
+      args: [{ name: 'id', type: 'int', min: 0 }, A_TRACK,
+             { name: 'bar', type: 'num', min: 1 },
+             { name: 'toTrack', type: 'int', min: 0, max: 63, optional: true }],
+      run: (a) => (api.moveClip(+a[0], +a[1], (+a[2] - 1) * api.ticksPerBar(),
+                                a[3] === undefined ? undefined : +a[3])
+                   ? 'moved' : 'refused') },
+    // Either edge, or both. Omitting one leaves it alone, which is what makes a
+    // one-edge trim a single command — see the sidecar's ResizePlacement.
+    'trim-clip': { help: 'trim-clip <id> <track> [bar] [bars] — omit either to leave that edge',
+      args: [{ name: 'id', type: 'int', min: 0 }, A_TRACK,
+             { name: 'bar', type: 'num', min: 1, optional: true },
+             { name: 'bars', type: 'num', min: 0, optional: true }],
+      run: (a) => {
+        const bar = api.ticksPerBar();
+        const at = a[2] === undefined ? undefined : (+a[2] - 1) * bar;
+        const len = a[3] === undefined ? undefined : +a[3] * bar;
+        if (at === undefined && len === undefined) return 'trim what? give a bar, a length, or both';
+        return api.trimClip(+a[0], +a[1], at, len) ? 'trimmed' : 'refused';
+      } },
+    'del-clip': { help: 'del-clip <id> <track>',
+      args: [{ name: 'id', type: 'int', min: 0 }, A_TRACK],
+      run: (a) => (api.delClip(+a[0], +a[1]) ? 'clip removed' : 'refused') },
+    'add-clip': { help: 'add-clip <clip> <track> <bar> <bars> — place a clip, 1-based bar',
+      args: [{ name: 'clip', type: 'int', min: 0 }, A_TRACK,
+             { name: 'bar', type: 'num', min: 1 },
+             { name: 'bars', type: 'num', min: 0 }],
+      run: (a) => (api.addClip(+a[0], +a[1], (+a[2] - 1) * api.ticksPerBar(),
+                               +a[3] * api.ticksPerBar())
+                   ? 'clip placed' : 'refused') },
     // Declared as a COMMAND, not left to fall through to the agent — an
     // unrecognised word here gets sent to the model as a prompt, so "forget"
     // would otherwise be a sentence asking a model to forget something, which

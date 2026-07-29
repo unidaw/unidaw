@@ -173,6 +173,94 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                 "properties": { "track": { "type": "integer", "minimum": 0 } },
             }),
         },
+        /*
+         * PLACEMENTS. Where a clip sits in the arrangement.
+         *
+         * Deliberately expressed in BEATS rather than nanoticks. Every other
+         * tool here takes ticks because notes are written at tick precision, but
+         * an arrangement is worked in bars and phrases, and asking a model to
+         * multiply by 960000 for every clip is asking it to make an arithmetic
+         * slip that lands a chorus a third of a beat late — visible to nobody
+         * and audible to everybody.
+         */
+        ToolSpec {
+            name: "clips",
+            description: "List the clips placed in the arrangement: their placement id, which \
+                          track they are on, where they start and how long they are, in beats. \
+                          The placement id is what the other clip tools take, and it is stable \
+                          across edits.",
+            params: json!({ "type": "object", "properties": {} }),
+        },
+        ToolSpec {
+            name: "move_clip",
+            description: "Move a placed clip to a new position, and optionally to another \
+                          track. Its length does not change. A move that would overlap a \
+                          neighbour is clamped by the engine rather than refused, so check \
+                          `clips` afterwards if the exact position matters.",
+            params: json!({
+                "type": "object",
+                "required": ["id", "track", "beat"],
+                "properties": {
+                    "id": { "type": "integer", "minimum": 0,
+                            "description": "the placement id from `clips`" },
+                    "track": { "type": "integer", "minimum": 0,
+                               "description": "the track it is on NOW" },
+                    "beat": { "type": "number", "minimum": 0,
+                              "description": "where it should start, in beats from the top" },
+                    "to_track": { "type": "integer", "minimum": 0,
+                                  "description": "another track to move it to; omit to stay put" },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "trim_clip",
+            description: "Change where a placed clip starts, how long it is, or both. Omit \
+                          `beat` to leave the start alone and only change the length; omit \
+                          `beats` to move the start and keep the end where it is. At least \
+                          one is required.",
+            params: json!({
+                "type": "object",
+                "required": ["id", "track"],
+                "properties": {
+                    "id": { "type": "integer", "minimum": 0 },
+                    "track": { "type": "integer", "minimum": 0 },
+                    "beat": { "type": "number", "minimum": 0,
+                              "description": "new start, in beats; omit to leave it" },
+                    "beats": { "type": "number", "exclusiveMinimum": 0,
+                               "description": "new length, in beats; omit to leave it" },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "remove_clip",
+            description: "Take a clip out of the arrangement. The clip itself and its notes \
+                          survive — only the placement goes, so it can be placed again with \
+                          add_clip. Undoable.",
+            params: json!({
+                "type": "object",
+                "required": ["id", "track"],
+                "properties": {
+                    "id": { "type": "integer", "minimum": 0 },
+                    "track": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "add_clip",
+            description: "Place a clip on a track. `clip` is a CLIP id (the `clip` field from \
+                          `clips`), not a placement id — placing the same clip twice is how a \
+                          part is repeated, and both placements share its notes.",
+            params: json!({
+                "type": "object",
+                "required": ["clip", "track", "beat", "beats"],
+                "properties": {
+                    "clip": { "type": "integer", "minimum": 0 },
+                    "track": { "type": "integer", "minimum": 0 },
+                    "beat": { "type": "number", "minimum": 0 },
+                    "beats": { "type": "number", "exclusiveMinimum": 0 },
+                },
+            }),
+        },
         ToolSpec {
             name: "set_harmony",
             description: "Set the key from a point in the song onwards. `root` is a pitch \
@@ -294,6 +382,11 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "delete_note" => delete_note(handle, &call.args),
         "add_track" => add_track(handle),
         "remove_track" => remove_track(handle, &call.args),
+        "clips" => clips(handle),
+        "move_clip" => move_clip(handle, &call.args),
+        "trim_clip" => trim_clip(handle, &call.args),
+        "remove_clip" => remove_clip(handle, &call.args),
+        "add_clip" => add_clip(handle, &call.args),
         "set_harmony" => set_harmony(handle, &call.args),
         "set_tempo" => set_tempo(handle, &call.args),
         "set_mixer" => set_mixer(handle, &call.args),
@@ -465,6 +558,121 @@ fn remove_track(handle: &EngineHandle, args: &Value) -> ToolResult {
     let mut p = blank(UiCommandType::RemoveTrack);
     p.track_id = track as u32;
     send_now(handle, p, json!({ "removed": track }))
+}
+
+/*
+ * ── PLACEMENTS ─────────────────────────────────────────────────────────────
+ *
+ * BEATS IN, TICKS OUT. The model is given beats and this multiplies. A tool
+ * that took nanoticks would be handing a language model a 960000x multiplication
+ * on every call, and the failure mode of getting one wrong is not an error — it
+ * is a clip a third of a beat late, which nothing reports and everything hears.
+ *
+ * Rounded rather than truncated, so `beat: 1.9999999` from a model that divided
+ * something is bar 2 rather than one tick short of it.
+ */
+fn beats_to_ticks(b: f64) -> u64 {
+    (b * NANOTICKS_PER_QUARTER as f64).round().max(0.0) as u64
+}
+fn ticks_to_beats(t: u64) -> f64 {
+    // Two decimals: a beat is the unit, and a model reading "4.0" acts on it
+    // more reliably than one reading "4.000000000000001".
+    ((t as f64 / NANOTICKS_PER_QUARTER as f64) * 100.0).round() / 100.0
+}
+
+fn split_tick(p: &mut UiCommandPayload, v: u64, duration: bool) {
+    if duration { p.note_duration_lo = v as u32; p.note_duration_hi = (v >> 32) as u32; }
+    else { p.note_nanotick_lo = v as u32; p.note_nanotick_hi = (v >> 32) as u32; }
+}
+
+/// What is placed where. The one read that makes the other four addressable.
+fn clips(handle: &EngineHandle) -> ToolResult {
+    let mut out = Vec::new();
+    for e in handle.read_clip_extents() {
+        let end = e.name.iter().position(|&c| c == 0).unwrap_or(e.name.len());
+        out.push(json!({
+            "id": e.placement_id,
+            "clip": e.clip_id,
+            "track": e.track_id,
+            "beat": ticks_to_beats(e.start_tick),
+            "beats": ticks_to_beats(e.end_tick.saturating_sub(e.start_tick)),
+            "name": String::from_utf8_lossy(&e.name[..end]).to_string(),
+            // An audio region holds no notes, so a model must not try to write
+            // any into it — and the refusal it would get names nothing useful.
+            "audio": e.flags & 1 != 0,
+        }));
+    }
+    ToolResult::ok(json!({ "clips": out }))
+}
+
+fn move_clip(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(id), Some(track)) = (arg_u64(args, "id"), arg_u64(args, "track")) else {
+        return ToolResult::err("move_clip needs \"id\" and \"track\"");
+    };
+    let Some(beat) = args.get("beat").and_then(|v| v.as_f64()) else {
+        return ToolResult::err("move_clip needs \"beat\" — where it should start");
+    };
+    if beat < 0.0 { return ToolResult::err("a clip cannot start before the song does"); }
+    let mut p = blank(UiCommandType::MovePlacement);
+    p.track_id = track as u32;
+    p.value0 = id as u32;
+    split_tick(&mut p, beats_to_ticks(beat), false);
+    p.note_pitch = match arg_u64(args, "to_track") {
+        Some(t) => t as u32,
+        None => daw_bridge::layout::PLACEMENT_SAME_TRACK,
+    };
+    send_now(handle, p, json!({ "id": id, "beat": beat,
+                               "to_track": args.get("to_track").cloned() }))
+}
+
+fn trim_clip(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(id), Some(track)) = (arg_u64(args, "id"), arg_u64(args, "track")) else {
+        return ToolResult::err("trim_clip needs \"id\" and \"track\"");
+    };
+    let at = args.get("beat").and_then(|v| v.as_f64());
+    let len = args.get("beats").and_then(|v| v.as_f64());
+    // Both absent is a command that does nothing, and the model would read the
+    // `sent: true` as "the trim worked".
+    if at.is_none() && len.is_none() {
+        return ToolResult::err("trim_clip needs \"beat\", \"beats\", or both —                                 with neither it would change nothing");
+    }
+    if at.is_some_and(|v| v < 0.0) { return ToolResult::err("a clip cannot start before 0"); }
+    if len.is_some_and(|v| v <= 0.0) { return ToolResult::err("a clip must be longer than nothing"); }
+    let un = daw_bridge::layout::PLACEMENT_UNCHANGED;
+    let mut p = blank(UiCommandType::ResizePlacement);
+    p.track_id = track as u32;
+    p.value0 = id as u32;
+    split_tick(&mut p, at.map_or(un, beats_to_ticks), false);
+    split_tick(&mut p, len.map_or(un, beats_to_ticks), true);
+    send_now(handle, p, json!({ "id": id, "beat": at, "beats": len }))
+}
+
+fn remove_clip(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(id), Some(track)) = (arg_u64(args, "id"), arg_u64(args, "track")) else {
+        return ToolResult::err("remove_clip needs \"id\" and \"track\"");
+    };
+    let mut p = blank(UiCommandType::RemovePlacement);
+    p.track_id = track as u32;
+    p.value0 = id as u32;
+    send_now(handle, p, json!({ "removed": id }))
+}
+
+fn add_clip(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(clip), Some(track)) = (arg_u64(args, "clip"), arg_u64(args, "track")) else {
+        return ToolResult::err("add_clip needs \"clip\" and \"track\"");
+    };
+    let (Some(beat), Some(beats)) = (args.get("beat").and_then(|v| v.as_f64()),
+                                     args.get("beats").and_then(|v| v.as_f64())) else {
+        return ToolResult::err("add_clip needs \"beat\" and \"beats\"");
+    };
+    if beat < 0.0 { return ToolResult::err("a clip cannot start before the song does"); }
+    if beats <= 0.0 { return ToolResult::err("a clip must be longer than nothing"); }
+    let mut p = blank(UiCommandType::AddPlacement);
+    p.track_id = track as u32;
+    p.value0 = clip as u32;
+    split_tick(&mut p, beats_to_ticks(beat), false);
+    split_tick(&mut p, beats_to_ticks(beats), true);
+    send_now(handle, p, json!({ "clip": clip, "track": track, "beat": beat, "beats": beats }))
 }
 
 /// Set the key at a point on the harmony timeline.

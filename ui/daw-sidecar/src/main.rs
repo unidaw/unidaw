@@ -942,6 +942,120 @@ fn build_named(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
     Some(Ok(UiPatcherPresetCommandPayload::named(ty, name).as_command()))
 }
 
+/*
+ * PLACEMENT EDITS: where a clip sits, rather than what is in it.
+ *
+ * One verb with an `op` rather than four verbs, because the four are one gesture
+ * seen from different edges — drag the middle and it is a move, drag an edge and
+ * it is a resize — and a page that has to pick a message type per edge ends up
+ * with the edge logic in two places.
+ *
+ *   {"type":"placement","op":"move",  "track":0,"id":7,"at":1920000,"toTrack":1}
+ *   {"type":"placement","op":"resize","track":0,"id":7,"at":960000,"len":1920000}
+ *   {"type":"placement","op":"remove","track":0,"id":7}
+ *   {"type":"placement","op":"add",   "track":0,"clip":2,"at":0,"len":3840000}
+ *
+ * `at` and `len` are OPTIONAL on resize and mean "leave it" when missing — which
+ * is what makes a right-edge drag one command instead of a move plus a resize.
+ */
+fn build_placement(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
+    if !is_type(body, "placement") { return None; }
+    let op = match parse_str(body, "\"op\"") {
+        Some(o) => o,
+        None => return Some(Err("placement needs an op: move, resize, remove or add")),
+    };
+    let mut p = UiCommandPayload {
+        command_type: UiCommandType::None as u16,
+        flags: 0, track_id: 0, plugin_index: 0, note_pitch: 0, value0: 0,
+        note_nanotick_lo: 0, note_nanotick_hi: 0,
+        note_duration_lo: 0, note_duration_hi: 0,
+        base_version: parse_num(body, "\"base\"").unwrap_or(0).max(0) as u32,
+    };
+    p.track_id = parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32;
+    // Ticks are read as i64 and refused when negative rather than wrapped. A
+    // clip dragged left past zero is the ordinary way to produce one, and
+    // `as u64` on -1 is 2^64-1 — which is the UNCHANGED sentinel, so a drag off
+    // the left edge would have silently meant "leave the start alone".
+    let tick = |k: &str| -> Option<Result<u64, &'static str>> {
+        parse_num(body, k).map(|v| if v < 0 { Err("negative tick") } else { Ok(v as u64) })
+    };
+    let split = |p: &mut UiCommandPayload, v: u64, dur: bool| {
+        if dur { p.note_duration_lo = v as u32; p.note_duration_hi = (v >> 32) as u32; }
+        else   { p.note_nanotick_lo = v as u32; p.note_nanotick_hi = (v >> 32) as u32; }
+    };
+    match op {
+        "move" => {
+            p.command_type = UiCommandType::MovePlacement as u16;
+            p.value0 = parse_num(body, "\"id\"").unwrap_or(-1).max(-1) as u32;
+            match tick("\"at\"") {
+                Some(Ok(v)) => split(&mut p, v, false),
+                Some(Err(e)) => return Some(Err(e)),
+                None => return Some(Err("move needs an `at`")),
+            }
+            // Absent means "same lane", and the sentinel says so explicitly
+            // rather than by repeating the source track — which would look
+            // identical to a deliberate move onto the track it is already on.
+            p.note_pitch = match parse_num(body, "\"toTrack\"") {
+                Some(t) if t >= 0 => t as u32,
+                _ => daw_bridge::layout::PLACEMENT_SAME_TRACK,
+            };
+        }
+        "resize" => {
+            p.command_type = UiCommandType::ResizePlacement as u16;
+            p.value0 = parse_num(body, "\"id\"").unwrap_or(-1).max(-1) as u32;
+            let un = daw_bridge::layout::PLACEMENT_UNCHANGED;
+            match tick("\"at\"") {
+                Some(Ok(v)) => split(&mut p, v, false),
+                Some(Err(e)) => return Some(Err(e)),
+                None => split(&mut p, un, false),
+            }
+            match tick("\"len\"") {
+                Some(Ok(0)) => return Some(Err("a clip cannot have zero length")),
+                Some(Ok(v)) => split(&mut p, v, true),
+                Some(Err(e)) => return Some(Err(e)),
+                None => split(&mut p, un, true),
+            }
+            // Both absent is a command that travels the ring to do nothing. It
+            // is always a caller bug — an edge drag that computed neither edge —
+            // and it is much easier to see here than as a clip that ignores you.
+            if p.note_nanotick_lo == un as u32 && p.note_duration_lo == un as u32 {
+                return Some(Err("resize needs an `at`, a `len`, or both"));
+            }
+        }
+        "remove" => {
+            p.command_type = UiCommandType::RemovePlacement as u16;
+            p.value0 = parse_num(body, "\"id\"").unwrap_or(-1).max(-1) as u32;
+        }
+        "add" => {
+            p.command_type = UiCommandType::AddPlacement as u16;
+            // The CLIP id here, not a placement id: this is the one op that
+            // creates a placement rather than addressing one.
+            p.value0 = match parse_num(body, "\"clip\"") {
+                Some(c) if c >= 0 => c as u32,
+                _ => return Some(Err("add needs a `clip`")),
+            };
+            match tick("\"at\"") {
+                Some(Ok(v)) => split(&mut p, v, false),
+                Some(Err(e)) => return Some(Err(e)),
+                None => return Some(Err("add needs an `at`")),
+            }
+            match tick("\"len\"") {
+                Some(Ok(0)) | None => return Some(Err("add needs a non-zero `len`")),
+                Some(Ok(v)) => split(&mut p, v, true),
+                Some(Err(e)) => return Some(Err(e)),
+            }
+        }
+        _ => return Some(Err("unknown placement op")),
+    }
+    // A missing id reads as u32::MAX after the casts above, which is a placement
+    // that cannot exist. Refused here rather than sent, so "nothing happened"
+    // is never the answer to a malformed command.
+    if !matches!(op, "add") && p.value0 == u32::MAX {
+        return Some(Err("placement needs an `id`"));
+    }
+    Some(Ok(p))
+}
+
 /// Chords ride in their OWN payload, not UiCommandPayload — the engine dispatches
 /// on entry size, so a chord sent in the wrong shape is silently ignored rather
 /// than rejected.
@@ -1492,6 +1606,7 @@ fn note_column(body: &str) -> u16 {
 
 fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_named(body) { return r; }
+    if let Some(r) = build_placement(body) { return r; }
 
     let mut p = UiCommandPayload {
         command_type: UiCommandType::None as u16,
@@ -3104,6 +3219,135 @@ mod tests {
         assert_eq!(parse_str(r#"{"type":"load","name":"maximal"}"#, "\"name\""), Some("maximal"));
         assert_eq!(parse_str(r#"{"name":""}"#, "\"name\""), Some(""));
         assert_eq!(parse_str(r#"{"type":"load"}"#, "\"name\""), None);
+    }
+
+    /// The 64-bit fields, reassembled the way the engine will read them.
+    fn tick64(p: &UiCommandPayload) -> u64 {
+        (p.note_nanotick_hi as u64) << 32 | p.note_nanotick_lo as u64
+    }
+    fn len64(p: &UiCommandPayload) -> u64 {
+        (p.note_duration_hi as u64) << 32 | p.note_duration_lo as u64
+    }
+
+    /*
+     * PLACEMENT OPS, against the wire the engine agreed to.
+     *
+     * Written BEFORE the engine answers 48-51, which is the reason they are
+     * worth having: the wire is locked, so every one of these can be wrong today
+     * in a way that is free to fix and expensive to find later. The field
+     * assignments are the whole contract — a start written into the duration
+     * pair is a clip that resizes when you drag it.
+     */
+    #[test]
+    fn placement_move_carries_id_start_and_lane() {
+        let p = build_command(
+            r#"{"type":"placement","op":"move","track":0,"id":7,"at":1920000,"toTrack":3}"#).unwrap();
+        assert_eq!(p.command_type, UiCommandType::MovePlacement as u16);
+        assert_eq!(p.track_id, 0, "the SOURCE track");
+        assert_eq!(p.value0, 7, "the placement id keys the op");
+        assert_eq!(tick64(&p), 1_920_000);
+        assert_eq!(p.note_pitch, 3, "the destination lane");
+    }
+
+    /// Absent `toTrack` must be the sentinel, not the source track. Repeating the
+    /// source would be indistinguishable from a deliberate move onto the lane it
+    /// is already on — which the engine may treat as a reorder.
+    #[test]
+    fn placement_move_without_a_lane_says_so_explicitly() {
+        let p = build_command(
+            r#"{"type":"placement","op":"move","track":2,"id":1,"at":0}"#).unwrap();
+        assert_eq!(p.note_pitch, daw_bridge::layout::PLACEMENT_SAME_TRACK);
+        assert_ne!(p.note_pitch, p.track_id);
+    }
+
+    /// A right-edge drag is a length with NO start, and that has to reach the
+    /// engine as one command. Sending Move+Resize instead makes the clip jump
+    /// through an intermediate position on screen.
+    #[test]
+    fn placement_resize_leaves_the_missing_edge_alone() {
+        let un = daw_bridge::layout::PLACEMENT_UNCHANGED;
+
+        let right = build_command(
+            r#"{"type":"placement","op":"resize","track":0,"id":4,"len":3840000}"#).unwrap();
+        assert_eq!(right.command_type, UiCommandType::ResizePlacement as u16);
+        assert_eq!(len64(&right), 3_840_000);
+        assert_eq!(tick64(&right), un, "no start given: leave it");
+
+        // A left-edge trim moves both, together.
+        let left = build_command(
+            r#"{"type":"placement","op":"resize","track":0,"id":4,"at":960000,"len":2880000}"#)
+            .unwrap();
+        assert_eq!(tick64(&left), 960_000);
+        assert_eq!(len64(&left), 2_880_000);
+    }
+
+    /// THE ONE THAT MATTERS MOST. A clip dragged off the left edge is the
+    /// ordinary way to produce a negative tick, and `-1 as u64` is all-ones —
+    /// which is the UNCHANGED sentinel. Unchecked, dragging past zero would
+    /// silently mean "leave the start where it was".
+    #[test]
+    fn placement_refuses_a_negative_tick_rather_than_wrapping_onto_the_sentinel() {
+        assert_eq!(build_command(
+            r#"{"type":"placement","op":"move","track":0,"id":1,"at":-1}"#).err(),
+            Some("negative tick"));
+        assert_eq!(build_command(
+            r#"{"type":"placement","op":"resize","track":0,"id":1,"at":-960000}"#).err(),
+            Some("negative tick"));
+    }
+
+    /// Malformed commands are refused here rather than travelling the ring to do
+    /// nothing. "Nothing happened" is the hardest failure to diagnose from a UI.
+    #[test]
+    fn placement_refuses_what_it_cannot_mean() {
+        let err = |b: &str| build_command(b).err();
+        assert_eq!(err(r#"{"type":"placement","track":0}"#),
+                   Some("placement needs an op: move, resize, remove or add"));
+        assert_eq!(err(r#"{"type":"placement","op":"wiggle","track":0,"id":1}"#),
+                   Some("unknown placement op"));
+        // No id: every op but `add` addresses an existing placement.
+        assert_eq!(err(r#"{"type":"placement","op":"remove","track":0}"#),
+                   Some("placement needs an `id`"));
+        assert_eq!(err(r#"{"type":"placement","op":"move","track":0,"at":0}"#),
+                   Some("placement needs an `id`"));
+        // A resize that changes neither edge is always a caller bug.
+        assert_eq!(err(r#"{"type":"placement","op":"resize","track":0,"id":1}"#),
+                   Some("resize needs an `at`, a `len`, or both"));
+        // A zero-length clip is not a clip.
+        assert_eq!(err(r#"{"type":"placement","op":"resize","track":0,"id":1,"len":0}"#),
+                   Some("a clip cannot have zero length"));
+        assert_eq!(err(r#"{"type":"placement","op":"add","track":0,"clip":1,"at":0,"len":0}"#),
+                   Some("add needs a non-zero `len`"));
+        // `add` names a CLIP, not a placement — it is the op that creates one.
+        assert_eq!(err(r#"{"type":"placement","op":"add","track":0,"at":0,"len":10}"#),
+                   Some("add needs a `clip`"));
+        assert_eq!(err(r#"{"type":"placement","op":"add","track":0,"clip":1,"len":10}"#),
+                   Some("add needs an `at`"));
+    }
+
+    #[test]
+    fn placement_remove_and_add_map_their_fields() {
+        let r = build_command(
+            r#"{"type":"placement","op":"remove","track":5,"id":9}"#).unwrap();
+        assert_eq!(r.command_type, UiCommandType::RemovePlacement as u16);
+        assert_eq!((r.track_id, r.value0), (5, 9));
+
+        let a = build_command(
+            r#"{"type":"placement","op":"add","track":1,"clip":2,"at":3840000,"len":7680000}"#)
+            .unwrap();
+        assert_eq!(a.command_type, UiCommandType::AddPlacement as u16);
+        assert_eq!((a.track_id, a.value0), (1, 2));
+        assert_eq!((tick64(&a), len64(&a)), (3_840_000, 7_680_000));
+    }
+
+    /// The four opcodes are the numbers the engine announced. A renumber on
+    /// either side is silent — the payload is the right size, so a wrong type is
+    /// ignored rather than rejected — so it is pinned by value, not by name.
+    #[test]
+    fn placement_opcodes_are_the_announced_numbers() {
+        assert_eq!(UiCommandType::MovePlacement as u16, 48);
+        assert_eq!(UiCommandType::RemovePlacement as u16, 49);
+        assert_eq!(UiCommandType::ResizePlacement as u16, 50);
+        assert_eq!(UiCommandType::AddPlacement as u16, 51);
     }
 
     #[test]

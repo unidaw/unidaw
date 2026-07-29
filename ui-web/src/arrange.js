@@ -6,10 +6,27 @@
 // A DAW's arrange page is where a user drags things around, so it is the one
 // surface where a dropped frame is felt directly.
 
-import { anchoredStart, clampZoom, ticksPerPixelAt, wheelPixels,
+import { anchoredStart, clampZoom, ticksPerPixelAt, wheelPixels, dragPlacement,
+         clipZoneAt, CLIP_HANDLE_PX,
          WHEEL_NOTCH_PX, WHEEL_PINCH_PX } from './arrangemodel.js';
 
 const GRID_POOL = 256;
+
+/**
+ * Whether a clip can be dragged to another LANE.
+ *
+ * Off, because the engine refuses a cross-track MovePlacement — and refuses the
+ * WHOLE command when it sees one, not just the lane part. So a diagonal drag
+ * would move the clip neither across nor along, which is the worst answer
+ * available: the gesture looks like it worked right up until nothing happens.
+ *
+ * With this off the vertical component is simply ignored, so a drag that wanders
+ * still repositions in time, and the page says why the lane did not change.
+ *
+ * Flip it when the engine's own comment stops saying "cross-track is a v2"
+ * (apps/event_payloads.h, UiCommandType::MovePlacement).
+ */
+const CROSS_TRACK_DRAG = false;
 
 // --- the waveform layer ----------------------------------------------------
 //
@@ -133,7 +150,8 @@ export class Arrange {
    * to log or distinguish them; every one of them means the user is driving, so
    * any playhead-following should stop on all three.
    */
-  constructor(host, metrics, { onLoop, onNav, onClipSelect, onClipOpen } = {}) {
+  constructor(host, metrics,
+              { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit } = {}) {
     this.host = host;
     this.metrics = metrics;
     this.host.className = 'ar';
@@ -143,6 +161,11 @@ export class Arrange {
     this.onNav = onNav;
     this.onClipSelect = onClipSelect;
     this.onClipOpen = onClipOpen;
+    // Where a finished drag goes. Absent, clips are still selectable and
+    // openable and simply cannot be moved — which is what the arrangement was
+    // before the engine had placement ops, and is still the right behaviour for
+    // a surface bound without one.
+    this.onClipEdit = onClipEdit;
 
     this.gutter = div('ar-gutter', host);
     // Two boxes, not one: the outer clips at the lane strip's top edge so a head
@@ -238,9 +261,24 @@ export class Arrange {
      */
     this.clipsIn.addEventListener('pointerdown', (e) => {
       const el = e.target.closest('.ar-clip');
-      if (!el || !this.onClipSelect) return;
-      this.onClipSelect({ track: el._pTrack, tick: el._pTick });
+      if (!el) return;
+      if (this.onClipSelect) this.onClipSelect({ track: el._pTrack, tick: el._pTick });
+      this._clipDown(e, el);
     });
+    this.clipsIn.addEventListener('pointermove', (e) => this._clipMove(e));
+    this.clipsIn.addEventListener('pointerup', (e) => this._clipUp(e));
+    this.clipsIn.addEventListener('pointercancel', () => this._clipCancel());
+    /**
+     * Escape abandons a drag mid-gesture.
+     *
+     * On the WINDOW, not the band: a drag with the pointer captured can leave
+     * the element entirely, and by then the band is not where keys go. This is
+     * also the only way out of a drag whose pointerup was eaten — a plugin
+     * window taking focus mid-gesture, say.
+     */
+    this._onEsc = (e) => { if (e.key === 'Escape' && this._clipDrag) this._clipCancel(); };
+    window.addEventListener('keydown', this._onEsc);
+    this._clipDrag = null;
     // dblclick, not a hand-rolled double pointerdown: the browser already knows
     // the platform's interval and its slop radius, and both differ per OS.
     this.clipsIn.addEventListener('dblclick', (e) => {
@@ -296,6 +334,121 @@ export class Arrange {
     if (!this._loopDrag) return;
     this._loopDrag = null;
     this.onLoop(0, 0, true, { cancelled: true });
+  }
+
+  /*
+   * ── DRAGGING A CLIP ────────────────────────────────────────────────────────
+   *
+   * Move it, trim either end, or drag it to another lane. Which of those a
+   * gesture is depends on where in the block it started, so there is one
+   * pointerdown rather than three overlapping hit targets.
+   *
+   * THE PENDING POSITION IS A GHOST, and the real block does not move until the
+   * engine says it did. Moving the block optimistically would fight the layout
+   * pass, which rewrites every clip's transform from the model each frame — so
+   * the clip would snap back to its published position on the very next
+   * published frame and jitter for the length of the drag. It also makes
+   * clamping legible: the block stays where the clip IS while the ghost shows
+   * where it will land, and if the engine clamps, the difference is on screen
+   * rather than a surprise on release.
+   */
+  _clipDown(e, el) {
+    if (!this.vm || !this.onClipEdit) return;
+    // Only the primary button. A right-click is a context menu everywhere else
+    // and starting a drag under one is how a clip ends up somewhere nobody
+    // meant to put it.
+    if (e.button !== 0) return;
+    const r = el.getBoundingClientRect();
+    const mode = clipZoneAt(e.clientX - r.left, r.width);
+    this._clipDrag = {
+      id: el._pId, mode, pointerId: e.pointerId,
+      x0: e.clientX, y0: e.clientY,
+      clip: { startTick: el._pTick, endTick: el._pEnd, track: el._pTrack },
+      at: null,
+    };
+    this.clipsIn.setPointerCapture(e.pointerId);
+    // Drawn immediately, at the clip's own position: a ghost that only appears
+    // once the pointer has travelled a bar looks like the drag did not take.
+    this._clipGhost(this._clipDrag.clip);
+  }
+
+  /** Where the current pointer position puts the clip. */
+  _clipAt(e) {
+    const d = this._clipDrag;
+    const tpp = this.vm.view.ticksPerPixel;
+    const lh = this.vm.laneHeight || 1;
+    const lanes = CROSS_TRACK_DRAG && d.mode === 'move'
+      ? Math.round((e.clientY - d.y0) / lh) : 0;
+    return dragPlacement(d.clip, d.mode, (e.clientX - d.x0) * tpp, lanes,
+                         { fine: e.shiftKey, laneCount: this.laneCount,
+                           meter: this.vm.meter });
+  }
+
+  _clipMove(e) {
+    if (!this._clipDrag) return;
+    const at = this._clipAt(e);
+    this._clipDrag.at = at;
+    this._clipGhost(at);
+  }
+
+  _clipUp(e) {
+    const d = this._clipDrag;
+    if (!d) return;
+    const at = this._clipAt(e);
+    this._clipDrag = null;
+    this.clipsIn.releasePointerCapture(e.pointerId);
+    this._clipGhost(null);
+    // Did the pointer try to change lane? Worth reporting either way: with
+    // cross-track off, that half of the gesture did not happen, and a drag that
+    // reads as ignored is worse than one that says what it could not do.
+    const triedLane = !CROSS_TRACK_DRAG && d.mode === 'move'
+      && Math.abs(e.clientY - d.y0) > (this.vm.laneHeight || 44) / 2;
+    // A click is not an edit. Sending an unchanged placement would dirty the
+    // project and cost an undo step for the act of selecting something — but a
+    // refused lane change is still news.
+    if (!at.changed) {
+      if (triedLane) this.onClipEdit({ laneRefused: true });
+      return;
+    }
+    this.onClipEdit({
+      op: d.mode === 'move' ? 'move' : 'resize',
+      id: d.id, track: d.clip.track,
+      at: at.startTick, len: at.endTick - at.startTick,
+      toTrack: at.track === d.clip.track ? undefined : at.track,
+      // A right-edge drag left the start alone, and saying so is what keeps it
+      // one command instead of a move followed by a resize.
+      startUnchanged: d.mode === 'trim-r',
+      laneRefused: triedLane,
+    });
+  }
+
+  /** Abandoned: the ghost goes and nothing is sent. */
+  _clipCancel() {
+    if (!this._clipDrag) return;
+    const id = this._clipDrag.pointerId;
+    this._clipDrag = null;
+    try { this.clipsIn.releasePointerCapture(id); } catch (err) { /* already gone */ }
+    this._clipGhost(null);
+  }
+
+  /** The pending position, or null to take it away. Created on first use. */
+  _clipGhost(at) {
+    if (!at) {
+      if (this._ghost) this._ghost.style.display = 'none';
+      return;
+    }
+    if (!this._ghost) {
+      this._ghost = div('ar-ghost', this.clipsIn);
+      this._ghost.style.display = 'none';
+    }
+    const tpp = this.vm.view.ticksPerPixel;
+    const lh = this.vm.laneHeight || 1;
+    const x = at.startTick / tpp;
+    const w = Math.max(2, (at.endTick - at.startTick) / tpp);
+    if (this._ghost.style.display === 'none') this._ghost.style.display = '';
+    this._ghost.style.transform = `translate(${x}px, ${at.track * lh}px)`;
+    this._ghost.style.width = `${w}px`;
+    this._ghost.style.height = `${lh}px`;
   }
 
   /** How far the lane strip is scrolled right now, per the model. */
@@ -475,6 +628,8 @@ export class Arrange {
       el._label = label.firstChild;
       el._x = -1; el._w = -1; el._y = -1; el._name = null;
       el._pTrack = -1; el._pTick = -1; el._bad = false;
+      el._pId = -1; el._pEnd = -1;
+      el._narrow = false; el._dragging = false;
       this.clipPool.push(el);
     }
     return this.clipPool;
@@ -878,6 +1033,8 @@ export class Arrange {
     const clips = this._clip(Math.max(vm.clipSlots, vm.clipCount));
     if (this._clipSeen.length < clips.length) this._clipSeen = new Uint8Array(clips.length + 16);
     const seen = this._clipSeen;
+    // The clip being dragged is dimmed, so the ghost reads as the live one.
+    const drag = this._clipDrag;
     seen.fill(0);
     for (let i = 0; i < vm.clipCount; i++) {
       const c = vm.clips[i];
@@ -908,6 +1065,18 @@ export class Arrange {
       if (el._pTrack !== c.track || el._pTick !== c.startTick) {
         el._pTrack = c.track; el._pTick = c.startTick;
         el.dataset.placement = c.track + ':' + c.startTick;
+      }
+      // The STABLE id a drag is keyed on, and the far edge a trim needs. Neither
+      // is drawn, so neither is guarded — these are two plain number writes, and
+      // a comparison to avoid them costs more than they do.
+      el._pId = c.id; el._pEnd = c.endTick;
+      // Too narrow to hold two handles and a body: the handles stand down so the
+      // whole block still moves. Guarded, because it is a class write.
+      const narrow = c.w < CLIP_HANDLE_PX * 3;
+      if (el._narrow !== narrow) { el._narrow = narrow; el.classList.toggle('narrow', narrow); }
+      const dragging = drag !== null && drag.id === c.id;
+      if (el._dragging !== dragging) {
+        el._dragging = dragging; el.classList.toggle('dragging', dragging);
       }
     }
     // Slots nothing claimed this frame. Hidden, never removed (GUIDELINES 3.7).
