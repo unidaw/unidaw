@@ -193,6 +193,30 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
 
   await until(() => listening(base), `page server on ${base}`);
   await until(() => listening(base + 1), `sidecar on ${base + 1}`);
+  /*
+   * AND THE ENGINE'S SEGMENT, which is the thing anything actually needs.
+   *
+   * A listening port is not a running engine. The sidecar binds its sockets
+   * immediately and attaches to shared memory per CONNECTION, so a test that
+   * connects before the engine has created the segment gets
+   * `attach failed: cannot open /daw_e2e_NNNN` on its first command — and then
+   * every assertion after it fails for its own apparent reason: no clips, no
+   * chain, a tempo that will not set, audio sources that did not decode.
+   *
+   * How long the engine takes to get there depends on the AUDIO DEVICE. Opening
+   * a Bluetooth speaker takes seconds where a built-in output takes
+   * milliseconds, so this raced on one machine and not another, and produced a
+   * run of thirty unrelated failures that read as a broken build.
+   */
+  await until(async () => {
+    const { execFileSync } = await import('node:child_process');
+    try {
+      execFileSync(bin('ui/target/release/daw-cli'), ['get', 'transport'],
+                   { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+                     env: { ...process.env, DAW_UI_SHM_NAME: shm } });
+      return true;
+    } catch { return false; }
+  }, `the engine to publish ${shm}`, 30000);
 
   const stop = () => {
     for (const p of procs) { try { p.kill('SIGTERM'); } catch {} }

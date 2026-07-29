@@ -35,14 +35,33 @@
   <div id="main">
     <div id="browser"></div>
     <div id="centre">
-      <div id="head"></div>
+      <!-- The stage holds two PANES. Each surface lives in whichever pane is
+           showing it, moved there rather than duplicated: there is one #tracker
+           in the document and one set of renderers bound to it.
+
+           The tracker is wrapped because it is the only surface that is more
+           than one box — its column header and its minimap belong to it and have
+           to travel with it. Wrapping makes it a surface like any other, which
+           is what lets the pane logic stay ignorant of which view it holds. -->
       <div id="stage">
-        <div id="minimap"></div>
-        <div id="tracker"></div>
-        <div id="arrange" hidden></div>
-        <div id="mixer" hidden></div>
-        <div id="piano" hidden></div>
-        <div id="patcher" hidden></div>
+        <div id="paneTop" class="pane">
+          <div id="trackerPane">
+            <div id="head"></div>
+            <div id="trackerBody">
+              <div id="minimap"></div>
+              <div id="tracker"></div>
+            </div>
+          </div>
+          <div id="arrange" hidden></div>
+          <div id="mixer" hidden></div>
+          <div id="piano" hidden></div>
+          <div id="patcher" hidden></div>
+        </div>
+        <!-- The divider. Present always; hidden with the pane, so the splitter
+             it hosts has a stable element to bind to rather than one that comes
+             and goes with the split. -->
+        <div id="paneEdge" hidden></div>
+        <div id="paneBot" class="pane" hidden></div>
       </div>
     </div>
     <div id="rdock">
@@ -104,6 +123,10 @@ const metrics = {
 
 const host = document.getElementById('tracker');
 const head = document.getElementById('head');
+const paneTop = document.getElementById('paneTop');
+const paneBot = document.getElementById('paneBot');
+const paneEdge = document.getElementById('paneEdge');
+const trackerPane = document.getElementById('trackerPane');
 const chrome = createChrome(document.getElementById('chrome'), {
   onView: (v) => { state.view = v; if (v === 'piano') fitPiano(); state.focus = 'centre'; schedule(); },
   onPlay: () => cmd('play'),
@@ -261,7 +284,9 @@ const arrange = new Arrange(arrangeHost, metrics, {
     // Put the roll where the clip is, so opening one shows its notes rather
     // than wherever the roll happened to be left.
     if (Number.isFinite(tick)) state.pianoStart = Math.max(0, tick);
-    state.rollOpen = true;
+    // The roll, in the second pane. Was `rollOpen`; it is a view name now, so
+    // the same machinery serves arrange-over-patcher.
+    state.view2 = 'piano';
     state.pianoFitPending = true;      // pick a sensible pitch window for it
     schedule();
   },
@@ -2005,7 +2030,17 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: FIELDS_PER_NOTE,
   projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, arrangeLaneScroll: 0,
   selectedPlacement: null,
   // The roll shares the stage with the arrangement when a clip is open.
-  rollOpen: false,
+  /**
+   * The SECOND centre pane's view, or null for one pane.
+   *
+   * This was `rollOpen`, a boolean meaning "the arrangement, with the piano roll
+   * below" — one hard-coded pairing with its own class, its own CSS and its own
+   * key. Any second pairing would have needed all three again. It is a view name
+   * now, so arrange-over-patcher and tracker-over-mixer cost nothing.
+   */
+  view2: null,
+  /** Which pane the keys go to: 0 top, 1 bottom. */
+  pane: 0,
   pianoZoom: 3, pianoStart: 0, pianoLow: 36, pianoAll: false, selectedNote: -1,
   pianoSelection: null, pianoMarquee: null, pianoDrag: null,
   pianoFitPending: false, browserOpen: true, dockOpen: true, helpOpen: false,
@@ -2751,6 +2786,27 @@ function generatorPhrase() {
   return _genText;
 }
 
+/**
+ * Put a surface in the pane that is showing it, or hide it.
+ *
+ * MOVED, not duplicated. `appendChild` re-parents without touching contents, so
+ * a surface keeps its element pools, its scroll offset and its measurements when
+ * it changes pane — which is what makes "the same view, lower down" free rather
+ * than a rebuild.
+ *
+ * Guarded on the parent, because re-parenting an element that is already in the
+ * right place still costs a layout.
+ */
+function placeSurface(el, name, v, v2) {
+  const want = v === name ? paneTop : (v2 === name ? paneBot : null);
+  if (!want) {
+    if (!el.hidden) el.hidden = true;
+    return;
+  }
+  if (el.parentNode !== want) want.appendChild(el);
+  if (el.hidden) el.hidden = false;
+}
+
 const _chainOpts = { track: 0, chains: null, selected: -1, trackName: '', params: null };
 const _entryOverlay = { row: 0, track: 0, col: 0, text: '' };
 /**
@@ -2979,50 +3035,65 @@ function draw() {
   }
   // One scheduler, two surfaces. Hiding the other host rather than unmounting it
   // keeps its pools warm, so switching views costs no rebuild.
-  const v = state.view;
-  const wantArrange = v === 'arrange', wantMixer = v === 'mixer', wantPiano = v === 'piano';
-  const wantPatcher = v === 'patcher';
-  /**
-   * The roll rides UNDER the arrangement while a clip is open.
+  /*
+   * TWO PANES, and a surface lives in whichever one is showing it.
    *
-   * So the piano surface is visible for two different reasons — because it is
-   * the chosen surface, or because the arrangement is showing a clip in it — and
-   * the split class is what tells #stage to give each an edge to stop at.
+   * MOVED, not duplicated: there is one #tracker in the document and one set of
+   * renderers bound to it. `appendChild` re-parents an element without touching
+   * its contents, so a surface keeps its pools, its scroll position and its
+   * measurements when it changes pane.
+   *
+   * `rollOpen` used to be a special case — "the arrangement, with the piano roll
+   * below" — with its own class, its own CSS and its own key. It is one instance
+   * of this now: `view2 === 'piano'`. That is the whole reason to generalise
+   * rather than add a second special case for the patcher.
    */
-  const splitRoll = wantArrange && state.rollOpen;
-  const showPiano = wantPiano || splitRoll;
-  if (stageEl.classList.contains('stage-split') !== splitRoll) {
-    stageEl.classList.toggle('stage-split', splitRoll);
+  const v = state.view, v2 = state.view2;
+  const split = v2 !== null && v2 !== v;
+  if (stageEl.classList.contains('stage-split') !== split) {
+    stageEl.classList.toggle('stage-split', split);
   }
-  if (patcherHost.hidden === wantPatcher) patcherHost.hidden = !wantPatcher;
-  if (arrangeHost.hidden === wantArrange) arrangeHost.hidden = !wantArrange;
-  if (mixerHost.hidden === wantMixer) mixerHost.hidden = !wantMixer;
-  if (pianoHost.hidden === showPiano) pianoHost.hidden = !showPiano;
-  const trackerOn = !wantArrange && !wantMixer && !wantPiano && !wantPatcher;
-  const disp = trackerOn ? '' : 'none';
-  if (host.style.display !== disp) {
-    host.style.display = disp;
-    head.style.display = disp;
+  if (paneEdge.hidden === split) paneEdge.hidden = !split;
+  if (paneBot.hidden === split) paneBot.hidden = !split;
+  const wantArrange = v === 'arrange' || v2 === 'arrange';
+  const wantMixer = v === 'mixer' || v2 === 'mixer';
+  const wantPiano = v === 'piano' || v2 === 'piano';
+  const wantPatcher = v === 'patcher' || v2 === 'patcher';
+  const trackerOn = v === 'tracker' || v2 === 'tracker';
+  placeSurface(patcherHost, 'patcher', v, v2);
+  placeSurface(arrangeHost, 'arrange', v, v2);
+  placeSurface(mixerHost, 'mixer', v, v2);
+  placeSurface(pianoHost, 'piano', v, v2);
+  placeSurface(trackerPane, 'tracker', v, v2);
+  // Which pane the keys go to, so it is possible to see. Guarded like every
+  // other class write.
+  const botFocused = state.pane === 1 && split;
+  if (paneTop.classList.contains('focused') === botFocused) {
+    paneTop.classList.toggle('focused', !botFocused);
+    paneBot.classList.toggle('focused', botFocused);
+  }
+  if (trackerOn && !trackerPane.hidden && trackerPane._wasHidden) {
     /**
      * Re-measure on the way BACK IN.
      *
-     * While the tracker is display:none every offset it can read is zero, so
-     * `measure()` now refuses to record one — which means whatever it holds is
-     * from before it was hidden. If a pane was dragged in the meantime, that
-     * geometry is stale: lanes are where they used to be, and a click lands a
-     * track or two off, or nowhere.
-     *
-     * Measured on the transition rather than every frame, and after the display
-     * is set, so the boxes being read are the ones now on screen.
+     * While the tracker is hidden every offset it can read is zero, so
+     * `measure()` refuses to record one — which means whatever it holds is from
+     * before it was hidden. If a pane was dragged in the meantime, that geometry
+     * is stale: lanes are where they used to be, and a click lands a track or
+     * two off, or nowhere.
      */
-    if (trackerOn) tracker.measure();
+    trackerPane._wasHidden = false;
+    tracker.measure();
+  } else if (trackerPane.hidden) {
+    trackerPane._wasHidden = true;
   }
-  // Both, in order, when the stage is split: the roll draws into the strip the
-  // arrangement left for it.
-  if (wantArrange) { drawArrange(); if (splitRoll) drawPiano(); return; }
-  if (wantMixer) return drawMixer();
-  if (wantPiano) return drawPiano();
-  if (wantPatcher) return drawPatcher();
+  // Every visible surface draws, in pane order. A surface in the second pane is
+  // as real as one in the first.
+  if (wantArrange) drawArrange();
+  if (wantMixer) drawMixer();
+  if (wantPiano) drawPiano();
+  if (wantPatcher) drawPatcher();
+  if (!trackerOn) return;
   // Resize FIRST: the header's track width comes from the renderer's measured
   // stride, so building the header before the pool exists bakes in the fallback
   // width and every column sits wrong until something else forces a rebuild.
@@ -3604,12 +3675,38 @@ addEventListener('keydown', (e) => {
   //    surface switch is never what you meant to type, and a user who cannot
   //    leave a surface is stuck in it. Tab still cycles; these name the surfaces.
   for (const t of VIEW_TABS) {
-    if (k === t.key) {
-      state.view = t.view;
-      if (t.view === 'piano') fitPiano();
+    if (k !== t.key) continue;
+    /*
+     * SHIFT OPENS IT BELOW, and the same chord closes it again.
+     *
+     * One key per view, one modifier for "the other pane", and the modifier is a
+     * TOGGLE on the view already down there — so the way out is the way in,
+     * which is how every other toggle in this app works. Without that, closing
+     * the second pane would need a key of its own that nothing suggests.
+     *
+     * The same view in both panes is refused rather than allowed: two copies of
+     * one surface cannot both hold the element, and "the tracker above the
+     * tracker" answers no question anyone has.
+     */
+    if (e.shiftKey) {
+      if (state.view2 === t.view) { state.view2 = null; state.pane = 0; }
+      else if (state.view === t.view) { state.reject = 'that view is already open above'; }
+      else { state.view2 = t.view; state.pane = 1; if (t.view === 'piano') fitPiano(); }
       state.focus = 'centre';
       return done();
     }
+    // Plain: the FOCUSED pane's view changes. The muscle memory of a single
+    // pane is untouched, because with no split the focused pane is the only one.
+    if (state.pane === 1 && state.view2 !== null) {
+      if (state.view === t.view) { state.reject = 'that view is already open above'; return done(); }
+      state.view2 = t.view;
+    } else {
+      if (state.view2 === t.view) { state.reject = 'that view is already open below'; return done(); }
+      state.view = t.view;
+    }
+    if (t.view === 'piano') fitPiano();
+    state.focus = 'centre';
+    return done();
   }
 
   /**
@@ -3962,7 +4059,7 @@ addEventListener('keydown', (e) => {
      * selected while closing the editor.
      */
     if (k === 'Escape') {
-      if (state.rollOpen) { state.rollOpen = false; return done(); }
+      if (state.view2 !== null) { state.view2 = null; state.pane = 0; return done(); }
       if (state.selectedPlacement) { state.selectedPlacement = null; return done(); }
       state.reject = null;
       return done();
@@ -3970,7 +4067,7 @@ addEventListener('keydown', (e) => {
     // Enter opens the selected clip in the roll — the keyboard's version of the
     // double-click, so the gesture is not mouse-only.
     if (k === 'Enter' && state.selectedPlacement) {
-      state.rollOpen = true;
+      state.view2 = 'piano';
       // "track:tick" — the same encoding the model reads.
       const colon = String(state.selectedPlacement).indexOf(':');
       const tick = colon > 0 ? +String(state.selectedPlacement).slice(colon + 1) : 0;

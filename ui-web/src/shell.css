@@ -163,9 +163,30 @@
 #stage {
   flex: 1 1 auto;
   min-height: 0;
-  position: relative;
+  /* A COLUMN of panes, not a positioning context for the surfaces. Each pane is
+     the positioning context for whatever surface it currently holds. */
+  display: flex;
+  flex-direction: column;
 }
-#tracker, #arrange, #mixer, #piano, #patcher { position: absolute; inset: 0; }
+/* A pane. One today, two when the split is open. `min-height: 0` is what lets a
+   pane shrink below its content instead of pushing its neighbour off. */
+.pane { position: relative; flex: 1 1 auto; min-height: 0; }
+#trackerPane, #arrange, #mixer, #piano, #patcher { position: absolute; inset: 0; }
+/* And the tracker itself, inside its wrapper's body. It was in the rule above
+   until the wrapper existed; leaving it out made it a static block with no
+   height, which draws the header and nothing under it. */
+#tracker { position: absolute; inset: 0; }
+/* The tracker is a column: its header, then everything else. The header is the
+   one part of it that is not `inset: 0`, which is why the whole thing is wrapped
+   — see the comment in the markup. */
+#trackerPane { display: flex; flex-direction: column; }
+/* `display: flex` BEATS the user agent's `[hidden] { display: none }`, so
+   without this the tracker's column header went on drawing over whichever
+   surface had replaced it — "TIME | HARMONY | Bass" across the top of the
+   arrangement. Every other surface is `display: block` by default and so was
+   hidden correctly, which is why this was the only one. */
+#trackerPane[hidden] { display: none; }
+#trackerBody { position: relative; flex: 1 1 auto; min-height: 0; }
 /* The minimap is pinned to the right of the STAGE, outside the horizontally
    scrolled strip — it spans the song, so it must not move when you scroll
    across tracks. The surfaces stop short of it. */
@@ -337,15 +358,13 @@
  * splitting is a matter of giving each an edge to stop at. --stage-roll-h is
  * dragged by a Splitter, like every other region.
  */
-#stage.stage-split #arrange { bottom: var(--stage-roll-h); }
-#stage.stage-split #piano {
-  top: auto;
-  height: var(--stage-roll-h);
-  border-top: 1px solid var(--uni-rule-gutter);
-}
-/* The roll needs its own containing block for the splitter handle, exactly as
-   #rdock did. */
-#piano { position: absolute; }
+/* The old roll split lived here: `#stage.stage-split #arrange { bottom:
+   var(--stage-roll-h) }` and a matching rule pinning #piano to the bottom. Both
+   are gone. A surface no longer has to know it is sharing the stage — it fills
+   the PANE it is in, and the panes divide the stage. That is the whole
+   difference between one hard-coded pairing and any two views at once, and
+   leaving the old rules in place squeezed the arrangement to 63px inside a
+   363px pane while the roll drew where it always had. */
 
 /* The patcher-is-generating warning. Louder than the modes beside it on purpose:
    it explains a sound with no visible source, which is the one thing in this app
@@ -357,3 +376,28 @@
   padding: 0 4px;
 }
 .ch-gen:empty { display: none; border: 0; padding: 0; }
+
+/* ── THE SPLIT CENTRE ───────────────────────────────────────────────────────
+   Two panes, stacked, with a draggable divider. Stacked rather than side by
+   side because every centre surface but the tracker has time on its x axis:
+   arrange, the piano roll and the scale roll all read left-to-right, and
+   stacking keeps the same bar under the same pixel in both. That alignment is
+   the whole reason arrange-over-piano-roll is useful, and a vertical split
+   would throw it away.
+
+   The bottom pane's height is a CSS variable so the splitter can write one
+   number, exactly as the rack and the rails do. */
+#paneBot {
+  flex: 0 0 var(--stage-split-h, 40%);
+  min-height: 0;
+}
+#paneEdge {
+  flex: 0 0 5px;
+  cursor: row-resize;
+  background: var(--uni-rule-gutter);
+}
+#paneEdge:hover { background: var(--base-accent); }
+/* The focused pane, so it is possible to tell which one the keys go to. A
+   1px inset line rather than a border: a border would change the pane's box and
+   move every surface inside it by a pixel when focus changed. */
+.pane.focused { box-shadow: inset 0 0 0 1px var(--base-accent-ramp-400); }

@@ -1758,7 +1758,11 @@ section('clips answer to the pointer');
     const st = window.__uni.state();
     const a = document.getElementById('arrange').getBoundingClientRect();
     const pi = document.getElementById('piano');
-    return { sel: st.selectedPlacement, roll: st.rollOpen,
+    // `view2 === 'piano'`, not `rollOpen`. The roll below the arrangement was a
+    // boolean with its own class, its own CSS and its own key; it is one
+    // instance of the two-pane split now, so "is the roll open" is "what is in
+    // the second pane".
+    return { sel: st.selectedPlacement, roll: st.view2 === 'piano',
              arrangeH: Math.round(a.height), pianoShown: !pi.hidden,
              pianoH: Math.round(pi.getBoundingClientRect().height),
              outlined: document.querySelectorAll('.ar-clip.sel').length };
@@ -2363,6 +2367,96 @@ section('the rack\'s parameter list grows when the strip does');
     await handle.dblclick();
     await page.waitForTimeout(500);
   }
+}
+
+/*
+ * TWO VIEWS AT ONCE.
+ *
+ * The centre is a stack of one or two panes. `rollOpen` — "the arrangement, with
+ * the piano roll below" — was a boolean with its own class, its own CSS and its
+ * own key: one hard-coded pairing, and any second pairing would have needed all
+ * three again. It is `view2 === 'piano'` now, one instance of the general thing.
+ *
+ * Driven with real keys. The whole claim is that a chord opens and closes it.
+ */
+section('the centre splits into two panes');
+{
+  await page.evaluate(() => window.__uni.loadProject('maximal'));
+  await page.waitForTimeout(2500);
+  const shape = () => page.evaluate(() => {
+    const box = (id) => {
+      const e = document.getElementById(id);
+      if (!e || e.hidden || !e.offsetParent) return null;
+      const r = e.getBoundingClientRect();
+      return { y: Math.round(r.y), h: Math.round(r.height) };
+    };
+    const s = window.__uni.state();
+    return { view: s.view, view2: s.view2, pane: s.pane,
+             arrange: box('arrange'), patcher: box('patcher'),
+             tracker: box('trackerPane'), edge: box('paneEdge') };
+  });
+
+  await page.keyboard.press('F2');
+  await page.waitForTimeout(400);
+  const one = await shape();
+  ok(one.arrange && !one.patcher && !one.edge, 'one pane holds one view',
+     JSON.stringify(one));
+  const full = one.arrange.h;
+
+  await page.keyboard.press('Shift+F3');
+  await page.waitForTimeout(600);
+  const two = await shape();
+  ok(two.view === 'arrange' && two.view2 === 'patcher',
+     'shift opens the other view below', `${two.view} / ${two.view2}`);
+  ok(two.arrange && two.patcher, 'and BOTH are on screen', JSON.stringify(two));
+  /*
+   * STACKED, and the one above really gave up the room. A split that left the
+   * top pane full height and drew the second over it would satisfy "both
+   * visible" and be useless.
+   */
+  ok(two.arrange.h < full, 'the top pane gave up height for it',
+     `${full} -> ${two.arrange.h}`);
+  ok(two.patcher.y > two.arrange.y + two.arrange.h - 2,
+     'and the second sits BELOW the first, not over it',
+     `arrange ends ${two.arrange.y + two.arrange.h}, patcher starts ${two.patcher.y}`);
+  ok(!!two.edge, 'with a divider between them to drag');
+  ok(two.pane === 1, 'and the keys go to the new pane', String(two.pane));
+
+  // The same chord closes it: the way out is the way in, like every other
+  // toggle here. Without that, closing needs a key nothing suggests.
+  await page.keyboard.press('Shift+F3');
+  await page.waitForTimeout(500);
+  const back = await shape();
+  ok(back.view2 === null && !back.patcher, 'the same chord closes it',
+     JSON.stringify(back));
+  ok(back.arrange && back.arrange.h === full, 'and the top pane takes the room back',
+     `${back.arrange && back.arrange.h} vs ${full}`);
+
+  /*
+   * ANY TWO VIEWS, which is the point of generalising. The tracker is the
+   * awkward one — its column header and its minimap belong to it and have to
+   * travel with it, which is why it is wrapped.
+   */
+  await page.keyboard.press('Shift+F1');
+  await page.waitForTimeout(600);
+  const withTracker = await shape();
+  ok(withTracker.tracker && withTracker.arrange,
+     'the tracker can be the second view too', JSON.stringify(withTracker));
+  ok(withTracker.tracker.y > withTracker.arrange.y,
+     'below the arrangement', JSON.stringify(withTracker));
+  // Its header travels with it: a header left behind draws over whatever
+  // replaced the tracker, which is exactly what happened when the wrapper was
+  // `display: flex` and `[hidden]` could not hide it.
+  const headInside = await page.evaluate(() => {
+    const h = document.getElementById('head');
+    const pane = document.getElementById('paneBot');
+    return !!h && pane.contains(h) && h.offsetParent !== null;
+  });
+  ok(headInside, 'and its column header travels with it');
+
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(400);
+  ok((await shape()).view2 === null, 'Escape closes the second pane');
 }
 
 section('dragging a clip moves it');

@@ -103,11 +103,20 @@ export function createPanes({ onSize = () => {}, onEnd = () => {} } = {}) {
     min: MIN_CELL, max: () => Math.max(MIN_CELL, innerHeight * 0.7), home: 150,
   });
 
-  // The roll, when it shares the stage with the arrangement. Grabbed on its TOP
-  // edge — the boundary with the arrangement above it — so dragging up gives the
-  // roll more room, which is the direction the handle's position implies.
-  add($('piano'), {
-    key: 'rollH', edge: 'top', prop: '--stage-roll-h', label: 'Scale roll height',
+  /*
+   * The divider between the two centre panes.
+   *
+   * On its own element rather than on the surface below it. The pane's contents
+   * change — it can hold any view — and a handle bound to whichever surface
+   * happened to be there would have to be rebound every time the view changed,
+   * or would vanish with it. `#paneEdge` exists whether or not the split is
+   * open, so the splitter binds once.
+   *
+   * Grabbed on its TOP edge, so dragging up gives the lower pane more room —
+   * the direction the handle's position implies.
+   */
+  add($('paneEdge'), {
+    key: 'splitH', edge: 'top', prop: '--stage-split-h', label: 'Second pane height',
     min: 120, max: () => Math.max(120, innerHeight * 0.7), home: 300,
   });
 
