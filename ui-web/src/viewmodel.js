@@ -1108,6 +1108,20 @@ export function buildViewModel(opts, buf) {
           if (n.pitch < c0.pitch) c0.pitch = n.pitch;
           if (c0._hiPitch === undefined || n.pitch > c0._hiPitch) c0._hiPitch = n.pitch;
           c0.kind = 'collide';
+          /*
+           * AND NO DEVIATION MARK, because there is no single sounding position.
+           *
+           * This branch never touched `dev`, so the cell kept whatever the FIRST
+           * note through it had written — one hairline, placed by one of several
+           * notes, next to text reading "3 evts". A mark that names a position when
+           * three notes have three different ones is worse than no mark, and
+           * quantize made it common: at a quarter per row, three triplet notes
+           * share a row and each moves a different distance.
+           *
+           * Saying nothing is the honest answer. The pill already says how many
+           * there are, and the piano roll shows where each one is.
+           */
+          c0.dev = -1; c0.devOut = 0;
         } else {
           c0.text = pitchName(n.pitch);
           // The contour ribbon's datum. Set alongside the text because it is the
@@ -1140,7 +1154,24 @@ export function buildViewModel(opts, buf) {
            * holds a count, and a mark inside it would point at a note the cell is
            * not showing.
            */
-          const soundsAt = n.delayTicks + (n.devTicks | 0);
+          /*
+           * FROM WHERE THE NOTE IS, not from the start of its row.
+           *
+           * The row is derived from the authored tick by DIVISION, so a note is
+           * generally somewhere INSIDE its row rather than on its edge — and the
+           * old formula measured only `delayTicks`, silently assuming every
+           * authored note sits exactly on a row line. That was invisible while
+           * delay was the only source of movement, because a delay really is
+           * measured from the note's own position.
+           *
+           * Quantize made it wrong and visible in one step: a note authored at tick
+           * 62400 that quantize pulls back to 0 has dev = -62400, and measuring
+           * that from the row start gives -62400 — "sounds before this row", when
+           * it sounds exactly ON it. The note's offset within its row is the
+           * missing term.
+           */
+          const inRow = rowTicks > 0 ? (n.tOn % rowTicks) : 0;
+          const soundsAt = inRow + n.delayTicks + (n.devTicks | 0);
           if (zoom.aggregate || soundsAt === 0 || rowTicks <= 0) {
             c0.dev = -1; c0.devOut = 0;
           } else {

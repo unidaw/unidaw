@@ -43,6 +43,18 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
+/// How many LANES the frame carries per-track data for.
+///
+/// One constant, because it governs three things that must agree: the width of the
+/// `lpb` block, how many tracks' notes and chords are read, and what the page can
+/// draw. They did NOT agree — the note loop capped at a hard-coded 8 while `lpb`
+/// was 16 — so every note and chord on track 8 and above was silently dropped from
+/// the feed. The notes were in the engine and in the saved file; they simply never
+/// reached the browser, so they could not be seen, edited or played from the
+/// tracker. No fixture has more than six tracks, which is exactly why nothing
+/// caught it: the ninth track a person adds is where it starts.
+const WIRE_LANES: usize = 16;
+
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
 const WIRE_VERSION: u16 = 18;
 
@@ -287,7 +299,7 @@ struct Frame {
      * TIED TO THE RENDERER'S LANE CAP. Widen the cap and this widens with it, or
      * the same silence comes back one lane further out.
      */
-    lpb: [u8; 16],
+    lpb: [u8; WIRE_LANES],
     /// A track's CHORDS, which the engine has always published and this side has
     /// never forwarded.
     ///
@@ -673,6 +685,21 @@ fn f_harmony_stale(out: &Frame) -> bool {
 }
 
 fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u32, vp: Viewport) -> bool {
+    /*
+     * LAST FRAME'S QUANTIZE VERSION, captured before anything overwrites it.
+     *
+     * The notes region is re-read only when the clip version moves — and
+     * SetLaneQuantize deliberately does NOT move it, because quantize invalidates
+     * nobody's edit. So a lane's per-note deviations sat at their old values until
+     * some unrelated note edit happened to force a rebuild: the bars would have
+     * been right by accident and stale the rest of the time, which is worse than
+     * wrong because wrong gets reported.
+     *
+     * This is the same bug backend found and fixed one layer down, in the engine's
+     * own gate for the same region, for the same reason. `uiQuantizeVersion` exists
+     * precisely to be the second half of this condition.
+     */
+    let prev_quantize_version = out.quantize_version;
     // read_snapshot performs the load-v0 / read / acquire-fence / load-v1 retry
     // and returns the version. Never read header fields raw — that is how you tear.
     let Some(snap) = h.snapshot() else { return false };
@@ -745,7 +772,7 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     // still rendered a plausible-looking pattern. SHM v10 publishes it so the
     // client never has to guess.
     // The first 16 of the engine's 64, which is what the page can draw.
-    out.lpb.copy_from_slice(&snap.ui_lines_per_beat[..16]);
+    out.lpb.copy_from_slice(&snap.ui_lines_per_beat[..WIRE_LANES]);
 
     // Cheap: read_mixer is a seqlock read of a fixed-size row. Guarded on the
     // engine's own version so an unchanged mixer costs one atomic load.
@@ -834,6 +861,7 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
 
     if out.clip_version != prev_clip_version || out.notes.is_empty()
         || out.notes_grid != vp.lines_per_beat
+        || out.quantize_version != prev_quantize_version
     {
         out.notes_grid = vp.lines_per_beat;
         out.notes.clear();
@@ -843,7 +871,7 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
         out.chords.clear();
         out.window_start = 0;
         out.window_end = 0;
-        for track in 0..(snap.ui_track_count.min(8)) {
+        for track in 0..(snap.ui_track_count.min(WIRE_LANES as u32)) {
             let Some(w) = h.read_track_clip(track) else { continue };
             if track == 0 {
                 out.window_start = w.window_start_nanotick;

@@ -2905,6 +2905,60 @@ section('a refused edit says so, with the version to retry');
      missing);
 }
 
+/*
+ * A NOTE ON THE NINTH TRACK EXISTS.
+ *
+ * The sidecar read notes and chords from `ui_track_count.min(8)` while the frame's
+ * per-lane block was 16 wide, so every note and chord on track 8 and above was
+ * silently dropped from the feed. The notes were in the engine and in the saved
+ * file — they simply never reached the browser, so they could not be seen, edited
+ * or played from the tracker.
+ *
+ * NO FIXTURE HAS MORE THAN SIX TRACKS, which is exactly why the whole suite passed
+ * over it. Nothing here is exotic: it is what happens on the ninth track a person
+ * adds. So this section builds the condition instead of hoping a fixture has it.
+ */
+section('a note on the ninth track is not thrown away');
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  // What this section inherited, restored at the end. It adds FOUR TRACKS and
+  // writes a note that creates a clip, which is exactly the kind of change that
+  // makes an unrelated section three screens down fail on a count — the mistake
+  // the save section above documents, made again here.
+  const inherited = await page.evaluate(() => window.__uni.state().currentProject);
+  await page.evaluate(() => window.__uni.loadProject('meter'));
+  await page.waitForTimeout(2500);
+  const start = await page.evaluate(() => window.__uni.state().tracks);
+  for (let i = start; i <= 9; i++) {
+    await page.evaluate(() => window.__uni.addTrack());
+    await page.waitForTimeout(500);
+  }
+  const grew = await page.evaluate(() => window.__uni.state().tracks);
+  ok(grew >= 10, 'the song has ten tracks to test the ninth', String(grew));
+
+  // Track 9 — past the old cap of 8, and past track 8 itself so an off-by-one in
+  // either direction fails rather than passing by luck.
+  await page.evaluate(() => window.__uni.run('goto 4 9'));
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.__uni.run('note 100'));
+  await page.waitForTimeout(1000);
+  const onNine = await page.evaluate(() =>
+    (window.__uni.notes() || []).filter((n) => n.tr === 9).length);
+  ok(onNine === 1, 'a note written on track 9 comes back on track 9',
+     `${onNine} notes`);
+
+  // And the lane it landed on can still be read, so this is not just a count.
+  const pitch = await page.evaluate(() =>
+    (window.__uni.notes() || []).filter((n) => n.tr === 9).map((n) => n.p));
+  ok(pitch.length === 1 && pitch[0] === 100, 'with the pitch it was given',
+     JSON.stringify(pitch));
+
+  // Reloading is the whole undo: the added tracks and the clip the note created
+  // live only in the in-memory document, and nothing was saved.
+  await page.evaluate((n) => window.__uni.loadProject(n || 'meter'), inherited);
+  await page.waitForTimeout(2000);
+}
+
 section('an edit lands on a track other than the last one edited');
 {
   await page.evaluate(() => window.__uni.run('view tracker'));

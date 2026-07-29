@@ -5463,16 +5463,31 @@ window.__uni = {
     for (let t = 0; t < 4; t++) {
       const stride = 12 / lpb[t];
       for (let k = 0; k * stride < 48; k++) {           // four beats of each lane
-        // Every third note sits OFF its row, by a quarter, a half and three
-        // quarters of a row in turn. Recorded material is never exactly on the
-        // grid, and a fixture where every note is makes the deviation mark
-        // untestable — the feature would render nothing and every golden would
-        // agree with it (GUIDELINES 2.1.1). Track 0 is left clean so that "on the
-        // row" and "near the row" are both on screen at once.
+        /*
+         * Every third note sits OFF its row, by a quarter, a half and three quarters
+         * of a row in turn. Recorded material is never exactly on the grid, and a
+         * fixture where every note is makes the deviation mark untestable — the
+         * feature would render nothing and every golden would agree with it
+         * (GUIDELINES 2.1.1). Track 0 is left clean so "on the row" and "near the
+         * row" are both on screen at once.
+         *
+         * THE OFFSET IS IN `tOn` ALONE, and it used to be in tOn AND delayTicks —
+         * the same number counted twice. That was invisible for as long as the
+         * renderer measured only the delay, because then the doubled `tOn` was never
+         * read: a wrong fixture and a wrong renderer agreeing, with a blessed golden
+         * on top. Adding the note's in-row position to the mark (which is what makes
+         * quantize's deviations land correctly) made the marks jump to 50% and 99%,
+         * which is the fixture's error becoming visible rather than a regression.
+         *
+         * `tOn` is the realistic place for it: a recorded note is authored where it
+         * was played. `delayTicks` is a ROW OP applied on top of that, and the two
+         * are composed, not alternatives — which is why counting one twice was wrong
+         * in the first place.
+         */
         const dev = (t === 0 || k % 3) ? 0 : [20000, 40000, 60000][(k / 3) % 3];
         notes.push({ tOn: k * stride * 80000 + dev, tOff: 0, id: t * 100 + k,
                      pitch: 48 + t * 5 + (k % 5), velocity: 100, column: 0, track: t,
-                     retrigger: 0, probability: 100, delayTicks: dev, row: k * stride,
+                     retrigger: 0, probability: 100, delayTicks: 0, row: k * stride,
                      muted: false, isAdd: false, placementId: 1 });
       }
     }
@@ -5656,6 +5671,18 @@ window.__uni = {
   bypass: bypassDevice,
   /** Pull a lane toward a grid. Likewise on both surfaces, likewise one function. */
   quantize: setQuantize,
+  /**
+   * How many nanoticks one ROW spans at the current zoom.
+   *
+   * On the TEST surface, which is where it is used — and it took three goes to put
+   * a method on the right object today, which is why there is now a ratchet
+   * comparing what the suites call against what this object has.
+   *
+   * Exposed because a test that hardcodes a row length silently depends on a zoom
+   * nobody set, and that is exactly how a zoom change hid inside the quantize suite
+   * and let a stale-deviation bug pass.
+   */
+  rowTicks: () => ZOOM_LEVELS[state.zoom].rowNanoticks,
   /** Every lane the engine reports a quantize grid for. Raw engine units. */
   quantized: () => (engine ? engine.quantize.slice(0, engine.quantizeCount).map((q) => ({
     track: q.track, grid: q.grid, strength: q.strength, swing: q.swing })) : []),

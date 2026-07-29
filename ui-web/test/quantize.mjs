@@ -86,6 +86,22 @@ check(ticksBefore.split(',').filter(Boolean).length >= 8,
       'the project has notes that could have moved',
       `${ticksBefore.split(',').filter(Boolean).length} notes`);
 
+/*
+ * A ZOOM WHERE EACH NOTE HAS ITS OWN CELL, set BEFORE the quantize command.
+ *
+ * `meter` track 1 is triplets — 0, 320000, 640000 — so at the default quarter per
+ * row all three share row 0, the cell takes the COLLIDE path, and no deviation is
+ * drawn for any of them (correctly: three notes have three sounding positions and
+ * one mark cannot name them). A 1/16 row gives each its own cell.
+ *
+ * BEFORE, and that ordering is the point. Changing the zoom also changes the
+ * frame's note grid, which is one of the conditions that makes the notes region be
+ * re-read — so a zoom change AFTER the quantize would deliver the deviations for
+ * the wrong reason and hide a stale-region bug, which is exactly what it did.
+ */
+await page.evaluate(() => window.__uni.setZoom(1));
+await page.waitForTimeout(600);
+
 // Through the console, in the units a person types: percent, and a named grid.
 const said = await page.evaluate(() => window.__uni.run('quantize 1 1/16 60 -10'));
 await page.waitForTimeout(1200);
@@ -135,23 +151,49 @@ check(savedTicks('qafter') === ticksBefore,
  * is drawing. One number, checked at both ends.
  */
 {
-  // A zoom where a row is a POSITION, not a summary — at "1 bar" per row the cell
-  // holds a count and a mark inside it would point at a note it is not showing.
-  await page.evaluate(() => window.__uni.setZoom(1));
-  await page.waitForTimeout(600);
-
+  /*
+   * NO ZOOM CHANGE HERE, and that absence is the check.
+   *
+   * The first version called setZoom(1) before reading — for the honest reason that
+   * a deviation mark only belongs at zooms where a row is a POSITION rather than a
+   * summary. But changing the zoom also changes the frame's note grid, which is one
+   * of the conditions that makes the sidecar RE-READ the notes region. So the
+   * deviations arrived because the zoom moved, not because the quantize did, and
+   * the test passed over a real bug: the region's rebuild gate did not include the
+   * quantize version, so a lane's deviations stayed at their old values until some
+   * unrelated note edit happened to force a rebuild. Right by accident, stale the
+   * rest of the time.
+   *
+   * The default zoom is already one where a row is a position, so nothing is lost
+   * by not touching it — and now the only thing that can have delivered these
+   * numbers is the quantize change itself.
+   */
   const moved = await page.evaluate(() => {
     const n = (window.__uni.notes() || []).filter((x) => x.tr === 1 && x.dev);
-    return n.length ? { row: n[0].row, dev: n[0].dev, delay: n[0].delay, p: n[0].p } : null;
+    return n.length
+      ? { row: n[0].row, dev: n[0].dev, delay: n[0].delay, p: n[0].p, t: n[0].t }
+      : null;
   });
   check(!!moved, 'the engine reports a note its lane moves', JSON.stringify(moved));
 
   if (moved) {
-    // 1/16 rows at this zoom: 240000 nanoticks each. The percentage the renderer
-    // draws is (delay + dev) / rowTicks, clamped into the cell.
-    const ROW_TICKS = 240000;
-    const want = Math.max(0, Math.min(99,
-      Math.round(((moved.delay + moved.dev) / ROW_TICKS) * 100)));
+    // The row length at whatever zoom is current, asked for rather than assumed —
+    // hardcoding it was how a zoom change hid inside this test in the first place.
+    const ROW_TICKS = await page.evaluate(() => window.__uni.rowTicks());
+    /*
+     * WHERE IN ITS ROW THE NOTE SOUNDS, composed from the engine's own three
+     * numbers: where it is written INSIDE the row, its own delay, and the deviation
+     * its lane applies. Computed here independently of the renderer — that is what
+     * makes this a comparison rather than a tautology.
+     *
+     * The `% ROW_TICKS` term is the one I got wrong first, in the renderer and then
+     * again here: a row is derived from the authored tick by division, so a note
+     * sits INSIDE its row, not on its edge. Measuring the deviation from the row
+     * start instead put a note that quantize pulls exactly onto the line at
+     * "-62400 ticks before this row".
+     */
+    const want = Math.max(0, Math.min(99, Math.round(
+      (((moved.t % ROW_TICKS) + moved.delay + moved.dev) / ROW_TICKS) * 100)));
     const drawn = await page.evaluate((row) => {
       for (const el of document.querySelectorAll('.tk-cell.dev')) {
         if (!el.offsetParent) continue;
@@ -164,7 +206,9 @@ check(savedTicks('qafter') === ticksBefore,
           `row ${moved.row}, dev ${moved.dev}`);
     check(drawn !== null && parseInt(drawn, 10) === want,
           'at exactly the position the engine\'s own deviation puts it',
-          `drawn ${drawn}, engine says ${want}% (dev ${moved.dev} + delay ${moved.delay})`);
+          `drawn ${drawn}, engine's numbers say ${want}%`
+          + ` (in-row ${moved.t % ROW_TICKS} + delay ${moved.delay} + dev ${moved.dev}`
+          + ` over ${ROW_TICKS})`);
   }
 }
 

@@ -379,10 +379,26 @@ export function decode(buf, store) {
   for (let i = 0; i < peakCount; i++) store.peaks[i] = v.getFloat32(AFTER_MIXER + i * 4, true);
   store.peakCount = peakCount;
 
-  // Notes only move on an edit; the sidecar re-serialises them only when
-  // clipVersion changes, so skip the copy when it hasn't.
+  /*
+   * Notes only move on an edit, so the copy is skipped when nothing changed — but
+   * QUANTIZE moves what a note carries WITHOUT moving the clip version, and that
+   * exception cost a real bug on both sides of this wire.
+   *
+   * A note's `devTicks` — how far its lane shifts it — changes when the lane's
+   * quantize changes, and SetLaneQuantize deliberately does not bump the clip
+   * version, because it invalidates nobody's edit. So the deviations stayed at
+   * their old values here until an unrelated note edit came along: right by
+   * accident, stale the rest of the time.
+   *
+   * The sidecar had the same hole in its own re-read gate, and the engine had it
+   * one layer below that. Three gates, one missing condition, and the quantize
+   * suite passed over all three because it changed the ZOOM before reading — which
+   * moves `rowGrid` and forces the copy for an unrelated reason.
+   */
+  const quantizeVersion = v.getUint32(140, true);
   if (clipVersion !== store.clipVersion || noteCount !== store.noteCount
-      || rowGrid !== store.rowGrid) {
+      || rowGrid !== store.rowGrid
+      || quantizeVersion !== store.quantizeVersion) {
     let o = AFTER_MIXER + peakCount * 4;
     for (let i = 0; i < noteCount; i++, o += NOTE_BYTES) {
       const n = note(store, i);
@@ -629,7 +645,10 @@ export function decode(buf, store) {
       q.grid = Number(v.getBigUint64(o + 12, true));
     }
     store.quantizeCount = have;
-    store.quantizeVersion = v.getUint32(140, true);
+    // Read at the top of this function, before the note gate compared it — assigned
+    // here so the comparison above sees LAST frame's value, which is the whole
+    // point of a version gate.
+    store.quantizeVersion = quantizeVersion;
   }
 
   store.ok = true;

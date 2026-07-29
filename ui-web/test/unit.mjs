@@ -1182,6 +1182,69 @@ test('every icon the app names exists in the bundled set', () => {
   assert.deepEqual(missing, [], `icons named but not in the set:\n  ${missing.join('\n  ')}`);
 });
 
+/*
+ * WHERE A NOTE SOUNDS IS THE SUM OF THREE TERMS, and the mark has to be the sum.
+ *
+ * A note is drawn on the row its authored tick DIVIDES into, so it generally sits
+ * somewhere inside that row rather than on its edge. On top of that its own delay
+ * pushes it late, and its lane's quantize pulls it toward a grid. The engine adds
+ * all three — quantize on the scheduling copy, delay at strike expansion — so the
+ * mark is (tOn mod rowTicks) + delay + dev.
+ *
+ * Every one of those three has been wrong here at some point, and none of the
+ * failures looked like a failure:
+ *   - The in-row term was MISSING, so a note quantize pulls exactly onto a grid
+ *     line was drawn as sounding before its own row.
+ *   - The golden fixture put the same offset in tOn AND delayTicks, which the
+ *     renderer's missing term made invisible: a wrong fixture and a wrong renderer
+ *     agreeing, with a blessed screenshot on top.
+ *   - `dev` arrived stale, because three separate version gates all omitted the
+ *     quantize counter.
+ *
+ * So the composition is pinned here, in arithmetic, where no zoom, cache or
+ * screenshot can agree with it by accident.
+ */
+test('the deviation mark is the sum of in-row, delay and quantize', () => {
+  const ROW = ZOOM_LEVELS[1].rowNanoticks;      // 240000, a 16th
+  const engine = gridEngine([4]);
+  // One note per row so nothing collides — a collided cell deliberately draws no
+  // mark, and that would make this pass for the wrong reason.
+  const at = (row, inRow, delay, dev) => ({
+    tOn: row * ROW + inRow, tOff: row * ROW + inRow + 1000, id: 100 + row,
+    pitch: 60, velocity: 100, column: 0, track: 0, retrigger: 0, probability: 0,
+    delayTicks: delay, devTicks: dev, row, muted: false, isAdd: false, placementId: 1,
+  });
+  engine.notes = [
+    at(0, 0, 0, 0),                     // dead on the line: no mark at all
+    at(1, ROW / 4, 0, 0),               // written a quarter in
+    at(2, 0, ROW / 2, 0),               // on the line, delayed half a row
+    at(3, ROW / 4, 0, ROW / 4),         // written a quarter in, pushed a quarter later
+    at(4, ROW / 2, 0, -ROW / 4),        // written halfway, pulled a quarter earlier
+    at(5, ROW / 4, 0, -ROW / 2),        // pulled to BEFORE its own row
+  ];
+  engine.noteCount = engine.notes.length;
+  const buf = createBuffer(8, 1, 3);
+  const vm = buildViewModel({ startRow: 0, rowCount: 8, tracks: 1, columns: 3,
+                              zoomIndex: 1, engine }, buf);
+  const dev = (row) => vm.rows[row].cells[0].dev;
+  const out = (row) => vm.rows[row].cells[0].devOut;
+
+  assert.equal(dev(0), -1, 'a note on its row line has nothing to say');
+  assert.equal(dev(1), 25, 'a note written a quarter into its row is marked there');
+  assert.equal(dev(2), 50, 'a delay alone still reads from the row start');
+  assert.equal(dev(3), 50, 'in-row and quantize ADD rather than replace');
+  assert.equal(dev(4), 25, 'and a negative deviation subtracts');
+  /*
+   * SPILL. Written a quarter in, pulled half a row earlier: it sounds BEFORE this
+   * row. Pinned to the edge, and flagged — because a mark at 0% that means
+   * "somewhere earlier" is a mark claiming the note is on time, which is the one
+   * thing a deviation mark must never say.
+   */
+  assert.equal(dev(5), 0, 'a note pulled before its row pins to the edge');
+  assert.equal(out(5), -1, 'and says so, rather than reading as on time');
+  assert.equal(out(3), 0, 'while one that stays inside does not');
+});
+
 test('a removed track takes no width and its neighbours keep their ids', () => {
   // kShmVersion 22: RemoveTrack tombstones the slot rather than compacting the
   // array, so `uiTrackCount` is the EXTENT and slot 1 here is a hole. The lane
