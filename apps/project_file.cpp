@@ -601,6 +601,15 @@ std::string serializeProject(const ProjectDocument& document) {
     if (track.isMaster) {
       writer.key("is_master", true);
     }
+    // A derived stem, flagged so the load lifts it out of `tracks` instead of adopting it
+    // as a top-level lane, and keyed by the BUS it came from rather than its track id (an
+    // id assigned from the live track count moves whenever the document's track count
+    // does). Written only for children, so a project without a multi-out instrument is
+    // byte-identical to what it was.
+    if (track.isAuxChild) {
+      writer.key("is_aux_child", true);
+      writer.key("aux_bus_index", track.auxBusIndex);
+    }
     writer.key("parent_id", track.parentId);
     writer.key("collapsed", track.collapsed);
     writer.key("harmony_quantize", track.harmonyQuantize);
@@ -899,6 +908,8 @@ bool deserializeProject(const std::string& json,
       track.trackId = tree.get<uint32_t>("track_id", 0);
       track.name = tree.get<std::string>("name", "");
       track.isMaster = tree.get<bool>("is_master", false);
+      track.isAuxChild = tree.get<bool>("is_aux_child", false);
+      track.auxBusIndex = tree.get<uint32_t>("aux_bus_index", 0);
       track.parentId = tree.get<uint32_t>("parent_id", 0);
       track.collapsed = tree.get<bool>("collapsed", false);
       track.harmonyQuantize = tree.get<bool>("harmony_quantize", false);

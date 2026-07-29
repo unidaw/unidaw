@@ -2087,6 +2087,29 @@ struct TrackRuntime {
            !rt.removed.load(std::memory_order_acquire) &&
            rt.trackId < liveTrackCount.load(std::memory_order_acquire);
   };
+  // What was AUTHORED ON A STEM, parked between the load and the derivation.
+  //
+  // A child lane does not exist when the project is parsed: it appears only after the
+  // parent's plugin reports its negotiated bus layout, which happens on the consumer
+  // thread after the load has finished. So a saved stem cannot be adopted like a track —
+  // it is lifted out of document.tracks, resolved against the clip pool while the pool is
+  // still in hand, and applied when the derivation places the child for its bus.
+  //
+  // Keyed by (parent track id, BUS INDEX). Not by track id: a child's id is assigned from
+  // the live track count when it is derived, so adding one document track renumbers every
+  // stem, and material keyed by id would come back on the wrong lane. Entries are consumed
+  // when applied, which is what makes application happen exactly once, and the whole map is
+  // cleared by the next load so a stem whose bus never comes back cannot leak into a
+  // different project.
+  struct AuxChildOverlay {
+    std::string name;
+    daw::MixerSettings mixer{};
+    std::vector<daw::ProjectPlacement> placements;
+    std::vector<daw::ProjectClip> ownedClips;
+    std::vector<daw::AutomationClip> automationClips;
+  };
+  std::map<std::pair<uint32_t, uint32_t>, AuxChildOverlay> auxChildOverlays;
+  std::mutex auxChildOverlayMutex;
   TrackRuntime* uiTrack = nullptr;
   {
     auto runtime = setupTrackRuntime(0, pluginPath, !spawnHost, true);
@@ -5103,6 +5126,92 @@ struct TrackRuntime {
       }
       document.tracks.push_back(std::move(track));
     }
+    // Persist what was AUTHORED ON A STEM. An aux child is derived from the parent
+    // plugin's bus layout, so the lane itself is never restored from the file — but the
+    // notes typed on it are the user's, and skipping the whole runtime threw them away.
+    // They were accepted, they sounded (midi_per_bus_check proves a stem's note steers to
+    // the parent on its bus channel), and after a reload they were simply gone, with
+    // nothing reporting a loss. Same shape as the mod links that were parsed and never
+    // installed.
+    //
+    // Written as a FLAGGED entry keyed by BUS INDEX, which the load lifts back out — the
+    // same device the master track uses. Keying on the bus rather than the track id
+    // matters: a child's id comes from the live track count when it is derived, so adding
+    // a document track renumbers every stem, and a saved id would reattach a stem's
+    // material to the wrong lane.
+    //
+    // Only children carrying something are emitted, so a project whose stems were never
+    // touched saves exactly as it did before.
+    for (auto* runtime : runtimes) {
+      if (!runtime->isAuxChild.load(std::memory_order_acquire) ||
+          runtime->removed.load(std::memory_order_acquire) ||
+          runtime->trackId >= liveTrackCount.load(std::memory_order_acquire)) {
+        continue;
+      }
+      const uint32_t busIndex = runtime->auxBusIndex.load(std::memory_order_relaxed);
+      const uint32_t parentTrackId =
+          runtime->auxParentTrackId.load(std::memory_order_relaxed);
+      if (busIndex == 0) {
+        continue;  // bus 0 is the parent's main output and never becomes a child
+      }
+      daw::ProjectTrack child;
+      std::vector<daw::ProjectClip> childOwnedClips;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        child.name = runtime->trackName;
+        child.placements = runtime->sourcePlacements;
+        childOwnedClips = runtime->ownedClips;
+        child.automationClips = runtime->track.automationClips;
+        const float gainLinear = runtime->mixGainLinear.load(std::memory_order_relaxed);
+        child.mixer.gainDb =
+            gainLinear > 0.0f ? 20.0 * std::log10(static_cast<double>(gainLinear)) : -120.0;
+        child.mixer.pan = runtime->mixPan.load(std::memory_order_relaxed);
+        child.mixer.mute = runtime->mixMute.load(std::memory_order_relaxed);
+        child.mixer.solo = runtime->mixSolo.load(std::memory_order_relaxed);
+      }
+      // The name the derivation would regenerate anyway is not worth persisting; a name
+      // the user changed is.
+      std::string derivedName;
+      for (auto* candidate : runtimes) {
+        if (candidate->trackId == parentTrackId) {
+          std::lock_guard<std::mutex> lock(candidate->trackMutex);
+          derivedName = candidate->trackName + " / Stem " + std::to_string(busIndex);
+          break;
+        }
+      }
+      const bool mixerTouched = child.mixer.gainDb != 0.0 || child.mixer.pan != 0.0 ||
+                                child.mixer.mute || child.mixer.solo;
+      const bool renamed = !derivedName.empty() && child.name != derivedName;
+      if (child.placements.empty() && child.automationClips.empty() && !mixerTouched &&
+          !renamed) {
+        continue;
+      }
+      child.isAuxChild = true;
+      child.auxBusIndex = busIndex;
+      child.trackId = runtime->trackId;
+      child.parentId = parentTrackId;
+      // The stem's placements point into the shared clip pool, so the clips they name have
+      // to be there too — otherwise the entry reloads with placements referencing nothing.
+      for (const auto& pl : child.placements) {
+        bool present = false;
+        for (const auto& c : document.clips) {
+          if (c.id == pl.clipId) {
+            present = true;
+            break;
+          }
+        }
+        if (present) {
+          continue;
+        }
+        for (const auto& c : childOwnedClips) {
+          if (c.id == pl.clipId) {
+            document.clips.push_back(c);
+            break;
+          }
+        }
+      }
+      document.tracks.push_back(std::move(child));
+    }
     // Persist the MASTER track (patcher-is-a-device item 4a): its device chain + mixer,
     // so a global patcher or master FX survives save/reload. Appended as an is_master
     // entry (reuses ProjectTrack purely for chain/mixer serialization); it carries no
@@ -5294,6 +5403,56 @@ struct TrackRuntime {
                          return true;
                        }),
         document.tracks.end());
+
+    // Lift the AUX CHILD entries out for the same reason and by the same device: a stem is
+    // DERIVED, not adopted, so one left in document.tracks would be installed as a
+    // top-level lane fed by nothing — which is exactly why the save used to skip them and
+    // silently discard what had been typed on them. Park each by (parent, bus) with its
+    // clips resolved now, while document.clips is still in hand, and let the derivation
+    // apply it when that bus's child appears.
+    {
+      std::lock_guard<std::mutex> lock(auxChildOverlayMutex);
+      auxChildOverlays.clear();
+      document.tracks.erase(
+          std::remove_if(
+              document.tracks.begin(), document.tracks.end(),
+              [&](daw::ProjectTrack& t) {
+                if (!t.isAuxChild) {
+                  return false;
+                }
+                // Bus 0 is the parent's main output and never becomes a child, so an entry
+                // claiming it is malformed: drop it rather than park material that no
+                // derivation will ever come asking for.
+                if (t.auxBusIndex != 0) {
+                  AuxChildOverlay overlay;
+                  overlay.name = t.name;
+                  overlay.mixer = t.mixer;
+                  overlay.placements = t.placements;
+                  overlay.automationClips = t.automationClips;
+                  for (const auto& pl : t.placements) {
+                    bool have = false;
+                    for (const auto& oc : overlay.ownedClips) {
+                      if (oc.id == pl.clipId) {
+                        have = true;
+                        break;
+                      }
+                    }
+                    if (have) {
+                      continue;
+                    }
+                    for (const auto& c : document.clips) {
+                      if (c.id == pl.clipId) {
+                        overlay.ownedClips.push_back(c);
+                        break;
+                      }
+                    }
+                  }
+                  auxChildOverlays[{t.parentId, t.auxBusIndex}] = std::move(overlay);
+                }
+                return true;
+              }),
+          document.tracks.end());
+    }
 
     // Resolve a clip's relative sourcePath against the project file's directory, and
     // drop the previous project's waveform sources (and pyramids) before the track
@@ -12313,6 +12472,76 @@ struct TrackRuntime {
           }
           reconcileChildTracks(*runtime);
           runtime->childrenReconciled.store(true, std::memory_order_release);
+        }
+        // Reattach what was authored on these stems. Done HERE rather than inside
+        // reconcileChildTracks because rebuilding a lane's flat clip and audio render is
+        // only possible this far down the file, and because a child has to exist before its
+        // material can be put back on it. Consuming the overlay is what makes this run
+        // exactly once per stem.
+        //
+        // The empty check comes first and cheap: this runs on every publish cycle, and in
+        // the overwhelmingly common case (no project with authored stems was just loaded)
+        // there is nothing to do and no reason to take a track snapshot to find that out.
+        bool haveOverlays = false;
+        {
+          std::lock_guard<std::mutex> lock(auxChildOverlayMutex);
+          haveOverlays = !auxChildOverlays.empty();
+        }
+        for (auto* child : haveOverlays ? snapshotTracks()
+                                        : std::vector<TrackRuntime*>{}) {
+          if (!child->isAuxChild.load(std::memory_order_acquire)) {
+            continue;
+          }
+          const std::pair<uint32_t, uint32_t> key{
+              child->auxParentTrackId.load(std::memory_order_relaxed),
+              child->auxBusIndex.load(std::memory_order_relaxed)};
+          AuxChildOverlay overlay;
+          {
+            std::lock_guard<std::mutex> lock(auxChildOverlayMutex);
+            const auto it = auxChildOverlays.find(key);
+            if (it == auxChildOverlays.end()) {
+              continue;
+            }
+            overlay = std::move(it->second);
+            auxChildOverlays.erase(it);
+          }
+          std::shared_ptr<const ClipSnapshot> snapshot;
+          {
+            std::lock_guard<std::mutex> lock(child->trackMutex);
+            child->sourcePlacements = overlay.placements;
+            ensurePlacementIds(child->sourcePlacements);
+            child->ownedClips = overlay.ownedClips;
+            child->track.automationClips = overlay.automationClips;
+            if (!overlay.name.empty()) {
+              child->trackName = overlay.name;
+            }
+            child->arrangementDirty.store(false, std::memory_order_relaxed);
+            snapshot = rebuildFlatAndPublish(*child);
+            std::atomic_store_explicit(&child->audioRender, rebuildAudioRender(*child),
+                                       std::memory_order_release);
+            child->trackSnapshot = buildTrackSnapshot(child->track);
+          }
+          std::atomic_store_explicit(&child->clipSnapshot, snapshot,
+                                     std::memory_order_release);
+          child->mixGainLinear.store(
+              static_cast<float>(std::pow(10.0, overlay.mixer.gainDb / 20.0)),
+              std::memory_order_relaxed);
+          child->mixPan.store(static_cast<float>(overlay.mixer.pan),
+                              std::memory_order_relaxed);
+          child->mixMute.store(overlay.mixer.mute, std::memory_order_relaxed);
+          child->mixSolo.store(overlay.mixer.solo, std::memory_order_relaxed);
+          // The published per-track version must move with the material, or the lane shows
+          // its notes while the next edit to it is refused against a base nobody published
+          // — the bug that made stems uneditable in the first place. Per-track value first,
+          // global gate second.
+          child->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
+          clipVersion.fetch_add(1, std::memory_order_acq_rel);
+          DAW_EVENT("multiout.child_restored")
+              .field("parent", key.first)
+              .field("bus", static_cast<uint64_t>(key.second))
+              .field("child", child->trackId)
+              .field("placements",
+                     static_cast<uint64_t>(overlay.placements.size()));
         }
       }
 

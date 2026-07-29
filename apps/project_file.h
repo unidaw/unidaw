@@ -106,6 +106,21 @@ struct ProjectTrack {
   // `collapsed` hides the children in the UI (a view filter, never a data change).
   uint32_t parentId = 0;
   bool collapsed = false;
+  // An AUX CHILD — a lane the engine DERIVES, one per enabled aux output bus of the
+  // parent's multi-out plugin. These used to be skipped by the save entirely, with a good
+  // reason (written as a plain track, a child reloads as a top-level lane fed by nothing)
+  // and a bad consequence: notes typed on a stem were accepted, they sounded, and they were
+  // gone after a reload with nothing reporting a loss. So a child is now saved the way the
+  // master track is — a FLAGGED entry, lifted out of `tracks` on load and reattached after
+  // the children are re-derived.
+  //
+  // It reattaches by BUS INDEX, never by track id or list position. A child's id is
+  // assigned from the live track count when it is derived, so it moves whenever the
+  // document's track count changes; the bus it came from is the only stable name it has.
+  // `auxBusIndex` is meaningful only when isAuxChild is set (bus 0 is the main output and
+  // never becomes a child, so 0 doubles as "unset" without ambiguity).
+  bool isAuxChild = false;
+  uint32_t auxBusIndex = 0;
   bool harmonyQuantize = false;
   // M3.27: this track's automation. Playback existed since Movement 3 phase 1 and this
   // did NOT, so automation could be heard and never saved — record a sweep, hear it,
