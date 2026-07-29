@@ -808,6 +808,46 @@ impl EngineHandle {
     /// Per-track stable ids (uiTrackId) + flags (UI_TRACK_FLAG_*), read together under
     /// the seqlock so a caller can key on the id (never the moving slot) and tell the
     /// master / absent / child entries apart. Returns (ids, flags), both `track_count` long.
+    /// v26 per-lane quantize, as (grid nanoticks, strength thousandths, swing
+    /// thousandths) per published slot, plus `ui_quantize_version`.
+    ///
+    /// SWING IS PLAIN SIGNED HERE. The SetLaneQuantize *command* carries it biased
+    /// by +500 because the payload field is unsigned; the read-back is written from
+    /// the runtime's already-debiased value and is not. Applying the bias on both
+    /// legs is an off-by-500 that would read as a groove nobody asked for.
+    ///
+    /// Its own reader rather than a UiSnapshot field: the snapshot is copied inside
+    /// the seqlock on every frame, and these are three more 64-entry arrays — 1 KB
+    /// of copying at 120 Hz for values that change when a person turns a knob.
+    pub fn read_track_quantize(&self) -> (Vec<(u64, u32, i32)>, u32) {
+        loop {
+            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue;
+            }
+            let count =
+                unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) } as usize;
+            let count = count.min(K_UI_MAX_TRACKS);
+            let mut out = Vec::with_capacity(count);
+            for i in 0..count {
+                out.push((
+                    unsafe { std::ptr::read_volatile(&(*self.header).ui_track_quantize_grid[i]) },
+                    unsafe {
+                        std::ptr::read_volatile(&(*self.header).ui_track_quantize_strength[i])
+                    },
+                    unsafe { std::ptr::read_volatile(&(*self.header).ui_track_quantize_swing[i]) },
+                ));
+            }
+            let version =
+                unsafe { std::ptr::read_volatile(&(*self.header).ui_quantize_version) };
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                return (out, version);
+            }
+        }
+    }
+
     pub fn read_track_ids_and_flags(&self) -> (Vec<u32>, Vec<u8>) {
         loop {
             let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };

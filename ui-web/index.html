@@ -105,7 +105,7 @@ import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch,
          notesInRect, noteKey, transposedKey } from './src/pianomodel.js';
 import { Browser, KIND_PLUGIN } from './src/browser.js';
-import { Dock } from './src/dock.js';
+import { Dock, quantizeGridName } from './src/dock.js';
 import { createPanes } from './src/panes.js';
 import { createHelp, GLOBAL_KEYS, SURFACE_KEYS } from './src/help.js';
 import { Patcher } from './src/patcher.js';
@@ -684,6 +684,28 @@ function delDevice(track, device) {
 function bypassDevice(track, device, on) {
   if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
   conn.send({ type: 'bypass', track, device, on: on ? 1 : 0 });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
+ * Pull a lane toward a grid, without moving a note.
+ *
+ * The engine applies this to a separate SCHEDULING copy of the flat clip: the
+ * authored tick is what is stored, saved and drawn here, and quantize changes only
+ * where the note sounds. So this sends no base version — quantize cannot conflict
+ * with an edit, and gating it on the clip version would let an unrelated keystroke
+ * refuse a setting.
+ *
+ * Thousandths, both of them, because that is what the engine takes. The console
+ * converts from percent at its own boundary; nothing between here and the wire
+ * changes units again.
+ */
+function setQuantize(track, gridNanoticks, strengthMilli, swingMilli) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  conn.send({ type: 'quantize', track, grid: gridNanoticks,
+              strength: strengthMilli, swing: swingMilli });
   state.reject = null;
   schedule();
   return true;
@@ -1546,6 +1568,14 @@ const dockApi = {
   // checks that a command is DECLARED, not that its api method exists.
   addTrack: () => addTrack(),
   removeTrack: (t) => removeTrack(t),
+  // The same functions the card's switch and the `b` key call, not copies. Both
+  // were added to `__uni` first, where the console cannot see them — which is the
+  // failure the comment above this object describes, twice more.
+  bypass: bypassDevice,
+  quantize: setQuantize,
+  // ...and `deldevice`, which has been calling a method dockApi never had since
+  // the day it shipped. The button and the key work; typing the command threw.
+  delDevice,
   noteColumns: (n) => uniNoteColumns(n),
   harmony: (root, scale, tick) => setHarmony(root, scaleIdNamed(scale), tick),
   /**
@@ -2350,6 +2380,21 @@ function buildHead() {
     lpb.appendChild(document.createTextNode(''));
     el.appendChild(lpb);
     el._lpbEl = lpb; el._lpb = -1;
+    /*
+     * The lane's QUANTIZE, beside its grid, because they are the same kind of fact
+     * — a lane attribute that changes what the rows mean and is not derivable from
+     * anything on screen.
+     *
+     * It has to be visible somewhere or the feature is unusable in the way that
+     * matters: quantize is NON-DESTRUCTIVE, so a lane that is being pulled hard
+     * toward a grid looks exactly like a lane that is not. Every note is still
+     * drawn at the tick it was written to.
+     */
+    const q = document.createElement('span');
+    q.className = 'hquant';
+    q.appendChild(document.createTextNode(''));
+    el.appendChild(q);
+    el._qEl = q; el._qTxt = null;
     headRow.append(el);
     heads.push(el);
   }
@@ -2385,10 +2430,65 @@ function paintHeadLpb() {
     const name = trackName(state.useEngine === false ? null : engine, t);
     if (el._nameVal !== name) { el._nameVal = name; el._nameNode.nodeValue = name; }
     const n = engine && engine.lpb[t] ? engine.lpb[t] : 0;
-    if (el._lpb === n) continue;
-    el._lpb = n;
-    el._lpbEl.firstChild.nodeValue = n ? ' ' + n + '/b' : '';
+    if (el._lpb !== n) {
+      el._lpb = n;
+      el._lpbEl.firstChild.nodeValue = n ? ' ' + n + '/b' : '';
+    }
+    /*
+     * ...and its quantize. Built as a string only when the LANE'S SETTING moves —
+     * `quantizeVersion` is the engine's own counter for exactly that and never
+     * moves when a note does, so this costs one integer compare on every frame
+     * where nobody has turned the knob.
+     */
+    const txt = quantizeLabel(t);
+    if (el._qTxt !== txt) {
+      el._qTxt = txt;
+      el._qEl.firstChild.nodeValue = txt;
+      // The class carries whether there IS a setting, so an unquantized lane —
+      // which is nearly all of them — costs no padding and no border.
+      el._qEl.classList.toggle('on', !!txt);
+    }
   }
+}
+
+/**
+ * A lane's quantize as a person reads it: `1/16 60% +33`, or '' for none.
+ *
+ * Memoised on `quantizeVersion` rather than rebuilt per frame. Sixteen lanes at
+ * 60fps is a thousand strings a second for a value that changes when somebody
+ * types a command, which is the allocation this file's guidelines exist to stop.
+ *
+ * STRENGTH IS SHOWN unless it is full, because 100% is what "quantized" means to
+ * most people and printing it on every lane is noise. Swing is shown only when it
+ * is non-zero, and always with its sign: -33 and +33 are different grooves and an
+ * unsigned 33 could be either.
+ */
+const _qLabels = new Map();
+let _qLabelVersion = -1;
+function quantizeLabel(track) {
+  if (!engine) return '';
+  if (_qLabelVersion !== engine.quantizeVersion) {
+    _qLabelVersion = engine.quantizeVersion;
+    _qLabels.clear();
+    for (let i = 0; i < engine.quantizeCount; i++) {
+      const q = engine.quantize[i];
+      if (!q.grid) continue;
+      let t = quantizeGridName(q.grid);
+      if (q.strength < 1000) t += ' ' + Math.round(q.strength / 10) + '%';
+      if (q.swing) t += (q.swing > 0 ? ' +' : ' ') + Math.round(q.swing / 10);
+      _qLabels.set(q.track, t);
+    }
+  }
+  /*
+   * Keyed on the TRACK ID the engine published, looked up by lane INDEX.
+   *
+   * They are the same number for an ordinary lane — the engine never renumbers a
+   * slot and ids start at 0 — and the one id that is not an index, the master's
+   * 0xFFFF0000, has no lane to draw on. If the wire ever carries per-index ids,
+   * this is the line that should use them; until then the equality is a documented
+   * property of the engine's numbering rather than an assumption.
+   */
+  return _qLabels.get(track) || '';
 }
 
 const NANOTICKS_PER_BEAT = 960000;
@@ -5466,7 +5566,6 @@ window.__uni = {
   addDevice: (track, kind) => conn && conn.send({ type: 'adddevice',
     track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' }),
   delDevice,                          // the same function the button and the key call
-  bypass: bypassDevice,               // likewise: the card's switch, `b`, and this
   addTrack, removeTrack,
   setHarmony, scaleIdNamed,
   // The version a harmony write must quote. Exposed so a test can see the
@@ -5516,6 +5615,9 @@ window.__uni = {
    * The only way to test a guard is to walk into it deliberately.
    */
   send: (msg) => !!(conn && conn.send(msg)),
+  /** Every lane the engine reports a quantize grid for. Raw engine units. */
+  quantized: () => (engine ? engine.quantize.slice(0, engine.quantizeCount).map((q) => ({
+    track: q.track, grid: q.grid, strength: q.strength, swing: q.swing })) : []),
   patchSelect: (id) => { state.selectedNode = id; state.selectedField = 0; draw(); },
   patchAdd: (type) => { if (type !== undefined) state.patchAddType = type;
                         const r = addPatcherNode(); draw(); return r; },

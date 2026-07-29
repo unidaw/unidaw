@@ -409,3 +409,21 @@
   color: var(--base-accent-ramp-200, var(--base-accent));
   font-style: italic;
 }
+
+/* THE LANE'S QUANTIZE, beside its lines-per-beat in the column header.
+   The same kind of fact as the grid — a lane attribute that changes what the rows
+   mean and cannot be seen anywhere else. It has to be here or the feature is
+   invisible in the way that matters: quantize is NON-DESTRUCTIVE, so a lane being
+   pulled hard toward a grid looks exactly like one that is not, because every note
+   is still drawn at the tick it was written to.
+
+   No padding and no border until there is something to say — `.on` is set only for
+   a lane with a grid, which is nearly none of them. */
+.hquant { color: var(--base-neutral-600); }
+.hquant.on {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 2px;
+  color: var(--base-accent-ramp-300, var(--base-accent));
+}

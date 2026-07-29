@@ -78,6 +78,32 @@ function oneOf(values, optional) {
 
 const VIEWS = ['tracker', 'arrange', 'piano', 'mixer', 'patcher'];
 
+/**
+ * Quantize grids, as a musician names them, in NANOTICKS.
+ *
+ * The engine takes a tick count rather than a subdivision on purpose — a lane can
+ * quantize to something its display grid does not show — but nobody should have to
+ * type 240000 to mean a sixteenth. 960000 per quarter; a triplet is a third of the
+ * straight value above it, which is why 1/8t is 320000 and not 240000.
+ *
+ * `off` is 0, and 0 is a real value the engine understands rather than an absent
+ * argument: it is how a lane stops being quantized.
+ */
+const QUANTIZE_GRIDS = Object.freeze({
+  off: 0,
+  '1/4': 960000, '1/8': 480000, '1/16': 240000, '1/32': 120000,
+  '1/4t': 640000, '1/8t': 320000, '1/16t': 160000,
+});
+const GRID_NAMES = Object.freeze(Object.keys(QUANTIZE_GRIDS));
+
+/** The name for a grid in nanoticks, for reading a lane's setting back. */
+export function quantizeGridName(nanoticks) {
+  for (const k of GRID_NAMES) if (QUANTIZE_GRIDS[k] === nanoticks) return k;
+  // A grid the engine holds that this table cannot name is still a real setting —
+  // showing the raw ticks is honest where showing "off" would be a lie.
+  return nanoticks > 0 ? nanoticks + 't' : 'off';
+}
+
 /** `gain <track> <dB>` — built from the schema, quoted by every refusal. */
 function signatureOf(name, args) {
   let s = name;
@@ -222,6 +248,30 @@ export function createCommands(api) {
       run: (a) => (api.bypass(Number(a[0]), Number(a[1]),
                               a[2] === undefined ? 1 : Number(a[2]))
         ? (Number(a[2] === undefined ? 1 : a[2]) ? 'bypassed' : 'active') : 'no engine') },
+    /*
+     * Pull a lane toward a grid — NON-DESTRUCTIVELY. Nothing on disk moves: the
+     * engine applies this to a separate scheduling copy, so the authored tick is
+     * still what is stored, saved and drawn, and only where the note SOUNDS
+     * changes. That is what makes it worth having over a destructive quantize,
+     * which throws the performance away on the first pass with no way back.
+     *
+     * PERCENT, not thousandths. The wire wants 0..1000 and a person thinks in
+     * 0..100; converting at this boundary keeps the engine's units out of the
+     * hands of anyone typing. Swing is signed here and biased once, in Rust.
+     */
+    quantize: { help: 'quantize <track> <off|1/4|1/8|1/16|1/32|1/4t|1/8t|1/16t> [strength] [swing]'
+                    + ' — pull a lane toward a grid; nothing moves on disk',
+      args: [A_TRACK, oneOf(GRID_NAMES),
+             { name: 'strength', type: 'int', min: 0, max: 100, optional: true },
+             { name: 'swing', type: 'int', min: -50, max: 50, optional: true }],
+      run: (a) => {
+        const grid = QUANTIZE_GRIDS[a[1]];
+        const strength = a[2] === undefined ? 100 : Number(a[2]);
+        const swing = a[3] === undefined ? 0 : Number(a[3]);
+        if (!api.quantize(Number(a[0]), grid, strength * 10, swing * 10)) return 'no engine';
+        return grid === 0 ? 'lane ' + a[0] + ' unquantized'
+          : `lane ${a[0]} ${a[1]} at ${strength}%` + (swing ? ` swing ${swing}%` : '');
+      } },
     // Open a plugin's own window. The engine has accepted OpenPluginEditor since
     // before this UI existed and nothing ever sent it.
     editor: { help: 'editor <track> <device> — open the plugin\'s own window',

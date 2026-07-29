@@ -44,7 +44,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 16;
+const WIRE_VERSION: u16 = 17;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -58,7 +58,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 140;
+const FULL_HEADER_BYTES: usize = 148;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
 const NOTE_BYTES: usize = 40;
 
@@ -303,6 +303,18 @@ struct Frame {
     /// as position-versus-id, which is the one this record already carries a
     /// device id to avoid.
     meters: Vec<(u32, u32, i16, i16, i16, i16)>,
+    /// v26 per-lane NON-DESTRUCTIVE quantize, as (track id, grid nanoticks,
+    /// strength thousandths, swing thousandths). Only lanes with a grid set — an
+    /// unquantized lane is the overwhelming majority and has nothing to say.
+    ///
+    /// Swing is PLAIN SIGNED. The command carries it biased by +500 because that
+    /// payload field is unsigned; the read-back does not. Biasing both legs is an
+    /// off-by-500 that would show a groove nobody asked for.
+    quantize: Vec<(u32, u64, u32, i32)>,
+    /// Moves ONLY when a lane's quantize changes — never when a note does. Backend
+    /// kept it off the clip version on purpose: quantize moves no authored note, so
+    /// it must not invalidate anyone's in-flight edit. The page caches on it.
+    quantize_version: u32,
     /// Real clip placements from the engine. placement_id, clip_id, track,
     /// flags, start/end tick, name. Loose session placements are excluded
     /// upstream. `flags` bit0 is UI_CLIP_EXTENT_AUDIO — an audio region, which
@@ -462,7 +474,16 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
      * whole grid at 120 Hz would be 12 KB a frame to say nothing.
      */
     out.extend_from_slice(&(f.meters.len() as u16).to_le_bytes());   // 136
-    out.extend_from_slice(&0u16.to_le_bytes());                      // 138, to 140
+    out.extend_from_slice(&0u16.to_le_bytes());                      // 138
+    /*
+     * v26 LANE QUANTIZE (wire 17). Its own version, because it moves when a lane's
+     * setting changes and NOT when notes do — the page caches the deviation layer
+     * on it, and keying that on the clip version would rebuild it on every
+     * keystroke while missing the one change it cares about.
+     */
+    out.extend_from_slice(&f.quantize_version.to_le_bytes());        // 140
+    out.extend_from_slice(&(f.quantize.len() as u16).to_le_bytes()); // 144
+    out.extend_from_slice(&0u16.to_le_bytes());                      // 146, to 148
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
     // variable section and nothing here noticed.
@@ -595,6 +616,27 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.extend_from_slice(&in_rms.to_le_bytes());     // 12
         out.extend_from_slice(&out_rms.to_le_bytes());    // 14, to 16
     }
+
+    /*
+     * PER-LANE QUANTIZE, and now THESE are last.
+     *
+     * Appended after the meters for the reason the meters were appended after the
+     * chords and the chords after the track structure: a section inserted ahead of
+     * another shifts it, and this file's history is a list of the times that
+     * happened. The "nothing follows this" line moves with the position rather
+     * than being left behind as a claim that quietly stopped being true.
+     *
+     * 24 bytes each, counted by the u16 at header offset 144. The grid is a u64
+     * because it is a tick count, not a subdivision — a lane can quantize to
+     * something its display grid does not show.
+     */
+    for &(track, grid, strength, swing) in &f.quantize {
+        out.extend_from_slice(&track.to_le_bytes());      // 0
+        out.extend_from_slice(&strength.to_le_bytes());   // 4
+        out.extend_from_slice(&swing.to_le_bytes());      // 8
+        out.extend_from_slice(&grid.to_le_bytes());       // 12
+        out.extend_from_slice(&0u32.to_le_bytes());       // 20, to 24
+    }
 }
 
 /// Whether the harmony we hold is out of date. Its own version, not the clip
@@ -638,6 +680,21 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
      * what is really there. It is bounded by 16 inserts a track and in practice a
      * handful; the whole 64x16 grid would be 12 KB a frame to say nothing.
      */
+    /*
+     * PER-LANE QUANTIZE. Read every frame like the meters, and cheap for the same
+     * reason: only lanes that HAVE a grid are forwarded, and almost none do.
+     */
+    out.quantize.clear();
+    {
+        let (lanes, version) = h.read_track_quantize();
+        out.quantize_version = version;
+        let (ids, _flags) = h.read_track_ids_and_flags();
+        for (slot, &(grid, strength, swing)) in lanes.iter().enumerate() {
+            if grid == 0 || slot >= ids.len() { continue; }
+            out.quantize.push((ids[slot], grid, strength, swing));
+        }
+    }
+
     out.meters.clear();
     {
         // v22's stable per-slot ids, which is what turns a slot into something the
@@ -1129,6 +1186,54 @@ fn build_routing(body: &str) -> Option<Result<UiTrackRoutingPayload, &'static st
         audio_out_track_id: n("\"audioOutTrack\""),
         midi_in_input_id: 0,
         audio_in_input_id: 0,
+    }))
+}
+
+/// Set a lane's NON-DESTRUCTIVE quantize (UiCommandType::SetLaneQuantize).
+///
+///   {"type":"quantize","track":0,"grid":240000,"strength":600,"swing":-100}
+///
+/// Nothing here rewrites a note. The engine applies this to a separate scheduling
+/// copy of the flat clip: the authored tick is what is stored, saved and drawn, and
+/// quantize changes only where the note SOUNDS. That is the whole point of the item
+/// — a performance keeps its exact timing and can be tightened afterwards without
+/// ever losing what was played.
+///
+/// SWING IS BIASED BY +500 HERE AND NOWHERE ELSE. The payload carries it in an
+/// unsigned field, so the command adds the bias (0 = -500, 500 = straight, 1000 =
+/// +500); the READ-BACK is plain signed. Applying it on both legs is an off-by-500
+/// that would show as a groove nobody asked for, and applying it on neither sends
+/// a swing of -500 for "straight". The constant is the bridge's, not a copy.
+///
+/// NOT VERSIONED. `base_version` stays 0 deliberately: quantize moves no authored
+/// note, so gating it on a clip version would let an unrelated edit refuse a
+/// setting that cannot conflict with anything.
+fn build_quantize(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
+    if !is_type(body, "quantize") { return None; }
+    let Some(grid) = parse_num(body, "\"grid\"") else {
+        return Some(Err("quantize needs a grid in nanoticks (0 turns it off)"));
+    };
+    if grid < 0 { return Some(Err("a quantize grid cannot be negative")); }
+    let strength = parse_num(body, "\"strength\"").unwrap_or(1000).clamp(0, 1000) as u32;
+    let swing = parse_num(body, "\"swing\"").unwrap_or(0);
+    if !(-500..=500).contains(&swing) {
+        // Refused rather than clamped: past +/-500 an odd slot lands on or beyond
+        // the next even one, so the slots cross and the pattern reorders itself.
+        // Silently clamping would accept a number that means something else.
+        return Some(Err("quantize swing must be -500..500 (thousandths of a step)"));
+    }
+    Some(Ok(UiCommandPayload {
+        command_type: UiCommandType::SetLaneQuantize as u16,
+        flags: 0,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        plugin_index: 0,
+        note_pitch: (swing + daw_bridge::layout::LANE_QUANTIZE_SWING_BIAS as i64) as u32,
+        value0: strength,
+        note_nanotick_lo: (grid as u64 & 0xffff_ffff) as u32,
+        note_nanotick_hi: ((grid as u64) >> 32) as u32,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
     }))
 }
 
@@ -1847,6 +1952,7 @@ fn note_column(body: &str) -> u16 {
 fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_named(body) { return r; }
     if let Some(r) = build_placement(body) { return r; }
+    if let Some(r) = build_quantize(body) { return r; }
 
     let mut p = UiCommandPayload {
         command_type: UiCommandType::None as u16,
@@ -4515,6 +4621,53 @@ mod tests {
                    .device_id, 0, "device 0 is a device, not a missing id");
         assert!(build_chain_edit(r#"{"type":"deldevice","track":1}"#).unwrap().is_err());
         assert!(build_chain_edit(r#"{"type":"deldevice","device":-1}"#).unwrap().is_err());
+    }
+
+    #[test]
+    fn quantize_biases_the_swing_exactly_once() {
+        let p = build_quantize(
+            r#"{"type":"quantize","track":2,"grid":240000,"strength":600,"swing":-100}"#)
+            .expect("recognised").expect("built");
+        assert_eq!(p.command_type, UiCommandType::SetLaneQuantize as u16);
+        assert_eq!(p.command_type, 53, "the engine's own number for it");
+        assert_eq!(p.track_id, 2);
+        assert_eq!(p.value0, 600, "strength in thousandths");
+        let grid = ((p.note_nanotick_hi as u64) << 32) | p.note_nanotick_lo as u64;
+        assert_eq!(grid, 240_000, "a 16th at 960000 per quarter");
+        // THE WHOLE POINT: the payload field is unsigned, so the command adds the
+        // bias and the READ-BACK does not. -100 travels as 400. Applying it on both
+        // legs, or neither, is an off-by-500 that shows as a groove nobody asked
+        // for — and it would look like a working feature.
+        assert_eq!(p.note_pitch, 400, "swing -100 travels as 400, biased by +500");
+        assert_eq!(build_quantize(r#"{"type":"quantize","grid":0}"#).unwrap().unwrap()
+                   .note_pitch, 500, "straight is 500, not 0");
+        // Unversioned on purpose: quantize moves no authored note, so gating it on
+        // a clip version would let an unrelated edit refuse a setting that cannot
+        // conflict with anything.
+        assert_eq!(p.base_version, 0);
+
+        // Grid 0 is "off", and a real value, so it must not be read as absent.
+        let off = build_quantize(r#"{"type":"quantize","track":1,"grid":0}"#)
+            .unwrap().unwrap();
+        assert_eq!(((off.note_nanotick_hi as u64) << 32) | off.note_nanotick_lo as u64, 0);
+        assert_eq!(off.value0, 1000, "strength defaults to full");
+
+        // Past +/-500 the odd slots cross the even ones and the pattern reorders.
+        // Refused rather than clamped: clamping accepts a number meaning something
+        // else, which is the same silence this whole file argues against.
+        assert!(build_quantize(r#"{"type":"quantize","grid":240000,"swing":900}"#)
+                .unwrap().is_err());
+        assert!(build_quantize(r#"{"type":"quantize","grid":240000,"swing":-900}"#)
+                .unwrap().is_err());
+        assert!(build_quantize(r#"{"type":"quantize","track":0}"#).unwrap().is_err(),
+                "no grid is a refusal, not a silent off");
+        assert!(build_quantize(r#"{"type":"quantize","grid":-1}"#).unwrap().is_err());
+        // Strength out of range clamps rather than refusing: unlike swing, every
+        // value past the end still MEANS the end.
+        assert_eq!(build_quantize(r#"{"type":"quantize","grid":1,"strength":9000}"#)
+                   .unwrap().unwrap().value0, 1000);
+        // And a project named "quantize" is not a quantize command.
+        assert!(build_quantize(r#"{"type":"load","name":"quantize"}"#).is_none());
     }
 
     #[test]

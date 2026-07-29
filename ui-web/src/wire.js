@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 16;
+export const WIRE_VERSION = 17;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 140;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4
+const HEADER_BYTES = 148;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -150,6 +150,8 @@ export function createStore() {
     chords: [], chordCount: 0, chordsRevision: 0,
     /** Where the chord section ends, so the meters after it need not re-derive it. */
     chordsEnd: 0,
+    /** Likewise for the section after the meters. */
+    metersEnd: 0,
     /**
      * v24 per-insert meters, pooled. Keyed by (track, device) — MATCHED ON
      * device id and never on position, because the engine's compacted insert
@@ -160,6 +162,25 @@ export function createStore() {
      * audio input and honestly reports its input silent forever.
      */
     meters: [], meterCount: 0,
+    /**
+     * v26 per-lane NON-DESTRUCTIVE quantize, pooled and keyed by TRACK ID.
+     *
+     * Only lanes that HAVE a grid arrive — an unquantized lane is the
+     * overwhelming majority and has nothing to say — so an absent track means
+     * "not quantized", which is also what grid 0 means.
+     *
+     * `swing` is PLAIN SIGNED. The command that sets it biases by +500 because
+     * that payload field is unsigned; this does not.
+     */
+    quantize: [], quantizeCount: 0,
+    /**
+     * Moves when a lane's quantize changes and NEVER when a note does — backend
+     * kept it off the clip version deliberately, since quantize moves no authored
+     * note and must not invalidate an in-flight edit. Cache the deviation layer on
+     * this: keyed on clipVersion it would rebuild on every keystroke while missing
+     * the one change it cares about.
+     */
+    quantizeVersion: 0,
     /** The patcher graph (SHM v14). One global graph today; the shape does not
      *  change when it becomes per-device. */
     patcherVersion: -1, patcherDevice: 0, patcherNodes: [], patcherEdges: [],
@@ -561,6 +582,36 @@ export function decode(buf, store) {
       m.outRms = v.getInt16(o + 14, true);
     }
     store.meterCount = have;
+    store.metersEnd = at + have * METER_BYTES;
+  }
+
+  /*
+   * PER-LANE QUANTIZE, and now THIS is the last section.
+   *
+   * Bounds-checked like every block above it and for the same reason: a frame from
+   * an older sidecar simply stops before this, and reading past the end of a
+   * DataView throws — which would take down the socket handler and the whole UI
+   * with it, to report a field that is merely absent.
+   */
+  {
+    const at = store.metersEnd;
+    const want = v.getUint16(144, true);
+    const have = Math.max(0, Math.min(want, (buf.byteLength - at) / QUANTIZE_BYTES | 0));
+    while (store.quantize.length < have) {
+      store.quantize.push({ track: 0, grid: 0, strength: 0, swing: 0 });
+    }
+    for (let i = 0; i < have; i++) {
+      const o = at + i * QUANTIZE_BYTES;
+      const q = store.quantize[i];
+      q.track = v.getUint32(o, true);
+      q.strength = v.getUint32(o + 4, true);
+      q.swing = v.getInt32(o + 8, true);
+      // A tick count, so a u64 — but Number is exact to 2^53 and a bar is
+      // 3,840,000, so no song reaches the range where this would lose a tick.
+      q.grid = Number(v.getBigUint64(o + 12, true));
+    }
+    store.quantizeCount = have;
+    store.quantizeVersion = v.getUint32(140, true);
   }
 
   store.ok = true;
@@ -571,6 +622,8 @@ export function decode(buf, store) {
 const CHORD_BYTES = 40;
 /** 16 bytes each; see the sidecar's encode. */
 const METER_BYTES = 16;
+/** 24 bytes each; see the sidecar's encode. */
+const QUANTIZE_BYTES = 24;
 /** kUiMeterSilent — silent or below the floor, NOT "no reading". */
 export const METER_SILENT = -32768;
 

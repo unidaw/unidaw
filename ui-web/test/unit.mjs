@@ -808,6 +808,7 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
                      'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice', 'bypass',
+                     'quantize',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
                      'selectedClip', 'ticksPerBar', 'master'];
@@ -1639,6 +1640,47 @@ test('a millibel reading lands where the scale says', () => {
  * top-level `name:` at a fixed indent inside the literal — and crude is fine,
  * because the guard below catches it going blind.
  */
+/*
+ * EVERY `api.X` A COMMAND CALLS EXISTS ON THE REAL dockApi.
+ *
+ * The registry test above checks that a command is DECLARED. It cannot check that
+ * the method behind it is there, because it runs against a stub that answers to
+ * everything — so a command wired to a function that only exists on `window.__uni`
+ * passes every test in this file and throws the moment a person types it.
+ *
+ * That is not hypothetical. dockApi's own comment records `add-track`,
+ * `remove-track` and `columns` doing exactly this. Writing that comment did not
+ * stop it: `bypass` and `quantize` both landed on `__uni` first, and `bypass`
+ * shipped that way — with a passing e2e, because the suite exercised the button
+ * and the key and never the console.
+ *
+ * Source-read on both sides, because the two objects are in different files and
+ * nothing else compares them.
+ */
+test('every api method a console command calls actually exists', async () => {
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const dockSrc = readFileSync(new URL('../src/dock.js', import.meta.url), 'utf8');
+
+  const at = html.indexOf('const dockApi = {');
+  assert.ok(at > 0, 'dockApi was found');
+  const body = html.slice(at, html.indexOf('\n};', at));
+  const have = new Set();
+  // `[:(,]` and end-of-line, because a SHORTHAND property (`delDevice,`) is a
+  // method too — a pattern that only matched `name:` would report every shorthand
+  // as missing, and a check that cries wolf is a check that gets deleted.
+  for (const m of body.matchAll(/^  ([A-Za-z_$][\w$]*)\s*(?:[:(,]|$)/gm)) have.add(m[1]);
+  assert.ok(have.size > 30, `dockApi was actually parsed: ${have.size} methods`);
+
+  const called = new Set();
+  for (const m of dockSrc.matchAll(/\bapi\.([A-Za-z_$][\w$]*)/g)) called.add(m[1]);
+  assert.ok(called.size > 30, `dock.js was actually parsed: ${called.size} calls`);
+
+  const missing = [...called].filter((n) => !have.has(n)).sort();
+  assert.deepEqual(missing, [],
+    'a console command calls an api method that dockApi does not have — it will throw');
+});
+
 test('the __uni surface declares no name twice', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -1739,6 +1781,9 @@ const OP_REGISTRY = {
   // verb) and this app second, so the CLI path is real and the agent's manifest
   // is what still owes it a tool.
   bypass:    { cli: 'set-bypass', agent: null, why: 'gap' },
+  // M1.13. daw-cli shipped `do quantize` with the engine, so the CLI path is real
+  // from day one; the agent's manifest still owes it a tool.
+  quantize:  { cli: 'quantize', agent: null, why: 'gap' },
   editor:    { cli: null, agent: null, why: 'gap' },
   // v22 (AddTrack=46/RemoveTrack=47). daw-cli shipped its verbs in the same
   // commit the engine did, so these are covered on the CLI from day one; the
@@ -1833,7 +1878,8 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
 // to make on its own — and worth recording honestly until it is.
 const AGENT_GAP = ['addnode', 'bypass', 'clear', 'columns', 'copy', 'cut', 'del',
                    'deldevice', 'delnode', 'editor', 'gain', 'link', 'loop', 'mute',
-                   'new', 'paste', 'patch', 'seek', 'solo', 'tempo', 'transpose'];
+                   'new', 'paste', 'patch', 'quantize', 'seek', 'solo', 'tempo',
+                   'transpose'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether
@@ -1959,13 +2005,6 @@ const ENGINE_UNUSED = {
   LoadPluginOnTrack: 'gap — the rack inserts with AddDevice; this older path is unused',
   SetAutomationTarget: 'gap — automation has no UI at all',
   SetModSourceValue: 'gap — macro/mod values are unreachable',
-  // M1.13, landed engine-side this session. NON-DESTRUCTIVE: the authored notes
-  // never move, and where a note SOUNDS is quantize_tick(t_on, grid, strength,
-  // swing) — so the interesting half is not the command but the DEVIATION the
-  // tracker should draw between the two. Recorded rather than half-wired: a grid
-  // control with no way to see what it did to the feel is the kind of setting you
-  // turn and then cannot evaluate.
-  SetLaneQuantize: 'gap — lane quantize needs the deviation drawn, not just a command',
 };
 
 test('every engine command has a caller, or a recorded reason it has none', async () => {
