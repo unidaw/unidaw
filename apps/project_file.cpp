@@ -510,6 +510,23 @@ std::string serializeProject(const ProjectDocument& document) {
   writer.key("time_sig_denominator", document.songTimeSigDenominator);
   writer.endChildObject();
 
+  // M3.23: the section spine. Written only when there IS one, so a project with no
+  // named structure is byte-identical to what it was before this field existed —
+  // successive saves of an unchanged document have to stay identical, and an empty array
+  // in every file would make every old project show a diff on its first save.
+  if (!document.sections.empty()) {
+    writer.beginArray("sections");
+    for (const auto& section : document.sections) {
+      writer.beginArrayElement();
+      writer.key("id", section.id);
+      writer.key("name", section.name);
+      writer.key("bars", section.barCount);
+      writer.key("color_rgb", section.colorRgb);
+      writer.endArrayElement();
+    }
+    writer.endArray();
+  }
+
   // M3.22: the song's time-signature map. Written only when there IS one, so a project
   // in a single meter is byte-identical to what it was before this field existed —
   // successive saves of an unchanged document have to stay identical, and an empty
@@ -758,6 +775,20 @@ bool deserializeProject(const std::string& json,
       root.get<uint32_t>("timebase.time_sig_numerator", 4);
   parsed.songTimeSigDenominator =
       root.get<uint32_t>("timebase.time_sig_denominator", 4);
+  if (const auto sectionList = root.get_child_optional("sections")) {
+    for (const auto& entry : *sectionList) {
+      daw::Section section;
+      section.id = entry.second.get<uint32_t>("id", 0);
+      section.name = entry.second.get<std::string>("name", "");
+      section.barCount = entry.second.get<uint32_t>("bars", 0);
+      section.colorRgb = entry.second.get<uint32_t>("color_rgb", 0);
+      // A zero-bar section occupies no time and could never be pointed at. Dropping it
+      // here rather than carrying it means the loaded spine is always resolvable.
+      if (section.barCount > 0) {
+        parsed.sections.push_back(std::move(section));
+      }
+    }
+  }
   if (const auto sigMap = root.get_child_optional("time_sig_map")) {
     for (const auto& entry : *sigMap) {
       daw::TimeSignaturePoint point;

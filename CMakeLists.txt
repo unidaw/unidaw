@@ -271,6 +271,14 @@ target_include_directories(event_ring_mpsc_tests PRIVATE
 find_package(Threads REQUIRED)
 target_link_libraries(event_ring_mpsc_tests PRIVATE Threads::Threads)
 
+# M3.23: the section list — positions derived from bar counts, never stored.
+add_executable(section_list_tests
+  apps/section_list_tests_main.cpp
+)
+target_include_directories(section_list_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # M3.24: `adds` are an appearance's own content — emitted once, not looped with the clip.
 add_executable(placement_adds_tests
   apps/placement_adds_tests_main.cpp
@@ -423,6 +431,11 @@ add_test(NAME lint
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
 )
 set_tests_properties(lint PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME section_list
+  COMMAND section_list_tests
+)
+set_tests_properties(section_list PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME placement_adds
   COMMAND placement_adds_tests
@@ -670,6 +683,7 @@ foreach(daw_test_target
     tempo_integral_tests
     time_signature_tests
     placement_adds_tests
+    section_list_tests
     event_ring_mpsc_tests
     audio_io_tests
     device_chain_tests

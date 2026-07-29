@@ -9,6 +9,7 @@
 #include "apps/harmony_timeline.h"
 #include "apps/modulation.h"
 #include "apps/lane_quantize.h"
+#include "apps/section_list.h"
 #include "apps/time_signature_map.h"
 #include "apps/musical_structures.h"
 #include "apps/patcher_graph.h"
@@ -152,6 +153,12 @@ struct ProjectDocument {
   // kept as its own field so every existing reader and every file written before this
   // still means what it meant — a project with one signature writes an empty map and
   // reads back identically. A non-empty map supersedes it.
+  // M3.23: the section spine — the ORDERED list of named spans that is the arrangement.
+  // Each entry stores a bar COUNT, never a start position: "chorus 1 is at bar 9" is a
+  // consequence of the intro being 8 bars, so lengthening the intro moves everything
+  // after it and no two facts about the same position can disagree. Empty = a song with
+  // no named structure, which is every project written before this field.
+  std::vector<Section> sections;
   std::vector<TimeSignaturePoint> timeSigMap;
   uint32_t songTimeSigNumerator = 4;
   uint32_t songTimeSigDenominator = 4;
