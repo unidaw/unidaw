@@ -4439,6 +4439,28 @@ struct TrackRuntime {
       ~LoadGuard() { flag.store(false, std::memory_order_release); }
     } loadGuard{loadInProgress};
 
+    // Resolve every device's patcherNodeId from the "natural output" sentinel
+    // (0xFFFFFFFF) to a REAL node id — its graph's event_out — up front, on the
+    // document, before the assembly/single-graph paths and the per-track chain
+    // install consume it. A lone patcher device left at the sentinel had no seed:
+    // the per-track node filter keys on patcherNodeId, so it never allowed the
+    // device's nodes and the generator ran SILENT (only the >=2-device assembly
+    // path resolved it, via assemblePatcherPool's fallback). Doing it here also
+    // makes the published patcherNodeId a real node the UI can walk back over
+    // resolvedInputs to recover exactly this device's subgraph. The resolved id is
+    // the device-local output; the assembly path still remaps it into the pool.
+    for (auto& track : document.tracks) {
+      for (auto& device : track.chain.devices) {
+        if (device.patcherNodeId == 0xFFFFFFFFu &&
+            !device.patcher.nodes.empty()) {
+          uint32_t outNode = 0;
+          if (daw::patcherGraphOutputNode(device.patcher, outNode)) {
+            device.patcherNodeId = outNode;
+          }
+        }
+      }
+    }
+
     // Resolve a clip's relative sourcePath against the project file's directory, and
     // drop the previous project's waveform sources (and pyramids) before the track
     // loop below re-decodes and repopulates the store — one project's worth resident.
