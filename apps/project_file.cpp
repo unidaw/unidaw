@@ -501,6 +501,9 @@ std::string serializeProject(const ProjectDocument& document) {
   writer.key("modified_utc", document.meta.modifiedUtc);
   writer.endChildObject();
 
+  // Generation seed: every patcher generator folds this into its hash, so generated
+  // material reproduces exactly, and changing this one number re-rolls every variation.
+  writer.key("seed", document.seed);
   writer.beginChildObject("timebase");
   writer.key("nanoticks_per_quarter", document.nanoticksPerQuarter);
   writer.key("time_sig_numerator", document.songTimeSigNumerator);
@@ -717,6 +720,9 @@ bool deserializeProject(const std::string& json,
   parsed.meta.modifiedUtc = root.get<std::string>("meta.modified_utc", "");
   parsed.nanoticksPerQuarter =
       root.get<uint64_t>("timebase.nanoticks_per_quarter", 960000);
+  // 0 = unseeded (every project written before this field), which simply means the
+  // generators hash position + node id alone.
+  parsed.seed = root.get<uint64_t>("seed", 0);
   // Song time signature (default 4/4 so a project without it — every project written
   // before this field — keeps counting in common time).
   parsed.songTimeSigNumerator =

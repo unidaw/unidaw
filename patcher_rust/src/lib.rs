@@ -2,7 +2,7 @@
 
 use core::ffi::c_void;
 
-pub const PATCHER_ABI_VERSION: u32 = 3;
+pub const PATCHER_ABI_VERSION: u32 = 4;
 const NANOTICKS_PER_QUARTER: u64 = 960_000;
 const DEFAULT_BPM: f64 = 120.0;
 const EUCLIDEAN_STEPS: u32 = 16;
@@ -106,6 +106,11 @@ pub struct PatcherContext {
     pub mod_inputs: *mut f32,
     pub mod_input_count: u32,
     pub mod_input_stride: u32,
+
+    /// ABI 4: the node's id and the project seed, so generation is reproducible AND
+    /// decorrelated per node. Mirrors apps/patcher_abi.h; appended at the end.
+    pub node_id: u32,
+    pub seed: u64,
 }
 
 extern "C" {
@@ -417,7 +422,16 @@ pub extern "C" fn patcher_process_random_degree(ctx: *mut PatcherContext) {
                 ctx_ref.block_start_tick as i64
             };
             const SEED_GRID: i64 = (NANOTICKS_PER_QUARTER / 64) as i64;
-            let seed = tick.div_euclid(SEED_GRID) as u64;
+            // Reproducible AND decorrelated: fold the project seed and this node's id into
+            // the musical position. Position alone made every random_degree node in the
+            // song emit the SAME pitch at the same tick — two generators on two tracks
+            // moved in lockstep, which reads as a bug and hides the second generator. The
+            // odd multipliers are just decorrelating constants (golden-ratio derived); the
+            // hash is mix64, so any one input changing scatters the whole result.
+            let grid = tick.div_euclid(SEED_GRID) as u64;
+            let seed = mix64(ctx_ref.seed ^ 0x9e37_79b9_7f4a_7c15u64
+                                 .wrapping_mul(ctx_ref.node_id as u64 + 1))
+                ^ grid;
             let random = (mix64(seed) % degree_max as u64) as u8;
             payload.degree = random.saturating_add(1);
             payload.velocity = if config.velocity != 0 {
@@ -599,7 +613,7 @@ mod tests {
     /// Renders gate events at fixed musical positions through
     /// random_degree, cutting the timeline into `block_frames`-sized blocks,
     /// and returns the degrees produced.
-    fn render_degrees(block_frames: u64, gate_ticks: &[u64]) -> Vec<u8> {
+    fn render_degrees(block_frames: u64, gate_ticks: &[u64], node_id: u32) -> Vec<u8> {
         const SAMPLE_RATE: f64 = 48_000.0;
         const BPM: f64 = 120.0;
         let samples_per_tick = (SAMPLE_RATE * 60.0) / (BPM * NANOTICKS_PER_QUARTER as f64);
@@ -686,7 +700,9 @@ mod tests {
                     mod_inputs: core::ptr::null_mut(),
                     mod_input_count: 0,
                     mod_input_stride: 0,
-                };
+                                    node_id,
+                    seed: 0,
+};
                 patcher_process_random_degree(&mut ctx);
                 for entry in buffer.iter() {
                     let mut out = [0u8; core::mem::size_of::<MusicalLogicPayload>()];
@@ -711,9 +727,9 @@ mod tests {
         // same notes. The old seed mixed block_start_tick and the event's
         // index within the block, so it did not.
         let gates: Vec<u64> = (0..16).map(|i| i * (NANOTICKS_PER_QUARTER / 4)).collect();
-        let at_512 = render_degrees(512, &gates);
-        let at_128 = render_degrees(128, &gates);
-        let at_300 = render_degrees(300, &gates);
+        let at_512 = render_degrees(512, &gates, 0);
+        let at_128 = render_degrees(128, &gates, 0);
+        let at_300 = render_degrees(300, &gates, 0);
 
         assert_eq!(at_512.len(), gates.len(), "expected one degree per gate");
         assert_eq!(at_512, at_128, "buffer size 512 vs 128 changed the notes");
@@ -722,6 +738,24 @@ mod tests {
             at_512.iter().any(|&d| d != at_512[0]),
             "degrees should vary across positions, got {at_512:?}"
         );
+    }
+
+    /// Two generator nodes at the SAME musical position must not emit the same pitch.
+    /// Before the node id entered the hash the seed was position alone, so every
+    /// random_degree in the song moved in lockstep — two generators on two tracks played
+    /// identical lines, which reads as a broken second generator rather than a seeding bug.
+    #[test]
+    fn random_degree_decorrelates_per_node() {
+        let gates: Vec<u64> = (0..16).map(|i| i * (NANOTICKS_PER_QUARTER / 4)).collect();
+        let a = render_degrees(512, &gates, 1);
+        let b = render_degrees(512, &gates, 2);
+        assert_eq!(a.len(), b.len());
+        assert!(!a.is_empty(), "no degrees generated");
+        // Same node id must still be perfectly reproducible.
+        assert_eq!(a, render_degrees(512, &gates, 1));
+        // Different node ids must differ somewhere. (Per-event equality can coincide;
+        // the whole sequence matching would mean the node id is not in the hash at all.)
+        assert_ne!(a, b, "two nodes generated identical sequences — node id not seeded in");
     }
 
     #[test]

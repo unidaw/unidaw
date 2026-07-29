@@ -2212,6 +2212,10 @@ struct TrackRuntime {
       held.erase(it);
     }
   };
+  // The project's generation seed (ABI 4). Folded into every generator's hash so a song
+  // reproduces exactly, and changing this one number re-rolls every generated variation.
+  // 0 until a project supplies one.
+  std::atomic<uint64_t> projectSeed{0};
   // PANIC (all sound off). The UI thread only raises this flag; the producer — the sole
   // writer of the per-track event rings — consumes it once per block and emits CC120 +
   // CC123 on every channel to every ready host, then drops that track's note state. Same
@@ -4432,6 +4436,7 @@ struct TrackRuntime {
     }
     document.meta.name = stem;
     document.nanoticksPerQuarter = daw::NanotickConverter::kNanoticksPerQuarter;
+    document.seed = projectSeed.load(std::memory_order_relaxed);
     // Re-emit the full retained tempo map so a load->save round-trip keeps tempo
     // changes, not just the current tempo. (A never-loaded session defaults to 120.)
     document.tempoMap = loadedTempoMap;
@@ -4726,6 +4731,9 @@ struct TrackRuntime {
     }
     // Hold off aux-child derivation until this load has finished mutating the track set
     // (adopt, tear down leftovers, set liveTrackCount). Cleared on every exit path.
+    // Adopt the project's generation seed before anything renders, so generators hash
+    // against this song's seed rather than the previous project's.
+    projectSeed.store(document.seed, std::memory_order_relaxed);
     loadInProgress.store(true, std::memory_order_release);
     struct LoadGuard {
       std::atomic<bool>& flag;
@@ -8794,7 +8802,9 @@ struct TrackRuntime {
             }
           }
           daw::PatcherContext ctx{};
-          ctx.abi_version = 3;
+          ctx.abi_version = 4;
+          ctx.node_id = node.id;
+          ctx.seed = projectSeed.load(std::memory_order_relaxed);
           ctx.block_start_tick = windowStartTicks;
           ctx.block_end_tick = windowEndTicks;
           ctx.block_start_sample = blockSampleStart;
@@ -10080,7 +10090,9 @@ struct TrackRuntime {
           }
         }
         daw::PatcherContext ctx{};
-        ctx.abi_version = 3;
+        ctx.abi_version = 4;
+        ctx.node_id = nodeId;
+        ctx.seed = projectSeed.load(std::memory_order_relaxed);
         ctx.block_start_tick = blockStartTicks;
         ctx.block_end_tick = blockEndTicks;
         ctx.block_start_sample = sampleStart;
