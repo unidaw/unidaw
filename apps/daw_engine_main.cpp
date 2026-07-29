@@ -3447,6 +3447,17 @@ struct TrackRuntime {
       diffPayload.deviceKind = static_cast<uint32_t>(device.kind);
       diffPayload.position = i;
       diffPayload.patcherNodeId = device.patcherNodeId;
+      // Report the patcher node id this device ACTUALLY publishes. It must be the device's
+      // own output node in the assembled pool; publishing an authored (device-local) id
+      // instead points into another device's subgraph, which is invisible for the first
+      // contributing device and wrong for the rest. Emitted from the snapshot, so it is
+      // the value the UI really receives — not what some earlier stage intended.
+      if (!device.patcher.nodes.empty()) {
+        DAW_EVENT("chain.patcher_node")
+            .field("track", runtime.trackId)
+            .field("device", device.id)
+            .field("node", static_cast<uint64_t>(device.patcherNodeId));
+      }
       diffPayload.hostSlotIndex = device.hostSlotIndex;
       diffPayload.capabilityMask = device.capabilityMask;
       diffPayload.bypass = device.bypass ? 1u : 0u;
@@ -4924,9 +4935,30 @@ struct TrackRuntime {
         }
         patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
         updatePatcherGraphSnapshot();
-        // Repoint each runtime device at its output node in the assembled pool, so
-        // the RT DFS seeds from the right node.
+        // Repoint each device at its output node in the assembled pool, so the RT DFS
+        // seeds from the right node AND the published patcherNodeId is a real pool node.
+        //
+        // This MUST write the DOCUMENT as well as the runtime: the per-track load below
+        // rebuilds each chain from `source.chain` and installs it (runtime->track.chain =
+        // std::move(loadedChain)), which would otherwise overwrite this repoint with the
+        // device-local AUTHORED id. That is invisible for the first contributing device —
+        // its pool block starts at offset 0, so authored == pooled — and wrong for every
+        // device after it, which published an id belonging to ANOTHER device's subgraph.
+        // Walking resolvedInputs back from it then recovered a neighbour's generator, so
+        // per-device patcher scoping in the UI showed foreign nodes as unowned orphans.
         for (const auto& out : outputs) {
+          for (auto& track : document.tracks) {
+            if (track.trackId != out.trackId) {
+              continue;
+            }
+            for (auto& d : track.chain.devices) {
+              if (d.id == out.deviceId) {
+                d.patcherNodeId = out.node;
+                break;
+              }
+            }
+            break;
+          }
           TrackRuntime* rt = nullptr;
           {
             std::lock_guard<std::mutex> lock(tracksMutex);
