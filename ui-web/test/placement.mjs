@@ -63,6 +63,14 @@ function extents() {
   return out2;
 }
 
+/** A daw-cli write. `--force` because the sidecar owns the command ring. */
+function cliDo(args) {
+  try {
+    return execFileSync(CLI, args,
+                        { encoding: 'utf8', env: { ...process.env, DAW_UI_SHM_NAME: stack.shm } });
+  } catch (e) { return 'ERR ' + (e.stdout || e.message); }
+}
+
 const NANOTICKS_PER_QUARTER = 960000;
 const BAR = NANOTICKS_PER_QUARTER * 4;
 
@@ -160,15 +168,27 @@ try {
     await settle();
     check(JSON.stringify(extents()) === snapshot,
           'a move addressed to nothing changes nothing');
-    // A cross-track move is refused whole, which is exactly why the UI does not
-    // offer one yet. Pinned here so the day the engine gains it, this fails and
-    // says to turn CROSS_TRACK_DRAG on.
+  }
+
+  console.log('\ncross-track');
+  {
+    // The lane drag. This check was written as its own opposite — it asserted the
+    // engine REFUSED a cross-track move, because it did, and failing was the
+    // signal to turn the gesture on. It duly failed the day the engine gained
+    // one, and `CROSS_TRACK_DRAG` in arrange.js went true.
+    const cur = extents().find((e) => e.id === startId);
+    const dest = cur.track + 1;
     say({ type: 'placement', op: 'move', track: cur.track, id: startId,
-          at: cur.start + BAR, toTrack: cur.track + 1 });
-    await settle();
-    check(JSON.stringify(extents()) === snapshot,
-          'a cross-track move is refused WHOLE — the time part does not happen either',
-          'if this now fails, the engine gained cross-track: flip CROSS_TRACK_DRAG in arrange.js');
+          at: cur.start + BAR, toTrack: dest });
+    await settle(600);
+    const now = extents().find((e) => e.id === startId);
+    check(now && now.track === dest, 'a clip moves to another lane',
+          now ? `track=${now.track}, wanted ${dest}` : 'the placement vanished');
+    check(now && now.start === cur.start + BAR, 'and moves in time in the same command',
+          now && `start=${now.start}, wanted ${cur.start + BAR}`);
+    // The id is the whole reason a drag can be keyed on it: crossing a lane must
+    // not mint a new one, or the thing under the mouse changes identity mid-drag.
+    check(now !== undefined, 'keeping its stable id across the lane change');
   }
 
   console.log('\nundo');
@@ -177,10 +197,36 @@ try {
     say({ type: 'placement', op: 'move', track: cur.track, id: startId, at: BAR * 30 });
     await settle();
     check(extents().find((e) => e.id === startId).start === BAR * 30, 'moved, ready to undo');
+
+    /*
+     * A BASE-LESS UNDO IS DROPPED, AND THAT IS CORRECT.
+     *
+     * The engine validates Undo against the clip version, so a command with no
+     * base carries 0 — stale by definition — and never applies. This cost me an
+     * hour: the check below used to send a bare `{type:"undo"}`, fail, and read
+     * exactly like "placement ops are not undoable after all". I was one message
+     * away from reporting it as an engine defect.
+     *
+     * It is neither. The PAGE always supplies a base — the `obj.base ===
+     * undefined` line in engine.js, itself a fix for this same trap from the
+     * other direction — so undo works in the app, and the e2e suite's undo
+     * section proves it. It was the raw socket in THIS FILE speaking an
+     * incomplete sentence.
+     *
+     * Pinned in both directions, so the next person reads a fact rather than
+     * rediscovering it. "Base version" reads as one idea and is two.
+     */
     say({ type: 'undo' });
     await settle(700);
+    check(extents().find((e) => e.id === startId).start === BAR * 30,
+          'an undo with no base version is dropped, as the engine intends');
+
+    // And with one. daw-cli reads the version and stamps it, which is what the
+    // page does and what this file cannot do over a raw socket.
+    cliDo(['do', 'undo', '--force']);
+    await settle(900);
     const back = extents().find((e) => e.id === startId);
-    check(back && back.start === cur.start, 'undo puts it back',
+    check(back && back.start === cur.start, 'a stamped undo puts the clip back',
           back && `start=${back.start}, was ${cur.start}`);
     // The id has to survive the store swap, or every held reference breaks on
     // the commonest operation in a DAW.

@@ -15,18 +15,34 @@ const GRID_POOL = 256;
 /**
  * Whether a clip can be dragged to another LANE.
  *
- * Off, because the engine refuses a cross-track MovePlacement — and refuses the
- * WHOLE command when it sees one, not just the lane part. So a diagonal drag
- * would move the clip neither across nor along, which is the worst answer
- * available: the gesture looks like it worked right up until nothing happens.
+ * On since the engine gained cross-track MovePlacement. It was off for exactly
+ * one reason, worth keeping written down: the engine used to refuse a
+ * cross-track move WHOLE — not just the lane part — so a diagonal drag moved the
+ * clip neither across nor along, which is the worst answer available. The
+ * gesture looks like it worked right up until nothing happens.
  *
- * With this off the vertical component is simply ignored, so a drag that wanders
- * still repositions in time, and the page says why the lane did not change.
- *
- * Flip it when the engine's own comment stops saying "cross-track is a v2"
- * (apps/event_payloads.h, UiCommandType::MovePlacement).
+ * `test/placement.mjs` is what turned this back on: it asserted the refusal, and
+ * failing was the signal. If the engine ever loses cross-track again, that test
+ * fails first and says to come back here.
  */
-const CROSS_TRACK_DRAG = false;
+const CROSS_TRACK_DRAG = true;
+
+/**
+ * How far the pointer must travel before a press becomes a drag.
+ *
+ * NOT cosmetic, and not about shaky hands. Capturing the pointer on pointerdown
+ * RETARGETS every later pointer event to the capturing element — which means the
+ * two clicks of a double-click no longer land on the clip, `dblclick` fires with
+ * the container as its target, and `e.target.closest('.ar-clip')` returns null.
+ * Double-clicking a clip silently stopped opening the piano roll, and the only
+ * thing that noticed was the e2e suite.
+ *
+ * So a press arms nothing. The drag — and the capture — begins on the first move
+ * past this threshold, which is also what a person means: pressing on a clip is
+ * how you select it, and a hand that moves two pixels while clicking has not
+ * asked for anything to move.
+ */
+const CLIP_DRAG_SLOP_PX = 3;
 
 // --- the waveform layer ----------------------------------------------------
 //
@@ -360,21 +376,20 @@ export class Arrange {
     if (e.button !== 0) return;
     const r = el.getBoundingClientRect();
     const mode = clipZoneAt(e.clientX - r.left, r.width);
+    // Armed, not started. Nothing is captured and no ghost is drawn until the
+    // pointer moves — see CLIP_DRAG_SLOP_PX.
     this._clipDrag = {
       id: el._pId, mode, pointerId: e.pointerId,
       x0: e.clientX, y0: e.clientY,
       clip: { startTick: el._pTick, endTick: el._pEnd, track: el._pTrack },
-      at: null,
+      at: null, live: false,
     };
-    this.clipsIn.setPointerCapture(e.pointerId);
-    // Drawn immediately, at the clip's own position: a ghost that only appears
-    // once the pointer has travelled a bar looks like the drag did not take.
-    this._clipGhost(this._clipDrag.clip);
   }
 
   /** Where the current pointer position puts the clip. */
-  _clipAt(e) {
-    const d = this._clipDrag;
+  _clipAt(e) { return this._clipAt2(this._clipDrag, e); }
+
+  _clipAt2(d, e) {
     const tpp = this.vm.view.ticksPerPixel;
     const lh = this.vm.laneHeight || 1;
     const lanes = CROSS_TRACK_DRAG && d.mode === 'move'
@@ -385,18 +400,33 @@ export class Arrange {
   }
 
   _clipMove(e) {
-    if (!this._clipDrag) return;
+    const d = this._clipDrag;
+    if (!d) return;
+    if (!d.live) {
+      if (Math.abs(e.clientX - d.x0) < CLIP_DRAG_SLOP_PX
+          && Math.abs(e.clientY - d.y0) < CLIP_DRAG_SLOP_PX) return;
+      d.live = true;
+      // Captured HERE rather than on the press, so a click stays a click and
+      // `dblclick` still lands on the clip. See CLIP_DRAG_SLOP_PX.
+      this.clipsIn.setPointerCapture(d.pointerId);
+      // Drawn at the clip's own position first, so the ghost appears where the
+      // clip is and travels from there rather than materialising ahead of it.
+      this._clipGhost(d.clip);
+    }
     const at = this._clipAt(e);
-    this._clipDrag.at = at;
+    d.at = at;
     this._clipGhost(at);
   }
 
   _clipUp(e) {
     const d = this._clipDrag;
     if (!d) return;
-    const at = this._clipAt(e);
     this._clipDrag = null;
-    this.clipsIn.releasePointerCapture(e.pointerId);
+    // A press that never moved: a selection, not an edit. Nothing was captured
+    // and nothing is committed.
+    if (!d.live) return;
+    const at = this._clipAt2(d, e);
+    try { this.clipsIn.releasePointerCapture(e.pointerId); } catch (err) { /* gone */ }
     this._clipGhost(null);
     // Did the pointer try to change lane? Worth reporting either way: with
     // cross-track off, that half of the gesture did not happen, and a drag that
@@ -424,10 +454,11 @@ export class Arrange {
 
   /** Abandoned: the ghost goes and nothing is sent. */
   _clipCancel() {
-    if (!this._clipDrag) return;
-    const id = this._clipDrag.pointerId;
+    const d = this._clipDrag;
+    if (!d) return;
     this._clipDrag = null;
-    try { this.clipsIn.releasePointerCapture(id); } catch (err) { /* already gone */ }
+    if (!d.live) return;
+    try { this.clipsIn.releasePointerCapture(d.pointerId); } catch (err) { /* already gone */ }
     this._clipGhost(null);
   }
 
@@ -1074,7 +1105,7 @@ export class Arrange {
       // whole block still moves. Guarded, because it is a class write.
       const narrow = c.w < CLIP_HANDLE_PX * 3;
       if (el._narrow !== narrow) { el._narrow = narrow; el.classList.toggle('narrow', narrow); }
-      const dragging = drag !== null && drag.id === c.id;
+      const dragging = drag !== null && drag.live && drag.id === c.id;
       if (el._dragging !== dragging) {
         el._dragging = dragging; el.classList.toggle('dragging', dragging);
       }

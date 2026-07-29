@@ -1736,6 +1736,167 @@ section('clips answer to the pointer');
   }
 }
 
+/*
+ * DRAGGING A CLIP, with a real pointer.
+ *
+ * This is the gesture the whole placement feature exists for, and until now the
+ * only thing testing it was a pure function over numbers. `test/placement.mjs`
+ * proves the OPS work by writing to the socket; the unit tests prove the
+ * arithmetic. Neither says that pressing on a clip and moving the mouse produces
+ * either of those — pointer capture, the trim-handle hit zones, the ghost and
+ * the commit-on-release are all only real in a browser.
+ *
+ * Drives `page.mouse` throughout. No __uni: a drag that only works when a test
+ * calls the handler directly is the exact failure this suite has shipped before.
+ */
+section('dragging a clip moves it');
+{
+  await page.evaluate(() => window.__uni.run('view arrange'));
+  await page.evaluate(() => window.__uni.run('goto 1 1'));
+  await page.keyboard.press('Home');
+  await page.waitForTimeout(500);
+
+  // The clip's own geometry, keyed on its stable placement id so the assertions
+  // can follow THIS clip rather than "whatever is first" after it has moved.
+  const clipBox = () => page.evaluate(() => {
+    for (const c of document.querySelectorAll('.ar-clip')) {
+      const r = c.getBoundingClientRect();
+      if (r.width < 40 || r.height < 6) continue;
+      const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      if (!(top && (top === c || c.contains(top)))) continue;
+      return { id: c._pId, tick: c._pTick, end: c._pEnd, track: c._pTrack,
+               x: r.x, y: r.y, w: r.width, h: r.height };
+    }
+    return null;
+  });
+  const byId = (id) => page.evaluate((wanted) =>
+    (window.__uni.clips() || []).find((c) => c.id === wanted) || null, id);
+
+  /*
+   * HOW FAR IS TWO BARS, IN PIXELS?
+   *
+   * The first version of this dragged a flat 120px and failed, and the failure
+   * was entirely mine: a drag snaps to the bar, the arrangement's zoom is left
+   * wherever an earlier section put it, and at the finest zoom 120px is a
+   * quarter of a bar — which snaps to nothing. The clip correctly did not move.
+   *
+   * A gesture test has to speak the units the gesture is defined in. Two bars is
+   * two bars at any zoom.
+   */
+  // Normalise the zoom with the keys that do it, so the pixel arithmetic below
+  // is predictable AND the setup is still real input. Earlier sections leave the
+  // arrangement wherever their own gestures put it.
+  for (let i = 0; i < 8; i++) {
+    const z = await page.evaluate(() => window.__uni.arrangeProbe().zoomIndex);
+    if (z === 3) break;
+    await page.keyboard.press(z > 3 ? '+' : '-');
+    await page.waitForTimeout(80);
+  }
+  const barPx = await page.evaluate(() => {
+    const a = window.__uni.arrangeProbe();
+    return (a && a.ticksPerPixel) ? 3840000 / a.ticksPerPixel : 64;
+  });
+  const box = await clipBox();
+  if (!box) {
+    blocked(false, 'dragging a clip moves it', 'no clip wide enough to grab');
+  } else {
+    ok(Number.isFinite(box.id) && box.id > 0,
+       'the clip carries a stable placement id, not a list index', `id=${box.id}`);
+
+    // ── MOVE. Grab the middle, well clear of both trim handles. ──────────────
+    const before = await byId(box.id);
+    const midX = box.x + box.w / 2, midY = box.y + box.h / 2;
+    await page.mouse.move(midX, midY);
+    await page.mouse.down();
+    // Two moves, not one: a single move can be coalesced into the press on some
+    // platforms, and a drag that only commits after two events would pass a
+    // one-move test and fail under a hand.
+    await page.mouse.move(midX + barPx * 2, midY, { steps: 6 });
+    await page.waitForTimeout(60);
+    const ghost = await page.evaluate(() => {
+      const g = document.querySelector('.ar-ghost');
+      if (!g || g.style.display === 'none') return null;
+      const r = g.getBoundingClientRect();
+      return { x: Math.round(r.x), w: Math.round(r.width) };
+    });
+    ok(ghost !== null, 'a ghost follows the pointer while dragging');
+    ok(ghost && ghost.x > box.x, 'and it is ahead of the clip it came from',
+       ghost && `ghost ${ghost.x} vs clip ${Math.round(box.x)}`);
+    // The real block must NOT have moved yet: it moves when the engine says so.
+    const during = await page.evaluate(() =>
+      [...document.querySelectorAll('.ar-clip')].some((c) => c.classList.contains('dragging')));
+    ok(during, 'the clip being dragged is marked, so the ghost reads as the live one');
+
+    await page.mouse.up();
+    await page.waitForTimeout(700);
+    const after = await byId(box.id);
+    ok(after && after.at > before.at, 'releasing moves the clip',
+       after ? `${before.at} -> ${after.at}` : 'the clip vanished');
+    ok(after && after.len === before.len, 'and a move does not resize it',
+       after && `${before.len} -> ${after.len}`);
+    ok(await page.evaluate(() => {
+      const g = document.querySelector('.ar-ghost');
+      return !g || g.style.display === 'none';
+    }), 'the ghost goes when the drag ends');
+
+    // ── TRIM. The right handle is six pixels wide; aim inside it. ────────────
+    const b2 = await clipBox();
+    const trimBefore = await byId(b2.id);
+    await page.mouse.move(b2.x + b2.w - 3, b2.y + b2.h / 2);
+    await page.mouse.down();
+    await page.mouse.move(b2.x + b2.w + barPx * 2, b2.y + b2.h / 2, { steps: 6 });
+    await page.mouse.up();
+    await page.waitForTimeout(700);
+    const trimAfter = await byId(b2.id);
+    ok(trimAfter && trimAfter.len > trimBefore.len, 'dragging the right edge lengthens it',
+       trimAfter ? `${trimBefore.len} -> ${trimAfter.len} (box w=${Math.round(b2.w)}, barPx=${barPx})`
+                 : 'gone');
+    ok(trimAfter && trimAfter.at === trimBefore.at,
+       'and leaves the start exactly where it was — the sentinel does its job',
+       trimAfter && `${trimBefore.at} -> ${trimAfter.at}`);
+
+    // ── ESCAPE. A drag abandoned mid-gesture must commit nothing. ────────────
+    const b3 = await clipBox();
+    const escBefore = await byId(b3.id);
+    await page.mouse.move(b3.x + b3.w / 2, b3.y + b3.h / 2);
+    await page.mouse.down();
+    await page.mouse.move(b3.x + b3.w / 2 + barPx * 3, b3.y + b3.h / 2, { steps: 6 });
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await page.waitForTimeout(600);
+    const escAfter = await byId(b3.id);
+    ok(escAfter && escAfter.at === escBefore.at, 'Escape abandons a drag, changing nothing',
+       escAfter && `${escBefore.at} -> ${escAfter.at}`);
+
+    // ── A CLICK IS NOT AN EDIT. Selecting must not cost an undo step. ────────
+    const b4 = await clipBox();
+    const clickBefore = await byId(b4.id);
+    await page.mouse.click(b4.x + b4.w / 2, b4.y + b4.h / 2);
+    await page.waitForTimeout(500);
+    const clickAfter = await byId(b4.id);
+    ok(clickAfter && clickAfter.at === clickBefore.at,
+       'a click selects without moving anything',
+       clickAfter && `${clickBefore.at} -> ${clickAfter.at}`);
+
+    // ── BACKSPACE removes the selected clip, and only with a selection. ──────
+    const b5 = await clipBox();
+    const n0 = (await page.evaluate(() => window.__uni.clips().length));
+    await page.mouse.click(b5.x + b5.w / 2, b5.y + b5.h / 2);
+    await page.waitForTimeout(300);
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(700);
+    const n1 = (await page.evaluate(() => window.__uni.clips().length));
+    ok(n1 === n0 - 1, 'Backspace removes the selected clip', `${n0} -> ${n1}`);
+    // And with nothing selected it must not eat the keystroke.
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(200);
+    await page.keyboard.press('Backspace');
+    await page.waitForTimeout(600);
+    const n2 = (await page.evaluate(() => window.__uni.clips().length));
+    ok(n2 === n1, 'and with nothing selected it removes nothing', `${n1} -> ${n2}`);
+  }
+}
+
 section('resizable and collapsible panes');
 {
   // splitter.js was complete — handles, keyboard, clamping, persistence — and

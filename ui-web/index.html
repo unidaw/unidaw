@@ -281,11 +281,15 @@ const arrange = new Arrange(arrangeHost, metrics, {
    * song does not have.
    */
   onClipEdit: ({ op, id, track, at, len, toTrack, startUnchanged, laneRefused }) => {
-    // A drag that crossed lanes when the engine cannot. Said out loud rather
-    // than swallowed: the horizontal half still happened, and a gesture whose
-    // vertical half silently did nothing reads as the app being broken.
-    if (laneRefused) state.reject = 'moving a clip between tracks is not supported yet';
-    if (!Number.isFinite(id) || id < 0) return;
+    if (!Number.isFinite(id) || id < 0) {
+      // A drag that crossed lanes when the engine cannot. Said out loud rather
+      // than swallowed: a gesture whose vertical half silently did nothing reads
+      // as the app being broken. Dead while cross-track is on, kept because the
+      // flag can go back.
+      if (laneRefused) { state.reject = 'moving a clip between tracks is not supported yet';
+                         schedule(); }
+      return;
+    }
     const msg = { type: 'placement', op, track, id };
     if (op === 'move') {
       msg.at = Math.round(at);
@@ -298,7 +302,8 @@ const arrange = new Arrange(arrangeHost, metrics, {
       if (!startUnchanged) msg.at = Math.round(at);
       msg.len = Math.round(len);
     }
-    send(msg);
+    sendPlacement(msg);
+    if (laneRefused) state.reject = 'moving a clip between tracks is not supported yet';
   },
   onNav: (zoomIndex, startTick, laneScroll, why) => {
     state.arrangeZoom = clampZoom(zoomIndex);
@@ -485,6 +490,20 @@ function configOf(node) {
  * send and a wait — there is nothing sensible to show optimistically, because a
  * node the engine has not created yet has no id to draw.
  */
+/**
+ * A placement edit, to the engine.
+ *
+ * Same shape as `sendGraph` below and for the same reason: nothing is applied
+ * optimistically. The engine clamps a move that would cross a neighbour, so a
+ * block drawn where the pointer left it would be showing a position the song
+ * does not have — and the arrangement's whole job is to say where things are.
+ */
+function sendPlacement(msg) {
+  if (!conn || !conn.send(msg)) { state.reject = 'no engine'; return false; }
+  state.reject = null;
+  return true;
+}
+
 function sendGraph(msg) {
   if (!conn || !conn.send(msg)) { state.reject = 'no engine'; return false; }
   state.reject = null;
@@ -1393,7 +1412,7 @@ const dockApi = {
     const msg = { type: 'placement', op: 'move', id: Number(id),
                   track: Number(track), at: Math.max(0, Math.round(Number(at))) };
     if (toTrack !== undefined && toTrack !== null) msg.toTrack = Number(toTrack);
-    return send(msg);
+    return sendPlacement(msg);
   },
   trimClip: (id, track, at, len) => {
     const msg = { type: 'placement', op: 'resize', id: Number(id), track: Number(track) };
@@ -1402,12 +1421,12 @@ const dockApi = {
     // working the moment the engine treats a given start as a reposition.
     if (at !== undefined && at !== null) msg.at = Math.max(0, Math.round(Number(at)));
     if (len !== undefined && len !== null) msg.len = Math.max(1, Math.round(Number(len)));
-    return send(msg);
+    return sendPlacement(msg);
   },
   delClip: (id, track) =>
-    send({ type: 'placement', op: 'remove', id: Number(id), track: Number(track) }),
+    sendPlacement({ type: 'placement', op: 'remove', id: Number(id), track: Number(track) }),
   addClip: (clipId, track, at, len) =>
-    send({ type: 'placement', op: 'add', clip: Number(clipId), track: Number(track),
+    sendPlacement({ type: 'placement', op: 'add', clip: Number(clipId), track: Number(track),
            at: Math.max(0, Math.round(Number(at))), len: Math.max(1, Math.round(Number(len))) }),
   /**
    * How long a bar is, right now.
@@ -3758,7 +3777,7 @@ addEventListener('keydown', (e) => {
      */
     if ((k === 'Backspace' || k === 'Delete') && state.selectedPlacement) {
       const p = selectedPlacement();
-      if (p) { send({ type: 'placement', op: 'remove', track: p.track, id: p.id });
+      if (p) { sendPlacement({ type: 'placement', op: 'remove', track: p.track, id: p.id });
                state.selectedPlacement = null; }
       return done();
     }
