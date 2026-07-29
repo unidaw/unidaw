@@ -241,6 +241,19 @@ target_include_directories(waveform_store_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# M2.18: the multi-producer command ring, hammered by concurrent threads. The shell
+# check exercises real processes but cannot reliably create the race; this can.
+add_executable(event_ring_mpsc_tests
+  apps/event_ring_mpsc_tests_main.cpp
+  apps/event_ring.cpp
+  apps/shared_memory.cpp
+)
+target_include_directories(event_ring_mpsc_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+find_package(Threads REQUIRED)
+target_link_libraries(event_ring_mpsc_tests PRIVATE Threads::Threads)
+
 # Header-only tests for the per-clip grid packed into UiClipExtent.flags.
 add_executable(clip_grid_tests
   apps/clip_grid_tests_main.cpp
@@ -334,6 +347,11 @@ add_test(NAME waveform_store
   COMMAND waveform_store_tests
 )
 set_tests_properties(waveform_store PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME event_ring_mpsc
+  COMMAND event_ring_mpsc_tests
+)
+set_tests_properties(event_ring_mpsc PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME clip_grid
   COMMAND clip_grid_tests

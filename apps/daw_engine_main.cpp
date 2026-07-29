@@ -8263,6 +8263,45 @@ struct TrackRuntime {
   std::thread uiThread([&] {
     std::cerr << "UI: command thread started" << std::endl;
     uint64_t lastIdleLogMs = 0;
+    // M2.18: abandoned-slot recovery for the multi-producer rings. A producer reserves
+    // a slot, then fills and publishes it — a few instructions apart. If it dies in
+    // between (Ctrl-C'd daw-cli, crashed UI) the slot never becomes ready and the
+    // consumer would wait at it forever, wedging every later command.
+    //
+    // The threshold is deliberately long. A slot that is merely slow belongs to a
+    // producer that is descheduled or page-faulting, and retiring it while that
+    // producer is still alive lets it publish into a slot someone else has since
+    // claimed. Two seconds is far beyond any scheduling hiccup and far below any
+    // useful patience for a wedged ring.
+    constexpr uint64_t kStalledSlotGraceMs = 2000;
+    struct StallWatch { uint32_t slot = 0; uint64_t sinceMs = 0; bool active = false; };
+    StallWatch stallUi, stallAgent;
+    auto recoverStalledRing = [&](daw::EventRingView& ring, StallWatch& watch,
+                                  const char* which) {
+      uint32_t slot = 0;
+      if (!daw::ringStalledSlot(ring, slot)) {
+        watch.active = false;
+        return;
+      }
+      const uint64_t nowMs = uiDiffNowMs();
+      if (!watch.active || watch.slot != slot) {
+        watch = StallWatch{slot, nowMs, true};
+        return;
+      }
+      if (nowMs - watch.sinceMs < kStalledSlotGraceMs) {
+        return;
+      }
+      DAW_EVENT("ring.abandoned_slot")
+          .field("ring", which)
+          .field("slot", slot)
+          .field("waited_ms", static_cast<uint32_t>(nowMs - watch.sinceMs))
+          .field("action", "retired");
+      std::cerr << "UI: retiring abandoned " << which << " ring slot " << slot
+                << " (producer reserved it and never published; it probably died)"
+                << std::endl;
+      daw::ringSkipStalledSlot(ring);
+      watch.active = false;
+    };
     while (running.load()) {
       auto ringUi = getRingUi();
       auto ringUiEdit = getRingUiEdit();
@@ -8307,6 +8346,8 @@ struct TrackRuntime {
         handleUiEntry(uiEntry);
         handled = true;
       }
+      recoverStalledRing(ringUi, stallUi, "ui");
+      recoverStalledRing(ringUiAgent, stallAgent, "agent");
       if (!handled) {
         const uint64_t nowMs = uiDiffNowMs();
         if (uiDebugEnabled() && nowMs - lastIdleLogMs >= 1000) {
