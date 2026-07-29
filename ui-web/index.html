@@ -1295,6 +1295,22 @@ const dockApi = {
     if (!conn || !conn.canSend()) return false;
     return conn.send({ type: 'ask', text: String(text) });
   },
+  /**
+   * Start a new conversation.
+   *
+   * The agent remembers the last few exchanges, so "now do the same to the
+   * lead" works. That memory is also why this is needed: a model that has
+   * misread something stays wrong about it until the transcript goes, and a new
+   * line of thought should not arrive carrying the old one.
+   *
+   * Loading a song, starting one, undo and redo clear it on their own — those
+   * change the document out from under the transcript. This is the deliberate
+   * case.
+   */
+  forget: () => {
+    if (!conn || !conn.canSend()) return false;
+    return conn.send({ type: 'forget' });
+  },
   scaleNames: () => (scales || []).map((x) => x.name),
   /**
    * Whether note keys write. The `edit` command has always called this and it

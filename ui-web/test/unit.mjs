@@ -559,7 +559,7 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
                      'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice',
-                     'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask'];
+                     'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask', 'forget'];
 
 function stubApi() {
   const calls = [];
@@ -1470,6 +1470,11 @@ const OP_REGISTRY = {
   select:    { cli: null, agent: null, why: 'view' },
   view:      { cli: null, agent: null, why: 'view' },
   zoom:      { cli: null, agent: null, why: 'view' },
+  // The agent's conversation, not the song. There is nothing for the CLI to do
+  // with it (each invocation is already a fresh conversation) and giving the
+  // agent a tool to clear its own memory is asking it to decide when to forget
+  // what it was told, which is the person's call.
+  forget:    { cli: null, agent: null, why: 'view' },
   // Introspection, answered differently on each surface.
   engine:    { cli: null, agent: null, why: 'ask' },
   help:      { cli: null, agent: null, why: 'ask' },

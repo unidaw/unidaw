@@ -1773,6 +1773,10 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
             // can talk, which is not fast.
             let (ask_tx, ask_rx) = std::sync::mpsc::channel::<ask::Progress>();
             let asking = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            // The conversation, for as long as this tab is open. Per connection
+            // rather than per process: two tabs are two conversations, and a
+            // reload is a fresh one. See `ask::History`.
+            let history = std::sync::Arc::new(std::sync::Mutex::new(ask::History::new()));
             // Attached HERE, on the thread that will use it: EngineHandle is not
             // Send, so it cannot be created elsewhere and moved in.
             let mut generation = SHM_GENERATION.load(Ordering::Acquire);
@@ -1814,6 +1818,10 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         if g != generation {
                             match EngineHandle::attach(&shm, true) {
                                 Ok(h) => { handle = h; generation = g;
+                                           // A new engine is a new document. See
+                                           // the note at the verb check below.
+                                           history.lock()
+                                               .unwrap_or_else(|e| e.into_inner()).clear();
                                            eprintln!("sidecar: command channel re-attached"); }
                                 Err(e) => {
                                     let _ = ws.send(tungstenite::Message::Text(
@@ -1829,6 +1837,60 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         // Not an engine command: a directory listing. Answered
                         // here because the browser cannot read a filesystem and
                         // the engine publishes no project index.
+                        /*
+                         * A DIFFERENT SONG ENDS THE CONVERSATION.
+                         *
+                         * Ordinary edits do not: if the model raised the bass and
+                         * the person then muted a track by hand, "put it back"
+                         * still means something, and the fresh shape in the next
+                         * prompt says what is true now.
+                         *
+                         * These four are not ordinary edits. Load and new replace
+                         * the document outright; undo and redo move it to a state
+                         * nobody narrated. After any of them the transcript
+                         * describes a song that does not exist — every track id
+                         * it names may now be a different instrument. A model
+                         * reading "track 2 is the lead, I gave it a fifth" and
+                         * acting on it would be editing at random.
+                         *
+                         * Checked BEFORE the verbs are dispatched, in one place,
+                         * because the four arrive by three different routes:
+                         * `new` is handled here, `load` builds a LoadProject, and
+                         * undo/redo fall through to the generic command path.
+                         */
+                        if is_type(&t, "load") || is_type(&t, "new")
+                            || is_type(&t, "undo") || is_type(&t, "redo")
+                        {
+                            let dropped = history.lock()
+                                .unwrap_or_else(|e| e.into_inner()).clear();
+                            // Said out loud. A chat panel that silently forgets
+                            // looks like a chat panel that is ignoring you, and
+                            // the next "do that again" would fail for a reason
+                            // nothing on screen explains.
+                            if dropped {
+                                let _ = ws.send(tungstenite::Message::Text(json_line(
+                                    "note", "— the song changed; starting a new conversation",
+                                    None, true)));
+                            }
+                            // Falls through: this only clears history, the verb
+                            // still has to be done.
+                        }
+                        // And on purpose. The four above are the cases where
+                        // carrying on would be wrong; this is the case where it
+                        // is merely unwanted — a new line of thought, or a model
+                        // that has talked itself into a corner and needs to stop
+                        // being reminded of it.
+                        if is_type(&t, "forget") {
+                            let dropped = history.lock()
+                                .unwrap_or_else(|e| e.into_inner()).clear();
+                            let reply = json_line(
+                                "note",
+                                if dropped { "— conversation cleared" }
+                                else { "— nothing to clear" },
+                                None, true);
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
                         if is_type(&t, "list") {
                             let reply = list_projects(&projects);
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
@@ -1870,9 +1932,10 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                 "thinking", &prompt, None, true)));
                             let (tx, shm2) = (ask_tx.clone(), shm.clone());
                             let flag = asking.clone();
+                            let hist = history.clone();
                             thread::spawn(move || {
                                 match daw_agent::AgentSession::attach(&shm2) {
-                                    Ok(session) => ask::run(&session, &prompt, &tx),
+                                    Ok(session) => ask::run(&session, &prompt, &tx, &hist),
                                     Err(e) => {
                                         let _ = tx.send(ask::Progress::Failed(
                                             format!("could not attach to the engine: {e}")));

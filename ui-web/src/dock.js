@@ -301,6 +301,13 @@ export function createCommands(api) {
              { name: 'tick', type: 'int', min: 0, optional: true }],
       run: (a) => (api.harmony(Number(a[0]), a[1], a[2] === undefined ? 0 : Number(a[2]))
                    ? `key set` : 'refused') },
+    // Declared as a COMMAND, not left to fall through to the agent — an
+    // unrecognised word here gets sent to the model as a prompt, so "forget"
+    // would otherwise be a sentence asking a model to forget something, which
+    // is the one instruction it cannot carry out about itself.
+    forget: { help: 'forget — start a new agent conversation',
+      args: [],
+      run: () => (api.forget() ? 'forgetting…' : 'not connected') },
     columns: { help: 'columns <n> — how many note columns each track shows',
       args: [{ name: 'n', type: 'int', min: 1, max: 8 }],
       run: (a) => 'note columns: ' + api.noteColumns(Number(a[0])) },

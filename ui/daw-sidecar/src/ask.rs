@@ -19,6 +19,7 @@
 //! DAW while a model thinks. The caller spawns this and gets progress back
 //! through a channel.
 
+use std::collections::VecDeque;
 use std::sync::mpsc::Sender;
 
 use daw_agent::{AgentSession, ToolCall};
@@ -35,6 +36,92 @@ pub enum Progress {
     Done(String),
     /// The turn failed. The string is safe to show; see `scrub`.
     Failed(String),
+}
+
+/// What earlier asks left behind.
+///
+/// WHY AT ALL. Without this every ask starts from nothing, so "now do the same
+/// to the lead" is unanswerable — the model has never heard of "the same". That
+/// is not a small gap: it is the difference between a text box you issue orders
+/// to and one you have a conversation with, and the second is the only one worth
+/// having in a DAW, where the next instruction is nearly always a refinement of
+/// the last.
+///
+/// WHY IT IS A LIST OF EXCHANGES AND NOT A LIST OF MESSAGES. The obvious
+/// implementation — a ring buffer of messages, drop the oldest when full —
+/// produces an INVALID conversation, and the API rejects it outright. A
+/// `tool_use` block must be followed by its matching `tool_result`, and a
+/// conversation may not begin with a bare `tool_result`. Evicting one message at
+/// a time will eventually cut between the two. So the unit of eviction is a
+/// whole exchange: a user sentence, every tool round it took, and the model's
+/// closing prose. Any suffix of a list of those is itself a valid conversation.
+///
+/// WHY ONLY CLEAN ENDINGS ARE KEPT. An exchange that died on an API error or ran
+/// out of tool rounds ends mid-plan, with edits half applied. Replaying that as
+/// context invites the model to carry on from a state neither of us can describe
+/// — and its last message may be a dangling `tool_use`, which is the invalid
+/// shape again by another route. A failed ask leaves no trace.
+///
+/// WHY IT IS PER CONNECTION. This lives on the websocket thread, so each browser
+/// tab has its own. Two tabs hold two conversations, and a reload starts fresh.
+/// That matches what a chat panel looks like it does; the alternative — one
+/// history shared by every tab — would have a model answering a question that
+/// was asked in a window the person is not looking at.
+#[derive(Default)]
+pub struct History {
+    /// Oldest first.
+    exchanges: VecDeque<Exchange>,
+}
+
+struct Exchange {
+    messages: Vec<Value>,
+    bytes: usize,
+}
+
+/// How many past exchanges to carry. Enough for "do that again", "no, the other
+/// one", "now the lead" — the shape a session actually takes — without turning
+/// every ask into a bill for the whole afternoon.
+const MAX_EXCHANGES: usize = 6;
+/// And a byte ceiling, because six exchanges of a model reading `observe`
+/// windows is a different size from six of "make it louder". Roughly 6k tokens.
+const MAX_HISTORY_BYTES: usize = 24_000;
+
+impl History {
+    pub fn new() -> Self { Self::default() }
+
+    pub fn is_empty(&self) -> bool { self.exchanges.is_empty() }
+    pub fn len(&self) -> usize { self.exchanges.len() }
+
+    /// Forget everything. Returns whether there was anything to forget, so the
+    /// caller can say so rather than announcing a clearing that did nothing.
+    pub fn clear(&mut self) -> bool {
+        let had = !self.exchanges.is_empty();
+        self.exchanges.clear();
+        had
+    }
+
+    /// The conversation so far, as the API wants it.
+    fn prefix(&self) -> Vec<Value> {
+        self.exchanges.iter().flat_map(|e| e.messages.iter().cloned()).collect()
+    }
+
+    /// Keep an exchange, evicting from the front until it fits.
+    fn record(&mut self, messages: Vec<Value>) {
+        if messages.is_empty() { return; }
+        let bytes = messages.iter().map(|m| m.to_string().len()).sum();
+        self.exchanges.push_back(Exchange { messages, bytes });
+        while self.exchanges.len() > MAX_EXCHANGES {
+            self.exchanges.pop_front();
+        }
+        // Never evict to empty: a single exchange over the ceiling is still the
+        // one the person is in the middle of, and dropping it would make the
+        // next ask amnesiac exactly when the conversation got interesting.
+        while self.exchanges.len() > 1
+            && self.exchanges.iter().map(|e| e.bytes).sum::<usize>() > MAX_HISTORY_BYTES
+        {
+            self.exchanges.pop_front();
+        }
+    }
 }
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -113,41 +200,82 @@ fn tools_json(session: &AgentSession) -> Value {
 /// The observation is included because a request like "make the bass louder"
 /// needs to know which track is the bass, and asking the model to call a tool to
 /// find out costs a round trip before it can start.
-fn system_prompt(session: &AgentSession) -> String {
+/// The half that never changes. Split out so it can carry the cache breakpoint:
+/// everything up to and including a marked block is reused across turns and
+/// across asks, and this text plus the tool manifest is the bulk of what gets
+/// re-sent twelve times in a tool loop.
+const INSTRUCTIONS: &str = "\
+You are operating a digital audio workstation through its tool API. You are not \
+describing what to do — the tools ARE the doing, and the person will hear the \
+result.\n\n\
+Work in small steps and check the observation after edits that matter. Prefer \
+the smallest change that answers the request. If a request is ambiguous in a way \
+that changes the music — which track, which bar — ask rather than guess. If a \
+tool refuses, read the refusal: it names what was wrong.\n\n\
+Ticks are nanoticks; there are 960000 per quarter note. Pitches are MIDI \
+numbers, 60 is middle C. Track ids are stable and do not renumber when a track \
+is removed.\n\n\
+You are given the song's SHAPE, not its notes: each track's name, how many notes \
+it has, the beats it spans and the pitch range it covers. To see actual notes, \
+call `observe` with `from_beat` for the part you are working on. A track marked \
+TRUNCATED has more notes than the engine publishes, so do not conclude it ends \
+where the count stops.\n\n\
+The shape is taken before your first tool call and is NOT refreshed as you work \
+— call `observe` again after edits that matter.";
+
+/// The half that does: the song as it stands, plus a warning about the past.
+fn shape_block(session: &AgentSession, has_history: bool) -> String {
     // The TEXT form, and the SHAPE rather than every note.
     //
     // This used to embed the whole song as JSON — ~114 bytes per note, which is
     // 2.2 MB on a large session: past what can be sent at all, and past it
     // silently. The same song's shape is under a kilobyte and answers the
-    // question the prompt below actually poses ("which track is the bass")
-    // better than twenty thousand note objects do. Notes come from the `observe`
-    // tool, for the window being worked on.
+    // question the prompt above actually poses ("which track is the bass")
+    // better than twenty thousand note objects do.
     let obs = session.observe().to_text();
-    format!(
-        "You are operating a digital audio workstation through its tool API. You \
-         are not describing what to do — the tools ARE the doing, and the person \
-         will hear the result.\n\n\
-         Work in small steps and check the observation after edits that matter. \
-         Prefer the smallest change that answers the request. If a request is \
-         ambiguous in a way that changes the music — which track, which bar — ask \
-         rather than guess. If a tool refuses, read the refusal: it names what \
-         was wrong.\n\n\
-         Ticks are nanoticks; there are 960000 per quarter note. Pitches are MIDI \
-         numbers, 60 is middle C. Track ids are stable and do not renumber when a \
-         track is removed.\n\n\
-         Below is the song's SHAPE, not its notes: each track's name, how many \
-         notes it has, the beats it spans and the pitch range it covers. To see \
-         actual notes, call `observe` with `from_beat` for the part you are \
-         working on. A track marked TRUNCATED has more notes than the engine \
-         publishes, so do not conclude it ends where the count stops.\n\n\
-         This shape was taken before your first tool call and is NOT refreshed as \
-         you work — call `observe` again after edits that matter.\n\n\
-         {obs}"
-    )
+    let stale = if has_history {
+        // Said out loud because the two contexts disagree by design. Earlier
+        // turns describe the song at the moment they were spoken; the person has
+        // very likely edited it by hand since, and nothing replays those edits
+        // into the transcript. Without this line a model reading "track 2 has 8
+        // notes" three exchanges up will believe it over the shape below.
+        "\nEarlier turns in this conversation describe the song AS IT WAS THEN. \
+         The person has been editing it by hand in between. Where the two \
+         disagree, the shape below is what is true now.\n"
+    } else {
+        ""
+    };
+    format!("{stale}\n{obs}")
+}
+
+/// Mark a message as a cache breakpoint.
+///
+/// Everything before it — the tools, the system prompt, every earlier message —
+/// is billed at a tenth and read back instead of re-sent. In a twelve-turn tool
+/// loop the same prefix goes over the wire twelve times, so this is most of the
+/// cost of an ask.
+fn mark_cacheable(msg: &mut Value) {
+    let bp = json!({ "type": "ephemeral" });
+    match &mut msg["content"] {
+        // A plain-string content has no block to hang the marker on; promote it.
+        Value::String(s) => {
+            let text = std::mem::take(s);
+            msg["content"] = json!([{ "type": "text", "text": text, "cache_control": bp }]);
+        }
+        Value::Array(blocks) => {
+            if let Some(last) = blocks.last_mut() { last["cache_control"] = bp; }
+        }
+        _ => {}
+    }
 }
 
 /// One prompt, to as many tool round trips as it takes.
-pub fn run(session: &AgentSession, prompt: &str, tx: &Sender<Progress>) {
+pub fn run(
+    session: &AgentSession,
+    prompt: &str,
+    tx: &Sender<Progress>,
+    history: &std::sync::Mutex<History>,
+) {
     let Some(key) = api_key() else {
         let _ = tx.send(Progress::Failed(
             "no ANTHROPIC_API_KEY — export it, put it in .env at the repo root, \
@@ -156,12 +284,29 @@ pub fn run(session: &AgentSession, prompt: &str, tx: &Sender<Progress>) {
         return;
     };
 
+    // Snapshot the past under a brief lock. Held across the API call it would
+    // block the websocket thread's `clear` for as long as a model takes to
+    // think, which is exactly when someone hits undo.
+    let (mut prefix, past) = {
+        let h = history.lock().unwrap_or_else(|e| e.into_inner());
+        (h.prefix(), h.len())
+    };
+    // The history is the same bytes on every turn of this loop AND on the next
+    // ask, so it is worth a breakpoint of its own.
+    if let Some(last) = prefix.last_mut() { mark_cacheable(last); }
+
     let tools = tools_json(session);
-    let system = system_prompt(session);
+    let system = json!([
+        { "type": "text", "text": INSTRUCTIONS, "cache_control": { "type": "ephemeral" } },
+        { "type": "text", "text": shape_block(session, past > 0) },
+    ]);
+
     // The running conversation. Tool results have to come back in the same
     // structure the model sent the calls in, so this accumulates rather than
     // being rebuilt per turn.
-    let mut messages: Vec<Value> = vec![json!({ "role": "user", "content": prompt })];
+    let first_new = prefix.len();
+    let mut messages: Vec<Value> = prefix;
+    messages.push(json!({ "role": "user", "content": prompt }));
 
     for turn in 0..MAX_TURNS {
         let body = json!({
@@ -225,6 +370,18 @@ pub fn run(session: &AgentSession, prompt: &str, tx: &Sender<Progress>) {
         if calls.is_empty() {
             // No tools asked for: the model has finished.
             //
+            // This is the ONE exit that records history. The turn ended with the
+            // model's own prose and no dangling tool call, which is both a
+            // complete thought and the only message shape the API will accept
+            // back. Every other way out of this function — an API error, running
+            // out of rounds — leaves a half-executed plan, and replaying that as
+            // context is worse than starting clean.
+            if !content.is_empty() {
+                messages.push(json!({ "role": "assistant", "content": content }));
+                let exchange: Vec<Value> = messages.split_off(first_new);
+                let mut h = history.lock().unwrap_or_else(|e| e.into_inner());
+                h.record(exchange);
+            }
             // Done carries NOTHING. Every text block in this response has already
             // gone out as a `Say` a few lines above, and sending it again printed
             // the closing sentence twice — once as prose and once as the ending.
@@ -288,6 +445,92 @@ mod tests {
         assert_eq!(scrub("failed with sk-ant-secret in it", k), "failed with <key> in it");
         // An empty key must not turn every string into a redaction.
         assert_eq!(scrub("nothing to hide", ""), "nothing to hide");
+    }
+
+    /// One exchange, the shape the loop actually records: a prompt, a tool
+    /// round, and the model's closing prose.
+    fn exchange(prompt: &str) -> Vec<Value> {
+        vec![
+            json!({ "role": "user", "content": prompt }),
+            json!({ "role": "assistant", "content": [
+                { "type": "tool_use", "id": "t1", "name": "set_mixer", "input": {} }]}),
+            json!({ "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "t1", "content": "{}" }]}),
+            json!({ "role": "assistant", "content": [{ "type": "text", "text": "done" }]}),
+        ]
+    }
+
+    /// THE INVARIANT THIS TYPE EXISTS FOR. However much gets evicted, what is
+    /// left must still be a conversation the API will accept: it may not begin
+    /// with a `tool_result`, and every `tool_use` must be answered.
+    ///
+    /// A message-at-a-time ring buffer fails this on the second eviction, which
+    /// is why eviction is per exchange.
+    #[test]
+    fn eviction_leaves_a_valid_conversation() {
+        let mut h = History::new();
+        for i in 0..(MAX_EXCHANGES * 3) {
+            h.record(exchange(&format!("ask {i}")));
+            let p = h.prefix();
+            assert!(!p.is_empty());
+            // Never starts mid-tool-call.
+            assert_eq!(p[0]["role"], "user");
+            assert!(p[0]["content"].is_string(), "a conversation may not open with a tool_result");
+            // Every tool_use is answered by the message after it.
+            for (n, m) in p.iter().enumerate() {
+                let uses: Vec<&str> = m["content"].as_array().map(|bs| bs.iter()
+                    .filter(|b| b["type"] == "tool_use")
+                    .filter_map(|b| b["id"].as_str()).collect()).unwrap_or_default();
+                if uses.is_empty() { continue; }
+                let next = p.get(n + 1).expect("a tool_use must not be the last message");
+                for id in uses {
+                    assert!(next["content"].as_array().unwrap().iter().any(
+                        |b| b["type"] == "tool_result" && b["tool_use_id"] == id),
+                        "tool_use {id} lost its result");
+                }
+            }
+        }
+        assert_eq!(h.len(), MAX_EXCHANGES, "the count ceiling holds");
+    }
+
+    /// A single enormous exchange is kept whole rather than evicted to nothing:
+    /// it is the one the person is in the middle of.
+    #[test]
+    fn one_oversized_exchange_survives() {
+        let mut h = History::new();
+        h.record(exchange(&"x".repeat(MAX_HISTORY_BYTES * 2)));
+        assert_eq!(h.len(), 1);
+        // And the next one pushes it out rather than both being kept.
+        h.record(exchange("small"));
+        assert_eq!(h.len(), 1);
+        assert_eq!(h.prefix()[0]["content"], "small");
+    }
+
+    /// A failed ask records nothing, so `clear` on an empty history reports that
+    /// it did nothing rather than announcing a clearing to the log.
+    #[test]
+    fn clear_reports_whether_it_did_anything() {
+        let mut h = History::new();
+        assert!(!h.clear());
+        h.record(exchange("hello"));
+        assert!(h.clear());
+        assert!(h.is_empty());
+    }
+
+    /// The breakpoint has to land on a block, and a user message's content is a
+    /// bare string — promoting it is the only way to mark it.
+    #[test]
+    fn cache_marker_lands_on_both_content_shapes() {
+        let mut s = json!({ "role": "user", "content": "hello" });
+        mark_cacheable(&mut s);
+        assert_eq!(s["content"][0]["text"], "hello");
+        assert_eq!(s["content"][0]["cache_control"]["type"], "ephemeral");
+
+        let mut a = json!({ "role": "assistant", "content": [
+            { "type": "text", "text": "one" }, { "type": "text", "text": "two" }]});
+        mark_cacheable(&mut a);
+        assert!(a["content"][0]["cache_control"].is_null(), "only the last block");
+        assert_eq!(a["content"][1]["cache_control"]["type"], "ephemeral");
     }
 
     /// The env var wins over the file, so a caller can override without editing
