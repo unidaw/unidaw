@@ -616,6 +616,10 @@ pub enum UiCommandType {
     /// Place a clip on a track. trackId, value0 = clip id, nanotick = at,
     /// duration = length.
     AddPlacement = 51,
+    /// PANIC: all sound off — CC120 (all-sound-off) AND CC123 (all-notes-off) on every MIDI
+    /// channel to every hosted plugin, plus all pending/active note state dropped. CC120 is
+    /// the one that matters: 123 releases notes and lets them ring out, which is not a panic.
+    Panic = 52,
 }
 
 /// A track's routing (UiCommandType::SetTrackRouting). Mirrors the C++
