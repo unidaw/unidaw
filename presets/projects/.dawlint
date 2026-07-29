@@ -12,3 +12,18 @@
 # machine but the one that wrote it. Resolution by name is weaker than by path — it will
 # silently pick a different build — and for a test fixture that is the right trade.
 device-plugin-by-name-only
+
+# NOT DECLARED HERE, and the reason is a gap in the mechanism rather than a decision.
+#
+# `stress-128` and `stress-512` exist to put more notes on a lane than anything is
+# expected to handle, and between them they report 60,000+ note-same-tick-in-column.
+# The pile IS the test, so those findings are intentional — but a declaration's scope is
+# a finding's scope (`clip:2`, `track:3`), not a project, and this file covers every
+# project in the directory. So the only declaration available would silence the rule for
+# `maximal` and `webtest` too, and that is the rule that just found a real authoring
+# mistake in both of them: two notes stacked in one column, both playing, one of them
+# reachable only as a pill where two note columns would have shown both.
+#
+# --max-per-rule already solves the flooding (eleven lines instead of sixty thousand)
+# and the count stays truthful. Left at that, and raised with backend, rather than
+# trading a rule that works for a directory that looks quiet.
