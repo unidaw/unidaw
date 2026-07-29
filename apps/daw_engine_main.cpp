@@ -6611,10 +6611,20 @@ struct TrackRuntime {
       enqueuePreview(payload.trackId, pitch, velocity, on);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::AddTrack)) {
-      // Append an empty top-level track at the current extent. Its id == slot index and is
-      // stable. Reuses a leftover/tombstone slot at the extent (bring up a bare host and
-      // blank it), else creates a fresh runtime. Refused at the cap.
-      const uint32_t slot = liveTrackCount.load(std::memory_order_acquire);
+      // Add an empty top-level track. Refill the LOWEST tombstone first (RemoveTrack leaves
+      // middle holes) so repeated middle remove+add can't leak slots toward the cap; only
+      // when there is no tombstone do we append at the extent. Its id == slot index and is
+      // stable. A reused slot gets a bare host + blank state; a fresh extent slot is created.
+      uint32_t slot = liveTrackCount.load(std::memory_order_acquire);
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        for (uint32_t i = 0; i < slot && i < tracks.size(); ++i) {
+          if (tracks[i] && tracks[i]->removed.load(std::memory_order_acquire)) {
+            slot = i;  // lowest tombstone — refill it instead of appending
+            break;
+          }
+        }
+      }
       if (slot >= daw::kUiMaxTracks) {
         std::cerr << "UI: AddTrack refused — at track cap " << daw::kUiMaxTracks
                   << std::endl;
