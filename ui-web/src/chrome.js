@@ -155,8 +155,36 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
    */
   const editMode = label('ch-mode', '');
   const followMode = label('ch-mode', '');
+  /**
+   * "The patcher is making notes."
+   *
+   * The single most expensive missing sentence in this application. A patcher
+   * graph that emits events plays them through whatever instrument the track
+   * has, alongside whatever is written in the clip — so you drop an instrument
+   * on a track, hear notes you did not write, and nothing on screen accounts for
+   * them. That has been reported as "phantom notes" three times, cost hours each
+   * time, and produced three confident wrong diagnoses from me on the first
+   * round: a missing note-off, MIDI leaking between tracks, a version race.
+   * Every one of them was a story invented to explain a sound with no visible
+   * source, and the fix each time was to notice a euclidean node.
+   *
+   * Deliberately in the CHROME, next to EDIT and follow, rather than on a device
+   * card. The badge that already existed hangs off a device, and a track-level
+   * generator with an empty device chain therefore showed nothing at all —
+   * which is exactly the case that keeps biting. This is the one place a person
+   * is already looking to find out what mode the app is in, and "notes are
+   * coming from somewhere other than the notes" is a mode.
+   *
+   * It says the graph, not the track: the engine publishes ONE patcher region
+   * ("one global graph today"), so which track is generating is not knowable
+   * here yet. Asked for as a per-track flag bit; until then, saying the true
+   * thing loudly beats saying the precise thing not at all.
+   */
+  const genWarn = label('ch-mode ch-gen', '');
+  let lastGen = null;
   let lastEdit = null, lastFollow = null;
-  entry.append(viewLabel, octLabel, stepLabel, velLabel, digitMode, editMode, followMode);
+  entry.append(viewLabel, octLabel, stepLabel, velLabel, digitMode, editMode,
+               followMode, genWarn);
 
   const scales = document.createElement('button');
   scales.className = 'ch-btn ch-scales';
@@ -212,7 +240,7 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
     update({ playheadTick, transport: tstate, linkText, octave, editStep,
              velocity = 100, rejectText = '', viewName = '', keyName = '',
              tempoMilliBpm = 120000, tempoPointCount = 0, meter = DEFAULT_METER,
-             digitMode: digitModeText = '',
+             digitMode: digitModeText = '', generating = '',
              editMode: editOn = true, followPlayhead: followOn = false }) {
       if (digitModeText !== lastDigitMode) {
         lastDigitMode = digitModeText;
@@ -229,6 +257,15 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
       if (followOn !== lastFollow) {
         lastFollow = followOn;
         followMode.firstChild.nodeValue = followOn ? 'follow' : '';
+      }
+      // Guarded on the phrase, which changes when a graph loads and never again.
+      if (generating !== lastGen) {
+        lastGen = generating;
+        genWarn.firstChild.nodeValue = generating;
+        genWarn.title = generating
+          ? 'A patcher graph is emitting notes of its own, on top of what is '
+            + 'written in the clips. Press F3 to see it, or `delnode <id>` to remove it.'
+          : '';
       }
       // Guarded on the two numbers, not on the record: the engine will republish a
       // meter on every frame, and a guard keyed on object identity would rebuild

@@ -346,3 +346,14 @@
 /* The roll needs its own containing block for the splitter handle, exactly as
    #rdock did. */
 #piano { position: absolute; }
+
+/* The patcher-is-generating warning. Louder than the modes beside it on purpose:
+   it explains a sound with no visible source, which is the one thing in this app
+   people have repeatedly failed to work out on their own. */
+.ch-gen {
+  color: var(--uni-text-fx);
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  padding: 0 4px;
+}
+.ch-gen:empty { display: none; border: 0; padding: 0; }

@@ -129,6 +129,38 @@ export function configFields(type) {
 }
 
 /** Nudge one field, clamped. Returns the new eight-value config. */
+/**
+ * Pixels of vertical drag per one step of a node's value.
+ *
+ * A DRAG, not a mapping of the bar's width to the field's range. Two reasons:
+ * several node fields declare no range at all (the bar is hidden for those, see
+ * `frac < 0` in patcher.js), so there is nothing to map; and a value that jumps
+ * to wherever you happened to press is the one behaviour nobody wants on a
+ * parameter they are dialling in by ear.
+ *
+ * 6px is a compromise measured against the two extremes it has to serve:
+ * `steps` on a euclidean runs 1..64, so a full-height drag should cross it, and
+ * `velocity` runs 0..127 in steps of 1, where finer would be unusable.
+ */
+export const PATCH_DRAG_PX_PER_STEP = 6;
+
+/**
+ * How many steps a drag of `dy` pixels has asked for, given how many it has
+ * already been credited with.
+ *
+ * Returns the DELTA to apply now, and the total to remember. Accumulating the
+ * total rather than differencing consecutive events is what keeps a slow drag
+ * from being rounded to nothing on every frame: five 2px moves are ten pixels
+ * and one step, not five moves of zero.
+ *
+ * Up is positive. Screen y grows downward and every DAW disagrees with it here.
+ */
+export function dragSteps(dy, alreadyApplied, fine = false) {
+  const px = PATCH_DRAG_PX_PER_STEP * (fine ? 4 : 1);
+  const total = Math.trunc(-dy / px);
+  return { delta: total - alreadyApplied, total };
+}
+
 export function nudgeConfig(type, config, fieldIndex, dir) {
   const limits = CONFIG_LIMITS[NODE_TYPES[type]];
   if (!limits || !limits[fieldIndex]) return null;

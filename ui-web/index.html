@@ -430,6 +430,22 @@ const patcherHost = document.getElementById('patcher');
 let patcherBuf = null;
 const patcher = new Patcher(patcherHost, {
   onSelect: (id) => { state.selectedNode = id; state.selectedField = 0; schedule(); },
+  /** Clicking a row picks that field, so the keyboard carries on from there. */
+  onFieldPick: (id, at) => { state.selectedNode = id; state.selectedField = at; schedule(); },
+  /**
+   * Dragging a row changes it.
+   *
+   * Through `nudgePatcher`, which is the same function the arrow keys call — one
+   * clamp, one pending-edit record, one refusal message. A second path that
+   * built its own config would drift from the keyboard's the first time either
+   * changed, and this file has that scar already.
+   */
+  onFieldDrag: (id, at, steps) => {
+    state.selectedNode = id; state.selectedField = at;
+    const dir = steps < 0 ? -1 : 1;
+    for (let i = 0; i < Math.abs(steps); i++) { if (!nudgePatcher(dir)) break; }
+    schedule();
+  },
 });
 
 /**
@@ -2327,7 +2343,7 @@ const _chromeOpts = { playheadTick: 0, transport: 0, linkText: '', octave: 0,
                       editStep: 0, velocity: 100, rejectText: '', viewName: '',
                       keyName: '', digitMode: '', tempoMilliBpm: 120000,
                       tempoPointCount: 0, meter: null,
-                      editMode: true, followPlayhead: false };
+                      editMode: true, followPlayhead: false, generating: '' };
 function updateChrome() {
   const o = _chromeOpts;
   o.playheadTick = engine ? engine.playheadTick : 0;
@@ -2354,6 +2370,11 @@ function updateChrome() {
   o.meter = songMeter();
   o.editMode = state.editMode;
   o.followPlayhead = state.followPlayhead;
+  // The same phrase the device card uses, put where it can be SEEN. See the
+  // comment on `genWarn` in chrome.js: a generator on a track with no devices
+  // has no card to hang a badge on, which is precisely the case that has been
+  // reported as phantom notes three times.
+  o.generating = generatorPhrase();
   chrome.update(o);
 }
 

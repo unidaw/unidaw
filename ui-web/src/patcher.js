@@ -17,7 +17,7 @@
 // box bigger than the one on screen, so every one of them began past the node's
 // right edge and ended in mid-air. One owner for one number.
 
-import { PORT_SIZE } from './patchermodel.js';
+import { PORT_SIZE, dragSteps } from './patchermodel.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -34,10 +34,15 @@ function text(parent) {
 }
 
 export class Patcher {
-  constructor(host, { onSelect } = {}) {
+  constructor(host, { onSelect, onFieldPick, onFieldDrag } = {}) {
     this.host = host;
     this.host.className = 'pt';
     this.onSelect = onSelect;
+    // Picking a field and changing it are separate callbacks because they are
+    // separate acts: clicking a row must select it whether or not you then drag,
+    // and the keyboard operates on whatever the last click selected.
+    this.onFieldPick = onFieldPick;
+    this.onFieldDrag = onFieldDrag;
 
     // Three layers, and the split matters: `.pt-scroll` is the viewport and
     // `.pt-canvas` is the graph's own extent, so the notice below can stay put
@@ -72,10 +77,56 @@ export class Patcher {
     this._nAdd = null; this._nUnres = -1;
     this._w = -1; this._h = -1;
 
+    /*
+     * A NODE'S PARAMETERS, BY POINTER.
+     *
+     * They were keyboard-only: select a node, arrow left/right to a field, arrow
+     * up/down to change it. Every value on screen looked like a control and none
+     * of them answered a click, which is the failure GUIDELINES calls out — a
+     * thing that looks operable and is not costs more than one that looks inert.
+     *
+     * Press picks the row. Drag changes it, vertically, accumulating pixels (see
+     * `dragSteps`) so a slow drag is not rounded away. Shift is finer. The
+     * keyboard path is untouched and shares the same selection, so the two
+     * agree about what "the selected field" means.
+     */
     this.nodesEl.addEventListener('pointerdown', (e) => {
       const el = e.target.closest('.pt-node');
-      if (el && this.onSelect) this.onSelect(Number(el.dataset.id));
+      if (!el) return;
+      const id = Number(el.dataset.id);
+      if (this.onSelect) this.onSelect(id);
+      const row = e.target.closest('.pt-row');
+      if (!row) return;
+      const at = el._rows.indexOf(row);
+      if (at < 0) return;
+      if (this.onFieldPick) this.onFieldPick(id, at);
+      if (!this.onFieldDrag) return;
+      this._fieldDrag = { id, at, y0: e.clientY, applied: 0, pointerId: e.pointerId };
+      this.nodesEl.setPointerCapture(e.pointerId);
+      // The row keeps the cursor for the whole gesture, so a drag that wanders
+      // off the row still reads as adjusting the thing you grabbed.
+      row.classList.add('dragging');
+      this._fieldRow = row;
     });
+    this.nodesEl.addEventListener('pointermove', (e) => {
+      const d = this._fieldDrag;
+      if (!d) return;
+      const { delta, total } = dragSteps(e.clientY - d.y0, d.applied, e.shiftKey);
+      if (!delta) return;
+      d.applied = total;
+      this.onFieldDrag(d.id, d.at, delta);
+    });
+    const end = (e) => {
+      const d = this._fieldDrag;
+      if (!d) return;
+      this._fieldDrag = null;
+      try { this.nodesEl.releasePointerCapture(d.pointerId); } catch (err) { /* gone */ }
+      if (this._fieldRow) { this._fieldRow.classList.remove('dragging'); this._fieldRow = null; }
+    };
+    this.nodesEl.addEventListener('pointerup', end);
+    this.nodesEl.addEventListener('pointercancel', end);
+    this._fieldDrag = null;
+    this._fieldRow = null;
   }
 
   _node(i) {

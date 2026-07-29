@@ -155,3 +155,10 @@
 .pt-key-swatch.audio   { background: var(--uni-patcher-port-audio); height: 3px; }
 .pt-key-swatch.control { background: repeating-linear-gradient(to right,
                            var(--uni-patcher-port-control) 0 3px, transparent 3px 9px); }
+
+/* A node parameter answers the pointer. `row-resize` rather than `ns-resize`:
+   the value moves with the drag, it is not a boundary being pushed. */
+.pt-row { cursor: row-resize; }
+/* Held for the whole gesture, including after the pointer has left the row —
+   pointer capture means the row you grabbed is still the one you are changing. */
+.pt-row.dragging { background: var(--uni-surface-cursor-cell); }

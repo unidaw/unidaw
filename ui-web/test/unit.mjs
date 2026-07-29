@@ -22,7 +22,7 @@ import {
   gainLabel, panLabel, faderPosition, gainAtPosition, GAIN_MIN, GAIN_MAX,
 } from '../src/mixermodel.js';
 import { isBlackKey, pitchLabel, fitLowPitch } from '../src/pianomodel.js';
-import { describeConfig, configFields, nudgeConfig,
+import { describeConfig, configFields, nudgeConfig, dragSteps,
          NODE_TYPES } from '../src/patchermodel.js';
 import { snapLoop, TICKS_PER_BAR, buildArrangeModel, dragPlacement, clipZoneAt,
          CLIP_HANDLE_PX, createArrangeBuffer } from '../src/arrangemodel.js';
@@ -327,6 +327,33 @@ test('the trim handle the cursor shows is the one the drag begins in', async () 
   assert.equal(Number(width[1]), CLIP_HANDLE_PX,
     'arrange.css and clipZoneAt disagree about how wide a trim handle is');
   assert.ok(/cursor:\s*col-resize/.test(rule[0]), 'a handle with no cursor is invisible');
+});
+
+test('dragging a node parameter accumulates rather than rounding to nothing', () => {
+  // The bug this shape exists to avoid: differencing consecutive pointer events
+  // and truncating each one. A slow drag arrives as many small moves, every one
+  // of which truncates to zero steps, so the parameter never moves at all and
+  // the control reads as broken.
+  let applied = 0;
+  for (const dy of [-2, -4, -6, -8, -10]) {          // five 2px moves upward
+    const r = dragSteps(dy, applied);
+    applied = r.total;
+  }
+  assert.equal(applied, 1, 'ten pixels of travel is one step, not five zeros');
+
+  // Up is positive. Screen y grows downward, and a parameter that falls when you
+  // drag up is the fastest way to make a control feel wrong.
+  assert.ok(dragSteps(-60, 0).total > 0, 'dragging up raises the value');
+  assert.ok(dragSteps(60, 0).total < 0, 'dragging down lowers it');
+
+  // The delta is what to apply NOW, so re-reporting the same position asks for
+  // nothing further.
+  const a = dragSteps(-60, 0);
+  assert.equal(dragSteps(-60, a.total).delta, 0, 'a pointer that stopped asks for no more');
+
+  // Fine is slower, not inverted or scaled the wrong way.
+  assert.ok(Math.abs(dragSteps(-60, 0, true).total) < Math.abs(dragSteps(-60, 0).total),
+            'shift makes the same travel do less');
 });
 
 test('a nudge clamps, and leaves every other value exactly as it was read', () => {

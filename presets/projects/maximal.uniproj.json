@@ -88,6 +88,53 @@
             "name": "Zebra2",
             "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
             "uid16": ""
+          },
+          "patcher": {
+            "nodes": [
+              {
+                "id": 0,
+                "type": "euclidean",
+                "euclidean": {
+                  "steps": 16,
+                  "hits": 5,
+                  "offset": 0,
+                  "duration_ticks": 0,
+                  "degree": 1,
+                  "octave_offset": 0,
+                  "velocity": 100,
+                  "base_octave": 4
+                }
+              },
+              {
+                "id": 1,
+                "type": "random_degree",
+                "random_degree": {
+                  "degree": 8,
+                  "velocity": 100,
+                  "duration_ticks": 0
+                }
+              },
+              {
+                "id": 2,
+                "type": "event_out"
+              }
+            ],
+            "edges": [
+              {
+                "src_node_id": 0,
+                "src_port_id": 1,
+                "dst_node_id": 1,
+                "dst_port_id": 0,
+                "kind": "event"
+              },
+              {
+                "src_node_id": 1,
+                "src_port_id": 1,
+                "dst_node_id": 2,
+                "dst_port_id": 0,
+                "kind": "event"
+              }
+            ]
           }
         }
       ],
@@ -212,54 +259,7 @@
           "note_id": 1012
         }
       ],
-      "chords": [],
-      "patcher": {
-        "nodes": [
-          {
-            "id": 0,
-            "type": "euclidean",
-            "euclidean": {
-              "steps": 16,
-              "hits": 5,
-              "offset": 0,
-              "duration_ticks": 0,
-              "degree": 1,
-              "octave_offset": 0,
-              "velocity": 100,
-              "base_octave": 4
-            }
-          },
-          {
-            "id": 1,
-            "type": "random_degree",
-            "random_degree": {
-              "degree": 8,
-              "velocity": 100,
-              "duration_ticks": 0
-            }
-          },
-          {
-            "id": 2,
-            "type": "event_out"
-          }
-        ],
-        "edges": [
-          {
-            "src_node_id": 0,
-            "src_port_id": 1,
-            "dst_node_id": 1,
-            "dst_port_id": 0,
-            "kind": "event"
-          },
-          {
-            "src_node_id": 1,
-            "src_port_id": 1,
-            "dst_node_id": 2,
-            "dst_port_id": 0,
-            "kind": "event"
-          }
-        ]
-      }
+      "chords": []
     },
     {
       "track_id": 1,
@@ -628,6 +628,32 @@
             "name": "Zebra2",
             "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
             "uid16": ""
+          },
+          "patcher": {
+            "nodes": [
+              {
+                "id": 0,
+                "type": "random_degree",
+                "random_degree": {
+                  "degree": 8,
+                  "velocity": 100,
+                  "duration_ticks": 0
+                }
+              },
+              {
+                "id": 1,
+                "type": "event_out"
+              }
+            ],
+            "edges": [
+              {
+                "src_node_id": 0,
+                "src_port_id": 1,
+                "dst_node_id": 1,
+                "dst_port_id": 0,
+                "kind": "event"
+              }
+            ]
           }
         }
       ],
@@ -1026,33 +1052,7 @@
           "retrigger": 2
         }
       ],
-      "chords": [],
-      "patcher": {
-        "nodes": [
-          {
-            "id": 0,
-            "type": "random_degree",
-            "random_degree": {
-              "degree": 8,
-              "velocity": 100,
-              "duration_ticks": 0
-            }
-          },
-          {
-            "id": 1,
-            "type": "event_out"
-          }
-        ],
-        "edges": [
-          {
-            "src_node_id": 0,
-            "src_port_id": 1,
-            "dst_node_id": 1,
-            "dst_port_id": 0,
-            "kind": "event"
-          }
-        ]
-      }
+      "chords": []
     },
     {
       "track_id": 4,

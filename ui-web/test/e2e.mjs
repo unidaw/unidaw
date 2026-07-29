@@ -1633,7 +1633,22 @@ section('a device that makes its own notes says so');
    * truth. Checking the clean project afterwards asserted the opposite of what
    * is actually the case.
    */
-  await page.evaluate((pr) => window.__uni.loadProject(pr), PROJECT);
+  /*
+   * `waveform`, not PROJECT. This used to load webtest, on the assumption that
+   * it had no generator — and it did not, because its generators were TRACK
+   * level and a track-level graph has no card to appear on. That was the whole
+   * bug: three "phantom notes" reports, and the one surface that could have said
+   * so was structurally unable to.
+   *
+   * The presets have since been migrated so every patcher lives on a device, and
+   * webtest's Bass now correctly says `generates: euclidean + random` on its
+   * card. Which broke this check, and the break was the migration WORKING.
+   *
+   * So the quiet case needs a project that genuinely has no patcher anywhere.
+   * `waveform` is one; if that ever changes, this fails and says to pick another
+   * rather than quietly asserting nothing.
+   */
+  await page.evaluate(() => window.__uni.loadProject('waveform'));
   await page.waitForTimeout(1800);
   const plain = await feet();
   ok(!/generates:/.test(plain), 'a device with no graph says nothing about generating',
@@ -1749,6 +1764,130 @@ section('clips answer to the pointer');
  * Drives `page.mouse` throughout. No __uni: a drag that only works when a test
  * calls the handler directly is the exact failure this suite has shipped before.
  */
+/*
+ * A GENERATOR SAYS SO WHERE YOU CAN SEE IT — blocked on the engine.
+ *
+ * Three separate "phantom notes" reports, all the same cause: a patcher graph
+ * emitting notes alongside the clip, with nothing on screen to account for them.
+ * The chrome has a slot for the warning and the wiring is in place. It cannot be
+ * turned on yet, and the reason is worth recording because it is not obvious:
+ *
+ *   load webtest   -> published graph: euclidean, random, out
+ *   load waveform  -> published graph: euclidean, random, out    <-- same
+ *   load webtest   -> published graph: euclidean, random, out
+ *
+ * `waveform` contains no generator at all. The engine publishes ONE patcher
+ * region ("one global graph today" — daw-bridge/src/control.rs) and it does not
+ * follow the loaded project, so reading it would announce a generator on a song
+ * that has none. That is a worse failure than silence: an indicator whose job is
+ * to explain an unexplained sound must never invent one.
+ *
+ * Unblocks when the chain snapshot carries, per device, whether that device's
+ * graph generates events — asked for, and superseded by the larger decision that
+ * a patcher IS a device, at which point the chain shows it in place.
+ */
+section('a generating patcher says so in the chrome');
+{
+  const g = await page.evaluate(() => {
+    const el = document.querySelector('.ch-gen');
+    return el ? { present: true, text: el.textContent.trim() } : null;
+  });
+  ok(g !== null, 'the chrome has a slot for it');
+  blocked(false, 'and names what is generating',
+          'the engine publishes one global patcher region that does not follow the '
+          + 'loaded project; showing it would be a false positive on every song');
+}
+
+/*
+ * A NODE'S PARAMETERS ANSWER THE POINTER.
+ *
+ * They were keyboard-only — select a node, arrows to a field, arrows to change
+ * it. Every value on screen was drawn as a labelled bar with a fill, which is
+ * what a control looks like, and none of them did anything when clicked. A thing
+ * that looks operable and is not costs more than one that looks inert.
+ *
+ * Driven with a real pointer. The whole claim is "the mouse works", so a test
+ * that called the handler would be testing nothing.
+ */
+section('patcher node parameters can be dragged');
+{
+  await page.evaluate(() => window.__uni.run('load generator'));
+  await page.waitForTimeout(1800);
+  await page.evaluate(() => window.__uni.run('view patcher'));
+  await page.waitForTimeout(600);
+
+  // A row on a node that HAS editable configuration. `euclidean` does; the
+  // output node does not, and a test that grabbed that one would read its
+  // refusal as a failure to drag.
+  const row = await page.evaluate(() => {
+    for (const n of document.querySelectorAll('.pt-node')) {
+      const rows = [...n.querySelectorAll('.pt-row')].filter((r) => r.style.display !== 'none');
+      if (!rows.length) continue;
+      const r = rows[0].getBoundingClientRect();
+      if (r.width < 10 || r.height < 4) continue;
+      return { node: Number(n.dataset.id), x: r.x + r.width / 2, y: r.y + r.height / 2,
+               name: rows[0].querySelector('.pt-row-n').textContent,
+               value: rows[0].querySelector('.pt-row-v').textContent };
+    }
+    return null;
+  });
+  if (!row) {
+    blocked(false, 'patcher node parameters can be dragged', 'no configurable node on screen');
+  } else {
+    ok(true, `found a parameter to drag: ${row.name} = ${row.value}`);
+    // A press alone selects and changes nothing — clicking to look at a value
+    // must not edit it.
+    await page.mouse.move(row.x, row.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    const afterClick = await page.evaluate(() => {
+      const r = document.querySelector('.pt-row.sel');
+      return r ? r.querySelector('.pt-row-v').textContent : null;
+    });
+    ok(afterClick === row.value, 'clicking a row selects it without changing it',
+       `${row.value} -> ${afterClick}`);
+
+    // Now drag UP, which must RAISE the value. Far enough to cross several
+    // steps, so a one-step-per-event bug and a rounded-to-nothing bug both show.
+    await page.mouse.move(row.x, row.y);
+    await page.mouse.down();
+    await page.mouse.move(row.x, row.y - 60, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    const up = await page.evaluate(() => {
+      const r = document.querySelector('.pt-row.sel');
+      return r ? r.querySelector('.pt-row-v').textContent : null;
+    });
+    ok(up !== null && Number(up) > Number(row.value),
+       'dragging up raises the value', `${row.value} -> ${up}`);
+
+    // And back down. Not merely "it changed": a control that moves the wrong way
+    // is worse than one that does not move.
+    await page.mouse.move(row.x, row.y);
+    await page.mouse.down();
+    await page.mouse.move(row.x, row.y + 60, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    const down = await page.evaluate(() => {
+      const r = document.querySelector('.pt-row.sel');
+      return r ? r.querySelector('.pt-row-v').textContent : null;
+    });
+    ok(down !== null && Number(down) < Number(up), 'and dragging down lowers it',
+       `${up} -> ${down}`);
+
+    // The engine agrees, not just the screen. A pending optimistic value that
+    // never landed would pass every check above.
+    await page.waitForTimeout(700);
+    const settled = await page.evaluate(() => {
+      const n = (window.__uni.patchNodes() || [])[0];
+      return n ? n.config[0] : null;
+    });
+    ok(settled !== null, 'and the engine published the change back',
+       `engine config[0] = ${settled}`);
+  }
+}
+
 section('dragging a clip moves it');
 {
   await page.evaluate(() => window.__uni.run('view arrange'));
