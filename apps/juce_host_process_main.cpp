@@ -933,6 +933,9 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
           for (int ch = 0; ch < numOutputs; ++ch) {
             std::fill(outputPtrs[ch], outputPtrs[ch] + state.header->blockSize, 0.0f);
           }
+          // Nothing in, nothing out — say so. Leaving the slot unwritten would show
+          // whatever it held last, or 0 mB (full scale) if it was never written.
+          writeMeters(static_cast<int>(index), 0.0, 0.0, 0.0, 0.0);
         }
       } else {
         // Movement 4 multi-out: a plugin prepared with aux outputs writes its stems to
@@ -968,37 +971,51 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
                                static_cast<int64_t>(blockStart),
                                writeAux ? state.auxOutputPtrs.data() : nullptr,
                                writeAux ? static_cast<int>(state.numAuxChannelsOut) : 0);
-        if (levelSamples > 0) {
-          double outSumSq = 0.0, outPeak = 0.0;
-          for (int ch = 0; ch < std::min(pluginInputCount, numOutputs); ++ch) {
-            const float* dst = outputPtrs[ch];
-            if (!dst) {
-              continue;
-            }
-            for (uint32_t i = 0; i < state.header->blockSize; ++i) {
-              const double v = std::fabs(static_cast<double>(dst[i]));
-              outSumSq += v * v;
-              outPeak = std::max(outPeak, v);
-            }
+        // OUTPUT is metered for every device, including one with no audio input.
+        // This used to be gated on levelSamples (an INPUT count) and bounded by
+        // pluginInputCount, so an instrument — zero inputs — measured nothing and its
+        // meter slot was never written at all. A never-written slot is zero, and zero
+        // millibels on this scale is FULL SCALE: every instrument on every track drew a
+        // meter pegged at the top on a stopped transport, which reads as clipping
+        // rather than as a bug. Reported by the frontend against v24.
+        double outSumSq = 0.0, outPeak = 0.0;
+        size_t outSamples = 0;
+        for (int ch = 0; ch < numOutputs; ++ch) {
+          const float* dst = outputPtrs[ch];
+          if (!dst) {
+            continue;
           }
-          const double inRms = std::sqrt(inSumSq / static_cast<double>(levelSamples));
-          const double outRms = std::sqrt(outSumSq / static_cast<double>(levelSamples));
-          writeMeters(static_cast<int>(index), inPeak, outPeak, inRms, outRms);
-          // Only learn from blocks with real signal, or near-silence would swamp the
-          // estimate with noise ratios. Clamp hard: a gate or a limiter can produce an
-          // absurd instantaneous ratio, and bypass must never become a volume weapon.
-          if (inRms > 1e-5 && outRms > 1e-6) {
-            // out/in, NOT in/out: the bypassed signal must be made as loud as the
-            // PROCESSED one. With an insert at 0.5x, bypass must be scaled by 0.5 to
-            // match it; the inverse made bypass 2x the raw sum — 4x the active level,
-            // i.e. louder rather than matched. Caught only once the test used a fixture
-            // with a known gain, where the expected number was arithmetic.
-            const double ratio = std::clamp(outRms / inRms, 0.05, 20.0);
-            const double smoothing = slot.levelMatchMeasured ? 0.02 : 1.0;
-            slot.levelMatchGain = static_cast<float>(
-                slot.levelMatchGain * (1.0 - smoothing) + ratio * smoothing);
-            slot.levelMatchMeasured = true;
+          for (uint32_t i = 0; i < state.header->blockSize; ++i) {
+            const double v = std::fabs(static_cast<double>(dst[i]));
+            outSumSq += v * v;
+            outPeak = std::max(outPeak, v);
           }
+          outSamples += state.header->blockSize;
+        }
+        const double inRms =
+            levelSamples ? std::sqrt(inSumSq / static_cast<double>(levelSamples)) : 0.0;
+        const double outRms =
+            outSamples ? std::sqrt(outSumSq / static_cast<double>(outSamples)) : 0.0;
+        // A device with no audio input reports SILENCE on the in_* pair, not zero dB:
+        // toMillibels maps 0.0 to kUiMeterSilent, so a generator draws an empty input
+        // meter, which is the honest picture of a device that generates.
+        writeMeters(static_cast<int>(index), levelSamples ? inPeak : 0.0, outPeak,
+                    inRms, outRms);
+        // Level matching still needs a real input to learn a ratio from. Only learn
+        // from blocks with real signal, or near-silence would swamp the estimate with
+        // noise ratios. Clamp hard: a gate or a limiter can produce an absurd
+        // instantaneous ratio, and bypass must never become a volume weapon.
+        if (levelSamples > 0 && inRms > 1e-5 && outRms > 1e-6) {
+          // out/in, NOT in/out: the bypassed signal must be made as loud as the
+          // PROCESSED one. With an insert at 0.5x, bypass must be scaled by 0.5 to
+          // match it; the inverse made bypass 2x the raw sum — 4x the active level,
+          // i.e. louder rather than matched. Caught only once the test used a fixture
+          // with a known gain, where the expected number was arithmetic.
+          const double ratio = std::clamp(outRms / inRms, 0.05, 20.0);
+          const double smoothing = slot.levelMatchMeasured ? 0.02 : 1.0;
+          slot.levelMatchGain = static_cast<float>(
+              slot.levelMatchGain * (1.0 - smoothing) + ratio * smoothing);
+          slot.levelMatchMeasured = true;
         }
       }
       inputPtrs = outputPtrs;

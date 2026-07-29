@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <vector>
 
 #include "apps/patcher_abi.h"
 #include "apps/patcher_assemble.h"
@@ -39,6 +40,81 @@ uint32_t countDegreeEvents(const NodeBuffer& buffer) {
   return count;
 }
 
+// Run ONE euclidean node with a given config and hand back everything it emitted, so a
+// test can look at the payload fields rather than only counting events.
+//
+// This exists because four of euclidean's seven editable fields — degree,
+// octave_offset, velocity, base_octave — were in the config, stored, round-tripped
+// through the read-back and drawn as turnable controls, while the DSP hard-zeroed them
+// into the payload. Nothing here could see it: the graph tests counted events, and an
+// event with degree 0 is still an event.
+std::vector<daw::MusicalLogicPayload> runEuclideanOnce(
+    const daw::PatcherEuclideanConfig& config) {
+  NodeBuffer buffer;
+  uint64_t overflowTick = 0;
+  daw::PatcherContext ctx{};
+  ctx.abi_version = daw::kPatcherAbiVersion;
+  ctx.block_start_tick = 0;
+  ctx.block_end_tick = kNanoticksPerQuarter * 4;
+  ctx.block_start_sample = 0;
+  ctx.sample_rate = 48000.0f;
+  ctx.tempo_bpm = 120.0f;
+  ctx.num_frames = 512;
+  ctx.event_buffer = buffer.events.data();
+  ctx.event_capacity = static_cast<uint32_t>(buffer.events.size());
+  ctx.event_count = &buffer.count;
+  ctx.last_overflow_tick = &overflowTick;
+  ctx.node_config = &config;
+  ctx.node_config_size = sizeof(config);
+  assert(daw::patcher_process_euclidean != nullptr);
+  daw::patcher_process_euclidean(&ctx);
+
+  std::vector<daw::MusicalLogicPayload> out;
+  for (uint32_t i = 0; i < buffer.count; ++i) {
+    const auto& entry = buffer.events[i];
+    if (entry.type != static_cast<uint16_t>(daw::EventType::MusicalLogic)) {
+      continue;
+    }
+    daw::MusicalLogicPayload payload{};
+    std::memcpy(&payload, entry.payload, sizeof(payload));
+    out.push_back(payload);
+  }
+  return out;
+}
+
+void testEuclideanConfigReachesThePayload() {
+  daw::PatcherEuclideanConfig config{};
+  config.steps = 8;
+  config.hits = 3;
+  config.degree = 5;
+  config.octave_offset = -2;
+  config.velocity = 77;
+  config.base_octave = 6;
+  const auto events = runEuclideanOnce(config);
+  assert(events.size() == 3);  // one bar, 8 steps, 3 hits
+  for (const auto& payload : events) {
+    assert(payload.degree == 5);
+    assert(payload.octave_offset == -2);
+    assert(payload.velocity == 77);
+    assert(payload.base_octave == 6);
+  }
+
+  // 0 MEANS 0. `hits 0` used to be read as "unset, use the default 5", so a generator
+  // the user had silenced went on playing five notes a bar while the read-back
+  // cheerfully reported 0. Defaults come from the config struct now, applied where the
+  // file is parsed, so a zero that reaches the DSP was actually asked for.
+  daw::PatcherEuclideanConfig silent = config;
+  silent.hits = 0;
+  assert(runEuclideanOnce(silent).empty());
+
+  // Zero steps is not a pattern; it must not divide by zero either.
+  daw::PatcherEuclideanConfig noSteps = config;
+  noSteps.steps = 0;
+  assert(runEuclideanOnce(noSteps).empty());
+
+  std::cout << "euclidean_config_reaches_dsp: ok" << std::endl;
+}
+
 uint32_t runGraphOnce(const daw::PatcherGraph& graph) {
   const uint64_t blockStart = 0;
   const uint64_t blockEnd = kNanoticksPerQuarter * 4;
@@ -61,7 +137,7 @@ uint32_t runGraphOnce(const daw::PatcherGraph& graph) {
       }
     }
     daw::PatcherContext ctx{};
-    ctx.abi_version = 3;
+    ctx.abi_version = daw::kPatcherAbiVersion;
     ctx.block_start_tick = blockStart;
     ctx.block_end_tick = blockEnd;
     ctx.block_start_sample = 0;
@@ -210,6 +286,7 @@ void testAssemblePatcherPool() {
 
 int main() {
   testAssemblePatcherPool();
+  testEuclideanConfigReachesThePayload();
 
   daw::PatcherGraphState state;
 

@@ -1,8 +1,9 @@
 //! Control surface for a running engine.
 //!
 //! Queries are read-only and always safe. Commands write into the UI command
-//! ring, which is single-producer: while the UI app is running it owns that
-//! ring, so `do` requires --force to acknowledge you are the only writer.
+//! ring, which is multi-producer (M2.18): writers reserve a slot with a
+//! compare-and-swap, so the UI app and any number of CLI invocations can write
+//! at the same time without losing each other's commands.
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -19,36 +20,42 @@ daw-cli — control surface for a running engine
   daw-cli watch                    stream transport state (default)
   daw-cli get transport            transport + versions as JSON
   daw-cli get tracks               per-track state as JSON
-  daw-cli get clip --force [--track N] [--bars N] [--grid]
+  daw-cli get notes --track N      that track's notes from the published region
+                                   (read-only: reads the published region)
+  daw-cli get clip [--track N] [--bars N] [--grid]
                                    notes and chords in a window, as JSON or as
                                    a tracker-style text grid
-  daw-cli do save [name] --force   save the project (default name: default)
-  daw-cli do load [name] --force   load the project
-  daw-cli do play --force          toggle transport
-  daw-cli do panic --force         all sound off (CC120+CC123 everywhere)
-  daw-cli do note --force --track N --nanotick T --pitch P
-                  [--velocity V] [--duration D] [--column C]
-  daw-cli do delete-note --force --track N --nanotick T --pitch P [--column C]
-  daw-cli do notes --force --track N --pitches 60,64,67 [--start T] [--step S]
+  daw-cli do save [name]           save the project (default name: default)
+  daw-cli do load [name]           load the project
+  daw-cli do play                  toggle transport
+  daw-cli do panic                 all sound off (CC120+CC123 everywhere)
+  daw-cli do note --track N --nanotick T --pitch P
+                  [--velocity V] [--duration D] [--column C] [--base V]
+  daw-cli do delete-note --track N --nanotick T --pitch P [--column C]
+  daw-cli do notes --track N --pitches 60,64,67 [--start T] [--step S]
                    [--duration D] [--velocity V] [--column C]
                                    writes a phrase in one invocation
-  daw-cli do chord --force --track N --nanotick T --degree D
+  daw-cli do chord --track N --nanotick T --degree D
                    [--quality Q] [--inversion I] [--octave O] [--duration D]
-  daw-cli do harmony --force --nanotick T --root R --scale S
-  daw-cli do mixer --force --track N [--gain-db X] [--pan Y]
+  daw-cli do harmony --nanotick T --root R --scale S
+  daw-cli do mixer --track N [--gain-db X] [--pan Y]
                    [--mute 0|1] [--solo 0|1]
 
-`get clip` needs --force too: reading a window means asking the engine for one,
-and any request is a write to the single-producer command ring.
+`get clip` writes too: reading a window means asking the engine for one, and any
+request is a write to the command ring. `get notes` does not — it reads the
+published region, so it can never disturb a writer.
 
-Write a phrase with `do notes`, not a shell loop over `do note`. The engine
-accepts one clip edit per version, and each invocation reads the version once
-at startup, so back-to-back processes all claim the same version and only the
-first survives. `do notes` numbers them itself.
+Write a phrase with `do notes`, not a shell loop over `do note`. The ring
+carries all of them now, but the engine still accepts one clip edit per version
+per track, and each invocation reads that version once at startup — so
+back-to-back processes on the SAME track all claim the same base and only the
+first survives. `do notes` numbers them itself. Different tracks do not collide
+at all (M2.17); `get tracks` reports each track's own clip_version.
 
-Queries are read-only. `do` writes to the UI command ring, which allows a
-single producer: if the UI app is running it already owns that ring, so pass
---force only when nothing else is writing.
+Queries are read-only. `do` writes to the UI command ring, which is
+multi-producer as of M2.18: writers reserve a slot with a compare-and-swap and
+publish it, so the UI app and any number of CLI invocations can write at once.
+--force is gone; it is still accepted and ignored so old scripts keep working.
 
 Environment:
   DAW_UI_SHM_NAME / DAW_SHM_NAME   shared memory name (default /daw_engine_ui)
@@ -141,7 +148,7 @@ fn get_transport(handle: &EngineHandle) -> i32 {
     0
 }
 
-// do set-param <track> <device> <uid16hex> <milli> [--force]
+// do set-param <track> <device> <uid16hex> <milli>
 // uid16hex is the 32-char hex of the param's durable id (from `get device-params`);
 // milli is the normalized value in milli (0..1000).
 fn set_param(handle: &EngineHandle, args: &[&str]) -> i32 {
@@ -184,7 +191,7 @@ fn set_param(handle: &EngineHandle, args: &[&str]) -> i32 {
     }
 }
 
-// do set-tempo <bpm> [position_nanotick] [--force]
+// do set-tempo <bpm> [position_nanotick]
 // Flatten to <bpm> when no position, else insert/replace a point at position.
 fn set_tempo(handle: &EngineHandle, args: &[&str]) -> i32 {
     let bpm: f64 = match args.get(1).and_then(|s| s.parse().ok()) {
@@ -223,6 +230,41 @@ fn set_tempo(handle: &EngineHandle, args: &[&str]) -> i32 {
     }
 }
 
+/// Read-only note listing, straight out of the all-tracks published region. Unlike
+/// `get clip` this asks the engine for nothing, so it writes nothing at all and cannot
+/// perturb what it is measuring — which is what makes it usable as a test oracle and
+/// as an observer while someone else is writing.
+fn get_notes(handle: &EngineHandle, args: &[String]) -> i32 {
+    let track = match flag_u64(args, "--track", Some(0)) {
+        Ok(v) => v as u32,
+        Err(err) => {
+            eprintln!("daw-cli: {err}");
+            return 2;
+        }
+    };
+    let Some(snapshot) = handle.read_track_clip(track) else {
+        eprintln!("daw-cli: no published clip region for track {track}");
+        return 1;
+    };
+    let count = (snapshot.note_count as usize).min(snapshot.notes.len());
+    println!("{{");
+    println!("  \"track_id\": {},", snapshot.track_id);
+    println!("  \"clip_version\": {},", snapshot.clip_version);
+    println!("  \"note_count\": {count},");
+    println!("  \"notes\": [");
+    for index in 0..count {
+        let note = snapshot.notes[index];
+        let comma = if index + 1 == count { "" } else { "," };
+        println!(
+            "    {{ \"nanotick\": {}, \"pitch\": {}, \"velocity\": {}, \"column\": {} }}{comma}",
+            note.t_on, note.pitch, note.velocity, note.column
+        );
+    }
+    println!("  ]");
+    println!("}}");
+    0
+}
+
 fn get_tracks(handle: &EngineHandle) -> i32 {
     let Some(snapshot) = handle.snapshot() else {
         eprintln!("daw-cli: no coherent snapshot available");
@@ -249,8 +291,12 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
         let flag = flags.get(index).copied().unwrap_or(0);
         let is_master = flag & daw_bridge::layout::UI_TRACK_FLAG_MASTER != 0;
         let comma = if index + 1 == count { "" } else { "," };
+        // M2.17: this track's OWN clip version — the base an edit to this track must
+        // present. The global `clip_version` in `get transport` moves whenever ANY
+        // track changes and is no longer the right base for a track-scoped edit.
+        let clip_version = handle.clip_version_for_track(id);
         println!(
-            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"peak_rms\": {rms} }}{comma}"
+            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
         );
     }
     println!("  ]");
@@ -307,7 +353,10 @@ fn write_notes(handle: &EngineHandle, args: &[String]) -> i32 {
     let velocity = flag_u64(args, "--velocity", Some(100)).unwrap_or(100).min(127);
     let column = flag_u64(args, "--column", Some(0)).unwrap_or(0);
 
-    let mut base = handle.clip_version();
+    // M2.17: the base is this TRACK's version. Each note consumes one, so the run
+    // numbers itself from there — and because acceptance is per track, a phrase written
+    // here is no longer invalidated by someone editing a different track mid-run.
+    let mut base = handle.clip_version_for_track(track);
     let mut sent = 0usize;
     for (index, pitch) in pitches.iter().enumerate() {
         let nanotick = start + step * index as u64;
@@ -796,7 +845,9 @@ fn watch(handle: &EngineHandle) -> i32 {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let force = args.iter().any(|arg| arg == "--force");
+    // M2.18: the ring is multi-producer now, so nothing needs acknowledging. The flag
+    // is still accepted (and ignored) because it appears in a lot of scripts and notes.
+    let _force = args.iter().any(|arg| arg == "--force");
     let positional: Vec<&str> = args
         .iter()
         .map(String::as_str)
@@ -812,16 +863,9 @@ fn main() {
                 1
             }
         },
-        // `get clip` has to ask the engine for a window, and a request is a
-        // ring write, so it needs the same acknowledgement as `do`.
+        // `get clip` has to ask the engine for a window, and a request is a ring
+        // write, so it needs a writable handle just like `do`.
         Some((&"get", rest)) if rest.first() == Some(&"clip") => {
-            if !force {
-                eprintln!(
-                    "daw-cli: `get clip` asks the engine for a window, which writes to the\n\
-                     single-producer command ring. Pass --force when nothing else is writing."
-                );
-                std::process::exit(2);
-            }
             match EngineHandle::attach(&name, true) {
                 Ok(handle) => get_clip(&handle, &args),
                 Err(err) => {
@@ -830,17 +874,10 @@ fn main() {
                 }
             }
         }
-        // Reads its own read-back, but first SENDS RequestDeviceParams — that is a
-        // write to the single-producer command ring, so it needs a writable handle
-        // (a read-only mmap makes send_command a silent no-op) and the --force guard.
+        // Reads its own read-back, but first SENDS RequestDeviceParams — a ring write,
+        // so it needs a writable handle (a read-only mmap makes send_command a silent
+        // no-op).
         Some((&"get", rest)) if rest.first() == Some(&"device-params") => {
-            if !force {
-                eprintln!(
-                    "daw-cli: `get device-params` writes RequestDeviceParams to the\n\
-                     single-producer command ring. Pass --force when nothing else is writing."
-                );
-                std::process::exit(2);
-            }
             match EngineHandle::attach(&name, true) {
                 Ok(handle) => get_device_params(&handle, rest),
                 Err(err) => {
@@ -850,13 +887,6 @@ fn main() {
             }
         }
         Some((&"get", rest)) if rest.first() == Some(&"waveform") => {
-            if !force {
-                eprintln!(
-                    "daw-cli: `get waveform` writes RequestWaveform to the\n\
-                     single-producer command ring. Pass --force when nothing else is writing."
-                );
-                std::process::exit(2);
-            }
             match EngineHandle::attach(&name, true) {
                 Ok(handle) => get_waveform(&handle, rest),
                 Err(err) => {
@@ -876,6 +906,7 @@ fn main() {
             match rest.first() {
                 Some(&"transport") => get_transport(&handle),
                 Some(&"tracks") => get_tracks(&handle),
+                Some(&"notes") => get_notes(&handle, &args),
                 Some(&"meters") => {
                     // v24 per-insert meters, dBFS millibels. device_id matches the chain
                     // snapshot's device, not a position.
@@ -903,14 +934,6 @@ fn main() {
             }
         }
         Some((&"do", rest)) => {
-            if !force {
-                eprintln!(
-                    "daw-cli: `do` writes to the single-producer UI command ring.\n\
-                     If the UI app is running it already owns that ring and a second\n\
-                     writer would corrupt it. Pass --force when nothing else is writing."
-                );
-                std::process::exit(2);
-            }
             let handle = match EngineHandle::attach(&name, true) {
                 Ok(handle) => handle,
                 Err(err) => {
@@ -970,8 +993,19 @@ fn main() {
                         UiCommandType::DeleteNote
                     };
                     // The engine advances one version per applied edit, so read
-                    // the current one immediately before sending.
-                    let base = handle.clip_version();
+                    // the current one immediately before sending — and read the
+                    // version of the TRACK being edited (M2.17), not the global one,
+                    // so a concurrent author on another track does not invalidate
+                    // this edit.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    // --base lets a caller present a base it read EARLIER (that is what
+                    // a real concurrent author does: read, think, then write). Without
+                    // it every invocation re-reads immediately before sending and can
+                    // never exercise staleness at all.
+                    let base = match flag_u64(&args, "--base", Some(u64::MAX)) {
+                        Ok(v) if v != u64::MAX => v as u32,
+                        _ => handle.clip_version_for_track(track),
+                    };
                     match note_command(command, &args, base) {
                         Ok(payload) => match handle.send_command(payload) {
                             Ok(()) => {
@@ -1294,7 +1328,8 @@ fn main() {
                     }
                 },
                 Some(&"chord") => {
-                    let base = handle.clip_version();
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let base = handle.clip_version_for_track(track);  // M2.17: per track
                     match chord_command(&args, base) {
                         Ok(payload) => match handle.send_chord_command(payload) {
                             Ok(()) => {

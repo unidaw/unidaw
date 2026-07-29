@@ -45,7 +45,7 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 //    into transport/keyjazz. The ring sits right after the mailbox at a computed offset
 //    (hostKeyRingOffset), so it needs no ShmHeader field — host↔engine only, kShmVersion
 //    stands. Gated here because an old host wouldn't allocate/init the ring.
-constexpr uint16_t kControlVersion = 11;  // v11: ResetPlugins (panic)
+constexpr uint16_t kControlVersion = 12;  // v12: EventEntry::ready (MPSC rings)
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,

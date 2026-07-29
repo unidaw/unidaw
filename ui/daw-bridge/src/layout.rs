@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 24;
+pub const K_SHM_VERSION: u16 = 25;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
@@ -221,6 +221,12 @@ pub struct EventEntry {
     pub size: u16,
     pub flags: u32,
     pub payload: [u8; 40],
+    /// M2.18 publication flag for the multi-producer ring. A producer CAS-reserves a
+    /// slot on `write_index`, fills the entry, then stores 1 here; the engine will not
+    /// read a slot until it is set. It occupies what was already tail padding, so the
+    /// struct is the same 64 bytes and nothing else moved — but a producer that leaves
+    /// it 0 has its command ignored, so every writer must go through `write_entry`.
+    pub ready: u32,
 }
 
 #[repr(C, align(64))]
@@ -1058,6 +1064,8 @@ mod tests {
     #[test]
     fn ui_edit_batch_entry_layout_matches_cpp() {
         const_assert_eq!(size_of::<EventEntry>(), 64);
+        // M2.18: `ready` must sit in the old tail padding, or every ring offset moves.
+        assert_eq!(offset_of!(EventEntry, ready), 60);
         const_assert_eq!(size_of::<UiEditBatchEntry>(), 2112);
         const_assert_eq!(align_of::<UiEditBatchEntry>(), 64);
         assert_eq!(offset_of!(UiEditBatchEntry, batch_id), 0);

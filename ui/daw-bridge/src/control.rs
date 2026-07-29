@@ -281,6 +281,19 @@ impl EngineHandle {
         unsafe { std::ptr::read_volatile(&(*self.header).ui_clip_version) }
     }
 
+    /// M2.17: the base version to present for an edit to `track_id`. Acceptance is
+    /// per track in the engine, so the global counter is the WRONG base — another
+    /// author typing on a different track moves it, and this edit is then refused as
+    /// stale even though nothing touched this track. The per-track counter is
+    /// published in that track's clip snapshot. Falls back to the global for a track
+    /// with no published snapshot, which is the same fallback the engine guard makes.
+    pub fn clip_version_for_track(&self, track_id: u32) -> u32 {
+        match self.read_track_clip(track_id) {
+            Some(snapshot) => snapshot.clip_version,
+            None => self.clip_version(),
+        }
+    }
+
     /// The published loop span in nanoticks (start, end) — mirrors the engine's
     /// SetLoopRange, so the UI can draw the loop region.
     pub fn loop_range(&self) -> (u64, u64) {
@@ -953,19 +966,41 @@ impl EngineHandle {
             size: size as u16,
             flags: 0,
             payload: [0u8; 40],
+            ready: 0,
         };
         let bytes = unsafe { std::slice::from_raw_parts(payload, size) };
         entry.payload[..bytes.len()].copy_from_slice(bytes);
 
-        let write = unsafe { (*ring.header).write_index.load(Ordering::Relaxed) };
-        let read = unsafe { (*ring.header).read_index.load(Ordering::Acquire) };
-        let next = (write + 1) & ring.mask;
-        if next == read {
-            return Err("UI command ring is full (engine not draining)".to_string());
-        }
+        // M2.18: MULTI-PRODUCER. Reserve the slot with a CAS on write_index, fill it,
+        // and only then publish it by setting `ready`. Reading write_index and storing
+        // it back — what this did before — meant two writers claimed the same slot and
+        // one command was silently lost, which is why `daw-cli do` needed --force.
+        let mut write = unsafe { (*ring.header).write_index.load(Ordering::Relaxed) };
+        let next = loop {
+            let next = (write + 1) & ring.mask;
+            if next == unsafe { (*ring.header).read_index.load(Ordering::Acquire) } {
+                return Err("UI command ring is full (engine not draining)".to_string());
+            }
+            match unsafe {
+                (*ring.header).write_index.compare_exchange_weak(
+                    write,
+                    next,
+                    Ordering::AcqRel,
+                    Ordering::Relaxed,
+                )
+            } {
+                Ok(_) => break next,
+                Err(actual) => write = actual,
+            }
+        };
+        let _ = next;
         unsafe {
-            *ring.entries.add(write as usize) = entry;
-            (*ring.header).write_index.store(next, Ordering::Release);
+            let slot = ring.entries.add(write as usize);
+            std::ptr::write_volatile(slot, entry);
+            // Release: everything written above is visible to the engine before it can
+            // observe ready == 1.
+            let ready = &(*slot).ready as *const u32 as *const AtomicU32;
+            (*ready).store(1, Ordering::Release);
         }
         Ok(())
     }

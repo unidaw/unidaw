@@ -260,9 +260,16 @@ bool buildPatcherGraph(PatcherGraph& graph) {
 
 uint32_t addPatcherNode(PatcherGraphState& state, PatcherNodeType type) {
   std::lock_guard<std::mutex> lock(state.mutex);
-  const uint32_t maxId = maxNodeId(state.graph);
-  if (state.nextNodeId <= maxId) {
-    state.nextNodeId = maxId + 1;
+  // Skip past ids already in the graph (a loaded preset numbers its own nodes), but
+  // only when there ARE any: maxNodeId returns 0 for an empty graph, so the old
+  // unconditional `nextNodeId <= maxId` bumped the very first node to id 1 and node id
+  // 0 could never be issued. File-authored graphs start at 0, so a UI-built graph
+  // numbering from 1 was a gratuitous difference.
+  if (!state.graph.nodes.empty()) {
+    const uint32_t maxId = maxNodeId(state.graph);
+    if (state.nextNodeId <= maxId) {
+      state.nextNodeId = maxId + 1;
+    }
   }
   PatcherNode node;
   node.id = state.nextNodeId++;

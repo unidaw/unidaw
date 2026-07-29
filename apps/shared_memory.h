@@ -73,7 +73,13 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //     copies them per track slot into a published UiDeviceMeterRegion. Both new fields are
 //     APPENDED, so every earlier offset is unchanged and only sizeof(ShmHeader) grows.
 //     Lockstep with the Rust mirror.
-constexpr uint16_t kShmVersion = 24;
+// 25 (M2.18): EventEntry::ready — the multi-producer publication flag, taken from
+//    the struct's existing tail padding. No offset moves and no region changes size,
+//    but the ring protocol does: a producer must CAS-reserve its slot and then set
+//    ready=1, and the consumer ignores any slot that is not ready. A producer built
+//    against v24 leaves ready at 0 and its commands are silently dropped, which is
+//    why this is a version bump and not a free addition.
+constexpr uint16_t kShmVersion = 25;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -250,6 +256,17 @@ struct alignas(64) EventEntry {
   uint16_t size = 0;
   uint32_t flags = 0;
   uint8_t payload[40]{};
+  // M2.18: the multi-producer publication flag. A producer CAS-reserves a slot on
+  // writeIndex, fills the entry, and only then stores ready=1; the consumer refuses
+  // to read a slot until it is ready. Without this, two producers that reserve the
+  // same index both write the same slot and one command vanishes — which is why the
+  // ring was single-producer and `daw-cli do` needed --force.
+  //
+  // It lives in what was already tail padding, so sizeof(EventEntry) is unchanged
+  // and not one offset in the SHM moves. It is a plain uint32_t, not ShmAtomicU32,
+  // because EventEntry is copied by value throughout the engine and std::atomic is
+  // not copyable; event_ring.cpp touches this one field through atomic builtins.
+  uint32_t ready = 0;
 };
 
 struct alignas(64) UiEditBatchEntry {
@@ -262,6 +279,9 @@ struct alignas(64) UiEditBatchEntry {
 // Changing any of them requires bumping kShmVersion and updating the Rust
 // mirror plus its layout test.
 static_assert(sizeof(EventEntry) == 64, "EventEntry must be one cache line");
+static_assert(offsetof(EventEntry, ready) == 60,
+              "EventEntry::ready must occupy the former tail padding, so that adding "
+              "it moves no other field and no region offset");
 static_assert(sizeof(UiEditBatchEntry) == 2112,
               "UiEditBatchEntry must match the Rust mirror");
 static_assert(offsetof(UiEditBatchEntry, ops) == 64,

@@ -8,6 +8,14 @@
 
 namespace daw {
 
+// The patcher node ABI. A node function refuses to run unless the context declares
+// exactly this version, so ANY caller that hardcodes a number silently stops executing
+// nodes the moment it is bumped — which is what happened to patcher_graph_tests, pinned
+// at 3 while this went to 4, quietly turning its whole node-execution harness into a
+// no-op. Everything that fills a PatcherContext uses this constant.
+constexpr uint32_t kPatcherAbiVersion = 4;
+
+
 constexpr uint16_t kEventTypeMusicalLogic = 9;
 constexpr uint8_t kMusicalLogicKindGate = 1;
 constexpr uint8_t kMusicalLogicKindDegree = 2;
@@ -51,7 +59,7 @@ struct PatcherLfoConfig {
 };
 
 struct alignas(64) PatcherContext {
-  uint32_t abi_version = 4;
+  uint32_t abi_version = kPatcherAbiVersion;
   uint64_t block_start_tick = 0;
   uint64_t block_end_tick = 0;
   uint64_t block_start_sample = 0;

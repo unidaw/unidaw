@@ -1844,6 +1844,11 @@ struct TrackRuntime {
     // v22 add/remove track: a tombstoned slot — the track was removed but its slot is kept
     // so neighbours' ids don't renumber. Published with kUiTrackFlagAbsent, skipped by save
     // and the mix, refillable by AddTrack. A live track has this false.
+    // M2.17: this TRACK's clip version. The global clipVersion stays as the "something
+    // changed" signal every observer polls; ACCEPTANCE is per track, so two authors
+    // editing DIFFERENT tracks never collide — which is the whole point of the item.
+    // Bumped alongside the global wherever this track's clips change.
+    std::atomic<uint32_t> trackClipVersion{0};
     std::atomic<bool> removed{false};
     std::atomic<bool> mirrorPending{false};
     std::atomic<uint64_t> mirrorGateSampleTime{0};
@@ -2024,6 +2029,7 @@ struct TrackRuntime {
   std::vector<std::unique_ptr<TrackRuntime>> tracks;
   tracks.reserve(daw::kUiMaxTracks);
   std::mutex tracksMutex;
+
   // Movement 4: how many tracks the UI should see. The `tracks` vector only ever grows
   // (a runtime is reused, never removed), so publishing tracks.size() leaves phantom
   // lanes from a larger project loaded before a smaller one. This is set to the loaded
@@ -2194,6 +2200,50 @@ struct TrackRuntime {
   std::atomic<bool> clipDirty{true};
   std::atomic<bool> playing{false};
   std::atomic<uint32_t> clipVersion{0};
+
+  // M2.17: bump BOTH counters for a track-scoped change — the track's (what acceptance
+  // compares, and what the diff hands back to the caller as its new base) and the global
+  // (the "something moved" signal every publisher polls to know its region is stale).
+  // One helper so a bump site cannot advance one and forget the other: forgetting the
+  // track counter makes that track's edits succeed forever regardless of base, and
+  // forgetting the global freezes the published regions so the edit is never visible.
+  // Returns the track's NEW version.
+  //
+  // Two entry points because of lock order. Code already holding a track's trackMutex
+  // must not reach for tracksMutex (every other path takes tracksMutex first, briefly,
+  // then trackMutex — taking them the other way round is the classic inversion), so
+  // those sites pass the TrackRuntime* they already hold. TrackRuntime objects are never
+  // destroyed, so the pointer form needs no lock at all.
+  auto bumpClipVersionFor = [&](TrackRuntime* runtime) -> uint32_t {
+    const uint32_t globalNext = clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (!runtime) {
+      return globalNext;
+    }
+    return runtime->trackClipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+  };
+  auto bumpTrackClipVersion = [&](uint32_t trackId) -> uint32_t {
+    TrackRuntime* runtime = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      if (trackId < tracks.size()) {
+        runtime = tracks[trackId].get();
+      }
+    }
+    return bumpClipVersionFor(runtime);
+  };
+  // Every track's version advances: used where a change is NOT scoped to one track (a
+  // project load replaces every clip; a waveform arrival invalidates every mirror), so
+  // no caller is left holding a base that silently still matches.
+  auto bumpAllTrackClipVersions = [&]() {
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);
+    std::lock_guard<std::mutex> lock(tracksMutex);
+    for (auto& rt : tracks) {
+      if (rt) {
+        rt->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
+      }
+    }
+  };
+
   std::atomic<uint32_t> chainVersion{0};
   std::atomic<uint32_t> routingVersion{0};
   std::atomic<uint32_t> modVersion{0};
@@ -2534,7 +2584,12 @@ struct TrackRuntime {
       snapshot->flags = daw::kUiClipWindowFlagResync;
       return;
     }
-    const uint32_t clipVersionValue = clipVersion.load(std::memory_order_acquire);
+    // M2.17: a track's snapshot carries THAT TRACK's version, which is what the
+    // caller must present back as its base. Publishing the global here is what made
+    // every author collide: typing on track 1 moved the number track 4's editor was
+    // holding, and track 4's next edit was refused as stale.
+    const uint32_t clipVersionValue =
+        runtime->trackClipVersion.load(std::memory_order_acquire);
     std::lock_guard<std::mutex> lock(runtime->trackMutex);
     daw::buildUiClipWindowSnapshot(runtime->track.clip,
                                    pending->request,
@@ -2575,6 +2630,9 @@ struct TrackRuntime {
       if (!runtime) {
         std::memset(&snap, 0, sizeof(daw::UiClipWindowSnapshot));
         snap.trackId = trackId;
+        // No such track: publish the GLOBAL, because that is exactly what the
+        // engine's acceptance guard falls back to for an unknown track. Publishing
+        // 0 here would advertise a base the guard would then reject.
         snap.clipVersion = clipVersionValue;
         continue;
       }
@@ -2585,8 +2643,11 @@ struct TrackRuntime {
       request.windowEndNanotick = UINT64_MAX;  // whole clip, capped by note array.
       request.cursorEventIndex = 0;
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
-      daw::buildUiClipWindowSnapshot(runtime->track.clip, request,
-                                     clipVersionValue, snap);
+      // Per-track version (see the requested-window path). The REBUILD gate above is
+      // still the global counter — any track's change makes this whole region stale.
+      daw::buildUiClipWindowSnapshot(
+          runtime->track.clip, request,
+          runtime->trackClipVersion.load(std::memory_order_acquire), snap);
     }
   };
 
@@ -4498,8 +4559,7 @@ struct TrackRuntime {
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
                                std::memory_order_release);
     clipDirty.store(true, std::memory_order_release);
-    const uint32_t v = clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
-    emitClipResync(trackId, v);
+    emitClipResync(trackId, bumpClipVersionFor(runtime));
     return true;
   };
 
@@ -4924,8 +4984,9 @@ struct TrackRuntime {
     // loaded timeline read as 0 events.
     harmonyDirty.store(true, std::memory_order_release);
     // A load replaces every clip; advance clipVersion so observers (and the
-    // all-tracks published snapshot, which refreshes on this value) re-read.
-    clipVersion.fetch_add(1, std::memory_order_acq_rel);
+    // all-tracks published snapshot, which refreshes on this value) re-read — and
+    // every per-track version too, so nobody's pre-load base still matches.
+    bumpAllTrackClipVersions();
 
     // M3.3: the transport loops over the whole arrangement now, not a fixed bar.
     // Arrangement end = the furthest placement end across all tracks; the flat
@@ -5591,7 +5652,7 @@ struct TrackRuntime {
 
     // The UI's mirror is now arbitrarily stale, so force a full resync rather
     // than trying to describe the change as a diff.
-    clipVersion.fetch_add(1, std::memory_order_acq_rel);
+    bumpAllTrackClipVersions();
     clipDirty.store(true, std::memory_order_release);
     daw::UiDiffPayload resync{};
     resync.diffType = static_cast<uint16_t>(daw::UiDiffType::ResyncNeeded);
@@ -5605,14 +5666,28 @@ struct TrackRuntime {
   // to be a no-op. Otherwise the UI stays permanently one ahead and every
   // later edit is rejected — inside a batch that discards the whole remainder
   // and emits a resync request per op.
-  auto consumeClipVersionForNoOp = [&]() {
-    clipVersion.fetch_add(1, std::memory_order_acq_rel);
+  auto consumeClipVersionForNoOp = [&](TrackRuntime* runtime) {
+    bumpClipVersionFor(runtime);
   };
 
+  // M2.17: acceptance is PER TRACK. The caller presents the version of the track it is
+  // editing (published in uiTrackClipVersion), so an edit to track 4 is no longer refused
+  // because someone typed on track 1 — the collision that made `daw-cli do` need --force
+  // and made two authors impossible. Falls back to the global counter when the track is
+  // unknown, which keeps non-track-scoped edits behaving exactly as before.
   auto requireMatchingClipVersion = [&](uint32_t baseVersion,
                                         daw::UiCommandType commandType,
                                         uint32_t trackId) -> bool {
-    const uint32_t current = clipVersion.load(std::memory_order_acquire);
+    uint32_t current = clipVersion.load(std::memory_order_acquire);
+    // Undo/Redo (and the other global-scope ops) can touch ANY track, so they are
+    // gated on the global counter — comparing them against the caller's incidental
+    // trackId would let an undo of a track-3 edit ride on track 0's version.
+    if (!daw::uiCommandIsGlobalScope(commandType)) {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      if (trackId < tracks.size() && tracks[trackId]) {
+        current = tracks[trackId]->trackClipVersion.load(std::memory_order_acquire);
+      }
+    }
     daw::UiDiffPayload diffPayload{};
     if (daw::requireMatchingClipVersion(baseVersion, current, diffPayload)) {
       return true;
@@ -5710,7 +5785,7 @@ struct TrackRuntime {
       EditTarget target = locateEditTarget(*runtime, nanotick, /*create=*/!isNoteOff);
       if (!target.valid) {
         // An OFF (or edit) with no clip to land in — nothing to do.
-        consumeClipVersionForNoOp();
+        consumeClipVersionForNoOp(runtime);
         noOp = true;
       } else {
         const uint64_t relSpanEnd =
@@ -5718,14 +5793,15 @@ struct TrackRuntime {
         daw::MusicalClip& clip = runtime->ownedClips[target.ownedIndex].clip;
         if (isNoteOff) {
           result = daw::endNoteInColumn(clip, trackId, target.relTick, column,
-                                        clipVersion, recordUndo);
+                                        runtime->trackClipVersion, recordUndo);
           if (!result) {
-            consumeClipVersionForNoOp();
+            consumeClipVersionForNoOp(runtime);
             noOp = true;
           }
         } else {
           result = daw::addNoteToClip(clip, trackId, target.relTick, duration,
-                                      pitch, velocity, flags, clipVersion,
+                                      pitch, velocity, flags,
+                                      runtime->trackClipVersion,
                                       recordUndo, relSpanEnd, noteIdOverride);
         }
         if (result) {
@@ -5746,6 +5822,9 @@ struct TrackRuntime {
       return false;
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
+    // The store already advanced this track's version and stamped result->diff with it.
+    // The global counter is the publishers' staleness signal, so it moves in step.
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);
     clipDirty.store(true, std::memory_order_release);
     emitUiDiff(result->diff);
     return true;
@@ -5792,7 +5871,7 @@ struct TrackRuntime {
       std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
                                  std::memory_order_release);
     }
-    clipVersion.fetch_add(1, std::memory_order_acq_rel);
+    bumpClipVersionFor(runtime);
     clipDirty.store(true, std::memory_order_release);
     return true;
   };
@@ -5824,7 +5903,8 @@ struct TrackRuntime {
       if (target.valid) {
         daw::MusicalClip& clip = runtime->ownedClips[target.ownedIndex].clip;
         result = daw::removeNoteFromClip(clip, trackId, target.relTick, pitch,
-                                         flags, clipVersion, recordUndo);
+                                         flags, runtime->trackClipVersion,
+                                         recordUndo);
         if (result) {
           forkOwnedClip(*runtime, target.ownedIndex);
           growLengthsForContent(*runtime, target);
@@ -5844,11 +5924,12 @@ struct TrackRuntime {
           .field("nanotick", nanotick)
           .field("pitch", static_cast<uint32_t>(pitch))
           .field("action", "version_consumed");
-      consumeClipVersionForNoOp();
+      consumeClipVersionForNoOp(runtime);
       return false;
     }
 
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);  // see applyAddNote
     clipDirty.store(true, std::memory_order_release);
     emitUiDiff(result->diff);
     return true;
@@ -5917,7 +5998,7 @@ struct TrackRuntime {
       // it at the same absolute tick the UI sees.
       EditTarget target = locateEditTarget(*runtime, nanotick, /*create=*/true);
       if (!target.valid) {
-        consumeClipVersionForNoOp();
+        consumeClipVersionForNoOp(runtime);
         return false;
       }
       const uint64_t relTick = target.relTick;
@@ -5962,8 +6043,7 @@ struct TrackRuntime {
 
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
     clipDirty.store(true, std::memory_order_release);
-    const uint32_t nextClipVersion =
-        clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    const uint32_t nextClipVersion = bumpClipVersionFor(runtime);
     daw::UiChordDiffPayload diffPayload{};
     diffPayload.diffType = static_cast<uint16_t>(daw::UiChordDiffType::AddChord);
     diffPayload.trackId = trackId;
@@ -5990,8 +6070,7 @@ struct TrackRuntime {
                                  const daw::MusicalClip::RemovedChord& removed,
                                  uint64_t absTick) -> bool {
     clipDirty.store(true, std::memory_order_release);
-    const uint32_t nextClipVersion =
-        clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    const uint32_t nextClipVersion = bumpTrackClipVersion(trackId);
     daw::UiChordDiffPayload diffPayload{};
     diffPayload.diffType = static_cast<uint16_t>(daw::UiChordDiffType::RemoveChord);
     diffPayload.trackId = trackId;
@@ -6065,7 +6144,7 @@ struct TrackRuntime {
     if (!removed) {
       std::cerr << "UI: RemoveChord - chord not found (track "
                 << trackId << ", id " << chordId << ")" << std::endl;
-      consumeClipVersionForNoOp();
+      consumeClipVersionForNoOp(runtime);
       return false;
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
@@ -6113,7 +6192,7 @@ struct TrackRuntime {
       std::cerr << "UI: RemoveChord - chord not found (track "
                 << trackId << ", tick " << nanotick
                 << ", col " << static_cast<int>(column) << ")" << std::endl;
-      consumeClipVersionForNoOp();
+      consumeClipVersionForNoOp(runtime);
       return false;
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
@@ -7489,7 +7568,11 @@ struct TrackRuntime {
           }
         }
         if (ok) {
-          clipVersion.fetch_add(1, std::memory_order_acq_rel);
+          // Both lanes changed, so both bases must move — advancing only the source
+          // would leave an author on the destination track accepted against a base
+          // that no longer describes its placements.
+          bumpClipVersionFor(src);
+          bumpClipVersionFor(dst);
           clipDirty.store(true, std::memory_order_release);
         }
         std::cout << "UI: MovePlacement " << placementId << " cross-track " << srcId
@@ -8245,6 +8328,45 @@ struct TrackRuntime {
   std::thread uiThread([&] {
     std::cerr << "UI: command thread started" << std::endl;
     uint64_t lastIdleLogMs = 0;
+    // M2.18: abandoned-slot recovery for the multi-producer rings. A producer reserves
+    // a slot, then fills and publishes it — a few instructions apart. If it dies in
+    // between (Ctrl-C'd daw-cli, crashed UI) the slot never becomes ready and the
+    // consumer would wait at it forever, wedging every later command.
+    //
+    // The threshold is deliberately long. A slot that is merely slow belongs to a
+    // producer that is descheduled or page-faulting, and retiring it while that
+    // producer is still alive lets it publish into a slot someone else has since
+    // claimed. Two seconds is far beyond any scheduling hiccup and far below any
+    // useful patience for a wedged ring.
+    constexpr uint64_t kStalledSlotGraceMs = 2000;
+    struct StallWatch { uint32_t slot = 0; uint64_t sinceMs = 0; bool active = false; };
+    StallWatch stallUi, stallAgent;
+    auto recoverStalledRing = [&](daw::EventRingView& ring, StallWatch& watch,
+                                  const char* which) {
+      uint32_t slot = 0;
+      if (!daw::ringStalledSlot(ring, slot)) {
+        watch.active = false;
+        return;
+      }
+      const uint64_t nowMs = uiDiffNowMs();
+      if (!watch.active || watch.slot != slot) {
+        watch = StallWatch{slot, nowMs, true};
+        return;
+      }
+      if (nowMs - watch.sinceMs < kStalledSlotGraceMs) {
+        return;
+      }
+      DAW_EVENT("ring.abandoned_slot")
+          .field("ring", which)
+          .field("slot", slot)
+          .field("waited_ms", static_cast<uint32_t>(nowMs - watch.sinceMs))
+          .field("action", "retired");
+      std::cerr << "UI: retiring abandoned " << which << " ring slot " << slot
+                << " (producer reserved it and never published; it probably died)"
+                << std::endl;
+      daw::ringSkipStalledSlot(ring);
+      watch.active = false;
+    };
     while (running.load()) {
       auto ringUi = getRingUi();
       auto ringUiEdit = getRingUiEdit();
@@ -8289,6 +8411,8 @@ struct TrackRuntime {
         handleUiEntry(uiEntry);
         handled = true;
       }
+      recoverStalledRing(ringUi, stallUi, "ui");
+      recoverStalledRing(ringUiAgent, stallAgent, "agent");
       if (!handled) {
         const uint64_t nowMs = uiDiffNowMs();
         if (uiDebugEnabled() && nowMs - lastIdleLogMs >= 1000) {
@@ -8943,7 +9067,7 @@ struct TrackRuntime {
             }
           }
           daw::PatcherContext ctx{};
-          ctx.abi_version = 4;
+          ctx.abi_version = daw::kPatcherAbiVersion;
           ctx.node_id = node.id;
           ctx.seed = projectSeed.load(std::memory_order_relaxed);
           ctx.block_start_tick = windowStartTicks;
@@ -10231,7 +10355,7 @@ struct TrackRuntime {
           }
         }
         daw::PatcherContext ctx{};
-        ctx.abi_version = 4;
+        ctx.abi_version = daw::kPatcherAbiVersion;
         ctx.node_id = nodeId;
         ctx.seed = projectSeed.load(std::memory_order_relaxed);
         ctx.block_start_tick = blockStartTicks;

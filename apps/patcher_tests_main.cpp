@@ -269,7 +269,7 @@ int main() {
     float ch1[8]{};
     float* channels[2]{ch0, ch1};
     daw::PatcherContext audioCtx{};
-    audioCtx.abi_version = 1;
+    audioCtx.abi_version = daw::kPatcherAbiVersion;
     audioCtx.num_frames = 8;
     audioCtx.audio_channels = channels;
     audioCtx.num_channels = 2;
@@ -291,7 +291,7 @@ int main() {
       modInputs[i] = 0.5f;
     }
     daw::PatcherContext audioCtx{};
-    audioCtx.abi_version = 1;
+    audioCtx.abi_version = daw::kPatcherAbiVersion;
     audioCtx.num_frames = 8;
     audioCtx.audio_channels = channels;
     audioCtx.num_channels = 2;
@@ -312,7 +312,7 @@ int main() {
     float modOutputs[2]{};
     float modSamples[16]{};
     daw::PatcherContext lfoCtx{};
-    lfoCtx.abi_version = 1;
+    lfoCtx.abi_version = daw::kPatcherAbiVersion;
     lfoCtx.block_start_tick = 0;
     lfoCtx.block_end_tick = 0;
     lfoCtx.sample_rate = 48000.0f;
