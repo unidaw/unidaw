@@ -4218,22 +4218,23 @@ struct TrackRuntime {
 
   // Resolve a track's placed AUDIO clips into a sample-domain render list for the
   // audio thread: decode each source (deduped per rebuild), and convert its
-  // placement to output frames. Musical->sample uses the engine rate at a constant
-  // tempo (variable-tempo audio positioning is a later refinement). Runs off the
-  // audio thread (decodes files); the caller atomic_stores the result into
-  // rt.audioRender. Assumes trackMutex is held for the store reads.
+  // placement to output frames. Runs off the audio thread (decodes files); the caller
+  // atomic_stores the result into rt.audioRender. Assumes trackMutex is held for the
+  // store reads.
+  //
+  // M3.22: positions are ABSOLUTE, so they are integrated over the tempo map rather
+  // than multiplied by one tempo. This used to take bpmAtNanotick(0) and apply it to
+  // every tick in the project, which treats the whole song as though it had never
+  // changed tempo — with a change at bar 3, an audio clip at bar 9 landed at the wrong
+  // sample, and the further into the song the worse it got. The note scheduler was
+  // always fine: it advances tick by tick per block using the LOCAL tempo, which is a
+  // different (and also correct) computation.
   auto rebuildAudioRender =
       [&](const TrackRuntime& rt) -> std::shared_ptr<const AudioRenderList> {
     auto list = std::make_shared<AudioRenderList>();
     const double rate = static_cast<double>(engineConfig.sampleRate);
-    const double bpm = tempoProvider.bpmAtNanotick(0);
-    const double samplesPerTick =
-        bpm > 0.0 ? rate * 60.0 /
-                        (bpm * static_cast<double>(
-                                   daw::NanotickConverter::kNanoticksPerQuarter))
-                  : 0.0;
     auto toSamples = [&](uint64_t ticks) -> int64_t {
-      return static_cast<int64_t>(static_cast<double>(ticks) * samplesPerTick);
+      return tickConverter.nanoticksToSamplesAbsolute(ticks);
     };
     // Small per-rebuild decode cache so one file placed twice decodes once.
     struct Cached {
@@ -4335,6 +4336,15 @@ struct TrackRuntime {
       r.params.fadeOutSamples = toSamples(clip->audio.fadeOutNanoticks);
       r.source = std::move(src);
       r.sourceFrames = frames;
+      // What the engine actually scheduled, in samples. Absolute positioning is
+      // invisible from the outside until it is wrong by a whole bar, and then it reads
+      // as "the audio is in the wrong place" with nothing to compare against.
+      DAW_EVENT("audio.region_scheduled")
+          .field("track", rt.trackId)
+          .field("clip", clip->id)
+          .field("at_tick", *pl.at)
+          .field("start_sample", static_cast<uint64_t>(r.params.regionStartSample))
+          .field("length_samples", static_cast<uint64_t>(r.params.regionLengthSamples));
       list->push_back(std::move(r));
     }
     return list;

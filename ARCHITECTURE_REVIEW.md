@@ -196,7 +196,7 @@ The tracker is the only finished thing in the repo and the only thing that can b
 *Ends with: an agent that can work on track 4 while you type on track 1, and a session you can interrogate.*
 
 ### Movement 3 — Structure (8–12 weeks; the real bet)
-22. Time-signature map; prefix-summed seconds-per-quarter tempo integral; a linear song transport (the engine currently wraps at one bar).
+22. Time-signature map; prefix-summed seconds-per-quarter tempo integral; a linear song transport (the engine currently wraps at one bar). **The tempo integral is DONE; the time-signature map is not.** `ITempoProvider` gained `secondsAtNanotick` / `nanotickAtSeconds`, integrated over the map as a prefix sum, and `NanotickConverter` gained `nanoticksToSamplesAbsolute` / `samplesToNanoticksAbsolute` — deliberately named apart from the LOCAL delta conversions, since asking one and using the other IS the defect. Audio clip positioning used to take the tempo at tick 0 and multiply every tick by it, so on a tempo-mapped project the tempo change moved no audio at all; `tools/tempo_map_audio_check.sh` measures the interval between two clicks inside ONE capture (4.0s straight, 6.0s with a slow bar between them) and fails against the old computation. `tempo_integral_tests` (ctest) covers the arithmetic. The transport itself was already linear and loops over the whole arrangement (M3.3); note scheduling was never affected, because it advances per block using the LOCAL tempo.
 23. `Clip` / `Placement` / `Section`; bar positions derived from the section list; `Placement.at` nullable.
 24. Additive-only overrides (`Add`, `Mute`) with a count badge and a one-click revert.
 25. `UiArrangeSummary` IPC. **Build this before drawing a single rectangle.**
