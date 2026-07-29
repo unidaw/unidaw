@@ -4186,7 +4186,16 @@ struct TrackRuntime {
       }
       daw::ProjectTrack track;
       track.trackId = runtime->trackId;
-      track.name = "Track " + std::to_string(runtime->trackId + 1);
+      // Persist the track's actual name (SetTrackName updates runtime->trackName). Saving a
+      // hardcoded "Track N+1" here silently dropped every rename on reload — right in the
+      // live UI mirror, gone on disk. Read under trackMutex (the same lock SetTrackName and
+      // the child-rename path write it under).
+      {
+        std::lock_guard<std::mutex> tlock(runtime->trackMutex);
+        track.name = runtime->trackName.empty()
+                         ? ("Track " + std::to_string(runtime->trackId + 1))
+                         : runtime->trackName;
+      }
       track.parentId = runtime->parentId.load(std::memory_order_relaxed);
       track.collapsed = runtime->collapsed.load(std::memory_order_relaxed);
       track.linesPerBeat = runtime->linesPerBeat.load(std::memory_order_relaxed);
@@ -6712,6 +6721,7 @@ struct TrackRuntime {
             rt->lastAuxOutMask = 0;
             rt->lastSidechainMask = 0;
           }
+          std::shared_ptr<const ClipSnapshot> snapshot;
           {
             std::lock_guard<std::mutex> tlock(rt->trackMutex);
             rt->track.chain = daw::TrackChain{};
@@ -6719,6 +6729,17 @@ struct TrackRuntime {
             rt->ownedClips.clear();
             rt->editableClipIds.clear();
             rt->arrangementDirty.store(false, std::memory_order_relaxed);
+            // Republish the (now empty) flat clip + audio render, exactly like the
+            // load-clear does. Without this the removed track's notes linger in the
+            // published flat clip until reload — the schedule already drops them (its host
+            // is gone and its clips are cleared), but the UI aggregate keeps showing them.
+            snapshot = rebuildFlatAndPublish(*rt);
+            std::atomic_store_explicit(&rt->audioRender, rebuildAudioRender(*rt),
+                                       std::memory_order_release);
+          }
+          if (snapshot) {
+            std::atomic_store_explicit(&rt->clipSnapshot, snapshot,
+                                       std::memory_order_release);
           }
           rt->isAuxChild.store(false, std::memory_order_release);
           rt->parentId.store(0, std::memory_order_relaxed);

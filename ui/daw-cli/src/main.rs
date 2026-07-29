@@ -967,6 +967,32 @@ fn main() {
                         2
                     }
                 },
+                Some(&"rename") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let name = flag(&args, "--name").unwrap_or_default();
+                    let mut bytes = [0u8; 28];
+                    let src = name.as_bytes();
+                    let len = src.len().min(bytes.len());
+                    bytes[..len].copy_from_slice(&src[..len]);
+                    let payload = UiPatcherPresetCommandPayload {
+                        command_type: UiCommandType::SetTrackName as u16,
+                        flags: 0,
+                        track_id: track,
+                        base_version: 0,
+                        name: bytes,
+                    };
+                    let as_ui: UiCommandPayload = unsafe { std::mem::transmute(payload) };
+                    match handle.send_command(as_ui) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"rename\", \"track\": {track}, \"name\": {name:?} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
                 Some(&"add-track") => {
                     match handle.send_command(track_structure_command(
                         UiCommandType::AddTrack,
