@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "apps/harmony_timeline.h"
+#include "apps/lane_quantize.h"
 #include "apps/musical_structures.h"
 #include "apps/shared_memory.h"
 
@@ -22,10 +23,17 @@ struct ClipWindowResult {
   bool complete = false;
 };
 
+// `quantize` is the LANE's non-destructive quantize (M1.13). Each published note keeps
+// its authored tOn and carries the DEVIATION to where it sounds in devNanoticks — the
+// number comes from quantizeTick, the same function that builds the scheduling copy, so
+// the deviation cannot disagree with the audio. Pass a default-constructed LaneQuantize
+// for an unquantized lane; the deviation is then 0 for every note, which is what a
+// reader that ignores the field already assumes.
 ClipWindowResult buildUiClipWindowSnapshot(const MusicalClip& clip,
                                            const ClipWindowRequest& request,
                                            uint32_t clipVersion,
-                                           UiClipWindowSnapshot& snapshot);
+                                           UiClipWindowSnapshot& snapshot,
+                                           const LaneQuantize& quantize = LaneQuantize{});
 
 void buildUiHarmonySnapshot(const std::vector<HarmonyEvent>& events,
                             UiHarmonySnapshot& snapshot);

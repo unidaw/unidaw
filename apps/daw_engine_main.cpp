@@ -2224,6 +2224,17 @@ struct TrackRuntime {
   loopEndNanotick.store(patternTicks, std::memory_order_release);
   std::atomic<bool> clipDirty{true};
   std::atomic<bool> playing{false};
+  // The lane's quantize, read from the one place it lives. Used by BOTH the scheduling
+  // copy and the published deviation, so the number the UI draws and the number the
+  // audio uses cannot come from different settings.
+  auto laneQuantizeOf = [](const TrackRuntime& rt) -> daw::LaneQuantize {
+    daw::LaneQuantize q;
+    q.gridNanoticks = rt.quantizeGrid.load(std::memory_order_acquire);
+    q.strengthMilli = rt.quantizeStrength.load(std::memory_order_acquire);
+    q.swingMilli = rt.quantizeSwing.load(std::memory_order_acquire);
+    return q;
+  };
+
   std::atomic<uint32_t> clipVersion{0};
   // M1.13: moves when a LANE's quantize changes. Deliberately separate from
   // clipVersion — quantize moves no authored note, so it must not invalidate anyone's
@@ -2637,7 +2648,8 @@ struct TrackRuntime {
     daw::buildUiClipWindowSnapshot(runtime->track.clip,
                                    pending->request,
                                    clipVersionValue,
-                                   *snapshot);
+                                   *snapshot,
+                                   laneQuantizeOf(*runtime));
   };
 
   // v9: publish every track's clip in one region so read-only observers see
@@ -2645,15 +2657,26 @@ struct TrackRuntime {
   // per-frame cost is otherwise a needless multi-megabyte memset. `force` seeds
   // the first publish and reruns after a load.
   uint32_t lastClipAllVersion = 0xFFFF'FFFFu;
+  uint32_t lastClipAllQuantizeVersion = 0xFFFF'FFFFu;
   auto writeUiClipAllSnapshot = [&](bool force) {
     if (!uiShm.header || uiShm.header->uiClipAllOffset == 0) {
       return;
     }
     const uint32_t clipVersionValue = clipVersion.load(std::memory_order_acquire);
-    if (!force && clipVersionValue == lastClipAllVersion) {
-      return;  // notes unchanged; the published region is still valid.
+    // The region carries each note's quantize DEVIATION, which moves when the LANE's
+    // quantize changes and not when a note does — and SetLaneQuantize deliberately does
+    // not bump the clip version, because it invalidates nobody's edit. So the rebuild
+    // gate is BOTH counters. Gating on the clip version alone left every published
+    // deviation at its old value until some unrelated note edit happened to rebuild:
+    // the bars would have been right only by accident, and stale the rest of the time.
+    const uint32_t quantizeVersionValue =
+        quantizeVersion.load(std::memory_order_acquire);
+    if (!force && clipVersionValue == lastClipAllVersion &&
+        quantizeVersionValue == lastClipAllQuantizeVersion) {
+      return;  // notes unchanged AND quantize unchanged; the region is still valid.
     }
     lastClipAllVersion = clipVersionValue;
+    lastClipAllQuantizeVersion = quantizeVersionValue;
     // Take a fresh track snapshot at rebuild time. The rebuild runs at most once
     // per clipVersion change, so it must not use a snapshot captured earlier in
     // the publish iteration — during a load that snapshot can predate the tracks
@@ -2690,7 +2713,8 @@ struct TrackRuntime {
       // still the global counter — any track's change makes this whole region stale.
       daw::buildUiClipWindowSnapshot(
           runtime->track.clip, request,
-          runtime->trackClipVersion.load(std::memory_order_acquire), snap);
+          runtime->trackClipVersion.load(std::memory_order_acquire), snap,
+          laneQuantizeOf(*runtime));
     }
   };
 
@@ -4245,11 +4269,8 @@ struct TrackRuntime {
     // emission time matters: moving a note's start changes which block it belongs to,
     // and the scheduler windows on the tick it reads, so a note nudged earlier at
     // emission time would already have missed its block.
-    daw::LaneQuantize q;
-    q.gridNanoticks = rt.quantizeGrid.load(std::memory_order_acquire);
-    q.strengthMilli = rt.quantizeStrength.load(std::memory_order_acquire);
-    q.swingMilli = rt.quantizeSwing.load(std::memory_order_acquire);
-    return buildClipSnapshot(daw::quantizeClipForSchedule(rt.track.clip, q));
+    return buildClipSnapshot(
+        daw::quantizeClipForSchedule(rt.track.clip, laneQuantizeOf(rt)));
   };
 
   // Resolve a clip's sourcePath the one way both the decode funnel and the clip-

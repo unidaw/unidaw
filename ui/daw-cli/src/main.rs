@@ -259,8 +259,13 @@ fn get_notes(handle: &EngineHandle, args: &[String]) -> i32 {
         let note = snapshot.notes[index];
         let comma = if index + 1 == count { "" } else { "," };
         println!(
-            "    {{ \"nanotick\": {}, \"pitch\": {}, \"velocity\": {}, \"column\": {} }}{comma}",
-            note.t_on, note.pitch, note.velocity, note.column
+            "    {{ \"nanotick\": {}, \"pitch\": {}, \"velocity\": {}, \"column\": {}, \
+             \"dev\": {}, \"delay\": {}, \"sounds_at\": {} }}{comma}",
+            note.t_on, note.pitch, note.velocity, note.column,
+            note.dev_nanoticks, note.delay_nanoticks,
+            // The AUTHORED tick plus both offsets — quantize moves the tick and the row-op
+            // delay is added after it, so the sounding position is the sum.
+            note.t_on as i64 + note.dev_nanoticks as i64 + note.delay_nanoticks as i64
         );
     }
     println!("  ]");

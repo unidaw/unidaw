@@ -107,6 +107,8 @@ cli do quantize --track 0 --grid "$SIXTEENTH" --strength 1000 >/dev/null 2>&1 ||
 sleep 1
 cli do save lqout >/dev/null 2>&1 || true
 sleep 1.5
+# Read the PUBLISHED deviations while the engine is still up.
+DEVS="$(cli get notes --track 0 | sed -n 's/.*"dev": \(-\{0,1\}[0-9]*\).*/\1/p' | tr '\n' ' ')"
 
 kill "$ENG" 2>/dev/null || true
 wait "$ENG" 2>/dev/null || true
@@ -149,5 +151,35 @@ done
   fail "only $OFFGRID authored notes are off the grid; the fixture is supposed to place
         all 8 off it, so 'quantize moved them' would be unfalsifiable"
 echo "  all $OFFGRID saved notes remain off the grid, as written"
+
+# HALF THREE: the PUBLISHED deviation must be the same number the scheduler used. It is
+# published (UiClipNote.devNanoticks) precisely so a client never has to re-implement
+# quantizeTick — so if it disagreed with the scheduling copy, the drawn deviation bar
+# would be an instrument that lies in the last digit, which is the digit it exists for.
+#
+# The engine is gone by now, so this re-derives from the SAVED authored ticks: at full
+# strength every note sounds exactly on the grid, so authored + dev must be a multiple of
+# the grid, for every note.
+python3 - "$SIXTEENTH" <<PYD
+import sys
+grid = int(sys.argv[1])
+authored = [int(x) for x in "$AFTER".split()]
+devs = [int(x) for x in "$DEVS".split()]
+if len(devs) != len(authored):
+    print("  FAIL: %d published deviations for %d notes" % (len(devs), len(authored)))
+    raise SystemExit(1)
+bad = [(a, d) for a, d in zip(sorted(authored), devs) if (a + d) % grid != 0]
+if bad:
+    for a, d in bad[:4]:
+        print("  FAIL: note at %d publishes dev %+d, which sounds at %d — not on the grid"
+              % (a, d, a + d))
+    raise SystemExit(1)
+if all(d == 0 for d in devs):
+    print("  FAIL: every published deviation is 0, so the field is not being written")
+    raise SystemExit(1)
+print("  published deviations put every note exactly on the grid: %s"
+      % ", ".join("%+d" % d for d in devs))
+PYD
+[ $? = 0 ] || fail "the published deviation does not agree with the quantize the engine ran"
 
 echo "lane_quantize_check: PASS"

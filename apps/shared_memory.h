@@ -610,7 +610,12 @@ struct UiClipNote {
   uint8_t placementFlags = 0;  // bit0 = muted (drawn struck-out), bit1 = is_add
   uint16_t placementId = 0;
   uint32_t delayNanoticks = 0;  // row op: onset delay, absolute ticks
-  uint32_t reserved3 = 0;
+  // v26 (M1.13): how far this note moves when it SOUNDS, in nanoticks, SIGNED — a note
+  // pulled earlier reads negative. tOn stays the authored value. 0 means the lane is not
+  // quantized, which is also what this field read before it had a meaning, so a reader
+  // that ignores it is correct for every project without quantize. Took the reserved
+  // word, so the struct is the same 40 bytes and no offset moved.
+  int32_t devNanoticks = 0;
 };
 
 constexpr uint8_t kUiClipNoteMuted = 1u << 0;
