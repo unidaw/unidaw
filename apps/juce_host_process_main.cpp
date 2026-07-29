@@ -1047,6 +1047,20 @@ void runControlLoop(HostState& state) {
             break;
           }
         }
+      } else if (type == daw::ControlMessageType::ResetPlugins) {
+        // PANIC: drop every plugin's internal DSP state. CC120 asks a plugin to stop
+        // sounding; a voice wedged inside the plugin's own state ignores it, which is
+        // exactly the case panic exists for. Done here on the control thread under the
+        // plugins lock — never from the audio thread.
+        std::lock_guard<std::mutex> lock(state.pluginsMutex);
+        uint32_t resetCount = 0;
+        for (auto& slot : state.plugins) {
+          if (slot.instance) {
+            slot.instance->reset();
+            ++resetCount;
+          }
+        }
+        std::cerr << "Host: panic reset " << resetCount << " plugin(s)" << std::endl;
       } else if (type == daw::ControlMessageType::SetParam) {
         // Fire-and-forget: resolve uid16 -> stableId and set it. The setter is an
         // atomic store into the param-target array the audio thread reads, so calling

@@ -7497,8 +7497,38 @@ struct TrackRuntime {
         pendingPreviewNotes.clear();
         heldPreview.clear();
       }
-      DAW_EVENT("transport.panic");
-      std::cout << "UI: PANIC — all sound off" << std::endl;
+      // And the part a controller message cannot reach: reset every hosted plugin's own
+      // DSP state. CC120 asks a plugin to stop sounding; a voice wedged inside the
+      // plugin's state ignores it, which is precisely the case panic exists for. Sent on
+      // the control socket (off the RT path) to every track host AND the master's, so a
+      // master-chain plugin is covered too.
+      uint32_t resetHosts = 0;
+      {
+        std::vector<TrackRuntime*> all;
+        {
+          std::lock_guard<std::mutex> lock(tracksMutex);
+          for (auto& rt : tracks) {
+            if (rt) {
+              all.push_back(rt.get());
+            }
+          }
+        }
+        if (masterTrack) {
+          all.push_back(masterTrack.get());
+        }
+        for (auto* rt : all) {
+          if (!rt->hostReady.load(std::memory_order_acquire)) {
+            continue;
+          }
+          std::lock_guard<std::mutex> lock(rt->controllerMutex);
+          if (rt->controller.sendResetPlugins()) {
+            ++resetHosts;
+          }
+        }
+      }
+      DAW_EVENT("transport.panic").field("hosts_reset", static_cast<uint64_t>(resetHosts));
+      std::cout << "UI: PANIC — all sound off (" << resetHosts
+                << " host(s) reset)" << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetPosition)) {
       const uint64_t target =

@@ -604,6 +604,18 @@ bool HostController::sendSetParam(uint32_t pluginIndex, const uint8_t* uid16,
   return sendMessage(socketFd_, ControlMessageType::SetParam, &request, sizeof(request));
 }
 
+bool HostController::sendResetPlugins() {
+  // Panic: ask the host to reset every plugin's internal DSP state. Fire-and-forget; a
+  // dead socket simply means there is nothing to silence.
+  std::lock_guard<std::mutex> lock(socketMutex_);
+  if (socketFd_ < 0) {
+    return false;
+  }
+  // The control loop only dispatches a message whose body is non-empty, so send a byte.
+  const uint8_t body = 0;
+  return sendMessage(socketFd_, ControlMessageType::ResetPlugins, &body, sizeof(body));
+}
+
 bool HostController::sendShutdown() {
   std::lock_guard<std::mutex> lock(socketMutex_);
   return sendMessage(socketFd_, ControlMessageType::Shutdown, nullptr, 0);

@@ -109,6 +109,9 @@ class HostController {
   // Set plugin[pluginIndex]'s parameter (keyed by 16-byte uid16) to a normalized
   // 0..1 value. Fire-and-forget over the control socket.
   bool sendSetParam(uint32_t pluginIndex, const uint8_t* uid16, float normalized);
+  // Panic: reset every hosted plugin's internal DSP state (the stuck voice a CC cannot
+  // reach). Fire-and-forget, no reply.
+  bool sendResetPlugins();
   bool sendShutdown();
   pid_t hostPid() const { return hostPid_; }
 

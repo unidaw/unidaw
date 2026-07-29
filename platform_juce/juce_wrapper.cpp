@@ -659,6 +659,12 @@ class JucePluginInstance final : public IPluginInstance {
 
   std::vector<BusInfo> busLayout() const override { return busLayout_; }
 
+  void reset() override {
+    if (instance_) {
+      instance_->reset();
+    }
+  }
+
   int latencySamples() const override {
     return instance_ ? instance_->getLatencySamples() : 0;
   }

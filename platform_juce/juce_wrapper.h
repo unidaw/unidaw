@@ -140,6 +140,11 @@ class IPluginInstance {
   // engine + UI read this to see and address stems, aux, and sidechain buses.
   virtual std::vector<BusInfo> busLayout() const = 0;
   virtual bool loadVst3PresetFile(const std::string& path) = 0;
+  // PANIC: drop the plugin's internal DSP state (voices, delay lines, tails). This is the
+  // case a controller message cannot reach — CC120 asks a plugin to stop sounding, and a
+  // voice wedged inside its own state ignores it. Defaulted to a no-op so a fixture that
+  // holds no state need not implement it.
+  virtual void reset() {}
 
   virtual const std::vector<ParamInfo>& parameters() const = 0;
   virtual float getParameterValueNormalizedById(const std::string& stableId) const = 0;
