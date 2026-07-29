@@ -1588,6 +1588,9 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(sizeof(daw::UiClipExtentRegion), 64);
     header.uiPatcherOffset = offset;  // v14: published patcher graph
     offset += daw::alignUp(sizeof(daw::UiPatcherRegion), 64);
+    header.uiArrangeOffset = offset;  // v27: section spine + meter map, resolved
+    header.uiArrangeBytes = sizeof(daw::UiArrangeSummaryRegion);
+    offset += daw::alignUp(header.uiArrangeBytes, 64);
     header.uiDeviceMeterOffset = offset;  // v24: per-insert meters
     offset += daw::alignUp(sizeof(daw::UiDeviceMeterRegion), 64);
     header.uiScalesOffset = offset;  // v16: scale registry read-back
@@ -2749,6 +2752,78 @@ struct TrackRuntime {
           runtime->trackClipVersion.load(std::memory_order_acquire), snap,
           laneQuantizeOf(*runtime));
     }
+  };
+
+  // M3.25: publish the ARRANGEMENT SUMMARY — the section spine RESOLVED against the
+  // meter, the meter points themselves, and the song end. Gated on sectionVersion so a
+  // note edit does not rewrite it, and rebuilt whole rather than diffed: it is 4 KB and
+  // a section reorder changes every entry anyway.
+  uint32_t lastArrangeVersion = 0xFFFF'FFFFu;
+  auto writeUiArrangeSummary = [&](bool force) {
+    if (!uiShm.header || uiShm.header->uiArrangeOffset == 0) {
+      return;
+    }
+    const uint32_t version = sectionVersion.load(std::memory_order_acquire);
+    if (!force && version == lastArrangeVersion) {
+      return;
+    }
+    lastArrangeVersion = version;
+    auto* region = reinterpret_cast<daw::UiArrangeSummaryRegion*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiArrangeOffset);
+    std::vector<daw::ResolvedSection> resolved;
+    std::vector<daw::TimeSignaturePoint> points;
+    {
+      std::lock_guard<std::mutex> mlock(songMeterMutex);
+      points = songMeter.points();
+      std::lock_guard<std::mutex> slock(sectionMutex);
+      resolved = sectionList.resolve(songMeter);
+    }
+    // Clear first: a shorter spine than last time must not leave the old tail readable,
+    // and `count` alone would not stop a reader that scanned the array.
+    for (uint32_t i = 0; i < daw::kUiMaxSections; ++i) {
+      region->sections[i] = daw::UiArrangeSection{};
+    }
+    for (uint32_t i = 0; i < daw::kUiMaxTimeSigPoints; ++i) {
+      region->timeSigPoints[i] = daw::UiTimeSigPoint{};
+    }
+    const uint32_t sectionFit =
+        std::min<uint32_t>(static_cast<uint32_t>(resolved.size()), daw::kUiMaxSections);
+    for (uint32_t i = 0; i < sectionFit; ++i) {
+      auto& out = region->sections[i];
+      out.id = resolved[i].id;
+      out.startBar = static_cast<uint32_t>(resolved[i].startBar);
+      out.barCount = resolved[i].barCount;
+      out.colorRgb = resolved[i].colorRgb;
+      out.startTick = resolved[i].startTick;
+      out.endTick = resolved[i].endTick;
+      const size_t n =
+          std::min(resolved[i].name.size(), sizeof(out.name) - 1);
+      std::memcpy(out.name, resolved[i].name.data(), n);
+      out.name[n] = '\0';
+    }
+    const uint32_t pointFit =
+        std::min<uint32_t>(static_cast<uint32_t>(points.size()), daw::kUiMaxTimeSigPoints);
+    for (uint32_t i = 0; i < pointFit; ++i) {
+      region->timeSigPoints[i].nanotick = points[i].nanotick;
+      region->timeSigPoints[i].numerator = points[i].sig.numerator;
+      region->timeSigPoints[i].denominator = points[i].sig.denominator;
+    }
+    region->sectionCount = sectionFit;
+    region->timeSigCount = pointFit;
+    region->sectionsTruncated =
+        static_cast<uint32_t>(resolved.size()) - sectionFit;
+    region->timeSigTruncated = static_cast<uint32_t>(points.size()) - pointFit;
+    region->songEndTick = songEndNanotick.load(std::memory_order_acquire);
+    if (region->sectionsTruncated > 0 || region->timeSigTruncated > 0) {
+      // Said out loud, not just in the region: a truncated list nobody notices reads as
+      // a complete one, which is how "the arrangement view is missing sections" becomes
+      // a bug report about the view.
+      DAW_EVENT("arrange.truncated")
+          .field("sections_dropped", region->sectionsTruncated)
+          .field("timesig_dropped", region->timeSigTruncated);
+    }
+    std::atomic_thread_fence(std::memory_order_release);
+    region->version = version;
   };
 
   // M3.4: publish the placed-clip extents (rails). Rebuilt only when clipVersion
@@ -12399,6 +12474,7 @@ struct TrackRuntime {
         writeUiClipWindowSnapshot(trackSnapshot);
         writeUiClipAllSnapshot(false);
         writeUiClipExtents(false);
+        writeUiArrangeSummary(false);
         writeUiPatcher(false);
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);

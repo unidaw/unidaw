@@ -20,6 +20,8 @@ daw-cli — control surface for a running engine
   daw-cli watch                    stream transport state (default)
   daw-cli get transport            transport + versions as JSON
   daw-cli get tracks               per-track state as JSON
+  daw-cli get arrangement          the section spine (resolved to bars AND ticks),
+                                   the meter map, and the song end
   daw-cli get notes --track N      that track's notes from the published region
                                    (read-only: reads the published region)
   daw-cli get clip [--track N] [--bars N] [--grid]
@@ -1296,6 +1298,49 @@ fn main() {
                 }
                 Some(&"audio-sources") => get_audio_sources(&handle),
                 Some(&"extents") => get_extents(&handle),
+                Some(&"arrangement") => {
+                    match handle.read_arrange_summary() {
+                        Some(r) => {
+                            println!("{{");
+                            println!("  \"version\": {},", r.version);
+                            println!("  \"song_end_tick\": {},", r.song_end_tick);
+                            // Truncation is reported, not hidden: an incomplete list that
+                            // says nothing reads as a complete one.
+                            println!("  \"sections_truncated\": {},", r.sections_truncated);
+                            println!("  \"time_sig_truncated\": {},", r.time_sig_truncated);
+                            println!("  \"sections\": [");
+                            let n = (r.section_count as usize).min(r.sections.len());
+                            for i in 0..n {
+                                let s = r.sections[i];
+                                let name = String::from_utf8_lossy(&s.name);
+                                let name = name.trim_end_matches('\0');
+                                let comma = if i + 1 == n { "" } else { "," };
+                                println!(
+                                    "    {{ \"id\": {}, \"name\": {:?}, \"start_bar\": {}, \"bars\": {}, \"start_tick\": {}, \"end_tick\": {} }}{comma}",
+                                    s.id, name, s.start_bar, s.bar_count, s.start_tick, s.end_tick
+                                );
+                            }
+                            println!("  ],");
+                            println!("  \"time_sig\": [");
+                            let m = (r.time_sig_count as usize).min(r.time_sig_points.len());
+                            for i in 0..m {
+                                let p = r.time_sig_points[i];
+                                let comma = if i + 1 == m { "" } else { "," };
+                                println!(
+                                    "    {{ \"nanotick\": {}, \"sig\": \"{}/{}\" }}{comma}",
+                                    p.nanotick, p.numerator, p.denominator
+                                );
+                            }
+                            println!("  ]");
+                            println!("}}");
+                            0
+                        }
+                        None => {
+                            eprintln!("daw-cli: no arrangement summary (older engine, or a write was in flight)");
+                            1
+                        }
+                    }
+                }
                 other => {
                     eprintln!("daw-cli: unknown query {:?}\n\n{USAGE}", other.unwrap_or(&""));
                     2

@@ -83,7 +83,15 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    (uiTrackQuantizeGrid/Strength/Swing + uiQuantizeVersion), appended at the end.
 //    The UI draws each note at its authored t_on and a deviation bar from these; no
 //    note field changed, and the engine's stored/saved clip is untouched by quantize.
-constexpr uint16_t kShmVersion = 26;
+// 27 (M3.25): the ARRANGEMENT SUMMARY (uiArrangeOffset/Bytes -> UiArrangeSummaryRegion):
+//    the section spine published RESOLVED (startBar and startTick already prefix-summed
+//    through the meter), plus the song's time-signature points and the song end, in one
+//    region with one version. Resolved on purpose — a client deriving positions from bar
+//    counts would be reimplementing SectionList::resolve, and a disagreement would draw a
+//    section in the wrong place with nothing reporting it.
+//    Also in this bump: kUiMaxClipExtents 64 -> 256 (64 was reached by a six-track
+//    project and the overflow was a silent `break`).
+constexpr uint16_t kShmVersion = 27;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -102,7 +110,18 @@ constexpr uint32_t kMasterTrackId = 0xFFFF0000u;
 constexpr uint32_t kUiMaxMeteredDevices = 16;
 constexpr uint32_t kUiMaxClipNotes = 4096;
 constexpr uint32_t kUiMaxClipChords = 1024;
-constexpr uint32_t kUiMaxClipExtents = 64;  // clip boxes across all tracks (M3.4)
+// Clip boxes across ALL tracks (M3.4). Raised 64 -> 256 in v27: 64 was reached by a
+// six-track project with a handful of sections, and the overflow was a bare `break` — the
+// rails simply stopped, with no count and no complaint, so a project looked like it had
+// fewer clips than it does. The region grows to ~16 KB, which is nothing next to the
+// clip-note region.
+constexpr uint32_t kUiMaxClipExtents = 256;
+// M3.25: sections published per song, and time-signature points. Both are arrangement
+// scale rather than note scale — a song with more than 64 named sections or 32 meter
+// changes is beyond what this tool is for, and both counts are published alongside a
+// TRUNCATED count so hitting the wall is visible rather than silent.
+constexpr uint32_t kUiMaxSections = 64;
+constexpr uint32_t kUiMaxTimeSigPoints = 32;
 constexpr uint32_t kUiMaxHarmonyEvents = 512;
 constexpr uint32_t kUiEditBatchMaxOps = 32;
 constexpr uint32_t kUiEditBatchCapacity = 64;
@@ -240,6 +259,11 @@ struct alignas(64) ShmHeader {
   uint32_t uiTrackQuantizeStrength[kUiMaxTracks]{};
   int32_t uiTrackQuantizeSwing[kUiMaxTracks]{};
   uint32_t uiQuantizeVersion = 0;
+  // v27 (M3.25): the arrangement summary region — the section spine + the meter map,
+  // resolved. 0 = absent (an older engine). Its own version lives INSIDE the region so a
+  // reader takes both under one read; this is only where to find it.
+  uint64_t uiArrangeOffset = 0;
+  uint64_t uiArrangeBytes = 0;
 };
 
 // uiTrackFlags bits.
@@ -363,6 +387,52 @@ struct UiClipExtentRegion {
   uint32_t count = 0;
   uint32_t reserved = 0;
   UiClipExtent extents[kUiMaxClipExtents]{};
+};
+
+// M3.25 (v27): the ARRANGEMENT SUMMARY — the section spine and the song's meter map, in
+// ONE region with one version, because they are read together (a section's tick position
+// comes from the meter) and a reader that had them in two places could see a mismatched
+// pair.
+//
+// THE SECTIONS ARE PUBLISHED RESOLVED — startBar AND startTick, already prefix-summed
+// through the meter map. That is deliberate: the model stores only bar COUNTS, so a
+// client that had to derive positions would be reimplementing `SectionList::resolve`,
+// and the first time the two implementations disagreed the UI would draw chorus 2 in the
+// wrong place with nothing reporting an error. One derivation, in the engine, published.
+struct UiArrangeSection {
+  uint32_t id = 0;
+  uint32_t startBar = 1;  // ONE-based, like BarBeat and every ruler
+  uint32_t barCount = 0;
+  uint32_t colorRgb = 0;
+  uint64_t startTick = 0;
+  uint64_t endTick = 0;  // exclusive
+  char name[24]{};
+};
+static_assert(sizeof(UiArrangeSection) == 56, "UiArrangeSection is wire format");
+
+struct UiTimeSigPoint {
+  uint64_t nanotick = 0;
+  uint32_t numerator = 4;
+  uint32_t denominator = 4;
+};
+static_assert(sizeof(UiTimeSigPoint) == 16, "UiTimeSigPoint is wire format");
+
+struct UiArrangeSummaryRegion {
+  // Moves when the SPINE or the METER changes — never when a note does, so a section
+  // rename does not invalidate anyone's in-flight clip edit.
+  uint32_t version = 0;
+  uint32_t sectionCount = 0;
+  uint32_t timeSigCount = 0;
+  // How many sections / meter points did NOT fit. Published rather than dropped in
+  // silence: a truncated list that says nothing reads as a complete one.
+  uint32_t sectionsTruncated = 0;
+  uint32_t timeSigTruncated = 0;
+  uint32_t reserved = 0;
+  // The song's end in ticks — the furthest placement end, which is NOT the same as the
+  // end of the last section. Material can sit past the spine; it plays and is unnamed.
+  uint64_t songEndTick = 0;
+  UiArrangeSection sections[kUiMaxSections]{};
+  UiTimeSigPoint timeSigPoints[kUiMaxTimeSigPoints]{};
 };
 
 // Levels are dBFS MILLIBELS (0 = full scale, ordinary values negative). kUiMeterSilent is

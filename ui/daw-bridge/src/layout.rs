@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 26;
+pub const K_SHM_VERSION: u16 = 27;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -149,6 +149,11 @@ pub struct ShmHeader {
     pub ui_track_quantize_strength: [u32; K_UI_MAX_TRACKS],
     pub ui_track_quantize_swing: [i32; K_UI_MAX_TRACKS],
     pub ui_quantize_version: u32,
+    /// v27 (M3.25): where to find the UiArrangeSummaryRegion. 0 = absent. Its own
+    /// version lives INSIDE the region, so a reader takes the spine and the meter under
+    /// one read and cannot see a mismatched pair.
+    pub ui_arrange_offset: u64,
+    pub ui_arrange_bytes: u64,
 }
 
 /// uiTrackFlags bits (Movement 4).
@@ -362,7 +367,10 @@ pub struct UiClipExtent {
     pub name: [u8; 32],
 }
 
-pub const K_UI_MAX_CLIP_EXTENTS: usize = 64;
+/// Raised 64 -> 256 in v27. NOTHING asserted this against the C++ side, so when the C++
+/// constant moved first the two disagreed and every test still passed — the exact silent
+/// divergence the const_asserts exist to prevent. There is one on the region size now.
+pub const K_UI_MAX_CLIP_EXTENTS: usize = 256;
 
 #[repr(C)]
 pub struct UiClipExtentRegion {
@@ -848,6 +856,73 @@ impl Default for UiModSourceValuePayload {
     }
 }
 
+/// v27 (M3.25): a section, published RESOLVED — `start_bar` and `start_tick` are already
+/// prefix-summed through the meter map. Resolved on purpose: the model stores only bar
+/// COUNTS, so a client deriving positions would be reimplementing the engine's
+/// `SectionList::resolve`, and the first disagreement would draw a section in the wrong
+/// place with nothing reporting an error.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiArrangeSection {
+    pub id: u32,
+    /// ONE-based, like every ruler.
+    pub start_bar: u32,
+    pub bar_count: u32,
+    pub color_rgb: u32,
+    pub start_tick: u64,
+    /// Exclusive.
+    pub end_tick: u64,
+    pub name: [u8; 24],
+}
+
+impl Default for UiArrangeSection {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            start_bar: 1,
+            bar_count: 0,
+            color_rgb: 0,
+            start_tick: 0,
+            end_tick: 0,
+            name: [0u8; 24],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiTimeSigPoint {
+    pub nanotick: u64,
+    pub numerator: u32,
+    pub denominator: u32,
+}
+
+/// The section spine and the song's meter in ONE region with one version, because they are
+/// read together — a section's tick position comes from the meter, and two regions could
+/// be seen mismatched. `version` moves when the SPINE or the METER changes and never when
+/// a note does, so a section rename does not invalidate an in-flight clip edit.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiArrangeSummaryRegion {
+    pub version: u32,
+    pub section_count: u32,
+    pub time_sig_count: u32,
+    /// How many did NOT fit. Non-zero means the list you are reading is incomplete —
+    /// published rather than dropped silently, because a truncated list that says nothing
+    /// reads as a complete one.
+    pub sections_truncated: u32,
+    pub time_sig_truncated: u32,
+    pub reserved: u32,
+    /// The furthest placement end. NOT the end of the last section: material can sit past
+    /// the spine, and it plays and is unnamed.
+    pub song_end_tick: u64,
+    pub sections: [UiArrangeSection; K_UI_MAX_SECTIONS],
+    pub time_sig_points: [UiTimeSigPoint; K_UI_MAX_TIME_SIG_POINTS],
+}
+
+pub const K_UI_MAX_SECTIONS: usize = 64;
+pub const K_UI_MAX_TIME_SIG_POINTS: usize = 32;
+
 /// M3.23 section commands (54-58). A section stores a name and a length in BARS; its
 /// POSITION is derived from the lengths before it, so there is deliberately no
 /// "move a section to bar N" — you change a length or the order and everything after
@@ -1174,7 +1249,7 @@ mod tests {
 
     #[test]
     fn shm_header_layout_matches_cpp() {
-        const_assert_eq!(size_of::<ShmHeader>(), 6016); // v26: + per-lane quantize
+        const_assert_eq!(size_of::<ShmHeader>(), 6080); // v27: + arrange summary offset
         const_assert_eq!(size_of::<UiDeviceMeter>(), 12);
         const_assert_eq!(size_of::<UiDeviceMeterRegion>(), 12352);
         const_assert_eq!(align_of::<ShmHeader>(), 64);
@@ -1229,6 +1304,8 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_track_quantize_strength), 5488);
         assert_eq!(offset_of!(ShmHeader, ui_track_quantize_swing), 5744);
         assert_eq!(offset_of!(ShmHeader, ui_quantize_version), 6000);
+        assert_eq!(offset_of!(ShmHeader, ui_arrange_offset), 6008); // v27
+        assert_eq!(offset_of!(ShmHeader, ui_arrange_bytes), 6016);
         // The scale + device-param region structs (v16/v17) are now generated from
         // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
@@ -1247,6 +1324,12 @@ mod tests {
         const_assert_eq!(size_of::<UiPatcherGraphCommandPayload>(), 40);
         const_assert_eq!(size_of::<UiPatcherNodeConfigPayload>(), 40);
         const_assert_eq!(size_of::<UiSectionCommandPayload>(), 40);
+        const_assert_eq!(size_of::<UiArrangeSection>(), 56);
+        const_assert_eq!(size_of::<UiTimeSigPoint>(), 16);
+        const_assert_eq!(size_of::<UiArrangeSummaryRegion>(), 4128);
+        // The extents region had NO size assert, which is how its capacity constant
+        // diverged from the C++ side unnoticed.
+        const_assert_eq!(size_of::<UiClipExtentRegion>(), 16392);
         // v18 waveform structs are bindgen-generated; pin the element sizes, then tie
         // each hand constant to the generated region size so neither can drift: if a
         // K_* count is wrong the region no longer sums, and this fails to compile.

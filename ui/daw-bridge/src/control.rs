@@ -402,6 +402,33 @@ impl EngineHandle {
 
     /// Reads the published clip extents — the placed-clip boxes that drive rails
     /// (M3.4) — under the seqlock. Loose (session) placements are not included.
+    /// v27: the arrangement summary — the section spine RESOLVED, the meter points, and
+    /// the song end. Read under the region's OWN version rather than the seqlock: the
+    /// engine writes the whole region and then stores `version` behind a release fence, so
+    /// reading version-body-version and requiring the two to match is what makes a torn
+    /// read impossible. Returns None while a write is in flight or the region is absent.
+    pub fn read_arrange_summary(&self) -> Option<crate::layout::UiArrangeSummaryRegion> {
+        let offset = unsafe { (*self.header).ui_arrange_offset };
+        let bytes = unsafe { (*self.header).ui_arrange_bytes };
+        if offset == 0
+            || (bytes as usize) < std::mem::size_of::<crate::layout::UiArrangeSummaryRegion>()
+        {
+            return None;
+        }
+        let base = self._mmap.as_ptr().wrapping_add(offset as usize)
+            as *const crate::layout::UiArrangeSummaryRegion;
+        for _ in 0..64 {
+            let v0 = unsafe { std::ptr::read_volatile(&(*base).version) };
+            let snapshot = unsafe { std::ptr::read_volatile(base) };
+            fence(Ordering::Acquire);
+            let v1 = unsafe { std::ptr::read_volatile(&(*base).version) };
+            if v0 == v1 && v0 == snapshot.version {
+                return Some(snapshot);
+            }
+        }
+        None
+    }
+
     pub fn read_clip_extents(&self) -> Vec<UiClipExtent> {
         loop {
             let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
