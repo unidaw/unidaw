@@ -809,9 +809,26 @@ public:
     const bool playing =
         m_playing && m_playing->load(std::memory_order_acquire);
     if (playing) {
+      // WHERE ARE WE? Take it from the block actually being played, not from a counter
+      // of our own. The callback does not start at block 1 (it syncs to
+      // completed - playMargin on the first Play, and re-syncs the same way after a
+      // dropout), so a counter drifts a whole pipeline depth away from the MIDI in the
+      // very block it is mixing — and moves when DAW_ENGINE_NUM_BLOCKS is tuned.
+      // m_transportSample stays as the fallback for a block the producer has not
+      // stamped (test mode, or before the producer has run), and keeps advancing below
+      // so that path still works.
+      uint64_t stamped = 0;
+      const bool haveStamp = blockStartSample(nextBlockToPlay, stamped);
+      if (haveStamp) {
+        m_transportSample = stamped;
+      }
+      // No stamp means we cannot say where this block sits, and placing audio at a
+      // GUESSED position is worse than placing none: a guess is inaudible as an error
+      // and shows up as a flam against the MIDI. This only happens before the producer
+      // has stamped the block being played — the first callback or two after Play.
       for (const auto& track : *tracks) {
         const auto& regions = track.audioRender;
-        if (!regions || regions->empty()) {
+        if (!regions || regions->empty() || !haveStamp) {
           continue;
         }
         const float gain = track.gainLinear
@@ -848,7 +865,6 @@ public:
           }
         }
       }
-      m_transportSample += static_cast<uint64_t>(numSamples);
     }
 
     // 4b — master FX on the SUM (B2). When the master has an enabled VST effect AND its
@@ -1041,6 +1057,34 @@ public:
 
  public:
 
+  // M3: where a produced block SITS on the timeline, in output samples. The producer
+  // stamps this as it renders block B; the callback reads it for the block it is
+  // actually playing, so audio regions land at the same instant as that block's MIDI.
+  //
+  // Counting samples independently — which is what this replaced — cannot work, because
+  // the callback does not start at block 1. On the first Play it syncs to
+  // (completed - playMargin), skipping however many blocks the producer got ahead, and
+  // it re-syncs the same way after any dropout. An independent counter therefore sits a
+  // whole pipeline depth away from the notes, and MOVES when DAW_ENGINE_NUM_BLOCKS is
+  // tuned: measured at 19 ms early with 3 blocks, 75 ms with 8, 169 ms with 16. Nobody
+  // tuning a buffer setting expects their audio to slide against their MIDI.
+  static constexpr uint32_t kBlockPosSlots = 64;  // >= the 32-block ceiling, power of two
+  void setBlockStartSample(uint32_t blockId, uint64_t startSample) {
+    m_blockStartSample[blockId % kBlockPosSlots].store(startSample,
+                                                       std::memory_order_release);
+    m_blockStartValid[blockId % kBlockPosSlots].store(blockId, std::memory_order_release);
+  }
+  // The published start sample for `blockId`, or nullopt if that slot has been recycled
+  // by a later block (which means we are asking about a block long gone).
+  bool blockStartSample(uint32_t blockId, uint64_t& out) const {
+    const uint32_t slot = blockId % kBlockPosSlots;
+    if (m_blockStartValid[slot].load(std::memory_order_acquire) != blockId) {
+      return false;
+    }
+    out = m_blockStartSample[slot].load(std::memory_order_acquire);
+    return m_blockStartValid[slot].load(std::memory_order_acquire) == blockId;
+  }
+
   void resetForStart() {
     m_currentReadBlock = 0;
     m_totalSamplesProcessed = 0;
@@ -1149,6 +1193,11 @@ private:
   // mono scratch buffer for rendering one region before it is panned into the mix.
   const std::atomic<bool>* m_playing = nullptr;
   uint64_t m_transportSample = 0;
+  // The loop span in output samples, mirroring the transport's tick loop. Written from
+  // the producer thread each block (the tempo map or the arrangement end can move), read
+  // on the audio thread.
+  std::array<std::atomic<uint64_t>, kBlockPosSlots> m_blockStartSample{};
+  std::array<std::atomic<uint32_t>, kBlockPosSlots> m_blockStartValid{};
   std::vector<float> m_audioScratch;
 
   // Movement 4 surround master. The mix places tracks across an N-channel master. When
@@ -8853,6 +8902,14 @@ struct TrackRuntime {
       blockStartTicks = wrapTick(blockStartTicks);
       const uint64_t blockTicks = blockTicksFor(blockStartTicks);
       const uint64_t blockEndTicks = blockStartTicks + blockTicks;
+      // Stamp where this block sits on the timeline so the callback can place audio
+      // regions at the same instant as this block's MIDI. Absolute, so it is correct
+      // across tempo changes.
+      if (audioCallback) {
+        audioCallback->setBlockStartSample(
+            blockId, static_cast<uint64_t>(
+                         tickConverter.nanoticksToSamplesAbsolute(blockStartTicks)));
+      }
 
       auto renderTrack = [&](TrackRuntime& runtime,
                              const TrackStateSnapshot& trackState,
