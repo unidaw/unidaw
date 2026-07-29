@@ -11,6 +11,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
+[ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
 SHM="/master_check_$$"
 MASTER_ID=4294901760  # 0xFFFF0000 == kMasterTrackId
 
