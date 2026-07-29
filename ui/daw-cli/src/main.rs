@@ -48,6 +48,11 @@ daw-cli — control surface for a running engine
   daw-cli do position --nanotick T move the playhead
   daw-cli do loop --start T --end T set the loop range
   daw-cli do harmony-quantize --track N [--on 0|1]
+  daw-cli do automation --track N --param ID --nanotick T --value V
+                        [--discrete] [--device D]
+                                   writes one automation point. --discrete makes the
+                                   value STEP at each point instead of interpolating,
+                                   and is fixed when the clip is created.
   daw-cli do revert-overrides --track N --placement P
                                    clears every add and mute on one appearance, in one
                                    step — possible only because overrides are
@@ -1959,6 +1964,42 @@ fn main() {
                 // M3.23 sections. There is no "move a section to bar N": a section's
                 // position is derived from the lengths before it, so you change a length
                 // or the ORDER and everything after follows.
+                Some(&"automation") => {
+                    use daw_bridge::layout as L;
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let param = match flag(&args, "--param") {
+                        Some(p) if !p.is_empty() => p,
+                        _ => { eprintln!("daw-cli: --param is required (the automation clip's id, e.g. index:0)"); std::process::exit(2) }
+                    };
+                    let tick = match flag_u64(&args, "--nanotick", None) {
+                        Ok(v) => v,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let value = match flag_f64(&args, "--value", f64::NAN) {
+                        Ok(v) if !v.is_nan() => v as f32,
+                        _ => { eprintln!("daw-cli: --value is required (normalised 0..1)"); std::process::exit(2) }
+                    };
+                    let mut param_id = [0u8; 16];
+                    let b = param.as_bytes();
+                    let len = b.len().min(param_id.len());
+                    param_id[..len].copy_from_slice(&b[..len]);
+                    let discrete = args.iter().any(|a| a == "--discrete");
+                    let payload = L::UiAutomationPointPayload {
+                        command_type: UiCommandType::WriteAutomationPoint as u16,
+                        flags: if discrete { L::UI_AUTOMATION_DISCRETE } else { 0 },
+                        track_id: track,
+                        target_plugin_index: flag_u64(&args, "--device", Some(0xFFFF_FFFF))
+                            .unwrap_or(0xFFFF_FFFF) as u32,
+                        nanotick_lo: (tick & 0xffff_ffff) as u32,
+                        nanotick_hi: (tick >> 32) as u32,
+                        value,
+                        param_id,
+                    };
+                    match handle.send_automation_point(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"automation\", \"param\": {param:?}, \"nanotick\": {tick}, \"value\": {value} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
                 Some(&"revert-overrides") => {
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
                     let placement = match flag_u64(&args, "--placement", None) {

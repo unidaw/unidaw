@@ -8,6 +8,7 @@
 #include "apps/device_chain.h"
 #include "apps/harmony_timeline.h"
 #include "apps/modulation.h"
+#include "apps/automation_clip.h"
 #include "apps/lane_quantize.h"
 #include "apps/section_list.h"
 #include "apps/time_signature_map.h"
@@ -106,6 +107,11 @@ struct ProjectTrack {
   uint32_t parentId = 0;
   bool collapsed = false;
   bool harmonyQuantize = false;
+  // M3.27: this track's automation. Playback existed since Movement 3 phase 1 and this
+  // did NOT, so automation could be heard and never saved — record a sweep, hear it,
+  // reload, and it was gone. Written only when non-empty, so a project without automation
+  // is byte-identical to what it was.
+  std::vector<AutomationClip> automationClips;
   // Rows one beat is cut into for this lane's tracker grid (Mock B per-lane
   // grids): 4 = 16ths, 3 = triplets. The engine persists this but does not use
   // it — note timing is stored in nanoticks and is grid-independent.

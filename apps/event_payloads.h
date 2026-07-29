@@ -153,8 +153,35 @@ enum class UiCommandType : uint16_t {
   // the "one-click revert" the item asks for, and it is only possible because the
   // overrides are additive-only — reverting is deleting two lists, not replaying 32
   // correct inverses.
-  RevertPlacementOverrides = 59,  // next free 60
+  RevertPlacementOverrides = 59,
+  // M3.27: write one automation point. Automation PLAYBACK has existed and been tested
+  // since Movement 3 phase 1, but NOTHING in the engine ever created a clip to play —
+  // there was no authoring command and no persistence, so the feature was unreachable.
+  // This is the owner half: a point is addressed by (track, paramId, tick).
+  WriteAutomationPoint = 60,  // next free 61
 };
+
+// M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
+// (the engine hashes it to the uid16 the wire and the param mirror use) — 16 bytes, which
+// fits "index:NNN" and a uid16 hex prefix. `value` is the plugin's normalised 0..1.
+//
+// flags bit 0 = DISCRETE: the value steps at each point instead of interpolating between
+// them. That belongs to the CLIP rather than the point, so it is applied when the clip is
+// created and ignored afterwards — a switch that changed meaning halfway through a curve
+// would make the curve unreadable.
+struct UiAutomationPointPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t targetPluginIndex = 0;
+  uint32_t nanotickLo = 0;
+  uint32_t nanotickHi = 0;
+  float value = 0.0f;
+  char paramId[16]{};
+};
+static_assert(sizeof(UiAutomationPointPayload) == 40,
+              "UiAutomationPointPayload must fit an EventEntry payload");
+constexpr uint16_t kUiAutomationDiscrete = 1u << 0;
 
 // M3.23: one section command. `sectionId` addresses an existing section (0 = append, for
 // AddSection); `barCount` is the length for Add/SetSectionLength; `toIndex` is the
@@ -235,6 +262,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SetSectionLength: return "set_section_length";
     case UiCommandType::MoveSection: return "move_section";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
+    case UiCommandType::WriteAutomationPoint: return "write_automation_point";
   }
   return "op:unknown";
 }

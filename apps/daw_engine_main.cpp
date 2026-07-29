@@ -4970,6 +4970,7 @@ struct TrackRuntime {
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         track.harmonyQuantize = runtime->track.harmonyQuantize;
+        track.automationClips = runtime->track.automationClips;
         track.quantize.gridNanoticks =
             runtime->quantizeGrid.load(std::memory_order_acquire);
         track.quantize.strengthMilli =
@@ -5670,6 +5671,10 @@ struct TrackRuntime {
                                    rebuildAudioRender(*runtime),
                                    std::memory_order_release);
         runtime->track.harmonyQuantize = source.harmonyQuantize;
+        // M3.27: adopt the automation. Parsed at load and never installed would be the
+        // mod-link data loss all over again — the next save would write an empty list and
+        // delete it from disk.
+        runtime->track.automationClips = source.automationClips;
         // M1.13: adopt the lane's quantize BEFORE the flat rebuild below, so the very
         // first scheduling copy after a load already sounds quantized. Adopting it
         // afterwards would leave the lane straight until the next edit.
@@ -6902,6 +6907,79 @@ struct TrackRuntime {
       }
       return;
     }
+    // M3.27: write an automation point. Automation playback has been built and tested
+    // since M3 phase 1, but nothing ever CREATED a clip — this is the missing half.
+    if (entry.size == sizeof(daw::UiAutomationPointPayload) &&
+        commandType == daw::UiCommandType::WriteAutomationPoint) {
+      daw::UiAutomationPointPayload ap{};
+      std::memcpy(&ap, entry.payload, sizeof(ap));
+      if (static_cast<daw::UiCommandType>(ap.commandType) != commandType) {
+        return;
+      }
+      const std::string paramId(ap.paramId, strnlen(ap.paramId, sizeof(ap.paramId)));
+      if (paramId.empty()) {
+        DAW_EVENT("automation.rejected")
+            .field("track", ap.trackId)
+            .field("reason", "empty_param_id");
+        return;
+      }
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (ap.trackId < tracks.size()) {
+          runtime = tracks[ap.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("automation.rejected")
+            .field("track", ap.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      const uint64_t tick =
+          (static_cast<uint64_t>(ap.nanotickHi) << 32) | ap.nanotickLo;
+      const bool discrete = (ap.flags & daw::kUiAutomationDiscrete) != 0;
+      uint32_t pointCount = 0;
+      bool created = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        daw::AutomationClip* clip = nullptr;
+        for (auto& c : runtime->track.automationClips) {
+          if (c.paramId() == paramId) {
+            clip = &c;
+            break;
+          }
+        }
+        if (!clip) {
+          // discreteOnly belongs to the CLIP, so it is fixed at creation. A flag that
+          // changed meaning halfway through a curve would make the curve unreadable.
+          runtime->track.automationClips.emplace_back(paramId, discrete,
+                                                      ap.targetPluginIndex);
+          clip = &runtime->track.automationClips.back();
+          created = true;
+        }
+        clip->addPoint(daw::AutomationPoint{tick, ap.value});
+        pointCount = static_cast<uint32_t>(clip->points().size());
+      }
+      // The RT scheduler reads automation from the track SNAPSHOT, so a point that is not
+      // republished is a point that does not play — the same shape as every other derived
+      // read-back in this engine.
+      std::shared_ptr<const TrackStateSnapshot> snapshot;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        snapshot = buildTrackSnapshot(runtime->track);
+      }
+      std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
+                                 std::memory_order_release);
+      DAW_EVENT("automation.point")
+          .field("track", ap.trackId)
+          .field("param", paramId)
+          .field("nanotick", tick)
+          .field("points", pointCount)
+          .field("created_clip", created);
+      historyAppend("write_automation_point", "received", ap.trackId, 0, "");
+      return;
+    }
     // M3.23 SECTION ops. All five are SONG-scoped: the spine belongs to no track, and
     // SetSectionLength moves placements on every track at once.
     if (entry.size == sizeof(daw::UiSectionCommandPayload) &&
@@ -7016,6 +7094,34 @@ struct TrackRuntime {
               const uint64_t moved = daw::rippleTick(*pl.at, oldEndTick, delta);
               if (moved != *pl.at) {
                 pl.at = moved;
+                touched = true;
+              }
+            }
+            // M3.27: automation moves WITH the material. Without this, inserting bars
+            // into the intro slid every note later and left the filter sweep where it
+            // was — the notes and the automation would drift apart by exactly the amount
+            // of the edit, silently.
+            for (auto& clip : rt->track.automationClips) {
+              // Only points at or after the boundary move, matching rippleTick's rule for
+              // placements, so a sweep in an earlier section stays put.
+              std::vector<daw::AutomationPoint> kept;
+              const auto& pts = clip.points();
+              bool anyMoved = false;
+              for (const auto& p : pts) {
+                if (p.nanotick >= oldEndTick) {
+                  anyMoved = true;
+                  break;
+                }
+              }
+              if (anyMoved) {
+                daw::AutomationClip rebuilt(clip.paramId(), clip.discreteOnly(),
+                                            clip.targetPluginIndex());
+                for (const auto& p : pts) {
+                  daw::AutomationPoint moved = p;
+                  moved.nanotick = daw::rippleTick(p.nanotick, oldEndTick, delta);
+                  rebuilt.addPoint(moved);
+                }
+                clip = std::move(rebuilt);
                 touched = true;
               }
             }

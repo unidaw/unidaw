@@ -601,6 +601,7 @@ pub enum UiCommandType {
     SetSectionLength = 57,
     MoveSection = 58,
     RevertPlacementOverrides = 59,
+    WriteAutomationPoint = 60,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -940,6 +941,41 @@ pub const UI_EDIT_COLUMN_MASK: u16 = 0x00FF;
 
 pub const K_UI_MAX_SECTIONS: usize = 64;
 pub const K_UI_MAX_TIME_SIG_POINTS: usize = 32;
+
+/// M3.27 (60): one automation point. `param_id` is the STRING the clip is keyed on (the
+/// engine hashes it to the uid16 the wire and the param mirror use). `value` is the
+/// plugin's normalised 0..1. flags bit 0 = DISCRETE (step instead of interpolate), applied
+/// when the clip is CREATED and ignored afterwards — a switch that changed meaning halfway
+/// through a curve would make the curve unreadable.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiAutomationPointPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub target_plugin_index: u32,
+    pub nanotick_lo: u32,
+    pub nanotick_hi: u32,
+    pub value: f32,
+    pub param_id: [u8; 16],
+}
+
+impl Default for UiAutomationPointPayload {
+    fn default() -> Self {
+        Self {
+            command_type: 0,
+            flags: 0,
+            track_id: 0,
+            target_plugin_index: 0,
+            nanotick_lo: 0,
+            nanotick_hi: 0,
+            value: 0.0,
+            param_id: [0u8; 16],
+        }
+    }
+}
+
+pub const UI_AUTOMATION_DISCRETE: u16 = 1 << 0;
 
 /// M3.23 section commands (54-58). A section stores a name and a length in BARS; its
 /// POSITION is derived from the lengths before it, so there is deliberately no
@@ -1342,6 +1378,7 @@ mod tests {
         const_assert_eq!(size_of::<UiPatcherGraphCommandPayload>(), 40);
         const_assert_eq!(size_of::<UiPatcherNodeConfigPayload>(), 40);
         const_assert_eq!(size_of::<UiSectionCommandPayload>(), 40);
+        const_assert_eq!(size_of::<UiAutomationPointPayload>(), 40);
         const_assert_eq!(size_of::<UiArrangeSection>(), 56);
         const_assert_eq!(size_of::<UiTimeSigPoint>(), 16);
         const_assert_eq!(size_of::<UiArrangeSummaryRegion>(), 4128);

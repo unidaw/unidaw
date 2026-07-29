@@ -954,6 +954,17 @@ impl EngineHandle {
         )
     }
 
+    /// Write one automation point.
+    pub fn send_automation_point(
+        &self,
+        payload: crate::layout::UiAutomationPointPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiAutomationPointPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiAutomationPointPayload>(),
+        )
+    }
+
     /// Send a section command (add/remove/rename/set-length/move).
     pub fn send_section_command(
         &self,

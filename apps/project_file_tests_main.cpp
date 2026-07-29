@@ -766,6 +766,35 @@ int main(int argc, char** argv) {
   // the clip round-trips above.
   {
     daw::ProjectDocument doc = makeDocument();
+    // M3.27: automation round-trips with its VALUES, not just its ticks. A save that kept
+    // the ticks and lost the values would satisfy a tick-only assertion and play silence.
+    {
+      daw::ProjectDocument autoDoc;
+      autoDoc.tracks.emplace_back();
+      daw::AutomationClip clip("index:7", /*discreteOnly=*/true, /*target=*/3);
+      clip.addPoint({0, 0.25f});
+      clip.addPoint({960000, 0.75f});
+      autoDoc.tracks[0].automationClips.push_back(std::move(clip));
+      daw::ProjectDocument back;
+      std::string err;
+      require(daw::deserializeProject(daw::serializeProject(autoDoc), back, &err),
+              "automation document did not parse");
+      require(back.tracks[0].automationClips.size() == 1, "automation clip lost");
+      const auto& got = back.tracks[0].automationClips[0];
+      require(got.paramId() == "index:7", "automation param id lost");
+      require(got.discreteOnly(), "automation discrete flag lost");
+      require(got.targetPluginIndex() == 3, "automation target plugin lost");
+      require(got.points().size() == 2, "automation points lost");
+      require(got.points()[1].nanotick == 960000, "automation point tick lost");
+      require(got.points()[1].value > 0.74f && got.points()[1].value < 0.76f,
+              "automation point VALUE lost — ticks alone would play silence");
+
+      daw::ProjectDocument plain;
+      plain.tracks.emplace_back();
+      require(daw::serializeProject(plain).find("automation") == std::string::npos,
+              "a track with no automation must not write the key at all");
+    }
+
     // M3.23: the section spine round-trips, ORDER INTACT — the order IS the
     // arrangement, so a serializer that sorted or de-duplicated would silently rewrite
     // the song. And a project with no sections must not gain the key, or every old

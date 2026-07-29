@@ -679,6 +679,29 @@ std::string serializeProject(const ProjectDocument& document) {
     }
     writer.endArray();
 
+    // M3.27: automation. Points are (nanotick, value); the clip carries the param id it
+    // is keyed on, whether it steps or interpolates, and which plugin in the chain it
+    // targets. Written only when there IS automation.
+    if (!track.automationClips.empty()) {
+      writer.beginArray("automation");
+      for (const auto& clip : track.automationClips) {
+        writer.beginArrayElement();
+        writer.key("param_id", clip.paramId());
+        writer.key("discrete", clip.discreteOnly());
+        writer.key("target_plugin_index", clip.targetPluginIndex());
+        writer.beginArray("points");
+        for (const auto& point : clip.points()) {
+          writer.beginArrayElement();
+          writer.key("nanotick", point.nanotick);
+          writer.key("value", static_cast<double>(point.value));
+          writer.endArrayElement();
+        }
+        writer.endArray();
+        writer.endArrayElement();
+      }
+      writer.endArray();
+    }
+
     writer.beginArray("mod_links");
     for (const auto& link : track.modLinks) {
       writer.beginArrayElement();
@@ -976,6 +999,28 @@ bool deserializeProject(const std::string& json,
         }
       }
 
+      if (const auto automation = tree.get_child_optional("automation")) {
+        for (const auto& entry : *automation) {
+          const std::string paramId =
+              entry.second.get<std::string>("param_id", "");
+          if (paramId.empty()) {
+            continue;  // a clip with no param to drive can never be applied
+          }
+          daw::AutomationClip clip(paramId,
+                                   entry.second.get<bool>("discrete", false),
+                                   entry.second.get<uint32_t>("target_plugin_index",
+                                                              daw::kParamTargetAll));
+          if (const auto points = entry.second.get_child_optional("points")) {
+            for (const auto& p : *points) {
+              daw::AutomationPoint point;
+              point.nanotick = p.second.get<uint64_t>("nanotick", 0);
+              point.value = p.second.get<float>("value", 0.0f);
+              clip.addPoint(point);
+            }
+          }
+          track.automationClips.push_back(std::move(clip));
+        }
+      }
       if (const auto links = tree.get_child_optional("mod_links")) {
         for (const auto& linkEntry : *links) {
           ModLink link;
