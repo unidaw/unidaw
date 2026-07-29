@@ -2083,6 +2083,12 @@ struct TrackRuntime {
     uint32_t trackId = 0;
     TrackStoreState before;
     TrackStoreState after;
+    // A cross-track placement move touches two tracks; carrying both in ONE undo entry
+    // makes the undo atomic (no intermediate state where the clip belongs to neither).
+    bool hasSecond = false;
+    uint32_t secondTrackId = 0;
+    TrackStoreState secondBefore;
+    TrackStoreState secondAfter;
     daw::UndoEntry harmony{};  // used only when !structural
   };
   std::mutex undoMutex;
@@ -6886,8 +6892,80 @@ struct TrackRuntime {
                              payload.noteNanotickLo;
       const uint32_t newTrackId = payload.notePitch;
       if (newTrackId != 0xFFFFFFFFu && newTrackId != payload.trackId) {
-        std::cerr << "UI: MovePlacement cross-track not supported yet (same-track v1)"
-                  << std::endl;
+        // Cross-track lane drag: relocate the placement + its clip to another lane, both
+        // tracks committed atomically under one undo entry (no state where the clip belongs
+        // to neither). Clip ids are globally unique, so the dest just needs its own copy of
+        // the referenced clip for the flatten to resolve it.
+        const uint32_t srcId = payload.trackId;
+        const uint32_t dstId = newTrackId;
+        TrackRuntime* src = nullptr;
+        TrackRuntime* dst = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(tracksMutex);
+          if (srcId < tracks.size()) src = tracks[srcId].get();
+          if (dstId < tracks.size()) dst = tracks[dstId].get();
+        }
+        bool ok = false;
+        if (src && dst && src != dst) {
+          std::scoped_lock lock(src->trackMutex, dst->trackMutex);
+          TrackStoreState srcBefore = snapshotTrackStore(*src);
+          TrackStoreState dstBefore = snapshotTrackStore(*dst);
+          auto it = std::find_if(
+              src->sourcePlacements.begin(), src->sourcePlacements.end(),
+              [&](const daw::ProjectPlacement& p) { return p.id == placementId; });
+          if (it != src->sourcePlacements.end()) {
+            daw::ProjectPlacement moved = *it;
+            moved.at = newAt;
+            const uint32_t clipId = moved.clipId;
+            const bool dstHasClip = std::any_of(
+                dst->ownedClips.begin(), dst->ownedClips.end(),
+                [&](const daw::ProjectClip& c) { return c.id == clipId; });
+            if (!dstHasClip) {
+              for (const auto& c : src->ownedClips) {
+                if (c.id == clipId) {
+                  dst->ownedClips.push_back(c);
+                  dst->editableClipIds.push_back(clipId);
+                  break;
+                }
+              }
+            }
+            src->sourcePlacements.erase(it);
+            dst->sourcePlacements.push_back(std::move(moved));
+            src->arrangementDirty.store(true, std::memory_order_relaxed);
+            dst->arrangementDirty.store(true, std::memory_order_relaxed);
+            auto srcSnap = rebuildFlatAndPublish(*src);
+            auto dstSnap = rebuildFlatAndPublish(*dst);
+            std::atomic_store_explicit(&src->audioRender, rebuildAudioRender(*src),
+                                       std::memory_order_release);
+            std::atomic_store_explicit(&dst->audioRender, rebuildAudioRender(*dst),
+                                       std::memory_order_release);
+            if (srcSnap) {
+              std::atomic_store_explicit(&src->clipSnapshot, srcSnap,
+                                         std::memory_order_release);
+            }
+            if (dstSnap) {
+              std::atomic_store_explicit(&dst->clipSnapshot, dstSnap,
+                                         std::memory_order_release);
+            }
+            EngineUndoEntry e;
+            e.structural = true;
+            e.trackId = srcId;
+            e.before = std::move(srcBefore);
+            e.after = snapshotTrackStore(*src);
+            e.hasSecond = true;
+            e.secondTrackId = dstId;
+            e.secondBefore = std::move(dstBefore);
+            e.secondAfter = snapshotTrackStore(*dst);
+            pushUndo(std::move(e));
+            ok = true;
+          }
+        }
+        if (ok) {
+          clipVersion.fetch_add(1, std::memory_order_acq_rel);
+          clipDirty.store(true, std::memory_order_release);
+        }
+        std::cout << "UI: MovePlacement " << placementId << " cross-track " << srcId
+                  << " -> " << dstId << (ok ? "" : " (failed)") << std::endl;
       } else {
         const bool ok = applyPlacementEdit(
             payload.trackId, [&](std::vector<daw::ProjectPlacement>& pls) {
@@ -7372,8 +7450,13 @@ struct TrackRuntime {
         return;
       }
       if (undo->structural) {
-        // Store swap: restore the track's pre-edit placements + clips.
-        if (restoreTrackStore(undo->trackId, undo->before)) {
+        // Store swap: restore the track's pre-edit placements + clips. A cross-track move
+        // restores BOTH tracks so the placement is never briefly in neither.
+        bool ok = restoreTrackStore(undo->trackId, undo->before);
+        if (undo->hasSecond) {
+          ok = restoreTrackStore(undo->secondTrackId, undo->secondBefore) || ok;
+        }
+        if (ok) {
           std::lock_guard<std::mutex> lock(undoMutex);
           redoStack.push_back(std::move(*undo));
         }
@@ -7407,8 +7490,13 @@ struct TrackRuntime {
         return;
       }
       if (redo->structural) {
-        // Store swap: re-apply the track's post-edit placements + clips.
-        if (restoreTrackStore(redo->trackId, redo->after)) {
+        // Store swap: re-apply the track's post-edit placements + clips (both tracks for a
+        // cross-track move).
+        bool ok = restoreTrackStore(redo->trackId, redo->after);
+        if (redo->hasSecond) {
+          ok = restoreTrackStore(redo->secondTrackId, redo->secondAfter) || ok;
+        }
+        if (ok) {
           std::lock_guard<std::mutex> lock(undoMutex);
           undoStack.push_back(std::move(*redo));
         }
