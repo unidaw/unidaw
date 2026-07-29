@@ -649,6 +649,26 @@ function delDevice(track, device) {
   return true;
 }
 
+/**
+ * Switch a device off without removing it.
+ *
+ * No `reqchain` afterwards, unlike delDevice: the engine emits a chain snapshot
+ * on every accepted UpdateDevice, so the state comes back by itself. Asking as
+ * well would be a second question with the same answer.
+ *
+ * The STATE is sent, never "the other one" — see the sidecar's builder. It also
+ * means a press that agrees with what the engine already has is refused (chain
+ * error 4), which only happens from a stale card and is better than a toggle
+ * that silently inverts the wrong way.
+ */
+function bypassDevice(track, device, on) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  conn.send({ type: 'bypass', track, device, on: on ? 1 : 0 });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
 /** Add a node of the armed type. */
 function addPatcherNode() {
   return sendGraph({ type: 'patchadd', nodeType: state.patchAddType, track: 0 });
@@ -1134,6 +1154,9 @@ const chain = new Chain(chainHost, {
     if (!confirm(`Remove ${title}? This cannot be undone.`)) return;
     delDevice(track, device);
   },
+  // No confirmation, unlike remove: it is the one thing you do to a device that
+  // undoes itself by being done again.
+  onBypass: ({ track, device, on }) => bypassDevice(track, device, on),
   onSelect: (pos) => {
     state.chainSelected = pos;
     // Selecting a card takes the keyboard. It did not, and that is the whole bug:
@@ -4058,6 +4081,22 @@ addEventListener('keydown', (e) => {
       return done();
     }
     if (k === 'ArrowLeft') { state.chainSelected = Math.max(0, state.chainSelected - 1); return done(); }
+    /**
+     * B BYPASSES THE SELECTED DEVICE.
+     *
+     * Plain `b`, because ⌘B is the browser rail and this branch only runs while
+     * the rack holds the keyboard. A/B-ing an insert is a per-second gesture when
+     * you are deciding whether it earns its place, and reaching for the mouse
+     * every time is what makes people stop doing it.
+     *
+     * From the card the rack is DRAWING, not from `chains` — the card is what you
+     * are looking at, and the two differ for a frame after every edit.
+     */
+    if (k === 'b' || k === 'B') {
+      const card = chain.vm && chain.vm.cards && chain.vm.cards[state.chainSelected];
+      if (card) bypassDevice(state.cursor.track, card.id, !card.bypass);
+      return done();
+    }
     if (k === 'Enter') {
       const here = chains[state.cursor.track];
       const dev = (here && here.devices || [])[state.chainSelected];
@@ -5423,6 +5462,8 @@ window.__uni = {
   paletteProbe: () => palette.probe(),
   paletteMove: (d) => { palette.move(d); draw(); return palette.probe().selected; },
   chainSelect: (pos) => { state.chainSelected = pos; draw(); return state.chainSelected; },
+  /** Switch a device off. Same function the button and the `b` key call. */
+  bypass: (track, device, on) => bypassDevice(track, device, on),
   palette: (on) => { if (on === false) palette.close(); else palette.open(); draw();
                      return palette.opened; },
   chains: () => JSON.parse(JSON.stringify(chains)),

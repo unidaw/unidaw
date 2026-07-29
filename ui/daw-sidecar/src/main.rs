@@ -1428,7 +1428,12 @@ fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static
     // before the web UI existed and nothing ever sent it: "how do I open the
     // plugin UI" had the answer "you can't", for a command that was already there.
     let open = is_type(body, "openeditor");
-    if !(add || del || open) { return None; }
+    // Bypass an insert. The chain snapshot has carried each device's bypass state
+    // since v20 and the rack has drawn it as a dimmed card the whole time — with
+    // no way to set it. A state you can see and cannot change is worse than one
+    // you cannot see: it reads as a control that has stopped working.
+    let byp = is_type(body, "bypass");
+    if !(add || del || open || byp) { return None; }
     let mut p = UiChainCommandPayload {
         command_type: UiCommandType::None as u16,
         flags: 0,
@@ -1452,6 +1457,28 @@ fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static
         };
         p.command_type = UiCommandType::OpenPluginEditor as u16;
         p.device_id = id as u32;
+        return Some(Ok(p));
+    }
+    if byp {
+        let Some(id) = parse_num(body, "\"device\"").filter(|id| *id >= 0) else {
+            return Some(Err("bypass needs the id of the device to bypass"));
+        };
+        // UpdateDevice applies ONLY the fields its flags name — bit0 bypass, bit1
+        // patcher node, bit2 host slot. So the auto sentinels this builder defaults
+        // the other fields to are never read, and are zeroed anyway rather than
+        // relying on that: a command whose payload is only correct because the
+        // receiver ignores most of it is one flag bit away from repointing a
+        // device's patcher node as a side effect of dimming its card.
+        p.command_type = UiCommandType::UpdateDevice as u16;
+        p.flags = 0x1;
+        p.device_id = id as u32;
+        p.insert_index = 0;
+        p.patcher_node_id = 0;
+        p.host_slot_index = 0;
+        // Absent means ON. A toggle sends the state it wants rather than asking
+        // for "the other one": two clicks racing on the ring would otherwise
+        // cancel out, and the UI already knows what it is looking at.
+        p.bypass = match parse_num(body, "\"on\"") { Some(0) => 0, _ => 1 };
         return Some(Ok(p));
     }
     if del {
@@ -4330,6 +4357,36 @@ mod tests {
                    .device_id, 0, "device 0 is a device, not a missing id");
         assert!(build_chain_edit(r#"{"type":"deldevice","track":1}"#).unwrap().is_err());
         assert!(build_chain_edit(r#"{"type":"deldevice","device":-1}"#).unwrap().is_err());
+    }
+
+    #[test]
+    fn bypass_names_the_state_it_wants_and_touches_only_that() {
+        let p = build_chain_edit(r#"{"type":"bypass","track":2,"device":7,"on":1}"#)
+            .expect("recognised").expect("built");
+        assert_eq!(p.command_type, UiCommandType::UpdateDevice as u16);
+        assert_eq!(p.command_type, 17, "the engine's own number for it");
+        assert_eq!(p.flags, 0x1, "bit0 alone — bit1 would repoint the patcher node");
+        assert_eq!(p.track_id, 2);
+        assert_eq!(p.device_id, 7);
+        assert_eq!(p.bypass, 1);
+        // The fields this builder defaults to the auto sentinel for adds. They are
+        // unread under flags 0x1, and zeroed rather than trusted to stay unread.
+        assert_eq!(p.patcher_node_id, 0);
+        assert_eq!(p.host_slot_index, 0);
+        assert_eq!(p.insert_index, 0);
+
+        // A state, not a toggle: "off" has to be expressible, or two clicks racing
+        // on the ring cancel each other out.
+        assert_eq!(build_chain_edit(r#"{"type":"bypass","device":7,"on":0}"#)
+                   .unwrap().unwrap().bypass, 0);
+        // Device 0 is a device. The same trap deldevice has: a parser looking for
+        // "device" inside the word "bypass" would find nothing and default to 0,
+        // which is a real id.
+        assert_eq!(build_chain_edit(r#"{"type":"bypass","device":0,"on":1}"#)
+                   .unwrap().unwrap().device_id, 0);
+        assert!(build_chain_edit(r#"{"type":"bypass","track":1}"#).unwrap().is_err(),
+                "no device id is a refusal, not device 0");
+        assert!(build_chain_edit(r#"{"type":"bypass","device":-1}"#).unwrap().is_err());
     }
 
     /// A well-formed parameter write becomes a payload, keyed on the uid.

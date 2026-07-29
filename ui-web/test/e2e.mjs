@@ -1653,21 +1653,32 @@ section('the console can ask the agent');
   await page.waitForTimeout(250);
   await page.keyboard.type('please make the drums louder');
   await page.keyboard.press('Enter');
-  // A model takes seconds; a missing key comes back at once. Either way the
-  // console says something new.
-  await page.waitForFunction(
+  /*
+   * THE WAIT IS THE ASSERTION, and it used to be neither.
+   *
+   * It waited 15s for the model's first progress line, swallowed the timeout,
+   * then asserted against a SNAPSHOT of the last six console lines. Two things
+   * were wrong with that and they compound. Fifteen seconds is a guess about how
+   * long a live model takes to say its first word, and it is sometimes wrong —
+   * the page had sent the sentence and printed `asking…`, which is the plumbing
+   * this check exists to prove, and the check failed anyway. And a six-line
+   * window is a race of its own: the answer arriving is what pushes the line out
+   * of it.
+   *
+   * So: wait on the condition, with a budget that respects a network round trip,
+   * and assert on whether the wait SUCCEEDED. The log is kept for the message,
+   * where being approximate costs nothing.
+   */
+  const asked = await page.waitForFunction(
     () => [...document.querySelectorAll('.dk-line')]
       .some((e) => /asking:/.test(e.textContent || '')),
-    null, { timeout: 15000 }).catch(() => {});
-  // The WHOLE log. The engine narrates every republish into this console, so the
-  // last few lines are whatever the engine said most recently rather than the
-  // answer to what was just typed.
+    null, { timeout: 45000 }).then(() => true).catch(() => false);
   const log = await page.evaluate(() => [...document.querySelectorAll('.dk-line')]
     .map((e) => e.textContent).filter(Boolean)
-    .filter((t) => !/^engine: /.test(t)).slice(-6).join(' | '));
+    .filter((t) => !/^engine: /.test(t)).slice(-8).join(' | '));
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
-  ok(/asking:/.test(log), 'a sentence is sent to the agent rather than refused as a typo',
+  ok(asked, 'a sentence is sent to the agent rather than refused as a typo',
      log.slice(0, 160));
   ok(!/unknown: please/.test(log),
      'and is NOT treated as an unknown command', log.slice(0, 120));
@@ -2597,6 +2608,71 @@ section('a track can be routed away from Main');
   await page.selectOption('.mx-strip[data-track="0"] .mx-out', '-1');
   await page.waitForTimeout(1200);
   ok((await routes())['0'] === '1:0', 'and it goes back to Main');
+}
+
+/*
+ * BYPASS: the rack has drawn this state since v20 and could never set it.
+ *
+ * Asserted from the ENGINE's chain snapshot, not from the card's class. The card
+ * dimming proves the click reached the renderer; the snapshot proves it reached
+ * the engine, and those are the two halves that a working-looking-but-inert
+ * button separates. Both routes are exercised — the button and the `b` key —
+ * because they are two call sites and a rack where the mouse works and the
+ * keyboard does not is the shape this file keeps finding.
+ */
+section('a device can be switched off without removing it');
+{
+  // Back to the tracker first: the section before this one leaves the mixer up,
+  // and the mixer takes the space the rack lives in — so every card is present,
+  // pooled and invisible, and `visible` correctly finds none of them.
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.evaluate(() => window.__uni.loadProject('rack'));
+  await page.waitForTimeout(2500);
+  // Track 0 — the rack shows the CURSOR's track, and `rack` puts its devices
+  // there. On track 1 the strip is legitimately empty and the section reads as a
+  // broken rack.
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.waitForTimeout(500);
+
+  /** What the ENGINE says about track 0's devices. */
+  const byp = () => page.evaluate(() => {
+    const c = window.__uni.chains()['0'];
+    return (c && c.devices || []).map((d) => `${d.id}:${d.bypass ? 1 : 0}`).join(' ');
+  });
+
+  const before = await byp();
+  ok(/^\S+:0( \S+:0)*$/.test(before), 'nothing starts bypassed', before);
+
+  // `visible`, not a selector: the pool keeps spare cards around with their last
+  // project's `data-pos` still on them, so `.dv-card[data-pos="1"]` matches a
+  // hidden leftover and the click hangs for thirty seconds. Fifth time.
+  const cards = await visible('.dv-card');
+  const buttons = await visible('.dv-card .dv-byp');
+  ok(buttons.length === cards.length && cards.length > 0,
+     'every card carries a bypass button', `${buttons.length} of ${cards.length}`);
+
+  const target = await cards[1].evaluate((el) => el._devId);
+  await buttons[1].click();
+  await page.waitForTimeout(1200);
+  const clicked = await byp();
+  ok(clicked.includes(`${target}:1`), 'the button bypasses that device in the ENGINE',
+     `${clicked} (wanted device ${target})`);
+  ok(clicked.split(' ').filter((s) => s.endsWith(':1')).length === 1,
+     'and only that one', clicked);
+  ok(await cards[1].evaluate((el) => el.classList.contains('byp')),
+     'and the card says so');
+
+  // The same press again, from the keyboard this time. The card is selected by
+  // the click above, so the rack already holds the keys.
+  await page.keyboard.press('b');
+  await page.waitForTimeout(1200);
+  const keyed = await byp();
+  ok(keyed.includes(`${target}:0`), 'and `b` switches it back on', keyed);
+
+  // A bypassed device must not be a bypassed PROJECT: leaving one off would make
+  // every later section quietly quieter, which is the kind of inherited state
+  // that makes a suite depend on its own order.
+  ok((await byp()) === before, 'the chain is back where it started', await byp());
 }
 
 section('dragging a clip moves it');

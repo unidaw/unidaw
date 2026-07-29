@@ -64,7 +64,7 @@ export class Chain {
    * on the strip, rather than showing a value nobody has accepted.
    */
   constructor(host, { onSelect, onAdd, onParam, onOpenEditor, onDelete,
-                      onOpenPatcher } = {}) {
+                      onOpenPatcher, onBypass } = {}) {
     this.host = host;
     this.host.className = 'dv';
     this.onSelect = onSelect;
@@ -81,6 +81,9 @@ export class Chain {
     // than a flag on `onOpenEditor`, because the two go to different places: an
     // editor is the plugin's own window, a graph is a surface in this app.
     this.onOpenPatcher = onOpenPatcher;
+    // Destructured, for the reason onDelete's comment gives — that failure looks
+    // exactly like a working button and is only found by pressing it.
+    this.onBypass = onBypass;
 
     const head = div('dv-head', host);
     this.label = text(div('dv-label', head));
@@ -165,7 +168,7 @@ export class Chain {
      * button is two deletes, not a delete and an open.
      */
     this.cardsEl.addEventListener('dblclick', (e) => {
-      if (e.target.closest('.dv-add, .dv-open, .dv-del, .dv-p-bar')) return;
+      if (e.target.closest('.dv-add, .dv-open, .dv-del, .dv-byp, .dv-p-bar')) return;
       const card = e.target.closest('.dv-card');
       if (!card || !this.vm) return;
       const pos = Number(card.dataset.pos);
@@ -323,7 +326,25 @@ export class Chain {
       const delIcon = document.createElement('i');
       delIcon.className = 'ph ph-trash';
       del.appendChild(delIcon);
-      el.append(open, del);
+      /**
+       * Bypass the device.
+       *
+       * The chain snapshot has carried every device's bypass state since v20 and
+       * this card has dimmed itself for it the whole time — with nothing able to
+       * SET it. A state you can see and cannot change reads as a control that has
+       * stopped working, and the only way in was a project file.
+       *
+       * It sits beside remove because they are the two things you do to a device
+       * you are unsure about, and one of them is reversible. `power` rather than a
+       * crossed-out circle: this is the switch, not a warning.
+       */
+      const byp = document.createElement('button');
+      byp.className = 'dv-byp';
+      byp.title = 'Bypass this device';
+      const bypIcon = document.createElement('i');
+      bypIcon.className = 'ph ph-power';
+      byp.appendChild(bypIcon);
+      el.append(open, byp, del);
       const bus = div('dv-bus', el);
       el._busEl = bus;
       el._badge = text(badge);
@@ -356,6 +377,31 @@ export class Chain {
       const c = opener.closest('.dv-card');
       if (c && this.onOpenEditor) {
         this.onOpenEditor({ track: this.vm ? this.vm.track : -1, device: c._devId });
+      }
+      return;
+    }
+    const bypasser = e.target.closest('.dv-byp');
+    if (bypasser) {
+      const c = bypasser.closest('.dv-card');
+      if (c && this.onBypass) {
+        const pos = Number(c.dataset.pos);
+        const card = this.vm && this.vm.cards && this.vm.cards[pos];
+        /*
+         * THIS one selects the card, where open and delete do not.
+         *
+         * Their reason for not selecting is that the card is about to stop being
+         * the thing you are looking at — a plugin window takes over, or the card
+         * goes away. Bypass is the opposite: the card stays, and you are almost
+         * certainly about to press it again, because comparing is the entire
+         * point of the control. Selecting hands the rack the keyboard, so the
+         * second and third comparisons are the `b` key rather than the mouse.
+         */
+        if (this.onSelect) this.onSelect(pos);
+        // The state we WANT, computed from the one we are drawing — not "toggle".
+        // Two presses racing on the command ring both mean "the other one", and
+        // the pair cancels out; two presses that name a state settle on the second.
+        this.onBypass({ track: this.vm ? this.vm.track : -1, device: c._devId,
+                        on: !(card && card.bypass) });
       }
       return;
     }

@@ -213,11 +213,13 @@
 }
 .dv-open:hover { opacity: 1; border-color: var(--base-accent); color: var(--base-accent); }
 
-/* Sits to the LEFT of the open button, same size and treatment: they are the two
-   things you can do to a card and there is no reason for them to look unrelated.
-   26px is the open button's 20px plus its 6px gutter. */
+/* FURTHEST from the corner, at 6 + 26 + 26. Same size and treatment as its
+   neighbours — there is no reason for the three things you can do to a card to
+   look unrelated — but the one that cannot be undone should not sit next to the
+   one you flick to without looking. It was at 32px, beside the open button,
+   which put "throw this away" one button's width from "show me this". */
 .dv-del {
-  position: absolute; top: 6px; right: 32px;
+  position: absolute; top: 6px; right: 58px;
   display: flex; align-items: center; justify-content: center;
   width: 20px; height: 20px;
   font-size: 13px;
@@ -232,6 +234,38 @@
 /* Destructive, so it goes red on hover rather than accent — the one button in
    the rack that cannot be undone should not look like the one next to it. */
 .dv-del:hover { opacity: 1; border-color: var(--uni-warn, #c04a4a); color: var(--uni-warn, #c04a4a); }
+
+/* Between the two, at 6 + 26. The three controls read right to left in
+   increasing order of consequence: look at it, switch it off, throw it away —
+   and in decreasing order of how often you reach for one, which is the same
+   order. A/B-ing an insert is a per-second gesture; deleting it is a per-week
+   one. */
+.dv-byp {
+  position: absolute; top: 6px; right: 32px;
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  font-size: 13px;
+  color: var(--uni-text-fx);
+  background: transparent;
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 3px;
+  padding: 0;
+  cursor: pointer;
+  opacity: .5;
+}
+.dv-byp:hover { opacity: 1; border-color: var(--base-accent); color: var(--base-accent); }
+/* ON A BYPASSED CARD IT MUST STAY LEGIBLE. The card carries `opacity: .45` when
+   bypassed, which multiplies with the button's own .5 and leaves the one control
+   that can undo the state at a quarter opacity — the switch fades out with the
+   thing it switched off, and the way back is the hardest thing on the card to
+   see. It reads as ON instead: full strength and in the accent, so the card says
+   both "I am doing nothing" and "this is why". */
+.dv-card.byp .dv-byp {
+  opacity: 1;
+  border-color: var(--base-accent);
+  color: var(--base-accent);
+  background: color-mix(in srgb, var(--base-accent) 18%, transparent);
+}
 
 /* WHICH PANE OWNS THE KEYBOARD.
    Backspace deleted a note in the tracker while a device was selected, because
