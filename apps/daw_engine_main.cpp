@@ -1911,6 +1911,16 @@ struct TrackRuntime {
   masterTrack->trackId = daw::kMasterTrackId;
   masterTrack->trackName = "Master";
   masterTrack->trackSnapshot = buildTrackSnapshot(masterTrack->track);
+  // 4b groundwork: give the master a host-capable config so a VST effect on the master
+  // SUM can be hosted out of process. Its input IS the sum, so numChannelsIn ==
+  // numChannelsOut (an audio-in effects chain). Dedicated socket/shm names off the
+  // master id. No host is launched until it actually has a VST effect (reconcileMasterHost).
+  masterTrack->config = baseConfig;
+  masterTrack->config.socketPath = trackSocketPath(daw::kMasterTrackId);
+  masterTrack->config.shmName = trackShmName(daw::kMasterTrackId);
+  masterTrack->config.numChannelsIn = masterTrack->config.numChannelsOut;
+  masterTrack->config.pluginPaths.clear();
+  masterTrack->config.pluginNames.clear();
 
   daw::LatencyManager latencyMgr;
   const auto& engineConfig = tracks.front()->config;

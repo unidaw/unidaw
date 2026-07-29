@@ -159,3 +159,52 @@ bypass, and underrun telemetry must stay at zero.
 This is the next focused increment — deliberately not rushed into the RT callback in
 the same pass as 4a, since a wrong handshake there reintroduces the dropouts the
 low-latency work removed.
+
+## 4b — CONFIRMED B2 (Jaakko, 2026-07-29). Concrete build plan + a scoping finding.
+
+**Finding that sets the scope:** the master is a SEPARATE runtime, not in the `tracks`
+vector (4a chose this so it never collides with AddTrack/aux-child slot logic). So it
+is NOT covered by any per-track host machinery — the restart worker, the consumer
+render loop, and the callback mix list all iterate `tracks` and skip the master. B2
+therefore needs its OWN self-contained host lifecycle + render path; it cannot lean on
+the per-track code. Good news: that self-containment + a hard bypass gate means B2
+cannot affect existing playback — a project with no enabled master VST effect takes
+today's exact path byte-for-byte.
+
+**Build order (each its own verified commit):**
+
+1. **Master host config.** At masterTrack creation, give it a real `HostConfig`:
+   `config = baseConfig; socketPath = trackSocketPath(kMasterTrackId); shmName =
+   trackShmName(kMasterTrackId); numChannelsIn = numChannelsOut` (an audio-in effects
+   chain — its input is the sum). No plugins yet. Safe: no behaviour change.
+
+2. **Dedicated master-host lifecycle** (NOT via the per-track restart worker, which
+   skips the master). A small `reconcileMasterHost()`: when the master chain gains/loses
+   an enabled VstEffect, launch / SetChain / teardown its host synchronously off the
+   command thread (the master chain edit already runs there). Verify: `do add-device
+   --track master --kind vst_effect --plugin <Zebra2>` launches the master host and it
+   reports the plugin. (chain handler already routes the master; stop skipping its host
+   rebuild once this exists.)
+
+3. **Master render thread + two lock-free single-slot hand-offs.**
+   - Callback -> render thread: after summing into `master[]`, if the gate is on, copy
+     the sum into `m_masterSumSlot` (plain stores, no alloc).
+   - Render thread: read the latest sum, write it into the master host's input plane
+     (safeAudioInPtr on masterTrack->controller), `sendProcessBlock`, wait on the
+     master host's completedBlockId, read the output plane (safeAudioOutPtr), copy into
+     `m_masterOutSlot`. This thread is the ONLY place that blocks on the master host.
+   - Render thread -> callback: the callback reads `m_masterOutSlot` (the previous
+     block's finished output) and emits THAT instead of the raw sum, then applies the
+     master fader. One block late by construction = B2.
+
+4. **The gate (safety).** `masterFxActive (>=1 enabled VstEffect on the master) &&
+   masterHostReady`. Off => the callback outputs the sum exactly as today. On => the
+   processed path. Gate is read once per block into a local; flipping it can only
+   swap between "today" and "processed", never a torn state.
+
+5. **Report the one block** in the latency line when the gate is on; note it is
+   master-only and opt-in.
+
+**Verify:** a master with a known effect (e.g. a gain/limiter) measurably changes the
+captured sum vs the empty-master bypass; underrun telemetry stays at zero; an
+empty-master project is byte-identical to today (save_roundtrip + audio capture).
