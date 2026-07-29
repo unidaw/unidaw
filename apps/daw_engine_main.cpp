@@ -3522,6 +3522,37 @@ struct TrackRuntime {
     }
   };
 
+  // A refusal, on the outbound ring, with the numbers that settle it. Everything the
+  // caller needs to recover is here: which track the version was compared against, what
+  // it sent, and what to retry with.
+  auto emitClipReject = [&](daw::UiClipRejectReason reason, uint32_t trackId,
+                            uint32_t sentBase, uint32_t currentBase,
+                            daw::UiCommandType commandType) {
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::UiClipRejectPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ClipRejected);
+    payload.reason = static_cast<uint16_t>(reason);
+    payload.trackId = trackId;
+    payload.sentBase = sentBase;
+    payload.currentBase = currentBase;
+    payload.commandType = static_cast<uint16_t>(commandType);
+    daw::EventEntry entry;
+    entry.sampleTime = 0;
+    entry.blockId = 0;
+    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+    entry.size = sizeof(daw::UiClipRejectPayload);
+    std::memcpy(entry.payload, &payload, sizeof(payload));
+    if (daw::ringWrite(ringUiOut, entry)) {
+      uiDiffSent.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      uiDiffDropped.fetch_add(1, std::memory_order_relaxed);
+      logUiDiffDrop();
+    }
+  };
+
   auto emitChainSnapshot = [&](TrackRuntime& runtime) {
     // Movement 4: an aux child has no host chain to enumerate.
     if (runtime.isAuxChild.load(std::memory_order_acquire)) {
@@ -5702,9 +5733,29 @@ struct TrackRuntime {
     // gated on the global counter — comparing them against the caller's incidental
     // trackId would let an undo of a track-3 edit ride on track 0's version.
     if (!daw::uiCommandIsGlobalScope(commandType)) {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size() && tracks[trackId]) {
-        current = tracks[trackId]->trackClipVersion.load(std::memory_order_acquire);
+      bool haveTrack = false;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (trackId < tracks.size() && tracks[trackId] &&
+            !tracks[trackId]->removed.load(std::memory_order_acquire)) {
+          current = tracks[trackId]->trackClipVersion.load(std::memory_order_acquire);
+          haveTrack = true;
+        }
+      }
+      if (!haveTrack) {
+        // A track-scoped edit naming a track that is not there used to fall through to
+        // the global counter, get ACCEPTED, and then quietly do nothing when the edit
+        // itself could not find the track. Refuse it here and say why: unlike a stale
+        // base, retrying will never help, and the caller needs to know that.
+        historyAppend(daw::uiCommandTypeName(commandType), "rejected:no_track", trackId,
+                      baseVersion, "");
+        DAW_EVENT("clip.unknown_track")
+            .field("track", trackId)
+            .field("command", static_cast<uint32_t>(commandType))
+            .field("action", "rejected");
+        emitClipReject(daw::UiClipRejectReason::UnknownTrack, trackId, baseVersion,
+                       current, commandType);
+        return false;
       }
     }
     daw::UiDiffPayload diffPayload{};
@@ -5716,9 +5767,15 @@ struct TrackRuntime {
     // track-4 version labelled as track 0's — a trap that costs nothing to remove and
     // would be very hard to find. Global-scope commands keep 0, which is correct there:
     // they are gated on the global counter.
-    diffPayload.trackId =
+    const uint32_t scopeTrack =
         daw::uiCommandIsGlobalScope(commandType) ? 0u : trackId;
+    diffPayload.trackId = scopeTrack;
     emitUiDiff(diffPayload);
+    // Say it OUT LOUD. A resync request tells the caller to re-read; it does not tell
+    // them they were refused, which edit, or what to retry with — so a client that
+    // stamps the wrong base sees only "nothing happened", on every edit, forever.
+    emitClipReject(daw::UiClipRejectReason::StaleBase, scopeTrack, baseVersion, current,
+                   commandType);
     historyAppend(daw::uiCommandTypeName(commandType), "rejected:version", trackId,
                   baseVersion, "");
     DAW_EVENT("clip.version_mismatch")

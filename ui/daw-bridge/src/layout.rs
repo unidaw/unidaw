@@ -603,6 +603,40 @@ pub enum UiDiffType {
     /// v20 (Movement 4): one per audio bus of a device, streamed after that device's
     /// ChainSnapshot diff. See UiBusDiffPayload.
     DeviceBus = 14,
+    /// A clip edit was REFUSED, and why. Before this, a stale-base edit was dropped in
+    /// total silence — no error, no code, nothing on the outbound ring — so every
+    /// symptom was "the app does nothing". Payload: `UiClipRejectPayload`.
+    /// ResyncNeeded (4) is still emitted alongside, unchanged.
+    ClipRejected = 15,
+}
+
+/// Why a clip edit was refused. The distinction matters because the fix differs: a
+/// stale base means re-read `clip_version_for_track` and retry; an unknown track means
+/// the caller is addressing something that is not there and retrying will never help.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiClipRejectReason {
+    None = 0,
+    StaleBase = 1,
+    UnknownTrack = 2,
+}
+
+/// Rides the same 40-byte diff slot as every other payload. `diff_type` is FIRST —
+/// dispatch on it, never on the payload's size (UiChainDiffPayload and
+/// UiChainErrorPayload are both 40 bytes).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiClipRejectPayload {
+    pub diff_type: u16,
+    pub reason: u16,
+    pub track_id: u32,
+    /// What the caller presented.
+    pub sent_base: u32,
+    /// What the engine holds — the value to retry with.
+    pub current_base: u32,
+    pub command_type: u16,
+    pub reserved: u16,
+    pub reserved2: [u32; 5],
 }
 
 #[repr(u16)]
