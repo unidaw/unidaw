@@ -1852,7 +1852,7 @@ test('the parameter key names the track as well as the device', () => {
 // lists that all describe the UI. None of them says what the APPLICATION is
 // capable of. That is the engine's `UiCommandType`, and comparing against it
 // found eleven commands the engine accepts and the frontend never sends:
-// OpenPluginEditor, the two mod-link commands, SetTrackRouting, MoveDevice,
+// OpenPluginEditor, the two mod-link commands, MoveDevice,
 // SavePatcherPreset, SetTrackHarmonyQuantize, the harmony pair, DeleteChord and
 // SetDeviceEuclideanConfig.
 //
@@ -1867,7 +1867,6 @@ test('the parameter key names the track as well as the device', () => {
 const ENGINE_UNUSED = {
   AddModLink: 'gap — modulation cannot be wired from the UI',
   RemoveModLink: 'gap — nor unwired',
-  SetTrackRouting: 'gap — routing is authored in the project file only',
   SetDeviceEuclideanConfig: 'gap — the euclidean device cannot be configured',
   MoveDevice: 'gap — devices cannot be reordered in the chain',
   SavePatcherPreset: 'gap — a patcher graph cannot be saved as a preset',

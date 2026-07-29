@@ -109,6 +109,24 @@ const run = async (line, wait = 150) => {
   await page.waitForTimeout(wait);
   return out[out.length - 1] || '';
 };
+/**
+ * The VISIBLE elements matching a selector.
+ *
+ * The rack, the tracker and the arrangement all POOL their elements and hide the
+ * spares rather than removing them (GUIDELINES 3.7), so `page.$$` hands back
+ * leftovers that still carry the last project's text. Clicking one hangs until
+ * Playwright's timeout with "element is not visible", and reading one reports a
+ * value that was true two sections ago.
+ *
+ * This has bitten four separate checks in this file. A helper, so it stops.
+ */
+async function visible(sel) {
+  const all = await page.$$(sel);
+  const out = [];
+  for (const h of all) if (await h.evaluate((e) => e.offsetParent !== null)) out.push(h);
+  return out;
+}
+
 const frames = () => page.evaluate(() => new Promise((r) =>
   requestAnimationFrame(() => requestAnimationFrame(r))));
 
@@ -526,14 +544,9 @@ section('patcher editing');
 await page.evaluate(() => window.__uni.view('patcher'));
 await frames();
 {
-  // VISIBLE cards only. The rack pools its cards and hides the spares rather
-  // than removing them (GUIDELINES 3.7), so `$$('.dv-card')` hands back hidden
-  // ones that still carry their old badge — and clicking one hangs until the
-  // timeout with "element is not visible".
-  const cards = await page.$$('.dv-card');
-  for (const c of cards) {
-    const isPatcher = await c.evaluate((el) => el.offsetParent !== null
-      && /PATCHER/.test((el.querySelector('.dv-badge') || {}).textContent || ''));
+  for (const c of await visible('.dv-card')) {
+    const isPatcher = await c.evaluate((el) =>
+      /PATCHER/.test((el.querySelector('.dv-badge') || {}).textContent || ''));
     if (isPatcher) { await c.click(); break; }
   }
   await page.waitForTimeout(500);
@@ -2206,7 +2219,7 @@ section('the patcher shows one device\'s graph, not the pool');
      'the track\'s own patcher is shown without hunting for it',
      JSON.stringify(idle.nodes));
 
-  const cards = await page.$$('.dv-card');
+  const cards = await visible('.dv-card');
   await cards[0].click();                       // the patcher device
   await page.waitForTimeout(700);
   const onPatcher = await drawn();
@@ -2480,11 +2493,7 @@ section('double-clicking a patcher device opens its graph');
              nodes: [...document.querySelectorAll('.pt-node')].filter((n) => n.offsetParent)
                       .map((n) => (n.querySelector('.pt-type') || {}).textContent) };
   });
-  // VISIBLE cards. The rack hides its spares rather than removing them, and
-  // clicking a hidden one hangs until the timeout.
-  const all = await page.$$('.dv-card');
-  const cards = [];
-  for (const c of all) if (await c.evaluate((e) => e.offsetParent !== null)) cards.push(c);
+  const cards = await visible('.dv-card');
   ok(cards.length === 2, 'the track has a patcher device and an instrument',
      `${cards.length} cards`);
 
@@ -2516,9 +2525,7 @@ section('double-clicking a patcher device opens its graph');
        JSON.stringify(up));
 
     // The rack is still on screen under the split, so its cards are clickable.
-    const all2 = await page.$$('.dv-card');
-    const cards2 = [];
-    for (const c of all2) if (await c.evaluate((e) => e.offsetParent !== null)) cards2.push(c);
+    const cards2 = await visible('.dv-card');
     if (cards2.length) {
       await cards2[0].dblclick();
       await page.waitForTimeout(800);
@@ -2528,6 +2535,68 @@ section('double-clicking a patcher device opens its graph');
       ok(again.view === 'patcher', 'and the one on screen stays where it is', again.view);
     }
   }
+}
+
+/*
+ * A TRACK'S AUDIO CAN GO SOMEWHERE OTHER THAN MAIN.
+ *
+ * A track whose output feeds another track IS a group — there is no separate
+ * object to create — so the destination list is Main plus every other track.
+ *
+ * The engine has supported this the whole time (SetTrackRouting, a RoutingSnapshot
+ * diff, and a summing path that finds the destination runtime); nothing on this
+ * side read the snapshot or sent the command.
+ */
+section('a track can be routed away from Main');
+{
+  await page.evaluate(() => window.__uni.loadProject('maximal'));
+  await page.waitForTimeout(3000);
+  await page.evaluate(() => window.__uni.run('view mixer'));
+  await page.waitForTimeout(700);
+
+  const routes = () => page.evaluate(() => {
+    const c = window.__uni.chains(); const out = {};
+    for (const k in c) {
+      if (c[k].routing) out[k] = c[k].routing.audioOutKind + ':' + c[k].routing.audioOutTrack;
+    }
+    return out;
+  });
+  const opts = (t) => page.evaluate((track) => {
+    const strip = document.querySelector(`.mx-strip[data-track="${track}"]`);
+    return strip ? [...strip.querySelectorAll('option')].map((o) => o.textContent) : null;
+  }, t);
+
+  const list = await opts(0);
+  ok(list && list[0] === 'Main', 'every strip offers Main first', JSON.stringify(list));
+  /*
+   * AND NOT ITSELF. A track cannot feed its own input, and offering it would be
+   * offering a feedback loop — the one destination that is never right.
+   */
+  ok(list && !list.includes('Bass'), 'and not the track it belongs to',
+     JSON.stringify(list));
+  ok(list && list.includes('Arp'), 'but every other track', JSON.stringify(list));
+
+  const before = await routes();
+  ok(before['0'] === '1:0', 'the Bass starts routed to Main', before['0']);
+
+  // A real select, committed the way a person commits one.
+  await page.selectOption('.mx-strip[data-track="0"] .mx-out', '3');
+  await page.waitForTimeout(1400);
+  const after = await routes();
+  /*
+   * kind 2 is "another track" and 3 is the Arp. Read back from the ENGINE's own
+   * snapshot rather than from the select: the select showing what you clicked
+   * proves nothing, and the failure this guards is a routing command that is
+   * accepted and does not land.
+   */
+  ok(after['0'] === '2:3', 'and the engine has it routed into the Arp', after['0']);
+  ok(after['1'] === '1:0' && after['2'] === '1:0',
+     'while every other track is untouched', JSON.stringify(after));
+
+  // Back to Main, or later sections inherit a routed mix.
+  await page.selectOption('.mx-strip[data-track="0"] .mx-out', '-1');
+  await page.waitForTimeout(1200);
+  ok((await routes())['0'] === '1:0', 'and it goes back to Main');
 }
 
 section('dragging a clip moves it');

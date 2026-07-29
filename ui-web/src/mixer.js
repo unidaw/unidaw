@@ -36,11 +36,14 @@ const PCT = (() => {
 })();
 
 export class Mixer {
-  constructor(host, { onGain, onPan, onToggle, onRename } = {}) {
+  constructor(host, { onGain, onPan, onToggle, onRename, onRoute } = {}) {
     this.host = host;
     this.host.className = 'mx';
     this.onGain = onGain; this.onPan = onPan; this.onToggle = onToggle;
     this.onRename = onRename;
+    // Where a track's audio goes. Its own callback: it is a routing change, not
+    // a mix change, and the engine takes it on a different command.
+    this.onRoute = onRoute;
     /** Which strip is being renamed; the text lives in the shared field. */
     this.renaming = -1;
     this.field = createField({ max: 23 });
@@ -65,6 +68,17 @@ export class Mixer {
 
     // One listener for the whole surface rather than per control: strips are
     // pooled and re-bound, so per-element listeners would have to be rebound too.
+    /*
+     * The output select. `change`, delegated on the host — a select fires it on
+     * commit, whether by mouse or keyboard, which is the whole reason to use one
+     * rather than a custom menu that would have to handle both.
+     */
+    this.host.addEventListener('change', (e) => {
+      const sel = e.target.closest && e.target.closest('.mx-out');
+      if (!sel || !this.onRoute) return;
+      const strip = sel.closest('.mx-strip');
+      if (strip) this.onRoute(Number(strip.dataset.track), Number(sel.value));
+    });
     this.host.addEventListener('pointerdown', (e) => this._down(e));
     this.host.addEventListener('pointermove', (e) => this._move(e));
     this.host.addEventListener('pointerup', () => this._up());
@@ -86,6 +100,20 @@ export class Mixer {
       const meterFill = div('mx-meter-fill', meter);
       const gain = textDiv('mx-gain', el);
       const pan = textDiv('mx-pan', el);
+      /*
+       * WHERE THIS TRACK GOES.
+       *
+       * A real `<select>`. The app builds its own controls everywhere else, and
+       * this is the one place not to: "pick one of N" is what a select IS, it is
+       * keyboard-reachable and screen-reader-reachable for free, and a custom
+       * menu here would be a popup layer, a focus trap and a keymap to maintain
+       * for a control most people touch twice a session.
+       */
+      const out = document.createElement('select');
+      out.className = 'mx-out';
+      out.dataset.act = 'route';
+      out.title = 'Where this track\u2019s audio goes';
+      el.appendChild(out);
       const btns = div('mx-btns', el);
       const mute = textDiv('mx-btn mx-mute', btns);
       mute.firstChild.nodeValue = 'M';
@@ -95,6 +123,7 @@ export class Mixer {
       solo.dataset.act = 'solo';
       fader.dataset.act = 'fader';
       pan.dataset.act = 'pan';
+      el._out = out; el._outV = null; el._outOpts = '';
       el._name = name.firstChild; el._gain = gain.firstChild; el._pan = pan.firstChild;
       el._fader = fader; el._faderFill = faderFill; el._meterFill = meterFill;
       el._mute = mute; el._solo = solo;
@@ -187,6 +216,34 @@ export class Mixer {
       if (el._renV !== ren) { el._renV = ren; el.classList.toggle('renaming', ren); }
       if (el._gainV !== s.gainDb) { el._gainV = s.gainDb; el._gain.nodeValue = s.gainDb; }
       if (el._panV !== s.panLabel) { el._panV = s.panLabel; el._pan.nodeValue = s.panLabel; }
+      /*
+       * The destination list, rebuilt only when the TRACKS change — not when the
+       * routing does. Options are a track's name and count; rebuilding them per
+       * frame would be a fresh <option> per track per strip per frame, which is
+       * the shape GUIDELINES 3 exists to keep out.
+       *
+       * A track cannot feed itself, so it is not in its own list. Everything
+       * else the engine validates: it refuses a route that would make a cycle,
+       * and duplicating that rule here would be a second place for it to be
+       * wrong.
+       */
+      if (el._outOpts !== vm.routeKey) {
+        el._outOpts = vm.routeKey;
+        el._out.textContent = '';
+        const main = document.createElement('option');
+        main.value = '-1';
+        main.textContent = 'Main';
+        el._out.appendChild(main);
+        for (let d = 0; d < vm.stripCount; d++) {
+          if (d === s.track) continue;
+          const o = document.createElement('option');
+          o.value = String(vm.strips[d].track);
+          o.textContent = vm.strips[d].name;
+          el._out.appendChild(o);
+        }
+        el._outV = null;                 // the value has to be re-applied
+      }
+      if (el._outV !== s.outTo) { el._outV = s.outTo; el._out.value = String(s.outTo); }
       if (el._faderV !== s.faderPct) {
         el._faderV = s.faderPct;
         el._faderFill.style.height = (s.faderPct * 100).toFixed(1) + '%';

@@ -57,6 +57,9 @@ export function createMixerBuffer(trackCount = 16) {
   for (let i = 0; i < trackCount; i++) {
     strips[i] = {
       track: i, name: '', gain: 0, gainDb: '0.0', pan: 0, panLabel: 'C',
+      // Where this track's audio GOES. `outTo` is the destination track id, or
+      // -1 for the master — "Main" on screen. See ROUTE_MASTER.
+      outTo: -1,
       mute: false, solo: false, dimmed: false, pending: false,
       peak: 0, peakPct: 0, faderPct: 0,
       // The name the engine published that `name` was derived from. A number,
@@ -68,6 +71,10 @@ export function createMixerBuffer(trackCount = 16) {
     };
   }
   return { strips, stripCount: 0, authoritative: false,
+           /* Changes when the DESTINATION LIST would — the strip count and the
+              names. The view rebuilds its <option>s on this and not on the
+              routing, which moves far more often and does not change the list. */
+           routeKey: '',
            _shape: String(trackCount) };
 }
 
@@ -124,8 +131,16 @@ export function gainAtPosition(pos) {
 /**
  * @param {{tracks:number, engine:object|null, mixer:object, mixRevision:number}} opts
  */
+/** daw::TrackRouteKind. 1 is the master, 2 is another track. */
+export const ROUTE_KIND_MASTER = 1;
+export const ROUTE_KIND_TRACK = 2;
+
 export function buildMixerModel(opts, buf) {
-  const { tracks: trackCount = 8, engine = null, mixer, mixRevision = 0 } = opts;
+  const { tracks: trackCount = 8, engine = null, mixer, mixRevision = 0,
+          // Per-track chains, which is where the engine publishes routing. The
+          // mixer needs them for one field; passing the whole map rather than a
+          // second derived structure keeps one source of truth.
+          chains = null } = opts;
   const n = Math.min(trackCount, buf.strips.length);
 
   // Solo is exclusive-ish: if anything is soloed, everything unsoloed is dimmed.
@@ -149,6 +164,17 @@ export function buildMixerModel(opts, buf) {
     // — the whole of trackName's input — is covered.
     const nm = engine && engine.names ? engine.names[t] : undefined;
     if (s._nameSrc !== nm) { s._nameSrc = nm; s.name = trackName(engine, t); }
+    /*
+     * WHERE THE TRACK'S AUDIO GOES.
+     *
+     * `null` routing is not "the master" — it is "the engine has not said yet",
+     * and defaulting it to Main would show every track routed to Main before the
+     * first snapshot arrives and would show a track sent to a group as sent to
+     * Main until it happened to republish. So an unknown routing keeps whatever
+     * was last known rather than inventing a plausible one.
+     */
+    const r = chains && chains[t] ? chains[t].routing : null;
+    if (r) s.outTo = r.audioOutKind === ROUTE_KIND_TRACK ? r.audioOutTrack : -1;
     // Both labels are pure functions of the value beside them, and both were
     // rebuilt for every strip on every frame to produce the characters that were
     // already there. The value we store is the key. Moving a fader now allocates
@@ -167,6 +193,11 @@ export function buildMixerModel(opts, buf) {
     s.peakPct = p <= 0 ? 0 : Math.max(0, Math.min(1, 1 + Math.log10(Math.max(p, 1e-5)) / 5));
   }
   buf.stripCount = n;
+  // Built here, once, rather than compared field by field in the view: it is one
+  // small string per frame against N option elements per strip per frame.
+  let key = n + ':';
+  for (let i = 0; i < n; i++) key += buf.strips[i].name + ',';
+  buf.routeKey = key;
   buf.authoritative = mixer.authoritative;
   return buf;
 }

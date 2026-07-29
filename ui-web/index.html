@@ -93,6 +93,7 @@ import { buildHarmonyModel, createHarmonyBuffer } from './src/harmonymodel.js';
 import { Palette } from './src/palette.js';
 import { buildChainModel, createChainBuffer, paramKey } from './src/chainmodel.js';
 import { createChrome, VIEW_TABS } from './src/chrome.js';
+import { ROUTE_KIND_MASTER, ROUTE_KIND_TRACK } from './src/mixermodel.js';
 import { Arrange, ARRANGE_CLIP_MARGIN_PX } from './src/arrange.js';
 import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName,
          TICKS_PER_BAR, snapLoop, wheelPixels, clampZoom } from './src/arrangemodel.js';
@@ -1975,6 +1976,35 @@ const mixer = new Mixer(mixerHost, {
     s.pan = Math.max(-1000, Math.min(1000, s.pan + dir * 100));
     sendMixer(track);
   },
+  /**
+   * Send a track's audio somewhere else.
+   *
+   * -1 is the master — "Main" on screen. Anything else is another track, which
+   * is how a group works here: a track whose output feeds another track's input
+   * IS a group, and there is no separate object to create.
+   *
+   * The whole routing struct goes, not just the field being changed. The engine
+   * reads a `SetTrackRouting` as the track's routing ENTIRE, so sending it with
+   * the other fields zeroed would not leave them alone — it would set them all
+   * to none, and quietly cut the track's MIDI on the way past.
+   */
+  onRoute: (track, dest) => {
+    const cur = (chains[track] && chains[track].routing) || null;
+    if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return; }
+    conn.send({
+      type: 'routing', track,
+      audioOutKind: dest < 0 ? ROUTE_KIND_MASTER : ROUTE_KIND_TRACK,
+      audioOutTrack: dest < 0 ? 0 : dest,
+      // Carried through unchanged. See above: this command replaces the lot.
+      audioInKind: cur ? cur.audioInKind : 0,
+      audioInTrack: cur ? cur.audioInTrack : 0,
+      midiOutKind: cur ? cur.midiOutKind : 0,
+      midiOutTrack: cur ? cur.midiOutTrack : 0,
+      preFaderSend: cur ? cur.preFaderSend : true,
+    });
+    state.reject = null;
+    schedule();
+  },
   onRename: (track, name) => {
     if (!conn || !conn.send({ type: 'rename', track, name })) { state.reject = 'no engine'; }
     else state.reject = null;
@@ -2643,7 +2673,7 @@ function drawPiano() {
   updateChrome();
 }
 
-const _mixerOpts = { tracks: 8, engine: null, mixer: null, mixRevision: 0 };
+const _mixerOpts = { tracks: 8, engine: null, mixer: null, mixRevision: 0, chains: null };
 // The lane count the mixer buffer was built for. Comparing `mixerBuf._shape`
 // meant `String(n)` — a string built every frame to be thrown away — so the
 // number is kept here instead. Same for the arrangement below.
@@ -2666,6 +2696,9 @@ function drawMixer() {
   o.engine = state.useEngine === false ? null : engine;
   o.mixer = mixerState;
   o.mixRevision = mixRevision;
+  // Routing rides the chain snapshot, so the mixer reads it from there rather
+  // than from a second derived structure that could disagree with it.
+  o.chains = chains;
   mixer.render(buildMixerModel(o, mixerBuf));
   updateChrome();
 }

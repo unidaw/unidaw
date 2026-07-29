@@ -107,3 +107,20 @@
   opacity: 0;
 }
 .mx-notice.on { opacity: 1; }
+
+/* Where a track's audio goes. A real <select>, styled to sit in the strip — the
+   one place this app does not build its own control, because "pick one of N" is
+   what a select IS and a custom menu here would be a popup layer, a focus trap
+   and a keymap to maintain for something touched twice a session. */
+.mx-out {
+  width: 100%;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  color: var(--uni-text-instrument);
+  background: var(--uni-surface-cursor-cell);
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 2px;
+  padding: 1px 2px;
+}
+.mx-out:focus { outline: 1px solid var(--base-accent); }

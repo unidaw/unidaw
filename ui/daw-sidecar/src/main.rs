@@ -36,6 +36,7 @@ use daw_bridge::layout::{EventEntry, UiChainCommandPayload, UiChordCommandPayloa
                         UiCommandPayload, UiCommandType,
                         UiDiffType, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
                         UiPatcherPresetCommandPayload, UiSetParamPayload,
+                        UiTrackRoutingPayload,
                         UiWaveformRequestPayload, K_UI_WAVEFORM_SLOTS, K_CHAIN_DEVICE_ID_AUTO,
                         K_CHAIN_TRACK_ALL, K_HOST_SLOT_DIRECT};
 use daw_bridge::grid::{aggregate_rows, LaneGrid};
@@ -1018,6 +1019,45 @@ fn build_named(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
  * `at` and `len` are OPTIONAL on resize and mean "leave it" when missing — which
  * is what makes a right-edge drag one command instead of a move plus a resize.
  */
+/*
+ * A TRACK'S ROUTING: where its audio goes.
+ *
+ *   {"type":"routing","track":2,"audioOutKind":2,"audioOutTrack":0, ...}
+ *
+ * kind 1 = the master, 2 = another track. A track whose output feeds another
+ * track IS a group; there is no separate object to create.
+ *
+ * The WHOLE struct travels, not the one field being changed. The engine reads a
+ * SetTrackRouting as the track's routing entire, so a payload with the other
+ * fields zeroed does not leave them alone — it sets them to none, and cuts the
+ * track's MIDI on the way past. The page carries the current values through.
+ */
+fn build_routing(body: &str) -> Option<Result<UiTrackRoutingPayload, &'static str>> {
+    if !is_type(body, "routing") { return None; }
+    let n = |k: &str| parse_num(body, k).unwrap_or(0).max(0) as u32;
+    let kind = n("\"audioOutKind\"") as u8;
+    if kind > daw_bridge::layout::ROUTE_KIND_EXTERNAL {
+        return Some(Err("unknown route kind"));
+    }
+    Some(Ok(UiTrackRoutingPayload {
+        command_type: UiCommandType::SetTrackRouting as u16,
+        // bit0 is pre-fader send, per the payload's own comment.
+        flags: if body.contains("\"preFaderSend\":true") { 1 } else { 0 },
+        track_id: n("\"track\""),
+        base_version: 0,
+        midi_in_kind: 0,
+        midi_out_kind: n("\"midiOutKind\"") as u8,
+        audio_in_kind: n("\"audioInKind\"") as u8,
+        audio_out_kind: kind,
+        midi_in_track_id: 0,
+        midi_out_track_id: n("\"midiOutTrack\""),
+        audio_in_track_id: n("\"audioInTrack\""),
+        audio_out_track_id: n("\"audioOutTrack\""),
+        midi_in_input_id: 0,
+        audio_in_input_id: 0,
+    }))
+}
+
 fn build_placement(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
     if !is_type(body, "placement") { return None; }
     let op = match parse_str(body, "\"op\"") {
@@ -2211,6 +2251,22 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Duration::from_millis(250)) { ok += 1; } else { failed += 1; }
                             }
                             let reply = format!("{{\"ok\":true,\"applied\":{ok},\"failed\":{failed}}}");
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // A track's routing. Own 40-byte payload, matched on
+                        // size by the engine before commandType is read.
+                        if let Some(r) = build_routing(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_track_routing(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"routing\":{},\"kind\":{},\"to\":{}}}",
+                                        p.track_id, p.audio_out_kind, p.audio_out_track_id),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }
