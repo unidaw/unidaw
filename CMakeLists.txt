@@ -207,6 +207,23 @@ if (DAW_BUILD_PATCHER_RUST)
   target_link_libraries(patcher_graph_tests PRIVATE patcher_rust)
 endif()
 
+# M2.20: the deterministic linter. Shares the engine's project parser on purpose — a
+# linter with its own parser lints a different document.
+add_executable(daw_lint
+  apps/daw_lint_main.cpp
+  apps/event_log.cpp
+  apps/project_file.cpp
+  apps/device_chain.cpp
+  apps/plugin_cache.cpp
+  apps/patcher_preset.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
+)
+target_include_directories(daw_lint PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+
 add_executable(project_file_tests
   apps/project_file_tests_main.cpp
   apps/event_log.cpp
@@ -386,6 +403,13 @@ add_test(NAME event_ring_mpsc
   COMMAND event_ring_mpsc_tests
 )
 set_tests_properties(event_ring_mpsc PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# M2.20: the linter's own coverage — every rule fires, clean input is silent, output is
+# deterministic. Pure file in / text out, so it needs no audio device and belongs here.
+add_test(NAME lint
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
+)
+set_tests_properties(lint PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME lane_quantize
   COMMAND lane_quantize_tests

@@ -6497,7 +6497,18 @@ struct TrackRuntime {
         emitModError(kModErrInvalidDevice, modPayload.trackId, modPayload.linkId);
         return;
       }
-      if (*sourcePos >= *targetPos) {
+      // Modulation flows FORWARD, so a device later in the chain must not modulate an
+      // earlier one — by the time its value exists, the earlier device's audio has
+      // already gone past. SAME device is fine and is in fact the common case now that
+      // patchers are per-device: an LFO in device N's own graph driving device N's
+      // cutoff is the ordinary thing to want.
+      //
+      // This used to reject same-device links (>= rather than >), which meant the
+      // engine ACCEPTED from a file what it REFUSED from the UI — the loader installs
+      // mod links without this check. presets/projects/rack.uniproj.json ships exactly
+      // such a link, so the rack demo's modulation worked on load and could never be
+      // recreated by hand. Found by daw_lint (M2.20) on its first run over the presets.
+      if (*sourcePos > *targetPos) {
         emitModError(kModErrOrderViolation, modPayload.trackId, modPayload.linkId);
         return;
       }
