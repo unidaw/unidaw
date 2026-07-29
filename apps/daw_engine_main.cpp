@@ -3475,6 +3475,19 @@ struct TrackRuntime {
         }
       }
       if (placed) {
+        // A child is a fresh editable lane, and the version-gated regions have to learn
+        // it exists. Without this the clip-all region kept the rebuild it did BEFORE the
+        // child was placed — where this slot had no track, so it advertised the GLOBAL
+        // version — while the child's own acceptance counter sat at 0. Every note typed
+        // on a stem was then refused as a stale base, forever, and the sender was told it
+        // had succeeded. Same rule as AddTrack: the per-track VALUE first, the global
+        // GATE second, so nobody can see the new gate and read a stale value behind it.
+        // This also retires the counter the reused-slot branch inherits from whatever
+        // track used to live in that slot.
+        if (childId < tracks.size() && tracks[childId]) {
+          tracks[childId]->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
+        }
+        clipVersion.fetch_add(1, std::memory_order_acq_rel);
         DAW_EVENT("multiout.child_created")
             .field("parent", parent.trackId)
             .field("child", childId)

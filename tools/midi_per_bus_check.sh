@@ -42,6 +42,15 @@ CHILDREN=$(grep -c "multiout.child_created" "$LOG" || true)
 # Note on CHILD track 1 -> renders on MIDI channel 1 -> parent bus 1 -> child 1 audio.
 DAW_UI_SHM_NAME="$SHM" "$CLI" do note --force --track 1 --nanotick $((2*Q)) --pitch 60 --duration "$Q" >/dev/null 2>&1 || true
 sleep 0.5
+# Did the edit actually LAND on the child? Asserted separately from the audio, because a
+# refused edit and a mis-steered note both show up downstream as "the master is silent"
+# and they need completely different fixes. This caught the real one: creating a child did
+# not bump the version-gated regions, so the child's published base stayed at the global
+# value while its acceptance counter sat at 0 — every note on a stem was refused as stale,
+# forever, and the sender was told it had succeeded.
+CHILD_NOTES=$(DAW_UI_SHM_NAME="$SHM" "$CLI" get notes --track 1 2>/dev/null \
+  | grep -oE '"note_count": [0-9]+' | grep -oE '[0-9]+' || echo 0)
+REFUSALS=$(grep -c 'clip.version_mismatch\|clip.unknown_track' "$LOG" || true)
 DAW_UI_SHM_NAME="$SHM" "$CLI" do play --force >/dev/null 2>&1 || true
 wait "$ENG"
 
@@ -52,11 +61,21 @@ print(f"{max((abs(v) for v in s),default=0)/32768.0:.3f}")
 PY
 )
 echo "children: $CHILDREN (expect 2)"
+echo "notes accepted on child 1: $CHILD_NOTES (expect 1), engine refusals: $REFUSALS (expect 0)"
 echo "master peak with a note on child 1 only: $PEAK (expect >0.3)"
-grep -o '"aux_channel":[0-9]*' "$LOG" | sort -u | paste -sd, - | sed 's/^/aux channels active: /'
+# `|| true`: with no audio there are no aux_channel lines, grep exits 1, and under
+# `set -o pipefail` the script died right here — before printing a single FAIL line. The
+# check did still fail, but silently, which is the least useful way to fail: the run that
+# found the child-track bug showed one peak line and nothing else.
+{ grep -o '"aux_channel":[0-9]*' "$LOG" | sort -u | paste -sd, - \
+    | sed 's/^/aux channels active: /'; } || true
 
 rc=0
 [ "$CHILDREN" = "2" ] || { echo "FAIL: expected 2 children, got $CHILDREN"; rc=1; }
+[ "$CHILD_NOTES" = "1" ] || { echo "FAIL: the note did not land on child 1 (count $CHILD_NOTES)
+        — the edit was refused or went to the wrong track, before any routing happened"; rc=1; }
+[ "${REFUSALS:-0}" = "0" ] || { echo "FAIL: the engine refused $REFUSALS edit(s) — a child
+        track's published clip version disagrees with the version it accepts against"; rc=1; }
 python3 -c "import sys; sys.exit(0 if float('$PEAK')>0.3 else 1)" \
   || { echo "FAIL: master silent — the child's note did not route through the parent on its bus channel"; rc=1; }
 rm -rf "$TMP"
