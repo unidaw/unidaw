@@ -2459,6 +2459,77 @@ section('the centre splits into two panes');
   ok((await shape()).view2 === null, 'Escape closes the second pane');
 }
 
+/*
+ * DOUBLE-CLICK A PATCHER DEVICE TO SEE ITS GRAPH.
+ *
+ * And the interesting half is WHERE. If a patcher is already on screen the graph
+ * simply changes there — moving a surface you are already looking at is
+ * disorienting and answers a question nobody asked. Only when none is visible
+ * does this open one, and below, because you double-clicked a device in the rack
+ * to look at its graph: whatever you were working in is what you want to keep.
+ */
+section('double-clicking a patcher device opens its graph');
+{
+  await page.evaluate(() => window.__uni.loadProject('rack'));
+  await page.waitForTimeout(3000);
+  await page.evaluate(() => { window.__uni.run('view tracker'); window.__uni.run('goto 1 0'); });
+  await page.waitForTimeout(800);
+  const st = () => page.evaluate(() => {
+    const s = window.__uni.state();
+    return { view: s.view, view2: s.view2, sel: s.chainSelected,
+             nodes: [...document.querySelectorAll('.pt-node')].filter((n) => n.offsetParent)
+                      .map((n) => (n.querySelector('.pt-type') || {}).textContent) };
+  });
+  // VISIBLE cards. The rack hides its spares rather than removing them, and
+  // clicking a hidden one hangs until the timeout.
+  const all = await page.$$('.dv-card');
+  const cards = [];
+  for (const c of all) if (await c.evaluate((e) => e.offsetParent !== null)) cards.push(c);
+  ok(cards.length === 2, 'the track has a patcher device and an instrument',
+     `${cards.length} cards`);
+
+  if (cards.length === 2) {
+    const before = await st();
+    ok(before.view2 === null, 'nothing is open below to begin with');
+
+    await cards[0].dblclick();
+    await page.waitForTimeout(900);
+    const opened = await st();
+    ok(opened.view2 === 'patcher', 'double-clicking the patcher opens one below',
+       JSON.stringify(opened.view2));
+    ok(opened.view === 'tracker', 'and leaves what you were working in alone',
+       opened.view);
+    ok(opened.nodes.join(',') === 'euclidean,random,out',
+       'showing THAT device\'s graph', JSON.stringify(opened.nodes));
+
+    /*
+     * ALREADY VISIBLE: the graph changes where it is. Put the patcher in the TOP
+     * pane, then double-click again — a second pane must not open, and the one
+     * on screen must not move.
+     */
+    await page.keyboard.press('Escape');            // close the lower pane
+    await page.waitForTimeout(400);
+    await page.keyboard.press('F3');                // patcher in the top pane
+    await page.waitForTimeout(500);
+    const up = await st();
+    ok(up.view === 'patcher' && up.view2 === null, 'the patcher can sit in the top pane',
+       JSON.stringify(up));
+
+    // The rack is still on screen under the split, so its cards are clickable.
+    const all2 = await page.$$('.dv-card');
+    const cards2 = [];
+    for (const c of all2) if (await c.evaluate((e) => e.offsetParent !== null)) cards2.push(c);
+    if (cards2.length) {
+      await cards2[0].dblclick();
+      await page.waitForTimeout(800);
+      const again = await st();
+      ok(again.view2 === null,
+         'with a patcher already visible, no second pane opens', JSON.stringify(again));
+      ok(again.view === 'patcher', 'and the one on screen stays where it is', again.view);
+    }
+  }
+}
+
 section('dragging a clip moves it');
 {
   await page.evaluate(() => window.__uni.run('view arrange'));

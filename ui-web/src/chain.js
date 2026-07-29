@@ -63,7 +63,8 @@ export class Chain {
    * falsey return leaves the bar where the plugin says it is and puts the reason
    * on the strip, rather than showing a value nobody has accepted.
    */
-  constructor(host, { onSelect, onAdd, onParam, onOpenEditor, onDelete } = {}) {
+  constructor(host, { onSelect, onAdd, onParam, onOpenEditor, onDelete,
+                      onOpenPatcher } = {}) {
     this.host = host;
     this.host.className = 'dv';
     this.onSelect = onSelect;
@@ -76,6 +77,10 @@ export class Chain {
     // click did nothing at all. No error, nothing on screen: a control that is
     // present, reachable and inert. Only pressing it finds this.
     this.onDelete = onDelete;
+    // Double-clicking a PATCHER device opens its graph. Its own callback rather
+    // than a flag on `onOpenEditor`, because the two go to different places: an
+    // editor is the plugin's own window, a graph is a surface in this app.
+    this.onOpenPatcher = onOpenPatcher;
 
     const head = div('dv-head', host);
     this.label = text(div('dv-label', head));
@@ -144,6 +149,38 @@ export class Chain {
     this.cardsEl.addEventListener('pointermove', (e) => this._move(e));
     this.cardsEl.addEventListener('pointerup', () => this._up());
     this.cardsEl.addEventListener('pointercancel', () => this._up());
+    /*
+     * DOUBLE-CLICK OPENS THE DEVICE.
+     *
+     * `dblclick`, not a hand-rolled pair of clicks: the browser already knows
+     * the platform's interval and its slop radius, and both differ per OS.
+     *
+     * Which "open" depends on the KIND, and the kinds are the engine's own — a
+     * patcher device opens its graph, a plugin opens its editor window. Sending
+     * a patcher to the editor path is not merely wrong, it is SILENT: the engine
+     * skips OpenPluginEditor for non-VST kinds and logs to its own stderr, so
+     * the card looked inert for the same reason `onDelete` did.
+     *
+     * The controls are excluded first. A double-click that lands on the delete
+     * button is two deletes, not a delete and an open.
+     */
+    this.cardsEl.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.dv-add, .dv-open, .dv-del, .dv-p-bar')) return;
+      const card = e.target.closest('.dv-card');
+      if (!card || !this.vm) return;
+      const pos = Number(card.dataset.pos);
+      const c = this.vm.cards[pos];
+      if (!c) return;
+      // Resolved by DEVICE ID, not by the position the first click saw. The two
+      // clicks are a third of a second apart and the pool rebinds on any chain
+      // change, so a device added or removed in between makes `pos` mean
+      // something else entirely.
+      if (c.kind <= 2 && c.patcherNode >= 0) {
+        if (this.onOpenPatcher) this.onOpenPatcher(this.vm.track, c.id, pos);
+      } else if (this.onOpenEditor) {
+        this.onOpenEditor(this.vm.track, c.id);
+      }
+    });
     // Scroll does not bubble, but it does fire on the way DOWN — so one capturing
     // listener on the container sees every card's list. Per-card listeners would
     // have to be rebound every time the pool grows, which is the same reason
