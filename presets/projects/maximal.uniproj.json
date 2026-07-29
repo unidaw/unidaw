@@ -503,7 +503,7 @@
           "duration": 960000,
           "pitch": 71,
           "velocity": 105,
-          "column": 0,
+          "column": 1,
           "note_id": 1021,
           "retrigger": 4
         },
@@ -582,7 +582,7 @@
           "duration": 960000,
           "pitch": 74,
           "velocity": 105,
-          "column": 0,
+          "column": 1,
           "note_id": 1030,
           "retrigger": 4
         }
