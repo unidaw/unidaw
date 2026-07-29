@@ -815,6 +815,7 @@ const browser = new Browser(browserHost, {
     if (row.kind === KIND_PLUGIN) { insertPlugin(row); return; }
     const name = row.name;
     forgetPatcherGraph();
+    forgetChains();
     if (!conn || !conn.loadProject(name)) { state.reject = 'no engine'; schedule(); return; }
     state.currentProject = name;
     state.browserOpen = false;
@@ -1151,6 +1152,8 @@ const chainBuf = createChainBuffer();
  * half arrived first — GUIDELINES 2.1, one more time.
  */
 let chains = Object.create(null);
+/** Bumped whenever `chains` changes, so derived values can be cached on it. */
+let chainRevision = 0;
 let chainRev = -1;
 /** Whether the project list has been asked for on this connection. */
 let listRequested = false;
@@ -1516,7 +1519,7 @@ const dockApi = {
     return state.editMode;
   },
   setView: (v) => { if (v) { state.view = v; if (v === 'piano') fitPiano(); } schedule(); return state.view; },
-  load: (n) => { forgetPatcherGraph();
+  load: (n) => { forgetPatcherGraph(); forgetChains();
                  const ok = conn && conn.loadProject(n); if (ok) state.currentProject = n; return ok; },
   save: (n) => { const ok = conn && conn.saveProject(n); if (ok) state.currentProject = n; return ok; },
   listProjects: () => conn && conn.send({ type: 'list' }),
@@ -2418,7 +2421,96 @@ function updateChrome() {
   chrome.update(o);
 }
 
+/**
+ * The output node of the device the rack has selected, or -1.
+ *
+ * The bridge between two identities: the rack knows a device, the patcher knows
+ * nodes, and `patcher_node_id` is the only thing that joins them. It is a real,
+ * walkable node id now — the engine resolves the 0xFFFFFFFF sentinel at load —
+ * so this needs no fallback, and must not have one: guessing here is exactly
+ * what showed the wrong track's graph.
+ */
+function selectedDeviceRootNode() {
+  if (!engine) return -1;
+  const track = state.chainTrack === null ? state.cursor.track : state.chainTrack;
+  const here = chains[track];
+  const devs = here && here.devices;
+  if (!devs || !devs.length) return -1;
+  /*
+   * THE SELECTED PATCHER, ELSE THE TRACK'S FIRST ONE.
+   *
+   * Following the selection alone meant the view was blank until you found and
+   * clicked the right card, on a pane whose whole purpose is to show you a
+   * graph. Falling back to the track's first patcher makes moving between tracks
+   * show each one's generator, which is what you want when you are chasing a
+   * sound you did not write.
+   *
+   * ONLY A PATCHER-KIND DEVICE NAMES A GRAPH. Every device carries a
+   * `patcher_node_id` and a VST's is 0 — a perfectly valid node id, so it cannot
+   * be told from a real root by its value. Selecting the instrument on rack's
+   * Bass used to show node 0's subgraph, which is the euclidean belonging to the
+   * patcher device beside it: the same "whose graph is this?" bug, one device
+   * along. Kind is the honest discriminator, and keying on it also holds the
+   * rule that a patcher IS a device of a patcher kind (0, 1, 2 in DEVICE_KINDS).
+   */
+  const picked = devs[state.chainSelected];
+  if (deviceRoots(picked)) return picked.node;
+  for (let i = 0; i < devs.length; i++) if (deviceRoots(devs[i])) return devs[i].node;
+  return -1;
+}
+
+/**
+ * Does this device name a patcher graph?
+ *
+ * A named function, not the arrow it started as. Both callers run on every draw,
+ * so a closure built per call cost ~500 B/draw — on the PALETTE scene, which
+ * does not even show the patcher, because the draw path builds every
+ * view-model whatever is on screen.
+ */
+function deviceRoots(d) {
+  return !!d && d.kind <= 2 && d.node !== undefined && d.node >= 0;
+}
+
+/**
+ * Every patcher device's root, on EVERY track.
+ *
+ * Needed so a node belonging to no device at all can be told from one belonging
+ * to ANOTHER device: the first is an orphan you just made and must see, the
+ * second is somebody else's and must stay hidden. Without the distinction,
+ * scoping either hides new nodes — making it impossible to build a graph — or
+ * shows every device's, which is the bug.
+ *
+ * ACROSS ALL TRACKS, and that is the correction. Gathering only the rack's own
+ * track meant a track with NO patcher devices had no roots, so nothing was
+ * owned, so every node in the pool read as an orphan — and the view showed the
+ * neighbouring track's euclidean again, which is exactly the bug this scoping
+ * exists to end.
+ *
+ * The pool is global; ownership has to be too.
+ */
+const _roots = [];
+let _rootsRev = -1;
+function allPatcherRoots() {
+  // Guarded on the chain revision. The walk is a `for...in`, which allocates its
+  // key list every time — cheap once per chain edit, and 500 B/draw at frame
+  // rate. Chains change when a device is added, removed or republished, and not
+  // otherwise.
+  if (_rootsRev === chainRevision) return _roots;
+  _rootsRev = chainRevision;
+  _roots.length = 0;
+  if (!engine) return _roots;
+  for (const key in chains) {
+    const devs = (chains[key] && chains[key].devices) || [];
+    for (let i = 0; i < devs.length; i++) {
+      const d = devs[i];
+      if (deviceRoots(d)) _roots.push(d.node);
+    }
+  }
+  return _roots;
+}
+
 const _patcherOpts = { engine: null, selectedNode: 0, selectedField: 0, pending: null,
+                       rootNode: -1, allRoots: [],
                        addType: -1, linkFrom: null };
 function drawPatcher() {
   if (!patcherBuf) patcherBuf = createPatcherBuffer(64, 128);
@@ -2428,6 +2520,21 @@ function drawPatcher() {
   o.selectedField = state.selectedField;
   o.pending = patchPending;
   o.addType = state.patchAddType;
+  /*
+   * WHOSE GRAPH THIS IS.
+   *
+   * The engine publishes one POOL holding every device's patcher nodes on every
+   * track, and this view used to render it whole. So standing on track 2 you
+   * were shown track 1's euclidean, editing it changed track 1, and a track with
+   * no devices at all appeared to have a generator. Three bug reports, one
+   * cause, and the last place the old "one global graph" model was still visible.
+   *
+   * The selected chain device names its own output node, and everything feeding
+   * that node is its graph. No device selected means no graph — see the note on
+   * `rootNode`.
+   */
+  o.rootNode = selectedDeviceRootNode();
+  o.allRoots = allPatcherRoots();
   o.linkFrom = state.patchLinkFrom ? state.patchLinkFrom.id : null;
   patcher.render(buildPatcherModel(o, patcherBuf));
   updateChrome();
@@ -2579,6 +2686,29 @@ const GENERATOR_TYPES = new Set(['euclidean', 'random']);
  * the rack told a project with no generator that it had a euclidean. A label
  * that can be wrong is worse than no label: this one exists to be believed.
  */
+/**
+ * A new song's chains are not the old song's.
+ *
+ * The engine publishes a chain only when it CHANGES, so a track whose chain is
+ * identical in both songs — or which simply has not been asked about yet —
+ * republishes nothing, and whatever this side is holding stays on screen. After
+ * loading a project with no patcher anywhere, the rack went on showing the
+ * previous song's generator device, footed "generates: euclidean + random".
+ *
+ * It was invisible until the generator label started naming the device that owns
+ * it: before that the label was pinned to slot 0 regardless, so a stale chain
+ * looked much like a fresh one.
+ *
+ * Cleared rather than diffed: an empty rack for the frame it takes the engine to
+ * answer is honest, where a stale one is not.
+ */
+function forgetChains() {
+  chains = Object.create(null);
+  chainRevision++;
+  paramsAsked.clear();
+  state.chainSelected = -1;
+}
+
 function forgetPatcherGraph() {
   _genText = '';
   _genSeen = -1;
@@ -4280,6 +4410,11 @@ conn = WANTS_ENGINE ? connectEngine({
     // chainVersion won, and merging here would reintroduce the question it
     // answered.
     for (const c of list) chains[c.track] = c;
+    // Bumped so anything derived from the chain set can be cached against it.
+    // See `allPatcherRoots`, which walks every track and must not do so per
+    // frame — a `for...in` allocates its key list, which is the one thing the
+    // draw path may not do (GUIDELINES 3).
+    chainRevision++;
     // An insert is answered by the rack republishing, so this is where the answer
     // can be checked against what was asked for.
     checkPendingInsert();
@@ -4614,7 +4749,13 @@ window.__uni = {
   // Pins the fixture, freezes the HUD, and CLOSES the socket. Without the close
   // the reconnect backoff keeps firing onStatus -> schedule() -> draw() while a
   // screenshot is being taken, which made goldens pass once and fail twice.
-  useFixture: () => { state.useEngine = false; state.hudFrozen = true;
+  useFixture: () => {
+    // A fixture is a WHOLE WORLD, so it starts from no chains. Without this the
+    // patcher fixture's device chain leaked into every scene captured after it
+    // and moved twelve goldens at once — the rack drew a card where the scene
+    // had none.
+    forgetChains();
+ state.useEngine = false; state.hudFrozen = true;
                       conn.close(); hudText.nodeValue = 'fixture'; draw(); },
   // Hermetic reset for tests: a scene that inherits the cursor from whatever ran
   // before it is not a fixture, it is a dependency on execution order.
@@ -4683,6 +4824,12 @@ window.__uni = {
    * regression indistinguishable from noise.
    */
   useBusyEngine: (tracks = 8, bars = 8) => {
+    // A fixture is a WHOLE WORLD, so it starts from no chains. Without this the
+    // patcher fixture's device chain leaked into every scene captured after it
+    // and moved twelve goldens at once — the rack drew a card where the scene
+    // had none.
+    forgetChains();
+
     state.useEngine = true; state.hudFrozen = true;
     conn.close(); hudText.nodeValue = 'busy-engine';
     state.zoom = 1; state.start = 0; state.scrollX = 0; state.tracks = tracks;
@@ -4882,7 +5029,7 @@ window.__uni = {
   },
   // currentProject is set here too, not only in the rail: it seeds save-as, and a
   // project opened from the dock or a test is just as much "the open project".
-  loadProject: (name) => { forgetPatcherGraph();
+  loadProject: (name) => { forgetPatcherGraph(); forgetChains();
                            const ok = conn && conn.loadProject(name);
                            if (ok) state.currentProject = name; return ok; },
   saveProject: (name) => { const ok = conn && conn.saveProject(name);
@@ -5142,6 +5289,12 @@ window.__uni = {
    * fixture without one cannot tell the two apart.
    */
   useArrangeFixture: () => {
+    // A fixture is a WHOLE WORLD, so it starts from no chains. Without this the
+    // patcher fixture's device chain leaked into every scene captured after it
+    // and moved twelve goldens at once — the rack drew a card where the scene
+    // had none.
+    forgetChains();
+
     state.useEngine = true; state.hudFrozen = true; conn.close();
     hudText.nodeValue = 'arrange-fixture';
     state.view = 'arrange'; state.arrangeZoom = 3; state.arrangeStart = 0;
@@ -5213,6 +5366,12 @@ window.__uni = {
    * cannot tell the two apart.
    */
   useWaveFixture: () => {
+    // A fixture is a WHOLE WORLD, so it starts from no chains. Without this the
+    // patcher fixture's device chain leaked into every scene captured after it
+    // and moved twelve goldens at once — the rack drew a card where the scene
+    // had none.
+    forgetChains();
+
     state.useEngine = true; state.hudFrozen = true; conn.close();
     hudText.nodeValue = 'wave-fixture';
     state.view = 'arrange'; state.arrangeZoom = 3; state.arrangeStart = 0;
@@ -5293,6 +5452,12 @@ window.__uni = {
     return scope.probe();
   },
   useMixerFixture: () => {
+    // A fixture is a WHOLE WORLD, so it starts from no chains. Without this the
+    // patcher fixture's device chain leaked into every scene captured after it
+    // and moved twelve goldens at once — the rack drew a card where the scene
+    // had none.
+    forgetChains();
+
     state.useEngine = true; state.hudFrozen = true; conn.close();
     hudText.nodeValue = 'mixer-fixture';
     state.view = 'mixer';
@@ -5319,6 +5484,12 @@ window.__uni = {
     draw();
   },
   usePianoFixture: () => {
+    // A fixture is a WHOLE WORLD, so it starts from no chains. Without this the
+    // patcher fixture's device chain leaked into every scene captured after it
+    // and moved twelve goldens at once — the rack drew a card where the scene
+    // had none.
+    forgetChains();
+
     state.useEngine = true; state.hudFrozen = true; conn.close();
     hudText.nodeValue = 'piano-fixture';
     state.view = 'piano'; state.pianoZoom = 3; state.pianoStart = 0;
@@ -5354,6 +5525,12 @@ window.__uni = {
    * that the empty state renders.
    */
   useBrowserFixture: () => {
+    // A fixture is a WHOLE WORLD, so it starts from no chains. Without this the
+    // patcher fixture's device chain leaked into every scene captured after it
+    // and moved twelve goldens at once — the rack drew a card where the scene
+    // had none.
+    forgetChains();
+
     state.useEngine = false; state.hudFrozen = true; conn.close();
     hudText.nodeValue = 'browser-fixture';
     state.projects = ['webtest', 'maximal', 'sketch-01', 'live-set', 'drums-only'];
@@ -5377,6 +5554,12 @@ window.__uni = {
    * a greyed row from a missing one.
    */
   usePluginFixture: (n = 52) => {
+    // A fixture is a WHOLE WORLD, so it starts from no chains. Without this the
+    // patcher fixture's device chain leaked into every scene captured after it
+    // and moved twelve goldens at once — the rack drew a card where the scene
+    // had none.
+    forgetChains();
+
     state.useEngine = false; state.hudFrozen = true; conn.close();
     hudText.nodeValue = 'plugin-fixture';
     const vendors = ['u-he', 'Kilohearts', 'Sugar Bytes', 'VCV', 'XLN Audio',
@@ -5405,6 +5588,12 @@ window.__uni = {
   },
   /** Dock fixture: a scripted session showing all three line kinds. */
   useDockFixture: () => {
+    // A fixture is a WHOLE WORLD, so it starts from no chains. Without this the
+    // patcher fixture's device chain leaked into every scene captured after it
+    // and moved twelve goldens at once — the rack drew a card where the scene
+    // had none.
+    forgetChains();
+
     state.useEngine = false; state.hudFrozen = true; conn.close();
     hudText.nodeValue = 'dock-fixture';
     state.dockOpen = true;
@@ -5502,10 +5691,27 @@ window.__uni = {
                aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
                extents: [], extentCount: 0, extentsRevision: 1, names: [],
                lpb: Uint8Array.from([4, 4, 4, 3, 4, 6, 0, 0]),
-               patcherVersion: 3, patcherDevice: 0, patcherNodes: nodes, patcherEdges: edges,
+               patcherVersion: 3, patcherNodes: nodes, patcherEdges: edges,
                mixGain: new Int32Array(16), mixPan: new Int32Array(16),
                mixFlags: new Uint8Array(16), mixCount: 0, mixerVersion: 1,
                rowGrid: 1, notesRevision: 1, aggRevision: 1 };
+    /*
+     * A CHAIN, because a graph now belongs to a DEVICE.
+     *
+     * The fixture used to publish nodes with no chain at all, which was fine
+     * while the view drew the pool. It draws one device's subgraph now, and a
+     * pool with no device to own it is exactly the case that renders nothing —
+     * so without this the golden became a picture of an empty canvas.
+     *
+     * `node: 4` is the graph's output above; a patcher device names its own
+     * output node and everything feeding it is its graph.
+     */
+    chains = Object.create(null);
+    chains[0] = { track: 0, version: 1, routing: null, devices: [
+      { id: 0, kind: 0, pos: 0, node: 4, slot: 0, caps: 3, bypass: 0, generates: true,
+        busCount: 0, busTruncated: false, buses: [] },
+    ] };
+    state.chainSelected = 0;
     draw();
   },
   /** Which rows a lane actually has, for assertions that don't read pixels. */

@@ -2657,11 +2657,36 @@ struct BusEntry {
     bus: DeviceBus,
 }
 
+/// Where a track's audio and events go.
+///
+/// Kinds mirror daw::TrackRouteKind — 0 none, 1 master, 2 another track,
+/// 3 an external input. `audio_out` is the one a person changes: "this track
+/// goes to Main" versus "this track goes into that group".
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct TrackRouting {
+    audio_out_kind: u8,
+    audio_out_track: u32,
+    audio_in_kind: u8,
+    audio_in_track: u32,
+    midi_out_kind: u8,
+    midi_out_track: u32,
+    pre_fader_send: bool,
+}
+
 /// A track's chain as accumulated so far, plus the version it was published at.
 #[derive(Default)]
 struct TrackChain {
     track: u32,
     version: u32,
+    /// The engine publishes routing as its own diff on the same ring, and it is
+    /// per-track state exactly as the chain is. Kept HERE rather than in a
+    /// parallel store: one revision, one message, and the page gets "what this
+    /// track's chain is" and "where its output goes" in the same breath —
+    /// which is how anyone reading a mixer thinks about them.
+    ///
+    /// `None` until the engine has said; a track whose routing has not arrived
+    /// is not a track routed to nothing.
+    routing: Option<TrackRouting>,
     /// Reused across snapshots — a replacement clears this rather than dropping
     /// it, so a chain that is re-published on every device edit allocates once.
     devices: Vec<ChainDevice>,
@@ -2696,6 +2721,27 @@ impl ChainStore {
     /// after the first edit — the content changed while the key the consumer
     /// watches (the track, its version) stood still, which is GUIDELINES 2.1
     /// exactly, and it renders a perfectly believable chain while doing it.
+    /// Fold one routing snapshot in, and say whether it changed anything.
+    ///
+    /// Guarded on equality so a track that republishes identical routing does
+    /// not bump the revision — the engine re-emits on load for every track, and
+    /// an unconditional bump would push the whole chain set to every client on
+    /// every load for no change at all.
+    fn apply_routing(&self, track: u32, routing: TrackRouting) -> bool {
+        let mut tracks = self.tracks.lock().unwrap();
+        let at = match tracks.iter().position(|t| t.track == track) {
+            Some(i) => i,
+            None => {
+                tracks.push(TrackChain { track, ..Default::default() });
+                tracks.len() - 1
+            }
+        };
+        if tracks[at].routing == Some(routing) { return false; }
+        tracks[at].routing = Some(routing);
+        self.revision.fetch_add(1, Ordering::AcqRel);
+        true
+    }
+
     fn apply(&self, entry: &ChainEntry) {
         let mut tracks = self.tracks.lock().unwrap();
         let slot = match tracks.iter().position(|t| t.track == entry.track) {
@@ -2763,7 +2809,19 @@ impl ChainStore {
         for (i, t) in tracks.iter().enumerate() {
             if i > 0 { out.push(','); }
             out.push_str(&format!(
-                "{{\"track\":{},\"version\":{},\"devices\":[", t.track, t.version));
+                "{{\"track\":{},\"version\":{},", t.track, t.version));
+            // Absent when the engine has not said. A page that defaulted this to
+            // "master" would show every track routed to Main before the first
+            // snapshot arrives, and a track someone had sent to a group would
+            // read as sent to Main until it happened to republish.
+            match t.routing {
+                Some(r) => out.push_str(&format!(
+                    "\"routing\":{{\"audioOutKind\":{},\"audioOutTrack\":{},                     \"audioInKind\":{},\"audioInTrack\":{},                     \"midiOutKind\":{},\"midiOutTrack\":{},\"preFaderSend\":{}}},",
+                    r.audio_out_kind, r.audio_out_track, r.audio_in_kind, r.audio_in_track,
+                    r.midi_out_kind, r.midi_out_track, r.pre_fader_send)),
+                None => out.push_str("\"routing\":null,"),
+            }
+            out.push_str("\"devices\":[");
             for (j, d) in t.devices.iter().enumerate() {
                 if j > 0 { out.push(','); }
                 out.push_str(&format!(
@@ -2969,6 +3027,31 @@ fn decode_engine_event(e: &EventEntry) -> Option<String> {
 /// a worse error.
 /// UiDiffType by number, for the log. Names, because "type 5 = 12" is not a
 /// report anyone can act on.
+/// One RoutingSnapshot diff, if this entry is one.
+///
+/// Offsets from UiTrackRoutingPayload in apps/event_payloads.h. Read by name and
+/// asserted against the struct's own size, because a payload read two bytes off
+/// still yields a plausible routing — a track that claims to feed track 0 when
+/// it feeds Main is not an error anyone will see, it is a mix that is quietly
+/// wrong.
+fn decode_routing_snapshot(e: &EventEntry) -> Option<(u32, TrackRouting)> {
+    if e.size < 40 { return None; }
+    let p = &e.payload;
+    let u16at = |o: usize| u16::from_le_bytes([p[o], p[o + 1]]);
+    let u32at = |o: usize| u32::from_le_bytes([p[o], p[o + 1], p[o + 2], p[o + 3]]);
+    if u16at(0) != daw_bridge::layout::UiDiffType::RoutingSnapshot as u16 { return None; }
+    Some((u32at(4), TrackRouting {
+        // flags bit0 is preFaderSend, per the payload's own comment.
+        pre_fader_send: (u16at(2) & 1) != 0,
+        midi_out_kind: p[13],
+        audio_in_kind: p[14],
+        audio_out_kind: p[15],
+        midi_out_track: u32at(20),
+        audio_in_track: u32at(24),
+        audio_out_track: u32at(28),
+    }))
+}
+
 fn diff_type_name(t: u16) -> &'static str {
     match t {
         1 => "add-note", 2 => "remove-note", 3 => "update-note", 4 => "resync",
@@ -3046,6 +3129,14 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<Chain
             if let Some(bus) = decode_device_bus(e) {
                 if chains.apply_bus(&bus) { continue; }
                 dropped += 1;
+                continue;
+            }
+            // Routing is STATE about a track, on the same ring and by the same
+            // reasoning as the chain: it belongs in the store, not in the event
+            // queue, where it would replay "track 2 goes to master" as a
+            // notification every time anything republished.
+            if let Some((track, routing)) = decode_routing_snapshot(e) {
+                chains.apply_routing(track, routing);
                 continue;
             }
             match decode_engine_event(e) {
@@ -3802,7 +3893,13 @@ mod tests {
         apply_chain(&store, &chain_entry(2, 6, K_CHAIN_DEVICE_ID_AUTO, 0));
         assert!(store.devices_of(2).is_empty(), "the chain was emptied");
         let (json, _) = store.changed_since(0).expect("changed");
-        assert!(json.contains("\"track\":2,\"version\":6,\"devices\":[]}"), "{json}");
+        // The two facts, checked separately rather than as one substring: the
+        // track's version moved and its device list is empty. Matching the exact
+        // byte sequence made this fail when a `routing` field was added between
+        // them, which is a change to a NEIGHBOURING field and nothing this test
+        // is about.
+        assert!(json.contains("\"track\":2,\"version\":6,"), "{json}");
+        assert!(json.contains("\"devices\":[]}"), "{json}");
     }
 
     /// Same contract as the engine events: one shared store, one cursor per

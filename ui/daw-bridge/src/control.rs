@@ -889,6 +889,18 @@ impl EngineHandle {
         )
     }
 
+    /// Set a track's routing. Its own 40-byte payload, matched on size by the
+    /// engine before commandType is looked at — see send_chain_command.
+    pub fn send_track_routing(
+        &self,
+        payload: crate::layout::UiTrackRoutingPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiTrackRoutingPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiTrackRoutingPayload>(),
+        )
+    }
+
     /// Send a rack knob write. Same ring as send_command; a distinct payload shape
     /// (UiSetParamPayload carries a uid16 that does not fit UiCommandPayload's fields).
     pub fn send_set_param(&self, payload: crate::layout::UiSetParamPayload) -> Result<(), String> {

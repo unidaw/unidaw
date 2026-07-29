@@ -410,6 +410,57 @@ test('the chain says what is flowing between its devices', async () => {
   assert.equal(resolveFlow([], buf).length, 1);
 });
 
+test('one device\'s patcher graph can be picked out of the pooled one', async () => {
+  const { subgraphFrom } = await import('../src/patchermodel.js');
+  /*
+   * A BITMASK, not a Set. `Set.prototype.clear()` allocates a fresh backing
+   * table in V8 and this runs whenever the selected device changes — every frame
+   * you hold an arrow key on the rack — which measured 844 B/draw on the chain
+   * scene alone. `ids` reads a mask back as the list these assertions are about.
+   */
+  const ids = (mask) => [...mask].map((v, i) => (v ? i : -1)).filter((i) => i >= 0);
+  /*
+   * The engine publishes every device's nodes in ONE array with disjoint id
+   * blocks, naming only each device's own output node. Two generator tracks look
+   * like this — and rendering the pool unfiltered is what showed track 1's
+   * euclidean while you stood on track 2, let you edit it thinking it was track
+   * 2's, and reported a generator on a track with no devices at all.
+   */
+  const nodes = [{ id: 0 }, { id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }];
+  const edges = [{ src: 0, dst: 1 }, { src: 1, dst: 2 },      // device A -> out 2
+                 { src: 3, dst: 4 }];                          // device B -> out 4
+
+  assert.deepEqual(ids(subgraphFrom(nodes, edges, 2, null)), [0, 1, 2]);
+  assert.deepEqual(ids(subgraphFrom(nodes, edges, 4, null)), [3, 4]);
+
+  /*
+   * A ROOT THAT NAMES NOTHING YIELDS NOTHING. "I do not know which nodes are
+   * yours" must never render as "all of them" — that is the bug, and a
+   * convenient fallback to the whole pool would reintroduce it exactly.
+   */
+  assert.deepEqual(ids(subgraphFrom(nodes, edges, 99, null)), []);
+  assert.deepEqual(ids(subgraphFrom(nodes, edges, -1, null)), []);
+  assert.deepEqual(ids(subgraphFrom(nodes, edges, undefined, null)), []);
+
+  // A branch feeding the output is part of the device: two sources into one node.
+  assert.deepEqual(ids(subgraphFrom(nodes,
+    [{ src: 0, dst: 2 }, { src: 1, dst: 2 }], 2, null)), [0, 1, 2]);
+
+  // A CYCLE must terminate. The engine refuses to build one, but this side reads
+  // whatever arrives and a graph walk that hangs takes the whole page with it.
+  assert.deepEqual(ids(subgraphFrom(nodes,
+    [{ src: 0, dst: 1 }, { src: 1, dst: 0 }, { src: 1, dst: 2 }], 2, null)), [0, 1, 2]);
+
+  // REUSES the caller's mask, because this runs per frame — and clears it, so a
+  // second call cannot leave the first call's nodes on screen.
+  const reuse = subgraphFrom(nodes, edges, 2, null);
+  assert.equal(subgraphFrom(nodes, edges, 4, reuse), reuse, 'the same array comes back');
+  assert.deepEqual(ids(reuse), [3, 4], 'holding only the second walk');
+  // Grown rather than overflowed when the pool's ids outrun it.
+  const wide = subgraphFrom([{ id: 300 }], [], 300, new Uint8Array(4));
+  assert.ok(wide.length > 300 && wide[300] === 1, 'a mask too small is replaced');
+});
+
 test('a nudge clamps, and leaves every other value exactly as it was read', () => {
   const EU = NODE_TYPES.indexOf('euclidean');
   assert.deepEqual(configFields(EU).map((f) => f.name),

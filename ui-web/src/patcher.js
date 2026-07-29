@@ -73,7 +73,7 @@ export class Patcher {
     // Everything the notice sentence is made of, so it is composed only when one
     // of them moves. See the comment at the bottom of render() for why these
     // five are the whole of it.
-    this._nEmpty = null; this._nDevice = -1; this._nLink = -2;
+    this._nEmpty = null; this._nScoped = null; this._nPool = -1; this._nLink = -2;
     this._nAdd = null; this._nUnres = -1;
     this._w = -1; this._h = -1;
 
@@ -306,14 +306,39 @@ export class Patcher {
     // and `addType` the whole of the keystroke clause, and `unresolved` the
     // whole of the tail. Nothing else in the view-model appears in the text, so
     // these five name it completely — a sixth term would only cost work.
-    if (this._nEmpty !== vm.empty || this._nDevice !== vm.device
+    if (this._nEmpty !== vm.empty || this._nScoped !== vm.scoped
+        || this._nPool !== vm.poolCount
         || this._nLink !== vm.linkFrom || this._nAdd !== vm.addType
         || this._nUnres !== vm.unresolved) {
-      this._nEmpty = vm.empty; this._nDevice = vm.device; this._nLink = vm.linkFrom;
+      this._nEmpty = vm.empty; this._nScoped = vm.scoped; this._nPool = vm.poolCount;
+      this._nLink = vm.linkFrom;
       this._nAdd = vm.addType; this._nUnres = vm.unresolved;
-      const scope = vm.empty
-        ? 'no patcher graph published'
-        : `one global graph, on device ${vm.device} — per-device execution is not in the engine yet`;
+      /*
+       * WHOSE GRAPH THIS IS, and when it is nobody's, WHY.
+       *
+       * This used to say "one global graph, on device N — per-device execution
+       * is not in the engine yet", which was true when written and became a lie:
+       * the engine pools every device's nodes and names each device's own
+       * output, so the view shows exactly one device's graph now.
+       *
+       * The three empty cases are three different things and must not read the
+       * same. "Nothing selected" is an instruction; "this device has no graph" is
+       * a fact about the device; "the song has no patcher anywhere" is a fact
+       * about the song. Collapsing them into "empty" is what let a patcher on
+       * another track look like a patcher on this one.
+       */
+      /*
+       * The three empty cases are three different things and must not read the
+       * same. "This track has no patcher" is a fact about the track; "no patcher
+       * anywhere" is a fact about the song; and a drawn graph belongs to one
+       * device rather than to everything. Collapsing them into "empty" is what
+       * let a patcher on another track look like a patcher on this one.
+       */
+      const scope = !vm.empty
+        ? 'this device\u2019s graph'
+        : vm.poolCount > 0
+          ? 'this track has no patcher \u2014 other tracks do'
+          : 'no patcher graph anywhere in this song';
       const base = vm.linkFrom >= 0
         ? `connecting from #${vm.linkFrom} — press c on the destination · ${scope}`
         : (vm.addType ? `a adds ${vm.addType} (t cycles) · ${scope}` : scope);
@@ -337,7 +362,12 @@ export class Patcher {
     const nodes = vm.nodes.slice(0, vm.nodeCount);
     const edges = vm.edges.slice(0, vm.edgeCount);
     return {
-      nodes: vm.nodeCount, edges: vm.edgeCount, version: vm.version, device: vm.device,
+      nodes: vm.nodeCount, edges: vm.edgeCount, version: vm.version,
+      // `device` is gone: UiPatcherRegion.deviceId is never written by the
+      // engine, so the old probe reported a hardcoded 0 as a fact. What the view
+      // actually knows is whether it is scoped to a device and how much of the
+      // pool it is NOT showing.
+      scoped: vm.scoped, poolCount: vm.poolCount,
       types: nodes.map((n) => n.typeName),
       field: (nodes.find((n) => n.selected) || {}).fieldName || '',
       addType: vm.addType,

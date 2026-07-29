@@ -541,22 +541,148 @@ function bindConfig(node, type, cfg, has) {
  * node id. It wins over the engine's value so the box shows what you just typed
  * — the same optimism the faders have.
  */
+/**
+ * The nodes belonging to ONE device, out of the pooled graph.
+ *
+ * The engine publishes every device's patcher nodes in one array — a POOL, not a
+ * graph — with each device's nodes in a disjoint id block and each device's own
+ * output node named by its `patcher_node_id`. Rendering the pool unfiltered is
+ * what made the patcher view show track 1's euclidean while you stood on track
+ * 2, edit it when you thought you were editing track 2's, and report a generator
+ * on a track that has no devices at all. Three separate bug reports, one cause.
+ *
+ * A device's graph is everything that FEEDS its output, so this walks backwards
+ * from the root over `dst -> src`. Backwards rather than forwards because a
+ * generator's output node is the only node the engine names: the nodes are known
+ * by what they reach, not by what reaches them.
+ *
+ * WRITES A BITMASK, not a Set, and that is a performance decision with a
+ * measurement behind it. `Set.prototype.clear()` allocates a fresh backing table
+ * in V8, and this runs whenever the selected device changes — which on the rack
+ * is every frame you hold an arrow key. Measured at 844 B/draw on the chain
+ * scene alone. A `Uint8Array` filled with `fill(0)` allocates nothing after the
+ * first sizing.
+ *
+ * A root that names no node yields an EMPTY mask, not a full one — "I do not
+ * know which nodes are yours" must not render as "all of them", which is the
+ * failure being fixed.
+ *
+ * Returns the mask, grown if the pool's ids outran it.
+ */
+export function subgraphFrom(nodes, edges, rootNodeId, mask) {
+  let m = mask;
+  let top = 0;
+  for (let i = 0; i < nodes.length; i++) if (nodes[i].id > top) top = nodes[i].id;
+  if (!m || m.length <= top) m = new Uint8Array(top + 8);
+  m.fill(0);
+  if (rootNodeId === undefined || rootNodeId === null || rootNodeId < 0
+      || rootNodeId >= m.length) return m;
+  let exists = false;
+  for (let i = 0; i < nodes.length; i++) if (nodes[i].id === rootNodeId) { exists = true; break; }
+  if (!exists) return m;
+  m[rootNodeId] = 1;
+  // Iterate to a fixed point rather than recursing: the pool is small, a graph
+  // may name its inputs in any order, and a cycle — which the engine refuses but
+  // this side must not hang on — terminates naturally when nothing new is added.
+  for (let pass = 0; pass < nodes.length + 1; pass++) {
+    let added = false;
+    for (let i = 0; i < edges.length; i++) {
+      const e = edges[i];
+      if (e.dst < m.length && e.src < m.length && m[e.dst] && !m[e.src]) {
+        m[e.src] = 1; added = true;
+      }
+    }
+    if (!added) break;
+  }
+  return m;
+}
+
 export function buildPatcherModel(opts, buf) {
   const { engine = null, selectedNode = -1, selectedField = 0, pending = null,
-          addType = -1, linkFrom = null } = opts;
-  const srcNodes = engine ? engine.patcherNodes : EMPTY;
-  const srcEdges = engine ? engine.patcherEdges : EMPTY;
+          addType = -1, linkFrom = null,
+          // Which DEVICE's graph to show, named by its output node. See
+          // `subgraphFrom`: the engine publishes one pool for every device on
+          // every track, and showing it whole is how a patcher on track 1 came
+          // to be edited by someone standing on track 2.
+          //
+          // -1 means "no device selected", which shows NOTHING rather than
+          // everything. A view that falls back to the pool when it does not know
+          // whose nodes these are is the bug, not a convenience.
+          rootNode = -1,
+          // Every patcher device's root on this track, so a node belonging to
+          // NONE of them can be told from one belonging to another device. See
+          // the orphan rule below.
+          allRoots = EMPTY_ROOTS } = opts;
+  const poolNodes = engine ? engine.patcherNodes : EMPTY;
+  const poolEdges = engine ? engine.patcherEdges : EMPTY;
+  /*
+   * WHICH NODES ARE ON SCREEN.
+   *
+   * Two masks: `scope` is the selected device's subgraph, `owned` is every
+   * device's. A node is drawn when it is in `scope`, or in no device's at all.
+   *
+   * ORPHANS ARE SHOWN, which is the second half and not an afterthought. A node
+   * just added with `addnode` is wired to nothing, so it belongs to no device's
+   * subgraph and pure scoping made it vanish the moment it was created — which
+   * makes building a graph impossible, since every graph starts as unconnected
+   * nodes. `owned` is what tells an orphan (nobody's yet, and therefore yours)
+   * from a node belonging to ANOTHER device (hidden, which is the whole point).
+   */
+  buf._scope = subgraphFrom(poolNodes, poolEdges, rootNode, buf._scope);
+  const scope = buf._scope;
+  let owned = buf._owned;
+  if (!owned || owned.length < scope.length) owned = buf._owned = new Uint8Array(scope.length);
+  owned.fill(0);
+  for (let i = 0; i < allRoots.length; i++) {
+    buf._tmp = subgraphFrom(poolNodes, poolEdges, allRoots[i], buf._tmp);
+    const t = buf._tmp;
+    const n = t.length < owned.length ? t.length : owned.length;
+    for (let j = 0; j < n; j++) if (t[j]) owned[j] = 1;
+  }
+  buf.scoped = rootNode >= 0;
+  /*
+   * FILLED BY INDEX, and the count kept beside the array rather than in its
+   * `length`.
+   *
+   * `srcNodes.length = 0` followed by `push` is the obvious way to reuse an
+   * array and it is not free: V8 shrinks the backing store on the truncation and
+   * grows it again on the pushes, which measured ~450 B/draw here — on the
+   * patcher AT REST, where nothing has changed and the whole path should be
+   * doing nothing. Assigning by index never resizes.
+   */
+  const srcNodes = buf._fn || (buf._fn = []);
+  const srcEdges = buf._fe || (buf._fe = []);
+  let srcNodeCount = 0;
+  for (let i = 0; i < poolNodes.length; i++) {
+    const id = poolNodes[i].id;
+    if (id < scope.length && (scope[id] || !owned[id])) srcNodes[srcNodeCount++] = poolNodes[i];
+  }
+  let srcEdgeCount = 0;
+  for (let i = 0; i < poolEdges.length; i++) {
+    // BOTH ends visible. An edge with one end outside is not one this view can
+    // draw, and drawing it would put a wire into empty space.
+    const e = poolEdges[i];
+    if (e.src < scope.length && e.dst < scope.length
+        && (scope[e.src] || !owned[e.src]) && (scope[e.dst] || !owned[e.dst])) {
+      srcEdges[srcEdgeCount++] = e;
+    }
+  }
+  // How many nodes the pool holds that are NOT this device's. The view needs it
+  // to say "select a device" rather than "this song has no patcher", which are
+  // very different things to be told.
+  buf.poolCount = poolNodes.length;
 
   buf.version = engine ? engine.patcherVersion : -1;
-  buf.device = engine ? engine.patcherDevice : 0;
-  buf.empty = srcNodes.length === 0;
+  buf.empty = srcNodeCount === 0;
   buf.addType = NODE_TYPES[addType] || '';
   // Which node an in-progress connection started from, so the next keystroke's
   // meaning is on screen rather than in the user's head.
   buf.linkFrom = linkFrom === null ? -1 : linkFrom;
 
-  const n = Math.min(srcNodes.length, buf.nodes.length);
-  const m = Math.min(srcEdges.length, buf.edges.length);
+  // The COUNTS, not the arrays' lengths: the arrays are reused and hold stale
+  // entries past the count by design (see above).
+  const n = Math.min(srcNodeCount, buf.nodes.length);
+  const m = Math.min(srcEdgeCount, buf.edges.length);
 
   for (let i = 0; i < n; i++) {
     const node = buf.nodes[i];

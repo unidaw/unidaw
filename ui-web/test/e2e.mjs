@@ -281,7 +281,11 @@ for (const [view, probe, check, prep] of [
   // is driven by the patcher and holds no notes, so a per-track assertion here
   // fails on a correct render.
   ['piano', 'pianoProbe', (p) => p.notes > 0 && p.keys > 0, () => window.__uni.pianoAll(true)],
-  ['patcher', 'patcherProbe', (p) => p.nodes > 0],
+  // On a track that HAS a patcher. The view shows one device's graph now rather
+  // than every device's on every track, so "does it render" is only a question
+  // you can ask where there is something to render — webtest's Bass is track 0.
+  ['patcher', 'patcherProbe', (p) => p.nodes > 0,
+   () => window.__uni.run('goto 1 0')],
 ]) {
   await page.evaluate((v) => window.__uni.view(v), view);
   if (prep) await page.evaluate(prep);
@@ -508,8 +512,28 @@ ok(Array.isArray(registry) && registry.length > 0,
    'the registry itself reached the client', `${registry.length} scales`);
 
 section('patcher editing');
+/*
+ * SELECT THE PATCHER DEVICE FIRST.
+ *
+ * The view shows one DEVICE's graph now, not the pool, so with nothing selected
+ * there is nothing on screen to edit — which is the point: it used to show every
+ * device's nodes on every track, and that is how a patcher on track 1 came to be
+ * edited by someone standing on track 2.
+ *
+ * Clicked rather than set: the selection is what the drawing follows, and a test
+ * that reached past the click would not prove the two agree.
+ */
 await page.evaluate(() => window.__uni.view('patcher'));
 await frames();
+{
+  const cards = await page.$$('.dv-card');
+  for (const c of cards) {
+    const isPatcher = await c.evaluate((el) =>
+      /PATCHER/.test((el.querySelector('.dv-badge') || {}).textContent || ''));
+    if (isPatcher) { await c.click(); break; }
+  }
+  await page.waitForTimeout(500);
+}
 const graph = await page.evaluate(() => window.__uni.patchNodes());
 const euclid = graph.find((n) => n.type === 'euclidean');
 ok(!!euclid && euclid.fields.length > 0, 'a node advertises its editable fields',
@@ -1644,8 +1668,15 @@ section('a device that makes its own notes says so');
    * `generator.uniproj.json` is that shape reduced to one track, one note and
    * one graph.
    */
+  /*
+   * VISIBLE cards only. The rack pools its cards and HIDES the spares rather
+   * than removing them (GUIDELINES 3.7), so a raw querySelectorAll returns the
+   * previous project's footers too — complete with the generator label they had
+   * then. Reading those made a clean project look like it had a generator.
+   */
   const feet = () => page.evaluate(
-    () => [...document.querySelectorAll('.dv-foot')].map((e) => e.textContent).join(' | '));
+    () => [...document.querySelectorAll('.dv-card')].filter((c) => c.offsetParent)
+            .map((c) => (c.querySelector('.dv-foot') || {}).textContent || '').join(' | '));
 
   /**
    * The quiet case FIRST, and this order is load-bearing.
@@ -2118,6 +2149,90 @@ section('the master track has a chain but no lane');
   // the master.
   await page.evaluate(() => window.__uni.run('master off'));
   await page.waitForTimeout(600);
+}
+
+/*
+ * WHOSE PATCHER GRAPH IS THIS?
+ *
+ * Three bug reports, one cause. Standing on track 2 you were shown track 1's
+ * euclidean; editing it changed track 1 while you listened to track 2, so the
+ * edits "did nothing"; and a track with no devices at all appeared to have a
+ * generator. The engine publishes one POOL holding every device's nodes on every
+ * track, and this view rendered it whole — the last place the old "one global
+ * graph" model was still visible in the UI.
+ *
+ * `rack` is the fixture that shows it: T1 Bass has a patcher device AND an
+ * instrument, T2 Pad has no devices at all.
+ */
+section('the patcher shows one device\'s graph, not the pool');
+{
+  await page.evaluate(() => window.__uni.loadProject('rack'));
+  await page.waitForTimeout(3500);
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.evaluate(() => window.__uni.run('view patcher'));
+  await page.waitForTimeout(600);
+
+  const drawn = () => page.evaluate(() => ({
+    nodes: [...document.querySelectorAll('.pt-node')].filter((n) => n.offsetParent)
+             .map((n) => (n.querySelector('.pt-type') || {}).textContent),
+    note: (document.querySelector('.pt-notice') || {}).textContent || '',
+    cards: [...document.querySelectorAll('.dv-card')].filter((c) => c.offsetParent)
+             .map((c) => (c.querySelector('.dv-title') || {}).textContent),
+  }));
+
+  const idle = await drawn();
+  ok(idle.cards.length === 2, 'the track has a patcher device and an instrument',
+     JSON.stringify(idle.cards));
+  /*
+   * NOTHING SELECTED SHOWS NOTHING. The first version fell back to the pool
+   * here, which is the same bug wearing a different hat — with no device chosen
+   * you were shown every device on every track.
+   */
+  /*
+   * IT FOLLOWS THE TRACK. Requiring a click meant the pane whose whole purpose
+   * is showing a graph was blank until you found the right card; falling back to
+   * the track's first patcher makes moving between tracks show each generator,
+   * which is what you want when chasing a sound you did not write.
+   */
+  ok(idle.nodes.join(',') === 'euclidean,random,out',
+     'the track\'s own patcher is shown without hunting for it',
+     JSON.stringify(idle.nodes));
+
+  const cards = await page.$$('.dv-card');
+  await cards[0].click();                       // the patcher device
+  await page.waitForTimeout(700);
+  const onPatcher = await drawn();
+  ok(onPatcher.nodes.join(',') === 'euclidean,random,out',
+     'selecting the patcher device draws ITS graph', JSON.stringify(onPatcher.nodes));
+
+  /*
+   * AND THE INSTRUMENT BESIDE IT DRAWS NOTHING. Every device carries a
+   * `patcher_node_id` and a VST's is 0 — a perfectly valid node id, so it cannot
+   * be told from a real root by its value. Selecting the instrument used to show
+   * node 0's subgraph, which is the euclidean belonging to the device next to it.
+   */
+  await cards[1].click();
+  await page.waitForTimeout(700);
+  const onVst = await drawn();
+  /*
+   * Selecting the INSTRUMENT falls back to the track's patcher rather than
+   * showing node 0's subgraph — which is what a VST's `patcher_node_id` of 0
+   * used to select, and node 0 is the euclidean belonging to the device beside
+   * it.
+   */
+  ok(onVst.nodes.join(',') === 'euclidean,random,out',
+     'and the instrument falls back to the track\'s patcher, not to node 0',
+     JSON.stringify(onVst.nodes));
+
+  // A track with no devices at all: the pool still holds track 1's nodes, and
+  // none of them belong here.
+  await page.evaluate(() => window.__uni.run('goto 1 1'));
+  await page.waitForTimeout(800);
+  const other = await drawn();
+  ok(other.nodes.length === 0,
+     'and a track with no devices shows no other track\'s graph',
+     JSON.stringify(other.nodes));
+  ok(/no patcher/i.test(other.note), 'saying so about THIS track', other.note.slice(0, 70));
 }
 
 section('dragging a clip moves it');
