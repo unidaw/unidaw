@@ -92,6 +92,11 @@ struct ProjectPlacement {
 struct ProjectTrack {
   uint32_t trackId = 0;
   std::string name;
+  // The MASTER track (patcher-is-a-device item 4): a device chain + mixer whose output
+  // is the master bus, no clips/placements. Serialized in the tracks array with
+  // "is_master": true and lifted out of it by the engine on load. Reuses ProjectTrack
+  // purely for its chain/mixer/mod-link serialization.
+  bool isMaster = false;
   // Movement 4 child-track structure: a child is a real track fed from a plugin
   // output bus instead of a clip. parentId 0 = top-level, else the parent track_id;
   // `collapsed` hides the children in the UI (a view filter, never a data change).

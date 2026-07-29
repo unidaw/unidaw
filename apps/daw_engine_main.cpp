@@ -4388,6 +4388,40 @@ struct TrackRuntime {
       }
       document.tracks.push_back(std::move(track));
     }
+    // Persist the MASTER track (patcher-is-a-device item 4a): its device chain + mixer,
+    // so a global patcher or master FX survives save/reload. Appended as an is_master
+    // entry (reuses ProjectTrack purely for chain/mixer serialization); it carries no
+    // clips/placements and is lifted back out of document.tracks on load. Written after
+    // the real tracks so it inherits the same per-device patcher-node normalization + VST
+    // vst_ref stamping below.
+    if (masterTrack) {
+      daw::ProjectTrack m;
+      m.isMaster = true;
+      m.trackId = daw::kMasterTrackId;
+      m.name = "Master";
+      {
+        std::lock_guard<std::mutex> lock(masterTrack->trackMutex);
+        m.chain = masterTrack->track.chain;
+        m.modLinks = masterTrack->track.modRegistry.links;
+      }
+      const float g = masterTrack->mixGainLinear.load(std::memory_order_relaxed);
+      m.mixer.gainDb =
+          g > 0.0f ? 20.0 * std::log10(static_cast<double>(g)) : -120.0;
+      m.mixer.mute = masterTrack->mixMute.load(std::memory_order_relaxed);
+      // Stamp durable plugin identity on the master's VST devices, same rule as tracks.
+      for (auto& device : m.chain.devices) {
+        if ((device.kind == daw::DeviceKind::VstInstrument ||
+             device.kind == daw::DeviceKind::VstEffect) &&
+            device.hostSlotIndex < pluginCache.entries.size()) {
+          const auto& entry = pluginCache.entries[device.hostSlotIndex];
+          device.vstRef.vendor = entry.vendor;
+          device.vstRef.name = entry.name;
+          device.vstRef.path = entry.path;
+          device.vstRef.uid16 = entry.pluginUid16;
+        }
+      }
+      document.tracks.push_back(std::move(m));
+    }
     // Persist the patcher execution. Two cases, mirroring load:
     if (patcherAssembledFromDevices.load(std::memory_order_acquire)) {
       // Per-device: every device already carries its own graph (load left
@@ -4515,6 +4549,26 @@ struct TrackRuntime {
         }
       }
     }
+
+    // Lift the MASTER track (is_master) out of document.tracks BEFORE the adoption loops
+    // run, so it is never mistaken for a slot track. Its chain/mixer are restored onto
+    // masterTrack after the tracks load (below). A project with no master leaves this
+    // empty, which resets masterTrack to a clean chain. (patcher-is-a-device item 4a.)
+    daw::ProjectTrack masterSource;
+    bool haveMaster = false;
+    document.tracks.erase(
+        std::remove_if(document.tracks.begin(), document.tracks.end(),
+                       [&](daw::ProjectTrack& t) {
+                         if (!t.isMaster) {
+                           return false;
+                         }
+                         if (!haveMaster) {
+                           masterSource = std::move(t);
+                           haveMaster = true;
+                         }
+                         return true;
+                       }),
+        document.tracks.end());
 
     // Resolve a clip's relative sourcePath against the project file's directory, and
     // drop the previous project's waveform sources (and pyramids) before the track
@@ -4935,6 +4989,31 @@ struct TrackRuntime {
       // all-tracks snapshot above ran before this loop restored them, so on its
       // own it would leave a UI showing the pre-load chain.
       emitChainSnapshot(*runtime);
+    }
+
+    // Restore the MASTER track's chain/mixer lifted out above (patcher-is-a-device 4a).
+    // A project with no master entry resets it to a clean chain + unity fader, so a
+    // previous project's master never lingers into the next. No host rebuild — master
+    // VST hosting is 4b; a patcher/mod device on it runs in the existing model.
+    if (masterTrack) {
+      std::shared_ptr<const TrackStateSnapshot> snap;
+      {
+        std::lock_guard<std::mutex> lock(masterTrack->trackMutex);
+        masterTrack->track.chain =
+            haveMaster ? masterSource.chain : daw::TrackChain{};
+        masterTrack->track.modRegistry.links =
+            haveMaster ? masterSource.modLinks : std::vector<daw::ModLink>{};
+        snap = buildTrackSnapshot(masterTrack->track);
+      }
+      std::atomic_store_explicit(&masterTrack->trackSnapshot, snap,
+                                 std::memory_order_release);
+      const double gainDb = haveMaster ? masterSource.mixer.gainDb : 0.0;
+      masterTrack->mixGainLinear.store(
+          static_cast<float>(std::pow(10.0, gainDb / 20.0)),
+          std::memory_order_relaxed);
+      masterTrack->mixMute.store(haveMaster ? masterSource.mixer.mute : false,
+                                 std::memory_order_relaxed);
+      emitChainSnapshot(*masterTrack);
     }
 
     // Clear the arrangement of any track the loaded project does not define. Load
