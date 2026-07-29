@@ -2195,11 +2195,18 @@ struct TrackRuntime {
   // those sites pass the TrackRuntime* they already hold. TrackRuntime objects are never
   // destroyed, so the pointer form needs no lock at all.
   auto bumpClipVersionFor = [&](TrackRuntime* runtime) -> uint32_t {
+    // ORDER MATTERS, and it is the reverse of the obvious one. The publisher GATES on
+    // the global ("has anything changed?") and PUBLISHES the per-track value. If the
+    // global moved first, a publish landing between the two increments would latch the
+    // new gate value while writing the OLD per-track version — and then return early
+    // forever after, because the gate already matches. That track's published base
+    // would be permanently one behind, so every client reading it would present a stale
+    // base and have every edit rejected. Bump the value first, the gate second.
+    const uint32_t trackNext =
+        runtime ? runtime->trackClipVersion.fetch_add(1, std::memory_order_acq_rel) + 1
+                : 0;
     const uint32_t globalNext = clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
-    if (!runtime) {
-      return globalNext;
-    }
-    return runtime->trackClipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    return runtime ? trackNext : globalNext;
   };
   auto bumpTrackClipVersion = [&](uint32_t trackId) -> uint32_t {
     TrackRuntime* runtime = nullptr;
@@ -2215,13 +2222,20 @@ struct TrackRuntime {
   // project load replaces every clip; a waveform arrival invalidates every mirror), so
   // no caller is left holding a base that silently still matches.
   auto bumpAllTrackClipVersions = [&]() {
-    clipVersion.fetch_add(1, std::memory_order_acq_rel);
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    for (auto& rt : tracks) {
-      if (rt) {
-        rt->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
+    // Per-track values first, the global gate last — see bumpClipVersionFor. The window
+    // is at its widest here: the global bump used to come before a tracksMutex
+    // acquisition that the publisher takes on every iteration, so an entire all-tracks
+    // rebuild could complete inside it and every track's published base would be stuck
+    // one behind immediately after a project load.
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      for (auto& rt : tracks) {
+        if (rt) {
+          rt->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
+        }
       }
     }
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);
   };
 
   std::atomic<uint32_t> chainVersion{0};
@@ -5827,8 +5841,9 @@ struct TrackRuntime {
       return false;
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
-    // The store already advanced this track's version and stamped result->diff with it.
-    // The global counter is the publishers' staleness signal, so it moves in step.
+    // The store already advanced this track's version and stamped result->diff with it;
+    // the global gate moves AFTER, so a publisher that sees the new gate is guaranteed
+    // to read the new per-track value. See bumpClipVersionFor for why the order matters.
     clipVersion.fetch_add(1, std::memory_order_acq_rel);
     clipDirty.store(true, std::memory_order_release);
     emitUiDiff(result->diff);
@@ -7400,6 +7415,17 @@ struct TrackRuntime {
                  !liveTrackCount.compare_exchange_weak(seen, slot + 1,
                                                        std::memory_order_relaxed)) {
           }
+          {
+            // A fresh track's clips are empty, but the RuntimeTrack in this slot may be
+            // a reused tombstone whose counter still carries the removed track's value.
+            // Bump so nobody's pre-existing base is accepted against a brand-new track,
+            // and so the version-gated regions rebuild and show the new lane.
+            std::lock_guard<std::mutex> lock(tracksMutex);
+            if (slot < tracks.size() && tracks[slot]) {
+              tracks[slot]->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
+            }
+          }
+          clipVersion.fetch_add(1, std::memory_order_acq_rel);
           std::cout << "UI: AddTrack -> track " << slot << std::endl;
         } else {
           std::cerr << "UI: AddTrack failed to bring up track " << slot << std::endl;
@@ -7479,6 +7505,13 @@ struct TrackRuntime {
           rt->parentId.store(0, std::memory_order_relaxed);
           rt->childrenReconciled.store(false, std::memory_order_relaxed);
           rt->removed.store(true, std::memory_order_release);
+          // This wiped every clip on the track, which is as big a clip change as there
+          // is — so both counters have to move. Without the GLOBAL bump the
+          // version-gated regions are never rebuilt and the removed track's notes stay
+          // published; without the PER-TRACK bump, a base read before the removal is
+          // still accepted against the now-empty track, and because AddTrack reuses this
+          // same TrackRuntime, that stale base carries over to the NEW track in this slot.
+          bumpClipVersionFor(rt);
         }
         // Trim trailing tombstones so a remove-from-the-end shrinks the extent (and the
         // freed slot is reused by the next AddTrack).

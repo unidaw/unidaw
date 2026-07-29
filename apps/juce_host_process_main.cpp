@@ -980,17 +980,32 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
         // rather than as a bug. Reported by the frontend against v24.
         double outSumSq = 0.0, outPeak = 0.0;
         size_t outSamples = 0;
+        // Level matching compares an RMS ratio, so it must compare LIKE FOR LIKE: the
+        // input RMS was taken over min(pluginInputCount, numOutputs) channels, and an
+        // output RMS taken over MORE channels than that is not a gain, it is a
+        // different measurement. Accumulate the matched subset separately from the full
+        // meter. (Widening the meter loop without this made the learned bypass gain
+        // wrong for any plugin narrower than its bus.)
+        double matchedSumSq = 0.0;
+        size_t matchedSamples = 0;
+        const int matchedChannels = std::min(pluginInputCount, numOutputs);
         for (int ch = 0; ch < numOutputs; ++ch) {
           const float* dst = outputPtrs[ch];
           if (!dst) {
             continue;
           }
+          double chSumSq = 0.0;
           for (uint32_t i = 0; i < state.header->blockSize; ++i) {
             const double v = std::fabs(static_cast<double>(dst[i]));
-            outSumSq += v * v;
+            chSumSq += v * v;
             outPeak = std::max(outPeak, v);
           }
+          outSumSq += chSumSq;
           outSamples += state.header->blockSize;
+          if (ch < matchedChannels) {
+            matchedSumSq += chSumSq;
+            matchedSamples += state.header->blockSize;
+          }
         }
         const double inRms =
             levelSamples ? std::sqrt(inSumSq / static_cast<double>(levelSamples)) : 0.0;
@@ -1005,13 +1020,16 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
         // from blocks with real signal, or near-silence would swamp the estimate with
         // noise ratios. Clamp hard: a gate or a limiter can produce an absurd
         // instantaneous ratio, and bypass must never become a volume weapon.
-        if (levelSamples > 0 && inRms > 1e-5 && outRms > 1e-6) {
+        const double matchedOutRms =
+            matchedSamples ? std::sqrt(matchedSumSq / static_cast<double>(matchedSamples))
+                           : 0.0;
+        if (levelSamples > 0 && inRms > 1e-5 && matchedOutRms > 1e-6) {
           // out/in, NOT in/out: the bypassed signal must be made as loud as the
           // PROCESSED one. With an insert at 0.5x, bypass must be scaled by 0.5 to
           // match it; the inverse made bypass 2x the raw sum — 4x the active level,
           // i.e. louder rather than matched. Caught only once the test used a fixture
           // with a known gain, where the expected number was arithmetic.
-          const double ratio = std::clamp(outRms / inRms, 0.05, 20.0);
+          const double ratio = std::clamp(matchedOutRms / inRms, 0.05, 20.0);
           const double smoothing = slot.levelMatchMeasured ? 0.02 : 1.0;
           slot.levelMatchGain = static_cast<float>(
               slot.levelMatchGain * (1.0 - smoothing) + ratio * smoothing);

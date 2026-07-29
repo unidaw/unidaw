@@ -624,8 +624,13 @@ std::string serializeProject(const ProjectDocument& document) {
         writer.key("duration_ticks",
                    static_cast<uint64_t>(device.euclideanConfig.duration_ticks));
         writer.key("degree", static_cast<uint32_t>(device.euclideanConfig.degree));
+        // int64_t, NOT uint32_t: octave_offset is int8_t, and casting a negative
+        // through unsigned wrote 4294967295 for -1. The reader's get<int32_t> cannot
+        // translate that, so boost returned the default and a negative octave offset
+        // silently became 0 on every reload. The node-level serializer 180 lines up
+        // always did this correctly; the two paths had drifted apart.
         writer.key("octave_offset",
-                   static_cast<uint32_t>(device.euclideanConfig.octave_offset));
+                   static_cast<int64_t>(device.euclideanConfig.octave_offset));
         writer.key("velocity", static_cast<uint32_t>(device.euclideanConfig.velocity));
         writer.key("base_octave",
                    static_cast<uint32_t>(device.euclideanConfig.base_octave));

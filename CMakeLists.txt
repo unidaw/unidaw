@@ -346,32 +346,6 @@ target_include_directories(device_chain_ui_live_tests PRIVATE
 
 target_link_libraries(device_chain_ui_live_tests PRIVATE platform_juce)
 
-# assert() is the assertion mechanism in several of these test mains, and CMake's
-# RelWithDebInfo (the default build here) passes -DNDEBUG, which compiles every one of
-# them away. Those binaries then run to completion and exit 0 having verified NOTHING —
-# 161 assertions across four files were dead when this was noticed. Undefine NDEBUG for
-# test targets only, so a test that asserts actually asserts.
-foreach(daw_test_target
-    patcher_tests
-    patcher_graph_tests
-    project_file_tests
-    waveform_pyramid_tests
-    waveform_store_tests
-    waveform_fixture_tests
-    clip_grid_tests
-    lane_quantize_tests
-    event_ring_mpsc_tests
-    audio_io_tests
-    device_chain_tests
-    device_chain_ui_tests
-    device_chain_ui_live_tests
-    phase2_tests
-    phase3_tests)
-  if (TARGET ${daw_test_target})
-    target_compile_options(${daw_test_target} PRIVATE -UNDEBUG)
-  endif()
-endforeach()
-
 enable_testing()
 
 add_test(NAME patcher_resolution
@@ -618,3 +592,35 @@ add_test(NAME phase3_composition_full
           --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase3_composition_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+
+# NOTE: this MUST stay at the very END of this file. `if (TARGET ...)` is false for a
+# target that has not been declared yet and silently skips it — when this loop lived
+# above enable_testing(), phase3_tests (declared 130 lines later, and the largest test
+# target here) was skipped, so the fix for "assertions were compiled out" left the
+# biggest suite still building with -DNDEBUG while the CMake read as though it did not.
+# assert() is the assertion mechanism in several of these test mains, and CMake's
+# RelWithDebInfo (the default build here) passes -DNDEBUG, which compiles every one of
+# them away. Those binaries then run to completion and exit 0 having verified NOTHING —
+# 161 assertions across four files were dead when this was noticed. Undefine NDEBUG for
+# test targets only, so a test that asserts actually asserts.
+foreach(daw_test_target
+    patcher_tests
+    patcher_graph_tests
+    project_file_tests
+    waveform_pyramid_tests
+    waveform_store_tests
+    waveform_fixture_tests
+    clip_grid_tests
+    lane_quantize_tests
+    event_ring_mpsc_tests
+    audio_io_tests
+    device_chain_tests
+    device_chain_ui_tests
+    device_chain_ui_live_tests
+    phase2_tests
+    phase3_tests)
+  if (TARGET ${daw_test_target})
+    target_compile_options(${daw_test_target} PRIVATE -UNDEBUG)
+  endif()
+endforeach()

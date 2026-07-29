@@ -91,6 +91,14 @@ daw::ProjectDocument makeDocument() {
   euclid.euclideanConfig.steps = 16;
   euclid.euclideanConfig.hits = 5;
   euclid.euclideanConfig.duration_ticks = 240000;
+  // NEGATIVE on purpose. octave_offset is int8_t and was serialized through uint32_t,
+  // so -1 was written as 4294967295 and the reader silently fell back to the default 0
+  // — a knob the user had turned down, reset on every reload. Every other field here is
+  // unsigned, so nothing else in this fixture could have caught it.
+  euclid.euclideanConfig.octave_offset = -2;
+  euclid.euclideanConfig.velocity = 77;
+  euclid.euclideanConfig.base_octave = 6;
+  euclid.euclideanConfig.degree = 5;
   track.chain.devices.push_back(euclid);
 
   daw::ModLink link;
@@ -280,6 +288,15 @@ int main(int argc, char** argv) {
   require(track.chain.devices[1].euclideanConfig.steps == 16, "euclidean steps lost");
   require(track.chain.devices[1].euclideanConfig.duration_ticks == 240000,
           "euclidean duration lost");
+  require(track.chain.devices[1].euclideanConfig.octave_offset == -2,
+          "euclidean NEGATIVE octave_offset lost — signed field written through an "
+          "unsigned cast");
+  require(track.chain.devices[1].euclideanConfig.velocity == 77,
+          "euclidean velocity lost");
+  require(track.chain.devices[1].euclideanConfig.base_octave == 6,
+          "euclidean base_octave lost");
+  require(track.chain.devices[1].euclideanConfig.degree == 5,
+          "euclidean degree lost");
   require(track.modLinks.size() == 1, "mod links lost");
   require(!track.modLinks[0].enabled, "mod link enabled flag lost");
   // A link that loses its endpoints is a number with no referent, which is

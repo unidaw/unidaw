@@ -754,8 +754,24 @@ fn get_clip(handle: &EngineHandle, args: &[String]) -> i32 {
     };
     let bars = flag_u64(args, "--bars", Some(4)).unwrap_or(4).max(1);
     let window_end = bars * 4 * NANOTICKS_PER_QUARTER;
-    // Any nonzero id works; it only has to match what comes back.
-    let request_id = 0x5ADD_u32;
+    // UNIQUE PER INVOCATION. The read-back region is a single persistent slot that
+    // keeps the last answer, so a constant id (this was 0x5ADD) matches the PREVIOUS
+    // call's snapshot the instant it is read — every `get clip` after the first
+    // returned the answer to the last one. Measured: asking for 2 bars right after 8
+    // printed the 8-bar window, and a `get clip` straight after a `do note` reported
+    // the note absent, which is exactly the observation that makes an agent conclude
+    // its write was lost. Mixing the pid with the clock also stops two concurrent
+    // requesters from taking delivery of each other's answers, which matters now that
+    // `do` no longer needs --force.
+    let request_id = {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let id = pid.rotate_left(11) ^ nanos;
+        if id == 0 { 1 } else { id }
+    };
 
     let request = UiClipWindowCommandPayload {
         command_type: UiCommandType::RequestClipWindow as u16,
