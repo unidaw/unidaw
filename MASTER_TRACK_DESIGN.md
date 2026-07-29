@@ -97,3 +97,65 @@ Split item 4 along the fork:
 
 Implementation is a clear, mechanical follow-up once these are answered; nothing
 here is blocked on engine capability, only on the intended behaviour.
+
+## DECISION (Jaakko, 2026-07-29): build BOTH A and B.
+
+**A (a home for a global patcher) is DONE end-to-end.** The master is a complete,
+usable strip:
+- 4a-1 (953f251): published addressable entity — `kMasterTrackId` (0xFFFF0000),
+  `kUiTrackFlagMaster`, compacted after the regular tracks; the UI keys on the id.
+- 4a-2 (a45dff9): its device chain takes edits — `do add-device --track master ...`.
+- 4a-3 (d3cfc63): the master fader — its gain/mute attenuates the summed output
+  (mute -> flux 0 / pk 0.00).
+- 4a-4 (938fb41): persistence — the master's chain survives save/reload (an
+  `is_master` track entry lifted out on load).
+All verified by `tools/master_track_check.sh` (addressable + takes edits + persists).
+A patcher device on the master runs in the existing per-track patcher model.
+
+**B (audio FX on the sum) is the only remaining piece** — it needs the latency call
+below before the RT callback change.
+
+## 4b implementation plan — audio FX on the master SUM (B2, one-block latency)
+
+The reusable pieces (all already in the engine):
+- **Audio-in hosts.** `TrackRuntime::inputAudioChannels` is an audio buffer the
+  producer feeds a host as its input (built for sidechain / patcher-audio,
+  daw_engine_main.cpp:1688, :9944). The master host is an effects chain whose input
+  is the master sum — the same shape.
+- **Per-track audio rings.** A host writes block N to `slot N % numBlocks`; the
+  callback reads it (the "host writes block N to slot N%numBlocks" mix loop).
+- **`rebuildHostForChain`** spawns/reconciles a host for a runtime's chain.
+
+The constraint: the master's input (the sum) is known only at CALLBACK time, but the
+producer feeds hosts AHEAD (the numBlocks pipeline). So the master host runs ONE
+BLOCK BEHIND:
+
+  1. **Set up the master host.** Give `masterTrack` a real host config
+     (socket/shm/inputAudio like a normal track — 4a created it bare) and call
+     `rebuildHostForChain(masterTrack)` when its chain has VstEffect devices. Stop
+     skipping the rebuild for the master once this is wired.
+  2. **Callback → producer hand-off.** After the callback finishes summing into
+     `master[]` (daw_engine_main.cpp ~856), copy that sum into a lock-free
+     single-slot double-buffer (`m_masterSumForFx`). No allocation, plain stores.
+  3. **Producer feeds the master host.** The producer loop copies the latest handed-
+     off sum into `masterTrack->inputAudioChannels` and drives the master host's
+     render exactly as it drives a track's — the host processes sum[N-1] → master
+     out[N-1] into the master audio ring.
+  4. **Callback consumes the processed master.** When the master host is ready, the
+     callback, instead of sending `master[]` straight to the device, reads the master
+     host's output ring (block N-1) and outputs THAT; it still writes the fresh sum[N]
+     to the hand-off. Bypass path (no master FX / host not ready) = today's behaviour
+     exactly, so this is safe to land dark and flip on when the chain is non-empty.
+  5. **Latency.** The master output is one block late — uniform added output latency,
+     nothing to PDC against (PDC aligns tracks against each other; here everything is
+     equally delayed). Report it in the latency line.
+
+Risk is concentrated in step 4 (the callback's output source changes). Gate it hard
+on "master has an enabled VstEffect AND its host is ready", so a project with no
+master FX takes the identical path it does today. Verify with the capture loop:
+master with a known effect (e.g. a gain/limiter) must change the sum measurably vs
+bypass, and underrun telemetry must stay at zero.
+
+This is the next focused increment — deliberately not rushed into the RT callback in
+the same pass as 4a, since a wrong handshake there reintroduces the dropouts the
+low-latency work removed.
