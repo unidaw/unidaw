@@ -1984,6 +1984,75 @@ section('clips show the notes inside them');
      `${before} -> ${after} lit pixels`);
 }
 
+/*
+ * WHAT IS FLOWING BETWEEN THE DEVICES.
+ *
+ * The thing Live draws, and the thing that makes a chain readable: you can see
+ * where MIDI becomes audio. `maximal`'s Bass is the shape that proves it — a
+ * patcher device feeding an instrument, so MIDI arrives at both and audio leaves
+ * only the second.
+ *
+ * Asserted on the COMPUTED STYLE, not only on the data attribute. The attribute
+ * is what this side decided; the border is whether anything reached the screen,
+ * and the two failed independently twice while building it (clipped by the
+ * card's overflow, then drawn through the middle of the parameter list).
+ */
+section('the chain shows what flows between devices');
+{
+  await page.evaluate(() => window.__uni.loadProject('maximal'));
+  await page.waitForTimeout(3500);
+  // The rack follows the CURSOR's track and earlier sections move it. Bass is
+  // the track with both a patcher and an instrument; without this the section
+  // reads whichever chain the cursor happened to be left on and reports "no
+  // patcher to flow between" for a project that has two.
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.waitForTimeout(1200);
+  const flow = await page.evaluate(() => {
+    const cards = [...document.querySelectorAll('.dv-card')].filter((c) => c.offsetParent);
+    return cards.map((c) => {
+      const before = getComputedStyle(c, '::before');
+      const after = getComputedStyle(c, '::after');
+      return { title: (c.querySelector('.dv-title') || {}).textContent,
+               in: c.dataset.flowIn, out: c.dataset.flowOut,
+               inStyle: before.borderLeftStyle, inW: before.borderLeftWidth,
+               outStyle: after.borderLeftStyle,
+               foot: (c.querySelector('.dv-foot') || {}).textContent || '' };
+    });
+  });
+  ok(flow.length >= 2, 'the track has a patcher and an instrument to flow between',
+     JSON.stringify(flow.map((f) => f.title)));
+  if (flow.length >= 2) {
+    const inst = flow.find((f) => /Zebra/.test(f.title || ''));
+    const patch = flow.find((f) => /patcher/i.test(f.title || ''));
+    ok(patch && patch.in === 'midi', 'MIDI arrives at the patcher', patch && patch.in);
+    ok(inst && inst.in === 'midi', 'and at the instrument', inst && inst.in);
+    /*
+     * THE CONVERSION. An instrument takes MIDI and puts out audio, and this is
+     * the one relationship the picture exists to show — a rule of thumb like
+     * "audio after the first device" gets it right by accident here and wrong on
+     * every chain that starts with a patcher, which is now most of them.
+     */
+    ok(inst && inst.out === 'audio', 'and audio comes out of it', inst && inst.out);
+    // Told apart by SHAPE, not by colour: dashed for MIDI, solid for audio. A
+    // difference carried by hue is one some people cannot see.
+    ok(inst && inst.inStyle === 'dashed' && inst.outStyle === 'solid',
+       'MIDI is dashed and audio is solid, so they differ without colour',
+       inst && `in=${inst.inStyle} out=${inst.outStyle}`);
+    ok(inst && inst.inW !== '0px', 'and the mark has real width on screen',
+       inst && inst.inW);
+    /*
+     * AND THE GENERATOR IS NAMED ON THE DEVICE THAT OWNS IT. This read
+     * `d.id === patcherDevice` against a field the engine never writes, so it was
+     * always 0 — putting "generates" on whatever sat in slot 0, which on this
+     * track is the instrument. It is a per-device bit now.
+     */
+    ok(patch && /generates/.test(patch.foot),
+       'the generator is named on the patcher device', patch && patch.foot.trim());
+    ok(inst && !/generates/.test(inst.foot),
+       'and NOT on the instrument beside it', inst && inst.foot.trim());
+  }
+}
+
 section('dragging a clip moves it');
 {
   await page.evaluate(() => window.__uni.run('view arrange'));

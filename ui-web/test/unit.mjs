@@ -356,6 +356,60 @@ test('dragging a node parameter accumulates rather than rounding to nothing', ()
             'shift makes the same travel do less');
 });
 
+test('the chain says what is flowing between its devices', async () => {
+  const { resolveFlow } = await import('../src/chainmodel.js');
+  const shape = (devs) => resolveFlow(devs)
+    .map((g) => (g.midi ? 'M' : '-') + (g.audio ? 'A' : '-')).join(' ');
+
+  // The clip feeds the head, so MIDI is present before anything.
+  assert.equal(shape([]), 'M-');
+
+  // An instrument CONVERTS: MIDI in, audio out. This is the one the picture
+  // exists to show, and the one a hand-written "audio after the first device"
+  // rule would get right by accident and wrong everywhere else.
+  assert.equal(shape([{ caps: 5 }]), 'M- -A');
+
+  // An event patcher passes MIDI along and makes no audio.
+  assert.equal(shape([{ caps: 3 }, { caps: 5 }]), 'M- M- -A');
+
+  // An audio effect after an instrument keeps audio; MIDI has already stopped.
+  assert.equal(shape([{ caps: 5 }, { caps: 4 }]), 'M- -A -A');
+
+  // A BYPASSED device is a wire, not a device that does nothing: its conversion
+  // does not happen either, so a bypassed instrument leaves MIDI as MIDI. Drawing
+  // audio after it would be the exact confident lie this indicator must not tell.
+  assert.equal(shape([{ caps: 5, bypass: true }]), 'M- M-');
+  assert.equal(shape([{ caps: 5, bypass: true }, { caps: 5 }]), 'M- M- -A');
+
+  /*
+   * DEAD: a device that swallows MIDI and emits nothing leaves everything after
+   * it with nothing to work on. Reported rather than drawn as a blank, because
+   * "nothing downstream of here can ever do anything" is the most useful thing
+   * this can say and the hardest to work out by ear.
+   *
+   * My first attempt at this case was `[instrument, midi-sink]` and it was
+   * wrong: audio keeps flowing past a device that only consumes MIDI, which is
+   * correct and is exactly the sort of thing a carry-forward model gets right
+   * and a rule of thumb gets wrong.
+   */
+  const dead = resolveFlow([{ caps: 1 }]);
+  assert.equal(dead[0].dead, false, 'the clip feeds the head');
+  assert.equal(dead[1].dead, true, 'and nothing comes out the other side');
+  // Audio survives a MIDI-only device, so this chain has no dead gap at all.
+  assert.deepEqual(resolveFlow([{ caps: 5 }, { caps: 1 }]).map((g) => g.dead),
+                   [false, false, false]);
+
+  // Reuses the caller's array: the rack redraws at frame rate and this must not
+  // allocate a new object per gap per frame.
+  const buf = [];
+  const a = resolveFlow([{ caps: 5 }], buf);
+  const b = resolveFlow([{ caps: 5 }], buf);
+  assert.equal(a, b, 'the same array comes back');
+  assert.equal(a[0], b[0], 'and the same gap objects inside it');
+  // And it shrinks when the chain does, rather than leaving a stale tail.
+  assert.equal(resolveFlow([], buf).length, 1);
+});
+
 test('a nudge clamps, and leaves every other value exactly as it was read', () => {
   const EU = NODE_TYPES.indexOf('euclidean');
   assert.deepEqual(configFields(EU).map((f) => f.name),

@@ -768,17 +768,6 @@ impl EngineHandle {
         )
     }
 
-    /// Add, remove, move or update a device on a track's chain. Same story
-    /// again: the engine matches this size FIRST and only then looks at
-    /// commandType, so a chain edit sent in a UiCommandPayload is not refused —
-    /// it is read as some other command's fields, or ignored entirely.
-    pub fn send_chain_command(&self, payload: UiChainCommandPayload) -> Result<(), String> {
-        self.write_entry(
-            &payload as *const UiChainCommandPayload as *const u8,
-            std::mem::size_of::<UiChainCommandPayload>(),
-        )
-    }
-
     /// v23: the first instrument's name per track (empty when the track has none).
     pub fn read_track_device_names(&self) -> Vec<String> {
         loop {
@@ -885,6 +874,11 @@ impl EngineHandle {
     /// Send a device-chain edit (AddDevice/RemoveDevice/MoveDevice/UpdateDevice). Same
     /// ring as send_command; a distinct payload (UiChainCommandPayload). track_id may be
     /// MASTER_TRACK_ID to edit the master chain.
+    ///
+    /// The distinct payload is load-bearing, not tidiness: the engine matches on
+    /// the entry's SIZE first and only then looks at commandType, so a chain edit
+    /// sent in a UiCommandPayload is not refused — it is read as some other
+    /// command's fields, or ignored entirely.
     pub fn send_chain_command(
         &self,
         payload: crate::layout::UiChainCommandPayload,

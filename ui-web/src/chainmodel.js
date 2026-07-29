@@ -72,6 +72,73 @@ const NO_DEVICES = [];
  * for the lifetime of the process, and building one of them per card per frame
  * was an array plus a join per card per draw.
  */
+/*
+ * WHAT IS FLOWING BETWEEN TWO DEVICES.
+ *
+ * Ableton draws this and it is the thing that makes a chain readable at a
+ * glance: you can see where MIDI becomes audio, and you can see when a device is
+ * receiving nothing.
+ *
+ * CAPABILITY, not activity. Two reasons, and the second is the important one.
+ * The engine publishes what each device consumes and emits (capability_mask on
+ * the chain snapshot); it does not publish whether a note went past a moment
+ * ago, and asking for that would mean a meter's worth of traffic at frame rate
+ * for a picture that flickers. But even with activity available, capability is
+ * what you want here: a chain is wrong when it CANNOT carry what you meant, and
+ * that is true whether or not you happen to be playing. An activity light that
+ * is dark during a rest looks identical to one that is dark because the routing
+ * is broken.
+ *
+ * THE FAILURE THIS MUST NOT HAVE is showing MIDI flowing into a device that
+ * ignores it, or audio out of a device that emits none. A confident lie about
+ * the signal path is worse than no indicator, because the whole point is to be
+ * believed when something looks wrong. So this carries the signal FORWARD
+ * through each device's own declaration rather than assuming what a chain
+ * "usually" looks like:
+ *
+ *   an instrument   consumes MIDI, emits audio  -> MIDI stops here, audio starts
+ *   an event patcher consumes and emits MIDI    -> MIDI continues, no audio
+ *   an audio effect  processes audio            -> audio continues, MIDI passes
+ *
+ * A track's own clip is the source, so MIDI is present before the first device.
+ */
+export const CAP_CONSUMES_MIDI = 1;
+export const CAP_PRODUCES_MIDI = 2;
+export const CAP_AUDIO = 4;
+
+/**
+ * The n+1 gaps in a chain of n devices: before the first, between each pair,
+ * after the last. Each says what is present at that point.
+ *
+ * `dead` marks a gap carrying nothing at all — which is not a drawing detail but
+ * the most useful thing this can tell you: a device downstream of it can never
+ * do anything, and until now the only way to find that out was to wonder why you
+ * could not hear it.
+ */
+export function resolveFlow(devices, out) {
+  const gaps = out || [];
+  while (gaps.length < devices.length + 1) gaps.push({ midi: false, audio: false, dead: false });
+  // The clip feeds the head of the chain.
+  let midi = true, audio = false;
+  for (let i = 0; i <= devices.length; i++) {
+    const g = gaps[i];
+    g.midi = midi; g.audio = audio; g.dead = !midi && !audio;
+    if (i === devices.length) break;
+    const d = devices[i];
+    const caps = d.caps | 0;
+    // A BYPASSED device is a wire. Not "a device that does nothing" — its
+    // conversions do not happen either, so an instrument that is bypassed does
+    // not turn MIDI into audio, and the gap after it must say so.
+    if (d.bypass) continue;
+    const consumes = !!(caps & CAP_CONSUMES_MIDI);
+    const produces = !!(caps & CAP_PRODUCES_MIDI);
+    midi = produces ? true : (consumes ? false : midi);
+    if (caps & CAP_AUDIO) audio = true;
+  }
+  gaps.length = devices.length + 1;
+  return gaps;
+}
+
 const CAP_TEXT = [];
 function describeCaps(mask) {
   const m = mask & 7;
@@ -150,6 +217,11 @@ export function createChainBuffer(cap = 16) {
   for (let i = 0; i < cap; i++) {
     cards[i] = { id: 0, kind: 0, badge: '', title: '', pos: 0,
                  sub: '', caps: '', bypass: false, selected: false, patcherNode: -1,
+                 // What is flowing INTO this card, and — on the last card only —
+                 // out of it. Two small strings rather than a gap object per
+                 // card, because the renderer's whole job with them is to toggle
+                 // a class and a class is a string.
+                 flowIn: '', flowOut: '',
                  named: false, params: [], paramCount: 0, more: '',
                  // The device's audio buses (kShmVersion 20): what it can actually
                  // route, which is the difference between "a plugin" and "a plugin
@@ -377,7 +449,20 @@ export function buildChainModel(opts, buf) {
        * The graph was reachable the whole time — F3, if you knew — and the fix
        * is not more places to look, it is one line on the card that owns it.
        */
-      if (generators && d.id === patcherDevice) c.sub += ' · ' + generators;
+      /*
+       * THE DEVICE'S OWN BIT, not a guess at which device owns the graph.
+       *
+       * This used to read `d.id === patcherDevice`, where `patcherDevice` came
+       * from the published patcher region — a field the engine never writes, so
+       * it was always 0. A generator on slot 3 was therefore reported on slot 0,
+       * and on a track whose slot 0 is an instrument it was reported on the
+       * instrument. In `maximal` that put "generates: euclidean + random" on
+       * Zebra2 and left the patcher device beside it saying nothing.
+       *
+       * The engine now sets a per-device bit on the chain snapshot
+       * (UI_CHAIN_DIFF_GENERATES). One device, one truth, no inference.
+       */
+      if (d.generates && generators) c.sub += ' · ' + generators;
       // The count belongs on screen, not just in the scrollbar: six rows of 256
       // with a thin scrollbar reads as "this plugin has six parameters" unless
       // something says otherwise. This is the something.
@@ -386,7 +471,31 @@ export function buildChainModel(opts, buf) {
     }
     buf.cardCount++;
   }
+
+  /*
+   * WHAT IS FLOWING BETWEEN THE CARDS.
+   *
+   * After the loop, because it is a property of the CHAIN and not of any one
+   * device: what reaches a card depends on everything upstream of it.
+   *
+   * Each card carries the gap BEFORE it, and the last card carries the gap after
+   * it as well. That is what lets the renderer draw n+1 gaps with no elements of
+   * its own — two pseudo-elements and a class, rather than a pooled gutter to
+   * keep in step with a pooled card.
+   */
+  const gaps = resolveFlow(devices, buf._flow || (buf._flow = []));
+  for (let i = 0; i < buf.cardCount; i++) {
+    buf.cards[i].flowIn = flowClass(gaps[i]);
+    buf.cards[i].flowOut = i === buf.cardCount - 1 ? flowClass(gaps[i + 1]) : '';
+  }
   return buf;
+}
+
+/** A gap as the one word the renderer toggles. Interned; there are four. */
+function flowClass(g) {
+  if (!g || g.dead) return 'dead';
+  if (g.midi && g.audio) return 'both';
+  return g.audio ? 'audio' : 'midi';
 }
 
 // ---------------------------------------------------------------------------

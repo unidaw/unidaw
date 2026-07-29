@@ -211,6 +211,7 @@ export class Chain {
       list._card = el;
       el._list = list; el._space = space;
       el._rows = [];
+      el._fIn = null; el._fOut = null;
       el._scrollTop = 0; el._spaceH = -1;
       const foot = div('dv-foot', el);
       // The device's audio buses, on its own line: "8 out · 1 in", or "buses 3/8"
@@ -449,6 +450,11 @@ export class Chain {
       }
       if (el._sel !== c.selected) { el._sel = c.selected; el.classList.toggle('sel', c.selected); }
       if (el._byp !== c.bypass) { el._byp = c.bypass; el.classList.toggle('byp', c.bypass); }
+      // What reaches this card, and — on the last one — what leaves it. Written
+      // as dataset rather than four toggled classes: one string write when it
+      // changes, and the stylesheet selects on the attribute.
+      if (el._fIn !== c.flowIn) { el._fIn = c.flowIn; el.dataset.flowIn = c.flowIn; }
+      if (el._fOut !== c.flowOut) { el._fOut = c.flowOut; el.dataset.flowOut = c.flowOut; }
       // Keyed on the number rather than on the string it renders to. The old
       // `dataset.pos !== String(c.pos)` built one string per card per frame —
       // and then a second one to write it — only ever to conclude that the

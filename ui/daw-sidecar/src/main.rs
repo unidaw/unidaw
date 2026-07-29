@@ -2610,6 +2610,8 @@ struct ChainDevice {
     slot: u32,
     caps: u32,
     bypass: u32,
+    /// This device's own patcher graph emits events. See UI_CHAIN_DIFF_GENERATES.
+    generates: bool,
     /// How many DeviceBus diffs the engine says are coming for this device, and
     /// whether it had more than the cap. Read from the ChainSnapshot's `flags`, not
     /// its payload, which is full.
@@ -2766,8 +2768,8 @@ impl ChainStore {
                 if j > 0 { out.push(','); }
                 out.push_str(&format!(
                     "{{\"id\":{},\"kind\":{},\"pos\":{},\"node\":{},\"slot\":{},\
-                     \"caps\":{},\"bypass\":{},\"busCount\":{},\"busTruncated\":{},\"buses\":[",
-                    d.id, d.kind, d.pos, d.node, d.slot, d.caps, d.bypass,
+                     \"caps\":{},\"bypass\":{},\"generates\":{},\"busCount\":{},\"busTruncated\":{},\"buses\":[",
+                    d.id, d.kind, d.pos, d.node, d.slot, d.caps, d.bypass, d.generates,
                     d.bus_count, d.bus_truncated));
                 for (k, b) in d.buses.iter().enumerate() {
                     if k > 0 { out.push(','); }
@@ -2868,6 +2870,13 @@ fn decode_chain_snapshot(e: &EventEntry) -> Option<ChainEntry> {
             // is u32.
             bus_count: (u16at(2) & 0x00ff) as u8,
             bus_truncated: (u16at(2) & 0x0100) != 0,
+            // Bit 9 of the same field: this device's patcher graph EMITS events
+            // it was not given. Per device, which is the whole point — the page
+            // used to attribute "generates" to device 0 of whichever track,
+            // because the published patcher region names no device and never
+            // did. So a generator on slot 3 was reported on slot 0, and on a
+            // track with no generator at all it was reported anyway.
+            generates: (u16at(2) & daw_bridge::layout::UI_CHAIN_DIFF_GENERATES) != 0,
             buses: Vec::new(),
         }),
     })
@@ -3745,6 +3754,9 @@ mod tests {
             // device whose buses have not arrived look the same here, which is
             // exactly what `bus_count` exists to separate — see the bus tests below.
             bus_count: 0, bus_truncated: false, buses: Vec::new(),
+            // Same story as bus_count: the generates bit rides the payload's
+            // `flags`, which this fixture leaves zero.
+            generates: false,
         });
 
         // Another track is its own chain and its own version; one track's

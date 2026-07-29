@@ -239,3 +239,58 @@
    claimed otherwise. A selection that looks like focus and is not is worse than
    no selection at all. */
 .chain.pane-focus { box-shadow: inset 0 0 0 1px var(--base-accent); }
+
+/* ── WHAT IS FLOWING BETWEEN THE DEVICES ────────────────────────────────────
+   Ableton draws this and it is what makes a chain readable at a glance: you can
+   see where MIDI becomes audio, and you can see a device receiving nothing.
+
+   A FULL-HEIGHT STRIP at the card's own edge, not a stub in the flex gap. Two
+   failed placements taught the shape: out in the gap (`left: -11px`) it is
+   clipped away entirely, because the card must be `overflow: hidden` for its
+   parameter list to scroll; and a short mark at `top: 50%` lands in the middle
+   of that list, drawing a line through the values. Down the edge it reads as the
+   wire arriving at the device, and there is nothing there to collide with.
+
+   Drawn as pseudo-elements ON THE CARDS rather than as gutter elements between
+   them. A pooled gutter would be a second pool to keep in step with the card
+   pool — a class of bug this file has paid for once — where `::before` on every
+   card plus `::after` on the last is exactly n+1 marks with nothing to
+   synchronise.
+
+   NOT COLOUR ALONE. MIDI is dashed, audio is solid: told apart by shape at any
+   size and in any theme, with colour only reinforcing. A difference carried by
+   hue is a difference some people cannot see. */
+.dv-card::before,
+.dv-card[data-flow-out]:not([data-flow-out=""])::after {
+  content: '';
+  position: absolute; top: 10px; bottom: 10px; width: 0;
+  pointer-events: none;
+}
+.dv-card::before { left: 2px; }
+.dv-card[data-flow-out]:not([data-flow-out=""])::after { right: 2px; }
+
+/* MIDI: dashed. */
+.dv-card[data-flow-in="midi"]::before,
+.dv-card[data-flow-out="midi"]::after {
+  border-left: 1px dashed var(--base-accent);
+}
+/* Audio: solid. */
+.dv-card[data-flow-in="audio"]::before,
+.dv-card[data-flow-out="audio"]::after {
+  border-left: 1px solid var(--base-accent-ramp-400);
+}
+/* Both at once. Two strips side by side, so "both" is visibly the sum of the two
+   rather than a third thing to learn. */
+.dv-card[data-flow-in="both"]::before,
+.dv-card[data-flow-out="both"]::after {
+  border-left: 1px dashed var(--base-accent);
+  border-right: 1px solid var(--base-accent-ramp-400);
+  width: 3px;
+}
+/* DEAD: nothing arrives, so nothing downstream can do anything. Dotted and
+   dimmed — it must read as "broken", not as "quiet". */
+.dv-card[data-flow-in="dead"]::before,
+.dv-card[data-flow-out="dead"]::after {
+  border-left: 1px dotted var(--uni-text-fx);
+  opacity: 0.7;
+}
