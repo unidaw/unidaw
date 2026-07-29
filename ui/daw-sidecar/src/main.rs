@@ -1395,7 +1395,14 @@ fn build_placement(body: &str) -> Option<Result<UiCommandPayload, &'static str>>
 /// the seventh built on the third degree of whatever key is in force, which is
 /// what makes a chord track survive a key change.
 fn build_chord(body: &str) -> Option<UiChordCommandPayload> {
-    if !body.contains("\"chord\"") { return None; }
+    // is_type, not `contains` — the last raw substring dispatch in this file, and it
+    // was claiming any message with the word "chord" anywhere in it. Renaming a
+    // track to "chord" sends {"type":"rename","track":2,"name":"chord"}, which this
+    // builder answered by WRITING A CHORD to track 2 and reporting ok. The essay in
+    // `a_project_may_be_named_after_a_command` is about exactly this hole; every
+    // other verb was converted and this one was missed, and the loop that would have
+    // caught it lists "chord" among its verbs without ever calling this function.
+    if !is_type(body, "chord") { return None; }
     let n = |k: &str, d: i64| parse_num(body, k).unwrap_or(d);
     let tick = n("\"tick\"", 0).max(0) as u64;
     let dur = n("\"dur\"", 0).max(0) as u64;
@@ -1437,7 +1444,10 @@ fn build_chord(body: &str) -> Option<UiChordCommandPayload> {
 ///                   phaseMilli i32@12
 ///   RandomDegree(5) degree u8@0, velocity u8@1, pad u16@2, durationTicks u32@4
 fn build_patcher_config(body: &str) -> Option<Result<UiPatcherNodeConfigPayload, &'static str>> {
-    if !body.contains("\"patchcfg\"") { return None; }
+    // is_type: a project named `patchcfg` was claimed by this and refused with "no
+    // config layout for that node type". Third of three raw-substring dispatches the
+    // extended naming loop found in one run.
+    if !is_type(body, "patchcfg") { return None; }
     let n = |k: &str| parse_num(body, k).unwrap_or(0);
     let node_type = n("\"nodeType\"") as u32;
     let mut cfg = [0u8; 16];
@@ -1550,9 +1560,15 @@ fn resolve_link(
 /// the published graph. The alternative is asking a person to type "port 3",
 /// which is engine trivia and gets it wrong.
 fn build_patcher_graph(body: &str) -> Option<Result<UiPatcherGraphCommandPayload, &'static str>> {
-    let add = body.contains("\"patchadd\"");
-    let del = body.contains("\"patchdel\"");
-    let link = body.contains("\"patchlink\"");
+    // is_type on all three, for the reason the essay in
+    // `a_project_may_be_named_after_a_command` gives: a project named `patchadd`
+    // sends {"type":"load","name":"patchadd"} and this claimed it, so the load never
+    // reached the engine and the reply talked about node types. Found by extending
+    // that test's loop to call every builder in the dispatch chain rather than two
+    // of them — the same extension that caught build_chord.
+    let add = is_type(body, "patchadd");
+    let del = is_type(body, "patchdel");
+    let link = is_type(body, "patchlink");
     if !(add || del || link) { return None; }
     let n = |k: &str| parse_num(body, k).unwrap_or(0);
     let mut p = UiPatcherGraphCommandPayload {
@@ -4848,12 +4864,38 @@ mod tests {
         // never reached the engine, and the reply named a concept the caller had
         // not mentioned. Every verb dispatched here had the same hole.
         for verb in ["waveform", "setparam", "settempo", "list", "plugins",
-                     "note", "chord", "loop", "seek", "adddevice"] {
+                     "note", "chord", "loop", "seek", "adddevice",
+                     // Added with the builders below them: a verb absent from this
+                     // list is a builder nothing protects.
+                     "deldevice", "openeditor", "bypass", "quantize", "routing",
+                     "patchadd", "patchremove", "patchlink", "patchcfg",
+                     "placement", "preview", "panic", "stop", "undo", "redo"] {
             let body = format!("{{\"type\":\"load\",\"name\":\"{verb}\"}}");
             assert!(build_waveform_request(&body).is_none(),
                     "the waveform handler claimed a load of a project called {verb}");
             assert!(build_set_param(&body).is_none(),
                     "the setparam handler claimed a load of a project called {verb}");
+            /*
+             * EVERY BUILDER IN THE DISPATCH CHAIN, not two of them.
+             *
+             * This loop listed "chord" among its verbs and never called build_chord,
+             * so the one builder still using a raw `contains` was named by the test
+             * that exists to find it and checked by no assertion in it. A ratchet
+             * that records a case without testing it is a ratchet that reports
+             * safety it does not provide.
+             */
+            assert!(build_chord(&body).is_none(),
+                    "the chord handler claimed a load of a project called {verb}");
+            assert!(build_chain_edit(&body).is_none(),
+                    "a chain builder claimed a load of a project called {verb}");
+            assert!(build_patcher_graph(&body).is_none(),
+                    "the graph handler claimed a load of a project called {verb}");
+            assert!(build_patcher_config(&body).is_none(),
+                    "the node-config handler claimed a load of a project called {verb}");
+            assert!(build_routing(&body).is_none(),
+                    "the routing handler claimed a load of a project called {verb}");
+            assert!(build_quantize(&body).is_none(),
+                    "the quantize handler claimed a load of a project called {verb}");
             assert!(!is_type(&body, verb),
                     "is_type matched {verb} in a message whose type is load");
             // ...and the load itself still builds, which is the point.

@@ -181,7 +181,20 @@ export class Chain {
       if (c.kind <= 2 && c.patcherNode >= 0) {
         if (this.onOpenPatcher) this.onOpenPatcher(this.vm.track, c.id, pos);
       } else if (this.onOpenEditor) {
-        this.onOpenEditor(this.vm.track, c.id);
+        /*
+         * AN OBJECT, which is what the handler destructures.
+         *
+         * This passed two positional arguments while `onOpenEditor` takes
+         * `({ track, device })`, so destructuring a NUMBER gave undefined for both
+         * and double-clicking a VST card opened nothing at all. Silent in every
+         * direction: no throw, no message, and the other call site (the open button)
+         * passes the object correctly, so the feature demonstrably worked.
+         *
+         * `onOpenPatcher` above really is positional — the two callbacks have
+         * different shapes, which is how this happened and why they now look
+         * different on the page.
+         */
+        this.onOpenEditor({ track: this.vm.track, device: c.id });
       }
     });
     // Scroll does not bubble, but it does fire on the way DOWN — so one capturing

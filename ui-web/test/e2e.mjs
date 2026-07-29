@@ -2756,6 +2756,76 @@ section('a track can be routed away from Main');
  * destroys another is worse than no confirmation, because it turns a mistake into a
  * mistake you approved — and device removal is not undoable.
  */
+/*
+ * THREE CONTROLS THAT WERE PRESENT AND INERT.
+ *
+ * Each of these had a comment, a help entry or a call site, and could not be
+ * operated. That combination is the worst kind of gap in this codebase: it looks
+ * finished from every angle except pressing it, and the suites had walked past all
+ * three because nothing pressed them either.
+ */
+section('controls that look operable are operable');
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.evaluate(() => window.__uni.loadProject('rack'));
+  await page.waitForTimeout(2500);
+
+  /*
+   * CTRL+TAB CYCLES THE SURFACES. The modifier branch returned unconditionally, so
+   * this never reached its handler — and a bare return does not preventDefault, so
+   * the keystroke went to the BROWSER. The documented way to change surface moved
+   * browser tab focus instead.
+   */
+  const view0 = await page.evaluate(() => window.__uni.state().view);
+  await page.keyboard.press('Control+Tab');
+  await page.waitForTimeout(400);
+  const view1 = await page.evaluate(() => window.__uni.state().view);
+  ok(view1 !== view0, 'Ctrl+Tab changes surface', `${view0} -> ${view1}`);
+  await page.keyboard.press('Control+Tab');
+  await page.waitForTimeout(400);
+  const view2 = await page.evaluate(() => window.__uni.state().view);
+  ok(view2 !== view1, 'and again, rather than toggling two', `${view1} -> ${view2}`);
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.waitForTimeout(400);
+
+  /*
+   * DOUBLE-CLICKING A VST CARD OPENS ITS EDITOR. The call passed two positional
+   * arguments to a handler that destructures `({ track, device })`, so both came
+   * out undefined and nothing happened. The open BUTTON on the same card passes the
+   * object correctly, so the feature demonstrably worked — from the other route.
+   */
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.waitForTimeout(500);
+  const cards2 = await visible('.dv-card');
+  ok(cards2.length >= 2, 'the rack has a VST card to open', String(cards2.length));
+  // The instrument, not the patcher — a patcher device double-click opens its GRAPH,
+  // which is a different callback with a different (positional) shape.
+  const vst = cards2[cards2.length - 1];
+  /*
+   * ON THE TITLE, not the card's centre. An instrument card is mostly parameter
+   * rows — Zebra2 publishes 256 — so the centre of it is a `.dv-p-bar`, which the
+   * dblclick handler deliberately excludes: double-clicking a parameter you are
+   * dragging must not open a window. Playwright clicks an element's centre, so
+   * targeting the card meant targeting a parameter, and the first version of this
+   * check failed for that reason rather than for the bug's.
+   */
+  const title = await vst.$('.dv-title');
+  ok(!!title, 'the card has a title to double-click');
+  await title.dblclick();
+  await page.waitForTimeout(900);
+  const said = String(await page.evaluate(() => window.__uni.state().reject));
+  /*
+   * The engine owns the window, so this cannot assert one appeared. What it CAN
+   * assert is that the command went out with a real track and device — the failure
+   * was `undefined` for both, and the app's own refusal path is what reports that.
+   */
+  ok(!/undefined|no engine/.test(said), 'double-clicking it does not fail on undefined',
+     said);
+  const dbl = await page.evaluate(() => window.__uni.lastEditor());
+  ok(dbl && dbl.track === 0 && dbl.device >= 0,
+     'and names a real track and device', JSON.stringify(dbl));
+}
+
 section('the rack\'s keys act on the track the rack is showing');
 {
   await page.evaluate(() => window.__uni.run('view tracker'));

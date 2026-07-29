@@ -1784,6 +1784,15 @@ const dockApi = {
    *  before this UI existed and nothing ever sent it. */
   openEditor: (track, device) => {
     if (!conn || !conn.canSend()) { state.reject = 'no engine'; return false; }
+    /*
+     * WHAT WAS ASKED FOR, kept so a test can see it.
+     *
+     * The engine owns the plugin window, so nothing on this side can observe one
+     * opening — which is why a call that passed `undefined` for both arguments went
+     * unnoticed for as long as it did. This is the observable: the request that went
+     * out, with the values it went out with.
+     */
+    lastEditor = { track, device };
     conn.send({ type: 'openeditor', track, device });
     return true;
   },
@@ -3576,6 +3585,8 @@ function followPlayhead() {
  * key released while the window is not focused never delivers its keyup and would
  * otherwise leave a voice sounding with nothing on screen able to stop it.
  */
+/** The last openEditor request, for the reason its comment gives. */
+let lastEditor = null;
 const sounding = new Set();
 const voiceKey = (track, pitch) => track * 128 + pitch;
 
@@ -4150,7 +4161,19 @@ addEventListener('keydown', (e) => {
       state.focus = state.dockOpen ? 'dock' : 'centre';
       return done();
     }
-    return;                                   // leave browser shortcuts alone
+    /*
+     * EXCEPT TAB, which has a Ctrl binding of its own further down.
+     *
+     * This was a bare `return`, so Ctrl+Tab — the documented way to cycle surfaces —
+     * never reached its handler and, because the return did not preventDefault,
+     * went to the BROWSER instead. The feature had a comment, a help entry and a
+     * cycler, and could not be pressed.
+     *
+     * Everything else with a modifier still stops here: an unrecognised Cmd/Ctrl
+     * combo belongs to the browser, and swallowing them all would break Cmd+R,
+     * Cmd+L and every other shortcut a person expects to keep working.
+     */
+    if (k !== 'Tab') return;                  // leave browser shortcuts alone
   }
 
   // 2. An open token buffer owns the keyboard, except for navigation.
@@ -5724,6 +5747,8 @@ window.__uni = {
   // The same functions the dock and the palette call, not copies of them.
   newSong: (name) => dockApi.newSong(name),
   openEditor: (track, device) => dockApi.openEditor(track, device),
+  /** The last plugin-editor request, so a test can see what a double-click sent. */
+  lastEditor: () => (lastEditor ? { ...lastEditor } : null),
   playRow: (row) => dockApi.playRow(row),
   /** Which preview voices are sounding, as track:pitch — so a test can prove a
    *  note-on is matched by exactly one note-off rather than trusting the wire. */
