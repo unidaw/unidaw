@@ -5169,6 +5169,14 @@ struct TrackRuntime {
         // and a saved sidechain/send was silently dropped). Read by rebuildHostForChain
         // below and by the producer's routing, both under this same trackMutex.
         runtime->track.routing = source.routing;
+        // Adopt the project's modulation matrix. Without this a saved mod link was parsed
+        // into the document and then DROPPED — the runtime kept its empty list, and the
+        // next save (which writes runtime->track.modRegistry.links) emitted an empty
+        // mod_links array, deleting the link from disk. Serialization was never the bug;
+        // the load side simply never installed them, so every other field being adopted
+        // here made the omission invisible. Verified: maximal has one link on Bass, and a
+        // load+save round trip took it from 1 to 0 before this line existed.
+        runtime->track.modRegistry.links = source.modLinks;
         runtime->mixGainLinear.store(
             static_cast<float>(std::pow(10.0, source.mixer.gainDb / 20.0)),
             std::memory_order_relaxed);
