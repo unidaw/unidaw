@@ -145,4 +145,42 @@ wait "$ENG" 2>/dev/null || true
 grep -q '"event":"automation.rejected"' "$TMP/engine.log" && \
   fail "something was rejected that should not have been" || true
 
+# A WRITE THE SAVE WOULD THROW AWAY MUST BE REFUSED, not accepted.
+#
+# The handler's only check used to be `trackId < tracks.size()`, which is true for three
+# kinds of runtime the save deliberately skips: a tombstone (a hole kept to reserve an id),
+# a slot past the live count (a leftover of a larger project), and an aux child (derived
+# from a plugin's bus layout at load). Automation written to any of them was applied,
+# reported with created_clip:true, and then simply absent after the next reload — the same
+# silent-loss shape as the mod links that were parsed and never installed.
+#
+# A TOMBSTONE is the case this can build from nothing: add a track, remove it, write to it.
+SHM3="/autochk3_$$"
+( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --run-seconds 14 >"$TMP/engine3.log" 2>&1 ) &
+ENG=$!
+sleep 2.5
+cli() { DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
+cli do load autoout >/dev/null 2>&1 || true
+sleep 1.6
+cli do add-track --force >/dev/null 2>&1 || true      # -> track 1
+sleep 0.6
+cli do remove-track --track 1 --force >/dev/null 2>&1 || true
+sleep 0.8
+cli do automation --force --track 1 --param index:0 --nanotick 0 --value 0.9 \
+  >/dev/null 2>&1 || true
+sleep 1
+kill "$ENG" 2>/dev/null || true
+wait "$ENG" 2>/dev/null || true
+
+grep -q '"event":"automation.rejected".*"reason":"track_not_persisted"' "$TMP/engine3.log" || \
+  fail "automation written to a REMOVED track was not refused. The save skips tombstoned
+        tracks, so the points would be reported as written and then be gone after a
+        reload, with nothing saying no. The engine's log says:
+        $(grep -o '"event":"automation[a-z._]*"[^}]*' "$TMP/engine3.log" | tail -3)"
+# And it must not ALSO have been applied — a refusal that still writes is worse than either.
+grep '"event":"automation.point"' "$TMP/engine3.log" | grep -q '"track":1' && \
+  fail "the write to the removed track was refused AND applied" || true
+echo "  refusal: automation on a track the save would discard is refused, not silently lost"
+
 echo "automation_check: PASS"

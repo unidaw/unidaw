@@ -2074,6 +2074,19 @@ struct TrackRuntime {
   // children until it clears, so a child is never placed against a half-updated track
   // set — e.g. before the load-clear has torn down the leftover it would recycle.
   std::atomic<bool> loadInProgress{false};
+  // ONE definition of "the save will write this track", shared by the save itself and by
+  // the commands that author persistent data on a track. Three separate kinds of runtime
+  // are skipped at save time — an aux child (derived from the plugin's bus layout, never
+  // persisted), a tombstone (a hole kept only to hold an id), and a slot past the live
+  // count (a leftover of a larger project) — and a handler that checks only `trackId <
+  // tracks.size()` accepts an edit to all three. The edit is then applied, reported as
+  // applied, and silently absent after the next reload, with nothing anywhere saying so.
+  // Keeping the predicate in one place is what stops the two from drifting apart again.
+  auto trackIsPersisted = [&](const TrackRuntime& rt) {
+    return !rt.isAuxChild.load(std::memory_order_acquire) &&
+           !rt.removed.load(std::memory_order_acquire) &&
+           rt.trackId < liveTrackCount.load(std::memory_order_acquire);
+  };
   TrackRuntime* uiTrack = nullptr;
   {
     auto runtime = setupTrackRuntime(0, pluginPath, !spawnHost, true);
@@ -4957,9 +4970,9 @@ struct TrackRuntime {
       // saving one would reload as a phantom top-level track. Slots past the live count
       // are leftovers of a larger project the user closed; skip those too. A tombstoned
       // slot (v22 RemoveTrack) is a hole kept only to hold an id put — never persist it.
-      if (runtime->isAuxChild.load(std::memory_order_acquire) ||
-          runtime->removed.load(std::memory_order_acquire) ||
-          runtime->trackId >= liveTrackCount.load(std::memory_order_acquire)) {
+      // The predicate itself lives next to liveTrackCount so the handlers that must refuse
+      // an edit to these tracks test the very same rule.
+      if (!trackIsPersisted(*runtime)) {
         continue;
       }
       daw::ProjectTrack track;
@@ -6937,16 +6950,30 @@ struct TrackRuntime {
         return;
       }
       TrackRuntime* runtime = nullptr;
+      bool wouldNotPersist = false;
       {
         std::lock_guard<std::mutex> lock(tracksMutex);
-        if (ap.trackId < tracks.size()) {
+        if (ap.trackId < tracks.size() && tracks[ap.trackId]) {
           runtime = tracks[ap.trackId].get();
+          // `trackId < tracks.size()` was the only test here, and it is true for three
+          // kinds of runtime the save then skips: a tombstone, a leftover slot past the
+          // live count, and an aux child. Writing automation to any of them was accepted
+          // and reported with created_clip:true, and the points were gone after the next
+          // save/reload with nothing having said no. Refuse instead — this is the same
+          // silent-loss shape as the mod links that were parsed but never installed.
+          wouldNotPersist = !trackIsPersisted(*runtime);
         }
       }
       if (!runtime) {
         DAW_EVENT("automation.rejected")
             .field("track", ap.trackId)
             .field("reason", "no_such_track");
+        return;
+      }
+      if (wouldNotPersist) {
+        DAW_EVENT("automation.rejected")
+            .field("track", ap.trackId)
+            .field("reason", "track_not_persisted");
         return;
       }
       const uint64_t tick =
