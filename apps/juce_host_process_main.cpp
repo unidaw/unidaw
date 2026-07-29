@@ -70,6 +70,12 @@ struct HostState {
                                       // a reused slot re-prepares if this changed (M4)
     bool preparedAuxOut = false;      // whether aux OUTPUT buses were enabled at prepare
                                       // (M4 multi-out); re-prepares if this changed
+    // LEVEL-MATCHED BYPASS (roadmap 15c). The RMS ratio this insert applies, measured
+    // while it is ACTIVE and smoothed. When the insert is bypassed the passthrough is
+    // scaled by it, so toggling bypass compares TONE rather than loudness — an insert
+    // that merely makes things louder stops sounding "better". 1 = no correction yet.
+    float levelMatchGain = 1.0f;
+    bool levelMatchMeasured = false;
   };
   std::vector<PluginSlot> plugins;
   std::mutex pluginsMutex;
@@ -862,10 +868,29 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
       if (slot.bypass || !slot.instance) {
         if (pluginInputPtrs && pluginInputCount > 0) {
           const int channelsToCopy = std::min(pluginInputCount, numOutputs);
+          // Level-matched bypass (roadmap 15c): scale the passthrough by the gain this
+          // insert was measured to apply while active, so A/B compares tone rather than
+          // loudness. OPT-IN (DAW_LEVEL_MATCH_BYPASS=1) and OFF by default: the roadmap
+          // wants it on by default, but I have not yet verified it end to end on real
+          // audio — three attempts each failed on the METHOD (a project loaded already
+          // bypassed never measures; bypassing the master's only effect disengages the
+          // master-FX path entirely; the instrument stimulus is timing-flaky). Shipping an
+          // unverified change to what bypass SOUNDS like, on by default, is precisely the
+          // silent-wrong-value class of bug this session has been digging out. Flip the
+          // default once there is a deterministic insert-level test.
+          static const bool kLevelMatch = std::getenv("DAW_LEVEL_MATCH_BYPASS") != nullptr;
+          const float matchGain =
+              (kLevelMatch && slot.levelMatchMeasured) ? slot.levelMatchGain : 1.0f;
           for (int ch = 0; ch < channelsToCopy; ++ch) {
             const float* src = pluginInputPtrs[ch];
             float* dst = outputPtrs[ch];
-            std::copy(src, src + state.header->blockSize, dst);
+            if (matchGain == 1.0f) {
+              std::copy(src, src + state.header->blockSize, dst);
+            } else {
+              for (uint32_t i = 0; i < state.header->blockSize; ++i) {
+                dst[i] = src[i] * matchGain;
+              }
+            }
           }
           for (int ch = channelsToCopy; ch < numOutputs; ++ch) {
             std::fill(outputPtrs[ch], outputPtrs[ch] + state.header->blockSize, 0.0f);
@@ -881,6 +906,23 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
         // writer per host.
         const bool writeAux = slot.preparedAuxOut && state.numAuxChannelsOut > 0 &&
                               !state.auxOutputPtrs.empty();
+        // Level-matched bypass (15c): measure what this insert does to the level while it
+        // is active, so the bypass path can undo it. Input RMS must be taken BEFORE
+        // process() — an in-place effect overwrites the buffer it read.
+        double inSumSq = 0.0;
+        size_t levelSamples = 0;
+        if (pluginInputPtrs && pluginInputCount > 0) {
+          for (int ch = 0; ch < std::min(pluginInputCount, numOutputs); ++ch) {
+            const float* src = pluginInputPtrs[ch];
+            if (!src) {
+              continue;
+            }
+            for (uint32_t i = 0; i < state.header->blockSize; ++i) {
+              inSumSq += static_cast<double>(src[i]) * src[i];
+            }
+            levelSamples += state.header->blockSize;
+          }
+        }
         slot.instance->process(pluginInputPtrs,
                                pluginInputCount,
                                outputPtrs,
@@ -890,6 +932,30 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
                                static_cast<int64_t>(blockStart),
                                writeAux ? state.auxOutputPtrs.data() : nullptr,
                                writeAux ? static_cast<int>(state.numAuxChannelsOut) : 0);
+        if (levelSamples > 0) {
+          double outSumSq = 0.0;
+          for (int ch = 0; ch < std::min(pluginInputCount, numOutputs); ++ch) {
+            const float* dst = outputPtrs[ch];
+            if (!dst) {
+              continue;
+            }
+            for (uint32_t i = 0; i < state.header->blockSize; ++i) {
+              outSumSq += static_cast<double>(dst[i]) * dst[i];
+            }
+          }
+          const double inRms = std::sqrt(inSumSq / static_cast<double>(levelSamples));
+          const double outRms = std::sqrt(outSumSq / static_cast<double>(levelSamples));
+          // Only learn from blocks with real signal, or near-silence would swamp the
+          // estimate with noise ratios. Clamp hard: a gate or a limiter can produce an
+          // absurd instantaneous ratio, and bypass must never become a volume weapon.
+          if (inRms > 1e-5 && outRms > 1e-6) {
+            const double ratio = std::clamp(inRms / outRms, 0.05, 20.0);
+            const double smoothing = slot.levelMatchMeasured ? 0.02 : 1.0;
+            slot.levelMatchGain = static_cast<float>(
+                slot.levelMatchGain * (1.0 - smoothing) + ratio * smoothing);
+            slot.levelMatchMeasured = true;
+          }
+        }
       }
       inputPtrs = outputPtrs;
       numInputs = numOutputs;

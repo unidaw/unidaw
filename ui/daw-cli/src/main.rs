@@ -1113,6 +1113,33 @@ fn main() {
                         2
                     }
                 },
+                Some(&"set-bypass") => {
+                    // Toggle an insert's bypass live: --track <id|master> --device N
+                    // --bypass 0|1. UpdateDevice flags bit0 = "apply bypass".
+                    let track_arg = args.iter().position(|a| a == "--track")
+                        .and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("0");
+                    let track = if track_arg == "master" { MASTER_TRACK_ID }
+                                else { track_arg.parse::<u32>().unwrap_or(0) };
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let bypass = flag_u64(&args, "--bypass", Some(1)).unwrap_or(1) as u32;
+                    let payload = UiChainCommandPayload {
+                        command_type: UiCommandType::UpdateDevice as u16,
+                        flags: 0x1,
+                        track_id: track,
+                        base_version: 0,
+                        device_id: device,
+                        device_kind: 0,
+                        insert_index: 0,
+                        patcher_node_id: 0,
+                        host_slot_index: 0,
+                        bypass,
+                        reserved: [0; 4],
+                    };
+                    match handle.send_chain_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"set-bypass\", \"track\": {track}, \"device\": {device}, \"bypass\": {bypass} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
                 Some(&"add-device") => {
                     // --track accepts a numeric id or "master"; --kind is a device kind
                     // string; --at is the insert index (default = append); --plugin is a
