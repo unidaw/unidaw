@@ -130,6 +130,29 @@ if abs(a-b) > 0.1*a:
     raise SystemExit(1)
 PY
 
+# 5. SURROUND: the master host must open at the MIX's width, not a hardcoded stereo.
+#    Sized at 2 it can never match a 6-channel master, and the gate then leaves the effect
+#    installed, hosted and completely inaudible — which is how this shipped at first.
+shm_s="/master_fx_sur_$$"
+( cd "$BUILD" && env DAW_MASTER_CHANNELS=6 DAW_IDENTITY_PASSTHRU=1 DAW_UI_SHM_NAME="$shm_s" \
+    DAW_PROJECT_DIR="$TMP" DAW_CAPTURE_WAV="$TMP/sur.wav" DAW_CAPTURE_SECONDS=6 \
+    ./daw_engine --run-seconds 12 >"$TMP/sur.log" 2>&1 ) &
+eng_s=$!
+sleep 2.5
+DAW_UI_SHM_NAME="$shm_s" "$CLI" do load withfx --force >/dev/null 2>&1 || true
+sleep 1.5
+DAW_UI_SHM_NAME="$shm_s" "$CLI" do play --force >/dev/null 2>&1 || true
+wait "$eng_s" 2>/dev/null || true
+if grep -q "Master FX: engaged" "$TMP/sur.log" && \
+   ! grep -q "not using it" "$TMP/sur.log" && \
+   python3 "$ROOT/tools/perceptual.py" --expect-audio "$TMP/sur.wav" >/dev/null 2>&1; then
+  echo "  surround master (6ch): FX engaged and audible"
+else
+  echo "  FAIL: master FX did not engage on a 6-channel master"
+  grep -iE "Surround master|not using it|Master FX" "$TMP/sur.log" | head -3 | sed 's/^/    /'
+  ok=0
+fi
+
 rm -rf "$TMP"
 [ "$ok" = "1" ] && echo "master_fx_check: PASS — the mix is processed by an out-of-process master effect, transparently" \
                 || { echo "master_fx_check: FAIL"; exit 1; }

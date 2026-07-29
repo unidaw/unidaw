@@ -11412,16 +11412,37 @@ struct TrackRuntime {
           engineConfig.numBlocks,
           &audioPlaybackBlockId);
       audioCallback->setPlaying(&playing);
+      // Movement 4 surround master: the mix width follows the device, but
+      // DAW_MASTER_CHANNELS forces a wider (e.g. 5.1) master for placement + capture even
+      // on a stereo device — the device just hears the downmixed front L/R. Determined
+      // HERE, before the master FX wiring below, because the master host must be opened at
+      // the master's true width: sized at a fixed 2 it could never match a surround mix,
+      // and the gate would leave a master effect installed, hosted and inaudible.
+      int masterChannels = std::max(2, audioBackend->outputChannels());
+      if (const char* mc = std::getenv("DAW_MASTER_CHANNELS")) {
+        const int parsed = std::atoi(mc);
+        if (parsed > masterChannels) {
+          masterChannels = std::min(parsed, 8);
+          audioCallback->setMasterChannels(masterChannels);
+          std::cout << "Surround master: " << masterChannels
+                    << " channels (device has " << audioBackend->outputChannels()
+                    << ")" << std::endl;
+        }
+      }
       // Wire the master track's fader so its gain/mute controls the summed output
       // (patcher-is-a-device item 4a). The atomics live on masterTrack for its lifetime.
       if (masterTrack) {
+        // Open the master host at the MIX's width, not a hardcoded stereo, so master FX
+        // works on a surround master too. Its input IS the sum, so in == out.
+        masterTrack->config.numChannelsOut = static_cast<uint32_t>(masterChannels);
+        masterTrack->config.numChannelsIn = static_cast<uint32_t>(masterChannels);
         audioCallback->setMasterMixer(&masterTrack->mixGainLinear,
                                       &masterTrack->mixMute);
         // 4b: wire the master host's readiness + size the sum/processed hand-off buffers
         // to the master host's channel width.
         audioCallback->setMasterFxWiring(
             &masterFxActive, &masterTrack->hostReady,
-            masterTrack->config.numChannelsOut,
+            static_cast<uint32_t>(masterChannels),
             static_cast<uint32_t>(audioBackend->blockSize()));
         // 4b render thread: one block behind the callback, it drives the master host —
         // take the summed block, write it to the host's input plane, process, read the
@@ -11573,20 +11594,6 @@ struct TrackRuntime {
         }
       }
       audioCallback->resetForStart();
-      // Movement 4 surround master: the mix width follows the device, but
-      // DAW_MASTER_CHANNELS forces a wider (e.g. 5.1) master for placement + capture
-      // even on a stereo device — the device just hears the downmixed front L/R.
-      int masterChannels = std::max(2, audioBackend->outputChannels());
-      if (const char* mc = std::getenv("DAW_MASTER_CHANNELS")) {
-        const int parsed = std::atoi(mc);
-        if (parsed > masterChannels) {
-          masterChannels = std::min(parsed, 8);
-          audioCallback->setMasterChannels(masterChannels);
-          std::cout << "Surround master: " << masterChannels
-                    << " channels (device has " << audioBackend->outputChannels()
-                    << ")" << std::endl;
-        }
-      }
       // DAW_CAPTURE_WAV=<path> records the master output so a take can be
       // analysed offline; DAW_CAPTURE_SECONDS bounds the preallocation.
       if (const char* capturePath = std::getenv("DAW_CAPTURE_WAV")) {
