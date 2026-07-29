@@ -597,6 +597,51 @@ export function subgraphFrom(nodes, edges, rootNodeId, mask) {
   return m;
 }
 
+/**
+ * Which node types EMIT events a graph was not given — the generators.
+ *
+ * A set rather than a list because the question asked of it is always membership,
+ * and it is asked once per node per rebuild. `euclidean` fires on a grid and
+ * `random` picks a degree; both make notes nobody wrote, which is the whole reason
+ * anyone needs to be told they are there.
+ */
+export const GENERATOR_TYPES = new Set(['euclidean', 'random']);
+
+/**
+ * The generator node types reachable from `rootNodeId`, as a phrase.
+ *
+ * SCOPED TO ONE DEVICE, which is the entire point. The published patcher region is
+ * a POOL holding every graph in the song, so naming its generators names the whole
+ * project's — and both the rack card and the chrome did exactly that: a device with
+ * a plain passthrough graph on track 3 read "generates: euclidean + random" because
+ * track 0 had a euclidean somewhere in the pool. The per-device bit on the chain
+ * snapshot says WHETHER a device generates; this says WHAT, from that device's own
+ * subgraph and nothing else.
+ *
+ * The walk is UPSTREAM from the device's root — `subgraphFrom` follows edges
+ * backwards from the output — because that is what feeds this device and therefore
+ * what it can be blamed for.
+ *
+ * Returns '' when there is nothing to say, so a caller can test it as a boolean.
+ * `mask` is reused across calls to keep this off the allocation path.
+ */
+export function generatorsFrom(nodes, edges, rootNodeId, mask) {
+  if (!nodes || !nodes.length || rootNodeId === undefined || rootNodeId < 0) return '';
+  const m = subgraphFrom(nodes, edges, rootNodeId, mask);
+  let found = '';
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (!m[n.id]) continue;
+    const name = NODE_TYPES[n.type] || '';
+    if (!GENERATOR_TYPES.has(name)) continue;
+    // Each type once: a graph with three euclideans is still "euclidean", and
+    // listing it three times says nothing a reader can act on.
+    if (found.indexOf(name) >= 0) continue;
+    found = found ? found + ' + ' + name : name;
+  }
+  return found;
+}
+
 export function buildPatcherModel(opts, buf) {
   const { engine = null, selectedNode = -1, selectedField = 0, pending = null,
           addType = -1, linkFrom = null,

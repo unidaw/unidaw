@@ -22,6 +22,18 @@
 // keep at zero. The rule for anything added below: if it concatenates, it caches
 // the values it concatenated from, and it is rebuilt only when one of them moves.
 
+import { generatorsFrom } from './patchermodel.js';
+
+/**
+ * One shared empty edge list, and one reused subgraph mask.
+ *
+ * The mask is a scratch buffer `generatorsFrom` fills and reads within one call —
+ * it never carries meaning between calls — so one of them for the whole module is
+ * correct and keeps a per-card allocation off a path that runs at frame rate.
+ */
+const EMPTY_EDGES = Object.freeze([]);
+let _genMask = null;
+
 /** DeviceKind, from apps/device_chain.h. */
 export const DEVICE_KINDS = [
   'patcher event', 'patcher instrument', 'patcher audio', 'VST instrument', 'VST effect',
@@ -300,7 +312,11 @@ export function buildChainModel(opts, buf) {
           // Which device the published patcher graph belongs to, and what is in
           // it. A generator node emits notes of its own, and until now nothing
           // anywhere said so — see `generators` below.
-          patcherDevice = -1, generators = '',
+          patcherDevice = -1,
+          // The published patcher POOL, so each card can name the generators in
+          // its OWN subgraph. `generators` — one phrase for the whole song — is
+          // what this replaces; see the card's `sub` below.
+          patcherNodes = null, patcherEdges = null, patcherVersion = -1,
           // v24 per-insert meters, as the wire decoded them. Read by TRACK ID and
           // DEVICE ID below, never by slot or by position — both of those diverge
           // from the ids the moment anything is removed.
@@ -511,14 +527,16 @@ export function buildChainModel(opts, buf) {
     c.caps = describeCaps(d.caps);
     c.bypass = !!d.bypass;
     c.selected = i === selected;
-    // `generators` is part of the key: it can change while the slot, node and
-    // parameter count all stay put, which is GUIDELINES 2.1 exactly — content
-    // moving under a key that did not.
+    // The POOL VERSION is part of the key, for the reason the generator phrase
+    // used to be: it can change while the slot, node and parameter count all stay
+    // put — somebody edits a graph — and that is GUIDELINES 2.1 exactly, content
+    // moving under a key that did not. The device's own root node is in the key
+    // already, so those two together are everything the phrase is built from.
     if (c._sSlot !== d.slot || c._sNode !== c.patcherNode
         || c._sCount !== shown || c._sMore !== moreCount
-        || c._sGen !== generators) {
+        || c._sGen !== patcherVersion) {
       c._sSlot = d.slot; c._sNode = c.patcherNode;
-      c._sCount = shown; c._sMore = moreCount; c._sGen = generators;
+      c._sCount = shown; c._sMore = moreCount; c._sGen = patcherVersion;
       c.sub = d.slot === HOST_SLOT_DIRECT
         ? 'in-process'
         : (d.slot === DEVICE_ID_AUTO ? 'slot unassigned' : 'slot ' + d.slot);
@@ -548,7 +566,27 @@ export function buildChainModel(opts, buf) {
        * The engine now sets a per-device bit on the chain snapshot
        * (UI_CHAIN_DIFF_GENERATES). One device, one truth, no inference.
        */
-      if (d.generates && generators) c.sub += ' · ' + generators;
+      /*
+       * WHAT this device generates, from ITS OWN subgraph.
+       *
+       * The per-device bit (UI_CHAIN_DIFF_GENERATES) says whether; it does not say
+       * what. The phrase used to come from the whole published POOL, so a device
+       * whose graph is a plain passthrough read "generates: euclidean + random"
+       * because some other track had a euclidean in the pool. One device, one
+       * truth — the same correction the bit itself was for, one layer up.
+       *
+       * Memoised on the device's root node and the pool's version: the answer
+       * changes when a graph changes and never otherwise, and this runs per card
+       * per frame.
+       */
+      if (d.generates && patcherNodes) {
+        // No memo of its own: the block this sits in only runs when the key above
+        // changes, and that key already carries both inputs. Two caches where one
+        // does the work is how the next person debugs the inert one.
+        const what = generatorsFrom(patcherNodes, patcherEdges || EMPTY_EDGES,
+                                    c.patcherNode, _genMask);
+        if (what) c.sub += ' · generates: ' + what;
+      }
       // The count belongs on screen, not just in the scrollbar: six rows of 256
       // with a thin scrollbar reads as "this plugin has six parameters" unless
       // something says otherwise. This is the something.

@@ -802,6 +802,30 @@ export class Chain {
       scroll: this.pool.slice(0, vm.cardCount).map((el) => el._scrollTop),
       extent: this.pool.slice(0, vm.cardCount).map((el) => el._spaceH),
       rowHeight: this._rowH,
+      /*
+       * WHAT THE METERS WERE DRAWN FROM, per card, as the fractions the renderer
+       * actually wrote — not as the engine's current numbers.
+       *
+       * The distinction is the whole reason this is here. A test comparing the DOM
+       * against `deviceMeters()` is comparing two different instants: the DOM was
+       * written on the last draw and the store has moved on since, by up to a frame
+       * — and a percussive signal swings a long way in a frame. That check failed
+       * at 28 percentage points of disagreement with no bug present, which is what
+       * a badly-specified comparison looks like.
+       *
+       * These are the model's own values, so a test can assert model -> DOM
+       * exactly, and assert engine -> model separately against the published
+       * region. Two exact checks beat one with a tolerance wide enough to hide the
+       * absence of a comparison.
+       */
+      meters: vm.cards.slice(0, vm.cardCount).map((c) => (c.hasMeter ? {
+        device: c.id,
+        outRms: Math.round(c.outRms * 100),
+        outPeak: Math.round(c.outPeak * 100),
+        inRms: Math.round(c.inRms * 100),
+        hasIn: c.hasIn,
+        text: c.meterText,
+      } : null)),
       // The measured height of the parameter list. Reported because it is the
       // value that went stale when the strip was resized, and a stale scalar is
       // invisible to every other assertion.

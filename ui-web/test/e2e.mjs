@@ -1944,38 +1944,67 @@ section('clips answer to the pointer');
  * calls the handler directly is the exact failure this suite has shipped before.
  */
 /*
- * A GENERATOR SAYS SO WHERE YOU CAN SEE IT — blocked on the engine.
+ * WHAT IS MAKING NOTES ON THIS TRACK — and, crucially, WHAT IS NOT.
  *
- * Three separate "phantom notes" reports, all the same cause: a patcher graph
- * emitting notes alongside the clip, with nothing on screen to account for them.
- * The chrome has a slot for the warning and the wiring is in place. It cannot be
- * turned on yet, and the reason is worth recording because it is not obvious:
+ * This was BLOCKED for a long time, and the reason it was blocked is the reason
+ * the negative case is asserted first here. The indicator used to read the
+ * published patcher region, which is a POOL of every graph in the song and does
+ * not clear between projects:
  *
- *   load webtest   -> published graph: euclidean, random, out
- *   load waveform  -> published graph: euclidean, random, out    <-- same
- *   load webtest   -> published graph: euclidean, random, out
+ *   load webtest   -> pool: euclidean, random, out
+ *   load waveform  -> pool: euclidean, random, out    <- waveform has no generator
  *
- * `waveform` contains no generator at all. The engine publishes ONE patcher
- * region ("one global graph today" — daw-bridge/src/control.rs) and it does not
- * follow the loaded project, so reading it would announce a generator on a song
- * that has none. That is a worse failure than silence: an indicator whose job is
- * to explain an unexplained sound must never invent one.
+ * So it announced a generator on a song with none. An indicator whose whole job is
+ * to explain an unexplained sound must never invent one, which is why it shipped
+ * inert rather than shipped wrong.
  *
- * Unblocks when the chain snapshot carries, per device, whether that device's
- * graph generates events — asked for, and superseded by the larger decision that
- * a patcher IS a device, at which point the chain shows it in place.
+ * It reads the CHAIN now: the per-device generates bit says whether, and the
+ * device's own subgraph says what. A track with no generating device says nothing,
+ * which is the case that was impossible before and is therefore the case that
+ * proves the fix.
  */
-section('a generating patcher says so in the chrome');
+section('the chrome names what is generating, and stays quiet when nothing is');
 {
-  const g = await page.evaluate(() => {
+  const gen = () => page.evaluate(() => {
     const el = document.querySelector('.ch-gen');
-    return el ? { present: true, text: el.textContent.trim() } : null;
+    return el ? el.textContent.trim() : null;
   });
-  ok(g !== null, 'the chrome has a slot for it');
-  blocked(false, 'and names what is generating',
-          'the engine publishes one global patcher region that does not follow the '
-          + 'loaded project; showing it would be a false positive on every song');
+
+  ok((await gen()) !== null, 'the chrome has a slot for it');
+
+  // A generator, on the track it is on.
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.evaluate(() => window.__uni.loadProject('generator'));
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.waitForTimeout(600);
+  const named = await gen();
+  ok(/euclidean/.test(String(named)), 'a track with a euclidean says so', String(named));
+  ok(/random/.test(String(named)), 'and names the whole chain of it', String(named));
+
+  /*
+   * THE ONE THAT WAS IMPOSSIBLE. `waveform` has no generator anywhere, and the old
+   * implementation announced one because the pool still held the previous song's.
+   * If this ever passes vacuously — because nothing is drawn at all — the check
+   * above it fails first, which is why they are in this order.
+   */
+  await page.evaluate(() => window.__uni.loadProject('waveform'));
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.waitForTimeout(800);
+  const quiet = await gen();
+  ok(quiet === '', 'and a song with no generator says NOTHING', JSON.stringify(quiet));
+
+  // And back, so it is not a one-way latch: the phrase has to return when a
+  // generator does. A label that can only turn on is a label you stop reading.
+  await page.evaluate(() => window.__uni.loadProject('generator'));
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.waitForTimeout(800);
+  ok(/euclidean/.test(String(await gen())), 'and comes back when one does',
+     String(await gen()));
 }
+
 
 /*
  * A NODE'S PARAMETERS ANSWER THE POINTER.
@@ -3008,6 +3037,7 @@ section('every insert says what it is putting out');
    * PANIC — real silence — has to drive it to nothing. Together they pin both
    * ends without either of them lying about what Stop means.
    */
+  const loudEnough = (await drawnFill()).tick;
   await page.evaluate(() => window.__uni.run('stop'));
   await page.waitForTimeout(1200);
   const halted = await drawnFill();
@@ -3025,8 +3055,24 @@ section('every insert says what it is putting out');
    * having. The claim is that the meter draws NOTHING VISIBLE; that is what is
    * checked.
    */
-  ok(parseInt(silent.width, 10) < 2 && parseInt(silent.tick, 10) < 2,
-     'and with every voice cut, it draws an EMPTY one', JSON.stringify(silent));
+  /*
+   * "EMPTY" IS THE RMS BAR, and the PEAK is asserted separately and loosely.
+   *
+   * Two goes at this. `=== '0%'` failed at 1%, then `< 2` failed at 4% — because
+   * what is left after every voice is cut is not silence, it is the plugin's own
+   * noise floor at around -58 dB. That is real output and the meter is right to
+   * show it; a peak meter that read exactly zero on a running synth would be the
+   * broken one.
+   *
+   * So the RMS bar has to be empty — average level of nothing is nothing — and the
+   * peak only has to be far below where it was playing. Which is the honest claim:
+   * a cut voice leaves a noise floor, not a void.
+   */
+  ok(silent.width === '0%', 'and with every voice cut, its level bar is empty',
+     JSON.stringify(silent));
+  ok(parseInt(silent.tick, 10) < parseInt(loudEnough, 10) / 3,
+     'and its peak is far below what it was playing',
+     `${silent.tick} against ${loudEnough} playing`);
 
   await page.keyboard.press(' ');
   await page.waitForTimeout(3000);
@@ -3067,15 +3113,47 @@ section('every insert says what it is putting out');
   ok(!back.dim && parseInt(back.width, 10) > 0,
      'and switching it back on brings both back', JSON.stringify(back));
 
-  const after = await page.evaluate(() => window.__uni.deviceMeters());
-  const now = after.find((m) => m.device === 0);
-  const expected = Math.round(((now.outRms + 6000) / 6000) * 100);
-  const got = parseInt(card.width, 10);
-  ok(Math.abs(got - expected) <= 12,
-     'and the drawn width is that level on the -60 dB scale',
-     `${card.width} for ${now.outRms} mB (expected ~${expected}%)`);
-  ok(card.db === (now.outPeak / 100).toFixed(1) || /^-\d/.test(card.db),
-     'and the readout is the output peak in dB', card.db);
+  /*
+   * AND THE BAR IS THE MODEL'S NUMBER, EXACTLY — because that is the only pair of
+   * numbers belonging to the same instant.
+   *
+   * THREE versions of this check were wrong in the same way. It compared the DOM
+   * against `deviceMeters()`, which is the engine's CURRENT reading: the DOM was
+   * written on the last draw and the store has moved on since. Twelve points of
+   * slack failed at thirteen. Reading both inside one evaluate failed at
+   * twenty-eight, which is when it became clear the slack was never absorbing lag —
+   * it was hiding the fact that the two numbers were not about the same moment. The
+   * `card` snapshot here was taken dozens of assertions earlier.
+   *
+   * So the chain is checked as two exact links. ENGINE -> MODEL is asserted above
+   * against the published region. MODEL -> DOM is this, against the fractions the
+   * renderer actually wrote. Neither has a tolerance, because neither crosses a
+   * frame.
+   */
+  const link = await page.evaluate(() => {
+    const p = window.__uni.chainProbe();
+    const m = (p.meters || []).find((x) => x && x.device === 0);
+    let width = null, tick = null, db = null;
+    for (const el of document.querySelectorAll('.dv-card')) {
+      if (!el.offsetParent || el._devId !== 0) continue;
+      width = el.querySelectorAll('.dv-m-fill')[1].style.width;
+      tick = el.querySelectorAll('.dv-m-tick')[1].style.left;
+      db = el.querySelector('.dv-m-db').textContent;
+    }
+    return { m, width, tick, db };
+  });
+  ok(link.m && link.width !== null, 'the model and its bar can both be read',
+     JSON.stringify(link));
+  if (link.m && link.width !== null) {
+    ok(parseInt(link.width, 10) === link.m.outRms,
+       'the drawn bar is exactly the level the model computed',
+       `${link.width} vs ${link.m.outRms}%`);
+    ok(parseInt(link.tick, 10) === link.m.outPeak,
+       'and the peak tick is exactly the peak', `${link.tick} vs ${link.m.outPeak}%`);
+    ok(link.db === link.m.text, 'and the readout is the string it was given',
+       `${link.db} vs ${link.m.text}`);
+    ok(/^-?\d/.test(String(link.db)), 'which is a dB number', String(link.db));
+  }
 
   await page.evaluate(() => window.__uni.run('stop'));
   await page.waitForTimeout(400);

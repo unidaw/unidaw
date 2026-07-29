@@ -109,6 +109,7 @@ import { Dock, quantizeGridName } from './src/dock.js';
 import { createPanes } from './src/panes.js';
 import { createHelp, GLOBAL_KEYS, SURFACE_KEYS } from './src/help.js';
 import { Patcher } from './src/patcher.js';
+import { generatorsFrom } from './src/patchermodel.js';
 import { buildPatcherModel, createPatcherBuffer, configFields, nudgeConfig,
          describeConfig, NODE_TYPES } from './src/patchermodel.js';
 import { createEntry, feed, cancel, begin, parseToken, parseChord, editing, NOTE_KEYS, NOTE_OFF_KEY,
@@ -2972,14 +2973,6 @@ const _harmonyOpts = { harmony: null, playheadTick: 0, version: -1,
 const GENERATOR_TYPES = new Set(['euclidean', 'random']);
 
 /**
- * Forget the cached patcher graph, because a different song is loading.
- *
- * The engine publishes a graph when one is asked for, and publishes NOTHING when
- * a project without graphs loads — so the page keeps the last one it saw, and
- * the rack told a project with no generator that it had a euclidean. A label
- * that can be wrong is worse than no label: this one exists to be believed.
- */
-/**
  * A new song's chains are not the old song's.
  *
  * The engine publishes a chain only when it CHANGES, so a track whose chain is
@@ -3002,43 +2995,76 @@ function forgetChains() {
   state.chainSelected = -1;
 }
 
+/**
+ * Forget the cached generator phrase, because a different song is loading.
+ *
+ * STILL NEEDED, for a narrower reason than before. The phrase is now built from the
+ * CHAIN, and `forgetChains` bumps `chainRevision`, which invalidates the memo by
+ * itself — so this is belt and braces against the one case that does not: a project
+ * that loads with the same chain revision and the same pool version it had before.
+ *
+ * What it no longer has to do is suppress a stale POOL. The old version read the
+ * published patcher region directly, and the engine publishes nothing when a
+ * project without graphs loads — so the page kept the last song's graph and
+ * announced a euclidean on a song that had none. The chain's per-device bit is what
+ * fixed that, because a track with no generating device now says nothing at all.
+ */
 function forgetPatcherGraph() {
   _genText = '';
-  _genSeen = -1;
-  _genVersion = engine ? engine.patcherVersion : -1;
+  _genTrack = -1; _genChainRev = -1; _genPoolVer = -1;
 }
 
 /**
- * What the published patcher graph generates, as a phrase for the card.
+ * What is making notes ON THE TRACK YOU ARE LOOKING AT, or ''.
  *
- * Interned on the node set, because the string would otherwise be rebuilt every
- * frame for a value that changes when a graph is loaded and never again.
+ * WHY THIS EXISTS. A generator node emits notes nobody wrote. The first three
+ * times Jaakko reported "phantom notes" the app had no way to say where they came
+ * from, and this line is the answer to "why am I hearing something I did not
+ * type".
+ *
+ * FROM THE CHAIN, NOT FROM THE POOL, and that is the correction. The published
+ * patcher region is a POOL holding every graph in the song, so reading it named the
+ * whole project's generators regardless of track — and worse, it does not clear
+ * between projects, so loading a song with no generator at all still announced one:
+ *
+ *   load webtest   -> published pool: euclidean, random, out
+ *   load waveform  -> published pool: euclidean, random, out   <- waveform has none
+ *
+ * That is why this was left blocked rather than shipped: an indicator whose whole
+ * job is to explain an unexplained sound must never invent one. It reads the chain
+ * snapshot's per-device bit now, and names the types from that device's own
+ * subgraph — so a track with no generating device says nothing, which is the case
+ * that was impossible before.
+ *
+ * Memoised on the chain revision and the pool version together, because either can
+ * change the answer: a device can start generating (chain) and a graph can change
+ * what it contains (pool).
  */
-let _genText = '', _genVersion = -1, _genSeen = -1;
+let _genTrack = -1, _genChainRev = -1, _genPoolVer = -1, _genText = '';
+let _genMaskLocal = null;
 function generatorPhrase() {
-  if (!engine || !engine.patcherNodes) return '';
-  // Nothing published since the last project load: whatever is cached belongs to
-  // the previous song. See forgetPatcherGraph().
-  if (engine.patcherVersion === _genVersion) return '';
-  /**
-   * Keyed on the ENGINE'S OWN VERSION, and nothing else.
-   *
-   * The first version built a `id:type,` string over every node to decide
-   * whether the answer had changed — per frame, forever, for a value that
-   * changes when a graph loads and never again. 1367 B/draw against a 900 limit,
-   * and the string was pure garbage every time it agreed with itself.
-   *
-   * The region carries a version that increments exactly when its contents
-   * change. That is the key; comparing two integers is the whole check.
-   */
-  if (engine.patcherVersion === _genSeen) return _genText;
-  _genSeen = engine.patcherVersion;
+  const track = state.chainTrack === null ? state.cursor.track : state.chainTrack;
+  const poolVer = engine ? engine.patcherVersion : -1;
+  if (_genTrack === track && _genChainRev === chainRevision && _genPoolVer === poolVer) {
+    return _genText;
+  }
+  _genTrack = track; _genChainRev = chainRevision; _genPoolVer = poolVer;
+  _genText = '';
+  const here = chains[track];
+  const devices = (here && here.devices) || [];
+  if (!engine || !engine.patcherNodes || !devices.length) return _genText;
   let found = '';
-  for (const n of engine.patcherNodes) {
-    const name = NODE_TYPES[n.type] || '';
-    if (!GENERATOR_TYPES.has(name)) continue;
-    if (found.indexOf(name) >= 0) continue;
-    found = found ? found + ' + ' + name : name;
+  for (const d of devices) {
+    // The BIT is what says this device generates. Without it a device whose
+    // subgraph happens to contain a euclidean upstream of something else would be
+    // blamed for notes it only passes through.
+    if (!d.generates) continue;
+    const node = d.node === undefined || d.node === 0xffffffff ? -1 : d.node;
+    const one = generatorsFrom(engine.patcherNodes, engine.patcherEdges, node,
+                               _genMaskLocal);
+    if (!one) continue;
+    if (found.indexOf(one) >= 0) continue;
+    found = found ? found + ' + ' + one : one;
   }
   _genText = found ? 'generates: ' + found : '';
   return _genText;
@@ -3068,7 +3094,8 @@ function placeSurface(el, name, v, v2) {
 // One reused object, with every field the model reads declared here — a shape
 // that gains a property mid-run is a hidden-class transition on the hot path.
 const _chainOpts = { track: 0, chains: null, selected: -1, trackName: '', params: null,
-                     patcherDevice: -1, generators: '',
+                     patcherDevice: -1,
+                     patcherNodes: null, patcherEdges: null, patcherVersion: -1,
                      meters: null, meterCount: 0, meterTrack: -1 };
 const _entryOverlay = { row: 0, track: 0, col: 0, text: '' };
 /**
@@ -3266,7 +3293,11 @@ function draw() {
     // Without this the rack can show a plugin sitting quietly while a euclidean
     // node inside it plays a part nobody wrote.
     o.patcherDevice = engine ? engine.patcherDevice : -1;
-    o.generators = generatorPhrase();
+    // The POOL, so each card can name the generators in its own subgraph rather
+    // than repeating the whole song's.
+    o.patcherNodes = engine ? engine.patcherNodes : null;
+    o.patcherEdges = engine ? engine.patcherEdges : null;
+    o.patcherVersion = engine ? engine.patcherVersion : -1;
     // v24 per-insert meters. Keyed by (track id, device id) — see chainmodel.
     o.meters = engine ? engine.meters : null;
     o.meterCount = engine ? engine.meterCount : 0;
