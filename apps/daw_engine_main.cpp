@@ -850,6 +850,27 @@ public:
       m_transportSample += static_cast<uint64_t>(numSamples);
     }
 
+    // The MASTER fader: apply the master track's gain (0 when muted) to the summed bus
+    // before it is captured or sent to the device — a pure output-side multiply, no host
+    // and no latency, so the master mixer strip actually controls the mix. Unity (null
+    // pointers or gain 1.0) is a no-op.
+    {
+      const float masterGain =
+          (m_masterMute && m_masterMute->load(std::memory_order_relaxed))
+              ? 0.0f
+              : (m_masterGain ? m_masterGain->load(std::memory_order_relaxed) : 1.0f);
+      if (masterGain != 1.0f) {
+        for (int ch = 0; ch < masterCh; ++ch) {
+          if (!master[ch]) {
+            continue;
+          }
+          for (int i = 0; i < numSamples; ++i) {
+            master[ch][i] *= masterGain;
+          }
+        }
+      }
+    }
+
     // Capture the FULL master (all N channels) so a surround mix is verifiable, then, if
     // the master is wider than the device, downmix its first device-many channels to the
     // hardware so a stereo device still hears the front L/R.
@@ -1081,6 +1102,11 @@ private:
   int m_masterChannels = 0;                          // 0 = follow the device
   std::vector<float> m_masterBuffer;                 // kMaxMasterChannels * blockSize
   std::vector<float*> m_masterPtrs;
+  // The MASTER fader: the master track's gain (linear) + mute, applied to the summed
+  // bus before capture/output. Owned by the master TrackRuntime; the audio thread only
+  // reads them. Null until wired => unity gain, so this is inert on an old setup.
+  const std::atomic<float>* m_masterGain = nullptr;
+  const std::atomic<bool>* m_masterMute = nullptr;
 
  public:
   void setPlaying(const std::atomic<bool>* playing) { m_playing = playing; }
@@ -1089,6 +1115,11 @@ private:
   void setMasterChannels(int channels) {
     m_masterChannels =
         channels > 0 ? std::min<int>(channels, kMaxMasterChannels) : 0;
+  }
+  // Wire the master track's fader (gain + mute) so it controls the summed output.
+  void setMasterMixer(const std::atomic<float>* gain, const std::atomic<bool>* mute) {
+    m_masterGain = gain;
+    m_masterMute = mute;
   }
 
   // Movement 4 PDC: set one slot's compensation delay in samples (clamped to the ring
@@ -7518,7 +7549,11 @@ struct TrackRuntime {
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTrackMixer)) {
       TrackRuntime* runtime = nullptr;
-      {
+      if (payload.trackId == daw::kMasterTrackId) {
+        // The master fader (gain/mute) is a real mixer target; the audio callback
+        // reads these atomics each block to attenuate the summed output.
+        runtime = masterTrack.get();
+      } else {
         std::lock_guard<std::mutex> lock(tracksMutex);
         if (payload.trackId < tracks.size()) {
           runtime = tracks[payload.trackId].get();
@@ -10946,6 +10981,12 @@ struct TrackRuntime {
           engineConfig.numBlocks,
           &audioPlaybackBlockId);
       audioCallback->setPlaying(&playing);
+      // Wire the master track's fader so its gain/mute controls the summed output
+      // (patcher-is-a-device item 4a). The atomics live on masterTrack for its lifetime.
+      if (masterTrack) {
+        audioCallback->setMasterMixer(&masterTrack->mixGainLinear,
+                                      &masterTrack->mixMute);
+      }
       audioCallback->resetForStart();
       // Movement 4 surround master: the mix width follows the device, but
       // DAW_MASTER_CHANNELS forces a wider (e.g. 5.1) master for placement + capture
