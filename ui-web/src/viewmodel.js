@@ -1107,6 +1107,19 @@ export function buildViewModel(opts, buf) {
           // register collision this feature exists to make visible.
           if (n.pitch < c0.pitch) c0.pitch = n.pitch;
           if (c0._hiPitch === undefined || n.pitch > c0._hiPitch) c0._hiPitch = n.pitch;
+          /*
+           * ...AND INTO THE FIELDS THE RENDERER READS.
+           *
+           * The ribbon picks its source on `aggCount`: a cell with one has it from
+           * `pitch`, a cell with several from `aggLo`/`aggHi`. This branch sets
+           * aggCount and then wrote its spread into pitch/_hiPitch alone — which
+           * that very flag makes the renderer stop reading — so the ribbon for a
+           * collided cell came from aggLo/aggHi with nothing in them: zero, the
+           * bottom of the pitch scale, for exactly the cells the pill exists to
+           * explain. And a golden had been blessed with it there.
+           */
+          c0.aggLo = c0.pitch;
+          c0.aggHi = c0._hiPitch;
           c0.kind = 'collide';
           /*
            * AND NO DEVIATION MARK, because there is no single sounding position.
@@ -1191,8 +1204,10 @@ export function buildViewModel(opts, buf) {
           // provenance so an override reads differently from the shared clip.
           c0.kind = n.muted ? 'muted' : n.isAdd ? 'add' : 'note';
           c0._row = ri;
-          // Reset the pill's accumulators: this cell holds one note again.
+          // Reset the pill's accumulators: this cell holds one note again. aggLo/Hi
+          // with it, or a cell that briefly held a chord keeps reporting its range.
           c0.aggCount = 0;
+          c0.aggLo = 0; c0.aggHi = 0;
           c0._same = undefined;
           // ...and the ribbon's spread, or a cell that briefly held a chord would
           // keep drawing its range after the chord became one note.

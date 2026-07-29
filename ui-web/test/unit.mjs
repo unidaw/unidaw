@@ -1204,6 +1204,48 @@ test('every icon the app names exists in the bundled set', () => {
  * So the composition is pinned here, in arithmetic, where no zoom, cache or
  * screenshot can agree with it by accident.
  */
+/*
+ * A COLLIDED CELL'S RIBBON SHOWS THE PITCHES IN IT.
+ *
+ * The contour ribbon has two sources. A cell holding ONE note draws it from `pitch`;
+ * a cell summarising a SPAN draws it from `aggLo`/`aggHi`. The renderer chooses on
+ * `aggCount`.
+ *
+ * The collide branch — several notes on one row — sets `aggCount` and then writes
+ * its spread into `pitch` and `_hiPitch`, which that choice makes the renderer stop
+ * reading. So the ribbon for a collided cell came from `aggLo`/`aggHi`, which
+ * nothing had written: zero, i.e. the bottom of the pitch scale, for exactly the
+ * cells the collide pill exists to explain.
+ *
+ * Asserted on the MODEL's fields rather than through a screenshot, because a golden
+ * would have to be blessed against whatever it currently draws — and it was blessed,
+ * with the ribbon at the floor.
+ */
+test('a cell holding several notes reports the spread of them', () => {
+  const engine = gridEngine([4]);
+  const mk = (row, pitch, id) => ({
+    tOn: row * ZOOM_LEVELS[1].rowNanoticks, tOff: row * ZOOM_LEVELS[1].rowNanoticks + 100,
+    id, pitch, velocity: 100, column: 0, track: 0, retrigger: 0, probability: 0,
+    delayTicks: 0, devTicks: 0, row, muted: false, isAdd: false, placementId: 1,
+  });
+  // Three notes on ONE row and column: a chord typed into one column, which is the
+  // ambiguous data the pill reports rather than a chord across columns.
+  engine.notes = [mk(0, 48, 1), mk(0, 60, 2), mk(0, 55, 3)];
+  engine.noteCount = 3;
+  const buf = createBuffer(4, 1, 3);
+  const vm = buildViewModel({ startRow: 0, rowCount: 4, tracks: 1, columns: 3,
+                              zoomIndex: 1, engine }, buf);
+  const cell = vm.rows[0].cells[0];
+  assert.equal(cell.kind, 'collide', 'the cell reports a collision');
+  assert.equal(cell.aggCount, 3, 'and how many');
+  /*
+   * THE SPREAD, in the fields the renderer actually reads for a cell with an
+   * aggCount. 48 to 60, whatever order they arrived in.
+   */
+  assert.equal(cell.aggLo, 48, 'the lowest pitch in the cell');
+  assert.equal(cell.aggHi, 60, 'and the highest');
+});
+
 test('the deviation mark is the sum of in-row, delay and quantize', () => {
   const ROW = ZOOM_LEVELS[1].rowNanoticks;      // 240000, a 16th
   const engine = gridEngine([4]);

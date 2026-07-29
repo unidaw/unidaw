@@ -373,6 +373,41 @@ ok(pills.length > 0, 'several events in one cell become a pill', JSON.stringify(
 ok(pills.some((p) => /^\d+ evts$/.test(p)), 'differing pitches read as a count',
    JSON.stringify(pills.filter((p) => /evts/.test(p)).slice(0, 2)));
 ok(!pills.some((p) => p === '**'), 'and nothing still says just "**"');
+/*
+ * AND THE CONTOUR RIBBON IN A PILLED CELL SHOWS THE PITCHES IN IT.
+ *
+ * The ribbon chooses its source on `aggCount`: one note reads `pitch`, several read
+ * `aggLo`/`aggHi`. The collide branch set aggCount and wrote its spread into
+ * pitch/_hiPitch — which that flag makes the renderer stop reading — so the ribbon
+ * for a collided cell came from aggLo/aggHi with nothing in them. Zero is the bottom
+ * of the pitch scale, so the mark sat on the floor for exactly the cells the pill
+ * exists to explain.
+ *
+ * No GOLDEN could catch it: no golden scene contains a collision, so all of them
+ * stayed byte-identical through the fix. This is the only place on screen where the
+ * two meet.
+ */
+const ribbons = await page.evaluate(() => {
+  const out = [];
+  for (const cell of document.querySelectorAll('.tk-cell[data-kind="collide"]')) {
+    if (!cell.offsetParent) continue;
+    const bar = cell.querySelector('.tk-bar');
+    if (!bar) continue;
+    out.push({ bottom: parseFloat(bar.style.bottom) || 0,
+               height: parseFloat(bar.style.height) || 0,
+               op: parseFloat(getComputedStyle(bar).opacity) });
+  }
+  return out;
+});
+ok(ribbons.length > 0, 'a pilled cell draws a contour ribbon', String(ribbons.length));
+ok(ribbons.every((r) => r.bottom > 0),
+   'and it is not pinned to the floor of the pitch scale',
+   JSON.stringify(ribbons.slice(0, 3)));
+// Several notes must not read FAINTER than one. The aggregate formula gives 0.37 for
+// three, which is dimmer than the single note beside it — exactly backwards.
+ok(ribbons.every((r) => r.op > 0.9),
+   'and several notes are not drawn fainter than one',
+   JSON.stringify(ribbons.slice(0, 3).map((r) => r.op)));
 const vels = await page.evaluate(() => [...document.querySelectorAll('.tk-cell[data-kind="inst"]')]
   .map((e) => e.textContent).filter(Boolean));
 ok(vels.every((v) => v === 'mix' || /^[0-9a-f]{2}$/.test(v)),

@@ -429,7 +429,23 @@ export class Tracker {
        * heights depending on what else happened to be nearby.
        */
       let markLo = -1, markHi = -1, markOp = 0;
-      if (c.aggCount) {
+      /*
+       * A COLLIDED CELL IS NOT AN AGGREGATE, and its opacity must not be read as
+       * one.
+       *
+       * For a span summary, opacity encodes DENSITY — a bar holding forty notes is
+       * more opaque than one holding two. For a cell holding three notes on one row,
+       * the same formula gives 0.37: FAINTER than the single note beside it, which
+       * reads exactly backwards. Three notes are more, not less.
+       *
+       * So a collision draws at full strength, with the spread of the pitches
+       * actually in it. Its own branch, before the aggregate one, because the two
+       * share `aggCount` and mean different things by it.
+       */
+      if (c.kind === 'collide') {
+        markLo = c.aggLo; markHi = c.aggHi;
+        markOp = 1;
+      } else if (c.aggCount) {
         markLo = c.aggLo; markHi = c.aggHi;
         markOp = Math.min(1, 0.25 + c.aggCount / 24);
       } else if (c.pitch >= 0) {
