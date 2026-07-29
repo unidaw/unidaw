@@ -80,7 +80,7 @@
           "device_id": 0,
           "kind": "patcher_event",
           "capability_mask": 3,
-          "patcher_node_id": 4294967295,
+          "patcher_node_id": 2,
           "host_slot_index": 0,
           "bypass": false,
           "patcher": {
@@ -566,7 +566,7 @@
           "device_id": 0,
           "kind": "patcher_event",
           "capability_mask": 3,
-          "patcher_node_id": 4294967295,
+          "patcher_node_id": 1,
           "host_slot_index": 0,
           "bypass": false,
           "patcher": {

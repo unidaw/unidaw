@@ -1,160 +1,168 @@
 {
- "schema_version": 4,
- "meta": {
-  "name": "generator",
-  "created_utc": "",
-  "modified_utc": ""
- },
- "timebase": {
-  "nanoticks_per_quarter": 960000,
-  "time_sig_numerator": 7,
-  "time_sig_denominator": 8
- },
- "tempo_map": [
-  {
-   "nanotick": 0,
-   "bpm": 120
-  }
- ],
- "harmony_timeline": [],
- "clips": [
-  {
-   "id": 4,
-   "name": "seven",
-   "length": 13440000,
-   "lines_per_beat": 4,
-   "time_sig_numerator": 7,
-   "time_sig_denominator": 8,
-   "kind": "symbolic",
-   "notes": [
+  "schema_version": 4,
+  "meta": {
+    "name": "generator",
+    "created_utc": "",
+    "modified_utc": ""
+  },
+  "timebase": {
+    "nanoticks_per_quarter": 960000,
+    "time_sig_numerator": 7,
+    "time_sig_denominator": 8
+  },
+  "tempo_map": [
     {
-     "nanotick": 0,
-     "duration": 240000,
-     "pitch": 60,
-     "velocity": 100,
-     "column": 0,
-     "note_id": 9001
+      "nanotick": 0,
+      "bpm": 120
     }
-   ],
-   "chords": []
-  }
- ],
- "tracks": [
-  {
-   "track_id": 0,
-   "name": "Track 1",
-   "parent_id": 0,
-   "collapsed": false,
-   "harmony_quantize": false,
-   "lines_per_beat": 4,
-   "mixer": {
-    "gain_db": 0,
-    "pan": 0,
-    "mute": false,
-    "solo": false
-   },
-   "routing": {
-    "midi_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "midi_out": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_in": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "audio_out": {
-     "kind": "master",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "sidechain": {
-     "kind": "none",
-     "track_id": 0,
-     "input_id": 0
-    },
-    "pre_fader_send": true
-   },
-   "device_chain": [
+  ],
+  "harmony_timeline": [],
+  "clips": [
     {
-     "device_id": 0,
-     "kind": "vst_instrument",
-     "capability_mask": 5,
-     "patcher_node_id": 4294967295,
-     "host_slot_index": 13,
-     "bypass": false,
-     "vst_ref": {
-      "vendor": "u-he",
-      "name": "Zebralette",
-      "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
-      "uid16": ""
-     },
-     "patcher": {
-      "nodes": [
-       {
-        "id": 0,
-        "type": "euclidean",
-        "euclidean": {
-         "steps": 16,
-         "hits": 5,
-         "offset": 0,
-         "duration_ticks": 0,
-         "degree": 1,
-         "octave_offset": 0,
-         "velocity": 100,
-         "base_octave": 4
+      "id": 4,
+      "name": "seven",
+      "length": 13440000,
+      "lines_per_beat": 4,
+      "time_sig_numerator": 7,
+      "time_sig_denominator": 8,
+      "kind": "symbolic",
+      "notes": [
+        {
+          "nanotick": 0,
+          "duration": 240000,
+          "pitch": 60,
+          "velocity": 100,
+          "column": 0,
+          "note_id": 9001
         }
-       },
-       {
-        "id": 1,
-        "type": "random_degree",
-        "random_degree": {
-         "degree": 8,
-         "velocity": 100,
-         "duration_ticks": 0
-        }
-       },
-       {
-        "id": 2,
-        "type": "event_out"
-       }
       ],
-      "edges": [
-       {
-        "src_node_id": 0,
-        "src_port_id": 1,
-        "dst_node_id": 1,
-        "dst_port_id": 0,
-        "kind": "event"
-       },
-       {
-        "src_node_id": 1,
-        "src_port_id": 1,
-        "dst_node_id": 2,
-        "dst_port_id": 0,
-        "kind": "event"
-       }
-      ]
-     }
+      "chords": []
     }
-   ],
-   "mod_links": [],
-   "placements": [
+  ],
+  "tracks": [
     {
-     "clip_id": 4,
-     "at": 0,
-     "length": 13440000,
-     "notes": [],
-     "chords": [],
-     "mutes": []
+      "track_id": 0,
+      "name": "Track 1",
+      "parent_id": 0,
+      "collapsed": false,
+      "harmony_quantize": false,
+      "lines_per_beat": 4,
+      "mixer": {
+        "gain_db": 0,
+        "pan": 0,
+        "mute": false,
+        "solo": false
+      },
+      "routing": {
+        "midi_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "midi_out": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_in": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "audio_out": {
+          "kind": "master",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "sidechain": {
+          "kind": "none",
+          "track_id": 0,
+          "input_id": 0
+        },
+        "pre_fader_send": true
+      },
+      "device_chain": [
+        {
+          "kind": "patcher_event",
+          "capability_mask": 3,
+          "patcher_node_id": 2,
+          "host_slot_index": 0,
+          "device_id": 1,
+          "bypass": false,
+          "patcher": {
+            "nodes": [
+              {
+                "id": 0,
+                "type": "euclidean",
+                "euclidean": {
+                  "steps": 16,
+                  "hits": 5,
+                  "offset": 0,
+                  "duration_ticks": 0,
+                  "degree": 1,
+                  "octave_offset": 0,
+                  "velocity": 100,
+                  "base_octave": 4
+                }
+              },
+              {
+                "id": 1,
+                "type": "random_degree",
+                "random_degree": {
+                  "degree": 8,
+                  "velocity": 100,
+                  "duration_ticks": 0
+                }
+              },
+              {
+                "id": 2,
+                "type": "event_out"
+              }
+            ],
+            "edges": [
+              {
+                "src_node_id": 0,
+                "src_port_id": 1,
+                "dst_node_id": 1,
+                "dst_port_id": 0,
+                "kind": "event"
+              },
+              {
+                "src_node_id": 1,
+                "src_port_id": 1,
+                "dst_node_id": 2,
+                "dst_port_id": 0,
+                "kind": "event"
+              }
+            ]
+          }
+        },
+        {
+          "device_id": 0,
+          "kind": "vst_instrument",
+          "capability_mask": 5,
+          "patcher_node_id": 4294967295,
+          "host_slot_index": 13,
+          "bypass": false,
+          "vst_ref": {
+            "vendor": "u-he",
+            "name": "Zebralette",
+            "path": "/Library/Audio/Plug-Ins/VST3/Zebra2.vst3",
+            "uid16": ""
+          }
+        }
+      ],
+      "mod_links": [],
+      "placements": [
+        {
+          "clip_id": 4,
+          "at": 0,
+          "length": 13440000,
+          "notes": [],
+          "chords": [],
+          "mutes": []
+        }
+      ]
     }
-   ]
-  }
- ]
+  ]
 }

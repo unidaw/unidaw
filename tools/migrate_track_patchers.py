@@ -45,66 +45,121 @@ PRODUCES_MIDI = 1 << 1
 PATCHER_NODE_AUTO = 0xFFFFFFFF
 
 
-def carrier_device(existing, graph):
-    """The device that will own `graph`, and whether it is new."""
-    if existing:
-        # An instrument is already here: the generator drives it. Attaching
-        # rather than inserting also avoids inventing a device id that has to
-        # not collide with one the engine may already have handed out.
-        return existing[0], False
+# The device kinds that MAY carry a patcher. See below.
+PATCHER_KINDS = ("patcher_event", "patcher_instrument", "patcher_audio")
+
+
+def output_node_id(graph):
+    """The graph's own event_out, or the sentinel if it somehow has none.
+
+    NAMED EXPLICITLY rather than left as 0xFFFFFFFF. The sentinel means "engine,
+    work it out", and the engine does — but only on the multi-device assembly
+    path. A LONE patcher device carrying the sentinel seeds no nodes into the
+    evaluator's filter, so its generator never runs and the track is silent: a
+    file that looks authored, loads clean, and makes no sound.
+
+    That was fixed engine-side, and naming the node is still better. It costs
+    nothing, it removes the dependency on a resolve step entirely, and it makes
+    the published id walkable for per-device attribution whatever the engine
+    does with it.
+    """
+    for n in graph.get("nodes", []):
+        if n.get("type") == "event_out":
+            return n["id"]
+    return PATCHER_NODE_AUTO
+
+
+def new_patcher_device(device_id=0, graph=None):
     return {
-        "device_id": 0,
         "kind": "patcher_event",
         # It sits in the EVENT path: it may transform what passes through and it
         # may add events of its own. Audio is none of its business.
         "capability_mask": CONSUMES_MIDI | PRODUCES_MIDI,
-        "patcher_node_id": PATCHER_NODE_AUTO,
+        "patcher_node_id": output_node_id(graph or {}),
         "host_slot_index": 0,
+        "device_id": device_id,
         "bypass": False,
-    }, True
+    }
 
 
 def migrate(path, write=True):
+    """Enforce the rule on one file. Returns what it changed."""
     text = path.read_text()
     doc = json.loads(text)
-    moved = []
+    changed = []
     for track in doc.get("tracks", []):
-        graph = track.get("patcher")
-        if not graph or not graph.get("nodes"):
-            # REMOVED, not nulled. See below — this is the same trap.
-            track.pop("patcher", None)
-            continue
         chain = track.setdefault("device_chain", [])
-        device, is_new = carrier_device(chain, graph)
-        if device.get("patcher", {}).get("nodes"):
-            # Already carries one. Refuse rather than merge two graphs into a
-            # shape nobody authored — two generators silently becoming one is
-            # the class of bug this whole change exists to end.
-            raise SystemExit(
-                f"{path.name}: track {track.get('name')!r} has BOTH a track-level "
-                f"patcher and a device that already carries one. Merge by hand.")
-        device["patcher"] = graph
-        if is_new:
-            # At the HEAD: a generator feeds the chain, so it belongs before
-            # everything the chain does with what it makes.
-            chain.insert(0, device)
-        # REMOVE THE KEY. Setting it to null does not work, and the failure is
-        # spectacular: boost::property_tree reads a JSON null as a present but
-        # EMPTY node, so `get_child_optional("patcher")` succeeds, the graph
-        # reader finds no "nodes", and project_file.cpp:951 returns false — which
-        # fails the ENTIRE project load. The engine then falls back to an empty
-        # document, so the symptom is "my song is gone", reported by the e2e
-        # suite as "0 notes on 1 tracks".
-        #
-        # Note the device path two hundred lines up swallows the same error
-        # (project_file.cpp:869 discards it into a local `perr`), so a null on a
-        # DEVICE is harmless and a null on a TRACK is fatal. Worth knowing before
-        # trusting either.
+        used_ids = {d.get("device_id", 0) for d in chain}
+
+        def free_id():
+            i = 0
+            while i in used_ids:
+                i += 1
+            used_ids.add(i)
+            return i
+
+        # What already lives on a device that is ALLOWED to carry a patcher.
+        legit = [json.dumps((d.get("patcher") or {}).get("nodes"), sort_keys=True)
+                 for d in chain
+                 if d.get("kind") in PATCHER_KINDS and (d.get("patcher") or {}).get("nodes")]
+
+        """
+        A PATCHER ON A NON-PATCHER DEVICE IS A SILENT GENERATOR.
+
+        Not a style rule — `assemblePatcherPool` only pools Patcher-kind devices
+        and SKIPS vst_instrument, so in any project with two or more generator
+        devices a graph attached to an instrument is never assembled and never
+        runs. It looks authored, it looks correct, and it makes no sound.
+
+        My first pass at this migration attached graphs to the track's instrument
+        because that is what `generator.uniproj.json` did. That preset works only
+        because it is a SINGLE-device project, which takes a different path
+        entirely. Applied to `maximal` — two generator tracks — it would have
+        silenced both, and silencing the generators is the failure that disguises
+        itself as fixing the phantom notes.
+        """
+        for dev in chain:
+            graph = (dev.get("patcher") or {}).get("nodes")
+            if not graph or dev.get("kind") in PATCHER_KINDS:
+                continue
+            key = json.dumps(graph, sort_keys=True)
+            if key in legit:
+                # A device that may carry it already does. This is a duplicate —
+                # left alone it is the same generator running twice.
+                dev.pop("patcher", None)
+                changed.append((track.get("name"), "dropped duplicate from "
+                                + str(dev.get("kind")), [n["type"] for n in graph]))
+            else:
+                moved = dev.pop("patcher")
+                head = new_patcher_device(free_id(), moved)
+                head["patcher"] = moved
+                chain.insert(0, head)
+                legit.append(key)
+                changed.append((track.get("name"), "moved off "
+                                + str(dev.get("kind")) + " to a head device",
+                                [n["type"] for n in graph]))
+
+        # The legacy track-level field, which the engine still reads only to
+        # migrate. See the note below on why it is REMOVED rather than nulled.
+        graph = track.get("patcher")
+        if graph and graph.get("nodes"):
+            head = new_patcher_device(free_id(), graph)
+            head["patcher"] = graph
+            chain.insert(0, head)
+            changed.append((track.get("name"), "moved off the TRACK to a head device",
+                            [n["type"] for n in graph["nodes"]]))
+        """
+        REMOVED, not nulled. boost::property_tree reads a JSON null as a present
+        but EMPTY node, so `get_child_optional("patcher")` succeeds, the graph
+        reader finds no "nodes", and project_file.cpp returns false — which fails
+        the ENTIRE project load. The engine falls back to an empty document, so
+        the symptom is "my song is gone". The device path swallows the same error
+        into a local, so a null on a DEVICE is harmless and a null on a TRACK is
+        fatal.
+        """
         track.pop("patcher", None)
-        moved.append((track.get("name"), "new device" if is_new else
-                      f"existing {device.get('kind')}",
-                      [n["type"] for n in graph["nodes"]]))
-    if moved and write:
+
+    if changed and write:
         # KEEP THE FILE'S OWN FORMATTING. The stress fixtures are written on one
         # line and the hand-authored ones are indented; reformatting either way
         # turned a nine-line change into 877,000 and buried it completely. A
@@ -117,7 +172,7 @@ def migrate(path, write=True):
             if text.endswith("\n"):
                 out += "\n"
         path.write_text(out)
-    return moved
+    return changed
 
 
 def main():
@@ -129,19 +184,22 @@ def main():
         for name, where, nodes in moved:
             print(f"{path.name:28} {name:8} -> {where:22} {' + '.join(nodes)}")
             total += 1
-    print(f"\n{total} track-level patcher(s) "
-          f"{'moved' if write else 'would move'} into devices")
-    # The check the instruction actually asked for.
-    left = []
+    print(f"\n{total} patcher(s) {'put' if write else 'would be put'} in their place")
+    # The rule, audited. Both halves: nothing at track level, and nothing on a
+    # device kind that the engine will not pool.
+    bad = []
     for path in sorted(root.glob("*.json")):
         doc = json.loads(path.read_text())
         for track in doc.get("tracks", []):
             if (track.get("patcher") or {}).get("nodes"):
-                left.append(f"{path.name}:{track.get('name')}")
-    if left and write:
-        raise SystemExit("STILL TRACK-LEVEL: " + ", ".join(left))
-    if write:
-        print("no project has a track-level patcher")
+                bad.append(f"{path.name}:{track.get('name')} (track level)")
+            for dev in track.get("device_chain", []):
+                if (dev.get("patcher") or {}).get("nodes") \
+                        and dev.get("kind") not in PATCHER_KINDS:
+                    bad.append(f"{path.name}:{track.get('name')} (on {dev.get('kind')})")
+    if bad:
+        raise SystemExit("RULE VIOLATED:\n  " + "\n  ".join(bad))
+    print("every patcher in every project lives on a patcher device")
 
 
 if __name__ == "__main__":

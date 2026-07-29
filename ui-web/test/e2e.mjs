@@ -947,22 +947,36 @@ section('device rack, live');
 // scanned into the plugin cache, so it cannot resolve and falls back to whatever
 // sits at host slot 0. maximal names Zebra2, which IS in the cache.
 await page.evaluate(() => window.__uni.loadProject('maximal'));
+/*
+ * THE PLUGIN BY NAME, NOT BY POSITION.
+ *
+ * These used to read `titles[0]`, which held while the instrument was the only
+ * device on the track. It is not any more: a patcher is a device now, and
+ * `maximal`'s generator sits at the HEAD of the chain, so slot 0 is the patcher
+ * and Zebra2 is behind it. Asserting on slot 0 was asserting that no other
+ * device may ever exist — which is a claim about the chain, not about the host
+ * naming its plugin.
+ */
 let live = null;
-for (let i = 0; i < 90 && !(live && live.params && live.params[0] > 0); i++) {
+const vstAt = (l) => (l && l.titles ? l.titles.findIndex((t) => /Zebra/.test(t)) : -1);
+for (let i = 0; i < 90; i++) {
   await page.waitForTimeout(200);
   live = await page.evaluate(() => window.__uni.chainProbe());
+  const at = vstAt(live);
+  if (at >= 0 && live.params && live.params[at] > 0) break;
 }
+const vst = vstAt(live);
 ok(live && live.cards >= 1, 'a real project with a device chain draws it',
    JSON.stringify(live && live.titles));
-ok(live && live.named >= 1 && live.titles[0] === 'Zebra2',
+ok(vst >= 0 && live.named >= 1,
    'and the name comes from the plugin host, not from here', JSON.stringify(live.titles));
 // The parameters are the plugin's own, queried from its host. This returned zero
 // for a long time and the cause was environmental: the engine reads its plugin
 // cache relative to its working directory, and a fresh build dir has none — so it
 // could resolve a plugin's path and never load it, and every query answered from
 // a host with no instance.
-ok(live && live.params[0] > 0, 'and its parameters come back from the host',
-   JSON.stringify(live.params));
+ok(vst >= 0 && live.params[vst] > 0, 'and its parameters come back from the host',
+   `${JSON.stringify(live.params)} (plugin at slot ${vst})`);
 const bars = await page.evaluate(() => [...document.querySelectorAll('.dv-p-fill')]
   .map((e) => e.style.width));
 ok(bars.length > 0 && bars.some((w) => w !== '0%' && w !== ''),
@@ -1111,10 +1125,19 @@ await page.waitForTimeout(2000);
 // from a plugin with eight stems and a sidechain input. These ride the chain
 // snapshot rather than a request, so they are here the moment the chain is.
 {
+  /*
+   * THE DEVICE THAT HAS BUSES, not slot 0.
+   *
+   * A patcher is a device now and sits at the head of the chain, so slot 0 on a
+   * generator track is an EVENT device — no audio buses, correctly. Reading
+   * `devices[0]` asserted that the audio plugin is always first, which was only
+   * ever true because nothing else was in the chain.
+   */
   const d = await page.evaluate(() => {
     const c = window.__uni.chains();
     const t = c && c['0'];
-    return t && t.devices.length ? t.devices[0] : null;
+    if (!t || !t.devices.length) return null;
+    return t.devices.find((x) => x.busCount > 0) || t.devices[t.devices.length - 1];
   });
   ok(d !== null, 'the rack project published a device');
   if (d) {
