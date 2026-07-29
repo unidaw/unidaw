@@ -2501,6 +2501,11 @@ function drawArrange() {
   arrangeAudio.bpmMilli = audioBpmMilli;
   arrangeAudio.revision = waveRevision;
   o.audio = arrangeAudio;
+  // The store the notes inside clips are drawn from. Set HERE rather than once
+  // at construction: `engine` is a `let` that is reassigned when the socket
+  // (re)connects, and this file has had four temporal-dead-zone bugs already.
+  // A reference write per frame allocates nothing.
+  if (arrange.engine !== engine) arrange.bindEngine(engine);
   arrange.render(buildArrangeModel(o, arrangeBuf));
   updateChrome();
 }
@@ -5071,10 +5076,37 @@ window.__uni = {
       mk(5, 0, 4, B * 3, B * 7, 'Vocal take', true),
       mk(6, 5, 5, B * 6, B * 9, 'Perc', false),
     ];
+    /*
+     * NOTES, so the golden covers the material drawn inside clips.
+     *
+     * The fixture had none, so the arrangement golden was a picture of empty
+     * rectangles and could not have caught a note layer that drew nothing, drew
+     * everything at one height, or shifted by three pixels — which is exactly
+     * the class of mistake a golden exists for.
+     *
+     * Shaped, not random. Track 0 walks DOWN and track 2 walks UP, so the golden
+     * pins the direction of the pitch mapping: high notes at the top is a
+     * one-character mistake to make and invisible in any count-based assertion.
+     * Track 3 repeats one figure, which is what an arpeggio should look like.
+     * Track 1 gets a single sustained note — the case where a lane's pitch range
+     * collapses and the minimum span has to save it.
+     */
+    const notes = [];
+    let nid = 1;
+    const put = (tr, tick, dur, pitch) => notes.push(
+      { tOn: tick, tOff: tick + dur, id: nid++, pitch, velocity: 100, column: 0,
+        track: tr, retrigger: 0, probability: 100, muted: false, isAdd: false,
+        placementId: 0, delayTicks: 0, row: 0 });
+    for (let i = 0; i < 16; i++) put(0, i * (B / 4), B / 8, 43 - i);           // down
+    put(1, B, B * 4, 64);                                                      // one long note
+    for (let i = 0; i < 8; i++) put(2, B * 2 + i * (B / 8), B / 16, 60 + i * 2); // up
+    for (let i = 0; i < 32; i++) put(3, i * (B / 4), B / 8, 72 + [0, 4, 7, 4][i % 4]);
+    for (let i = 0; i < 12; i++) put(5, B * 6 + i * (B / 4), B / 8, 36 + (i % 3) * 2);
+
     engine = { ok: true, seq: 1, playheadTick: B * 2, visualSample: 0, clipVersion: 1,
                harmonyVersion: 0, transport: 0, trackCount: 6, stale: false,
                peaks: new Float32Array(6), peakCount: 0,
-               notes: [], noteCount: 0,
+               notes, noteCount: notes.length,
                aggCount: new Uint32Array(0), aggRep: new Uint8Array(0),
                aggLo: new Uint8Array(0), aggHi: new Uint8Array(0), aggRows: 0, aggTracks: 0,
                extents, extentCount: extents.length, extentsRevision: 1,

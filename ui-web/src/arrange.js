@@ -232,12 +232,15 @@ export class Arrange {
     // cache of a picture, and the picture is a function of exactly these.
     this.waveCache = null;              // the page's Map of windows; see bindAudio
     this.waveRequest = null;            // the page's requestWaveform
-    this.waveColors = { body: '', fail: '' };
+    this.waveColors = { body: '', fail: '', note: '' };
+    // The engine's published notes, for the material drawn inside clips.
+    this.engine = null;
     this.waveThemed = false;
     this._wvDevW = 0; this._wvDevH = 0; this._wvDpr = 0;
     this._wvSpanX = 0; this._wvSpanW = 0; this._wvTx = -1;
     this._wvTpp = -1; this._wvLaneH = -1; this._wvLanes = -1; this._wvRev = -1;
     this._wvIncomplete = false; this._wvNextTry = 0;
+    this._wvNoteRev = -1;
     // The visible clips as the last paint saw them, six numbers each. A pan
     // inside the painted band must not repaint, so "did the clips change?" has to
     // be answerable without a string and without a revision the model does not
@@ -683,6 +686,19 @@ export class Arrange {
   }
 
   /**
+   * The engine store, for the notes drawn inside clips.
+   *
+   * Separate from `bindAudio` because they are separate dependencies with
+   * separate lifetimes: the audio cache is the page's, filled by round trips,
+   * and this is the published frame. Binding both through one call would make a
+   * project with no audio unable to draw its notes.
+   */
+  bindEngine(engine) {
+    this.engine = engine || null;
+    this._wvNoteRev = -1;                // repaint against whatever just arrived
+  }
+
+  /**
    * The waveform's colours, from the stylesheet rather than repeated here — the
    * same contract `scope.js` and `minimap.js` have, and for the same reason: a
    * canvas is the one surface where a missing token paints a plausible black
@@ -695,6 +711,10 @@ export class Arrange {
     const pick = (n) => (s.getPropertyValue(n) || '').trim();
     this.waveColors.body = pick('--base-accent-ramp-400');
     this.waveColors.fail = pick('--uni-text-fx');
+    // Notes are drawn BRIGHTER than the waveform body: inside a clip they are
+    // the foreground, and at one device pixel tall they need the contrast to
+    // read at all.
+    this.waveColors.note = pick('--base-accent-ramp-200') || pick('--base-accent');
     this.waveThemed = !!(this.waveColors.body && this.waveColors.fail);
   }
 
@@ -748,7 +768,11 @@ export class Arrange {
    * nothing at all.
    */
   _waves(vm, laneH) {
-    if (!this.waveCache) return;
+    // NOT gated on `waveCache` any more. That cache is the AUDIO half; the same
+    // canvas now also draws the notes inside symbolic clips, and those need no
+    // cache and no engine round trip — the published clip window is the whole
+    // song (windowStart 0, windowEnd UINT64_MAX), so the notes are already here.
+    // Gating on the cache meant a project with no audio painted nothing at all.
     if (!this.waveThemed) this._readWaveTheme();
     if (!this.waveThemed) return;
 
@@ -781,11 +805,17 @@ export class Arrange {
     const stale = this._wvIncomplete
                && (this._wvRev !== vm.waveRevision
                    || performance.now() >= this._wvNextTry);
+    // `noteRev` is in the guard for the same reason `waveRevision` is: an edit
+    // that changes the notes changes the picture, and nothing else in this list
+    // would notice. Without it, writing a note left the arrangement showing the
+    // previous bar's material until something else forced a repaint.
+    const noteRev = vm.noteRevision;
     if (!moved && !outside && !stale
         && this._wvTpp === tpp && this._wvLaneH === laneH
         && this._wvLanes === vm.laneCount && this._wvDpr === dpr
-        && this._wvRev === vm.waveRevision
+        && this._wvRev === vm.waveRevision && this._wvNoteRev === noteRev
         && this._wvDevW === devW && this._wvDevH === devH) return;
+    this._wvNoteRev = noteRev;
 
     this._wvSpanX = spanX; this._wvSpanW = spanW;
     this._wvTpp = tpp; this._wvLaneH = laneH; this._wvLanes = vm.laneCount;
@@ -888,6 +918,10 @@ export class Arrange {
         this.waveDrawn++;
       }
     }
+
+    // The symbolic half of the same canvas. AFTER the waveforms so a clip that is both
+    // (audio with an event lane) reads as notes over material rather than under it.
+    this._notes(vm, ctx, spanX, dpr, devW, laneDev, insetDev);
   }
 
   /**
@@ -955,6 +989,64 @@ export class Arrange {
         }
         ctx.fillRect(x, t, 1, bt - t);
       }
+    }
+  }
+
+  /*
+   * THE NOTES INSIDE A CLIP.
+   *
+   * An arrangement whose blocks are blank rectangles tells you a part exists and
+   * nothing about what it does. The whole reason to look at an arrangement
+   * rather than a track list is to see the SHAPE of the music — where it is
+   * busy, where it rests, where the line rises — and that is the note material,
+   * drawn small.
+   *
+   * ON THE CANVAS, not as elements. A busy song publishes twenty thousand notes;
+   * as DOM that is twenty thousand nodes with one style write each, which is the
+   * exact shape GUIDELINES 3 exists to keep out of this app. On the canvas it is
+   * one pass and it happens only when the guard above says the picture moved.
+   *
+   * ONE PASS OVER THE NOTES, not one per clip. Per clip it is O(clips x notes) —
+   * on the stress fixtures that is six clips against twenty thousand notes for
+   * every repaint. Walking the notes once and asking which clip each falls in is
+   * the same picture for a sixth of the work.
+   */
+  _notes(vm, ctx, spanX, dpr, devW, laneDev, insetDev) {
+    const eng = this.engine;
+    if (!eng || !eng.noteCount) return;
+    const tpp = vm.view.ticksPerPixel;
+    // Inset further than the waveform: a note touching the lane's edge reads as
+    // part of the clip's border rather than as material inside it.
+    const pad = insetDev + Math.max(1, Math.round(dpr));
+    ctx.fillStyle = this.waveColors.note || this.waveColors.body;
+
+    for (let i = 0; i < eng.noteCount; i++) {
+      const n = eng.notes[i];
+      if (n.track >= vm.laneCount) continue;
+      const x0 = Math.floor((n.tOn / tpp - spanX) * dpr);
+      if (x0 >= devW) continue;
+      // A note's END, not a fixed width: an arrangement where a whole note and a
+      // grace note look identical is not showing the music's shape, which is the
+      // only thing it is for.
+      let x1 = Math.ceil((n.tOff / tpp - spanX) * dpr);
+      if (x1 <= 0) continue;
+      // A MINIMUM OF ONE DEVICE PIXEL. Zoomed out, most notes are narrower than
+      // a pixel, and a rectangle of zero width draws nothing — so the busiest
+      // passages would be the emptiest on screen.
+      if (x1 - x0 < 1) x1 = x0 + 1;
+      const dx0 = Math.max(0, x0), dx1 = Math.min(devW, x1);
+      if (dx1 <= dx0) continue;
+
+      const lo = vm.pitchLo[n.track], hi = vm.pitchHi[n.track];
+      const span = hi - lo;
+      if (span <= 0) continue;
+      const usable = laneDev - pad * 2;
+      if (usable < 2) continue;
+      // High notes at the TOP. Screen y grows downward and pitch does not.
+      const frac = 1 - (Math.max(lo, Math.min(hi, n.pitch)) - lo) / span;
+      const h = Math.max(1, Math.round(dpr));
+      const y = n.track * laneDev + pad + Math.round(frac * (usable - h));
+      ctx.fillRect(dx0, y, dx1 - dx0, h);
     }
   }
 

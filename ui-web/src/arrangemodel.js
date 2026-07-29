@@ -232,6 +232,15 @@ export function dragPlacement(clip, mode, deltaTicks, deltaLanes, opts = {}) {
 export const CLIP_HANDLE_PX = 6;
 
 /**
+ * The narrowest pitch range a lane's notes are drawn across, in semitones.
+ *
+ * An octave. A part that only ever plays two adjacent semitones would otherwise
+ * be normalised to the full lane height, so a semitone would look like the
+ * biggest leap in the song.
+ */
+export const MIN_PITCH_SPAN = 12;
+
+/**
  * Which part of a clip the pointer is on: its body, or one of its trim handles.
  *
  * The handle is a fixed number of PIXELS, not a fraction of the width, because
@@ -288,6 +297,12 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
                  ticksPerFrame: 0 };
   }
   return {
+    // Per-lane pitch range for the notes drawn inside clips, and the note
+    // revision they were computed for. Sized here so the first frame does not
+    // allocate in the middle of a draw.
+    pitchLo: new Uint8Array(laneCount + 8),
+    pitchHi: new Uint8Array(laneCount + 8),
+    _pitchRev: -1,
     lanes, laneCount,
     clips, clipCount: 0,
     /**
@@ -584,9 +599,56 @@ export function buildArrangeModel(opts, buf) {
     cl.selected = e.track === buf._selTrack && e.startTick === buf._selTick;
     }
   }
+  /*
+   * PITCH RANGE PER LANE, for drawing notes inside clips.
+   *
+   * Per LANE rather than per clip: two clips on the same track are the same
+   * part, and normalising each to its own range would draw a bass figure and a
+   * one-note stab at the same height and make them look alike. Per track, a low
+   * part sits low.
+   *
+   * Guarded on the note revision because it is a scan over every published note
+   * — twenty-odd thousand on the stress fixtures — and the answer only changes
+   * when the notes do. Unguarded this would be the most expensive thing in the
+   * frame, to produce the same two numbers sixty times a second.
+   */
+  if (buf.pitchLo.length < laneCount) {
+    buf.pitchLo = new Uint8Array(laneCount + 8);
+    buf.pitchHi = new Uint8Array(laneCount + 8);
+    buf._pitchRev = -1;
+  }
+  const noteRev = engine ? engine.notesRevision : -1;
+  if (buf._pitchRev !== noteRev) {
+    buf._pitchRev = noteRev;
+    buf.pitchLo.fill(255);
+    buf.pitchHi.fill(0);
+    if (engine) {
+      for (let i = 0; i < engine.noteCount; i++) {
+        const n = engine.notes[i];
+        if (n.track >= laneCount) continue;
+        if (n.pitch < buf.pitchLo[n.track]) buf.pitchLo[n.track] = n.pitch;
+        if (n.pitch > buf.pitchHi[n.track]) buf.pitchHi[n.track] = n.pitch;
+      }
+    }
+    // A lane with no notes, or one note, gets a MINIMUM span. Without it a
+    // single-pitch part divides by zero, and a two-semitone part draws its two
+    // notes at the very top and very bottom of the lane — which reads as a
+    // dramatic leap rather than a semitone.
+    for (let t = 0; t < laneCount; t++) {
+      if (buf.pitchLo[t] > buf.pitchHi[t]) { buf.pitchLo[t] = 60; buf.pitchHi[t] = 72; }
+      else if (buf.pitchHi[t] - buf.pitchLo[t] < MIN_PITCH_SPAN) {
+        const mid = (buf.pitchLo[t] + buf.pitchHi[t]) >> 1;
+        buf.pitchLo[t] = Math.max(0, mid - (MIN_PITCH_SPAN >> 1));
+        buf.pitchHi[t] = Math.min(127, buf.pitchLo[t] + MIN_PITCH_SPAN);
+      }
+    }
+  }
+
   buf.clipCount = c;
   buf.clipSlots = engine ? engine.extentCount : 0;
   buf.waveRevision = audio ? audio.revision : 0;
+  // What the notes drawn inside clips were painted against. See `_notes`.
+  buf.noteRevision = engine ? engine.notesRevision : 0;
 
   // The loop, if the engine has one. Clamped to the window rather than skipped
   // when it runs off the edge: a loop you are inside should still show its edge.

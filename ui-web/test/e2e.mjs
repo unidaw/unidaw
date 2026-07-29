@@ -1888,6 +1888,79 @@ section('patcher node parameters can be dragged');
   }
 }
 
+/*
+ * THE NOTES INSIDE A CLIP.
+ *
+ * An arrangement of blank rectangles tells you a part exists and nothing about
+ * what it does. The reason to look at an arrangement rather than a track list is
+ * to see the SHAPE of the music — where it is busy, where it rests, where the
+ * line rises — and that is the note material, drawn small.
+ *
+ * Asserted on the CANVAS's own pixels, not on the model. The model saying "here
+ * are the notes" is what it said before this worked; the question is whether
+ * anything reached the screen.
+ */
+section('clips show the notes inside them');
+{
+  await page.evaluate(() => window.__uni.loadProject('webtest'));
+  await page.waitForTimeout(2200);
+  await page.evaluate(() => window.__uni.run('view arrange'));
+  await page.waitForTimeout(400);
+  await page.keyboard.press('Home');
+  await page.waitForTimeout(800);
+
+  /** Lit pixels on the arrangement's canvas, and where they sit vertically. */
+  const painted = () => page.evaluate(() => {
+    const ar = document.getElementById('arrange')._arrange;
+    const c = ar.waveCanvas;
+    if (!c || !c.width) return null;
+    const d = ar.waveCtx.getImageData(0, 0, Math.min(c.width, 1400),
+                                      Math.min(c.height, 400)).data;
+    let lit = 0;
+    const rows = new Set();
+    const w = Math.min(c.width, 1400);
+    for (let i = 3, px = 0; i < d.length; i += 4, px++) {
+      if (d[i] > 8) { lit++; rows.add(Math.floor(px / w)); }
+    }
+    return { lit, rows: rows.size, h: c.height };
+  });
+
+  const p = await painted();
+  ok(p !== null, 'the arrangement has a canvas to paint on');
+  ok(p && p.lit > 50, 'notes are painted inside the clips', p && `${p.lit} lit pixels`);
+  /*
+   * SPREAD VERTICALLY, which is the whole point of drawing them at all. A pass
+   * that painted every note at the same height would light plenty of pixels and
+   * show a flat line — technically "notes are visible", musically useless.
+   */
+  ok(p && p.rows > 6, 'and at different heights, so the line has a shape',
+     p && `${p.rows} distinct rows`);
+
+  /*
+   * A WRITE REPAINTS IT. The canvas is guarded so hard that it does nothing at
+   * rest, and the note revision had to be added to that guard — without it, a
+   * note written in the tracker left the arrangement showing the previous
+   * material until something unrelated forced a repaint.
+   */
+  const before = (await painted()).lit;
+  await page.evaluate(() => {
+    window.__uni.run('view tracker');
+    window.__uni.run('goto 1 1');            // an empty lane: Pad has chords, no notes
+  });
+  await page.waitForTimeout(300);
+  // Through the console, which is the same path a keypress takes. `__uni.note`
+  // does not exist — the note API lives on the dock's surface, and reaching for
+  // a method that is not there throws inside page.evaluate and takes the whole
+  // suite with it rather than failing one check.
+  await page.evaluate(() => window.__uni.run('note 72'));
+  await page.waitForTimeout(900);
+  await page.evaluate(() => window.__uni.run('view arrange'));
+  await page.waitForTimeout(900);
+  const after = (await painted()).lit;
+  ok(after !== before, 'and writing a note repaints the arrangement',
+     `${before} -> ${after} lit pixels`);
+}
+
 section('dragging a clip moves it');
 {
   await page.evaluate(() => window.__uni.run('view arrange'));
