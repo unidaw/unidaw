@@ -50,6 +50,66 @@ export function envelope(mono, rate, sliceSeconds = 0.05) {
   return out;
 }
 
+/**
+ * Loudness over one window of the capture, in seconds from the file's start.
+ *
+ * Separate from summarise() because the question is different: summarise asks
+ * "did the take have sound in it", this asks "did the take have sound HERE" —
+ * which is what any A/B against a change made mid-run needs. Out-of-range
+ * windows return 0 rather than throwing, so a mis-timed test reads as silence
+ * and its own non-vacuity check catches it; see stack.captureOffset for turning
+ * a wall-clock moment into these numbers.
+ */
+export function rmsBetween(mono, rate, from, to) {
+  const a = Math.max(0, Math.round(from * rate));
+  const b = Math.min(mono.length, Math.round(to * rate));
+  if (b <= a) return 0;
+  let sum = 0;
+  for (let i = a; i < b; i++) sum += mono[i] * mono[i];
+  return Math.sqrt(sum / (b - a));
+}
+
+/** What fraction of a window is above a floor — density, where rms is level. */
+export function loudFraction(mono, rate, from, to, floor = 0.004) {
+  const a = Math.max(0, Math.round(from * rate));
+  const b = Math.min(mono.length, Math.round(to * rate));
+  if (b <= a) return 0;
+  const env = envelope(mono.subarray(a, b), rate);
+  if (!env.length) return 0;
+  let loud = 0;
+  for (const v of env) if (v > floor) loud++;
+  return loud / env.length;
+}
+
+/**
+ * How many note attacks are in a window, per second.
+ *
+ * Level is the wrong measure for "how many notes are playing" and the capture
+ * that proved it is in patchcfg.mjs: a synth patch with a long release smears
+ * every note into the next, so density read 0.99 at five notes a bar and 1.00 at
+ * sixteen — a change you can SEE in the envelope and cannot measure as loudness.
+ * Random pitches move the level around by more than the note count does.
+ *
+ * An attack is a RISE, though, and a rise survives being played over a bed of
+ * decaying tails. So: a short-window envelope, and a slice counts as an onset
+ * when it is `rise`x the one before it and above the floor, with a refractory
+ * gap so one attack's leading edge is not counted twice.
+ */
+export function onsetsPerSecond(mono, rate, from, to, { rise = 1.5, floor = 0.004,
+                                                        slice = 0.01, gap = 0.05 } = {}) {
+  const a = Math.max(0, Math.round(from * rate));
+  const b = Math.min(mono.length, Math.round(to * rate));
+  if (b <= a) return 0;
+  const env = envelope(mono.subarray(a, b), rate, slice);
+  const refractory = Math.max(1, Math.round(gap / slice));
+  let count = 0, last = -refractory;
+  for (let i = 1; i < env.length; i++) {
+    if (env[i] < floor) continue;
+    if (env[i] > env[i - 1] * rise && i - last >= refractory) { count++; last = i; }
+  }
+  return count / ((b - a) / rate);
+}
+
 /** Loudest slice, and how many slices are above a floor. */
 export function summarise(mono, rate, floor = 0.004) {
   const env = envelope(mono, rate);

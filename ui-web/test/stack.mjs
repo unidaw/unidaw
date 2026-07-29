@@ -19,7 +19,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, cpSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, cpSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -218,6 +218,40 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
     } catch { return false; }
   }, `the engine to publish ${shm}`, 30000);
 
+  /*
+   * WHERE IN THE WAV A MOMENT LANDS.
+   *
+   * The capture is a RING of the last `captureSeconds`, and `--run-seconds` is a
+   * sleep that begins when the audio device opens — so the file's last sample is
+   * `runSeconds` after "Audio output started", and its first is `captureSeconds`
+   * before that. Both ends are therefore known, and any wall-clock instant can be
+   * turned into an offset into the file.
+   *
+   * Without this an audio test has to GUESS its windows from how long it thinks
+   * setup took, and setup time is dominated by plugin scanning and by how long
+   * the audio device takes to open — seconds on a Bluetooth speaker, milliseconds
+   * on the built-in output. A guess that is two seconds out reads a window from
+   * the wrong phase and reports the feature broken.
+   *
+   * The segment wait above is NOT the anchor: the segment exists well before the
+   * device is open, which is exactly the gap that varies.
+   */
+  let audioStartedAt = 0;
+  if (capture) {
+    const engineLog = join(root, 'engine.log');
+    await until(() => {
+      try { return readFileSync(engineLog, 'utf8').includes('Audio output started'); }
+      catch { return false; }
+    }, 'the audio device to open', 30000, 50);
+    audioStartedAt = Date.now();
+  }
+  /** Seconds into the capture WAV for a wall-clock instant, or -1 if not capturing. */
+  const captureOffset = (atMs) => {
+    if (!audioStartedAt) return -1;
+    const endsAt = audioStartedAt + runSeconds * 1000;
+    return (atMs - (endsAt - captureSeconds * 1000)) / 1000;
+  };
+
   const stop = () => {
     for (const p of procs) { try { p.kill('SIGTERM'); } catch {} }
     // The engine spawns plugin hosts of its own; they exit with it, but give
@@ -229,5 +263,5 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
   process.on('exit', stop);
 
   return { url: `http://127.0.0.1:${base}/index.html`, dir, root, shm, base,
-           capture, stop };
+           capture, captureOffset, audioStartedAt, runSeconds, stop };
 }
