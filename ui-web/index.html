@@ -1281,6 +1281,20 @@ const dockApi = {
   removeTrack: (t) => removeTrack(t),
   noteColumns: (n) => uniNoteColumns(n),
   harmony: (root, scale, tick) => setHarmony(root, scaleIdNamed(scale), tick),
+  /**
+   * Hand a sentence to the agent.
+   *
+   * The reply does not come back here — it arrives on the ack channel as a
+   * series of lines, because a model works for seconds and the point of a
+   * console is that you watch it happen.
+   */
+  ask: (text) => {
+    // No reject line: the console is where this was typed and the console says
+    // what happened to it. Setting the chrome's rejection as well says the same
+    // thing twice, in the place reserved for the thing you just did to the SONG.
+    if (!conn || !conn.canSend()) return false;
+    return conn.send({ type: 'ask', text: String(text) });
+  },
   scaleNames: () => (scales || []).map((x) => x.name),
   /**
    * Whether note keys write. The `edit` command has always called this and it
@@ -4030,6 +4044,34 @@ conn = WANTS_ENGINE ? connectEngine({
     schedule();
   },
   onAck: (msg) => {
+    /**
+     * The agent talks on this channel too.
+     *
+     * Claimed FIRST, and by a field name of its own (`agent`), because the ack
+     * channel is shared: a project list, a plugin catalogue, an engine refusal
+     * and now a model's prose all arrive here, and the way they have been told
+     * apart is by looking for a distinctive substring. One more shape claiming
+     * `"error"` would start eating the others' messages.
+     */
+    if (typeof msg === 'string' && msg.indexOf('"agent"') >= 0) {
+      let a = null;
+      try { a = JSON.parse(msg); } catch (e) { /* not ours after all */ }
+      if (a && a.agent) {
+        // `did` carries the call and its result; the rest are prose. The log
+        // keeps them apart so a wall of tool output does not bury the sentence
+        // that explains it.
+        const kind = a.ok === false ? 'err' : (a.agent === 'did' ? 'in' : 'out');
+        // `done` is an empty marker — the prose already arrived as `say`.
+        const body = a.agent === 'did'
+          ? `· ${a.text} ${a.detail || ''}`.trimEnd()
+          : a.agent === 'thinking' ? `asking: ${a.text}`
+          : a.agent === 'done' ? (a.text || '')
+          : a.text;
+        if (body) dock.log(kind, body);
+        schedule();
+        return;
+      }
+    }
     // The project list comes back on the command socket's ack channel.
     if (typeof msg === 'string' && msg.indexOf('"projects"') >= 0) {
       // Parse alone in the try; the assignment and redraw outside it, so a bug

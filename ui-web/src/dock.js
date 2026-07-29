@@ -475,7 +475,26 @@ export class Dock {
     this.log('in', '> ' + line);
     const [name, ...args] = line.split(/\s+/);
     const cmd = this.commands[name];
-    if (!cmd) { this.log('err', 'unknown: ' + name + ' (try help)'); return; }
+    /**
+     * A sentence, not a command: ask the agent.
+     *
+     * "ask — it runs the same commands you do" is what the design puts under
+     * this box, and this is the line that makes it true. The agent reaches the
+     * song through the same named operations the console does, so there is one
+     * grammar with two ways in rather than a second, softer interface that can
+     * do things you cannot.
+     *
+     * Anything that IS a command still runs locally and instantly: nobody should
+     * wait on a model to press play.
+     */
+    if (!cmd) {
+      if (this.api.ask && this.api.ask(line)) {
+        this.log('out', 'asking…');
+      } else {
+        this.log('err', 'unknown: ' + name + ' (try help)');
+      }
+      return;
+    }
     try {
       // Through the gate, never straight at `run`: a console that validated its
       // own way would be a second opinion about the same grammar.

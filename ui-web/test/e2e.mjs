@@ -880,8 +880,18 @@ const bad = String(await page.evaluate(() => window.__uni.run('note 999')));
 // message improved, which is a test punishing the thing it exists to encourage.
 ok(bad.includes('note') && bad.includes('pitch') && bad.includes('999'),
    'the dock refuses a bad argument by naming command, argument and value', bad);
-const unknown = await page.evaluate(() => window.__uni.run('flurb'));
-ok(String(unknown).includes('unknown'), 'and an unknown command', String(unknown));
+/**
+ * A word that is not a command is now a QUESTION.
+ *
+ * It used to be refused as a typo, and that was right while the console was the
+ * only thing behind this box. The design puts an agent there — "ask, it runs the
+ * same commands you do" — so a line the grammar does not recognise goes to the
+ * model rather than being thrown back. The property worth holding is that the
+ * console still answers: it says what it did with the line either way.
+ */
+const unknown = String(await page.evaluate(() => window.__uni.run('flurb')));
+ok(/asking/i.test(unknown) || /unknown/i.test(unknown),
+   'and a line the grammar does not know is asked, not silently dropped', unknown);
 const help = await page.evaluate(() => window.__uni.dockProbe().commands);
 ok(help.includes('note') && help.includes('gain') && help.includes('view'),
    `the grammar spans editing, mixing and navigation: ${help.length} commands`);
@@ -1558,6 +1568,45 @@ section('arrangement navigation');
   await page.waitForTimeout(250);
   const a3 = await A();
   ok(a3.zoom > a2.zoom, 'and the keyboard zooms out', `zoom ${a2.zoom} -> ${a3.zoom}`);
+}
+
+section('the console can ask the agent');
+{
+  /**
+   * The dual-purpose input the design describes: "ask — it runs the same
+   * commands you do". A line that IS a command runs locally and instantly; a
+   * sentence goes to a model with daw-agent's tool manifest attached.
+   *
+   * This asserts the PLUMBING, which is deterministic: the sentence leaves the
+   * page, reaches the sidecar, and comes back as agent progress on the ack
+   * channel. Whether a model then writes good music is not a thing to assert in
+   * a suite — and without a key the answer arrives as a clear refusal, which is
+   * itself the behaviour worth pinning.
+   */
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  await page.keyboard.press('Slash');
+  await page.waitForTimeout(250);
+  await page.keyboard.type('please make the drums louder');
+  await page.keyboard.press('Enter');
+  // A model takes seconds; a missing key comes back at once. Either way the
+  // console says something new.
+  await page.waitForFunction(
+    () => [...document.querySelectorAll('.dk-line')]
+      .some((e) => /asking:/.test(e.textContent || '')),
+    null, { timeout: 15000 }).catch(() => {});
+  // The WHOLE log. The engine narrates every republish into this console, so the
+  // last few lines are whatever the engine said most recently rather than the
+  // answer to what was just typed.
+  const log = await page.evaluate(() => [...document.querySelectorAll('.dk-line')]
+    .map((e) => e.textContent).filter(Boolean)
+    .filter((t) => !/^engine: /.test(t)).slice(-6).join(' | '));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  ok(/asking:/.test(log), 'a sentence is sent to the agent rather than refused as a typo',
+     log.slice(0, 160));
+  ok(!/unknown: please/.test(log),
+     'and is NOT treated as an unknown command', log.slice(0, 120));
 }
 
 section('a device that makes its own notes says so');

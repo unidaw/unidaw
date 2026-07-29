@@ -162,6 +162,10 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
     env.DAW_CAPTURE_SECONDS = String(captureSeconds);
   }
   if (numBlocks) env.DAW_ENGINE_NUM_BLOCKS = String(numBlocks);
+  // Where the API key lives, if the caller has said. The agent loop reads this
+  // at ask time; a stack started without it simply cannot ask, which is the
+  // right failure and the one it reports.
+  if (process.env.DAW_ENV_FILE) env.DAW_ENV_FILE = process.env.DAW_ENV_FILE;
   // Logs to disk, not /dev/null. The first version discarded them, so when the
   // engine fell back to a stand-in plugin the only evidence was a wrong device
   // name three sections into the suite.

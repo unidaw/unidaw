@@ -559,7 +559,7 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
                      'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice',
-                     'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony'];
+                     'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask'];
 
 function stubApi() {
   const calls = [];

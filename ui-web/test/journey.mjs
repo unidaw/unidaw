@@ -929,17 +929,14 @@ step('26. the harmony pane');
     () => [...document.querySelectorAll('.dk-log *')].map((e) => e.textContent)
       .filter(Boolean).slice(-3).join(' / '));
   /**
-   * Setting a key works on a fresh engine and is refused after a project load.
-   *
-   * The UI sends the harmony version it can see, and around a load the published
-   * value is briefly one ahead of the one `requireMatchingHarmonyVersion`
-   * compares against — the engine logs `base=4 current=3` for a page that reads
-   * 3 on both sides of the send. Nothing the UI holds can be the right number
-   * while that is true. Reported; the check un-blocks itself when it is fixed.
+   * Harmony is validated against its OWN version, and the socket used to
+   * overwrite it with the clip's on the way out — so this worked on a fresh
+   * engine, where the two happen to agree at 0, and was refused after any
+   * project load. The engine reported `base=4 current=3` for a page that had
+   * sent 3, which read exactly like a race in the engine and was an assignment
+   * in `send()`.
    */
-  blocked(after && after !== before, 'the console can set the key',
-          'engine: the published harmony version is briefly ahead of the '
-          + 'validated one after a project load, so the write is refused',
+  ok(after && after !== before, 'the console can set the key',
      `${JSON.stringify(before)} -> ${JSON.stringify(after)}`
      + ` events=${events} diag=${JSON.stringify(diag)}`
      + `${why ? ` reject="${why}"` : ''} console="${said}"`);

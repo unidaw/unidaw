@@ -20,6 +20,10 @@
 //!
 //!   cargo run -p daw-sidecar -- [--port 8174] [--shm /daw_engine_ui] [--hz 120]
 
+// The agent loop: a typed sentence to a sequence of tool calls. Its own module
+// because it is the only part of this binary that talks to the network.
+mod ask;
+
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::collections::VecDeque;
@@ -1718,6 +1722,36 @@ fn last_client_gone(shm: &str, clients: Arc<AtomicU64>) {
     });
 }
 
+/// One line of agent progress, as JSON the page can render.
+///
+/// Hand-built rather than serde-derived: this is four fields and the escaping is
+/// the only part that matters — a model's prose contains quotes and newlines,
+/// and a broken frame here would take down the socket the UI depends on.
+fn json_line(kind: &str, text: &str, detail: Option<&str>, ok: bool) -> String {
+    let esc = |s: &str| {
+        let mut out = String::with_capacity(s.len() + 8);
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out
+    };
+    match detail {
+        Some(d) => format!(
+            "{{\"agent\":\"{}\",\"text\":\"{}\",\"detail\":\"{}\",\"ok\":{}}}",
+            kind, esc(text), esc(d), ok),
+        None => format!("{{\"agent\":\"{}\",\"text\":\"{}\",\"ok\":{}}}",
+                        kind, esc(text), ok),
+    }
+}
+
 fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, projects: String,
                   plugin_cache: String) {
     for stream in listener.incoming().flatten() {
@@ -1726,7 +1760,19 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
         let projects = projects.clone();
         let plugin_cache = plugin_cache.clone();
         thread::spawn(move || {
+            // A READ TIMEOUT, so this loop can do two things.
+            //
+            // An `ask` runs a model on its own thread and reports progress as it
+            // goes; the websocket can only be written from here, so the loop has
+            // to come up for air rather than sitting in a blocking read. A
+            // timeout turns `ws.read()` into "a message, or a moment passed",
+            // and both are useful.
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(120)));
             let mut ws = match tungstenite::accept(stream) { Ok(w) => w, Err(_) => return };
+            // Progress from an in-flight ask. Bounded only by how fast a model
+            // can talk, which is not fast.
+            let (ask_tx, ask_rx) = std::sync::mpsc::channel::<ask::Progress>();
+            let asking = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             // Attached HERE, on the thread that will use it: EngineHandle is not
             // Send, so it cannot be created elsewhere and moved in.
             let mut generation = SHM_GENERATION.load(Ordering::Acquire);
@@ -1737,7 +1783,30 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
             };
             eprintln!("sidecar: command client connected");
             loop {
+                // Anything the ask thread has said since last time.
+                while let Ok(p) = ask_rx.try_recv() {
+                    let msg = match p {
+                        ask::Progress::Say(t) => json_line("say", &t, None, true),
+                        ask::Progress::Did { tool, args, result, ok } =>
+                            json_line("did", &tool, Some(&format!("{args} -> {result}")), ok),
+                        ask::Progress::Done(t) => {
+                            asking.store(false, Ordering::Release);
+                            json_line("done", &t, None, true)
+                        }
+                        ask::Progress::Failed(t) => {
+                            asking.store(false, Ordering::Release);
+                            json_line("failed", &t, None, false)
+                        }
+                    };
+                    if ws.send(tungstenite::Message::Text(msg)).is_err() { return; }
+                }
                 match ws.read() {
+                    // A read timeout is not a disconnect: it is this loop's
+                    // heartbeat, and the only reason progress reaches the page
+                    // while a model is still thinking.
+                    Err(tungstenite::Error::Io(ref e))
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut => continue,
                     Ok(tungstenite::Message::Text(t)) => {
                         // The engine may have restarted while we were blocked in
                         // read(); re-attach before acting on anything.
@@ -1763,6 +1832,57 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         if is_type(&t, "list") {
                             let reply = list_projects(&projects);
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+                        /*
+                         * ASK. A sentence instead of a command.
+                         *
+                         * The model gets daw-agent's tool manifest and operates
+                         * the song through it — the same named operations the
+                         * console and the CLI use, so it can do what a person can
+                         * do and nothing else. Nothing here builds a payload.
+                         *
+                         * On its OWN THREAD with its own EngineHandle, because a
+                         * round trip to the API is hundreds of milliseconds and
+                         * this loop is where a person's next edit arrives.
+                         * EngineHandle is not Send, so the thread attaches its
+                         * own rather than borrowing this one.
+                         *
+                         * One at a time: two models editing the same song from
+                         * the same text box is not a feature anybody asked for,
+                         * and the second one would be planning against a document
+                         * the first is halfway through changing.
+                         */
+                        if is_type(&t, "ask") {
+                            if asking.swap(true, Ordering::AcqRel) {
+                                let _ = ws.send(tungstenite::Message::Text(json_line(
+                                    "failed", "still working on the last one", None, false)));
+                                continue;
+                            }
+                            let prompt = parse_str(&t, "\"text\"").unwrap_or("").to_string();
+                            if prompt.trim().is_empty() {
+                                asking.store(false, Ordering::Release);
+                                let _ = ws.send(tungstenite::Message::Text(json_line(
+                                    "failed", "ask what?", None, false)));
+                                continue;
+                            }
+                            let _ = ws.send(tungstenite::Message::Text(json_line(
+                                "thinking", &prompt, None, true)));
+                            let (tx, shm2) = (ask_tx.clone(), shm.clone());
+                            let flag = asking.clone();
+                            thread::spawn(move || {
+                                match daw_agent::AgentSession::attach(&shm2) {
+                                    Ok(session) => ask::run(&session, &prompt, &tx),
+                                    Err(e) => {
+                                        let _ = tx.send(ask::Progress::Failed(
+                                            format!("could not attach to the engine: {e}")));
+                                    }
+                                }
+                                // The Done/Failed arm clears this too; belt and
+                                // braces, because a panic in the loop would
+                                // otherwise wedge the box forever.
+                                flag.store(false, Ordering::Release);
+                            });
                             continue;
                         }
                         /*

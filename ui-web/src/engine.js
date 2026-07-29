@@ -171,7 +171,18 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
     /** Fire-and-reconcile: the reply is an ack, the truth arrives in a frame. */
     send(obj) {
       if (!cmdWs || cmdWs.readyState !== 1) return false;
-      obj.base = store.clipVersion;      // what this edit was composed against
+      /**
+       * What this edit was composed against — unless the caller already knows
+       * better.
+       *
+       * Most commands are clip edits and the clip version is the right answer,
+       * so filling it in here means no caller has to remember. But harmony is
+       * validated against its OWN counter, and this line was overwriting the
+       * version `setHarmony` had carefully looked up: the engine then reported
+       * `base=4 current=3` for a page that had sent 3, and I spent a while
+       * reading that as an engine race. It was this assignment.
+       */
+      if (obj.base === undefined) obj.base = store.clipVersion;
       cmdWs.send(JSON.stringify(obj));
       return true;
     },
