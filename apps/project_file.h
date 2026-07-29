@@ -8,6 +8,7 @@
 #include "apps/device_chain.h"
 #include "apps/harmony_timeline.h"
 #include "apps/modulation.h"
+#include "apps/lane_quantize.h"
 #include "apps/musical_structures.h"
 #include "apps/patcher_graph.h"
 #include "apps/track_routing.h"
@@ -107,6 +108,10 @@ struct ProjectTrack {
   // grids): 4 = 16ths, 3 = triplets. The engine persists this but does not use
   // it — note timing is stored in nanoticks and is grid-independent.
   uint32_t linesPerBeat = 4;
+  // M1.13: non-destructive quantize for this lane. It changes where notes SOUND, never
+  // what is stored, so it lives beside linesPerBeat as a lane attribute rather than
+  // anywhere near the notes. Default is off, and off is the identity.
+  LaneQuantize quantize{};
   MixerSettings mixer{};
   TrackRouting routing{};
   TrackChain chain{};

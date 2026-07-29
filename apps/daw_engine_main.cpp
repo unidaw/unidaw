@@ -51,6 +51,7 @@
 #include "apps/watchdog.h"
 #include "apps/latency_manager.h"
 #include "apps/time_base.h"
+#include "apps/lane_quantize.h"
 #include "apps/musical_structures.h"
 #include "apps/placement_schedule.h"
 #include "apps/note_entry.h"
@@ -1733,6 +1734,13 @@ struct TrackRuntime {
     // Per-lane tracker subdivision (Mock B grids); published so the UI builds a
     // LaneGrid per track. The engine doesn't use it — timing is grid-independent.
     std::atomic<uint32_t> linesPerBeat{4};
+    // M1.13 lane quantize, held as atomics for the same reason linesPerBeat is: the UI
+    // publish runs every frame and must not take this track's mutex to read three
+    // numbers. These are the ONLY copy — Track deliberately does not also hold one,
+    // because two copies of the same setting is how the mod links were silently lost.
+    std::atomic<uint64_t> quantizeGrid{0};
+    std::atomic<uint32_t> quantizeStrength{0};
+    std::atomic<int32_t> quantizeSwing{0};
     // Movement 4 child-track structure: parentId 0 = top-level, else the parent
     // track_id; collapsed hides children in the UI. Published per track.
     std::atomic<uint32_t> parentId{0};
@@ -2168,6 +2176,10 @@ struct TrackRuntime {
   std::atomic<bool> clipDirty{true};
   std::atomic<bool> playing{false};
   std::atomic<uint32_t> clipVersion{0};
+  // M1.13: moves when a LANE's quantize changes. Deliberately separate from
+  // clipVersion — quantize moves no authored note, so it must not invalidate anyone's
+  // in-flight edit, but the UI still has to redraw its deviation bars.
+  std::atomic<uint32_t> quantizeVersion{0};
 
   // M2.17: bump BOTH counters for a track-scoped change — the track's (what acceptance
   // compares, and what the diff hands back to the caller as its new base) and the global
@@ -4133,7 +4145,17 @@ struct TrackRuntime {
       ext.endTick = *pl.at + length;
       rt.clipExtents.push_back(std::move(ext));
     }
-    return buildClipSnapshot(rt.track.clip);
+    // M1.13: the clip the UI draws and the clip that SOUNDS are already two objects —
+    // rt.track.clip is published and saved, the returned snapshot is what the producer
+    // schedules from. Quantize applies to the second only. Doing it here rather than at
+    // emission time matters: moving a note's start changes which block it belongs to,
+    // and the scheduler windows on the tick it reads, so a note nudged earlier at
+    // emission time would already have missed its block.
+    daw::LaneQuantize q;
+    q.gridNanoticks = rt.quantizeGrid.load(std::memory_order_acquire);
+    q.strengthMilli = rt.quantizeStrength.load(std::memory_order_acquire);
+    q.swingMilli = rt.quantizeSwing.load(std::memory_order_acquire);
+    return buildClipSnapshot(daw::quantizeClipForSchedule(rt.track.clip, q));
   };
 
   // Resolve a clip's sourcePath the one way both the decode funnel and the clip-
@@ -4607,6 +4629,12 @@ struct TrackRuntime {
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         track.harmonyQuantize = runtime->track.harmonyQuantize;
+        track.quantize.gridNanoticks =
+            runtime->quantizeGrid.load(std::memory_order_acquire);
+        track.quantize.strengthMilli =
+            runtime->quantizeStrength.load(std::memory_order_acquire);
+        track.quantize.swingMilli =
+            runtime->quantizeSwing.load(std::memory_order_acquire);
         track.routing = runtime->track.routing;
         const float gainLinear = runtime->mixGainLinear.load(std::memory_order_relaxed);
         track.mixer.gainDb =
@@ -5256,6 +5284,15 @@ struct TrackRuntime {
                                    rebuildAudioRender(*runtime),
                                    std::memory_order_release);
         runtime->track.harmonyQuantize = source.harmonyQuantize;
+        // M1.13: adopt the lane's quantize BEFORE the flat rebuild below, so the very
+        // first scheduling copy after a load already sounds quantized. Adopting it
+        // afterwards would leave the lane straight until the next edit.
+        runtime->quantizeGrid.store(source.quantize.gridNanoticks,
+                                    std::memory_order_release);
+        runtime->quantizeStrength.store(source.quantize.strengthMilli,
+                                        std::memory_order_release);
+        runtime->quantizeSwing.store(source.quantize.swingMilli,
+                                     std::memory_order_release);
         if (!source.name.empty()) {
           runtime->trackName = source.name;
         }
@@ -8235,6 +8272,76 @@ struct TrackRuntime {
           std::memory_order_release);
       std::cout << "UI: Track " << payload.trackId
                 << " harmony quantize " << (enable ? "on" : "off") << std::endl;
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetLaneQuantize)) {
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        std::cerr << "UI: SetLaneQuantize failed - track " << payload.trackId
+                  << " not found" << std::endl;
+        return;
+      }
+      daw::LaneQuantize q;
+      q.gridNanoticks = (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
+                        payload.noteNanotickLo;
+      q.strengthMilli =
+          std::min<uint32_t>(payload.value0, daw::kLaneQuantizeMaxStrength);
+      q.swingMilli = std::clamp(
+          static_cast<int32_t>(payload.notePitch) -
+              static_cast<int32_t>(daw::kLaneQuantizeSwingBias),
+          -daw::kLaneQuantizeMaxSwing, daw::kLaneQuantizeMaxSwing);
+      runtime->quantizeGrid.store(q.gridNanoticks, std::memory_order_release);
+      runtime->quantizeStrength.store(q.strengthMilli, std::memory_order_release);
+      runtime->quantizeSwing.store(q.swingMilli, std::memory_order_release);
+      std::shared_ptr<const ClipSnapshot> snapshot;
+      {
+        // The scheduling copy is derived from the lane's quantize, so changing it has
+        // to rebuild that copy — otherwise the setting is stored and inaudible until
+        // the next unrelated edit happens to rebuild.
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        snapshot = rebuildFlatAndPublish(*runtime);
+      }
+      if (snapshot) {
+        std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
+                                   std::memory_order_release);
+      }
+      // The AUTHORED notes did not change, so this is not a clip edit and must not
+      // advance a clip version: doing so would reject every editor's in-flight edit
+      // for a change that moved no note. It does change what the UI must draw (the
+      // deviation bars), which is what the published per-lane quantize is for.
+      quantizeVersion.fetch_add(1, std::memory_order_acq_rel);
+      // How many events the scheduling copy actually moved. This is the only externally
+      // visible proof that quantize is WIRED rather than merely stored: the authored
+      // clip is unchanged by design, so "the notes did not move" is true either way, and
+      // the audible half needs a number to assert on. Counted against the same snapshot
+      // the producer will schedule from.
+      uint32_t movedEvents = 0;
+      if (snapshot) {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        const auto& authored = runtime->track.clip.events();
+        const auto& scheduled = snapshot->events;
+        if (authored.size() == scheduled.size()) {
+          for (size_t i = 0; i < authored.size(); ++i) {
+            if (authored[i].nanotickOffset != scheduled[i].nanotickOffset) {
+              ++movedEvents;
+            }
+          }
+        }
+      }
+      DAW_EVENT("lane.quantize")
+          .field("track", payload.trackId)
+          .field("grid", q.gridNanoticks)
+          .field("strength", q.strengthMilli)
+          .field("moved", movedEvents)
+          .field("swing", static_cast<uint32_t>(q.swingMilli + daw::kLaneQuantizeSwingBias));
+      std::cout << "UI: Track " << payload.trackId << " quantize grid "
+                << q.gridNanoticks << " strength " << q.strengthMilli
+                << " swing " << q.swingMilli << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetLoopRange)) {
       const uint64_t start =
@@ -11410,6 +11517,19 @@ struct TrackRuntime {
                         trackSnapshot[i]->linesPerBeat.load(std::memory_order_relaxed),
                         255u))
                   : 0;
+          // v26 (M1.13): the lane's quantize, so the UI can draw each note where it was
+          // played and a deviation bar to where it sounds.
+          const bool haveTrack = i < trackSnapshot.size();
+          uiShm.header->uiTrackQuantizeGrid[i] =
+              haveTrack ? trackSnapshot[i]->quantizeGrid.load(std::memory_order_relaxed)
+                        : 0;
+          uiShm.header->uiTrackQuantizeStrength[i] =
+              haveTrack
+                  ? trackSnapshot[i]->quantizeStrength.load(std::memory_order_relaxed)
+                  : 0;
+          uiShm.header->uiTrackQuantizeSwing[i] =
+              haveTrack ? trackSnapshot[i]->quantizeSwing.load(std::memory_order_relaxed)
+                        : 0;
           // v20 child-track structure (Movement 4): parent id + flags. HasParent is
           // set for a genuine child (an aux stem) so the reader never confuses "child of
           // track 0" with "top-level" — parentId 0 is a valid id, so the sentinel alone
@@ -11544,6 +11664,9 @@ struct TrackRuntime {
                 static_cast<uint8_t>(daw::kUiTrackFlagMaster);
             uiShm.header->uiTrackParentId[m] = 0;
             uiShm.header->uiLinesPerBeat[m] = 0;
+            uiShm.header->uiTrackQuantizeGrid[m] = 0;  // the master has no lane
+            uiShm.header->uiTrackQuantizeStrength[m] = 0;
+            uiShm.header->uiTrackQuantizeSwing[m] = 0;
             uiShm.header->uiTrackPeakRms[m] = 0.0f;  // master peak: 4b
             const float mg =
                 masterTrack->mixGainLinear.load(std::memory_order_relaxed);
@@ -11654,6 +11777,8 @@ struct TrackRuntime {
         writeUiPatcher(false);
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);
+        uiShm.header->uiQuantizeVersion =
+            quantizeVersion.load(std::memory_order_acquire);
         if (writeHarmony) {
           writeUiHarmonySnapshot();
         }

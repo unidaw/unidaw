@@ -131,8 +131,16 @@ enum class UiCommandType : uint16_t {
   // PANIC: all sound off. Sends CC120 (all-sound-off) AND CC123 (all-notes-off) on every
   // MIDI channel to every hosted plugin, and drops all pending/active note state. CC120 is
   // the one that matters — 123 releases notes and lets them ring out, which is not a panic.
-  Panic = 52,  // next free 53
+  Panic = 52,
+  // M1.13 lane quantize, non-destructive: trackId, noteNanotick = grid in nanoticks
+  // (0 = off), value0 = strength in thousandths, notePitch = swing in thousandths
+  // BIASED BY +500 so it survives the unsigned field (0 = -500, 500 = straight,
+  // 1000 = +500). Changes what SOUNDS; never touches a stored note.
+  SetLaneQuantize = 53,  // next free 54
 };
+
+// SetLaneQuantize carries swing through an unsigned field; this is the bias.
+constexpr uint32_t kLaneQuantizeSwingBias = 500;
 
 // Readable name for an opcode, for the history journal and diagnostics. Unknown values
 // render as "op:<n>" rather than throwing away the number.
@@ -187,6 +195,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::ResizePlacement: return "resize_placement";
     case UiCommandType::AddPlacement: return "add_placement";
     case UiCommandType::Panic: return "panic";
+    case UiCommandType::SetLaneQuantize: return "set_lane_quantize";
   }
   return "op:unknown";
 }

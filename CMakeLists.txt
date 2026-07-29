@@ -254,6 +254,14 @@ target_include_directories(event_ring_mpsc_tests PRIVATE
 find_package(Threads REQUIRED)
 target_link_libraries(event_ring_mpsc_tests PRIVATE Threads::Threads)
 
+# M1.13: non-destructive lane quantize. Header-only, no deps.
+add_executable(lane_quantize_tests
+  apps/lane_quantize_tests_main.cpp
+)
+target_include_directories(lane_quantize_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # Header-only tests for the per-clip grid packed into UiClipExtent.flags.
 add_executable(clip_grid_tests
   apps/clip_grid_tests_main.cpp
@@ -334,6 +342,7 @@ foreach(daw_test_target
     waveform_store_tests
     waveform_fixture_tests
     clip_grid_tests
+    lane_quantize_tests
     event_ring_mpsc_tests
     audio_io_tests
     device_chain_tests
@@ -377,6 +386,11 @@ add_test(NAME event_ring_mpsc
   COMMAND event_ring_mpsc_tests
 )
 set_tests_properties(event_ring_mpsc PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME lane_quantize
+  COMMAND lane_quantize_tests
+)
+set_tests_properties(lane_quantize PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME clip_grid
   COMMAND clip_grid_tests
