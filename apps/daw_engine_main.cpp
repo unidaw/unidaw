@@ -3216,7 +3216,12 @@ struct TrackRuntime {
     {
       std::lock_guard<std::mutex> lock(masterTrack->trackMutex);
       for (const auto& d : masterTrack->track.chain.devices) {
-        if (d.kind == daw::DeviceKind::VstEffect && !d.bypass) {
+        // Count a BYPASSED effect too. Gating on "unbypassed" made toggling bypass on the
+        // master's only insert engage/disengage the whole sum-processing path, which
+        // changes master latency by a full block — an audible discontinuity, and a worse
+        // A/B than the loudness jump level matching is meant to remove. A bypassed insert
+        // is still IN the chain; the host passes audio through it.
+        if (d.kind == daw::DeviceKind::VstEffect) {
           hasFx = true;
           break;
         }

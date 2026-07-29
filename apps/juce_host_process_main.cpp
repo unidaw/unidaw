@@ -868,19 +868,13 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
       if (slot.bypass || !slot.instance) {
         if (pluginInputPtrs && pluginInputCount > 0) {
           const int channelsToCopy = std::min(pluginInputCount, numOutputs);
-          // Level-matched bypass (roadmap 15c): scale the passthrough by the gain this
-          // insert was measured to apply while active, so A/B compares tone rather than
-          // loudness. OPT-IN (DAW_LEVEL_MATCH_BYPASS=1) and OFF by default: the roadmap
-          // wants it on by default, but I have not yet verified it end to end on real
-          // audio — three attempts each failed on the METHOD (a project loaded already
-          // bypassed never measures; bypassing the master's only effect disengages the
-          // master-FX path entirely; the instrument stimulus is timing-flaky). Shipping an
-          // unverified change to what bypass SOUNDS like, on by default, is precisely the
-          // silent-wrong-value class of bug this session has been digging out. Flip the
-          // default once there is a deterministic insert-level test.
-          static const bool kLevelMatch = std::getenv("DAW_LEVEL_MATCH_BYPASS") != nullptr;
+          // Level-matched bypass (roadmap 15c), ON BY DEFAULT: scale the passthrough by
+          // the gain this insert was measured to apply while active, so toggling bypass
+          // compares TONE rather than LOUDNESS — an insert that merely makes things
+          // louder stops sounding "better". DAW_NO_LEVEL_MATCH=1 hears the raw bypass.
+          static const bool kNoLevelMatch = std::getenv("DAW_NO_LEVEL_MATCH") != nullptr;
           const float matchGain =
-              (kLevelMatch && slot.levelMatchMeasured) ? slot.levelMatchGain : 1.0f;
+              (!kNoLevelMatch && slot.levelMatchMeasured) ? slot.levelMatchGain : 1.0f;
           for (int ch = 0; ch < channelsToCopy; ++ch) {
             const float* src = pluginInputPtrs[ch];
             float* dst = outputPtrs[ch];
@@ -949,7 +943,12 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
           // estimate with noise ratios. Clamp hard: a gate or a limiter can produce an
           // absurd instantaneous ratio, and bypass must never become a volume weapon.
           if (inRms > 1e-5 && outRms > 1e-6) {
-            const double ratio = std::clamp(inRms / outRms, 0.05, 20.0);
+            // out/in, NOT in/out: the bypassed signal must be made as loud as the
+            // PROCESSED one. With an insert at 0.5x, bypass must be scaled by 0.5 to
+            // match it; the inverse made bypass 2x the raw sum — 4x the active level,
+            // i.e. louder rather than matched. Caught only once the test used a fixture
+            // with a known gain, where the expected number was arithmetic.
+            const double ratio = std::clamp(outRms / inRms, 0.05, 20.0);
             const double smoothing = slot.levelMatchMeasured ? 0.02 : 1.0;
             slot.levelMatchGain = static_cast<float>(
                 slot.levelMatchGain * (1.0 - smoothing) + ratio * smoothing);
