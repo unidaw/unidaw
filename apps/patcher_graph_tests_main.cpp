@@ -422,6 +422,32 @@ int main() {
     assert(degreeEvents > 0);
   }
 
+  // graphHasEventGenerator: true iff a graph contains a generator node (euclidean/
+  // random_degree). Drives the per-device kUiChainDiffGenerates flag the UI reads.
+  {
+    daw::PatcherGraph empty;
+    assert(!daw::graphHasEventGenerator(empty));
+
+    daw::PatcherGraph passthroughOnly;
+    passthroughOnly.nodes.push_back({0, daw::PatcherNodeType::Passthrough});
+    passthroughOnly.nodes.push_back({1, daw::PatcherNodeType::EventOut});
+    assert(!daw::graphHasEventGenerator(passthroughOnly));
+
+    daw::PatcherGraph lfoOnly;  // LFO is a modulation source, not an event generator
+    lfoOnly.nodes.push_back({0, daw::PatcherNodeType::Lfo});
+    assert(!daw::graphHasEventGenerator(lfoOnly));
+
+    daw::PatcherGraph euclid;
+    euclid.nodes.push_back({0, daw::PatcherNodeType::Euclidean});
+    euclid.nodes.push_back({1, daw::PatcherNodeType::EventOut});
+    assert(daw::graphHasEventGenerator(euclid));
+
+    daw::PatcherGraph randomDegree;
+    randomDegree.nodes.push_back({0, daw::PatcherNodeType::RandomDegree});
+    randomDegree.nodes.push_back({1, daw::PatcherNodeType::EventOut});
+    assert(daw::graphHasEventGenerator(randomDegree));
+  }
+
   std::cout << "patcher_graph_tests_main: ok" << std::endl;
   return 0;
 }

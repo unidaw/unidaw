@@ -681,6 +681,11 @@ pub struct UiChainDiffPayload {
 /// the payload's, or a plugin reporting N buses under a busCount of 0 is your only tell.
 pub const UI_CHAIN_DIFF_BUS_COUNT_MASK: u16 = 0x00ff;
 pub const UI_CHAIN_DIFF_BUS_TRUNCATED: u16 = 1 << 8;
+/// bit9 = this device's patcher graph contains an event GENERATOR node (euclidean,
+/// random_degree, ...): it emits events the user never wrote. Mark the device — and
+/// its track — as a source of "notes I didn't type", so a phantom note is a glance at
+/// the chain, not an investigation.
+pub const UI_CHAIN_DIFF_GENERATES: u16 = 1 << 9;
 
 /// v20: one audio bus of a hosted plugin, streamed after the device's ChainSnapshot
 /// diff. `channel_offset` is the bus's first channel in the flat post-negotiation

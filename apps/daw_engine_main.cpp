@@ -3200,11 +3200,16 @@ struct TrackRuntime {
 
       daw::UiChainDiffPayload diffPayload{};
       diffPayload.diffType = static_cast<uint16_t>(daw::UiDiffType::ChainSnapshot);
+      // Does this device's patcher graph emit events it was not given (euclidean/
+      // random_degree/...)? Published so the UI can mark the device — and its track —
+      // as a source of unwritten notes, so a phantom note is a glance at the chain.
+      const bool deviceGenerates = daw::graphHasEventGenerator(device.patcher);
       // busCount + truncated ride the flags so a reader knows when the bus set is
       // complete and draws once (see the invalidation rule in shared_memory.h).
       diffPayload.flags = static_cast<uint16_t>(
           (buses.size() & daw::kUiChainDiffBusCountMask) |
-          (busTruncated ? daw::kUiChainDiffBusTruncated : 0u));
+          (busTruncated ? daw::kUiChainDiffBusTruncated : 0u) |
+          (deviceGenerates ? daw::kUiChainDiffGenerates : 0u));
       diffPayload.trackId = runtime.trackId;
       diffPayload.chainVersion = version;
       diffPayload.deviceId = device.id;
