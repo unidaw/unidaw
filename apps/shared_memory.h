@@ -65,7 +65,10 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //     so RemoveTrack retires an id without renumbering its neighbours. uiTrackCount becomes
 //     the extent; iterate skipping absent slots, key on uiTrackId. uiTrackId[] grows the
 //     header (region offsets shift automatically); lockstep with the Rust mirror.
-constexpr uint16_t kShmVersion = 22;
+// 23: per-track instrument name (uiTrackDeviceName) so the agent's observation can see what
+//     is on a track. Appended after uiTrackId, so earlier offsets are unchanged; the header
+//     grows and region offsets shift automatically. Lockstep with the Rust mirror.
+constexpr uint16_t kShmVersion = 23;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -189,6 +192,11 @@ struct alignas(64) ShmHeader {
   // skipping absent slots, keying selection/cursor/caches on uiTrackId — never on the flat
   // visual position, which moves as tombstones open and close.
   uint32_t uiTrackId[kUiMaxTracks]{};
+  // v23: the name of the first instrument on each track (nul-padded, truncated), so a
+  // surface — and the agent's observation — can see WHAT is on a track, not just that a
+  // track exists. Empty when the track has no instrument. Appended after uiTrackId so
+  // every earlier field offset is unchanged.
+  char uiTrackDeviceName[kUiMaxTracks][kUiTrackNameBytes]{};
 };
 
 // uiTrackFlags bits.

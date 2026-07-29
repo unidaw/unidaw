@@ -228,6 +228,8 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
         return 1;
     };
     let count = handle.track_count() as usize;
+    let names = handle.read_track_names();
+    let devices = handle.read_track_device_names();
     println!("{{");
     println!("  \"track_count\": {count},");
     println!("  \"tracks\": [");
@@ -237,8 +239,12 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
             .get(index)
             .copied()
             .unwrap_or(0.0);
+        let name = names.get(index).map(String::as_str).unwrap_or("");
+        let device = devices.get(index).map(String::as_str).unwrap_or("");
         let comma = if index + 1 == count { "" } else { "," };
-        println!("    {{ \"track_id\": {index}, \"peak_rms\": {rms} }}{comma}");
+        println!(
+            "    {{ \"track_id\": {index}, \"name\": {name:?}, \"device\": {device:?}, \"peak_rms\": {rms} }}{comma}"
+        );
     }
     println!("  ]");
     println!("}}");

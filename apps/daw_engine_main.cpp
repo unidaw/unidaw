@@ -10675,6 +10675,27 @@ struct TrackRuntime {
                         std::min<size_t>(n.size(), daw::kUiTrackNameBytes - 1));
           }
         }
+        // v23: the first instrument's name per track, so the agent's observation can see
+        // what is on a track (it was writing notes to empty tracks and reporting success).
+        for (uint32_t i = 0; i < daw::kUiMaxTracks; ++i) {
+          char* dst = uiShm.header->uiTrackDeviceName[i];
+          std::memset(dst, 0, daw::kUiTrackNameBytes);
+          if (i < publishedTrackCount && i < trackSnapshot.size()) {
+            auto ts = std::atomic_load_explicit(&trackSnapshot[i]->trackSnapshot,
+                                                std::memory_order_acquire);
+            if (ts) {
+              for (const auto& device : ts->chainDevices) {
+                if (device.kind == daw::DeviceKind::VstInstrument &&
+                    !device.vstRef.name.empty()) {
+                  std::memcpy(dst, device.vstRef.name.data(),
+                              std::min<size_t>(device.vstRef.name.size(),
+                                               daw::kUiTrackNameBytes - 1));
+                  break;
+                }
+              }
+            }
+          }
+        }
         uiShm.header->uiClipVersion =
             clipVersion.load(std::memory_order_acquire);
         writeUiClipWindowSnapshot(trackSnapshot);

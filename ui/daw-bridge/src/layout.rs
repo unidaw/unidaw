@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 22;
+pub const K_SHM_VERSION: u16 = 23;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
@@ -114,6 +114,9 @@ pub struct ShmHeader {
     // appends), so ui_track_count is the EXTENT: iterate 0..count, SKIP absent slots, and
     // key selection/cursor/caches on ui_track_id — never the flat visual position.
     pub ui_track_id: [u32; K_UI_MAX_TRACKS],
+    /// v23: the first instrument's name per track (nul-padded), so a surface / the agent
+    /// can see what is on a track. Empty when the track has no instrument.
+    pub ui_track_device_name: [[u8; K_UI_TRACK_NAME_BYTES]; K_UI_MAX_TRACKS],
 }
 
 /// uiTrackFlags bits (Movement 4).
@@ -860,7 +863,7 @@ mod tests {
 
     #[test]
     fn shm_header_layout_matches_cpp() {
-        const_assert_eq!(size_of::<ShmHeader>(), 3328); // v22: + ui_track_id[64]
+        const_assert_eq!(size_of::<ShmHeader>(), 4864); // v23: + ui_track_device_name[64][24]
         const_assert_eq!(align_of::<ShmHeader>(), 64);
         assert_eq!(offset_of!(ShmHeader, ring_std_offset), 56);
         assert_eq!(offset_of!(ShmHeader, ring_ctrl_offset), 64);
@@ -906,6 +909,7 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_track_parent_id), 2728); // v20
         assert_eq!(offset_of!(ShmHeader, ui_track_flags), 2984);
         assert_eq!(offset_of!(ShmHeader, ui_track_id), 3048); // v22 (appended at the end)
+        assert_eq!(offset_of!(ShmHeader, ui_track_device_name), 3304); // v23
         // The scale + device-param region structs (v16/v17) are now generated from
         // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
