@@ -44,7 +44,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 15;
+const WIRE_VERSION: u16 = 16;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -58,7 +58,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 136;
+const FULL_HEADER_BYTES: usize = 140;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
 const NOTE_BYTES: usize = 40;
 
@@ -290,6 +290,19 @@ struct Frame {
     /// grid is the engine's business and a client that computed its own put
     /// notes three beats out with no error anywhere.
     chords: Vec<(u64, u64, u32, u8, u8, u8, u8, u8, u32, u32)>,
+    /// v24 per-insert meters, as (track ID, device id, inPeak, outPeak, inRms,
+    /// outRms) in dBFS millibels. Only PRESENT entries — the region is 64x16 and
+    /// almost all of it is "no device". kUiMeterSilent (i16::MIN) means silent or
+    /// below the floor and is a real value, not a hole: an instrument has no
+    /// audio input and honestly reports its input as silent forever.
+    ///
+    /// The track ID, NOT the slot the engine indexes the region by. The page keys
+    /// everything on ids and the two diverge the moment a track is removed — a
+    /// tombstoned slot keeps its position while its id retires. Translating here,
+    /// once, beats every reader doing it: slot-versus-id is the same shape of bug
+    /// as position-versus-id, which is the one this record already carries a
+    /// device id to avoid.
+    meters: Vec<(u32, u32, i16, i16, i16, i16)>,
     /// Real clip placements from the engine. placement_id, clip_id, track,
     /// flags, start/end tick, name. Loose session placements are excluded
     /// upstream. `flags` bit0 is UI_CLIP_EXTENT_AUDIO — an audio region, which
@@ -438,7 +451,18 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&f.tempo_point_count.to_le_bytes());       // 128
     debug_assert_eq!(out.len(), 132, "the song meter starts at 132");
     out.extend_from_slice(&f.song_time_sig_num.to_le_bytes());       // 132
-    out.extend_from_slice(&f.song_time_sig_den.to_le_bytes());       // 134, to 136
+    out.extend_from_slice(&f.song_time_sig_den.to_le_bytes());       // 134
+    /*
+     * v24 PER-INSERT METERS (wire 16). A count and a pad, appended rather than
+     * taking one of the header's spare bytes, because there were none left — 98
+     * was the last and the chord count has it.
+     *
+     * Only the entries the engine says are PRESENT are sent. The region is
+     * 64 tracks x 16 inserts and almost all of it is "no device"; publishing the
+     * whole grid at 120 Hz would be 12 KB a frame to say nothing.
+     */
+    out.extend_from_slice(&(f.meters.len() as u16).to_le_bytes());   // 136
+    out.extend_from_slice(&0u16.to_le_bytes());                      // 138, to 140
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
     // variable section and nothing here noticed.
@@ -547,6 +571,30 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.extend_from_slice(&row.to_le_bytes());      // 32
         out.extend_from_slice(&0u32.to_le_bytes());     // 36, to 40
     }
+
+    /*
+     * PER-INSERT METERS, and now THESE are last.
+     *
+     * Appended after the chords for the reason the chords were appended after the
+     * track structure: a section inserted ahead of another shifts it, and this
+     * file's history is a list of the times that happened. The "nothing follows
+     * this" line moves with the position rather than being left behind as a claim
+     * that has quietly stopped being true.
+     *
+     * 16 bytes each, counted by the u16 at header offset 136.
+     *
+     * MATCHED ON deviceId, never on position: the engine's compacted insert order
+     * skips patcher devices, so the Nth meter is not the Nth card. Backend and I
+     * agreed the id travels with the meter for exactly this reason.
+     */
+    for &(track, device, in_peak, out_peak, in_rms, out_rms) in &f.meters {
+        out.extend_from_slice(&track.to_le_bytes());      // 0, the track ID
+        out.extend_from_slice(&device.to_le_bytes());     // 4
+        out.extend_from_slice(&in_peak.to_le_bytes());    // 8
+        out.extend_from_slice(&out_peak.to_le_bytes());   // 10
+        out.extend_from_slice(&in_rms.to_le_bytes());     // 12
+        out.extend_from_slice(&out_rms.to_le_bytes());    // 14, to 16
+    }
 }
 
 /// Whether the harmony we hold is out of date. Its own version, not the clip
@@ -577,6 +625,32 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     out.peaks.clear();
     let n = (snap.ui_track_count as usize).min(snap.ui_track_peak_rms.len());
     out.peaks.extend_from_slice(&snap.ui_track_peak_rms[..n]);
+
+    /*
+     * v24 PER-INSERT METERS, every frame, like the track peaks beside them.
+     *
+     * Every published SLOT, master included: the master occupies a real slot with
+     * kUiTrackFlagMaster, so metering it needs no second path — which was the
+     * first thing I asked backend to guarantee, because a master with no
+     * per-insert meters is the one chain where gain staging matters most.
+     *
+     * `read_device_meters` skips kUiMeterNoDevice itself, so what arrives is only
+     * what is really there. It is bounded by 16 inserts a track and in practice a
+     * handful; the whole 64x16 grid would be 12 KB a frame to say nothing.
+     */
+    out.meters.clear();
+    {
+        // v22's stable per-slot ids, which is what turns a slot into something the
+        // page can match on. Read once for the whole loop rather than per slot.
+        let (ids, _flags) = h.read_track_ids_and_flags();
+        for slot in 0..ids.len().min(daw_bridge::layout::K_UI_MAX_TRACKS) {
+            let metered = h.read_device_meters(slot);
+            if metered.is_empty() { continue; }
+            for (device, in_peak, out_peak, in_rms, out_rms) in metered {
+                out.meters.push((ids[slot], device, in_peak, out_peak, in_rms, out_rms));
+            }
+        }
+    }
 
     // SHM v9: an all-tracks region the engine publishes unasked, indexed by
     // track. No clip-window request, so no write access and no contention for
@@ -1513,6 +1587,45 @@ fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static
     Some(Ok(p))
 }
 
+/// M2.17 GLOBAL-SCOPE COMMANDS, which keep arbitrating on the global counter.
+///
+/// Undo, Redo, Load and Save can touch any track, so a per-track base would be
+/// meaningless for them; harmony has its own counter entirely and never reaches
+/// this. Everything else that names a track is arbitrated against THAT track's
+/// counter, so this list is the exception and the default is per-track.
+fn is_global_scope(command_type: u16) -> bool {
+    command_type == UiCommandType::Undo as u16
+        || command_type == UiCommandType::Redo as u16
+        || command_type == UiCommandType::LoadProject as u16
+        || command_type == UiCommandType::SaveProject as u16
+}
+
+/// The base version a track-scoped edit must present, when the caller did not say.
+///
+/// M2.17 MOVED THE GOALPOSTS AND THE SYMPTOM WAS SILENCE. Acceptance used to be
+/// global; it is per-track now, and the two diverge on the first edit — measured
+/// on `maximal`, three notes on track 0 left it at global 5, track 0 at 5 and
+/// every other track at 1. An edit on track 1 quoting 5 is not refused with a
+/// message, it is DROPPED, so note entry, chords and transpose all stopped
+/// working on every track except the one edited last, with nothing on screen.
+///
+/// The page cannot stamp this itself: the per-track counters are not on the wire,
+/// and putting them there would mean every client re-deriving what this side can
+/// read in one call. It is the same argument the BATCH path already makes for
+/// re-basing here rather than in the browser — this is the side that can ask.
+///
+/// An EXPLICIT base is honoured. `daw-cli do note --base V` models an author who
+/// read a version, thought, and wrote; overriding that would turn optimistic
+/// concurrency into no concurrency at all.
+fn resolve_base(handle: &EngineHandle, track_id: u32, sent: u32, command_type: u16) -> u32 {
+    if sent != 0 { return sent; }
+    // A global-scope command still needs a base — it is arbitrated, just against
+    // the other counter. Returning 0 here dropped every Undo silently, which is
+    // the same failure this function exists to fix, one counter over.
+    if is_global_scope(command_type) { return handle.clip_version(); }
+    handle.clip_version_for_track(track_id)
+}
+
 /// The most parameters the engine's region carries, kUiMaxDeviceParams.
 const MAX_DEVICE_PARAMS: i64 = 256;
 
@@ -2267,15 +2380,26 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         if let Some(rest) = t.strip_prefix("BATCH\n") {
                             let (mut ok, mut failed) = (0u32, 0u32);
                             for line in rest.lines().filter(|l| !l.trim().is_empty()) {
-                                let base = handle.clip_version();
+                                // The GLOBAL counter, kept only to wait on below: it
+                                // moves on any accepted edit, so it is still the
+                                // "did that land" signal even though it is no longer
+                                // the base anything is arbitrated against.
+                                let global_before = handle.clip_version();
+                                // Read per OP, from the op's OWN track: a batch can
+                                // span tracks (a transpose across a selection does),
+                                // and the counters diverge, so one base for the whole
+                                // frame is right for at most one of them.
                                 let sent = if let Some(c) = build_chord(line) {
                                     let mut c = c;
-                                    c.base_version = base;
+                                    c.base_version = handle.clip_version_for_track(c.track_id);
                                     handle.send_chord_command(c).is_ok()
                                 } else {
                                     match build_command(line) {
-                                        Ok(mut p) => { p.base_version = base;
-                                                       handle.send_command(p).is_ok() }
+                                        Ok(mut p) => {
+                                            p.base_version = resolve_base(
+                                                &handle, p.track_id, 0, p.command_type);
+                                            handle.send_command(p).is_ok()
+                                        }
                                         Err(_) => false,
                                     }
                                 };
@@ -2284,7 +2408,7 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                 // this the next op re-reads the same version and we
                                 // are back to the race we are fixing.
                                 if handle.wait_for_clip_version(
-                                    base, base.wrapping_add(1),
+                                    global_before, global_before.wrapping_add(1),
                                     Duration::from_millis(250)) { ok += 1; } else { failed += 1; }
                             }
                             let reply = format!("{{\"ok\":true,\"applied\":{ok},\"failed\":{failed}}}");
@@ -2440,6 +2564,9 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         // Chords take a different payload, so they cannot go
                         // through build_command's return type.
                         if let Some(c) = build_chord(&t) {
+                            let mut c = c;
+                            c.base_version = resolve_base(&handle, c.track_id,
+                                                          c.base_version, c.command_type);
                             let reply = match handle.send_chord_command(c) {
                                 Ok(()) => format!("{{\"ok\":true,\"type\":{},\"degree\":{}}}",
                                                   c.command_type, c.degree),
@@ -2450,10 +2577,13 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         }
                         let reply = match build_command(&t) {
                             Err(why) => format!("{{\"error\":\"{why}\"}}"),
-                            Ok(p) => match handle.send_command(p) {
+                            Ok(mut p) => {
+                                p.base_version = resolve_base(&handle, p.track_id,
+                                                              p.base_version, p.command_type);
+                                match handle.send_command(p) {
                                 Ok(()) => format!("{{\"ok\":true,\"type\":{}}}", p.command_type),
                                 Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
-                            },
+                            }},
                         };
                         if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                     }
@@ -3719,8 +3849,14 @@ mod tests {
     /// The values are the ones the READ side reports, so a round trip through
     /// the UI has to come back the same.
     fn entry(payload: &[u8]) -> EventEntry {
+        // `ready` is M2.18's publication flag for the multi-producer ring. This
+        // builds an entry the DECODERS read rather than one the ring publishes,
+        // so its value is immaterial here — but it is set to 1 anyway, because a
+        // fixture that does not look like a real entry is a fixture that stops
+        // catching the day someone checks the flag.
         let mut e = EventEntry { sample_time: 0, block_id: 0, event_type: 0,
-                                 size: payload.len() as u16, flags: 0, payload: [0u8; 40] };
+                                 size: payload.len() as u16, flags: 0,
+                                 payload: [0u8; 40], ready: 1 };
         e.payload[..payload.len()].copy_from_slice(payload);
         e
     }

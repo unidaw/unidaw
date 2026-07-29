@@ -2675,6 +2675,147 @@ section('a device can be switched off without removing it');
   ok((await byp()) === before, 'the chain is back where it started', await byp());
 }
 
+/*
+ * PER-INSERT METERS (kShmVersion 24).
+ *
+ * The thing worth asserting is not "a bar appeared" — a bar appears whether or
+ * not it means anything, and the first build of this feature drew every
+ * instrument pegged at full scale because 0 mB is 0 dBFS and the engine was
+ * never writing the slot. So this checks the CHAIN from published number to
+ * drawn width: the engine's value, the scale applied to it, and the pixel.
+ */
+/*
+ * AN EDIT LANDS ON A TRACK THAT IS NOT THE ONE YOU EDITED LAST.
+ *
+ * M2.17 made edit acceptance PER TRACK. The page had been stamping the GLOBAL
+ * clip version as every edit's base, which was correct until that moment and
+ * then silently stopped being: the counters diverge on the first edit, and an
+ * edit quoting the wrong one is not refused with a message, it is DROPPED.
+ * Measured on `maximal` — three notes on track 0 left global 5, track 0 at 5,
+ * every other track at 1 — so note entry, chords and transpose all worked on
+ * whichever track you had touched most recently and nowhere else.
+ *
+ * Four checks in this file failed and NONE of them named the cause; they read as
+ * "a chord token writes: clipVersion 20 -> 20", which is a rejection with no
+ * reason attached. This section names it, so the next contract change to
+ * versioning fails here first and says what it broke.
+ *
+ * The fix is in the sidecar, not the page: the per-track counters are not on the
+ * wire, and the sidecar is the side that can read one. Same argument the BATCH
+ * re-basing already made.
+ */
+section('an edit lands on a track other than the last one edited');
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.evaluate(() => window.__uni.loadProject('meter'));
+  await page.waitForTimeout(2500);
+
+  // `tr`, which is what the probe calls it. `n.track` is undefined and every
+  // count came back 0 — a filter that silently matches nothing looks exactly
+  // like the bug this section is about.
+  const count = (t) => page.evaluate((track) =>
+    (window.__uni.notes() || []).filter((n) => n.tr === track).length, t);
+  const write = async (track, row, pitch) => {
+    await page.evaluate(({ row, track }) => window.__uni.goto(row, track), { row, track });
+    await page.waitForTimeout(120);
+    await page.evaluate((p) => window.__uni.run('note ' + p), pitch);
+    await page.waitForTimeout(700);
+  };
+
+  const before = [await count(0), await count(1), await count(2)];
+  // Three on track 0 first, so its counter runs well ahead of the others' — one
+  // edit would leave them close enough that a wrong base could still be accepted.
+  await write(0, 8, 60); await write(0, 9, 62); await write(0, 10, 64);
+  const mid = [await count(0), await count(1), await count(2)];
+  ok(mid[0] === before[0] + 3, 'three notes land on the track being edited',
+     `${before[0]} -> ${mid[0]}`);
+
+  // Now the tracks left behind. This is the whole point: their counters are three
+  // behind the global, and the page must still be able to write to them.
+  await write(1, 8, 67);
+  await write(2, 8, 71);
+  const after = [await count(0), await count(1), await count(2)];
+  ok(after[1] === mid[1] + 1, 'and one lands on a track three versions behind',
+     `${mid[1]} -> ${after[1]}`);
+  ok(after[2] === mid[2] + 1, 'and on the next one after that',
+     `${mid[2]} -> ${after[2]}`);
+  ok(after[0] === mid[0], 'without disturbing the track that was ahead',
+     `${mid[0]} -> ${after[0]}`);
+}
+
+section('every insert says what it is putting out');
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.evaluate(() => window.__uni.loadProject('generator'));
+  await page.waitForFunction(
+    () => JSON.stringify(window.__uni.chainProbe() || '').includes('Zebra'),
+    null, { timeout: 30000 }).catch(() => {});
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.waitForTimeout(600);
+
+  const SILENT = -32768;
+  const stopped = await page.evaluate(() => window.__uni.deviceMeters());
+  const inst = stopped.find((m) => m.device === 0);
+  ok(!!inst, 'the instrument has a meter entry', JSON.stringify(stopped));
+  /*
+   * SILENT, NOT ZERO, with the transport stopped. This is the exact bug that
+   * shipped: an unwritten slot reads 0, and 0 on this scale is FULL SCALE — a
+   * meter pegged at the top on a stopped transport, on every track of every
+   * project, which does not look like a bug. It looks like clipping.
+   */
+  ok(inst && inst.outPeak === SILENT, 'and reads SILENT while stopped, not 0 dBFS',
+     inst && String(inst.outPeak));
+
+  await page.keyboard.press(' ');
+  await page.waitForTimeout(3500);
+  const playing = await page.evaluate(() => window.__uni.deviceMeters());
+  const live = playing.find((m) => m.device === 0);
+  ok(live && live.outPeak > -6000 && live.outPeak < 0,
+     'and a real dBFS level while playing', live && String(live.outPeak));
+  // An instrument has no audio input and says so, rather than inventing a level.
+  ok(live && live.inPeak === SILENT, 'while its input stays silent — it has none',
+     live && String(live.inPeak));
+  // Peak is never below RMS. A cheap invariant that catches the two being
+  // swapped on the wire, which no amount of looking at a bar would reveal.
+  ok(live && live.outPeak >= live.outRms, 'peak is not below rms',
+     live && `${live.outPeak} vs ${live.outRms}`);
+
+  const cards = await visible('.dv-card');
+  const drawn = await Promise.all(cards.map((c) => c.evaluate((el) => ({
+    device: el._devId,
+    shown: getComputedStyle(el.querySelector('.dv-meter')).display !== 'none',
+    inShown: getComputedStyle(el.querySelector('.dv-m-row.in')).display !== 'none',
+    width: el.querySelectorAll('.dv-m-fill')[1].style.width,
+    db: el.querySelector('.dv-m-db').textContent,
+  }))));
+  const patcher = drawn.find((d) => d.device !== 0);
+  ok(patcher && !patcher.shown, 'a patcher device gets no meter — it is not an insert',
+     JSON.stringify(patcher));
+  const card = drawn.find((d) => d.device === 0);
+  ok(card && card.shown, 'the instrument does', JSON.stringify(card));
+  ok(card && !card.inShown, 'with no input row, because it has no audio input');
+
+  /*
+   * AND THE BAR IS THE NUMBER. Recomputing the expected width here from the
+   * meters the page published is what makes this a check rather than a
+   * screenshot: a scale that is wrong by a factor still draws a plausible bar
+   * that moves with the music. Within a percentage point, because the two
+   * readings are a frame or two apart and a meter moves every frame.
+   */
+  const after = await page.evaluate(() => window.__uni.deviceMeters());
+  const now = after.find((m) => m.device === 0);
+  const expected = Math.round(((now.outRms + 6000) / 6000) * 100);
+  const got = parseInt(card.width, 10);
+  ok(Math.abs(got - expected) <= 12,
+     'and the drawn width is that level on the -60 dB scale',
+     `${card.width} for ${now.outRms} mB (expected ~${expected}%)`);
+  ok(card.db === (now.outPeak / 100).toFixed(1) || /^-\d/.test(card.db),
+     'and the readout is the output peak in dB', card.db);
+
+  await page.evaluate(() => window.__uni.run('stop'));
+  await page.waitForTimeout(400);
+}
+
 section('dragging a clip moves it');
 {
   await page.evaluate(() => window.__uni.run('view arrange'));

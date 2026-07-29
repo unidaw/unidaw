@@ -171,18 +171,30 @@ export function connectEngine({ url = 'ws://127.0.0.1:8174', cmdUrl = 'ws://127.
     /** Fire-and-reconcile: the reply is an ack, the truth arrives in a frame. */
     send(obj) {
       if (!cmdWs || cmdWs.readyState !== 1) return false;
-      /**
-       * What this edit was composed against — unless the caller already knows
-       * better.
+      /*
+       * WHAT THIS EDIT WAS COMPOSED AGAINST — and this side no longer guesses.
        *
-       * Most commands are clip edits and the clip version is the right answer,
-       * so filling it in here means no caller has to remember. But harmony is
-       * validated against its OWN counter, and this line was overwriting the
-       * version `setHarmony` had carefully looked up: the engine then reported
-       * `base=4 current=3` for a page that had sent 3, and I spent a while
-       * reading that as an engine race. It was this assignment.
+       * It used to stamp `store.clipVersion`, the GLOBAL counter, on anything
+       * that had not named a base. That was right until M2.17 made acceptance
+       * PER TRACK: the counters diverge on the first edit, and an edit on track 1
+       * quoting the global is not refused with a message — it is DROPPED. Note
+       * entry, chords and transpose all stopped working on every track except the
+       * one edited most recently, with nothing on screen to say so. Measured on
+       * `maximal`: three notes on track 0 left global 5, track 0 at 5, and every
+       * other track still at 1.
+       *
+       * The page cannot stamp the right number because the per-track counters are
+       * not on the wire, and putting them there would mean every client
+       * re-deriving what the sidecar can read in one call. So the sidecar fills
+       * it in — the same argument it already makes for re-basing a BATCH, which
+       * has to happen on the side that can wait for the engine.
+       *
+       * A caller that DOES know still wins: harmony validates against its own
+       * counter and `setHarmony` looks that up, so it names a base and this must
+       * not overwrite it. That exact overwrite once had the engine reporting
+       * `base=4 current=3` to a page that had sent 3, and I spent a while reading
+       * it as an engine race.
        */
-      if (obj.base === undefined) obj.base = store.clipVersion;
       cmdWs.send(JSON.stringify(obj));
       return true;
     },

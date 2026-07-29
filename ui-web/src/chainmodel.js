@@ -106,6 +106,35 @@ export const CAP_CONSUMES_MIDI = 1;
 export const CAP_PRODUCES_MIDI = 2;
 export const CAP_AUDIO = 4;
 
+/** DeviceKind. Only the instrument is named here; the rest read from `caps`. */
+const KIND_VST_INSTRUMENT = 3;
+/** kUiMeterSilent: silent or below the floor, and a real reading, not a hole. */
+export const METER_SILENT = -32768;
+/**
+ * The bottom of the drawn scale, in dBFS millibels.
+ *
+ * -60 dB, which is the range a channel meter is useful over. Not the -327 dB the
+ * i16 could hold: a scale that reserves four fifths of its length for levels
+ * nobody can hear puts every real signal in the top inch, where the difference
+ * between "hot" and "clipping" is a pixel — and telling those two apart is the
+ * entire reason to look at a meter.
+ */
+const METER_FLOOR_MB = -6000;
+
+/**
+ * A millibel reading as a fraction of the drawn scale, 0..1.
+ *
+ * SILENT is 0 rather than being clamped like any other low value, because it is
+ * not a low value: it is "there is nothing here". They land in the same place on
+ * screen and mean different things, and the distinction is what stops an
+ * instrument's absent input from drawing as a very quiet signal.
+ */
+export function meterScale(mb) {
+  if (mb === METER_SILENT || mb <= METER_FLOOR_MB) return 0;
+  if (mb >= 0) return 1;
+  return (mb - METER_FLOOR_MB) / -METER_FLOOR_MB;
+}
+
 /**
  * The n+1 gaps in a chain of n devices: before the first, between each pair,
  * after the last. Each says what is present at that point.
@@ -228,7 +257,19 @@ export function createChainBuffer(cap = 16) {
                  // with eight stems and a sidechain input". Empty until the engine
                  // publishes a chain that carries them.
                  busText: '', busTruncated: false, busPartial: false,
-                 _bKey: -1,
+                 /*
+                  * v24 PER-INSERT METERS, as fractions of the drawn scale plus
+                  * the dB the card prints. `hasIn` says whether an INPUT meter
+                  * belongs on this device at all — see meterScale.
+                  *
+                  * Numbers on the card object rather than a meter object per
+                  * card: these change every frame by definition, and a fresh
+                  * object per card per frame is the one allocation pattern this
+                  * file exists to avoid.
+                  */
+                 hasMeter: false, hasIn: false,
+                 inRms: 0, inPeak: 0, outRms: 0, outPeak: 0, meterText: '',
+                 _bKey: -1, _mOut: 1,
                  // Memo keys for the three strings this card builds. Named for
                  // what they cache so a fourth input added to one of them is
                  // obviously missing from its key.
@@ -259,7 +300,11 @@ export function buildChainModel(opts, buf) {
           // Which device the published patcher graph belongs to, and what is in
           // it. A generator node emits notes of its own, and until now nothing
           // anywhere said so — see `generators` below.
-          patcherDevice = -1, generators = '' } = opts;
+          patcherDevice = -1, generators = '',
+          // v24 per-insert meters, as the wire decoded them. Read by TRACK ID and
+          // DEVICE ID below, never by slot or by position — both of those diverge
+          // from the ids the moment anything is removed.
+          meters = null, meterCount = 0, meterTrack = -1 } = opts;
   const entry = chains ? chains[track] : null;
 
   buf.track = track;
@@ -418,6 +463,47 @@ export function buildChainModel(opts, buf) {
     if (c._mCount !== moreCount) {
       c._mCount = moreCount;
       c.more = moreCount > 0 ? '+' + moreCount + ' more' : '';
+    }
+
+    /*
+     * THE DEVICE'S METERS, FOUND BY ID.
+     *
+     * A linear scan of a list that is a handful long, once per card, rather than
+     * a Map rebuilt every frame: building the map would allocate more than the
+     * scan costs, and this runs at 120 Hz. Matching on `device` and not on
+     * position is the contract — the engine's compacted insert order skips
+     * patcher devices, so the Nth meter is not the Nth card, and indexing by
+     * position paints one device's level on another's face.
+     */
+    c.hasMeter = false;
+    if (meters && meterTrack >= 0) {
+      for (let m = 0; m < meterCount; m++) {
+        const e = meters[m];
+        if (e.track !== meterTrack || e.device !== d.id) continue;
+        c.hasMeter = true;
+        c.outRms = meterScale(e.outRms);
+        c.outPeak = meterScale(e.outPeak);
+        c.inRms = meterScale(e.inRms);
+        c.inPeak = meterScale(e.inPeak);
+        /*
+         * WHETHER AN INPUT METER BELONGS HERE AT ALL, from what the device IS
+         * rather than from what it currently reads.
+         *
+         * An instrument has no audio input and honestly reports its input as
+         * silent forever, so keying on "is the input silent right now" would
+         * draw an input meter on an effect and then blank it during a rest —
+         * a meter that disappears when the music stops. A device that processes
+         * audio gets both, which is the whole gain-staging comparison; one that
+         * only makes it gets an output.
+         */
+        c.hasIn = (d.caps & CAP_AUDIO) !== 0 && d.kind !== KIND_VST_INSTRUMENT;
+        if (c._mOut !== e.outPeak) {
+          c._mOut = e.outPeak;
+          c.meterText = e.outPeak === METER_SILENT
+            ? '−∞' : (e.outPeak / 100).toFixed(1);
+        }
+        break;
+      }
     }
 
     c.pos = d.pos;

@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 15;
+export const WIRE_VERSION = 16;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 136;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4
+const HEADER_BYTES = 140;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -148,6 +148,18 @@ export function createStore() {
     trackParent: new Uint32Array(16), trackFlags: new Uint8Array(16),
     /** A track's chords, pooled like the notes. See the decode at the tail. */
     chords: [], chordCount: 0, chordsRevision: 0,
+    /** Where the chord section ends, so the meters after it need not re-derive it. */
+    chordsEnd: 0,
+    /**
+     * v24 per-insert meters, pooled. Keyed by (track, device) — MATCHED ON
+     * device id and never on position, because the engine's compacted insert
+     * order skips patcher devices, so the Nth meter is not the Nth card.
+     *
+     * Levels are dBFS millibels: 0 is full scale, ordinary values negative, and
+     * METER_SILENT is a real reading rather than a hole — an instrument has no
+     * audio input and honestly reports its input silent forever.
+     */
+    meters: [], meterCount: 0,
     /** The patcher graph (SHM v14). One global graph today; the shape does not
      *  change when it becomes per-device. */
     patcherVersion: -1, patcherDevice: 0, patcherNodes: [], patcherEdges: [],
@@ -513,6 +525,42 @@ export function decode(buf, store) {
     // moved without comparing the list, and the clip version does not separate a
     // note edit from a chord one.
     if (changed) store.chordsRevision++;
+    store.chordsEnd = at + have * CHORD_BYTES;
+  }
+
+  /*
+   * PER-INSERT METERS, and now THESE are the last section.
+   *
+   * No revision and no change detection, unlike the chords: these move EVERY
+   * frame by design — that is what a meter is — so comparing them to decide
+   * whether anything changed would be work done to always answer yes.
+   *
+   * Bounds-checked like the two blocks above and for the same reason: a frame
+   * from an older sidecar simply stops before this, and reading past the end of
+   * a DataView throws, which would take down the socket handler and the whole UI
+   * with it to report a field that is merely absent.
+   */
+  {
+    const at = store.chordsEnd;
+    const want = v.getUint16(136, true);
+    const have = Math.max(0, Math.min(want, (buf.byteLength - at) / METER_BYTES | 0));
+    while (store.meters.length < have) {
+      store.meters.push({ track: 0, device: 0, inPeak: 0, outPeak: 0, inRms: 0, outRms: 0 });
+    }
+    for (let i = 0; i < have; i++) {
+      const o = at + i * METER_BYTES;
+      const m = store.meters[i];
+      // The track ID, not the slot the engine indexes its region by — the
+      // sidecar translates. The two diverge the moment a track is removed, and
+      // the page keys everything on ids.
+      m.track = v.getUint32(o, true);
+      m.device = v.getUint32(o + 4, true);
+      m.inPeak = v.getInt16(o + 8, true);
+      m.outPeak = v.getInt16(o + 10, true);
+      m.inRms = v.getInt16(o + 12, true);
+      m.outRms = v.getInt16(o + 14, true);
+    }
+    store.meterCount = have;
   }
 
   store.ok = true;
@@ -521,6 +569,10 @@ export function decode(buf, store) {
 
 /** 40 bytes each; see the sidecar's encode. */
 const CHORD_BYTES = 40;
+/** 16 bytes each; see the sidecar's encode. */
+const METER_BYTES = 16;
+/** kUiMeterSilent — silent or below the floor, NOT "no reading". */
+export const METER_SILENT = -32768;
 
 const NAMES = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];
 

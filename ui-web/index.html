@@ -2945,7 +2945,11 @@ function placeSurface(el, name, v, v2) {
   if (el.hidden) el.hidden = false;
 }
 
-const _chainOpts = { track: 0, chains: null, selected: -1, trackName: '', params: null };
+// One reused object, with every field the model reads declared here — a shape
+// that gains a property mid-run is a hidden-class transition on the hot path.
+const _chainOpts = { track: 0, chains: null, selected: -1, trackName: '', params: null,
+                     patcherDevice: -1, generators: '',
+                     meters: null, meterCount: 0, meterTrack: -1 };
 const _entryOverlay = { row: 0, track: 0, col: 0, text: '' };
 /**
  * How many note columns the tracker shows, from what the song actually uses.
@@ -3143,6 +3147,10 @@ function draw() {
     // node inside it plays a part nobody wrote.
     o.patcherDevice = engine ? engine.patcherDevice : -1;
     o.generators = generatorPhrase();
+    // v24 per-insert meters. Keyed by (track id, device id) — see chainmodel.
+    o.meters = engine ? engine.meters : null;
+    o.meterCount = engine ? engine.meterCount : 0;
+    o.meterTrack = rackTrack;
     chain.render(buildChainModel(o, chainBuf));
     /**
      * A non-tracker pane holds the keyboard only WHILE something is selected in
@@ -5438,6 +5446,7 @@ window.__uni = {
   addDevice: (track, kind) => conn && conn.send({ type: 'adddevice',
     track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' }),
   delDevice,                          // the same function the button and the key call
+  bypass: bypassDevice,               // likewise: the card's switch, `b`, and this
   addTrack, removeTrack,
   setHarmony, scaleIdNamed,
   // The version a harmony write must quote. Exposed so a test can see the
@@ -5462,8 +5471,17 @@ window.__uni = {
   paletteProbe: () => palette.probe(),
   paletteMove: (d) => { palette.move(d); draw(); return palette.probe().selected; },
   chainSelect: (pos) => { state.chainSelected = pos; draw(); return state.chainSelected; },
-  /** Switch a device off. Same function the button and the `b` key call. */
-  bypass: (track, device, on) => bypassDevice(track, device, on),
+  /**
+   * v24 per-insert meters, as the engine published them this frame.
+   *
+   * Raw millibels, not the drawn fractions: a test asserting "the meter moved"
+   * should compare the numbers the engine sent, and a test asserting the SCALE is
+   * right should call meterScale itself. Folding them together here would let a
+   * broken scale pass by agreeing with itself.
+   */
+  deviceMeters: () => (engine ? engine.meters.slice(0, engine.meterCount).map((m) => ({
+    track: m.track, device: m.device, inPeak: m.inPeak, outPeak: m.outPeak,
+    inRms: m.inRms, outRms: m.outRms })) : []),
   palette: (on) => { if (on === false) palette.close(); else palette.open(); draw();
                      return palette.opened; },
   chains: () => JSON.parse(JSON.stringify(chains)),

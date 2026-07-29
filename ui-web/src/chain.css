@@ -95,7 +95,11 @@
    that never reacts is decoration. */
 .dv-add:hover { border-color: var(--base-accent); color: var(--base-accent-ramp-400); }
 
-.dv-card-top { display: flex; align-items: center; gap: 8px; }
+ /* The three buttons are absolutely positioned, so they reserve no space and the
+    title happily ran underneath them — "patcher event #1" ending behind the
+    bypass switch. The gutter is 6 + 3 x (20 + 6), which is what makes the
+    title's ellipsis fire before it reaches them rather than after. */
+.dv-card-top { display: flex; align-items: center; gap: 8px; padding-right: 78px; }
 .dv-badge {
   padding: 1px 5px; border-radius: 2px;
   border: 1px solid var(--base-accent);
@@ -327,4 +331,59 @@
 .dv-card[data-flow-out="dead"]::after {
   border-left: 1px dotted var(--uni-text-fx);
   opacity: 0.7;
+}
+
+/* ── PER-INSERT METERS (v24) ────────────────────────────────────────────────
+   What this insert is receiving and what it is putting out, on ONE numeric
+   scale with the track meters, so gain staging is comparable card to card. The
+   whole point of the feature: an insert that merely makes things louder should
+   be visibly doing that rather than sounding better.
+
+   Between the capability line and the parameter list — under the facts about
+   what the device IS, above the list of what it is set to. It is a live value,
+   not a property, and putting it with the properties would make the card's top
+   half twitch. */
+.dv-meter {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; gap: 2px;
+  position: relative;
+  padding-right: 34px;   /* the dB readout sits in this gutter */
+}
+/* 4px, matching the parameter bars' 3px closely enough to read as the same kit
+   without being mistaken for one — a parameter bar is draggable and this is not. */
+.dv-m-row {
+  position: relative;
+  height: 4px;
+  background: var(--uni-rule-column);
+  border-radius: 2px;
+  overflow: hidden;
+}
+/* The INPUT row is dimmer than the output. They are the same measurement in the
+   same units and you are comparing them, so they must not be different colours —
+   but the output is the one you read at a glance. */
+.dv-m-row.in { opacity: .55; }
+.dv-m-fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  background: var(--base-accent);
+  border-radius: 2px;
+}
+/* PEAK, riding on the RMS fill. A limiter's entire job is to make these two
+   disagree, and either number alone hides the thing you put the limiter there
+   to see. `translateX(-100%)` so a peak at full scale sits INSIDE the bar rather
+   than one pixel past its end, where it would be clipped away exactly when it
+   matters most. */
+.dv-m-tick {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--base-accent-ramp-300, var(--base-accent));
+  transform: translateX(-100%);
+}
+/* The output peak in dB, right-aligned in the gutter. Numbers, because "is this
+   -3 or -12" is not a question a 64px bar can answer and it is the question you
+   are asking. */
+.dv-m-db {
+  position: absolute; right: 0; top: 0;
+  font-size: var(--font-size-fx);
+  color: var(--base-neutral-600);
+  text-align: right;
+  line-height: 10px;
 }

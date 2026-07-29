@@ -36,7 +36,7 @@ import { ticksPerBar, ticksPerBeat, positionOf, createPosition, sameMeter,
          meterText } from '../src/meter.js';
 import { buildChainModel, createChainBuffer, paramKey, createParamEdits, findParamEdit,
          setParamEdit, dropParamEdit, reapParamEdits, MAX_PARAMS,
-         EDIT_HOLD_MS } from '../src/chainmodel.js';
+         EDIT_HOLD_MS, meterScale, METER_SILENT } from '../src/chainmodel.js';
 import { createCommands, checkArgs, runCommand, parseHelpArgs } from '../src/dock.js';
 import { unpackClipGrid } from '../src/wire.js';
 
@@ -807,7 +807,7 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
                      'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
-                     'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice',
+                     'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice', 'bypass',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
                      'selectedClip', 'ticksPerBar', 'master'];
@@ -1572,6 +1572,8 @@ const KEY_OPS = {
   // Editing.
   Delete: { cmd: 'del' }, Backspace: { cmd: 'del' },
   c: { cmd: 'copy' }, s: { cmd: 'save' }, S: { cmd: 'save' },
+  // Bypass the selected device, in the rack.
+  b: { cmd: 'bypass' }, B: { cmd: 'bypass' },
   // Commits an open token buffer; with none open it plays from the cursor row,
   // which is `seek` + `play` and reachable as both.
   Enter: { nav: true },
@@ -1593,6 +1595,69 @@ const ALT_OPS = {
   KeyS: { cmd: 'solo' }, KeyV: { cmd: 'paste' }, KeyW: { cmd: 'mute' },
   KeyX: { cmd: 'cut' },
 };
+
+/*
+ * THE METER SCALE, which decides where a level lands on a 64px bar.
+ *
+ * Pure arithmetic and therefore testable without an engine, which matters
+ * because the failure it guards is not a crash: a scale that is wrong by a
+ * factor still draws a plausible bar that moves with the music, and the only
+ * way to notice is to compare it against a number nobody has on screen.
+ */
+test('a millibel reading lands where the scale says', () => {
+  // 0 mB is FULL SCALE on this contract, not silence. Getting this backwards
+  // would draw a stopped transport as a pegged meter, which is what the engine
+  // did for one build and why the sentinel below exists at all.
+  assert.equal(meterScale(0), 1, '0 mB is full scale');
+  assert.equal(meterScale(-3000), 0.5, 'half the scale is -30 dB');
+  assert.equal(meterScale(-6000), 0, 'and the floor is -60 dB');
+  assert.equal(meterScale(-9000), 0, 'below the floor clamps rather than going negative');
+  assert.equal(meterScale(600), 1, 'and above full scale clamps rather than overflowing');
+  /*
+   * SILENT IS NOT A LOW VALUE. It is "there is nothing here" — an instrument has
+   * no audio input and says so forever — and it happens to land in the same
+   * place a very quiet signal does. They must not be computed the same way: the
+   * arithmetic on i16::MIN would give a large negative fraction, and a bar drawn
+   * from it is a bar whose width depends on a sentinel.
+   */
+  assert.equal(meterScale(METER_SILENT), 0, 'silence is the bottom, not a computation');
+  assert.ok(meterScale(-100) > 0.9 && meterScale(-100) < 1, 'just under full scale is near the top');
+});
+
+/*
+ * NO KEY IN `__uni` IS DECLARED TWICE.
+ *
+ * A duplicate key in an object literal is legal JavaScript and silent: the last
+ * one wins, no warning, no error. `__uni` is 150 entries long and is the test
+ * surface, the agent's surface and the console's surface at once — so a name
+ * collision does not break the new entry, it deletes an OLD one, and the failure
+ * lands somewhere unrelated.
+ *
+ * Which is exactly what happened: a `meters` added for per-insert levels replaced
+ * the `meters` that reported the song's time signature, and the e2e died four
+ * sections earlier reading `.song` off the wrong shape. The parse is crude —
+ * top-level `name:` at a fixed indent inside the literal — and crude is fine,
+ * because the guard below catches it going blind.
+ */
+test('the __uni surface declares no name twice', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const at = src.indexOf('window.__uni = {');
+  assert.ok(at > 0, 'the surface was found at all');
+  const body = src.slice(at);
+  const end = body.indexOf('\n};');
+  assert.ok(end > 0, 'and its end');
+  const seen = new Map();
+  const dupes = [];
+  for (const m of body.slice(0, end).matchAll(/^  ([A-Za-z_$][\w$]*):/gm)) {
+    if (seen.has(m[1])) dupes.push(m[1]);
+    seen.set(m[1], true);
+  }
+  // If this stops matching, the whole test quietly becomes a no-op — the failure
+  // mode every source-reading check has to guard against.
+  assert.ok(seen.size > 60, `the surface was actually parsed: ${seen.size} entries`);
+  assert.deepEqual(dupes, [], 'a name declared twice — the earlier one is silently gone');
+});
 
 test('every key the app handles is reachable another way', async () => {
   const { readFileSync } = await import('node:fs');
@@ -1670,6 +1735,10 @@ const OP_REGISTRY = {
   // New this session, all three still owed a programmatic path.
   new:       { cli: null, agent: null, why: 'gap' },
   deldevice: { cli: null, agent: null, why: 'gap' },
+  // Bypass reached the ENGINE from daw-cli first (`do set-bypass`, backend's
+  // verb) and this app second, so the CLI path is real and the agent's manifest
+  // is what still owes it a tool.
+  bypass:    { cli: 'set-bypass', agent: null, why: 'gap' },
   editor:    { cli: null, agent: null, why: 'gap' },
   // v22 (AddTrack=46/RemoveTrack=47). daw-cli shipped its verbs in the same
   // commit the engine did, so these are covered on the CLI from day one; the
@@ -1757,9 +1826,14 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                  'move-clip', 'new', 'paste', 'patch', 'redo', 'rename', 'seek',
                  'stop', 'transpose', 'trim-clip', 'undo'];
 /** Ops with no agent tool today. Same rule. */
-const AGENT_GAP = ['addnode', 'clear', 'columns', 'copy', 'cut', 'del', 'deldevice',
-                   'delnode', 'editor', 'gain', 'link', 'loop', 'mute', 'new', 'paste',
-                   'patch', 'seek', 'solo', 'tempo', 'transpose'];
+// `bypass` joins the list rather than being smuggled past it: the engine takes
+// the command and daw-cli sends it, but the agent's manifest has no tool for it,
+// so an agent asked to A/B an insert still cannot. Worth closing — comparing with
+// and without a device is exactly the kind of judgement an agent should be able
+// to make on its own — and worth recording honestly until it is.
+const AGENT_GAP = ['addnode', 'bypass', 'clear', 'columns', 'copy', 'cut', 'del',
+                   'deldevice', 'delnode', 'editor', 'gain', 'link', 'loop', 'mute',
+                   'new', 'paste', 'patch', 'seek', 'solo', 'tempo', 'transpose'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether
@@ -1874,12 +1948,16 @@ const ENGINE_UNUSED = {
   DeleteChord: 'gap — a chord can be written and not removed',
   DeleteHarmony: 'gap — same',
   RequestClipWindow: 'the sidecar owns the viewport and asks on the client\'s behalf',
-  // These four are referenced by NAME elsewhere but never sent as a command from
+  // These three are referenced by NAME elsewhere but never sent as a command from
   // a frontend path, which is the distinction this test draws: a struct that
   // mentions an enum is not a caller.
+  //
+  // UpdateDevice was here — "a device's config cannot be edited after it is
+  // added" — until the bypass switch started sending it, and this list is
+  // asserted in BOTH directions, so it failed the moment that became untrue. A
+  // recorded gap that outlives the gap is a lie with a comment on it.
   LoadPluginOnTrack: 'gap — the rack inserts with AddDevice; this older path is unused',
   SetAutomationTarget: 'gap — automation has no UI at all',
-  UpdateDevice: 'gap — a device\'s config cannot be edited after it is added',
   SetModSourceValue: 'gap — macro/mod values are unreachable',
 };
 

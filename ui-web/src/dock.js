@@ -209,6 +209,19 @@ export function createCommands(api) {
     deldevice: { help: 'deldevice <track> <device>',
       args: [A_TRACK, { name: 'device', type: 'int', min: 0 }],
       run: (a) => (api.delDevice(Number(a[0]), Number(a[1])) ? 'removed' : 'no engine') },
+    // Switch a device off without removing it. The state has been on the wire and
+    // drawn on the card since v20 with nothing able to SET it; `b` in the rack
+    // sets it now, and this is the same action for anything that is not a hand.
+    //
+    // It takes the STATE, not a toggle: a caller that has to read the current
+    // value to ask for the other one races anything else on the ring, and an
+    // agent asking twice would land back where it started.
+    bypass: { help: 'bypass <track> <device> [on] — switch a device off (on: 1 bypassed, 0 active)',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             { name: 'on', type: 'int', min: 0, max: 1, optional: true }],
+      run: (a) => (api.bypass(Number(a[0]), Number(a[1]),
+                              a[2] === undefined ? 1 : Number(a[2]))
+        ? (Number(a[2] === undefined ? 1 : a[2]) ? 'bypassed' : 'active') : 'no engine') },
     // Open a plugin's own window. The engine has accepted OpenPluginEditor since
     // before this UI existed and nothing ever sent it.
     editor: { help: 'editor <track> <device> — open the plugin\'s own window',

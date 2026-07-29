@@ -270,6 +270,33 @@ export class Chain {
       // The scroller and, inside it, a spacer holding the full extent. The rows
       // live in the spacer and are placed absolutely, so scrolling moves nothing
       // but the scroll offset.
+      /*
+       * THE METERS (v24). Two rows at most — in above out — each an RMS fill with
+       * a PEAK tick riding on top of it.
+       *
+       * Both, because they disagree in the way that matters: a limiter's job is
+       * to hold the peak down while the RMS climbs, and either number alone hides
+       * exactly the thing you put the limiter there to see. The tick is a
+       * separate element rather than a second background, so moving it is one
+       * transform and never a repaint of the bar under it.
+       *
+       * ABOVE the parameter list, under the facts about what the device IS. The
+       * list SCROLLS, and a live readout pinned to the bottom of a scrolling
+       * region moves when you scroll something unrelated to it.
+       */
+      const meter = div('dv-meter', el);
+      const rowIn = div('dv-m-row in', meter);
+      const inFill = div('dv-m-fill', rowIn);
+      const inTick = div('dv-m-tick', rowIn);
+      const rowOut = div('dv-m-row', meter);
+      const outFill = div('dv-m-fill', rowOut);
+      const outTick = div('dv-m-tick', rowOut);
+      const outDb = text(div('dv-m-db', meter));
+      el._meter = meter; el._rowIn = rowIn;
+      el._inFill = inFill; el._inTick = inTick;
+      el._outFill = outFill; el._outTick = outTick; el._outDb = outDb;
+      el._mi = -1; el._mip = -1; el._mo = -1; el._mop = -1;
+      el._mOn = null; el._mIn = null; el._mDb = null;
       const list = div('dv-plist', el);
       const space = div('dv-pspace', list);
       list._card = el;
@@ -562,6 +589,41 @@ export class Chain {
         // resolves in a frame, the other never will.
         el._busEl.classList.toggle('partial', c.busPartial);
         el._busEl.classList.toggle('trunc', c.busTruncated);
+      }
+      /*
+       * METERS. Every write guarded on a cached number (GUIDELINES 3.2), because
+       * this is the one part of a card that genuinely changes every frame — so it
+       * is also the one place where an unguarded style write costs 120 layouts a
+       * second per card rather than none.
+       *
+       * Quantised to whole percent before comparing. The engine publishes a new
+       * number every block and the bar is ~64px wide, so the untruncated value
+       * differs every single frame while the PIXEL does not: rounding first is
+       * what makes the guard a guard instead of a formality.
+       */
+      if (el._mOn !== c.hasMeter) {
+        el._mOn = c.hasMeter;
+        el._meter.style.display = c.hasMeter ? '' : 'none';
+        // Showing or hiding a row changes the height left for the parameter list
+        // inside this card, which the observer on `.dv-cards` cannot see.
+        this._geom = false;
+      }
+      if (c.hasMeter) {
+        if (el._mIn !== c.hasIn) {
+          el._mIn = c.hasIn;
+          el._rowIn.style.display = c.hasIn ? '' : 'none';
+          this._geom = false;
+        }
+        const pc = (v) => Math.round(v * 100);
+        if (c.hasIn) {
+          const i = pc(c.inRms), ip = pc(c.inPeak);
+          if (el._mi !== i) { el._mi = i; el._inFill.style.width = i + '%'; }
+          if (el._mip !== ip) { el._mip = ip; el._inTick.style.left = ip + '%'; }
+        }
+        const o = pc(c.outRms), op = pc(c.outPeak);
+        if (el._mo !== o) { el._mo = o; el._outFill.style.width = o + '%'; }
+        if (el._mop !== op) { el._mop = op; el._outTick.style.left = op + '%'; }
+        if (el._mDb !== c.meterText) { el._mDb = c.meterText; el._outDb.nodeValue = c.meterText; }
       }
       if (el._sel !== c.selected) { el._sel = c.selected; el.classList.toggle('sel', c.selected); }
       if (el._byp !== c.bypass) { el._byp = c.bypass; el.classList.toggle('byp', c.bypass); }

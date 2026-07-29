@@ -199,34 +199,32 @@ try {
     check(extents().find((e) => e.id === startId).start === BAR * 30, 'moved, ready to undo');
 
     /*
-     * A BASE-LESS UNDO IS DROPPED, AND THAT IS CORRECT.
+     * A BASE-LESS UNDO IS FILLED IN, AND THAT CHANGED — read this before
+     * believing an older comment about it.
      *
-     * The engine validates Undo against the clip version, so a command with no
-     * base carries 0 — stale by definition — and never applies. This cost me an
-     * hour: the check below used to send a bare `{type:"undo"}`, fail, and read
-     * exactly like "placement ops are not undoable after all". I was one message
-     * away from reporting it as an engine defect.
+     * The engine validates Undo against the clip version, so a command carrying
+     * base 0 is stale by definition and never applies. For a long time this file
+     * sent a bare `{type:"undo"}`, watched nothing happen, and PINNED that as
+     * correct. It cost an hour the first time — it reads exactly like "placement
+     * ops are not undoable after all", and I was one message from reporting it as
+     * an engine defect.
      *
-     * It is neither. The PAGE always supplies a base — the `obj.base ===
-     * undefined` line in engine.js, itself a fix for this same trap from the
-     * other direction — so undo works in the app, and the e2e suite's undo
-     * section proves it. It was the raw socket in THIS FILE speaking an
-     * incomplete sentence.
+     * What made it true was that the PAGE always stamped a base. M2.17 ended
+     * that: acceptance went per-track, the page cannot know a per-track counter,
+     * and it stopped stamping anything. So the sidecar resolves the base now —
+     * per-track for a track-scoped edit, global for Undo, Redo, Load and Save —
+     * and an explicit base is still honoured, which is what leaves optimistic
+     * concurrency available to anyone who wants it.
      *
-     * Pinned in both directions, so the next person reads a fact rather than
-     * rediscovering it. "Base version" reads as one idea and is two.
+     * Which means a base-less undo APPLIES now, and that is the better contract:
+     * "undo" is a complete sentence, and silently dropping it is not arbitration,
+     * it is a command that does nothing for a reason no caller can see.
      */
     say({ type: 'undo' });
-    await settle(700);
-    check(extents().find((e) => e.id === startId).start === BAR * 30,
-          'an undo with no base version is dropped, as the engine intends');
-
-    // And with one. daw-cli reads the version and stamps it, which is what the
-    // page does and what this file cannot do over a raw socket.
-    cliDo(['do', 'undo', '--force']);
     await settle(900);
     const back = extents().find((e) => e.id === startId);
-    check(back && back.start === cur.start, 'a stamped undo puts the clip back',
+    check(back && back.start === cur.start,
+          'an undo with no base is resolved by the sidecar and applies',
           back && `start=${back.start}, was ${cur.start}`);
     // The id has to survive the store swap, or every held reference breaks on
     // the commonest operation in a DAW.

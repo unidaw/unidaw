@@ -3,42 +3,45 @@
  *
  * Reported twice — "I'm editing T1 and T2's patchers Euclidean settings, nothing
  * seems to change", then "I was editing T1's patcher's Euclidean and I don't
- * think it had any effect". The first cause was the unscoped patcher view:
- * rack.uni has a generator on track 0 and on no other track, so the view showed
- * track 0's euclidean while sitting on track 1, and every edit landed on a graph
- * feeding a track nobody was listening to. That is fixed.
+ * think it had any effect". Part of that was the unscoped patcher view, which is
+ * fixed. Part of it was that FOUR OF THE SEVEN KNOBS ON THAT NODE DID NOTHING,
+ * which this file found and which backend has since fixed.
  *
- * But relocating a control does not prove it WORKS, and "the knob is in the right
- * place now and still does nothing" is the same complaint with a longer path to
- * it. The evidence up to here was a read-back — the engine publishing the number
- * back — which proves the command was parsed and stored and proves nothing about
- * whether the audio thread ever reads it. A UI mirror that round-trips perfectly
- * and never reaches the DSP is exactly the bug being claimed. Writing this found
- * four knobs where that is literally true (see DEAD FIELDS below).
+ * The reason it went unnoticed is the reason this file asserts on audio: the only
+ * evidence anyone had was a read-back — the engine publishing the number back —
+ * which proves the command was parsed and stored and proves nothing about whether
+ * the audio thread ever reads it. degree, oct, vel and base round-tripped
+ * perfectly through the wire, the UI and the read-back, and
+ * patcher_process_euclidean emitted a payload with all four hard-zeroed. A UI
+ * mirror that round-trips and never reaches the DSP is invisible to every check
+ * that is not a microphone.
  *
- * So this asserts on audio, four phases against one capture:
+ * Five phases against one capture, chosen so that no single mechanism carries the
+ * file — two different nodes, four different fields, and both a LEVEL claim and a
+ * PITCH claim, which fail in different ways:
  *
- *   A  the preset as authored           -> sound          (non-vacuity)
- *   B  random_degree vel 1              -> nearly silent
- *   C  random_degree vel 127            -> loud again
- *   D  euclidean hits 1                 -> sparse
+ *   A  the preset as authored      -> sound                    (non-vacuity)
+ *   B  random_degree vel 1         -> nearly silent            level
+ *   C  random_degree vel 127       -> loud again               level, and RETURNS
+ *   D  euclidean base 9            -> a much higher register   pitch
+ *   E  euclidean hits 0            -> silence                  the sentinel
  *
- * C is what makes it an argument rather than a way of breaking the engine: the
- * sound has to COME BACK when the knob comes back, which no crash, no stuck voice
- * and no dead plugin can fake. D turns a different FIELD on a different NODE, so
- * one lucky code path cannot carry the whole file. A is the non-vacuity check —
- * without it everything here passes on a run where Zebralette never loaded.
+ * C is what makes B an argument rather than a way of breaking the engine: sound
+ * has to COME BACK when the knob comes back, which no crash, no stuck voice and
+ * no dead plugin can fake. D is the one that was dead — base is euclidean's own
+ * octave and nine octaves is not a subtle claim. E pins a semantic that changed
+ * underneath this file: `hits 0` used to be an UNSET sentinel that made the
+ * engine substitute the default and play five, so the box said 0 while the
+ * generator ran. Backend made 0 mean zero, which is also the natural spelling of
+ * "this generator is in the graph and emitting nothing" — a state we had no way
+ * to express.
  *
- * WHY THESE TWO KNOBS AND NOT THE OBVIOUS ONE. `hits 0` looks like the perfect
- * test — no hits, no notes, silence — and it is not: 0 is an UNSET SENTINEL in
- * patcher_rust, so the engine substitutes the default and plays five. Measured,
- * before believing it: hits 5 -> rms 0.033, hits 0 -> 0.021, and the difference
- * is the random pitches, not the knob.
- *
- * LEVEL, NOT ONSETS. A long release smears every note into the next, so density
- * read 0.96 at five notes a bar and 1.00 at sixteen — a change you can see in the
- * envelope and cannot measure by counting attacks. Velocity moves the level 6x
- * and does not care about the patch's tail.
+ * LEVEL AND PITCH, NOT ONSETS. A long release smears every note into the next, so
+ * density read 0.96 at five notes a bar and 1.00 at sixteen — a change you can
+ * SEE in the envelope and cannot measure by counting attacks. Twelve parameter
+ * pairs of onset detector never beat 1.6x separation on a 3x density change.
+ * Velocity moves the level 10x and does not care about the tail; the octave moves
+ * the zero-crossing rate and does not care about the level.
  *
  * `generator` is the fixture because it is ONE track — euclidean -> random_degree
  * -> event_out -> Zebralette, one written note. On `maximal` five other Zebras
@@ -48,26 +51,16 @@
  * setup took: plugin scanning and opening the audio device dominate that and vary
  * by seconds between machines, and a window two seconds out reads the wrong phase
  * and reports a working feature broken.
- *
- * DEAD FIELDS, measured here and reported to backend — euclidean's `degree`,
- * `oct`, `vel` and `base` never reach the DSP. patcher_process_euclidean reads
- * steps/hits/offset/duration and emits a payload with degree, velocity,
- * base_octave and octave_offset hard-zeroed, though all four are in the ABI
- * struct and all four round-trip through the UI. Turning `base` from 4 to 9 —
- * nine octaves — moved the capture's zero-crossing rate from 1430/s to 1685/s,
- * which is noise; the control knob in the same run moved rms 5.6x. They are not
- * asserted on here because they are backend's to wire, and a test that asserts
- * the current behaviour would have to be deleted when they do.
  */
 
 import { chromium } from 'playwright';
 import { startStack } from './stack.mjs';
-import { readWav, rmsBetween, loudFraction } from './wav.mjs';
+import { readWav, rmsBetween, zeroCrossingRate, loudFraction } from './wav.mjs';
 
 const WAV = '/tmp/patchcfg_check.wav';
 /** The engine's whole life. Everything below is placed inside it. */
-const RUN = 70;
-const KEEP = 55;
+const RUN = 80;
+const KEEP = 64;
 /** How long each phase holds. */
 const PHASE = 9_000;
 /** When the first phase starts, after the audio device opens. */
@@ -103,7 +96,7 @@ const graph = await page.evaluate(() => {
   const p = window.__uni.patcher();
   const by = (t) => (p ? p.nodes.find((n) => n.type === t) : null);
   const e = by(1), r = by(5);
-  return e && r ? { euclidean: e.id, random: r.id, hits: e.cfg[1], vel: r.cfg[1] } : null;
+  return e && r ? { euclidean: e.id, random: r.id, base: e.cfg[6] } : null;
 });
 check(!!graph, 'the project has a euclidean and a random_degree to turn',
       JSON.stringify(graph));
@@ -167,12 +160,17 @@ await waitUntil(bAt + PHASE);
 const cAt = bAt + PHASE;
 check(await set(graph.random, 1, 127) === 127, 'and back as 127');
 
-// ---- D: a different field on a different node. ---------------------------
+// ---- D: euclidean's own octave — one of the four that used to be dead. ---
 await waitUntil(cAt + PHASE);
 const dAt = cAt + PHASE;
-check(await set(graph.euclidean, 1, 1) === 1, 'and the euclidean back at one hit');
+check(await set(graph.euclidean, 6, 9) === 9, 'and the euclidean at base octave 9');
 
-await waitUntil(dAt + PHASE - 500);
+// ---- E: no hits. ---------------------------------------------------------
+await waitUntil(dAt + PHASE);
+const eAt = dAt + PHASE;
+check(await set(graph.euclidean, 1, 0) === 0, 'and at zero hits');
+
+await waitUntil(eAt + PHASE - 500);
 await browser.close();
 
 // Let the engine reach its own end and write the file: the WAV appears when the
@@ -190,12 +188,14 @@ if (wav) {
   // already sounding when the knob moved and 0.5s clear of the back.
   const win = (start) => [at(start + 4000), at(start + PHASE - 500)];
   const level = (start) => rmsBetween(mono, rate, ...win(start));
+  const pitch = (start) => zeroCrossingRate(mono, rate, ...win(start));
   const dens = (start) => loudFraction(mono, rate, ...win(start));
-  const [a, b, c, d] = [aAt, bAt, cAt, dAt].map(level);
-  const [, , cD, dD] = [aAt, bAt, cAt, dAt].map(dens);
+  const [a, b, c, d, e] = [aAt, bAt, cAt, dAt, eAt].map(level);
   console.log(`  preset ${a.toFixed(5)}   vel 1 ${b.toFixed(5)}   vel 127 ${c.toFixed(5)}` +
-              `   hits 1 ${d.toFixed(5)}`);
-  console.log(`  density at vel 127 ${cD.toFixed(2)}, at one hit ${dD.toFixed(2)}` +
+              `   base 9 ${d.toFixed(5)}   hits 0 ${e.toFixed(5)}`);
+  console.log(`  density: base 9 ${dens(dAt).toFixed(2)} -> hits 0 ${dens(eAt).toFixed(2)}`);
+  console.log(`  zero crossings/s: at base ${graph.base} ${pitch(cAt).toFixed(0)}` +
+              ` -> at base 9 ${pitch(dAt).toFixed(0)}` +
               `   (capture ${(mono.length / rate).toFixed(1)}s, phase A at ${win(aAt)[0].toFixed(1)}s)`);
 
   check(a > 0.005, 'the generator was sounding to begin with', a.toFixed(5));
@@ -203,9 +203,36 @@ if (wav) {
         `${b.toFixed(5)} vs ${a.toFixed(5)}`);
   check(c > b * 3, 'and the loudest brought it back',
         `${(c / Math.max(b, 1e-9)).toFixed(1)}x`);
-  // A different node and a different field, so one working path cannot carry it.
-  check(d < c * 0.5 && dD < cD - 0.25, 'one hit a bar is sparser than sixteen',
-        `rms ${d.toFixed(5)} vs ${c.toFixed(5)}, density ${dD.toFixed(2)} vs ${cD.toFixed(2)}`);
+  /*
+   * FIVE OCTAVES UP, so the crossing rate must MULTIPLY, not merely differ.
+   * The number this replaces was 1430/s against 1685/s — an 18% wobble that is
+   * the random degrees wandering, on a field that claimed to move the octave.
+   * A ratio, not a difference, because the absolute rate depends on the patch.
+   */
+  check(pitch(dAt) > pitch(cAt) * 3, 'base octave 9 plays in a far higher register',
+        `${pitch(cAt).toFixed(0)}/s -> ${pitch(dAt).toFixed(0)}/s`);
+  /*
+   * ZERO HITS IS ZERO HITS — measured as DENSITY, not as silence, and the
+   * difference is the whole content of this check.
+   *
+   * `generator` has one WRITTEN note in its clip, and the transport loops the
+   * 7-second placement, so a note fires roughly every 7s no matter what the
+   * generator does. That is correct: it is the song, not the euclidean. Asserting
+   * silence here failed at rms 0.0045 and I nearly reported a working fix as
+   * broken — the capture's envelope showed isolated bursts on a ~7s period with
+   * true silence between them, which is a looping clip and could not be anything
+   * else.
+   *
+   * Density tells the two apart where level cannot: five notes a bar is
+   * continuous sound (0.99) and one note per loop is not (0.11), while their
+   * average levels are within a factor of six. The previous phase is asserted
+   * loud in the same breath, so "both are quiet because the run was broken"
+   * cannot pass.
+   */
+  check(dens(dAt) > 0.9, 'the generator was running continuously before',
+        dens(dAt).toFixed(2));
+  check(dens(eAt) < 0.3, 'and at zero hits it stops — 0 is not "use the default"',
+        `density ${dens(eAt).toFixed(2)}, rms ${e.toFixed(5)}`);
 }
 
 console.log(`\n${fail === 0 ? `ALL PASS (${pass} checks)` : `${fail} of ${pass + fail} FAILED`}`);

@@ -110,6 +110,23 @@ export function onsetsPerSecond(mono, rate, from, to, { rise = 1.5, floor = 0.00
   return count / ((b - a) / rate);
 }
 
+/**
+ * Zero crossings per second over a window — a crude pitch proxy, immune to level.
+ *
+ * Not a pitch tracker and not trying to be. It answers one question: did the
+ * thing that was playing change register? An octave doubles it, so a field that
+ * claims to move the octave and does not shows up as noise — which is exactly how
+ * euclidean's four dead config fields were found, and how their fix was checked.
+ */
+export function zeroCrossingRate(mono, rate, from, to) {
+  const a = Math.max(0, Math.round(from * rate));
+  const b = Math.min(mono.length, Math.round(to * rate));
+  if (b <= a) return 0;
+  let n = 0;
+  for (let i = a + 1; i < b; i++) if ((mono[i - 1] < 0) !== (mono[i] < 0)) n++;
+  return n / ((b - a) / rate);
+}
+
 /** Loudest slice, and how many slices are above a floor. */
 export function summarise(mono, rate, floor = 0.004) {
   const env = envelope(mono, rate);
