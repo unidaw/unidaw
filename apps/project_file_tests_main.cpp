@@ -766,6 +766,32 @@ int main(int argc, char** argv) {
   // the clip round-trips above.
   {
     daw::ProjectDocument doc = makeDocument();
+    // M3.22: the song's time-signature MAP round-trips, and a project WITHOUT one is
+    // written exactly as before — an empty array in every file would make every old
+    // project show a diff on its first save, and successive saves of an unchanged
+    // document have to stay byte-identical.
+    {
+      daw::ProjectDocument mapped;
+      mapped.songTimeSigNumerator = 4;
+      mapped.songTimeSigDenominator = 4;
+      mapped.timeSigMap = {{0, {4, 4}}, {4 * 4 * 960000ull, {7, 8}}};
+      daw::ProjectDocument back;
+      std::string err;
+      require(daw::deserializeProject(daw::serializeProject(mapped), back, &err),
+              "time-sig map document did not parse");
+      require(back.timeSigMap.size() == 2, "time-sig map lost on round trip");
+      require(back.timeSigMap[1].nanotick == 4 * 4 * 960000ull,
+              "time-sig map point tick lost");
+      require(back.timeSigMap[1].sig.numerator == 7 &&
+                  back.timeSigMap[1].sig.denominator == 8,
+              "time-sig map point signature lost");
+
+      daw::ProjectDocument plain;
+      const std::string plainJson = daw::serializeProject(plain);
+      require(plainJson.find("time_sig_map") == std::string::npos,
+              "a project with no time-sig map must not write the key at all");
+    }
+
     doc.songTimeSigNumerator = 7;
     doc.songTimeSigDenominator = 8;
     daw::ProjectDocument rt;

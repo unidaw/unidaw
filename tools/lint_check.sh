@@ -159,6 +159,66 @@ else
   fails=$((fails + 1))
 fi
 
+# STAYING USABLE. A linter that floods, or that cannot be told "yes, on purpose", gets
+# muted — and a muted linter reads as approval. Both mechanisms must work AND must say
+# what they hid, or the suppression becomes invisible and the tool stops meaning
+# anything without anyone deciding that it should.
+{
+  echo "# declared intentional"
+  echo "clip-unplaced"
+} > "$TMP/.dawlint-test"
+sed 's/"clip_id": 2, "id": 2/"clip_id": 1, "id": 2/' "$TMP/clean.uniproj.json" \
+  > "$TMP/sup.uniproj.json"
+OUT="$("$LINT" "$TMP/sup.uniproj.json" --ignore-file "$TMP/.dawlint-test" 2>&1 || true)"
+if echo "$OUT" | grep -q "0 warning(s), 1 declared intentional"; then
+  echo "  declared-intentional: suppressed AND reported"
+else
+  echo "  FAIL: a declared-intentional finding was not suppressed, or was suppressed"
+  echo "        silently — which is worse:"
+  echo "$OUT" | sed 's/^/          /'
+  fails=$((fails + 1))
+fi
+
+# A .dawlint BESIDE the project is found without being named, because that is where a
+# fixture directory keeps its own exemptions.
+cp "$TMP/.dawlint-test" "$TMP/.dawlint"
+OUT="$("$LINT" "$TMP/sup.uniproj.json" 2>&1 || true)"
+rm -f "$TMP/.dawlint"
+echo "$OUT" | grep -q "declared intentional" \
+  && echo "  .dawlint beside the project is found" \
+  || { echo "  FAIL: a .dawlint next to the project was not read"; fails=$((fails + 1)); }
+
+# The per-rule cap prints a count instead of the flood, and does NOT change the verdict:
+# capping a rule into silence and still exiting 0 would be a linter lying.
+python3 - "$TMP/clean.uniproj.json" "$TMP/flood.uniproj.json" <<'PYFLOOD'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+notes = doc["clips"][0]["notes"]
+# 30 notes stacked on one tick in one column: the same finding, thirty times.
+doc["clips"][0]["notes"] = [
+    {"nanotick": 0, "duration": 1000, "pitch": 60 + i, "velocity": 100,
+     "column": 0, "note_id": 500 + i} for i in range(30)
+]
+json.dump(doc, open(sys.argv[2], "w"))
+PYFLOOD
+OUT="$("$LINT" "$TMP/flood.uniproj.json" --max-per-rule 3 2>&1 || true)"
+SHOWN="$(echo "$OUT" | grep -c "note-same-tick-in-column" || true)"
+# 3 findings + the "... and N more" line, which also names the code.
+if [ "$SHOWN" = "4" ] && echo "$OUT" | grep -q "and 26 more"; then
+  echo "  per-rule cap: 3 shown, the rest counted"
+else
+  echo "  FAIL: --max-per-rule 3 showed $SHOWN lines; expected 3 findings + 1 summary"
+  echo "$OUT" | sed 's/^/          /' | head -8
+  fails=$((fails + 1))
+fi
+if echo "$OUT" | grep -q "29 warning(s)"; then
+  echo "  per-rule cap does not change the verdict"
+else
+  echo "  FAIL: the cap changed the reported warning count — a capped rule must still"
+  echo "        be counted, or the tool is lying about what it found"
+  fails=$((fails + 1))
+fi
+
 # Exit codes are the CI contract: errors fail, warnings alone do not, --strict makes
 # warnings fail too.
 sed 's/"clip_id": 1,/"clip_id": 99,/' "$TMP/clean.uniproj.json" > "$TMP/err.uniproj.json"

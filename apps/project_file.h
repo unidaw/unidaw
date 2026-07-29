@@ -9,6 +9,7 @@
 #include "apps/harmony_timeline.h"
 #include "apps/modulation.h"
 #include "apps/lane_quantize.h"
+#include "apps/time_signature_map.h"
 #include "apps/musical_structures.h"
 #include "apps/patcher_graph.h"
 #include "apps/track_routing.h"
@@ -147,6 +148,11 @@ struct ProjectDocument {
   // gutter count in. Separate from a clip's own meter (ProjectClip time_sig_*): a
   // 7/8 clip draws its own accents inside bars that the song still numbers in its
   // meter, so polymetric clips never lose a shared sense of where you are.
+  // M3.22: the SONG's time-signature MAP. songTimeSig* below is the map's FIRST entry,
+  // kept as its own field so every existing reader and every file written before this
+  // still means what it meant — a project with one signature writes an empty map and
+  // reads back identically. A non-empty map supersedes it.
+  std::vector<TimeSignaturePoint> timeSigMap;
   uint32_t songTimeSigNumerator = 4;
   uint32_t songTimeSigDenominator = 4;
   // Generation seed. Every patcher generator folds this into its hash, so a song's
