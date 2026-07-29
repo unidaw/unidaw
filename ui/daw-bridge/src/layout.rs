@@ -4,7 +4,10 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 25;
+pub const K_SHM_VERSION: u16 = 26;
+
+/// SetLaneQuantize carries swing through an unsigned field; this is the bias.
+pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
@@ -147,6 +150,16 @@ pub struct ShmHeader {
     /// v24: the HOST writes its own inserts' meters here, in ITS per-track SHM header.
     /// Host->engine leg only; the UI reads the published region, not this.
     pub host_device_meters: [[i16; 4]; K_UI_MAX_METERED_DEVICES],
+    /// v26 (M1.13): per-lane non-destructive quantize. Draw each note at its authored
+    /// t_on (unchanged, and what is saved) plus a deviation bar to where it sounds,
+    /// which is `quantize_tick(t_on, grid, strength, swing)`. grid 0 = lane not
+    /// quantized. Swing is signed thousandths of a grid step, applied to ODD slots.
+    /// `ui_quantize_version` moves when a lane's quantize changes and is NOT the clip
+    /// version — quantize moves no authored note, so it must not invalidate an edit.
+    pub ui_track_quantize_grid: [u64; K_UI_MAX_TRACKS],
+    pub ui_track_quantize_strength: [u32; K_UI_MAX_TRACKS],
+    pub ui_track_quantize_swing: [i32; K_UI_MAX_TRACKS],
+    pub ui_quantize_version: u32,
 }
 
 /// uiTrackFlags bits (Movement 4).
@@ -641,6 +654,10 @@ pub enum UiCommandType {
     /// channel to every hosted plugin, plus all pending/active note state dropped. CC120 is
     /// the one that matters: 123 releases notes and lets them ring out, which is not a panic.
     Panic = 52,
+    /// M1.13 lane quantize: track_id, note_nanotick = grid in nanoticks (0 = off),
+    /// value0 = strength in thousandths, note_pitch = swing in thousandths BIASED by
+    /// +500 (so 500 = straight). Changes what SOUNDS; never touches a stored note.
+    SetLaneQuantize = 53,
 }
 
 /// A track's routing (UiCommandType::SetTrackRouting). Mirrors the C++
@@ -712,6 +729,40 @@ pub enum UiDiffType {
     /// v20 (Movement 4): one per audio bus of a device, streamed after that device's
     /// ChainSnapshot diff. See UiBusDiffPayload.
     DeviceBus = 14,
+    /// A clip edit was REFUSED, and why. Before this, a stale-base edit was dropped in
+    /// total silence — no error, no code, nothing on the outbound ring — so every
+    /// symptom was "the app does nothing". Payload: `UiClipRejectPayload`.
+    /// ResyncNeeded (4) is still emitted alongside, unchanged.
+    ClipRejected = 15,
+}
+
+/// Why a clip edit was refused. The distinction matters because the fix differs: a
+/// stale base means re-read `clip_version_for_track` and retry; an unknown track means
+/// the caller is addressing something that is not there and retrying will never help.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiClipRejectReason {
+    None = 0,
+    StaleBase = 1,
+    UnknownTrack = 2,
+}
+
+/// Rides the same 40-byte diff slot as every other payload. `diff_type` is FIRST —
+/// dispatch on it, never on the payload's size (UiChainDiffPayload and
+/// UiChainErrorPayload are both 40 bytes).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiClipRejectPayload {
+    pub diff_type: u16,
+    pub reason: u16,
+    pub track_id: u32,
+    /// What the caller presented.
+    pub sent_base: u32,
+    /// What the engine holds — the value to retry with.
+    pub current_base: u32,
+    pub command_type: u16,
+    pub reserved: u16,
+    pub reserved2: [u32; 5],
 }
 
 #[repr(u16)]
@@ -1075,7 +1126,7 @@ mod tests {
 
     #[test]
     fn shm_header_layout_matches_cpp() {
-        const_assert_eq!(size_of::<ShmHeader>(), 4992); // v24: + meter offset + host meters
+        const_assert_eq!(size_of::<ShmHeader>(), 6016); // v26: + per-lane quantize
         const_assert_eq!(size_of::<UiDeviceMeter>(), 12);
         const_assert_eq!(size_of::<UiDeviceMeterRegion>(), 12352);
         const_assert_eq!(align_of::<ShmHeader>(), 64);
@@ -1126,6 +1177,10 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_track_device_name), 3304); // v23
         assert_eq!(offset_of!(ShmHeader, ui_device_meter_offset), 4840); // v24
         assert_eq!(offset_of!(ShmHeader, host_device_meters), 4848); // v24
+        assert_eq!(offset_of!(ShmHeader, ui_track_quantize_grid), 4976); // v26
+        assert_eq!(offset_of!(ShmHeader, ui_track_quantize_strength), 5488);
+        assert_eq!(offset_of!(ShmHeader, ui_track_quantize_swing), 5744);
+        assert_eq!(offset_of!(ShmHeader, ui_quantize_version), 6000);
         // The scale + device-param region structs (v16/v17) are now generated from
         // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);

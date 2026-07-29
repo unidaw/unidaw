@@ -305,6 +305,19 @@ int main() {
   loadPayload.pluginIndex = pluginIndex;
   assert(sendUiCommand(ringUi, loadPayload));
 
+  // A clip edit with a base that cannot possibly be current. The engine must REFUSE it
+  // and SAY SO on the outbound ring — before this existed the edit was dropped in
+  // silence, and a client stamping the wrong base saw only "nothing happens", forever.
+  constexpr uint32_t kImpossibleBase = 0xDEADBEEFu;
+  daw::UiCommandPayload staleNote{};
+  staleNote.commandType = static_cast<uint16_t>(daw::UiCommandType::WriteNote);
+  staleNote.trackId = 0;
+  staleNote.notePitch = 60;
+  staleNote.value0 = 100;
+  staleNote.noteDurationLo = 240000;
+  staleNote.baseVersion = kImpossibleBase;
+  assert(sendUiCommand(ringUi, staleNote));
+
   daw::UiCommandPayload playPayload{};
   playPayload.commandType =
       static_cast<uint16_t>(daw::UiCommandType::TogglePlay);
@@ -318,6 +331,8 @@ int main() {
   bool sawModUid = false;
   bool sawPatcherDelta = false;
   bool sawVstInstrument = false;
+  bool sawClipReject = false;
+  daw::UiClipRejectPayload clipReject{};
   std::set<uint16_t> seenDiffTypes;
   daw::EventRingView ringUiOut =
       daw::makeEventRing(base, header->ringUiOutOffset);
@@ -369,12 +384,16 @@ int main() {
           case daw::UiDiffType::PatcherGraphDelta:
             sawPatcherDelta = true;
             break;
+          case daw::UiDiffType::ClipRejected:
+            std::memcpy(&clipReject, diffEntry.payload, sizeof(clipReject));
+            sawClipReject = true;
+            break;
           default:
             break;
         }
       }
       if (sawSnapshot && sawError && sawRouting && sawMod && sawModUid &&
-          sawPatcherDelta && sawVstInstrument) {
+          sawPatcherDelta && sawVstInstrument && sawClipReject) {
         break;
       }
     }
@@ -391,6 +410,17 @@ int main() {
   assert(sawModUid);
   assert(sawPatcherDelta);
   assert(sawVstInstrument);
+  // The refusal must arrive, and must carry the numbers that let a caller recover:
+  // which track, what it sent, and what to retry with. A bare "rejected" would leave
+  // the caller exactly as stuck as silence did.
+  assert(sawClipReject);
+  assert(clipReject.reason ==
+         static_cast<uint16_t>(daw::UiClipRejectReason::StaleBase));
+  assert(clipReject.trackId == 0);
+  assert(clipReject.sentBase == kImpossibleBase);
+  assert(clipReject.currentBase != kImpossibleBase);
+  assert(clipReject.commandType ==
+         static_cast<uint16_t>(daw::UiCommandType::WriteNote));
   assert(waitForPlayheadAdvance(header, std::chrono::milliseconds(500)));
 
   int status = 0;

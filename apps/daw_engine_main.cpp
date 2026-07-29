@@ -51,6 +51,7 @@
 #include "apps/watchdog.h"
 #include "apps/latency_manager.h"
 #include "apps/time_base.h"
+#include "apps/lane_quantize.h"
 #include "apps/musical_structures.h"
 #include "apps/placement_schedule.h"
 #include "apps/note_entry.h"
@@ -1765,6 +1766,13 @@ struct TrackRuntime {
     // Per-lane tracker subdivision (Mock B grids); published so the UI builds a
     // LaneGrid per track. The engine doesn't use it — timing is grid-independent.
     std::atomic<uint32_t> linesPerBeat{4};
+    // M1.13 lane quantize, held as atomics for the same reason linesPerBeat is: the UI
+    // publish runs every frame and must not take this track's mutex to read three
+    // numbers. These are the ONLY copy — Track deliberately does not also hold one,
+    // because two copies of the same setting is how the mod links were silently lost.
+    std::atomic<uint64_t> quantizeGrid{0};
+    std::atomic<uint32_t> quantizeStrength{0};
+    std::atomic<int32_t> quantizeSwing{0};
     // Movement 4 child-track structure: parentId 0 = top-level, else the parent
     // track_id; collapsed hides children in the UI. Published per track.
     std::atomic<uint32_t> parentId{0};
@@ -2200,6 +2208,10 @@ struct TrackRuntime {
   std::atomic<bool> clipDirty{true};
   std::atomic<bool> playing{false};
   std::atomic<uint32_t> clipVersion{0};
+  // M1.13: moves when a LANE's quantize changes. Deliberately separate from
+  // clipVersion — quantize moves no authored note, so it must not invalidate anyone's
+  // in-flight edit, but the UI still has to redraw its deviation bars.
+  std::atomic<uint32_t> quantizeVersion{0};
 
   // M2.17: bump BOTH counters for a track-scoped change — the track's (what acceptance
   // compares, and what the diff hands back to the caller as its new base) and the global
@@ -2215,11 +2227,18 @@ struct TrackRuntime {
   // those sites pass the TrackRuntime* they already hold. TrackRuntime objects are never
   // destroyed, so the pointer form needs no lock at all.
   auto bumpClipVersionFor = [&](TrackRuntime* runtime) -> uint32_t {
+    // ORDER MATTERS, and it is the reverse of the obvious one. The publisher GATES on
+    // the global ("has anything changed?") and PUBLISHES the per-track value. If the
+    // global moved first, a publish landing between the two increments would latch the
+    // new gate value while writing the OLD per-track version — and then return early
+    // forever after, because the gate already matches. That track's published base
+    // would be permanently one behind, so every client reading it would present a stale
+    // base and have every edit rejected. Bump the value first, the gate second.
+    const uint32_t trackNext =
+        runtime ? runtime->trackClipVersion.fetch_add(1, std::memory_order_acq_rel) + 1
+                : 0;
     const uint32_t globalNext = clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
-    if (!runtime) {
-      return globalNext;
-    }
-    return runtime->trackClipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    return runtime ? trackNext : globalNext;
   };
   auto bumpTrackClipVersion = [&](uint32_t trackId) -> uint32_t {
     TrackRuntime* runtime = nullptr;
@@ -2235,13 +2254,20 @@ struct TrackRuntime {
   // project load replaces every clip; a waveform arrival invalidates every mirror), so
   // no caller is left holding a base that silently still matches.
   auto bumpAllTrackClipVersions = [&]() {
-    clipVersion.fetch_add(1, std::memory_order_acq_rel);
-    std::lock_guard<std::mutex> lock(tracksMutex);
-    for (auto& rt : tracks) {
-      if (rt) {
-        rt->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
+    // Per-track values first, the global gate last — see bumpClipVersionFor. The window
+    // is at its widest here: the global bump used to come before a tracksMutex
+    // acquisition that the publisher takes on every iteration, so an entire all-tracks
+    // rebuild could complete inside it and every track's published base would be stuck
+    // one behind immediately after a project load.
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      for (auto& rt : tracks) {
+        if (rt) {
+          rt->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
+        }
       }
     }
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);
   };
 
   std::atomic<uint32_t> chainVersion{0};
@@ -3528,6 +3554,37 @@ struct TrackRuntime {
     }
   };
 
+  // A refusal, on the outbound ring, with the numbers that settle it. Everything the
+  // caller needs to recover is here: which track the version was compared against, what
+  // it sent, and what to retry with.
+  auto emitClipReject = [&](daw::UiClipRejectReason reason, uint32_t trackId,
+                            uint32_t sentBase, uint32_t currentBase,
+                            daw::UiCommandType commandType) {
+    auto ringUiOut = getRingUiOut();
+    if (ringUiOut.mask == 0) {
+      return;
+    }
+    daw::UiClipRejectPayload payload{};
+    payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ClipRejected);
+    payload.reason = static_cast<uint16_t>(reason);
+    payload.trackId = trackId;
+    payload.sentBase = sentBase;
+    payload.currentBase = currentBase;
+    payload.commandType = static_cast<uint16_t>(commandType);
+    daw::EventEntry entry;
+    entry.sampleTime = 0;
+    entry.blockId = 0;
+    entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+    entry.size = sizeof(daw::UiClipRejectPayload);
+    std::memcpy(entry.payload, &payload, sizeof(payload));
+    if (daw::ringWrite(ringUiOut, entry)) {
+      uiDiffSent.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      uiDiffDropped.fetch_add(1, std::memory_order_relaxed);
+      logUiDiffDrop();
+    }
+  };
+
   auto emitChainSnapshot = [&](TrackRuntime& runtime) {
     // Movement 4: an aux child has no host chain to enumerate.
     if (runtime.isAuxChild.load(std::memory_order_acquire)) {
@@ -4165,7 +4222,17 @@ struct TrackRuntime {
       ext.endTick = *pl.at + length;
       rt.clipExtents.push_back(std::move(ext));
     }
-    return buildClipSnapshot(rt.track.clip);
+    // M1.13: the clip the UI draws and the clip that SOUNDS are already two objects —
+    // rt.track.clip is published and saved, the returned snapshot is what the producer
+    // schedules from. Quantize applies to the second only. Doing it here rather than at
+    // emission time matters: moving a note's start changes which block it belongs to,
+    // and the scheduler windows on the tick it reads, so a note nudged earlier at
+    // emission time would already have missed its block.
+    daw::LaneQuantize q;
+    q.gridNanoticks = rt.quantizeGrid.load(std::memory_order_acquire);
+    q.strengthMilli = rt.quantizeStrength.load(std::memory_order_acquire);
+    q.swingMilli = rt.quantizeSwing.load(std::memory_order_acquire);
+    return buildClipSnapshot(daw::quantizeClipForSchedule(rt.track.clip, q));
   };
 
   // Resolve a clip's sourcePath the one way both the decode funnel and the clip-
@@ -4639,6 +4706,12 @@ struct TrackRuntime {
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         track.harmonyQuantize = runtime->track.harmonyQuantize;
+        track.quantize.gridNanoticks =
+            runtime->quantizeGrid.load(std::memory_order_acquire);
+        track.quantize.strengthMilli =
+            runtime->quantizeStrength.load(std::memory_order_acquire);
+        track.quantize.swingMilli =
+            runtime->quantizeSwing.load(std::memory_order_acquire);
         track.routing = runtime->track.routing;
         const float gainLinear = runtime->mixGainLinear.load(std::memory_order_relaxed);
         track.mixer.gainDb =
@@ -5288,6 +5361,15 @@ struct TrackRuntime {
                                    rebuildAudioRender(*runtime),
                                    std::memory_order_release);
         runtime->track.harmonyQuantize = source.harmonyQuantize;
+        // M1.13: adopt the lane's quantize BEFORE the flat rebuild below, so the very
+        // first scheduling copy after a load already sounds quantized. Adopting it
+        // afterwards would leave the lane straight until the next edit.
+        runtime->quantizeGrid.store(source.quantize.gridNanoticks,
+                                    std::memory_order_release);
+        runtime->quantizeStrength.store(source.quantize.strengthMilli,
+                                        std::memory_order_release);
+        runtime->quantizeSwing.store(source.quantize.swingMilli,
+                                     std::memory_order_release);
         if (!source.name.empty()) {
           runtime->trackName = source.name;
         }
@@ -5683,16 +5765,49 @@ struct TrackRuntime {
     // gated on the global counter — comparing them against the caller's incidental
     // trackId would let an undo of a track-3 edit ride on track 0's version.
     if (!daw::uiCommandIsGlobalScope(commandType)) {
-      std::lock_guard<std::mutex> lock(tracksMutex);
-      if (trackId < tracks.size() && tracks[trackId]) {
-        current = tracks[trackId]->trackClipVersion.load(std::memory_order_acquire);
+      bool haveTrack = false;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (trackId < tracks.size() && tracks[trackId] &&
+            !tracks[trackId]->removed.load(std::memory_order_acquire)) {
+          current = tracks[trackId]->trackClipVersion.load(std::memory_order_acquire);
+          haveTrack = true;
+        }
+      }
+      if (!haveTrack) {
+        // A track-scoped edit naming a track that is not there used to fall through to
+        // the global counter, get ACCEPTED, and then quietly do nothing when the edit
+        // itself could not find the track. Refuse it here and say why: unlike a stale
+        // base, retrying will never help, and the caller needs to know that.
+        historyAppend(daw::uiCommandTypeName(commandType), "rejected:no_track", trackId,
+                      baseVersion, "");
+        DAW_EVENT("clip.unknown_track")
+            .field("track", trackId)
+            .field("command", static_cast<uint32_t>(commandType))
+            .field("action", "rejected");
+        emitClipReject(daw::UiClipRejectReason::UnknownTrack, trackId, baseVersion,
+                       current, commandType);
+        return false;
       }
     }
     daw::UiDiffPayload diffPayload{};
     if (daw::requireMatchingClipVersion(baseVersion, current, diffPayload)) {
       return true;
     }
+    // Say WHICH track this version belongs to. The payload's clipVersion is now a
+    // per-track counter (M2.17), and leaving trackId at its default 0 hands a client a
+    // track-4 version labelled as track 0's — a trap that costs nothing to remove and
+    // would be very hard to find. Global-scope commands keep 0, which is correct there:
+    // they are gated on the global counter.
+    const uint32_t scopeTrack =
+        daw::uiCommandIsGlobalScope(commandType) ? 0u : trackId;
+    diffPayload.trackId = scopeTrack;
     emitUiDiff(diffPayload);
+    // Say it OUT LOUD. A resync request tells the caller to re-read; it does not tell
+    // them they were refused, which edit, or what to retry with — so a client that
+    // stamps the wrong base sees only "nothing happened", on every edit, forever.
+    emitClipReject(daw::UiClipRejectReason::StaleBase, scopeTrack, baseVersion, current,
+                   commandType);
     historyAppend(daw::uiCommandTypeName(commandType), "rejected:version", trackId,
                   baseVersion, "");
     DAW_EVENT("clip.version_mismatch")
@@ -5822,8 +5937,9 @@ struct TrackRuntime {
       return false;
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
-    // The store already advanced this track's version and stamped result->diff with it.
-    // The global counter is the publishers' staleness signal, so it moves in step.
+    // The store already advanced this track's version and stamped result->diff with it;
+    // the global gate moves AFTER, so a publisher that sees the new gate is guaranteed
+    // to read the new per-track value. See bumpClipVersionFor for why the order matters.
     clipVersion.fetch_add(1, std::memory_order_acq_rel);
     clipDirty.store(true, std::memory_order_release);
     emitUiDiff(result->diff);
@@ -6492,7 +6608,18 @@ struct TrackRuntime {
         emitModError(kModErrInvalidDevice, modPayload.trackId, modPayload.linkId);
         return;
       }
-      if (*sourcePos >= *targetPos) {
+      // Modulation flows FORWARD, so a device later in the chain must not modulate an
+      // earlier one — by the time its value exists, the earlier device's audio has
+      // already gone past. SAME device is fine and is in fact the common case now that
+      // patchers are per-device: an LFO in device N's own graph driving device N's
+      // cutoff is the ordinary thing to want.
+      //
+      // This used to reject same-device links (>= rather than >), which meant the
+      // engine ACCEPTED from a file what it REFUSED from the UI — the loader installs
+      // mod links without this check. presets/projects/rack.uniproj.json ships exactly
+      // such a link, so the rack demo's modulation worked on load and could never be
+      // recreated by hand. Found by daw_lint (M2.20) on its first run over the presets.
+      if (*sourcePos > *targetPos) {
         emitModError(kModErrOrderViolation, modPayload.trackId, modPayload.linkId);
         return;
       }
@@ -7384,6 +7511,17 @@ struct TrackRuntime {
                  !liveTrackCount.compare_exchange_weak(seen, slot + 1,
                                                        std::memory_order_relaxed)) {
           }
+          {
+            // A fresh track's clips are empty, but the RuntimeTrack in this slot may be
+            // a reused tombstone whose counter still carries the removed track's value.
+            // Bump so nobody's pre-existing base is accepted against a brand-new track,
+            // and so the version-gated regions rebuild and show the new lane.
+            std::lock_guard<std::mutex> lock(tracksMutex);
+            if (slot < tracks.size() && tracks[slot]) {
+              tracks[slot]->trackClipVersion.fetch_add(1, std::memory_order_acq_rel);
+            }
+          }
+          clipVersion.fetch_add(1, std::memory_order_acq_rel);
           std::cout << "UI: AddTrack -> track " << slot << std::endl;
         } else {
           std::cerr << "UI: AddTrack failed to bring up track " << slot << std::endl;
@@ -7463,6 +7601,13 @@ struct TrackRuntime {
           rt->parentId.store(0, std::memory_order_relaxed);
           rt->childrenReconciled.store(false, std::memory_order_relaxed);
           rt->removed.store(true, std::memory_order_release);
+          // This wiped every clip on the track, which is as big a clip change as there
+          // is — so both counters have to move. Without the GLOBAL bump the
+          // version-gated regions are never rebuilt and the removed track's notes stay
+          // published; without the PER-TRACK bump, a base read before the removal is
+          // still accepted against the now-empty track, and because AddTrack reuses this
+          // same TrackRuntime, that stale base carries over to the NEW track in this slot.
+          bumpClipVersionFor(rt);
         }
         // Trim trailing tombstones so a remove-from-the-end shrinks the extent (and the
         // freed slot is reused by the next AddTrack).
@@ -8300,6 +8445,76 @@ struct TrackRuntime {
           std::memory_order_release);
       std::cout << "UI: Track " << payload.trackId
                 << " harmony quantize " << (enable ? "on" : "off") << std::endl;
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetLaneQuantize)) {
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        std::cerr << "UI: SetLaneQuantize failed - track " << payload.trackId
+                  << " not found" << std::endl;
+        return;
+      }
+      daw::LaneQuantize q;
+      q.gridNanoticks = (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
+                        payload.noteNanotickLo;
+      q.strengthMilli =
+          std::min<uint32_t>(payload.value0, daw::kLaneQuantizeMaxStrength);
+      q.swingMilli = std::clamp(
+          static_cast<int32_t>(payload.notePitch) -
+              static_cast<int32_t>(daw::kLaneQuantizeSwingBias),
+          -daw::kLaneQuantizeMaxSwing, daw::kLaneQuantizeMaxSwing);
+      runtime->quantizeGrid.store(q.gridNanoticks, std::memory_order_release);
+      runtime->quantizeStrength.store(q.strengthMilli, std::memory_order_release);
+      runtime->quantizeSwing.store(q.swingMilli, std::memory_order_release);
+      std::shared_ptr<const ClipSnapshot> snapshot;
+      {
+        // The scheduling copy is derived from the lane's quantize, so changing it has
+        // to rebuild that copy — otherwise the setting is stored and inaudible until
+        // the next unrelated edit happens to rebuild.
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        snapshot = rebuildFlatAndPublish(*runtime);
+      }
+      if (snapshot) {
+        std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
+                                   std::memory_order_release);
+      }
+      // The AUTHORED notes did not change, so this is not a clip edit and must not
+      // advance a clip version: doing so would reject every editor's in-flight edit
+      // for a change that moved no note. It does change what the UI must draw (the
+      // deviation bars), which is what the published per-lane quantize is for.
+      quantizeVersion.fetch_add(1, std::memory_order_acq_rel);
+      // How many events the scheduling copy actually moved. This is the only externally
+      // visible proof that quantize is WIRED rather than merely stored: the authored
+      // clip is unchanged by design, so "the notes did not move" is true either way, and
+      // the audible half needs a number to assert on. Counted against the same snapshot
+      // the producer will schedule from.
+      uint32_t movedEvents = 0;
+      if (snapshot) {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        const auto& authored = runtime->track.clip.events();
+        const auto& scheduled = snapshot->events;
+        if (authored.size() == scheduled.size()) {
+          for (size_t i = 0; i < authored.size(); ++i) {
+            if (authored[i].nanotickOffset != scheduled[i].nanotickOffset) {
+              ++movedEvents;
+            }
+          }
+        }
+      }
+      DAW_EVENT("lane.quantize")
+          .field("track", payload.trackId)
+          .field("grid", q.gridNanoticks)
+          .field("strength", q.strengthMilli)
+          .field("moved", movedEvents)
+          .field("swing", static_cast<uint32_t>(q.swingMilli + daw::kLaneQuantizeSwingBias));
+      std::cout << "UI: Track " << payload.trackId << " quantize grid "
+                << q.gridNanoticks << " strength " << q.strengthMilli
+                << " swing " << q.swingMilli << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetLoopRange)) {
       const uint64_t start =
@@ -11475,6 +11690,19 @@ struct TrackRuntime {
                         trackSnapshot[i]->linesPerBeat.load(std::memory_order_relaxed),
                         255u))
                   : 0;
+          // v26 (M1.13): the lane's quantize, so the UI can draw each note where it was
+          // played and a deviation bar to where it sounds.
+          const bool haveTrack = i < trackSnapshot.size();
+          uiShm.header->uiTrackQuantizeGrid[i] =
+              haveTrack ? trackSnapshot[i]->quantizeGrid.load(std::memory_order_relaxed)
+                        : 0;
+          uiShm.header->uiTrackQuantizeStrength[i] =
+              haveTrack
+                  ? trackSnapshot[i]->quantizeStrength.load(std::memory_order_relaxed)
+                  : 0;
+          uiShm.header->uiTrackQuantizeSwing[i] =
+              haveTrack ? trackSnapshot[i]->quantizeSwing.load(std::memory_order_relaxed)
+                        : 0;
           // v20 child-track structure (Movement 4): parent id + flags. HasParent is
           // set for a genuine child (an aux stem) so the reader never confuses "child of
           // track 0" with "top-level" — parentId 0 is a valid id, so the sentinel alone
@@ -11609,6 +11837,9 @@ struct TrackRuntime {
                 static_cast<uint8_t>(daw::kUiTrackFlagMaster);
             uiShm.header->uiTrackParentId[m] = 0;
             uiShm.header->uiLinesPerBeat[m] = 0;
+            uiShm.header->uiTrackQuantizeGrid[m] = 0;  // the master has no lane
+            uiShm.header->uiTrackQuantizeStrength[m] = 0;
+            uiShm.header->uiTrackQuantizeSwing[m] = 0;
             uiShm.header->uiTrackPeakRms[m] = 0.0f;  // master peak: 4b
             const float mg =
                 masterTrack->mixGainLinear.load(std::memory_order_relaxed);
@@ -11719,6 +11950,8 @@ struct TrackRuntime {
         writeUiPatcher(false);
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);
+        uiShm.header->uiQuantizeVersion =
+            quantizeVersion.load(std::memory_order_acquire);
         if (writeHarmony) {
           writeUiHarmonySnapshot();
         }

@@ -572,6 +572,14 @@ std::string serializeProject(const ProjectDocument& document) {
     writer.key("collapsed", track.collapsed);
     writer.key("harmony_quantize", track.harmonyQuantize);
     writer.key("lines_per_beat", track.linesPerBeat);
+    // M1.13 lane quantize. Written unconditionally, including when it is off, so a
+    // file always states what the lane does rather than leaving it to a default the
+    // reader has to know.
+    writer.beginChildObject("quantize");
+    writer.key("grid_nanoticks", track.quantize.gridNanoticks);
+    writer.key("strength_milli", track.quantize.strengthMilli);
+    writer.key("swing_milli", static_cast<int64_t>(track.quantize.swingMilli));
+    writer.endChildObject();
 
     writer.beginChildObject("mixer");
     writer.key("gain_db", track.mixer.gainDb);
@@ -616,8 +624,13 @@ std::string serializeProject(const ProjectDocument& document) {
         writer.key("duration_ticks",
                    static_cast<uint64_t>(device.euclideanConfig.duration_ticks));
         writer.key("degree", static_cast<uint32_t>(device.euclideanConfig.degree));
+        // int64_t, NOT uint32_t: octave_offset is int8_t, and casting a negative
+        // through unsigned wrote 4294967295 for -1. The reader's get<int32_t> cannot
+        // translate that, so boost returned the default and a negative octave offset
+        // silently became 0 on every reload. The node-level serializer 180 lines up
+        // always did this correctly; the two paths had drifted apart.
         writer.key("octave_offset",
-                   static_cast<uint32_t>(device.euclideanConfig.octave_offset));
+                   static_cast<int64_t>(device.euclideanConfig.octave_offset));
         writer.key("velocity", static_cast<uint32_t>(device.euclideanConfig.velocity));
         writer.key("base_octave",
                    static_cast<uint32_t>(device.euclideanConfig.base_octave));
@@ -811,6 +824,15 @@ bool deserializeProject(const std::string& json,
       track.linesPerBeat = tree.get<uint32_t>("lines_per_beat", 4);
       if (track.linesPerBeat == 0) {
         track.linesPerBeat = 4;
+      }
+      if (const auto quantizeTree = tree.get_child_optional("quantize")) {
+        const daw::LaneQuantize defaults{};
+        track.quantize.gridNanoticks =
+            quantizeTree->get<uint64_t>("grid_nanoticks", defaults.gridNanoticks);
+        track.quantize.strengthMilli =
+            quantizeTree->get<uint32_t>("strength_milli", defaults.strengthMilli);
+        track.quantize.swingMilli =
+            quantizeTree->get<int32_t>("swing_milli", defaults.swingMilli);
       }
       if (const auto mixer = tree.get_child_optional("mixer")) {
         track.mixer.gainDb = mixer->get<double>("gain_db", 0.0);

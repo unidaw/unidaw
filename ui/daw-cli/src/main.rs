@@ -40,6 +40,9 @@ daw-cli — control surface for a running engine
   daw-cli do harmony --nanotick T --root R --scale S
   daw-cli do mixer --track N [--gain-db X] [--pan Y]
                    [--mute 0|1] [--solo 0|1]
+  daw-cli do quantize --track N [--grid T] [--strength 0..1000] [--swing -500..500]
+                                   non-destructive: changes what SOUNDS, never the
+                                   stored notes. --grid 0 turns it off.
 
 `get clip` writes too: reading a window means asking the engine for one, and any
 request is a write to the command ring. `get notes` does not — it reads the
@@ -319,6 +322,33 @@ fn send_named(handle: &EngineHandle, command: UiCommandType, name: &str) -> i32 
 /// Writes a phrase in one invocation, numbering the base versions itself.
 /// The engine advances one clip version per applied edit and rejects anything
 /// stale, so a shell loop over `do note` loses every note after the first.
+/// M1.13 lane quantize. No base_version: this moves no authored note, so gating it on
+/// a clip version would reject it whenever someone else was mid-edit, for a change that
+/// cannot conflict with theirs.
+fn quantize_command(args: &[String]) -> Result<UiCommandPayload, String> {
+    let track = flag_u64(args, "--track", Some(0))? as u32;
+    let grid = flag_u64(args, "--grid", Some(0))?;
+    let strength = flag_u64(args, "--strength", Some(1000))?.min(1000) as u32;
+    let swing_raw = flag_i64(args, "--swing", 0)?;
+    if !(-500..=500).contains(&swing_raw) {
+        return Err(format!("--swing must be -500..500, got {swing_raw}"));
+    }
+    let swing = (swing_raw + daw_bridge::layout::LANE_QUANTIZE_SWING_BIAS as i64) as u32;
+    Ok(UiCommandPayload {
+        command_type: UiCommandType::SetLaneQuantize as u16,
+        flags: 0,
+        track_id: track,
+        plugin_index: 0,
+        note_pitch: swing,
+        value0: strength,
+        note_nanotick_lo: (grid & 0xffff_ffff) as u32,
+        note_nanotick_hi: (grid >> 32) as u32,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    })
+}
+
 fn write_notes(handle: &EngineHandle, args: &[String]) -> i32 {
     let Some(raw) = flag(args, "--pitches") else {
         eprintln!("daw-cli: --pitches is required, e.g. --pitches 60,64,67");
@@ -382,6 +412,15 @@ fn write_notes(handle: &EngineHandle, args: &[String]) -> i32 {
     }
     println!("{{ \"sent\": {sent}, \"first_base_version\": {} }}", base - sent as u32);
     0
+}
+
+fn flag_i64(args: &[String], key: &str, default: i64) -> Result<i64, String> {
+    match flag(args, key) {
+        Some(raw) => raw
+            .parse::<i64>()
+            .map_err(|_| format!("{key} expects a whole number, got {raw:?}")),
+        None => Ok(default),
+    }
 }
 
 fn flag_f64(args: &[String], key: &str, default: f64) -> Result<f64, String> {
@@ -700,8 +739,24 @@ fn get_clip(handle: &EngineHandle, args: &[String]) -> i32 {
     };
     let bars = flag_u64(args, "--bars", Some(4)).unwrap_or(4).max(1);
     let window_end = bars * 4 * NANOTICKS_PER_QUARTER;
-    // Any nonzero id works; it only has to match what comes back.
-    let request_id = 0x5ADD_u32;
+    // UNIQUE PER INVOCATION. The read-back region is a single persistent slot that
+    // keeps the last answer, so a constant id (this was 0x5ADD) matches the PREVIOUS
+    // call's snapshot the instant it is read — every `get clip` after the first
+    // returned the answer to the last one. Measured: asking for 2 bars right after 8
+    // printed the 8-bar window, and a `get clip` straight after a `do note` reported
+    // the note absent, which is exactly the observation that makes an agent conclude
+    // its write was lost. Mixing the pid with the clock also stops two concurrent
+    // requesters from taking delivery of each other's answers, which matters now that
+    // `do` no longer needs --force.
+    let request_id = {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let id = pid.rotate_left(11) ^ nanos;
+        if id == 0 { 1 } else { id }
+    };
 
     let request = UiClipWindowCommandPayload {
         command_type: UiCommandType::RequestClipWindow as u16,
@@ -1311,6 +1366,22 @@ fn main() {
                     }
                 }
                 Some(&"notes") => write_notes(&handle, &args),
+                Some(&"quantize") => match quantize_command(&args) {
+                    Ok(payload) => match handle.send_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"quantize\" }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    },
+                    Err(err) => {
+                        eprintln!("daw-cli: {err}");
+                        2
+                    }
+                },
                 Some(&"mixer") => match mixer_command(&args) {
                     Ok(payload) => match handle.send_command(payload) {
                         Ok(()) => {

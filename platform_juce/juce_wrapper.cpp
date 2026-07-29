@@ -1072,6 +1072,20 @@ inline bool fakeIdentityPassThru() {
   return kOn;
 }
 
+// DAW_FAKE_TONE_HZ makes the fixture generate a CONTINUOUS sine at that frequency,
+// rather than a 10-sample pulse per note-on. A test that needs an instrument's output
+// to be measurable otherwise has to catch one of the ~9% of blocks that contain a
+// pulse, which is a coin flip dressed as an assertion — a continuous tone makes the
+// measurement timing-free. 0 (unset) keeps the pulse behaviour every other fixture
+// test relies on.
+inline float fakeIdentityToneHz() {
+  static const float kHz = [] {
+    const char* e = std::getenv("DAW_FAKE_TONE_HZ");
+    return e ? std::strtof(e, nullptr) : 0.0f;
+  }();
+  return kHz;
+}
+
 class FakeIdentityPluginInstance final : public IPluginInstance {
  public:
   // latencySamples models a real plugin's reported processing latency: the instance
@@ -1092,8 +1106,9 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
     params_.push_back(std::move(gainInfo));
   }
 
-  void prepare(double, int blockSize, int numOutputs,
+  void prepare(double sampleRate, int blockSize, int numOutputs,
                bool enableSidechain = false, bool enableAuxOut = false) override {
+    toneSampleRate_ = sampleRate;
     outputChannels_ = numOutputs;
     sidechainEnabled_ = enableSidechain;
     auxOutEnabled_ = enableAuxOut;
@@ -1163,6 +1178,23 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
         }
       } else {
         std::fill(outputs[ch], outputs[ch] + numFrames, 0.0f);
+      }
+    }
+    // Continuous tone, when asked for: a generator whose output is measurable in EVERY
+    // block. Written after the clear and before the note pulses, so note-driven tests
+    // that do not set DAW_FAKE_TONE_HZ are untouched.
+    if (const float toneHz = fakeIdentityToneHz(); toneHz > 0.0f && !kPassThru) {
+      const double rate = toneSampleRate_ > 0.0 ? toneSampleRate_ : 48000.0;
+      const double step = 2.0 * 3.14159265358979323846 * toneHz / rate;
+      for (int i = 0; i < numFrames; ++i) {
+        const float v = static_cast<float>(0.25 * std::sin(tonePhase_));
+        tonePhase_ += step;
+        if (tonePhase_ > 2.0 * 3.14159265358979323846) {
+          tonePhase_ -= 2.0 * 3.14159265358979323846;
+        }
+        for (int ch = 0; ch < numOutputs; ++ch) {
+          outputs[ch][i] += v;
+        }
       }
     }
     for (int ch = 0; ch < numAuxOutputs; ++ch) {
@@ -1412,6 +1444,9 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   bool sidechainEnabled_ = false;
   // Multi-out fixture: when true, notes route to output bus (pitch % (1+auxBuses)).
   bool auxOutEnabled_ = false;
+  // DAW_FAKE_TONE_HZ generator state (see fakeIdentityToneHz).
+  double toneSampleRate_ = 0.0;
+  double tonePhase_ = 0.0;
 };
 
 class JucePluginHost final : public IPluginHost {

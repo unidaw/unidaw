@@ -11,6 +11,13 @@
 # The assertion is deliberately about the value, not just presence: 0 is precisely the
 # wrong number, and "the slot exists" would have passed before the fix too.
 #
+# The instrument is driven with DAW_FAKE_TONE_HZ so it emits a CONTINUOUS tone. Without
+# it the fixture only pulses for 10 samples per note-on, so out_* read silent in ~91% of
+# blocks whether the output metering works or not — and the first version of this check
+# asserted only "all four read SILENT", which stayed green with the output-loop half of
+# the fix reverted. It measures both halves now: in_* SILENT because an instrument has
+# no audio input, out_* NOT silent because it is generating.
+#
 # Needs a real audio device (non-test mode) + the C++ and daw-cli targets built.
 #   tools/instrument_meter_check.sh
 #
@@ -46,6 +53,7 @@ cat > "$TMP/im.uniproj.json" <<EOF
 EOF
 
 ( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+    DAW_FAKE_TONE_HZ=440 \
     ./daw_engine --run-seconds 16 >"$TMP/engine.log" 2>&1 ) &
 ENG=$!
 sleep 2.5
@@ -89,6 +97,19 @@ done
 [ "$IN_PEAK" = "$SILENT" ] && [ "$IN_RMS" = "$SILENT" ] || \
   fail "an instrument has no audio input, so in_peak/in_rms must be kUiMeterSilent
         ($SILENT); got $IN_PEAK / $IN_RMS"
+
+# And its OUTPUT must be measured. This is the half the first version of this check
+# could not see: with the output loop bounded by the INPUT channel count, an instrument
+# measures zero channels and reads silent, which was indistinguishable from "the
+# generator made no sound".
+[ "$OUT_PEAK" != "$SILENT" ] && [ "$OUT_RMS" != "$SILENT" ] || \
+  fail "the instrument is generating a 440 Hz tone, but its out_peak/out_rms read
+        kUiMeterSilent — the output is not being metered (the loop is probably still
+        bounded by the input channel count, which is 0 for an instrument)"
+# A tone at 0.25 amplitude is about -1200 mB peak. Assert a sane range rather than an
+# exact number, but tight enough that a stray 0 or a full-scale reading fails.
+[ "$OUT_PEAK" -lt 0 ] && [ "$OUT_PEAK" -gt -3000 ] || \
+  fail "out_peak is $OUT_PEAK mB; a 0.25-amplitude tone should read about -1200"
 
 echo "instrument_meter_check: PASS — the instrument's meter is written, and reads"
 echo "  silence rather than full scale"

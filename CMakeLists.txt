@@ -207,6 +207,23 @@ if (DAW_BUILD_PATCHER_RUST)
   target_link_libraries(patcher_graph_tests PRIVATE patcher_rust)
 endif()
 
+# M2.20: the deterministic linter. Shares the engine's project parser on purpose — a
+# linter with its own parser lints a different document.
+add_executable(daw_lint
+  apps/daw_lint_main.cpp
+  apps/event_log.cpp
+  apps/project_file.cpp
+  apps/device_chain.cpp
+  apps/plugin_cache.cpp
+  apps/patcher_preset.cpp
+  apps/patcher_graph.cpp
+  apps/patcher_abi.cpp
+)
+target_include_directories(daw_lint PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+  ${Boost_INCLUDE_DIRS}
+)
+
 add_executable(project_file_tests
   apps/project_file_tests_main.cpp
   apps/event_log.cpp
@@ -253,6 +270,14 @@ target_include_directories(event_ring_mpsc_tests PRIVATE
 )
 find_package(Threads REQUIRED)
 target_link_libraries(event_ring_mpsc_tests PRIVATE Threads::Threads)
+
+# M1.13: non-destructive lane quantize. Header-only, no deps.
+add_executable(lane_quantize_tests
+  apps/lane_quantize_tests_main.cpp
+)
+target_include_directories(lane_quantize_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
 
 # Header-only tests for the per-clip grid packed into UiClipExtent.flags.
 add_executable(clip_grid_tests
@@ -321,31 +346,6 @@ target_include_directories(device_chain_ui_live_tests PRIVATE
 
 target_link_libraries(device_chain_ui_live_tests PRIVATE platform_juce)
 
-# assert() is the assertion mechanism in several of these test mains, and CMake's
-# RelWithDebInfo (the default build here) passes -DNDEBUG, which compiles every one of
-# them away. Those binaries then run to completion and exit 0 having verified NOTHING —
-# 161 assertions across four files were dead when this was noticed. Undefine NDEBUG for
-# test targets only, so a test that asserts actually asserts.
-foreach(daw_test_target
-    patcher_tests
-    patcher_graph_tests
-    project_file_tests
-    waveform_pyramid_tests
-    waveform_store_tests
-    waveform_fixture_tests
-    clip_grid_tests
-    event_ring_mpsc_tests
-    audio_io_tests
-    device_chain_tests
-    device_chain_ui_tests
-    device_chain_ui_live_tests
-    phase2_tests
-    phase3_tests)
-  if (TARGET ${daw_test_target})
-    target_compile_options(${daw_test_target} PRIVATE -UNDEBUG)
-  endif()
-endforeach()
-
 enable_testing()
 
 add_test(NAME patcher_resolution
@@ -377,6 +377,18 @@ add_test(NAME event_ring_mpsc
   COMMAND event_ring_mpsc_tests
 )
 set_tests_properties(event_ring_mpsc PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# M2.20: the linter's own coverage — every rule fires, clean input is silent, output is
+# deterministic. Pure file in / text out, so it needs no audio device and belongs here.
+add_test(NAME lint
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
+)
+set_tests_properties(lint PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME lane_quantize
+  COMMAND lane_quantize_tests
+)
+set_tests_properties(lane_quantize PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME clip_grid
   COMMAND clip_grid_tests
@@ -580,3 +592,35 @@ add_test(NAME phase3_composition_full
           --plugin ${IDENTITY_VST3}
 )
 set_tests_properties(phase3_composition_full PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+
+# NOTE: this MUST stay at the very END of this file. `if (TARGET ...)` is false for a
+# target that has not been declared yet and silently skips it — when this loop lived
+# above enable_testing(), phase3_tests (declared 130 lines later, and the largest test
+# target here) was skipped, so the fix for "assertions were compiled out" left the
+# biggest suite still building with -DNDEBUG while the CMake read as though it did not.
+# assert() is the assertion mechanism in several of these test mains, and CMake's
+# RelWithDebInfo (the default build here) passes -DNDEBUG, which compiles every one of
+# them away. Those binaries then run to completion and exit 0 having verified NOTHING —
+# 161 assertions across four files were dead when this was noticed. Undefine NDEBUG for
+# test targets only, so a test that asserts actually asserts.
+foreach(daw_test_target
+    patcher_tests
+    patcher_graph_tests
+    project_file_tests
+    waveform_pyramid_tests
+    waveform_store_tests
+    waveform_fixture_tests
+    clip_grid_tests
+    lane_quantize_tests
+    event_ring_mpsc_tests
+    audio_io_tests
+    device_chain_tests
+    device_chain_ui_tests
+    device_chain_ui_live_tests
+    phase2_tests
+    phase3_tests)
+  if (TARGET ${daw_test_target})
+    target_compile_options(${daw_test_target} PRIVATE -UNDEBUG)
+  endif()
+endforeach()

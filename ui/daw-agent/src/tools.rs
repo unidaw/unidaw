@@ -423,10 +423,15 @@ fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
     let velocity = arg_u64(args, "velocity").unwrap_or(100).min(127) as u32;
     let column = arg_u64(args, "column").unwrap_or(0) as u16;
 
-    // Optimistic concurrency: each accepted write bumps the clip version by one,
-    // so the next note's base_version is the previous plus one. Same protocol the
+    // Optimistic concurrency: each accepted write bumps this TRACK's clip version by
+    // one, so the next note's base_version is the previous plus one. Same protocol the
     // UI obeys — the agent is not privileged.
-    let mut base = handle.clip_version();
+    //
+    // Per TRACK, not global (M2.17). Reading the global here is exactly the failure the
+    // per-track counters were introduced to end: the moment anyone edits another track
+    // the two counters diverge, and every note this agent writes is silently rejected —
+    // which is the "agent works on track 4 while you type on track 1" case itself.
+    let mut base = handle.clip_version_for_track(track);
     let first_base = base;
     let mut sent = 0usize;
     for (index, pitch) in pitches.iter().enumerate() {

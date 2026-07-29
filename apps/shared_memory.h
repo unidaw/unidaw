@@ -79,7 +79,11 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    ready=1, and the consumer ignores any slot that is not ready. A producer built
 //    against v24 leaves ready at 0 and its commands are silently dropped, which is
 //    why this is a version bump and not a free addition.
-constexpr uint16_t kShmVersion = 25;
+// 26 (M1.13): per-lane non-destructive quantize published
+//    (uiTrackQuantizeGrid/Strength/Swing + uiQuantizeVersion), appended at the end.
+//    The UI draws each note at its authored t_on and a deviation bar from these; no
+//    note field changed, and the engine's stored/saved clip is untouched by quantize.
+constexpr uint16_t kShmVersion = 26;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -225,6 +229,17 @@ struct alignas(64) ShmHeader {
   // is the host->engine leg, not the published one. Index is the host's compacted plugin
   // order; the engine maps it to stable device ids when publishing.
   int16_t hostDeviceMeters[kUiMaxMeteredDevices][4]{};
+  // v26 (M1.13): per-lane NON-DESTRUCTIVE quantize. The UI needs these to draw each
+  // note where it was played AND a deviation bar showing where it sounds; it can derive
+  // both from the note's authored t_on (already published, untouched) plus these three
+  // numbers, so no note field grows. grid 0 = quantize off for that lane. Swing is
+  // signed thousandths of a grid step applied to odd slots. uiQuantizeVersion moves only
+  // when a lane's quantize changes — it is NOT the clip version, because quantize moves
+  // no authored note and must not invalidate anyone's in-flight edit.
+  uint64_t uiTrackQuantizeGrid[kUiMaxTracks]{};
+  uint32_t uiTrackQuantizeStrength[kUiMaxTracks]{};
+  int32_t uiTrackQuantizeSwing[kUiMaxTracks]{};
+  uint32_t uiQuantizeVersion = 0;
 };
 
 // uiTrackFlags bits.

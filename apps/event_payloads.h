@@ -150,8 +150,16 @@ enum class UiCommandType : uint16_t {
   // PANIC: all sound off. Sends CC120 (all-sound-off) AND CC123 (all-notes-off) on every
   // MIDI channel to every hosted plugin, and drops all pending/active note state. CC120 is
   // the one that matters — 123 releases notes and lets them ring out, which is not a panic.
-  Panic = 52,  // next free 53
+  Panic = 52,
+  // M1.13 lane quantize, non-destructive: trackId, noteNanotick = grid in nanoticks
+  // (0 = off), value0 = strength in thousandths, notePitch = swing in thousandths
+  // BIASED BY +500 so it survives the unsigned field (0 = -500, 500 = straight,
+  // 1000 = +500). Changes what SOUNDS; never touches a stored note.
+  SetLaneQuantize = 53,  // next free 54
 };
+
+// SetLaneQuantize carries swing through an unsigned field; this is the bias.
+constexpr uint32_t kLaneQuantizeSwingBias = 500;
 
 // Readable name for an opcode, for the history journal and diagnostics. Unknown values
 // render as "op:<n>" rather than throwing away the number.
@@ -206,6 +214,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::ResizePlacement: return "resize_placement";
     case UiCommandType::AddPlacement: return "add_placement";
     case UiCommandType::Panic: return "panic";
+    case UiCommandType::SetLaneQuantize: return "set_lane_quantize";
   }
   return "op:unknown";
 }
@@ -281,7 +290,48 @@ enum class UiDiffType : uint16_t {
   // device's ChainSnapshot diff. See UiBusDiffPayload + the invalidation rule in
   // shared_memory.h (a ChainSnapshot replaces the device's whole bus set).
   DeviceBus = 14,
+  // A clip edit was REFUSED, and why. Until this existed a stale-base edit was dropped
+  // in total silence: no error, no code, nothing on the outbound ring — every symptom
+  // was "the app does nothing", and the fastest diagnosis available to the UI was
+  // diffing two counters in a shell script. It carries the numbers that settle it:
+  // which track, what base was sent, what the engine actually holds. Reported by the
+  // frontend after M2.17 moved acceptance per-track and their page kept sending the
+  // global version as its base.
+  //
+  // ResyncNeeded (4) is still emitted alongside, unchanged, so nothing that already
+  // handles it has to change. This is strictly additive: a reader that switches on
+  // diffType and ignores unknown values is unaffected, which is why it needs no
+  // kShmVersion bump.
+  ClipRejected = 15,
 };
+
+// Why a clip edit was refused. Distinct codes rather than one "rejected", because the
+// fix differs: a stale base means re-read and retry, an unknown track means the caller
+// is addressing something that is not there and retrying will never help.
+enum class UiClipRejectReason : uint16_t {
+  None = 0,
+  StaleBase = 1,      // baseVersion != the engine's current version for this scope
+  UnknownTrack = 2,   // no such track
+};
+
+// Rides the same 40-byte diff slot as every other payload; diffType is FIRST, so a
+// reader dispatches on it and never on the payload's size (UiChainDiffPayload and
+// UiChainErrorPayload are both 40 bytes — dispatching by size silently routes one into
+// the other's handler, which is a real bug this codebase already shipped once).
+struct UiClipRejectPayload {
+  uint16_t diffType = 0;   // UiDiffType::ClipRejected
+  uint16_t reason = 0;     // UiClipRejectReason
+  uint32_t trackId = 0;    // the scope the version was compared against
+  uint32_t sentBase = 0;   // what the caller presented
+  uint32_t currentBase = 0;  // what the engine holds — the value to retry with
+  uint16_t commandType = 0;  // UiCommandType that was refused
+  uint16_t reserved = 0;
+  uint32_t reserved2[5]{};
+};
+static_assert(sizeof(UiClipRejectPayload) <= 40,
+              "UiClipRejectPayload must fit an EventEntry payload");
+static_assert(offsetof(UiClipRejectPayload, diffType) == 0,
+              "diffType must be first: readers dispatch on it");
 
 enum class UiHarmonyDiffType : uint16_t {
   None = 0,
