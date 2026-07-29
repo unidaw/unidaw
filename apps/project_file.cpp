@@ -562,6 +562,9 @@ std::string serializeProject(const ProjectDocument& document) {
     writer.beginArrayElement();
     writer.key("track_id", track.trackId);
     writer.key("name", track.name);
+    if (track.isMaster) {
+      writer.key("is_master", true);
+    }
     writer.key("parent_id", track.parentId);
     writer.key("collapsed", track.collapsed);
     writer.key("harmony_quantize", track.harmonyQuantize);
@@ -795,6 +798,7 @@ bool deserializeProject(const std::string& json,
       ProjectTrack track;
       track.trackId = tree.get<uint32_t>("track_id", 0);
       track.name = tree.get<std::string>("name", "");
+      track.isMaster = tree.get<bool>("is_master", false);
       track.parentId = tree.get<uint32_t>("parent_id", 0);
       track.collapsed = tree.get<bool>("collapsed", false);
       track.harmonyQuantize = tree.get<bool>("harmony_quantize", false);

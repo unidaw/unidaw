@@ -162,6 +162,14 @@ pid_t HostController::spawnHostProcess(const HostConfig& config) {
     }
     const std::filesystem::path pluginPath(path);
     if (pluginPath.filename() == "Identity.vst3") {
+      // The host will substitute the in-process FAKE fixture for this plugin — the real
+      // Identity.vst3 bundle is never opened, so edits to IdentityProcessor.cpp have no
+      // effect here. That is intended for the test fixture, but it triggers on the
+      // FILENAME alone, so say it out loud: a silent substitution is exactly how the
+      // master-FX path came to output silence for hours (the fixture has no audio input).
+      std::cerr << "HostController: '" << pluginPath.filename().string()
+                << "' resolves to the built-in fake fixture, not the real plugin"
+                << std::endl;
       env.emplace_back("DAW_USE_FAKE_IDENTITY=1");
       break;
     }

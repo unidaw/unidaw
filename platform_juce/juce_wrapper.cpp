@@ -1058,6 +1058,14 @@ class JucePluginInstance final : public IPluginInstance {
   std::function<void(int, bool)> keyForwardCb_;  // keystroke forwarding (set by the host)
 };
 
+// DAW_IDENTITY_PASSTHRU=1 turns the Identity fixture into a unity-gain insert EFFECT
+// (see the pass-through copy in process() and the input-bus declaration in
+// inputChannels()). Read once; unset is the normal instrument behaviour.
+inline bool fakeIdentityPassThru() {
+  static const bool kOn = std::getenv("DAW_IDENTITY_PASSTHRU") != nullptr;
+  return kOn;
+}
+
 class FakeIdentityPluginInstance final : public IPluginInstance {
  public:
   // latencySamples models a real plugin's reported processing latency: the instance
@@ -1123,8 +1131,21 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
       }
       (void)sink;
     }
+    // DAW_IDENTITY_PASSTHRU=1 makes this fixture a unity-gain AUDIO EFFECT: copy the
+    // incoming audio to the output instead of starting from silence (note blips below
+    // then land on top, and a chain fed no MIDI is a pure pass-through). This is the
+    // test suite's dependency-free stand-in for a real insert effect — master-bus FX and
+    // chain inserts — and it has to live HERE rather than in the real Identity plugin,
+    // because host_controller spawns the host with DAW_USE_FAKE_IDENTITY for any path
+    // named Identity.vst3, so this fake is what actually runs. Off by default: without
+    // the flag the outputs still start silent, exactly as before.
+    const bool kPassThru = fakeIdentityPassThru();
     for (int ch = 0; ch < numOutputs; ++ch) {
-      std::fill(outputs[ch], outputs[ch] + numFrames, 0.0f);
+      if (kPassThru && inputs != nullptr && ch < numInputs && inputs[ch] != nullptr) {
+        std::copy(inputs[ch], inputs[ch] + numFrames, outputs[ch]);
+      } else {
+        std::fill(outputs[ch], outputs[ch] + numFrames, 0.0f);
+      }
     }
     for (int ch = 0; ch < numAuxOutputs; ++ch) {
       if (auxOutputs && auxOutputs[ch]) {
@@ -1237,7 +1258,14 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   // input bus, so the host lays out [main..., sidechain...] and process() can read the
   // key from the channels after the main bus.
   int inputChannels() const override {
-    return sidechainEnabled_ ? (kFakeMainInputChannels + kFakeSidechainChannels) : 0;
+    if (sidechainEnabled_) {
+      return kFakeMainInputChannels + kFakeSidechainChannels;
+    }
+    // In pass-through (insert-effect) mode the fixture must DECLARE a main input bus, or
+    // the host has nothing to hand it — it only passes input pointers when the plugin
+    // reports input channels. Without this the fixture silently behaves like a synth and
+    // an "effect" made of it outputs silence.
+    return fakeIdentityPassThru() ? kFakeMainInputChannels : 0;
   }
   int outputChannels() const override {
     return auxOutEnabled_

@@ -850,6 +850,67 @@ public:
       m_transportSample += static_cast<uint64_t>(numSamples);
     }
 
+    // 4b — master FX on the SUM (B2). When the master has an enabled VST effect AND its
+    // host is ready, hand this block's summed audio to the master render thread and swap
+    // in the PREVIOUS block's processed result (one block late) before the fader. try_lock
+    // only, so the RT thread never blocks: a missed publish just gives the render thread a
+    // marginally staler sum; a missing processed block passes the sum through. When the
+    // gate is off this whole block is skipped and the path is byte-identical to today.
+    if (m_masterFxActive && m_masterFxActive->load(std::memory_order_acquire) &&
+        m_masterHostReady && m_masterHostReady->load(std::memory_order_acquire) &&
+        m_masterFxChannels > 0 && masterCh == static_cast<int>(m_masterFxChannels)) {
+      const uint32_t chn = m_masterFxChannels;
+      const size_t n = static_cast<size_t>(numSamples);
+      const size_t need = static_cast<size_t>(chn) * n;
+      if (m_masterSumMx.try_lock()) {
+        if (m_masterSumBuf.size() >= need) {
+          for (uint32_t ch = 0; ch < chn; ++ch) {
+            if (master[ch]) {
+              std::memcpy(m_masterSumBuf.data() + static_cast<size_t>(ch) * n,
+                          master[ch], n * sizeof(float));
+            }
+          }
+          m_masterSumFresh = true;
+        }
+        m_masterSumMx.unlock();
+      }
+      bool gotFresh = false;
+      if (m_masterOutMx.try_lock()) {
+        if (m_masterOutFresh && m_masterOutBuf.size() == m_masterOutLocal.size()) {
+          std::memcpy(m_masterOutLocal.data(), m_masterOutBuf.data(),
+                      m_masterOutBuf.size() * sizeof(float));
+          m_masterOutFresh = false;
+          m_masterOutLocalValid = true;
+          gotFresh = true;
+        }
+        m_masterOutMx.unlock();
+      }
+      if (m_masterOutLocalValid && m_masterOutLocal.size() >= need) {
+        // In steady state a processed block arrives for every callback, so this emits
+        // exactly one block late. If the master plugin misses its deadline no fresh block
+        // arrived, and re-emitting the last one repeats ~a block of audio — audible as a
+        // stutter. Count those so a chronically late master plugin is VISIBLE in the
+        // shutdown report rather than a mystery artefact. (Reported alongside underruns;
+        // the audio still flows, it just repeats a block.)
+        if (!gotFresh) {
+          m_masterFxStaleBlocks.fetch_add(1, std::memory_order_relaxed);
+        }
+        m_masterFxBlocks.fetch_add(1, std::memory_order_relaxed);
+        for (uint32_t ch = 0; ch < chn; ++ch) {
+          if (master[ch]) {
+            std::memcpy(master[ch],
+                        m_masterOutLocal.data() + static_cast<size_t>(ch) * n,
+                        n * sizeof(float));
+          }
+        }
+      }
+    } else if (m_masterOutLocalValid) {
+      // The FX path just disengaged (effect removed/bypassed, or its host went down).
+      // Drop the last processed block: without this the latch stays set and a stale
+      // block would be stamped over a later mix if the path ever re-engages.
+      m_masterOutLocalValid = false;
+    }
+
     // The MASTER fader: apply the master track's gain (0 when muted) to the summed bus
     // before it is captured or sent to the device — a pure output-side multiply, no host
     // and no latency, so the master mixer strip actually controls the mix. Unity (null
@@ -1108,6 +1169,30 @@ private:
   const std::atomic<float>* m_masterGain = nullptr;
   const std::atomic<bool>* m_masterMute = nullptr;
 
+  // 4b — master FX on the SUM (B2, one block late). The gate: master has an enabled VST
+  // effect (m_masterFxActive) AND its host is ready (m_masterHostReady). When BOTH hold,
+  // the callback hands the summed block to the master render thread and emits the
+  // PREVIOUS block's processed result instead of the raw sum. When either is false it is
+  // exactly today's path — the sum straight through. Hand-off is try_lock only on the RT
+  // side, so the callback never blocks; the render thread holds each lock just long
+  // enough to memcpy one block (never across the host round-trip). Interleaved [ch*n+i].
+  const std::atomic<bool>* m_masterFxActive = nullptr;
+  const std::atomic<bool>* m_masterHostReady = nullptr;
+  uint32_t m_masterFxChannels = 0;
+  uint32_t m_masterFxBlockSize = 0;
+  std::mutex m_masterSumMx;
+  std::vector<float> m_masterSumBuf;   // callback -> render: latest summed block
+  bool m_masterSumFresh = false;
+  std::mutex m_masterOutMx;
+  std::vector<float> m_masterOutBuf;   // render -> callback: latest processed block
+  bool m_masterOutFresh = false;
+  std::vector<float> m_masterOutLocal;  // callback's persistent copy (last good processed)
+  bool m_masterOutLocalValid = false;
+  // Master-FX health: blocks emitted through the master effect, and how many of those
+  // re-used the previous processed block because none arrived in time.
+  std::atomic<uint64_t> m_masterFxBlocks{0};
+  std::atomic<uint64_t> m_masterFxStaleBlocks{0};
+
  public:
   void setPlaying(const std::atomic<bool>* playing) { m_playing = playing; }
   // A wider-than-device master for surround (DAW_MASTER_CHANNELS). 0/negative follows
@@ -1117,9 +1202,51 @@ private:
         channels > 0 ? std::min<int>(channels, kMaxMasterChannels) : 0;
   }
   // Wire the master track's fader (gain + mute) so it controls the summed output.
+  // The block size the hand-off buffers were sized with. The render thread MUST stride
+  // with this, not with engineConfig.blockSize: if the device buffer and the engine's
+  // block size ever diverge, striding with the other one smears channels or silently
+  // stalls the master FX.
+  uint32_t masterFxBlockSize() const { return m_masterFxBlockSize; }
+  uint64_t masterFxBlocks() const { return m_masterFxBlocks.load(std::memory_order_relaxed); }
+  uint64_t masterFxStaleBlocks() const {
+    return m_masterFxStaleBlocks.load(std::memory_order_relaxed);
+  }
   void setMasterMixer(const std::atomic<float>* gain, const std::atomic<bool>* mute) {
     m_masterGain = gain;
     m_masterMute = mute;
+  }
+  // 4b: wire the master host's readiness flag and size the hand-off buffers. `channels`
+  // is the master width; `blockSize` the block. Called once at callback setup.
+  void setMasterFxWiring(const std::atomic<bool>* active,
+                         const std::atomic<bool>* hostReady, uint32_t channels,
+                         uint32_t blockSize) {
+    m_masterFxActive = active;
+    m_masterHostReady = hostReady;
+    m_masterFxChannels = channels;
+    m_masterFxBlockSize = blockSize;
+    const size_t n = static_cast<size_t>(channels) * blockSize;
+    m_masterSumBuf.assign(n, 0.0f);
+    m_masterOutBuf.assign(n, 0.0f);
+    m_masterOutLocal.assign(n, 0.0f);
+  }
+  // 4b (render thread): take the latest summed block the callback published. Returns
+  // false if nothing new since last call. `dst` is resized to channels*blockSize.
+  bool takeMasterSum(std::vector<float>& dst) {
+    std::lock_guard<std::mutex> lock(m_masterSumMx);
+    if (!m_masterSumFresh) {
+      return false;
+    }
+    dst = m_masterSumBuf;
+    m_masterSumFresh = false;
+    return true;
+  }
+  // 4b (render thread): publish a processed block for the callback to emit next block.
+  void publishMasterOut(const std::vector<float>& src) {
+    std::lock_guard<std::mutex> lock(m_masterOutMx);
+    if (m_masterOutBuf.size() == src.size()) {
+      m_masterOutBuf = src;
+      m_masterOutFresh = true;
+    }
   }
 
   // Movement 4 PDC: set one slot's compensation delay in samples (clamped to the ring
@@ -1943,6 +2070,20 @@ struct TrackRuntime {
   masterTrack->trackId = daw::kMasterTrackId;
   masterTrack->trackName = "Master";
   masterTrack->trackSnapshot = buildTrackSnapshot(masterTrack->track);
+  // 4b groundwork: give the master a host-capable config so a VST effect on the master
+  // SUM can be hosted out of process. Its input IS the sum, so numChannelsIn ==
+  // numChannelsOut (an audio-in effects chain). Dedicated socket/shm names off the
+  // master id. No host is launched until it actually has a VST effect (reconcileMasterHost).
+  masterTrack->config = baseConfig;
+  masterTrack->config.socketPath = trackSocketPath(daw::kMasterTrackId);
+  masterTrack->config.shmName = trackShmName(daw::kMasterTrackId);
+  masterTrack->config.numChannelsIn = masterTrack->config.numChannelsOut;
+  masterTrack->config.pluginPaths.clear();
+  masterTrack->config.pluginNames.clear();
+  // 4b gate (first half): the master has an enabled VST effect. The callback ANDs this
+  // with the master host being ready. Set by reconcileMasterHost; read by the callback
+  // via a wired pointer.
+  std::atomic<bool> masterFxActive{false};
 
   daw::LatencyManager latencyMgr;
   const auto& engineConfig = tracks.front()->config;
@@ -1959,6 +2100,9 @@ struct TrackRuntime {
 
   std::unique_ptr<daw::IRuntime> audioRuntime;
   std::unique_ptr<EngineAudioCallback> audioCallback;
+  // 4b: drives the master host one block behind the callback. Started once the callback
+  // exists (below), joined at shutdown.
+  std::thread masterRenderThread;
 
   // Map-aware so a loaded project's tempo — including changes mid-song — actually
   // takes effect. A StaticTempoProvider here made the engine play every project at
@@ -2785,7 +2929,20 @@ struct TrackRuntime {
             device.kind != daw::DeviceKind::VstEffect) {
           continue;
         }
-        const auto path = resolveDevicePluginPath(runtime, device.hostSlotIndex);
+        // A device whose vstRef did NOT resolve to a scan index (still Direct) but which
+        // carries a real path on disk must load from THAT path. Otherwise Direct falls
+        // back to the engine's DEFAULT plugin, so a project referencing a plugin the scan
+        // hasn't caught silently loads the wrong plugin instead — an instrument where an
+        // effect was asked for, which then outputs silence. The saved path is the only
+        // identity such a plugin has (same principle as the vstRef fix in M0).
+        std::optional<std::string> path;
+        if (device.hostSlotIndex == daw::kHostSlotIndexDirect &&
+            !device.vstRef.path.empty() &&
+            std::filesystem::exists(device.vstRef.path)) {
+          path = device.vstRef.path;
+        } else {
+          path = resolveDevicePluginPath(runtime, device.hostSlotIndex);
+        }
         if (!path) {
           std::cerr << "Engine: missing plugin path for device "
                     << device.id << std::endl;
@@ -3058,6 +3215,37 @@ struct TrackRuntime {
       restartQueue.push_back(&runtime);
     }
     restartCv.notify_one();
+  };
+
+  // 4b: bring the MASTER host in line with its chain. The master is not in the `tracks`
+  // vector, so the per-track consumer never drives its host lifecycle — do it here,
+  // off the command/load thread. rebuildHostForChain resolves the master's VST paths and
+  // either reconciles a running host in place or arms needsRestart; the restart worker
+  // (which operates on any runtime, not just tracks) then launches it. A master with only
+  // patcher/mod devices resolves to no plugins, so no host is launched. The master render
+  // thread (below) drives its blocks once it is ready.
+  auto reconcileMasterHost = [&]() {
+    if (!masterTrack) {
+      return;
+    }
+    rebuildHostForChain(*masterTrack);
+    if (masterTrack->needsRestart.load(std::memory_order_acquire)) {
+      scheduleHostRestart(*masterTrack);
+    }
+    // Engage the sum-processing path only when there is an enabled VST effect on the
+    // master. The callback ANDs this with hostReady, so this flip alone can only turn the
+    // FX path on/off between "today's sum" and "processed"; it never tears.
+    bool hasFx = false;
+    {
+      std::lock_guard<std::mutex> lock(masterTrack->trackMutex);
+      for (const auto& d : masterTrack->track.chain.devices) {
+        if (d.kind == daw::DeviceKind::VstEffect && !d.bypass) {
+          hasFx = true;
+          break;
+        }
+      }
+    }
+    masterFxActive.store(hasFx, std::memory_order_release);
   };
 
   std::thread restartWorker([&] {
@@ -4420,6 +4608,40 @@ struct TrackRuntime {
       }
       document.tracks.push_back(std::move(track));
     }
+    // Persist the MASTER track (patcher-is-a-device item 4a): its device chain + mixer,
+    // so a global patcher or master FX survives save/reload. Appended as an is_master
+    // entry (reuses ProjectTrack purely for chain/mixer serialization); it carries no
+    // clips/placements and is lifted back out of document.tracks on load. Written after
+    // the real tracks so it inherits the same per-device patcher-node normalization + VST
+    // vst_ref stamping below.
+    if (masterTrack) {
+      daw::ProjectTrack m;
+      m.isMaster = true;
+      m.trackId = daw::kMasterTrackId;
+      m.name = "Master";
+      {
+        std::lock_guard<std::mutex> lock(masterTrack->trackMutex);
+        m.chain = masterTrack->track.chain;
+        m.modLinks = masterTrack->track.modRegistry.links;
+      }
+      const float g = masterTrack->mixGainLinear.load(std::memory_order_relaxed);
+      m.mixer.gainDb =
+          g > 0.0f ? 20.0 * std::log10(static_cast<double>(g)) : -120.0;
+      m.mixer.mute = masterTrack->mixMute.load(std::memory_order_relaxed);
+      // Stamp durable plugin identity on the master's VST devices, same rule as tracks.
+      for (auto& device : m.chain.devices) {
+        if ((device.kind == daw::DeviceKind::VstInstrument ||
+             device.kind == daw::DeviceKind::VstEffect) &&
+            device.hostSlotIndex < pluginCache.entries.size()) {
+          const auto& entry = pluginCache.entries[device.hostSlotIndex];
+          device.vstRef.vendor = entry.vendor;
+          device.vstRef.name = entry.name;
+          device.vstRef.path = entry.path;
+          device.vstRef.uid16 = entry.pluginUid16;
+        }
+      }
+      document.tracks.push_back(std::move(m));
+    }
     // Persist the patcher execution. Two cases, mirroring load:
     if (patcherAssembledFromDevices.load(std::memory_order_acquire)) {
       // Per-device: every device already carries its own graph (load left
@@ -4547,6 +4769,26 @@ struct TrackRuntime {
         }
       }
     }
+
+    // Lift the MASTER track (is_master) out of document.tracks BEFORE the adoption loops
+    // run, so it is never mistaken for a slot track. Its chain/mixer are restored onto
+    // masterTrack after the tracks load (below). A project with no master leaves this
+    // empty, which resets masterTrack to a clean chain. (patcher-is-a-device item 4a.)
+    daw::ProjectTrack masterSource;
+    bool haveMaster = false;
+    document.tracks.erase(
+        std::remove_if(document.tracks.begin(), document.tracks.end(),
+                       [&](daw::ProjectTrack& t) {
+                         if (!t.isMaster) {
+                           return false;
+                         }
+                         if (!haveMaster) {
+                           masterSource = std::move(t);
+                           haveMaster = true;
+                         }
+                         return true;
+                       }),
+        document.tracks.end());
 
     // Resolve a clip's relative sourcePath against the project file's directory, and
     // drop the previous project's waveform sources (and pyramids) before the track
@@ -4967,6 +5209,62 @@ struct TrackRuntime {
       // all-tracks snapshot above ran before this loop restored them, so on its
       // own it would leave a UI showing the pre-load chain.
       emitChainSnapshot(*runtime);
+    }
+
+    // Restore the MASTER track's chain/mixer lifted out above (patcher-is-a-device 4a).
+    // A project with no master entry resets it to a clean chain + unity fader, so a
+    // previous project's master never lingers into the next. No host rebuild — master
+    // VST hosting is 4b; a patcher/mod device on it runs in the existing model.
+    if (masterTrack) {
+      // Resolve the master's VST devices from their DURABLE vstRef to a live plugin-cache
+      // index, exactly as the document-track loop above does. The master is lifted out of
+      // document.tracks before that loop, so without this its devices keep whatever
+      // hostSlotIndex the file carried — and kHostSlotIndexDirect resolves to the ENGINE'S
+      // DEFAULT plugin, so a saved master effect silently loaded the wrong plugin (an
+      // instrument with no audio input), which output silence and muted the whole mix.
+      if (haveMaster) {
+        for (auto& device : masterSource.chain.devices) {
+          if (device.kind != daw::DeviceKind::VstInstrument &&
+              device.kind != daw::DeviceKind::VstEffect) {
+            continue;
+          }
+          if (device.vstRef.empty()) {
+            continue;
+          }
+          const auto resolution = daw::resolveVstRef(
+              pluginCache, device.vstRef.uid16, device.vstRef.path,
+              device.vstRef.vendor, device.vstRef.name);
+          if (resolution.match != daw::VstMatch::None) {
+            device.hostSlotIndex = static_cast<uint32_t>(resolution.index);
+          }
+          DAW_EVENT("master.plugin_resolved")
+              .field("device", device.id)
+              .field("name", device.vstRef.name)
+              .field("path", device.vstRef.path)
+              .field("matched", resolution.match != daw::VstMatch::None)
+              .field("slot", static_cast<uint64_t>(device.hostSlotIndex));
+        }
+      }
+      std::shared_ptr<const TrackStateSnapshot> snap;
+      {
+        std::lock_guard<std::mutex> lock(masterTrack->trackMutex);
+        masterTrack->track.chain =
+            haveMaster ? masterSource.chain : daw::TrackChain{};
+        masterTrack->track.modRegistry.links =
+            haveMaster ? masterSource.modLinks : std::vector<daw::ModLink>{};
+        snap = buildTrackSnapshot(masterTrack->track);
+      }
+      std::atomic_store_explicit(&masterTrack->trackSnapshot, snap,
+                                 std::memory_order_release);
+      const double gainDb = haveMaster ? masterSource.mixer.gainDb : 0.0;
+      masterTrack->mixGainLinear.store(
+          static_cast<float>(std::pow(10.0, gainDb / 20.0)),
+          std::memory_order_relaxed);
+      masterTrack->mixMute.store(haveMaster ? masterSource.mixer.mute : false,
+                                 std::memory_order_relaxed);
+      emitChainSnapshot(*masterTrack);
+      // Bring the master host up (or down) for the loaded master chain, like a track.
+      reconcileMasterHost();
     }
 
     // Clear the arrangement of any track the loaded project does not define. Load
@@ -6666,11 +6964,12 @@ struct TrackRuntime {
         std::atomic_store_explicit(&runtime->trackSnapshot,
                                    snapshot,
                                    std::memory_order_release);
-        // The master has no per-track host yet — hosting the master SUM through VST
-        // effects is 4b. For now its chain (patcher/mod + stored VST refs) is kept and
-        // published but not host-rebuilt, so a patcher device on the master is a real,
-        // visible, bypassable home for global logic.
-        if (chainPayload.trackId != daw::kMasterTrackId) {
+        // Reconcile the host. The master runs its own lifecycle (it is not in the tracks
+        // vector); a patcher/mod-only master resolves to no plugins and launches nothing,
+        // while a VST effect on the master brings its host up for the 4b sum-processing path.
+        if (chainPayload.trackId == daw::kMasterTrackId) {
+          reconcileMasterHost();
+        } else {
           rebuildHostForChain(*runtime);
         }
         emitChainSnapshot(*runtime);
@@ -11051,6 +11350,160 @@ struct TrackRuntime {
       if (masterTrack) {
         audioCallback->setMasterMixer(&masterTrack->mixGainLinear,
                                       &masterTrack->mixMute);
+        // 4b: wire the master host's readiness + size the sum/processed hand-off buffers
+        // to the master host's channel width.
+        audioCallback->setMasterFxWiring(
+            &masterFxActive, &masterTrack->hostReady,
+            masterTrack->config.numChannelsOut,
+            static_cast<uint32_t>(audioBackend->blockSize()));
+        // 4b render thread: one block behind the callback, it drives the master host —
+        // take the summed block, write it to the host's input plane, process, read the
+        // output plane, hand it back for the callback to emit next block. This is the ONLY
+        // thing that blocks on the master host; the RT callback never does. Idle (a short
+        // sleep) whenever there is no master effect or the host isn't ready.
+        if (!masterRenderThread.joinable()) {
+          masterRenderThread = std::thread([&] {
+            const uint32_t chn = masterTrack->config.numChannelsOut;
+            // Stride with the SAME block size the hand-off buffers were sized with. Using
+            // engineConfig.blockSize here would smear channels the moment the device
+            // buffer and the engine block size diverge.
+            const uint32_t bs = audioCallback->masterFxBlockSize();
+            std::vector<float> sumScratch;
+            std::vector<float> outScratch(static_cast<size_t>(chn) * bs, 0.0f);
+            uint32_t masterBlockId = 1;
+            uint64_t masterSample = 0;
+            uint32_t consecutiveTimeouts = 0;
+            bool warnedNotConsumed = false;
+            while (running.load(std::memory_order_acquire)) {
+              if (!masterFxActive.load(std::memory_order_acquire) ||
+                  !masterTrack->hostReady.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                continue;
+              }
+              if (!audioCallback || !audioCallback->takeMasterSum(sumScratch) ||
+                  sumScratch.size() < static_cast<size_t>(chn) * bs) {
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+                continue;
+              }
+              bool sendFailed = false;
+              bool timedOut = false;
+              bool produced = false;
+              {
+                // Hold controllerMutex across the WHOLE host interaction. The restart
+                // worker takes this same lock to call controller.launch(), which
+                // disconnects and munmaps the very mapping this thread reads and writes —
+                // touching header/mailbox unlocked is a use-after-munmap.
+                std::lock_guard<std::mutex> lock(masterTrack->controllerMutex);
+                const auto* header = masterTrack->controller.shmHeader();
+                const auto* mailbox = masterTrack->controller.mailbox();
+                const size_t shmSize = masterTrack->controller.shmSize();
+                if (!header || !mailbox || header->numBlocks == 0 ||
+                    header->channelStrideBytes == 0) {
+                  sendFailed = true;
+                } else {
+                  const uint64_t stride = header->channelStrideBytes;
+                  const uint32_t blockIndex = masterBlockId % header->numBlocks;
+                  const uint64_t inBlockBytes =
+                      static_cast<uint64_t>(header->numChannelsIn) * stride;
+                  for (uint32_t ch = 0; ch < chn && ch < header->numChannelsIn; ++ch) {
+                    const uint64_t off = header->audioInOffset +
+                                         blockIndex * inBlockBytes +
+                                         static_cast<uint64_t>(ch) * stride;
+                    if (off + stride > shmSize) {
+                      continue;
+                    }
+                    std::memcpy(reinterpret_cast<uint8_t*>(
+                                    const_cast<daw::ShmHeader*>(header)) + off,
+                                sumScratch.data() + static_cast<size_t>(ch) * bs,
+                                bs * sizeof(float));
+                  }
+                  daw::HostTransport tr;
+                  tr.isPlaying = playing.load(std::memory_order_acquire);
+                  if (!masterTrack->controller.sendProcessBlock(
+                          masterBlockId, masterSample, masterSample, 0, 0, tr)) {
+                    sendFailed = true;
+                  } else {
+                    // Bounded wait for THIS block. A dead or wedged host must not hang
+                    // the render thread.
+                    const auto deadline = std::chrono::steady_clock::now() +
+                                          std::chrono::milliseconds(50);
+                    while (mailbox->completedBlockId.load(std::memory_order_acquire) <
+                           masterBlockId) {
+                      if (std::chrono::steady_clock::now() > deadline) {
+                        timedOut = true;
+                        break;
+                      }
+                      std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    }
+                    // ONLY read the out plane when the host actually finished this block.
+                    // On a timeout that slot still holds the block from numBlocks ago (or
+                    // silence), and publishing it would present stale audio as fresh.
+                    if (!timedOut) {
+                      const uint64_t outBlockBytes =
+                          static_cast<uint64_t>(header->numChannelsOut) * stride;
+                      for (uint32_t ch = 0; ch < chn; ++ch) {
+                        float* dst = outScratch.data() + static_cast<size_t>(ch) * bs;
+                        if (ch < header->numChannelsOut) {
+                          const uint64_t off = header->audioOutOffset +
+                                               blockIndex * outBlockBytes +
+                                               static_cast<uint64_t>(ch) * stride;
+                          if (off + stride <= shmSize) {
+                            std::memcpy(dst,
+                                        reinterpret_cast<const uint8_t*>(header) + off,
+                                        bs * sizeof(float));
+                            continue;
+                          }
+                        }
+                        std::fill(dst, dst + bs, 0.0f);
+                      }
+                      produced = true;
+                    }
+                  }
+                }
+              }
+              if (sendFailed) {
+                // The master is not in the tracks vector, so the consumer's periodic
+                // re-arm never sees it: schedule its restart HERE or a dead master host
+                // stays dead for the rest of the session.
+                masterTrack->hostReady.store(false, std::memory_order_release);
+                masterTrack->needsRestart.store(true, std::memory_order_release);
+                scheduleHostRestart(*masterTrack);
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                continue;
+              }
+              if (timedOut) {
+                if (++consecutiveTimeouts >= 10) {
+                  std::cerr << "Engine: master FX host is not completing blocks; "
+                               "restarting it." << std::endl;
+                  consecutiveTimeouts = 0;
+                  masterTrack->hostReady.store(false, std::memory_order_release);
+                  masterTrack->needsRestart.store(true, std::memory_order_release);
+                  scheduleHostRestart(*masterTrack);
+                }
+                continue;
+              }
+              consecutiveTimeouts = 0;
+              if (produced) {
+                audioCallback->publishMasterOut(outScratch);
+                ++masterBlockId;
+                masterSample += bs;
+                // If we are feeding the host but the callback never swaps our output in,
+                // master FX is silently doing nothing (e.g. a surround master whose width
+                // does not match the master host's, or a hand-off size mismatch). Say so
+                // once rather than leaving an installed effect mysteriously inaudible.
+                if (!warnedNotConsumed && masterBlockId > 200 &&
+                    audioCallback->masterFxBlocks() == 0) {
+                  warnedNotConsumed = true;
+                  std::cerr << "Engine: master FX is processing but the audio callback is "
+                               "not using it — the master bus width does not match the "
+                               "master host ("
+                            << chn << " ch). The effect is installed but inaudible."
+                            << std::endl;
+                }
+              }
+            }
+          });
+        }
       }
       audioCallback->resetForStart();
       // Movement 4 surround master: the mix width follows the device, but
@@ -11153,6 +11606,9 @@ struct TrackRuntime {
   uiThread.join();
   producer.join();
   consumer.join();
+  if (masterRenderThread.joinable()) {
+    masterRenderThread.join();
+  }
   if (xrunReporter.joinable()) {
     xrunReporter.join();
   }
@@ -11173,6 +11629,19 @@ struct TrackRuntime {
               << audioCallback->worstStarveGap() << " blocks). Pipeline depth "
               << depth << " blocks (~" << (depth * blockMs)
               << " ms transport-to-ear, + device buffer)." << std::endl;
+    // 4b: an effect on the master SUM runs one block behind the callback (B2), because the
+    // sum does not exist until mix time and the callback must never block on a plugin.
+    // That block is uniform added OUTPUT latency (every track shifts together, so nothing
+    // goes out of alignment) and it applies ONLY while a master effect is engaged.
+    if (masterFxActive.load(std::memory_order_acquire)) {
+      const uint64_t fxBlocks = audioCallback->masterFxBlocks();
+      const uint64_t fxStale = audioCallback->masterFxStaleBlocks();
+      std::cout << "Master FX: engaged — the master bus is processed one block later (~"
+                << blockMs << " ms added output latency, master only). " << fxStale
+                << " of " << fxBlocks
+                << " blocks re-used the previous processed block (master plugin late)."
+                << std::endl;
+    }
     // Audio is stopped, so the capture buffer is quiescent and safe to write.
     if (audioCallback->capturing()) {
       const char* capturePath = std::getenv("DAW_CAPTURE_WAV");
