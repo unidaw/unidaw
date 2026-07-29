@@ -112,8 +112,16 @@ usable strip:
 All verified by `tools/master_track_check.sh` (addressable + takes edits + persists).
 A patcher device on the master runs in the existing per-track patcher model.
 
-**B (audio FX on the sum) is the only remaining piece** — it needs the latency call
-below before the RT callback change.
+**B (audio FX on the sum) is DONE too** — Jaakko chose **B2** (one block behind), and it
+shipped in commits 175f845 + d47bb15. The whole mix now runs through an out-of-process
+VST effect without the RT callback ever blocking on a plugin. Verified by instrumenting
+the whole chain: mix `0.302911` → callback hand-off `0.302911` → render thread
+`0.302911` → host output `0.302911` (unity pass-through is sample-exact), and
+`tools/master_fx_check.sh` shows a unity master effect is transparent
+(peak `0.424` with and without). Confirmed independently with a real third-party VST3
+effect. A late master plugin is counted and reported at shutdown.
+
+**So item 4 (master track) is complete: A and B both.**
 
 ## 4b implementation plan — audio FX on the master SUM (B2, one-block latency)
 
