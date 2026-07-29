@@ -563,6 +563,26 @@ function describeEngineEvent(e) {
   if (e.kind === 'resync') {
     return `track ${e.track} republished (clip version ${e.clipVersion})`;
   }
+  /*
+   * A REFUSED EDIT, WHICH USED TO BE SILENCE.
+   *
+   * The engine drops a clip edit whose base version is stale, and until backend
+   * added this it dropped it with no event at all: the whole symptom was "the app
+   * does nothing". That is how M2.17's move to per-track versioning broke note
+   * entry on every track but the last one edited, and why four checks failed
+   * saying only "clipVersion 20 -> 20".
+   *
+   * It names the version to RETRY with, because that is the difference between a
+   * report and a fix, and it distinguishes the two reasons because what to do
+   * about them differs — a stale base is worth retrying and a missing track never
+   * will be.
+   */
+  if (e.kind === 'clip-rejected') {
+    const where = e.track === MASTER_TRACK_ID ? 'the master' : `track ${e.track}`;
+    if (e.reason === 2) return `${where} does not exist — that edit went nowhere`;
+    return `${where} refused an edit composed against version ${e.sentBase}` +
+           ` (it is at ${e.currentBase} now)`;
+  }
   return `${e.kind.replace('-', ' ')} on track ${e.track} (code ${e.code})`;
 }
 
@@ -5487,6 +5507,15 @@ window.__uni = {
   chains: () => JSON.parse(JSON.stringify(chains)),
   reqChain: (track) => conn && conn.send({ type: 'reqchain',
                                            track: track === undefined ? -1 : track }),
+  /**
+   * One message, exactly as given, past every path that would fix it up.
+   *
+   * For provoking refusals. The app's send path resolves a correct base version
+   * now, so nothing it does can produce a stale-base rejection — which means the
+   * engine's refusal REPORTING has no ordinary caller and would rot unnoticed.
+   * The only way to test a guard is to walk into it deliberately.
+   */
+  send: (msg) => !!(conn && conn.send(msg)),
   patchSelect: (id) => { state.selectedNode = id; state.selectedField = 0; draw(); },
   patchAdd: (type) => { if (type !== undefined) state.patchAddType = type;
                         const r = addPatcherNode(); draw(); return r; },

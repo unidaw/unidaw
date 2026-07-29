@@ -1959,6 +1959,13 @@ const ENGINE_UNUSED = {
   LoadPluginOnTrack: 'gap — the rack inserts with AddDevice; this older path is unused',
   SetAutomationTarget: 'gap — automation has no UI at all',
   SetModSourceValue: 'gap — macro/mod values are unreachable',
+  // M1.13, landed engine-side this session. NON-DESTRUCTIVE: the authored notes
+  // never move, and where a note SOUNDS is quantize_tick(t_on, grid, strength,
+  // swing) — so the interesting half is not the command but the DEVIATION the
+  // tracker should draw between the two. Recorded rather than half-wired: a grid
+  // control with no way to see what it did to the feel is the kind of setting you
+  // turn and then cannot evaluate.
+  SetLaneQuantize: 'gap — lane quantize needs the deviation drawn, not just a command',
 };
 
 test('every engine command has a caller, or a recorded reason it has none', async () => {

@@ -3282,6 +3282,28 @@ fn decode_engine_event(e: &EventEntry) -> Option<String> {
         return Some(format!(
             "{{\"kind\":\"resync\",\"track\":{track},\"clipVersion\":{clip_version}}}"));
     }
+    /*
+     * A REFUSED EDIT SAYS SO (UiDiffType::ClipRejected = 15).
+     *
+     * Until backend shipped this, a clip edit with a stale base was dropped in
+     * silence — no event, no code, nothing on the ring. Every symptom was "the
+     * app does nothing", which is how M2.17's per-track versioning broke note
+     * entry on every track but one and cost four suite failures that named
+     * nothing between them.
+     *
+     * `current` is the value to RETRY WITH, which is why it is forwarded rather
+     * than reduced to a message: it is the difference between a report and a fix.
+     * The two reasons are separate because what to do about them differs — a
+     * stale base means re-read and retry, an unknown track means the caller is
+     * addressing something that is not there and retrying will never help.
+     */
+    if diff == 15 {
+        let reason = u16at(2);
+        return Some(format!(
+            "{{\"kind\":\"clip-rejected\",\"reason\":{reason},\"track\":{track},\
+              \"sentBase\":{},\"currentBase\":{},\"command\":{}}}",
+            u32at(8), u32at(12), u16at(16)));
+    }
     // The error payloads DO share a prefix: diff_type:u16, error_code:u16,
     // track_id:u32.
     let code = u16at(2);

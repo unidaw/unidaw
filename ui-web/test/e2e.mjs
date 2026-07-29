@@ -2704,6 +2704,63 @@ section('a device can be switched off without removing it');
  * wire, and the sidecar is the side that can read one. Same argument the BATCH
  * re-basing already made.
  */
+/*
+ * AND WHEN ONE DOES NOT LAND, IT SAYS SO.
+ *
+ * The complement of the section below, and the more important half. A stale-base
+ * edit used to be dropped in complete silence — no event, no code, nothing on the
+ * ring — so the entire symptom of M2.17's per-track versioning was "the app does
+ * nothing", and the four suite failures it caused named nothing between them.
+ *
+ * The base is stamped DELIBERATELY WRONG here, which is the only way to provoke a
+ * rejection now that the sidecar resolves a correct one. That is also why this
+ * check is worth having: with the resolution working, no ordinary path produces a
+ * rejection any more, so the reporting would rot unnoticed.
+ */
+section('a refused edit says so, with the version to retry');
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.evaluate(() => window.__uni.loadProject('meter'));
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.__uni.goto(4, 0));
+  await page.waitForTimeout(300);
+
+  const before = await page.evaluate(() => (window.__uni.notes() || []).length);
+  /*
+   * NOTHING IS ALREADY SAYING IT. `state.reject` is the app's one refusal line
+   * and it PERSISTS until something clears it, so a message left by an earlier
+   * section would satisfy every assertion below without this run proving
+   * anything. Checked rather than cleared, so an unexpected refusal upstream
+   * fails here instead of being erased.
+   */
+  const already = await page.evaluate(() => String(window.__uni.state().reject));
+  ok(!/refused an edit/.test(already), 'nothing was already claiming a refusal',
+     already);
+  // A base far in the future is stale in the sense the engine means: not the
+  // number it holds. Sent raw, past the app's own send path, because the app's
+  // whole job now is to never produce one.
+  await page.evaluate(() => window.__uni.send({
+    type: 'note', track: 0, pitch: 60, tick: 3840000, dur: 240000, vel: 100,
+    column: 0, base: 999999 }));
+  await page.waitForTimeout(1200);
+
+  const said = await page.evaluate(() => window.__uni.state().reject);
+  ok(/refused an edit/.test(String(said)), 'the refusal reaches the screen',
+     String(said));
+  ok(/999999/.test(String(said)), 'and names the version that was presented',
+     String(said));
+  /*
+   * THE NUMBER TO RETRY WITH. A refusal that says only "no" leaves the caller
+   * exactly where it was; this is what makes the message actionable, and it is
+   * why the payload carries current_base rather than the sidecar reducing it to
+   * prose.
+   */
+  ok(/it is at \d+ now/.test(String(said)), 'and the one to retry with',
+     String(said));
+  const after = await page.evaluate(() => (window.__uni.notes() || []).length);
+  ok(after === before, 'and the note really did not land', `${before} -> ${after}`);
+}
+
 section('an edit lands on a track other than the last one edited');
 {
   await page.evaluate(() => window.__uni.run('view tracker'));
