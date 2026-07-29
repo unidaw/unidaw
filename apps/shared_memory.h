@@ -74,6 +74,12 @@ constexpr uint16_t kShmVersion = 23;
 constexpr uint32_t kUiTrackNameBytes = 24;
 
 constexpr uint32_t kUiMaxTracks = 64;
+// The MASTER track's stable id. Deliberately >= kUiMaxTracks so every per-track
+// command handler's `trackId >= kUiMaxTracks` guard auto-rejects it — the master
+// is not a note/clip lane. Only the chain/mixer/patcher handlers opt it in
+// explicitly. Published in uiTrackId with kUiTrackFlagMaster so the UI addresses
+// the master by this id, not by a moving slot. (patcher-is-a-device item 4.)
+constexpr uint32_t kMasterTrackId = 0xFFFF0000u;
 constexpr uint32_t kUiMaxClipNotes = 4096;
 constexpr uint32_t kUiMaxClipChords = 1024;
 constexpr uint32_t kUiMaxClipExtents = 64;  // clip boxes across all tracks (M3.4)
@@ -208,6 +214,10 @@ constexpr uint32_t kUiTrackFlagHasParent = 1u << 1;
 // v22: this slot is a tombstone — a removed track whose id is retired but whose slot is
 // kept so its neighbours' ids don't renumber. Skip absent slots when drawing/iterating.
 constexpr uint32_t kUiTrackFlagAbsent = 1u << 2;
+// This published entry is the MASTER track (id == kMasterTrackId): a real device
+// chain + mixer whose output is the master bus, but no arrangement rail and no
+// clips. The UI renders it as the master strip and never as a tracker lane.
+constexpr uint32_t kUiTrackFlagMaster = 1u << 3;
 
 struct alignas(64) RingHeader {
   uint32_t capacity = 0;

@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{
-    UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload, UiCommandType,
-    UiPatcherPresetCommandPayload, UiWaveformRequestPayload,
+    UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
+    UiCommandType, UiPatcherPresetCommandPayload, UiWaveformRequestPayload, MASTER_TRACK_ID,
 };
 
 const USAGE: &str = "\
@@ -230,6 +230,7 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
     let count = handle.track_count() as usize;
     let names = handle.read_track_names();
     let devices = handle.read_track_device_names();
+    let (ids, flags) = handle.read_track_ids_and_flags();
     println!("{{");
     println!("  \"track_count\": {count},");
     println!("  \"tracks\": [");
@@ -241,9 +242,14 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
             .unwrap_or(0.0);
         let name = names.get(index).map(String::as_str).unwrap_or("");
         let device = devices.get(index).map(String::as_str).unwrap_or("");
+        // The stable id the UI keys on (kMasterTrackId for the master strip), not the
+        // moving slot; plus a master marker decoded from the flags.
+        let id = ids.get(index).copied().unwrap_or(index as u32);
+        let flag = flags.get(index).copied().unwrap_or(0);
+        let is_master = flag & daw_bridge::layout::UI_TRACK_FLAG_MASTER != 0;
         let comma = if index + 1 == count { "" } else { "," };
         println!(
-            "    {{ \"track_id\": {index}, \"name\": {name:?}, \"device\": {device:?}, \"peak_rms\": {rms} }}{comma}"
+            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"peak_rms\": {rms} }}{comma}"
         );
     }
     println!("  ]");
@@ -1065,6 +1071,77 @@ fn main() {
                         2
                     }
                 },
+                Some(&"add-device") => {
+                    // --track accepts a numeric id or "master"; --kind is a device kind
+                    // string; --at is the insert index (default = append); --plugin is a
+                    // plugin-cache slot for a VST device (default = none).
+                    let track_arg = args
+                        .iter()
+                        .position(|a| a == "--track")
+                        .and_then(|i| args.get(i + 1))
+                        .map(String::as_str)
+                        .unwrap_or("0");
+                    let track = if track_arg == "master" {
+                        MASTER_TRACK_ID
+                    } else {
+                        track_arg.parse::<u32>().unwrap_or(0)
+                    };
+                    let kind_arg = args
+                        .iter()
+                        .position(|a| a == "--kind")
+                        .and_then(|i| args.get(i + 1))
+                        .map(String::as_str)
+                        .unwrap_or("patcher_event");
+                    let kind = match kind_arg {
+                        "patcher_event" => Some(0u32),
+                        "patcher_instrument" => Some(1),
+                        "patcher_audio" => Some(2),
+                        "vst_instrument" => Some(3),
+                        "vst_effect" => Some(4),
+                        _ => None,
+                    };
+                    match kind {
+                        None => {
+                            eprintln!("daw-cli: unknown --kind {kind_arg}");
+                            2
+                        }
+                        Some(kind) => {
+                            let device_id =
+                                flag_u64(&args, "--device-id", Some(0)).unwrap_or(0) as u32;
+                            let insert = flag_u64(&args, "--at", Some(0xFFFF_FFFF))
+                                .unwrap_or(0xFFFF_FFFF)
+                                as u32;
+                            let plugin = flag_u64(&args, "--plugin", Some(0xFFFF_FFFE))
+                                .unwrap_or(0xFFFF_FFFE)
+                                as u32;
+                            let payload = UiChainCommandPayload {
+                                command_type: UiCommandType::AddDevice as u16,
+                                flags: 0,
+                                track_id: track,
+                                base_version: 0,
+                                device_id,
+                                device_kind: kind,
+                                insert_index: insert,
+                                patcher_node_id: 0xFFFF_FFFF,
+                                host_slot_index: plugin,
+                                bypass: 0,
+                                reserved: [0; 4],
+                            };
+                            match handle.send_chain_command(payload) {
+                                Ok(()) => {
+                                    println!(
+                                        "{{ \"sent\": \"add-device\", \"track\": {track}, \"kind\": {kind_arg:?} }}"
+                                    );
+                                    0
+                                }
+                                Err(err) => {
+                                    eprintln!("daw-cli: {err}");
+                                    1
+                                }
+                            }
+                        }
+                    }
+                }
                 Some(&"open-editor") => {
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
                     let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;

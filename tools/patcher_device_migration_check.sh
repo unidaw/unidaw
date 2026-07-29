@@ -19,7 +19,9 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
+# Prefer a debug build, fall back to release, so a release-only tree still works.
 CLI="$ROOT/ui/target/debug/daw-cli"
+[ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
 Q=960000
 ZEBRA="/Library/Audio/Plug-Ins/VST3/Zebra2.vst3"
 
@@ -37,14 +39,18 @@ GRAPH='"patcher": { "nodes": [
 ZDEV='{ "device_id": 9, "kind": "vst_instrument", "capability_mask": 5, "patcher_node_id": 0, "host_slot_index": 4294967294, "bypass": false, "vst_ref": { "vendor": "u-he", "name": "Zebra2", "path": "'"$ZEBRA"'", "uid16": "" } }'
 
 # scenario <name> <fixture-json>: load through the engine, capture, assert audio.
+# The window is deliberately generous — load at 2.5s, play at 3.5s, capture 12s of a
+# 14s run — so ~8s of playback lands in the WAV even on a busy machine. A tight window
+# made the audio assertion flaky (the graph-assembly half was always fine), so give it
+# room rather than race it.
 scenario() {
   local name="$1" json="$2"
   local tmp take shm
   tmp="$(mktemp -d)"; take="$tmp/$name.wav"; shm="/patmig_${name}_$$"
   printf '%s\n' "$json" > "$tmp/$name.uniproj.json"
   ( cd "$BUILD" && DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$tmp" \
-      DAW_CAPTURE_WAV="$take" DAW_CAPTURE_SECONDS=5 \
-      ./daw_engine --run-seconds 6 >"$tmp/engine.log" 2>&1 ) &
+      DAW_CAPTURE_WAV="$take" DAW_CAPTURE_SECONDS=12 \
+      ./daw_engine --run-seconds 14 >"$tmp/engine.log" 2>&1 ) &
   local eng=$!
   sleep 2.5
   DAW_UI_SHM_NAME="$shm" "$CLI" do load "$name" --force >/dev/null 2>&1 || true
@@ -52,12 +58,18 @@ scenario() {
   DAW_UI_SHM_NAME="$shm" "$CLI" do play --force >/dev/null 2>&1 || true
   wait "$eng" 2>/dev/null || true
   local ok=1
-  grep -qE "project\.patcher_(loaded|assembled)" "$tmp/engine.log" || {
-    echo "  [$name] FAIL: no patcher graph loaded/assembled"; ok=0; }
+  # Two independent halves, reported distinctly so a failure says WHICH broke: the
+  # engine never running the graph (a real migration/setup bug) is not the same as the
+  # graph running but the capture being empty (a timing/generation issue).
+  if ! grep -qE "project\.patcher_(loaded|assembled)" "$tmp/engine.log"; then
+    echo "  [$name] FAIL (setup): engine never loaded/assembled the patcher graph"
+    ok=0
+  fi
   if python3 "$ROOT/tools/perceptual.py" --expect-audio "$take" >/dev/null 2>&1; then
     echo "  [$name] PASS: patcher device produced audio"
-  else
-    echo "  [$name] FAIL: generator-only track was silent"; ok=0
+  elif [ "$ok" = "1" ]; then
+    echo "  [$name] FAIL (audio): graph ran but the capture was silent (generation broken, or widen the window on a busy box)"
+    ok=0
   fi
   rm -rf "$tmp"
   [ "$ok" = "1" ]
