@@ -874,16 +874,28 @@ public:
         }
         m_masterSumMx.unlock();
       }
+      bool gotFresh = false;
       if (m_masterOutMx.try_lock()) {
         if (m_masterOutFresh && m_masterOutBuf.size() == m_masterOutLocal.size()) {
           std::memcpy(m_masterOutLocal.data(), m_masterOutBuf.data(),
                       m_masterOutBuf.size() * sizeof(float));
           m_masterOutFresh = false;
           m_masterOutLocalValid = true;
+          gotFresh = true;
         }
         m_masterOutMx.unlock();
       }
       if (m_masterOutLocalValid && m_masterOutLocal.size() >= need) {
+        // In steady state a processed block arrives for every callback, so this emits
+        // exactly one block late. If the master plugin misses its deadline no fresh block
+        // arrived, and re-emitting the last one repeats ~a block of audio — audible as a
+        // stutter. Count those so a chronically late master plugin is VISIBLE in the
+        // shutdown report rather than a mystery artefact. (Reported alongside underruns;
+        // the audio still flows, it just repeats a block.)
+        if (!gotFresh) {
+          m_masterFxStaleBlocks.fetch_add(1, std::memory_order_relaxed);
+        }
+        m_masterFxBlocks.fetch_add(1, std::memory_order_relaxed);
         for (uint32_t ch = 0; ch < chn; ++ch) {
           if (master[ch]) {
             std::memcpy(master[ch],
@@ -1170,6 +1182,10 @@ private:
   bool m_masterOutFresh = false;
   std::vector<float> m_masterOutLocal;  // callback's persistent copy (last good processed)
   bool m_masterOutLocalValid = false;
+  // Master-FX health: blocks emitted through the master effect, and how many of those
+  // re-used the previous processed block because none arrived in time.
+  std::atomic<uint64_t> m_masterFxBlocks{0};
+  std::atomic<uint64_t> m_masterFxStaleBlocks{0};
 
  public:
   void setPlaying(const std::atomic<bool>* playing) { m_playing = playing; }
@@ -1180,6 +1196,10 @@ private:
         channels > 0 ? std::min<int>(channels, kMaxMasterChannels) : 0;
   }
   // Wire the master track's fader (gain + mute) so it controls the summed output.
+  uint64_t masterFxBlocks() const { return m_masterFxBlocks.load(std::memory_order_relaxed); }
+  uint64_t masterFxStaleBlocks() const {
+    return m_masterFxStaleBlocks.load(std::memory_order_relaxed);
+  }
   void setMasterMixer(const std::atomic<float>* gain, const std::atomic<bool>* mute) {
     m_masterGain = gain;
     m_masterMute = mute;
@@ -11480,8 +11500,13 @@ struct TrackRuntime {
     // That block is uniform added OUTPUT latency (every track shifts together, so nothing
     // goes out of alignment) and it applies ONLY while a master effect is engaged.
     if (masterFxActive.load(std::memory_order_acquire)) {
+      const uint64_t fxBlocks = audioCallback->masterFxBlocks();
+      const uint64_t fxStale = audioCallback->masterFxStaleBlocks();
       std::cout << "Master FX: engaged — the master bus is processed one block later (~"
-                << blockMs << " ms added output latency, master only)." << std::endl;
+                << blockMs << " ms added output latency, master only). " << fxStale
+                << " of " << fxBlocks
+                << " blocks re-used the previous processed block (master plugin late)."
+                << std::endl;
     }
     // Audio is stopped, so the capture buffer is quiescent and safe to write.
     if (audioCallback->capturing()) {

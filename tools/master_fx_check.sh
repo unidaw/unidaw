@@ -78,9 +78,19 @@ run() {  # run <name>
   wait "$eng" 2>/dev/null || true
 }
 run nofx
+sleep 1   # let the audio device settle before the next engine claims it
 run withfx
 
 ok=1
+# The captures must exist at all — an engine that never got the device (or died early)
+# would otherwise crash the comparison below with a confusing FileNotFoundError.
+for f in nofx withfx; do
+  [ -s "$TMP/$f.wav" ] || {
+    echo "  FAIL (setup): $f produced no capture — engine log tail:"
+    tail -3 "$TMP/$f.log" | sed 's/^/    /'
+    ok=0
+  }
+done
 # 1. The master host must have come up for the withfx project (and NOT for nofx).
 if grep -q "Restarted track $MASTER_ID" "$TMP/withfx.log"; then
   echo "  master host launched for the master effect"
@@ -105,7 +115,7 @@ else
   echo "  FAIL: audio through the master effect was SILENT"; ok=0
 fi
 # 4. Levels must match: unity gain in, unity gain out (10% tolerance on peak).
-python3 - "$TMP/nofx.wav" "$TMP/withfx.wav" <<'PY' || ok=0
+[ "$ok" = "1" ] && python3 - "$TMP/nofx.wav" "$TMP/withfx.wav" <<'PY' || ok=0
 import sys, wave, numpy as np
 def peak(p):
     w = wave.open(p, 'rb')
