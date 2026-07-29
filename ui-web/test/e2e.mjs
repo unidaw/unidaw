@@ -2053,6 +2053,73 @@ section('the chain shows what flows between devices');
   }
 }
 
+/*
+ * THE MASTER TRACK.
+ *
+ * A patcher is a device, and the legitimately GLOBAL case — graph logic that is
+ * not per-part — is a device on the master's chain. That is what keeps the rule
+ * exception-free: no special pane, no second set of verbs, no graph without a
+ * visible home.
+ *
+ * The master rides the same published track array as everything else, so its
+ * chain and fader are addressable by id. Which is also how it went wrong: counted
+ * as an ordinary track it drew an empty "Master" lane at the bottom of the
+ * arrangement and an empty column in the tracker, and the cursor could be moved
+ * into it, where every edit addresses a track that will never have anything to
+ * edit.
+ */
+section('the master track has a chain but no lane');
+{
+  await page.evaluate(() => window.__uni.loadProject('maximal'));
+  await page.waitForTimeout(3000);
+
+  const lanes = await page.evaluate(() => {
+    window.__uni.run('view arrange');
+    return { count: window.__uni.state().tracks,
+             names: [...document.querySelectorAll('.ar-head-nm, .ar-head')]
+                      .map((e) => e.textContent.trim()).filter(Boolean) };
+  });
+  ok(lanes.count === 6, 'the six real tracks are lanes', `tracks=${lanes.count}`);
+  ok(!lanes.names.some((n) => /master/i.test(n)),
+     'and the master is NOT one of them', JSON.stringify(lanes.names));
+
+  // Reachable, though — otherwise the chain a global patcher lives on cannot be
+  // opened at all. The master has no lane, so there is no cursor position that
+  // means it; `master` is the pointer.
+  const said = await page.evaluate(() => window.__uni.run('master on'));
+  await page.waitForTimeout(1200);
+  const head = await page.evaluate(() =>
+    (document.querySelector('.dv') || {}).textContent || '');
+  ok(/master/i.test(String(said)) || /Master/.test(head),
+     'the console can point the rack at the master', String(said));
+  ok(/DEVICE CHAIN\s*Master/.test(head.replace(/\s+/g, ' ')),
+     'and the rack captions itself Master, not the cursor track',
+     head.slice(0, 60));
+
+  /*
+   * AND A DEVICE LANDS ON IT. The rack's own "+" button, which is handed the
+   * track the strip is showing — the whole test, because three separate reads of
+   * `state.cursor.track` had the rack pointed at the master while asking the
+   * cursor's track for its parameters and captioning itself with the cursor's
+   * name.
+   */
+  const plus = await page.$('.dv-add');
+  ok(!!plus, 'the master rack offers a way to add a device');
+  if (plus) {
+    await plus.click();
+    await page.waitForTimeout(2500);
+    const cards = await page.evaluate(() =>
+      [...document.querySelectorAll('.dv-card')].filter((c) => c.offsetParent)
+        .map((c) => (c.querySelector('.dv-title') || {}).textContent));
+    ok(cards.length >= 1 && /patcher/i.test(cards[0] || ''),
+       'and a patcher device lands on the MASTER chain', JSON.stringify(cards));
+  }
+  // Back to the cursor's track, or every section after this one is looking at
+  // the master.
+  await page.evaluate(() => window.__uni.run('master off'));
+  await page.waitForTimeout(600);
+}
+
 section('dragging a clip moves it');
 {
   await page.evaluate(() => window.__uni.run('view arrange'));

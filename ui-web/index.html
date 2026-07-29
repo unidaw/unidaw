@@ -318,6 +318,25 @@ const arrange = new Arrange(arrangeHost, metrics, {
 const ARRANGE_LANE_H = 44;
 
 /**
+ * Published track flags. bit0 collapsed, bit1 aux child, bit2 absent (a
+ * tombstone left by RemoveTrack so later ids do not renumber), bit3 master.
+ *
+ * The master rides the same array as the ordinary tracks so its chain and fader
+ * are addressable by id, and it must be kept out of anything that draws LANES:
+ * it has no clips, no placements and no notes.
+ */
+const TRACK_FLAG_MASTER = 8;
+
+/**
+ * The master's stable track id (daw-bridge MASTER_TRACK_ID, 0xFFFF0000).
+ *
+ * A sentinel far outside the ordinary id space on purpose: the master rides the
+ * same track array and the same chain commands as everything else, so its id has
+ * to be one no real track can ever take.
+ */
+const MASTER_TRACK_ID = 0xFFFF0000;
+
+/**
  * The loop the UI is showing: a drag in progress, else a set we sent and the
  * engine has not published back, else nothing and the engine's own span wins.
  *
@@ -1409,6 +1428,24 @@ const dockApi = {
    * change the document out from under the transcript. This is the deliberate
    * case.
    */
+  /**
+   * Point the rack at the master's chain, or back at the cursor's track.
+   *
+   * The master is where a patcher that is not per-part belongs — that is the
+   * whole reason it exists — and it has no lane to put a cursor on, so without
+   * this the chain is unreachable from the UI at all.
+   */
+  master: (on) => {
+    const want = on === undefined ? state.chainTrack === null : !!on;
+    state.chainTrack = want ? MASTER_TRACK_ID : null;
+    // The engine publishes a chain only when it CHANGES, so a track nobody has
+    // asked about since the last edit has none on this side. Every other track
+    // gets asked when the cursor lands on it; the master has no cursor to land.
+    if (want && conn && conn.canSend()) conn.send({ type: 'reqchain', track: MASTER_TRACK_ID });
+    if (want) state.focus = 'chain';
+    schedule();
+    return want ? 'master' : 'cursor track';
+  },
   forget: () => {
     if (!conn || !conn.canSend()) return false;
     return conn.send({ type: 'forget' });
@@ -1999,6 +2036,9 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: FIELDS_PER_NOTE,
    */
   editMode: true,
   selectedNode: -1, selectedField: 0, patchAddType: 1, patchLinkFrom: null,
+  // Which track's chain the rack shows: null follows the cursor. See the rack's
+  // opts below — the master has no lane, so it needs a pointer of its own.
+  chainTrack: null,
   chainSelected: -1,
   currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
 
@@ -2728,9 +2768,15 @@ function draw() {
      * A quarter second of stillness is the difference between "I am looking at
      * this track" and "I am passing through it".
      */
-    const here = chains[state.cursor.track];
-    if (state.cursor.track !== lastParamTrack) {
-      lastParamTrack = state.cursor.track;
+    // ONE definition of "which track the rack is about", read by the chain
+    // lookup, the parameter requests and the header alike. Three separate
+    // `state.cursor.track` reads is how the rack ended up pointed at the master
+    // while asking the cursor's track for its parameters and captioning itself
+    // with the cursor's name.
+    const rackTrack = state.chainTrack === null ? state.cursor.track : state.chainTrack;
+    const here = chains[rackTrack];
+    if (rackTrack !== lastParamTrack) {
+      lastParamTrack = rackTrack;
       paramTrackSince = performance.now();
     }
     const settled = performance.now() - paramTrackSince > 250;
@@ -2743,18 +2789,30 @@ function draw() {
     if (settled && here && here.devices && conn && conn.canSend()) {
       const devs = here.devices;
       for (let i = 0; i < devs.length; i++) {
-        const key = state.cursor.track * 65536 + devs[i].id;
+        const key = rackTrack * 65536 + devs[i].id;
         if (paramsAsked.has(key)) continue;
         paramsAsked.add(key);
-        conn.send({ type: 'reqparams', track: state.cursor.track, device: devs[i].id });
+        conn.send({ type: 'reqparams', track: rackTrack, device: devs[i].id });
         break;                        // one per frame; the rest follow
       }
     }
     const o = _chainOpts;
-    o.track = state.cursor.track;
+    /*
+     * THE RACK FOLLOWS THE CURSOR, EXCEPT ON THE MASTER.
+     *
+     * The master has no lane, so there is no cursor position that means it — and
+     * without a way to point at it, the chain a global patcher is supposed to
+     * live on is unreachable. `state.chainTrack` is that pointer: null for "wherever
+     * the cursor is", or a track id to pin it.
+     *
+     * Held until it is cleared rather than reset per frame, because looking at
+     * the master while the cursor sits on a lane is the normal way to work on it:
+     * you write notes on a part and reach over to the master's chain.
+     */
+    o.track = rackTrack;
     o.chains = chains;
     o.selected = state.chainSelected;
-    o.trackName = trackName(engine, state.cursor.track);
+    o.trackName = rackTrack === MASTER_TRACK_ID ? 'Master' : trackName(engine, rackTrack);
     o.params = deviceParams;
     // Which device the published graph belongs to, and what that graph MAKES.
     // Without this the rack can show a plugin sitting quietly while a euclidean
@@ -4338,7 +4396,25 @@ conn = WANTS_ENGINE ? connectEngine({
      * addresses a track the engine does not have.
      */
     if (state.useEngine !== false && store.trackCount > 0) {
-      const n = Math.min(store.trackCount, 16);
+      /*
+       * THE MASTER IS NOT A LANE.
+       *
+       * It is published in the same track array as everything else — it has to
+       * be, so a chain and a fader can be addressed on it — but it holds no
+       * clips, no placements and no notes. Counted as an ordinary track it drew
+       * an empty "Master" lane at the bottom of the arrangement and an empty
+       * column in the tracker, and the cursor could be moved into it, where
+       * every edit addresses a track that will never have anything to edit.
+       *
+       * The extent still includes it, so this counts back from the end rather
+       * than assuming a position: the engine appends the master today and that
+       * is not a promise.
+       */
+      let lanes = 0;
+      for (let t = 0; t < store.trackCount; t++) {
+        if ((store.trackFlags[t] & TRACK_FLAG_MASTER) === 0) lanes = t + 1;
+      }
+      const n = Math.min(lanes, 16);
       if (state.tracks !== n) {
         state.tracks = n;
         if (state.cursor.track >= n) state.cursor.track = n - 1;
@@ -4851,6 +4927,12 @@ window.__uni = {
       // THERE and still holds its id — a probe that silently skipped it could not
       // tell "removed, ids preserved" from "compacted and renumbered", which is
       // exactly the distinction this contract turns on.
+      //
+      // The MASTER is skipped, and that is the opposite call for a reason: a
+      // tombstone is a track that WAS in the tree, where the master was never in
+      // it. It has no parent, no children, no clips and no lane; including it
+      // made "a parent and its two stems" count four.
+      if ((f & TRACK_FLAG_MASTER) !== 0) continue;
       out.push({ track: t, hasParent: (f & 2) !== 0,
                  parent: (f & 2) !== 0 ? engine.trackParent[t] : -1,
                  collapsed: (f & 1) !== 0, absent: (f & 4) !== 0 });

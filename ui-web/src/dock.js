@@ -355,6 +355,11 @@ export function createCommands(api) {
     // unrecognised word here gets sent to the model as a prompt, so "forget"
     // would otherwise be a sentence asking a model to forget something, which
     // is the one instruction it cannot carry out about itself.
+    // The master has no lane, so there is no cursor position that means it. This
+    // is the only way to reach the chain a global patcher lives on.
+    master: { help: 'master [on|off] — show the master chain in the rack',
+      args: [ON_OFF],
+      run: (a) => 'rack: ' + api.master(a[0] === undefined ? undefined : a[0] === 'on') },
     forget: { help: 'forget — start a new agent conversation',
       args: [],
       run: () => (api.forget() ? 'forgetting…' : 'not connected') },

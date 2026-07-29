@@ -735,7 +735,7 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
-                     'selectedClip', 'ticksPerBar'];
+                     'selectedClip', 'ticksPerBar', 'master'];
 
 function stubApi() {
   const calls = [];
@@ -1659,6 +1659,10 @@ const OP_REGISTRY = {
   'trim-clip':  { cli: null,          agent: 'trim_clip',       why: 'gap' },
   'del-clip':   { cli: null,          agent: 'remove_clip',     why: 'gap' },
   'add-clip':   { cli: null,          agent: 'add_clip',        why: 'gap' },
+  // Which chain the rack shows. View state — it changes what you are looking at
+  // and nothing about the song — but unlike zoom it is the ONLY route to the
+  // master's chain, so it is listed rather than waved through.
+  master:    { cli: null, agent: null, why: 'view' },
   // The agent's conversation, not the song. There is nothing for the CLI to do
   // with it (each invocation is already a fresh conversation) and giving the
   // agent a tool to clear its own memory is asking it to decide when to forget
