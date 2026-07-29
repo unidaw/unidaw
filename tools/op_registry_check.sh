@@ -48,12 +48,6 @@ DECLARED_NO_CLI = {
                            "drive something that does not survive the session",
     "SetDeviceEuclideanConfig": "the patcher node config surface as a whole is unbuilt "
                                 "on the CLI side; see the patcher ops below",
-    "AddPatcherNode": "patcher GRAPH editing from a shell is a real surface and a real "
-                      "piece of work; the per-device patcher read-back exists",
-    "RemovePatcherNode": "as AddPatcherNode",
-    "ConnectPatcherNodes": "as AddPatcherNode",
-    "SetPatcherNodeConfig": "as AddPatcherNode",
-    "SavePatcherPreset": "as AddPatcherNode",
 }
 
 missing = []

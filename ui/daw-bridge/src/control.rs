@@ -905,6 +905,28 @@ impl EngineHandle {
         )
     }
 
+    /// Add/remove a patcher node, or connect two.
+    pub fn send_patcher_graph_command(
+        &self,
+        payload: crate::layout::UiPatcherGraphCommandPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiPatcherGraphCommandPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiPatcherGraphCommandPayload>(),
+        )
+    }
+
+    /// Configure a patcher node.
+    pub fn send_patcher_node_config(
+        &self,
+        payload: crate::layout::UiPatcherNodeConfigPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiPatcherNodeConfigPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiPatcherNodeConfigPayload>(),
+        )
+    }
+
     /// Send a rack knob write. Same ring as send_command; a distinct payload shape
     /// (UiSetParamPayload carries a uid16 that does not fit UiCommandPayload's fields).
     pub fn send_set_param(&self, payload: crate::layout::UiSetParamPayload) -> Result<(), String> {

@@ -843,6 +843,20 @@ impl Default for UiModSourceValuePayload {
     }
 }
 
+/// PatcherNodeType, mirroring apps/patcher_graph.h.
+pub const PATCHER_NODE_RUST_KERNEL: u32 = 0;
+pub const PATCHER_NODE_EUCLIDEAN: u32 = 1;
+pub const PATCHER_NODE_PASSTHROUGH: u32 = 2;
+pub const PATCHER_NODE_AUDIO_PASSTHROUGH: u32 = 3;
+pub const PATCHER_NODE_LFO: u32 = 4;
+pub const PATCHER_NODE_RANDOM_DEGREE: u32 = 5;
+pub const PATCHER_NODE_EVENT_OUT: u32 = 6;
+
+/// PatcherPortKind.
+pub const PATCHER_PORT_EVENT: u32 = 0;
+pub const PATCHER_PORT_AUDIO: u32 = 1;
+pub const PATCHER_PORT_CV: u32 = 2;
+
 /// ModSourceKind / ModTargetKind / ModRate, mirroring apps/modulation.h. Modulation
 /// flows FORWARD: the source device must not be LATER in the chain than the target.
 /// Same device is legal and is the common case with per-device patchers.
@@ -1188,6 +1202,8 @@ mod tests {
         const_assert_eq!(size_of::<UiModLinkCommandPayload>(), 40);
         const_assert_eq!(size_of::<UiModLinkUid16Payload>(), 40);
         const_assert_eq!(size_of::<UiModSourceValuePayload>(), 40);
+        const_assert_eq!(size_of::<UiPatcherGraphCommandPayload>(), 40);
+        const_assert_eq!(size_of::<UiPatcherNodeConfigPayload>(), 40);
         // v18 waveform structs are bindgen-generated; pin the element sizes, then tie
         // each hand constant to the generated region size so neither can drift: if a
         // K_* count is wrong the region no longer sums, and this fails to compile.

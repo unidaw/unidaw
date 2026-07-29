@@ -2157,6 +2157,19 @@ struct TrackRuntime {
   // each carrying one) at load. Save then preserves each device's own graph rather
   // than parking the live single graph on one device (the legacy path).
   std::atomic<bool> patcherAssembledFromDevices{false};
+  // True when any device in the document carries its own patcher graph. The save must
+  // never park the global pool on a device in that case: the device graphs ARE the
+  // authored data, and the pool is a derived join of them.
+  auto documentHasPerDeviceGraphs = [](const daw::ProjectDocument& doc) -> bool {
+    for (const auto& track : doc.tracks) {
+      for (const auto& device : track.chain.devices) {
+        if (!device.patcher.nodes.empty()) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
   std::shared_ptr<daw::PatcherGraph> patcherGraphSnapshot;
   auto updatePatcherGraphSnapshot = [&]() {
     auto snapshot = std::make_shared<daw::PatcherGraph>();
@@ -4955,10 +4968,17 @@ struct TrackRuntime {
         }
       }
     } else if (!document.tracks.empty() &&
-               !document.tracks.front().chain.devices.empty()) {
+               !document.tracks.front().chain.devices.empty() &&
+               !documentHasPerDeviceGraphs(document)) {
       // Legacy single graph: the engine runs one global graph that lives only in
       // patcherGraphState (edited live), so park it on the first track's
       // instrument (else its first device) so the song round-trips.
+      //
+      // GUARDED on the document having no per-device graphs of its own. Without that
+      // guard, a project whose ASSEMBLY failed (one invalid device graph) took this
+      // branch and overwrote device 1's real graph with the whole pool — corrupting it
+      // and dropping every other device's. Reached by a project a user could plausibly
+      // write, and it rewrote their file.
       std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
       auto& devices = document.tracks.front().chain.devices;
       daw::Device* target = nullptr;
@@ -5245,7 +5265,25 @@ struct TrackRuntime {
         }
         base += static_cast<uint32_t>(sub.pool.nodes.size());
       }
-      if (!pool.nodes.empty() && daw::buildPatcherGraph(pool)) {
+      // A pool that will not build is a REPORTED failure, not a silent fallback. One
+      // device with an invalid graph — an LFO wired to an event input, say — used to
+      // fail the whole TRACK's assembly with nothing said, leave
+      // patcherAssembledFromDevices false, and then the save below would park the pool
+      // on the first device, overwriting its real graph and losing every other device's.
+      // A bad edge in one device silently rewrote the user's project.
+      const bool poolBuilt = !pool.nodes.empty() && daw::buildPatcherGraph(pool);
+      if (!pool.nodes.empty() && !poolBuilt) {
+        DAW_EVENT("project.patcher_assembly_failed")
+            .field("nodes", static_cast<uint64_t>(pool.nodes.size()))
+            .field("edges", static_cast<uint64_t>(pool.edges.size()))
+            .field("action", "per_device_graphs_preserved_but_not_executing");
+        std::cerr << "Engine: patcher assembly FAILED (" << pool.nodes.size()
+                  << " nodes, " << pool.edges.size()
+                  << " edges) — one device's graph is invalid. The graphs are left "
+                     "exactly as loaded and are NOT executing; run tools/daw_lint on "
+                     "the project to find the bad edge." << std::endl;
+      }
+      if (poolBuilt) {
         {
           std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
           patcherGraphState.graph = std::move(pool);

@@ -50,6 +50,18 @@ daw-cli — control surface for a running engine
                                    named goes to its DEFAULT (audio-out master, the
                                    rest none) — the engine has no partial form and no
                                    routing read-back to merge against.
+  daw-cli do patcher-node --track N --type euclidean|lfo|random-degree|
+                          passthrough|audio-passthrough|event-out
+  daw-cli do patcher-unnode --track N --node ID
+  daw-cli do patcher-connect --track N --src ID --dst ID
+                             [--src-port P] [--dst-port P] [--kind event|audio|cv]
+  daw-cli do patcher-config --track N --node ID --type T [type-specific flags]
+                            euclidean: --steps --hits --offset --degree
+                                       --octave-offset --velocity --base-octave
+                                       --duration
+                            random-degree: --degree --velocity --duration
+                            lfo: --freq --depth --bias --phase
+  daw-cli do patcher-save [name]
   daw-cli do mod-link --track N --source-device D --target-device D2
                       [--source-kind macro|lfo|envelope|patcher]
                       [--target-kind vst|patcher-param|patcher-macro]
@@ -372,6 +384,71 @@ fn send_named(handle: &EngineHandle, command: UiCommandType, name: &str) -> i32 
 /// M1.13 lane quantize. No base_version: this moves no authored note, so gating it on
 /// a clip version would reject it whenever someone else was mid-edit, for a change that
 /// cannot conflict with theirs.
+/// Patcher node types, by name.
+fn parse_node_type(raw: &str) -> Result<u32, String> {
+    use daw_bridge::layout as L;
+    Ok(match raw {
+        "euclidean" => L::PATCHER_NODE_EUCLIDEAN,
+        "lfo" => L::PATCHER_NODE_LFO,
+        "random-degree" => L::PATCHER_NODE_RANDOM_DEGREE,
+        "passthrough" => L::PATCHER_NODE_PASSTHROUGH,
+        "audio-passthrough" => L::PATCHER_NODE_AUDIO_PASSTHROUGH,
+        "event-out" => L::PATCHER_NODE_EVENT_OUT,
+        "rust-kernel" => L::PATCHER_NODE_RUST_KERNEL,
+        other => return Err(format!(
+            "--type: expected euclidean|lfo|random-degree|passthrough|\
+             audio-passthrough|event-out|rust-kernel, got {other:?}"
+        )),
+    })
+}
+
+/// SetPatcherNodeConfig's `config` block. EXPLICIT little-endian per node type — the
+/// engine reads it field by field rather than memcpy'ing a struct, because a raw copy
+/// truncated Euclidean and coupled the wire to C++ padding. Building it here by the same
+/// documented layout keeps the two ends honest.
+fn build_node_config(args: &[String], node_type: u32) -> Result<[u8; 16], String> {
+    use daw_bridge::layout as L;
+    let mut cfg = [0u8; 16];
+    let put_u16 = |c: &mut [u8; 16], at: usize, v: u16| {
+        c[at] = (v & 0xff) as u8;
+        c[at + 1] = (v >> 8) as u8;
+    };
+    let put_u32 = |c: &mut [u8; 16], at: usize, v: u32| {
+        c[at] = (v & 0xff) as u8;
+        c[at + 1] = ((v >> 8) & 0xff) as u8;
+        c[at + 2] = ((v >> 16) & 0xff) as u8;
+        c[at + 3] = ((v >> 24) & 0xff) as u8;
+    };
+    if node_type == L::PATCHER_NODE_EUCLIDEAN {
+        // 0 MEANS 0 (M0.6): these are sent verbatim, so `--hits 0` is silence and not
+        // "use the default five".
+        put_u16(&mut cfg, 0, flag_u64(args, "--steps", Some(16))? as u16);
+        put_u16(&mut cfg, 2, flag_u64(args, "--hits", Some(5))? as u16);
+        put_u16(&mut cfg, 4, flag_u64(args, "--offset", Some(0))? as u16);
+        cfg[6] = flag_u64(args, "--degree", Some(1))? as u8;
+        cfg[7] = (flag_i64(args, "--octave-offset", 0)? as i8) as u8;
+        cfg[8] = flag_u64(args, "--velocity", Some(100))? as u8;
+        cfg[9] = flag_u64(args, "--base-octave", Some(4))? as u8;
+        put_u32(&mut cfg, 12, flag_u64(args, "--duration", Some(0))? as u32);
+    } else if node_type == L::PATCHER_NODE_RANDOM_DEGREE {
+        cfg[0] = flag_u64(args, "--degree", Some(8))? as u8;
+        cfg[1] = flag_u64(args, "--velocity", Some(100))? as u8;
+        put_u32(&mut cfg, 4, flag_u64(args, "--duration", Some(0))? as u32);
+    } else if node_type == L::PATCHER_NODE_LFO {
+        // Milli-units on the wire, mirroring the read-back; the engine stores floats.
+        let milli = |v: f64| ((v * 1000.0).round() as i32) as u32;
+        put_u32(&mut cfg, 0, milli(flag_f64(args, "--freq", 1.0)?));
+        put_u32(&mut cfg, 4, milli(flag_f64(args, "--depth", 1.0)?));
+        put_u32(&mut cfg, 8, milli(flag_f64(args, "--bias", 0.0)?));
+        put_u32(&mut cfg, 12, milli(flag_f64(args, "--phase", 0.0)?));
+    } else {
+        return Err(
+            "--type: only euclidean, random-degree and lfo carry a config".to_string(),
+        );
+    }
+    Ok(cfg)
+}
+
 /// AddModLink / RemoveModLink. The engine validates that both devices exist and that
 /// modulation flows FORWARD (source not later in the chain than target; same device is
 /// legal and is the common case with per-device patchers). A refusal is reported as
@@ -1624,6 +1701,112 @@ fn main() {
                         }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
+                }
+                Some(&"patcher-node") | Some(&"patcher-unnode") => {
+                    let removing = rest.first() == Some(&"patcher-unnode");
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let node_type = if removing {
+                        0
+                    } else {
+                        match flag(&args, "--type") {
+                            Some(t) => match parse_node_type(&t) {
+                                Ok(v) => v,
+                                Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                            },
+                            None => { eprintln!("daw-cli: --type is required"); std::process::exit(2) }
+                        }
+                    };
+                    let payload = daw_bridge::layout::UiPatcherGraphCommandPayload {
+                        command_type: if removing {
+                            UiCommandType::RemovePatcherNode as u16
+                        } else {
+                            UiCommandType::AddPatcherNode as u16
+                        },
+                        track_id: track,
+                        node_id: flag_u64(&args, "--node", Some(0)).unwrap_or(0) as u32,
+                        node_type,
+                        ..Default::default()
+                    };
+                    match handle.send_patcher_graph_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": {:?} }}",
+                                     if removing { "patcher-unnode" } else { "patcher-node" });
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"patcher-connect") => {
+                    use daw_bridge::layout as L;
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let src = match flag_u64(&args, "--src", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let dst = match flag_u64(&args, "--dst", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let kind = match flag(&args, "--kind").as_deref().unwrap_or("event") {
+                        "event" => L::PATCHER_PORT_EVENT,
+                        "audio" => L::PATCHER_PORT_AUDIO,
+                        "cv" => L::PATCHER_PORT_CV,
+                        other => { eprintln!("daw-cli: --kind: expected event|audio|cv, got {other:?}"); std::process::exit(2) }
+                    };
+                    let payload = L::UiPatcherGraphCommandPayload {
+                        command_type: UiCommandType::ConnectPatcherNodes as u16,
+                        track_id: track,
+                        src_node_id: src,
+                        dst_node_id: dst,
+                        // Port 1 is the conventional event OUTPUT and 0 the event INPUT
+                        // (see kPatcherEventOutputPort / kPatcherEventInputPort).
+                        src_port_id: flag_u64(&args, "--src-port", Some(1)).unwrap_or(1) as u32,
+                        dst_port_id: flag_u64(&args, "--dst-port", Some(0)).unwrap_or(0) as u32,
+                        edge_kind: kind,
+                        ..Default::default()
+                    };
+                    match handle.send_patcher_graph_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"patcher-connect\", \"src\": {src}, \"dst\": {dst} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"patcher-config") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let node = match flag_u64(&args, "--node", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let node_type = match flag(&args, "--type") {
+                        Some(t) => match parse_node_type(&t) {
+                            Ok(v) => v,
+                            Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                        },
+                        None => { eprintln!("daw-cli: --type is required"); std::process::exit(2) }
+                    };
+                    let cfg = match build_node_config(&args, node_type) {
+                        Ok(c) => c,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let payload = daw_bridge::layout::UiPatcherNodeConfigPayload {
+                        command_type: UiCommandType::SetPatcherNodeConfig as u16,
+                        track_id: track,
+                        node_id: node,
+                        config_type: node_type,
+                        config: cfg,
+                        ..Default::default()
+                    };
+                    match handle.send_patcher_node_config(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"patcher-config\", \"node\": {node} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"patcher-save") => {
+                    let name = rest.get(1).copied().unwrap_or("default");
+                    let code = send_named(&handle, UiCommandType::SavePatcherPreset, name);
+                    if code == 0 {
+                        println!("{{ \"sent\": \"patcher-save\", \"name\": {name:?} }}");
+                    }
+                    code
                 }
                 Some(&"mod-link") | Some(&"unmod-link") => {
                     let removing = rest.first() == Some(&"unmod-link");

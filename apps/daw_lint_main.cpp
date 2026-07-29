@@ -49,6 +49,8 @@
 #include <string>
 #include <vector>
 
+#include "apps/patcher_assemble.h"
+#include "apps/patcher_graph.h"
 #include "apps/project_file.h"
 
 namespace {
@@ -424,6 +426,41 @@ void checkChains(const daw::ProjectDocument& doc) {
   }
 }
 
+// Does this track's set of patcher devices actually ASSEMBLE and BUILD? Uses the very
+// functions the engine uses, so the linter and the engine cannot disagree about whether
+// a graph is valid — a reimplementation here would be a second opinion, which is worth
+// nothing when the question is "will the engine run this".
+//
+// The failure this catches is severe and was silent: one device with an invalid edge
+// (an LFO wired into an event input, say) fails the whole TRACK's assembly, so NONE of
+// that track's patchers execute. The engine now says so at load; this says so without
+// running it, and names the track.
+void checkPatcherAssembly(const daw::ProjectDocument& doc) {
+  for (const auto& track : doc.tracks) {
+    bool anyGraph = false;
+    for (const auto& device : track.chain.devices) {
+      if (!device.patcher.nodes.empty()) {
+        anyGraph = true;
+        break;
+      }
+    }
+    if (!anyGraph) {
+      continue;
+    }
+    daw::AssembledPatcher sub = daw::assemblePatcherPool(track.chain.devices);
+    if (!sub.anyPerDevice || sub.pool.nodes.empty()) {
+      continue;
+    }
+    daw::PatcherGraph pool = sub.pool;
+    if (!daw::buildPatcherGraph(pool)) {
+      report(Severity::Error, "patcher-assembly-fails", trackScope(track),
+             "this track's patcher devices do not assemble into a runnable graph, so "
+             "NONE of them execute — one device's edges are invalid (a common cause is "
+             "an LFO or other CV source wired into an EVENT input)");
+    }
+  }
+}
+
 void checkGlobals(const daw::ProjectDocument& doc) {
   if (doc.tempoMap.empty()) {
     report(Severity::Error, "tempo-map-empty", "global",
@@ -623,6 +660,7 @@ int main(int argc, char** argv) {
   checkClipsAndPlacements(doc);
   checkTracks(doc);
   checkChains(doc);
+  checkPatcherAssembly(doc);
   if (!historyPath.empty()) {
     checkHistory(historyPath);
   }
