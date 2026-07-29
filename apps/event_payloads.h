@@ -367,6 +367,11 @@ static_assert(sizeof(UiChainDiffPayload) == 40,
 // live plugin reporting N buses under a busCount of 0 is the first you'll hear of it.
 constexpr uint16_t kUiChainDiffBusCountMask = 0x00ff;  // low byte: bus count (<=32)
 constexpr uint16_t kUiChainDiffBusTruncated = 1u << 8;  // more buses than the cap
+// This device's patcher graph contains an event GENERATOR node (euclidean,
+// random_degree, ...) — it emits events the user did not write. Lets the UI mark
+// the device (and the track) as a source of "notes I didn't type", turning a
+// phantom-note hunt into a glance at the chain. bit8 is truncated, so this is bit9.
+constexpr uint16_t kUiChainDiffGenerates = 1u << 9;
 
 // v20: one audio bus of a hosted plugin, streamed right after that device's
 // ChainSnapshot diff (UiDiffType::DeviceBus). `channelOffset` is the bus's first

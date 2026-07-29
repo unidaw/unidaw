@@ -692,9 +692,10 @@ int main(int argc, char** argv) {
             "schema-2 clip note lost");
   }
 
-  // A schema <= 3 track-level patcher migrates onto the track's instrument device
-  // (patchers are per-device from v4). The track carries two devices; the graph
-  // must land on the VstInstrument, not the effect.
+  // A schema <= 3 track-level patcher migrates into a PatcherEvent DEVICE at the
+  // HEAD of the chain (a patcher is a device with a position, never a track-level
+  // graph). The existing effect + instrument keep their ids and their empty
+  // patchers; the generator is not smeared onto either.
   {
     daw::ProjectDocument doc;
     std::string err;
@@ -707,15 +708,40 @@ int main(int argc, char** argv) {
                 "   \"edges\": [] } } ] }",
                 doc, &err),
             "schema-3 track patcher failed to parse");
-    require(doc.tracks.size() == 1 && doc.tracks[0].chain.devices.size() == 2,
-            "schema-3 track/devices lost");
-    require(doc.tracks[0].patcher.nodes.empty(),
-            "track-level patcher should be cleared after migration");
-    const auto& inst = doc.tracks[0].chain.devices[1];  // the vst_instrument
-    require(inst.id == 6 && inst.patcher.nodes.size() == 1,
-            "patcher did not migrate onto the instrument device");
-    require(doc.tracks[0].chain.devices[0].patcher.nodes.empty(),
-            "patcher wrongly migrated onto the effect device");
+    require(doc.tracks.size() == 1 && doc.tracks[0].chain.devices.size() == 3,
+            "migration should ADD a head patcher device (3 devices total)");
+    const auto& head = doc.tracks[0].chain.devices[0];
+    require(head.kind == daw::DeviceKind::PatcherEvent &&
+                head.patcher.nodes.size() == 1,
+            "legacy patcher did not migrate into a head PatcherEvent device");
+    require(head.id != 5 && head.id != 6,
+            "head patcher device must get a fresh id");
+    require(head.patcherNodeId == 0,
+            "head device output node should be the event_out (id 0)");
+    require(doc.tracks[0].chain.devices[1].id == 5 &&
+                doc.tracks[0].chain.devices[1].patcher.nodes.empty(),
+            "effect device should keep its id and stay patcher-free");
+    require(doc.tracks[0].chain.devices[2].id == 6 &&
+                doc.tracks[0].chain.devices[2].patcher.nodes.empty(),
+            "instrument device should keep its id and stay patcher-free");
+  }
+
+  // No devices at all: the generator is STILL kept (never dropped), as the lone
+  // head patcher device on the track.
+  {
+    daw::ProjectDocument doc;
+    std::string err;
+    require(daw::deserializeProject(
+                "{\"schema_version\": 3, \"tracks\": [ { \"track_id\": 0,"
+                " \"patcher\": { \"nodes\": [ { \"id\": 0, \"type\": \"event_out\" } ],"
+                "   \"edges\": [] } } ] }",
+                doc, &err),
+            "schema-3 no-device track patcher failed to parse");
+    require(doc.tracks.size() == 1 && doc.tracks[0].chain.devices.size() == 1,
+            "no-device legacy patcher must survive as one head device");
+    require(doc.tracks[0].chain.devices[0].kind == daw::DeviceKind::PatcherEvent &&
+                doc.tracks[0].chain.devices[0].patcher.nodes.size() == 1,
+            "no-device legacy generator was dropped instead of kept");
   }
 
   // Song time signature (Phase 2 of per-clip grid) round-trips, and a project written

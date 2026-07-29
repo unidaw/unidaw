@@ -3232,11 +3232,16 @@ struct TrackRuntime {
 
       daw::UiChainDiffPayload diffPayload{};
       diffPayload.diffType = static_cast<uint16_t>(daw::UiDiffType::ChainSnapshot);
+      // Does this device's patcher graph emit events it was not given (euclidean/
+      // random_degree/...)? Published so the UI can mark the device — and its track —
+      // as a source of unwritten notes, so a phantom note is a glance at the chain.
+      const bool deviceGenerates = daw::graphHasEventGenerator(device.patcher);
       // busCount + truncated ride the flags so a reader knows when the bus set is
       // complete and draws once (see the invalidation rule in shared_memory.h).
       diffPayload.flags = static_cast<uint16_t>(
           (buses.size() & daw::kUiChainDiffBusCountMask) |
-          (busTruncated ? daw::kUiChainDiffBusTruncated : 0u));
+          (busTruncated ? daw::kUiChainDiffBusTruncated : 0u) |
+          (deviceGenerates ? daw::kUiChainDiffGenerates : 0u));
       diffPayload.trackId = runtime.trackId;
       diffPayload.chainVersion = version;
       diffPayload.deviceId = device.id;
@@ -4182,6 +4187,12 @@ struct TrackRuntime {
       runtime->editableClipIds = state.editable;
       runtime->arrangementDirty.store(true, std::memory_order_relaxed);
       snapshot = rebuildFlatAndPublish(*runtime);
+      // Also re-derive the AUDIO render: rebuildFlatAndPublish only rebuilds the flat clip
+      // (host/MIDI), while sample playback reads runtime->audioRender. Without this, an
+      // undo/redo that moved an audio-clip placement leaves the sample sounding on the old
+      // track until some later edit happens to rebuild it.
+      std::atomic_store_explicit(&runtime->audioRender, rebuildAudioRender(*runtime),
+                                 std::memory_order_release);
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
                                std::memory_order_release);
@@ -4464,6 +4475,28 @@ struct TrackRuntime {
       std::atomic<bool>& flag;
       ~LoadGuard() { flag.store(false, std::memory_order_release); }
     } loadGuard{loadInProgress};
+
+    // Resolve every device's patcherNodeId from the "natural output" sentinel
+    // (0xFFFFFFFF) to a REAL node id — its graph's event_out — up front, on the
+    // document, before the assembly/single-graph paths and the per-track chain
+    // install consume it. A lone patcher device left at the sentinel had no seed:
+    // the per-track node filter keys on patcherNodeId, so it never allowed the
+    // device's nodes and the generator ran SILENT (only the >=2-device assembly
+    // path resolved it, via assemblePatcherPool's fallback). Doing it here also
+    // makes the published patcherNodeId a real node the UI can walk back over
+    // resolvedInputs to recover exactly this device's subgraph. The resolved id is
+    // the device-local output; the assembly path still remaps it into the pool.
+    for (auto& track : document.tracks) {
+      for (auto& device : track.chain.devices) {
+        if (device.patcherNodeId == 0xFFFFFFFFu &&
+            !device.patcher.nodes.empty()) {
+          uint32_t outNode = 0;
+          if (daw::patcherGraphOutputNode(device.patcher, outNode)) {
+            device.patcherNodeId = outNode;
+          }
+        }
+      }
+    }
 
     // Resolve a clip's relative sourcePath against the project file's directory, and
     // drop the previous project's waveform sources (and pyramids) before the track
@@ -6913,22 +6946,29 @@ struct TrackRuntime {
           auto it = std::find_if(
               src->sourcePlacements.begin(), src->sourcePlacements.end(),
               [&](const daw::ProjectPlacement& p) { return p.id == placementId; });
+          // Give the dest its OWN copy of the referenced clip under a FRESH globally-unique
+          // id, and repoint the moved placement to it. Reusing the source id would put the
+          // same id in two tracks; if that clip is referenced elsewhere, a later in-place
+          // edit (forkOwnedClip skips the copy-on-write when the id is already editable)
+          // diverges under the shared id, and save's dedup-by-id silently drops one copy.
+          daw::ProjectClip dstClip;
+          bool clipCopied = false;
           if (it != src->sourcePlacements.end()) {
-            daw::ProjectPlacement moved = *it;
-            moved.at = newAt;
-            const uint32_t clipId = moved.clipId;
-            const bool dstHasClip = std::any_of(
-                dst->ownedClips.begin(), dst->ownedClips.end(),
-                [&](const daw::ProjectClip& c) { return c.id == clipId; });
-            if (!dstHasClip) {
-              for (const auto& c : src->ownedClips) {
-                if (c.id == clipId) {
-                  dst->ownedClips.push_back(c);
-                  dst->editableClipIds.push_back(clipId);
-                  break;
-                }
+            for (const auto& c : src->ownedClips) {
+              if (c.id == it->clipId) {
+                dstClip = c;
+                clipCopied = true;
+                break;
               }
             }
+          }
+          if (it != src->sourcePlacements.end() && clipCopied) {
+            daw::ProjectPlacement moved = *it;
+            moved.at = newAt;
+            dstClip.id = nextClipId.fetch_add(1, std::memory_order_acq_rel);
+            moved.clipId = dstClip.id;
+            dst->ownedClips.push_back(std::move(dstClip));
+            dst->editableClipIds.push_back(moved.clipId);
             src->sourcePlacements.erase(it);
             dst->sourcePlacements.push_back(std::move(moved));
             src->arrangementDirty.store(true, std::memory_order_relaxed);

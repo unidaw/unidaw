@@ -109,8 +109,10 @@ struct ProjectTrack {
   // Placements of project-level clips on this track. Every note lives in a clip
   // reached through a placement — no notes outside clips.
   std::vector<ProjectPlacement> placements;
-  // This track's patcher DAG. One patcher per track; an empty graph = none.
-  PatcherGraph patcher;
+  // No track-level patcher: a patcher is a DEVICE (in `chain`), so it has a
+  // position in the signal path. A legacy schema-<=3 track-level "patcher" is
+  // migrated into a head-of-chain PatcherEvent device on load (see
+  // deserializeProject); it is never a field here and never re-serialized.
 };
 
 struct ProjectTempoPoint {

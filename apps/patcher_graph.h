@@ -22,6 +22,22 @@ enum class PatcherNodeType : uint8_t {
   EventOut = 6,
 };
 
+// True for a node that puts events into the stream the user did not author:
+// Euclidean synthesises a rhythm from nothing; RandomDegree rewrites a gate's
+// pitch, so its output is not the note that was typed. Both make "notes I didn't
+// write" — the source of every "phantom notes" report. The UI keys a track badge
+// off this so an unwritten note is self-explaining. Extend as generators are
+// added (arp, ...). LFO is a control/modulation source, not an event generator.
+inline bool isEventGeneratorNode(PatcherNodeType type) {
+  return type == PatcherNodeType::Euclidean ||
+         type == PatcherNodeType::RandomDegree;
+}
+
+struct PatcherGraph;  // defined below
+// True when a graph contains any event-generator node — i.e. a device carrying it
+// can sound notes the user never wrote. Defined after PatcherGraph.
+inline bool graphHasEventGenerator(const PatcherGraph& graph);
+
 enum class PatcherPortKind : uint8_t {
   Event = 0,
   Audio = 1,
@@ -77,6 +93,15 @@ struct PatcherGraph {
   std::vector<uint32_t> idToIndex;
   uint16_t maxDepth = 0;
 };
+
+inline bool graphHasEventGenerator(const PatcherGraph& graph) {
+  for (const auto& node : graph.nodes) {
+    if (isEventGeneratorNode(node.type)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 bool buildPatcherGraph(PatcherGraph& graph);
 
