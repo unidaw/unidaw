@@ -52,6 +52,7 @@ struct HostState {
   daw::BlockMailbox* mailbox = nullptr;
   daw::EventRingView ringStd;
   daw::EventRingView ringCtrl;
+  daw::EventRingView keyRing;  // host->engine keystroke forwarding (kControlVersion 10)
   bool renderPrioritySet = false;  // realtime scheduling applied once the block period
                                    // is known (first ProcessBlock); see handleProcessBlock
   std::unique_ptr<daw::IRuntime> runtime;
@@ -538,8 +539,20 @@ bool handleHello(HostState& state, const daw::HelloRequest& request) {
   state.mailbox->completedSampleTime.store(0);
   state.mailbox->replayAckSampleTime.store(0);
 
+  // Host->engine key ring (keystroke forwarding), right after the mailbox at the computed
+  // hostKeyRingOffset — no ShmHeader field, so kShmVersion is untouched (kControlVersion 10
+  // gates it). The host's editor-window message thread is the sole writer.
+  const size_t keyRingOff = daw::hostKeyRingOffset(header);
+  auto* keyRing = reinterpret_cast<daw::RingHeader*>(
+      reinterpret_cast<uint8_t*>(state.shmBase) + keyRingOff);
+  keyRing->capacity = daw::kHostKeyRingCapacity;
+  keyRing->entrySize = sizeof(daw::EventEntry);
+  keyRing->readIndex.store(0);
+  keyRing->writeIndex.store(0);
+
   state.ringStd = daw::makeEventRing(state.shmBase, header.ringStdOffset);
   state.ringCtrl = daw::makeEventRing(state.shmBase, header.ringCtrlOffset);
+  state.keyRing = daw::makeEventRing(state.shmBase, keyRingOff);
   state.outputPtrs.resize(header.numChannelsOut, nullptr);
   state.inputPtrs.resize(header.numChannelsIn, nullptr);
   state.auxOutputPtrs.resize(state.numAuxChannelsOut, nullptr);
@@ -925,6 +938,21 @@ bool handleOpenEditor(HostState& state, const daw::OpenEditorRequest& request) {
   if (!slot.instance) {
     return true;
   }
+  // Forward keys the plugin's editor didn't consume into the key ring (keyjazz/transport
+  // while the plugin window is focused). Runs on the JUCE message thread — the ring's sole
+  // producer. &state outlives the callback (it is the process's HostState).
+  slot.instance->setKeyForwardCallback([&state](int keyCode, bool isDown) {
+    daw::EventEntry entry;
+    entry.sampleTime = 0;
+    entry.blockId = 0;
+    entry.type = static_cast<uint16_t>(daw::EventType::HostKey);
+    entry.size = sizeof(daw::KeyEventPayload);
+    daw::KeyEventPayload payload;
+    payload.keyCode = keyCode;
+    payload.isDown = isDown ? 1 : 0;
+    std::memcpy(entry.payload, &payload, sizeof(payload));
+    daw::ringWrite(state.keyRing, entry);
+  });
   if (!slot.instance->openEditor()) {
     std::cerr << "Host: failed to open editor for plugin "
               << request.pluginIndex << std::endl;

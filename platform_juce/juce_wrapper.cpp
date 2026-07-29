@@ -8,6 +8,7 @@
 #include <cstring>
 #include <utility>
 #include <unordered_map>
+#include <set>
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #define JUCE_VST3HEADERS_INCLUDE_HEADERS_ONLY 1
@@ -798,19 +799,55 @@ class JucePluginInstance final : public IPluginInstance {
                 << instance_->getName().toStdString() << std::endl;
       return false;
     }
-    struct EditorWindow final : public juce::DocumentWindow {
+    struct EditorWindow final : public juce::DocumentWindow, private juce::Timer {
       explicit EditorWindow(const juce::String& name, JucePluginInstance* ownerIn)
           : juce::DocumentWindow(name, juce::Colours::black,
                                  juce::DocumentWindow::closeButton),
             owner(ownerIn) {
         setUsingNativeTitleBar(true);
         setResizable(true, true);
+        setWantsKeyboardFocus(true);
+        startTimerHz(40);  // poll held keys for release (JUCE gives no key-up event)
       }
+      ~EditorWindow() override { stopTimer(); }
       void closeButtonPressed() override {
         if (owner) {
           owner->closeEditorWindow();
         }
       }
+      // Keys the plugin's editor did NOT consume bubble up to the hosting window. Forward
+      // them to the engine (keydown here, keyup detected by the timer below) so the DAW can
+      // keyjazz / start-stop while a plugin window has focus. Returns false so nothing is
+      // consumed — transparent to the plugin. DAW_HOST_KEY_PROBE=1 additionally logs.
+      bool keyPressed(const juce::KeyPress& key) override {
+        const int code = key.getKeyCode();
+        if (std::getenv("DAW_HOST_KEY_PROBE") != nullptr) {
+          std::cerr << "HOST_KEY: code=" << code
+                    << " char='" << juce::String::charToString(key.getTextCharacter())
+                       .toStdString()
+                    << "' desc=" << key.getTextDescription().toStdString() << std::endl;
+        }
+        // keyPressed auto-repeats while held; forward the note-on only on the first press.
+        if (owner != nullptr && heldKeys.insert(code).second) {
+          owner->forwardKey(code, true);
+        }
+        return false;  // never consume
+      }
+      void timerCallback() override {
+        // JUCE has no key-up callback, so poll: a held key no longer physically down means
+        // it was released — forward the note-off so sustained keyjazz ends cleanly.
+        for (auto it = heldKeys.begin(); it != heldKeys.end();) {
+          if (!juce::KeyPress::isKeyCurrentlyDown(*it)) {
+            if (owner != nullptr) {
+              owner->forwardKey(*it, false);
+            }
+            it = heldKeys.erase(it);
+          } else {
+            ++it;
+          }
+        }
+      }
+      std::set<int> heldKeys;
       JucePluginInstance* owner = nullptr;
     };
     editorWindow_ =
@@ -831,6 +868,18 @@ class JucePluginInstance final : public IPluginInstance {
     }
     editorWindow_->setVisible(false);
     editorWindow_.reset();
+  }
+
+  // Keystroke forwarding: the editor window calls this with keys the plugin didn't consume;
+  // the host installs the callback (writes them to the SHM key ring). Runs on the JUCE
+  // message thread, the ring's single producer.
+  void setKeyForwardCallback(std::function<void(int, bool)> cb) override {
+    keyForwardCb_ = std::move(cb);
+  }
+  void forwardKey(int keyCode, bool isDown) {
+    if (keyForwardCb_) {
+      keyForwardCb_(keyCode, isDown);
+    }
   }
 
   void buildParameterCache() {
@@ -1006,6 +1055,7 @@ class JucePluginInstance final : public IPluginInstance {
   int paramTargetCount_ = 0;
   std::unordered_map<std::string, int> paramIdToIndex_;
   std::unique_ptr<juce::DocumentWindow> editorWindow_;
+  std::function<void(int, bool)> keyForwardCb_;  // keystroke forwarding (set by the host)
 };
 
 class FakeIdentityPluginInstance final : public IPluginInstance {

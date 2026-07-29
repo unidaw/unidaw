@@ -78,6 +78,11 @@ struct ProjectClip {
 // placement, `mutes` silences base notes by EventId. Resolved = base - mutes + adds.
 struct ProjectPlacement {
   uint32_t clipId = 0;
+  // Stable, monotonic per-placement id (published in placementId; the arrangement's Move/
+  // Resize/Remove key on it). 0 = unassigned (a pre-id file or a fresh placement); the
+  // engine assigns one on creation and on load. It lives on the placement so it survives
+  // edits and the undo store-swap, and is persisted so it is stable across save/load too.
+  uint32_t id = 0;
   std::optional<uint64_t> at;
   uint64_t lengthNanoticks = 0;
   std::vector<MusicalEvent> adds;

@@ -133,8 +133,20 @@ enum class UiCommandType : uint16_t {
   AddTrack = 46,
   // Remove the track whose stable id is in trackId, tombstoning its slot (kUiTrackFlagAbsent)
   // rather than renumbering. Takes the track's aux children with it; rejects a child id.
-  // Not undoable in v1 (the UI confirms). Next free 48.
+  // Not undoable in v1 (the UI confirms).
   RemoveTrack = 47,
+  // Arrangement placement ops. All reuse UiCommandPayload and key on the STABLE placement id
+  // (value0), published in the clip extent's placementId. All undoable (store-swap).
+  //   MovePlacement:   trackId, value0=placementId, noteNanotick=new at,
+  //                    notePitch=new trackId (0xFFFFFFFF=same track; cross-track is v2).
+  //   RemovePlacement: trackId, value0=placementId.
+  //   ResizePlacement: value0=placementId, noteNanotick=new at, noteDuration=new length,
+  //                    0xFFFF..FF in either = leave that field unchanged.
+  //   AddPlacement:    trackId, value0=clipId, noteNanotick=at, noteDuration=length.
+  MovePlacement = 48,
+  RemovePlacement = 49,
+  ResizePlacement = 50,
+  AddPlacement = 51,  // next free 52
 };
 
 // PreviewNote flags: bit0 set = note-on, clear = note-off for (trackId, notePitch).

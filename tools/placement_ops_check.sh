@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# Check the arrangement placement ops (48-51) + the STABLE placement id. Two clips placed
+# on one track; then Move / Resize / Remove / Add via daw-cli, reading the published clip
+# extents back after each. The placement id must NOT change across a Move/Resize (the whole
+# point — the frontend keys drags on it), and each op must land on the right placement.
+#
+# Needs a real audio device (non-test mode) + the C++ and daw-cli targets built.
+#   tools/placement_ops_check.sh
+#
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BUILD="$ROOT/build"
+CLI="$ROOT/ui/target/debug/daw-cli"
+Q=960000
+BAR=$((4 * Q))
+TMP="$(mktemp -d)"
+SHM="/placement_ops_$$"
+
+[ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
+[ -x "$CLI" ] || { echo "build daw-cli first"; exit 2; }
+
+python3 - "$TMP/p.uniproj.json" "$Q" "$BAR" <<'PY'
+import json,sys
+out,Q,BAR=sys.argv[1],int(sys.argv[2]),int(sys.argv[3]); DIRECT=4294967294
+def routing():
+    r=lambda k="none":{"kind":k,"track_id":0,"input_id":0}
+    return {"midi_in":r(),"midi_out":r(),"audio_in":r(),"audio_out":r("master"),"pre_fader_send":True}
+def dev(): return {"device_id":0,"kind":"vst_instrument","capability_mask":5,"patcher_node_id":0,"host_slot_index":DIRECT,"bypass":False,"vst_ref":{"vendor":"","name":"identity","path":"","uid16":""}}
+def clip(cid):
+    return {"id":cid,"name":f"c{cid}","length":BAR,"lines_per_beat":4,"time_sig_numerator":4,"time_sig_denominator":4,"kind":"symbolic","notes":[{"nanotick":0,"duration":Q//2,"pitch":60,"velocity":100,"column":0,"note_id":cid}],"chords":[]}
+clips=[clip(1),clip(2)]
+# two placements: clip 1 at bar 0, clip 2 at bar 2. id omitted -> engine assigns stable ids.
+pls=[{"clip_id":1,"at":0,"length":BAR,"notes":[],"chords":[],"mutes":[]},
+     {"clip_id":2,"at":2*BAR,"length":BAR,"notes":[],"chords":[],"mutes":[]}]
+tr={"track_id":0,"name":"T","harmony_quantize":False,"lines_per_beat":4,"mixer":{"gain_db":0.0,"pan":0.0,"mute":False,"solo":False},"routing":routing(),"device_chain":[dev()],"mod_links":[],"placements":pls}
+json.dump({"schema_version":4,"meta":{"name":"p"},"nanoticks_per_quarter":Q,"tempo_map":[{"nanotick":0,"bpm":120.0}],"harmony_timeline":[],"clips":clips,"tracks":[tr]},open(out,"w"))
+PY
+
+( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --run-seconds 16 >"$TMP/eng.log" 2>&1 ) &
+ENG=$!
+sleep 2
+DAW_UI_SHM_NAME="$SHM" "$CLI" do load p --force >/dev/null 2>&1 || true
+sleep 1
+
+# get extents prints a trailing comma before ']' (not strict JSON). A small helper file
+# avoids inline-python quoting hell. `parse.py byclip <clipId>` -> "pid start end";
+# `parse.py count` -> N. Reads the last snapshot in ext.json.
+cat > "$TMP/parse.py" <<'PY'
+import json, re, sys
+data = re.sub(r",(\s*])", r"\1", open(sys.argv[1]).read() or "[]")
+d = json.loads(data)
+mode = sys.argv[2]
+if mode == "count":
+    print(len(d))
+else:
+    c = int(sys.argv[3])
+    e = next((x for x in d if x["clip"] == c), None)
+    print(f'{e["placement"]} {e["start"]} {e["end"]}' if e else "NONE 0 0")
+PY
+snap() { DAW_UI_SHM_NAME="$SHM" "$CLI" get extents >"$TMP/ext.json" 2>/dev/null || true; }
+byclip() { python3 "$TMP/parse.py" "$TMP/ext.json" byclip "$1"; }
+count() { python3 "$TMP/parse.py" "$TMP/ext.json" count; }
+
+snap
+read -r P1 S1 _ <<<"$(byclip 1)"     # clip 1's placement id + start
+read -r P2 _  _ <<<"$(byclip 2)"
+echo "initial: clip1 placement=$P1 start=$S1 ; clip2 placement=$P2 ; count=$(count)"
+
+# Move clip1's placement to bar 4.
+DAW_UI_SHM_NAME="$SHM" "$CLI" do move-placement --track 0 --placement "$P1" --at $((4*BAR)) --force >/dev/null 2>&1 || true
+sleep 0.4; snap
+read -r P1b S1b _ <<<"$(byclip 1)"
+# Resize clip1's placement to length = 1 bar.
+DAW_UI_SHM_NAME="$SHM" "$CLI" do resize-placement --track 0 --placement "$P1" --length $BAR --force >/dev/null 2>&1 || true
+sleep 0.4; snap
+read -r P1c S1c E1c <<<"$(byclip 1)"
+LEN1=$((E1c - S1c))
+# Remove clip2's placement.
+DAW_UI_SHM_NAME="$SHM" "$CLI" do remove-placement --track 0 --placement "$P2" --force >/dev/null 2>&1 || true
+sleep 0.4; snap
+C_AFTER_RM=$(count)
+# Add a new placement of clip 1 at bar 6.
+DAW_UI_SHM_NAME="$SHM" "$CLI" do add-placement --track 0 --clip 1 --at $((6*BAR)) --length $BAR --force >/dev/null 2>&1 || true
+sleep 0.4; snap
+C_AFTER_ADD=$(count)
+wait "$ENG" 2>/dev/null || true
+
+echo "after move  : clip1 placement=$P1b start=$S1b (want id==$P1, start==$((4*BAR)))"
+echo "after resize: clip1 placement=$P1c len=$LEN1 (want id==$P1, len==$BAR)"
+echo "after remove: count=$C_AFTER_RM (want 1)"
+echo "after add   : count=$C_AFTER_ADD (want 2)"
+
+rm -rf "$TMP"
+ok=1
+[ -n "$P1" ] && [ "$P1" != "0" ] && [ "$P1" != "NONE" ] || { echo "FAIL: no stable placement id published"; ok=0; }
+[ "$P1b" = "$P1" ] && [ "$S1b" = "$((4*BAR))" ] || { echo "FAIL: Move — id changed or wrong start"; ok=0; }
+[ "$P1c" = "$P1" ] && [ "$LEN1" = "$BAR" ] || { echo "FAIL: Resize — id changed or wrong length"; ok=0; }
+[ "$C_AFTER_RM" = "1" ] || { echo "FAIL: Remove — count not 1"; ok=0; }
+[ "$C_AFTER_ADD" = "2" ] || { echo "FAIL: Add — count not 2"; ok=0; }
+[ "$ok" = "1" ] && echo "placement_ops_check: PASS — Move/Resize/Remove/Add work and the placement id stays stable" \
+                || { echo "placement_ops_check: FAIL"; exit 1; }

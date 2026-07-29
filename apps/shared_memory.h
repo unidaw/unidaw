@@ -65,7 +65,10 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //     so RemoveTrack retires an id without renumbering its neighbours. uiTrackCount becomes
 //     the extent; iterate skipping absent slots, key on uiTrackId. uiTrackId[] grows the
 //     header (region offsets shift automatically); lockstep with the Rust mirror.
-constexpr uint16_t kShmVersion = 22;
+// 23: per-track instrument name (uiTrackDeviceName) so the agent's observation can see what
+//     is on a track. Appended after uiTrackId, so earlier offsets are unchanged; the header
+//     grows and region offsets shift automatically. Lockstep with the Rust mirror.
+constexpr uint16_t kShmVersion = 23;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -189,6 +192,11 @@ struct alignas(64) ShmHeader {
   // skipping absent slots, keying selection/cursor/caches on uiTrackId — never on the flat
   // visual position, which moves as tombstones open and close.
   uint32_t uiTrackId[kUiMaxTracks]{};
+  // v23: the name of the first instrument on each track (nul-padded, truncated), so a
+  // surface — and the agent's observation — can see WHAT is on a track, not just that a
+  // track exists. Empty when the track has no instrument. Appended after uiTrackId so
+  // every earlier field offset is unchanged.
+  char uiTrackDeviceName[kUiMaxTracks][kUiTrackNameBytes]{};
 };
 
 // uiTrackFlags bits.
@@ -245,6 +253,16 @@ enum class EventType : uint16_t {
   UiHarmonyDiff = 7,
   UiChordDiff = 8,
   MusicalLogic = 9,
+  HostKey = 10,  // host->engine: a plugin-editor key the plugin didn't consume
+};
+
+// Payload of a HostKey EventEntry (keystroke forwarding). Written by the host's editor
+// window into the key ring, drained by the engine. keyCode is JUCE's KeyPress key code
+// (ASCII-ish; e.g. 32 = space); isDown = 1 for press, 0 for release (sustained keyjazz).
+struct KeyEventPayload {
+  int32_t keyCode = 0;
+  uint8_t isDown = 0;
+  uint8_t reserved[3]{};
 };
 
 struct alignas(64) BlockMailbox {
@@ -599,5 +617,13 @@ size_t sharedMemorySize(const ShmHeader& header,
 // field. Each block holds numAuxChannelsOut channels; bus k's channel c is at
 // auxOutputPlaneOffset + block*numAux*stride + (busChannelOffset+c)*stride.
 size_t auxOutputPlaneOffset(const ShmHeader& header);
+
+// Host->engine key-event ring (keystroke forwarding). A small ring the plugin-editor
+// window fills with keys the plugin didn't consume; the engine drains it and turns them
+// into transport / keyjazz. It sits right after the mailbox at a COMPUTED offset (like the
+// aux plane) so it needs no ShmHeader field and thus no kShmVersion bump — it is entirely
+// host<->engine (kControlVersion). Fixed small capacity; keystrokes are sparse.
+constexpr uint32_t kHostKeyRingCapacity = 64;
+size_t hostKeyRingOffset(const ShmHeader& header);
 
 }  // namespace daw

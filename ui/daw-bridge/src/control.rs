@@ -779,6 +779,30 @@ impl EngineHandle {
         )
     }
 
+    /// v23: the first instrument's name per track (empty when the track has none).
+    pub fn read_track_device_names(&self) -> Vec<String> {
+        loop {
+            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue;
+            }
+            let count =
+                unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) } as usize;
+            let count = count.min(K_UI_MAX_TRACKS);
+            let mut out = Vec::with_capacity(count);
+            for i in 0..count {
+                let raw = unsafe { &(*self.header).ui_track_device_name[i] };
+                let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+                out.push(String::from_utf8_lossy(&raw[..end]).into_owned());
+            }
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                return out;
+            }
+        }
+    }
+
     pub fn send_chord_command(&self, payload: UiChordCommandPayload) -> Result<(), String> {
         self.write_entry(
             &payload as *const UiChordCommandPayload as *const u8,

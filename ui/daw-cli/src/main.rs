@@ -228,6 +228,8 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
         return 1;
     };
     let count = handle.track_count() as usize;
+    let names = handle.read_track_names();
+    let devices = handle.read_track_device_names();
     println!("{{");
     println!("  \"track_count\": {count},");
     println!("  \"tracks\": [");
@@ -237,8 +239,12 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
             .get(index)
             .copied()
             .unwrap_or(0.0);
+        let name = names.get(index).map(String::as_str).unwrap_or("");
+        let device = devices.get(index).map(String::as_str).unwrap_or("");
         let comma = if index + 1 == count { "" } else { "," };
-        println!("    {{ \"track_id\": {index}, \"peak_rms\": {rms} }}{comma}");
+        println!(
+            "    {{ \"track_id\": {index}, \"name\": {name:?}, \"device\": {device:?}, \"peak_rms\": {rms} }}{comma}"
+        );
     }
     println!("  ]");
     println!("}}");
@@ -350,6 +356,46 @@ fn preview_command(args: &[String]) -> Result<UiCommandPayload, String> {
         note_duration_hi: 0,
         base_version: 0,
     })
+}
+
+fn open_editor_command(track: u32, device: u32) -> UiCommandPayload {
+    UiCommandPayload {
+        command_type: UiCommandType::OpenPluginEditor as u16,
+        flags: 0,
+        track_id: track,
+        plugin_index: 0,
+        note_pitch: 0,
+        value0: device,
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn placement_command(
+    cmd: UiCommandType,
+    track: u32,
+    value0: u32,
+    at: u64,
+    length: u64,
+    note_pitch: u32,
+) -> UiCommandPayload {
+    UiCommandPayload {
+        command_type: cmd as u16,
+        flags: 0,
+        track_id: track,
+        plugin_index: 0,
+        note_pitch,
+        value0,
+        note_nanotick_lo: (at & 0xffff_ffff) as u32,
+        note_nanotick_hi: (at >> 32) as u32,
+        note_duration_lo: (length & 0xffff_ffff) as u32,
+        note_duration_hi: (length >> 32) as u32,
+        base_version: 0,
+    }
 }
 
 fn track_structure_command(command: UiCommandType, track: u32) -> UiCommandPayload {
@@ -653,13 +699,14 @@ fn get_clip(handle: &EngineHandle, args: &[String]) -> i32 {
         let comma = if index + 1 == note_count { "" } else { "," };
         println!(
             "    {{ \"nanotick\": {}, \"duration\": {}, \"pitch\": {}, \"name\": \"{}\", \
-             \"velocity\": {}, \"column\": {} }}{comma}",
+             \"velocity\": {}, \"column\": {}, \"placement\": {} }}{comma}",
             note.t_on,
             note.t_off.saturating_sub(note.t_on),
             note.pitch,
             pitch_name(note.pitch),
             note.velocity,
-            note.column
+            note.column,
+            note.placement_id
         );
     }
     println!("  ],");
@@ -936,6 +983,32 @@ fn main() {
                         2
                     }
                 },
+                Some(&"rename") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let name = flag(&args, "--name").unwrap_or_default();
+                    let mut bytes = [0u8; 28];
+                    let src = name.as_bytes();
+                    let len = src.len().min(bytes.len());
+                    bytes[..len].copy_from_slice(&src[..len]);
+                    let payload = UiPatcherPresetCommandPayload {
+                        command_type: UiCommandType::SetTrackName as u16,
+                        flags: 0,
+                        track_id: track,
+                        base_version: 0,
+                        name: bytes,
+                    };
+                    let as_ui: UiCommandPayload = unsafe { std::mem::transmute(payload) };
+                    match handle.send_command(as_ui) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"rename\", \"track\": {track}, \"name\": {name:?} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
                 Some(&"add-track") => {
                     match handle.send_command(track_structure_command(
                         UiCommandType::AddTrack,
@@ -970,6 +1043,66 @@ fn main() {
                         2
                     }
                 },
+                Some(&"open-editor") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    match handle.send_command(open_editor_command(track, device)) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"open-editor\", \"track\": {track}, \"device\": {device} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
+                Some(&"move-placement")
+                | Some(&"remove-placement")
+                | Some(&"resize-placement")
+                | Some(&"add-placement") => {
+                    const UNCHANGED: u64 = u64::MAX;
+                    let verb = *rest.first().unwrap();
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let at = flag_u64(&args, "--at", Some(UNCHANGED)).unwrap_or(UNCHANGED);
+                    let length =
+                        flag_u64(&args, "--length", Some(UNCHANGED)).unwrap_or(UNCHANGED);
+                    let (cmd, value0, np) = match verb {
+                        "move-placement" => (
+                            UiCommandType::MovePlacement,
+                            flag_u64(&args, "--placement", Some(0)).unwrap_or(0) as u32,
+                            0xFFFF_FFFFu32,
+                        ),
+                        "remove-placement" => (
+                            UiCommandType::RemovePlacement,
+                            flag_u64(&args, "--placement", Some(0)).unwrap_or(0) as u32,
+                            0,
+                        ),
+                        "resize-placement" => (
+                            UiCommandType::ResizePlacement,
+                            flag_u64(&args, "--placement", Some(0)).unwrap_or(0) as u32,
+                            0,
+                        ),
+                        _ => (
+                            UiCommandType::AddPlacement,
+                            flag_u64(&args, "--clip", Some(0)).unwrap_or(0) as u32,
+                            0,
+                        ),
+                    };
+                    let at = if verb == "move-placement" && at == UNCHANGED { 0 } else { at };
+                    match handle
+                        .send_command(placement_command(cmd, track, value0, at, length, np))
+                    {
+                        Ok(()) => {
+                            println!("{{ \"sent\": {verb:?} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
                 Some(&"notes") => write_notes(&handle, &args),
                 Some(&"mixer") => match mixer_command(&args) {
                     Ok(payload) => match handle.send_command(payload) {

@@ -150,6 +150,10 @@ class IPluginInstance {
   virtual bool setState(const std::vector<uint8_t>& data) = 0;
   virtual void flushParameterChanges() = 0;
   virtual bool openEditor() = 0;
+  // Keystroke forwarding: the host installs a callback the plugin's editor window invokes
+  // with keys the plugin did NOT consume (keyCode, isDown) — press on keydown, release on
+  // keyup, for sustained keyjazz. Non-pure so non-JUCE/stub instances ignore it.
+  virtual void setKeyForwardCallback(std::function<void(int, bool)>) {}
 };
 
 class IPluginHost {

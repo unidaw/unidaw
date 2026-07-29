@@ -43,6 +43,9 @@ size_t sharedMemorySize(const ShmHeader& header,
   offset += alignUp(ringBytes(ringCtrlCapacity), 64);
   offset += alignUp(ringBytes(ringUiCapacity), 64);
   offset += alignUp(sizeof(BlockMailbox), 64);
+  // Host->engine key ring, right after the mailbox (see hostKeyRingOffset). Constant
+  // capacity so host and engine compute the same size without threading a parameter.
+  offset += alignUp(ringBytes(kHostKeyRingCapacity), 64);
   return alignUp(offset, 64);
 }
 
@@ -51,6 +54,13 @@ size_t auxOutputPlaneOffset(const ShmHeader& header) {
   const size_t outBlockBytes = static_cast<size_t>(header.numChannelsOut) * stride;
   return static_cast<size_t>(header.audioOutOffset) +
          alignUp(outBlockBytes * header.numBlocks, 64);
+}
+
+size_t hostKeyRingOffset(const ShmHeader& header) {
+  // Immediately after the mailbox. mailboxOffset is a stored header field; the mailbox
+  // occupies alignUp(sizeof(BlockMailbox), 64), so the key ring begins right after it.
+  return static_cast<size_t>(header.mailboxOffset) +
+         alignUp(sizeof(BlockMailbox), 64);
 }
 
 }  // namespace daw
