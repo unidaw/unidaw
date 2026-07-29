@@ -28,6 +28,15 @@ pub struct HarmonyEvent {
     pub flags: u32,
 }
 
+// This struct is handed across the C ABI as `const HarmonyEvent*` (apps/patcher_abi.h),
+// and until now NOTHING on either side pinned its layout — a widened field would have
+// compiled clean here and in C++ while every node below read garbage roots and scales.
+// The C++ side asserts the same numbers.
+const _: () = {
+    assert!(core::mem::size_of::<HarmonyEvent>() == 24);
+    assert!(core::mem::align_of::<HarmonyEvent>() == 8);
+};
+
 #[repr(C)]
 pub struct MusicalLogicPayload {
     pub degree: u8,

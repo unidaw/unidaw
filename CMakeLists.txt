@@ -396,6 +396,13 @@ set_tests_properties(event_ring_mpsc PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY
 
 # M2.20: the linter's own coverage — every rule fires, clean input is silent, output is
 # deterministic. Pure file in / text out, so it needs no audio device and belongs here.
+# M2.21: every opcode has a CLI path or a declared reason it does not. Pure source
+# analysis, so it belongs in ctest.
+add_test(NAME op_registry
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/op_registry_check.sh
+)
+set_tests_properties(op_registry PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME lint
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lint_check.sh
 )
