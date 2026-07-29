@@ -1024,6 +1024,28 @@ fn main() {
                         }
                     }
                 }
+                Some(&"undo") | Some(&"redo") => {
+                    let is_undo = rest.first() == Some(&"undo");
+                    let cmd = if is_undo {
+                        UiCommandType::Undo
+                    } else {
+                        UiCommandType::Redo
+                    };
+                    // base_version must match the engine's current clip version.
+                    let base = handle.clip_version();
+                    let mut payload = track_structure_command(cmd, 0);
+                    payload.base_version = base;
+                    match handle.send_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": {:?}, \"base_version\": {base} }}", if is_undo { "undo" } else { "redo" });
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
                 Some(&"add-track") => {
                     match handle.send_command(track_structure_command(
                         UiCommandType::AddTrack,
@@ -1086,7 +1108,9 @@ fn main() {
                         "move-placement" => (
                             UiCommandType::MovePlacement,
                             flag_u64(&args, "--placement", Some(0)).unwrap_or(0) as u32,
-                            0xFFFF_FFFFu32,
+                            // --to-track T for a cross-track lane drag; omitted = same track.
+                            flag_u64(&args, "--to-track", Some(0xFFFF_FFFF)).unwrap_or(0xFFFF_FFFF)
+                                as u32,
                         ),
                         "remove-placement" => (
                             UiCommandType::RemovePlacement,
