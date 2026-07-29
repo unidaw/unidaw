@@ -479,7 +479,19 @@ export function createBuffer(rowCount, trackCount, columns) {
                         * renderer's guard an integer compare and its style write
                         * an interned string.
                         */
-                       dev: -1 };
+                       dev: -1,
+                       /**
+                        * Whether the sounding position is OUTSIDE this row: -1
+                        * before it, +1 after, 0 inside.
+                        *
+                        * Quantize made this reachable. A grid coarser than the row
+                        * pulls a note to a line that can be well before its own
+                        * row, so the note is heard where this cell is not looking.
+                        * `dev` pins to the edge in that case, and this is what
+                        * stops the pin reading as "on time" — which is the one
+                        * thing a deviation mark must never claim.
+                        */
+                       devOut: 0 };
     rows[i] = { index: 0, label: '', beat: false, bar: false, cells,
                 /**
                  * The CLIP-LOCAL position of this row on each lane, and that
@@ -922,7 +934,7 @@ export function buildViewModel(opts, buf) {
       for (let c = 0; c < columns; c++) {
         if (engine) {
           const cl = cells[ci++];
-          cl.text = ''; cl.aggCount = 0; cl.pitch = -1; cl.dev = -1;
+          cl.text = ''; cl.aggCount = 0; cl.pitch = -1; cl.dev = -1; cl.devOut = 0;
           cl.kind = offGrid ? 'offgrid' : 'empty';
           continue;
         }
@@ -1101,12 +1113,49 @@ export function buildViewModel(opts, buf) {
           // The contour ribbon's datum. Set alongside the text because it is the
           // same fact — what note is here — read at a glance instead of read.
           c0.pitch = n.pitch;
-          // ...and WHERE IN THE ROW it actually sounds. Only at the zooms where a
-          // row is a position rather than a summary: at "1 bar" per row the cell
-          // holds a count, and a deviation mark inside it would be pointing at a
-          // note the cell is not showing.
-          c0.dev = (!zoom.aggregate && n.delayTicks > 0 && rowTicks > 0)
-            ? Math.min(99, Math.round((n.delayTicks / rowTicks) * 100)) : -1;
+          /*
+           * ...and WHERE IN THE ROW IT ACTUALLY SOUNDS.
+           *
+           * TWO CAUSES, ONE MARK. A note's own delay pushes it late; its lane's
+           * quantize pulls it toward a grid. The engine COMPOSES them — it
+           * quantizes the note start on its scheduling copy and adds the delay
+           * afterwards — so the sounding tick is `tOn + devTicks + delayTicks` and
+           * there is exactly one place the note is heard. Two marks would invent a
+           * distinction the audio does not make, and there is no second
+           * pseudo-element to spend on it: `::after` is this mark and `::before`
+           * is the collide pill.
+           *
+           * SIGNED, because quantize pulls notes EARLIER as often as later, and a
+           * note pulled back before its own row sounds in the row above. Clamped
+           * to the cell rather than drawn outside it: a mark in a cell that is not
+           * showing the note is worse than no mark, so it pins to the edge and
+           * says "at least this far", which is true.
+           *
+           * `devTicks` comes from the ENGINE (UiClipNote.reserved3), not from a
+           * quantize function reimplemented here. That was the whole argument for
+           * the field: one implementation, the one that schedules the audio, so
+           * the mark cannot disagree with the sound.
+           *
+           * Only at zooms where a row is a POSITION. At "1 bar" per row the cell
+           * holds a count, and a mark inside it would point at a note the cell is
+           * not showing.
+           */
+          const soundsAt = n.delayTicks + (n.devTicks | 0);
+          if (zoom.aggregate || soundsAt === 0 || rowTicks <= 0) {
+            c0.dev = -1; c0.devOut = 0;
+          } else {
+            const pct = Math.round((soundsAt / rowTicks) * 100);
+            c0.dev = Math.max(0, Math.min(99, pct));
+            /*
+             * SPILL. A quantize grid coarser than the row can pull a note to a
+             * line well before its own row — so the note SOUNDS in a row this
+             * cell is not. Pinned to the edge and flagged, rather than clamped
+             * silently: a mark sitting at 0% that means "somewhere earlier" is a
+             * mark claiming the note is on time, which is the one thing it must
+             * never say. -1 is before this row, +1 after.
+             */
+            c0.devOut = pct < 0 ? -1 : pct > 99 ? 1 : 0;
+          }
           // Muted base notes still ship — draw them struck out. Adds carry
           // provenance so an override reads differently from the shared clip.
           c0.kind = n.muted ? 'muted' : n.isAdd ? 'add' : 'note';

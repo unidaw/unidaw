@@ -44,7 +44,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// Wire format, little-endian. The frontend decodes with a DataView.
 /// Bump `WIRE_VERSION` here and in `ui-web/src/wire.js` together.
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 17;
+const WIRE_VERSION: u16 = 18;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -233,6 +233,21 @@ struct WireNote {
     /// Row index under the client's current grid, computed by LaneGrid here so
     /// the frontend never re-derives the projection.
     row: u32,
+    /// v26 lane quantize: how far this note's lane MOVES it, in nanoticks, signed.
+    /// 0 when the lane is not quantized.
+    ///
+    /// The SOUNDING tick is `t_on + dev_nanoticks + delay_nanoticks` — quantize and
+    /// the note's own delay COMPOSE; the scheduler quantizes the note start on its
+    /// scheduling copy and expandNoteOps adds the delay afterwards. So a cell draws
+    /// ONE mark, from where the note is written to where it is heard, and not two
+    /// competing ones.
+    ///
+    /// Published by the ENGINE rather than derived here or in the browser. A second
+    /// implementation of quantizeTick would rest on two integer divisions that
+    /// truncate toward zero, where the natural JS spelling rounds toward negative
+    /// infinity — off by one tick on precisely the notes played late, silently,
+    /// with the bar still moving and still pointing the right way.
+    dev_nanoticks: i32,
 }
 
 #[derive(Default)]
@@ -532,8 +547,15 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.push(n.probability);
         out.push(n.placement_flags);
         out.push(n.placement_id);
-        out.extend_from_slice(&n.delay_nanoticks.to_le_bytes());
-        out.extend_from_slice(&n.row.to_le_bytes());
+        out.extend_from_slice(&n.delay_nanoticks.to_le_bytes());   // 32
+        out.extend_from_slice(&n.row.to_le_bytes());                // 36
+        // 40..44. THE STRIDE GREW, and it is load-bearing for everything after
+        // the notes — extents, aggregates, the track structure, chords, meters
+        // and quantize all follow. Growing it on one side only is what made the
+        // extents decode as garbage once before, so both sides move together and
+        // WIRE_VERSION is bumped: a page reading 40 where the sidecar writes 44
+        // rejects the frame outright instead of rendering nonsense.
+        out.extend_from_slice(&n.dev_nanoticks.to_le_bytes());      // 40, to 44
     }
     // 64 bytes each, matching UiClipExtent. The stride is load-bearing for the
     // aggregates that follow it; widening it without the client is what made
@@ -849,6 +871,7 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
                     placement_flags: note.placement_flags,
                     placement_id: note.placement_id as u8,
                     delay_nanoticks: note.delay_nanoticks,
+                    dev_nanoticks: note.dev_nanoticks,
                     row: vp_grid.row_of_tick(note.t_on) as u32,
                 });
             }

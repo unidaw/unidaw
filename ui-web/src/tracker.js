@@ -305,7 +305,7 @@ export class Tracker {
         cell._text = cell.firstChild;
         cell._bar = bar;
         cell._kindV = null;
-        cell._devV = -1;
+        cell._devV = -1; cell._devOutV = 0;
         tr.append(cell);
         cells[k++] = cell;
       }
@@ -397,6 +397,18 @@ export class Tracker {
         } else if (had) {
           cell.classList.remove('dev');
         }
+      }
+      /*
+       * ...and whether it sounds outside this row at all, which quantize made
+       * reachable: a grid coarser than the row can pull a note to a line before
+       * its own row. `--dev` pins to the edge there, and this is what stops the
+       * pin reading as "on time". Its own cached integer, because it changes far
+       * less often than the position does.
+       */
+      if (cell._devOutV !== c.devOut) {
+        cell._devOutV = c.devOut;
+        cell.classList.toggle('dev-early', c.devOut < 0);
+        cell.classList.toggle('dev-late', c.devOut > 0);
       }
 
       const bar = cell._bar;

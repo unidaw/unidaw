@@ -604,6 +604,21 @@ export class Chain {
       if (el._mOn !== c.hasMeter) {
         el._mOn = c.hasMeter;
         el._meter.style.display = c.hasMeter ? '' : 'none';
+        /*
+         * EMPTY IT ON THE WAY OUT. The pool rebinds cards to different devices,
+         * so a hidden meter keeps the last width it was given — and a card that
+         * held a loud insert leaves a 100% bar sitting in a hidden element. It
+         * cannot be seen there, but the moment that card is rebound to a device
+         * that DOES meter, the first frame draws the previous device's level:
+         * a pegged bar, for one frame, on the wrong instrument. Cheaper to clear
+         * than to reason about which frame wins.
+         */
+        if (!c.hasMeter) {
+          el._mi = -1; el._mip = -1; el._mo = -1; el._mop = -1; el._mDb = null;
+          el._inFill.style.width = '0%'; el._inTick.style.left = '0%';
+          el._outFill.style.width = '0%'; el._outTick.style.left = '0%';
+          el._outDb.nodeValue = '';
+        }
         // Showing or hiding a row changes the height left for the parameter list
         // inside this card, which the observer on `.dv-cards` cannot see.
         this._geom = false;

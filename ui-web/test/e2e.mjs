@@ -2852,6 +2852,28 @@ section('a refused edit says so, with the version to retry');
      String(said));
   const after = await page.evaluate(() => (window.__uni.notes() || []).length);
   ok(after === before, 'and the note really did not land', `${before} -> ${after}`);
+
+  /*
+   * THE TWO REASONS MUST NOT COLLAPSE INTO ONE SENTENCE.
+   *
+   * A stale base is worth retrying and a missing track never will be, so the
+   * distinction is the only actionable thing in the message. They are cheap to
+   * merge by accident — one generic "that edit was refused" satisfies any check
+   * that only asserts something red appeared — and impossible to notice once
+   * merged, because both readings are true of the generic string.
+   */
+  const staleSaid = String(await page.evaluate(() => window.__uni.state().reject));
+  await page.evaluate(() => window.__uni.send({
+    type: 'note', track: 61, pitch: 60, tick: 0, dur: 240000, vel: 100,
+    column: 0, base: 1 }));
+  await page.waitForTimeout(1200);
+  const missing = String(await page.evaluate(() => window.__uni.state().reject));
+  ok(missing !== staleSaid, 'a missing track reads differently from a stale base',
+     `${missing}  /  ${staleSaid}`);
+  ok(/does not exist/.test(missing), 'and says the track is not there', missing);
+  ok(!/retry|version \d/.test(missing),
+     'without offering a version to retry with, because retrying will not help',
+     missing);
 }
 
 section('an edit lands on a track other than the last one edited');
@@ -2941,6 +2963,15 @@ section('every insert says what it is putting out');
   const patcher = drawn.find((d) => d.device !== 0);
   ok(patcher && !patcher.shown, 'a patcher device gets no meter — it is not an insert',
      JSON.stringify(patcher));
+  /*
+   * ...AND ITS HIDDEN BAR IS EMPTY, not left at whatever the last device on this
+   * pooled card was showing. Hidden, so it cannot lie now — but the pool rebinds,
+   * and a card that carried a loud insert would draw that insert's level for one
+   * frame on the next device it holds. Full scale, on the wrong instrument.
+   */
+  ok(patcher && patcher.width === '0%',
+     'and its hidden bar is empty, so a rebind cannot flash the last one',
+     JSON.stringify(patcher));
   const card = drawn.find((d) => d.device === 0);
   ok(card && card.shown, 'the instrument does', JSON.stringify(card));
   ok(card && !card.inShown, 'with no input row, because it has no audio input');
@@ -2952,6 +2983,90 @@ section('every insert says what it is putting out');
    * that moves with the music. Within a percentage point, because the two
    * readings are a frame or two apart and a meter moves every frame.
    */
+  /*
+   * ASK 1: THE DRAWN METER, NOT THE PUBLISHED NUMBER, IS EMPTY WHEN STOPPED.
+   *
+   * The published value is checked above; this is the other end of the same
+   * wire, and it is the end that would have shown the bug. An unwritten slot
+   * reads 0 mB, which on a dBFS scale is FULL SCALE — so the failure draws a
+   * meter pegged at the top on a stopped transport, on every track of every
+   * project, and looks like clipping rather than like a bug. Asserting that a
+   * meter ELEMENT exists would have passed throughout.
+   */
+  const drawnFill = () => cards[1].evaluate((el) => ({
+    width: el.querySelectorAll('.dv-m-fill')[1].style.width,
+    tick: el.querySelectorAll('.dv-m-tick')[1].style.left,
+  }));
+  /*
+   * STOPPED IS NOT SILENT, which this check learned the hard way: it asserted an
+   * empty meter a second after Stop and read 17%, because a synth's voices keep
+   * ringing when the transport stops — that is the entire reason PANIC exists,
+   * and it is measured elsewhere in this repo as 0.0196 rms of tail.
+   *
+   * So Stop only has to prove the meter is not PEGGED, which is the actual bug:
+   * an unwritten slot reads 0 mB, and 0 mB on a dBFS scale is full scale. And
+   * PANIC — real silence — has to drive it to nothing. Together they pin both
+   * ends without either of them lying about what Stop means.
+   */
+  await page.evaluate(() => window.__uni.run('stop'));
+  await page.waitForTimeout(1200);
+  const halted = await drawnFill();
+  ok(parseInt(halted.width, 10) < 90,
+     'stopped, the instrument is not drawing a PEGGED meter', JSON.stringify(halted));
+
+  await page.evaluate(() => window.__uni.run('panic'));
+  await page.waitForTimeout(1500);
+  const silent = await drawnFill();
+  /*
+   * "EMPTY" IS UNDER A PIXEL, not exactly zero. A cut voice leaves a peak meter
+   * holding 1% — which is -59.4 dB on this scale, and 1% of a 64px bar is less
+   * than one pixel. Asserting `=== '0%'` failed on that and would have failed on
+   * any implementation with a peak hold, which is every implementation worth
+   * having. The claim is that the meter draws NOTHING VISIBLE; that is what is
+   * checked.
+   */
+  ok(parseInt(silent.width, 10) < 2 && parseInt(silent.tick, 10) < 2,
+     'and with every voice cut, it draws an EMPTY one', JSON.stringify(silent));
+
+  await page.keyboard.press(' ');
+  await page.waitForTimeout(3000);
+  const loud = await drawnFill();
+  ok(parseInt(loud.width, 10) > 0, 'and playing, it draws something again',
+     JSON.stringify(loud));
+
+  /*
+   * ASK 4: BYPASS MOVES THE CARD AND THE METER TOGETHER.
+   *
+   * One assertion over both, deliberately. They are two renderings of one fact —
+   * this device is doing nothing — and a check that tested them apart would pass
+   * a build where the card dims and the meter carries on showing level, which
+   * reads as "bypass is broken" to anyone looking at the meter and "bypass
+   * works" to anyone looking at the card.
+   */
+  /*
+   * A REAL POINTER, not `element.click()`. The rack's handler is delegated on
+   * POINTERDOWN, which a synthetic click never fires — so the first version of
+   * this check clicked, nothing happened, and the assertion that bypass came back
+   * on afterwards passed VACUOUSLY, because it had never gone off.
+   */
+  await (await cards[1].$('.dv-byp')).click();
+  await page.waitForTimeout(1800);
+  const off = await cards[1].evaluate((el) => ({
+    dim: el.classList.contains('byp'),
+    width: el.querySelectorAll('.dv-m-fill')[1].style.width,
+  }));
+  ok(off.dim && off.width === '0%',
+     'bypassed, the card says so AND its meter goes silent', JSON.stringify(off));
+
+  await page.keyboard.press('b');
+  await page.waitForTimeout(1800);
+  const back = await cards[1].evaluate((el) => ({
+    dim: el.classList.contains('byp'),
+    width: el.querySelectorAll('.dv-m-fill')[1].style.width,
+  }));
+  ok(!back.dim && parseInt(back.width, 10) > 0,
+     'and switching it back on brings both back', JSON.stringify(back));
+
   const after = await page.evaluate(() => window.__uni.deviceMeters());
   const now = after.find((m) => m.device === 0);
   const expected = Math.round(((now.outRms + 6000) / 6000) * 100);

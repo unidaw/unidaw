@@ -427,3 +427,20 @@
   border-radius: 2px;
   color: var(--base-accent-ramp-300, var(--base-accent));
 }
+
+/* THE NOTE SOUNDS OUTSIDE THIS ROW — quantize made this reachable.
+   A grid coarser than the row pulls a note to a line that can be well before its
+   own row, so it is heard where this cell is not looking. `--dev` pins to the
+   edge in that case, and a hairline pinned at 0% is indistinguishable from a note
+   exactly on time — which is the one thing a deviation mark must never claim.
+
+   So the pinned mark becomes a solid 2px cap against the edge it left through: it
+   reads as "at least this far, and off the end", which is what is true. Same
+   colour, because it is the same fact measured past the edge of the ruler. */
+.tk-cell.dev.dev-early::after,
+.tk-cell.dev.dev-late::after {
+  width: 2px;
+  opacity: .85;
+}
+.tk-cell.dev.dev-early::after { left: 0; }
+.tk-cell.dev.dev-late::after  { left: auto; right: 0; }

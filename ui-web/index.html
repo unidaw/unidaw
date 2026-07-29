@@ -5615,6 +5615,16 @@ window.__uni = {
    * The only way to test a guard is to walk into it deliberately.
    */
   send: (msg) => !!(conn && conn.send(msg)),
+  /**
+   * Switch a device off. THE SAME FUNCTION dockApi.bypass and the card's switch
+   * call, not a copy — and it has to be on both objects, because the console
+   * reaches one and tests and agents reach the other. Moving it from here to
+   * dockApi to fix the console broke the audio suite, which is the mirror of the
+   * bug that moved it: one surface gaining a method by another losing it.
+   */
+  bypass: bypassDevice,
+  /** Pull a lane toward a grid. Likewise on both surfaces, likewise one function. */
+  quantize: setQuantize,
   /** Every lane the engine reports a quantize grid for. Raw engine units. */
   quantized: () => (engine ? engine.quantize.slice(0, engine.quantizeCount).map((q) => ({
     track: q.track, grid: q.grid, strength: q.strength, swing: q.swing })) : []),
@@ -5743,9 +5753,13 @@ window.__uni = {
     // nothing could ask the question.
     // `vel` too: velocity is a column you can type into, so a test that types
     // one needs to be able to read it back.
+    // `dev` is the engine's own quantize deviation and `delay` the note's own
+    // microtiming; the note SOUNDS at t + dev + delay. Both exposed so a test can
+    // compare the drawn mark against the number rather than against a second
+    // computation of it — which is the whole reason the engine publishes dev.
     .map(n => ({ t: n.tOn, off: n.tOff, dur: n.tOff - n.tOn, p: n.pitch,
                  vel: n.velocity, row: n.row, tr: n.track, col: n.column,
-                 id: n.id })) : null),
+                 dev: n.devTicks, delay: n.delayTicks, id: n.id })) : null),
   /**
    * A synthetic store for the arrange view, including an AUDIO region — schema
    * v3 ships those with UI_CLIP_EXTENT_AUDIO and they render differently, so a

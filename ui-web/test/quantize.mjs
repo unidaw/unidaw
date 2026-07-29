@@ -121,6 +121,53 @@ await page.waitForTimeout(1500);
 check(savedTicks('qafter') === ticksBefore,
       'and NOT ONE AUTHORED TICK MOVED on disk');
 
+/*
+ * AND THE BAR AGREES WITH THE ENGINE'S OWN NUMBER.
+ *
+ * This is the check that justifies publishing the deviation at all. A test that
+ * asserted "a mark is drawn" would pass a mark computed independently and wrongly
+ * — which is exactly the outcome the field exists to prevent, since a JavaScript
+ * port of quantizeTick is off by one tick on the notes played late and looks
+ * completely right while doing it.
+ *
+ * So: take a note the ENGINE says it moves, work out where that lands in its row
+ * from the engine's own numbers, and compare against the pixel position the cell
+ * is drawing. One number, checked at both ends.
+ */
+{
+  // A zoom where a row is a POSITION, not a summary — at "1 bar" per row the cell
+  // holds a count and a mark inside it would point at a note it is not showing.
+  await page.evaluate(() => window.__uni.setZoom(1));
+  await page.waitForTimeout(600);
+
+  const moved = await page.evaluate(() => {
+    const n = (window.__uni.notes() || []).filter((x) => x.tr === 1 && x.dev);
+    return n.length ? { row: n[0].row, dev: n[0].dev, delay: n[0].delay, p: n[0].p } : null;
+  });
+  check(!!moved, 'the engine reports a note its lane moves', JSON.stringify(moved));
+
+  if (moved) {
+    // 1/16 rows at this zoom: 240000 nanoticks each. The percentage the renderer
+    // draws is (delay + dev) / rowTicks, clamped into the cell.
+    const ROW_TICKS = 240000;
+    const want = Math.max(0, Math.min(99,
+      Math.round(((moved.delay + moved.dev) / ROW_TICKS) * 100)));
+    const drawn = await page.evaluate((row) => {
+      for (const el of document.querySelectorAll('.tk-cell.dev')) {
+        if (!el.offsetParent) continue;
+        const r = el.closest('.tk-row');
+        if (r && Number(r.dataset.row) === row) return el.style.getPropertyValue('--dev');
+      }
+      return null;
+    }, moved.row);
+    check(drawn !== null, 'and the cell holding it draws a deviation mark',
+          `row ${moved.row}, dev ${moved.dev}`);
+    check(drawn !== null && parseInt(drawn, 10) === want,
+          'at exactly the position the engine\'s own deviation puts it',
+          `drawn ${drawn}, engine says ${want}% (dev ${moved.dev} + delay ${moved.delay})`);
+  }
+}
+
 // Off again, so the setting is not one-way.
 await page.evaluate(() => window.__uni.run('quantize 1 off'));
 await page.waitForTimeout(1200);

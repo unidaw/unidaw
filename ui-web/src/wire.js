@@ -7,7 +7,7 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 17;
+export const WIRE_VERSION = 18;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
@@ -19,7 +19,16 @@ const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
 const PATCHER_EDGE_BYTES = 20;
 const MIXER_BYTES = 12;
-const NOTE_BYTES = 40;
+/*
+ * 44, not 40 — the stride GREW for v26's per-note quantize deviation.
+ *
+ * It is load-bearing for every section after the notes (extents, aggregates,
+ * track structure, chords, meters, quantize), which is why growing it on one side
+ * only made the extents decode as garbage once before. Both sides move together
+ * and WIRE_VERSION goes with them, so a mismatched page rejects the frame rather
+ * than rendering nonsense.
+ */
+const NOTE_BYTES = 44;
 /** Mirrors daw_bridge::layout::UiClipExtent. */
 const EXTENT_BYTES = 64;
 /** UI_CLIP_EXTENT_AUDIO — the placement is an audio region (schema v3). */
@@ -205,7 +214,7 @@ function note(store, i) {
   let n = store.notes[i];
   if (!n) {
     n = { tOn: 0, tOff: 0, id: 0, pitch: 0, velocity: 0, column: 0, track: 0,
-          retrigger: 0, probability: 0, delayTicks: 0, row: 0,
+          retrigger: 0, probability: 0, delayTicks: 0, devTicks: 0, row: 0,
           muted: false, isAdd: false, placementId: 0 };
     store.notes[i] = n;
   }
@@ -390,6 +399,15 @@ export function decode(buf, store) {
       // Row comes from LaneGrid on the sidecar; the frontend never re-derives
       // the projection, so triplet grids work and there is one definition of it.
       n.row = v.getUint32(o + 36, true);
+      /*
+       * How far this note's LANE moves it, signed, in nanoticks. 0 when the lane
+       * is not quantized.
+       *
+       * The sounding tick is `tOn + devTicks + delayTicks` — quantize and the
+       * note's own delay COMPOSE, because the scheduler quantizes the note start
+       * and then adds the delay. One mark, from written to heard.
+       */
+      n.devTicks = v.getInt32(o + 40, true);
       // Offsets 30/31 are the note's two spare bytes; the 40-byte stride is
       // load-bearing for every section after the notes.
       const pf = v.getUint8(o + 30);
