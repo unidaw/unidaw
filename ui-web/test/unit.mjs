@@ -1720,6 +1720,37 @@ test('a millibel reading lands where the scale says', () => {
  * Source-read on both sides, because the two objects are in different files and
  * nothing else compares them.
  */
+/*
+ * THE PAGE'S MODULE SCRIPT PARSES.
+ *
+ * The cheapest possible check, and it exists because a syntax error in index.html
+ * presents as a THIRTY-SECOND PLAYWRIGHT TIMEOUT waiting for `window.__uni`, with
+ * no mention of syntax anywhere. I duplicated a function declaration and spent the
+ * next few minutes reading a timeout stack.
+ *
+ * `--check` is not available in-process, so the parse is attempted by constructing
+ * an AsyncFunction over the source: same parser, same errors, no execution. A
+ * duplicate `function` or `const` at top level fails here in milliseconds and names
+ * the identifier.
+ */
+test('the page script parses', async () => {
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const m = html.match(/<script type="module">([\s\S]*)<\/script>/);
+  assert.ok(m, 'the module script was found');
+  const src = m[1];
+  assert.ok(src.length > 100000, `and it is the whole thing: ${src.length} bytes`);
+  // Wrapped so `import` statements do not have to resolve — the question is
+  // whether the SOURCE is syntactically valid, not whether its deps are present.
+  const body = src.replace(/^\s*import\s[^;]*;/gm, '');
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  try {
+    new AsyncFunction(body);
+  } catch (e) {
+    assert.fail(`index.html does not parse: ${e.message}`);
+  }
+});
+
 test('every api method a console command calls actually exists', async () => {
   const { readFileSync } = await import('node:fs');
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');

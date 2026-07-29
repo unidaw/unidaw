@@ -712,6 +712,27 @@ function setQuantize(track, gridNanoticks, strengthMilli, swingMilli) {
   return true;
 }
 
+/**
+ * WHICH TRACK THE RACK IS ABOUT.
+ *
+ * The cursor's track normally — but `state.chainTrack` PINS it, which is how the
+ * master's chain is reachable at all: the master has no lane, so no cursor position
+ * means it.
+ *
+ * ONE DEFINITION, because it was two. The draw path computed this and the rack's own
+ * key handler read `state.cursor.track` directly, so with the rack pinned to the
+ * master every keystroke acted on a different track from the one on screen. The
+ * worst was Backspace: it asked "Remove Zebralette?" — naming the card you were
+ * looking at, from the master's chain — and then deleted a device from whatever
+ * track the cursor happened to be on, unrecoverably.
+ *
+ * A confirmation that names one thing and destroys another is worse than none,
+ * because it turns a mistake into a mistake you approved.
+ */
+function rackTrack() {
+  return state.chainTrack === null ? state.cursor.track : state.chainTrack;
+}
+
 /** Add a node of the armed type. */
 function addPatcherNode() {
   return sendGraph({ type: 'patchadd', nodeType: state.patchAddType, track: 0 });
@@ -3248,10 +3269,10 @@ function draw() {
     // `state.cursor.track` reads is how the rack ended up pointed at the master
     // while asking the cursor's track for its parameters and captioning itself
     // with the cursor's name.
-    const rackTrack = state.chainTrack === null ? state.cursor.track : state.chainTrack;
-    const here = chains[rackTrack];
-    if (rackTrack !== lastParamTrack) {
-      lastParamTrack = rackTrack;
+    const rackOn = rackTrack();
+    const here = chains[rackOn];
+    if (rackOn !== lastParamTrack) {
+      lastParamTrack = rackOn;
       paramTrackSince = performance.now();
     }
     const settled = performance.now() - paramTrackSince > 250;
@@ -3264,10 +3285,10 @@ function draw() {
     if (settled && here && here.devices && conn && conn.canSend()) {
       const devs = here.devices;
       for (let i = 0; i < devs.length; i++) {
-        const key = rackTrack * 65536 + devs[i].id;
+        const key = rackOn * 65536 + devs[i].id;
         if (paramsAsked.has(key)) continue;
         paramsAsked.add(key);
-        conn.send({ type: 'reqparams', track: rackTrack, device: devs[i].id });
+        conn.send({ type: 'reqparams', track: rackOn, device: devs[i].id });
         break;                        // one per frame; the rest follow
       }
     }
@@ -3284,10 +3305,10 @@ function draw() {
      * the master while the cursor sits on a lane is the normal way to work on it:
      * you write notes on a part and reach over to the master's chain.
      */
-    o.track = rackTrack;
+    o.track = rackOn;
     o.chains = chains;
     o.selected = state.chainSelected;
-    o.trackName = rackTrack === MASTER_TRACK_ID ? 'Master' : trackName(engine, rackTrack);
+    o.trackName = rackOn === MASTER_TRACK_ID ? 'Master' : trackName(engine, rackOn);
     o.params = deviceParams;
     // Which device the published graph belongs to, and what that graph MAKES.
     // Without this the rack can show a plugin sitting quietly while a euclidean
@@ -3301,7 +3322,7 @@ function draw() {
     // v24 per-insert meters. Keyed by (track id, device id) — see chainmodel.
     o.meters = engine ? engine.meters : null;
     o.meterCount = engine ? engine.meterCount : 0;
-    o.meterTrack = rackTrack;
+    o.meterTrack = rackOn;
     chain.render(buildChainModel(o, chainBuf));
     /**
      * A non-tracker pane holds the keyboard only WHILE something is selected in
@@ -4214,7 +4235,7 @@ addEventListener('keydown', (e) => {
   if (state.focus === 'chain') {
     if (k === 'Escape') { state.focus = 'centre'; state.chainSelected = -1; return done(); }
     if (k === 'Backspace' || k === 'Delete') {
-      const here = chains[state.cursor.track];
+      const here = chains[rackTrack()];
       const devs = (here && here.devices) || [];
       const dev = devs[state.chainSelected];
       if (dev) {
@@ -4223,7 +4244,7 @@ addEventListener('keydown', (e) => {
         const card = chain.vm && chain.vm.cards && chain.vm.cards[state.chainSelected];
         const what = (card && card.title) || 'this device';
         if (confirm(`Remove ${what}? This cannot be undone.`)) {
-          delDevice(state.cursor.track, dev.id);
+          delDevice(rackTrack(), dev.id);
           // Step the selection back so it lands on a card that still exists.
           state.chainSelected = Math.max(0, state.chainSelected - 1);
         }
@@ -4234,7 +4255,7 @@ addEventListener('keydown', (e) => {
       // Clamped, not incremented freely: the invariant below drops focus back to
       // the tracker when the selection points past the end, so an unclamped
       // ArrowRight would silently throw you out of the pane you are navigating.
-      const here = chains[state.cursor.track];
+      const here = chains[rackTrack()];
       const last = (((here && here.devices) || []).length) - 1;
       state.chainSelected = Math.min(last, state.chainSelected + 1);
       return done();
@@ -4253,13 +4274,13 @@ addEventListener('keydown', (e) => {
      */
     if (k === 'b' || k === 'B') {
       const card = chain.vm && chain.vm.cards && chain.vm.cards[state.chainSelected];
-      if (card) bypassDevice(state.cursor.track, card.id, !card.bypass);
+      if (card) bypassDevice(rackTrack(), card.id, !card.bypass);
       return done();
     }
     if (k === 'Enter') {
-      const here = chains[state.cursor.track];
+      const here = chains[rackTrack()];
       const dev = (here && here.devices || [])[state.chainSelected];
-      if (dev) dockApi.openEditor(state.cursor.track, dev.id);
+      if (dev) dockApi.openEditor(rackTrack(), dev.id);
       return done();
     }
     // Everything else falls THROUGH deliberately: transport, view switching and

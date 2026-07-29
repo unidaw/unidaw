@@ -2742,6 +2742,96 @@ section('a track can be routed away from Main');
  * because they are two call sites and a rack where the mouse works and the
  * keyboard does not is the shape this file keeps finding.
  */
+/*
+ * THE RACK'S KEYBOARD ACTS ON THE TRACK THE RACK IS SHOWING.
+ *
+ * Normally that is the cursor's track, so the distinction never comes up. But the
+ * rack can be PINNED to the master — it has to be, because the master has no lane
+ * and therefore no cursor position that means it — and the key handler read
+ * `state.cursor.track` while the strip drew the pinned one.
+ *
+ * The worst of the six sites was Backspace. It asked "Remove Zebralette?", naming
+ * the card on screen from the master's chain, and then deleted a device from
+ * whatever track the cursor was on. A confirmation that names one thing and
+ * destroys another is worse than no confirmation, because it turns a mistake into a
+ * mistake you approved — and device removal is not undoable.
+ */
+section('the rack\'s keys act on the track the rack is showing');
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.evaluate(() => window.__uni.loadProject('rack'));
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.waitForTimeout(500);
+
+  const count = (t) => page.evaluate((track) => {
+    const c = window.__uni.chains()[track];
+    return ((c && c.devices) || []).length;
+  }, t);
+  const before = await count(0);
+  ok(before > 0, 'track 0 has devices to lose', String(before));
+
+  // Pin the rack to the master while the cursor stays on track 0. Through the
+  // console, which is the path a person has.
+  await page.evaluate(() => window.__uni.run('master on'));
+  await page.waitForTimeout(1200);
+  ok((await page.evaluate(() => window.__uni.chainProbe().track)) === 0xFFFF0000,
+     'the rack is showing the master');
+  /*
+   * GIVE THE MASTER A DEVICE, or this section cannot fail.
+   *
+   * No fixture puts anything on the master, and with an empty rack the draw path's
+   * own invariant clamps the selection to -1 and hands the keyboard back — so the
+   * wrong-track delete could never fire and a test written against the empty case
+   * passes with the bug present. That is the vacuous green this suite exists to
+   * refuse, and I wrote it once before catching it.
+   *
+   * With a device on the master, position 0 is a real card in the master's chain AND
+   * a real device in the cursor's track's chain. That is the collision the bug
+   * needed: one index, two lists, and the keystroke reading the wrong one.
+   */
+  await page.evaluate(() => window.__uni.addDevice(0xFFFF0000, 'patcher event'));
+  await page.waitForTimeout(1800);
+  ok((await count(0xFFFF0000)) === 1, 'the master now has a device of its own',
+     String(await count(0xFFFF0000)));
+
+  /*
+   * SELECT BY CLICKING, because `__uni.state()` IS A DEEP COPY.
+   *
+   * `state().focus = 'chain'` writes to a snapshot and returns — the app never sees
+   * it — so the first version of this section pressed Backspace with the keyboard
+   * still in the tracker and passed for a reason that had nothing to do with the
+   * rack. Which is documented behaviour of that probe, and I walked into it anyway.
+   *
+   * Clicking a card is also the path a person takes, and it is what sets focus to
+   * 'chain' in the first place.
+   */
+  const masterCards = await visible('.dv-card');
+  ok(masterCards.length === 1, 'the master card is on screen to be clicked',
+     String(masterCards.length));
+  await masterCards[0].click();
+  await page.waitForTimeout(400);
+  ok((await page.evaluate(() => window.__uni.state().focus)) === 'chain',
+     'and clicking it gave the rack the keyboard');
+  // ACCEPT the confirmation, or this proves nothing: Playwright dismisses dialogs
+  // by default, confirm() returns false, and the delete never runs whether the
+  // target is right or wrong.
+  page.once('dialog', (d) => d.accept());
+  await page.keyboard.press('Backspace');
+  await page.waitForTimeout(1800);
+  ok((await count(0)) === before,
+     'Backspace in the master\'s rack takes nothing from the cursor\'s track',
+     `${before} -> ${await count(0)}`);
+  ok((await count(0xFFFF0000)) === 0, 'and takes it from the master, which is what it named',
+     String(await count(0xFFFF0000)));
+
+  await page.evaluate(() => window.__uni.run('master off'));
+  await page.waitForTimeout(800);
+  await page.evaluate(() => { window.__uni.state().focus = 'centre'; });
+  await page.evaluate(() => window.__uni.loadProject('rack'));
+  await page.waitForTimeout(2000);
+}
+
 section('a device can be switched off without removing it');
 {
   // Back to the tracker first: the section before this one leaves the mixer up,
