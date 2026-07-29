@@ -3352,6 +3352,26 @@ function draw() {
         state.chainSelected = -1;
       }
     }
+    /*
+     * ...AND THE SAME INVARIANT FOR THE RAIL, which did not have one.
+     *
+     * Two paths close the browser rail without clearing focus — opening a project
+     * from it, and adding a plugin from it — so the keyboard stayed parked on a panel
+     * that was no longer on screen. Two things went wrong from there, and neither
+     * looked like a focus bug:
+     *
+     *   ⌘B NEEDED TWO PRESSES. The toggle reads "if focus is browser, close it", so
+     *   the first press closed an already-closed rail and only handed focus back; the
+     *   second opened it. The most-used shortcut in the app, doing nothing.
+     *
+     *   ESCAPE STOPPED CLOSING THE SPLIT PANE, which is gated on focus being
+     *   'centre'. So after opening a project you could not dismiss the second pane
+     *   until you had pressed ⌘B twice, for no reason you could see.
+     *
+     * Here rather than at the two close sites, for the reason the rack's invariant
+     * above gives: there will be a third close site, and it will forget too.
+     */
+    if (state.focus === 'browser' && !state.browserOpen) state.focus = 'centre';
     // Say which pane has the keyboard. Guarded on the flag rather than written
     // every frame, per GUIDELINES 3 — a classList write is a style invalidation.
     const rackFocused = state.focus === 'chain';
@@ -5797,6 +5817,15 @@ window.__uni = {
     x0: 0, y0: 0, x1: dx, y1: dy }); schedule(); },
   pianoEdit: (kind, n) => pianoEdit(kind, n),
   pianoFit: () => { fitPiano(); draw(); },
+  /**
+   * Open a project THROUGH THE RAIL, the way Enter on a row does.
+   *
+   * Not the same as `loadProject`: the rail's own path closes the rail afterwards,
+   * and that is the path with the interesting behaviour — it is where focus was left
+   * pointing at a panel that had gone. A test that loads a project any other way
+   * cannot see it, which is how it survived.
+   */
+  browserOpenRow: (name) => browser.openNamed(name),
   browser: (on) => { state.browserOpen = on === undefined ? !state.browserOpen : !!on;
     state.focus = state.browserOpen ? 'browser' : 'centre';
     if (state.browserOpen) conn && conn.send({ type: 'list' }); draw(); return state.browserOpen; },

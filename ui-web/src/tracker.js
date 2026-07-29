@@ -55,6 +55,15 @@ export class Tracker {
     this.pool = [];
     /** How many pool slots the current frame's window claims — see rowEl(). */
     this._live = 0;
+    /*
+     * The elements currently WEARING the cursor and playhead classes.
+     *
+     * Held rather than recomputed, because the recomputation cannot find them once
+     * the window has scrolled past their rows — see paintState. Declared here so the
+     * shape is fixed from construction.
+     */
+    this._curEl = null;
+    this._phEl = null;
     /** Whether last frame had a selection; see paintSelection(). */
     this._hadSel = false;
     /** Fixed pool of rail elements. Clips scroll in and out constantly, and
@@ -717,15 +726,33 @@ export class Tracker {
     return n ? this.pool[((rowIdx % n) + n) % n] : null;
   }
 
-  /** Cursor / playhead / selection: a handful of class toggles, never a rebind. */
+  /**
+   * Cursor / playhead / selection: a handful of class toggles, never a rebind.
+   *
+   * REMOVED THROUGH THE ELEMENT IT WAS ADDED TO, not through a recomputed one.
+   *
+   * `rowEl`/`cellEl` turn an absolute row into a pooled element by `row mod
+   * poolSize`, and return null when that row is OUTSIDE the current window. So
+   * un-painting the previous cursor by looking its row up again failed the moment
+   * the window moved past it: the class was never removed, and because the pool is
+   * a ring that element is now showing some other row entirely.
+   *
+   * Measured: cursor parked on row 5, scroll away, and the highlight is drawn on
+   * ROW 435 while the cursor is still at 5. A phantom cursor on an unrelated row is
+   * worse than no cursor — the whole job of that highlight is to say where you are,
+   * and there is nothing about it that looks wrong.
+   *
+   * Holding the element costs two references and cannot go stale in a way that
+   * matters: if the pool rebinds it to another row, removing the class is exactly
+   * what we want; if it is gone, the reference is harmless.
+   */
   paintState(vm, prev) {
-    if (prev) {
-      this.rowEl(prev.playhead.row)?.classList.remove('playhead');
-      const pc = this.cellEl(prev.cursor);
-      pc?.classList.remove('cursor');
-    }
-    this.rowEl(vm.playhead.row)?.classList.add('playhead');
-    this.cellEl(vm.cursor)?.classList.add('cursor');
+    if (this._phEl) { this._phEl.classList.remove('playhead'); this._phEl = null; }
+    if (this._curEl) { this._curEl.classList.remove('cursor'); this._curEl = null; }
+    this._phEl = this.rowEl(vm.playhead.row) || null;
+    if (this._phEl) this._phEl.classList.add('playhead');
+    this._curEl = this.cellEl(vm.cursor) || null;
+    if (this._curEl) this._curEl.classList.add('cursor');
     this.paintSelection(vm);
   }
 

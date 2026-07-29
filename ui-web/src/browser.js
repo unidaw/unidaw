@@ -658,6 +658,21 @@ export class Browser {
     return row;
   }
 
+  /**
+   * Open a row BY NAME, through the same `_open` Enter uses.
+   *
+   * For tests, and for the reason the probe that calls it explains: the rail's own
+   * open path is the one that closes the rail, and a test that loads a project any
+   * other way cannot see what that leaves behind.
+   */
+  openNamed(name) {
+    for (let i = 0; i < this.view.length; i++) {
+      const r = this.rowAt(i);
+      if (r && r.name === name) { this.selected = i; return this._open(); }
+    }
+    return null;
+  }
+
   openSelected() {
     const row = this._open();
     return row ? row.name : null;

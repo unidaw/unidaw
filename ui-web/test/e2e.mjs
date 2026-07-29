@@ -2799,6 +2799,128 @@ section('a track can be routed away from Main');
  * finished from every angle except pressing it, and the suites had walked past all
  * three because nothing pressed them either.
  */
+/*
+ * NO PHANTOM CURSOR AFTER A SCROLL.
+ *
+ * The cursor and playhead classes were removed by looking their row up AGAIN — and
+ * that lookup returns nothing once the window has scrolled past the row, so the class
+ * was never taken off. The pool is a ring, so the element still wearing it is now
+ * showing some other row entirely.
+ *
+ * Measured before the fix: cursor parked on row 5, scroll away, and the highlight is
+ * drawn on ROW 435 while the cursor is still at 5. The whole job of that highlight is
+ * to say where you are, and there is nothing about a misplaced one that looks wrong.
+ */
+/*
+ * ⌘B WORKS ON THE FIRST PRESS AFTER OPENING A PROJECT.
+ *
+ * Opening a project from the rail closes the rail and left `focus` at 'browser', so
+ * the keyboard was parked on a panel that was no longer on screen. Two symptoms,
+ * neither of which looks like a focus bug: ⌘B needed two presses (the toggle reads
+ * "if focus is browser, close it", so the first press closed an already-closed rail),
+ * and Escape stopped closing the split pane, which is gated on focus being 'centre'.
+ */
+section('the rail hands the keyboard back when it closes');
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  const st = () => page.evaluate(() => {
+    const s = window.__uni.state();
+    return { open: s.browserOpen, focus: s.focus, view2: s.view2 };
+  });
+
+  /*
+   * THROUGH THE RAIL, which is the only path that produces the bug. Loading a
+   * project through the test surface never sets focus to 'browser' in the first
+   * place, so a section written that way passes with the bug present — I wrote it
+   * that way first and the negative control is what showed it up.
+   */
+  await page.evaluate(() => window.__uni.browser(true));
+  await page.waitForTimeout(900);
+  ok((await st()).open, 'the rail is open', JSON.stringify(await st()));
+  await page.evaluate(() => { window.__uni.state(); });
+  // Enter on a project row: the rail's own open, which closes the rail.
+  await page.evaluate(() => window.__uni.browserOpenRow('meter'));
+  await page.waitForTimeout(2500);
+  const after = await st();
+  ok(!after.open, 'opening a project from it closes the rail', JSON.stringify(after));
+  ok(after.focus !== 'browser', 'and hands the keyboard back',
+     JSON.stringify(after));
+
+  // ⌘B, ONCE, must open it again. With focus left stale this closed an
+  // already-closed rail and only the SECOND press opened it.
+  await page.keyboard.press('Meta+b');
+  await page.waitForTimeout(600);
+  const opened = await st();
+  ok(opened.open && opened.focus === 'browser', 'and one ⌘B opens it again',
+     JSON.stringify(opened));
+  await page.keyboard.press('Meta+b');
+  await page.waitForTimeout(600);
+  ok(!(await st()).open, 'and a second closes it', JSON.stringify(await st()));
+
+  /*
+   * AND ESCAPE CLOSES THE SPLIT — in THIS ORDER, which is the only order that shows
+   * it.
+   *
+   * The split-pane Escape is gated on focus being 'centre'. Opening the split with
+   * Shift+F2 sets focus to 'centre' itself, so a sequence that splits AFTER opening a
+   * project heals the very state it means to test. The split has to be open FIRST,
+   * then a project opened from the rail, then Escape — and measured with the fix
+   * reverted, that leaves `view2: "arrange"` and focus stuck on a rail that is not on
+   * screen.
+   *
+   * Which is the shape a person hits: arrangement below the tracker, open a song, want
+   * the screen back.
+   */
+  await page.keyboard.press('Shift+F2');
+  await page.waitForTimeout(500);
+  ok((await st()).view2 !== null, 'a second pane is open', JSON.stringify(await st()));
+  await page.evaluate(() => window.__uni.browser(true));
+  await page.waitForTimeout(900);
+  await page.evaluate(() => window.__uni.browserOpenRow('meter'));
+  await page.waitForTimeout(2500);
+  ok((await st()).focus === 'centre',
+     'opening a project with a split up still hands the keyboard back',
+     JSON.stringify(await st()));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(500);
+  ok((await st()).view2 === null, 'so Escape can close the split',
+     JSON.stringify(await st()));
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.waitForTimeout(300);
+}
+
+section('the cursor is drawn where the cursor is');
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.evaluate(() => window.__uni.loadProject('meter'));
+  await page.waitForTimeout(2500);
+
+  const drawn = () => page.evaluate(() => {
+    const cells = [...document.querySelectorAll('.tk-cell.cursor')].filter((e) => e.offsetParent);
+    return { n: cells.length,
+             rows: cells.map((c) => Number(c.closest('.tk-row').dataset.row)),
+             at: window.__uni.state().cursor.row };
+  });
+
+  await page.evaluate(() => window.__uni.goto(5, 0));
+  await page.waitForTimeout(500);
+  const here = await drawn();
+  ok(here.n === 1 && here.rows[0] === 5, 'the cursor is on its row', JSON.stringify(here));
+
+  // Scroll the cursor's row out of the window WITHOUT moving the cursor.
+  await page.evaluate(() => window.__uni.scrollTo(400));
+  await page.waitForTimeout(700);
+  const away = await drawn();
+  ok(away.n === 0, 'scrolled past, nothing wears the cursor', JSON.stringify(away));
+  ok(away.at === 5, 'and the cursor itself has not moved', String(away.at));
+
+  await page.evaluate(() => window.__uni.scrollTo(0));
+  await page.waitForTimeout(700);
+  const back = await drawn();
+  ok(back.n === 1 && back.rows[0] === 5, 'and it comes back to the same row',
+     JSON.stringify(back));
+}
+
 section('controls that look operable are operable');
 {
   await page.evaluate(() => window.__uni.run('view tracker'));
