@@ -400,3 +400,12 @@
   font-size: 10px; letter-spacing: .06em; color: var(--uni-text-gutter);
   min-width: 40px;
 }
+
+/* A CHORD, not a note: a scale DEGREE with a quality and an inversion, resolved
+   against the harmony timeline. Coloured with the harmony's accent rather than a
+   note's, because that is what it belongs to — a chord drawn like a note makes
+   "why can I not edit its pitch" an obvious question with a confusing answer. */
+.tk-cell[data-kind="chord"] {
+  color: var(--base-accent-ramp-200, var(--base-accent));
+  font-style: italic;
+}

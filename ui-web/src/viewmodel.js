@@ -1,4 +1,5 @@
 import { pitchName } from './wire.js';
+import { nameChord } from './harmonymodel.js';
 import { DEFAULT_METER, createPosition, positionOf, sameMeter,
          ticksPerBar, ticksPerBeat, NANOTICKS_PER_QUARTER } from './meter.js';
 // The view-model: plain data describing exactly what is on screen right now.
@@ -1136,6 +1137,45 @@ export function buildViewModel(opts, buf) {
           c2.kind = 'fx';
         }
       }
+    }
+    /*
+     * CHORDS, after the notes.
+     *
+     * A chord is not a note and never was: it is a scale DEGREE with a quality
+     * and an inversion, resolved against the harmony timeline, which is what
+     * lets a chord track survive a key change. The engine has published them all
+     * along and nothing on this side ever read them — so a track of chords
+     * played and drew an empty column, reported twice as "sound with no notes".
+     *
+     * In the track's FIRST note column. A chord occupies the whole track at that
+     * moment by definition — there is no such thing as a chord in column 3 — so
+     * placing it anywhere else would invent a distinction the document does not
+     * have.
+     *
+     * AFTER the notes and only into a cell they left empty. A track with both is
+     * ambiguous rather than rich: it would be two different things claiming one
+     * position, and quietly drawing the chord over the note is exactly the kind
+     * of silent loss the aggregate pill exists to prevent.
+     */
+    const chordCount = engine.chordCount | 0;
+    for (let i = 0; i < chordCount; i++) {
+      const ch = engine.chords[i];
+      if (ch.tick < winStart || ch.tick >= winEnd || ch.track >= trackCount) continue;
+      const scaled = gridScale === 1 ? ch.row : Math.round(ch.row * gridScale);
+      const ri = scaled >= startRow ? scaled - startRow : ((ch.tick - winStart) / span) | 0;
+      const row = rows[ri];
+      if (!row) continue;
+      const cell = row.cells[ch.track * columns];
+      if (!cell) continue;
+      if (cell.kind === 'note' || cell.kind === 'muted' || cell.kind === 'add'
+          || cell.kind === 'collide' || cell.kind === 'aggregate') {
+        // A note is already here. Said out loud rather than overwritten.
+        cell.kind = 'collide';
+        continue;
+      }
+      cell.text = nameChord(ch.degree, ch.quality, ch.inversion);
+      cell.kind = 'chord';
+      cell._row = ri;
     }
     // Real placements from the engine (v11). One per track today because the
     // engine plays the first placement; the rail code is the same when M3.3

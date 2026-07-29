@@ -272,6 +272,23 @@ struct Frame {
      * the same silence comes back one lane further out.
      */
     lpb: [u8; 16],
+    /// A track's CHORDS, which the engine has always published and this side has
+    /// never forwarded.
+    ///
+    /// They are not notes: a chord is (degree, quality, inversion) resolved
+    /// against the harmony timeline, which is what lets a chord track survive a
+    /// key change. The sidecar could WRITE one — `build_chord` below — and never
+    /// read one back, so a track of chords played and showed nothing at all.
+    /// Reported twice as "sound with no notes".
+    ///
+    /// (tick, duration, chord_id, track, degree, quality, inversion, base_octave,
+    /// flags, row)
+    ///
+    /// `row` is computed HERE by the same LaneGrid the notes use. The frontend
+    /// never re-derives the projection — one axis on the wire — because a lane's
+    /// grid is the engine's business and a client that computed its own put
+    /// notes three beats out with no error anywhere.
+    chords: Vec<(u64, u64, u32, u8, u8, u8, u8, u8, u32, u32)>,
     /// Real clip placements from the engine. placement_id, clip_id, track,
     /// flags, start/end tick, name. Loose session placements are excluded
     /// upstream. `flags` bit0 is UI_CLIP_EXTENT_AUDIO — an audio region, which
@@ -400,7 +417,9 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&f.patcher_device.to_le_bytes());          // 90
     out.extend_from_slice(&(f.patcher_nodes.len() as u16).to_le_bytes());  // 94
     out.extend_from_slice(&(f.patcher_edges.len() as u16).to_le_bytes());  // 96
-    out.extend_from_slice(&0u16.to_le_bytes());                      // 98, pad
+    // 98 was a pad. It holds the CHORD COUNT now — a count is exactly what a
+    // spare two bytes in a header is for, and taking it moves nothing.
+    out.extend_from_slice(&(f.chords.len() as u16).to_le_bytes());   // 98
     // Checkpoints, not just a total. The trailing comments are the map and a map
     // cannot be verified — when the lpb block widened from 8 to 16 every offset
     // after it moved, and a careless renumber left the COMMENTS scrambled
@@ -486,17 +505,46 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.extend_from_slice(&count.to_le_bytes());
         out.push(rep); out.push(lo); out.push(hi); out.push(0);
     }
-    // v20 child-track structure, LAST in the frame on purpose.
+    // v20 child-track structure.
     //
     // Appended rather than folded into the mixer's 12-byte record, because that
     // record's stride is load-bearing for everything after it and GUIDELINES 2.3
-    // is a list of the two times widening one shifted the whole tail. Nothing
-    // follows this, so nothing can be shifted by it. Counted by `track_count`,
-    // which the header already carries.
+    // is a list of the two times widening one shifted the whole tail. Counted by
+    // `track_count`, which the header already carries.
     for &(parent, flags) in &f.track_parent {
         out.extend_from_slice(&parent.to_le_bytes());   // 0
         out.push(flags);                                // 4
         out.push(0); out.push(0); out.push(0);          // 8 bytes each
+    }
+
+    /*
+     * CHORDS, and now these are last.
+     *
+     * AFTER the track structure, not before it, so no existing section moves at
+     * all — a section inserted ahead of another shifts it, which is the whole
+     * reason the note above says what it says. This is the first thing appended
+     * since, and the "nothing follows this" line moved with the position rather
+     * than being left behind as a claim that had quietly stopped being true.
+     *
+     * 40 bytes each, counted by the u16 at header offset 98, which was a pad.
+     *
+     * The engine has always published a track's chords and this side never read
+     * them, so a track of chords played and showed nothing at all — reported
+     * twice as "sound with no notes". A chord is not a note: it is (degree,
+     * quality, inversion) resolved against the harmony timeline, which is what
+     * lets a chord track survive a key change.
+     */
+    for &(tick, dur, id, track, degree, quality, inversion, octave, flags, row)
+        in &f.chords
+    {
+        out.extend_from_slice(&tick.to_le_bytes());     // 0
+        out.extend_from_slice(&dur.to_le_bytes());      // 8
+        out.extend_from_slice(&id.to_le_bytes());       // 16
+        out.push(track); out.push(degree); out.push(quality); out.push(inversion); // 20
+        out.push(octave); out.push(0); out.push(0); out.push(0);                   // 24
+        out.extend_from_slice(&flags.to_le_bytes());    // 28
+        out.extend_from_slice(&row.to_le_bytes());      // 32
+        out.extend_from_slice(&0u32.to_le_bytes());     // 36, to 40
     }
 }
 
@@ -635,6 +683,10 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     {
         out.notes_grid = vp.lines_per_beat;
         out.notes.clear();
+        // Gathered on the same trigger as the notes, from the same snapshot. A
+        // chord and a note both move when the clip version does, so a separate
+        // guard would only be a second thing to get wrong.
+        out.chords.clear();
         out.window_start = 0;
         out.window_end = 0;
         for track in 0..(snap.ui_track_count.min(8)) {
@@ -642,6 +694,13 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
             if track == 0 {
                 out.window_start = w.window_start_nanotick;
                 out.window_end = w.window_end_nanotick;
+            }
+            let chord_count = (w.chord_count as usize).min(w.chords.len());
+            for c in &w.chords[..chord_count] {
+                out.chords.push((c.nanotick, c.duration_nanoticks, c.chord_id,
+                                 track as u8, c.degree, c.quality, c.inversion,
+                                 c.base_octave, c.flags,
+                                 vp_grid.row_of_tick(c.nanotick) as u32));
             }
             let count = (w.note_count as usize).min(w.notes.len());
             for note in &w.notes[..count] {
@@ -867,6 +926,7 @@ fn list_projects(dir: &str) -> String {
         out.push('"');
     }
     out.push_str("]}");
+
     out
 }
 

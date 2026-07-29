@@ -146,6 +146,8 @@ export function createStore() {
      * to avoid.
      */
     trackParent: new Uint32Array(16), trackFlags: new Uint8Array(16),
+    /** A track's chords, pooled like the notes. See the decode at the tail. */
+    chords: [], chordCount: 0, chordsRevision: 0,
     /** The patcher graph (SHM v14). One global graph today; the shape does not
      *  change when it becomes per-device. */
     patcherVersion: -1, patcherDevice: 0, patcherNodes: [], patcherEdges: [],
@@ -462,9 +464,63 @@ export function decode(buf, store) {
     for (let t = have; t < tc; t++) { store.trackParent[t] = 0; store.trackFlags[t] = 0; }
   }
 
+  /*
+   * CHORDS, the last section in the frame.
+   *
+   * A chord is not a note: it is (degree, quality, inversion) resolved against
+   * the harmony timeline, which is what lets a chord track survive a key change.
+   * The engine has always published them and this side never read them, so a
+   * track of chords played and showed nothing at all.
+   *
+   * Bounds-checked like the block above and for the same reason: a frame from an
+   * older sidecar simply stops before this, and reading past the end of a
+   * DataView throws — which would take down the socket handler and the whole UI
+   * with it, to report a field that is merely absent.
+   */
+  {
+    const at = AFTER_MIXER + peakCount * 4 + noteCount * NOTE_BYTES
+             + extentCount * EXTENT_BYTES + aggN * 8 + store.trackCount * 8;
+    const want = v.getUint16(98, true);
+    const have = Math.max(0, Math.min(want, (buf.byteLength - at) / CHORD_BYTES | 0));
+    while (store.chords.length < have) {
+      store.chords.push({ tick: 0, duration: 0, id: 0, track: 0, degree: 0,
+                          quality: 0, inversion: 0, octave: 0, flags: 0, row: 0 });
+    }
+    let changed = store.chordCount !== have;
+    for (let i = 0; i < have; i++) {
+      const o = at + i * CHORD_BYTES;
+      const c = store.chords[i];
+      const tick = Number(v.getBigUint64(o, true));
+      const dur = Number(v.getBigUint64(o + 8, true));
+      const id = v.getUint32(o + 16, true);
+      const track = v.getUint8(o + 20), degree = v.getUint8(o + 21);
+      const quality = v.getUint8(o + 22), inversion = v.getUint8(o + 23);
+      const octave = v.getUint8(o + 24);
+      if (c.tick !== tick || c.duration !== dur || c.id !== id || c.track !== track
+          || c.degree !== degree || c.quality !== quality
+          || c.inversion !== inversion || c.octave !== octave) changed = true;
+      c.tick = tick; c.duration = dur; c.id = id; c.track = track;
+      c.degree = degree; c.quality = quality; c.inversion = inversion;
+      c.octave = octave; c.flags = v.getUint32(o + 28, true);
+      // The row LaneGrid put it on, computed by the sidecar in the grid it was
+      // last told about — the same axis the notes ride. The frontend never
+      // re-derives the projection; a client that computed its own put material
+      // three beats out with no error anywhere.
+      c.row = v.getUint32(o + 32, true);
+    }
+    store.chordCount = have;
+    // A revision, like the notes have. What draws chords needs to know when they
+    // moved without comparing the list, and the clip version does not separate a
+    // note edit from a chord one.
+    if (changed) store.chordsRevision++;
+  }
+
   store.ok = true;
   return true;
 }
+
+/** 40 bytes each; see the sidecar's encode. */
+const CHORD_BYTES = 40;
 
 const NAMES = ['C-', 'C#', 'D-', 'D#', 'E-', 'F-', 'F#', 'G-', 'G#', 'A-', 'A#', 'B-'];
 

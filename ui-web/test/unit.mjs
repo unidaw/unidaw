@@ -461,6 +461,30 @@ test('one device\'s patcher graph can be picked out of the pooled one', async ()
   assert.ok(wide.length > 300 && wide[300] === 1, 'a mask too small is replaced');
 });
 
+test('a chord is named by its degree, not by a pitch set it does not contain', async () => {
+  const { nameChord } = await import('../src/harmonymodel.js');
+  // Quality is the engine's own vocabulary: 0 the degree alone, 1 a triad, 2 a
+  // seventh (apps/chord_resolver.cpp).
+  assert.equal(nameChord(0, 1, 0), 'I');
+  assert.equal(nameChord(3, 1, 0), 'IV');
+  assert.equal(nameChord(4, 2, 0), 'V7');
+  // A single note carries no chord marker — it is not a chord.
+  assert.equal(nameChord(1, 0, 0), 'II');
+  // Inversions show, root position does not: "/0" on nearly every chord is noise.
+  assert.equal(nameChord(0, 2, 1), 'I7/1');
+  assert.equal(nameChord(0, 1, 2), 'I/2');
+
+  /*
+   * A degree past the seventh is SHOWN, not clamped. The scale may not have it
+   * — that is a real thing to see, and drawing it as the seventh would hide a
+   * chord pointing somewhere the key cannot reach.
+   */
+  assert.equal(nameChord(7, 1, 0), 'd8');
+
+  // Interned, because a tracker row redraws at frame rate.
+  assert.equal(nameChord(0, 1, 0), nameChord(0, 1, 0));
+});
+
 test('a nudge clamps, and leaves every other value exactly as it was read', () => {
   const EU = NODE_TYPES.indexOf('euclidean');
   assert.deepEqual(configFields(EU).map((f) => f.name),

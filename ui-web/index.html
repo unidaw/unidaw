@@ -5272,7 +5272,19 @@ window.__uni = {
     transport: engine.transport, playheadTick: engine.playheadTick,
     clipVersion: engine.clipVersion, rowGrid: engine.rowGrid,
     stale: engine.stale, noteCount: engine.noteCount, trackCount: engine.trackCount,
+    chordCount: engine.chordCount,
   } : null),
+  /**
+   * The chords the engine published, by track.
+   *
+   * They were never forwarded at all until now — a track of chords played and
+   * showed nothing — so this exists as much to prove they ARRIVE as to let a
+   * test read them.
+   */
+  chords: () => (engine ? engine.chords.slice(0, engine.chordCount).map((c) => ({
+    tick: c.tick, track: c.track, degree: c.degree, quality: c.quality,
+    inversion: c.inversion, octave: c.octave, duration: c.duration,
+  })) : []),
   notes: () => (engine ? engine.notes.slice(0, engine.noteCount)
     // `col` is the NOTE COLUMN within the track — the engine's own field, which
     // decides whether two notes on one row are a chord in two columns or a

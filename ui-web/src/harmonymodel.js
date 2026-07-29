@@ -279,3 +279,38 @@ export function buildHarmonyModel(opts, buf) {
 
   return buf;
 }
+
+/**
+ * A chord's name, from what the engine stores.
+ *
+ * ROMAN NUMERALS, because that is what is actually stored: a chord here is a
+ * scale DEGREE, not a set of pitches, which is precisely what lets a chord track
+ * survive a key change. Spelling it "Am" would name a pitch set the document
+ * does not contain and would go stale the moment the key moved — the same
+ * mistake as storing a note as a frequency.
+ *
+ * Quality is the engine's own vocabulary (apps/chord_resolver.cpp):
+ *   0  the degree alone — one note, so no chord marker
+ *   1  a triad          — the plain numeral
+ *   2  a seventh        — suffixed 7
+ *
+ * Inversion appears as /1, /2 and is omitted at root position, because "/0" is
+ * noise on the overwhelming majority of chords.
+ *
+ * Interned: a tracker row redraws at frame rate and a chord's name changes when
+ * the music does, which is to say hardly ever.
+ */
+const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'];
+const CHORD_NAMES = new Map();
+export function nameChord(degree, quality, inversion) {
+  const key = degree * 256 + quality * 16 + (inversion & 15);
+  let s = CHORD_NAMES.get(key);
+  if (s !== undefined) return s;
+  // Past the seventh degree the numeral table runs out. Shown as `d8` rather
+  // than clamped to VII: a degree the scale does not have is a real thing to
+  // see, and silently drawing it as the seventh would hide it.
+  const base = degree < ROMAN.length ? ROMAN[degree] : 'd' + (degree + 1);
+  s = base + (quality >= 2 ? '7' : '') + (inversion ? '/' + inversion : '');
+  CHORD_NAMES.set(key, s);
+  return s;
+}

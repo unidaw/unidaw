@@ -526,10 +526,14 @@ section('patcher editing');
 await page.evaluate(() => window.__uni.view('patcher'));
 await frames();
 {
+  // VISIBLE cards only. The rack pools its cards and hides the spares rather
+  // than removing them (GUIDELINES 3.7), so `$$('.dv-card')` hands back hidden
+  // ones that still carry their old badge — and clicking one hangs until the
+  // timeout with "element is not visible".
   const cards = await page.$$('.dv-card');
   for (const c of cards) {
-    const isPatcher = await c.evaluate((el) =>
-      /PATCHER/.test((el.querySelector('.dv-badge') || {}).textContent || ''));
+    const isPatcher = await c.evaluate((el) => el.offsetParent !== null
+      && /PATCHER/.test((el.querySelector('.dv-badge') || {}).textContent || ''));
     if (isPatcher) { await c.click(); break; }
   }
   await page.waitForTimeout(500);
@@ -2233,6 +2237,62 @@ section('the patcher shows one device\'s graph, not the pool');
      'and a track with no devices shows no other track\'s graph',
      JSON.stringify(other.nodes));
   ok(/no patcher/i.test(other.note), 'saying so about THIS track', other.note.slice(0, 70));
+}
+
+/*
+ * CHORDS ARE VISIBLE.
+ *
+ * The engine has published a track's chords all along and this side never read
+ * them: the sidecar could WRITE a chord and had no code to read one back. So a
+ * track of chords played and drew an empty column — reported twice, as "sound
+ * with no notes" and as "I don't see any notes or chords or degrees on Pad".
+ *
+ * `rack` is the case: T1 Bass has notes, T2 Pad has NO notes and four chords.
+ */
+section('a track of chords shows its chords');
+{
+  await page.evaluate(() => window.__uni.loadProject('rack'));
+  await page.waitForTimeout(2800);
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  // Back to the top. Earlier sections scroll the tracker, and the first chord
+  // sits on row 0 — without this the section reports three of four drawn and
+  // reads as a placement bug rather than a scrolled viewport.
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.evaluate(() => window.__uni.scrollTo(0));
+  await page.waitForTimeout(700);
+
+  const published = await page.evaluate(() => window.__uni.chords());
+  ok(published.length === 4, 'the engine publishes the chords',
+     `${published.length} chords`);
+  ok(published.every((c) => c.track === 1), 'all on the Pad track',
+     JSON.stringify(published.map((c) => c.track)));
+
+  const drawn = await page.evaluate(() =>
+    [...document.querySelectorAll('.tk-cell[data-kind="chord"]')]
+      .filter((e) => e.offsetParent).map((e) => e.textContent));
+  ok(drawn.length === 4, 'and the tracker draws one cell per chord',
+     JSON.stringify(drawn));
+
+  /*
+   * NAMED BY DEGREE, not spelled as pitches. A chord here is a scale degree
+   * resolved against the harmony timeline — that is what lets a chord track
+   * survive a key change — so "Am" would name a pitch set the document does not
+   * contain and would go stale the moment the key moved.
+   */
+  ok(drawn.some((t) => /^[IVX]+/.test(t)), 'as roman numerals', JSON.stringify(drawn));
+  // The seventh and the inversion are both in the fixture, and both are the
+  // parts a plain degree readout would silently drop.
+  ok(drawn.some((t) => t.includes('7')), 'with the seventh shown', JSON.stringify(drawn));
+  ok(drawn.some((t) => t.includes('/')), 'and the inversion', JSON.stringify(drawn));
+
+  // On the Pad track's own column, not somewhere plausible-looking. A chord
+  // occupies the whole track at that moment by definition.
+  const onPad = await page.evaluate(() => {
+    const cells = [...document.querySelectorAll('.tk-cell[data-kind="chord"]')]
+      .filter((e) => e.offsetParent);
+    return cells.every((c) => Number(c.dataset.track) === 1);
+  });
+  ok(onPad, 'in the Pad track\'s column');
 }
 
 section('dragging a clip moves it');
