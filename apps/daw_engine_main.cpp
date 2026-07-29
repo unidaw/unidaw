@@ -551,6 +551,40 @@ public:
     bool starvedThisCallback = false;  // an active track's block wasn't ready yet
     uint32_t starveGap = 0;            // how many blocks short the worst track was
 
+    // Startup priming: right after Play the producer is still filling the pipeline. If the
+    // callback begins consuming before a cushion is buffered it immediately outruns the
+    // producer and starves for the first few blocks — the audible Play-time transient. So
+    // while we have not started (m_lastPlayedBlockId == 0), hold at silence (the master is
+    // already cleared) until the freshest rendered block reaches a small cushion, then let
+    // the sync below begin from a full pipeline. Only touches the first blocks after Play;
+    // m_primeWait bounds the wait so a stuck host can never hang playback in silence.
+    if (m_lastPlayedBlockId == 0) {
+      uint32_t maxCompleted = 0;
+      bool anyActive = false;
+      for (const auto& track : *tracks) {
+        if (!track.completedBlockId || !track.header) {
+          continue;
+        }
+        if (track.mute && track.mute->load(std::memory_order_relaxed)) {
+          continue;
+        }
+        if (track.hostReady && !track.hostReady->load(std::memory_order_acquire)) {
+          continue;
+        }
+        if (track.active && !track.active->load(std::memory_order_acquire)) {
+          continue;
+        }
+        anyActive = true;
+        maxCompleted = std::max(
+            maxCompleted, track.completedBlockId->load(std::memory_order_acquire));
+      }
+      const uint32_t cushion = std::min(m_numBlocks, m_playMargin + 2);
+      if (anyActive && maxCompleted < cushion && m_primeWait < kMaxPrimeCallbacks) {
+        ++m_primeWait;
+        return;  // silence this callback; try again once the pipeline has filled
+      }
+    }
+
     // Solo is exclusive across the whole bus, so it has to be resolved before
     // any track is summed.
     bool anySolo = false;
@@ -928,6 +962,7 @@ public:
     m_currentReadBlock = 0;
     m_totalSamplesProcessed = 0;
     m_lastPlayedBlockId = 0;
+    m_primeWait = 0;
     m_transportSample = 0;
     if (m_audioScratch.size() != m_blockSize) {
       m_audioScratch.assign(m_blockSize, 0.0f);
@@ -977,6 +1012,7 @@ private:
   std::chrono::steady_clock::time_point m_startTime;
   uint64_t m_totalSamplesProcessed = 0;
   uint32_t m_lastPlayedBlockId = 0;  // Track which block we played last
+  uint32_t m_primeWait = 0;          // callbacks spent priming the pipeline after Play
 
   // Underrun telemetry (Movement 4 stability). A "starve" is a callback that wanted a
   // fresh block for an active track but the producer/host had not delivered it yet — an
@@ -1039,6 +1075,9 @@ private:
   // while all N reach the capture. A real surround device needs none of this: the mix
   // uses the device buffers directly at the device's own channel count.
   static constexpr uint32_t kMaxMasterChannels = 8;  // up to 7.1
+  // Startup priming cap: after this many silent callbacks (~2.7s at 512/44.1k) the callback
+  // starts regardless, so a wedged host can never hang playback in silence forever.
+  static constexpr uint32_t kMaxPrimeCallbacks = 256;
   int m_masterChannels = 0;                          // 0 = follow the device
   std::vector<float> m_masterBuffer;                 // kMaxMasterChannels * blockSize
   std::vector<float*> m_masterPtrs;
