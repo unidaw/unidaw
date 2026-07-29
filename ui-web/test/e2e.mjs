@@ -31,7 +31,7 @@
 // to tools/repro-hang.mjs and the plugin host when the answer is a timer.
 
 import { chromium } from 'playwright';
-import { rmSync } from 'node:fs';
+import { rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -906,12 +906,105 @@ const listed = await page.evaluate(() => window.__uni.projects());
 ok(listed.includes(SCRATCH), 'a saved project appears in the browser', JSON.stringify(listed));
 // Exactly the name it wrote, nothing globbed: a test that deletes by pattern in
 // a directory holding the user's projects is a bad trade for tidiness.
-const PROJECTS = process.env.UNI_PROJECTS
+/*
+ * WHERE THE SAVES ACTUALLY GO.
+ *
+ * `stack.dir` when this run owns its stack — startStack copies the whole presets
+ * tree to a temp directory and points the engine at it, precisely so a test that
+ * saves cannot rewrite the fixtures everything else reads. The repo path is the
+ * fallback for a run against somebody's already-running stack, where the engine
+ * was pointed at the real one.
+ */
+const PROJECTS = (stack && stack.dir)
+  || process.env.UNI_PROJECTS
   || '/Users/jak/src/daw-web/presets/projects';
 for (const suffix of ['.uniproj.json', '.uniproj.state']) {
   rmSync(join(PROJECTS, SCRATCH + suffix), { recursive: true, force: true });
 }
 await page.evaluate(() => window.__uni.browser(false));
+
+/*
+ * ⌘S SAVES YOUR WORK TO YOUR SONG — asserted through the FILE, and through the
+ * KEY.
+ *
+ * Everything above this proves a project appears in a list. That is not the
+ * question anybody asks. "Can one Save?" has been asked twice, and both times the
+ * suite could not answer it: `saveAs` was covered, the keystroke was not, and
+ * nothing checked that a note you had just written was in the bytes on disk.
+ *
+ * INTO A SCRATCH SONG, not into a fixture. The first version wrote a note into
+ * `meter` and deleted it afterwards — and writing past the end of the placement
+ * CREATED A CLIP, which the delete did not take away, so `meter` gained a fourth
+ * rail and three later sections failed for reasons that had nothing to do with
+ * them. Saving-as first means ⌘S has a name to write to that nothing else reads.
+ *
+ * A DISTINCTIVE PITCH, at a row nothing occupies. An earlier attempt wrote at row
+ * 2, where the fixture already has a note, so the edit REPLACED one and the file's
+ * note count was identical before and after — which reads exactly like "the save
+ * did nothing" and sent me looking for a bug that was not there. 103 is G#7, well
+ * above anything in `meter`, so finding it cannot be a coincidence and failing to
+ * find it cannot be an off-by-one.
+ */
+section('a keystroke saves your work to your song');
+{
+  const SAVED = 'e2e-keysave';
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  /*
+   * WHATEVER IS LOADED, and put back at the end.
+   *
+   * The first version loaded `meter` for a fixture it liked and left it loaded,
+   * which is a section quietly deciding what the NEXT one starts from — the
+   * transpose section two below it found an empty selection and failed for a
+   * reason that had nothing to do with transposing. A section that changes the
+   * document owes the document back.
+   */
+  const incoming = await page.evaluate(() => window.__uni.state().currentProject);
+  await page.evaluate((n) => window.__uni.saveAs(n), SAVED);
+  await page.waitForTimeout(2000);
+
+  const named = await page.evaluate(() => window.__uni.state().currentProject);
+  ok(named === SAVED, 'saving-as makes that song the current one — ⌘S needs a name',
+     String(named));
+
+  const file = join(PROJECTS, SAVED + '.uniproj.json');
+  const pitches = () => JSON.parse(readFileSync(file, 'utf8'))
+    .clips.flatMap((c) => (c.notes || []).map((n) => n.pitch));
+  ok(!pitches().includes(103), 'and it does not already contain the proof',
+     String(pitches().length));
+
+  await page.evaluate(() => window.__uni.run('goto 6 0'));
+  await page.waitForTimeout(200);
+  await page.evaluate(() => window.__uni.run('note 103'));
+  await page.waitForTimeout(900);
+  ok(await page.evaluate(() => (window.__uni.notes() || []).some((n) => n.p === 103)),
+     'and the note is in the engine before we ask for a save');
+
+  await page.keyboard.press('Meta+s');
+  await page.waitForTimeout(2500);
+  ok(pitches().includes(103), 'and ⌘S puts it in the file, under the song\'s own name');
+  ok(!(await page.evaluate(() => window.__uni.state().reject)),
+     'without complaining', String(await page.evaluate(() => window.__uni.state().reject)));
+
+  // ⌘⇧S is SAVE AS, which is a different question: it has to ask for a name.
+  await page.keyboard.press('Meta+Shift+s');
+  await page.waitForTimeout(700);
+  const saveAs = await page.evaluate(() => ({ open: window.__uni.state().browserOpen,
+                                              focus: window.__uni.state().focus }));
+  ok(saveAs.open && saveAs.focus === 'browser', 'and ⌘⇧S asks where instead',
+     JSON.stringify(saveAs));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.__uni.browser(false));
+
+  for (const suffix of ['.uniproj.json', '.uniproj.state']) {
+    rmSync(join(PROJECTS, SAVED + suffix), { recursive: true, force: true });
+  }
+  // Back to a clean document, and to the SAME one this section inherited: the
+  // in-memory copy still carries the scratch edit, and the next section is
+  // entitled to the fixture as authored.
+  if (incoming) await page.evaluate((n) => window.__uni.loadProject(n), incoming);
+  await page.waitForTimeout(2000);
+}
 
 section('dock');
 const bad = String(await page.evaluate(() => window.__uni.run('note 999')));
