@@ -2284,6 +2284,49 @@ struct TrackRuntime {
   // resolves against the project (portable) rather than the engine's CWD. Set by
   // loadProjectFromPath before the track loop; read by rebuildAudioRender.
   std::string loadedProjectDir;
+  // history.jsonl (roadmap 19): an append-only journal of the commands this engine acted
+  // on — {seq, ts_ms, author, scope, base_version, op, outcome, params}. Deliberately NOT
+  // the DAW_EVENT telemetry stream: that is engine behaviour, this is "what was asked of
+  // the document, in order", which is what makes it a crash-recovery and
+  // what-changed-since-Tuesday artifact. NO INVERSES — reconstructing 32 correct inverses
+  // plus schema-version replay is a project of its own; as a record it is nearly free.
+  // Written from the command thread only (it does IO), guarded so a later multi-producer
+  // ring cannot interleave half-lines.
+  std::mutex historyMutex;
+  uint64_t historySeq = 0;
+  auto historyPath = [&]() -> std::filesystem::path {
+    const std::string dir =
+        loadedProjectDir.empty() ? daw::defaultProjectDir() : loadedProjectDir;
+    return std::filesystem::path(dir) / "history.jsonl";
+  };
+  auto historyAppend = [&](const char* op, const char* outcome, uint32_t scopeTrack,
+                           uint32_t baseVersion, const std::string& params) {
+    if (std::getenv("DAW_NO_HISTORY")) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(historyMutex);
+    const auto path = historyPath();
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::app);
+    if (!out) {
+      return;
+    }
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+    out << "{\"seq\":" << ++historySeq << ",\"ts_ms\":" << now
+        << ",\"author\":\"ui\",\"scope\":";
+    if (scopeTrack == 0xFFFFFFFFu) {
+      out << "\"global\"";
+    } else if (scopeTrack == daw::kMasterTrackId) {
+      out << "\"master\"";
+    } else {
+      out << "\"track:" << scopeTrack << "\"";
+    }
+    out << ",\"base_version\":" << baseVersion << ",\"op\":\"" << op
+        << "\",\"outcome\":\"" << outcome << "\",\"params\":{" << params << "}}\n";
+  };
   // Engine-lifetime registry of decoded audio sources for waveform display: owns the
   // min/max pyramids the RequestWaveform handler slices, keyed by a stable sourceId.
   // Populated on the decode funnel (rebuildAudioRender), published to
@@ -5541,6 +5584,8 @@ struct TrackRuntime {
       return true;
     }
     emitUiDiff(diffPayload);
+    historyAppend(daw::uiCommandTypeName(commandType), "rejected:version", trackId,
+                  baseVersion, "");
     DAW_EVENT("clip.version_mismatch")
         .field("base", baseVersion)
         .field("current", current)
@@ -6102,6 +6147,30 @@ struct TrackRuntime {
     std::memcpy(&header, entry.payload, sizeof(header));
     const auto commandType =
         static_cast<daw::UiCommandType>(header.commandType);
+    // Journal every command the engine acts on, in order. Recorded here — the one point
+    // every command passes through — rather than at ~20 handlers, so a new opcode cannot
+    // silently escape the journal. Outcome is "received"; a command later refused by the
+    // version check writes its own "rejected" line, so history shows the attempt AND its
+    // fate rather than quietly dropping it.
+    {
+      const bool globalScope = daw::uiCommandIsGlobalScope(commandType);
+      std::ostringstream params;
+      if (daw::uiCommandUsesGenericPayload(commandType)) {
+        // value0 is signed for at least one op (mixer gain in millibels), so render it
+        // signed: an unsigned -600 reads as 4294966696, which looks like corruption.
+        params << "\"value0\":" << static_cast<int32_t>(header.value0)
+               << ",\"pitch\":" << header.notePitch << ",\"flags\":" << header.flags
+               << ",\"nanotick\":"
+               << ((static_cast<uint64_t>(header.noteNanotickHi) << 32) |
+                   header.noteNanotickLo)
+               << ",\"duration\":"
+               << ((static_cast<uint64_t>(header.noteDurationHi) << 32) |
+                   header.noteDurationLo);
+      }
+      historyAppend(daw::uiCommandTypeName(commandType), "received",
+                    globalScope ? 0xFFFFFFFFu : header.trackId,
+                    header.baseVersion, params.str());
+    }
     if (entry.size == sizeof(daw::UiAutomationCommandPayload) &&
         commandType == daw::UiCommandType::SetAutomationTarget) {
       daw::UiAutomationCommandPayload autoPayload{};
