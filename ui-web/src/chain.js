@@ -154,8 +154,32 @@ export class Chain {
       l._card._scrollTop = l.scrollTop;
       this._frame();
     }, true);
-    // The card box is measured, so a resize invalidates it. Cheap: it only
-    // clears a flag, and the next draw takes the two reads.
+    /*
+     * THE CARD BOX IS MEASURED, so anything that moves it invalidates the
+     * measurement — not only a window resize.
+     *
+     * That is what this was, and it was wrong: dragging the chain strip TALLER
+     * changes the card's height without a window resize, so `_listH` stayed at
+     * whatever it was when the strip was short and the parameter list kept
+     * showing the same handful of rows in a box with room for thirty. Reported
+     * as "the scrollable VSTi parameter section stays the same size".
+     *
+     * A ResizeObserver watches the box itself, which is the thing the
+     * measurement is OF. It clears the flag and asks for a frame — the class's
+     * own throttled redraw, not the page's, because the page has no reason to
+     * know the rack re-measures.
+     *
+     * No feedback loop: the callback writes no geometry, and `_grow` appends
+     * into `.dv-pspace`, which is inside a `contain: strict` scroller and cannot
+     * change `.dv-cards`.
+     */
+    if (typeof ResizeObserver === 'function') {
+      this._ro = new ResizeObserver(() => { this._geom = false; this._frame(); });
+      this._ro.observe(this.cardsEl);
+    }
+    // Kept as well. An observer fires on the element's own box; a window resize
+    // that leaves the box alone can still change the row height through a font
+    // or a metric, and that is what `_rowH` is.
     addEventListener('resize', () => { this._geom = false; });
   }
 
@@ -442,7 +466,15 @@ export class Chain {
         // still takes its height, and every non-plugin device in the rack would
         // grow a gap where a fact about plugins used to be.
         const bd = c.busText ? '' : 'none';
-        if (el._busEl.style.display !== bd) el._busEl.style.display = bd;
+        if (el._busEl.style.display !== bd) {
+          el._busEl.style.display = bd;
+          // Showing or hiding this line changes how much height is left INSIDE
+          // one card, which the observer on `.dv-cards` cannot see — that box
+          // did not move. `_listH` is one scalar shared by every card, so a card
+          // that gained a bus line would keep drawing rows for the height it had
+          // without one.
+          this._geom = false;
+        }
         // Incomplete and truncated are different states and read differently: one
         // resolves in a frame, the other never will.
         el._busEl.classList.toggle('partial', c.busPartial);
@@ -610,6 +642,10 @@ export class Chain {
       scroll: this.pool.slice(0, vm.cardCount).map((el) => el._scrollTop),
       extent: this.pool.slice(0, vm.cardCount).map((el) => el._spaceH),
       rowHeight: this._rowH,
+      // The measured height of the parameter list. Reported because it is the
+      // value that went stale when the strip was resized, and a stale scalar is
+      // invisible to every other assertion.
+      listHeight: this._listH,
       // The first and last parameter each card currently has a row for, by the
       // engine's own index — the honest answer to "can I reach number 255".
       shown: this.pool.slice(0, vm.cardCount).map((el) => {

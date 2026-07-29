@@ -2295,6 +2295,76 @@ section('a track of chords shows its chords');
   ok(onPad, 'in the Pad track\'s column');
 }
 
+/*
+ * THE PARAMETER LIST GROWS WITH THE STRIP.
+ *
+ * "When I grow the device chain upward, the scrollable VSTi parameter section
+ * stays the same size." It did: the card box is MEASURED, and the measurement
+ * was invalidated only by a window resize — so dragging the chain splitter made
+ * the box taller while `_listH` still held the height it had when the strip was
+ * short, and the list kept drawing eight rows in a box with room for
+ * twenty-four.
+ *
+ * Proven by A/B before it was written: with the observer disabled the box grows
+ * (listClientH 84 -> 309) and `listHeight` stays 86. That is the bug, and it is
+ * why the assertion below is on `listHeight` — every other symptom can be
+ * satisfied by a coincidence, a stale scalar cannot.
+ */
+section('the rack\'s parameter list grows when the strip does');
+{
+  await page.evaluate(() => window.__uni.loadProject('maximal'));
+  await page.waitForTimeout(3500);
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.waitForTimeout(1200);
+  const probe = () => page.evaluate(() => {
+    const p = window.__uni.chainProbe();
+    // The LARGEST card's row count, not the first card's. A generator track's
+    // slot 0 is a patcher device with almost no parameters; the plugin behind it
+    // is the card this is about, and reading slot 0 reports 7 while 24 are on
+    // screen.
+    return { listHeight: p.listHeight, rowHeight: p.rowHeight,
+             rows: Math.max(0, ...(p.rows || [0])),
+             shown: [...document.querySelectorAll('.dv-p')].filter((e) => e.offsetParent).length };
+  });
+
+  const before = await probe();
+  ok(before.rows > 0, 'the rack is drawing parameter rows', JSON.stringify(before));
+
+  // The CHAIN splitter by name. `.sp-bottom` matches the harmony strip's handle
+  // first in document order, and dragging that one moves a different pane while
+  // looking exactly like this test passing.
+  const handle = await page.$('[data-splitter="chain"]');
+  ok(!!handle, 'the chain strip has a drag handle');
+  if (handle && before.rows > 0) {
+    const b = await handle.boundingBox();
+    const DRAG = 220;
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2, b.y - DRAG, { steps: 10 });
+    await page.mouse.up();
+    await page.waitForTimeout(900);
+
+    const after = await probe();
+    ok(after.listHeight > before.listHeight,
+       'the measured list height follows the strip — this is the value that went stale',
+       `${before.listHeight} -> ${after.listHeight}`);
+    /*
+     * IN PROPORTION to the drag, not merely "more". A fix that re-measured once
+     * and then latched again would add a row or two and pass a bare
+     * greater-than.
+     */
+    const expect = before.rows + Math.floor(DRAG / Math.max(1, after.rowHeight)) - 2;
+    ok(after.rows >= expect, 'and the pool grew by about the height that was added',
+       `${before.rows} -> ${after.rows}, wanted >= ${expect}`);
+    ok(after.shown === after.rows, 'with no blank band under the last row',
+       `${after.shown} drawn vs ${after.rows} rows`);
+
+    // Home again, or every section after this one inherits a dragged strip.
+    await handle.dblclick();
+    await page.waitForTimeout(500);
+  }
+}
+
 section('dragging a clip moves it');
 {
   await page.evaluate(() => window.__uni.run('view arrange'));
