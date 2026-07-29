@@ -313,7 +313,18 @@ pub struct UiClipNote {
     pub placement_id: u16,
     /// Row op: onset delay in absolute nanoticks.
     pub delay_nanoticks: u32,
-    pub reserved3: u32,
+    /// v26 (M1.13): how far this note moves when it SOUNDS, in nanoticks, SIGNED — a
+    /// note pulled earlier reads negative. `t_on` stays the AUTHORED value, so draw the
+    /// note where it was played and a mark to where it is heard. 0 means the lane is not
+    /// quantized. The SOUNDING tick is `t_on + dev_nanoticks + delay_nanoticks`: the
+    /// scheduler quantizes the tick and then adds the row-op delay.
+    ///
+    /// Published rather than derived client-side on purpose: deriving it means a second
+    /// implementation of quantize_tick, whose correctness turns on C++ integer division
+    /// truncating TOWARD ZERO on a negative delta — which `Math.floor` and Rust's `/`
+    /// on negatives do not both agree with. It took the reserved word, so the struct is
+    /// the same 40 bytes and nothing moved.
+    pub dev_nanoticks: i32,
 }
 
 pub const UI_CLIP_NOTE_MUTED: u8 = 1 << 0;

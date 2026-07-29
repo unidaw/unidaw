@@ -121,5 +121,17 @@ static_assert(alignof(EventEntry) == 64, "EventEntry alignment mismatch");
 static_assert(sizeof(MusicalLogicPayload) <= 40,
               "MusicalLogicPayload exceeds EventEntry payload");
 static_assert(sizeof(PatcherLfoConfig) == 16, "PatcherLfoConfig size mismatch");
+// HarmonyEvent crosses this ABI too — PatcherContext hands a `const HarmonyEvent*` to
+// the Rust nodes, which mirror it #[repr(C)] in patcher_rust/src/lib.rs — and it was the
+// ONE struct on the wire with nothing guarding it. Changing its shape or a field width
+// would compile clean on both sides and every generator would read garbage roots and
+// scales at runtime, on the producer thread. Found by an adversarial design review that
+// proposed exactly that change without noticing.
+static_assert(sizeof(HarmonyEvent) == 24, "HarmonyEvent size mismatch (crosses the ABI)");
+static_assert(alignof(HarmonyEvent) == 8, "HarmonyEvent alignment mismatch");
+static_assert(offsetof(HarmonyEvent, nanotick) == 0, "HarmonyEvent::nanotick moved");
+static_assert(offsetof(HarmonyEvent, root) == 8, "HarmonyEvent::root moved");
+static_assert(offsetof(HarmonyEvent, scaleId) == 12, "HarmonyEvent::scaleId moved");
+static_assert(offsetof(HarmonyEvent, flags) == 16, "HarmonyEvent::flags moved");
 
 }  // namespace daw

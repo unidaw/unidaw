@@ -8,7 +8,8 @@ namespace daw {
 ClipWindowResult buildUiClipWindowSnapshot(const MusicalClip& clip,
                                            const ClipWindowRequest& request,
                                            uint32_t clipVersion,
-                                           UiClipWindowSnapshot& snapshot) {
+                                           UiClipWindowSnapshot& snapshot,
+                                           const LaneQuantize& quantize) {
   std::memset(&snapshot, 0, sizeof(UiClipWindowSnapshot));
   snapshot.trackId = request.trackId;
   snapshot.clipVersion = clipVersion;
@@ -61,7 +62,23 @@ ClipWindowResult buildUiClipWindowSnapshot(const MusicalClip& clip,
       note.placementFlags = 0;
       note.placementId = event.payload.note.reserved2;
       note.delayNanoticks = event.payload.note.delayNanoticks;
-      note.reserved3 = 0;
+      // M1.13: how far this note MOVES when it sounds, in nanoticks, signed — notes are
+      // pulled earlier as often as later. tOn stays the authored value, so the UI draws
+      // the note where it was played and a mark to where it is heard.
+      //
+      // Published rather than left for the client to compute, because computing it means
+      // a second implementation of quantizeTick, and its correctness turns on C++
+      // integer division truncating TOWARD ZERO on a negative delta — which the obvious
+      // spelling in most other languages does not. A deviation bar that disagrees with
+      // the audio by one tick is worse than no bar: it is an instrument that lies in the
+      // last digit, which is the digit you consulted it for.
+      //
+      // The sounding tick is this deviation PLUS delayNanoticks (the row op), because
+      // the scheduler quantizes the tick and expandNoteOps then adds the delay. Keeping
+      // them separate lets the reader compose them and keeps tOn unambiguous.
+      note.devNanoticks = static_cast<int32_t>(
+          static_cast<int64_t>(quantizeTick(event.nanotickOffset, quantize)) -
+          static_cast<int64_t>(event.nanotickOffset));
       ++noteCount;
     } else if (event.type == MusicalEventType::Chord) {
       if (chordCount >= kUiMaxClipChords) {

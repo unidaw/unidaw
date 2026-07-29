@@ -105,6 +105,40 @@ int main() {
     CHECK(quantizeTick(kSixteenth, back) == kSixteenth - kSixteenth / 2);
   }
 
+  // SWING TOGETHER WITH PARTIAL STRENGTH. Neither is interesting alone here; the pair
+  // is, because strength scales the distance to a target that swing has already moved,
+  // and getting the order wrong (scaling first, then swinging) gives a different answer
+  // that still looks plausible. Flagged as unpinned by the frontend before they ported
+  // this function, and they were right — nothing exercised the two together.
+  {
+    const auto q = grid16(500, 250);  // half strength, quarter-step swing
+    // Slot 1 is odd, so its target is kSixteenth + kSixteenth/4 = 300000.
+    // A note played exactly on the slot moves half way to that: 240000 -> 270000.
+    CHECK(quantizeTick(kSixteenth, q) == 270000);
+    // Slot 2 is even, so its target is unmoved and a note on it does not move at all.
+    CHECK(quantizeTick(kSixteenth * 2, q) == kSixteenth * 2);
+    // A note 20000 late on odd slot 1: target 300000, delta +40000, half of it = +20000.
+    CHECK(quantizeTick(kSixteenth + 20000, q) == kSixteenth + 40000);
+  }
+
+  // NEGATIVE DELTA ROUNDS TOWARD THE AUTHORED POSITION, not toward negative infinity.
+  // C++ integer division truncates toward zero, and this pins that as a DECISION rather
+  // than an accident of the language: a partial-strength quantize never overshoots the
+  // note past where the player put it. It also matters because the published deviation
+  // is consumed by clients whose own integer division rounds the other way — which is
+  // exactly why the engine publishes the number instead of letting them derive it.
+  {
+    const auto q = grid16(500);
+    // A note 37 ticks LATE: delta = -37, and -37*500/1000 truncates to -18, not -19.
+    CHECK(quantizeTick(kSixteenth + 37, q) == kSixteenth + 37 - 18);
+    // The mirror image, a note 37 ticks EARLY: delta = +37, +37*500/1000 = +18.
+    CHECK(quantizeTick(kSixteenth - 37, q) == kSixteenth - 37 + 18);
+    // So an early note and a late note the same distance out move by the SAME amount.
+    const uint64_t lateMove = (kSixteenth + 37) - quantizeTick(kSixteenth + 37, q);
+    const uint64_t earlyMove = quantizeTick(kSixteenth - 37, q) - (kSixteenth - 37);
+    CHECK(lateMove == earlyMove);
+  }
+
   // Never negative: an early note at slot 0 with negative swing must not underflow into
   // a gigantic unsigned tick, which would schedule it in the far future rather than at 0.
   {

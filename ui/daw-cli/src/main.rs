@@ -37,7 +37,14 @@ daw-cli — control surface for a running engine
                                    writes a phrase in one invocation
   daw-cli do chord --track N --nanotick T --degree D
                    [--quality Q] [--inversion I] [--octave O] [--duration D]
-  daw-cli do harmony --nanotick T --root R --scale S
+                   [--delete]
+  daw-cli do harmony --nanotick T --root R --scale S [--delete]
+  daw-cli do stop                  halt the transport
+  daw-cli do position --nanotick T move the playhead
+  daw-cli do loop --start T --end T set the loop range
+  daw-cli do harmony-quantize --track N [--on 0|1]
+  daw-cli do remove-device --track N|master --device D
+  daw-cli do move-device --track N|master --device D --index I
   daw-cli do mixer --track N [--gain-db X] [--pan Y]
                    [--mute 0|1] [--solo 0|1]
   daw-cli do quantize --track N [--grid T] [--strength 0..1000] [--swing -500..500]
@@ -259,8 +266,13 @@ fn get_notes(handle: &EngineHandle, args: &[String]) -> i32 {
         let note = snapshot.notes[index];
         let comma = if index + 1 == count { "" } else { "," };
         println!(
-            "    {{ \"nanotick\": {}, \"pitch\": {}, \"velocity\": {}, \"column\": {} }}{comma}",
-            note.t_on, note.pitch, note.velocity, note.column
+            "    {{ \"nanotick\": {}, \"pitch\": {}, \"velocity\": {}, \"column\": {}, \
+             \"dev\": {}, \"delay\": {}, \"sounds_at\": {} }}{comma}",
+            note.t_on, note.pitch, note.velocity, note.column,
+            note.dev_nanoticks, note.delay_nanoticks,
+            // The AUTHORED tick plus both offsets — quantize moves the tick and the row-op
+            // delay is added after it, so the sounding position is the sum.
+            note.t_on as i64 + note.dev_nanoticks as i64 + note.delay_nanoticks as i64
         );
     }
     println!("  ]");
@@ -542,10 +554,21 @@ fn chord_command(
 ) -> Result<UiChordCommandPayload, String> {
     let track = flag_u64(args, "--track", Some(0))? as u32;
     let nanotick = flag_u64(args, "--nanotick", None)?;
-    let degree = flag_u64(args, "--degree", None)?;
+    // --delete turns the same addressing into a removal, so a script never has to build
+    // a second command shape to undo what it just wrote.
+    let deleting = args.iter().any(|a| a == "--delete");
+    let degree = if deleting {
+        flag_u64(args, "--degree", Some(0))?
+    } else {
+        flag_u64(args, "--degree", None)?
+    };
     let duration = flag_u64(args, "--duration", Some(0))?;
     Ok(UiChordCommandPayload {
-        command_type: UiCommandType::WriteChord as u16,
+        command_type: if deleting {
+            UiCommandType::DeleteChord as u16
+        } else {
+            UiCommandType::WriteChord as u16
+        },
         flags: flag_u64(args, "--column", Some(0))? as u16,
         track_id: track,
         base_version,
@@ -566,10 +589,15 @@ fn chord_command(
 
 fn harmony_command(args: &[String], base_version: u32) -> Result<UiCommandPayload, String> {
     let nanotick = flag_u64(args, "--nanotick", Some(0))?;
-    let root = flag_u64(args, "--root", None)?;
-    let scale = flag_u64(args, "--scale", None)?;
+    let deleting = args.iter().any(|a| a == "--delete");
+    let root = if deleting { flag_u64(args, "--root", Some(0))? } else { flag_u64(args, "--root", None)? };
+    let scale = if deleting { flag_u64(args, "--scale", Some(0))? } else { flag_u64(args, "--scale", None)? };
     Ok(UiCommandPayload {
-        command_type: UiCommandType::WriteHarmony as u16,
+        command_type: if deleting {
+            UiCommandType::DeleteHarmony as u16
+        } else {
+            UiCommandType::WriteHarmony as u16
+        },
         flags: 0,
         track_id: 0,
         plugin_index: 0,
@@ -1366,6 +1394,98 @@ fn main() {
                     }
                 }
                 Some(&"notes") => write_notes(&handle, &args),
+                // M2.21: an op with no CLI path cannot be scripted, tested from a
+                // shell, or driven by an agent — so the registry check
+                // (tools/op_registry_check.sh) requires one for every opcode that is
+                // not explicitly declared UI-only. These close the cheap half of that
+                // gap; they all reuse payload shapes that already had a sender.
+                Some(&"remove-device") | Some(&"move-device") => {
+                    let removing = rest.first() == Some(&"remove-device");
+                    let track = match flag(&args, "--track") {
+                        Some(t) if t == "master" => MASTER_TRACK_ID,
+                        Some(t) => t.parse::<u32>().unwrap_or(0),
+                        None => 0,
+                    };
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let index = flag_u64(&args, "--index", Some(0)).unwrap_or(0) as u32;
+                    let payload = UiChainCommandPayload {
+                        command_type: if removing {
+                            UiCommandType::RemoveDevice as u16
+                        } else {
+                            UiCommandType::MoveDevice as u16
+                        },
+                        flags: 0,
+                        track_id: track,
+                        base_version: 0,
+                        device_id: device,
+                        device_kind: 0,
+                        insert_index: index,
+                        patcher_node_id: 0,
+                        host_slot_index: 0,
+                        bypass: 0,
+                        reserved: [0u8; 4],
+                    };
+                    match handle.send_chain_command(payload) {
+                        Ok(()) => {
+                            let verb = if removing { "remove-device" } else { "move-device" };
+                            println!("{{ \"sent\": {verb:?}, \"device\": {device} }}");
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"stop") => {
+                    let payload = track_structure_command(UiCommandType::Stop, 0);
+                    match handle.send_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"stop\" }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"position") => {
+                    let tick = match flag_u64(&args, "--nanotick", None) {
+                        Ok(v) => v,
+                        Err(err) => { eprintln!("daw-cli: {err}"); std::process::exit(2) }
+                    };
+                    let mut payload = track_structure_command(UiCommandType::SetPosition, 0);
+                    payload.note_nanotick_lo = (tick & 0xffff_ffff) as u32;
+                    payload.note_nanotick_hi = (tick >> 32) as u32;
+                    match handle.send_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"position\", \"nanotick\": {tick} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"loop") => {
+                    let start = flag_u64(&args, "--start", Some(0)).unwrap_or(0);
+                    let end = match flag_u64(&args, "--end", None) {
+                        Ok(v) => v,
+                        Err(err) => { eprintln!("daw-cli: {err}"); std::process::exit(2) }
+                    };
+                    if end <= start {
+                        eprintln!("daw-cli: --end must be after --start");
+                        std::process::exit(2);
+                    }
+                    let mut payload =
+                        track_structure_command(UiCommandType::SetLoopRange, 0);
+                    payload.note_nanotick_lo = (start & 0xffff_ffff) as u32;
+                    payload.note_nanotick_hi = (start >> 32) as u32;
+                    payload.note_duration_lo = (end & 0xffff_ffff) as u32;
+                    payload.note_duration_hi = (end >> 32) as u32;
+                    match handle.send_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"loop\", \"start\": {start}, \"end\": {end} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"harmony-quantize") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let on = flag_u64(&args, "--on", Some(1)).unwrap_or(1);
+                    let mut payload = track_structure_command(
+                        UiCommandType::SetTrackHarmonyQuantize, track);
+                    payload.value0 = if on != 0 { 1 } else { 0 };
+                    match handle.send_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"harmony-quantize\", \"on\": {on} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
                 Some(&"quantize") => match quantize_command(&args) {
                     Ok(payload) => match handle.send_command(payload) {
                         Ok(()) => {
