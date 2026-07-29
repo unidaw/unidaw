@@ -131,7 +131,7 @@ const trackerPane = document.getElementById('trackerPane');
 const chrome = createChrome(document.getElementById('chrome'), {
   onView: (v) => { state.view = v; if (v === 'piano') fitPiano(); state.focus = 'centre'; schedule(); },
   onPlay: () => cmd('play'),
-  onStop: () => { cmd('stop'); state.reject = null; schedule(); },
+  onStop: () => stopOrPanic(),
   // Hoisted through, not inlined: the same two functions back the dock commands
   // and the __uni hooks, so the button cannot grow behaviour the scriptable path
   // does not have. That divergence is the bug this app keeps finding.
@@ -140,7 +140,54 @@ const chrome = createChrome(document.getElementById('chrome'), {
 });
 // No write path yet — the command ring needs a channel the write-only socket
 // does not have. The buttons exist and say so rather than pretending.
+/**
+ * Stop, and PANIC on a second press.
+ *
+ * Stop halts and rewinds and flushes held keyjazz notes. It does not silence a
+ * plugin's own ringing voices, a sustained sequencer note whose note-off has not
+ * been reached, or a generator mid-phrase — so after Stop the room can still be
+ * full of sound, which is exactly when a person reaches for panic.
+ *
+ * The SECOND press, not a key of its own, because that is what hardware does and
+ * because a panic key you have to look up is a panic key you do not have. The
+ * transport's published state is what tells the two apart: already stopped means
+ * this press is the second one.
+ *
+ * Panic (UiCommandType 52) sends CC123 then CC120 on all sixteen channels to
+ * every hosted plugin — 120 last, because 123 releases a note and lets it ring
+ * where 120 cuts it, and politely releasing a four-second pad is not a panic. It
+ * also drops each track's pending strikes, without which a scheduled retrigger
+ * fires after the panic and the sound comes back on its own.
+ */
+let lastWasStop = false;
+function stopOrPanic() {
+  /*
+   * TWICE means two stops in a row, not "the transport is stopped".
+   *
+   * Reading the transport alone was wrong and the suite caught it: PAUSE also
+   * leaves the transport at 0, so play-pause-stop panicked instead of stopping,
+   * and the playhead never rewound. Pause is not stop.
+   *
+   * The flag is cleared by anything else that moves the transport, so "stop,
+   * play a bit, stop" is two first-presses and not a panic.
+   */
+  const panic = lastWasStop;
+  lastWasStop = true;
+  cmd(panic ? 'panic' : 'stop');
+  state.reject = null;
+  // Said out loud, in the app's one transient-message slot. A panic that
+  // silences everything and shows nothing is indistinguishable from a key that
+  // did not register, and the moment you most need to know it worked is the
+  // moment you pressed it. The slot is named `reject` because refusals were the
+  // first thing to use it; the wording carries what this one is.
+  if (panic) state.reject = 'panic — all notes off';
+  schedule();
+}
+
 function cmd(what) {
+  // Anything that is not a stop ends a stop run, so the next stop is a first
+  // press again.
+  if (what !== 'stop' && what !== 'panic') lastWasStop = false;
   // Starting or stopping the transport re-arms following: it is the moment you
   // are asking to watch the music rather than to look around it.
   if (what === 'play' || what === 'stop') state.followPlayhead = true;
@@ -1576,7 +1623,15 @@ const dockApi = {
                  const ok = conn && conn.loadProject(n); if (ok) state.currentProject = n; return ok; },
   save: (n) => { const ok = conn && conn.saveProject(n); if (ok) state.currentProject = n; return ok; },
   listProjects: () => conn && conn.send({ type: 'list' }),
-  transport: (what) => cmd(what),
+  /**
+   * Play, pause, stop — and stop TWICE is panic.
+   *
+   * Routed through the same function the transport button uses, so the console,
+   * the button and anything else mean one thing by "stop". Three call sites each
+   * sending their own command is how a second press panics from the chrome and
+   * does nothing from the console, which is worse than not having it.
+   */
+  transport: (what) => (what === 'stop' ? stopOrPanic() : cmd(what)),
   seek: (tick) => conn && conn.send({ type: 'seek', track: state.cursor.track, tick: Math.max(0, tick) }),
   /**
    * Set the tempo. `tempo(128)` sets the whole song; `tempo(128, tick)` inserts
@@ -3817,6 +3872,35 @@ addEventListener('keydown', (e) => {
       return done();
     }
     if (c === 'k') { palette.toggle(); return done(); }
+    /**
+     * ⌘S SAVES.
+     *
+     * Saving existed in three places and none of them was this one: `S` in the
+     * browser rail, `save <name>` in the console, and `__uni.save`. All three are
+     * SAVE AS — they take a name — so keeping a song you already named meant
+     * opening a rail, pressing a second key and typing the name back. The single
+     * most expected shortcut in any application, and it did nothing.
+     *
+     * ⌘⇧S is save-as, matching the rail. It is NOT the scale browser: the chrome
+     * shows "⌘⇧S" beside the key readout, which is a label for a shortcut that
+     * was never bound to anything.
+     *
+     * An unnamed song has nothing to save TO, so it falls through to save-as
+     * rather than inventing a filename.
+     */
+    if (c === 's') {
+      const named = state.currentProject;
+      if (e.shiftKey || !named) {
+        state.browserOpen = true;
+        state.focus = 'browser';
+        browser.beginSave(named || '');
+        conn && conn.send({ type: 'list' });
+        return done();
+      }
+      if (!conn || !conn.saveProject(named)) state.reject = 'no engine';
+      else state.reject = null;
+      return done();
+    }
     /**
      * Copy, cut and paste on the keys everybody already knows.
      *

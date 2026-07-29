@@ -1722,6 +1722,16 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
 
     if body.contains("\"play\"") {
         p.command_type = UiCommandType::TogglePlay as u16;
+    } else if body.contains("\"panic\"") {
+        /*
+         * PANIC. All notes off, everywhere, now.
+         *
+         * Checked BEFORE "stop" — the engine halts the transport as part of a
+         * panic, so the two are not alternatives and the more specific one has
+         * to win. Ordered the other way, a panic would arrive as a plain stop
+         * and the room would stay full of sound.
+         */
+        p.command_type = UiCommandType::Panic as u16;
     } else if body.contains("\"stop\"") {
         // A real Stop now: halt AND rewind. TogglePlay is pause-in-place.
         p.command_type = UiCommandType::Stop as u16;
