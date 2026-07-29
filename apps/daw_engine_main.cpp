@@ -6482,7 +6482,11 @@ struct TrackRuntime {
       const auto commandType =
           static_cast<daw::UiCommandType>(chainPayload.commandType);
       TrackRuntime* runtime = nullptr;
-      {
+      if (chainPayload.trackId == daw::kMasterTrackId) {
+        // The master is addressed by its stable id, not a slot; it lives outside the
+        // tracks vector. Its chain accepts the same device edits as any track.
+        runtime = masterTrack.get();
+      } else {
         std::lock_guard<std::mutex> lock(tracksMutex);
         if (chainPayload.trackId < tracks.size()) {
           runtime = tracks[chainPayload.trackId].get();
@@ -6592,7 +6596,13 @@ struct TrackRuntime {
         std::atomic_store_explicit(&runtime->trackSnapshot,
                                    snapshot,
                                    std::memory_order_release);
-        rebuildHostForChain(*runtime);
+        // The master has no per-track host yet — hosting the master SUM through VST
+        // effects is 4b. For now its chain (patcher/mod + stored VST refs) is kept and
+        // published but not host-rebuilt, so a patcher device on the master is a real,
+        // visible, bypassable home for global logic.
+        if (chainPayload.trackId != daw::kMasterTrackId) {
+          rebuildHostForChain(*runtime);
+        }
         emitChainSnapshot(*runtime);
       } else if (emitError) {
         emitChainError(errorCode,
@@ -10866,16 +10876,30 @@ struct TrackRuntime {
             std::memset(uiShm.header->uiTrackDeviceName[m], 0, daw::kUiTrackNameBytes);
             auto mts = std::atomic_load_explicit(&masterTrack->trackSnapshot,
                                                  std::memory_order_acquire);
-            if (mts) {
+            if (mts && !mts->chainDevices.empty()) {
+              const char* label = nullptr;
+              // Prefer a real instrument name; else surface the first device's kind so a
+              // patcher/effect on the master is still visible (it has no plugin name).
               for (const auto& device : mts->chainDevices) {
                 if (device.kind == daw::DeviceKind::VstInstrument &&
                     !device.vstRef.name.empty()) {
-                  std::memcpy(uiShm.header->uiTrackDeviceName[m],
-                              device.vstRef.name.data(),
-                              std::min<size_t>(device.vstRef.name.size(),
-                                               daw::kUiTrackNameBytes - 1));
+                  label = device.vstRef.name.c_str();
                   break;
                 }
+              }
+              if (!label) {
+                switch (mts->chainDevices.front().kind) {
+                  case daw::DeviceKind::PatcherEvent: label = "patcher_event"; break;
+                  case daw::DeviceKind::PatcherInstrument: label = "patcher_instrument"; break;
+                  case daw::DeviceKind::PatcherAudio: label = "patcher_audio"; break;
+                  case daw::DeviceKind::VstInstrument: label = "vst_instrument"; break;
+                  case daw::DeviceKind::VstEffect: label = "vst_effect"; break;
+                }
+              }
+              if (label) {
+                std::memcpy(uiShm.header->uiTrackDeviceName[m], label,
+                            std::min<size_t>(std::strlen(label),
+                                             daw::kUiTrackNameBytes - 1));
               }
             }
             uiShm.header->uiTrackCount = publishedTrackCount + 1;
