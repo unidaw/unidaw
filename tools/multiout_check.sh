@@ -15,7 +15,7 @@ BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 Q=960000
 TMP="$(mktemp -d)"
-SHM="/mo_check_$$"
+SHM_BASE="/mo_check_$$"
 
 [ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
 [ -x "$CLI" ] || { echo "build daw-cli first"; exit 2; }
@@ -37,16 +37,60 @@ json.dump({"schema_version":4,"meta":{"name":"mo","created_utc":0,"modified_utc"
 PY
 }
 
+# The active aux channels, or "" if none ever lit.
+aux_channels() {
+  { grep -o '"aux_channel":[0-9]*' "$1" | grep -o '[0-9]*' | sort -n | uniq \
+      | paste -sd, -; } 2>/dev/null || true
+}
+
 run() {  # $1=name  -> prints the sorted active aux channels
   local name="$1"
   local log="$TMP/$name.log"
-  ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
-      ./daw_engine --run-seconds 5 >"$log" 2>&1 ) &
-  local e=$!; sleep 2
-  DAW_UI_SHM_NAME="$SHM" "$CLI" do load "$name" --force >/dev/null 2>&1 || true; sleep 1
-  DAW_UI_SHM_NAME="$SHM" "$CLI" do play --force >/dev/null 2>&1 || true
-  wait "$e"
-  grep -o '"aux_channel":[0-9]*' "$log" | grep -o '[0-9]*' | sort -n | uniq | paste -sd, -
+  # WAIT for each step instead of sleeping a guessed amount, and give the engine room.
+  # On a 5-second budget with fixed sleeps this passed about two runs in three: the load
+  # has to negotiate the plugin's bus layout and derive the children before a note can
+  # steer anywhere, and on a busy machine that did not fit in the 3 seconds left before
+  # play. The failure was also SILENT — with no aux_channel lines the grep exits 1, and
+  # under `set -o pipefail` inside a command substitution that killed the whole script
+  # before it printed a single line, so a flake was indistinguishable from a crash.
+  # A SEGMENT PER RUN. The shm segment outlives the engine that made it, so the second run
+  # reusing one name found the first run's segment still mapped: a readiness probe answered
+  # instantly, the `do load` went into a ring nobody was reading, and the engine played the
+  # startup project in silence. Only the FIRST pitch was ever really tested.
+  local shm="${SHM_BASE}_$name"
+  ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" \
+      ./daw_engine --run-seconds 30 >"$log" 2>&1 ) &
+  local e=$!
+  # Readiness comes from THIS engine's own log, not from the shm — a segment answering is
+  # not evidence that the process behind it is alive.
+  for _ in $(seq 1 120); do
+    if grep -q 'starting threads' "$log"; then break; fi
+    sleep 0.25
+  done
+  DAW_UI_SHM_NAME="$shm" "$CLI" do load "$name" --force >/dev/null 2>&1 || true
+  # The children are derived from the bus layout after the load; without them there is no
+  # aux plane for a stem to reach.
+  for _ in $(seq 1 80); do
+    if grep -q '"event":"multiout.child_created"' "$log"; then break; fi
+    sleep 0.25
+  done
+  DAW_UI_SHM_NAME="$shm" "$CLI" do play --force >/dev/null 2>&1 || true
+  local chans=""
+  for _ in $(seq 1 80); do
+    chans="$(aux_channels "$log")"
+    if [ -n "$chans" ]; then
+      sleep 0.75          # both channels of the pair register together; let them land
+      break
+    fi
+    sleep 0.25
+  done
+  chans="$(aux_channels "$log")"
+  kill "$e" 2>/dev/null || true
+  wait "$e" 2>/dev/null || true
+  if [ -z "$chans" ]; then
+    { echo "  (no aux telemetry for $name — engine log tail:)"; tail -6 "$log"; } >&2
+  fi
+  printf '%s' "$chans"
 }
 
 gen "$TMP/p61.uniproj.json" 61

@@ -88,6 +88,26 @@ class AutomationClip {
   }
 
   const std::string& paramId() const { return paramId_; }
+  // For persistence and for the override/ripple paths. Points are kept sorted by tick,
+  // which addPoint maintains, so a consumer can rely on the order.
+  const std::vector<AutomationPoint>& points() const { return points_; }
+  // Shift every point by a signed delta, saturating at 0. Used by the section ripple so
+  // automation moves with the material it belongs to — without this, inserting bars into
+  // the intro slid every note later and left the filter sweep behind.
+  void shiftPoints(int64_t delta) {
+    if (delta == 0) {
+      return;
+    }
+    for (auto& p : points_) {
+      if (delta > 0) {
+        const uint64_t d = static_cast<uint64_t>(delta);
+        p.nanotick = (p.nanotick > UINT64_MAX - d) ? UINT64_MAX : p.nanotick + d;
+      } else {
+        const uint64_t d = static_cast<uint64_t>(-delta);
+        p.nanotick = p.nanotick > d ? p.nanotick - d : 0;
+      }
+    }
+  }
   bool discreteOnly() const { return discreteOnly_; }
   uint32_t targetPluginIndex() const { return targetPluginIndex_; }
   void setTargetPluginIndex(uint32_t target) { targetPluginIndex_ = target; }

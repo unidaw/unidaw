@@ -112,6 +112,45 @@ expect modlink-device-missing  's/"dst": { "device_id": 6,/"dst": { "device_id":
 expect quantize-inert          's/"strength_milli": 500/"strength_milli": 0/'
 expect tempo-map-no-origin     's/"nanotick": 0, "bpm": 120/"nanotick": 480000, "bpm": 120/'
 expect clip-unplaced           's/"clip_id": 2, "id": 2/"clip_id": 1, "id": 2/'
+# An LFO (a CV source) wired into an EVENT input is invalid, and the engine's assembler
+# refuses the WHOLE TRACK for it — so none of that track's patchers run. Uses the engine's
+# own assemblePatcherPool + buildPatcherGraph, so the linter cannot disagree with it.
+# An LFO (a CV source) wired into an EVENT input is invalid, and the engine's assembler
+# refuses the WHOLE TRACK for it — so none of that track's patchers run, silently. This
+# rule uses the engine's own assemblePatcherPool + buildPatcherGraph, so the linter and
+# the engine cannot disagree about whether a graph will execute.
+cat > "$TMP/badpatcher.uniproj.json" <<EOF
+{ "schema_version": 4, "meta": { "name": "badpatcher" }, "nanoticks_per_quarter": $Q,
+  "tempo_map": [ { "nanotick": 0, "bpm": 120 } ], "harmony_timeline": [],
+  "clips": [], "tracks": [
+    { "track_id": 0, "name": "P",
+      "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+      "device_chain": [
+        { "device_id": 1, "kind": "patcher_event", "capability_mask": 3,
+          "patcher_node_id": 4294967295, "host_slot_index": 0, "bypass": false,
+          "patcher": { "nodes": [
+            { "id": 0, "type": "lfo", "lfo": { "frequency_hz": 1.0, "depth": 1.0, "bias": 0.0, "phase_offset": 0.0 } },
+            { "id": 1, "type": "event_out" } ],
+            "edges": [ { "src_node_id": 0, "src_port_id": 1, "dst_node_id": 1, "dst_port_id": 0, "kind": "event" } ] } } ],
+      "mod_links": [], "placements": [] } ] }
+EOF
+OUT="$("$LINT" "$TMP/badpatcher.uniproj.json" 2>&1 || true)"
+if echo "$OUT" | grep -q "patcher-assembly-fails"; then
+  echo "  fires: patcher-assembly-fails"
+else
+  echo "  FAIL: patcher-assembly-fails did not fire on a graph the engine refuses"
+  echo "$OUT" | sed 's/^/          /'
+  fails=$((fails + 1))
+fi
+
+# The same shape with a VALID edge must stay silent, or the rule is just noise on every
+# project that has a patcher at all.
+sed 's/"type": "lfo", "lfo": { "frequency_hz": 1.0, "depth": 1.0, "bias": 0.0, "phase_offset": 0.0 }/"type": "euclidean", "euclidean": { "steps": 16, "hits": 5, "offset": 0, "duration_ticks": 0, "degree": 1, "octave_offset": 0, "velocity": 100, "base_octave": 4 }/' \
+  "$TMP/badpatcher.uniproj.json" > "$TMP/goodpatcher.uniproj.json"
+"$LINT" "$TMP/goodpatcher.uniproj.json" 2>&1 | grep -q "0 error" \
+  && echo "  silent: a valid patcher graph" \
+  || { echo "  FAIL: a VALID patcher graph was reported as unassemblable"; fails=$((fails + 1)); }
+
 expect device-plugin-missing   's|"device_id": 6, "kind": "patcher_audio", "capability_mask": 4|"device_id": 6, "kind": "vst_effect", "capability_mask": 4, "vst_ref": { "vendor": "x", "name": "Nope", "path": "/nonexistent/Nope.vst3", "uid16": "" }|'
 # A name but no path is how a PORTABLE fixture is written — a warning, not an error.
 expect device-plugin-by-name-only 's|"device_id": 6, "kind": "patcher_audio", "capability_mask": 4|"device_id": 6, "kind": "vst_effect", "capability_mask": 4, "vst_ref": { "vendor": "x", "name": "Named", "path": "", "uid16": "" }|'

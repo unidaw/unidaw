@@ -6,6 +6,12 @@
 # renumber to 1: identity stayed put, which is the whole point of the tombstone model.
 # Also confirms the engine stays up through add/remove/save (no crash).
 #
+# The MASTER track (patcher-is-a-device item 4a) is a real published track and is written
+# into the saved `tracks` array as an is_master entry, so every count here is of the
+# DOCUMENT tracks specifically — filtered on the master flag rather than assumed to be the
+# whole list. Bumping the expected totals instead would have hidden which extra track had
+# appeared, so master is asserted separately: exactly one, saved, flagged.
+#
 # Needs a real audio device (non-test mode) + the C++ and daw-cli targets built.
 #   tools/add_remove_track_check.sh
 #
@@ -40,19 +46,32 @@ ENG=$!
 sleep 2
 DAW_UI_SHM_NAME="$SHM" "$CLI" do load one --force >/dev/null 2>&1 || true
 sleep 1
-before="$(DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null | grep -oE '"track_count": [0-9]+' | grep -oE '[0-9]+' || echo -1)"
+# Count only the DOCUMENT tracks: master is published alongside them and would otherwise
+# inflate every total by one.
+doc_tracks() {
+  DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null | grep -c '"master": false' || true
+}
+master_strips() {
+  DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null | grep -c '"master": true' || true
+}
+before="$(doc_tracks)"
+master_before="$(master_strips)"
 DAW_UI_SHM_NAME="$SHM" "$CLI" do add-track --force >/dev/null 2>&1 || true; sleep 0.4   # -> track 1
 DAW_UI_SHM_NAME="$SHM" "$CLI" do add-track --force >/dev/null 2>&1 || true; sleep 0.4   # -> track 2
-after_add="$(DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null | grep -oE '"track_count": [0-9]+' | grep -oE '[0-9]+' || echo -1)"
+after_add="$(doc_tracks)"
+master_after="$(master_strips)"
 DAW_UI_SHM_NAME="$SHM" "$CLI" do remove-track --track 1 --force >/dev/null 2>&1 || true; sleep 0.4
 # Save under a new name and read back the surviving track ids.
 DAW_UI_SHM_NAME="$SHM" "$CLI" do save result --force >/dev/null 2>&1 || true
 sleep 0.6
 wait "$ENG"; ENG_RC=$?
 
-IDS="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(str(t["track_id"]) for t in d.get("tracks",[])))' "$TMP/result.uniproj.json" 2>/dev/null || echo ERR)"
-echo "track_count before add : $before (expect 1)"
-echo "track_count after 2 adds: $after_add (expect 3)"
+IDS="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(str(t["track_id"]) for t in d.get("tracks",[]) if not t.get("is_master")))' "$TMP/result.uniproj.json" 2>/dev/null || echo ERR)"
+SAVED_MASTERS="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(1 for t in d.get("tracks",[]) if t.get("is_master")))' "$TMP/result.uniproj.json" 2>/dev/null || echo ERR)"
+echo "doc tracks before add   : $before (expect 1)"
+echo "doc tracks after 2 adds : $after_add (expect 3)"
+echo "master strips           : $master_before before / $master_after after (expect 1/1)"
+echo "saved is_master entries : $SAVED_MASTERS (expect 1)"
 echo "AddTrack log            : $(grep -c 'AddTrack ->' "$TMP/eng.log") lines (expect 2)"
 echo "RemoveTrack log         : $(grep 'RemoveTrack ' "$TMP/eng.log" | head -1)"
 echo "saved track ids         : [$IDS] (expect [0,2] — id 2 did NOT renumber to 1)"
@@ -60,9 +79,17 @@ echo "engine exit code        : $ENG_RC (expect 0)"
 
 rm -rf "$TMP"
 ok=1
-[ "$before" = "1" ] || { echo "FAIL: expected 1 track before add"; ok=0; }
-[ "$after_add" = "3" ] || { echo "FAIL: expected 3 tracks after two adds"; ok=0; }
+[ "$before" = "1" ] || { echo "FAIL: expected 1 document track before add"; ok=0; }
+[ "$after_add" = "3" ] || { echo "FAIL: expected 3 document tracks after two adds"; ok=0; }
 [ "$IDS" = "0,2" ] || { echo "FAIL: saved ids not [0,2] — id stability broken"; ok=0; }
+# Master is exactly one strip, always — never zero (it stopped being published) and never
+# duplicated by an add (which would give the mix two faders and one of them would do
+# nothing).
+[ "$master_before" = "1" ] && [ "$master_after" = "1" ] \
+  || { echo "FAIL: master strips $master_before -> $master_after, expected 1 -> 1"; ok=0; }
+[ "$SAVED_MASTERS" = "1" ] \
+  || { echo "FAIL: the save wrote $SAVED_MASTERS is_master entries, expected exactly 1 —
+        0 loses the master chain on reload, 2+ means the load will fight over which wins"; ok=0; }
 [ "$ENG_RC" = "0" ] || { echo "FAIL: engine did not exit cleanly"; ok=0; }
 [ "$ok" = "1" ] && echo "add_remove_track_check: PASS — add/remove work and ids stay stable across a middle removal" \
                 || { echo "add_remove_track_check: FAIL"; exit 1; }

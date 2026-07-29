@@ -2594,7 +2594,7 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         if let Some(r) = build_routing(&t) {
                             let reply = match r {
                                 Err(why) => format!("{{\"error\":\"{why}\"}}"),
-                                Ok(p) => match handle.send_track_routing(p) {
+                                Ok(p) => match handle.send_routing_command(p) {
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"routing\":{},\"kind\":{},\"to\":{}}}",
                                         p.track_id, p.audio_out_kind, p.audio_out_track_id),

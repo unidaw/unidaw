@@ -8,7 +8,9 @@
 #include "apps/device_chain.h"
 #include "apps/harmony_timeline.h"
 #include "apps/modulation.h"
+#include "apps/automation_clip.h"
 #include "apps/lane_quantize.h"
+#include "apps/section_list.h"
 #include "apps/time_signature_map.h"
 #include "apps/musical_structures.h"
 #include "apps/patcher_graph.h"
@@ -104,7 +106,27 @@ struct ProjectTrack {
   // `collapsed` hides the children in the UI (a view filter, never a data change).
   uint32_t parentId = 0;
   bool collapsed = false;
+  // An AUX CHILD — a lane the engine DERIVES, one per enabled aux output bus of the
+  // parent's multi-out plugin. These used to be skipped by the save entirely, with a good
+  // reason (written as a plain track, a child reloads as a top-level lane fed by nothing)
+  // and a bad consequence: notes typed on a stem were accepted, they sounded, and they were
+  // gone after a reload with nothing reporting a loss. So a child is now saved the way the
+  // master track is — a FLAGGED entry, lifted out of `tracks` on load and reattached after
+  // the children are re-derived.
+  //
+  // It reattaches by BUS INDEX, never by track id or list position. A child's id is
+  // assigned from the live track count when it is derived, so it moves whenever the
+  // document's track count changes; the bus it came from is the only stable name it has.
+  // `auxBusIndex` is meaningful only when isAuxChild is set (bus 0 is the main output and
+  // never becomes a child, so 0 doubles as "unset" without ambiguity).
+  bool isAuxChild = false;
+  uint32_t auxBusIndex = 0;
   bool harmonyQuantize = false;
+  // M3.27: this track's automation. Playback existed since Movement 3 phase 1 and this
+  // did NOT, so automation could be heard and never saved — record a sweep, hear it,
+  // reload, and it was gone. Written only when non-empty, so a project without automation
+  // is byte-identical to what it was.
+  std::vector<AutomationClip> automationClips;
   // Rows one beat is cut into for this lane's tracker grid (Mock B per-lane
   // grids): 4 = 16ths, 3 = triplets. The engine persists this but does not use
   // it — note timing is stored in nanoticks and is grid-independent.
@@ -152,6 +174,12 @@ struct ProjectDocument {
   // kept as its own field so every existing reader and every file written before this
   // still means what it meant — a project with one signature writes an empty map and
   // reads back identically. A non-empty map supersedes it.
+  // M3.23: the section spine — the ORDERED list of named spans that is the arrangement.
+  // Each entry stores a bar COUNT, never a start position: "chorus 1 is at bar 9" is a
+  // consequence of the intro being 8 bars, so lengthening the intro moves everything
+  // after it and no two facts about the same position can disagree. Empty = a song with
+  // no named structure, which is every project written before this field.
+  std::vector<Section> sections;
   std::vector<TimeSignaturePoint> timeSigMap;
   uint32_t songTimeSigNumerator = 4;
   uint32_t songTimeSigDenominator = 4;

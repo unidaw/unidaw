@@ -155,8 +155,68 @@ enum class UiCommandType : uint16_t {
   // (0 = off), value0 = strength in thousandths, notePitch = swing in thousandths
   // BIASED BY +500 so it survives the unsigned field (0 = -500, 500 = straight,
   // 1000 = +500). Changes what SOUNDS; never touches a stored note.
-  SetLaneQuantize = 53,  // next free 54
+  SetLaneQuantize = 53,
+  // M3.23 SECTION ops. A section stores a name and a length in BARS; its position is
+  // DERIVED, so there is no "move a section to bar N" — you change a length or the order,
+  // and everything after follows. SetSectionLength RIPPLES: it carries every placement at
+  // or after the boundary, in one transaction, and REFUSES a shrink into occupied bars
+  // rather than stacking them on one tick.
+  //
+  // All five ride UiSectionCommandPayload. AddSection and RenameSection carry a name.
+  AddSection = 54,
+  RemoveSection = 55,
+  RenameSection = 56,
+  SetSectionLength = 57,
+  MoveSection = 58,
+  // M3.24: clear BOTH override vectors on one placement, in one undoable step. That is
+  // the "one-click revert" the item asks for, and it is only possible because the
+  // overrides are additive-only — reverting is deleting two lists, not replaying 32
+  // correct inverses.
+  RevertPlacementOverrides = 59,
+  // M3.27: write one automation point. Automation PLAYBACK has existed and been tested
+  // since Movement 3 phase 1, but NOTHING in the engine ever created a clip to play —
+  // there was no authoring command and no persistence, so the feature was unreachable.
+  // This is the owner half: a point is addressed by (track, paramId, tick).
+  WriteAutomationPoint = 60,  // next free 61
 };
+
+// M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
+// (the engine hashes it to the uid16 the wire and the param mirror use) — 16 bytes, which
+// fits "index:NNN" and a uid16 hex prefix. `value` is the plugin's normalised 0..1.
+//
+// flags bit 0 = DISCRETE: the value steps at each point instead of interpolating between
+// them. That belongs to the CLIP rather than the point, so it is applied when the clip is
+// created and ignored afterwards — a switch that changed meaning halfway through a curve
+// would make the curve unreadable.
+struct UiAutomationPointPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t targetPluginIndex = 0;
+  uint32_t nanotickLo = 0;
+  uint32_t nanotickHi = 0;
+  float value = 0.0f;
+  char paramId[16]{};
+};
+static_assert(sizeof(UiAutomationPointPayload) == 40,
+              "UiAutomationPointPayload must fit an EventEntry payload");
+constexpr uint16_t kUiAutomationDiscrete = 1u << 0;
+
+// M3.23: one section command. `sectionId` addresses an existing section (0 = append, for
+// AddSection); `barCount` is the length for Add/SetSectionLength; `toIndex` is the
+// destination for MoveSection. The name is a fixed inline array, not a pointer — the
+// ring carries values.
+struct UiSectionCommandPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  uint16_t flags = 0;
+  uint32_t sectionId = 0;
+  uint32_t barCount = 0;
+  uint32_t toIndex = 0;
+  uint32_t colorRgb = 0;
+  char name[20]{};
+};
+static_assert(sizeof(UiSectionCommandPayload) == 40,
+              "UiSectionCommandPayload must fit an EventEntry payload");
 
 // SetLaneQuantize carries swing through an unsigned field; this is the bias.
 constexpr uint32_t kLaneQuantizeSwingBias = 500;
@@ -215,6 +275,13 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::AddPlacement: return "add_placement";
     case UiCommandType::Panic: return "panic";
     case UiCommandType::SetLaneQuantize: return "set_lane_quantize";
+    case UiCommandType::AddSection: return "add_section";
+    case UiCommandType::RemoveSection: return "remove_section";
+    case UiCommandType::RenameSection: return "rename_section";
+    case UiCommandType::SetSectionLength: return "set_section_length";
+    case UiCommandType::MoveSection: return "move_section";
+    case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
+    case UiCommandType::WriteAutomationPoint: return "write_automation_point";
   }
   return "op:unknown";
 }
@@ -259,6 +326,13 @@ inline bool uiCommandIsGlobalScope(UiCommandType t) {
     case UiCommandType::WriteHarmony:
     case UiCommandType::DeleteHarmony:
     case UiCommandType::AddTrack:
+    // Section ops are SONG-scoped: they change the arrangement's spine, which belongs to
+    // no single track, and SetSectionLength moves placements on every track at once.
+    case UiCommandType::AddSection:
+    case UiCommandType::RemoveSection:
+    case UiCommandType::RenameSection:
+    case UiCommandType::SetSectionLength:
+    case UiCommandType::MoveSection:
       return true;
     default:
       return false;
@@ -529,6 +603,28 @@ constexpr uint16_t kUiChainDiffBusTruncated = 1u << 8;  // more buses than the c
 // the device (and the track) as a source of "notes I didn't type", turning a
 // phantom-note hunt into a glance at the chain. bit8 is truncated, so this is bit9.
 constexpr uint16_t kUiChainDiffGenerates = 1u << 9;
+
+// M3.24: EDIT SCOPE on WriteNote / DeleteNote / WriteChord. `flags` low bits carry the
+// COLUMN, so bit 15 — the top — is the scope.
+//
+//   CLEAR (default) = the CLIP. The edit goes to the clip, so it appears in EVERY
+//                     placement of that clip. This is exactly today's behaviour, so no
+//                     caller changes and no file means anything different.
+//   SET             = THIS APPEARANCE. The edit is recorded on the PLACEMENT as an `add`
+//                     or a `mute`, so it appears only here.
+//
+// It is an EXPLICIT flag and never inferred. Deciding "modify vs create" from whether the
+// cell is occupied — the obvious shortcut — breaks the promise in one direction or the
+// other depending on which rule you pick: infer clip-scope and the hat typed into chorus
+// 3 lands in all three; infer local and the bass fix in chorus 1 stops reaching choruses
+// 2 and 3. Both halves of "fix the bass in chorus 1, all three change, and the hat in
+// chorus 3 survives" need the caller to say which it meant.
+//
+// WHICH GESTURE sets it — modifier key, mode, or default — is a UI decision and is
+// deliberately not encoded here.
+constexpr uint16_t kUiEditScopeLocal = 1u << 15;
+// The column occupies the low byte; this masks the scope bit off before reading it.
+constexpr uint16_t kUiEditColumnMask = 0x00FFu;
 
 // v20: one audio bus of a hosted plugin, streamed right after that device's
 // ChainSnapshot diff (UiDiffType::DeviceBus). `channelOffset` is the bus's first

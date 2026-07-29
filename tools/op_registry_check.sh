@@ -44,23 +44,11 @@ DECLARED_NO_CLI = {
     "None": "not an op — the zero value",
     "LoadPluginOnTrack": "addressed by scan index, which is not stable across machines; "
                          "`do add-device` with a vst_ref path is the durable equivalent",
-    "SetAutomationTarget": "automation is not persisted yet (item 27); a CLI path would "
-                           "drive something that does not survive the session",
+    "SetAutomationTarget": "retargets an EXISTING automation clip to a different plugin "
+                           "in the chain; `do automation --device D` sets that when the "
+                           "clip is created, which covers the case that exists today",
     "SetDeviceEuclideanConfig": "the patcher node config surface as a whole is unbuilt "
                                 "on the CLI side; see the patcher ops below",
-    "SetTrackRouting": "needs a routing payload sender in daw-bridge; worth doing, not "
-                       "yet done",
-    "AddModLink": "mod-link editing needs its own payload sender + a way to name a "
-                  "target param; the read-back exists, the write path does not",
-    "RemoveModLink": "as AddModLink",
-    "SetModLinkUid16": "as AddModLink",
-    "SetModSourceValue": "as AddModLink",
-    "AddPatcherNode": "patcher GRAPH editing from a shell is a real surface and a real "
-                      "piece of work; the per-device patcher read-back exists",
-    "RemovePatcherNode": "as AddPatcherNode",
-    "ConnectPatcherNodes": "as AddPatcherNode",
-    "SetPatcherNodeConfig": "as AddPatcherNode",
-    "SavePatcherPreset": "as AddPatcherNode",
 }
 
 missing = []

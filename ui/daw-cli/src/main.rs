@@ -20,6 +20,8 @@ daw-cli — control surface for a running engine
   daw-cli watch                    stream transport state (default)
   daw-cli get transport            transport + versions as JSON
   daw-cli get tracks               per-track state as JSON
+  daw-cli get arrangement          the section spine (resolved to bars AND ticks),
+                                   the meter map, and the song end
   daw-cli get notes --track N      that track's notes from the published region
                                    (read-only: reads the published region)
   daw-cli get clip [--track N] [--bars N] [--grid]
@@ -30,7 +32,10 @@ daw-cli — control surface for a running engine
   daw-cli do play                  toggle transport
   daw-cli do panic                 all sound off (CC120+CC123 everywhere)
   daw-cli do note --track N --nanotick T --pitch P
-                  [--velocity V] [--duration D] [--column C] [--base V]
+                  [--velocity V] [--duration D] [--column C] [--base V] [--local]
+                                   --local records the edit on THIS APPEARANCE of the
+                                   clip (an add or a mute on the placement) instead of
+                                   on the clip, which every placement of it shares
   daw-cli do delete-note --track N --nanotick T --pitch P [--column C]
   daw-cli do notes --track N --pitches 60,64,67 [--start T] [--step S]
                    [--duration D] [--velocity V] [--column C]
@@ -43,6 +48,60 @@ daw-cli — control surface for a running engine
   daw-cli do position --nanotick T move the playhead
   daw-cli do loop --start T --end T set the loop range
   daw-cli do harmony-quantize --track N [--on 0|1]
+  daw-cli do automation --track N --param ID --nanotick T --value V
+                        [--discrete] [--device D]
+                                   writes one automation point. --discrete makes the
+                                   value STEP at each point instead of interpolating,
+                                   and is fixed when the clip is created.
+  daw-cli do revert-overrides --track N --placement P
+                                   clears every add and mute on one appearance, in one
+                                   step — possible only because overrides are
+                                   additive-only, so reverting is dropping two lists
+  daw-cli do section add --bars N [--name X] [--index I] [--color RGB]
+  daw-cli do section remove --id ID
+  daw-cli do section rename --id ID --name X
+  daw-cli do section length --id ID --bars N
+                                   RIPPLES: carries every placement at or after the
+                                   section's end. Refuses a shrink into occupied bars
+                                   rather than stacking them onto one tick.
+  daw-cli do section move --id ID --index I
+                                   a section's POSITION is derived from the lengths
+                                   before it, so reordering is how you move one
+  daw-cli do add-placement --track N --clip C --at T --length L
+                                   --at and --length are REQUIRED; the engine refuses
+                                   the leave-unchanged sentinel as a position
+  daw-cli do routing --track N [--audio-out none|master|track:M|input:M]
+                     [--midi-out ...] [--audio-in ...] [--midi-in ...]
+                     [--pre-fader 0|1]
+                                   REPLACES every route on the track. Anything not
+                                   named goes to its DEFAULT (audio-out master, the
+                                   rest none) — the engine has no partial form and no
+                                   routing read-back to merge against.
+  daw-cli do patcher-node --track N --type euclidean|lfo|random-degree|
+                          passthrough|audio-passthrough|event-out
+  daw-cli do patcher-unnode --track N --node ID
+  daw-cli do patcher-connect --track N --src ID --dst ID
+                             [--src-port P] [--dst-port P] [--kind event|audio|cv]
+  daw-cli do patcher-config --track N --node ID --type T [type-specific flags]
+                            euclidean: --steps --hits --offset --degree
+                                       --octave-offset --velocity --base-octave
+                                       --duration
+                            random-degree: --degree --velocity --duration
+                            lfo: --freq --depth --bias --phase
+  daw-cli do patcher-save [name]
+  daw-cli do mod-link --track N --source-device D --target-device D2
+                      [--source-kind macro|lfo|envelope|patcher]
+                      [--target-kind vst|patcher-param|patcher-macro]
+                      [--source-id N] [--target-id N] [--depth X] [--bias X]
+                      [--rate block|sample] [--enabled 0|1] [--link ID]
+                                   modulation flows FORWARD: the source must not be
+                                   later in the chain than the target (same device
+                                   is fine). A refusal is named in the engine log.
+  daw-cli do unmod-link --track N --link ID
+  daw-cli do mod-target --track N --link ID --uid16 <32 hex chars>
+                                   name the VST parameter a link drives
+  daw-cli do macro --track N --device D --source-id N --value X
+                                   turn a modulation source (a macro knob)
   daw-cli do remove-device --track N|master --device D
   daw-cli do move-device --track N|master --device D --index I
   daw-cli do mixer --track N [--gain-db X] [--pan Y]
@@ -116,9 +175,15 @@ fn note_command(
     let velocity = flag_u64(args, "--velocity", Some(100))?;
     let duration = flag_u64(args, "--duration", Some(0))?;
     let column = flag_u64(args, "--column", Some(0))?;
+    // M3.24: --local records the edit on THIS APPEARANCE (an add or a mute on the
+    // placement) instead of on the clip. Default is clip scope, which reaches every
+    // placement — today's behaviour, unchanged. It is a flag and never inferred: which
+    // one you meant is the difference between "fix the bass in chorus 1 and all three
+    // choruses change" and "the hat you added to chorus 3 stays in chorus 3".
+    let local = args.iter().any(|a| a == "--local");
     Ok(UiCommandPayload {
         command_type: command as u16,
-        flags: column as u16,
+        flags: (column as u16) | if local { daw_bridge::layout::UI_EDIT_SCOPE_LOCAL } else { 0 },
         track_id: track,
         plugin_index: 0,
         note_pitch: pitch as u32,
@@ -153,6 +218,11 @@ fn get_transport(handle: &EngineHandle) -> i32 {
         snapshot.ui_song_time_sig_num, snapshot.ui_song_time_sig_den
     );
     println!("  \"track_count\": {},", handle.track_count());
+    // The loop span drives what actually PLAYS, so it belongs in the transport report;
+    // without it "why is my new section silent" has no observable answer.
+    let (loop_start, loop_end) = handle.loop_range();
+    println!("  \"loop_start\": {loop_start},");
+    println!("  \"loop_end\": {loop_end},");
     println!("  \"clip_version\": {}", handle.clip_version());
     println!("}}");
     0
@@ -337,6 +407,227 @@ fn send_named(handle: &EngineHandle, command: UiCommandType, name: &str) -> i32 
 /// M1.13 lane quantize. No base_version: this moves no authored note, so gating it on
 /// a clip version would reject it whenever someone else was mid-edit, for a change that
 /// cannot conflict with theirs.
+/// Patcher node types, by name.
+fn parse_node_type(raw: &str) -> Result<u32, String> {
+    use daw_bridge::layout as L;
+    Ok(match raw {
+        "euclidean" => L::PATCHER_NODE_EUCLIDEAN,
+        "lfo" => L::PATCHER_NODE_LFO,
+        "random-degree" => L::PATCHER_NODE_RANDOM_DEGREE,
+        "passthrough" => L::PATCHER_NODE_PASSTHROUGH,
+        "audio-passthrough" => L::PATCHER_NODE_AUDIO_PASSTHROUGH,
+        "event-out" => L::PATCHER_NODE_EVENT_OUT,
+        "rust-kernel" => L::PATCHER_NODE_RUST_KERNEL,
+        other => return Err(format!(
+            "--type: expected euclidean|lfo|random-degree|passthrough|\
+             audio-passthrough|event-out|rust-kernel, got {other:?}"
+        )),
+    })
+}
+
+/// SetPatcherNodeConfig's `config` block. EXPLICIT little-endian per node type — the
+/// engine reads it field by field rather than memcpy'ing a struct, because a raw copy
+/// truncated Euclidean and coupled the wire to C++ padding. Building it here by the same
+/// documented layout keeps the two ends honest.
+fn build_node_config(args: &[String], node_type: u32) -> Result<[u8; 16], String> {
+    use daw_bridge::layout as L;
+    let mut cfg = [0u8; 16];
+    let put_u16 = |c: &mut [u8; 16], at: usize, v: u16| {
+        c[at] = (v & 0xff) as u8;
+        c[at + 1] = (v >> 8) as u8;
+    };
+    let put_u32 = |c: &mut [u8; 16], at: usize, v: u32| {
+        c[at] = (v & 0xff) as u8;
+        c[at + 1] = ((v >> 8) & 0xff) as u8;
+        c[at + 2] = ((v >> 16) & 0xff) as u8;
+        c[at + 3] = ((v >> 24) & 0xff) as u8;
+    };
+    if node_type == L::PATCHER_NODE_EUCLIDEAN {
+        // 0 MEANS 0 (M0.6): these are sent verbatim, so `--hits 0` is silence and not
+        // "use the default five".
+        put_u16(&mut cfg, 0, flag_u64(args, "--steps", Some(16))? as u16);
+        put_u16(&mut cfg, 2, flag_u64(args, "--hits", Some(5))? as u16);
+        put_u16(&mut cfg, 4, flag_u64(args, "--offset", Some(0))? as u16);
+        cfg[6] = flag_u64(args, "--degree", Some(1))? as u8;
+        cfg[7] = (flag_i64(args, "--octave-offset", 0)? as i8) as u8;
+        cfg[8] = flag_u64(args, "--velocity", Some(100))? as u8;
+        cfg[9] = flag_u64(args, "--base-octave", Some(4))? as u8;
+        put_u32(&mut cfg, 12, flag_u64(args, "--duration", Some(0))? as u32);
+    } else if node_type == L::PATCHER_NODE_RANDOM_DEGREE {
+        cfg[0] = flag_u64(args, "--degree", Some(8))? as u8;
+        cfg[1] = flag_u64(args, "--velocity", Some(100))? as u8;
+        put_u32(&mut cfg, 4, flag_u64(args, "--duration", Some(0))? as u32);
+    } else if node_type == L::PATCHER_NODE_LFO {
+        // Milli-units on the wire, mirroring the read-back; the engine stores floats.
+        let milli = |v: f64| ((v * 1000.0).round() as i32) as u32;
+        put_u32(&mut cfg, 0, milli(flag_f64(args, "--freq", 1.0)?));
+        put_u32(&mut cfg, 4, milli(flag_f64(args, "--depth", 1.0)?));
+        put_u32(&mut cfg, 8, milli(flag_f64(args, "--bias", 0.0)?));
+        put_u32(&mut cfg, 12, milli(flag_f64(args, "--phase", 0.0)?));
+    } else {
+        return Err(
+            "--type: only euclidean, random-degree and lfo carry a config".to_string(),
+        );
+    }
+    Ok(cfg)
+}
+
+/// AddModLink / RemoveModLink. The engine validates that both devices exist and that
+/// modulation flows FORWARD (source not later in the chain than target; same device is
+/// legal and is the common case with per-device patchers). A refusal is reported as
+/// `modlink.rejected` in the engine log and history.jsonl with a named reason.
+fn mod_link_command(
+    args: &[String],
+    removing: bool,
+) -> Result<daw_bridge::layout::UiModLinkCommandPayload, String> {
+    use daw_bridge::layout as L;
+    let track = flag_u64(args, "--track", Some(0))? as u32;
+    let link = flag_u64(args, "--link", Some(L::MOD_LINK_ID_AUTO as u64))? as u32;
+    if removing {
+        // A remove needs only the id; sending kinds would imply they are matched on.
+        return Ok(L::UiModLinkCommandPayload {
+            command_type: UiCommandType::RemoveModLink as u16,
+            track_id: track,
+            link_id: link,
+            ..Default::default()
+        });
+    }
+    let source_kind = match flag(args, "--source-kind").as_deref().unwrap_or("macro") {
+        "macro" => L::MOD_SOURCE_MACRO,
+        "lfo" => L::MOD_SOURCE_LFO,
+        "envelope" => L::MOD_SOURCE_ENVELOPE,
+        "patcher" => L::MOD_SOURCE_PATCHER_NODE_OUTPUT,
+        other => return Err(format!(
+            "--source-kind: expected macro|lfo|envelope|patcher, got {other:?}"
+        )),
+    };
+    let target_kind = match flag(args, "--target-kind").as_deref().unwrap_or("vst") {
+        "vst" => L::MOD_TARGET_VST_PARAM,
+        "patcher-param" => L::MOD_TARGET_PATCHER_PARAM,
+        "patcher-macro" => L::MOD_TARGET_PATCHER_MACRO,
+        other => return Err(format!(
+            "--target-kind: expected vst|patcher-param|patcher-macro, got {other:?}"
+        )),
+    };
+    let rate = match flag(args, "--rate").as_deref().unwrap_or("block") {
+        "block" => L::MOD_RATE_BLOCK,
+        "sample" => L::MOD_RATE_SAMPLE,
+        other => return Err(format!("--rate: expected block|sample, got {other:?}")),
+    };
+    let enabled = flag_u64(args, "--enabled", Some(1))? != 0;
+    // The engine packs these four into `flags`; the layout is stated in the payload's
+    // comment on both sides, and getting it wrong here would silently make every link a
+    // block-rate macro->vst link.
+    let flags = (source_kind & 0x0F)
+        | ((target_kind & 0x0F) << 4)
+        | ((rate & 0x03) << 8)
+        | (if enabled { 1u16 << 10 } else { 0 });
+    Ok(L::UiModLinkCommandPayload {
+        command_type: UiCommandType::AddModLink as u16,
+        flags,
+        track_id: track,
+        base_version: 0,
+        link_id: link,
+        source_device_id: flag_u64(args, "--source-device", None)? as u32,
+        source_id: flag_u64(args, "--source-id", Some(0))? as u32,
+        target_device_id: flag_u64(args, "--target-device", None)? as u32,
+        target_id: flag_u64(args, "--target-id", Some(0))? as u32,
+        depth: flag_f64(args, "--depth", 1.0)? as f32,
+        bias: flag_f64(args, "--bias", 0.0)? as f32,
+    })
+}
+
+/// A 32-hex-character plugin parameter uid.
+fn parse_uid16(raw: &str) -> Result<[u8; 16], String> {
+    let clean: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+    if clean.len() != 32 || !clean.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "--uid16 expects 32 hex characters (16 bytes), got {} character(s)",
+            clean.len()
+        ));
+    }
+    let mut out = [0u8; 16];
+    for i in 0..16 {
+        out[i] = u8::from_str_radix(&clean[i * 2..i * 2 + 2], 16)
+            .map_err(|_| "--uid16: not hex".to_string())?;
+    }
+    Ok(out)
+}
+
+/// One route spec: `none`, `master`, `track:N`, or `input:N`.
+fn parse_route(raw: &str, what: &str) -> Result<(u8, u32), String> {
+    use daw_bridge::layout::{
+        TRACK_ROUTE_EXTERNAL_INPUT, TRACK_ROUTE_MASTER, TRACK_ROUTE_NONE, TRACK_ROUTE_TRACK,
+    };
+    if raw == "none" {
+        return Ok((TRACK_ROUTE_NONE, 0));
+    }
+    if raw == "master" {
+        return Ok((TRACK_ROUTE_MASTER, 0));
+    }
+    if let Some(rest) = raw.strip_prefix("track:") {
+        let id = rest
+            .parse::<u32>()
+            .map_err(|_| format!("{what}: track:N needs a number, got {rest:?}"))?;
+        return Ok((TRACK_ROUTE_TRACK, id));
+    }
+    if let Some(rest) = raw.strip_prefix("input:") {
+        let id = rest
+            .parse::<u32>()
+            .map_err(|_| format!("{what}: input:N needs a number, got {rest:?}"))?;
+        return Ok((TRACK_ROUTE_EXTERNAL_INPUT, id));
+    }
+    Err(format!(
+        "{what}: expected none | master | track:N | input:N, got {raw:?}"
+    ))
+}
+
+/// SetTrackRouting. REPLACE, not merge — the engine writes all four routes from one
+/// payload, and there is no routing read-back to merge against, so anything not named
+/// here goes to its DEFAULT (audio-out master, everything else none) rather than to
+/// whatever it happens to be. That is stated in the usage text and echoed in the output,
+/// because a command that silently resets three routes while you set one is a trap.
+fn routing_command(args: &[String]) -> Result<daw_bridge::layout::UiTrackRoutingPayload, String> {
+    use daw_bridge::layout::{TRACK_ROUTE_MASTER, TRACK_ROUTE_NONE};
+    let track = flag_u64(args, "--track", Some(0))? as u32;
+    let (midi_in_kind, midi_in_id) = match flag(args, "--midi-in") {
+        Some(v) => parse_route(&v, "--midi-in")?,
+        None => (TRACK_ROUTE_NONE, 0),
+    };
+    let (midi_out_kind, midi_out_id) = match flag(args, "--midi-out") {
+        Some(v) => parse_route(&v, "--midi-out")?,
+        None => (TRACK_ROUTE_NONE, 0),
+    };
+    let (audio_in_kind, audio_in_id) = match flag(args, "--audio-in") {
+        Some(v) => parse_route(&v, "--audio-in")?,
+        None => (TRACK_ROUTE_NONE, 0),
+    };
+    // The engine's own default for a track's output is the master bus, so an omitted
+    // --audio-out means master rather than none. Defaulting it to none would silence the
+    // track, which is not what "I did not mention it" should mean.
+    let (audio_out_kind, audio_out_id) = match flag(args, "--audio-out") {
+        Some(v) => parse_route(&v, "--audio-out")?,
+        None => (TRACK_ROUTE_MASTER, 0),
+    };
+    let pre_fader = flag_u64(args, "--pre-fader", Some(1))? != 0;
+    Ok(daw_bridge::layout::UiTrackRoutingPayload {
+        command_type: UiCommandType::SetTrackRouting as u16,
+        flags: if pre_fader { 1 } else { 0 },
+        track_id: track,
+        base_version: 0,
+        midi_in_kind,
+        midi_out_kind,
+        audio_in_kind,
+        audio_out_kind,
+        midi_in_track_id: midi_in_id,
+        midi_out_track_id: midi_out_id,
+        audio_in_track_id: audio_in_id,
+        audio_out_track_id: audio_out_id,
+        midi_in_input_id: midi_in_id,
+        audio_in_input_id: audio_in_id,
+    })
+}
+
 fn quantize_command(args: &[String]) -> Result<UiCommandPayload, String> {
     let track = flag_u64(args, "--track", Some(0))? as u32;
     let grid = flag_u64(args, "--grid", Some(0))?;
@@ -1010,6 +1301,49 @@ fn main() {
                 }
                 Some(&"audio-sources") => get_audio_sources(&handle),
                 Some(&"extents") => get_extents(&handle),
+                Some(&"arrangement") => {
+                    match handle.read_arrange_summary() {
+                        Some(r) => {
+                            println!("{{");
+                            println!("  \"version\": {},", r.version);
+                            println!("  \"song_end_tick\": {},", r.song_end_tick);
+                            // Truncation is reported, not hidden: an incomplete list that
+                            // says nothing reads as a complete one.
+                            println!("  \"sections_truncated\": {},", r.sections_truncated);
+                            println!("  \"time_sig_truncated\": {},", r.time_sig_truncated);
+                            println!("  \"sections\": [");
+                            let n = (r.section_count as usize).min(r.sections.len());
+                            for i in 0..n {
+                                let s = r.sections[i];
+                                let name = String::from_utf8_lossy(&s.name);
+                                let name = name.trim_end_matches('\0');
+                                let comma = if i + 1 == n { "" } else { "," };
+                                println!(
+                                    "    {{ \"id\": {}, \"name\": {:?}, \"start_bar\": {}, \"bars\": {}, \"start_tick\": {}, \"end_tick\": {} }}{comma}",
+                                    s.id, name, s.start_bar, s.bar_count, s.start_tick, s.end_tick
+                                );
+                            }
+                            println!("  ],");
+                            println!("  \"time_sig\": [");
+                            let m = (r.time_sig_count as usize).min(r.time_sig_points.len());
+                            for i in 0..m {
+                                let p = r.time_sig_points[i];
+                                let comma = if i + 1 == m { "" } else { "," };
+                                println!(
+                                    "    {{ \"nanotick\": {}, \"sig\": \"{}/{}\" }}{comma}",
+                                    p.nanotick, p.numerator, p.denominator
+                                );
+                            }
+                            println!("  ]");
+                            println!("}}");
+                            0
+                        }
+                        None => {
+                            eprintln!("daw-cli: no arrangement summary (older engine, or a write was in flight)");
+                            1
+                        }
+                    }
+                }
                 other => {
                     eprintln!("daw-cli: unknown query {:?}\n\n{USAGE}", other.unwrap_or(&""));
                     2
@@ -1127,7 +1461,16 @@ fn main() {
                 },
                 Some(&"rename") => {
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
-                    let name = flag(&args, "--name").unwrap_or_default();
+                    // REQUIRED. Defaulting to an empty string sent a rename the engine
+                    // then ignored, while the CLI printed `"sent": "rename"` — the exact
+                    // silent-success shape being hunted out of this codebase.
+                    let name = match flag(&args, "--name") {
+                        Some(n) if !n.is_empty() => n,
+                        _ => {
+                            eprintln!("daw-cli: --name is required and must not be empty");
+                            std::process::exit(2)
+                        }
+                    };
                     let mut bytes = [0u8; 28];
                     let src = name.as_bytes();
                     let len = src.len().min(bytes.len());
@@ -1434,6 +1777,290 @@ fn main() {
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
+                Some(&"patcher-node") | Some(&"patcher-unnode") => {
+                    let removing = rest.first() == Some(&"patcher-unnode");
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let node_type = if removing {
+                        0
+                    } else {
+                        match flag(&args, "--type") {
+                            Some(t) => match parse_node_type(&t) {
+                                Ok(v) => v,
+                                Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                            },
+                            None => { eprintln!("daw-cli: --type is required"); std::process::exit(2) }
+                        }
+                    };
+                    let payload = daw_bridge::layout::UiPatcherGraphCommandPayload {
+                        command_type: if removing {
+                            UiCommandType::RemovePatcherNode as u16
+                        } else {
+                            UiCommandType::AddPatcherNode as u16
+                        },
+                        track_id: track,
+                        node_id: flag_u64(&args, "--node", Some(0)).unwrap_or(0) as u32,
+                        node_type,
+                        ..Default::default()
+                    };
+                    match handle.send_patcher_graph_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": {:?} }}",
+                                     if removing { "patcher-unnode" } else { "patcher-node" });
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"patcher-connect") => {
+                    use daw_bridge::layout as L;
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let src = match flag_u64(&args, "--src", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let dst = match flag_u64(&args, "--dst", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let kind = match flag(&args, "--kind").as_deref().unwrap_or("event") {
+                        "event" => L::PATCHER_PORT_EVENT,
+                        "audio" => L::PATCHER_PORT_AUDIO,
+                        "cv" => L::PATCHER_PORT_CV,
+                        other => { eprintln!("daw-cli: --kind: expected event|audio|cv, got {other:?}"); std::process::exit(2) }
+                    };
+                    let payload = L::UiPatcherGraphCommandPayload {
+                        command_type: UiCommandType::ConnectPatcherNodes as u16,
+                        track_id: track,
+                        src_node_id: src,
+                        dst_node_id: dst,
+                        // Port 1 is the conventional event OUTPUT and 0 the event INPUT
+                        // (see kPatcherEventOutputPort / kPatcherEventInputPort).
+                        src_port_id: flag_u64(&args, "--src-port", Some(1)).unwrap_or(1) as u32,
+                        dst_port_id: flag_u64(&args, "--dst-port", Some(0)).unwrap_or(0) as u32,
+                        edge_kind: kind,
+                        ..Default::default()
+                    };
+                    match handle.send_patcher_graph_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"patcher-connect\", \"src\": {src}, \"dst\": {dst} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"patcher-config") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let node = match flag_u64(&args, "--node", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let node_type = match flag(&args, "--type") {
+                        Some(t) => match parse_node_type(&t) {
+                            Ok(v) => v,
+                            Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                        },
+                        None => { eprintln!("daw-cli: --type is required"); std::process::exit(2) }
+                    };
+                    let cfg = match build_node_config(&args, node_type) {
+                        Ok(c) => c,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let payload = daw_bridge::layout::UiPatcherNodeConfigPayload {
+                        command_type: UiCommandType::SetPatcherNodeConfig as u16,
+                        track_id: track,
+                        node_id: node,
+                        config_type: node_type,
+                        config: cfg,
+                        ..Default::default()
+                    };
+                    match handle.send_patcher_node_config(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"patcher-config\", \"node\": {node} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"patcher-save") => {
+                    let name = rest.get(1).copied().unwrap_or("default");
+                    let code = send_named(&handle, UiCommandType::SavePatcherPreset, name);
+                    if code == 0 {
+                        println!("{{ \"sent\": \"patcher-save\", \"name\": {name:?} }}");
+                    }
+                    code
+                }
+                Some(&"mod-link") | Some(&"unmod-link") => {
+                    let removing = rest.first() == Some(&"unmod-link");
+                    match mod_link_command(&args, removing) {
+                        Ok(payload) => match handle.send_mod_link_command(payload) {
+                            Ok(()) => {
+                                println!(
+                                    "{{ \"sent\": {:?}, \"track\": {}, \"link\": {} }}",
+                                    if removing { "unmod-link" } else { "mod-link" },
+                                    payload.track_id, payload.link_id
+                                );
+                                0
+                            }
+                            Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                        },
+                        Err(err) => { eprintln!("daw-cli: {err}"); 2 }
+                    }
+                }
+                Some(&"mod-target") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let link = match flag_u64(&args, "--link", None) {
+                        Ok(v) => v as u32,
+                        Err(err) => { eprintln!("daw-cli: {err}"); std::process::exit(2) }
+                    };
+                    let uid = match flag(&args, "--uid16") {
+                        Some(raw) => match parse_uid16(&raw) {
+                            Ok(u) => u,
+                            Err(err) => { eprintln!("daw-cli: {err}"); std::process::exit(2) }
+                        },
+                        None => { eprintln!("daw-cli: --uid16 is required"); std::process::exit(2) }
+                    };
+                    let payload = daw_bridge::layout::UiModLinkUid16Payload {
+                        command_type: UiCommandType::SetModLinkUid16 as u16,
+                        track_id: track,
+                        link_id: link,
+                        uid16: uid,
+                        ..Default::default()
+                    };
+                    match handle.send_mod_link_uid16(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"mod-target\", \"link\": {link} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"macro") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let source = flag_u64(&args, "--source-id", Some(0)).unwrap_or(0) as u32;
+                    let value = match flag_f64(&args, "--value", f64::NAN) {
+                        Ok(v) if !v.is_nan() => v as f32,
+                        _ => { eprintln!("daw-cli: --value is required"); std::process::exit(2) }
+                    };
+                    let payload = daw_bridge::layout::UiModSourceValuePayload {
+                        command_type: UiCommandType::SetModSourceValue as u16,
+                        track_id: track,
+                        source_device_id: device,
+                        source_id: source,
+                        value,
+                        ..Default::default()
+                    };
+                    match handle.send_mod_source_value(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"macro\", \"value\": {value} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                // M3.23 sections. There is no "move a section to bar N": a section's
+                // position is derived from the lengths before it, so you change a length
+                // or the ORDER and everything after follows.
+                Some(&"automation") => {
+                    use daw_bridge::layout as L;
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let param = match flag(&args, "--param") {
+                        Some(p) if !p.is_empty() => p,
+                        _ => { eprintln!("daw-cli: --param is required (the automation clip's id, e.g. index:0)"); std::process::exit(2) }
+                    };
+                    let tick = match flag_u64(&args, "--nanotick", None) {
+                        Ok(v) => v,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let value = match flag_f64(&args, "--value", f64::NAN) {
+                        Ok(v) if !v.is_nan() => v as f32,
+                        _ => { eprintln!("daw-cli: --value is required (normalised 0..1)"); std::process::exit(2) }
+                    };
+                    let mut param_id = [0u8; 16];
+                    let b = param.as_bytes();
+                    let len = b.len().min(param_id.len());
+                    param_id[..len].copy_from_slice(&b[..len]);
+                    let discrete = args.iter().any(|a| a == "--discrete");
+                    let payload = L::UiAutomationPointPayload {
+                        command_type: UiCommandType::WriteAutomationPoint as u16,
+                        flags: if discrete { L::UI_AUTOMATION_DISCRETE } else { 0 },
+                        track_id: track,
+                        target_plugin_index: flag_u64(&args, "--device", Some(0xFFFF_FFFF))
+                            .unwrap_or(0xFFFF_FFFF) as u32,
+                        nanotick_lo: (tick & 0xffff_ffff) as u32,
+                        nanotick_hi: (tick >> 32) as u32,
+                        value,
+                        param_id,
+                    };
+                    match handle.send_automation_point(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"automation\", \"param\": {param:?}, \"nanotick\": {tick}, \"value\": {value} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"revert-overrides") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let placement = match flag_u64(&args, "--placement", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let mut payload = track_structure_command(
+                        UiCommandType::RevertPlacementOverrides, track);
+                    payload.value0 = placement;
+                    payload.base_version = handle.clip_version_for_track(track);
+                    match handle.send_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"revert-overrides\", \"placement\": {placement} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"section") => {
+                    use daw_bridge::layout as L;
+                    let sub = rest.get(1).copied().unwrap_or("");
+                    let mut name = [0u8; 20];
+                    if let Some(n) = flag(&args, "--name") {
+                        let b = n.as_bytes();
+                        let len = b.len().min(name.len());
+                        name[..len].copy_from_slice(&b[..len]);
+                    }
+                    let cmd = match sub {
+                        "add" => UiCommandType::AddSection,
+                        "remove" => UiCommandType::RemoveSection,
+                        "rename" => UiCommandType::RenameSection,
+                        "length" => UiCommandType::SetSectionLength,
+                        "move" => UiCommandType::MoveSection,
+                        other => {
+                            eprintln!("daw-cli: section {other:?}: expected add|remove|rename|length|move");
+                            std::process::exit(2)
+                        }
+                    };
+                    // `--bars` is required where it is the whole point of the command; a
+                    // zero would be a section with no span, which the engine refuses.
+                    let bars = flag_u64(&args, "--bars", Some(0)).unwrap_or(0) as u32;
+                    if matches!(cmd, UiCommandType::AddSection | UiCommandType::SetSectionLength)
+                        && bars == 0
+                    {
+                        eprintln!("daw-cli: --bars is required for section {sub} and must be > 0");
+                        std::process::exit(2);
+                    }
+                    if matches!(cmd, UiCommandType::RenameSection) && flag(&args, "--name").is_none() {
+                        eprintln!("daw-cli: --name is required for section rename");
+                        std::process::exit(2);
+                    }
+                    let payload = L::UiSectionCommandPayload {
+                        command_type: cmd as u16,
+                        flags: 0,
+                        section_id: flag_u64(&args, "--id", Some(0)).unwrap_or(0) as u32,
+                        bar_count: bars,
+                        to_index: flag_u64(&args, "--index", Some(u32::MAX as u64))
+                            .unwrap_or(u32::MAX as u64) as u32,
+                        color_rgb: flag_u64(&args, "--color", Some(0)).unwrap_or(0) as u32,
+                        name,
+                    };
+                    match handle.send_section_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"section {sub}\" }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"routing") => match routing_command(&args) {
+                    Ok(payload) => match handle.send_routing_command(payload) {
+                        Ok(()) => {
+                            println!(
+                                "{{ \"sent\": \"routing\", \"track\": {}, \"replaced_all_routes\": true }}",
+                                payload.track_id
+                            );
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    },
+                    Err(err) => { eprintln!("daw-cli: {err}"); 2 }
+                },
                 Some(&"stop") => {
                     let payload = track_structure_command(UiCommandType::Stop, 0);
                     match handle.send_command(payload) {

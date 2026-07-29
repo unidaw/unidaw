@@ -510,6 +510,23 @@ std::string serializeProject(const ProjectDocument& document) {
   writer.key("time_sig_denominator", document.songTimeSigDenominator);
   writer.endChildObject();
 
+  // M3.23: the section spine. Written only when there IS one, so a project with no
+  // named structure is byte-identical to what it was before this field existed —
+  // successive saves of an unchanged document have to stay identical, and an empty array
+  // in every file would make every old project show a diff on its first save.
+  if (!document.sections.empty()) {
+    writer.beginArray("sections");
+    for (const auto& section : document.sections) {
+      writer.beginArrayElement();
+      writer.key("id", section.id);
+      writer.key("name", section.name);
+      writer.key("bars", section.barCount);
+      writer.key("color_rgb", section.colorRgb);
+      writer.endArrayElement();
+    }
+    writer.endArray();
+  }
+
   // M3.22: the song's time-signature map. Written only when there IS one, so a project
   // in a single meter is byte-identical to what it was before this field existed —
   // successive saves of an unchanged document have to stay identical, and an empty
@@ -583,6 +600,15 @@ std::string serializeProject(const ProjectDocument& document) {
     writer.key("name", track.name);
     if (track.isMaster) {
       writer.key("is_master", true);
+    }
+    // A derived stem, flagged so the load lifts it out of `tracks` instead of adopting it
+    // as a top-level lane, and keyed by the BUS it came from rather than its track id (an
+    // id assigned from the live track count moves whenever the document's track count
+    // does). Written only for children, so a project without a multi-out instrument is
+    // byte-identical to what it was.
+    if (track.isAuxChild) {
+      writer.key("is_aux_child", true);
+      writer.key("aux_bus_index", track.auxBusIndex);
     }
     writer.key("parent_id", track.parentId);
     writer.key("collapsed", track.collapsed);
@@ -661,6 +687,29 @@ std::string serializeProject(const ProjectDocument& document) {
       writer.endArrayElement();
     }
     writer.endArray();
+
+    // M3.27: automation. Points are (nanotick, value); the clip carries the param id it
+    // is keyed on, whether it steps or interpolates, and which plugin in the chain it
+    // targets. Written only when there IS automation.
+    if (!track.automationClips.empty()) {
+      writer.beginArray("automation");
+      for (const auto& clip : track.automationClips) {
+        writer.beginArrayElement();
+        writer.key("param_id", clip.paramId());
+        writer.key("discrete", clip.discreteOnly());
+        writer.key("target_plugin_index", clip.targetPluginIndex());
+        writer.beginArray("points");
+        for (const auto& point : clip.points()) {
+          writer.beginArrayElement();
+          writer.key("nanotick", point.nanotick);
+          writer.key("value", static_cast<double>(point.value));
+          writer.endArrayElement();
+        }
+        writer.endArray();
+        writer.endArrayElement();
+      }
+      writer.endArray();
+    }
 
     writer.beginArray("mod_links");
     for (const auto& link : track.modLinks) {
@@ -758,6 +807,20 @@ bool deserializeProject(const std::string& json,
       root.get<uint32_t>("timebase.time_sig_numerator", 4);
   parsed.songTimeSigDenominator =
       root.get<uint32_t>("timebase.time_sig_denominator", 4);
+  if (const auto sectionList = root.get_child_optional("sections")) {
+    for (const auto& entry : *sectionList) {
+      daw::Section section;
+      section.id = entry.second.get<uint32_t>("id", 0);
+      section.name = entry.second.get<std::string>("name", "");
+      section.barCount = entry.second.get<uint32_t>("bars", 0);
+      section.colorRgb = entry.second.get<uint32_t>("color_rgb", 0);
+      // A zero-bar section occupies no time and could never be pointed at. Dropping it
+      // here rather than carrying it means the loaded spine is always resolvable.
+      if (section.barCount > 0) {
+        parsed.sections.push_back(std::move(section));
+      }
+    }
+  }
   if (const auto sigMap = root.get_child_optional("time_sig_map")) {
     for (const auto& entry : *sigMap) {
       daw::TimeSignaturePoint point;
@@ -845,6 +908,8 @@ bool deserializeProject(const std::string& json,
       track.trackId = tree.get<uint32_t>("track_id", 0);
       track.name = tree.get<std::string>("name", "");
       track.isMaster = tree.get<bool>("is_master", false);
+      track.isAuxChild = tree.get<bool>("is_aux_child", false);
+      track.auxBusIndex = tree.get<uint32_t>("aux_bus_index", 0);
       track.parentId = tree.get<uint32_t>("parent_id", 0);
       track.collapsed = tree.get<bool>("collapsed", false);
       track.harmonyQuantize = tree.get<bool>("harmony_quantize", false);
@@ -945,6 +1010,28 @@ bool deserializeProject(const std::string& json,
         }
       }
 
+      if (const auto automation = tree.get_child_optional("automation")) {
+        for (const auto& entry : *automation) {
+          const std::string paramId =
+              entry.second.get<std::string>("param_id", "");
+          if (paramId.empty()) {
+            continue;  // a clip with no param to drive can never be applied
+          }
+          daw::AutomationClip clip(paramId,
+                                   entry.second.get<bool>("discrete", false),
+                                   entry.second.get<uint32_t>("target_plugin_index",
+                                                              daw::kParamTargetAll));
+          if (const auto points = entry.second.get_child_optional("points")) {
+            for (const auto& p : *points) {
+              daw::AutomationPoint point;
+              point.nanotick = p.second.get<uint64_t>("nanotick", 0);
+              point.value = p.second.get<float>("value", 0.0f);
+              clip.addPoint(point);
+            }
+          }
+          track.automationClips.push_back(std::move(clip));
+        }
+      }
       if (const auto links = tree.get_child_optional("mod_links")) {
         for (const auto& linkEntry : *links) {
           ModLink link;

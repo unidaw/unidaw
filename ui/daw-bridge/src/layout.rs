@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 26;
+pub const K_SHM_VERSION: u16 = 27;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -160,6 +160,11 @@ pub struct ShmHeader {
     pub ui_track_quantize_strength: [u32; K_UI_MAX_TRACKS],
     pub ui_track_quantize_swing: [i32; K_UI_MAX_TRACKS],
     pub ui_quantize_version: u32,
+    /// v27 (M3.25): where to find the UiArrangeSummaryRegion. 0 = absent. Its own
+    /// version lives INSIDE the region, so a reader takes the spine and the meter under
+    /// one read and cannot see a mismatched pair.
+    pub ui_arrange_offset: u64,
+    pub ui_arrange_bytes: u64,
 }
 
 /// uiTrackFlags bits (Movement 4).
@@ -373,7 +378,10 @@ pub struct UiClipExtent {
     pub name: [u8; 32],
 }
 
-pub const K_UI_MAX_CLIP_EXTENTS: usize = 64;
+/// Raised 64 -> 256 in v27. NOTHING asserted this against the C++ side, so when the C++
+/// constant moved first the two disagreed and every test still passed — the exact silent
+/// divergence the const_asserts exist to prevent. There is one on the region size now.
+pub const K_UI_MAX_CLIP_EXTENTS: usize = 256;
 
 #[repr(C)]
 pub struct UiClipExtentRegion {
@@ -669,6 +677,13 @@ pub enum UiCommandType {
     /// value0 = strength in thousandths, note_pitch = swing in thousandths BIASED by
     /// +500 (so 500 = straight). Changes what SOUNDS; never touches a stored note.
     SetLaneQuantize = 53,
+    AddSection = 54,
+    RemoveSection = 55,
+    RenameSection = 56,
+    SetSectionLength = 57,
+    MoveSection = 58,
+    RevertPlacementOverrides = 59,
+    WriteAutomationPoint = 60,
 }
 
 /// A track's routing (UiCommandType::SetTrackRouting). Mirrors the C++
@@ -862,6 +877,303 @@ pub struct UiClipWindowCommandPayload {
     pub reserved2: u32,
 }
 
+
+/// SetTrackRouting (19). REPLACE semantics: the engine writes all four routes plus the
+/// pre-fader flag from this one payload, so a caller must send the state it wants, not a
+/// delta. There is deliberately no partial form — and note there is currently NO routing
+/// read-back in the SHM header (routing is only published as an outbound diff), so a
+/// read-modify-write is not available either. Both are on the list for the item-25
+/// contract batch.
+///
+/// `sidechain` is absent from this payload: TrackRouting carries one, the handler leaves
+/// it alone, and it can only be set from a project file today.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiTrackRoutingPayload {
+    pub command_type: u16,
+    /// bit 0: pre-fader send
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub midi_in_kind: u8,
+    pub midi_out_kind: u8,
+    pub audio_in_kind: u8,
+    pub audio_out_kind: u8,
+    pub midi_in_track_id: u32,
+    pub midi_out_track_id: u32,
+    pub audio_in_track_id: u32,
+    pub audio_out_track_id: u32,
+    pub midi_in_input_id: u32,
+    pub audio_in_input_id: u32,
+}
+
+/// AddModLink / RemoveModLink (20/21). `flags` packs the kinds and rate — bits 0-3
+/// source kind, 4-7 target kind, 8-9 rate, bit 10 enabled — because the four enums are
+/// small and the payload is full. `link_id` = MOD_LINK_ID_AUTO lets the engine assign.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiModLinkCommandPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub link_id: u32,
+    pub source_device_id: u32,
+    pub source_id: u32,
+    pub target_device_id: u32,
+    pub target_id: u32,
+    pub depth: f32,
+    pub bias: f32,
+}
+
+/// SetModLinkUid16 (22): names the VST parameter a link targets, by its 16-byte plugin
+/// uid. Separate from the link itself because it does not fit alongside it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiModLinkUid16Payload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub link_id: u32,
+    pub uid16: [u8; 16],
+    pub reserved: [u8; 8],
+}
+
+impl Default for UiModLinkUid16Payload {
+    fn default() -> Self {
+        Self {
+            command_type: 0,
+            flags: 0,
+            track_id: 0,
+            base_version: 0,
+            link_id: 0,
+            uid16: [0u8; 16],
+            reserved: [0u8; 8],
+        }
+    }
+}
+
+/// SetModSourceValue (23): drives a macro/source value directly, which is how a macro
+/// knob is turned.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiModSourceValuePayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub source_device_id: u32,
+    pub source_id: u32,
+    pub value: f32,
+    pub reserved: [u8; 16],
+}
+
+impl Default for UiModSourceValuePayload {
+    fn default() -> Self {
+        Self {
+            command_type: 0,
+            flags: 0,
+            track_id: 0,
+            base_version: 0,
+            source_device_id: 0,
+            source_id: 0,
+            value: 0.0,
+            reserved: [0u8; 16],
+        }
+    }
+}
+
+/// v27 (M3.25): a section, published RESOLVED — `start_bar` and `start_tick` are already
+/// prefix-summed through the meter map. Resolved on purpose: the model stores only bar
+/// COUNTS, so a client deriving positions would be reimplementing the engine's
+/// `SectionList::resolve`, and the first disagreement would draw a section in the wrong
+/// place with nothing reporting an error.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiArrangeSection {
+    pub id: u32,
+    /// ONE-based, like every ruler.
+    pub start_bar: u32,
+    pub bar_count: u32,
+    pub color_rgb: u32,
+    pub start_tick: u64,
+    /// Exclusive.
+    pub end_tick: u64,
+    pub name: [u8; 24],
+}
+
+impl Default for UiArrangeSection {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            start_bar: 1,
+            bar_count: 0,
+            color_rgb: 0,
+            start_tick: 0,
+            end_tick: 0,
+            name: [0u8; 24],
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiTimeSigPoint {
+    pub nanotick: u64,
+    pub numerator: u32,
+    pub denominator: u32,
+}
+
+/// The section spine and the song's meter in ONE region with one version, because they are
+/// read together — a section's tick position comes from the meter, and two regions could
+/// be seen mismatched. `version` moves when the SPINE or the METER changes and never when
+/// a note does, so a section rename does not invalidate an in-flight clip edit.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiArrangeSummaryRegion {
+    pub version: u32,
+    pub section_count: u32,
+    pub time_sig_count: u32,
+    /// How many did NOT fit. Non-zero means the list you are reading is incomplete —
+    /// published rather than dropped silently, because a truncated list that says nothing
+    /// reads as a complete one.
+    pub sections_truncated: u32,
+    pub time_sig_truncated: u32,
+    pub reserved: u32,
+    /// The furthest placement end. NOT the end of the last section: material can sit past
+    /// the spine, and it plays and is unnamed.
+    pub song_end_tick: u64,
+    pub sections: [UiArrangeSection; K_UI_MAX_SECTIONS],
+    pub time_sig_points: [UiTimeSigPoint; K_UI_MAX_TIME_SIG_POINTS],
+}
+
+/// M3.24: the override badge in UiClipExtent.flags. `override_count` SATURATES at 255 —
+/// a count that wrapped would draw a placement with 256 overrides as unmodified, which is
+/// the one thing the badge exists to prevent — and `HAS_OVERRIDES` is set whenever the
+/// real count is non-zero, so a saturated count can never read as none.
+pub const UI_CLIP_EXTENT_OVERRIDE_SHIFT: u32 = 14;
+pub const UI_CLIP_EXTENT_OVERRIDE_MASK: u32 = 0xFF << UI_CLIP_EXTENT_OVERRIDE_SHIFT;
+pub const UI_CLIP_EXTENT_HAS_OVERRIDES: u32 = 1 << 22;
+
+/// M3.24: edit scope on WriteNote / DeleteNote / WriteChord. CLEAR = the CLIP (every
+/// appearance) — today's behaviour and the default. SET = THIS APPEARANCE, recorded as an
+/// add or a mute on the placement. Never inferred: which one the caller meant is the
+/// difference between "fix the bass in chorus 1 and all three change" and "the hat you
+/// added to chorus 3 stays there", and no rule about whether the cell is occupied gets
+/// both right.
+pub const UI_EDIT_SCOPE_LOCAL: u16 = 1 << 15;
+pub const UI_EDIT_COLUMN_MASK: u16 = 0x00FF;
+
+pub const K_UI_MAX_SECTIONS: usize = 64;
+pub const K_UI_MAX_TIME_SIG_POINTS: usize = 32;
+
+/// M3.27 (60): one automation point. `param_id` is the STRING the clip is keyed on (the
+/// engine hashes it to the uid16 the wire and the param mirror use). `value` is the
+/// plugin's normalised 0..1. flags bit 0 = DISCRETE (step instead of interpolate), applied
+/// when the clip is CREATED and ignored afterwards — a switch that changed meaning halfway
+/// through a curve would make the curve unreadable.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiAutomationPointPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub target_plugin_index: u32,
+    pub nanotick_lo: u32,
+    pub nanotick_hi: u32,
+    pub value: f32,
+    pub param_id: [u8; 16],
+}
+
+impl Default for UiAutomationPointPayload {
+    fn default() -> Self {
+        Self {
+            command_type: 0,
+            flags: 0,
+            track_id: 0,
+            target_plugin_index: 0,
+            nanotick_lo: 0,
+            nanotick_hi: 0,
+            value: 0.0,
+            param_id: [0u8; 16],
+        }
+    }
+}
+
+pub const UI_AUTOMATION_DISCRETE: u16 = 1 << 0;
+
+/// M3.23 section commands (54-58). A section stores a name and a length in BARS; its
+/// POSITION is derived from the lengths before it, so there is deliberately no
+/// "move a section to bar N" — you change a length or the order and everything after
+/// follows. `SetSectionLength` RIPPLES every placement at or after the boundary in one
+/// transaction, and REFUSES a shrink into occupied bars rather than stacking placements
+/// onto one tick (the refusal is reported as `section.rejected` with the blocking
+/// placement id).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiSectionCommandPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    /// Addresses an existing section. 0 with AddSection means "append".
+    pub section_id: u32,
+    /// Length in bars, for AddSection and SetSectionLength.
+    pub bar_count: u32,
+    /// Destination index for MoveSection, and the insert position for AddSection.
+    pub to_index: u32,
+    pub color_rgb: u32,
+    /// 20 bytes — what is left of the 40-byte slot. A longer name is truncated.
+    pub name: [u8; 20],
+}
+
+impl Default for UiSectionCommandPayload {
+    fn default() -> Self {
+        Self {
+            command_type: 0,
+            flags: 0,
+            section_id: 0,
+            bar_count: 0,
+            to_index: 0,
+            color_rgb: 0,
+            name: [0u8; 20],
+        }
+    }
+}
+
+/// PatcherNodeType, mirroring apps/patcher_graph.h.
+pub const PATCHER_NODE_RUST_KERNEL: u32 = 0;
+pub const PATCHER_NODE_EUCLIDEAN: u32 = 1;
+pub const PATCHER_NODE_PASSTHROUGH: u32 = 2;
+pub const PATCHER_NODE_AUDIO_PASSTHROUGH: u32 = 3;
+pub const PATCHER_NODE_LFO: u32 = 4;
+pub const PATCHER_NODE_RANDOM_DEGREE: u32 = 5;
+pub const PATCHER_NODE_EVENT_OUT: u32 = 6;
+
+/// PatcherPortKind.
+pub const PATCHER_PORT_EVENT: u32 = 0;
+pub const PATCHER_PORT_AUDIO: u32 = 1;
+pub const PATCHER_PORT_CV: u32 = 2;
+
+/// ModSourceKind / ModTargetKind / ModRate, mirroring apps/modulation.h. Modulation
+/// flows FORWARD: the source device must not be LATER in the chain than the target.
+/// Same device is legal and is the common case with per-device patchers.
+pub const MOD_SOURCE_MACRO: u16 = 0;
+pub const MOD_SOURCE_LFO: u16 = 1;
+pub const MOD_SOURCE_ENVELOPE: u16 = 2;
+pub const MOD_SOURCE_PATCHER_NODE_OUTPUT: u16 = 3;
+pub const MOD_TARGET_VST_PARAM: u16 = 0;
+pub const MOD_TARGET_PATCHER_PARAM: u16 = 1;
+pub const MOD_TARGET_PATCHER_MACRO: u16 = 2;
+pub const MOD_RATE_BLOCK: u16 = 0;
+pub const MOD_RATE_SAMPLE: u16 = 1;
+/// Let the engine assign the link id (apps/modulation.h kModLinkIdAuto).
+pub const MOD_LINK_ID_AUTO: u32 = 0xFFFF_FFFF;
+
+/// TrackRouteKind, mirroring apps/track_routing.h.
+pub const TRACK_ROUTE_NONE: u8 = 0;
+pub const TRACK_ROUTE_MASTER: u8 = 1;
+pub const TRACK_ROUTE_TRACK: u8 = 2;
+pub const TRACK_ROUTE_EXTERNAL_INPUT: u8 = 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -1137,7 +1449,7 @@ mod tests {
 
     #[test]
     fn shm_header_layout_matches_cpp() {
-        const_assert_eq!(size_of::<ShmHeader>(), 6016); // v26: + per-lane quantize
+        const_assert_eq!(size_of::<ShmHeader>(), 6080); // v27: + arrange summary offset
         const_assert_eq!(size_of::<UiDeviceMeter>(), 12);
         const_assert_eq!(size_of::<UiDeviceMeterRegion>(), 12352);
         const_assert_eq!(align_of::<ShmHeader>(), 64);
@@ -1192,12 +1504,33 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_track_quantize_strength), 5488);
         assert_eq!(offset_of!(ShmHeader, ui_track_quantize_swing), 5744);
         assert_eq!(offset_of!(ShmHeader, ui_quantize_version), 6000);
+        assert_eq!(offset_of!(ShmHeader, ui_arrange_offset), 6008); // v27
+        assert_eq!(offset_of!(ShmHeader, ui_arrange_bytes), 6016);
         // The scale + device-param region structs (v16/v17) are now generated from
         // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);
         const_assert_eq!(size_of::<UiPatcherEdge>(), 20);
         const_assert_eq!(size_of::<UiPatcherRegion>(), 5184);
         const_assert_eq!(size_of::<UiBusDiffPayload>(), 40); // v20, fits EventEntry
+        // The engine dispatches SetTrackRouting BY PAYLOAD SIZE (daw_engine_main.cpp
+        // checks `entry.size == sizeof(UiTrackRoutingPayload)`), so a mismatch here does
+        // not fail to compile — it makes the command silently unrecognised.
+        const_assert_eq!(size_of::<UiTrackRoutingPayload>(), 40);
+        // Dispatched by payload SIZE too — a mismatch makes the command unrecognised
+        // rather than failing to compile.
+        const_assert_eq!(size_of::<UiModLinkCommandPayload>(), 40);
+        const_assert_eq!(size_of::<UiModLinkUid16Payload>(), 40);
+        const_assert_eq!(size_of::<UiModSourceValuePayload>(), 40);
+        const_assert_eq!(size_of::<UiPatcherGraphCommandPayload>(), 40);
+        const_assert_eq!(size_of::<UiPatcherNodeConfigPayload>(), 40);
+        const_assert_eq!(size_of::<UiSectionCommandPayload>(), 40);
+        const_assert_eq!(size_of::<UiAutomationPointPayload>(), 40);
+        const_assert_eq!(size_of::<UiArrangeSection>(), 56);
+        const_assert_eq!(size_of::<UiTimeSigPoint>(), 16);
+        const_assert_eq!(size_of::<UiArrangeSummaryRegion>(), 4128);
+        // The extents region had NO size assert, which is how its capacity constant
+        // diverged from the C++ side unnoticed.
+        const_assert_eq!(size_of::<UiClipExtentRegion>(), 16392);
         // v18 waveform structs are bindgen-generated; pin the element sizes, then tie
         // each hand constant to the generated region size so neither can drift: if a
         // K_* count is wrong the region no longer sums, and this fails to compile.
