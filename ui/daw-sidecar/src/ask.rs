@@ -114,8 +114,15 @@ fn tools_json(session: &AgentSession) -> Value {
 /// needs to know which track is the bass, and asking the model to call a tool to
 /// find out costs a round trip before it can start.
 fn system_prompt(session: &AgentSession) -> String {
-    let obs = serde_json::to_string(&session.observe())
-        .unwrap_or_else(|_| "{}".to_string());
+    // The TEXT form, and the SHAPE rather than every note.
+    //
+    // This used to embed the whole song as JSON — ~114 bytes per note, which is
+    // 2.2 MB on a large session: past what can be sent at all, and past it
+    // silently. The same song's shape is under a kilobyte and answers the
+    // question the prompt below actually poses ("which track is the bass")
+    // better than twenty thousand note objects do. Notes come from the `observe`
+    // tool, for the window being worked on.
+    let obs = session.observe().to_text();
     format!(
         "You are operating a digital audio workstation through its tool API. You \
          are not describing what to do — the tools ARE the doing, and the person \
@@ -128,7 +135,14 @@ fn system_prompt(session: &AgentSession) -> String {
          Ticks are nanoticks; there are 960000 per quarter note. Pitches are MIDI \
          numbers, 60 is middle C. Track ids are stable and do not renumber when a \
          track is removed.\n\n\
-         The song right now:\n{obs}"
+         Below is the song's SHAPE, not its notes: each track's name, how many \
+         notes it has, the beats it spans and the pitch range it covers. To see \
+         actual notes, call `observe` with `from_beat` for the part you are \
+         working on. A track marked TRUNCATED has more notes than the engine \
+         publishes, so do not conclude it ends where the count stops.\n\n\
+         This shape was taken before your first tool call and is NOT refreshed as \
+         you work — call `observe` again after edits that matter.\n\n\
+         {obs}"
     )
 }
 

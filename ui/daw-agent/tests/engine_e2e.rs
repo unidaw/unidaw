@@ -355,7 +355,15 @@ fn write_past_pattern_end_creates_material() {
     assert!(a.ok, "write past end failed: {a:?}");
 
     // Visible in the derived (flat) clip the UI reads, with a positive length.
-    let obs = session.execute(&ToolCall { tool: "observe".into(), args: json!({}) });
+    //
+    // `observe` with no window returns the song's SHAPE and no notes — the whole
+    // song's notes ran to megabytes and could not be handed to a model at all.
+    // A test that wants notes asks for the window they are in; this one covers
+    // well past `far` (beat 5).
+    let obs = session.execute(&ToolCall {
+        tool: "observe".into(),
+        args: json!({ "from_beat": 0, "beats": 64 }),
+    });
     assert!(obs.ok, "observe failed: {obs:?}");
     let note = obs.output["tracks"][0]["notes"]
         .as_array()

@@ -11,7 +11,7 @@ use daw_bridge::layout::{UiCommandPayload, UiCommandType, UiPatcherPresetCommand
 use serde::Serialize;
 use serde_json::{json, Value};
 
-use crate::observe::observe;
+use crate::observe::{observe_window, Window};
 
 /// One tool the agent can call: name, one-line description, and a JSON-schema
 /// object describing its arguments.
@@ -55,8 +55,23 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: "observe",
-            description: "Read the whole song: transport plus every track's notes. Pure read, no args.",
-            params: json!({ "type": "object", "properties": {} }),
+            description: "Read the song. With no arguments you get its SHAPE: tempo, meter, key, \
+                          and every track's name, note count, beat range and pitch range — which \
+                          is what you need to know which track is which. Pass `from_beat` (and \
+                          optionally `beats` and `track`) to also get the individual notes in \
+                          that window. Enumerating a whole large song is not offered: it can run \
+                          to millions of characters, so ask for the part you are working on.",
+            params: json!({
+                "type": "object",
+                "properties": {
+                    "from_beat": { "type": "number", "minimum": 0,
+                                   "description": "Start of the window, in quarter notes. Omit for shape only." },
+                    "beats": { "type": "number", "minimum": 0,
+                               "description": "Length of the window in quarter notes. Default 16 (four bars of 4/4)." },
+                    "track": { "type": "integer", "minimum": 0,
+                               "description": "Only this track's notes. Omit for every track." },
+                },
+            }),
         },
         ToolSpec {
             name: "add_notes",
@@ -236,6 +251,30 @@ pub fn manifest_json() -> String {
         .unwrap_or_else(|e| format!("[{{\"error\":\"{e}\"}}]"))
 }
 
+/// `observe`, with or without a window.
+///
+/// Shape by default. The whole song's notes used to come back here and be pasted
+/// into a model's context — 2.2 MB on a large session, past what can be sent at
+/// all, and silently: the caller saw a prefix and believed it was the song.
+fn observe_tool(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let window = args.get("from_beat").and_then(|v| v.as_f64()).map(|from| {
+        let len = args
+            .get("beats")
+            .and_then(|v| v.as_f64())
+            .filter(|v| *v > 0.0)
+            .unwrap_or(crate::observe::DEFAULT_WINDOW_BEATS);
+        let w = Window::beats(from, len);
+        match arg_u64(args, "track") {
+            Some(t) => w.on_track(t as u32),
+            None => w,
+        }
+    });
+    match serde_json::to_value(observe_window(handle, window)) {
+        Ok(v) => ToolResult::ok(v),
+        Err(e) => ToolResult::err(format!("serialize observation: {e}")),
+    }
+}
+
 fn arg_u64(args: &Value, key: &str) -> Option<u64> {
     args.get(key).and_then(|v| v.as_u64())
 }
@@ -244,10 +283,7 @@ fn arg_u64(args: &Value, key: &str) -> Option<u64> {
 /// error result, never a silent no-op.
 pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
     match call.tool.as_str() {
-        "observe" => match serde_json::to_value(observe(handle, 0)) {
-            Ok(v) => ToolResult::ok(v),
-            Err(e) => ToolResult::err(format!("serialize observation: {e}")),
-        },
+        "observe" => observe_tool(handle, &call.args),
         "add_notes" => add_notes(handle, &call.args),
         "transport" => transport(handle, &call.args),
         "save" => named(handle, UiCommandType::SaveProject, &call.args, "saved"),
@@ -348,6 +384,29 @@ fn add_notes(handle: &EngineHandle, args: &Value) -> ToolResult {
 /// copies of a twelve-field struct literal, and nine chances for one field to be
 /// wrong in a way nothing catches: `base_version` in particular, which is what
 /// makes an edit reconcile rather than race.
+/// Send a command that does NOT change the clip, and do not wait for one.
+///
+/// `send_edit` below waits for the clip version to advance, which is right for a
+/// note write and wrong for everything else: SetTrackMixer, SetTempo, AddTrack,
+/// RemoveTrack and SetLoop move their own state and leave the clip version
+/// alone. All five went through `send_edit`, stalled the full two second
+/// timeout, and then reported `applied: false` — telling a model its edit had
+/// failed when the edit had worked. A model that believes that tries again.
+///
+/// There is nothing to wait FOR here: the ring is ordered, so the command is
+/// queued by the time this returns, and the next `observe` shows the result.
+fn send_now(handle: &EngineHandle, p: UiCommandPayload, out: Value) -> ToolResult {
+    if let Err(e) = handle.send_command(p) {
+        return ToolResult::err(e);
+    }
+    let mut v = out;
+    if let Value::Object(ref mut m) = v {
+        m.insert("sent".into(), json!(true));
+    }
+    ToolResult::ok(v)
+}
+
+/// Send a CLIP edit and wait for the engine to apply it.
 fn send_edit(handle: &EngineHandle, mut p: UiCommandPayload, out: Value) -> ToolResult {
     let base = handle.clip_version();
     p.base_version = base;
@@ -391,7 +450,7 @@ fn delete_note(handle: &EngineHandle, args: &Value) -> ToolResult {
 /// Append a track. No arguments: v1 of AddTrack always appends, because
 /// inserting needs a display-order field the engine does not have yet.
 fn add_track(handle: &EngineHandle) -> ToolResult {
-    send_edit(handle, blank(UiCommandType::AddTrack), json!({ "added": true }))
+    send_now(handle, blank(UiCommandType::AddTrack), json!({ "added": true }))
 }
 
 /// Remove a track by its STABLE id.
@@ -405,7 +464,7 @@ fn remove_track(handle: &EngineHandle, args: &Value) -> ToolResult {
     };
     let mut p = blank(UiCommandType::RemoveTrack);
     p.track_id = track as u32;
-    send_edit(handle, p, json!({ "removed": track }))
+    send_now(handle, p, json!({ "removed": track }))
 }
 
 /// Set the key at a point on the harmony timeline.
@@ -429,7 +488,29 @@ fn set_harmony(handle: &EngineHandle, args: &Value) -> ToolResult {
     let tick = arg_u64(args, "tick").unwrap_or(0);
     p.note_nanotick_lo = (tick & 0xffff_ffff) as u32;
     p.note_nanotick_hi = (tick >> 32) as u32;
-    send_edit(handle, p, json!({ "root": root, "scale": scale, "tick": tick }))
+    /*
+     * The HARMONY version, not the clip's — and this is why it needs its own
+     * send path rather than `send_edit`.
+     *
+     * `requireMatchingHarmonyVersion` guards WriteHarmony, and the only thing
+     * that moves that counter is a harmony write. `send_edit` stamps
+     * `clip_version()` and then waits for the CLIP version to advance, so this
+     * tool quoted the wrong number and then waited for a counter that was never
+     * going to move: refused by the engine, and reported as `applied: false`
+     * after a two second stall. The doc comment above said as much while the
+     * code did the opposite.
+     *
+     * The page had exactly this bug on the same command, from the other
+     * direction — its socket layer overwrote the base with the clip version on
+     * the way out. Same mistake, two codebases, because "base version" reads as
+     * one idea and is two.
+     */
+    let base = handle.harmony_version();
+    p.base_version = base;
+    if let Err(e) = handle.send_command(p) {
+        return ToolResult::err(e);
+    }
+    ToolResult::ok(json!({ "root": root, "scale": scale, "tick": tick, "base": base }))
 }
 
 fn set_tempo(handle: &EngineHandle, args: &Value) -> ToolResult {
@@ -450,7 +531,7 @@ fn set_tempo(handle: &EngineHandle, args: &Value) -> ToolResult {
         }
         None => p.flags = 1,
     }
-    send_edit(handle, p, json!({ "bpm": bpm }))
+    send_now(handle, p, json!({ "bpm": bpm }))
 }
 
 fn set_mixer(handle: &EngineHandle, args: &Value) -> ToolResult {
@@ -475,7 +556,7 @@ fn set_mixer(handle: &EngineHandle, args: &Value) -> ToolResult {
     p.note_pitch = thousandths as u32;
     p.flags = (if mute.unwrap_or(false) { 1 } else { 0 })
             | (if solo.unwrap_or(false) { 2 } else { 0 });
-    send_edit(handle, p, json!({
+    send_now(handle, p, json!({
         "track": track, "gain_db": gain_db, "pan": pan, "mute": mute, "solo": solo }))
 }
 
@@ -491,7 +572,7 @@ fn set_loop(handle: &EngineHandle, args: &Value) -> ToolResult {
     p.note_nanotick_hi = (start >> 32) as u32;
     p.note_duration_lo = (end & 0xffff_ffff) as u32;
     p.note_duration_hi = (end >> 32) as u32;
-    send_edit(handle, p, json!({ "start": start, "end": end }))
+    send_now(handle, p, json!({ "start": start, "end": end }))
 }
 
 /// Sound a pitch WITHOUT writing it (kUiCommandType 45).
