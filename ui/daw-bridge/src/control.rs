@@ -872,6 +872,39 @@ impl EngineHandle {
         )
     }
 
+    /// Add or remove a modulation link.
+    pub fn send_mod_link_command(
+        &self,
+        payload: crate::layout::UiModLinkCommandPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiModLinkCommandPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiModLinkCommandPayload>(),
+        )
+    }
+
+    /// Name the VST parameter a link targets.
+    pub fn send_mod_link_uid16(
+        &self,
+        payload: crate::layout::UiModLinkUid16Payload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiModLinkUid16Payload as *const u8,
+            std::mem::size_of::<crate::layout::UiModLinkUid16Payload>(),
+        )
+    }
+
+    /// Drive a modulation source value (turn a macro knob).
+    pub fn send_mod_source_value(
+        &self,
+        payload: crate::layout::UiModSourceValuePayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiModSourceValuePayload as *const u8,
+            std::mem::size_of::<crate::layout::UiModSourceValuePayload>(),
+        )
+    }
+
     /// Send a rack knob write. Same ring as send_command; a distinct payload shape
     /// (UiSetParamPayload carries a uid16 that does not fit UiCommandPayload's fields).
     pub fn send_set_param(&self, payload: crate::layout::UiSetParamPayload) -> Result<(), String> {

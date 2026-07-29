@@ -766,6 +766,98 @@ pub struct UiTrackRoutingPayload {
     pub audio_in_input_id: u32,
 }
 
+/// AddModLink / RemoveModLink (20/21). `flags` packs the kinds and rate — bits 0-3
+/// source kind, 4-7 target kind, 8-9 rate, bit 10 enabled — because the four enums are
+/// small and the payload is full. `link_id` = MOD_LINK_ID_AUTO lets the engine assign.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiModLinkCommandPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub link_id: u32,
+    pub source_device_id: u32,
+    pub source_id: u32,
+    pub target_device_id: u32,
+    pub target_id: u32,
+    pub depth: f32,
+    pub bias: f32,
+}
+
+/// SetModLinkUid16 (22): names the VST parameter a link targets, by its 16-byte plugin
+/// uid. Separate from the link itself because it does not fit alongside it.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiModLinkUid16Payload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub link_id: u32,
+    pub uid16: [u8; 16],
+    pub reserved: [u8; 8],
+}
+
+impl Default for UiModLinkUid16Payload {
+    fn default() -> Self {
+        Self {
+            command_type: 0,
+            flags: 0,
+            track_id: 0,
+            base_version: 0,
+            link_id: 0,
+            uid16: [0u8; 16],
+            reserved: [0u8; 8],
+        }
+    }
+}
+
+/// SetModSourceValue (23): drives a macro/source value directly, which is how a macro
+/// knob is turned.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiModSourceValuePayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub source_device_id: u32,
+    pub source_id: u32,
+    pub value: f32,
+    pub reserved: [u8; 16],
+}
+
+impl Default for UiModSourceValuePayload {
+    fn default() -> Self {
+        Self {
+            command_type: 0,
+            flags: 0,
+            track_id: 0,
+            base_version: 0,
+            source_device_id: 0,
+            source_id: 0,
+            value: 0.0,
+            reserved: [0u8; 16],
+        }
+    }
+}
+
+/// ModSourceKind / ModTargetKind / ModRate, mirroring apps/modulation.h. Modulation
+/// flows FORWARD: the source device must not be LATER in the chain than the target.
+/// Same device is legal and is the common case with per-device patchers.
+pub const MOD_SOURCE_MACRO: u16 = 0;
+pub const MOD_SOURCE_LFO: u16 = 1;
+pub const MOD_SOURCE_ENVELOPE: u16 = 2;
+pub const MOD_SOURCE_PATCHER_NODE_OUTPUT: u16 = 3;
+pub const MOD_TARGET_VST_PARAM: u16 = 0;
+pub const MOD_TARGET_PATCHER_PARAM: u16 = 1;
+pub const MOD_TARGET_PATCHER_MACRO: u16 = 2;
+pub const MOD_RATE_BLOCK: u16 = 0;
+pub const MOD_RATE_SAMPLE: u16 = 1;
+/// Let the engine assign the link id (apps/modulation.h kModLinkIdAuto).
+pub const MOD_LINK_ID_AUTO: u32 = 0xFFFF_FFFF;
+
 /// TrackRouteKind, mirroring apps/track_routing.h.
 pub const TRACK_ROUTE_NONE: u8 = 0;
 pub const TRACK_ROUTE_MASTER: u8 = 1;
@@ -1091,6 +1183,11 @@ mod tests {
         // checks `entry.size == sizeof(UiTrackRoutingPayload)`), so a mismatch here does
         // not fail to compile — it makes the command silently unrecognised.
         const_assert_eq!(size_of::<UiTrackRoutingPayload>(), 40);
+        // Dispatched by payload SIZE too — a mismatch makes the command unrecognised
+        // rather than failing to compile.
+        const_assert_eq!(size_of::<UiModLinkCommandPayload>(), 40);
+        const_assert_eq!(size_of::<UiModLinkUid16Payload>(), 40);
+        const_assert_eq!(size_of::<UiModSourceValuePayload>(), 40);
         // v18 waveform structs are bindgen-generated; pin the element sizes, then tie
         // each hand constant to the generated region size so neither can drift: if a
         // K_* count is wrong the region no longer sums, and this fails to compile.

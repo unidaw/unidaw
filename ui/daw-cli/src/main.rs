@@ -50,6 +50,19 @@ daw-cli — control surface for a running engine
                                    named goes to its DEFAULT (audio-out master, the
                                    rest none) — the engine has no partial form and no
                                    routing read-back to merge against.
+  daw-cli do mod-link --track N --source-device D --target-device D2
+                      [--source-kind macro|lfo|envelope|patcher]
+                      [--target-kind vst|patcher-param|patcher-macro]
+                      [--source-id N] [--target-id N] [--depth X] [--bias X]
+                      [--rate block|sample] [--enabled 0|1] [--link ID]
+                                   modulation flows FORWARD: the source must not be
+                                   later in the chain than the target (same device
+                                   is fine). A refusal is named in the engine log.
+  daw-cli do unmod-link --track N --link ID
+  daw-cli do mod-target --track N --link ID --uid16 <32 hex chars>
+                                   name the VST parameter a link drives
+  daw-cli do macro --track N --device D --source-id N --value X
+                                   turn a modulation source (a macro knob)
   daw-cli do remove-device --track N|master --device D
   daw-cli do move-device --track N|master --device D --index I
   daw-cli do mixer --track N [--gain-db X] [--pan Y]
@@ -359,6 +372,88 @@ fn send_named(handle: &EngineHandle, command: UiCommandType, name: &str) -> i32 
 /// M1.13 lane quantize. No base_version: this moves no authored note, so gating it on
 /// a clip version would reject it whenever someone else was mid-edit, for a change that
 /// cannot conflict with theirs.
+/// AddModLink / RemoveModLink. The engine validates that both devices exist and that
+/// modulation flows FORWARD (source not later in the chain than target; same device is
+/// legal and is the common case with per-device patchers). A refusal is reported as
+/// `modlink.rejected` in the engine log and history.jsonl with a named reason.
+fn mod_link_command(
+    args: &[String],
+    removing: bool,
+) -> Result<daw_bridge::layout::UiModLinkCommandPayload, String> {
+    use daw_bridge::layout as L;
+    let track = flag_u64(args, "--track", Some(0))? as u32;
+    let link = flag_u64(args, "--link", Some(L::MOD_LINK_ID_AUTO as u64))? as u32;
+    if removing {
+        // A remove needs only the id; sending kinds would imply they are matched on.
+        return Ok(L::UiModLinkCommandPayload {
+            command_type: UiCommandType::RemoveModLink as u16,
+            track_id: track,
+            link_id: link,
+            ..Default::default()
+        });
+    }
+    let source_kind = match flag(args, "--source-kind").as_deref().unwrap_or("macro") {
+        "macro" => L::MOD_SOURCE_MACRO,
+        "lfo" => L::MOD_SOURCE_LFO,
+        "envelope" => L::MOD_SOURCE_ENVELOPE,
+        "patcher" => L::MOD_SOURCE_PATCHER_NODE_OUTPUT,
+        other => return Err(format!(
+            "--source-kind: expected macro|lfo|envelope|patcher, got {other:?}"
+        )),
+    };
+    let target_kind = match flag(args, "--target-kind").as_deref().unwrap_or("vst") {
+        "vst" => L::MOD_TARGET_VST_PARAM,
+        "patcher-param" => L::MOD_TARGET_PATCHER_PARAM,
+        "patcher-macro" => L::MOD_TARGET_PATCHER_MACRO,
+        other => return Err(format!(
+            "--target-kind: expected vst|patcher-param|patcher-macro, got {other:?}"
+        )),
+    };
+    let rate = match flag(args, "--rate").as_deref().unwrap_or("block") {
+        "block" => L::MOD_RATE_BLOCK,
+        "sample" => L::MOD_RATE_SAMPLE,
+        other => return Err(format!("--rate: expected block|sample, got {other:?}")),
+    };
+    let enabled = flag_u64(args, "--enabled", Some(1))? != 0;
+    // The engine packs these four into `flags`; the layout is stated in the payload's
+    // comment on both sides, and getting it wrong here would silently make every link a
+    // block-rate macro->vst link.
+    let flags = (source_kind & 0x0F)
+        | ((target_kind & 0x0F) << 4)
+        | ((rate & 0x03) << 8)
+        | (if enabled { 1u16 << 10 } else { 0 });
+    Ok(L::UiModLinkCommandPayload {
+        command_type: UiCommandType::AddModLink as u16,
+        flags,
+        track_id: track,
+        base_version: 0,
+        link_id: link,
+        source_device_id: flag_u64(args, "--source-device", None)? as u32,
+        source_id: flag_u64(args, "--source-id", Some(0))? as u32,
+        target_device_id: flag_u64(args, "--target-device", None)? as u32,
+        target_id: flag_u64(args, "--target-id", Some(0))? as u32,
+        depth: flag_f64(args, "--depth", 1.0)? as f32,
+        bias: flag_f64(args, "--bias", 0.0)? as f32,
+    })
+}
+
+/// A 32-hex-character plugin parameter uid.
+fn parse_uid16(raw: &str) -> Result<[u8; 16], String> {
+    let clean: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+    if clean.len() != 32 || !clean.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "--uid16 expects 32 hex characters (16 bytes), got {} character(s)",
+            clean.len()
+        ));
+    }
+    let mut out = [0u8; 16];
+    for i in 0..16 {
+        out[i] = u8::from_str_radix(&clean[i * 2..i * 2 + 2], 16)
+            .map_err(|_| "--uid16: not hex".to_string())?;
+    }
+    Ok(out)
+}
+
 /// One route spec: `none`, `master`, `track:N`, or `input:N`.
 fn parse_route(raw: &str, what: &str) -> Result<(u8, u32), String> {
     use daw_bridge::layout::{
@@ -1527,6 +1622,69 @@ fn main() {
                             println!("{{ \"sent\": {verb:?}, \"device\": {device} }}");
                             0
                         }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"mod-link") | Some(&"unmod-link") => {
+                    let removing = rest.first() == Some(&"unmod-link");
+                    match mod_link_command(&args, removing) {
+                        Ok(payload) => match handle.send_mod_link_command(payload) {
+                            Ok(()) => {
+                                println!(
+                                    "{{ \"sent\": {:?}, \"track\": {}, \"link\": {} }}",
+                                    if removing { "unmod-link" } else { "mod-link" },
+                                    payload.track_id, payload.link_id
+                                );
+                                0
+                            }
+                            Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                        },
+                        Err(err) => { eprintln!("daw-cli: {err}"); 2 }
+                    }
+                }
+                Some(&"mod-target") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let link = match flag_u64(&args, "--link", None) {
+                        Ok(v) => v as u32,
+                        Err(err) => { eprintln!("daw-cli: {err}"); std::process::exit(2) }
+                    };
+                    let uid = match flag(&args, "--uid16") {
+                        Some(raw) => match parse_uid16(&raw) {
+                            Ok(u) => u,
+                            Err(err) => { eprintln!("daw-cli: {err}"); std::process::exit(2) }
+                        },
+                        None => { eprintln!("daw-cli: --uid16 is required"); std::process::exit(2) }
+                    };
+                    let payload = daw_bridge::layout::UiModLinkUid16Payload {
+                        command_type: UiCommandType::SetModLinkUid16 as u16,
+                        track_id: track,
+                        link_id: link,
+                        uid16: uid,
+                        ..Default::default()
+                    };
+                    match handle.send_mod_link_uid16(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"mod-target\", \"link\": {link} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"macro") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let source = flag_u64(&args, "--source-id", Some(0)).unwrap_or(0) as u32;
+                    let value = match flag_f64(&args, "--value", f64::NAN) {
+                        Ok(v) if !v.is_nan() => v as f32,
+                        _ => { eprintln!("daw-cli: --value is required"); std::process::exit(2) }
+                    };
+                    let payload = daw_bridge::layout::UiModSourceValuePayload {
+                        command_type: UiCommandType::SetModSourceValue as u16,
+                        track_id: track,
+                        source_device_id: device,
+                        source_id: source,
+                        value,
+                        ..Default::default()
+                    };
+                    match handle.send_mod_source_value(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"macro\", \"value\": {value} }}"); 0 }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
