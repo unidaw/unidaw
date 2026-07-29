@@ -204,7 +204,10 @@ say "building the sidecar…"
 ( cd "$WEB/ui" && cargo build --release -p daw-sidecar ) > /tmp/side-build.log 2>&1 \
   || { say "sidecar build failed:"; tail -20 /tmp/side-build.log; exit 1; }
 
-( cd "$WEB/ui" && DAW_PROJECT_DIR=$PROJECTS \
+# DAW_ENV_FILE, if the caller set one, so the console's `ask` can find an API key
+# that does not live in this repo. Absent it, asking says so rather than failing
+# quietly — the key is never required to run the DAW, only to talk to it.
+( cd "$WEB/ui" && DAW_PROJECT_DIR=$PROJECTS DAW_ENV_FILE="${DAW_ENV_FILE:-}" \
     nohup ./target/release/daw-sidecar --shm "$SHM" --port "$WS_STATE" --cmd-port "$WS_CMD" $KEEP \
       --plugin-cache "$RUNDIR/plugin_cache.json" \
       > /tmp/side$SEG.log 2>&1 < /dev/null & echo $! >> "$PIDFILE" )
