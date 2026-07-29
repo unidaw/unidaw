@@ -50,9 +50,6 @@ inline std::vector<MusicalEvent> flattenPlacements(
         }
       }
     }
-    for (const auto& add : placement.adds) {
-      resolved.push_back(add);
-    }
     const uint64_t clipLen = clipDef ? clipDef->lengthNanoticks : 0;
     const uint64_t plLen =
         placement.lengthNanoticks > 0 ? placement.lengthNanoticks : clipLen;
@@ -66,6 +63,33 @@ inline std::vector<MusicalEvent> flattenPlacements(
       // without the positional (tick-range) guess. Carried in the note payload's spare
       // field; capped at u16 like the published UiClipNote.placementId (a much later wrap
       // than the frontend's u8, and a u32 widen is a piano-roll-time lockstep if needed).
+      if (ev.type == MusicalEventType::Note) {
+        ev.payload.note.reserved2 = static_cast<uint16_t>(placement.id);
+      }
+      out.push_back(ev);
+    }
+
+    // M3.24: `adds` are THIS APPEARANCE's content, not the clip's — so they are emitted
+    // PLACEMENT-RELATIVE and EXACTLY ONCE, not merged into the clip's events above.
+    //
+    // Merging them (which is what this did) put them through the clip's loop: an add
+    // past the clip's length was DROPPED, and one inside it repeated on every iteration.
+    // For the case the roadmap is graded on — "the hat you added to chorus 3", where a
+    // chorus is a 4-bar placement of a 1-bar hat clip — that meant either no hat at all
+    // or four of them. Neither is "a hat in chorus 3".
+    //
+    // Clipped to the PLACEMENT's extent, because an add beyond where the placement ends
+    // has no time to sound in. Safe to rule this way now: `adds` have no engine write
+    // site yet and no file on disk uses them, so nothing can observe the change.
+    for (const auto& add : placement.adds) {
+      if (plLen > 0 && add.nanotickOffset >= plLen) {
+        continue;
+      }
+      MusicalEvent ev = add;
+      ev.nanotickOffset = *placement.at + add.nanotickOffset;
+      if (ev.nanotickOffset >= windowEnd) {
+        continue;
+      }
       if (ev.type == MusicalEventType::Note) {
         ev.payload.note.reserved2 = static_cast<uint16_t>(placement.id);
       }
