@@ -5711,6 +5711,13 @@ struct TrackRuntime {
     if (daw::requireMatchingClipVersion(baseVersion, current, diffPayload)) {
       return true;
     }
+    // Say WHICH track this version belongs to. The payload's clipVersion is now a
+    // per-track counter (M2.17), and leaving trackId at its default 0 hands a client a
+    // track-4 version labelled as track 0's — a trap that costs nothing to remove and
+    // would be very hard to find. Global-scope commands keep 0, which is correct there:
+    // they are gated on the global counter.
+    diffPayload.trackId =
+        daw::uiCommandIsGlobalScope(commandType) ? 0u : trackId;
     emitUiDiff(diffPayload);
     historyAppend(daw::uiCommandTypeName(commandType), "rejected:version", trackId,
                   baseVersion, "");
