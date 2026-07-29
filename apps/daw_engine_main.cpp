@@ -4329,8 +4329,15 @@ struct TrackRuntime {
       }
       // Stamp durable plugin identity. hostSlotIndex only means anything
       // against the scan that produced it, so it must not be what a saved
-      // project relies on.
+      // project relies on. ONLY for VST devices: a patcher_event/instrument/audio
+      // device has no plugin, and stamping it from pluginCache[hostSlotIndex]
+      // (0 by default -> the Identity plugin) wrote a bogus vst_ref onto a pure
+      // patcher device, which then reloaded as a phantom plugin.
       for (auto& device : track.chain.devices) {
+        if (device.kind != daw::DeviceKind::VstInstrument &&
+            device.kind != daw::DeviceKind::VstEffect) {
+          continue;
+        }
         if (device.hostSlotIndex == daw::kHostSlotIndexDirect) {
           // Loaded by path rather than from the scan, so the path is the only
           // identity available — still better than nothing to restore from.
