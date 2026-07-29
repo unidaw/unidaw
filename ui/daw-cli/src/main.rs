@@ -230,6 +230,7 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
     let count = handle.track_count() as usize;
     let names = handle.read_track_names();
     let devices = handle.read_track_device_names();
+    let (ids, flags) = handle.read_track_ids_and_flags();
     println!("{{");
     println!("  \"track_count\": {count},");
     println!("  \"tracks\": [");
@@ -241,9 +242,14 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
             .unwrap_or(0.0);
         let name = names.get(index).map(String::as_str).unwrap_or("");
         let device = devices.get(index).map(String::as_str).unwrap_or("");
+        // The stable id the UI keys on (kMasterTrackId for the master strip), not the
+        // moving slot; plus a master marker decoded from the flags.
+        let id = ids.get(index).copied().unwrap_or(index as u32);
+        let flag = flags.get(index).copied().unwrap_or(0);
+        let is_master = flag & daw_bridge::layout::UI_TRACK_FLAG_MASTER != 0;
         let comma = if index + 1 == count { "" } else { "," };
         println!(
-            "    {{ \"track_id\": {index}, \"name\": {name:?}, \"device\": {device:?}, \"peak_rms\": {rms} }}{comma}"
+            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"peak_rms\": {rms} }}{comma}"
         );
     }
     println!("  ]");

@@ -10,6 +10,10 @@ pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
 
 pub const K_UI_MAX_TRACKS: usize = 64;
+/// The master track's stable id (>= K_UI_MAX_TRACKS so per-track note/clip handlers
+/// reject it). Published in ui_track_id with UI_TRACK_FLAG_MASTER; address the master
+/// by this id. (patcher-is-a-device item 4.)
+pub const MASTER_TRACK_ID: u32 = 0xFFFF_0000;
 pub const K_UI_MAX_CLIP_NOTES: usize = 4096;
 pub const K_UI_MAX_CLIP_CHORDS: usize = 1024;
 pub const K_UI_MAX_HARMONY_EVENTS: usize = 512;
@@ -127,6 +131,10 @@ pub const UI_TRACK_FLAG_HAS_PARENT: u8 = 1 << 1;
 /// v22: this slot is a tombstone — a removed track whose id is retired but whose slot is
 /// kept so neighbours don't renumber. Skip absent slots when drawing/iterating.
 pub const UI_TRACK_FLAG_ABSENT: u8 = 1 << 2;
+/// This published entry is the MASTER track (its ui_track_id == MASTER_TRACK_ID): a
+/// real device chain + mixer whose output is the master bus, but no arrangement rail
+/// and no clips. Render it as the master strip, never as a tracker lane.
+pub const UI_TRACK_FLAG_MASTER: u8 = 1 << 3;
 
 /// v14: a published patcher-graph node. `config` is type-interpreted (see the C++
 /// UiPatcherNode doc): Euclidean/RandomDegree ints; Lfo floats as milli-units.
