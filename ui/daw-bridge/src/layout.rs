@@ -4,12 +4,22 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 23;
+pub const K_SHM_VERSION: u16 = 24;
 pub const K_UI_TRACK_NAME_BYTES: usize = 24;
 pub const K_UI_MAX_PATCHER_NODES: usize = 64;
 pub const K_UI_MAX_PATCHER_EDGES: usize = 128;
 
 pub const K_UI_MAX_TRACKS: usize = 64;
+/// Per-insert metering (roadmap 15b). 16, not 8: a normal channel is EQ, comp, saturator,
+/// chorus, delay, reverb, limiter, utility — exactly eight — and running out does not
+/// degrade gracefully (a ninth insert shows a dead meter, or worse, another insert's).
+pub const K_UI_MAX_METERED_DEVICES: usize = 16;
+/// Levels are dBFS MILLIBELS (0 = full scale, ordinary values negative), the same scale as
+/// the track meters so gain staging is comparable insert to insert. This sentinel means
+/// "silent or below floor" — 0.0 amplitude is -inf dB and must not render as -327 dB.
+pub const UI_METER_SILENT: i16 = i16::MIN;
+/// deviceId value meaning "this slot holds no insert" — distinct from silence.
+pub const UI_METER_NO_DEVICE: u32 = 0xFFFF_FFFF;
 /// The master track's stable id (>= K_UI_MAX_TRACKS so per-track note/clip handlers
 /// reject it). Published in ui_track_id with UI_TRACK_FLAG_MASTER; address the master
 /// by this id. (patcher-is-a-device item 4.)
@@ -121,6 +131,11 @@ pub struct ShmHeader {
     /// v23: the first instrument's name per track (nul-padded), so a surface / the agent
     /// can see what is on a track. Empty when the track has no instrument.
     pub ui_track_device_name: [[u8; K_UI_TRACK_NAME_BYTES]; K_UI_MAX_TRACKS],
+    /// v24: byte offset of the published UiDeviceMeterRegion (0 = none). UI SHM only.
+    pub ui_device_meter_offset: u64,
+    /// v24: the HOST writes its own inserts' meters here, in ITS per-track SHM header.
+    /// Host->engine leg only; the UI reads the published region, not this.
+    pub host_device_meters: [[i16; 4]; K_UI_MAX_METERED_DEVICES],
 }
 
 /// uiTrackFlags bits (Movement 4).
@@ -686,6 +701,32 @@ pub struct UiChainDiffPayload {
     pub bypass: u32,
 }
 
+/// One insert's meters. `device_id` is the STABLE device id from the chain snapshot, NOT a
+/// positional index: the host's compacted plugin order skips non-VST devices, so matching
+/// by position paints one device's meter on another's card. Match on device_id.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiDeviceMeter {
+    pub in_peak_mb: i16,
+    pub out_peak_mb: i16,
+    pub in_rms_mb: i16,
+    pub out_rms_mb: i16,
+    pub device_id: u32,
+}
+
+/// Published per track SLOT, so the MASTER (a real slot with UI_TRACK_FLAG_MASTER) is
+/// metered by the same path with no special case. Rewritten every UI frame: an absent
+/// track or insert reads UI_METER_NO_DEVICE with silent levels rather than holding a
+/// stale value that would look like a stuck meter.
+#[repr(C, align(64))]
+#[derive(Clone, Copy, Debug)]
+pub struct UiDeviceMeterRegion {
+    pub version: u32,
+    pub reserved: u32,
+    pub meters: [[UiDeviceMeter; K_UI_MAX_METERED_DEVICES]; K_UI_MAX_TRACKS],
+}
+
+
 /// v20 (Movement 4): on a ChainSnapshot diff, `flags` low byte is the count of
 /// DeviceBus diffs that follow for this device (so a reader draws once); bit8 =
 /// bus list truncated at the cap. NOTE: this is `UiChainDiffPayload.flags` (u16, at
@@ -880,7 +921,9 @@ mod tests {
 
     #[test]
     fn shm_header_layout_matches_cpp() {
-        const_assert_eq!(size_of::<ShmHeader>(), 4864); // v23: + ui_track_device_name[64][24]
+        const_assert_eq!(size_of::<ShmHeader>(), 4992); // v24: + meter offset + host meters
+        const_assert_eq!(size_of::<UiDeviceMeter>(), 12);
+        const_assert_eq!(size_of::<UiDeviceMeterRegion>(), 12352);
         const_assert_eq!(align_of::<ShmHeader>(), 64);
         assert_eq!(offset_of!(ShmHeader, ring_std_offset), 56);
         assert_eq!(offset_of!(ShmHeader, ring_ctrl_offset), 64);
@@ -927,6 +970,8 @@ mod tests {
         assert_eq!(offset_of!(ShmHeader, ui_track_flags), 2984);
         assert_eq!(offset_of!(ShmHeader, ui_track_id), 3048); // v22 (appended at the end)
         assert_eq!(offset_of!(ShmHeader, ui_track_device_name), 3304); // v23
+        assert_eq!(offset_of!(ShmHeader, ui_device_meter_offset), 4840); // v24
+        assert_eq!(offset_of!(ShmHeader, host_device_meters), 4848); // v24
         // The scale + device-param region structs (v16/v17) are now generated from
         // the C++ header; bindgen's own layout_tests pin them, so no hand offsets.
         const_assert_eq!(size_of::<UiPatcherNode>(), 40);

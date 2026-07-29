@@ -891,6 +891,24 @@ fn main() {
             match rest.first() {
                 Some(&"transport") => get_transport(&handle),
                 Some(&"tracks") => get_tracks(&handle),
+                Some(&"meters") => {
+                    // v24 per-insert meters, dBFS millibels. device_id matches the chain
+                    // snapshot's device, not a position.
+                    println!("{{");
+                    let count = handle.track_count() as usize;
+                    let (ids, _flags) = handle.read_track_ids_and_flags();
+                    for slot in 0..count {
+                        let m = handle.read_device_meters(slot);
+                        if m.is_empty() { continue; }
+                        let tid = ids.get(slot).copied().unwrap_or(slot as u32);
+                        let body: Vec<String> = m.iter().map(|(d, ip, op, ir, orms)| {
+                            format!("{{ \"device\": {d}, \"in_peak_mb\": {ip}, \"out_peak_mb\": {op}, \"in_rms_mb\": {ir}, \"out_rms_mb\": {orms} }}")
+                        }).collect();
+                        println!("  \"track:{tid}\": [{}],", body.join(", "));
+                    }
+                    println!("}}");
+                    0
+                }
                 Some(&"audio-sources") => get_audio_sources(&handle),
                 Some(&"extents") => get_extents(&handle),
                 other => {

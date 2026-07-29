@@ -1537,6 +1537,8 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(sizeof(daw::UiClipExtentRegion), 64);
     header.uiPatcherOffset = offset;  // v14: published patcher graph
     offset += daw::alignUp(sizeof(daw::UiPatcherRegion), 64);
+    header.uiDeviceMeterOffset = offset;  // v24: per-insert meters
+    offset += daw::alignUp(sizeof(daw::UiDeviceMeterRegion), 64);
     header.uiScalesOffset = offset;  // v16: scale registry read-back
     offset += daw::alignUp(sizeof(daw::UiScaleRegion), 64);
     header.uiDeviceParamsOffset = offset;  // v17: one device's params (on request)
@@ -11463,6 +11465,62 @@ struct TrackRuntime {
             }
             uiShm.header->uiTrackCount = publishedTrackCount + 1;
           }
+        }
+        // v24 per-insert meters. Copy each host's per-insert levels into the published
+        // region, indexed by track SLOT so the MASTER — which occupies a real slot — is
+        // metered by the same path with no special case. Each entry carries the STABLE
+        // deviceId rather than a position: the host's compacted plugin order skips
+        // non-VST devices (a patcher insert, and the instrument is not an insert), so
+        // matching by position would paint one device's meter on another's card.
+        if (uiShm.header->uiDeviceMeterOffset != 0) {
+          auto* meterRegion = reinterpret_cast<daw::UiDeviceMeterRegion*>(
+              reinterpret_cast<uint8_t*>(uiShm.base) +
+              uiShm.header->uiDeviceMeterOffset);
+          for (uint32_t slot = 0; slot < daw::kUiMaxTracks; ++slot) {
+            // Rewritten every frame: an absent track/insert reads "no device" with silent
+            // levels rather than holding a stale value that would look like a stuck meter.
+            for (uint32_t d = 0; d < daw::kUiMaxMeteredDevices; ++d) {
+              meterRegion->meters[slot][d] = daw::UiDeviceMeter{};
+            }
+            TrackRuntime* rt = nullptr;
+            if (slot < publishedTrackCount && slot < trackSnapshot.size()) {
+              rt = trackSnapshot[slot];
+            } else if (masterTrack && slot == publishedTrackCount) {
+              rt = masterTrack.get();
+            }
+            if (!rt || !rt->hostReady.load(std::memory_order_acquire)) {
+              continue;
+            }
+            const auto* hostHeader = rt->controller.shmHeader();
+            if (!hostHeader) {
+              continue;
+            }
+            // Rebuild the host's compacted insert order to recover each meter's device id.
+            auto ts = std::atomic_load_explicit(&rt->trackSnapshot,
+                                                std::memory_order_acquire);
+            if (!ts) {
+              continue;
+            }
+            uint32_t hostIndex = 0;
+            for (const auto& device : ts->chainDevices) {
+              if (device.kind != daw::DeviceKind::VstInstrument &&
+                  device.kind != daw::DeviceKind::VstEffect) {
+                continue;
+              }
+              if (hostIndex >= daw::kUiMaxMeteredDevices) {
+                break;
+              }
+              const int16_t* m = hostHeader->hostDeviceMeters[hostIndex];
+              auto& out = meterRegion->meters[slot][hostIndex];
+              out.inPeakMb = m[0];
+              out.outPeakMb = m[1];
+              out.inRmsMb = m[2];
+              out.outRmsMb = m[3];
+              out.deviceId = device.id;
+              ++hostIndex;
+            }
+          }
+          ++meterRegion->version;
         }
         uiShm.header->uiClipVersion =
             clipVersion.load(std::memory_order_acquire);

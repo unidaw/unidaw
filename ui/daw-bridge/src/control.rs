@@ -780,6 +780,33 @@ impl EngineHandle {
         }
     }
 
+    /// v24 per-insert meters for one track SLOT: (device_id, in_peak_mb, out_peak_mb,
+    /// in_rms_mb, out_rms_mb) per insert, dBFS millibels. Entries with device_id ==
+    /// UI_METER_NO_DEVICE are empty slots, and UI_METER_SILENT means silent/below floor —
+    /// both are distinct from a real level, so render them as "no meter" not as -327 dB.
+    pub fn read_device_meters(&self, slot: usize) -> Vec<(u32, i16, i16, i16, i16)> {
+        use crate::layout::{UiDeviceMeterRegion, K_UI_MAX_METERED_DEVICES, UI_METER_NO_DEVICE};
+        let mut out = Vec::new();
+        if slot >= crate::layout::K_UI_MAX_TRACKS {
+            return out;
+        }
+        let offset = unsafe { std::ptr::read_volatile(&(*self.header).ui_device_meter_offset) };
+        if offset == 0 {
+            return out;
+        }
+        let region = unsafe {
+            &*((self._mmap.as_ptr()).add(offset as usize) as *const UiDeviceMeterRegion)
+        };
+        for d in 0..K_UI_MAX_METERED_DEVICES {
+            let m = region.meters[slot][d];
+            if m.device_id == UI_METER_NO_DEVICE {
+                continue;
+            }
+            out.push((m.device_id, m.in_peak_mb, m.out_peak_mb, m.in_rms_mb, m.out_rms_mb));
+        }
+        out
+    }
+
     pub fn send_chord_command(&self, payload: UiChordCommandPayload) -> Result<(), String> {
         self.write_entry(
             &payload as *const UiChordCommandPayload as *const u8,

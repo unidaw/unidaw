@@ -865,6 +865,29 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
           std::fill(state.chainBufferB.begin(), state.chainBufferB.end(), 0.0f);
         }
       }
+      // v24 per-insert metering: amplitude -> dBFS MILLIBELS (0 = full scale), with an
+      // explicit silence sentinel because 0.0 amplitude is -inf dB and must not render as
+      // -327 dB. Same scale as the track meters, which is the point of the item: gain
+      // staging is only comparable insert-to-insert on ONE scale.
+      auto toMillibels = [](double amp) -> int16_t {
+        if (!(amp > 1e-6)) {
+          return daw::kUiMeterSilent;
+        }
+        const double mb = 2000.0 * std::log10(amp);
+        return static_cast<int16_t>(std::clamp(mb, -12000.0, 6000.0));
+      };
+      auto writeMeters = [&](int slotIndex, double inPeak, double outPeak,
+                             double inRms, double outRms) {
+        if (!state.header || slotIndex < 0 ||
+            slotIndex >= static_cast<int>(daw::kUiMaxMeteredDevices)) {
+          return;
+        }
+        auto* m = state.header->hostDeviceMeters[slotIndex];
+        m[0] = toMillibels(inPeak);
+        m[1] = toMillibels(outPeak);
+        m[2] = toMillibels(inRms);
+        m[3] = toMillibels(outRms);
+      };
       if (slot.bypass || !slot.instance) {
         if (pluginInputPtrs && pluginInputCount > 0) {
           const int channelsToCopy = std::min(pluginInputCount, numOutputs);
@@ -886,6 +909,23 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
               }
             }
           }
+          // Meter the bypassed insert too: it is still passing audio, and a silent meter
+          // on a passing insert is a meter that lies. in == out * (1/matchGain).
+          double bPeak = 0.0, bSumSq = 0.0;
+          size_t bN = 0;
+          for (int ch = 0; ch < channelsToCopy; ++ch) {
+            const float* src = pluginInputPtrs[ch];
+            if (!src) continue;
+            for (uint32_t i = 0; i < state.header->blockSize; ++i) {
+              const double v = std::fabs(src[i]);
+              bPeak = std::max(bPeak, v);
+              bSumSq += v * v;
+            }
+            bN += state.header->blockSize;
+          }
+          const double bRms = bN ? std::sqrt(bSumSq / static_cast<double>(bN)) : 0.0;
+          writeMeters(static_cast<int>(index), bPeak, bPeak * matchGain,
+                      bRms, bRms * matchGain);
           for (int ch = channelsToCopy; ch < numOutputs; ++ch) {
             std::fill(outputPtrs[ch], outputPtrs[ch] + state.header->blockSize, 0.0f);
           }
@@ -903,7 +943,7 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
         // Level-matched bypass (15c): measure what this insert does to the level while it
         // is active, so the bypass path can undo it. Input RMS must be taken BEFORE
         // process() — an in-place effect overwrites the buffer it read.
-        double inSumSq = 0.0;
+        double inSumSq = 0.0, inPeak = 0.0;
         size_t levelSamples = 0;
         if (pluginInputPtrs && pluginInputCount > 0) {
           for (int ch = 0; ch < std::min(pluginInputCount, numOutputs); ++ch) {
@@ -912,7 +952,9 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
               continue;
             }
             for (uint32_t i = 0; i < state.header->blockSize; ++i) {
-              inSumSq += static_cast<double>(src[i]) * src[i];
+              const double v = std::fabs(static_cast<double>(src[i]));
+              inSumSq += v * v;
+              inPeak = std::max(inPeak, v);
             }
             levelSamples += state.header->blockSize;
           }
@@ -927,18 +969,21 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
                                writeAux ? state.auxOutputPtrs.data() : nullptr,
                                writeAux ? static_cast<int>(state.numAuxChannelsOut) : 0);
         if (levelSamples > 0) {
-          double outSumSq = 0.0;
+          double outSumSq = 0.0, outPeak = 0.0;
           for (int ch = 0; ch < std::min(pluginInputCount, numOutputs); ++ch) {
             const float* dst = outputPtrs[ch];
             if (!dst) {
               continue;
             }
             for (uint32_t i = 0; i < state.header->blockSize; ++i) {
-              outSumSq += static_cast<double>(dst[i]) * dst[i];
+              const double v = std::fabs(static_cast<double>(dst[i]));
+              outSumSq += v * v;
+              outPeak = std::max(outPeak, v);
             }
           }
           const double inRms = std::sqrt(inSumSq / static_cast<double>(levelSamples));
           const double outRms = std::sqrt(outSumSq / static_cast<double>(levelSamples));
+          writeMeters(static_cast<int>(index), inPeak, outPeak, inRms, outRms);
           // Only learn from blocks with real signal, or near-silence would swamp the
           // estimate with noise ratios. Clamp hard: a gate or a limiter can produce an
           // absurd instantaneous ratio, and bypass must never become a volume weapon.
