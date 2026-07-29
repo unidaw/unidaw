@@ -3772,6 +3772,29 @@ struct TrackRuntime {
     }
   };
 
+  // A refusal has to reach somewhere a PERSON can read. These three emitters wrote only
+  // to the outbound ring, so a refused routing/chain/mod command left no trace in the
+  // engine log and no entry in history.jsonl — a script or an agent saw "sent" and
+  // nothing else. That is the same silent-failure shape that cost the frontend an
+  // afternoon on stale clip versions, and it applies to every CLI path added for these
+  // ops. So: the diff still goes on the ring for the UI, and the same refusal is now
+  // also an event and a journal line.
+  auto errorScopeName = [](const char* family, uint16_t code) -> std::string {
+    // Codes are per-family small integers; naming them here keeps the numbers out of
+    // the log, where nobody remembers what routing error 3 was.
+    static const std::unordered_map<std::string, std::vector<const char*>> kNames = {
+        {"routing", {"", "track_missing", "invalid_kind", "invalid_target"}},
+        {"chain", {"", "add_failed", "remove_failed", "move_failed", "update_failed"}},
+        {"mod", {"", "track_missing", "link_missing", "invalid_kind", "invalid_device",
+                 "order_violation", "link_exists"}},
+    };
+    auto it = kNames.find(family);
+    if (it != kNames.end() && code < it->second.size() && *it->second[code]) {
+      return it->second[code];
+    }
+    return "code:" + std::to_string(code);
+  };
+
   auto emitChainError = [&](uint16_t errorCode,
                             uint32_t trackId,
                             uint32_t deviceId,
@@ -3795,6 +3818,12 @@ struct TrackRuntime {
     entry.size = sizeof(payload);
     std::memcpy(entry.payload, &payload, sizeof(payload));
     daw::ringWrite(ringUiOut, entry);
+    DAW_EVENT("chain.rejected")
+        .field("track", trackId)
+        .field("device", deviceId)
+        .field("reason", errorScopeName("chain", errorCode));
+    historyAppend("chain", ("rejected:" + errorScopeName("chain", errorCode)).c_str(),
+                  trackId, 0, "");
   };
 
   auto emitRoutingSnapshot = [&](TrackRuntime& runtime) {
@@ -3851,6 +3880,12 @@ struct TrackRuntime {
     entry.size = sizeof(payload);
     std::memcpy(entry.payload, &payload, sizeof(payload));
     daw::ringWrite(ringUiOut, entry);
+    DAW_EVENT("routing.rejected")
+        .field("track", trackId)
+        .field("reason", errorScopeName("routing", errorCode));
+    historyAppend("set_track_routing",
+                  ("rejected:" + errorScopeName("routing", errorCode)).c_str(), trackId,
+                  0, "");
   };
 
   auto emitModSnapshot = [&](TrackRuntime& runtime) {
@@ -3928,6 +3963,12 @@ struct TrackRuntime {
     entry.size = sizeof(payload);
     std::memcpy(entry.payload, &payload, sizeof(payload));
     daw::ringWrite(ringUiOut, entry);
+    DAW_EVENT("modlink.rejected")
+        .field("track", trackId)
+        .field("link", linkId)
+        .field("reason", errorScopeName("mod", errorCode));
+    historyAppend("mod_link", ("rejected:" + errorScopeName("mod", errorCode)).c_str(),
+                  trackId, 0, "");
   };
 
   auto emitPatcherGraphDelta = [&](uint32_t trackId,

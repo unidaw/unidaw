@@ -48,8 +48,6 @@ DECLARED_NO_CLI = {
                            "drive something that does not survive the session",
     "SetDeviceEuclideanConfig": "the patcher node config surface as a whole is unbuilt "
                                 "on the CLI side; see the patcher ops below",
-    "SetTrackRouting": "needs a routing payload sender in daw-bridge; worth doing, not "
-                       "yet done",
     "AddModLink": "mod-link editing needs its own payload sender + a way to name a "
                   "target param; the read-back exists, the write path does not",
     "RemoveModLink": "as AddModLink",

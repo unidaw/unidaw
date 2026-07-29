@@ -43,6 +43,13 @@ daw-cli — control surface for a running engine
   daw-cli do position --nanotick T move the playhead
   daw-cli do loop --start T --end T set the loop range
   daw-cli do harmony-quantize --track N [--on 0|1]
+  daw-cli do routing --track N [--audio-out none|master|track:M|input:M]
+                     [--midi-out ...] [--audio-in ...] [--midi-in ...]
+                     [--pre-fader 0|1]
+                                   REPLACES every route on the track. Anything not
+                                   named goes to its DEFAULT (audio-out master, the
+                                   rest none) — the engine has no partial form and no
+                                   routing read-back to merge against.
   daw-cli do remove-device --track N|master --device D
   daw-cli do move-device --track N|master --device D --index I
   daw-cli do mixer --track N [--gain-db X] [--pan Y]
@@ -352,6 +359,80 @@ fn send_named(handle: &EngineHandle, command: UiCommandType, name: &str) -> i32 
 /// M1.13 lane quantize. No base_version: this moves no authored note, so gating it on
 /// a clip version would reject it whenever someone else was mid-edit, for a change that
 /// cannot conflict with theirs.
+/// One route spec: `none`, `master`, `track:N`, or `input:N`.
+fn parse_route(raw: &str, what: &str) -> Result<(u8, u32), String> {
+    use daw_bridge::layout::{
+        TRACK_ROUTE_EXTERNAL_INPUT, TRACK_ROUTE_MASTER, TRACK_ROUTE_NONE, TRACK_ROUTE_TRACK,
+    };
+    if raw == "none" {
+        return Ok((TRACK_ROUTE_NONE, 0));
+    }
+    if raw == "master" {
+        return Ok((TRACK_ROUTE_MASTER, 0));
+    }
+    if let Some(rest) = raw.strip_prefix("track:") {
+        let id = rest
+            .parse::<u32>()
+            .map_err(|_| format!("{what}: track:N needs a number, got {rest:?}"))?;
+        return Ok((TRACK_ROUTE_TRACK, id));
+    }
+    if let Some(rest) = raw.strip_prefix("input:") {
+        let id = rest
+            .parse::<u32>()
+            .map_err(|_| format!("{what}: input:N needs a number, got {rest:?}"))?;
+        return Ok((TRACK_ROUTE_EXTERNAL_INPUT, id));
+    }
+    Err(format!(
+        "{what}: expected none | master | track:N | input:N, got {raw:?}"
+    ))
+}
+
+/// SetTrackRouting. REPLACE, not merge — the engine writes all four routes from one
+/// payload, and there is no routing read-back to merge against, so anything not named
+/// here goes to its DEFAULT (audio-out master, everything else none) rather than to
+/// whatever it happens to be. That is stated in the usage text and echoed in the output,
+/// because a command that silently resets three routes while you set one is a trap.
+fn routing_command(args: &[String]) -> Result<daw_bridge::layout::UiTrackRoutingPayload, String> {
+    use daw_bridge::layout::{TRACK_ROUTE_MASTER, TRACK_ROUTE_NONE};
+    let track = flag_u64(args, "--track", Some(0))? as u32;
+    let (midi_in_kind, midi_in_id) = match flag(args, "--midi-in") {
+        Some(v) => parse_route(&v, "--midi-in")?,
+        None => (TRACK_ROUTE_NONE, 0),
+    };
+    let (midi_out_kind, midi_out_id) = match flag(args, "--midi-out") {
+        Some(v) => parse_route(&v, "--midi-out")?,
+        None => (TRACK_ROUTE_NONE, 0),
+    };
+    let (audio_in_kind, audio_in_id) = match flag(args, "--audio-in") {
+        Some(v) => parse_route(&v, "--audio-in")?,
+        None => (TRACK_ROUTE_NONE, 0),
+    };
+    // The engine's own default for a track's output is the master bus, so an omitted
+    // --audio-out means master rather than none. Defaulting it to none would silence the
+    // track, which is not what "I did not mention it" should mean.
+    let (audio_out_kind, audio_out_id) = match flag(args, "--audio-out") {
+        Some(v) => parse_route(&v, "--audio-out")?,
+        None => (TRACK_ROUTE_MASTER, 0),
+    };
+    let pre_fader = flag_u64(args, "--pre-fader", Some(1))? != 0;
+    Ok(daw_bridge::layout::UiTrackRoutingPayload {
+        command_type: UiCommandType::SetTrackRouting as u16,
+        flags: if pre_fader { 1 } else { 0 },
+        track_id: track,
+        base_version: 0,
+        midi_in_kind,
+        midi_out_kind,
+        audio_in_kind,
+        audio_out_kind,
+        midi_in_track_id: midi_in_id,
+        midi_out_track_id: midi_out_id,
+        audio_in_track_id: audio_in_id,
+        audio_out_track_id: audio_out_id,
+        midi_in_input_id: midi_in_id,
+        audio_in_input_id: audio_in_id,
+    })
+}
+
 fn quantize_command(args: &[String]) -> Result<UiCommandPayload, String> {
     let track = flag_u64(args, "--track", Some(0))? as u32;
     let grid = flag_u64(args, "--grid", Some(0))?;
@@ -1449,6 +1530,19 @@ fn main() {
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
+                Some(&"routing") => match routing_command(&args) {
+                    Ok(payload) => match handle.send_routing_command(payload) {
+                        Ok(()) => {
+                            println!(
+                                "{{ \"sent\": \"routing\", \"track\": {}, \"replaced_all_routes\": true }}",
+                                payload.track_id
+                            );
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    },
+                    Err(err) => { eprintln!("daw-cli: {err}"); 2 }
+                },
                 Some(&"stop") => {
                     let payload = track_structure_command(UiCommandType::Stop, 0);
                     match handle.send_command(payload) {

@@ -737,6 +737,41 @@ pub struct UiClipWindowCommandPayload {
 }
 
 
+/// SetTrackRouting (19). REPLACE semantics: the engine writes all four routes plus the
+/// pre-fader flag from this one payload, so a caller must send the state it wants, not a
+/// delta. There is deliberately no partial form — and note there is currently NO routing
+/// read-back in the SHM header (routing is only published as an outbound diff), so a
+/// read-modify-write is not available either. Both are on the list for the item-25
+/// contract batch.
+///
+/// `sidechain` is absent from this payload: TrackRouting carries one, the handler leaves
+/// it alone, and it can only be set from a project file today.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiTrackRoutingPayload {
+    pub command_type: u16,
+    /// bit 0: pre-fader send
+    pub flags: u16,
+    pub track_id: u32,
+    pub base_version: u32,
+    pub midi_in_kind: u8,
+    pub midi_out_kind: u8,
+    pub audio_in_kind: u8,
+    pub audio_out_kind: u8,
+    pub midi_in_track_id: u32,
+    pub midi_out_track_id: u32,
+    pub audio_in_track_id: u32,
+    pub audio_out_track_id: u32,
+    pub midi_in_input_id: u32,
+    pub audio_in_input_id: u32,
+}
+
+/// TrackRouteKind, mirroring apps/track_routing.h.
+pub const TRACK_ROUTE_NONE: u8 = 0;
+pub const TRACK_ROUTE_MASTER: u8 = 1;
+pub const TRACK_ROUTE_TRACK: u8 = 2;
+pub const TRACK_ROUTE_EXTERNAL_INPUT: u8 = 3;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UiChainCommandPayload {
@@ -1052,6 +1087,10 @@ mod tests {
         const_assert_eq!(size_of::<UiPatcherEdge>(), 20);
         const_assert_eq!(size_of::<UiPatcherRegion>(), 5184);
         const_assert_eq!(size_of::<UiBusDiffPayload>(), 40); // v20, fits EventEntry
+        // The engine dispatches SetTrackRouting BY PAYLOAD SIZE (daw_engine_main.cpp
+        // checks `entry.size == sizeof(UiTrackRoutingPayload)`), so a mismatch here does
+        // not fail to compile — it makes the command silently unrecognised.
+        const_assert_eq!(size_of::<UiTrackRoutingPayload>(), 40);
         // v18 waveform structs are bindgen-generated; pin the element sizes, then tie
         // each hand constant to the generated region size so neither can drift: if a
         // K_* count is wrong the region no longer sums, and this fails to compile.
