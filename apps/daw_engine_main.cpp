@@ -2212,6 +2212,11 @@ struct TrackRuntime {
       held.erase(it);
     }
   };
+  // PANIC (all sound off). The UI thread only raises this flag; the producer — the sole
+  // writer of the per-track event rings — consumes it once per block and emits CC120 +
+  // CC123 on every channel to every ready host, then drops that track's note state. Same
+  // single-writer discipline as PreviewNote above.
+  std::atomic<bool> panicPending{false};
   std::atomic<bool> harmonyDirty{true};
   std::atomic<uint32_t> harmonyVersion{0};
   std::atomic<uint32_t> patcherGraphVersion{0};
@@ -7467,6 +7472,26 @@ struct TrackRuntime {
       }
       std::cout << "UI: Transport Stop" << std::endl;
     } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::Panic)) {
+      // PANIC: cut everything. Stop halts and flushes held KEYJAZZ notes, which is right
+      // but is not a panic — it cannot reach a plugin's own ringing voices, a sequencer
+      // note whose note-off has not been reached, or a generator mid-phrase. This raises
+      // the flag the producer turns into CC120 (all-sound-off) + CC123 (all-notes-off) on
+      // every channel of every hosted plugin, and drops the engine's own note bookkeeping.
+      // Also halt: a panic that leaves the sequencer running would immediately re-trigger.
+      playing.store(false, std::memory_order_release);
+      panicPending.store(true, std::memory_order_release);
+      // Drop held preview state outright. The CC120 below already cuts those voices, so
+      // enqueuing note-offs for them would be redundant — and leaving them held would let
+      // a later Stop emit note-offs for pitches that no longer sound.
+      {
+        std::lock_guard<std::mutex> lock(previewMutex);
+        pendingPreviewNotes.clear();
+        heldPreview.clear();
+      }
+      DAW_EVENT("transport.panic");
+      std::cout << "UI: PANIC — all sound off" << std::endl;
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetPosition)) {
       const uint64_t target =
           static_cast<uint64_t>(payload.noteNanotickLo) |
@@ -10153,6 +10178,10 @@ struct TrackRuntime {
         std::lock_guard<std::mutex> lock(previewMutex);
         previewThisBlock.swap(pendingPreviewNotes);
       }
+      // PANIC: claimed once for this block, then applied to every track below. Consuming it
+      // here (rather than per track) guarantees one pass emits it to ALL tracks — a flag
+      // cleared inside the loop would only reach whichever track happened to be first.
+      const bool doPanic = panicPending.exchange(false, std::memory_order_acq_rel);
 
       for (auto* runtime : trackSnapshot) {
         if (!runtime->hostReady.load(std::memory_order_acquire)) {
@@ -10227,6 +10256,39 @@ struct TrackRuntime {
         // these come straight from the keyboard, never the clip store, so they play (and
         // hold, and sustain in chords) without being recorded. Note-off carries no noteId;
         // the plugin matches it by pitch+channel. Plays whether or not the transport runs.
+        if (doPanic) {
+          // All-sound-off on EVERY channel, ahead of anything else this block. CC120 is
+          // what makes this a panic: CC123 (all-notes-off) merely releases held notes and
+          // lets a pad or reverb tail ring out. Both are sent — 123 for plugins that
+          // ignore 120 — with 120 last so it wins. Every channel, because a multitimbral
+          // plugin or a MIDI-per-bus instrument can be sounding on any of them.
+          for (uint8_t ch = 0; ch < 16; ++ch) {
+            for (const uint8_t cc : {uint8_t{123}, uint8_t{120}}) {
+              daw::EventEntry panicEntry;
+              panicEntry.sampleTime = pluginSampleStart;
+              panicEntry.blockId = blockId;
+              panicEntry.type = static_cast<uint16_t>(daw::EventType::Midi);
+              panicEntry.size = sizeof(daw::MidiPayload);
+              daw::MidiPayload panicPayload{};
+              panicPayload.status = 0xB0;  // control change
+              panicPayload.data1 = cc;
+              panicPayload.data2 = 0;
+              panicPayload.channel = ch;
+              std::memcpy(panicEntry.payload, &panicPayload, sizeof(panicPayload));
+              daw::ringWrite(ringStd, panicEntry);
+            }
+          }
+          // Drop this track's own note bookkeeping too. Without this the engine would
+          // later emit note-offs for voices the panic already cut, and a scheduled
+          // retrigger would fire after the panic — the sound coming back on its own is
+          // exactly what makes a panic button untrustworthy.
+          {
+            std::lock_guard<std::mutex> lock(runtime->activeNotesMutex);
+            runtime->activeNotes.clear();
+            runtime->activeNoteByColumn.clear();
+            runtime->pendingStrikes.clear();
+          }
+        }
         for (const auto& req : previewThisBlock) {
           if (req.trackId != runtime->trackId) {
             continue;

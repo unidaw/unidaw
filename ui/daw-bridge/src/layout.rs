@@ -534,6 +534,10 @@ pub enum UiCommandType {
     RemovePlacement = 49,
     ResizePlacement = 50,
     AddPlacement = 51,
+    /// PANIC: all sound off — CC120 (all-sound-off) AND CC123 (all-notes-off) on every MIDI
+    /// channel to every hosted plugin, plus all pending/active note state dropped. CC120 is
+    /// the one that matters: 123 releases notes and lets them ring out, which is not a panic.
+    Panic = 52,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;

@@ -25,6 +25,7 @@ daw-cli — control surface for a running engine
   daw-cli do save [name] --force   save the project (default name: default)
   daw-cli do load [name] --force   load the project
   daw-cli do play --force          toggle transport
+  daw-cli do panic --force         all sound off (CC120+CC123 everywhere)
   daw-cli do note --force --track N --nanotick T --pitch P
                   [--velocity V] [--duration D] [--column C]
   daw-cli do delete-note --force --track N --nanotick T --pitch P [--column C]
@@ -1044,6 +1045,32 @@ fn main() {
                     match handle.send_command(payload) {
                         Ok(()) => {
                             println!("{{ \"sent\": {:?}, \"base_version\": {base} }}", if is_undo { "undo" } else { "redo" });
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
+                Some(&"panic") => {
+                    // All sound off: CC120 + CC123 on every channel of every hosted
+                    // plugin, and all pending/active note state dropped.
+                    match handle.send_command(UiCommandPayload {
+                        command_type: UiCommandType::Panic as u16,
+                        flags: 0,
+                        track_id: 0,
+                        plugin_index: 0,
+                        note_pitch: 0,
+                        value0: 0,
+                        note_nanotick_lo: 0,
+                        note_nanotick_hi: 0,
+                        note_duration_lo: 0,
+                        note_duration_hi: 0,
+                        base_version: 0,
+                    }) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"panic\" }}");
                             0
                         }
                         Err(err) => {
