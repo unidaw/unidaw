@@ -4150,6 +4150,12 @@ struct TrackRuntime {
       runtime->editableClipIds = state.editable;
       runtime->arrangementDirty.store(true, std::memory_order_relaxed);
       snapshot = rebuildFlatAndPublish(*runtime);
+      // Also re-derive the AUDIO render: rebuildFlatAndPublish only rebuilds the flat clip
+      // (host/MIDI), while sample playback reads runtime->audioRender. Without this, an
+      // undo/redo that moved an audio-clip placement leaves the sample sounding on the old
+      // track until some later edit happens to rebuild it.
+      std::atomic_store_explicit(&runtime->audioRender, rebuildAudioRender(*runtime),
+                                 std::memory_order_release);
     }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
                                std::memory_order_release);
@@ -6881,22 +6887,29 @@ struct TrackRuntime {
           auto it = std::find_if(
               src->sourcePlacements.begin(), src->sourcePlacements.end(),
               [&](const daw::ProjectPlacement& p) { return p.id == placementId; });
+          // Give the dest its OWN copy of the referenced clip under a FRESH globally-unique
+          // id, and repoint the moved placement to it. Reusing the source id would put the
+          // same id in two tracks; if that clip is referenced elsewhere, a later in-place
+          // edit (forkOwnedClip skips the copy-on-write when the id is already editable)
+          // diverges under the shared id, and save's dedup-by-id silently drops one copy.
+          daw::ProjectClip dstClip;
+          bool clipCopied = false;
           if (it != src->sourcePlacements.end()) {
-            daw::ProjectPlacement moved = *it;
-            moved.at = newAt;
-            const uint32_t clipId = moved.clipId;
-            const bool dstHasClip = std::any_of(
-                dst->ownedClips.begin(), dst->ownedClips.end(),
-                [&](const daw::ProjectClip& c) { return c.id == clipId; });
-            if (!dstHasClip) {
-              for (const auto& c : src->ownedClips) {
-                if (c.id == clipId) {
-                  dst->ownedClips.push_back(c);
-                  dst->editableClipIds.push_back(clipId);
-                  break;
-                }
+            for (const auto& c : src->ownedClips) {
+              if (c.id == it->clipId) {
+                dstClip = c;
+                clipCopied = true;
+                break;
               }
             }
+          }
+          if (it != src->sourcePlacements.end() && clipCopied) {
+            daw::ProjectPlacement moved = *it;
+            moved.at = newAt;
+            dstClip.id = nextClipId.fetch_add(1, std::memory_order_acq_rel);
+            moved.clipId = dstClip.id;
+            dst->ownedClips.push_back(std::move(dstClip));
+            dst->editableClipIds.push_back(moved.clipId);
             src->sourcePlacements.erase(it);
             dst->sourcePlacements.push_back(std::move(moved));
             src->arrangementDirty.store(true, std::memory_order_relaxed);
