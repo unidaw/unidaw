@@ -32,7 +32,10 @@ daw-cli — control surface for a running engine
   daw-cli do play                  toggle transport
   daw-cli do panic                 all sound off (CC120+CC123 everywhere)
   daw-cli do note --track N --nanotick T --pitch P
-                  [--velocity V] [--duration D] [--column C] [--base V]
+                  [--velocity V] [--duration D] [--column C] [--base V] [--local]
+                                   --local records the edit on THIS APPEARANCE of the
+                                   clip (an add or a mute on the placement) instead of
+                                   on the clip, which every placement of it shares
   daw-cli do delete-note --track N --nanotick T --pitch P [--column C]
   daw-cli do notes --track N --pitches 60,64,67 [--start T] [--step S]
                    [--duration D] [--velocity V] [--column C]
@@ -45,6 +48,10 @@ daw-cli — control surface for a running engine
   daw-cli do position --nanotick T move the playhead
   daw-cli do loop --start T --end T set the loop range
   daw-cli do harmony-quantize --track N [--on 0|1]
+  daw-cli do revert-overrides --track N --placement P
+                                   clears every add and mute on one appearance, in one
+                                   step — possible only because overrides are
+                                   additive-only, so reverting is dropping two lists
   daw-cli do section add --bars N [--name X] [--index I] [--color RGB]
   daw-cli do section remove --id ID
   daw-cli do section rename --id ID --name X
@@ -163,9 +170,15 @@ fn note_command(
     let velocity = flag_u64(args, "--velocity", Some(100))?;
     let duration = flag_u64(args, "--duration", Some(0))?;
     let column = flag_u64(args, "--column", Some(0))?;
+    // M3.24: --local records the edit on THIS APPEARANCE (an add or a mute on the
+    // placement) instead of on the clip. Default is clip scope, which reaches every
+    // placement — today's behaviour, unchanged. It is a flag and never inferred: which
+    // one you meant is the difference between "fix the bass in chorus 1 and all three
+    // choruses change" and "the hat you added to chorus 3 stays in chorus 3".
+    let local = args.iter().any(|a| a == "--local");
     Ok(UiCommandPayload {
         command_type: command as u16,
-        flags: column as u16,
+        flags: (column as u16) | if local { daw_bridge::layout::UI_EDIT_SCOPE_LOCAL } else { 0 },
         track_id: track,
         plugin_index: 0,
         note_pitch: pitch as u32,
@@ -1946,6 +1959,21 @@ fn main() {
                 // M3.23 sections. There is no "move a section to bar N": a section's
                 // position is derived from the lengths before it, so you change a length
                 // or the ORDER and everything after follows.
+                Some(&"revert-overrides") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let placement = match flag_u64(&args, "--placement", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    let mut payload = track_structure_command(
+                        UiCommandType::RevertPlacementOverrides, track);
+                    payload.value0 = placement;
+                    payload.base_version = handle.clip_version_for_track(track);
+                    match handle.send_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"revert-overrides\", \"placement\": {placement} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
                 Some(&"section") => {
                     use daw_bridge::layout as L;
                     let sub = rest.get(1).copied().unwrap_or("");

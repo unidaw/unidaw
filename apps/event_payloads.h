@@ -148,7 +148,12 @@ enum class UiCommandType : uint16_t {
   RemoveSection = 55,
   RenameSection = 56,
   SetSectionLength = 57,
-  MoveSection = 58,  // next free 59
+  MoveSection = 58,
+  // M3.24: clear BOTH override vectors on one placement, in one undoable step. That is
+  // the "one-click revert" the item asks for, and it is only possible because the
+  // overrides are additive-only — reverting is deleting two lists, not replaying 32
+  // correct inverses.
+  RevertPlacementOverrides = 59,  // next free 60
 };
 
 // M3.23: one section command. `sectionId` addresses an existing section (0 = append, for
@@ -229,6 +234,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::RenameSection: return "rename_section";
     case UiCommandType::SetSectionLength: return "set_section_length";
     case UiCommandType::MoveSection: return "move_section";
+    case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
   }
   return "op:unknown";
 }
@@ -550,6 +556,28 @@ constexpr uint16_t kUiChainDiffBusTruncated = 1u << 8;  // more buses than the c
 // the device (and the track) as a source of "notes I didn't type", turning a
 // phantom-note hunt into a glance at the chain. bit8 is truncated, so this is bit9.
 constexpr uint16_t kUiChainDiffGenerates = 1u << 9;
+
+// M3.24: EDIT SCOPE on WriteNote / DeleteNote / WriteChord. `flags` low bits carry the
+// COLUMN, so bit 15 — the top — is the scope.
+//
+//   CLEAR (default) = the CLIP. The edit goes to the clip, so it appears in EVERY
+//                     placement of that clip. This is exactly today's behaviour, so no
+//                     caller changes and no file means anything different.
+//   SET             = THIS APPEARANCE. The edit is recorded on the PLACEMENT as an `add`
+//                     or a `mute`, so it appears only here.
+//
+// It is an EXPLICIT flag and never inferred. Deciding "modify vs create" from whether the
+// cell is occupied — the obvious shortcut — breaks the promise in one direction or the
+// other depending on which rule you pick: infer clip-scope and the hat typed into chorus
+// 3 lands in all three; infer local and the bass fix in chorus 1 stops reaching choruses
+// 2 and 3. Both halves of "fix the bass in chorus 1, all three change, and the hat in
+// chorus 3 survives" need the caller to say which it meant.
+//
+// WHICH GESTURE sets it — modifier key, mode, or default — is a UI decision and is
+// deliberately not encoded here.
+constexpr uint16_t kUiEditScopeLocal = 1u << 15;
+// The column occupies the low byte; this masks the scope bit off before reading it.
+constexpr uint16_t kUiEditColumnMask = 0x00FFu;
 
 // v20: one audio bus of a hosted plugin, streamed right after that device's
 // ChainSnapshot diff (UiDiffType::DeviceBus). `channelOffset` is the bus's first

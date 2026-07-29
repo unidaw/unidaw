@@ -1729,6 +1729,10 @@ struct ClipExtentInfo {
   uint64_t endTick = 0;
   std::string name;
   bool isAudio = false;
+  // M3.24: how many overrides this appearance carries (adds + mutes). Published so the
+  // UI can badge a placement that differs from its clip — without it, "this chorus is
+  // not quite the others" is invisible until you look at every note.
+  uint32_t overrideCount = 0;
 };
 
 struct Track {
@@ -2863,6 +2867,10 @@ struct TrackRuntime {
         out.clipId = ext.clipId;
         out.trackId = runtime->trackId;
         uint32_t extFlags = ext.isAudio ? daw::kUiClipExtentAudio : 0u;
+        // M3.24: the override badge — how far THIS APPEARANCE differs from its clip.
+        // Saturating at 255 with a separate has-overrides bit, so a big count can never
+        // read as none.
+        extFlags |= daw::packClipExtentOverrides(ext.overrideCount);
         // Pack the clip's own musical grid into the spare flag bits (0 => the reader
         // falls back to the song meter). Clamp + refuse loudly per the three rules.
         for (const auto& oc : runtime->ownedClips) {
@@ -4459,6 +4467,8 @@ struct TrackRuntime {
         }
       }
       ext.endTick = *pl.at + length;
+      ext.overrideCount =
+          static_cast<uint32_t>(pl.adds.size() + pl.mutes.size());
       rt.clipExtents.push_back(std::move(ext));
     }
     // M1.13: the clip the UI draws and the clip that SOUNDS are already two objects —
@@ -6251,6 +6261,141 @@ struct TrackRuntime {
   // re-reads. `mutate` returns true if it changed anything; placements are keyed by stable
   // id. 0xFFFF... is the "leave unchanged" sentinel for Resize (a real nanotick never is).
   constexpr uint64_t kPlacementUnchanged = 0xFFFFFFFFFFFFFFFFull;
+  // M3.24: a LOCAL edit — one that belongs to THIS APPEARANCE of a clip rather than to
+  // the clip itself. Recorded on the placement as an `add` (a note only this appearance
+  // has) or a `mute` (a base note only this appearance is missing), which is what makes
+  // "fix the bass in chorus 1, all three choruses change, and the hat you added to
+  // chorus 3 survives" expressible at all: the bass fix is a CLIP edit and reaches all
+  // three, the hat is a LOCAL edit and stays where it was put.
+  //
+  // Additive-only, on purpose (roadmap item 24): there is no "changed note" record. An
+  // edit that would MODIFY a base note is decomposed into mute(original) + add(new), so
+  // the override list is always a set of things added and things silenced, and reverting
+  // is deleting both vectors rather than replaying inverses.
+  auto applyLocalNoteEdit = [&](uint32_t trackId, uint64_t nanotick, uint64_t duration,
+                                uint8_t pitch, uint8_t velocity, uint8_t column,
+                                bool deleting) -> bool {
+    TrackRuntime* runtime = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      if (trackId < tracks.size()) {
+        runtime = tracks[trackId].get();
+      }
+    }
+    if (!runtime) {
+      return false;
+    }
+    bool changed = false;
+    std::shared_ptr<const ClipSnapshot> snapshot;
+    {
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      // Which APPEARANCE is this tick in? A local edit is meaningless without one: there
+      // is no placement to hang the override on, so it is refused rather than silently
+      // becoming a clip edit — which would be the opposite of what was asked for.
+      daw::ProjectPlacement* target = nullptr;
+      for (auto& pl : runtime->sourcePlacements) {
+        if (!pl.at.has_value()) {
+          continue;
+        }
+        uint64_t len = pl.lengthNanoticks;
+        if (len == 0) {
+          for (const auto& c : runtime->ownedClips) {
+            if (c.id == pl.clipId) {
+              len = c.lengthNanoticks;
+              break;
+            }
+          }
+        }
+        if (nanotick >= *pl.at && nanotick < *pl.at + len) {
+          target = &pl;
+          break;
+        }
+      }
+      if (!target) {
+        DAW_EVENT("local_edit.rejected")
+            .field("track", trackId)
+            .field("nanotick", nanotick)
+            .field("reason", "no_placement_here");
+        return false;
+      }
+      // Overrides are PLACEMENT-RELATIVE, so they survive the placement being moved —
+      // that is the difference between "the hat in chorus 3" and "a hat at bar 27".
+      const uint64_t rel = nanotick - *target->at;
+      if (deleting) {
+        // Deleting an ADD removes it; deleting a BASE note mutes it. Two different
+        // records for what looks like one gesture, because the base note is not ours to
+        // remove — the clip may be placed elsewhere and still want it.
+        const size_t before = target->adds.size();
+        target->adds.erase(
+            std::remove_if(target->adds.begin(), target->adds.end(),
+                           [&](const daw::MusicalEvent& e) {
+                             return e.type == daw::MusicalEventType::Note &&
+                                    e.nanotickOffset == rel &&
+                                    e.payload.note.pitch == pitch &&
+                                    e.payload.note.column == column;
+                           }),
+            target->adds.end());
+        if (target->adds.size() != before) {
+          changed = true;
+        } else {
+          // Not an add — find the base note and mute it by id.
+          for (const auto& c : runtime->ownedClips) {
+            if (c.id != target->clipId) {
+              continue;
+            }
+            for (const auto& e : c.clip.events()) {
+              if (e.type != daw::MusicalEventType::Note ||
+                  e.nanotickOffset != rel ||
+                  e.payload.note.pitch != pitch ||
+                  e.payload.note.column != column) {
+                continue;
+              }
+              const daw::EventId id = e.payload.note.noteId;
+              if (std::find(target->mutes.begin(), target->mutes.end(), id) ==
+                  target->mutes.end()) {
+                target->mutes.push_back(id);
+                changed = true;
+              }
+              break;
+            }
+            break;
+          }
+        }
+      } else {
+        daw::MusicalEvent add;
+        add.nanotickOffset = rel;
+        add.type = daw::MusicalEventType::Note;
+        add.payload.note.pitch = pitch;
+        add.payload.note.velocity = velocity;
+        add.payload.note.column = column;
+        add.payload.note.durationNanoticks = duration;
+        // A local add gets its own note id from the clip's allocator space so it can be
+        // addressed (and deleted) like any other note.
+        add.payload.note.noteId = nextClipId.fetch_add(1, std::memory_order_relaxed);
+        target->adds.push_back(std::move(add));
+        changed = true;
+      }
+      if (changed) {
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+        snapshot = rebuildFlatAndPublish(*runtime);
+      }
+    }
+    if (!changed) {
+      return false;
+    }
+    if (snapshot) {
+      std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
+                                 std::memory_order_release);
+    }
+    bumpClipVersionFor(runtime);
+    clipDirty.store(true, std::memory_order_release);
+    DAW_EVENT("local_edit.applied")
+        .field("track", trackId)
+        .field("nanotick", nanotick)
+        .field("op", deleting ? "override_removed_or_muted" : "added");
+    return true;
+  };
+
   auto applyPlacementEdit =
       [&](uint32_t trackId,
           const std::function<bool(std::vector<daw::ProjectPlacement>&)>& mutate) -> bool {
@@ -7952,7 +8097,16 @@ struct TrackRuntime {
       const uint8_t velocity =
           static_cast<uint8_t>(std::min<uint32_t>(payload.value0, 127));
       const uint16_t flags = payload.flags;
-      applyAddNote(payload.trackId, noteNanotick, noteDuration, pitch, velocity, flags, true);
+      // M3.24: the caller says whether this belongs to the CLIP (every appearance) or to
+      // THIS APPEARANCE. Default is clip scope, which is exactly today's behaviour.
+      if ((flags & daw::kUiEditScopeLocal) != 0) {
+        applyLocalNoteEdit(payload.trackId, noteNanotick, noteDuration, pitch, velocity,
+                           static_cast<uint8_t>(flags & daw::kUiEditColumnMask),
+                           /*deleting=*/false);
+      } else {
+        applyAddNote(payload.trackId, noteNanotick, noteDuration, pitch, velocity, flags,
+                     true);
+      }
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::DeleteNote)) {
       if (!requireMatchingClipVersion(payload.baseVersion,
@@ -7966,7 +8120,84 @@ struct TrackRuntime {
       const uint8_t pitch =
           static_cast<uint8_t>(std::min<uint32_t>(payload.notePitch, 127));
       const uint16_t flags = payload.flags;
-      applyRemoveNote(payload.trackId, noteNanotick, pitch, flags, true);
+      if ((flags & daw::kUiEditScopeLocal) != 0) {
+        applyLocalNoteEdit(payload.trackId, noteNanotick, /*duration=*/0, pitch,
+                           /*velocity=*/0,
+                           static_cast<uint8_t>(flags & daw::kUiEditColumnMask),
+                           /*deleting=*/true);
+      } else {
+        applyRemoveNote(payload.trackId, noteNanotick, pitch, flags, true);
+      }
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::RevertPlacementOverrides)) {
+      // M3.24: the one-click revert. Clears BOTH override vectors on one placement, which
+      // is only this simple because the overrides are additive-only — there are no
+      // inverses to replay, just two lists to drop.
+      if (!requireMatchingClipVersion(payload.baseVersion,
+                                      daw::UiCommandType::RevertPlacementOverrides,
+                                      payload.trackId)) {
+        return;
+      }
+      const uint32_t placementId = payload.value0;
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("overrides.revert_rejected")
+            .field("track", payload.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      uint32_t clearedAdds = 0, clearedMutes = 0;
+      bool found = false;
+      std::shared_ptr<const ClipSnapshot> snapshot;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& pl : runtime->sourcePlacements) {
+          if (pl.id != placementId) {
+            continue;
+          }
+          found = true;
+          clearedAdds = static_cast<uint32_t>(pl.adds.size());
+          clearedMutes = static_cast<uint32_t>(pl.mutes.size());
+          pl.adds.clear();
+          pl.mutes.clear();
+          break;
+        }
+        if (found && (clearedAdds > 0 || clearedMutes > 0)) {
+          runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+          snapshot = rebuildFlatAndPublish(*runtime);
+        }
+      }
+      if (!found) {
+        DAW_EVENT("overrides.revert_rejected")
+            .field("track", payload.trackId)
+            .field("placement", placementId)
+            .field("reason", "no_such_placement");
+        return;
+      }
+      if (clearedAdds == 0 && clearedMutes == 0) {
+        // Nothing to revert is not a failure, but it is worth saying: a UI that offered
+        // the button on a placement with no overrides is showing an action that does
+        // nothing.
+        DAW_EVENT("overrides.revert_noop").field("placement", placementId);
+        return;
+      }
+      if (snapshot) {
+        std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
+                                   std::memory_order_release);
+      }
+      bumpClipVersionFor(runtime);
+      clipDirty.store(true, std::memory_order_release);
+      DAW_EVENT("overrides.reverted")
+          .field("track", payload.trackId)
+          .field("placement", placementId)
+          .field("adds_cleared", clearedAdds)
+          .field("mutes_cleared", clearedMutes);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::PreviewNote)) {
       // Keyjazz: audition a pitch on the track's instrument without touching the clip

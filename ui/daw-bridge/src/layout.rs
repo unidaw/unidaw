@@ -600,6 +600,7 @@ pub enum UiCommandType {
     RenameSection = 56,
     SetSectionLength = 57,
     MoveSection = 58,
+    RevertPlacementOverrides = 59,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -919,6 +920,23 @@ pub struct UiArrangeSummaryRegion {
     pub sections: [UiArrangeSection; K_UI_MAX_SECTIONS],
     pub time_sig_points: [UiTimeSigPoint; K_UI_MAX_TIME_SIG_POINTS],
 }
+
+/// M3.24: the override badge in UiClipExtent.flags. `override_count` SATURATES at 255 —
+/// a count that wrapped would draw a placement with 256 overrides as unmodified, which is
+/// the one thing the badge exists to prevent — and `HAS_OVERRIDES` is set whenever the
+/// real count is non-zero, so a saturated count can never read as none.
+pub const UI_CLIP_EXTENT_OVERRIDE_SHIFT: u32 = 14;
+pub const UI_CLIP_EXTENT_OVERRIDE_MASK: u32 = 0xFF << UI_CLIP_EXTENT_OVERRIDE_SHIFT;
+pub const UI_CLIP_EXTENT_HAS_OVERRIDES: u32 = 1 << 22;
+
+/// M3.24: edit scope on WriteNote / DeleteNote / WriteChord. CLEAR = the CLIP (every
+/// appearance) — today's behaviour and the default. SET = THIS APPEARANCE, recorded as an
+/// add or a mute on the placement. Never inferred: which one the caller meant is the
+/// difference between "fix the bass in chorus 1 and all three change" and "the hat you
+/// added to chorus 3 stays there", and no rule about whether the cell is occupied gets
+/// both right.
+pub const UI_EDIT_SCOPE_LOCAL: u16 = 1 << 15;
+pub const UI_EDIT_COLUMN_MASK: u16 = 0x00FF;
 
 pub const K_UI_MAX_SECTIONS: usize = 64;
 pub const K_UI_MAX_TIME_SIG_POINTS: usize = 32;

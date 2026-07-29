@@ -695,6 +695,27 @@ constexpr uint8_t kUiClipNoteAdd = 1u << 1;
 // UI renders it as a waveform rather than notes — and it carries no note events.
 constexpr uint32_t kUiClipExtentAudio = 1u << 0;
 
+// M3.24: the override BADGE, in the spare high bits of UiClipExtent.flags — no size or
+// version change, the same trick the v19 grid used. `overrideCount` SATURATES at 255
+// rather than truncating: a count that wrapped to a small number (or to zero) would draw
+// a placement with 256 overrides as unmodified, which is the one thing this badge exists
+// to prevent. `hasOverrides` is set whenever the real count is non-zero, so a saturated
+// or clamped count can never read as "none".
+constexpr uint32_t kUiClipExtentOverrideShift = 14;
+constexpr uint32_t kUiClipExtentOverrideMask = 0xFFu << kUiClipExtentOverrideShift;
+constexpr uint32_t kUiClipExtentHasOverrides = 1u << 22;
+
+inline uint32_t packClipExtentOverrides(uint32_t count) {
+  if (count == 0) {
+    return 0;
+  }
+  const uint32_t shown = count > 255 ? 255u : count;
+  return (shown << kUiClipExtentOverrideShift) | kUiClipExtentHasOverrides;
+}
+inline uint32_t unpackClipExtentOverrides(uint32_t flags) {
+  return (flags & kUiClipExtentOverrideMask) >> kUiClipExtentOverrideShift;
+}
+
 // v19: the clip's own musical grid, packed into the spare bits of UiClipExtent.flags
 // (no size or version change — the field was reserved). A clip is a "section", so it
 // carries its own meter; the tracker draws each visible clip's grid. THREE RULES the
@@ -713,6 +734,8 @@ constexpr uint32_t kUiClipExtentAudio = 1u << 0;
 //   bits 1-5   linesPerBeat        5 bits  1..31
 //   bits 6-10  timeSigNumerator    5 bits  1..31
 //   bits 11-13 timeSigDenominator  3 bits  exponent 0..7 => denominator 1..128
+//   bits 14-21 overrideCount       8 bits  M3.24, SATURATING at 255 (see below)
+//   bit  22    hasOverrides        M3.24, set whenever the count is non-zero
 constexpr uint32_t kUiClipGridLpbShift = 1;
 constexpr uint32_t kUiClipGridNumShift = 6;
 constexpr uint32_t kUiClipGridDenExpShift = 11;
