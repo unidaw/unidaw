@@ -52,6 +52,7 @@
 #include "apps/latency_manager.h"
 #include "apps/time_base.h"
 #include "apps/lane_quantize.h"
+#include "apps/section_list.h"
 #include "apps/musical_structures.h"
 #include "apps/placement_schedule.h"
 #include "apps/note_entry.h"
@@ -2259,6 +2260,15 @@ struct TrackRuntime {
   // you would add a section at bar 4, press play, and hear nothing, with no explanation
   // anywhere. Recomputed whenever a placement edit changes the arrangement.
   std::atomic<uint64_t> songEndNanotick{0};
+  // M3.23: the section spine, and its own version counter. Deliberately NOT clipVersion:
+  // renaming a section moves no note, so it must not invalidate anyone's in-flight edit —
+  // the same separation quantizeVersion has.
+  daw::SectionList sectionList;
+  std::mutex sectionMutex;
+  std::atomic<uint32_t> sectionVersion{0};
+  // The song's meter, held for the section derivation (positions come from tickAtBar).
+  daw::TimeSignatureMap songMeter;
+  std::mutex songMeterMutex;
   // Whether the loop was set BY HAND. The loop follows the song end only while it was
   // not — otherwise every note you type would silently reset a loop you had chosen,
   // which is the opposite failure and a worse one.
@@ -4807,6 +4817,14 @@ struct TrackRuntime {
     document.meta.name = stem;
     document.nanoticksPerQuarter = daw::NanotickConverter::kNanoticksPerQuarter;
     document.seed = projectSeed.load(std::memory_order_relaxed);
+    {
+      // M3.23: the spine is LIVE state (section ops edit it), so the save must read the
+      // ENGINE's copy — not whatever the document loaded with. Writing the loaded value
+      // would silently discard every section edit made this session, which is exactly how
+      // the mod links were lost once already.
+      std::lock_guard<std::mutex> slock(sectionMutex);
+      document.sections = sectionList.sections();
+    }
     // Re-emit the full retained tempo map so a load->save round-trip keeps tempo
     // changes, not just the current tempo. (A never-loaded session defaults to 120.)
     document.tempoMap = loadedTempoMap;
@@ -5256,6 +5274,23 @@ struct TrackRuntime {
     loopStartNanotick.store(0, std::memory_order_release);
     loopEndNanotick.store(arrangementEnd, std::memory_order_release);
     songEndNanotick.store(arrangementEnd, std::memory_order_release);
+    // M3.23: adopt the section spine and the song's meter, so section positions derive
+    // from the loaded document rather than from whatever the last project left behind.
+    {
+      std::lock_guard<std::mutex> slock(sectionMutex);
+      sectionList.setSections(document.sections);
+    }
+    {
+      std::lock_guard<std::mutex> mlock(songMeterMutex);
+      if (!document.timeSigMap.empty()) {
+        songMeter.setMap(document.timeSigMap);
+      } else {
+        songMeter.setMap({{0,
+                           daw::TimeSignature{document.songTimeSigNumerator,
+                                              document.songTimeSigDenominator}}});
+      }
+    }
+    sectionVersion.fetch_add(1, std::memory_order_acq_rel);
     // A load replaces the song, so any hand-set loop belonged to the OLD one.
     loopUserSet.store(false, std::memory_order_release);
 
@@ -6644,6 +6679,218 @@ struct TrackRuntime {
       if (!updated) {
         std::cerr << "UI: SetAutomationTarget - automation clip not found (track "
                   << autoPayload.trackId << ")" << std::endl;
+      }
+      return;
+    }
+    // M3.23 SECTION ops. All five are SONG-scoped: the spine belongs to no track, and
+    // SetSectionLength moves placements on every track at once.
+    if (entry.size == sizeof(daw::UiSectionCommandPayload) &&
+        (commandType == daw::UiCommandType::AddSection ||
+         commandType == daw::UiCommandType::RemoveSection ||
+         commandType == daw::UiCommandType::RenameSection ||
+         commandType == daw::UiCommandType::SetSectionLength ||
+         commandType == daw::UiCommandType::MoveSection)) {
+      daw::UiSectionCommandPayload sp{};
+      std::memcpy(&sp, entry.payload, sizeof(sp));
+      if (static_cast<daw::UiCommandType>(sp.commandType) != commandType) {
+        return;
+      }
+      const std::string name(sp.name, strnlen(sp.name, sizeof(sp.name)));
+      auto reject = [&](const char* reason) {
+        DAW_EVENT("section.rejected")
+            .field("op", daw::uiCommandTypeName(commandType))
+            .field("section", sp.sectionId)
+            .field("reason", reason);
+        historyAppend(daw::uiCommandTypeName(commandType),
+                      (std::string("rejected:") + reason).c_str(), 0xFFFFFFFFu, 0, "");
+      };
+
+      // SetSectionLength is the only one that touches placements, and it does so across
+      // EVERY track in one transaction — so it is planned first and refused whole. A
+      // half-applied ripple is a corrupted arrangement with no undo entry to restore.
+      if (commandType == daw::UiCommandType::SetSectionLength) {
+        if (sp.barCount == 0) {
+          reject("zero_bars");  // a section with no span cannot be pointed at
+          return;
+        }
+        std::vector<daw::Section> sections;
+        size_t index = 0;
+        uint64_t oldEndTick = 0, newEndTick = 0;
+        {
+          std::lock_guard<std::mutex> slock(sectionMutex);
+          const auto found = sectionList.indexOfId(sp.sectionId);
+          if (!found) {
+            reject("no_such_section");
+            return;
+          }
+          index = *found;
+          sections = sectionList.sections();
+          std::lock_guard<std::mutex> mlock(songMeterMutex);
+          const auto before = sectionList.resolve(songMeter);
+          oldEndTick = before[index].endTick;
+          // The new end, taken THROUGH THE METER MAP rather than as
+          // startTick + bars * barLength: a section spanning a meter change has bars of
+          // two different lengths, and the naive product puts the boundary in the wrong
+          // place.
+          newEndTick = songMeter.tickAtBar(before[index].startBar + sp.barCount);
+        }
+        const int64_t delta =
+            static_cast<int64_t>(newEndTick) - static_cast<int64_t>(oldEndTick);
+        // Every non-loose placement on every track, so the plan sees the whole song.
+        std::vector<std::tuple<uint32_t, uint64_t, uint64_t>> spans;
+        const auto trackSnap = snapshotTracks();
+        for (auto* rt : trackSnap) {
+          if (!rt || rt->removed.load(std::memory_order_acquire)) {
+            continue;
+          }
+          std::lock_guard<std::mutex> tlock(rt->trackMutex);
+          for (const auto& pl : rt->sourcePlacements) {
+            if (!pl.at.has_value()) {
+              continue;
+            }
+            uint64_t len = pl.lengthNanoticks;
+            if (len == 0) {
+              for (const auto& c : rt->ownedClips) {
+                if (c.id == pl.clipId) {
+                  len = c.lengthNanoticks;
+                  break;
+                }
+              }
+            }
+            spans.emplace_back(pl.id, *pl.at, *pl.at + len);
+          }
+        }
+        const auto plan = daw::planRipple(spans, oldEndTick, delta);
+        if (plan.outcome != daw::RippleOutcome::Ok) {
+          DAW_EVENT("section.rejected")
+              .field("op", "set_section_length")
+              .field("section", sp.sectionId)
+              .field("reason", "content_in_removed_bars")
+              .field("blocking_placement", plan.blockingPlacementId);
+          std::cerr << "UI: SetSectionLength refused — placement "
+                    << plan.blockingPlacementId
+                    << " lives in the bars this would remove. Shrinking would stack it "
+                       "onto one tick or delete it; empty those bars first." << std::endl;
+          historyAppend("set_section_length", "rejected:content_in_removed_bars",
+                        0xFFFFFFFFu, 0, "");
+          return;
+        }
+        // Apply: the spine, then every placement, then the derived state.
+        {
+          std::lock_guard<std::mutex> slock(sectionMutex);
+          sections[index].barCount = sp.barCount;
+          sectionList.setSections(std::move(sections));
+        }
+        for (auto* rt : trackSnap) {
+          if (!rt || rt->removed.load(std::memory_order_acquire)) {
+            continue;
+          }
+          std::shared_ptr<const ClipSnapshot> snap;
+          {
+            std::lock_guard<std::mutex> tlock(rt->trackMutex);
+            bool touched = false;
+            for (auto& pl : rt->sourcePlacements) {
+              if (!pl.at.has_value()) {
+                continue;
+              }
+              const uint64_t moved = daw::rippleTick(*pl.at, oldEndTick, delta);
+              if (moved != *pl.at) {
+                pl.at = moved;
+                touched = true;
+              }
+            }
+            if (!touched) {
+              continue;
+            }
+            snap = rebuildFlatAndPublish(*rt);
+            std::atomic_store_explicit(&rt->audioRender, rebuildAudioRender(*rt),
+                                       std::memory_order_release);
+          }
+          if (snap) {
+            std::atomic_store_explicit(&rt->clipSnapshot, snap,
+                                       std::memory_order_release);
+          }
+          bumpClipVersionFor(rt);
+        }
+        clipDirty.store(true, std::memory_order_release);
+        recomputeSongEnd();
+        sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+        DAW_EVENT("section.length_set")
+            .field("section", sp.sectionId)
+            .field("bars", sp.barCount)
+            .field("delta_ticks", static_cast<int64_t>(delta))
+            .field("placements_moved", plan.moved);
+        return;
+      }
+
+      // The other four touch the spine only, so no placement moves and no clip version
+      // changes — a rename must not invalidate anyone's in-flight note edit.
+      bool ok = false;
+      const char* what = "";
+      {
+        std::lock_guard<std::mutex> slock(sectionMutex);
+        auto sections = sectionList.sections();
+        if (commandType == daw::UiCommandType::AddSection) {
+          if (sp.barCount == 0) {
+            reject("zero_bars");
+            return;
+          }
+          daw::Section s;
+          s.id = sectionList.nextId();
+          s.name = name.empty() ? "Section" : name;
+          s.barCount = sp.barCount;
+          s.colorRgb = sp.colorRgb;
+          // toIndex past the end appends, which is what "add a section" usually means.
+          const size_t at = std::min<size_t>(sp.toIndex, sections.size());
+          sections.insert(sections.begin() + static_cast<long>(at), std::move(s));
+          ok = true;
+          what = "added";
+        } else {
+          const auto found = sectionList.indexOfId(sp.sectionId);
+          if (!found) {
+            reject("no_such_section");
+            return;
+          }
+          const size_t index = *found;
+          if (commandType == daw::UiCommandType::RemoveSection) {
+            // Removing a section does NOT ripple: the material stays where it is and
+            // simply stops being named. Deleting the bars is a different, destructive
+            // operation and is not what removing a label means.
+            sections.erase(sections.begin() + static_cast<long>(index));
+            ok = true;
+            what = "removed";
+          } else if (commandType == daw::UiCommandType::RenameSection) {
+            if (name.empty()) {
+              reject("empty_name");
+              return;
+            }
+            sections[index].name = name;
+            ok = true;
+            what = "renamed";
+          } else if (commandType == daw::UiCommandType::MoveSection) {
+            const size_t to = std::min<size_t>(sp.toIndex, sections.size() - 1);
+            if (to == index) {
+              reject("already_there");
+              return;
+            }
+            auto moved = sections[index];
+            sections.erase(sections.begin() + static_cast<long>(index));
+            sections.insert(sections.begin() + static_cast<long>(to), std::move(moved));
+            ok = true;
+            what = "moved";
+          }
+        }
+        if (ok) {
+          sectionList.setSections(std::move(sections));
+        }
+      }
+      if (ok) {
+        sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+        DAW_EVENT("section.changed")
+            .field("op", daw::uiCommandTypeName(commandType))
+            .field("section", sp.sectionId)
+            .field("what", what);
+        historyAppend(daw::uiCommandTypeName(commandType), "received", 0xFFFFFFFFu, 0, "");
       }
       return;
     }

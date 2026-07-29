@@ -587,6 +587,11 @@ pub enum UiCommandType {
     /// value0 = strength in thousandths, note_pitch = swing in thousandths BIASED by
     /// +500 (so 500 = straight). Changes what SOUNDS; never touches a stored note.
     SetLaneQuantize = 53,
+    AddSection = 54,
+    RemoveSection = 55,
+    RenameSection = 56,
+    SetSectionLength = 57,
+    MoveSection = 58,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -839,6 +844,43 @@ impl Default for UiModSourceValuePayload {
             source_id: 0,
             value: 0.0,
             reserved: [0u8; 16],
+        }
+    }
+}
+
+/// M3.23 section commands (54-58). A section stores a name and a length in BARS; its
+/// POSITION is derived from the lengths before it, so there is deliberately no
+/// "move a section to bar N" — you change a length or the order and everything after
+/// follows. `SetSectionLength` RIPPLES every placement at or after the boundary in one
+/// transaction, and REFUSES a shrink into occupied bars rather than stacking placements
+/// onto one tick (the refusal is reported as `section.rejected` with the blocking
+/// placement id).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiSectionCommandPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    /// Addresses an existing section. 0 with AddSection means "append".
+    pub section_id: u32,
+    /// Length in bars, for AddSection and SetSectionLength.
+    pub bar_count: u32,
+    /// Destination index for MoveSection, and the insert position for AddSection.
+    pub to_index: u32,
+    pub color_rgb: u32,
+    /// 20 bytes — what is left of the 40-byte slot. A longer name is truncated.
+    pub name: [u8; 20],
+}
+
+impl Default for UiSectionCommandPayload {
+    fn default() -> Self {
+        Self {
+            command_type: 0,
+            flags: 0,
+            section_id: 0,
+            bar_count: 0,
+            to_index: 0,
+            color_rgb: 0,
+            name: [0u8; 20],
         }
     }
 }
@@ -1204,6 +1246,7 @@ mod tests {
         const_assert_eq!(size_of::<UiModSourceValuePayload>(), 40);
         const_assert_eq!(size_of::<UiPatcherGraphCommandPayload>(), 40);
         const_assert_eq!(size_of::<UiPatcherNodeConfigPayload>(), 40);
+        const_assert_eq!(size_of::<UiSectionCommandPayload>(), 40);
         // v18 waveform structs are bindgen-generated; pin the element sizes, then tie
         // each hand constant to the generated region size so neither can drift: if a
         // K_* count is wrong the region no longer sums, and this fails to compile.

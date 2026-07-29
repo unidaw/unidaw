@@ -927,6 +927,17 @@ impl EngineHandle {
         )
     }
 
+    /// Send a section command (add/remove/rename/set-length/move).
+    pub fn send_section_command(
+        &self,
+        payload: crate::layout::UiSectionCommandPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSectionCommandPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSectionCommandPayload>(),
+        )
+    }
+
     /// Send a rack knob write. Same ring as send_command; a distinct payload shape
     /// (UiSetParamPayload carries a uid16 that does not fit UiCommandPayload's fields).
     pub fn send_set_param(&self, payload: crate::layout::UiSetParamPayload) -> Result<(), String> {

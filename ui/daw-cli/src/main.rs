@@ -43,6 +43,16 @@ daw-cli — control surface for a running engine
   daw-cli do position --nanotick T move the playhead
   daw-cli do loop --start T --end T set the loop range
   daw-cli do harmony-quantize --track N [--on 0|1]
+  daw-cli do section add --bars N [--name X] [--index I] [--color RGB]
+  daw-cli do section remove --id ID
+  daw-cli do section rename --id ID --name X
+  daw-cli do section length --id ID --bars N
+                                   RIPPLES: carries every placement at or after the
+                                   section's end. Refuses a shrink into occupied bars
+                                   rather than stacking them onto one tick.
+  daw-cli do section move --id ID --index I
+                                   a section's POSITION is derived from the lengths
+                                   before it, so reordering is how you move one
   daw-cli do add-placement --track N --clip C --at T --length L
                                    --at and --length are REQUIRED; the engine refuses
                                    the leave-unchanged sentinel as a position
@@ -1885,6 +1895,57 @@ fn main() {
                     };
                     match handle.send_mod_source_value(payload) {
                         Ok(()) => { println!("{{ \"sent\": \"macro\", \"value\": {value} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                // M3.23 sections. There is no "move a section to bar N": a section's
+                // position is derived from the lengths before it, so you change a length
+                // or the ORDER and everything after follows.
+                Some(&"section") => {
+                    use daw_bridge::layout as L;
+                    let sub = rest.get(1).copied().unwrap_or("");
+                    let mut name = [0u8; 20];
+                    if let Some(n) = flag(&args, "--name") {
+                        let b = n.as_bytes();
+                        let len = b.len().min(name.len());
+                        name[..len].copy_from_slice(&b[..len]);
+                    }
+                    let cmd = match sub {
+                        "add" => UiCommandType::AddSection,
+                        "remove" => UiCommandType::RemoveSection,
+                        "rename" => UiCommandType::RenameSection,
+                        "length" => UiCommandType::SetSectionLength,
+                        "move" => UiCommandType::MoveSection,
+                        other => {
+                            eprintln!("daw-cli: section {other:?}: expected add|remove|rename|length|move");
+                            std::process::exit(2)
+                        }
+                    };
+                    // `--bars` is required where it is the whole point of the command; a
+                    // zero would be a section with no span, which the engine refuses.
+                    let bars = flag_u64(&args, "--bars", Some(0)).unwrap_or(0) as u32;
+                    if matches!(cmd, UiCommandType::AddSection | UiCommandType::SetSectionLength)
+                        && bars == 0
+                    {
+                        eprintln!("daw-cli: --bars is required for section {sub} and must be > 0");
+                        std::process::exit(2);
+                    }
+                    if matches!(cmd, UiCommandType::RenameSection) && flag(&args, "--name").is_none() {
+                        eprintln!("daw-cli: --name is required for section rename");
+                        std::process::exit(2);
+                    }
+                    let payload = L::UiSectionCommandPayload {
+                        command_type: cmd as u16,
+                        flags: 0,
+                        section_id: flag_u64(&args, "--id", Some(0)).unwrap_or(0) as u32,
+                        bar_count: bars,
+                        to_index: flag_u64(&args, "--index", Some(u32::MAX as u64))
+                            .unwrap_or(u32::MAX as u64) as u32,
+                        color_rgb: flag_u64(&args, "--color", Some(0)).unwrap_or(0) as u32,
+                        name,
+                    };
+                    match handle.send_section_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"section {sub}\" }}"); 0 }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }

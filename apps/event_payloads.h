@@ -136,8 +136,36 @@ enum class UiCommandType : uint16_t {
   // (0 = off), value0 = strength in thousandths, notePitch = swing in thousandths
   // BIASED BY +500 so it survives the unsigned field (0 = -500, 500 = straight,
   // 1000 = +500). Changes what SOUNDS; never touches a stored note.
-  SetLaneQuantize = 53,  // next free 54
+  SetLaneQuantize = 53,
+  // M3.23 SECTION ops. A section stores a name and a length in BARS; its position is
+  // DERIVED, so there is no "move a section to bar N" — you change a length or the order,
+  // and everything after follows. SetSectionLength RIPPLES: it carries every placement at
+  // or after the boundary, in one transaction, and REFUSES a shrink into occupied bars
+  // rather than stacking them on one tick.
+  //
+  // All five ride UiSectionCommandPayload. AddSection and RenameSection carry a name.
+  AddSection = 54,
+  RemoveSection = 55,
+  RenameSection = 56,
+  SetSectionLength = 57,
+  MoveSection = 58,  // next free 59
 };
+
+// M3.23: one section command. `sectionId` addresses an existing section (0 = append, for
+// AddSection); `barCount` is the length for Add/SetSectionLength; `toIndex` is the
+// destination for MoveSection. The name is a fixed inline array, not a pointer — the
+// ring carries values.
+struct UiSectionCommandPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  uint16_t flags = 0;
+  uint32_t sectionId = 0;
+  uint32_t barCount = 0;
+  uint32_t toIndex = 0;
+  uint32_t colorRgb = 0;
+  char name[20]{};
+};
+static_assert(sizeof(UiSectionCommandPayload) == 40,
+              "UiSectionCommandPayload must fit an EventEntry payload");
 
 // SetLaneQuantize carries swing through an unsigned field; this is the bias.
 constexpr uint32_t kLaneQuantizeSwingBias = 500;
@@ -196,6 +224,11 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::AddPlacement: return "add_placement";
     case UiCommandType::Panic: return "panic";
     case UiCommandType::SetLaneQuantize: return "set_lane_quantize";
+    case UiCommandType::AddSection: return "add_section";
+    case UiCommandType::RemoveSection: return "remove_section";
+    case UiCommandType::RenameSection: return "rename_section";
+    case UiCommandType::SetSectionLength: return "set_section_length";
+    case UiCommandType::MoveSection: return "move_section";
   }
   return "op:unknown";
 }
@@ -240,6 +273,13 @@ inline bool uiCommandIsGlobalScope(UiCommandType t) {
     case UiCommandType::WriteHarmony:
     case UiCommandType::DeleteHarmony:
     case UiCommandType::AddTrack:
+    // Section ops are SONG-scoped: they change the arrangement's spine, which belongs to
+    // no single track, and SetSectionLength moves placements on every track at once.
+    case UiCommandType::AddSection:
+    case UiCommandType::RemoveSection:
+    case UiCommandType::RenameSection:
+    case UiCommandType::SetSectionLength:
+    case UiCommandType::MoveSection:
       return true;
     default:
       return false;

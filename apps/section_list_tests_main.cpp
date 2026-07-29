@@ -172,6 +172,72 @@ int main() {
     }
   }
 
+  // --- THE RIPPLE. Inserting bars into a section must carry everything after it, or the
+  // edit silently overwrites the material it was supposed to push aside.
+  {
+    // (placementId, at, endTick) for three placements: bars 1, 5 and 9.
+    const std::vector<std::tuple<uint32_t, uint64_t, uint64_t>> spans = {
+        {1, 0, k44Bar * 4},
+        {2, k44Bar * 4, k44Bar * 8},
+        {3, k44Bar * 8, k44Bar * 12},
+    };
+
+    // GROW by 4 bars at bar 5: the two placements at or after it move, the first does not.
+    const auto grow = planRipple(spans, k44Bar * 4, static_cast<int64_t>(k44Bar * 4));
+    checkEq(static_cast<uint64_t>(grow.outcome == RippleOutcome::Ok), 1, "grow is allowed");
+    checkEq(grow.moved, 2, "grow moves the two placements at or after the boundary");
+    checkEq(rippleTick(0, k44Bar * 4, static_cast<int64_t>(k44Bar * 4)), 0,
+            "a placement before the boundary does not move");
+    checkEq(rippleTick(k44Bar * 4, k44Bar * 4, static_cast<int64_t>(k44Bar * 4)),
+            k44Bar * 8, "a placement AT the boundary moves");
+    checkEq(rippleTick(k44Bar * 8, k44Bar * 4, static_cast<int64_t>(k44Bar * 4)),
+            k44Bar * 12, "and one after it moves by the same amount");
+
+    // SHRINK into occupied bars is REFUSED, and names what is in the way. Clamping would
+    // pin every placement in the vacated range onto one tick, silently stacking them.
+    const auto shrink =
+        planRipple(spans, k44Bar * 8, -static_cast<int64_t>(k44Bar * 4));
+    checkEq(static_cast<uint64_t>(
+                shrink.outcome == RippleOutcome::RefusedContentInVacatedRange),
+            1, "shrink into occupied bars is refused");
+    checkEq(shrink.blockingPlacementId, 2, "and names the placement in the way");
+
+    // SHRINK into EMPTY bars is allowed. Only the first placement here, so bars 5-12
+    // are free.
+    const std::vector<std::tuple<uint32_t, uint64_t, uint64_t>> sparse = {
+        {1, 0, k44Bar * 4},
+        {3, k44Bar * 12, k44Bar * 16},
+    };
+    const auto ok =
+        planRipple(sparse, k44Bar * 12, -static_cast<int64_t>(k44Bar * 4));
+    checkEq(static_cast<uint64_t>(ok.outcome == RippleOutcome::Ok), 1,
+            "shrink into empty bars is allowed");
+    checkEq(ok.moved, 1, "and moves what follows");
+    checkEq(rippleTick(k44Bar * 12, k44Bar * 12, -static_cast<int64_t>(k44Bar * 4)),
+            k44Bar * 8, "backwards by the delta");
+
+    // A placement STRADDLING the boundary blocks a shrink too — it would otherwise be
+    // silently truncated rather than moved.
+    const std::vector<std::tuple<uint32_t, uint64_t, uint64_t>> straddler = {
+        {9, k44Bar * 6, k44Bar * 14},
+    };
+    const auto blocked =
+        planRipple(straddler, k44Bar * 12, -static_cast<int64_t>(k44Bar * 4));
+    checkEq(static_cast<uint64_t>(
+                blocked.outcome == RippleOutcome::RefusedContentInVacatedRange),
+            1, "a straddling placement blocks a shrink");
+    checkEq(blocked.blockingPlacementId, 9, "and is named");
+
+    // A zero delta is a no-op, not an error.
+    checkEq(static_cast<uint64_t>(planRipple(spans, k44Bar, 0).outcome ==
+                                  RippleOutcome::Ok),
+            1, "zero delta is allowed");
+    checkEq(planRipple(spans, k44Bar, 0).moved, 0, "and moves nothing");
+    // Saturating rather than wrapping: a placement near the top must not land near 0.
+    checkEq(rippleTick(UINT64_MAX - 10, 0, 1000), UINT64_MAX, "grow saturates");
+    checkEq(rippleTick(10, 0, -1000), 0, "shrink clamps at zero");
+  }
+
   if (g_fail == 0) {
     std::printf("section_list_tests: all passed\n");
     return 0;

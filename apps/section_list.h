@@ -158,11 +158,17 @@ class SectionList {
 // not a change to one number, and it is the only place in this design where a section
 // edit touches a placement's stored tick.
 //
-// SHRINK IS REFUSED, NOT CLAMPED, when the bars being removed hold anything. Clamping
-// would pin every placement in the vacated range to a single tick — silently stacking
-// them on top of each other — and deleting them would throw away work the user did not
-// ask to lose. Refusing leaves the decision with the person: empty the bars first, or
-// don't shrink.
+// SHRINK IS REFUSED when the bars being removed hold anything, and the reason is subtler
+// than it first looks. `rippleTick` only moves what is AT OR AFTER the boundary, so
+// material inside the removed bars is not stacked and not deleted — it stays exactly
+// where it is. What moves is everything AFTER it, and with it every later SECTION
+// BOUNDARY, because those positions derive from this section's length. So the material
+// does not move and the sections slide over it: a placement that was in the intro is
+// silently now in the verse, with no note changed and nothing to see.
+//
+// That is a change to what the arrangement MEANS that the user did not ask for and
+// cannot observe, which is why this refuses rather than proceeding. Emptying the bars
+// first is a decision a person can make; being silently re-sectioned is not.
 enum class RippleOutcome {
   Ok,
   RefusedContentInVacatedRange,
