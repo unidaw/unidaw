@@ -517,6 +517,12 @@ pub enum UiCommandType {
     /// Remove the track whose stable id is in trackId, tombstoning its slot
     /// (UI_TRACK_FLAG_ABSENT). Takes its aux children with it; rejects a child id.
     RemoveTrack = 47,
+    /// Arrangement placement ops, keyed on the stable placement id (value0), published in
+    /// the clip extent's placementId. See the C++ UiCommandType doc for the field mapping.
+    MovePlacement = 48,
+    RemovePlacement = 49,
+    ResizePlacement = 50,
+    AddPlacement = 51,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;

@@ -1978,6 +1978,27 @@ struct TrackRuntime {
   std::atomic<uint32_t> modVersion{0};
   std::atomic<uint32_t> nextNoteId{1};
   std::atomic<uint32_t> nextChordId{1};
+  // Monotonic stable placement id (published in placementId; the arrangement Move/Resize/
+  // Remove key on it). Seeded above the max id loaded from a project so loaded + new ids
+  // never collide. Assigned when a placement is created or loaded with id 0.
+  std::atomic<uint32_t> nextPlacementId{1};
+  // Seed the counter above any id already present in `placements`, then give every
+  // unassigned (id == 0) placement a fresh stable id. Called wherever placements enter the
+  // store (load, restore, single-note creation).
+  auto ensurePlacementIds = [&](std::vector<daw::ProjectPlacement>& placements) {
+    for (const auto& pl : placements) {
+      uint32_t seen = nextPlacementId.load(std::memory_order_relaxed);
+      while (pl.id >= seen &&
+             !nextPlacementId.compare_exchange_weak(seen, pl.id + 1,
+                                                    std::memory_order_relaxed)) {
+      }
+    }
+    for (auto& pl : placements) {
+      if (pl.id == 0) {
+        pl.id = nextPlacementId.fetch_add(1, std::memory_order_relaxed);
+      }
+    }
+  };
 
   // PreviewNote (keyjazz): the UI command thread enqueues auditions here and the producer
   // — the sole writer of the per-track event rings — drains and injects them, so each ring
@@ -3722,7 +3743,7 @@ struct TrackRuntime {
         continue;
       }
       ClipExtentInfo ext;
-      ext.placementId = static_cast<uint32_t>(i);
+      ext.placementId = pl.id;  // stable placement id (was the list index — now survives edits)
       ext.clipId = pl.clipId;
       ext.at = *pl.at;
       uint64_t length = pl.lengthNanoticks;
@@ -3989,6 +4010,7 @@ struct TrackRuntime {
       rt.editableClipIds.push_back(newId);
       daw::ProjectPlacement pl;
       pl.clipId = newId;
+      pl.id = nextPlacementId.fetch_add(1, std::memory_order_relaxed);  // stable id
       pl.at = decision.at;
       pl.lengthNanoticks = 0;
       rt.sourcePlacements.push_back(std::move(pl));
@@ -4117,6 +4139,7 @@ struct TrackRuntime {
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       runtime->sourcePlacements = state.placements;
+      ensurePlacementIds(runtime->sourcePlacements);
       runtime->ownedClips = state.clips;
       runtime->editableClipIds = state.editable;
       runtime->arrangementDirty.store(true, std::memory_order_relaxed);
@@ -4719,6 +4742,7 @@ struct TrackRuntime {
         // clips they reference; track.clip and the rails are DERIVED from them by
         // rebuildFlatAndPublish. Editing later mutates this store, not track.clip.
         runtime->sourcePlacements = source.placements;
+        ensurePlacementIds(runtime->sourcePlacements);
         runtime->ownedClips.clear();
         for (const auto& pl : source.placements) {
           bool have = false;
@@ -5200,6 +5224,52 @@ struct TrackRuntime {
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
     clipDirty.store(true, std::memory_order_release);
     emitUiDiff(result->diff);
+    return true;
+  };
+
+  // Arrangement placement ops (Move/Resize/Remove/Add) all mutate a track's placement
+  // store and commit exactly like a note edit: snapshot for undo, mutate, re-derive the
+  // flat clip + audio render, push the undo, republish + bump the clip version so the UI
+  // re-reads. `mutate` returns true if it changed anything; placements are keyed by stable
+  // id. 0xFFFF... is the "leave unchanged" sentinel for Resize (a real nanotick never is).
+  constexpr uint64_t kPlacementUnchanged = 0xFFFFFFFFFFFFFFFFull;
+  auto applyPlacementEdit =
+      [&](uint32_t trackId,
+          const std::function<bool(std::vector<daw::ProjectPlacement>&)>& mutate) -> bool {
+    TrackRuntime* runtime = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      if (trackId < tracks.size()) {
+        runtime = tracks[trackId].get();
+      }
+    }
+    if (!runtime) {
+      std::cerr << "UI: placement edit — track " << trackId << " not found" << std::endl;
+      return false;
+    }
+    std::shared_ptr<const ClipSnapshot> snapshot;
+    bool changed = false;
+    {
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      TrackStoreState before = snapshotTrackStore(*runtime);
+      changed = mutate(runtime->sourcePlacements);
+      if (changed) {
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+        snapshot = rebuildFlatAndPublish(*runtime);
+        std::atomic_store_explicit(&runtime->audioRender, rebuildAudioRender(*runtime),
+                                   std::memory_order_release);
+        pushStructuralUndo(trackId, std::move(before), snapshotTrackStore(*runtime));
+      }
+    }
+    if (!changed) {
+      return false;
+    }
+    if (snapshot) {
+      std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
+                                 std::memory_order_release);
+    }
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);
+    clipDirty.store(true, std::memory_order_release);
     return true;
   };
 
@@ -6774,6 +6844,95 @@ struct TrackRuntime {
                   << (toRemove.size() - 1) << " children), extent now " << extent
                   << std::endl;
       }
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::MovePlacement)) {
+      // Move a placement to a new `at` (arrangement drag). value0 = stable placementId,
+      // noteNanotick = new at, notePitch = new trackId (0xFFFFFFFF = same track). Cross-
+      // track lane drags are a v2 (the clip would have to move ownership); same-track now.
+      const uint32_t placementId = payload.value0;
+      const uint64_t newAt = (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
+                             payload.noteNanotickLo;
+      const uint32_t newTrackId = payload.notePitch;
+      if (newTrackId != 0xFFFFFFFFu && newTrackId != payload.trackId) {
+        std::cerr << "UI: MovePlacement cross-track not supported yet (same-track v1)"
+                  << std::endl;
+      } else {
+        const bool ok = applyPlacementEdit(
+            payload.trackId, [&](std::vector<daw::ProjectPlacement>& pls) {
+              for (auto& p : pls) {
+                if (p.id == placementId) {
+                  p.at = newAt;
+                  return true;
+                }
+              }
+              return false;
+            });
+        std::cout << "UI: MovePlacement " << placementId << " -> at " << newAt
+                  << (ok ? "" : " (not found)") << std::endl;
+      }
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::RemovePlacement)) {
+      const uint32_t placementId = payload.value0;
+      const bool ok = applyPlacementEdit(
+          payload.trackId, [&](std::vector<daw::ProjectPlacement>& pls) {
+            for (auto it = pls.begin(); it != pls.end(); ++it) {
+              if (it->id == placementId) {
+                pls.erase(it);
+                return true;
+              }
+            }
+            return false;
+          });
+      std::cout << "UI: RemovePlacement " << placementId << (ok ? "" : " (not found)")
+                << std::endl;
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::ResizePlacement)) {
+      // Both start (`at`) and length in one op; 0xFFFF... = leave that field unchanged, so
+      // a left-edge trim sends both and a right-edge drag sends length + at=sentinel.
+      const uint32_t placementId = payload.value0;
+      const uint64_t newAt = (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
+                             payload.noteNanotickLo;
+      const uint64_t newLen = (static_cast<uint64_t>(payload.noteDurationHi) << 32) |
+                              payload.noteDurationLo;
+      const bool ok = applyPlacementEdit(
+          payload.trackId, [&](std::vector<daw::ProjectPlacement>& pls) {
+            for (auto& p : pls) {
+              if (p.id == placementId) {
+                if (newAt != kPlacementUnchanged) {
+                  p.at = newAt;
+                }
+                if (newLen != kPlacementUnchanged) {
+                  p.lengthNanoticks = newLen;
+                }
+                return true;
+              }
+            }
+            return false;
+          });
+      std::cout << "UI: ResizePlacement " << placementId << (ok ? "" : " (not found)")
+                << std::endl;
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::AddPlacement)) {
+      // Place an existing clip (value0 = clipId) at `at` for `length`. The clip must be
+      // owned by the track for its content to resolve; an unknown id yields an empty box.
+      const uint32_t clipId = payload.value0;
+      const uint64_t at = (static_cast<uint64_t>(payload.noteNanotickHi) << 32) |
+                          payload.noteNanotickLo;
+      const uint64_t len = (static_cast<uint64_t>(payload.noteDurationHi) << 32) |
+                           payload.noteDurationLo;
+      const uint32_t newId = nextPlacementId.fetch_add(1, std::memory_order_relaxed);
+      applyPlacementEdit(payload.trackId,
+                         [&](std::vector<daw::ProjectPlacement>& pls) {
+                           daw::ProjectPlacement p;
+                           p.clipId = clipId;
+                           p.id = newId;
+                           p.at = at;
+                           p.lengthNanoticks = len;
+                           pls.push_back(std::move(p));
+                           return true;
+                         });
+      std::cout << "UI: AddPlacement clip " << clipId << " -> placement " << newId
+                << " at " << at << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::TogglePlay)) {
       const bool next = !playing.load(std::memory_order_acquire);

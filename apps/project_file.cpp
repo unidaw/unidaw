@@ -658,6 +658,9 @@ std::string serializeProject(const ProjectDocument& document) {
     for (const auto& placement : track.placements) {
       writer.beginArrayElement();
       writer.key("clip_id", placement.clipId);
+      if (placement.id != 0) {
+        writer.key("id", placement.id);  // stable placement id (0 = let the engine assign)
+      }
       if (placement.at.has_value()) {
         writer.key("at", *placement.at);  // omit when null = a session cell
       }
@@ -903,6 +906,7 @@ bool deserializeProject(const std::string& json,
           const auto& pTree = pEntry.second;
           ProjectPlacement placement;
           placement.clipId = pTree.get<uint32_t>("clip_id", 0);
+          placement.id = pTree.get<uint32_t>("id", 0);  // 0 = engine assigns on load
           if (const auto at = pTree.get_optional<uint64_t>("at")) {
             placement.at = *at;  // omitted key => a loose session cell
           }

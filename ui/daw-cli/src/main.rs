@@ -383,6 +383,30 @@ fn open_editor_command(track: u32, device: u32) -> UiCommandPayload {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn placement_command(
+    cmd: UiCommandType,
+    track: u32,
+    value0: u32,
+    at: u64,
+    length: u64,
+    note_pitch: u32,
+) -> UiCommandPayload {
+    UiCommandPayload {
+        command_type: cmd as u16,
+        flags: 0,
+        track_id: track,
+        plugin_index: 0,
+        note_pitch,
+        value0,
+        note_nanotick_lo: (at & 0xffff_ffff) as u32,
+        note_nanotick_hi: (at >> 32) as u32,
+        note_duration_lo: (length & 0xffff_ffff) as u32,
+        note_duration_hi: (length >> 32) as u32,
+        base_version: 0,
+    }
+}
+
 fn track_structure_command(command: UiCommandType, track: u32) -> UiCommandPayload {
     UiCommandPayload {
         command_type: command as u16,
@@ -1033,6 +1057,52 @@ fn main() {
                     match handle.send_command(open_editor_command(track, device)) {
                         Ok(()) => {
                             println!("{{ \"sent\": \"open-editor\", \"track\": {track}, \"device\": {device} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
+                Some(&"move-placement")
+                | Some(&"remove-placement")
+                | Some(&"resize-placement")
+                | Some(&"add-placement") => {
+                    const UNCHANGED: u64 = u64::MAX;
+                    let verb = *rest.first().unwrap();
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let at = flag_u64(&args, "--at", Some(UNCHANGED)).unwrap_or(UNCHANGED);
+                    let length =
+                        flag_u64(&args, "--length", Some(UNCHANGED)).unwrap_or(UNCHANGED);
+                    let (cmd, value0, np) = match verb {
+                        "move-placement" => (
+                            UiCommandType::MovePlacement,
+                            flag_u64(&args, "--placement", Some(0)).unwrap_or(0) as u32,
+                            0xFFFF_FFFFu32,
+                        ),
+                        "remove-placement" => (
+                            UiCommandType::RemovePlacement,
+                            flag_u64(&args, "--placement", Some(0)).unwrap_or(0) as u32,
+                            0,
+                        ),
+                        "resize-placement" => (
+                            UiCommandType::ResizePlacement,
+                            flag_u64(&args, "--placement", Some(0)).unwrap_or(0) as u32,
+                            0,
+                        ),
+                        _ => (
+                            UiCommandType::AddPlacement,
+                            flag_u64(&args, "--clip", Some(0)).unwrap_or(0) as u32,
+                            0,
+                        ),
+                    };
+                    let at = if verb == "move-placement" && at == UNCHANGED { 0 } else { at };
+                    match handle
+                        .send_command(placement_command(cmd, track, value0, at, length, np))
+                    {
+                        Ok(()) => {
+                            println!("{{ \"sent\": {verb:?} }}");
                             0
                         }
                         Err(err) => {
