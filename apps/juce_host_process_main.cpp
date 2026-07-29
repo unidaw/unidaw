@@ -70,6 +70,12 @@ struct HostState {
                                       // a reused slot re-prepares if this changed (M4)
     bool preparedAuxOut = false;      // whether aux OUTPUT buses were enabled at prepare
                                       // (M4 multi-out); re-prepares if this changed
+    // LEVEL-MATCHED BYPASS (roadmap 15c). The RMS ratio this insert applies, measured
+    // while it is ACTIVE and smoothed. When the insert is bypassed the passthrough is
+    // scaled by it, so toggling bypass compares TONE rather than loudness — an insert
+    // that merely makes things louder stops sounding "better". 1 = no correction yet.
+    float levelMatchGain = 1.0f;
+    bool levelMatchMeasured = false;
   };
   std::vector<PluginSlot> plugins;
   std::mutex pluginsMutex;
@@ -859,14 +865,67 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
           std::fill(state.chainBufferB.begin(), state.chainBufferB.end(), 0.0f);
         }
       }
+      // v24 per-insert metering: amplitude -> dBFS MILLIBELS (0 = full scale), with an
+      // explicit silence sentinel because 0.0 amplitude is -inf dB and must not render as
+      // -327 dB. Same scale as the track meters, which is the point of the item: gain
+      // staging is only comparable insert-to-insert on ONE scale.
+      auto toMillibels = [](double amp) -> int16_t {
+        if (!(amp > 1e-6)) {
+          return daw::kUiMeterSilent;
+        }
+        const double mb = 2000.0 * std::log10(amp);
+        return static_cast<int16_t>(std::clamp(mb, -12000.0, 6000.0));
+      };
+      auto writeMeters = [&](int slotIndex, double inPeak, double outPeak,
+                             double inRms, double outRms) {
+        if (!state.header || slotIndex < 0 ||
+            slotIndex >= static_cast<int>(daw::kUiMaxMeteredDevices)) {
+          return;
+        }
+        auto* m = state.header->hostDeviceMeters[slotIndex];
+        m[0] = toMillibels(inPeak);
+        m[1] = toMillibels(outPeak);
+        m[2] = toMillibels(inRms);
+        m[3] = toMillibels(outRms);
+      };
       if (slot.bypass || !slot.instance) {
         if (pluginInputPtrs && pluginInputCount > 0) {
           const int channelsToCopy = std::min(pluginInputCount, numOutputs);
+          // Level-matched bypass (roadmap 15c), ON BY DEFAULT: scale the passthrough by
+          // the gain this insert was measured to apply while active, so toggling bypass
+          // compares TONE rather than LOUDNESS — an insert that merely makes things
+          // louder stops sounding "better". DAW_NO_LEVEL_MATCH=1 hears the raw bypass.
+          static const bool kNoLevelMatch = std::getenv("DAW_NO_LEVEL_MATCH") != nullptr;
+          const float matchGain =
+              (!kNoLevelMatch && slot.levelMatchMeasured) ? slot.levelMatchGain : 1.0f;
           for (int ch = 0; ch < channelsToCopy; ++ch) {
             const float* src = pluginInputPtrs[ch];
             float* dst = outputPtrs[ch];
-            std::copy(src, src + state.header->blockSize, dst);
+            if (matchGain == 1.0f) {
+              std::copy(src, src + state.header->blockSize, dst);
+            } else {
+              for (uint32_t i = 0; i < state.header->blockSize; ++i) {
+                dst[i] = src[i] * matchGain;
+              }
+            }
           }
+          // Meter the bypassed insert too: it is still passing audio, and a silent meter
+          // on a passing insert is a meter that lies. in == out * (1/matchGain).
+          double bPeak = 0.0, bSumSq = 0.0;
+          size_t bN = 0;
+          for (int ch = 0; ch < channelsToCopy; ++ch) {
+            const float* src = pluginInputPtrs[ch];
+            if (!src) continue;
+            for (uint32_t i = 0; i < state.header->blockSize; ++i) {
+              const double v = std::fabs(src[i]);
+              bPeak = std::max(bPeak, v);
+              bSumSq += v * v;
+            }
+            bN += state.header->blockSize;
+          }
+          const double bRms = bN ? std::sqrt(bSumSq / static_cast<double>(bN)) : 0.0;
+          writeMeters(static_cast<int>(index), bPeak, bPeak * matchGain,
+                      bRms, bRms * matchGain);
           for (int ch = channelsToCopy; ch < numOutputs; ++ch) {
             std::fill(outputPtrs[ch], outputPtrs[ch] + state.header->blockSize, 0.0f);
           }
@@ -881,6 +940,25 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
         // writer per host.
         const bool writeAux = slot.preparedAuxOut && state.numAuxChannelsOut > 0 &&
                               !state.auxOutputPtrs.empty();
+        // Level-matched bypass (15c): measure what this insert does to the level while it
+        // is active, so the bypass path can undo it. Input RMS must be taken BEFORE
+        // process() — an in-place effect overwrites the buffer it read.
+        double inSumSq = 0.0, inPeak = 0.0;
+        size_t levelSamples = 0;
+        if (pluginInputPtrs && pluginInputCount > 0) {
+          for (int ch = 0; ch < std::min(pluginInputCount, numOutputs); ++ch) {
+            const float* src = pluginInputPtrs[ch];
+            if (!src) {
+              continue;
+            }
+            for (uint32_t i = 0; i < state.header->blockSize; ++i) {
+              const double v = std::fabs(static_cast<double>(src[i]));
+              inSumSq += v * v;
+              inPeak = std::max(inPeak, v);
+            }
+            levelSamples += state.header->blockSize;
+          }
+        }
         slot.instance->process(pluginInputPtrs,
                                pluginInputCount,
                                outputPtrs,
@@ -890,6 +968,38 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
                                static_cast<int64_t>(blockStart),
                                writeAux ? state.auxOutputPtrs.data() : nullptr,
                                writeAux ? static_cast<int>(state.numAuxChannelsOut) : 0);
+        if (levelSamples > 0) {
+          double outSumSq = 0.0, outPeak = 0.0;
+          for (int ch = 0; ch < std::min(pluginInputCount, numOutputs); ++ch) {
+            const float* dst = outputPtrs[ch];
+            if (!dst) {
+              continue;
+            }
+            for (uint32_t i = 0; i < state.header->blockSize; ++i) {
+              const double v = std::fabs(static_cast<double>(dst[i]));
+              outSumSq += v * v;
+              outPeak = std::max(outPeak, v);
+            }
+          }
+          const double inRms = std::sqrt(inSumSq / static_cast<double>(levelSamples));
+          const double outRms = std::sqrt(outSumSq / static_cast<double>(levelSamples));
+          writeMeters(static_cast<int>(index), inPeak, outPeak, inRms, outRms);
+          // Only learn from blocks with real signal, or near-silence would swamp the
+          // estimate with noise ratios. Clamp hard: a gate or a limiter can produce an
+          // absurd instantaneous ratio, and bypass must never become a volume weapon.
+          if (inRms > 1e-5 && outRms > 1e-6) {
+            // out/in, NOT in/out: the bypassed signal must be made as loud as the
+            // PROCESSED one. With an insert at 0.5x, bypass must be scaled by 0.5 to
+            // match it; the inverse made bypass 2x the raw sum — 4x the active level,
+            // i.e. louder rather than matched. Caught only once the test used a fixture
+            // with a known gain, where the expected number was arithmetic.
+            const double ratio = std::clamp(outRms / inRms, 0.05, 20.0);
+            const double smoothing = slot.levelMatchMeasured ? 0.02 : 1.0;
+            slot.levelMatchGain = static_cast<float>(
+                slot.levelMatchGain * (1.0 - smoothing) + ratio * smoothing);
+            slot.levelMatchMeasured = true;
+          }
+        }
       }
       inputPtrs = outputPtrs;
       numInputs = numOutputs;
@@ -1047,6 +1157,20 @@ void runControlLoop(HostState& state) {
             break;
           }
         }
+      } else if (type == daw::ControlMessageType::ResetPlugins) {
+        // PANIC: drop every plugin's internal DSP state. CC120 asks a plugin to stop
+        // sounding; a voice wedged inside the plugin's own state ignores it, which is
+        // exactly the case panic exists for. Done here on the control thread under the
+        // plugins lock — never from the audio thread.
+        std::lock_guard<std::mutex> lock(state.pluginsMutex);
+        uint32_t resetCount = 0;
+        for (auto& slot : state.plugins) {
+          if (slot.instance) {
+            slot.instance->reset();
+            ++resetCount;
+          }
+        }
+        std::cerr << "Host: panic reset " << resetCount << " plugin(s)" << std::endl;
       } else if (type == daw::ControlMessageType::SetParam) {
         // Fire-and-forget: resolve uid16 -> stableId and set it. The setter is an
         // atomic store into the param-target array the audio thread reads, so calling

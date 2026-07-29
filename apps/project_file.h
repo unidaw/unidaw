@@ -144,6 +144,10 @@ struct ProjectDocument {
   // meter, so polymetric clips never lose a shared sense of where you are.
   uint32_t songTimeSigNumerator = 4;
   uint32_t songTimeSigDenominator = 4;
+  // Generation seed. Every patcher generator folds this into its hash, so a song's
+  // generated material reproduces exactly across loads — and changing this one number
+  // re-rolls every variation while everything authored stays put. 0 = unseeded.
+  uint64_t seed = 0;
   std::vector<ProjectTempoPoint> tempoMap{{0, 120.0}};
   std::vector<HarmonyEvent> harmonyTimeline;
   // Project-level clip library, referenced by track placements by id.

@@ -1569,6 +1569,8 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(sizeof(daw::UiClipExtentRegion), 64);
     header.uiPatcherOffset = offset;  // v14: published patcher graph
     offset += daw::alignUp(sizeof(daw::UiPatcherRegion), 64);
+    header.uiDeviceMeterOffset = offset;  // v24: per-insert meters
+    offset += daw::alignUp(sizeof(daw::UiDeviceMeterRegion), 64);
     header.uiScalesOffset = offset;  // v16: scale registry read-back
     offset += daw::alignUp(sizeof(daw::UiScaleRegion), 64);
     header.uiDeviceParamsOffset = offset;  // v17: one device's params (on request)
@@ -2244,6 +2246,10 @@ struct TrackRuntime {
       held.erase(it);
     }
   };
+  // The project's generation seed (ABI 4). Folded into every generator's hash so a song
+  // reproduces exactly, and changing this one number re-rolls every generated variation.
+  // 0 until a project supplies one.
+  std::atomic<uint64_t> projectSeed{0};
   // PANIC (all sound off). The UI thread only raises this flag; the producer — the sole
   // writer of the per-track event rings — consumes it once per block and emits CC120 +
   // CC123 on every channel to every ready host, then drops that track's note state. Same
@@ -2312,6 +2318,49 @@ struct TrackRuntime {
   // resolves against the project (portable) rather than the engine's CWD. Set by
   // loadProjectFromPath before the track loop; read by rebuildAudioRender.
   std::string loadedProjectDir;
+  // history.jsonl (roadmap 19): an append-only journal of the commands this engine acted
+  // on — {seq, ts_ms, author, scope, base_version, op, outcome, params}. Deliberately NOT
+  // the DAW_EVENT telemetry stream: that is engine behaviour, this is "what was asked of
+  // the document, in order", which is what makes it a crash-recovery and
+  // what-changed-since-Tuesday artifact. NO INVERSES — reconstructing 32 correct inverses
+  // plus schema-version replay is a project of its own; as a record it is nearly free.
+  // Written from the command thread only (it does IO), guarded so a later multi-producer
+  // ring cannot interleave half-lines.
+  std::mutex historyMutex;
+  uint64_t historySeq = 0;
+  auto historyPath = [&]() -> std::filesystem::path {
+    const std::string dir =
+        loadedProjectDir.empty() ? daw::defaultProjectDir() : loadedProjectDir;
+    return std::filesystem::path(dir) / "history.jsonl";
+  };
+  auto historyAppend = [&](const char* op, const char* outcome, uint32_t scopeTrack,
+                           uint32_t baseVersion, const std::string& params) {
+    if (std::getenv("DAW_NO_HISTORY")) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(historyMutex);
+    const auto path = historyPath();
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out(path, std::ios::app);
+    if (!out) {
+      return;
+    }
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+    out << "{\"seq\":" << ++historySeq << ",\"ts_ms\":" << now
+        << ",\"author\":\"ui\",\"scope\":";
+    if (scopeTrack == 0xFFFFFFFFu) {
+      out << "\"global\"";
+    } else if (scopeTrack == daw::kMasterTrackId) {
+      out << "\"master\"";
+    } else {
+      out << "\"track:" << scopeTrack << "\"";
+    }
+    out << ",\"base_version\":" << baseVersion << ",\"op\":\"" << op
+        << "\",\"outcome\":\"" << outcome << "\",\"params\":{" << params << "}}\n";
+  };
   // Engine-lifetime registry of decoded audio sources for waveform display: owns the
   // min/max pyramids the RequestWaveform handler slices, keyed by a stable sourceId.
   // Populated on the decode funnel (rebuildAudioRender), published to
@@ -3244,7 +3293,12 @@ struct TrackRuntime {
     {
       std::lock_guard<std::mutex> lock(masterTrack->trackMutex);
       for (const auto& d : masterTrack->track.chain.devices) {
-        if (d.kind == daw::DeviceKind::VstEffect && !d.bypass) {
+        // Count a BYPASSED effect too. Gating on "unbypassed" made toggling bypass on the
+        // master's only insert engage/disengage the whole sum-processing path, which
+        // changes master latency by a full block — an audible discontinuity, and a worse
+        // A/B than the loudness jump level matching is meant to remove. A bypassed insert
+        // is still IN the chain; the host passes audio through it.
+        if (d.kind == daw::DeviceKind::VstEffect) {
           hasFx = true;
           break;
         }
@@ -4464,6 +4518,7 @@ struct TrackRuntime {
     }
     document.meta.name = stem;
     document.nanoticksPerQuarter = daw::NanotickConverter::kNanoticksPerQuarter;
+    document.seed = projectSeed.load(std::memory_order_relaxed);
     // Re-emit the full retained tempo map so a load->save round-trip keeps tempo
     // changes, not just the current tempo. (A never-loaded session defaults to 120.)
     document.tempoMap = loadedTempoMap;
@@ -4758,6 +4813,9 @@ struct TrackRuntime {
     }
     // Hold off aux-child derivation until this load has finished mutating the track set
     // (adopt, tear down leftovers, set liveTrackCount). Cleared on every exit path.
+    // Adopt the project's generation seed before anything renders, so generators hash
+    // against this song's seed rather than the previous project's.
+    projectSeed.store(document.seed, std::memory_order_relaxed);
     loadInProgress.store(true, std::memory_order_release);
     struct LoadGuard {
       std::atomic<bool>& flag;
@@ -5201,6 +5259,14 @@ struct TrackRuntime {
         // and a saved sidechain/send was silently dropped). Read by rebuildHostForChain
         // below and by the producer's routing, both under this same trackMutex.
         runtime->track.routing = source.routing;
+        // Adopt the project's modulation matrix. Without this a saved mod link was parsed
+        // into the document and then DROPPED — the runtime kept its empty list, and the
+        // next save (which writes runtime->track.modRegistry.links) emitted an empty
+        // mod_links array, deleting the link from disk. Serialization was never the bug;
+        // the load side simply never installed them, so every other field being adopted
+        // here made the omission invisible. Verified: maximal has one link on Bass, and a
+        // load+save round trip took it from 1 to 0 before this line existed.
+        runtime->track.modRegistry.links = source.modLinks;
         runtime->mixGainLinear.store(
             static_cast<float>(std::pow(10.0, source.mixer.gainDb / 20.0)),
             std::memory_order_relaxed);
@@ -5552,6 +5618,8 @@ struct TrackRuntime {
       return true;
     }
     emitUiDiff(diffPayload);
+    historyAppend(daw::uiCommandTypeName(commandType), "rejected:version", trackId,
+                  baseVersion, "");
     DAW_EVENT("clip.version_mismatch")
         .field("base", baseVersion)
         .field("current", current)
@@ -6113,6 +6181,30 @@ struct TrackRuntime {
     std::memcpy(&header, entry.payload, sizeof(header));
     const auto commandType =
         static_cast<daw::UiCommandType>(header.commandType);
+    // Journal every command the engine acts on, in order. Recorded here — the one point
+    // every command passes through — rather than at ~20 handlers, so a new opcode cannot
+    // silently escape the journal. Outcome is "received"; a command later refused by the
+    // version check writes its own "rejected" line, so history shows the attempt AND its
+    // fate rather than quietly dropping it.
+    {
+      const bool globalScope = daw::uiCommandIsGlobalScope(commandType);
+      std::ostringstream params;
+      if (daw::uiCommandUsesGenericPayload(commandType)) {
+        // value0 is signed for at least one op (mixer gain in millibels), so render it
+        // signed: an unsigned -600 reads as 4294966696, which looks like corruption.
+        params << "\"value0\":" << static_cast<int32_t>(header.value0)
+               << ",\"pitch\":" << header.notePitch << ",\"flags\":" << header.flags
+               << ",\"nanotick\":"
+               << ((static_cast<uint64_t>(header.noteNanotickHi) << 32) |
+                   header.noteNanotickLo)
+               << ",\"duration\":"
+               << ((static_cast<uint64_t>(header.noteDurationHi) << 32) |
+                   header.noteDurationLo);
+      }
+      historyAppend(daw::uiCommandTypeName(commandType), "received",
+                    globalScope ? 0xFFFFFFFFu : header.trackId,
+                    header.baseVersion, params.str());
+    }
     if (entry.size == sizeof(daw::UiAutomationCommandPayload) &&
         commandType == daw::UiCommandType::SetAutomationTarget) {
       daw::UiAutomationCommandPayload autoPayload{};
@@ -7521,8 +7613,38 @@ struct TrackRuntime {
         pendingPreviewNotes.clear();
         heldPreview.clear();
       }
-      DAW_EVENT("transport.panic");
-      std::cout << "UI: PANIC — all sound off" << std::endl;
+      // And the part a controller message cannot reach: reset every hosted plugin's own
+      // DSP state. CC120 asks a plugin to stop sounding; a voice wedged inside the
+      // plugin's state ignores it, which is precisely the case panic exists for. Sent on
+      // the control socket (off the RT path) to every track host AND the master's, so a
+      // master-chain plugin is covered too.
+      uint32_t resetHosts = 0;
+      {
+        std::vector<TrackRuntime*> all;
+        {
+          std::lock_guard<std::mutex> lock(tracksMutex);
+          for (auto& rt : tracks) {
+            if (rt) {
+              all.push_back(rt.get());
+            }
+          }
+        }
+        if (masterTrack) {
+          all.push_back(masterTrack.get());
+        }
+        for (auto* rt : all) {
+          if (!rt->hostReady.load(std::memory_order_acquire)) {
+            continue;
+          }
+          std::lock_guard<std::mutex> lock(rt->controllerMutex);
+          if (rt->controller.sendResetPlugins()) {
+            ++resetHosts;
+          }
+        }
+      }
+      DAW_EVENT("transport.panic").field("hosts_reset", static_cast<uint64_t>(resetHosts));
+      std::cout << "UI: PANIC — all sound off (" << resetHosts
+                << " host(s) reset)" << std::endl;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetPosition)) {
       const uint64_t target =
@@ -8821,7 +8943,9 @@ struct TrackRuntime {
             }
           }
           daw::PatcherContext ctx{};
-          ctx.abi_version = 3;
+          ctx.abi_version = 4;
+          ctx.node_id = node.id;
+          ctx.seed = projectSeed.load(std::memory_order_relaxed);
           ctx.block_start_tick = windowStartTicks;
           ctx.block_end_tick = windowEndTicks;
           ctx.block_start_sample = blockSampleStart;
@@ -10107,7 +10231,9 @@ struct TrackRuntime {
           }
         }
         daw::PatcherContext ctx{};
-        ctx.abi_version = 3;
+        ctx.abi_version = 4;
+        ctx.node_id = nodeId;
+        ctx.seed = projectSeed.load(std::memory_order_relaxed);
         ctx.block_start_tick = blockStartTicks;
         ctx.block_end_tick = blockEndTicks;
         ctx.block_start_sample = sampleStart;
@@ -11405,6 +11531,62 @@ struct TrackRuntime {
             uiShm.header->uiTrackCount = publishedTrackCount + 1;
           }
         }
+        // v24 per-insert meters. Copy each host's per-insert levels into the published
+        // region, indexed by track SLOT so the MASTER — which occupies a real slot — is
+        // metered by the same path with no special case. Each entry carries the STABLE
+        // deviceId rather than a position: the host's compacted plugin order skips
+        // non-VST devices (a patcher insert, and the instrument is not an insert), so
+        // matching by position would paint one device's meter on another's card.
+        if (uiShm.header->uiDeviceMeterOffset != 0) {
+          auto* meterRegion = reinterpret_cast<daw::UiDeviceMeterRegion*>(
+              reinterpret_cast<uint8_t*>(uiShm.base) +
+              uiShm.header->uiDeviceMeterOffset);
+          for (uint32_t slot = 0; slot < daw::kUiMaxTracks; ++slot) {
+            // Rewritten every frame: an absent track/insert reads "no device" with silent
+            // levels rather than holding a stale value that would look like a stuck meter.
+            for (uint32_t d = 0; d < daw::kUiMaxMeteredDevices; ++d) {
+              meterRegion->meters[slot][d] = daw::UiDeviceMeter{};
+            }
+            TrackRuntime* rt = nullptr;
+            if (slot < publishedTrackCount && slot < trackSnapshot.size()) {
+              rt = trackSnapshot[slot];
+            } else if (masterTrack && slot == publishedTrackCount) {
+              rt = masterTrack.get();
+            }
+            if (!rt || !rt->hostReady.load(std::memory_order_acquire)) {
+              continue;
+            }
+            const auto* hostHeader = rt->controller.shmHeader();
+            if (!hostHeader) {
+              continue;
+            }
+            // Rebuild the host's compacted insert order to recover each meter's device id.
+            auto ts = std::atomic_load_explicit(&rt->trackSnapshot,
+                                                std::memory_order_acquire);
+            if (!ts) {
+              continue;
+            }
+            uint32_t hostIndex = 0;
+            for (const auto& device : ts->chainDevices) {
+              if (device.kind != daw::DeviceKind::VstInstrument &&
+                  device.kind != daw::DeviceKind::VstEffect) {
+                continue;
+              }
+              if (hostIndex >= daw::kUiMaxMeteredDevices) {
+                break;
+              }
+              const int16_t* m = hostHeader->hostDeviceMeters[hostIndex];
+              auto& out = meterRegion->meters[slot][hostIndex];
+              out.inPeakMb = m[0];
+              out.outPeakMb = m[1];
+              out.inRmsMb = m[2];
+              out.outRmsMb = m[3];
+              out.deviceId = device.id;
+              ++hostIndex;
+            }
+          }
+          ++meterRegion->version;
+        }
         uiShm.header->uiClipVersion =
             clipVersion.load(std::memory_order_acquire);
         writeUiClipWindowSnapshot(trackSnapshot);
@@ -11439,16 +11621,37 @@ struct TrackRuntime {
           engineConfig.numBlocks,
           &audioPlaybackBlockId);
       audioCallback->setPlaying(&playing);
+      // Movement 4 surround master: the mix width follows the device, but
+      // DAW_MASTER_CHANNELS forces a wider (e.g. 5.1) master for placement + capture even
+      // on a stereo device — the device just hears the downmixed front L/R. Determined
+      // HERE, before the master FX wiring below, because the master host must be opened at
+      // the master's true width: sized at a fixed 2 it could never match a surround mix,
+      // and the gate would leave a master effect installed, hosted and inaudible.
+      int masterChannels = std::max(2, audioBackend->outputChannels());
+      if (const char* mc = std::getenv("DAW_MASTER_CHANNELS")) {
+        const int parsed = std::atoi(mc);
+        if (parsed > masterChannels) {
+          masterChannels = std::min(parsed, 8);
+          audioCallback->setMasterChannels(masterChannels);
+          std::cout << "Surround master: " << masterChannels
+                    << " channels (device has " << audioBackend->outputChannels()
+                    << ")" << std::endl;
+        }
+      }
       // Wire the master track's fader so its gain/mute controls the summed output
       // (patcher-is-a-device item 4a). The atomics live on masterTrack for its lifetime.
       if (masterTrack) {
+        // Open the master host at the MIX's width, not a hardcoded stereo, so master FX
+        // works on a surround master too. Its input IS the sum, so in == out.
+        masterTrack->config.numChannelsOut = static_cast<uint32_t>(masterChannels);
+        masterTrack->config.numChannelsIn = static_cast<uint32_t>(masterChannels);
         audioCallback->setMasterMixer(&masterTrack->mixGainLinear,
                                       &masterTrack->mixMute);
         // 4b: wire the master host's readiness + size the sum/processed hand-off buffers
         // to the master host's channel width.
         audioCallback->setMasterFxWiring(
             &masterFxActive, &masterTrack->hostReady,
-            masterTrack->config.numChannelsOut,
+            static_cast<uint32_t>(masterChannels),
             static_cast<uint32_t>(audioBackend->blockSize()));
         // 4b render thread: one block behind the callback, it drives the master host —
         // take the summed block, write it to the host's input plane, process, read the
@@ -11600,20 +11803,6 @@ struct TrackRuntime {
         }
       }
       audioCallback->resetForStart();
-      // Movement 4 surround master: the mix width follows the device, but
-      // DAW_MASTER_CHANNELS forces a wider (e.g. 5.1) master for placement + capture
-      // even on a stereo device — the device just hears the downmixed front L/R.
-      int masterChannels = std::max(2, audioBackend->outputChannels());
-      if (const char* mc = std::getenv("DAW_MASTER_CHANNELS")) {
-        const int parsed = std::atoi(mc);
-        if (parsed > masterChannels) {
-          masterChannels = std::min(parsed, 8);
-          audioCallback->setMasterChannels(masterChannels);
-          std::cout << "Surround master: " << masterChannels
-                    << " channels (device has " << audioBackend->outputChannels()
-                    << ")" << std::endl;
-        }
-      }
       // DAW_CAPTURE_WAV=<path> records the master output so a take can be
       // analysed offline; DAW_CAPTURE_SECONDS bounds the preallocation.
       if (const char* capturePath = std::getenv("DAW_CAPTURE_WAV")) {

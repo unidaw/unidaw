@@ -45,7 +45,7 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 //    into transport/keyjazz. The ring sits right after the mailbox at a computed offset
 //    (hostKeyRingOffset), so it needs no ShmHeader field — host↔engine only, kShmVersion
 //    stands. Gated here because an old host wouldn't allocate/init the ring.
-constexpr uint16_t kControlVersion = 10;
+constexpr uint16_t kControlVersion = 11;  // v11: ResetPlugins (panic)
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,
@@ -82,6 +82,12 @@ enum class ControlMessageType : uint16_t {
   // per-plugin latencies. The engine aligns on totalSamples; per-plugin values are for
   // display. Off the RT path.
   GetLatency = 12,
+  // PANIC support: reset every hosted plugin's internal DSP state (JUCE
+  // AudioProcessor::reset) — the case a controller message cannot reach. CC120 tells a
+  // plugin to stop sounding; a voice wedged inside the plugin's own state ignores it, and
+  // that is precisely why panic exists. Fire-and-forget, no reply, no payload beyond the
+  // header; the host does the work on its message thread, not the RT path.
+  ResetPlugins = 13,
 };
 
 // Cap on parameters returned per query — a scrollable rack shows plenty within

@@ -49,6 +49,37 @@ else
   ok=0
 fi
 
+# Content that must SURVIVE the trip, compared against the ORIGINAL rather than against
+# the other save. Save-vs-save idempotency alone is blind to anything the LOAD drops: both
+# sides lose it identically and the diff stays clean. That is exactly how a load path that
+# parsed mod_links and never installed them went unnoticed — the first save silently
+# emitted an empty array and deleted them from disk.
+python3 - "$TMP/src.uniproj.json" "$TMP/v4a.uniproj.json" <<'PY' || ok=0
+import json, sys
+def load(p):
+    d = json.load(open(p))
+    return d.get('document', d)
+a, b = load(sys.argv[1]), load(sys.argv[2])
+def modlinks(d):
+    return sum(len(t.get('mod_links', []) or []) for t in d.get('tracks', []))
+def devices(d):
+    return sum(len(t.get('device_chain', []) or []) for t in d.get('tracks', []))
+ok = True
+for name, fn in (("mod_links", modlinks), ("devices", devices)):
+    before, after = fn(a), fn(b)
+    # The master track is appended on save, so devices may legitimately GROW; they must
+    # never shrink. Mod links must be preserved exactly.
+    if name == "mod_links" and after != before:
+        print(f"  FAIL: {name} {before} -> {after} (the load path is dropping them)")
+        ok = False
+    elif name == "devices" and after < before:
+        print(f"  FAIL: {name} {before} -> {after} (devices lost in the round trip)")
+        ok = False
+    else:
+        print(f"  {name} preserved: {before} -> {after}")
+raise SystemExit(0 if ok else 1)
+PY
+
 # A patcher/instrument/audio patcher device must never carry a plugin vst_ref.
 bad="$(python3 -c "
 import json

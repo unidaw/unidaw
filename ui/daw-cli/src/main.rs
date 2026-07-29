@@ -876,6 +876,24 @@ fn main() {
             match rest.first() {
                 Some(&"transport") => get_transport(&handle),
                 Some(&"tracks") => get_tracks(&handle),
+                Some(&"meters") => {
+                    // v24 per-insert meters, dBFS millibels. device_id matches the chain
+                    // snapshot's device, not a position.
+                    println!("{{");
+                    let count = handle.track_count() as usize;
+                    let (ids, _flags) = handle.read_track_ids_and_flags();
+                    for slot in 0..count {
+                        let m = handle.read_device_meters(slot);
+                        if m.is_empty() { continue; }
+                        let tid = ids.get(slot).copied().unwrap_or(slot as u32);
+                        let body: Vec<String> = m.iter().map(|(d, ip, op, ir, orms)| {
+                            format!("{{ \"device\": {d}, \"in_peak_mb\": {ip}, \"out_peak_mb\": {op}, \"in_rms_mb\": {ir}, \"out_rms_mb\": {orms} }}")
+                        }).collect();
+                        println!("  \"track:{tid}\": [{}],", body.join(", "));
+                    }
+                    println!("}}");
+                    0
+                }
                 Some(&"audio-sources") => get_audio_sources(&handle),
                 Some(&"extents") => get_extents(&handle),
                 other => {
@@ -1098,6 +1116,33 @@ fn main() {
                         2
                     }
                 },
+                Some(&"set-bypass") => {
+                    // Toggle an insert's bypass live: --track <id|master> --device N
+                    // --bypass 0|1. UpdateDevice flags bit0 = "apply bypass".
+                    let track_arg = args.iter().position(|a| a == "--track")
+                        .and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("0");
+                    let track = if track_arg == "master" { MASTER_TRACK_ID }
+                                else { track_arg.parse::<u32>().unwrap_or(0) };
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let bypass = flag_u64(&args, "--bypass", Some(1)).unwrap_or(1) as u32;
+                    let payload = UiChainCommandPayload {
+                        command_type: UiCommandType::UpdateDevice as u16,
+                        flags: 0x1,
+                        track_id: track,
+                        base_version: 0,
+                        device_id: device,
+                        device_kind: 0,
+                        insert_index: 0,
+                        patcher_node_id: 0,
+                        host_slot_index: 0,
+                        bypass,
+                        reserved: [0; 4],
+                    };
+                    match handle.send_chain_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"set-bypass\", \"track\": {track}, \"device\": {device}, \"bypass\": {bypass} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
                 Some(&"add-device") => {
                     // --track accepts a numeric id or "master"; --kind is a device kind
                     // string; --at is the insert index (default = append); --plugin is a

@@ -7,6 +7,7 @@ Makefile
 compile_commands.json
 ui/target/
 ui/daw-bridge/target/
+.env
 
 *.a
 *.d
@@ -27,4 +28,6 @@ state.bin
 .DS_Store
 .vscode/
 ui/daw-app/tests/snapshots/*.svg
-build/
+
+# Per-project command journal (roadmap 19). Written beside the project it describes.
+history.jsonl

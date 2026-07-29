@@ -51,7 +51,7 @@ struct PatcherLfoConfig {
 };
 
 struct alignas(64) PatcherContext {
-  uint32_t abi_version = 3;
+  uint32_t abi_version = 4;
   uint64_t block_start_tick = 0;
   uint64_t block_end_tick = 0;
   uint64_t block_start_sample = 0;
@@ -81,6 +81,15 @@ struct alignas(64) PatcherContext {
   float* mod_inputs = nullptr;
   uint32_t mod_input_count = 0;
   uint32_t mod_input_stride = 0;
+
+  // ABI 4 — REPRODUCIBLE GENERATION. A generator must produce the same music every time
+  // for the same project, and different music per node: without node_id two random_degree
+  // nodes at the same musical tick generate the IDENTICAL pitch, because the tick was the
+  // whole seed. `seed` is the project's stored seed, so a variation can be re-rolled by
+  // changing one number and everything else stays put. Appended at the end so the flat C
+  // layout of every earlier field is untouched.
+  uint32_t node_id = 0;
+  uint64_t seed = 0;
 };
 
 #if defined(__GNUC__) || defined(__clang__)

@@ -153,6 +153,109 @@ enum class UiCommandType : uint16_t {
   Panic = 52,  // next free 53
 };
 
+// Readable name for an opcode, for the history journal and diagnostics. Unknown values
+// render as "op:<n>" rather than throwing away the number.
+inline const char* uiCommandTypeName(UiCommandType t) {
+  switch (t) {
+    case UiCommandType::None: return "none";
+    case UiCommandType::LoadPluginOnTrack: return "load_plugin_on_track";
+    case UiCommandType::WriteNote: return "write_note";
+    case UiCommandType::TogglePlay: return "toggle_play";
+    case UiCommandType::DeleteNote: return "delete_note";
+    case UiCommandType::Undo: return "undo";
+    case UiCommandType::WriteHarmony: return "write_harmony";
+    case UiCommandType::DeleteHarmony: return "delete_harmony";
+    case UiCommandType::WriteChord: return "write_chord";
+    case UiCommandType::DeleteChord: return "delete_chord";
+    case UiCommandType::SetTrackHarmonyQuantize: return "set_track_harmony_quantize";
+    case UiCommandType::Redo: return "redo";
+    case UiCommandType::SetLoopRange: return "set_loop_range";
+    case UiCommandType::SetAutomationTarget: return "set_automation_target";
+    case UiCommandType::AddDevice: return "add_device";
+    case UiCommandType::RemoveDevice: return "remove_device";
+    case UiCommandType::MoveDevice: return "move_device";
+    case UiCommandType::UpdateDevice: return "update_device";
+    case UiCommandType::SetDeviceEuclideanConfig: return "set_device_euclidean_config";
+    case UiCommandType::SetTrackRouting: return "set_track_routing";
+    case UiCommandType::AddModLink: return "add_mod_link";
+    case UiCommandType::RemoveModLink: return "remove_mod_link";
+    case UiCommandType::SetModLinkUid16: return "set_mod_link_uid16";
+    case UiCommandType::SetModSourceValue: return "set_mod_source_value";
+    case UiCommandType::OpenPluginEditor: return "open_plugin_editor";
+    case UiCommandType::AddPatcherNode: return "add_patcher_node";
+    case UiCommandType::RemovePatcherNode: return "remove_patcher_node";
+    case UiCommandType::ConnectPatcherNodes: return "connect_patcher_nodes";
+    case UiCommandType::SetPatcherNodeConfig: return "set_patcher_node_config";
+    case UiCommandType::SavePatcherPreset: return "save_patcher_preset";
+    case UiCommandType::RequestClipWindow: return "request_clip_window";
+    case UiCommandType::SaveProject: return "save_project";
+    case UiCommandType::LoadProject: return "load_project";
+    case UiCommandType::SetTrackMixer: return "set_track_mixer";
+    case UiCommandType::Stop: return "stop";
+    case UiCommandType::SetPosition: return "set_position";
+    case UiCommandType::SetTrackName: return "set_track_name";
+    case UiCommandType::RequestDeviceParams: return "request_device_params";
+    case UiCommandType::SetTempo: return "set_tempo";
+    case UiCommandType::SetDeviceParam: return "set_device_param";
+    case UiCommandType::RequestWaveform: return "request_waveform";
+    case UiCommandType::PreviewNote: return "preview_note";
+    case UiCommandType::AddTrack: return "add_track";
+    case UiCommandType::RemoveTrack: return "remove_track";
+    case UiCommandType::MovePlacement: return "move_placement";
+    case UiCommandType::RemovePlacement: return "remove_placement";
+    case UiCommandType::ResizePlacement: return "resize_placement";
+    case UiCommandType::AddPlacement: return "add_placement";
+    case UiCommandType::Panic: return "panic";
+  }
+  return "op:unknown";
+}
+
+// Does this opcode carry a plain UiCommandPayload? Several do NOT — Save/LoadProject and
+// SetTrackName pack a NAME into the same bytes, so reading them as trackId/pitch/nanotick
+// yields numbers that look like data and are not. The history journal uses this to record
+// nothing rather than record garbage.
+inline bool uiCommandUsesGenericPayload(UiCommandType t) {
+  switch (t) {
+    case UiCommandType::SaveProject:
+    case UiCommandType::LoadProject:
+    case UiCommandType::SetTrackName:
+    case UiCommandType::SavePatcherPreset:
+    case UiCommandType::AddDevice:
+    case UiCommandType::RemoveDevice:
+    case UiCommandType::MoveDevice:
+    case UiCommandType::UpdateDevice:
+    case UiCommandType::SetDeviceParam:
+    case UiCommandType::RequestWaveform:
+    case UiCommandType::RequestClipWindow:
+      return false;
+    default:
+      return true;
+  }
+}
+
+// Is this opcode about the SONG rather than one track? Recording a global op as
+// "track:0" invents a scope it never had, which is worse than saying nothing.
+inline bool uiCommandIsGlobalScope(UiCommandType t) {
+  switch (t) {
+    case UiCommandType::TogglePlay:
+    case UiCommandType::Stop:
+    case UiCommandType::SetPosition:
+    case UiCommandType::SetTempo:
+    case UiCommandType::SetLoopRange:
+    case UiCommandType::SaveProject:
+    case UiCommandType::LoadProject:
+    case UiCommandType::Undo:
+    case UiCommandType::Redo:
+    case UiCommandType::Panic:
+    case UiCommandType::WriteHarmony:
+    case UiCommandType::DeleteHarmony:
+    case UiCommandType::AddTrack:
+      return true;
+    default:
+      return false;
+  }
+}
+
 // PreviewNote flags: bit0 set = note-on, clear = note-off for (trackId, notePitch).
 constexpr uint16_t kPreviewNoteFlagOn = 1u << 0;
 

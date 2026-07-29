@@ -68,7 +68,12 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 // 23: per-track instrument name (uiTrackDeviceName) so the agent's observation can see what
 //     is on a track. Appended after uiTrackId, so earlier offsets are unchanged; the header
 //     grows and region offsets shift automatically. Lockstep with the Rust mirror.
-constexpr uint16_t kShmVersion = 23;
+// 24: per-INSERT metering (roadmap 15b). The HOST measures each insert's input/output
+//     peak+RMS and writes them into its own SHM header (hostDeviceMeters); the engine
+//     copies them per track slot into a published UiDeviceMeterRegion. Both new fields are
+//     APPENDED, so every earlier offset is unchanged and only sizeof(ShmHeader) grows.
+//     Lockstep with the Rust mirror.
+constexpr uint16_t kShmVersion = 24;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -80,6 +85,11 @@ constexpr uint32_t kUiMaxTracks = 64;
 // explicitly. Published in uiTrackId with kUiTrackFlagMaster so the UI addresses
 // the master by this id, not by a moving slot. (patcher-is-a-device item 4.)
 constexpr uint32_t kMasterTrackId = 0xFFFF0000u;
+// Per-insert metering (roadmap 15b). 16 rather than 8: a normal channel is EQ, comp,
+// saturator, chorus, delay, reverb, limiter, utility — which is exactly eight, and running
+// out does not degrade gracefully (a ninth insert either shows a dead meter or, indexed
+// defensively-modulo, shows insert 1's meter on insert 9's card, i.e. a meter that lies).
+constexpr uint32_t kUiMaxMeteredDevices = 16;
 constexpr uint32_t kUiMaxClipNotes = 4096;
 constexpr uint32_t kUiMaxClipChords = 1024;
 constexpr uint32_t kUiMaxClipExtents = 64;  // clip boxes across all tracks (M3.4)
@@ -203,6 +213,12 @@ struct alignas(64) ShmHeader {
   // track exists. Empty when the track has no instrument. Appended after uiTrackId so
   // every earlier field offset is unchanged.
   char uiTrackDeviceName[kUiMaxTracks][kUiTrackNameBytes]{};
+  // v24: byte offset of the published UiDeviceMeterRegion (0 = none). UI SHM only.
+  uint64_t uiDeviceMeterOffset = 0;
+  // v24: the HOST writes its own inserts' meters here, in ITS per-track SHM header — this
+  // is the host->engine leg, not the published one. Index is the host's compacted plugin
+  // order; the engine maps it to stable device ids when publishing.
+  int16_t hostDeviceMeters[kUiMaxMeteredDevices][4]{};
 };
 
 // uiTrackFlags bits.
@@ -312,6 +328,39 @@ struct UiClipExtentRegion {
   uint32_t count = 0;
   uint32_t reserved = 0;
   UiClipExtent extents[kUiMaxClipExtents]{};
+};
+
+// Levels are dBFS MILLIBELS (0 = full scale, ordinary values negative). kUiMeterSilent is
+// the "silent or below floor" sentinel — 0.0 amplitude is -inf dB and must not render as
+// -327 dB. Both peak AND rms are published: rms is what you gain-stage on, peak is what
+// says the insert is about to clip while its rms looks tame (a limiter's whole job is to
+// make the two disagree), and neither is derivable from the other.
+constexpr int16_t kUiMeterSilent = INT16_MIN;
+// One insert's meters. deviceId is the STABLE device id from the chain snapshot, NOT a
+// positional index: the host's compacted plugin order and the chain's device order differ
+// whenever a chain holds a non-VST device (a patcher insert, an instrument), and matching
+// by position then paints device 2's meter on device 3's card. Match on deviceId.
+// kUiMeterNoDevice in deviceId means "this slot holds no insert" — distinct from silence.
+constexpr uint32_t kUiMeterNoDevice = 0xFFFFFFFFu;
+struct UiDeviceMeter {
+  int16_t inPeakMb = kUiMeterSilent;
+  int16_t outPeakMb = kUiMeterSilent;
+  int16_t inRmsMb = kUiMeterSilent;
+  int16_t outRmsMb = kUiMeterSilent;
+  uint32_t deviceId = kUiMeterNoDevice;
+};
+static_assert(sizeof(UiDeviceMeter) == 12, "UiDeviceMeter must match the Rust mirror");
+
+// Published per track SLOT, so the MASTER (which occupies a real slot with
+// kUiTrackFlagMaster) is metered by the same path with no special case — and master is
+// where per-insert gain staging matters most, since everything has already summed there.
+// An absent track or insert reads deviceId == kUiMeterNoDevice with silent levels; the
+// region is rewritten every UI frame, so a stopped transport reads silence rather than
+// holding a stale level that would look like a stuck meter.
+struct alignas(64) UiDeviceMeterRegion {
+  uint32_t version = 0;
+  uint32_t reserved = 0;
+  UiDeviceMeter meters[kUiMaxTracks][kUiMaxMeteredDevices]{};
 };
 
 constexpr uint32_t kUiMaxPatcherNodes = 64;

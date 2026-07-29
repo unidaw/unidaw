@@ -659,6 +659,12 @@ class JucePluginInstance final : public IPluginInstance {
 
   std::vector<BusInfo> busLayout() const override { return busLayout_; }
 
+  void reset() override {
+    if (instance_) {
+      instance_->reset();
+    }
+  }
+
   int latencySamples() const override {
     return instance_ ? instance_->getLatencySamples() : 0;
   }
@@ -1142,7 +1148,19 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
     const bool kPassThru = fakeIdentityPassThru();
     for (int ch = 0; ch < numOutputs; ++ch) {
       if (kPassThru && inputs != nullptr && ch < numInputs && inputs[ch] != nullptr) {
-        std::copy(inputs[ch], inputs[ch] + numFrames, outputs[ch]);
+        // DAW_FAKE_INSERT_GAIN makes the fixture an insert with a KNOWN, fixed gain, so a
+        // test of level-matched bypass has an arithmetic expectation instead of a guess.
+        static const float kInsertGain = [] {
+          const char* e = std::getenv("DAW_FAKE_INSERT_GAIN");
+          return e ? std::strtof(e, nullptr) : 1.0f;
+        }();
+        if (kInsertGain == 1.0f) {
+          std::copy(inputs[ch], inputs[ch] + numFrames, outputs[ch]);
+        } else {
+          for (int i = 0; i < numFrames; ++i) {
+            outputs[ch][i] = inputs[ch][i] * kInsertGain;
+          }
+        }
       } else {
         std::fill(outputs[ch], outputs[ch] + numFrames, 0.0f);
       }
