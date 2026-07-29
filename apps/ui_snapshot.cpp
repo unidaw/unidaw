@@ -55,10 +55,11 @@ ClipWindowResult buildUiClipWindowSnapshot(const MusicalClip& clip,
       note.column = event.payload.note.column;
       note.retrigger = event.payload.note.retrigger;
       note.probability = event.payload.note.probability;
-      // M3.4 provenance: the engine plays the first placement's resolved clip, so
-      // every published note is placement 0, played (not muted), base (not add).
+      // Provenance: which placement produced this note. flattenPlacements tags each note
+      // with its placement's stable id in the payload's spare field; publish it so the UI
+      // can group notes by clip. (placementFlags — muted/add — is still a later refinement.)
       note.placementFlags = 0;
-      note.placementId = 0;
+      note.placementId = event.payload.note.reserved2;
       note.delayNanoticks = event.payload.note.delayNanoticks;
       note.reserved3 = 0;
       ++noteCount;

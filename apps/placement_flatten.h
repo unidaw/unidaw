@@ -61,6 +61,14 @@ inline std::vector<MusicalEvent> flattenPlacements(
     for (const auto& s : scheduled) {
       MusicalEvent ev = s.event;
       ev.nanotickOffset = s.absTick;
+      // Tag each flattened note with the stable id of the placement that produced it, so
+      // the UI can say which clip a note belongs to (e.g. open the piano roll for a clip)
+      // without the positional (tick-range) guess. Carried in the note payload's spare
+      // field; capped at u16 like the published UiClipNote.placementId (a much later wrap
+      // than the frontend's u8, and a u32 widen is a piano-roll-time lockstep if needed).
+      if (ev.type == MusicalEventType::Note) {
+        ev.payload.note.reserved2 = static_cast<uint16_t>(placement.id);
+      }
       out.push_back(ev);
     }
   }

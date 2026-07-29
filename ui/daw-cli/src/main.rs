@@ -708,13 +708,14 @@ fn get_clip(handle: &EngineHandle, args: &[String]) -> i32 {
         let comma = if index + 1 == note_count { "" } else { "," };
         println!(
             "    {{ \"nanotick\": {}, \"duration\": {}, \"pitch\": {}, \"name\": \"{}\", \
-             \"velocity\": {}, \"column\": {} }}{comma}",
+             \"velocity\": {}, \"column\": {}, \"placement\": {} }}{comma}",
             note.t_on,
             note.t_off.saturating_sub(note.t_on),
             note.pitch,
             pitch_name(note.pitch),
             note.velocity,
-            note.column
+            note.column,
+            note.placement_id
         );
     }
     println!("  ],");
