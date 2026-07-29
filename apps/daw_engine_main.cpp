@@ -2253,6 +2253,16 @@ struct TrackRuntime {
   // clipVersion — quantize moves no authored note, so it must not invalidate anyone's
   // in-flight edit, but the UI still has to redraw its deviation bars.
   std::atomic<uint32_t> quantizeVersion{0};
+  // M3: the SONG's end — the furthest placement end across every track — kept apart
+  // from the LOOP. Before this they were the same number, set only at load, so adding a
+  // placement past the end left the loop where it was and the new material NEVER PLAYED:
+  // you would add a section at bar 4, press play, and hear nothing, with no explanation
+  // anywhere. Recomputed whenever a placement edit changes the arrangement.
+  std::atomic<uint64_t> songEndNanotick{0};
+  // Whether the loop was set BY HAND. The loop follows the song end only while it was
+  // not — otherwise every note you type would silently reset a loop you had chosen,
+  // which is the opposite failure and a worse one.
+  std::atomic<bool> loopUserSet{false};
 
   // M2.17: bump BOTH counters for a track-scoped change — the track's (what acceptance
   // compares, and what the diff hands back to the caller as its new base) and the global
@@ -4241,6 +4251,55 @@ struct TrackRuntime {
     return "t" + std::to_string(trackId) + "_d" + std::to_string(deviceId) + ".bin";
   };
 
+  // The song's end: the furthest placement end across every LIVE track. Runs on the
+  // command thread after any placement edit, never on the audio thread.
+  //
+  // The loop follows it ONLY while the user has not set a loop by hand. Both halves
+  // matter: without the follow, material added past the old end is silent forever;
+  // without the guard, every placement edit would quietly discard a loop the user chose,
+  // which is the same bug pointing the other way.
+  auto recomputeSongEnd = [&]() {
+    uint64_t end = 0;
+    const auto snapshot = snapshotTracks();
+    for (auto* rt : snapshot) {
+      if (!rt || rt->removed.load(std::memory_order_acquire)) {
+        continue;
+      }
+      std::lock_guard<std::mutex> lock(rt->trackMutex);
+      for (const auto& pl : rt->sourcePlacements) {
+        if (!pl.at.has_value()) {
+          continue;  // a loose session cell has no timeline position
+        }
+        uint64_t len = pl.lengthNanoticks;
+        if (len == 0) {
+          for (const auto& c : rt->ownedClips) {
+            if (c.id == pl.clipId) {
+              len = c.lengthNanoticks;
+              break;
+            }
+          }
+        }
+        // Saturating: a placement near the top of the range must not wrap to a tiny
+        // song end, which would silence everything after it.
+        const uint64_t reach =
+            (*pl.at > UINT64_MAX - len) ? UINT64_MAX : *pl.at + len;
+        end = std::max(end, reach);
+      }
+    }
+    if (end == 0) {
+      end = patternTicks;  // an empty project keeps the default bar
+    }
+    const uint64_t previous = songEndNanotick.exchange(end, std::memory_order_acq_rel);
+    if (previous == end) {
+      return;
+    }
+    DAW_EVENT("song.end_moved").field("from", previous).field("to", end);
+    if (!loopUserSet.load(std::memory_order_acquire)) {
+      loopStartNanotick.store(0, std::memory_order_release);
+      loopEndNanotick.store(end, std::memory_order_release);
+    }
+  };
+
   // The flatten window for a track: past every placement's resolved end, at least
   // one pattern bar. Used so a note stretched or looped past the old arrangement
   // end still lands in the derived flat clip.
@@ -5196,6 +5255,9 @@ struct TrackRuntime {
     }
     loopStartNanotick.store(0, std::memory_order_release);
     loopEndNanotick.store(arrangementEnd, std::memory_order_release);
+    songEndNanotick.store(arrangementEnd, std::memory_order_release);
+    // A load replaces the song, so any hand-set loop belonged to the OLD one.
+    loopUserSet.store(false, std::memory_order_release);
 
     // Grow the track set to fit the document, so a project with more tracks than
     // the engine currently holds loads in full rather than dropping the tail.
@@ -6116,6 +6178,11 @@ struct TrackRuntime {
     }
     bumpClipVersionFor(runtime);
     clipDirty.store(true, std::memory_order_release);
+    // A placement edit can move the END OF THE SONG, and until this existed the loop was
+    // computed once at load — so a placement added past the old end never played, and
+    // nothing said why. Recomputed here, and the LOOP follows only while the user has
+    // not chosen one of their own.
+    recomputeSongEnd();
     return true;
   };
 
@@ -7913,6 +7980,20 @@ struct TrackRuntime {
                           payload.noteNanotickLo;
       const uint64_t len = (static_cast<uint64_t>(payload.noteDurationHi) << 32) |
                            payload.noteDurationLo;
+      // kPlacementUnchanged is Resize's "leave this field alone" sentinel. It is
+      // meaningless for an ADD, and accepting it created a placement at tick 2^64-1 —
+      // an invisible box at the end of time that then poisoned any song-end computation
+      // that added a length to it. Refuse it, and say so.
+      if (at == kPlacementUnchanged || len == kPlacementUnchanged) {
+        std::cerr << "UI: AddPlacement rejected — `at` and `length` are required "
+                     "(0xFFFF..FF is Resize's leave-unchanged sentinel, not a position)"
+                  << std::endl;
+        DAW_EVENT("placement.add_rejected")
+            .field("track", payload.trackId)
+            .field("clip", clipId)
+            .field("reason", "sentinel_position");
+        return;
+      }
       const uint32_t newId = nextPlacementId.fetch_add(1, std::memory_order_relaxed);
       applyPlacementEdit(payload.trackId,
                          [&](std::vector<daw::ProjectPlacement>& pls) {
@@ -8620,6 +8701,9 @@ struct TrackRuntime {
       if (end > start) {
         loopStartNanotick.store(start, std::memory_order_release);
         loopEndNanotick.store(end, std::memory_order_release);
+        // Set whenever the loop IS set, not only when the playhead had to move with it:
+        // this is what stops a later placement edit from silently taking the loop back.
+        loopUserSet.store(true, std::memory_order_release);
         uint64_t current =
             transportNanotick.load(std::memory_order_acquire);
         if (current < start || current >= end) {

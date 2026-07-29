@@ -43,6 +43,9 @@ daw-cli — control surface for a running engine
   daw-cli do position --nanotick T move the playhead
   daw-cli do loop --start T --end T set the loop range
   daw-cli do harmony-quantize --track N [--on 0|1]
+  daw-cli do add-placement --track N --clip C --at T --length L
+                                   --at and --length are REQUIRED; the engine refuses
+                                   the leave-unchanged sentinel as a position
   daw-cli do routing --track N [--audio-out none|master|track:M|input:M]
                      [--midi-out ...] [--audio-in ...] [--midi-in ...]
                      [--pre-fader 0|1]
@@ -185,6 +188,11 @@ fn get_transport(handle: &EngineHandle) -> i32 {
         snapshot.ui_song_time_sig_num, snapshot.ui_song_time_sig_den
     );
     println!("  \"track_count\": {},", handle.track_count());
+    // The loop span drives what actually PLAYS, so it belongs in the transport report;
+    // without it "why is my new section silent" has no observable answer.
+    let (loop_start, loop_end) = handle.loop_range();
+    println!("  \"loop_start\": {loop_start},");
+    println!("  \"loop_end\": {loop_end},");
     println!("  \"clip_version\": {}", handle.clip_version());
     println!("}}");
     0
