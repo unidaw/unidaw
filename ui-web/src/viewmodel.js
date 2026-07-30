@@ -2,6 +2,7 @@ import { pitchName } from './wire.js';
 import { nameChord } from './harmonymodel.js';
 import { DEFAULT_METER, createPosition, positionOf, sameMeter,
          ticksPerBar, ticksPerBeat, NANOTICKS_PER_QUARTER } from './meter.js';
+import { opsRun } from './rowops.js';
 // The view-model: plain data describing exactly what is on screen right now.
 //
 // This is the boundary the whole frontend is built around. The renderer consumes
@@ -382,10 +383,7 @@ function laneLabel(bar, beat) {
   return s;
 }
 
-const R_TEXT = [], P_TEXT = [], EVTS = [], PILL_SAME = [];
-function interned(table, prefix, n) {
-  return table[n] !== undefined ? table[n] : (table[n] = prefix + n);
-}
+const EVTS = [], PILL_SAME = [];
 function pillEvts(n) {
   return EVTS[n] !== undefined ? EVTS[n] : (EVTS[n] = n + ' evts');
 }
@@ -1248,12 +1246,23 @@ export function buildViewModel(opts, buf) {
           c1.kind = 'inst';
         }
       }
-      if (columns > 2 && (n.retrigger || n.probability || n.delayTicks)) {
-        const c2 = row.cells[base + 2];
-        if (c2) {
-          c2.text = n.retrigger ? interned(R_TEXT, 'R', n.retrigger)
-                  : n.probability ? interned(P_TEXT, 'P', n.probability) : 'D';
-          c2.kind = 'fx';
+      if (columns > 2) {
+        /*
+         * EVERY OP THIS NOTE CARRIES, one character each.
+         *
+         * This used to be a priority chain — retrigger beat probability beat
+         * delay — so a note carrying `ret3 p60 d1/6` drew `R3` and the other two
+         * were invisible while the engine played all three. `parse_row_ops` has
+         * always taken a whitespace-separated LIST, so the notation was never
+         * single-op; only the display was.
+         *
+         * The run is interned by mask in rowops.js, so this is a pointer
+         * assignment and allocates nothing.
+         */
+        const run = opsRun(n);
+        if (run) {
+          const c2 = row.cells[base + 2];
+          if (c2) { c2.text = run; c2.kind = 'fx'; }
         }
       }
     }

@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
+import { ROW_OPS, opGlyph, opsRun, opsText } from '../src/rowops.js';
 import {
   parseToken, parseChord, pitchOf, pitchToToken, hexValue, shiftDigit, NOTE_KEYS,
 } from '../src/entry.js';
@@ -2508,4 +2509,98 @@ test('every engine command has a caller, or a recorded reason it has none', asyn
   const stale = Object.keys(ENGINE_UNUSED).filter((n) => !unused.includes(n));
   assert.deepEqual(stale, [],
     'listed as unused but something calls it now — delete the entry');
+});
+
+// ---------------------------------------------------------------------------
+// ROW OPS: the mirror, and the run that replaced the priority chain.
+// ---------------------------------------------------------------------------
+
+test('the JS row-op mirror matches the Rust schema exactly', async () => {
+  /*
+   * `ROW_OPS` in rowops.js is a MIRROR of `OP_SCHEMA` in
+   * ui/daw-bridge/src/rowop.rs, which is the grammar the CLI, the bridge and the
+   * engine all share. Nothing forces the two to agree, and this project has paid
+   * for that shape six times in one session with dockApi/__uni.
+   *
+   * Read from the RUST SOURCE rather than from a copied list, so the check is
+   * against the definition rather than against itself. Asked backend whether the
+   * schema can be published instead of mirrored; until it is, this is the ratchet.
+   */
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(
+    new URL('../../../daw/ui/daw-bridge/src/rowop.rs', import.meta.url), 'utf8');
+  const block = src.slice(src.indexOf('OP_SCHEMA'), src.indexOf('];', src.indexOf('OP_SCHEMA')));
+  const rust = [...block.matchAll(/prefix:\s*"([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(rust.length > 0, `parsed OP_SCHEMA prefixes: ${JSON.stringify(rust)}`);
+  assert.deepEqual(ROW_OPS.map((o) => o.prefix), rust,
+    'rowops.js must list the same ops, in the same order, as rowop.rs — order is '
+    + 'the draw order, so a mismatch silently reorders every run on screen');
+});
+
+test('every op has a distinct glyph', () => {
+  // The glyph is IDENTITY: an op can appear at any position in the run, so
+  // position cannot say which op it is and the character must. Two ops sharing a
+  // glyph is therefore not cosmetic — it makes a run ambiguous to read.
+  const seen = new Map();
+  for (const op of ROW_OPS) {
+    const g = opGlyph(op);
+    assert.equal(g.length, 1, `${op.prefix} draws exactly one character, got ${JSON.stringify(g)}`);
+    assert.ok(!seen.has(g), `${op.prefix} and ${seen.get(g)} both draw ${JSON.stringify(g)}`);
+    seen.set(g, op.prefix);
+  }
+});
+
+test('a note carrying several ops shows ALL of them', () => {
+  /*
+   * THE BUG THIS REPLACED. The cell resolved ops by priority —
+   *   n.retrigger ? 'R'+n.retrigger : n.probability ? 'P'+n.probability : 'D'
+   * — so a note with `ret3 p60 d1/6` drew `R3` and the other two were invisible
+   * while the engine played all three. `parse_row_ops` has always taken a
+   * whitespace-separated LIST, so the notation was never single-op; the display
+   * was.
+   */
+  const all = opsRun({ retrigger: 3, probability: 60, delayTicks: 160000,
+                       sound: 5, soundOffset: 32768 });
+  assert.equal(all.length, ROW_OPS.length,
+    `three ops draw three characters, got ${JSON.stringify(all)}`);
+  for (const op of ROW_OPS) {
+    assert.ok(all.includes(opGlyph(op)),
+      `${op.prefix} is in ${JSON.stringify(all)} — the old chain dropped it silently`);
+  }
+  // ...and the NEGATIVE CONTROL for the priority chain: under the old code this
+  // run was 'R3', which is length 2 and contains neither 'p' nor 'd'. If this
+  // assertion could pass against that, the test above would be decoration.
+  assert.notEqual(all, 'R3', 'the priority chain would have produced this');
+});
+
+test('ops appear in schema order, and only when set', () => {
+  // ORDER is what makes two notes with the same ops draw the same string, which
+  // is what makes a column scannable at all.
+  assert.equal(opsRun({ probability: 60, retrigger: 3 }),
+               opsRun({ retrigger: 3, probability: 60 }),
+               'the run is ordered by the schema, not by the object');
+  // A note with nothing draws NOTHING — an ordinary kit track carries no new ink,
+  // which is the whole answer to "columns that are mostly empty".
+  assert.equal(opsRun({}), '', 'no ops, no ink');
+  /*
+   * ZERO IS ABSENCE, NOT A VALUE. `probability: 0` means "always sounds", which
+   * is the op being absent; drawing a mark there would claim a note is
+   * conditional when it is not.
+   */
+  assert.equal(opsRun({ probability: 0, retrigger: 0, delayTicks: 0 }), '',
+               'zeroes are absence, not ops');
+});
+
+test('the canonical text form round-trips what the engine published', () => {
+  // What the edit buffer is seeded with and what an agent writes — one grammar.
+  assert.equal(opsText({ retrigger: 3, probability: 60 }), 'ret3 p60');
+  // ORDER is the schema's, not the object's — the text form is generated from the
+  // same list the run is, so the two cannot drift apart.
+  assert.equal(opsText({ soundOffset: 32768, retrigger: 3, sound: 5 }), 'ret3 s5 o80');
+  // The delay is published in TICKS and authored as a fraction of a beat, so it
+  // needs the beat length to be spelled back. 160000 of 960000 is a sixth.
+  assert.equal(opsText({ delayTicks: 160000 }, 960000), 'd1/6');
+  // Without a beat length it says ticks rather than guessing a fraction — a guess
+  // would round-trip a different note than the one on screen.
+  assert.equal(opsText({ delayTicks: 160000 }), 'd160000t');
 });
