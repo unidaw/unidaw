@@ -3508,6 +3508,8 @@ function songMeter() {
   return _songMeter;
 }
 
+/** The loop the chrome reads, filled in place. See `updateChrome` for why it is not a literal. */
+const _loopRead = { start: 0, end: 0 };
 const _chromeOpts = { playheadTick: 0, transport: 0, linkText: '', octave: 0,
                       editStep: 0, velocity: 100, rejectText: '', viewName: '',
                       keyName: '', digitMode: '', tempoMilliBpm: 120000,
@@ -3551,7 +3553,17 @@ function updateChrome() {
    * printing "1-4" for it would claim a bar the loop does not play.
    */
   {
-    const lp = loopOverride() || (engine ? { start: engine.loopStart, end: engine.loopEnd } : null);
+    /*
+     * NO OBJECT PER FRAME. `loopOverride() || { start, end }` built a literal on every draw
+     * whenever no drag was in flight, which is always — and this runs at frame rate from four
+     * surfaces. GUIDELINES 3: the draw path allocates nothing. Read into a hoisted record.
+     */
+    const ov = loopOverride();
+    let lp = null;
+    if (ov) { lp = ov; }
+    else if (engine) {
+      _loopRead.start = engine.loopStart; _loopRead.end = engine.loopEnd; lp = _loopRead;
+    }
     const barTicks = ticksPerBar(songMeter());
     if (lp && lp.end > lp.start && barTicks > 0) {
       o.loopStartBar = Math.floor(lp.start / barTicks) + 1;
@@ -3567,14 +3579,22 @@ function updateChrome() {
    * groove to report, and picking track 0 would show a number that belongs to a track you may
    * not be looking at.
    */
-  o.grooveMilli = (() => {
-    // `swing`, not `swingMilli`. `quantizeOf` returns `{grid, strength, swing}` and the first
-    // version read a name that does not exist — so the groove was permanently absent and
-    // looked exactly like a straight lane. The third guessed field name this session; looked
-    // up now, as the others were.
-    const q = quantizeOf(state.cursor.track);
-    return q ? (q.swing || 0) : 0;
-  })();
+  /*
+   * THE CURSOR TRACK'S SWING, read WITHOUT going through `quantizeOf`.
+   *
+   * `quantizeOf` returns a fresh `{grid, strength, swing}` and this runs every frame, so calling
+   * it here was an object per draw — and an arrow invoked in place was a second one. The field
+   * is `swing` and not `swingMilli`, which the first version read: a name that does not exist,
+   * so the groove was permanently absent and looked exactly like a straight lane. Third guessed
+   * field name this session; looked up now.
+   */
+  o.grooveMilli = 0;
+  if (engine) {
+    const t = state.cursor.track;
+    for (let i = 0; i < engine.quantizeCount; i++) {
+      if (engine.quantize[i].track === t) { o.grooveMilli = engine.quantize[i].swing || 0; break; }
+    }
+  }
   o.blockSize = engine ? (engine.blockSize || 0) : 0;
   o.sampleRateHz = engine ? (engine.sampleRateHz || 0) : 0;
   o.docVersion = engine ? engine.clipVersion : -1;
@@ -6202,6 +6222,50 @@ function frozenCopy(o) {
 
 // Agent / test surface. Structure, not pixels — this is requirement (d).
 window.__uni = {
+  /*
+   * EVERY CONSOLE METHOD, REACHABLE BY ITS CONSOLE NAME.
+   *
+   * Six times in one session a test or a probe reached for `__uni.X` and got "is not a
+   * function", because X had been added to `dockApi` alone — `bypass`, `quantize`, `rowTicks`,
+   * `deleteHarmony`, `ticksPerBar`, `setView`. Each cost a suite run to find and one line to
+   * fix, and the sixth was as expensive as the first.
+   *
+   * So the whole set is delegated, and a ratchet in unit.mjs holds it: dockApi ⊆ __uni. The two
+   * surfaces are not the same thing — `dockApi` is what the console calls, `__uni` is what a
+   * test or an agent drives — but `__uni` being a SUBSET is never a decision, only an omission,
+   * because anything worth doing from the console is worth driving from a test.
+   *
+   * DELEGATIONS, not copies. Same function, so the two names cannot come to mean different
+   * things, which is the divergence this file keeps finding.
+   */
+  addNode: (type) => dockApi.addNode(type),
+  ask: (text) => dockApi.ask(text),
+  chord: (degree, quality, inv, oct) => dockApi.chord(degree, quality, inv, oct),
+  del: () => dockApi.del(),
+  delChord: () => dockApi.delChord(),
+  delNode: (id) => dockApi.delNode(id),
+  deleteHarmony: (tick) => dockApi.deleteHarmony(tick),
+  edit: (on) => dockApi.edit(on),
+  engine: () => dockApi.engine(),
+  forget: () => dockApi.forget(),
+  gain: (t, db) => dockApi.gain(t, db),
+  linkNodes: (a, b, kind) => dockApi.linkNodes(a, b, kind),
+  listProjects: () => dockApi.listProjects(),
+  load: (n) => dockApi.load(n),
+  master: (on) => dockApi.master(on),
+  moveDevice: () => dockApi.moveDevice(),
+  nodes: () => dockApi.nodes(),
+  note: (pitch, dur, vel) => dockApi.note(pitch, dur, vel),
+  octave: (o) => dockApi.octave(o),
+  removeTrack: (t) => dockApi.removeTrack(t),
+  save: (n) => dockApi.save(n),
+  scaleNames: () => dockApi.scaleNames(),
+  seek: (tick) => dockApi.seek(tick),
+  select: (r0, r1, track) => dockApi.select(r0, r1, track),
+  setView: (v) => dockApi.setView(v),
+  strip: (t, which) => dockApi.strip(t, which),
+  transport: (what) => dockApi.transport(what),
+  zoom: (z) => dockApi.zoom(z),
   probe: () => tracker.probe(),
   // The arrangement, by name. Delegated rather than reimplemented: these are
   // the SAME functions the console and the drag call, which is the whole rule

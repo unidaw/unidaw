@@ -1939,6 +1939,56 @@ test('the __uni surface declares no name twice', async () => {
   assert.deepEqual(dupes, [], 'a name declared twice — the earlier one is silently gone');
 });
 
+/**
+ * EVERY dockApi METHOD IS ALSO ON `__uni`.
+ *
+ * WHY THIS IS A TEST AND NOT A CONVENTION. Six times in one session a test or a probe reached
+ * for `__uni.X` and got "is not a function", because X had been added to `dockApi` alone:
+ * `bypass`, `quantize`, `rowTicks`, `deleteHarmony`, `ticksPerBar`, `setView`. Each cost a full
+ * suite run to find, and each was one line to fix. The existing ratchet checks the other
+ * direction — that every `api.X` the console calls exists on dockApi — and nothing checked this
+ * one, so the sixth was as expensive as the first.
+ *
+ * The two surfaces are not the same thing and should not be: `dockApi` is what the console
+ * calls and `__uni` is what a test or an agent drives. But `__uni` being a SUBSET is never
+ * deliberate — it is always an omission, because anything worth doing from the console is worth
+ * driving from a test. So the invariant is one-directional: dockApi ⊆ __uni, and a genuine
+ * console-only entry is listed below with its reason.
+ */
+const CONSOLE_ONLY = new Set([
+  // The dock's own machinery. `print` and `clear` act on the LOG, which a test reads by other
+  // means and an agent has no business writing to.
+  'print', 'clear', 'close',
+]);
+
+test('every dockApi method is also reachable on __uni', async () => {
+  const { readFileSync } = await import('node:fs');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+
+  const keysOf = (marker) => {
+    const at = html.indexOf(marker);
+    assert.ok(at > 0, `${marker} was found`);
+    const body = html.slice(at, html.indexOf('\n};', at));
+    const out = new Set();
+    // Same pattern as the ratchet above: `[:(,]` or end of line, so a shorthand property is a
+    // method too.
+    for (const m of body.matchAll(/^  ([A-Za-z_$][\w$]*)\s*(?:[:(,]|$)/gm)) out.add(m[1]);
+    return out;
+  };
+  const dock = keysOf('const dockApi = {');
+  const uni = keysOf('window.__uni = {');
+  // Both parsed, or the whole test is a no-op — the failure mode every source-reading check has
+  // to guard against, and the reason each of them says so out loud.
+  assert.ok(dock.size > 30, `dockApi was parsed: ${dock.size}`);
+  assert.ok(uni.size > 60, `__uni was parsed: ${uni.size}`);
+
+  const missing = [...dock].filter((n) => !uni.has(n) && !CONSOLE_ONLY.has(n)).sort();
+  assert.deepEqual(missing, [],
+    'on dockApi and not on __uni — a test or an agent reaching for it gets '
+    + '"is not a function". Delegate it (`X: (a) => dockApi.X(a)`) or list it in CONSOLE_ONLY '
+    + 'with a reason.');
+});
+
 test('every key the app handles is reachable another way', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../index.html', import.meta.url), 'utf8');

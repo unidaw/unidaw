@@ -219,7 +219,12 @@
   flex-direction: column;
   border-left: 1px solid var(--uni-rule-gutter);
   background: var(--uni-surface-header-bg);
-  overflow: hidden;
+  /* `overflow-y: auto` and not `hidden`, as the BACKSTOP behind the cells' shrink above.
+     Shrinking covers the ordinary case; when even the minimums do not fit, a scrollbar is the
+     honest answer — the content is reachable and the person can see there is more. `hidden`
+     truncates instead, and a card cut off mid-sentence reads as a rendering fault. */
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 /* The harmony card and the pending card are DRAGGABLE now; the agent still takes
    the rest, because its log is the thing that grows without bound and it is the
@@ -228,8 +233,19 @@
    `0 0 var(--...)` rather than `0 0 auto`: a content-sized cell cannot be
    resized, and the pending card being content-sized is why it sat at 83px with
    its text clipped while 300px of empty log went spare underneath it. */
-#harmony { flex: 0 0 var(--rdock-harmony-h); height: var(--rdock-harmony-h); overflow: hidden; position: relative; }
-#pending { flex: 0 0 var(--rdock-pending-h); height: var(--rdock-pending-h); overflow: hidden; position: relative; }
+/* `0 1 var(--...)`, and the SHRINK is load-bearing.
+ *
+ * With `0 0` these two were 495px of unyielding cell in a dock that is only as tall as the
+ * window leaves it, and `#dock` below them is the only thing that could give. MEASURED: at
+ * 1280x800 the dock's content came to 561px in a 513px box, and at 1024x640 to 561 in 353 —
+ * so the agent log went to zero and the harmony card was then cut off with nothing to say so.
+ * On any laptop.
+ *
+ * Shrink keeps the basis, so a drag still sets `--rdock-harmony-h` and the cell still holds
+ * that height whenever there is room for it. It differs only when there is not — which is the
+ * case that was broken. */
+#harmony { flex: 0 1 var(--rdock-harmony-h); height: var(--rdock-harmony-h); overflow: hidden; position: relative; }
+#pending { flex: 0 1 var(--rdock-pending-h); height: var(--rdock-pending-h); overflow: hidden; position: relative; }
 /* `inset: auto` and `height: auto` are NOT tidying — they are the fix for a real
    overlap. dock.css still describes the dock as the overlay it used to be:
    `position: absolute; left: 0; right: 0; bottom: 16px; height: 240px`. The id

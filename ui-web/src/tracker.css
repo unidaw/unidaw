@@ -412,6 +412,32 @@
    here and NOT on `.ch-right`: whichever element takes the free space defines where
    the right-hand group begins, and having two of them means the second never moves. */
 .ch-telemetry { margin-left: auto; gap: 12px; }
+
+/* WHAT GIVES WAY WHEN THERE IS NOT ENOUGH ROOM, in order of how little it is needed.
+ *
+ * MEASURED: at 1024px the bar's content came to 1239px, so it was cut off at the right — and
+ * the tabs are the last thing in it, which made switching surfaces the first thing to
+ * disappear. Something has to yield, and choosing WHAT is the whole decision: position,
+ * transport and the tabs are how you operate the thing, so the diagnostics go first.
+ *
+ * Hidden, not shrunk. A readout squeezed to three characters is a readout that lies. */
+@media (max-width: 1200px) {
+  /* dsp/latency/doc version: useful when tuning a buffer, never when playing. */
+  .ch-telemetry { display: none; }
+}
+@media (max-width: 1120px) {
+  /* The groove, which the lane badge in the tracker also shows. */
+  .ch-groove { display: none; }
+  /* CLICK is not built, so at this width it is the cheapest thing in the bar to drop. */
+  .ch-click { display: none; }
+}
+@media (max-width: 1040px) {
+  /* `saved` goes last of the readouts, because "is my work safe" outranks the rest — and it is
+     still reachable: the breadcrumb names the project and the console can ask. */
+  .ch-saved { display: none; }
+  /* The brand's version suffix, which is decoration at any width. */
+  .ch-ver { display: none; }
+}
 .ch-saved { border-color: var(--base-neutral-800); }
 
 .ch-right { display: flex; align-items: center; gap: 12px; }
