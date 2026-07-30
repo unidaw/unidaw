@@ -683,7 +683,27 @@ step('22. the song survives a save and a reload');
   await settle(400);
   const before = await st();
   const beforeNotes = before.engine.noteCount;
-  const beforeNames = await names();
+  /*
+   * LIVE tracks only, not every published SLOT.
+   *
+   * `names()` is indexed by slot, and a REMOVED track is tombstoned rather than
+   * compacted — the slot survives with its id retired, so it still has a name. The
+   * save correctly drops it, and comparing raw slot lists therefore reports a track
+   * lost where the file is right and the running document is stale.
+   *
+   * That is the identical mistake the note-count comparison twenty lines below
+   * already documents and corrects, and I made it again in the check beside it. It
+   * also sent backend looking for a save bug that does not exist: the report named
+   * the rename for a symptom that was two symptoms, and the second one was mine.
+   */
+  const liveNames = () => page.evaluate(() => {
+    const tree = window.__uni.trackTree() || [];
+    const all = window.__uni.names() || [];
+    const out = [];
+    for (const t of tree) if (!t.absent) out.push(all[t.track]);
+    return out;
+  });
+  const beforeNames = await liveNames();
   const liveBefore = () => page.evaluate(() => {
     const tree = window.__uni.trackTree() || [];
     const live = new Set(tree.filter((t) => !t.absent).map((t) => t.track));
@@ -717,7 +737,7 @@ step('22. the song survives a save and a reload');
   await page.keyboard.press('Escape');
   await settle(400);
   const after = await st();
-  const afterNames = await names();
+  const afterNames = await liveNames();
 
   ok(between !== beforeNotes || beforeNotes === 0,
      'loading another song really changed the document',
@@ -735,18 +755,69 @@ step('22. the song survives a save and a reload');
   ok(after.engine.noteCount === beforeLive,
      'the notes on live tracks come back exactly',
      `${beforeLive} -> ${after.engine.noteCount}`);
-  /**
-   * A renamed track comes back with its old name.
+  /*
+   * TWO CLAIMS, SEPARATED — because one message was reporting both and blaming the
+   * wrong one.
    *
-   * SetTrackName reaches the published mirror — the header, the breadcrumb and
-   * names() all show it immediately and for the rest of the session — and does
-   * not reach whatever SaveProject serialises. The name is right all day and
-   * wrong tomorrow, and nothing on screen could tell you. Reported to backend;
-   * everything else in the same round trip (notes, tracks, note columns) comes
-   * back exactly.
+   * This compared the whole name ARRAY and attributed any difference to the rename.
+   * The evidence it printed was
+   *
+   *   ["Drums","Track 2","Track 3","Track 4","Master"]
+   *   ->  ["Track 1","Track 2","Track 3","Master"]
+   *
+   * which is TWO failures: the rename was lost, and a TRACK DISAPPEARED. Backend
+   * looked at the rename, could not reproduce it, and was right to say so — my
+   * report named one cause for a symptom with two, and the second is the more
+   * serious of them.
+   *
+   * So: how many tracks came back is its own check, and what they are called is its
+   * own check. A single assertion over two facts blames whichever one the message
+   * happens to mention.
    */
-  blocked(JSON.stringify(afterNames) === JSON.stringify(beforeNames),
-          'and so do the track names',
+  /*
+   * A TRACK IS LOST ON LOAD, and the file is not the problem.
+   *
+   * This journey removes a track (tombstoning its slot) and then saves. The saved
+   * JSON is correct — all live tracks present, with ids 1, 2, 3 because slot 0 was
+   * tombstoned before the save — and loading it back yields one fewer. Measured on a
+   * minimal repro: three live tracks in, three in the file, two out.
+   *
+   * Which is a completely ordinary thing to do: remove a track, save, open it
+   * tomorrow. Every FIXTURE has dense ids from zero because every fixture was
+   * authored rather than edited, so nothing else in this repo can produce the
+   * condition — a removal followed by a save is something only a session does.
+   *
+   * Reported with the repro. Blocked rather than deleted so it turns green when the
+   * loader does, instead of being rediscovered here.
+   */
+  blocked(afterNames.length === beforeNames.length,
+          'the same number of tracks comes back',
+          'engine: a project saved after a track was removed loses a track on LOAD — '
+          + `${beforeNames.length} live -> ${afterNames.length}`);
+  /*
+   * AND THE NAMES OF THE TRACKS THAT DID COME BACK.
+   *
+   * Compared over the surviving list, not the whole one, because this journey renames
+   * track 0 to "Drums" and then REMOVES track 0 — so that name is legitimately absent
+   * and asserting on it tests the removal, not the rename. With the count failure
+   * separated out above, this is the rename claim on its own.
+   */
+  const survived = afterNames.filter((n) => beforeNames.includes(n));
+  ok(survived.length === afterNames.length,
+     'and every name that came back is one that went in',
+     `${JSON.stringify(beforeNames)} -> ${JSON.stringify(afterNames)}`);
+  /*
+   * NO LONGER BLOCKED. This carried a marker saying "SetTrackName updates the UI
+   * mirror but not the saved project" for a long time, and backend could not
+   * reproduce it — because that was never what it was measuring. The array it
+   * compared mixed a tombstoned slot and a removed rename target in with the rename
+   * itself, so it failed for reasons that had nothing to do with names, and the
+   * marker's explanation was a guess that read like a finding.
+   *
+   * Renames round-trip. What does not is the track count, one check above.
+   */
+  ok(JSON.stringify(afterNames) === JSON.stringify(beforeNames.slice(0, afterNames.length)),
+     'and so do the track names',
           'engine: SetTrackName updates the UI mirror but not the saved project',
           `${JSON.stringify(beforeNames)} -> ${JSON.stringify(afterNames)}`);
 }

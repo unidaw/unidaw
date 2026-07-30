@@ -686,34 +686,6 @@ pub enum UiCommandType {
     WriteAutomationPoint = 60,
 }
 
-/// A track's routing (UiCommandType::SetTrackRouting). Mirrors the C++
-/// UiTrackRoutingPayload (40 bytes) field for field.
-///
-/// The engine publishes the same shape back as a RoutingSnapshot diff, so this
-/// struct is read in both directions — which is why every field is here even
-/// though a UI that only changes where a track's audio GOES touches one of them.
-/// Sending a payload with the others zeroed would not leave them alone; it would
-/// set them to none.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct UiTrackRoutingPayload {
-    pub command_type: u16,
-    /// bit0: pre-fader send.
-    pub flags: u16,
-    pub track_id: u32,
-    pub base_version: u32,
-    pub midi_in_kind: u8,
-    pub midi_out_kind: u8,
-    pub audio_in_kind: u8,
-    pub audio_out_kind: u8,
-    pub midi_in_track_id: u32,
-    pub midi_out_track_id: u32,
-    pub audio_in_track_id: u32,
-    pub audio_out_track_id: u32,
-    pub midi_in_input_id: u32,
-    pub audio_in_input_id: u32,
-}
-
 /// Where a route points. Mirrors daw::TrackRouteKind.
 pub const ROUTE_KIND_NONE: u8 = 0;
 pub const ROUTE_KIND_MASTER: u8 = 1;

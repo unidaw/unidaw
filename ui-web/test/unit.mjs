@@ -2141,6 +2141,36 @@ const ENGINE_UNUSED = {
   LoadPluginOnTrack: 'gap — the rack inserts with AddDevice; this older path is unused',
   SetAutomationTarget: 'gap — automation has no UI at all',
   SetModSourceValue: 'gap — macro/mod values are unreachable',
+  /*
+   * ARRANGEMENT SECTIONS (54-58), landed engine-side and not yet a surface here.
+   *
+   * Recorded rather than half-wired, and the reason is the same one that held lane
+   * quantize back: sections are named spans of the timeline — verse, chorus — and the
+   * command set is the easy half. What makes them worth having is seeing them ON the
+   * arrangement and being able to drag their edges, which is a real piece of design
+   * over a ruler that already has a playhead, a loop range and clip rails on it.
+   *
+   * A `section add` console verb with nothing drawn would be a feature you can only
+   * verify by saving the file and reading it.
+   */
+  AddSection: 'gap — sections need drawing on the arrangement, not just commands',
+  RemoveSection: 'gap — with AddSection',
+  RenameSection: 'gap — with AddSection',
+  SetSectionLength: 'gap — with AddSection',
+  MoveSection: 'gap — with AddSection',
+  /*
+   * Placement overrides can be WRITTEN from this UI (a note typed into a placement
+   * becomes an override) and cannot be reverted, so "back to the shared clip" is
+   * unreachable. Worth closing — it is the undo for a whole class of edit — and it
+   * wants a control on the clip rather than a console verb, since that is where the
+   * override is visible.
+   */
+  RevertPlacementOverrides: 'gap — no way to send a placement back to its shared clip',
+  /*
+   * Automation has no surface at all: no lane, no curve, no way to see a point let
+   * alone place one. SetAutomationTarget above is the other half of the same hole.
+   */
+  WriteAutomationPoint: 'gap — automation has no UI at all, see SetAutomationTarget',
 };
 
 test('every engine command has a caller, or a recorded reason it has none', async () => {
