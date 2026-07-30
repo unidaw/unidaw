@@ -6,13 +6,15 @@
 # draw an ops cell it had no way to commit, which is the gap the web-UI agent hit head-on while
 # building pointer editing. SetRowOps (opcode 81) is the missing half.
 #
-# FOUR PROPERTIES, and two of them were found by someone else reading the wire:
+# FIVE PROPERTIES, and three of them were found by someone else using it:
 #
 #   WRITES     each op set through the real command comes back on the note that was addressed
 #   MASKS      setting ONE op leaves the others alone, and --clear removes one without
 #              disturbing the rest. A command that always writes all five cannot express
 #              "remove the retrigger from this note" — it can only restate the other four, and
 #              restating is how two facts about one note start disagreeing
+#   OVERRIDES  a note that lives on a PLACEMENT rather than in a clip is editable too. Both
+#              are published to the UI identically, so both have to be reachable
 #   AUTHORED   a note an AGENT wrote is addressable, and writing to it does not touch the
 #              HUMAN note with the same counter. EventId packs the author into bits 48+ and each
 #              author counts independently, so those two ids differ only in their top 16 bits —
@@ -69,8 +71,15 @@ tr = {"track_id": 0, "name": "T", "harmony_quantize": False, "lines_per_beat": 4
       "routing": {"midi_in": r(), "midi_out": r(), "audio_in": r(),
                   "audio_out": r("master"), "pre_fader_send": True},
       "device_chain": [], "mod_links": [],
+      # A PLACEMENT-LOCAL OVERRIDE. ProjectPlacement::adds, serialised as "notes": a note that
+      # belongs to this APPEARANCE rather than to the clip. flattenPlacements publishes it to the
+      # UI exactly like a clip note — same rail, same id, indistinguishable on the wire — so an
+      # editor can see it and must be able to edit it. It could not: applySetRowOps searched only
+      # ownedClips, and answered "no_such_note" about a note plainly on screen.
       "placements": [{"clip_id": 1, "id": 1, "at": 0, "length": BAR,
-                      "notes": [], "chords": [], "mutes": []}]}
+                      "notes": [{"nanotick": 6 * Q, "duration": Q // 2, "pitch": 67,
+                                 "velocity": 100, "column": 2, "note_id": 200}],
+                      "chords": [], "mutes": []}]}
 json.dump({"schema_version": 4, "meta": {"name": "rowops"}, "nanoticks_per_quarter": Q,
            "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [],
            "clips": [clip], "tracks": [tr]}, open(out, "w"))
@@ -131,6 +140,11 @@ cli do set-row-ops --track 0 --note "$AGENT_ID" --prob 77 >/dev/null 2>&1 || \
   fail "addressing an agent-authored note was refused"
 sleep 0.6
 
+# ---- OVERRIDES. A note that lives on the PLACEMENT, not in the clip.
+cli do set-row-ops --track 0 --note 200 --ret 6 >/dev/null 2>&1 || \
+  fail "editing a placement-local note was refused"
+sleep 0.6
+
 cli do save afterA --force >/dev/null 2>&1 || true
 sleep 1.8
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
@@ -141,9 +155,26 @@ A101="$(ops "$TMP/afterA.uniproj.json" 101)"
 A102="$(ops "$TMP/afterA.uniproj.json" 102)"
 A103="$(ops "$TMP/afterA.uniproj.json" 103)"
 AAGENT="$(ops "$TMP/afterA.uniproj.json" "$AGENT_ID")"
+# The override lives on the PLACEMENT in the saved file, so it is read from there.
+AOVR="$(python3 - "$TMP/afterA.uniproj.json" <<'PYO'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+for t in doc.get("tracks", []):
+    for pl in t.get("placements", []):
+        for n in pl.get("notes", []):
+            if n.get("note_id") == 200:
+                print("%d,%d" % (n.get("retrigger", 0), n.get("probability", 0)))
+                raise SystemExit(0)
+print("MISSING")
+PYO
+)"
 echo "  after the writes: 100=[$A100] 101=[$A101] 102=[$A102] 103=[$A103]"
-echo "  agent note (author 1, counter 100) = [$AAGENT]"
+echo "  agent note (author 1, counter 100) = [$AAGENT]; placement note 200 = [$AOVR]"
 
+[ "$AOVR" = "6,0" ] || \
+  fail "the placement-local note (id 200) came back as [$AOVR], not [6,0]. A note published to
+        the UI must be editable wherever it lives — searching only the clips means an editor can
+        see a note it cannot touch, and be told no_such_note about a note on screen"
 [ "$AAGENT" = "0,77,0,0,0" ] || \
   fail "the agent-authored note (author 1, counter 100) came back as [$AAGENT], not [0,77,0,0,0].
         Its id needs all 64 bits — a payload that carries 32 truncates the author away"

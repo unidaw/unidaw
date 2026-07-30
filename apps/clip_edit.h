@@ -100,10 +100,18 @@ struct RowOpEdit {
   uint32_t delayNanoticks = 0;
 };
 
+// Applies a masked row-op edit to ONE note payload. Returns false when a value is out of range —
+// REFUSED rather than clamped, because a silently corrected op is a note that does not do what
+// the row says it does, and the row is what the musician reads.
+//
+// Split out from setNoteRowOps because a note does not only live in a clip: a placement can carry
+// LOCAL OVERRIDES (ProjectPlacement::adds, serialised as "notes"), and those are published to the
+// UI exactly like clip notes. An editor that searched only clips could see a note it could not
+// edit — which is precisely what shipped, and what the web-UI agent hit on a loaded project.
+bool applyRowOpEdit(NotePayload& note, const RowOpEdit& edit);
+
 // Writes row ops onto an existing note, addressed by id. Returns nullopt when there is no such
-// note in this clip, or when a value is out of range — REFUSED rather than clamped, because a
-// silently corrected op is a note that does not do what the row says it does, and the row is
-// what the musician reads.
+// note in this clip, or when applyRowOpEdit refuses the values.
 std::optional<ClipEditResult> setNoteRowOps(MusicalClip& clip,
                                             uint32_t trackId,
                                             EventId noteId,

@@ -915,6 +915,14 @@ enum class UiClipRejectReason : uint16_t {
   None = 0,
   StaleBase = 1,      // baseVersion != the engine's current version for this scope
   UnknownTrack = 2,   // no such track
+  // SetRowOps addressed a note that is not in this track's store. Distinct from UnknownTrack
+  // because the caller's recovery differs: an unknown track means the address was wrong, an
+  // unknown note usually means the client is holding an id from before a reload.
+  UnknownNote = 3,
+  // A value was outside its range and the edit was refused rather than clamped — see
+  // setNoteRowOps. The caller sent nonsense and needs to know, because a clamped op gives the
+  // musician a row that says something the note does not do.
+  ValueOutOfRange = 4,
 };
 
 // SavePatcherPreset's result. Rides the same 40-byte diff slot; diffType FIRST for the same

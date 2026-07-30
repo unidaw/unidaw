@@ -7802,7 +7802,8 @@ struct TrackRuntime {
                             uint32_t clipId,
                             daw::EventId noteId,
                             const daw::RowOpEdit& edit,
-                            bool recordUndo) -> bool {
+                            bool recordUndo,
+                            daw::UiClipRejectReason& rejectReason) -> bool {
     TrackRuntime* runtime = nullptr;
     {
       std::lock_guard<std::mutex> lock(tracksMutex);
@@ -7815,12 +7816,17 @@ struct TrackRuntime {
           .field("track", trackId)
           .field("note", static_cast<uint64_t>(noteId))
           .field("reason", "no_such_track");
+      rejectReason = daw::UiClipRejectReason::UnknownTrack;
       return false;
     }
 
     std::optional<daw::ClipEditResult> result;
     std::shared_ptr<const ClipSnapshot> snapshot;
     uint64_t placementAt = 0;
+    // Whether the note was found as a PLACEMENT OVERRIDE rather than in a clip. Declared out here
+    // because the commit tail below has to know: an override edit produces no ClipEditResult, so
+    // "no result" alone cannot distinguish success from refusal.
+    bool editedOverride = false;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       TrackStoreState before = snapshotTrackStore(*runtime);
@@ -7835,15 +7841,58 @@ struct TrackRuntime {
         }
       }
       if (ownedIndex >= runtime->ownedClips.size()) {
-        DAW_EVENT("rowops.rejected")
-            .field("track", trackId)
-            .field("clip", clipId)
-            .field("note", static_cast<uint64_t>(noteId))
-            .field("reason", "no_such_note");
-        return false;
+        // NOT IN A CLIP — TRY THE PLACEMENT OVERRIDES.
+        //
+        // A note does not only live in a clip. A placement can carry LOCAL edits
+        // (ProjectPlacement::adds, serialised as "notes"), and flattenPlacements publishes them
+        // to the UI exactly like clip notes — same rail, same ids, indistinguishable on the wire.
+        // Searching only ownedClips meant an editor could SEE a note it could not edit, and be
+        // told "no_such_note" about a note plainly on screen. Reported by the web-UI agent as
+        // "SetRowOps only reaches notes created this session"; the real boundary was not session
+        // or ownership but WHICH CONTAINER the note ended up in.
+        for (auto& pl : runtime->sourcePlacements) {
+          if (clipId != 0 && pl.clipId != clipId) {
+            continue;
+          }
+          for (auto& ev : pl.adds) {
+            if (ev.type != daw::MusicalEventType::Note ||
+                ev.payload.note.noteId != noteId) {
+              continue;
+            }
+            if (!daw::applyRowOpEdit(ev.payload.note, edit)) {
+              DAW_EVENT("rowops.rejected")
+                  .field("track", trackId)
+                  .field("note", static_cast<uint64_t>(noteId))
+                  .field("reason", "out_of_range");
+              rejectReason = daw::UiClipRejectReason::ValueOutOfRange;
+              return false;
+            }
+            placementAt = pl.at ? *pl.at : 0;
+            runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+            snapshot = rebuildFlatAndPublish(*runtime);
+            if (recordUndo) {
+              pushStructuralUndo(trackId, std::move(before), snapshotTrackStore(*runtime));
+            }
+            editedOverride = true;
+            break;
+          }
+          if (editedOverride) {
+            break;
+          }
+        }
+        if (!editedOverride) {
+          DAW_EVENT("rowops.rejected")
+              .field("track", trackId)
+              .field("clip", clipId)
+              .field("note", static_cast<uint64_t>(noteId))
+              .field("reason", "no_such_note");
+          rejectReason = daw::UiClipRejectReason::UnknownNote;
+          return false;
+        }
       }
       // Where this clip sits, so the diff's tick is on the timeline rather than clip-relative —
       // the same shiftDiffTick a note edit does.
+      if (!editedOverride) {
       for (const auto& pl : runtime->sourcePlacements) {
         if (pl.clipId == runtime->ownedClips[ownedIndex].id && pl.at) {
           placementAt = *pl.at;
@@ -7852,6 +7901,7 @@ struct TrackRuntime {
       }
       result = daw::setNoteRowOps(runtime->ownedClips[ownedIndex].clip, trackId, noteId,
                                   edit, runtime->trackClipVersion, recordUndo);
+      }
       if (result) {
         forkOwnedClip(*runtime, ownedIndex);
         runtime->arrangementDirty.store(true, std::memory_order_relaxed);
@@ -7861,18 +7911,29 @@ struct TrackRuntime {
         }
       }
     }
-    if (!result) {
+    if (!result && !editedOverride) {
       DAW_EVENT("rowops.rejected")
           .field("track", trackId)
           .field("note", static_cast<uint64_t>(noteId))
           .field("reason", "out_of_range");
+      rejectReason = daw::UiClipRejectReason::ValueOutOfRange;
       return false;
     }
-    shiftDiffTick(result->diff, placementAt);
+    if (result) {
+      shiftDiffTick(result->diff, placementAt);
+    }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
     clipVersion.fetch_add(1, std::memory_order_acq_rel);  // see applyAddNote for the order
     clipDirty.store(true, std::memory_order_release);
-    emitUiDiff(result->diff);
+    if (result) {
+      emitUiDiff(result->diff);
+    } else {
+      // An override edit produces no ClipEditResult (the store helpers take a MusicalClip), so
+      // the version bump that a clip edit gets from setNoteRowOps is done here instead. Without
+      // it the flat clip is republished with a version the UI has already seen and the edit
+      // never reaches the screen.
+      bumpClipVersionFor(runtime);
+    }
     DAW_EVENT("rowops.set")
         .field("track", trackId)
         .field("note", static_cast<uint64_t>(noteId))
@@ -10544,7 +10605,18 @@ struct TrackRuntime {
       // disagree with this one.
       const daw::EventId noteId =
           (static_cast<uint64_t>(p.noteIdHi) << 32) | static_cast<uint64_t>(p.noteIdLo);
-      applySetRowOps(p.trackId, p.clipId, noteId, edit, /*recordUndo=*/true);
+      // A REFUSAL THE UI CAN SEE. rowops.rejected was a log line and nothing else, so from the
+      // page the sequence was: the sidecar replies ok, the engine refuses into its own log, the
+      // cell does not change, and the person is told nothing. That is the same silence the
+      // stale-base clip edit had before ClipRejected existed — so this rides the same diff,
+      // which already carries the refused commandType.
+      daw::UiClipRejectReason rejectReason = daw::UiClipRejectReason::None;
+      if (!applySetRowOps(p.trackId, p.clipId, noteId, edit, /*recordUndo=*/true,
+                          rejectReason) &&
+          rejectReason != daw::UiClipRejectReason::None) {
+        emitClipReject(rejectReason, p.trackId, /*sentBase=*/0, /*currentBase=*/0,
+                       daw::UiCommandType::SetRowOps);
+      }
       return;
     }
 
