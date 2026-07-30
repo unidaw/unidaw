@@ -2216,7 +2216,17 @@ test('the parameter key names the track as well as the device', () => {
 const ENGINE_UNUSED = {
   AddModLink: 'gap — modulation cannot be wired from the UI',
   RemoveModLink: 'gap — nor unwired',
-  SetDeviceEuclideanConfig: 'gap — the euclidean device cannot be configured',
+  /*
+   * A STALE REASON, corrected rather than left. Euclidean nodes CAN be configured —
+   * that is SetPatcherNodeConfig (41), which the patcher's knobs send and which is
+   * proven end to end with audio in patchcfg.mjs. This is the older per-DEVICE path,
+   * addressed by track+device rather than by node in the pool, and nothing sends it.
+   *
+   * The old wording said the feature was missing, which was true when it was written
+   * and became a lie the day the node path landed. A recorded gap is read as a
+   * finding by whoever picks it up, so a rotted one is worse than none.
+   */
+  SetDeviceEuclideanConfig: 'gap — superseded by SetPatcherNodeConfig; nothing sends the per-device form',
   MoveDevice: 'gap — devices cannot be reordered in the chain',
   SavePatcherPreset: 'gap — a patcher graph cannot be saved as a preset',
   SetTrackHarmonyQuantize: 'gap — the per-track harmony quantize flag is unreachable',
