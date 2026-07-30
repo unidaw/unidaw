@@ -2241,8 +2241,27 @@ const ENGINE_UNUSED = {
    * finding by whoever picks it up, so a rotted one is worse than none.
    */
   SetDeviceEuclideanConfig: 'gap — superseded by SetPatcherNodeConfig; nothing sends the per-device form',
-  SavePatcherPreset: 'gap — a patcher graph cannot be saved as a preset',
-  SetTrackHarmonyQuantize: 'gap — the per-track harmony quantize flag is unreachable',
+  /*
+   * Same shape as SetTrackHarmonyQuantize: the command is trivial, the RESULT is
+   * unobservable. Nothing publishes whether the file was written — daw-cli learns the
+   * path from the engine's stderr, which a browser cannot read — so a "save this graph as
+   * a preset" button would report success it has no way to know about. Asked backend for
+   * a completion event in the ClipRejected shape.
+   */
+  SavePatcherPreset: 'gap — no way to know whether the file was written, so the button would lie',
+  /*
+   * NOT unreachable — UNREADABLE, which is why it is still a gap after a day of closing
+   * these. The command works and I could send it in five minutes. What is missing is the
+   * READ-BACK: `track.harmonyQuantize` lives in the runtime and in the project file and
+   * in no published region — not a mixer flag, not a uiTrack* array.
+   *
+   * So the only thing shippable today is a WRITE-ONLY TOGGLE: press it, something
+   * changes, and the interface can never say which way it is set. After a project load it
+   * would have to guess or show nothing. That is the exact bug shape this session has been
+   * spent removing, so it waits for the read-back rather than shipping as a keystroke with
+   * a rumour attached. Asked backend for a bit in ui_track_mix_flags.
+   */
+  SetTrackHarmonyQuantize: 'gap — the flag is writable but NOT published, so no control can show its state',
   RequestClipWindow: 'the sidecar owns the viewport and asks on the client\'s behalf',
   // These three are referenced by NAME elsewhere but never sent as a command from
   // a frontend path, which is the distinction this test draws: a struct that
