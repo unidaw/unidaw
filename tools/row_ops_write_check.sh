@@ -6,13 +6,18 @@
 # draw an ops cell it had no way to commit, which is the gap the web-UI agent hit head-on while
 # building pointer editing. SetRowOps (opcode 81) is the missing half.
 #
-# THREE PROPERTIES, and the third is the one that would otherwise ship broken:
+# FOUR PROPERTIES, and two of them were found by someone else reading the wire:
 #
 #   WRITES     each op set through the real command comes back on the note that was addressed
 #   MASKS      setting ONE op leaves the others alone, and --clear removes one without
 #              disturbing the rest. A command that always writes all five cannot express
 #              "remove the retrigger from this note" — it can only restate the other four, and
 #              restating is how two facts about one note start disagreeing
+#   AUTHORED   a note an AGENT wrote is addressable, and writing to it does not touch the
+#              HUMAN note with the same counter. EventId packs the author into bits 48+ and each
+#              author counts independently, so those two ids differ only in their top 16 bits —
+#              a command carrying 32 of them edits whichever note the counter happens to match,
+#              silently. Found by the web-UI agent reading the payload against event_id.h
 #   PERSISTS   the ops survive a SAVE and a RELOAD. A row op that survives the wire but not the
 #              file is the failure mode you find a week later in a project that used to work
 #
@@ -47,6 +52,15 @@ out, Q = sys.argv[1], int(sys.argv[2])
 BAR = Q * 4
 notes = [{"nanotick": i * Q, "duration": Q // 2, "pitch": 60 + i, "velocity": 100,
           "column": 0, "note_id": 100 + i} for i in range(4)]
+# AN AGENT-AUTHORED NOTE WHOSE COUNTER COLLIDES WITH A HUMAN NOTE'S ID.
+# EventId packs the author into bits 48+ and each author counts independently, so
+# makeEventId(kAuthorAgent=1, 100) and the human note 100 differ ONLY in the top 16 bits. A
+# command that carries the id in 32 bits truncates the agent note to 100 and edits the human
+# note instead — silently, and only for notes an agent wrote. That is the whole point of this
+# pair: the ids must be distinguishable end to end, not merely representable.
+AGENT_100 = (1 << 48) | 100
+notes.append({"nanotick": 5 * Q, "duration": Q // 2, "pitch": 72, "velocity": 100,
+              "column": 1, "note_id": AGENT_100})
 clip = {"id": 1, "name": "p", "length": BAR, "kind": "symbolic", "notes": notes}
 def r(k="none"):
     return {"kind": k, "track_id": 0, "input_id": 0}
@@ -109,6 +123,14 @@ sleep 0.6
 cli do set-row-ops --track 0 --note 102 --clear ret >/dev/null 2>&1 || fail "clear refused"
 sleep 0.6
 
+# ---- AUTHORED IDS. Address the AGENT note (author 1, counter 100). The human note 100 already
+# carries ops from the first write above, so if the id truncates, this command lands on it and
+# changes them — which is exactly the silent wrong-note edit a 32-bit id produced.
+AGENT_ID=$(python3 -c "print((1 << 48) | 100)")
+cli do set-row-ops --track 0 --note "$AGENT_ID" --prob 77 >/dev/null 2>&1 || \
+  fail "addressing an agent-authored note was refused"
+sleep 0.6
+
 cli do save afterA --force >/dev/null 2>&1 || true
 sleep 1.8
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
@@ -118,8 +140,17 @@ A100="$(ops "$TMP/afterA.uniproj.json" 100)"
 A101="$(ops "$TMP/afterA.uniproj.json" 101)"
 A102="$(ops "$TMP/afterA.uniproj.json" 102)"
 A103="$(ops "$TMP/afterA.uniproj.json" 103)"
+AAGENT="$(ops "$TMP/afterA.uniproj.json" "$AGENT_ID")"
 echo "  after the writes: 100=[$A100] 101=[$A101] 102=[$A102] 103=[$A103]"
+echo "  agent note (author 1, counter 100) = [$AAGENT]"
 
+[ "$AAGENT" = "0,77,0,0,0" ] || \
+  fail "the agent-authored note (author 1, counter 100) came back as [$AAGENT], not [0,77,0,0,0].
+        Its id needs all 64 bits — a payload that carries 32 truncates the author away"
+[ "$A100" = "3,60,7,16384,120000" ] || \
+  fail "writing to the AGENT note (author 1, counter 100) changed the HUMAN note 100, which is
+        now [$A100]. This is the silent wrong-note edit: the two ids differ only in the author
+        bits, so a truncated id addresses whichever note the counter happens to match"
 [ "$A100" = "3,60,7,16384,120000" ] || \
   fail "the five ops written to note 100 came back as [$A100], not [3,60,7,16384,120000]"
 [ "$A101" = "0,25,0,0,0" ] || \

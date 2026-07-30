@@ -423,18 +423,34 @@ enum : uint16_t {
 // There is deliberately no PAN field, though the notation has one: pan is not on NotePayload,
 // which is pinned at 32 bytes by static_assert, so adding it is a real decision about growing
 // the per-note-per-block copy and not something to slip in beside four fields that already fit.
+// THE NOTE ID IS 64 BITS, IN TWO HALVES, and it was 32 for exactly one commit. EventId packs the
+// AUTHOR into bits 48+ (event_id.h: makeEventId(author, counter)), and each author has its own
+// independent 48-bit counter. A uint32 field drops the author silently — and the failure is not
+// "an agent-authored note cannot be addressed", which would be merely limiting. Agent note
+// (author 1, counter 5) truncates to 5, and findNoteById(5) then matches HUMAN note
+// (author 0, counter 5): an edit aimed at one note lands on another, with nothing said.
+//
+// Caught by the web-UI agent reading the payload against event_id.h. Every test passed because
+// every test used human-authored notes, where author == 0 and the id IS the counter.
+//
+// Split lo/hi rather than moved, following noteNanotickLo/Hi in UiDiffPayload: it keeps every
+// other field at the offset it already had, so a sender written against the 32-bit version still
+// addresses human notes correctly rather than silently scrambling its whole payload. The two
+// bytes before `noteIdHi` are alignment, not spare.
 struct UiSetRowOpsPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::SetRowOps);
   uint16_t mask = 0;
   uint32_t trackId = 0;
   uint32_t clipId = 0;
-  uint32_t noteId = 0;
+  uint32_t noteIdLo = 0;
   uint32_t delayNanoticks = 0;
   uint16_t sound = 0;
   uint16_t soundOffset = 0;
   uint8_t retrigger = 0;
   uint8_t probability = 0;
-  uint8_t reserved[14]{};
+  uint8_t pad0[2]{};
+  uint32_t noteIdHi = 0;
+  uint8_t reserved[8]{};
 };
 static_assert(sizeof(UiSetRowOpsPayload) == 40, "UiSetRowOpsPayload must be 40 bytes");
 

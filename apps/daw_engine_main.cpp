@@ -10538,8 +10538,13 @@ struct TrackRuntime {
       edit.sound = p.sound;
       edit.soundOffset = p.soundOffset;
       edit.delayNanoticks = p.delayNanoticks;
-      applySetRowOps(p.trackId, p.clipId, static_cast<daw::EventId>(p.noteId), edit,
-                     /*recordUndo=*/true);
+      // REASSEMBLED IN ONE PLACE. The id is 64 bits carried as two 32-bit halves — see the
+      // payload's comment for why it is split rather than moved — and this is the only site
+      // that puts them back together, so there is no second reading of the same value to
+      // disagree with this one.
+      const daw::EventId noteId =
+          (static_cast<uint64_t>(p.noteIdHi) << 32) | static_cast<uint64_t>(p.noteIdLo);
+      applySetRowOps(p.trackId, p.clipId, noteId, edit, /*recordUndo=*/true);
       return;
     }
 

@@ -322,13 +322,19 @@ pub struct UiSetRowOpsPayload {
     pub mask: u16,
     pub track_id: u32,
     pub clip_id: u32,
-    pub note_id: u32,
+    /// LOW half of the note's EventId. It is 64 bits because EventId packs the AUTHOR into bits
+    /// 48+ and each author has its own independent counter — a 32-bit id drops the author, and
+    /// agent note (1, 5) then collides with human note (0, 5) and edits the wrong one. Split
+    /// lo/hi rather than moved so every other field keeps the offset it already had.
+    pub note_id_lo: u32,
     pub delay_nanoticks: u32,
     pub sound: u16,
     pub sound_offset: u16,
     pub retrigger: u8,
     pub probability: u8,
-    pub reserved: [u8; 14],
+    pub pad0: [u8; 2],
+    pub note_id_hi: u32,
+    pub reserved: [u8; 8],
 }
 
 /// SetRowOps mask bits — which ops the payload means.

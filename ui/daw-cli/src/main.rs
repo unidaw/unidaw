@@ -2466,7 +2466,7 @@ fn main() {
                     // one op from a note without restating the other four.
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
                     let clip = flag_u64(&args, "--clip", Some(0)).unwrap_or(0) as u32;
-                    let note = flag_u64(&args, "--note", Some(0)).unwrap_or(0) as u32;
+                    let note = flag_u64(&args, "--note", Some(0)).unwrap_or(0);
                     let clear_arg = args
                         .iter()
                         .position(|a| a == "--clear")
@@ -2548,13 +2548,15 @@ fn main() {
                             mask,
                             track_id: track,
                             clip_id: clip,
-                            note_id: note,
+                            note_id_lo: note as u32,
+                            note_id_hi: (note >> 32) as u32,
+                            pad0: [0; 2],
                             delay_nanoticks,
                             sound,
                             sound_offset,
                             retrigger,
                             probability,
-                            reserved: [0; 14],
+                            reserved: [0; 8],
                         };
                         match handle.send_set_row_ops(payload) {
                             Ok(()) => {
