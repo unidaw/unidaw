@@ -69,6 +69,24 @@ pub struct DeviceParamView {
     pub uid16: [u8; 16],
     pub name: String,
     pub display: String,
+    /// v30: WHAT THE PARAMETER IS, not just where it is. Without these a caller can read
+    /// "Cutoff is 0.62, displays 440 Hz" and cannot know what 0.0 and 1.0 mean, whether it is a
+    /// switch, or what to reset it to — so setting a value in real units is a binary search
+    /// against `display`, which is a guessing loop rather than an interface.
+    pub unit: String,
+    /// The endpoints AS THE PLUGIN RENDERS THEM. For a VST3 through JUCE the normalisable range
+    /// is usually 0..1, so `min`/`max` below say nothing and the real range exists only as text.
+    pub min_text: String,
+    pub max_text: String,
+    pub default_value: f32,
+    pub min: f32,
+    pub max: f32,
+    /// 0 = continuous; else the number of switch positions.
+    pub step_count: u32,
+    pub discrete: bool,
+    /// False means the plugin will IGNORE an automation lane pointed at this, so drawing one
+    /// would be a lie.
+    pub automatable: bool,
 }
 
 /// A device's published parameters, from the last RequestDeviceParams.
@@ -682,6 +700,15 @@ impl EngineHandle {
                 uid16: p.uid16,
                 name: cchar_str(&p.name),
                 display: cchar_str(&p.display),
+                unit: cchar_str(&p.label),
+                min_text: cchar_str(&p.minText),
+                max_text: cchar_str(&p.maxText),
+                default_value: p.defaultMilli as f32 / 1000.0,
+                min: p.minMilli as f32 / 1000.0,
+                max: p.maxMilli as f32 / 1000.0,
+                step_count: p.stepCount,
+                discrete: p.flags & crate::layout::UI_PARAM_DISCRETE != 0,
+                automatable: p.flags & crate::layout::UI_PARAM_AUTOMATABLE != 0,
             });
         }
         view

@@ -4946,6 +4946,17 @@ struct TrackRuntime {
   auto pluginStateFileName = [](uint32_t trackId, uint32_t deviceId) -> std::string {
     return "t" + std::to_string(trackId) + "_d" + std::to_string(deviceId) + ".bin";
   };
+  // M0.3: the PARAMETER MANIFEST beside the opaque blob. The blob is the plugin's private state
+  // and says nothing to anyone but the plugin; this says what the knobs WERE — name, unit, range,
+  // default, whether each is a switch — in a form that is readable without the plugin installed
+  // and without the engine running.
+  //
+  // Its own file rather than a field in project.json, because it is DERIVED from the plugin
+  // rather than authored: a stale manifest must never look like part of the document, and losing
+  // it must cost nothing. It is a projection, and it is written next to the thing it projects.
+  auto pluginParamsFileName = [](uint32_t trackId, uint32_t deviceId) -> std::string {
+    return "t" + std::to_string(trackId) + "_d" + std::to_string(deviceId) + ".params.json";
+  };
 
   // The song's end: the furthest placement end across every LIVE track. Runs on the
   // command thread after any placement edit, never on the audio thread.
@@ -6038,10 +6049,69 @@ struct TrackRuntime {
           out.write(reinterpret_cast<const char*>(blob.data()),
                     static_cast<std::streamsize>(blob.size()));
         }
+        // AND THE MANIFEST. The blob above is opaque — it restores the plugin and tells a reader
+        // nothing. This is the projection the review asked for: "the difference between an
+        // assistant that can act on 'make the pad darker' and one that hallucinates". A failure
+        // to write it is not a failure to save: the manifest is derived, so it is reported and
+        // skipped rather than failing the save of the actual document.
+        uint32_t manifestCount = 0;
+        {
+          std::vector<daw::HostParamWire> wire;
+          std::string hostPluginName;
+          bool gotParams = false;
+          {
+            std::lock_guard<std::mutex> lock(runtime->controllerMutex);
+            gotParams =
+                runtime->controller.requestPluginParams(hostIndex, wire, hostPluginName);
+          }
+          if (gotParams && !wire.empty()) {
+            const auto manifestPath =
+                stateDir / pluginParamsFileName(runtime->trackId, device.id);
+            std::ofstream mf(manifestPath, std::ios::trunc);
+            auto esc = [](const char* raw, size_t cap) {
+              std::string out;
+              const size_t n = ::strnlen(raw, cap);
+              for (size_t i = 0; i < n; ++i) {
+                const char c = raw[i];
+                if (c == '"' || c == '\\') {
+                  out.push_back('\\');
+                  out.push_back(c);
+                } else if (static_cast<unsigned char>(c) >= 0x20) {
+                  out.push_back(c);
+                }
+              }
+              return out;
+            };
+            mf << "{\n  \"plugin\": \"" << esc(hostPluginName.c_str(), hostPluginName.size())
+               << "\",\n  \"track\": " << runtime->trackId
+               << ",\n  \"device\": " << device.id << ",\n  \"params\": [\n";
+            for (size_t i = 0; i < wire.size(); ++i) {
+              const auto& w = wire[i];
+              mf << "    { \"index\": " << w.index
+                 << ", \"id\": \"" << esc(w.stableId, sizeof(w.stableId))
+                 << "\", \"name\": \"" << esc(w.name, sizeof(w.name))
+                 << "\", \"unit\": \"" << esc(w.label, sizeof(w.label))
+                 << "\", \"value\": " << w.normalized
+                 << ", \"display\": \"" << esc(w.display, sizeof(w.display))
+                 << "\", \"min\": \"" << esc(w.minText, sizeof(w.minText))
+                 << "\", \"max\": \"" << esc(w.maxText, sizeof(w.maxText))
+                 << "\", \"default\": " << w.defaultNormalized
+                 << ", \"steps\": " << w.stepCount
+                 << ", \"discrete\": "
+                 << ((w.flags & daw::kHostParamDiscrete) ? "true" : "false")
+                 << ", \"automatable\": "
+                 << ((w.flags & daw::kHostParamAutomatable) ? "true" : "false")
+                 << " }" << (i + 1 == wire.size() ? "" : ",") << "\n";
+            }
+            mf << "  ]\n}\n";
+            manifestCount = static_cast<uint32_t>(wire.size());
+          }
+        }
         DAW_EVENT("project.state_captured")
             .field("track", runtime->trackId)
             .field("device", device.id)
             .field("bytes", static_cast<uint64_t>(blob.size()))
+            .field("params_manifested", manifestCount)
             .field("ok", ok);
         hostIndex++;
       }
@@ -10745,6 +10815,28 @@ struct TrackRuntime {
           std::memset(out.display, 0, sizeof(out.display));
           std::memcpy(out.display, wire[i].display,
                       ::strnlen(wire[i].display, sizeof(out.display) - 1));
+          // v30: what the parameter IS. Carried by the wrapper from the first day and dropped
+          // here until now.
+          auto copyText = [](char* dst, size_t cap, const char* src, size_t srcCap) {
+            std::memset(dst, 0, cap);
+            std::memcpy(dst, src, ::strnlen(src, std::min(cap - 1, srcCap)));
+          };
+          copyText(out.label, sizeof(out.label), wire[i].label, sizeof(wire[i].label));
+          copyText(out.minText, sizeof(out.minText), wire[i].minText,
+                   sizeof(wire[i].minText));
+          copyText(out.maxText, sizeof(out.maxText), wire[i].maxText,
+                   sizeof(wire[i].maxText));
+          // On the SAME 0..1000 scale as valueMilli, so a caller compares like with like rather
+          // than discovering that one field is normalised and its neighbour is not.
+          out.defaultMilli = static_cast<int32_t>(std::lround(
+              std::clamp(wire[i].defaultNormalized, 0.0f, 1.0f) * 1000.0f));
+          out.minMilli = static_cast<int32_t>(std::lround(wire[i].minValue * 1000.0f));
+          out.maxMilli = static_cast<int32_t>(std::lround(wire[i].maxValue * 1000.0f));
+          out.stepCount = wire[i].stepCount;
+          out.flags =
+              ((wire[i].flags & daw::kHostParamDiscrete) ? daw::kUiParamDiscrete : 0u) |
+              ((wire[i].flags & daw::kHostParamAutomatable) ? daw::kUiParamAutomatable
+                                                            : 0u);
         }
         region->paramCount = n;
         std::atomic_thread_fence(std::memory_order_release);

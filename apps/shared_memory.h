@@ -114,7 +114,12 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    UiArrangeSummaryRegion keeps its shape and its 4,128 bytes (UiMarker is the same 56 bytes
 //    UiArrangeSection was), so no offset after it moves. The version still had to move: a v28
 //    reader would parse markers as sections and draw spans that were never there.
-constexpr uint16_t kShmVersion = 29;
+// v30: UiDeviceParam carries what a parameter IS — unit, default, range, the endpoint TEXTS,
+//    step count and flags. Every field was already collected by the JUCE wrapper (ParamInfo) and
+//    thrown away at the IPC boundary, so a rack could show a knob's name and its current value
+//    text and nothing else. Setting a value in real units meant binary-searching the normalised
+//    value and reading the display back — which is a guessing loop, not an interface.
+constexpr uint16_t kShmVersion = 30;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -611,7 +616,26 @@ struct UiDeviceParam {
   uint8_t uid16[16] = {};
   char name[40] = {};
   char display[24] = {};  // current value text ("0.62", "440 Hz")
+  // v30: WHAT THE PARAMETER IS, not just where it is right now. The wrapper collected all of
+  // this from the first day and it was dropped at the IPC boundary, so a client could read
+  // "Cutoff is 0.62, displays 440 Hz" and could not know what 0.0 and 1.0 mean, whether it is a
+  // switch, or what to reset it to. Setting a value in real units meant binary-searching the
+  // normalised value and reading `display` back after each guess.
+  char label[16] = {};      // unit: "Hz", "dB", "%", "ms"
+  // The endpoints AS THE PLUGIN RENDERS THEM, and these are the ones that matter. A VST3 hosted
+  // through JUCE usually reports a 0..1 normalisable range, so min/max below say nothing — the
+  // real range exists only as text. "20.0 Hz" .. "20000 Hz" is what lets a caller reason in the
+  // units a musician uses.
+  char minText[24] = {};
+  char maxText[24] = {};
+  int32_t defaultMilli = 0;   // the default, on the same 0..1000 scale as valueMilli
+  int32_t minMilli = 0;       // the plugin's own range, when it exposes one
+  int32_t maxMilli = 1000;
+  uint32_t stepCount = 0;     // 0 = continuous; else the number of switch positions
+  uint32_t flags = 0;         // kUiParamDiscrete | kUiParamAutomatable
 };
+constexpr uint32_t kUiParamDiscrete = 1u << 0;
+constexpr uint32_t kUiParamAutomatable = 1u << 1;
 
 struct alignas(64) UiDeviceParamsRegion {
   uint32_t version = 0;   // bumps per publish

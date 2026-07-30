@@ -32,6 +32,9 @@ struct ParamInfo {
   float maxValue = 1.0f;
   bool isDiscrete = false;
   bool isAutomatable = false;
+  // 0 = continuous. A stepped parameter is a switch with N positions, and a caller that does not
+  // know that will write 0.37 to a 5-way selector and get whichever position that lands in.
+  int stepCount = 0;
 };
 
 struct PluginScanResult {

@@ -1292,6 +1292,22 @@ void runControlLoop(HostState& state) {
                 copyFixed(w.name, sizeof(w.name), info.name);
                 copyFixed(w.display, sizeof(w.display),
                           inst->getParameterTextById(info.stableId, w.normalized));
+                // WHAT THE PARAMETER IS. Straight out of ParamInfo, which has carried all of
+                // this since the wrapper was written — it simply never crossed the wire.
+                copyFixed(w.label, sizeof(w.label), info.label);
+                w.defaultNormalized = info.defaultNormalized;
+                w.minValue = info.minValue;
+                w.maxValue = info.maxValue;
+                w.stepCount = static_cast<uint32_t>(info.stepCount);
+                w.flags = (info.isDiscrete ? daw::kHostParamDiscrete : 0u) |
+                          (info.isAutomatable ? daw::kHostParamAutomatable : 0u);
+                // The endpoints as the PLUGIN renders them. For a VST3 through JUCE the
+                // normalisable range is usually 0..1, so minValue/maxValue say nothing and the
+                // real units exist only as text: "20.0 Hz" .. "20000 Hz".
+                copyFixed(w.minText, sizeof(w.minText),
+                          inst->getParameterTextById(info.stableId, 0.0f));
+                copyFixed(w.maxText, sizeof(w.maxText),
+                          inst->getParameterTextById(info.stableId, 1.0f));
                 params.push_back(w);
               }
             }

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 29;
+pub const K_SHM_VERSION: u16 = 30;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -219,6 +219,13 @@ pub use crate::sys::{
     daw_UiDeviceParam as UiDeviceParam, daw_UiDeviceParamsRegion as UiDeviceParamsRegion,
     daw_UiScale as UiScale, daw_UiScaleRegion as UiScaleRegion,
 };
+
+/// v30: `UiDeviceParam.flags`. A DISCRETE parameter is a switch with `step_count` positions —
+/// writing 0.37 to a 5-way selector lands in whichever position that happens to be, which is why
+/// knowing it is not optional. NOT-automatable means the plugin will ignore an automation lane
+/// pointed at it, so drawing one is a lie.
+pub const UI_PARAM_DISCRETE: u32 = 1 << 0;
+pub const UI_PARAM_AUTOMATABLE: u32 = 1 << 1;
 
 // v18 waveform regions, generated from shared_memory.h (bindgen's own layout_tests pin
 // their sizes/offsets against the C++ structs).

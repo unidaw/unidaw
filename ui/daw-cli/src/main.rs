@@ -1029,18 +1029,27 @@ fn get_device_params(handle: &EngineHandle, args: &[&str]) -> i32 {
         thread::sleep(Duration::from_millis(250));
         let v = handle.read_device_params();
         if (v.version > 0 && !v.params.is_empty()) || Instant::now() >= deadline {
-            let (first, uid, val) = v
-                .params
-                .first()
-                .map(|p| {
-                    let hex: String = p.uid16.iter().map(|b| format!("{b:02x}")).collect();
-                    (p.name.clone(), hex, p.value)
-                })
-                .unwrap_or_default();
+            // EVERY parameter, with what it IS — not just the first one's name. A rack that
+            // can only report "param 0 is called Gain and reads 0.62" is the state this
+            // replaces: no unit, no range, no default, no way to know a 5-way switch from a
+            // continuous knob, so setting a value in real units was a binary search against the
+            // display text.
             println!(
-                "{{ \"track\": {}, \"device\": {}, \"name\": {:?}, \"version\": {}, \"count\": {}, \"first\": {:?}, \"first_uid16\": {:?}, \"first_value\": {:.3} }}",
-                v.track_id, v.device_id, v.device_name, v.version, v.params.len(), first, uid, val
+                "{{ \"track\": {}, \"device\": {}, \"name\": {:?}, \"version\": {}, \"count\": {},",
+                v.track_id, v.device_id, v.device_name, v.version, v.params.len()
             );
+            println!("  \"params\": [");
+            for (i, p) in v.params.iter().enumerate() {
+                let hex: String = p.uid16.iter().map(|b| format!("{b:02x}")).collect();
+                let comma = if i + 1 == v.params.len() { "" } else { "," };
+                println!(
+                    "    {{ \"index\": {}, \"name\": {:?}, \"uid16\": {:?}, \"value\": {:.3}, \"display\": {:?}, \"unit\": {:?}, \"range\": [{:?}, {:?}], \"default\": {:.3}, \"steps\": {}, \"discrete\": {}, \"automatable\": {} }}{comma}",
+                    p.index, p.name, hex, p.value, p.display, p.unit, p.min_text, p.max_text,
+                    p.default_value, p.step_count, p.discrete, p.automatable
+                );
+            }
+            println!("  ]");
+            println!("}}");
             return 0;
         }
     }
