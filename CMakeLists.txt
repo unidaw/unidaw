@@ -306,6 +306,15 @@ target_include_directories(sampler_voice_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# Sampler S1: the polyphonic layer — choke, NNA, stealing, and sample-accurate note-OFF, which
+# is the thing block segmentation exists for.
+add_executable(sampler_engine_tests
+  apps/sampler_engine_tests_main.cpp
+)
+target_include_directories(sampler_engine_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # M3.24: `adds` are an appearance's own content — emitted once, not looped with the clip.
 add_executable(placement_adds_tests
   apps/placement_adds_tests_main.cpp
@@ -478,6 +487,11 @@ add_test(NAME sampler_voice
   COMMAND sampler_voice_tests
 )
 set_tests_properties(sampler_voice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_engine
+  COMMAND sampler_engine_tests
+)
+set_tests_properties(sampler_engine PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME placement_adds
   COMMAND placement_adds_tests
@@ -729,6 +743,7 @@ foreach(daw_test_target
     sampler_envelope_tests
     sampler_state_tests
     sampler_voice_tests
+    sampler_engine_tests
     event_ring_mpsc_tests
     audio_io_tests
     device_chain_tests

@@ -105,6 +105,8 @@ class SamplerVoice {
     // difference between a kick and a thud.
     gainSmoothed_ = spec_.gain;
     panSmoothed_ = spec_.pan;
+    fadeRemaining_ = 0;
+    fadeInRemaining_ = 0;
     if (spec_.ampEnv && !spec_.ampEnv->empty()) {
       env_.start(spec_.ampEnv, spec_.envUnitsPerFrame);
       envValue_ = env_.value();
@@ -134,6 +136,20 @@ class SamplerVoice {
     fadeRemaining_ = frames > 0 ? frames : 1;
     fadeStep_ = 1.0f / static_cast<float>(fadeRemaining_);
   }
+
+  // Ramps IN over `frames`. Used when a voice is STOLEN: the new note starts from a slot that was
+  // mid-waveform, so without this the discontinuity at the takeover is a click. Most sounds hide
+  // it behind their own attack; an instant-attack drum does not, which is exactly the case where
+  // a pool runs out.
+  void fadeIn(uint32_t frames) {
+    fadeInRemaining_ = frames;
+    fadeInTotal_ = frames > 0 ? frames : 1;
+  }
+
+  // Peak amplitude this voice is currently contributing. "Steal the quietest" needs a measure,
+  // and using the ENVELOPE rather than the last output sample means a voice in a waveform's
+  // zero-crossing is not mistaken for a voice that has finished.
+  float loudness() const { return active_ ? std::fabs(envValue_) * gainSmoothed_ : 0.0f; }
 
   // Renders `numFrames` starting at `offsetInBlock` into planar `out`, ADDING (never overwriting —
   // a voice shares its stem with every other voice on it).
@@ -184,6 +200,11 @@ class SamplerVoice {
       const float t = static_cast<float>(pos_ & 0xFFFFFFFFull) / 4294967296.0f;
 
       float amp = haveEnv ? env_.valueAt(age_) : 1.0f;
+      if (fadeInRemaining_ > 0) {
+        // Ramping in after a steal. Counts DOWN, so the gain rises from 0 to 1.
+        amp *= 1.0f - static_cast<float>(fadeInRemaining_) / static_cast<float>(fadeInTotal_);
+        --fadeInRemaining_;
+      }
       if (fadeRemaining_ > 0) {
         amp *= static_cast<float>(fadeRemaining_) * fadeStep_;
         if (--fadeRemaining_ == 0) {
@@ -265,6 +286,8 @@ class SamplerVoice {
   float panSmoothed_ = 0.0f;
   uint32_t fadeRemaining_ = 0;
   float fadeStep_ = 0.0f;
+  uint32_t fadeInRemaining_ = 0;
+  uint32_t fadeInTotal_ = 1;
   bool active_ = false;
   bool released_ = false;
 };
