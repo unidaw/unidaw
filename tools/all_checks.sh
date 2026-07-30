@@ -24,6 +24,15 @@
 #      pipefail` killed it mid-diagnosis. The full log per check is what made that
 #      readable, so every run keeps them.
 #
+# ONE IDIOM TO GET RIGHT WHEN WRITING A CHECK, because it cost four debugging sessions in a
+# single night: a grep that matches nothing exits 1, and under `set -o pipefail` inside a command
+# substitution — `X="$(cmd | grep ... | sed ...)"` — that failure propagates and `set -e` kills
+# the script BEFORE it prints anything at all. The check does fail, but with an empty log, which
+# is indistinguishable from a crash and tells you nothing about which assertion was involved.
+# Wrap the pipeline: `X="$({ cmd | grep ...; } || true)"`, then assert on the empty value with a
+# message. multiout_check, sidechain_check, section_ops_check and add_remove_track_check all died
+# this way; three of them looked like engine bugs first.
+#
 # Checks exit 2 for "a prerequisite is missing" (unbuilt target, absent plugin), which is
 # reported as SKIP and does not fail the run — but the count is printed, because a suite
 # that silently skipped half of itself looks exactly like a suite that passed.

@@ -51,8 +51,8 @@ sleep 1
 doc_tracks() {
   # `"absent": false` as well as non-master: track_count is the id EXTENT, so a removed track
   # leaves a tombstone inside it that is published for its id and is not a track.
-  DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null \
-    | grep '"master": false' | grep -c '"absent": false' || true
+  { DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null \
+    | grep '"master": false' | grep -c '"absent": false'; } || true
 }
 master_strips() {
   DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null | grep -c '"master": true' || true
@@ -99,9 +99,13 @@ for _ in $(seq 1 80); do
 done
 sleep 1.5
 # The ids that came back LIVE (a tombstone publishes with absent:true and is not a track).
-RELOADED="$(DAW_UI_SHM_NAME="$SHM2" "$CLI" get tracks 2>/dev/null \
+# `|| true` on the whole pipeline: if the engine is not answering yet the first grep matches
+# nothing, exits 1, and under `set -o pipefail` inside a command substitution that kills the
+# script before it prints anything — a silent death that looks like a crash. Fourth time this
+# exact shape has bitten in one night; see the note in all_checks.sh.
+RELOADED="$({ DAW_UI_SHM_NAME="$SHM2" "$CLI" get tracks 2>/dev/null \
   | grep '"master": false' | grep '"absent": false' \
-  | sed -n 's/.*"track_id": \([0-9]*\).*/\1/p' | paste -sd, -)"
+  | sed -n 's/.*"track_id": \([0-9]*\).*/\1/p' | paste -sd, -; } || true)"
 TOMBSTONES="$(DAW_UI_SHM_NAME="$SHM2" "$CLI" get tracks 2>/dev/null \
   | grep -c '"absent": true' || true)"
 # Save again: a load that hid a track would let this save delete it from disk for good.
