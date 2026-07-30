@@ -279,6 +279,16 @@ target_include_directories(markers_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# Sampler S1: multipoint drawable envelopes. The claim under test is that ADSR is a VIEW of the
+# same points (docs/SAMPLER_DESIGN.md R4) — if that is false, the sampler has two envelope models
+# pretending to be one and every later feature has to ask which it is talking to.
+add_executable(sampler_envelope_tests
+  apps/sampler_envelope_tests_main.cpp
+)
+target_include_directories(sampler_envelope_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # M3.24: `adds` are an appearance's own content — emitted once, not looped with the clip.
 add_executable(placement_adds_tests
   apps/placement_adds_tests_main.cpp
@@ -436,6 +446,11 @@ add_test(NAME markers
   COMMAND markers_tests
 )
 set_tests_properties(markers PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_envelope
+  COMMAND sampler_envelope_tests
+)
+set_tests_properties(sampler_envelope PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME placement_adds
   COMMAND placement_adds_tests
@@ -684,6 +699,7 @@ foreach(daw_test_target
     time_signature_tests
     placement_adds_tests
     markers_tests
+    sampler_envelope_tests
     event_ring_mpsc_tests
     audio_io_tests
     device_chain_tests

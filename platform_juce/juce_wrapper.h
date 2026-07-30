@@ -177,8 +177,8 @@ class IPluginHost {
 
 struct WaveformPyramid;  // apps/waveform_pyramid.h — built pre-downmix at decode.
 
-// A decoded audio source, downmixed to mono, in float samples. `sampleRate` is
-// the source file's own rate (resample at play time against the engine rate).
+// A decoded audio source, one float buffer per channel. `sampleRate` is the
+// source file's own rate (resample at play time against the engine rate).
 struct DecodedAudio {
   // PLANAR, one vector per source channel, each `frames` long. This used to be a single mono
   // buffer built by averaging the channels — so a stereo loop dropped into the arrangement PLAYED
@@ -197,9 +197,8 @@ struct DecodedAudio {
 };
 
 // Decodes an audio file (wav/aiff/flac/... — whatever JUCE's basic formats read)
-// fully into memory, downmixing to mono. `ok` is false if the file can't be read.
-// Named for what it does now: it preserves the source's channels. The old name said Mono and
-// that was the bug.
+// fully into memory, preserving its channels. `ok` is false if the file can't be read.
+// Named for what it does now. The old name said Mono, and that was the bug.
 DecodedAudio decodeAudioFile(const std::string& path);
 
 // Writes a mono float buffer as a 16-bit wav. Used by the offline bounce and by
