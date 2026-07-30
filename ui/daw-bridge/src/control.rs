@@ -440,6 +440,17 @@ impl EngineHandle {
     }
 
     pub fn read_clip_extents(&self) -> Vec<UiClipExtent> {
+        self.read_clip_extents_with_truncation().0
+    }
+
+    /// The extents AND how many did not fit, from ONE seqlock pass.
+    ///
+    /// A non-zero count means the rails are incomplete. It is returned alongside the extents
+    /// rather than from a separate accessor on purpose: two reads could land in different
+    /// generations, and a count that disagrees with the list it describes is worse than no
+    /// count. Callers that do not care use `read_clip_extents`, which is this with the number
+    /// dropped — one implementation, so the two can never diverge.
+    pub fn read_clip_extents_with_truncation(&self) -> (Vec<UiClipExtent>, u32) {
         loop {
             let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
             if v0 % 2 == 1 {
@@ -447,11 +458,12 @@ impl EngineHandle {
             }
             let offset = unsafe { (*self.header).ui_clip_extent_offset };
             if offset == 0 {
-                return Vec::new();
+                return (Vec::new(), 0);
             }
             let region = self._mmap.as_ptr().wrapping_add(offset as usize)
                 as *const UiClipExtentRegion;
             let count = unsafe { (*region).count as usize }.min(K_UI_MAX_CLIP_EXTENTS);
+            let truncated = unsafe { (*region).truncated };
             let mut out = Vec::with_capacity(count);
             for i in 0..count {
                 out.push(unsafe { (*region).extents[i] });
@@ -459,7 +471,7 @@ impl EngineHandle {
             fence(Ordering::Acquire);
             let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
             if v0 == v1 && v0 % 2 == 0 {
-                return out;
+                return (out, truncated);
             }
         }
     }

@@ -2982,6 +2982,7 @@ struct TrackRuntime {
     auto* region = reinterpret_cast<daw::UiClipExtentRegion*>(
         reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiClipExtentOffset);
     uint32_t count = 0;
+    uint32_t extentsDropped = 0;
     for (auto* runtime : freshTracks) {
       if (!runtime) {
         continue;
@@ -2996,7 +2997,10 @@ struct TrackRuntime {
       // on a note edit, and published no grid. See the frontend's P1.
       for (const auto& ext : runtime->clipExtents) {
         if (count >= daw::kUiMaxClipExtents) {
-          break;
+          // COUNT the shortfall rather than walking away from it. Keep going so the number is
+          // the real total that did not fit, not just "at least one".
+          ++extentsDropped;
+          continue;
         }
         daw::UiClipExtent& out = region->extents[count];
         out.placementId = ext.placementId;
@@ -3044,6 +3048,15 @@ struct TrackRuntime {
       }
     }
     region->count = count;
+    region->truncated = extentsDropped;
+    if (extentsDropped > 0) {
+      // Said out loud as well as published: the region's own reader may be a UI that draws what
+      // it is given without checking, and the person needs to know the rails are incomplete.
+      DAW_EVENT("clip_extents.truncated")
+          .field("published", count)
+          .field("dropped", extentsDropped)
+          .field("cap", static_cast<uint64_t>(daw::kUiMaxClipExtents));
+    }
   };
 
   // v14: publish the patcher graph the engine runs, so the UI can draw it. Reads
@@ -6354,11 +6367,18 @@ struct TrackRuntime {
       }
 
       uint32_t clipCount = 0;
+      uint32_t audioClipsDropped = 0;
       for (const auto& c : document.clips) {
         if (c.kind != daw::ClipKind::Audio || c.audio.sourcePath.empty()) {
           continue;
         }
-        if (clipCount >= daw::kUiMaxAudioClips) break;
+        // kUiMaxAudioClips is 64 while the extent list holds 256, so this cap can be reached
+        // while the rails look complete — a box with no waveform in it and nothing saying why.
+        // Count the shortfall and keep going so the number is the real total.
+        if (clipCount >= daw::kUiMaxAudioClips) {
+          ++audioClipsDropped;
+          continue;
+        }
         auto& d = region->clips[clipCount++];
         d = daw::UiAudioClip{};
         d.clipId = c.id;
@@ -6376,6 +6396,13 @@ struct TrackRuntime {
 
       region->sourceCount = sourceCount;
       region->clipCount = clipCount;
+      region->clipsTruncated = audioClipsDropped;
+      if (audioClipsDropped > 0) {
+        DAW_EVENT("audio_clips.truncated")
+            .field("published", clipCount)
+            .field("dropped", audioClipsDropped)
+            .field("cap", static_cast<uint64_t>(daw::kUiMaxAudioClips));
+      }
       region->formatVersion = daw::kWaveformFormatVersion;
       // The constant tempo audio is actually positioned at (bpmAtNanotick(0)) — the
       // number rebuildAudioRender uses, so drawn == heard even on a tempo-mapped

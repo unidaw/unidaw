@@ -385,7 +385,15 @@ static_assert(sizeof(UiClipExtent) == 64,
 
 struct UiClipExtentRegion {
   uint32_t count = 0;
-  uint32_t reserved = 0;
+  // How many extents did NOT fit. Took the reserved word, so the region is the same size and
+  // no offset moved.
+  //
+  // The cap went 64 -> 256 and the overflow stayed a bare `break` — so the silent truncation
+  // was moved further out rather than fixed, while the arrangement region added in the same
+  // change DOES publish its truncation counts. A truncated list nobody notices reads as a
+  // complete one, which is how "the rails are missing clips" becomes a bug report about the
+  // rails.
+  uint32_t truncated = 0;
   UiClipExtent extents[kUiMaxClipExtents]{};
 };
 
@@ -591,7 +599,12 @@ enum class UiBusLayoutId : uint16_t {
 // (RequestWaveform) into UiWaveformRegion's seqlock slots. Peaks are pre-gain,
 // pre-fade, in SOURCE frames, anchored to frame 0 — gain/fades/tempo are draw-time.
 constexpr uint32_t kUiMaxAudioSources = 32;
-constexpr uint32_t kUiMaxAudioClips = 64;      // == kUiMaxClipExtents
+// NOT equal to kUiMaxClipExtents (256) — it used to be, and the comment saying so outlived the
+// change. A project with more than 64 audio placements therefore publishes up to 256 extents and
+// only 64 audio clips, so the rails draw boxes with no waveform for the rest. Raising this grows
+// the region, so it waits for the next contract bump; until then the shortfall is REPORTED
+// (clipsTruncated below) rather than silently dropped.
+constexpr uint32_t kUiMaxAudioClips = 64;
 constexpr uint32_t kUiWaveformSlots = 4;
 constexpr uint32_t kUiWaveformMaxPairs = 24576;  // per slot, all channels
 constexpr uint32_t kWaveformBaseDecim = 64;      // smallest stored pyramid level
@@ -633,7 +646,11 @@ struct alignas(64) UiAudioSourceRegion {   // metadata table, version-gated
   uint32_t clipCount = 0;
   uint32_t audioMapBpmMilli = 0;  // the constant tempo audio is positioned at * 1000
   uint32_t formatVersion = 0;     // = kWaveformFormatVersion
-  uint32_t reserved[11] = {};
+  // How many placed audio clips did not fit in `clips`. One reserved word, so the region is
+  // unchanged in size. See kUiMaxAudioClips above for why this can be non-zero while the extent
+  // list is complete.
+  uint32_t clipsTruncated = 0;
+  uint32_t reserved[10] = {};
   UiAudioSource sources[kUiMaxAudioSources]{};
   UiAudioClip clips[kUiMaxAudioClips]{};
 };
