@@ -237,48 +237,64 @@ defined — and no way for the two to disagree, because there are not two of the
    track header carries the legend (`[SOPRD]`), which is where the eye goes anyway when the
    question is "what does this track do".
 
-### A FAMILY GETS A CHARACTER, NOT A COLUMN
+### A COLUMN HOLDS ANY OP — the op space stays open
 
-Jaakko: *"I don't like having a whole dedicated column for 'ret' for example."*
+Jaakko, closing the design out: *"I don't want a table, because the column hardcodes which ops
+we can have. I want to keep the op space flexible, and be able to show whatever ops there. so
+each op column must be able to be any op — so more than '6 families', any number of ops per row
+from say 200 ops in the system."*
 
-Correct, and it kills the "expanded = one value column per family" idea outright. `ret3` is one
-digit on maybe three rows in sixty-four. A 24 px column with a header and padding for that is
-the mostly-empty complaint arriving by a different door.
+That kills the per-family table I had one revision earlier, and correctly. A column bound to
+`offset` hardcodes the vocabulary into the layout: adding op #201 to `OP_SCHEMA` would relayout
+every track, and a track using twenty families would carry twenty columns.
 
-**COLLAPSED IS ONE CHARACTER FOR EVERY OP** (Jaakko's ruling), **and non-ASCII glyphs are
-allowed** (also his). That second permission is worth more than it sounds: a glyph can carry
-MAGNITUDE, where a letter can only carry presence.
-
-### The header is what makes it scale, not the encoding
-
-Two objections that killed position-memorisation: *"there can plausibly be more than 6 ops per
-row"* and *"there may be dozens of possible ops to choose from."*
-
-Both are answered by labelling rather than by encoding. `··P·3D` requires you to know that
-position 4 is retrigger. A header written above the slots requires you to read:
+**A COLUMN IS A SLOT FOR AN OP, NOT FOR A FAMILY.** This is ProTracker's and Renoise's actual
+model, and it is the one that survives a 200-op vocabulary.
 
 ```
-T05 break
-row   note  vel   S  O       P  a  r  d
-0000  C-4   112  04  37/256  60  >  3  1/6
-0001  ···    ··  ··  ······  ··  ·  ·  ···
-0002  D#4    96  04     1/3  85  <  5  ···
+T05 break                    legend: ▤ offset  ◑ prob  ⟐ ret  ◆ slot
+row   note  vel  ops
+0000  C-4   112  ◆▤◑⟐          collapsed — four ops, four glyphs
+0002  D#4    96  ◆▤◑           three
+0003  C-4    72  ◆▤            two
+
+expanded
+row   note  vel  op1   op2      op3  op4
+0000  C-4   112  S04   o37/256  p60  ret3
+0002  D#4    96  S04   o1/3     p85  ···
 ```
 
-That is not a mask, it is a TABLE — which is what a tracker already is for note and velocity.
-This extends the header one level into a cell that never had one. Dozens of possible ops never
-appear at once, because slots are derived per track; more than six per row is fine, because a
-family costs one to six characters rather than a column with its own header and padding.
+Four consequences, and they are what make it work at two hundred:
 
-### The collapsed alphabet, and the font trap under it
+**1. Column count follows the BUSIEST ROW in the track.** Derived, not configured, and it never
+truncates: a row carrying nine ops widens the track rather than dropping any. That is the
+invariant — everything else here is layout.
 
-**Measured, at 11 px IBM Plex Mono: the cell advance is 6.60 px and every ASCII character
-matches it exactly.** (An earlier measurement here said 7.57 px. That probe built its span from
-`getComputedStyle(...).font`, which serialised without a family, so it measured a proportional
+**2. Auto-pack in `OP_SCHEMA` order.** The column is not bound to a family, but if ops always
+pack in the same order then offset tends to land in the same column on every row. Scanning works
+BY CONVENTION without the column hardcoding anything. That is the table's benefit without the
+table's rigidity, and it costs nothing.
+
+**3. The glyph is IDENTITY, not magnitude.** I had this backwards one revision ago. In a
+position-bound table the position said which family a slot was, so the character was free to
+carry magnitude. In a flexible column nothing else says which op it is, so the one character
+must. Magnitude returns in the expanded token. (Pan keeps `◀ ◁ ◆ ▷ ▶` — those five ARE five
+distinct glyphs for one op, so it gets both.)
+
+**4. A PER-TRACK LEGEND, not a per-column header.** This is what makes two hundred ops
+learnable. You never hold 200 glyphs in your head — only the four to eight this track uses, and
+the track header names them. A header cannot label a column whose contents vary row to row; a
+legend can, because it describes the track rather than the column.
+
+### The font trap under the glyphs
+
+**Measured, at 11 px IBM Plex Mono: the cell advance is 6.60 px, and every ASCII character
+matches it exactly.** (An earlier figure here said 7.57 px. That probe built its span from
+`getComputedStyle(...).font`, which serialises without a family, so it measured a proportional
 fallback — `0` came out 7.57 and `W` 12.09, in a font where they must be equal. The shorthand
-is the bug; longhands are correct.)
+was the bug.)
 
-Glyph coverage, same measurement:
+Coverage, same measurement:
 
 | set | result |
 |---|---|
@@ -291,30 +307,10 @@ Glyph coverage, same measurement:
 | `∿` | **FAILS — 6.42 px** |
 
 Geometric shapes and block elements are reliable; arrows are a coin flip. **A glyph missing from
-the font falls back to one with a different advance and misaligns the whole grid**, so every
-glyph in the alphabet needs a ratchet test asserting it measures the reference advance. A font
-update on another machine would otherwise break alignment silently.
-
-Given that, the collapsed character carries magnitude wherever the family is ordinal:
-
-| family | collapsed | reads as |
-|---|---|---|
-| probability | `○ ◔ ◑ ◕ ●` | 0-20 … 80-100 % |
-| pan | `◀ ◁ ◆ ▷ ▶` | hard left … hard right |
-| offset | `▁ ▃ ▅ ▇ █` | how far into the sound |
-| delay | `▁ ▃ ▅ ▇` | how far into the row |
-| retrigger | `2`-`9`, `+` for >= 10 | the exact value, for free |
-| sound slot | the digit, or `◆` | which slot |
-
-Offset and delay share a ramp deliberately: they are the same KIND of quantity — how far in —
-and the header tells them apart. Retrigger is the case that made Jaakko's objection: its value
-already fits in the space its presence was going to cost, so it never needs widening at all.
-Pan was already doing this with `<` `=` `>`; the rule existed for one family and should simply
-be general.
-
-**Scanning a probability slot down sixty-four rows now shows the pattern's likelihood contour.**
-`P P P P` could never do that, and that is the whole argument for spending the character on a
-glyph rather than a letter.
+the font falls back to one with a different advance and misaligns the entire grid.** With a
+200-op vocabulary that is 200 chances to break alignment, so `OP_SCHEMA`'s glyph column needs a
+ratchet asserting every glyph measures the reference advance — checked in CI, not by eye, and
+re-checked when the font changes.
 
 ### What we must do that Renoise does not
 
