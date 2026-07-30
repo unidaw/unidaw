@@ -55,6 +55,7 @@
 #include "apps/lane_quantize.h"
 #include "apps/markers.h"
 #include "apps/ripple.h"
+#include "apps/sampler_engine.h"
 #include "apps/musical_structures.h"
 #include "apps/placement_schedule.h"
 #include "apps/note_entry.h"
@@ -1537,7 +1538,8 @@ int main(int argc, char** argv) {
   std::string pluginPath;
   bool spawnHost = true;
   int runSeconds = -1;
-  std::string renderName;  // non-empty => offline render (see --render)
+  std::string renderName;
+  uint32_t forcedBlockSize = 0;  // non-empty => offline render (see --render)
   std::string startupProject;  // non-empty => load it before running (see --project)
   bool testMode = false;
   for (int i = 1; i + 1 < argc; ++i) {
@@ -1568,6 +1570,14 @@ int main(int argc, char** argv) {
       // fixing the "everything 4x too fast" bug — so being the consumer is all that is
       // needed to run at host speed.
       renderName = argv[i + 1];
+      ++i;
+    } else if (arg == "--block-size" && i + 1 < argc) {
+      // Forces the engine's block size, which the offline render otherwise takes from its
+      // default (there is no audio device to ask). It exists so BLOCK-SIZE INVARIANCE is
+      // checkable end to end and not only in a unit test: docs/SAMPLER_DESIGN.md §3.5 requires
+      // one project rendered at 64, 256 and 1024 frames to be bit-identical, and a property
+      // that cannot be exercised through the real engine is a property nobody is defending.
+      forcedBlockSize = static_cast<uint32_t>(std::max(1, std::atoi(argv[i + 1])));
       ++i;
     }
   }
@@ -1761,6 +1771,13 @@ int main(int argc, char** argv) {
     std::cerr << "No audio device; using " << baseConfig.sampleRate
               << " Hz for offline timing" << std::endl;
     audioBackend.reset();
+  }
+  // --block-size wins over both, and it is applied AFTER the device probe so an offline render
+  // is not silently given the device's buffer instead of the one it asked for. It exists so
+  // block-size invariance is checkable through the real engine (§3.5).
+  if (forcedBlockSize > 0) {
+    baseConfig.blockSize = forcedBlockSize;
+    std::cerr << "Block size forced to " << baseConfig.blockSize << " samples" << std::endl;
   }
 
   const std::string pluginCachePath = defaultPluginCachePath();
@@ -2170,6 +2187,22 @@ struct TrackRuntime {
 
     std::vector<float> patcherAudioBuffer;
     std::vector<float*> patcherAudioChannels;
+
+    // THE BUILT-IN SAMPLER. Rendered on the PRODUCER thread into its own per-track buffer, which
+    // is then written into the host input plane AHEAD of the plugin chain — so a VST effect can
+    // follow the sampler on the same track. Rendering straight into the master sum (the way
+    // placed audio clips do) would have made that structurally impossible.
+    //
+    // A separate buffer from patcherAudio rather than a shared one: a track can carry both a
+    // sampler and a patcher audio node, and two producers writing one buffer is the "two facts
+    // about one thing" shape, here with the second one silently overwriting the first.
+    daw::SamplerRuntime samplerRuntime;
+    std::vector<daw::SamplerEvent> samplerEvents;   // this block's, sorted by sample offset
+    std::vector<float> samplerAudioBuffer;
+    std::vector<float*> samplerAudioChannels;
+    bool samplerAudioValid = false;
+    uint32_t samplerDeviceId = 0;                   // 0 = this track has no sampler
+    std::shared_ptr<const daw::SamplerRender> samplerSnapshot;
     std::vector<daw::EventEntry> patcherScratchpad;
     std::vector<PatcherNodeBuffer> patcherNodeBuffers;
     std::vector<std::array<float, kPatcherMaxModOutputs>> patcherNodeModOutputs;
@@ -5296,6 +5329,107 @@ struct TrackRuntime {
     return rec ? base.lexically_normal().string() : canon.string();
   };
 
+  // THE SAMPLER'S SNAPSHOT. Decodes every source the device names and flattens the document into
+  // the immutable form the producer thread reads (docs/SAMPLER_DESIGN.md §3.5).
+  //
+  // Runs OFF the audio path — it opens files — and the result is handed over by
+  // atomic_store_explicit, exactly as trackSnapshot and audioRender already are. The snapshot
+  // OWNS its audio by shared_ptr, so a render in flight keeps its buffers alive by construction
+  // and the last reference dies here, on the command thread, where a free is legal.
+  auto rebuildSamplerRender =
+      [&](const daw::SamplerState& st,
+          uint32_t trackId,
+          uint32_t deviceId) -> std::shared_ptr<const daw::SamplerRender> {
+    auto out = std::make_shared<daw::SamplerRender>();
+    out->state = st;
+    out->sampleRate = engineConfig.sampleRate;
+    out->keymap.rebuild(out->state);
+    uint32_t decoded = 0, failed = 0, changed = 0;
+    for (const auto& src : st.sources) {
+      const std::string path = resolveSourcePath(src.path);
+      daw::DecodedAudio dec = daw::decodeAudioFile(path);
+      if (!dec.ok || dec.channels.empty() || dec.frames == 0) {
+        // NEVER A QUIET SUBSTITUTION. A missing sample leaves a null entry, so the slot is
+        // SILENT and says so — loading "something else" is the kHostSlotIndexUnresolved failure,
+        // where every structural check passes and only the audio is wrong.
+        out->audio.push_back(nullptr);
+        ++failed;
+        DAW_EVENT("sampler.source_missing")
+            .field("track", trackId)
+            .field("device", deviceId)
+            .field("source", static_cast<uint32_t>(src.localId))
+            .field("path", path);
+        continue;
+      }
+      auto audio = std::make_shared<daw::SamplerSourceAudio>();
+      audio->channels = std::move(dec.channels);
+      audio->frames = dec.frames;
+      audio->sampleRate = dec.sampleRate;
+      audio->buildPlanes();
+      out->audio.push_back(std::move(audio));
+      ++decoded;
+      // The content key is ADVISORY: recomputed here so a changed file is REPORTED, never so the
+      // stored value can be trusted. Loud difference beats quiet substitution for audio.
+      if (src.contentKey != 0) {
+        uint64_t fileSize = 0, mtimeNs = 0;
+        std::error_code sec;
+        auto sz = std::filesystem::file_size(path, sec);
+        if (!sec) fileSize = static_cast<uint64_t>(sz);
+        std::error_code tec;
+        auto ft = std::filesystem::last_write_time(path, tec);
+        if (!tec) {
+          mtimeNs = static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(ft.time_since_epoch())
+                  .count());
+        }
+        const uint64_t now = daw::computeWaveformContentKey(
+            path, fileSize, mtimeNs, dec.frames, dec.sampleRate, dec.sourceChannels,
+            daw::kDecoderVersion, daw::kWaveformFormatVersion);
+        if (now != 0 && now != src.contentKey) {
+          ++changed;
+          DAW_EVENT("sampler.source_changed")
+              .field("track", trackId)
+              .field("device", deviceId)
+              .field("source", static_cast<uint32_t>(src.localId))
+              .field("path", path)
+              .field("saved_key", src.contentKey)
+              .field("current_key", now);
+        }
+      }
+    }
+    DAW_EVENT("sampler.render_built")
+        .field("track", trackId)
+        .field("device", deviceId)
+        .field("slots", static_cast<uint32_t>(st.slots.size()))
+        .field("decoded", decoded)
+        .field("failed", failed)
+        .field("changed", changed);
+    return out;
+  };
+
+  // Installs (or clears) a track's sampler from its device chain. Called from EVERY site that
+  // changes a chain, so "did you remember to rebuild the sampler" is not a question anyone has to
+  // answer twice. Caller holds trackMutex.
+  auto refreshSamplerForTrack = [&](TrackRuntime& rt) {
+    const daw::Device* found = nullptr;
+    for (const auto& d : rt.track.chain.devices) {
+      if (d.kind == daw::DeviceKind::Sampler && d.hasSampler) {
+        found = &d;
+        break;  // one sampler per track for now: it is a head-of-chain instrument
+      }
+    }
+    if (!found) {
+      rt.samplerDeviceId = 0;
+      rt.samplerSnapshot.reset();
+      rt.samplerRuntime.setSnapshot(nullptr);
+      return;
+    }
+    rt.samplerDeviceId = found->id;
+    rt.samplerSnapshot = rebuildSamplerRender(found->sampler, rt.trackId, found->id);
+    rt.samplerRuntime.configure(found->sampler.voiceCap, engineConfig.sampleRate);
+    rt.samplerRuntime.setSnapshot(rt.samplerSnapshot);
+  };
+
   // Resolve a track's placed AUDIO clips into a sample-domain render list for the
   // audio thread: decode each source (deduped per rebuild), and convert its
   // placement to output frames. Runs off the audio thread (decodes files); the caller
@@ -6872,6 +7006,7 @@ struct TrackRuntime {
           }
         }
         runtime->track.chain = std::move(loadedChain);
+        refreshSamplerForTrack(*runtime);
         // Adopt the project's routing so track-to-track sends and the sidechain source
         // survive a reopen (previously the runtime kept its default master-out routing
         // and a saved sidechain/send was silently dropped). Read by rebuildHostForChain
@@ -12652,6 +12787,18 @@ struct TrackRuntime {
               offPayload.noteId = activeNote.noteId;
               std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
               pushScratchpad(noteOffEntry, activeNote.endNanotick);
+              if (runtime.samplerDeviceId != 0) {
+                daw::SamplerEvent se;
+                const int64_t off = static_cast<int64_t>(eventSample) -
+                                    static_cast<int64_t>(blockSampleStart);
+                se.offsetInBlock = static_cast<uint32_t>(
+                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
+                                       ? engineConfig.blockSize - 1
+                                       : off));
+                se.kind = daw::SamplerEventKind::NoteOff;
+                se.noteId = activeNote.noteId;
+                runtime.samplerEvents.push_back(se);
+              }
               runtime.activeNotes.erase(noteIt);
               removeNoteIdFromColumn(column, noteId);
             }
@@ -12688,6 +12835,18 @@ struct TrackRuntime {
               offPayload.noteId = activeNote.noteId;
               std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
               pushScratchpad(noteOffEntry, activeNote.endNanotick);
+              if (runtime.samplerDeviceId != 0) {
+                daw::SamplerEvent se;
+                const int64_t off = static_cast<int64_t>(eventSample) -
+                                    static_cast<int64_t>(blockSampleStart);
+                se.offsetInBlock = static_cast<uint32_t>(
+                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
+                                       ? engineConfig.blockSize - 1
+                                       : off));
+                se.kind = daw::SamplerEventKind::NoteOff;
+                se.noteId = activeNote.noteId;
+                runtime.samplerEvents.push_back(se);
+              }
               runtime.activeNotes.erase(noteIt);
               removeNoteIdFromColumn(activeNote.column, noteId);
             }
@@ -12726,6 +12885,20 @@ struct TrackRuntime {
             midiPayload.noteId = noteId;
             std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
             pushScratchpad(midiEntry, onTick);
+            // TEE TO THE BUILT-IN SAMPLER, with the sample offset that the hosted-plugin path
+            // computes and then throws away (MidiEvent.sampleOffset is never populated — see
+            // docs/SAMPLER_DESIGN.md §3.5). `offset` above is already the exact frame within
+            // this block, so the sampler starts the voice THERE rather than at the boundary.
+            if (runtime.samplerDeviceId != 0) {
+              daw::SamplerEvent se;
+              se.offsetInBlock = static_cast<uint32_t>(offset);
+              se.kind = daw::SamplerEventKind::NoteOn;
+              se.pitch = pitch;
+              se.velocity = velocity;
+              se.column = noteColumn;
+              se.noteId = noteId;
+              runtime.samplerEvents.push_back(se);
+            }
             if (traceNotes) {
               DAW_EVENT("note.emit")
                   .field("track", runtime.trackId)
@@ -12772,6 +12945,18 @@ struct TrackRuntime {
                 offPayload.noteId = noteId;
                 std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                 pushScratchpad(noteOffEntry, noteEndTick);
+              if (runtime.samplerDeviceId != 0) {
+                daw::SamplerEvent se;
+                const int64_t off = static_cast<int64_t>(eventSample) -
+                                    static_cast<int64_t>(blockSampleStart);
+                se.offsetInBlock = static_cast<uint32_t>(
+                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
+                                       ? engineConfig.blockSize - 1
+                                       : off));
+                se.kind = daw::SamplerEventKind::NoteOff;
+                se.noteId = noteId;
+                runtime.samplerEvents.push_back(se);
+              }
               }
             } else {
               std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
@@ -12846,6 +13031,17 @@ struct TrackRuntime {
                   offPayload.noteId = activeNote.noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                   pushScratchpad(noteOffEntry, activeNote.endNanotick);
+              if (runtime.samplerDeviceId != 0) {
+                daw::SamplerEvent se;
+                const int64_t off = offOffset;
+                se.offsetInBlock = static_cast<uint32_t>(
+                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
+                                       ? engineConfig.blockSize - 1
+                                       : off));
+                se.kind = daw::SamplerEventKind::NoteOff;
+                se.noteId = activeNote.noteId;
+                runtime.samplerEvents.push_back(se);
+              }
                   notesToRemove.push_back(noteId);
                 }
               }
@@ -13023,6 +13219,18 @@ struct TrackRuntime {
                       offPayload.noteId = noteId;
                       std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                       pushScratchpad(noteOffEntry, noteEndTick);
+              if (runtime.samplerDeviceId != 0) {
+                daw::SamplerEvent se;
+                const int64_t off = static_cast<int64_t>(eventSample) -
+                                    static_cast<int64_t>(blockSampleStart);
+                se.offsetInBlock = static_cast<uint32_t>(
+                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
+                                       ? engineConfig.blockSize - 1
+                                       : off));
+                se.kind = daw::SamplerEventKind::NoteOff;
+                se.noteId = noteId;
+                runtime.samplerEvents.push_back(se);
+              }
                     }
                   } else if (duration > 0) {
                     std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
@@ -13778,7 +13986,23 @@ struct TrackRuntime {
         auto trackStatePtr = std::atomic_load_explicit(&runtime->trackSnapshot,
                                                        std::memory_order_acquire);
         const auto& trackState = trackStatePtr ? *trackStatePtr : kEmptyTrackState;
-        std::unique_lock<std::mutex> lock(runtime->controllerMutex, std::try_to_lock);
+        // TRY-LOCK IN REALTIME, BLOCKING WAIT OFFLINE.
+        //
+        // Skipping a track's whole block when this mutex is contended is the right realtime
+        // trade: a late block is worse than a dropped one when a device is waiting. It is the
+        // WRONG trade offline, and it was making renders non-reproducible — measured at roughly
+        // one run in six, differing by exactly one block somewhere in the middle, which is the
+        // hardest possible way for it to fail.
+        //
+        // The offline render already inverts the other two policies for the same reason (never
+        // skip a block, never prime with silence, never starve — WAIT). This is the third, and
+        // it was simply missed: nothing routed audio THROUGH a host in an offline render until
+        // the sampler did, so a skipped block used to cost a note to a plugin and now costs a
+        // hole in a sustaining voice. Found by tools/sampler_determinism_check.sh.
+        std::unique_lock<std::mutex> lock =
+            offlineRender ? std::unique_lock<std::mutex>(runtime->controllerMutex)
+                          : std::unique_lock<std::mutex>(runtime->controllerMutex,
+                                                         std::try_to_lock);
         if (!lock.owns_lock()) {
           continue;
         }
@@ -14112,6 +14336,55 @@ struct TrackRuntime {
             audioGraphPtr ? *audioGraphPtr : kEmptyAudioGraph;
 
         const uint32_t blockIndex = blockId % engineConfig.numBlocks;
+          // ---- THE BUILT-IN SAMPLER RENDERS HERE, on the PRODUCER thread.
+        //
+        // Not in the audio callback (which only consumes finished blocks, so the sampler is off
+        // the hardest-deadline thread by construction) and not into the master sum (which has
+        // already passed every plugin, so a VST effect could never follow the sampler on the
+        // same track). Its output goes into the host input plane below, AHEAD of the chain.
+        runtime->samplerAudioValid = false;
+        if (runtime->samplerDeviceId != 0 && runtime->samplerRuntime.snapshot()) {
+          const uint32_t channels = std::max<uint32_t>(engineConfig.numChannelsOut, 2u);
+          const size_t need = static_cast<size_t>(channels) * engineConfig.blockSize;
+          if (runtime->samplerAudioBuffer.size() != need) {
+            runtime->samplerAudioBuffer.assign(need, 0.0f);
+          } else {
+            std::fill(runtime->samplerAudioBuffer.begin(), runtime->samplerAudioBuffer.end(),
+                      0.0f);
+          }
+          if (runtime->samplerAudioChannels.size() != channels) {
+            runtime->samplerAudioChannels.resize(channels);
+          }
+          for (uint32_t ch = 0; ch < channels; ++ch) {
+            runtime->samplerAudioChannels[ch] = runtime->samplerAudioBuffer.data() +
+                                                static_cast<size_t>(ch) * engineConfig.blockSize;
+          }
+          // The event list is built in emit order, which is tick order, but a retrigger's
+          // strikes and a note-off scheduled earlier in the same block can interleave — so it is
+          // sorted rather than assumed. stable_sort because two events at one sample must keep
+          // the order they were emitted in: a note-off and the note-on that replaces it landing
+          // on the same frame is a repeat, and swapping them would cut the NEW note.
+          std::stable_sort(runtime->samplerEvents.begin(), runtime->samplerEvents.end(),
+                           [](const daw::SamplerEvent& a, const daw::SamplerEvent& b) {
+                             return a.offsetInBlock < b.offsetInBlock;
+                           });
+          // Nanoticks per frame for THIS block, for tempo-synced envelopes. Recomputed per block
+          // rather than cached: under a tempo ramp a stale ratio detunes every running envelope.
+          const double bpmNow = tempoProvider.bpmAtNanotick(blockStartTicks);
+          runtime->samplerRuntime.setNanotickPerFrame(
+              (bpmNow > 0.0 ? bpmNow : 120.0) *
+              static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter) /
+              (60.0 * engineConfig.sampleRate));
+          runtime->samplerRuntime.render(
+              runtime->samplerAudioChannels.data(), channels, engineConfig.blockSize,
+              runtime->samplerEvents.empty() ? nullptr : runtime->samplerEvents.data(),
+              static_cast<uint32_t>(runtime->samplerEvents.size()));
+          runtime->samplerAudioValid = true;
+        }
+        runtime->samplerEvents.clear();
+
+
+
         bool patcherAudioValid = patcherAudioWritten;
         if (patcherAudioValid && !runtime->inputAudioChannels.empty()) {
           const uint32_t channels =
@@ -14278,7 +14551,18 @@ struct TrackRuntime {
               continue;
             }
             if (segIndex == 0) {
-              if (patcherAudioValid && ch < runtime->patcherAudioChannels.size() &&
+              // THE SAMPLER FEEDS THE HEAD OF THE CHAIN. Only on the FIRST segment: later
+              // segments carry the previous segment's OUTPUT back in, and re-injecting the
+              // sampler there would make it play once per plugin run.
+              //
+              // It is checked before the patcher's audio because a track carrying both has the
+              // sampler as its instrument and the patcher node as an effect; ordered the other
+              // way, adding a patcher audio node would silently mute the sampler.
+              if (runtime->samplerAudioValid && ch < runtime->samplerAudioChannels.size() &&
+                  runtime->samplerAudioChannels[ch]) {
+                std::memcpy(input, runtime->samplerAudioChannels[ch],
+                            static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
+              } else if (patcherAudioValid && ch < runtime->patcherAudioChannels.size() &&
                   runtime->patcherAudioChannels[ch]) {
                 std::memcpy(input, runtime->patcherAudioChannels[ch],
                             static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
@@ -15126,9 +15410,16 @@ struct TrackRuntime {
   // agrees on samples-per-block.
   const double effSampleRate =
       audioBackend ? audioBackend->sampleRate() : engineConfig.sampleRate;
-  const uint32_t effBlockSize = audioBackend
-                                    ? static_cast<uint32_t>(audioBackend->blockSize())
-                                    : engineConfig.blockSize;
+  // --block-size WINS over the device's buffer. Without this the engine's config and the render
+  // pump disagreed: the config took the forced size while the pump kept taking the device's, so
+  // the callback strode 512 frames through 64-frame buffers and produced audio that was garbage
+  // in a plausible-sounding way. Caught by the determinism check on its first end-to-end run —
+  // which is the check doing exactly its job, on the tooling rather than on the sampler.
+  const uint32_t effBlockSize =
+      forcedBlockSize > 0
+          ? forcedBlockSize
+          : (audioBackend ? static_cast<uint32_t>(audioBackend->blockSize())
+                          : engineConfig.blockSize);
   const int effOutChannels = audioBackend ? audioBackend->outputChannels() : 2;
   if (!testMode) {
     audioRuntime = daw::createJuceRuntime();

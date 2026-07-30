@@ -303,10 +303,22 @@ class EnvRunner {
 
   // Note-off. Records WHEN, rather than mutating a position — the value keeps running on from
   // exactly where it is, and "where it is" stays a function of the frame index.
-  void release() {
-    if (releasedAt_ == kNotReleased) {
-      releasedAt_ = elapsed_;
+  void release() { releaseAt(elapsed_); }
+
+  // Note-off AT AN EXACT FRAME. This overload is the one a per-sample caller must use, and the
+  // difference is not cosmetic: `elapsed_` is only advanced at the END of a render call, so a
+  // note-off applied part-way through a block would otherwise be recorded at the previous
+  // block's boundary. The release would then start at a different frame depending on the buffer
+  // size — inaudible, and exactly what tools/sampler_determinism_check.sh exists to catch. It
+  // did catch it, end-to-end, after the unit tests had passed.
+  void releaseAt(uint64_t frame) {
+    if (releasedAt_ != kNotReleased) {
+      return;
     }
+    releasedAt_ = frame;
+    // Nothing else to arm: the release fade is DERIVED from (frame - releasedAt_) inside
+    // valueAt(), like everything else here. A countdown member would be accumulator state, and
+    // accumulator state is what made this class block-size dependent in the first place.
   }
 
   bool active() const { return shape_ != nullptr && !done_; }

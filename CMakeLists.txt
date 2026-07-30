@@ -478,6 +478,16 @@ add_test(NAME sampler_envelope
 )
 set_tests_properties(sampler_envelope PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_test(NAME sampler_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_check.sh
+)
+set_tests_properties(sampler_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_determinism
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_determinism_check.sh
+)
+set_tests_properties(sampler_determinism PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_state
   COMMAND sampler_state_tests
 )

@@ -119,7 +119,11 @@ class SamplerVoice {
   void release() {
     released_ = true;
     if (spec_.ampEnv && !spec_.ampEnv->empty()) {
-      env_.release();
+      // AT age_, not "now". age_ is the exact frame this note-off landed on; the envelope's own
+      // clock only moves at block boundaries, so release() without a frame would start the
+      // release wherever the last block ended — making the tail's length depend on the buffer
+      // size. The end-to-end determinism check found this after the unit tests were green.
+      env_.releaseAt(age_);
     } else {
       // No envelope means no release stage to run, so a gated note ends at note-off. A one-shot
       // slot never calls this at all — that decision belongs to the caller, not here.
