@@ -298,6 +298,11 @@ class SamplerRuntime {
       spec.startFrame = begin + extent * e.offsetFrac / 65536ull;
     }
     spec.reverse = slot->reverse != 0;
+    spec.loopStart = slot->loopStartFrame;
+    spec.loopEnd = slot->loopEndFrame;
+    spec.loopXfade = static_cast<uint32_t>(slot->loopXfadeFrames);
+    spec.loopMode = slot->loopMode;
+    spec.sustainLoop = slot->sustainLoop;
     spec.gain = db2lin(static_cast<float>(slot->gainMillibels) / 100.0f) *
                 (static_cast<float>(e.velocity) / 127.0f);
     spec.pan = static_cast<float>(slot->panThousandths) / 1000.0f;

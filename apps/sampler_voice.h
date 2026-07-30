@@ -11,11 +11,16 @@
 // `pos >> L`, exact by construction, so a pitch envelope sweeping through an octave boundary does
 // not jump. Choosing the representation now costs nothing and choosing it later is a rewrite.
 //
-// WHAT S1 DOES NOT DO, stated so a half-implementation is not mistaken for a working one:
-// no loops (S3 adds forward/ping-pong/backward TOGETHER, with the seam-crossing interpolation and
-// the negative control that tells them apart), no mip-map, no filter, no sinc. `loopMode` is not
-// read here. A forward loop alone would be ten lines and would be exactly the "backward silently
-// aliased to forward" shape this repo keeps deleting.
+// LOOPS (S3) ARE ALL THREE MODES AT ONCE — forward, ping-pong and backward — because shipping
+// forward alone and aliasing the others to it is precisely the failure this repo keeps deleting,
+// and it is invisible: a backward loop wired to forward still loops, still sounds like a loop,
+// and is simply not what was asked for. The tests use an ASYMMETRIC fixture for the same reason.
+//
+// THE INTERPOLATOR READS ACROSS THE SEAM. At a loop boundary the four taps come from the WRAPPED
+// positions, not from clamped ones. Clamping at the seam is where samplers click, and the click
+// is at exactly the loop rate, so it reads as part of the sound rather than as a defect.
+//
+// STILL NOT HERE: the mip-map, the filter, sinc. Named so the absence is deliberate.
 
 #include <algorithm>
 #include <cmath>
@@ -45,6 +50,15 @@ struct SamplerVoiceSpec {
   float gain = 1.0f;      // linear
   float pan = 0.0f;       // -1 left .. +1 right
   bool reverse = false;
+  // LOOP, in level-0 source frames. loopMode 0 = off, 1 forward, 2 ping-pong, 3 backward.
+  // The loop is only entered once playback reaches loopEnd; before that the slot plays normally
+  // from startFrame, which is what makes "attack then loop" the natural shape.
+  uint64_t loopStart = 0, loopEnd = 0;
+  uint32_t loopXfade = 0;   // equal-power crossfade over the seam, in frames; 0 = none
+  uint8_t loopMode = 0;
+  // 1 = the loop RELEASES at note-off and plays out to endFrame. 0 = it loops forever until the
+  // voice ends some other way. This is the difference between a sustained pad and a drone.
+  uint8_t sustainLoop = 0;
   const EnvShape* ampEnv = nullptr;  // borrowed from the snapshot; null = no envelope
   double envUnitsPerFrame = 0.0;
 };
@@ -100,6 +114,16 @@ class SamplerVoice {
     // read path, so every other rule (interpolation, bounds, envelope) has exactly one form.
     pos_ = (spec_.reverse ? (endFrame_ - 1) : startFrame_) << 32;
     step_ = static_cast<uint64_t>(std::max(spec_.ratio, 0.0) * 4294967296.0);
+    // THE LOOP IS VALIDATED HERE, ONCE, rather than guarded at every read. An inverted or
+    // out-of-range loop turns the loop OFF rather than being clamped into something the user did
+    // not ask for: a silently relocated loop is a different sound, and a sound you cannot explain.
+    loopEndClamped_ = std::min(spec_.loopEnd, endFrame_);
+    loopLen_ = (spec_.loopMode != 0 && loopEndClamped_ > spec_.loopStart)
+                   ? (loopEndClamped_ - spec_.loopStart)
+                   : 0;
+    looping_ = false;
+    loopForward_ = true;
+    releasedLoop_ = false;
     // Smoothed values START at their target rather than at zero. A voice that ramps up from
     // silence on every note-on has a 1-block attack nobody asked for, which on a drum is the
     // difference between a kick and a thud.
@@ -118,6 +142,16 @@ class SamplerVoice {
 
   void release() {
     released_ = true;
+    // A SUSTAIN LOOP LETS GO AT NOTE-OFF and plays out to endFrame; a plain loop keeps going.
+    // Without this a sustained pad never reaches its own tail and the release is the envelope's
+    // alone, which is not what a sample with a recorded decay is for.
+    if (spec_.sustainLoop) {
+      releasedLoop_ = true;
+      // Also stop WRAPPING the interpolator's taps: once the loop is let go the read position
+      // leaves the loop range, and taps wrapped back into it would splice unrelated audio onto
+      // the tail — a seam fix applied where there is no longer a seam.
+      looping_ = false;
+    }
     if (spec_.ampEnv && !spec_.ampEnv->empty()) {
       // AT age_, not "now". age_ is the exact frame this note-off landed on; the envelope's own
       // clock only moves at block boundaries, so release() without a frame would start the
@@ -221,12 +255,85 @@ class SamplerVoice {
       for (uint32_t ch = 0; ch < outChannels && ch < 2; ++ch) {
         const uint32_t srcCh =
             spec_.source.channels >= 2 ? std::min(ch, spec_.source.channels - 1) : 0;
-        const float s = sampleAt(srcCh, frame, t);
+        float s = sampleAt(srcCh, frame, t);
+        // LOOP CROSSFADE. Seam-crossing taps make the loop CONTINUOUS in the interpolator's
+        // sense — no clamped flat spot — but they cannot make the waveform on either side of
+        // the seam MATCH. A sustained tone whose loop points are not at the same phase still
+        // steps, and at the loop rate. So the last `loopXfade` frames before the seam are
+        // faded against the audio that precedes loopStart, equal-power, which is what makes a
+        // hand-set loop on a real recording usable rather than only a lucky one.
+        //
+        // Forward loops only: ping-pong has no seam to fade (it turns around), and a backward
+        // loop's seam is the same one read the other way, which the same blend would smear.
+        if (looping_ && !releasedLoop_ && spec_.loopXfade > 0 && spec_.loopMode == 1 &&
+            loopLen_ > spec_.loopXfade) {
+          const uint64_t fadeFrom = loopEndClamped_ - spec_.loopXfade;
+          if (frame >= fadeFrom && frame < loopEndClamped_) {
+            const float u = static_cast<float>(frame - fadeFrom) /
+                            static_cast<float>(spec_.loopXfade);
+            // The audio just BEFORE loopStart is what the loop will jump away from hearing, so
+            // it is the natural partner for the tail.
+            const uint64_t partner = spec_.loopStart > spec_.loopXfade
+                                         ? (spec_.loopStart - spec_.loopXfade +
+                                            (frame - fadeFrom))
+                                         : (frame - fadeFrom);
+            const float other = sampleAt(srcCh, partner, t);
+            const float a = std::cos(u * 0.5f * static_cast<float>(M_PI));
+            const float b = std::sin(u * 0.5f * static_cast<float>(M_PI));
+            s = s * a + other * b;
+          }
+        }
         out[ch][dst] += s * g * (ch == 0 ? gl : gr);
       }
 
-      pos_ = spec_.reverse ? (pos_ - step_) : (pos_ + step_);
-      if (spec_.reverse && pos_ > (1ull << 63)) {  // wrapped below zero
+      // ---- ADVANCE, AND THE THREE LOOP MODES ARE HERE AND NOWHERE ELSE.
+      const bool backwards = spec_.reverse != (looping_ && !loopForward_);
+      pos_ = backwards ? (pos_ - step_) : (pos_ + step_);
+      if (loopLen_ > 0 && !releasedLoop_) {
+        const uint64_t a = spec_.loopStart << 32;
+        const uint64_t b = loopEndClamped_ << 32;
+        if (!looping_) {
+          // Not in the loop yet: entering it is what happens the first time playback reaches
+          // loopEnd. Before that the slot plays normally from startFrame, which is what makes
+          // "attack, then loop" the natural shape rather than a special case.
+          if (!spec_.reverse && pos_ >= b) {
+            looping_ = true;
+          }
+        }
+        if (looping_) {
+          switch (spec_.loopMode) {
+            case 2:  // PING-PONG: turn around rather than jump. The seam is continuous, which is
+                     // the whole reason to choose it over forward.
+              if (loopForward_ && pos_ >= b) {
+                pos_ = b - (pos_ - b) - 1;
+                loopForward_ = false;
+              } else if (!loopForward_ && (pos_ <= a || pos_ > (1ull << 63))) {
+                pos_ = a + (a - pos_);
+                loopForward_ = true;
+              }
+              break;
+            case 3:  // BACKWARD: the loop runs in reverse, wrapping from start back to end.
+              if (loopForward_) {
+                loopForward_ = false;  // entered forward; from here the loop runs backwards
+                pos_ = b - 1;
+              }
+              if (pos_ <= a || pos_ > (1ull << 63)) {
+                // `while`, not `if`: a loop shorter than one step is not exotic (a 20-frame
+                // loop at ratio 4), and a single subtraction would leave the position outside.
+                while (pos_ <= a || pos_ > (1ull << 63)) {
+                  pos_ += (loopLen_ << 32);
+                }
+              }
+              break;
+            default:  // FORWARD
+              while (pos_ >= b) {
+                pos_ -= (loopLen_ << 32);
+              }
+              break;
+          }
+        }
+      }
+      if (backwards && pos_ > (1ull << 63)) {  // wrapped below zero
         active_ = false;
         break;
       }
@@ -263,17 +370,41 @@ class SamplerVoice {
   }
 
  private:
-  // Reads with the neighbours the interpolator needs, clamped at the source's edges. S3 replaces
-  // the clamping at LOOP boundaries with a wrapped read across the seam — clamping there is where
-  // samplers click — but at the true start and end of the file, clamping is correct.
+  // THE INTERPOLATOR READS ACROSS THE SEAM.
+  //
+  // At a loop boundary the four taps come from the WRAPPED positions rather than from clamped
+  // ones. Clamping there flattens the waveform for three samples on every pass, which is a click
+  // AT THE LOOP RATE — so it reads as a buzz that is part of the sound rather than as a defect,
+  // and it is the single most common reason a looped sampler sounds cheap.
+  //
+  // At the true start and end of the FILE, clamping remains correct: there is nothing beyond.
   float sampleAt(uint32_t ch, uint64_t frame, float t) const {
     const float* plane = spec_.source.planes[ch];
     const uint64_t last = spec_.source.frames - 1;
     const uint64_t i0 = std::min(frame, last);
-    const uint64_t im1 = i0 > 0 ? i0 - 1 : 0;
-    const uint64_t i1 = std::min(i0 + 1, last);
-    const uint64_t i2 = std::min(i0 + 2, last);
-    return hermite4(plane[im1], plane[i0], plane[i1], plane[i2], t);
+    return hermite4(plane[neighbour(i0, -1, last)], plane[i0],
+                    plane[neighbour(i0, 1, last)], plane[neighbour(i0, 2, last)], t);
+  }
+
+  // Where tap `d` for centre `i0` actually lives. Inside an active loop this wraps into the loop
+  // range; outside one it clamps to the file.
+  uint64_t neighbour(uint64_t i0, int64_t d, uint64_t last) const {
+    int64_t x = static_cast<int64_t>(i0) + d;
+    if (looping_ && loopLen_ > 1) {
+      const int64_t a = static_cast<int64_t>(spec_.loopStart);
+      const int64_t b = static_cast<int64_t>(loopEndClamped_);
+      if (x >= b) {
+        // Past the seam: continue from the loop's start. Ping-pong turns around instead of
+        // wrapping, so its neighbour is mirrored rather than translated.
+        x = spec_.loopMode == 2 ? (b - 1 - (x - b)) : (a + (x - b));
+      } else if (x < a) {
+        x = spec_.loopMode == 2 ? (a + (a - x)) : (b - (a - x));
+      }
+    }
+    if (x < 0) {
+      x = 0;
+    }
+    return std::min<uint64_t>(static_cast<uint64_t>(x), last);
   }
 
   SamplerVoiceSpec spec_{};
@@ -281,6 +412,10 @@ class SamplerVoice {
   uint64_t pos_ = 0;  // 32.32 fixed point, in level-0 source frames
   uint64_t step_ = 0;
   uint64_t startFrame_ = 0, endFrame_ = 0;
+  uint64_t loopEndClamped_ = 0, loopLen_ = 0;
+  bool looping_ = false;      // are we INSIDE the loop right now?
+  bool loopForward_ = true;   // ping-pong direction
+  bool releasedLoop_ = false; // a sustain loop that has been let go plays out to endFrame
   uint64_t age_ = 0;
   uint32_t noteId_ = 0;
   uint16_t slotId_ = 0;
