@@ -51,7 +51,7 @@ cat > "$TMP/arr.uniproj.json" <<EOF
 EOF
 
 ( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
-    ./daw_engine --run-seconds 22 >"$TMP/engine.log" 2>&1 ) &
+    ./daw_engine --run-seconds 30 >"$TMP/engine.log" 2>&1 ) &
 ENG=$!
 sleep 2.5
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
@@ -118,6 +118,29 @@ V3="$(cli get arrangement 2>/dev/null | sed -n 's/.*"version": \([0-9]*\).*/\1/p
   fail "a NOTE edit moved the arrangement version ($V3_BEFORE -> $V3) — the spine version
         must be independent of the clip version, or the two invalidate each other"
 echo "  a note edit leaves the summary version alone ($V3)"
+
+# ---- THE SONG END MUST NOT GO STALE. It rides this region, and it changes on a PLACEMENT
+# edit — which moves no section. The rebuild was gated on the section version alone, so a client
+# drawing the song end from here kept the value from the last section edit, and could not tell:
+# the version it caches on had not moved either. Two facts in one region under one version, and
+# only one of the two inputs opening the gate.
+END0="$(echo "$SUMMARY" | sed -n 's/.*"song_end_tick": \([0-9]*\).*/\1/p' | head -1)"
+VER0="$(echo "$SUMMARY" | sed -n 's/.*"version": \([0-9]*\).*/\1/p' | head -1)"
+# Add a placement well past the current end. No section changes.
+cli do add-placement --track 0 --clip 1 --at $((40 * BAR44)) --length $BAR44 \
+  >/dev/null 2>&1 || true
+sleep 1.3
+SUMMARY="$(cli get arrangement 2>/dev/null || true)"
+END1="$(echo "$SUMMARY" | sed -n 's/.*"song_end_tick": \([0-9]*\).*/\1/p' | head -1)"
+VER1="$(echo "$SUMMARY" | sed -n 's/.*"version": \([0-9]*\).*/\1/p' | head -1)"
+[ "${END1:-0}" -gt "${END0:-0}" ] || \
+  fail "a placement past the song end left song_end_tick at ${END1:-?} (was ${END0:-?}) — the
+        region is gated on the section version and a placement edit moves no section, so the
+        published song end was stale with nothing to say so"
+[ "$VER1" != "$VER0" ] || \
+  fail "song_end_tick changed but the region version did not ($VER0), so a client caching on the
+        version never re-reads it — a fresh value nobody fetches is still a stale value"
+echo "  song end: a placement edit updates song_end_tick AND moves the version ($VER0 -> $VER1)"
 
 # ---- THE METER MAP MUST SURVIVE A SAVE. Everything above reads the meter from the FIXTURE,
 # so it all passed while the save wrote no time_sig_map at all: `document` is default

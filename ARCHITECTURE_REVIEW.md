@@ -321,13 +321,59 @@ new feature's rule should have reached.
   currently pins the second reading. Picking one silently is how a song ends up off its own bar
   grid, so nothing moves until you decide.
 
+- **The extent caps still truncate silently.** `kUiMaxClipExtents` went 64 → 256 and the
+  overflow is still a bare `break` with no count and no event, while the arrange region in the
+  same change *does* publish truncation counts. And `kUiMaxAudioClips = 64; // ==
+  kUiMaxClipExtents` is now a false comment: a project with more than 64 audio placements
+  publishes up to 256 extents and only 64 audio clips, so the rails draw boxes with no waveform
+  and the header asserts the two are equal. Raising it changes the region size, so it wants
+  batching with the next contract bump.
+
 - **Nothing publishes what automation actually PLAYED.** The engine keeps a `paramMirror` of
   the last emitted value per param but does not publish it, which is why the ripple/playback
   divergence above could only be found by reading code — every automation test asserts on the
   saved file. Publishing it would also serve the UI.
 
-- **A plain project may gain the engine's boot-default patcher graph on save.** Startup seeds
-  the pool with a Euclidean(16/5) + Passthrough, and the legacy "park the pool on the first
-  instrument" branch fires for any document with devices and no per-device graphs. Not yet
-  verified empirically; a Euclidean node generates notes, so if it is real the save invents
-  audible authored data.
+### Fixed after the first pass
+
+Everything below was open in the list above and has since been closed, kept here because the
+reasons are the useful part:
+
+- **A plain project gained the engine's boot-default patcher graph on save.** Confirmed
+  empirically: a fixture with zero patcher data came back from load → save with
+  `['euclidean', 'passthrough', 'audio_passthrough']` on its instrument. NOT audible — both
+  captures had the same 7 onsets and the same peak — but it invented authored-looking data, put
+  a generator the user never added into the patcher UI, and flipped
+  `documentHasPerDeviceGraphs` so the second save took a different branch than the first. Fixed
+  by parking the pool only when someone actually edited it; `tools/patcher_save_guard_check.sh`
+  asserts both that a clean project stays clean and that a real edit still round-trips.
+
+- **A project saved after removing a track lost a track when loaded back.** The load stored a
+  track COUNT where it needed an id EXTENT. Ids never renumber, so such a file has sparse ids —
+  and every publisher clamps to liveTrackCount while the save skips anything at or past it. The
+  highest track was adopted correctly, then hidden and dropped; the unclaimed slot came back as
+  an editable empty lane the same save wrote out as real. Reported from the UI as "a track
+  disappears on load", which read as a rename bug for days because the invented phantom supplied
+  the wrong name.
+
+- **The section ripple left the tempo change and the key change behind.** Now rippled; the meter
+  question above is what remains.
+
+- **A local delete inside a loop repeat did nothing and said nothing**, and **a local add with no
+  explicit length was saved, badged, and permanently silent** while clip scope handled the same
+  gesture correctly. The tracker OFF gesture with the local bit set stored a phantom
+  note-shaped nothing; now refused with a reason.
+
+- **The arrange region's song end went stale and its torn-read guard did not work.** The rebuild
+  was gated on the section version while the region also carries the song end, which changes on
+  a placement edit. And the version was only stamped AFTER the body was written, so
+  version-body-version could not detect a write in flight — the comment claiming otherwise was
+  simply wrong. The version is now the region's own generation and is 0 while writing.
+
+- **Fixtures are all AUTHORED, which is what shaped both of the worst bugs.** Dense ids from
+  zero, no tombstones, no overrides, and the "maximal" fixture carries no sections, no automation
+  and no overrides at all — it predates three Movements, so "through-engine save is faithful" had
+  never round-tripped any of Movement 3. `tools/edited_roundtrip_check.sh` is the general answer:
+  the fixture is produced BY EDITING, then round-tripped twice, asserting both that each thing
+  the session did survived and that the whole document is a fixed point. Verified to find the
+  sparse-id bug on its own.

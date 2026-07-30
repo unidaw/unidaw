@@ -413,10 +413,11 @@ impl EngineHandle {
     /// Reads the published clip extents — the placed-clip boxes that drive rails
     /// (M3.4) — under the seqlock. Loose (session) placements are not included.
     /// v27: the arrangement summary — the section spine RESOLVED, the meter points, and
-    /// the song end. Read under the region's OWN version rather than the seqlock: the
-    /// engine writes the whole region and then stores `version` behind a release fence, so
-    /// reading version-body-version and requiring the two to match is what makes a torn
-    /// read impossible. Returns None while a write is in flight or the region is absent.
+    /// the song end. Read under the region's OWN version rather than the seqlock. That version
+    /// is the region's GENERATION and it is 0 while a write is in progress, which is what makes
+    /// a torn read detectable: version-body-version alone was NOT sufficient, because the
+    /// engine used to leave the old version standing for the whole duration of the rewrite.
+    /// Returns None while a write is in flight or the region is absent.
     pub fn read_arrange_summary(&self) -> Option<crate::layout::UiArrangeSummaryRegion> {
         let offset = unsafe { (*self.header).ui_arrange_offset };
         let bytes = unsafe { (*self.header).ui_arrange_bytes };
@@ -429,6 +430,15 @@ impl EngineHandle {
             as *const crate::layout::UiArrangeSummaryRegion;
         for _ in 0..64 {
             let v0 = unsafe { std::ptr::read_volatile(&(*base).version) };
+            // 0 means a write is IN FLIGHT. Without this the read was not torn-safe at all,
+            // whatever the comments said: the engine only changed `version` AFTER writing the
+            // body, so sampling it, reading a body mid-rewrite, and sampling again before the
+            // stamp gave v0 == v1 and a torn spine that looked valid. The engine now zeroes it
+            // for the duration of the write, so a reader that lands inside one sees 0 and
+            // retries. Published generations start at 1.
+            if v0 == 0 {
+                continue;
+            }
             let snapshot = unsafe { std::ptr::read_volatile(base) };
             fence(Ordering::Acquire);
             let v1 = unsafe { std::ptr::read_volatile(&(*base).version) };

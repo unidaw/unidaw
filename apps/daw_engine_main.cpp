@@ -2893,18 +2893,45 @@ struct TrackRuntime {
   // meter, the meter points themselves, and the song end. Gated on sectionVersion so a
   // note edit does not rewrite it, and rebuilt whole rather than diffed: it is 4 KB and
   // a section reorder changes every entry anyway.
-  uint32_t lastArrangeVersion = 0xFFFF'FFFFu;
+  // The region's published `version` is its OWN GENERATION, not the section version, and it
+  // starts at 1 so that 0 can mean "a write is in flight" (see the stamping at the end).
+  //
+  // TWO THINGS THIS FIXES. First, the gate was the section version alone while the region also
+  // carries songEndTick — and the song end changes on a PLACEMENT edit, which moves no section.
+  // So a client that drew the song end from here kept the value from the last section edit, and
+  // no reader could tell: the version it caches on had not moved either. Gating on both inputs
+  // and publishing a generation means the number moves whenever anything in the region did.
+  // A note edit still moves nothing, which is the property arrange_summary_check pins:
+  // recomputeSongEnd runs only on a placement edit, a section ripple, or a load.
+  //
+  // Second, the torn read. The comments here used to claim that "reading version-body-version
+  // and requiring the two to match is what makes a torn read impossible". That was wrong. The
+  // version only changed AFTER the body was written, so a reader that sampled it, then read a
+  // body mid-rewrite, then sampled again BEFORE the writer stamped, saw v0 == v1 and accepted
+  // torn data. A seqlock needs the write to be visible while it is happening, which is what the
+  // 0 sentinel below provides — the same odd/even trick the main ui_version already uses.
+  uint32_t lastArrangeSpineVersion = 0xFFFF'FFFFu;
+  uint64_t lastArrangeSongEnd = 0xFFFF'FFFF'FFFF'FFFFull;
+  uint32_t arrangeGeneration = 0;
   auto writeUiArrangeSummary = [&](bool force) {
     if (!uiShm.header || uiShm.header->uiArrangeOffset == 0) {
       return;
     }
-    const uint32_t version = sectionVersion.load(std::memory_order_acquire);
-    if (!force && version == lastArrangeVersion) {
+    const uint32_t spineVersion = sectionVersion.load(std::memory_order_acquire);
+    const uint64_t songEnd = songEndNanotick.load(std::memory_order_acquire);
+    if (!force && spineVersion == lastArrangeSpineVersion &&
+        songEnd == lastArrangeSongEnd) {
       return;
     }
-    lastArrangeVersion = version;
+    lastArrangeSpineVersion = spineVersion;
+    lastArrangeSongEnd = songEnd;
+    ++arrangeGeneration;
     auto* region = reinterpret_cast<daw::UiArrangeSummaryRegion*>(
         reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiArrangeOffset);
+    // In flight from here until the stamp at the end: a reader that samples 0 retries instead
+    // of reading a half-rewritten spine.
+    region->version = 0;
+    std::atomic_thread_fence(std::memory_order_release);
     std::vector<daw::ResolvedSection> resolved;
     std::vector<daw::TimeSignaturePoint> points;
     {
@@ -2956,7 +2983,9 @@ struct TrackRuntime {
     region->sectionsTruncated =
         static_cast<uint32_t>(resolved.size()) - sectionFit;
     region->timeSigTruncated = static_cast<uint32_t>(points.size()) - pointFit;
-    region->songEndTick = songEndNanotick.load(std::memory_order_acquire);
+    // The same value the gate compared, not a fresh load: re-reading here could publish a
+    // song end this rebuild was not triggered by and will not be triggered by again.
+    region->songEndTick = songEnd;
     if (region->sectionsTruncated > 0 || region->timeSigTruncated > 0) {
       // Said out loud, not just in the region: a truncated list nobody notices reads as
       // a complete one, which is how "the arrangement view is missing sections" becomes
@@ -2966,7 +2995,7 @@ struct TrackRuntime {
           .field("timesig_dropped", region->timeSigTruncated);
     }
     std::atomic_thread_fence(std::memory_order_release);
-    region->version = version;
+    region->version = arrangeGeneration;
   };
 
   // M3.4: publish the placed-clip extents (rails). Rebuilt only when clipVersion
