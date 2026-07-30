@@ -224,7 +224,13 @@ enum class UiCommandType : uint16_t {
   /// with its samples inside it. A project that refers to a sample by absolute path stops
   /// playing the moment you send it to someone, which is the thing R3 exists to prevent, so the
   /// command that creates the reference should not be able to express one.
-  SamplerLoad = 73,  // next free 74
+  SamplerLoad = 73,
+
+  /// Edits ONE FIELD of one sampler slot. A field selector plus a value, rather than a payload
+  /// carrying every field, because a whole-slot payload would not fit 40 bytes AND would make
+  /// every edit a read-modify-write of state the caller may not have — two callers editing
+  /// different fields would clobber each other with stale copies of the rest.
+  SamplerSetSlot = 74,  // next free 75
 };
 
 // SAMPLER LOAD (opcode 73). Exactly 40 bytes, which is the whole command payload — so `name`
@@ -248,6 +254,47 @@ static_assert(sizeof(UiSamplerLoadPayload) == 40,
               "UiSamplerLoadPayload must fit the command payload exactly");
 
 inline constexpr uint16_t kSamplerLoadFixedPitch = 1u << 0;
+
+// WHICH slot field SamplerSetSlot writes. Named rather than an index into the struct, so adding
+// a field never renumbers an existing one — a renumbered selector would silently write the wrong
+// field on a saved macro or an agent's script.
+enum class SamplerSlotField : uint16_t {
+  VoiceGroup = 0,
+  Nna = 1,
+  Gate = 2,
+  Reverse = 3,
+  GainMillibels = 4,   // signed
+  PanThousandths = 5,  // signed
+  TuneCents = 6,       // signed
+  PitchTrackMilli = 7, // signed
+  RootKey = 8,
+  KeyLow = 9,
+  KeyHigh = 10,
+  VelLow = 11,
+  VelHigh = 12,
+  SelectMode = 13,
+  Polyphony = 14,
+  ChokeFadeUs = 15,
+  ModSetId = 16,
+  OutputStem = 17,
+  Quality = 18,
+  LayerGroup = 19,
+};
+
+// One slot field. `value` is SIGNED: four of the fields above are, and a negative gain, tune or
+// pan is a normal setting rather than an error — the euclidean octave_offset bug was exactly a
+// signed value pushed through an unsigned path.
+struct UiSamplerSetSlotPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetSlot);
+  uint16_t field = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t slotId = 0;
+  int32_t value = 0;
+  uint8_t reserved[20]{};
+};
+static_assert(sizeof(UiSamplerSetSlotPayload) == 40,
+              "UiSamplerSetSlotPayload must fit the command payload exactly");
 
 // M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
 // (the engine hashes it to the uid16 the wire and the param mirror use) — 16 bytes, which
@@ -403,6 +450,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SwapPlacementClip: return "swap_placement_clip";
     case UiCommandType::ClearPlacementAlternate: return "clear_placement_alternate";
     case UiCommandType::SamplerLoad: return "sampler_load";
+    case UiCommandType::SamplerSetSlot: return "sampler_set_slot";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";

@@ -703,6 +703,12 @@ pub enum UiCommandType {
     /// plays it — the whole "drop a sample, name it from a row, hear it" line. Carries
     /// UiSamplerLoadPayload, not the generic one.
     SamplerLoad = 73,
+
+    /// Edits ONE FIELD of one sampler slot (SamplerSlotField + a signed value). One field at a
+    /// time rather than a whole-slot payload: a whole slot does not fit 40 bytes, and it would
+    /// make every edit a read-modify-write, so two callers touching different fields would
+    /// clobber each other with stale copies of the rest.
+    SamplerSetSlot = 74,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -1284,6 +1290,46 @@ pub struct UiSamplerLoadPayload {
 /// playable zone. There is no mapping-MODE stored anywhere — this chooses which KEYS to write.
 pub const SAMPLER_LOAD_FIXED_PITCH: u16 = 1 << 0;
 
+/// Mirrors apps/event_payloads.h UiSamplerSetSlotPayload. `value` is SIGNED: gain, pan, tune and
+/// pitch-track all take negative values as normal settings.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerSetSlotPayload {
+    pub command_type: u16,
+    pub field: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub slot_id: u32,
+    pub value: i32,
+    pub reserved: [u8; 20],
+}
+
+/// Which slot field SamplerSetSlot writes. NAMED rather than an index into the struct, so adding
+/// a field never renumbers an existing one — a renumbered selector would silently write the
+/// wrong field on a saved macro or an agent's script.
+pub const SAMPLER_SLOT_FIELDS: &[(&str, u16)] = &[
+    ("voice-group", 0),
+    ("nna", 1),
+    ("gate", 2),
+    ("reverse", 3),
+    ("gain-mb", 4),
+    ("pan", 5),
+    ("tune-cents", 6),
+    ("pitch-track", 7),
+    ("root", 8),
+    ("key-low", 9),
+    ("key-high", 10),
+    ("vel-low", 11),
+    ("vel-high", 12),
+    ("select-mode", 13),
+    ("polyphony", 14),
+    ("choke-fade-us", 15),
+    ("mod-set", 16),
+    ("stem", 17),
+    ("quality", 18),
+    ("layer-group", 19),
+];
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UiChainCommandPayload {
@@ -1720,6 +1766,7 @@ mod wire_layout {
             UiMarkerCommandPayload,
             UiArrangeTimeCommandPayload,
             UiSamplerLoadPayload,
+            UiSamplerSetSlotPayload,
         );
     }
 
@@ -1730,5 +1777,6 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiCommandPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiChainCommandPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerLoadPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerSetSlotPayload>(), 40);
     }
 }

@@ -9913,6 +9913,129 @@ struct TrackRuntime {
           .field("name", name);
       return;
     }
+    // ---- SAMPLER SET SLOT (74). One field of one slot.
+    if (entry.size == sizeof(daw::UiSamplerSetSlotPayload) &&
+        commandType == daw::UiCommandType::SamplerSetSlot) {
+      daw::UiSamplerSetSlotPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.set_slot_rejected")
+            .field("track", p.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      const char* why = "no_such_slot";
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          for (auto& slot : d.sampler.slots) {
+            if (slot.id != p.slotId) {
+              continue;
+            }
+            const int32_t v = p.value;
+            // CLAMPED, NOT REFUSED, for range fields — a value out of range is almost always a
+            // caller's arithmetic rather than an intent, and refusing leaves the kit in a state
+            // the caller thinks it changed. Fields where a wrong value would be a DIFFERENT
+            // sound rather than a clipped one (modSetId, slot ids) are validated instead.
+            auto u8c = [](int32_t x) {
+              return static_cast<uint8_t>(std::clamp(x, 0, 255));
+            };
+            auto keyc = [](int32_t x) {
+              return static_cast<uint8_t>(std::clamp(x, 0, 127));
+            };
+            switch (static_cast<daw::SamplerSlotField>(p.field)) {
+              case daw::SamplerSlotField::VoiceGroup: slot.voiceGroup = u8c(v); break;
+              case daw::SamplerSlotField::Nna:
+                slot.nna = static_cast<daw::SamplerNna>(std::clamp(v, 0, 2));
+                break;
+              case daw::SamplerSlotField::Gate: slot.gate = v ? 1 : 0; break;
+              case daw::SamplerSlotField::Reverse: slot.reverse = v ? 1 : 0; break;
+              case daw::SamplerSlotField::GainMillibels:
+                slot.gainMillibels = static_cast<int16_t>(std::clamp(v, -9600, 2400));
+                break;
+              case daw::SamplerSlotField::PanThousandths:
+                slot.panThousandths = static_cast<int16_t>(std::clamp(v, -1000, 1000));
+                break;
+              case daw::SamplerSlotField::TuneCents:
+                slot.tuneCents = static_cast<int16_t>(std::clamp(v, -4800, 4800));
+                break;
+              case daw::SamplerSlotField::PitchTrackMilli:
+                slot.pitchTrackMilli = static_cast<int16_t>(std::clamp(v, -2000, 2000));
+                break;
+              case daw::SamplerSlotField::RootKey: slot.rootKey = keyc(v); break;
+              case daw::SamplerSlotField::KeyLow: slot.keyLow = keyc(v); break;
+              case daw::SamplerSlotField::KeyHigh: slot.keyHigh = keyc(v); break;
+              case daw::SamplerSlotField::VelLow: slot.velLow = keyc(v); break;
+              case daw::SamplerSlotField::VelHigh: slot.velHigh = keyc(v); break;
+              case daw::SamplerSlotField::SelectMode:
+                slot.selectMode = static_cast<uint8_t>(std::clamp(v, 0, 3));
+                break;
+              case daw::SamplerSlotField::Polyphony: slot.polyphony = u8c(v); break;
+              case daw::SamplerSlotField::ChokeFadeUs:
+                slot.chokeFadeUs = static_cast<uint32_t>(std::clamp(v, 0, 1000000));
+                break;
+              case daw::SamplerSlotField::ModSetId: {
+                // A mod set that does not exist would leave the slot with NO amp envelope, so
+                // it would go silent — refused rather than clamped, because "silent" is not a
+                // near-miss of what the caller asked for.
+                const uint16_t want = static_cast<uint16_t>(std::max(0, v));
+                if (!d.sampler.findModSet(want)) {
+                  why = "no_such_mod_set";
+                  goto done;
+                }
+                slot.modSetId = want;
+                break;
+              }
+              case daw::SamplerSlotField::OutputStem: slot.outputStem = u8c(v); break;
+              case daw::SamplerSlotField::Quality:
+                slot.quality = static_cast<uint8_t>(std::clamp(v, 0, 2));
+                break;
+              case daw::SamplerSlotField::LayerGroup:
+                slot.layerGroup = static_cast<uint16_t>(std::clamp(v, 0, 65535));
+                break;
+              default:
+                why = "unknown_field";
+                goto done;
+            }
+            applied = true;
+            goto done;
+          }
+        }
+      done:
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        DAW_EVENT("sampler.set_slot_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("slot", p.slotId)
+            .field("field", static_cast<uint32_t>(p.field))
+            .field("reason", why);
+        return;
+      }
+      DAW_EVENT("sampler.slot_set")
+          .field("track", p.trackId)
+          .field("device", p.deviceId)
+          .field("slot", p.slotId)
+          .field("field", static_cast<uint32_t>(p.field))
+          .field("value", static_cast<int64_t>(p.value));
+      return;
+    }
+
     // ---- SAMPLER LOAD (73). Mints a SOURCE and a SLOT that plays it.
     if (entry.size == sizeof(daw::UiSamplerLoadPayload) &&
         commandType == daw::UiCommandType::SamplerLoad) {

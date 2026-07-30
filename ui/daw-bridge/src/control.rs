@@ -1094,6 +1094,17 @@ impl EngineHandle {
         )
     }
 
+    /// Edit one field of one sampler slot.
+    pub fn send_sampler_set_slot(
+        &self,
+        payload: crate::layout::UiSamplerSetSlotPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerSetSlotPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerSetSlotPayload>(),
+        )
+    }
+
     /// Send a track-routing replace (SetTrackRouting). Same ring as send_command; a
     /// distinct payload shape.
     pub fn send_routing_command(

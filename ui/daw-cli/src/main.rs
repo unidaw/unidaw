@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{
     UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
-    UiCommandType, UiPatcherPresetCommandPayload, UiSamplerLoadPayload, UiWaveformRequestPayload,
-    MASTER_TRACK_ID, SAMPLER_LOAD_FIXED_PITCH,
+    UiCommandType, UiPatcherPresetCommandPayload, UiSamplerLoadPayload, UiSamplerSetSlotPayload,
+    UiWaveformRequestPayload, MASTER_TRACK_ID, SAMPLER_LOAD_FIXED_PITCH, SAMPLER_SLOT_FIELDS,
 };
 
 const USAGE: &str = "\
@@ -24,6 +24,10 @@ daw-cli — control surface for a running engine
   daw-cli do add-device --track N --kind sampler
   daw-cli do sampler-load --track N --device D --file NAME [--root 60] [--fixed-pitch]
                                    load a sample (project-relative name) and mint a slot
+  daw-cli do sampler-load --track N --device D --files a.wav,b.wav --root 36
+                                   lay a KIT: N samples on N consecutive keys, fixed pitch
+  daw-cli do sampler-slot --track N --device D --slot S --field voice-group --value 1
+                                   edit one slot field (--field with no match lists them all)
   daw-cli get arrangement          the markers (bar AND tick, resolved) + the meter map,
                                    the meter map, and the song end
   daw-cli get notes --track N      that track's notes from the published region
@@ -1950,6 +1954,15 @@ fn main() {
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
                     let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
                     let root = flag_u64(&args, "--root", Some(60)).unwrap_or(60) as u8;
+                    // --files lays a whole KIT down in one gesture: N samples on N consecutive
+                    // keys from --root. It sends N separate commands rather than inventing a
+                    // bulk payload, which keeps the 40-byte ring exactly as it is — the ring is
+                    // one cache line for lock-free reasons and should not grow to carry a list.
+                    let files_arg = args
+                        .iter()
+                        .position(|a| a == "--files")
+                        .and_then(|i| args.get(i + 1))
+                        .cloned();
                     let file = args
                         .iter()
                         .position(|a| a == "--file")
@@ -1957,8 +1970,74 @@ fn main() {
                         .cloned()
                         .unwrap_or_default();
                     let fixed = args.iter().any(|a| a == "--fixed-pitch");
-                    if file.is_empty() {
-                        eprintln!("daw-cli: sampler-load needs --file <name>");
+                    if let Some(list) = files_arg {
+                        let names: Vec<&str> =
+                            list.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+                        if names.is_empty() {
+                            eprintln!("daw-cli: --files was empty");
+                            2
+                        } else if names.len() > 128 {
+                            eprintln!("daw-cli: --files takes at most 128 names, got {}", names.len());
+                            2
+                        } else {
+                            let mut sent = 0usize;
+                            let mut bad: Option<String> = None;
+                            for (i, n) in names.iter().enumerate() {
+                                let key = (root as usize).saturating_add(i);
+                                if key > 127 {
+                                    bad = Some(format!(
+                                        "{} names from root {root} runs past key 127",
+                                        names.len()
+                                    ));
+                                    break;
+                                }
+                                if n.starts_with('/') || n.contains("..") {
+                                    bad = Some(format!("{n:?} is not project-relative"));
+                                    break;
+                                }
+                                if n.len() >= 24 {
+                                    bad = Some(format!("{n:?} is longer than 23 bytes"));
+                                    break;
+                                }
+                                let mut name = [0u8; 24];
+                                name[..n.len()].copy_from_slice(n.as_bytes());
+                                let payload = UiSamplerLoadPayload {
+                                    command_type: UiCommandType::SamplerLoad as u16,
+                                    // A KIT IS FIXED-PITCH BY DEFAULT. Eight one-shots laid on
+                                    // eight keys are eight drums, not eight overlapping zones —
+                                    // and overlapping full-range zones would make every key play
+                                    // all eight, which is a confusing first experience.
+                                    flags: SAMPLER_LOAD_FIXED_PITCH,
+                                    track_id: track,
+                                    device_id: device,
+                                    root_key: key as u8,
+                                    reserved: [0; 3],
+                                    name,
+                                };
+                                if let Err(err) = handle.send_sampler_load(payload) {
+                                    bad = Some(err);
+                                    break;
+                                }
+                                sent += 1;
+                            }
+                            match bad {
+                                // PARTIAL PROGRESS IS REPORTED. Stopping halfway and saying
+                                // nothing would leave a half-built kit that looks like a bug in
+                                // the engine rather than a bad argument.
+                                Some(why) => {
+                                    eprintln!("daw-cli: sampler-load --files stopped after {sent} of {}: {why}", names.len());
+                                    1
+                                }
+                                None => {
+                                    println!(
+                                        "{{ \"sent\": \"sampler-load\", \"track\": {track}, \"device\": {device}, \"files\": {sent}, \"base_key\": {root} }}"
+                                    );
+                                    0
+                                }
+                            }
+                        }
+                    } else if file.is_empty() {
+                        eprintln!("daw-cli: sampler-load needs --file <name> or --files a,b,c");
                         2
                     } else if file.starts_with('/') || file.contains("..") {
                         eprintln!(
@@ -1995,6 +2074,66 @@ fn main() {
                             Err(err) => {
                                 eprintln!("daw-cli: {err}");
                                 1
+                            }
+                        }
+                    }
+                }
+                Some(&"sampler-slot") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let slot = flag_u64(&args, "--slot", Some(0)).unwrap_or(0) as u32;
+                    let field_arg = args
+                        .iter()
+                        .position(|a| a == "--field")
+                        .and_then(|i| args.get(i + 1))
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    let value = args
+                        .iter()
+                        .position(|a| a == "--value")
+                        .and_then(|i| args.get(i + 1))
+                        .and_then(|v| v.parse::<i32>().ok());
+                    let field = SAMPLER_SLOT_FIELDS
+                        .iter()
+                        .find(|(n, _)| *n == field_arg)
+                        .map(|(_, id)| *id);
+                    match (field, value, slot) {
+                        // A field NAME rather than a number, and an unknown one LISTS the set
+                        // rather than doing nothing — a caller who mistypes should not have to
+                        // read the source to find out what is available.
+                        (None, _, _) => {
+                            let names: Vec<&str> =
+                                SAMPLER_SLOT_FIELDS.iter().map(|(n, _)| *n).collect();
+                            eprintln!("daw-cli: --field must be one of: {}", names.join(", "));
+                            2
+                        }
+                        (_, None, _) => {
+                            eprintln!("daw-cli: sampler-slot needs --value <int>");
+                            2
+                        }
+                        (_, _, 0) => {
+                            eprintln!("daw-cli: sampler-slot needs --slot <id> (ids start at 1)");
+                            2
+                        }
+                        (Some(field), Some(value), slot) => {
+                            let payload = UiSamplerSetSlotPayload {
+                                command_type: UiCommandType::SamplerSetSlot as u16,
+                                field,
+                                track_id: track,
+                                device_id: device,
+                                slot_id: slot,
+                                value,
+                                reserved: [0; 20],
+                            };
+                            match handle.send_sampler_set_slot(payload) {
+                                Ok(()) => {
+                                    println!("{{ \"sent\": \"sampler-slot\", \"track\": {track}, \"device\": {device}, \"slot\": {slot}, \"field\": {field_arg:?}, \"value\": {value} }}");
+                                    0
+                                }
+                                Err(err) => {
+                                    eprintln!("daw-cli: {err}");
+                                    1
+                                }
                             }
                         }
                     }
