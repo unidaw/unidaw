@@ -16,6 +16,15 @@
 // The timeline is unbounded, so there is no path here that materialises it.
 
 const OVERSCAN = 4;
+/*
+ * How many tracks to render beyond each edge of the viewport.
+ *
+ * Two, and SYMMETRIC — unlike OVERSCAN above, which is trailing only. A row window moves in
+ * whole rows and only grows downward as you scroll; horizontal scroll is continuous and
+ * bidirectional, so a leftward nudge of one pixel must not expose a gap for a frame while the
+ * window catches up.
+ */
+const OVERSCAN_TRACKS = 2;
 
 /** The eight per-track hues, as the custom-property values a rail is set to.
  *  Fixed at load; see paintClips for why they are a table. */
@@ -124,16 +133,27 @@ export class Tracker {
     // to work out a pool size that has not changed since the window was last
     // resized. The three inputs decide `need` entirely, so comparing them first
     // is both cheaper and exact.
+    /*
+     * THE POOL HOLDS SLOTS, sized to the viewport, not one track element per track in the song.
+     *
+     * `slotsNeeded` wants the measured plain-track width, which does not exist until a pool
+     * exists to measure a ruler against — so a cold start asks for all of them and the first
+     * measure() settles it. That is the same shape as the rest of this file's cold starts and
+     * is why `slotsNeeded` returns the whole count when the classes are unmeasured.
+     */
+    const slots = this.slotsNeeded(this.host.clientWidth || 0, rowCount) || rowCount;
     if (this._viewH === viewportHeight && this.cols === columns
-        && this.tracks === rowCount && this.poolSize > 0) return;
+        && this.tracks === rowCount && this.slotCount === slots && this.poolSize > 0) return;
     this._viewH = viewportHeight;
     const need = Math.ceil(viewportHeight / this.m.rowHeight) + OVERSCAN * 2;
-    if (need === this.poolSize && this.cols === columns && this.tracks === rowCount) return;
+    if (need === this.poolSize && this.cols === columns && this.tracks === rowCount
+        && this.slotCount === slots) return;
     this.poolSize = need;
     this.tracks = rowCount;
     this.cols = columns;
+    this.slotCount = slots;
     this.band.textContent = '';
-    this.pool = Array.from({ length: need }, () => this.makeRow(rowCount, columns));
+    this.pool = Array.from({ length: need }, () => this.makeRow(slots, columns));
     // The ruler carries `columns` cells like any track, so it is rebuilt with the pool — a
     // ruler measured at three columns while the strip draws six would put every track after
     // the first in the wrong place, which is the failure this whole model exists to prevent.
@@ -257,20 +277,34 @@ export class Tracker {
     // no DOM. Held by reference — the caller rebuilds them per frame into the same arrays.
     this._laneShow = laneShow;
     this._laneHidden = laneHidden;
+    this.applyLaneClasses();
+    this.measure();
+    return true;
+  }
+
+  /**
+   * The per-track lane classes, applied to whichever SLOT currently holds each track.
+   *
+   * Split out of `applyLaneShow` because it now has two callers: the lane set changing, and the
+   * track WINDOW moving. A slot that has just been repointed at a different track is wearing
+   * the previous track's `no-lane` and `folded` — which would be a track drawn at the wrong
+   * width, and therefore every track after it in the wrong place.
+   */
+  applyLaneClasses() {
+    const first = this._firstTrack | 0;
+    const show = this._laneShow, hidden = this._laneHidden;
     for (let i = 0; i < this.pool.length; i++) {
       const lanes = this.pool[i]._lanes;
       if (!lanes) continue;
-      for (let t = 0; t < lanes.length; t++) {
-        lanes[t].classList.toggle('no-lane', !(laneShow && laneShow[t]));
-        // A lane whose parent is collapsed takes no width. NOT removed and not
-        // renumbered: the track keeps its published index, so the cursor, the
-        // selection's field indices and every track-keyed command are untouched.
-        // Collapse is what is drawn, never what exists.
-        lanes[t].classList.toggle('folded', !!(laneHidden && laneHidden[t]));
+      for (let sIdx = 0; sIdx < lanes.length; sIdx++) {
+        const t = first + sIdx;
+        lanes[sIdx].classList.toggle('no-lane', !(show && show[t]));
+        // A lane whose parent is collapsed takes no width. NOT removed and not renumbered: the
+        // track keeps its published index, so the cursor, the selection's field indices and
+        // every track-keyed command are untouched. Collapse is what is drawn, never what exists.
+        lanes[sIdx].classList.toggle('folded', !!(hidden && hidden[t]));
       }
     }
-    this.measure();
-    return true;
   }
 
   /** Left edge of a cell, in band coordinates. Uses measured stride, so it
@@ -334,6 +368,107 @@ export class Tracker {
     if (wp === this._wPlain && wb === this._wBar && wl === this._wLaneBar) return false;
     this._wPlain = wp; this._wBar = wb; this._wLaneBar = wl;
     return true;
+  }
+
+  /**
+   * HOW MANY TRACK SLOTS A ROW NEEDS, and which track the first one holds.
+   *
+   * Slots are SEQUENTIAL, not a modulo ring. The plan this came from specified a ring — slot =
+   * track mod K — because that is what the row axis does, and a ring rebinds one slot per step
+   * instead of all K. It does not carry over: rows are absolutely positioned so their DOM order
+   * is free, and tracks are laid out by flex, where DOM order IS visual order. A ring would put
+   * track 8 before track 7 on screen.
+   *
+   * Sequential costs K rebinds per horizontal track-step rather than 1. K is about eight and
+   * horizontal scrolling is rare, so that is roughly a thousand guarded integer compares on a
+   * gesture nobody makes in a loop — against a per-slot map, an `order` write per slot, and a
+   * second index space for every reader to get wrong. Measured before optimised: if a horizontal
+   * step ever shows up in frametime.mjs, the ring is the answer and this comment is where to
+   * start.
+   *
+   * The payoff is the whole point: node count stops scaling with the SONG and starts scaling
+   * with the VIEWPORT. Measured at 384 DOM nodes per track, sixteen tracks was 6,375 against a
+   * 12,000 bound — about thirty tracks and then the surface simply stops.
+   */
+  slotsNeeded(viewW, trackCount) {
+    /*
+     * The count is a PARAMETER, not `this.tracks`.
+     *
+     * `resize()` assigns `this.tracks = rowCount` further down its own body, so reading it here
+     * answers with the PREVIOUS song's track count — and a project load that changes the count
+     * would size the pool for the song you just closed. That shipped as a golden failure on the
+     * child-tracks scene: the strip drew a column that the fixture does not have, because the
+     * slot count came from a sixteen-track state while the scene has seven.
+     */
+    const n = trackCount | 0;
+    if (!n) return 0;
+    // The narrowest a track can be is the plain class; anything wider means FEWER fit, so the
+    // narrowest is the safe divisor. Falling back to the whole track count before the classes
+    // are measured keeps a cold start identical to the old behaviour.
+    const min = this._wPlain || 0;
+    if (min < 1) return n;
+    return Math.min(n, Math.ceil(viewW / min) + 1 + OVERSCAN_TRACKS * 2);
+  }
+
+  /**
+   * The first track to render, from the horizontal scroll.
+   *
+   * Linear over `trackLeft` rather than a division: tracks are not a uniform stride (a lane
+   * carries its bar readout only when its bars differ from the song's, and a folded track is
+   * zero-width), so there is no closed form. Sixteen-ish comparisons, once per frame.
+   */
+  firstVisibleTrack(scrollX) {
+    const n = this.tracks | 0;
+    if (!n || !this.trackLeft) return 0;
+    const x = Math.max(0, scrollX);
+    let t = 0;
+    while (t < n && this.trackLeft[t + 1] <= x) t++;
+    return Math.max(0, Math.min(n - 1, t - OVERSCAN_TRACKS));
+  }
+
+  /**
+   * Point every slot at the track it now holds, and size the two spacers to cover the rest.
+   *
+   * ZERO LAYOUT READS: every number comes from the width model built in `measure()`, which is
+   * the whole reason that model had to stop being a read-back of flex layout. The spacers are
+   * exactly the tracks that are not rendered, so `scrollWidth` stays the strip's true extent
+   * and native horizontal scrolling keeps working untouched.
+   *
+   * Returns true when the window MOVED, so the caller can force a full rebind — every slot now
+   * holds a different track, and the per-cell guards would otherwise see unchanged text on a
+   * cell that belongs to somebody else.
+   */
+  updateTrackWindow(scrollX) {
+    const n = this.tracks | 0;
+    if (!n || !this.trackLeft) return false;
+    const k = Math.min(this.slotCount | 0, n);
+    let first = this.firstVisibleTrack(scrollX);
+    // Never leave slots empty at the right edge: if the window would run past the last track,
+    // slide it back so the row stays full.
+    if (first + k > n) first = Math.max(0, n - k);
+    const moved = first !== this._firstTrack;
+    this._firstTrack = first;
+
+    const lead = this.trackLeft[first];
+    const tail = Math.max(0, this.trackLeft[n] - this.trackLeft[Math.min(n, first + k)]);
+    for (let i = 0; i < this.pool.length; i++) {
+      const row = this.pool[i];
+      if (row._leadW !== lead) { row._leadW = lead; row._lead.style.width = lead + 'px'; }
+      if (row._tailW !== tail) { row._tailW = tail; row._tail.style.width = tail + 'px'; }
+      if (!moved) continue;
+      // The identity on the element follows its slot, or a test — and the hit test's sibling,
+      // `data-track` — would name a track this slot stopped holding.
+      const lanes = row._lanes, bars = row._laneBars, cells = row._cells;
+      for (let sIdx = 0; sIdx < k; sIdx++) {
+        const t = first + sIdx;
+        lanes[sIdx].dataset.track = String(t);
+        lanes[sIdx].style.setProperty('--tint', `var(--uni-track-tint-${t % 8})`);
+        bars[sIdx].dataset.track = String(t);
+        for (let c = 0; c < this.cols; c++) cells[sIdx * this.cols + c].dataset.track = String(t);
+      }
+    }
+    if (moved) this.applyLaneClasses();
+    return moved;
   }
 
   /** The width of track `t`, from its class. Defined for every track, drawn or not. */
@@ -494,26 +629,39 @@ export class Tracker {
      * in a polyrhythm those are different rows. The classes are toggled from a
      * cached number so a lane that did not change costs one integer compare.
      */
+    /*
+     * SLOTS HOLD TRACKS, and the mapping is a single offset.
+     *
+     * A row has `slotCount` track slots, not one per track in the song, and slot i shows track
+     * `first + i`. Because the slots are sequential rather than a modulo ring, everything the
+     * view-model indexes by track — laneBar, laneAcc, cells — is reachable by adding `first`
+     * once, and no per-slot lookup table exists to get out of step with anything.
+     *
+     * The view-model is still indexed by ABSOLUTE track throughout. Nothing outside this file
+     * learns that slots exist.
+     */
+    const first = this._firstTrack | 0;
     const lanes = elm._laneBars, lel = elm._lanes;
-    const ln = Math.min(lanes.length, row.laneBar.length);
-    for (let t = 0; t < ln; t++) {
-      const lb = lanes[t];
-      const txt = row.laneBar[t];
+    const ln = Math.min(lanes.length, Math.max(0, row.laneBar.length - first));
+    for (let i = 0; i < ln; i++) {
+      const lb = lanes[i];
+      const txt = row.laneBar[first + i];
       if (lb._text.nodeValue !== txt) lb._text.nodeValue = txt;
-      const acc = row.laneAcc[t];
+      const acc = row.laneAcc[first + i];
       if (lb._accV !== acc) {
         lb._accV = acc;
-        const e = lel[t];
+        const e = lel[i];
         e.classList.toggle('lbar', (acc & 1) !== 0);
         e.classList.toggle('lbeat', (acc & 2) !== 0 && (acc & 1) === 0);
       }
     }
 
     const cells = elm._cells;
-    const n = Math.min(cells.length, row.cells.length);
+    const base = first * this.cols;
+    const n = Math.min(cells.length, Math.max(0, row.cells.length - base));
     for (let i = 0; i < n; i++) {
       const cell = cells[i];
-      const c = row.cells[i];
+      const c = row.cells[base + i];
 
       /**
        * Where in the row the note actually sounds.
@@ -643,9 +791,19 @@ export class Tracker {
     // The renderer bound cells only on rebind, so live data never reached the
     // DOM: the grid kept showing whatever the first draw put there. A content
     // revision makes "the same rows now say something different" expressible.
+    /*
+     * WHICH TRACKS THIS FRAME SHOWS, before any row is bound.
+     *
+     * When the window moves every slot holds a DIFFERENT track, so a full rebind is required —
+     * the per-cell guards compare against what the slot last said, and that text now belongs to
+     * somebody else. Getting this wrong would not look like a bug in the window: it would look
+     * like stale notes in the wrong column, which is the hardest kind of wrong to attribute.
+     */
+    const trackWindowMoved = this.updateTrackWindow(vm.scrollX || 0);
     const needFull = !prev
       || prev.zoom.index !== vm.zoom.index
       || prev.tracks.length !== vm.tracks.length
+      || trackWindowMoved
       || (vm.contentRevision || 0) !== (prev.contentRevision || 0);
     const n = this.pool.length;
 
@@ -929,7 +1087,11 @@ export class Tracker {
   cellEl(cur) {
     const row = this.rowEl(cur.row);
     if (!row) return null;
-    return row._cells[cur.track * this.cols + cur.col] || null;
+    // Track to SLOT. A track outside the rendered window has no element, and null is the
+    // honest answer — the same answer this already gave for a row outside the row window.
+    const slot = cur.track - (this._firstTrack | 0);
+    if (slot < 0 || slot >= this.slotCount) return null;
+    return row._cells[slot * this.cols + cur.col] || null;
   }
 
   /**
