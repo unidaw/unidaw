@@ -245,46 +245,76 @@ Correct, and it kills the "expanded = one value column per family" idea outright
 digit on maybe three rows in sixty-four. A 24 px column with a header and padding for that is
 the mostly-empty complaint arriving by a different door.
 
-**The slot IS the value, wherever the value fits in the slot.**
+**COLLAPSED IS ONE CHARACTER FOR EVERY OP** (Jaakko's ruling), **and non-ASCII glyphs are
+allowed** (also his). That second permission is worth more than it sounds: a glyph can carry
+MAGNITUDE, where a letter can only carry presence.
+
+### The header is what makes it scale, not the encoding
+
+Two objections that killed position-memorisation: *"there can plausibly be more than 6 ops per
+row"* and *"there may be dozens of possible ops to choose from."*
+
+Both are answered by labelling rather than by encoding. `··P·3D` requires you to know that
+position 4 is retrigger. A header written above the slots requires you to read:
 
 ```
-row   note  vel  ops
-0000  C-4   112  ··P·3D      retrigger 3 — not the letter R, the actual 3
-0002  D#4    96  ··P·5·      retrigger 5
+T05 break
+row   note  vel   S  O       P  a  r  d
+0000  C-4   112  04  37/256  60  >  3  1/6
+0001  ···    ··  ··  ······  ··  ·  ·  ···
+0002  D#4    96  04     1/3  85  <  5  ···
 ```
 
-Position already says which family a slot belongs to, so the slot does not need to spend its one
-character repeating it. `ret` never needs a column, because its value already fits in the space
-its *presence* was going to cost. Pan was already doing this with `<` `=` `>`; the rule was
-there, applied to one family, and should simply be general.
+That is not a mask, it is a TABLE — which is what a tracker already is for note and velocity.
+This extends the header one level into a cell that never had one. Dozens of possible ops never
+appear at once, because slots are derived per track; more than six per row is fine, because a
+family costs one to six characters rather than a column with its own header and padding.
 
-**So the slot-set rule extends one level down: a family's slot is as wide as its values in THAT
-TRACK.**
+### The collapsed alphabet, and the font trap under it
 
-| family | typical value | slot width |
+**Measured, at 11 px IBM Plex Mono: the cell advance is 6.60 px and every ASCII character
+matches it exactly.** (An earlier measurement here said 7.57 px. That probe built its span from
+`getComputedStyle(...).font`, which serialised without a family, so it measured a proportional
+fallback — `0` came out 7.57 and `W` 12.09, in a font where they must be equal. The shorthand
+is the bug; longhands are correct.)
+
+Glyph coverage, same measurement:
+
+| set | result |
+|---|---|
+| `○ ◔ ◑ ◕ ●` pie | safe |
+| `▁ ▃ ▅ ▇ █` blocks | safe |
+| `◀ ◁ ◆ ▷ ▶` triangles | safe |
+| `░ ▒ ▓` shade | safe |
+| `↻ ⇥ ↦ →` arrows | safe |
+| `⟳` | **FAILS — 7.48 px**, falls back to another font |
+| `∿` | **FAILS — 6.42 px** |
+
+Geometric shapes and block elements are reliable; arrows are a coin flip. **A glyph missing from
+the font falls back to one with a different advance and misaligns the whole grid**, so every
+glyph in the alphabet needs a ratchet test asserting it measures the reference advance. A font
+update on another machine would otherwise break alignment silently.
+
+Given that, the collapsed character carries magnitude wherever the family is ordinal:
+
+| family | collapsed | reads as |
 |---|---|---|
-| retrigger | `3` | **1** |
-| pan | `+22` rendered `>` | **1** |
-| probability | `60` | 2 |
-| sound slot | `04` | 2 |
-| delay | `1/6` | 3 |
-| offset | `37/256` | 6 |
+| probability | `○ ◔ ◑ ◕ ●` | 0-20 … 80-100 % |
+| pan | `◀ ◁ ◆ ▷ ▶` | hard left … hard right |
+| offset | `▁ ▃ ▅ ▇ █` | how far into the sound |
+| delay | `▁ ▃ ▅ ▇` | how far into the row |
+| retrigger | `2`-`9`, `+` for >= 10 | the exact value, for free |
+| sound slot | the digit, or `◆` | which slot |
 
-A track whose retriggers are all single digit gets a one-character retrigger slot; one that
-holds a `ret12` gets two. Derived from content, per track — the same rule as the slot set
-itself, not a second mechanism and not a configuration step.
+Offset and delay share a ramp deliberately: they are the same KIND of quantity — how far in —
+and the header tells them apart. Retrigger is the case that made Jaakko's objection: its value
+already fits in the space its presence was going to cost, so it never needs widening at all.
+Pan was already doing this with `<` `=` `>`; the rule existed for one family and should simply
+be general.
 
-**Which dissolves "expanded mode" as a separate concept.** There is one ops cell whose internal
-layout is derived, and exactly one choice remains: for a family whose values do NOT fit in one
-character, do you want its width or its glyph? Offset is really the only family where that
-question has teeth (`37/256` versus `O`). For retrigger, pan, and anything else single-char, it
-never arises — you always get the value, for free.
-
-**N GROUPS, THEN, ARE ONLY A READABILITY DEVICE.** Jaakko's earlier suggestion — *"multiple op
-columns like renoise, each with a mask (say, max 6 each)"* — still earns its place, but for a
-smaller reason than I gave it: not partial zoom (which per-family width now provides
-continuously), just that a long ops string wants grouping the way a phone number does. Split at
-six families, with a rule between. No configuration, no separate mode.
+**Scanning a probability slot down sixty-four rows now shows the pattern's likelihood contour.**
+`P P P P` could never do that, and that is the whole argument for spending the character on a
+glyph rather than a letter.
 
 ### What we must do that Renoise does not
 
