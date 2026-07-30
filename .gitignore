@@ -34,3 +34,4 @@ ui/daw-app/tests/snapshots/*.svg
 
 # Per-project command journal (roadmap 19). Written beside the project it describes.
 history.jsonl
+build-tsan/

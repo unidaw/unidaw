@@ -2195,8 +2195,17 @@ struct TrackRuntime {
     // Movement 4: the sidechain / aux-output masks last sent on SetChain, so toggling
     // either with an otherwise-unchanged chain still re-reconciles. Guarded by
     // controllerMutex like config. 0 = none, matching a freshly launched host.
-    uint32_t lastSidechainMask = 0;
-    uint32_t lastAuxOutMask = 0;
+    // ATOMIC because the consumer's aux-plane diagnostic reads lastAuxOutMask WITHOUT taking
+    // controllerMutex (it try_locks only for shmView_, after this test), while the chain-reconcile
+    // path writes both under it. ThreadSanitizer caught it on an 8-track sampler render: a plain
+    // uint32_t written under a lock and read without one is a data race however naturally aligned
+    // it is, and "it will not tear on ARM64" is an argument about this compiler on this day.
+    //
+    // Relaxed on both sides is the right ordering: neither value guards other memory. They say
+    // which aux buses a host last reported, and a reader one cycle stale simply runs its
+    // diagnostic a block later.
+    std::atomic<uint32_t> lastSidechainMask{0};
+    std::atomic<uint32_t> lastAuxOutMask{0};
     std::atomic<bool> needsRestart{false};
     std::atomic<bool> restartInFlight{false};
     std::atomic<bool> hostReady{false};
@@ -4064,15 +4073,15 @@ struct TrackRuntime {
     // path but changes the name, and that still needs a reconcile.
     if (runtime.config.pluginPaths != pluginPaths ||
         runtime.config.pluginNames != pluginNames ||
-        runtime.lastSidechainMask != sidechainMask ||
-        runtime.lastAuxOutMask != auxOutMask) {
+        runtime.lastSidechainMask.load(std::memory_order_relaxed) != sidechainMask ||
+        runtime.lastAuxOutMask.load(std::memory_order_relaxed) != auxOutMask) {
       const bool hostRunning = runtime.hostReady.load(std::memory_order_acquire);
       {
         std::lock_guard<std::mutex> lock(runtime.controllerMutex);
         runtime.config.pluginPaths = pluginPaths;
         runtime.config.pluginNames = pluginNames;
-        runtime.lastSidechainMask = sidechainMask;
-        runtime.lastAuxOutMask = auxOutMask;
+        runtime.lastSidechainMask.store(sidechainMask, std::memory_order_relaxed);
+        runtime.lastAuxOutMask.store(auxOutMask, std::memory_order_relaxed);
       }
       // The chain changed: re-derive children from the new bus layout once the host is
       // ready again (the consumer picks this up).
@@ -4167,7 +4176,7 @@ struct TrackRuntime {
     uint32_t mask = 0;
     {
       std::lock_guard<std::mutex> lock(parent.controllerMutex);
-      mask = parent.lastAuxOutMask;
+      mask = parent.lastAuxOutMask.load(std::memory_order_relaxed);
     }
     // A SAMPLER'S STEMS ARE A SECOND SOURCE OF BUSES, and the first one this function ever had
     // that is not a plugin.
@@ -7337,8 +7346,8 @@ struct TrackRuntime {
           runtime->controller.disconnect();
           runtime->config.pluginPaths.clear();
           runtime->config.pluginNames.clear();
-          runtime->lastAuxOutMask = 0;
-          runtime->lastSidechainMask = 0;
+          runtime->lastAuxOutMask.store(0, std::memory_order_relaxed);
+          runtime->lastSidechainMask.store(0, std::memory_order_relaxed);
         }
         std::shared_ptr<const ClipSnapshot> snapshot;
         {
@@ -12078,8 +12087,8 @@ struct TrackRuntime {
             rt->controller.disconnect();
             rt->config.pluginPaths.clear();
             rt->config.pluginNames.clear();
-            rt->lastAuxOutMask = 0;
-            rt->lastSidechainMask = 0;
+            rt->lastAuxOutMask.store(0, std::memory_order_relaxed);
+            rt->lastSidechainMask.store(0, std::memory_order_relaxed);
           }
           std::shared_ptr<const ClipSnapshot> snapshot;
           {
@@ -16507,7 +16516,7 @@ struct TrackRuntime {
         // channel once as it first produces sound. This proves each stem reaches the
         // engine on its own channel — the foundation the child tracks route to master.
         for (auto* runtime : trackSnapshot) {
-          if (runtime->lastAuxOutMask == 0 ||
+          if (runtime->lastAuxOutMask.load(std::memory_order_relaxed) == 0 ||
               !runtime->hostReady.load(std::memory_order_acquire)) {
             continue;
           }
