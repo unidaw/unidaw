@@ -35,12 +35,15 @@ json.dump({"schema_version":4,"meta":{"name":"mo","created_utc":0,"modified_utc"
 PY
 
 LOG="$TMP/eng.log"
+# RENDERED OFFLINE. No sound card is involved in the answer this check asks, and the render
+# pump never skips a block or primes with silence, so a missing signal is a missing signal
+# rather than an underrun that may not repeat. The realtime pull path is pinned by
+# offline_render_check (a render against a device capture of the same fixture) and by the
+# checks that deliberately stay on hardware: audio_stability, sidechain, master_fx, panic,
+# preview_note, level_match_bypass.
 ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
-    DAW_CAPTURE_WAV="$TMP/m.wav" DAW_CAPTURE_SECONDS=5 ./daw_engine --run-seconds 5 >"$LOG" 2>&1 ) &
-ENG=$!; sleep 2
-DAW_UI_SHM_NAME="$SHM" "$CLI" do load mo --force >/dev/null 2>&1 || true; sleep 1
-DAW_UI_SHM_NAME="$SHM" "$CLI" do play --force >/dev/null 2>&1 || true
-wait "$ENG"
+    ./daw_engine --project mo --render m --run-seconds 5 >"$LOG" 2>&1 ) \
+  || { echo "FAIL: the render exited non-zero — see $LOG"; exit 1; }
 
 CHILDREN=$(grep -c "multiout.child_created" "$LOG" || true)
 echo "children created: $CHILDREN (expect 2)"
