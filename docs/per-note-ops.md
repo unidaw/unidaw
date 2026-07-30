@@ -125,87 +125,110 @@ The value for the note under the cursor goes in a status line — the full canon
 which costs no horizontal space and replaces `digitMode`, the only current indication of which
 field the cursor is in.
 
-## 2b. SO HOW DO YOU EXPRESS ALL SIX? THREE SURFACES, NOT SIX COLUMNS
+## 2b. SO HOW DO YOU EXPRESS ALL SIX? THREE SURFACES, AND THE LIMIT IS NOT PIXELS
 
-"More columns" is the wrong axis, and the arithmetic says so plainly. Reading, typing and
-scanning are three different tasks and they do not want the same surface.
+Jaakko, correctly: *"we can have any number of tracks and horizontal scroll. so a single
+track's width isn't constrained by anything physical."*
 
-**Measured strip: `.tk-host` is 1050 px at a 1680 px window** (1930 px at 2560), which matches
-the shell CSS — centre 1082 minus the 30 px minimap. An earlier draft of this document said
-466 px; that was the *content* width of a two-track song, not the container. The refutation's
-1052 was right and the mask design's 1570 was wrong.
+Right, and it invalidates the pixel-budget framing this document had twice. The strip already
+scrolls — measured `scrollWidth` 2076 px inside a 1050 px host at eight tracks. Width is a
+scrolling cost, not a wall. Two earlier width tables here (1570 px, then 466 px) were both
+wrong and both were answering a question that does not bind.
 
-| track shape | width | tracks in 1050 px |
+**What DOES bind is DOM nodes, because tracks are not virtualized.** Rows are: the pool is
+viewport-sized (`poolSize = ceil(viewportHeight/17) + 8`, ~48). Tracks are not —
+`makeRow(trackCount, columns)` builds `trackCount × columns` cells in *every* pooled row, so a
+track scrolled off screen costs exactly as much as one under the cursor.
+
+Measured, at 1680×980, three fields per track:
+
+| tracks | DOM nodes | per track |
 |---|---|---|
-| today | 230 px | 4 |
-| base, with mask | **174 px** | **6** |
-| one track with 2 value columns + rest base | 249 px | 5 |
-| **all six columns open on one track** | **367 px** | **2** |
+| 1 | 615 | — |
+| 4 | 1,767 | 384 |
+| 8 | 3,303 | 384 |
+| 16 | 6,375 | 384 |
 
-That last row is the answer to "more columns?" — **no, not six.** Six columns on one track
-costs more than the entire strip can spend. But the mask makes the base track *narrower* than
-today, so bringing one or two values forward on the track you are working on still leaves more
-on screen than the current layout does.
+Dead linear at **384 nodes per track** = 48 pooled rows × 8 nodes. The bound in
+`test/shot.mjs` is 12,000, so ~30 tracks today.
 
-### Surface 1 — TYPING: one cell, one string, all six ops
+Each extra value column costs ~96 nodes per track (48 rows × 2). Therefore:
 
-No columns are involved at all. The canonical form is already a whitespace-separated list —
-`parse_row_ops` takes `"ret3 p60 d1/6"` today — so the ops cell is a **text field**, and you
-type the whole set into it in one gesture:
+- six value columns on **one** track: +576 nodes. Free.
+- six value columns on **every** track at 16 tracks: ~15,400. **Over the bound.**
+
+**That is the real rule, and it is a better one than pixels: columns are cheap on the track you
+are working on and expensive as a default.** It points at exactly the same answer per-track
+toggling does, but for a reason that survives horizontal scroll.
+
+(Horizontal virtualization would lift this. It is not built, and it is a real piece of work —
+`cellLeft`, `hitTest` and the selection all index `track * cols + col` against a dense array.
+Worth doing eventually; not a prerequisite for any of this.)
+
+### Reading, typing and scanning are three tasks and want three surfaces
+
+**TYPING — one cell, one string, all six ops. No columns involved.**
+
+The canonical form is already a whitespace-separated list: `parse_row_ops` takes
+`"ret3 p60 d1/6"` today. So the ops cell is a **text field** and you type the whole set into it
+in one gesture:
 
 ```
 S04 o1/3 p85 pan+22 ret3 d1/6
 ```
 
-Order-free, nothing outranks anything, one undo entry. This is also exactly what an agent
-writes, which is the same string, which is the point: one grammar, one editor, no second
-notation to keep in step.
+Order-free, nothing outranks anything, one undo entry — and it is the identical string an agent
+writes. One grammar, one editor, no second notation to keep in step.
 
-### Surface 2 — READING AT A GLANCE: the mask, always on, every row of every track
+**READING AT A GLANCE — the mask, always on, every row of every track.**
+
+Six fixed slots, one character each, never shifting:
+
+| idx | family | glyphs |
+|---|---|---|
+| 0 | sound slot | `·` `S` |
+| 1 | offset | `·` `O` |
+| 2 | probability | `·` `P` |
+| 3 | pan | `·` `<` `=` `>` |
+| 4 | retrigger | `·` `R` |
+| 5 | delay | `·` `D` |
 
 ```
        │ T05 break          ▸ ││ T06 vox            ▸ │
  row   │ ln │ note  │vel│ ops  ││ ln │ note  │vel│ ops  │
 ───────┼────┼───────┼───┼──────┼┼────┼───────┼───┼──────┤
- 0000  │ ▌  │ C-4   │112│SOP<RD││ ▏  │ D-3   │ 96│SOP>·D│
+ 0000  │ ▌  │ C-4   │112│SOP>RD││ ▏  │ D-3   │ 96│··P·RD│
  0001  │ ▐  │ ···   │ ··│      ││ ▏  │ ···   │ ··│      │
- 0002  │ ▌  │ D#4   │ 96│SOP>R·││ ▏  │ D-3   │104│S··=·D│
- 0003  │ ▎  │ C-4   │ 72│SO·<RD││ ▏  │ ···   │ ··│      │
-         40   56     32    44        40   56    32    44     = 174px each
+ 0002  │ ▌  │ D#4   │ 96│SOP<R·││ ▏  │ D-3   │104│S··=·D│
 ```
 
-Row 0000 carries **all six at once** and every one of them is visible, on every track,
-simultaneously. 44 px. This is the part that has to be free, and it is.
+`SOP>RD` is all six at once, none outranking another. Because the positions never move, the eye
+learns "slot 4 is retrigger" and a whole pattern can be scanned for *which rows carry retrigs*
+with nothing opened. 128 possible strings, interned at module load, so the draw path writes a
+pointer and allocates nothing.
 
-### Surface 3 — SCANNING A VALUE: bring one or two forward, per track
+Blank — not dotted — on a track with no ops, so an ordinary kit track carries no new ink.
 
-A column exists for exactly one job: comparing a number down 64 rows. You never need six of
-them, because you are never tuning six parameters at once — you are tuning the one you are
-tuning. Open offset and probability on the break track you are chopping:
+**SCANNING A VALUE — bring one or two forward, on the track being tuned.**
+
+A column exists for exactly one job: comparing a number down 64 rows. You are never tuning six
+parameters at once; you are tuning the one you are tuning.
 
 ```
        │ T05 break                       ▸ o p ││ T06 vox            ▸ │
  row   │ ln │ note  │vel│ ops  │offset │prob ││ ln │ note  │vel│ ops  │
 ───────┼────┼───────┼───┼──────┼───────┼─────┼┼────┼───────┼───┼──────┤
- 0000  │ ▌  │ C-4   │112│SOP<RD│37/256 │  60 ││ ▏  │ D-3   │ 96│SOP>·D│
- 0002  │ ▌  │ D#4   │ 96│SOP>R·│   1/3 │  85 ││ ▏  │ D-3   │104│S··=·D│
-         └──────────── 249px ────────────┘        └───── 174px ─────┘
+ 0000  │ ▌  │ C-4   │112│SOP>RD│37/256 │  60 ││ ▏  │ D-3   │ 96│··P·RD│
+ 0002  │ ▌  │ D#4   │ 96│SOP<R·│   1/3 │  85 ││ ▏  │ D-3   │104│S··=·D│
 ```
 
-**The mask is what makes this safe.** In Renoise, closing a sub-column hides the fact that
-anything is in it. Here it cannot: the mask is permanent and non-toggleable, so a closed column
-is a *magnification* control and never a hiding one. `O` still shows on row 0000 whether or not
-the offset column is open.
+**The mask is what makes this safe.** Close a sub-column in Renoise and the fact that anything
+is in it disappears. Here it cannot: the mask is permanent and non-toggleable, so a closed
+column is a *magnification* control and never a hiding one — `O` stays lit on row 0000 whether
+or not the offset column is open.
 
 And the status line carries the full canonical string for the note under the cursor, so the
-cursor row is completely readable at all times with no columns open at all.
-
-### What that means for shipping
-
-The mask ships first and stands alone: narrower than what it replaces, fixes the live
-silent-drop bug, needs nothing from the engine. Columns follow, priced against 1050 px rather
-than 1570 — two per track, opt-in, and only affordable *because* the mask made the base track
-56 px narrower.
+cursor row is completely readable with no columns open at all.
 
 ---
 
@@ -241,9 +264,11 @@ both the marker and the extent will pass a test that never exercised the derive.
    only for starting part-way into a sound you did not chop. That is a real but rare want. It
    costs a schema entry and a wire field. Keep it, or wait until something needs it?
 
-2. **Two value columns per track, or more?** Two is what the 1050 px strip affords while still
-   showing five tracks. Three would be 4 tracks; all six would be 2. The cap is a judgement
-   about how many numbers you actually tune at once, not a technical limit.
+2. **Is there a cap on value columns per track, and is it a default or a per-track choice?**
+   The node arithmetic says any number is fine on a few tracks and nothing beyond ~2 is fine on
+   all of them. So the cap could be a soft one — open what you like, and the app says when the
+   node budget is the reason it is refusing — or a hard per-track number. Soft is more honest;
+   hard is more predictable.
 
 3. **Where does automation live?** It is an arrangement lane here, and a pattern effect column
    in every tracker. Jaakko listed it among the simultaneous things, which suggests it is wanted
