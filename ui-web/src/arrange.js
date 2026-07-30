@@ -299,6 +299,27 @@ export class Arrange {
     this.waveCanvas.className = 'ar-wave';
     this.clipsIn.appendChild(this.waveCanvas);
     this.waveCtx = this.waveCanvas.getContext('2d');
+    /*
+     * THE AUTOMATION LAYER, over the clips and under the playhead.
+     *
+     * Its own canvas rather than the waveform's, because the two are cached on entirely
+     * different things: the waveform repaints when decoded audio or the view window moves, and
+     * a curve repaints when somebody edits a point. Sharing one canvas would mean every
+     * automation edit repainting every waveform on screen, and the wave layer's guard exists
+     * precisely to stop that.
+     *
+     * OVER the clips, because a curve that runs under a region's wash is a curve you cannot
+     * read across the loudest part of the song — which is where automation usually is.
+     */
+    this.autoCanvas = document.createElement('canvas');
+    this.autoCanvas.className = 'ar-auto';
+    this.clipsEl.appendChild(this.autoCanvas);
+    this.autoCtx = this.autoCanvas.getContext('2d');
+    /** What the last automation paint was a picture OF. Every input, or it goes stale. */
+    this._auSig = '';
+    this._auColor = '';
+    this.autoRepaints = 0;
+
     this.playhead = div('ar-playhead', this.band);
 
     this.lanePool = [];
@@ -939,6 +960,24 @@ export class Arrange {
    * and this is the published frame. Binding both through one call would make a
    * project with no audio unable to draw its notes.
    */
+  /**
+   * Where the automation curves come from.
+   *
+   * A reader object rather than the data, for the reason `bindAudio` takes a cache: the page owns
+   * the fetching — a curve arrives on the ack channel after a request — and this surface owns the
+   * drawing. `revision` is what the paint guards on, so the page can say "something changed"
+   * without this file diffing point arrays every frame.
+   *
+   * Absent, nothing is drawn and nothing throws: a surface bound without a reader is what the
+   * arrangement was before automation had a read-back at all.
+   */
+  bindAutomation(curves) {
+    this.autoCurves = curves;
+    // Force the next paint: the reader changing is exactly the case a signature built from the
+    // OLD reader's revision cannot see.
+    this._auSig = '';
+  }
+
   bindEngine(engine) {
     this.engine = engine || null;
     this._wvNoteRev = -1;                // repaint against whatever just arrived
@@ -1557,6 +1596,8 @@ export class Arrange {
     // both are read from the same view-model, so painting after them keeps the
     // two in step within one frame rather than one frame apart.
     this._waves(vm, lh);
+    // After the waves, so a curve is drawn OVER the material it is shaping rather than under it.
+    this._paintAutomation(vm);
 
     const px = vm.playheadX;
     if (this._px !== px) {
@@ -1606,6 +1647,89 @@ export class Arrange {
   }
 
   /** Structure for tests and agents — the same contract the tracker's probe has. */
+  /**
+   * Draw the automation curves over the clips.
+   *
+   * ONE POLYLINE PER TRACK, for the lane that track has open. Not every lane at once: two curves
+   * in one 44px lane are two lines nobody can attribute, and the point of drawing automation is
+   * to see what a parameter DOES.
+   *
+   * GUARDED ON EVERY INPUT. The signature names the automation version, the window, the lane
+   * geometry and which lane each track has open — a picture that is a function of exactly those,
+   * so anything that can change it changes the key. GUIDELINES 2.1: content moving while the key
+   * stands still is this codebase's signature bug.
+   */
+  _paintAutomation(vm) {
+    const curves = this.autoCurves;
+    if (!curves) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, Math.round(this.clipsEl.clientWidth));
+    const h = Math.max(1, Math.round(this.clipsEl.clientHeight));
+    // The signature includes the CURVE REVISION rather than the curves themselves: comparing
+    // point arrays per frame would cost more than the paint it is trying to avoid.
+    const sig = `${curves.revision}|${vm.view.startTick}|${vm.view.ticksPerPixel}|${w}x${h}`
+              + `|${vm.laneHeight}|${vm.laneCount}|${vm.laneScroll}|${dpr}`;
+    if (sig === this._auSig) return;
+    this._auSig = sig;
+    this.autoRepaints++;
+
+    if (this.autoCanvas.width !== w * dpr || this.autoCanvas.height !== h * dpr) {
+      this.autoCanvas.width = w * dpr;
+      this.autoCanvas.height = h * dpr;
+      this.autoCanvas.style.width = `${w}px`;
+      this.autoCanvas.style.height = `${h}px`;
+    }
+    const ctx = this.autoCtx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (!this._auColor) {
+      // Read from the THEME once, not hardcoded: the accent is a token and a canvas cannot use
+      // a CSS variable. Re-read when the canvas is rebuilt, so a theme change is picked up.
+      this._auColor = getComputedStyle(this.host).getPropertyValue('--base-accent').trim()
+                      || '#9184d9';
+    }
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = this._auColor;
+
+    const tpp = vm.view.ticksPerPixel;
+    const startTick = vm.view.startTick;
+    for (let i = 0; i < vm.laneCount; i++) {
+      const lane = vm.lanes[i];
+      const c = curves.forTrack(lane.track);
+      if (!c || !c.points || c.points.length === 0) continue;
+      // The lane's box in the strip's own space, minus the vertical scroll. Inset so a value of
+      // 1 does not sit exactly on the lane border above it and read as belonging to that lane.
+      const top = lane.y - (vm.laneScroll || 0) + 3;
+      const height = lane.height - 6;
+      if (top + height < 0 || top > h) continue;
+      ctx.beginPath();
+      let started = false;
+      for (let k = 0; k < c.points.length; k++) {
+        const [tick, value] = c.points[k];
+        const x = (tick - startTick) / tpp;
+        const y = top + (1 - Math.max(0, Math.min(1, value))) * height;
+        if (!started) { ctx.moveTo(x, y); started = true; continue; }
+        /*
+         * A DISCRETE clip STEPS and a ramped one does not, and drawing the wrong one is worse
+         * than drawing neither: a stepped curve drawn as a ramp says the parameter passes
+         * through values it never takes. The engine publishes which, per lane.
+         */
+        if (c.discrete) {
+          const prev = c.points[k - 1];
+          const py = top + (1 - Math.max(0, Math.min(1, prev[1]))) * height;
+          ctx.lineTo(x, py);
+        }
+        ctx.lineTo(x, y);
+      }
+      // ...and CARRY ON to the right edge. A curve that stops at its last point looks like a
+      // parameter that stops being automated there; it holds that value to the end of the song.
+      const last = c.points[c.points.length - 1];
+      const lastY = top + (1 - Math.max(0, Math.min(1, last[1]))) * height;
+      ctx.lineTo(w, lastY);
+      ctx.stroke();
+    }
+  }
+
   probe() {
     const vm = this.vm;
     if (!vm) return null;
@@ -1690,6 +1814,20 @@ export class Arrange {
        * on screen has data behind it, so "the waveform is missing" and "the
        * waveform is empty" are different answers rather than the same blank lane.
        */
+      /** The automation layer, in numbers a test can assert before it looks at a pixel. */
+      automation: {
+        bound: !!this.autoCurves,
+        repaints: this.autoRepaints,
+        drawn: (() => {
+          if (!this.autoCurves) return 0;
+          let n = 0;
+          for (let i = 0; i < vm.laneCount; i++) {
+            const c = this.autoCurves.forTrack(vm.lanes[i].track);
+            if (c && c.points && c.points.length) n++;
+          }
+          return n;
+        })(),
+      },
       wave: {
         bound: !!this.waveCache,
         themed: this.waveThemed,

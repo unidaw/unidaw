@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 20;
+export const WIRE_VERSION = 21;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 172;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
+const HEADER_BYTES = 180;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -209,6 +209,17 @@ export function createStore() {
      * nothing has started. The chrome draws nothing while they are zero.
      */
     blockSize: 0, sampleRateHz: 0,
+    /**
+     * WHICH PARAMETERS ARE AUTOMATED — the list, never the curves.
+     *
+     * `{track, target, points, discrete, param}` per lane. The points are fetched per lane on
+     * request, because a song can hold far more automation than a frame should carry and only
+     * the open lanes are ever drawn.
+     *
+     * `automationTruncated` non-zero means the list is INCOMPLETE, and an incomplete list that
+     * says nothing reads as a complete one.
+     */
+    automation: [], automationCount: 0, automationTruncated: 0, automationVersion: 0,
     /**
      * Moves when a lane's quantize changes and NEVER when a note does — backend
      * kept it off the clip version deliberately, since quantize moves no authored
@@ -745,6 +756,50 @@ export function decode(buf, store) {
       }
       store.sectionCount = have;
     }
+    // Where the sections END, so the automation block after them needs no second scan.
+    store.sectionsEnd = at + have * SECTION_BYTES;
+  }
+
+  /*
+   * The automation LANES, after the sections. Same discipline as everything else on this wire:
+   * the pool grows and is never shrunk, the count is the authority, and the TAIL IS BLANKED so
+   * a reader that forgets the count sees an obviously-empty lane rather than a convincing
+   * stale one.
+   */
+  {
+    const at = store.sectionsEnd;
+    const want = v.getUint16(172, true);
+    const version = v.getUint32(176, true);
+    const have = Math.max(0, Math.min(want, (buf.byteLength - at) / AUTOMATION_BYTES | 0));
+    store.automationTruncated = v.getUint16(174, true);
+    if (version !== store.automationVersion || have !== store.automationCount) {
+      store.automationVersion = version;
+      while (store.automation.length < have) {
+        store.automation.push({ track: 0, target: 0, points: 0, discrete: false, param: '' });
+      }
+      for (let i = 0; i < have; i++) {
+        const o = at + i * AUTOMATION_BYTES;
+        const l = store.automation[i];
+        l.track = v.getUint32(o, true);
+        l.target = v.getUint32(o + 4, true);
+        l.points = v.getUint32(o + 8, true);
+        l.discrete = (v.getUint32(o + 12, true) & 1) !== 0;
+        // Nul-PADDED to 16, like every other name here: a 16-character id carries no
+        // terminator, so the scan is bounded by the field.
+        let name = '';
+        for (let k = 0; k < 16; k++) {
+          const c = v.getUint8(o + 16 + k);
+          if (c === 0) break;
+          name += String.fromCharCode(c);
+        }
+        l.param = name;
+      }
+      for (let i = have; i < store.automation.length; i++) {
+        const l = store.automation[i];
+        l.track = 0; l.target = 0; l.points = 0; l.discrete = false; l.param = '';
+      }
+      store.automationCount = have;
+    }
   }
 
   store.ok = true;
@@ -759,6 +814,8 @@ const METER_BYTES = 16;
 const QUANTIZE_BYTES = 24;
 /** 56 bytes each; see the sidecar's encode. */
 const SECTION_BYTES = 56;
+/** UiAutomationLane on the wire: track, target, points, flags, paramId[16]. */
+const AUTOMATION_BYTES = 32;
 /** kUiMeterSilent — silent or below the floor, NOT "no reading". */
 export const METER_SILENT = -32768;
 

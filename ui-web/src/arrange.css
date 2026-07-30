@@ -229,6 +229,16 @@
 }
 .ar-gridline.bar { background: var(--uni-rule-track); }
 
+/* The automation layer: curves over the clips, under the playhead. Its own canvas,
+   because a curve repaints when somebody edits a point and a waveform repaints when
+   the view or the decoded audio moves — sharing one would make every automation edit
+   repaint every waveform on screen. */
+.ar-auto {
+  position: absolute; top: 0; left: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+
 /* The waveform band. First child of the clip wrapper, so the clip blocks paint
    over it — a region's wash, border and name belong on top of its material.
    Its width, height and x are all written from JS, because all three are

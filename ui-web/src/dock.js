@@ -330,6 +330,50 @@ export function createCommands(api) {
      * validator does not). `map` does all three, which is why it takes a track and a
      * parameter and not a link's worth of arguments.
      */
+    /*
+     * AUTOMATION. A read, because that is what this app can do with it: the lanes and the
+     * curves are published (v28) and authoring a point is the next piece — said in the help
+     * rather than left for someone to discover by looking for a write command.
+     */
+    automation: { help: 'automation [track] — which parameters are automated',
+      args: [A_TRACK_OPT],
+      run: (a) => {
+        const t = a[0] === undefined ? undefined : Number(a[0]);
+        const m = api.automation(t);
+        if (!m) return 'no engine';
+        if (!m.list.length) {
+          return t === undefined ? 'nothing in this song is automated'
+                                 : `nothing on track ${t} is automated`;
+        }
+        const rows = m.list.map((l) =>
+          `t${l.track}  ${l.param}  ${l.points} point${l.points === 1 ? '' : 's'}`
+          + `  ${l.discrete ? 'stepped' : 'ramped'}`);
+        // Truncation is reported. An incomplete list that says nothing reads as a complete one.
+        if (m.truncated) rows.push(`… and ${m.truncated} more the engine could not publish`);
+        return rows.join('\n');
+      } },
+    autopoint: { help: 'autopoint <track> <param> <tick> <value> — write one automation point',
+      args: [A_TRACK, { name: 'param', type: 'text' },
+             { name: 'tick', type: 'int', min: 0 },
+             { name: 'value', type: 'num', min: 0, max: 1 }],
+      // Writing the same tick again REPLACES that point. Said in the reply, because "wrote a
+      // point" and "moved the point that was there" look the same from outside and only one of
+      // them is what a second call at the same tick does.
+      run: (a) => (api.writeAutomation(Number(a[0]), a[1], Number(a[2]), Number(a[3]))
+        ? `${a[1]} = ${a[3]} at ${a[2]} (a point at that tick is replaced)` : refusal(api)) },
+    curve: { help: 'curve <track> <param> — one automation lane, point by point',
+      args: [A_TRACK, { name: 'param', type: 'text' }],
+      run: (a) => {
+        const c = api.automationPoints(Number(a[0]), a[1]);
+        // `null` is "asked, not answered yet" — a different fact from "nothing automates
+        // that", which the engine says explicitly with found:false.
+        if (!c) return 'asking the engine… run it again in a moment';
+        if (!c.found) return `nothing automates ${a[1]} on track ${a[0]}`;
+        const rows = c.points.map(([tick, v]) => `${tick}  ${v.toFixed(3)}`);
+        if (c.truncated) rows.push(`… and ${c.truncated} more points than the slot could carry`);
+        return `${c.points.length} points, ${c.discrete ? 'stepped' : 'ramped'}\n`
+             + rows.join('\n');
+      } },
     mods: { help: 'mods [track] — what modulates what', args: [A_TRACK_OPT],
       run: (a) => {
         const t = a[0] === undefined ? undefined : Number(a[0]);

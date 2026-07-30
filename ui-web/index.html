@@ -972,23 +972,14 @@ function unmapParam(track, link) {
               srcDevice: found.sourceDevice, srcId: found.sourceId,
               dstDevice: found.targetDevice, dstParam: found.targetId });
   /*
-   * AND DROP IT LOCALLY — the one place in this file that edits published state.
+   * NOTHING IS DROPPED LOCALLY ANY MORE, and that is the point.
    *
-   * The engine's `emitModSnapshot` iterates the registry's links, so a track whose LAST
-   * link was just removed publishes nothing at all: the version moves and nothing carries
-   * it here. Removing one of several is fine (the rest republish under a new version); it
-   * is only the last one that would leave a lit badge for a link that no longer exists.
-   *
-   * Bounded deliberately: only when this was the last link, and only for the track it was
-   * on. Asked backend for the same sentinel entry an empty CHAIN already publishes, and
-   * this goes when that arrives.
+   * This used to edit published state: an emptied registry published nothing at all, so
+   * removing a track’s LAST link was invisible, and the badge stayed lit for a link that no
+   * longer existed. Backend now emits a one-entry sentinel for an empty registry — the same
+   * thing an empty CHAIN has always done — so a removal arrives like every other change and
+   * the one place in this file that guessed at engine state is gone.
    */
-  const c = chains[track];
-  if (c && Array.isArray(c.modLinks) && c.modLinks.length === 1
-      && c.modLinks[0].id === n) {
-    c.modLinks = [];
-    chainRevision++;
-  }
   state.reject = null;
   schedule();
   return true;
@@ -1017,25 +1008,17 @@ function sourceDeviceBefore(track, device) {
 }
 
 /**
- * Change how far a source sweeps its target: REMOVE, then ADD.
+ * Change how far a source sweeps its target. ONE COMMAND, in place.
  *
- * I assumed `AddModLink` with an existing id replaced that link — the comment saying so is
- * gone, because it does not: the engine refuses it as `kModErrLinkExists`. There is no
- * update opcode, so the only way to change a depth is to destroy the link and make it
- * again, which is what this does.
+ * It used to be a remove and an add, because `AddModLink` with an existing id is refused and
+ * there was no update opcode — so the link got a new id, came back UNNAMED (and an unnamed link
+ * moves nothing, so the depth change silently disabled the modulation until a second command
+ * named it again), and the pair was not atomic. Backend added `SetModLinkDepth` on the strength
+ * of that report; this is what it looks like with the opcode it needed.
  *
- * TWO CONSEQUENCES, both real and neither hidden:
- *
- *  - THE LINK GETS A NEW ID. The engine assigns `max + 1`, so nothing that remembered the
- *    old one is still right. Nothing here does: the badge reads its id from the published
- *    snapshot every frame, which is why that is where it lives rather than in a variable.
- *  - IT IS NOT ATOMIC. For the moment between the two commands the parameter is unmodulated.
- *    On the same ring and in order, so it is one block at most — acceptable for a depth
- *    change, and the reason this is not offered as a drag: a continuous gesture would tear
- *    the link down and rebuild it per frame.
- *
- * Asked backend for an update path. Until then this is the operation the engine offers,
- * described accurately rather than wrapped in a name that implies less work.
+ * WHICH MAKES A SLIDER POSSIBLE. The old shape could not be dragged — a continuous gesture
+ * would have destroyed and rebuilt the link on every frame — and that was a UI limitation
+ * caused entirely by the opcode set rather than by anything about the interface.
  */
 function modDepth(track, link, depth) {
   if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
@@ -1045,19 +1028,12 @@ function modDepth(track, link, depth) {
   if (!Number.isFinite(d)) { state.reject = 'a depth is a number from 0 to 1'; schedule(); return false; }
   const found = (modsOf(track) || { links: [] }).links.find((l) => l.id === n);
   if (!found) { state.reject = `no link ${n} on track ${track}`; schedule(); return false; }
-  // The devices go on the REMOVE too. See `unmapParam`: the engine validates them before it
-  // will remove anything, so a remove naming only the link is refused.
-  conn.send({ type: 'mod', op: 'remove', track, link: n,
-              srcDevice: found.sourceDevice, srcId: found.sourceId,
-              dstDevice: found.targetDevice, dstParam: found.targetId });
   /*
-   * Every field of the original goes back out, not just the depth. The remade link has to
-   * be the same link in every other respect — a message carrying only the new depth would
-   * take the builder's defaults for the source, the target and the rate, which for a link
-   * on the last plugin means an illegal forward order and a refusal, from a command that
-   * said "change the depth".
+   * The devices and kinds go out even though `SetModLinkDepth` ignores them. A payload with
+   * holes in it is a payload somebody fills in wrongly later, and the builder packs the flags
+   * from these fields regardless.
    */
-  conn.send({ type: 'mod', op: 'add', track,
+  conn.send({ type: 'mod', op: 'depth', track, link: n,
               srcDevice: found.sourceDevice, srcId: found.sourceId,
               dstDevice: found.targetDevice, dstParam: found.targetId,
               depth: Math.max(0, Math.min(1, d)), bias: found.bias,
@@ -1065,13 +1041,6 @@ function modDepth(track, link, depth) {
               target: MOD_TARGET_NAMES[found.targetKind] || 'param',
               rate: found.rate === 1 ? 'sample' : 'block',
               enabled: found.enabled ? 1 : 0 });
-  // ...and NAME it again. The uid16 belongs to the link, not to the parameter, so the new
-  // link starts unnamed — and an unnamed link moves nothing. Queued like the map click's,
-  // and drained by `namePendingMaps` when the engine reports the new id.
-  if (found.uid16) {
-    pendingMaps.push({ track, device: found.targetDevice, param: found.targetId,
-                       uid: found.uid16 });
-  }
   state.reject = null;
   schedule();
   return true;
@@ -1087,6 +1056,135 @@ function modDepth(track, link, depth) {
  */
 const MOD_SOURCE_NAMES = ['macro', 'lfo', 'env', 'node'];
 const MOD_TARGET_NAMES = ['param', 'patcher', 'macro'];
+
+/**
+ * WHAT THE ARRANGEMENT DRAWS AUTOMATION FROM.
+ *
+ * `forTrack(track)` answers with the curve for the lane that track has open, or null. It also
+ * ASKS for a curve it does not hold yet — which is why this is a reader with behaviour rather
+ * than a plain map: the arrangement draws what has arrived and the request happens as a side
+ * effect of it being wanted, so a lane appears the moment the engine answers rather than
+ * needing a second gesture.
+ *
+ * `revision` is what the paint guards on. It moves when a curve arrives or the engine's lane
+ * version changes, and NOT when a note is typed — so the canvas repaints when a curve changes
+ * and at no other time.
+ */
+let automationRevision = 0;
+const automationReader = {
+  get revision() {
+    // The engine's lane version is part of it: a lane appearing or disappearing changes the
+    // picture even when no curve has arrived.
+    return automationRevision + (engine ? engine.automationVersion * 1000000 : 0);
+  },
+  forTrack(track) {
+    /*
+     * `engine.automation` MAY NOT EXIST. The fixtures build partial stores by hand — a shape
+     * with the fields a scene needs and nothing else — so a reader that assumes a field the
+     * decoder always writes still throws under `?engine=off`. This one did:
+     * "Cannot read properties of undefined (reading 'length')", from a canvas paint, which
+     * took the whole arrange golden down.
+     *
+     * Guarding the ARRAY rather than adding the field to every fixture: a fixture exists to be
+     * a minimum, and making all of them carry every field to satisfy one reader is the
+     * arrangement that goes stale on the next field.
+     */
+    if (!engine || !Array.isArray(engine.automation)) return null;
+    // The FIRST lane on this track. One curve per lane at a time: two in a 44px lane are two
+    // lines nobody can attribute, and which one is shown is a choice worth making explicitly
+    // when there is somewhere to make it.
+    const n = Math.min(engine.automationCount, engine.automation.length);
+    for (let i = 0; i < n; i++) {
+      const l = engine.automation[i];
+      if (l.track !== track) continue;
+      const key = `${track}:${l.param}`;
+      const hit = automationCurves.get(key);
+      if (hit && hit.version === engine.automationVersion) return hit.found ? hit : null;
+      // Not held, or held at an older version. Ask — and `requestAutomation` will not ask twice
+      // for the same thing, so calling this per frame costs one Map lookup.
+      requestAutomation(track, l.param);
+      return null;
+    }
+    return null;
+  },
+};
+
+/**
+ * WRITE one automation point.
+ *
+ * Addressed by (track, param, tick): writing the same tick again REPLACES that point rather
+ * than stacking a second one on it, which is what makes drawing a curve with a pointer possible
+ * rather than a way to accumulate duplicates.
+ *
+ * The value is CLAMPED and not refused. A gesture that runs past the end of a fader is an
+ * ordinary thing for a pointer to do, and refusing the last pixel of a drag would make the
+ * control feel broken at exactly the extremes people reach for.
+ */
+function writeAutomation(track, param, tick, value, discrete) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  const p = String(param || '').trim();
+  if (!p) { state.reject = 'which parameter?'; schedule(); return false; }
+  const v = Number(value);
+  if (!Number.isFinite(v)) { state.reject = 'a value is a number from 0 to 1'; schedule(); return false; }
+  conn.send({ type: 'autopoint', track: Number(track) || 0, param: p,
+              tick: Math.max(0, Math.round(Number(tick) || 0)),
+              value: Math.max(0, Math.min(1, v)), discrete: discrete ? 1 : 0 });
+  /*
+   * The cached curve for this lane is dropped, not patched.
+   *
+   * Patching it would be this side inventing what the engine holds — the engine may merge, clamp
+   * or replace, and a curve drawn from a guess is the exact failure the read-back exists to
+   * prevent. Dropped, so the next read asks again.
+   */
+  automationCurves.delete(`${track}:${p}`);
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
+ * WHICH PARAMETERS ARE AUTOMATED, from the standing lane list.
+ *
+ * `slice(0, count)` for the reason every reader on this wire has: the pool grows and is never
+ * shrunk, so its tail after a removal is a lane that no longer exists.
+ */
+function automationOf(track) {
+  // Same guard as `automationReader.forTrack`, and for the same reason: a fixture store has
+  // only the fields its scene needs.
+  if (!engine || !Array.isArray(engine.automation)) return null;
+  const list = [];
+  const n = Math.min(engine.automationCount || 0, engine.automation.length);
+  for (let i = 0; i < n; i++) {
+    const l = engine.automation[i];
+    if (track !== undefined && l.track !== Number(track)) continue;
+    list.push({ track: l.track, param: l.param, points: l.points,
+                discrete: l.discrete, target: l.target });
+  }
+  return { version: engine.automationVersion, truncated: engine.automationTruncated | 0, list };
+}
+
+/**
+ * Ask for one lane's curve. Answered on the ack channel; see `onAck`.
+ *
+ * The answer is CACHED on the lane version, so opening a lane twice costs one round trip. A
+ * request that is already in flight is not sent twice — the engine answers into a slot the
+ * sidecar picked, and asking again would spend a slot on a question already asked.
+ */
+const automationCurves = new Map();
+let automationAsked = null;
+function requestAutomation(track, param) {
+  const key = `${track}:${param}`;
+  const hit = automationCurves.get(key);
+  if (hit && hit.version === (engine ? engine.automationVersion : 0)) return hit;
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return null; }
+  if (automationAsked !== key) {
+    automationAsked = key;
+    conn.send({ type: 'automation', track: Number(track) || 0, param: String(param) });
+  }
+  // Null means "not yet", which is different from a lane with no points — the caller draws
+  // nothing rather than an empty curve, and the answer arrives on the ack channel.
+  return hit || null;
+}
 
 /** A new section at the end of the song. No `at`, so the sidecar appends. */
 function addSection(bars, name) {
@@ -2219,6 +2317,15 @@ const dockApi = {
   unmapParam: (track, link) => unmapParam(track, link),
   modDepth: (track, link, depth) => modDepth(track, link, depth),
   macro: (track, device, value) => setMacro(track, device, value),
+  /*
+   * AUTOMATION. The lane LIST is standing and free; a lane's POINTS are a request, because a
+   * song can hold far more automation than a frame should carry and only the open lanes are
+   * ever drawn.
+   */
+  automation: (track) => automationOf(track),
+  writeAutomation: (track, param, tick, value, discrete) =>
+    writeAutomation(track, param, tick, value, discrete),
+  automationPoints: (track, param) => requestAutomation(track, param),
   sections: () => sectionsOf(),
   addSection: (bars, name) => addSection(bars, name),
   delSection: (id) => delSection(id),
@@ -3899,6 +4006,12 @@ function drawArrange() {
   // (re)connects, and this file has had four temporal-dead-zone bugs already.
   // A reference write per frame allocates nothing.
   if (arrange.engine !== engine) arrange.bindEngine(engine);
+  /*
+   * THE AUTOMATION READER, bound once. See `automationReader`: the page owns fetching a curve
+   * (it arrives on the ack channel after a request) and the surface owns drawing it, which is
+   * the same split `bindAudio` makes for waveforms.
+   */
+  if (arrange.autoCurves !== automationReader) arrange.bindAutomation(automationReader);
   arrange.render(buildArrangeModel(o, arrangeBuf));
   updateChrome();
 }
@@ -6016,6 +6129,36 @@ conn = WANTS_ENGINE ? connectEngine({
         return;
       }
     }
+    /*
+     * AN AUTOMATION CURVE. Claimed by its own field name before the generic error branch, for
+     * the reason that branch's comment gives: this channel is shared and matching on a
+     * substring is how one shape starts eating another's.
+     */
+    if (typeof msg === 'string' && msg.indexOf('"automation"') >= 0) {
+      let parsed = null;
+      try { parsed = JSON.parse(msg); } catch (e) { /* not ours after all */ }
+      if (parsed && parsed.automation) {
+        const a = parsed.automation;
+        const key = `${a.track}:${a.param}`;
+        if (automationAsked === key) automationAsked = null;
+        if (a.timeout) {
+          // Reported, not cached. A timeout is "the engine did not answer", which is a
+          // different fact from "nothing automates that" and must not be remembered as one.
+          state.reject = `the engine did not answer about ${a.param} on track ${a.track}`;
+        } else {
+          // The revision moves so the arrangement repaints — it guards on this rather than
+          // diffing point arrays every frame.
+          automationRevision++;
+          automationCurves.set(key, {
+            version: engine ? engine.automationVersion : 0,
+            track: a.track, param: a.param, found: !!a.found, discrete: !!a.discrete,
+            truncated: a.truncated | 0, points: a.points || [],
+          });
+        }
+        schedule();
+        return;
+      }
+    }
     // The project list comes back on the command socket's ack channel.
     if (typeof msg === 'string' && msg.indexOf('"projects"') >= 0) {
       // Parse alone in the try; the assignment and redraw outside it, so a bug
@@ -6745,6 +6888,11 @@ window.__uni = {
    * console cannot reach fails only when a test reaches for it, which is what just
    * happened. Delegating means there is one implementation and both names find it.
    */
+  // Automation, delegating — the ratchet that says dockApi ⊆ __uni caught these on the first
+  // run, which is what it is for.
+  automation: (track) => dockApi.automation(track),
+  writeAutomation: (t, p, k, v, d) => dockApi.writeAutomation(t, p, k, v, d),
+  automationPoints: (track, param) => dockApi.automationPoints(track, param),
   mods: (track) => dockApi.mods(track),
   mapParam: (track, device, param) => dockApi.mapParam(track, device, param),
   unmapParam: (track, link) => dockApi.unmapParam(track, link),

@@ -54,6 +54,7 @@ if [ "${1:-}" = "--engine" ]; then
   step "engine: modulation"    node "$WEB/ui-web/test/mods.mjs"
   step "engine: chrome"        node "$WEB/ui-web/test/chrome.mjs"
   step "engine: layout"        node "$WEB/ui-web/test/layout.mjs"
+  step "engine: automation"    node "$WEB/ui-web/test/automation.mjs"
   step "engine: placements"    node "$WEB/ui-web/test/placement.mjs"
   # The AUDIO suites. Each captures the master output and asserts on the sound, so
   # they are the only checks here that can tell "the value changed" from "the change

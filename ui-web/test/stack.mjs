@@ -176,42 +176,38 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
   // first version of the audio test killed the engine and then looked for a file
   // that was never going to exist.
   /*
-   * CLEAR STALE PLUGIN-HOST SOCKETS FIRST.
+   * SWEEP OLD PLUGIN-HOST SOCKETS.
    *
-   * The engine names them by TRACK INDEX in /tmp — `/tmp/daw_host_track_0.sock` — so they are
-   * shared by every engine on this machine and NOT scoped to a run the way the SHM segment and
-   * the ports are. A run that is killed rather than stopped leaves them behind, and the next
-   * engine's host cannot bind a path that already exists: the host fails to start, the track
-   * has no instrument, and every meter reads the silence sentinel.
+   * The engine names them `/tmp/daw_host_<pid>_<track>.sock` and does not remove them, so every
+   * run of every suite leaves a handful behind for ever. MEASURED: 978 of them after a day of
+   * this, which is not a correctness problem now that the name carries a pid — two runs cannot
+   * collide — but it is a thousand files in /tmp and it was one before the rename, when they
+   * WERE shared and a leftover stopped the next engine's host from binding.
    *
-   * WHICH LOOKS LIKE A BROKEN APP. It presented as two e2e failures — "a real dBFS level while
-   * playing: -32768" — after a UI-only change, with ten sockets in /tmp and no engine or host
-   * process alive to own them. audible.mjs documents the same trap and tells you to go and look;
-   * this removes the condition instead, because a suite that needs a manual `rm` before it is
-   * trusted is a suite people learn to ignore.
-   *
-   * ONLY WHEN NOTHING IS LISTENING. A socket with a live host behind it belongs to a session
-   * somebody is using — deleting that would break the app they are looking at to make a test
-   * pass. Connect first; only an unreachable path is stale.
+   * BY AGE, NOT BY PROBING. The first version connected to each path to see whether anything
+   * answered, which is exact and costs a syscall and a timeout EACH — at 978 files that is
+   * minutes of setup before the engine starts, and it made a suite look like it was hanging.
+   * A socket older than the cutoff cannot belong to a run that is starting now, and one younger
+   * than it is left alone whether or not anybody is listening: deleting a live session's socket
+   * to tidy up would break the app somebody is looking at.
    */
   {
-    const { readdirSync, unlinkSync } = await import('node:fs');
-    const net = await import('node:net');
-    let names = [];
+    const { readdirSync, statSync, unlinkSync } = await import('node:fs');
+    const CUTOFF_MS = 10 * 60 * 1000;
+    const now = Date.now();
+    let swept = 0;
     try {
-      names = readdirSync('/tmp').filter((n) => /^daw_host_track_\d+\.sock$/.test(n));
+      for (const n of readdirSync('/tmp')) {
+        if (!/^daw_host_[0-9a-f_]+\.sock$/.test(n)) continue;
+        const path = `/tmp/${n}`;
+        try {
+          if (now - statSync(path).mtimeMs < CUTOFF_MS) continue;
+          unlinkSync(path);
+          swept++;
+        } catch { /* raced with another run, or not ours to remove */ }
+      }
     } catch { /* no /tmp to read is not this function's problem */ }
-    for (const n of names) {
-      const path = `/tmp/${n}`;
-      const alive = await new Promise((res) => {
-        const c = net.connect(path);
-        const done = (v) => { try { c.destroy(); } catch {} res(v); };
-        c.once('connect', () => done(true));
-        c.once('error', () => done(false));
-        setTimeout(() => done(false), 250);
-      });
-      if (!alive) { try { unlinkSync(path); } catch { /* raced with another run */ } }
-    }
+    if (swept > 20) console.log(`  (swept ${swept} stale plugin-host sockets from /tmp)`);
   }
 
   const engineArgs = runSeconds ? ['--run-seconds', String(runSeconds)] : [];

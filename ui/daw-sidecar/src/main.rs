@@ -35,6 +35,7 @@ use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiSectionCommandPayload, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
+                         UiAutomationLaneRequestPayload, UiAutomationPointPayload,
                          MOD_SOURCE_MACRO, MOD_SOURCE_LFO, MOD_SOURCE_ENVELOPE,
                          MOD_SOURCE_PATCHER_NODE_OUTPUT, MOD_TARGET_VST_PARAM,
                          MOD_TARGET_PATCHER_PARAM, MOD_TARGET_PATCHER_MACRO,
@@ -62,7 +63,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 const WIRE_LANES: usize = 16;
 
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 20;
+const WIRE_VERSION: u16 = 21;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -76,7 +77,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 172;
+const FULL_HEADER_BYTES: usize = 180;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
 const NOTE_BYTES: usize = 40;
 
@@ -375,6 +376,11 @@ struct Frame {
     /// distinct from "a block of zero": the chrome draws nothing rather than "0.0ms".
     block_size: u32,
     sample_rate_hz: u32,
+    /// One entry per automated parameter: (track, targetPluginIndex, pointCount, flags, paramId).
+    /// The LIST, so a lane is discoverable; the curve is fetched per lane on request.
+    automation: Vec<(u32, u32, u32, u32, String)>,
+    automation_version: u32,
+    automation_truncated: u32,
     /// Real clip placements from the engine. placement_id, clip_id, track,
     /// flags, start/end tick, name. Loose session placements are excluded
     /// upstream. `flags` bit0 is UI_CLIP_EXTENT_AUDIO — an audio region, which
@@ -574,7 +580,21 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
      * cost the same and invite a readout that says 47999.9.
      */
     out.extend_from_slice(&f.block_size.to_le_bytes());               // 164
-    out.extend_from_slice(&f.sample_rate_hz.to_le_bytes());           // 168, to 172
+    out.extend_from_slice(&f.sample_rate_hz.to_le_bytes());           // 168
+    /*
+     * WHICH PARAMETERS ARE AUTOMATED. The LIST, not the curves.
+     *
+     * A standing list is what makes automation DISCOVERABLE — "cutoff is automated on track 3"
+     * — and it is small: 32 bytes a lane against a curve's 512 points. The points are fetched
+     * per lane on request, because a song can hold far more automation than a frame should
+     * carry and the interface only ever draws the lanes that are open.
+     *
+     * Its own version, from the engine, so a client caches on automation changing rather than
+     * on anything else moving.
+     */
+    out.extend_from_slice(&(f.automation.len() as u16).to_le_bytes());   // 172
+    out.extend_from_slice(&(f.automation_truncated.min(0xffff) as u16).to_le_bytes()); // 174
+    out.extend_from_slice(&f.automation_version.to_le_bytes());       // 176, to 180
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
     // variable section and nothing here noticed.
@@ -758,6 +778,28 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.extend_from_slice(&end_tick.to_le_bytes());    // 24
         out.extend_from_slice(&name);                      // 32, to 56
     }
+
+    /*
+     * ...AND THE AUTOMATION LANES, after the sections, counted by the u16 at 172.
+     *
+     * 32 bytes each: track u32, target u32, points u32, flags u32, paramId 16. LAST for the
+     * reason the sections are second-to-last — a variable-length block cannot move a fixed
+     * field, and a reader that stops early gets a short list rather than garbage.
+     *
+     * `paramId` is the STRING the engine keys an automation clip on, not a uid16 — it is what
+     * WriteAutomationPoint addresses and what a person sees. Nul-padded to 16 like every other
+     * name on this wire.
+     */
+    for (track, target, points, flags, param) in &f.automation {
+        out.extend_from_slice(&track.to_le_bytes());        // 0
+        out.extend_from_slice(&target.to_le_bytes());       // 4
+        out.extend_from_slice(&points.to_le_bytes());       // 8
+        out.extend_from_slice(&flags.to_le_bytes());        // 12
+        let b = param.as_bytes();
+        let take = b.len().min(16);
+        out.extend_from_slice(&b[..take]);
+        out.extend_from_slice(&vec![0u8; 16 - take]);       // 16, to 32
+    }
 }
 
 /// Whether the harmony we hold is out of date. Its own version, not the clip
@@ -903,6 +945,32 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     // compares. That is cheap here; the browser is the allocation-sensitive side,
     // not this one.
     out.names = h.read_track_names();
+
+    /*
+     * The automation LANES, read every frame and gated on the engine's own version.
+     *
+     * `version == 0` means A WRITE IS IN FLIGHT — backend's note, and it is the arrange
+     * summary's trap over again: the counter only moves after the body is written, so
+     * version-body-version equality is not torn-safe by itself. Zero is a retry, never "empty",
+     * and holding the previous list for a frame is exactly right — automation does not change
+     * between two frames unless somebody edited it.
+     */
+    {
+        let lanes = h.read_automation_lanes();
+        if lanes.version != 0 && lanes.version != out.automation_version {
+            out.automation_version = lanes.version;
+            out.automation_truncated = lanes.truncated;
+            out.automation.clear();
+            for l in &lanes.lanes {
+                // `discrete` is a bool on this side and a FLAG BIT on the wire, packed back
+                // into bit 0 — the client draws a stepped curve for a discrete clip and a
+                // ramped one otherwise, and a lane that draws the wrong shape for half its
+                // curves is worse than one that draws none.
+                out.automation.push((l.track_id, l.target_plugin_index, l.point_count,
+                                     if l.discrete { 1 } else { 0 }, l.param_id.clone()));
+            }
+        }
+    }
 
     let (bs, sr) = h.device_block();
     out.block_size = bs;
@@ -1092,8 +1160,35 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
 ///
 ///   {"type":"play"}
 ///   {"type":"note","track":0,"pitch":60,"tick":0,"dur":960000,"vel":100,"base":7}
+/// Where a KEY's value begins, or None.
+///
+/// `"depth"` APPEARS AS A VALUE TOO. `{"op":"depth","depth":0.25}` contains the needle `"depth"`
+/// twice, and the first hit is inside `"op":"depth"` — so a scan that took the first one read
+/// the number after it, which is whatever field comes next. Every depth arrived as 0, the
+/// modulation multiplied by nothing, and the capture was silence: a parser bug that presented
+/// as an audio bug.
+///
+/// So a key is only a key when a COLON follows it. Whitespace between is allowed, because JSON
+/// permits it and `JSON.stringify` not producing any is a property of one caller rather than of
+/// the format.
+fn value_at(body: &str, key: &str) -> Option<usize> {
+    let mut from = 0;
+    while let Some(rel) = body[from..].find(key) {
+        let after = from + rel + key.len();
+        let rest = &body[after..];
+        let trimmed = rest.trim_start();
+        if trimmed.starts_with(':') {
+            // Past the colon, so the value scan cannot mistake the colon for punctuation.
+            let skipped = rest.len() - trimmed.len();
+            return Some(after + skipped + 1);
+        }
+        from = after;
+    }
+    None
+}
+
 fn parse_num(body: &str, key: &str) -> Option<i64> {
-    let i = body.find(key)? + key.len();
+    let i = value_at(body, key)?;
     let rest = &body[i..];
     let start = rest.find(|c: char| c.is_ascii_digit() || c == '-')?;
     let end = rest[start..].find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len() - start);
@@ -1109,7 +1204,7 @@ fn parse_num(body: &str, key: &str) -> Option<i64> {
 /// (None) rather than clamped when the text is not a number: a depth of NaN would reach
 /// the audio thread.
 fn parse_f32(body: &str, key: &str) -> Option<f32> {
-    let i = body.find(key)? + key.len();
+    let i = value_at(body, key)?;
     let rest = &body[i..];
     let start = rest.find(|c: char| c.is_ascii_digit() || c == '-' || c == '.')?;
     let tail = &rest[start..];
@@ -1131,6 +1226,69 @@ fn parse_f32(body: &str, key: &str) -> Option<f32> {
     // A non-finite value is refused, not passed on. This number ends up multiplying a
     // parameter on the audio thread.
     v.is_finite().then_some(v)
+}
+
+/// Ask the engine for one lane's points and wait for the answer in our own slot.
+///
+/// BLOCKING, briefly, and on the connection's own thread — which is where every other command
+/// on this socket is already handled, so it cannot stall a frame: the state frames go out on a
+/// different socket and a different thread. The wait is bounded and a timeout is REPORTED
+/// rather than returned as an empty lane, because "no answer yet" and "no automation" are
+/// different facts and only one of them is worth drawing.
+fn request_automation(handle: &EngineHandle, track: u32, target: u32, param: &str) -> String {
+    if param.is_empty() {
+        return "{\"error\":\"automation needs a param\"}".to_string();
+    }
+    let mut param_id = [0u8; 16];
+    let b = param.as_bytes();
+    let take = b.len().min(param_id.len());
+    param_id[..take].copy_from_slice(&b[..take]);
+    /*
+     * A SEQ NOBODY ELSE WILL USE THIS SECOND. Monotonic per process, so two connections asking
+     * at once land in different slots — the answer is matched on the echo regardless, but
+     * colliding on a slot means one of them waits for a reply that has already been overwritten.
+     */
+    static NEXT_SEQ: AtomicU64 = AtomicU64::new(1);
+    let seq = NEXT_SEQ.fetch_add(1, Ordering::AcqRel) as u32;
+    let payload = UiAutomationLaneRequestPayload {
+        command_type: UiCommandType::RequestAutomationLane as u16,
+        flags: 0,
+        request_seq: seq,
+        track_id: track,
+        target_plugin_index: target,
+        param_id,
+        reserved0: 0,
+        reserved1: 0,
+    };
+    if let Err(e) = handle.send_automation_lane_request(payload) {
+        return format!("{{\"error\":\"{}\"}}", e.replace('"', "'"));
+    }
+    let slot = (seq as usize) % daw_bridge::layout::K_UI_AUTOMATION_SLOTS;
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    loop {
+        if let Some(a) = handle.read_automation_slot(slot) {
+            // EVERY echoed field, not just the seq. A slot is reused mod four and the param is
+            // what makes two questions about the same track different.
+            if a.request_seq == seq && a.track_id == track && a.param_id == param {
+                let pts: Vec<String> = a.points.iter()
+                    .map(|(t, v)| format!("[{},{}]", t, if v.is_finite() { *v } else { 0.0 }))
+                    .collect();
+                return format!(
+                    "{{\"automation\":{{\"track\":{},\"param\":\"{}\",\"found\":{},\
+                     \"discrete\":{},\"truncated\":{},\"points\":[{}]}}}}",
+                    track, escape_json(param), a.found, a.discrete, a.points_truncated,
+                    pts.join(","));
+            }
+        }
+        if Instant::now() >= deadline {
+            // Said out loud. An empty list here would read as "nothing automates that", which is
+            // a different answer and one the engine is perfectly capable of giving.
+            return format!(
+                "{{\"automation\":{{\"track\":{},\"param\":\"{}\",\"timeout\":true}}}}",
+                track, escape_json(param));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// The projects on disk, newest first, as a JSON array of names.
@@ -1312,7 +1470,9 @@ fn list_projects(dir: &str) -> String {
 /// commands are a handful of flat objects we generate ourselves, so a real JSON
 /// dependency would be the largest thing in the binary for no gain.
 fn parse_str<'a>(txt: &'a str, key: &str) -> Option<&'a str> {
-    let i = txt.find(key)? + key.len();
+    // `value_at`, not `find`: a key that also occurs as a VALUE elsewhere in the message would
+    // otherwise match the wrong one. See its doc — that bug reached the audio path.
+    let i = value_at(txt, key)?;
     let rest = &txt[i..];
     let open = rest.find('"')?;
     let after = &rest[open + 1..];
@@ -2075,8 +2235,20 @@ fn build_mod(body: &str) -> Option<Result<UiModLinkCommandPayload, &'static str>
     };
     let removing = op == "remove";
     let command_type = match op {
-        "add" | "depth" => UiCommandType::AddModLink,
+        "add" => UiCommandType::AddModLink,
         "remove" => UiCommandType::RemoveModLink,
+        /*
+         * ITS OWN OPCODE NOW (v28). This used to be an AddModLink with the same id, which the
+         * engine REFUSES — so a depth change was a remove and an add: the link got a new id,
+         * came back UNNAMED (and therefore inert until re-named), and was not atomic. Which
+         * made a depth SLIDER impossible, because a continuous gesture would have torn the
+         * link down and rebuilt it every frame.
+         *
+         * `SetModLinkDepth` updates in place by linkId and ignores the device and kind fields.
+         * They are still sent, because a payload with holes in it is a payload somebody fills
+         * in wrongly later.
+         */
+        "depth" => UiCommandType::SetModLinkDepth,
         _ => return Some(Err("mod op must be add, remove or depth")),
     };
     let link = parse_num(body, "\"link\"").unwrap_or(-1);
@@ -2195,6 +2367,48 @@ fn build_mod_source(body: &str) -> Option<Result<UiModSourceValuePayload, &'stat
         source_id: parse_num(body, "\"source\"").unwrap_or(0).max(0) as u32,
         value: v.clamp(0.0, 1.0),
         reserved: [0u8; 16],
+    }))
+}
+
+/// WRITE one automation point, or None if this message is not one.
+///
+///   {"type":"autopoint","track":0,"param":"cutoff","tick":0,"value":0.25,"discrete":0}
+///
+/// A point is addressed by (track, paramId, tick) — writing the same tick again REPLACES that
+/// point rather than stacking a second one on it, which is what makes a drag over a curve
+/// possible at all.
+///
+/// `discrete` belongs to the CLIP and not to the point: it is applied when the clip is created
+/// and ignored afterwards, because a switch that changed meaning halfway through a curve would
+/// make the curve unreadable. Sent anyway on every point, so the first one carries it.
+///
+/// `value` is the plugin's NORMALISED 0..1. Out of range is CLAMPED rather than refused: a
+/// gesture that runs past the end of a fader is a normal thing for a pointer to do, and refusing
+/// it would make the last pixel of a drag do nothing.
+fn build_automation_point(body: &str) -> Option<Result<UiAutomationPointPayload, &'static str>> {
+    if !is_type(body, "autopoint") { return None; }
+    let Some(param) = parse_str(body, "\"param\"").filter(|p| !p.is_empty()) else {
+        return Some(Err("autopoint needs a param"));
+    };
+    let Some(value) = parse_f32(body, "\"value\"") else {
+        return Some(Err("autopoint needs a value from 0 to 1"));
+    };
+    let tick = parse_num(body, "\"tick\"").unwrap_or(0).max(0) as u64;
+    let mut param_id = [0u8; 16];
+    let b = param.as_bytes();
+    let take = b.len().min(param_id.len());
+    param_id[..take].copy_from_slice(&b[..take]);
+    Some(Ok(UiAutomationPointPayload {
+        command_type: UiCommandType::WriteAutomationPoint as u16,
+        flags: if parse_num(body, "\"discrete\"").unwrap_or(0) != 0 { 1 } else { 0 },
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        // PARAM_TARGET_ALL by default: every plugin on the track that publishes this parameter.
+        // A caller that means one plugin says which.
+        target_plugin_index: parse_num(body, "\"target\"").unwrap_or(u32::MAX as i64) as u32,
+        nanotick_lo: (tick & 0xffff_ffff) as u32,
+        nanotick_hi: (tick >> 32) as u32,
+        value: value.clamp(0.0, 1.0),
+        param_id,
     }))
 }
 
@@ -2930,6 +3144,33 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                          * after a save and prints the file's own age, which is a fact about
                          * the artefact rather than a claim about a message.
                          */
+                        /*
+                         * ONE AUTOMATION LANE'S POINTS, on request.
+                         *
+                         *   {"type":"automation","track":0,"param":"cutoff"}
+                         *
+                         * Request/answer rather than a standing region, because a song can hold
+                         * far more automation than a frame should carry and the interface only
+                         * draws the lanes that are open — the shape backend and I agreed on.
+                         *
+                         * THE SEQ IS OURS. Slots are reused mod four, so an answer to somebody
+                         * else's question is indistinguishable from ours on anything but the
+                         * echo: the reply is only accepted when `request_seq`, `track_id` and
+                         * `param_id` all match what went out.
+                         *
+                         * `found: false` is an ANSWER — "nothing automates that parameter" —
+                         * and is forwarded as one. A client that treated it as silence would
+                         * spin forever on a question that has been answered.
+                         */
+                        if is_type(&t, "automation") {
+                            let track = parse_num(&t, "\"track\"").unwrap_or(0).max(0) as u32;
+                            let param = parse_str(&t, "\"param\"").unwrap_or("").to_string();
+                            let target = parse_num(&t, "\"target\"")
+                                .unwrap_or(u32::MAX as i64) as u32;
+                            let reply = request_automation(&handle, track, target, &param);
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
                         if is_type(&t, "savedstate") {
                             let name = parse_str(&t, "\"name\"").unwrap_or("").to_string();
                             let reply = saved_state(&projects, &name);
@@ -3128,6 +3369,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"modsource\":{},\"value\":{}}}",
                                         p.source_id, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // ONE AUTOMATION POINT. Own 40-byte payload again.
+                        if let Some(r) = build_automation_point(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_automation_point(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"autopoint\":{},\"value\":{}}}",
+                                        p.track_id, p.value),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };
@@ -3799,6 +4055,22 @@ impl ChainStore {
         if t.mod_version != version {
             t.mod_version = version;
             t.mod_links.clear();
+        }
+        /*
+         * MOD_LINK_ID_AUTO IN A SNAPSHOT IS NOT A LINK. It is the engine saying "this track has
+         * no links" — one entry so the VERSION still travels, exactly as `kDeviceIdAuto` does
+         * for an empty chain.
+         *
+         * Without it an emptied registry published nothing at all, so removing a track's LAST
+         * link was invisible and the page had to drop it locally to avoid a lit badge over a
+         * link that no longer existed. Asked for, added, and that workaround is gone.
+         *
+         * Taken as a link it would leave every unmodulated track showing a phantom with id
+         * 4294967295 — the chain decoder's comment says the same thing about the same mistake.
+         */
+        if link.link_id == MOD_LINK_ID_AUTO {
+            self.revision.fetch_add(1, Ordering::AcqRel);
+            return;
         }
         // Keyed on link_id within the version, because a snapshot run can be interleaved
         // with the uid16 diffs that belong to it and a re-published link must replace
@@ -5853,6 +6125,29 @@ mod tests {
         // exactly the step this avoids.
         assert!(out.contains(r#"A \"quoted\" one"#), "{out}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A KEY THAT IS ALSO A VALUE MUST NOT MATCH ITSELF.
+    ///
+    /// `{"op":"depth","depth":0.25}` contains `"depth"` twice, and a scan that took the first
+    /// hit read the number after `"op":"depth"` — the NEXT field's value. Every modulation
+    /// depth arrived as 0, the link multiplied by nothing, and the capture was silence: a
+    /// parser bug that presented as an audio bug, and was found by an RMS measurement rather
+    /// than by anything that looked at a message.
+    ///
+    /// The real message is used here rather than a minimal one, because the ORDER is what
+    /// makes the bug: `op` comes before `depth` in what the page sends.
+    #[test]
+    fn a_key_that_is_also_a_value_does_not_match_itself() {
+        let body = r#"{"type":"mod","op":"depth","track":0,"link":1,"depth":0.25,"bias":0}"#;
+        assert_eq!(parse_f32(body, "\"depth\""), Some(0.25), "read the FIELD, not the op's value");
+        assert_eq!(parse_str(body, "\"op\""), Some("depth"));
+        assert_eq!(parse_num(body, "\"link\""), Some(1));
+        // ...and a key that is genuinely absent is still absent, rather than matching a value
+        // somewhere else that happens to spell it.
+        assert_eq!(parse_f32(r#"{"op":"depth"}"#, "\"depth\""), None);
+        // Whitespace after the colon is legal JSON, and a hand-written message has it.
+        assert_eq!(parse_f32(r#"{"depth" : 0.5}"#, "\"depth\""), Some(0.5));
     }
 
     #[test]

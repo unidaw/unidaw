@@ -820,7 +820,8 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      // Modulation. `mapParam` takes a parameter INDEX and resolves the
                      // uid16 itself — the console should not have to type a 32-character
                      // hex string to map a knob.
-                     'mods', 'mapParam', 'unmapParam', 'modDepth', 'macro'];
+                     'mods', 'mapParam', 'unmapParam', 'modDepth', 'macro',
+                     'automation', 'automationPoints', 'writeAutomation'];
 
 function stubApi() {
   const calls = [];
@@ -2102,6 +2103,9 @@ const OP_REGISTRY = {
    * `session.execute`. Recorded rather than papered over: an agent CAN modulate and cannot
    * yet check its own work.
    */
+  autopoint:   { cli: null, agent: 'write_automation_point', why: 'gap' },
+  automation:  { cli: 'automation', agent: 'automation' },
+  curve:       { cli: null, agent: 'automation_points', why: 'gap' },
   mods:        { cli: null, agent: null, why: 'gap' },
   // `depth` is `mod-link` again on the CLI. The agent reaches it through `modulate`, which
   // takes a depth — there is no separate opcode to give it a tool of its own.
@@ -2223,7 +2227,15 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                   * nobody has turned is skipped by the applier. Recorded rather than left
                   * looking covered.
                   */
-                 'mods', 'macro'];
+                 'mods', 'macro',
+                 /*
+                  * `curve` — one lane's points — has a CLI verb (`get automation-points`) but
+                  * the registry maps one console command to one verb and this one is under
+                  * `get` rather than `do`, which the CLI-parity check reads from the `do`
+                  * table. Recorded here rather than claimed, since claiming a path the check
+                  * cannot see is worse than recording a gap that is nearly closed.
+                  */
+                 'curve', 'autopoint'];
 /** Ops with no agent tool today. Same rule. */
 // `bypass` joins the list rather than being smuggled past it: the engine takes
 // the command and daw-cli sends it, but the agent's manifest has no tool for it,
@@ -2402,7 +2414,24 @@ const ENGINE_UNUSED = {
   // asserted in BOTH directions, so it failed the moment that became untrue. A
   // recorded gap that outlives the gap is a lie with a comment on it.
   LoadPluginOnTrack: 'gap — the rack inserts with AddDevice; this older path is unused',
-  SetAutomationTarget: 'gap — automation has no UI at all',
+  /*
+   * `SetAutomationTarget` (13) sets a MODE: which parameter the point writes that follow it
+   * will address. This app does not send it and does not want to — `WriteAutomationPoint`
+   * carries its own paramId, so every write says what it is writing and a mode nobody set
+   * cannot be the wrong one.
+   *
+   * That is the same argument the placement ops make against a global edit-scope mode, and
+   * the same failure it avoids: forgetting to set a mode fails QUIETLY, in the wrong lane,
+   * where a self-addressing command cannot.
+   */
+  SetAutomationTarget: 'gap — WriteAutomationPoint carries its own paramId; no mode needed',
+  /*
+   * A PLACEMENT's own edit scope (61): note edits landing in it are recorded as overrides
+   * without the caller passing kUiEditScopeLocal each time. This app passes the scope per edit,
+   * which is the explicit half of the same choice — so the per-placement mode is a convenience
+   * it does not need yet, rather than a capability it is missing.
+   */
+  SetPlacementEditScope: 'gap — this app sets the scope per edit instead',
   /*
    * ARRANGEMENT SECTIONS (54-58), landed engine-side and not yet a surface here.
    *
@@ -2423,11 +2452,6 @@ const ENGINE_UNUSED = {
    * override is visible.
    */
   RevertPlacementOverrides: 'gap — no way to send a placement back to its shared clip',
-  /*
-   * Automation has no surface at all: no lane, no curve, no way to see a point let
-   * alone place one. SetAutomationTarget above is the other half of the same hole.
-   */
-  WriteAutomationPoint: 'gap — automation has no UI at all, see SetAutomationTarget',
 };
 
 test('every engine command has a caller, or a recorded reason it has none', async () => {

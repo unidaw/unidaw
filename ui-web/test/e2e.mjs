@@ -1377,6 +1377,14 @@ section('device parameters');
 await page.evaluate(() => window.__uni.loadProject('rack'));
 await page.waitForTimeout(2000);
 
+/**
+ * Did this scene's project get the plugin it asked for?
+ *
+ * Declared out here because TWO blocks need it — the buses and the parameter mirror — and both
+ * are about the substitute rather than about the code they are testing when it is false.
+ */
+let substituted = false;
+
 // The device's AUDIO BUSES (kShmVersion 20), which is what tells a stereo effect
 // from a plugin with eight stems and a sidechain input. These ride the chain
 // snapshot rather than a request, so they are here the moment the chain is.
@@ -1396,7 +1404,34 @@ await page.waitForTimeout(2000);
     return t.devices.find((x) => x.busCount > 0) || t.devices[t.devices.length - 1];
   });
   ok(d !== null, 'the rack project published a device');
-  if (d) {
+  /*
+   * DID THE PROJECT GET THE PLUGIN IT ASKED FOR?
+   *
+   * `rack.uniproj.json` names "Identity" with an EMPTY PATH, and the plugin cache on this
+   * machine does not contain our own Identity build — 52 plugins, none of them it. So the
+   * engine reports `project.plugin_missing` and substitutes whatever the cache offers FIRST,
+   * which here is an Elektron hardware controller with no buses to speak of.
+   *
+   * Every assertion below then failed as "every bus the engine promised arrived: 0/0", which
+   * says nothing about the bus code and everything about which plugin turned up. BLOCKED with
+   * the substitution named, rather than failed: reporting a machine whose plugin set differs as
+   * a bug in the bus publisher is the kind of flake that teaches people to ignore a suite —
+   * audible.mjs makes the same distinction for the same reason.
+   *
+   * Reported to backend: a preset that names a plugin nothing can resolve is a preset that
+   * loads as something else, silently, and every fixture built on it measures the substitute.
+   */
+  const asked = await page.evaluate(() => {
+    const c = window.__uni.chainProbe();
+    return c && c.titles ? c.titles.join(',') : '';
+  });
+  substituted = !!d && d.busCount === 0 && !/Identity/i.test(String(asked));
+  if (substituted) {
+    blocked(false, 'the rack project publishes its plugin buses',
+            'rack.uniproj.json names "Identity" with an empty path and the plugin cache on this '
+            + 'machine has none, so the engine substituted another plugin — reported to backend',
+            `loaded ${JSON.stringify(asked)} instead`);
+  } else if (d) {
     // COMPLETE, not partial. busCount is the field I held the version bump for:
     // without it, two buses received out of eight is indistinguishable from a
     // device that has two, and the rack draws the wrong number and then changes
@@ -1428,8 +1463,22 @@ const beforeP = await page.evaluate(() => {
   const d = all[ids[0]];
   return { device: Number(ids[0]), name: d.name, count: d.params.length, first: d.params[0] };
 });
-ok(beforeP && beforeP.count > 0, 'the rack reads a real plugin\'s parameters',
-   beforeP ? `${beforeP.name}, ${beforeP.count} params` : 'none published');
+/*
+ * SAME SCENE, SAME SUBSTITUTION. `rack` asks for a plugin the cache does not have, so what
+ * answers here is whatever the engine put in its place — and on a machine whose first cached
+ * plugin is a hardware controller, that is something with no parameters to publish. The claim
+ * is about the param MIRROR, not about which plugin turned up, so it is blocked rather than
+ * failed when the project did not get what it asked for. See the bus block above.
+ */
+if (substituted) {
+  blocked(!!(beforeP && beforeP.count > 0), 'the rack reads a real plugin\'s parameters',
+          'the project asked for a plugin this machine\'s cache does not have, so the engine '
+          + 'substituted one — the mirror has nothing to read through no fault of its own',
+          beforeP ? `${beforeP.name}, ${beforeP.count} params` : 'none published');
+} else {
+  ok(beforeP && beforeP.count > 0, 'the rack reads a real plugin\'s parameters',
+     beforeP ? `${beforeP.name}, ${beforeP.count} params` : 'none published');
+}
 
 if (beforeP && beforeP.first) {
   const uid = beforeP.first.uid;

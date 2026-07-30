@@ -368,12 +368,14 @@ let workingLink = 0;
     check(after && Math.abs(after.depth - 0.25) < 0.001, 'depth sets the depth',
           after && String(after.depth));
     /*
-     * ONE link, still. The engine has no update opcode — an add with an existing id is
-     * refused — so this is a remove and an add, and the id it comes back with may be the same
-     * one: the engine assigns `max + 1` over the REMAINING links, which after taking the only
-     * one out is the id just freed. So the assertion is that there is exactly one link for
-     * this parameter, not that its id changed.
+     * ONE link, and it KEPT ITS ID. `SetModLinkDepth` (v28) updates in place, which it did not
+     * used to: a depth change was a remove and an add, so the link came back with a new id and
+     * NO uid16 — inert until something named it again — and the pair was not atomic, which put
+     * a depth slider out of reach. Backend added the opcode on the strength of that report, so
+     * the assertion is now the stronger one: same link, new depth.
      */
+    check(after && after.id === workingLink, 'and it is the SAME link, updated in place',
+          `${workingLink} -> ${after && after.id}`);
     const forParam = ((await mods(0)) || { links: [] }).links.filter((x) => x.uid16 === gain.uid);
     check(forParam.length === 1,
           'and there is exactly one link for it — remove-and-add, not add-on-top',

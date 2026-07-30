@@ -483,6 +483,54 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: "automation",
+            description: "Which parameters are automated: track, param, how many points, and \
+                          whether the curve steps or ramps. The LIST, not the curves — ask for \
+                          one lane's points with automation_points.",
+            params: json!({
+                "type": "object",
+                "properties": { "track": { "type": "integer", "minimum": 0 } },
+            }),
+        },
+        ToolSpec {
+            name: "automation_points",
+            description: "One automation lane's points, as [nanotick, value] with value \
+                          normalised 0..1. `found: false` is an ANSWER — nothing automates that \
+                          parameter — not a failure. The value BETWEEN points is deliberately \
+                          not given: interpolating it here would be a second implementation of \
+                          what the engine plays, and the two could disagree.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "param"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "param": { "type": "string" },
+                    "target_plugin_index": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "write_automation_point",
+            description: "Write one automation point: a parameter reaches `value` (normalised \
+                          0..1) at `tick`. Writing the same tick again REPLACES that point \
+                          rather than adding a second one, so a sweep is a series of ticks. \
+                          `discrete` belongs to the CLIP, not the point — it is applied when the \
+                          clip is created and ignored afterwards, because a curve that changed \
+                          shape halfway through would be unreadable.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "param", "tick", "value"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "param": { "type": "string" },
+                    "tick": { "type": "integer", "minimum": 0 },
+                    "value": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "discrete": { "type": "boolean" },
+                    "target_plugin_index": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
             name: "set_lane_quantize",
             description: "Pull a track's notes toward a grid WITHOUT moving them: the \
                           authored ticks are unchanged on disk and only where the notes \
@@ -934,6 +982,121 @@ fn set_lane_quantize(handle: &EngineHandle, args: &Value) -> ToolResult {
     send_now(handle, p, json!({ "track": track, "grid": grid, "strength": strength, "swing": swing }))
 }
 
+/// Which parameters are automated. A standing region — no request, no wait.
+fn automation_lanes(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let want = arg_u64(args, "track").map(|t| t as u32);
+    let view = handle.read_automation_lanes();
+    let lanes: Vec<Value> = view.lanes.iter()
+        .filter(|l| want.map_or(true, |t| t == l.track_id))
+        .map(|l| json!({
+            "track": l.track_id, "param": l.param_id, "points": l.point_count,
+            "discrete": l.discrete, "target_plugin_index": l.target_plugin_index,
+        }))
+        .collect();
+    ToolResult::ok(json!({
+        "lanes": lanes,
+        "version": view.version,
+        // An incomplete list that says nothing reads as a complete one.
+        "truncated": view.truncated,
+    }))
+}
+
+/// One lane's points: ask, then read our own slot under its seqlock.
+///
+/// THE SEQ IS OURS AND EVERY ECHOED FIELD IS CHECKED. Slots are reused mod the slot count, so an
+/// answer to somebody else's question is indistinguishable from ours on anything but the echo —
+/// and an agent handed another track's curve would edit confidently against the wrong music.
+fn automation_points(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("automation_points needs \"track\"");
+    };
+    let Some(param) = arg_str(args, "param").filter(|p| !p.is_empty()) else {
+        return ToolResult::err("automation_points needs \"param\" — the id from `automation`");
+    };
+    let mut param_id = [0u8; 16];
+    let b = param.as_bytes();
+    let take = b.len().min(param_id.len());
+    param_id[..take].copy_from_slice(&b[..take]);
+    // Monotonic per process, so two questions in flight land in different slots.
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    let target = arg_u64(args, "target_plugin_index").unwrap_or(u32::MAX as u64) as u32;
+    let payload = daw_bridge::layout::UiAutomationLaneRequestPayload {
+        command_type: UiCommandType::RequestAutomationLane as u16,
+        flags: 0, request_seq: seq, track_id: track as u32,
+        target_plugin_index: target, param_id, reserved0: 0, reserved1: 0,
+    };
+    if let Err(e) = handle.send_automation_lane_request(payload) { return ToolResult::err(e); }
+    let slot = (seq as usize) % daw_bridge::layout::K_UI_AUTOMATION_SLOTS;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+    loop {
+        if let Some(a) = handle.read_automation_slot(slot) {
+            if a.request_seq == seq && a.track_id == track as u32 && a.param_id == param {
+                return ToolResult::ok(json!({
+                    "track": a.track_id, "param": a.param_id,
+                    // `found: false` is an ANSWER, and is returned as `ok` so a model reads it
+                    // as "nothing automates that" rather than as a call that failed.
+                    "found": a.found, "discrete": a.discrete,
+                    "truncated": a.points_truncated,
+                    "points": a.points.iter().map(|(t, v)| json!([t, v])).collect::<Vec<_>>(),
+                }));
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            // A timeout is NOT an empty lane. Returned as an error, because an empty list would
+            // be read as "nothing automates that" — an answer the engine gives explicitly.
+            return ToolResult::err(format!(
+                "the engine did not answer about {param:?} on track {track} within 1.5s"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Write one automation point.
+///
+/// Self-addressing: the paramId rides on the payload, so there is no "which parameter am I
+/// writing" mode to forget. `SetAutomationTarget` exists and is deliberately unused for that
+/// reason — a mode nobody set fails quietly, in the wrong lane.
+fn write_automation_point(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("write_automation_point needs \"track\"");
+    };
+    let Some(param) = arg_str(args, "param").filter(|p| !p.is_empty()) else {
+        return ToolResult::err("write_automation_point needs \"param\"");
+    };
+    let Some(value) = arg_f64(args, "value") else {
+        return ToolResult::err("write_automation_point needs \"value\" from 0 to 1");
+    };
+    let Some(tick) = arg_u64(args, "tick") else {
+        return ToolResult::err("write_automation_point needs \"tick\" in nanoticks");
+    };
+    let mut param_id = [0u8; 16];
+    let b = param.as_bytes();
+    let take = b.len().min(param_id.len());
+    param_id[..take].copy_from_slice(&b[..take]);
+    let p = daw_bridge::layout::UiAutomationPointPayload {
+        command_type: UiCommandType::WriteAutomationPoint as u16,
+        flags: if args.get("discrete").and_then(|v| v.as_bool()).unwrap_or(false) { 1 } else { 0 },
+        track_id: track as u32,
+        // Every plugin on the track that publishes this parameter, unless one is named.
+        target_plugin_index: arg_u64(args, "target_plugin_index")
+            .unwrap_or(u32::MAX as u64) as u32,
+        nanotick_lo: (tick & 0xffff_ffff) as u32,
+        nanotick_hi: (tick >> 32) as u32,
+        // CLAMPED, not refused: a value past the end of a range is an ordinary thing for a
+        // caller to compute, and refusing it would make the extremes of a sweep do nothing.
+        value: value.clamp(0.0, 1.0) as f32,
+        param_id,
+    };
+    match handle.send_automation_point(p) {
+        Ok(()) => ToolResult::ok(json!({
+            "sent": true, "track": track, "param": param, "tick": tick,
+            "value": value.clamp(0.0, 1.0),
+        })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
 /// Renders the manifest as a JSON array — the form an LLM harness ingests to
 /// learn its tools.
 pub fn manifest_json() -> String {
@@ -1005,6 +1168,9 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "unmodulate" => unmodulate(handle, &call.args),
         "set_macro" => set_macro(handle, &call.args),
         "set_lane_quantize" => set_lane_quantize(handle, &call.args),
+        "automation" => automation_lanes(handle, &call.args),
+        "automation_points" => automation_points(handle, &call.args),
+        "write_automation_point" => write_automation_point(handle, &call.args),
         other => ToolResult::err(format!("unknown tool {other:?}")),
     }
 }
