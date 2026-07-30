@@ -83,12 +83,24 @@ echo "$LAST" | grep -q '"points":4' || \
   fail "the clip should hold 4 points after 4 writes; the engine reported: $LAST"
 echo "  author: 4 points written into one clip"
 
+# CORRECTING A POINT REPLACES IT. addPoint used to insert unconditionally, so writing a new
+# value at a tick that already had one left BOTH — the value could never be fixed, and the
+# file grew by a point on every attempt. Rewriting the point at 1 quarter (0.5 above) must
+# leave the count at 4, not take it to 5.
+cli do automation --track 0 --param index:0 --nanotick $Q --value 0.125 >/dev/null 2>&1 || true
+sleep 1
+LAST="$(grep '"event":"automation.point"' "$TMP/engine.log" | tail -1)"
+echo "$LAST" | grep -q '"points":4' || \
+  fail "rewriting the point at one quarter should still leave 4 points, so a value can be
+        corrected rather than doubled; the engine reported: $LAST"
+echo "  correct: rewriting a point at an existing tick replaces it (still 4)"
+
 # PERSIST: ticks AND values. A save that kept the ticks and lost the values would look
 # right in a tick-only assertion and play silence.
 cli do save autoout >/dev/null 2>&1 || true
 sleep 1.4
 SAVED="$(points_of "$TMP/autoout.uniproj.json")"
-WANT="0:0 ${Q}:0.5 $((2 * Q)):1 $((5 * BAR)):0.25"
+WANT="0:0 ${Q}:0.125 $((2 * Q)):1 $((5 * BAR)):0.25"
 [ "$SAVED" = "$WANT" ] || fail "saved automation is
         [$SAVED]
         expected
@@ -129,7 +141,7 @@ sleep 1.3
 cli do save autorip >/dev/null 2>&1 || true
 sleep 1.4
 RIPPLED="$(points_of "$TMP/autorip.uniproj.json")"
-WANT_RIP="0:0 ${Q}:0.5 $((2 * Q)):1 $((5 * BAR + 2 * BAR)):0.25"
+WANT_RIP="0:0 ${Q}:0.125 $((2 * Q)):1 $((5 * BAR + 2 * BAR)):0.25"
 [ "$RIPPLED" = "$WANT_RIP" ] || \
   fail "after lengthening the intro by 2 bars the automation should be
         [$WANT_RIP]
@@ -182,5 +194,59 @@ grep -q '"event":"automation.rejected".*"reason":"track_not_persisted"' "$TMP/en
 grep '"event":"automation.point"' "$TMP/engine3.log" | grep -q '"track":1' && \
   fail "the write to the removed track was refused AND applied" || true
 echo "  refusal: automation on a track the save would discard is refused, not silently lost"
+
+# ---- A REUSED SLOT MUST NOT INHERIT THE DEAD TRACK'S AUTOMATION.
+#
+# `automationClips` was cleared nowhere in the engine — only ever ASSIGNED, at load, for
+# tracks the document names. The three paths that repurpose an existing runtime (AddTrack
+# refilling a tombstone, the load blanking a slot past the new document, and a slot recycled
+# as a multi-out stem) each cleared the chain, placements, owned clips and editable ids by
+# hand, and each forgot automation and mod links. So: automate a filter on track 1, delete
+# track 1, add a track — and the new track carries the deleted one's sweep, which the next
+# save writes to disk as if the user had drawn it there.
+#
+# AddTrack refills the LOWEST tombstone, so removing track 1 and adding one lands back in
+# slot 1. That is what makes this reproducible rather than incidental.
+SHM4="/autochk4_$$"
+( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM4" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --run-seconds 18 >"$TMP/engine4.log" 2>&1 ) &
+ENG=$!
+sleep 2.5
+cli() { DAW_UI_SHM_NAME="$SHM4" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
+cli do load auto >/dev/null 2>&1 || true
+sleep 1.6
+cli do add-track --force >/dev/null 2>&1 || true          # -> track 1
+sleep 0.7
+cli do automation --force --track 1 --param index:0 --nanotick 0 --value 0.75 \
+  >/dev/null 2>&1 || true
+sleep 0.8
+# It must have LANDED, or this proves nothing about clearing it afterwards.
+grep '"event":"automation.point"' "$TMP/engine4.log" | grep -q '"track":1' || \
+  fail "the setup failed: automation was never written to the added track, so the reuse
+        assertion below would pass for the wrong reason"
+cli do remove-track --track 1 --force >/dev/null 2>&1 || true
+sleep 0.7
+cli do add-track --force >/dev/null 2>&1 || true          # refills slot 1
+sleep 0.9
+cli do save autoreuse >/dev/null 2>&1 || true
+sleep 1.4
+kill "$ENG" 2>/dev/null || true
+wait "$ENG" 2>/dev/null || true
+
+REUSED="$(python3 - "$TMP/autoreuse.uniproj.json" <<'PYR'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+for t in doc.get("tracks", []):
+    if t.get("track_id") == 1 and not t.get("is_master"):
+        print(len(t.get("automation", [])))
+        break
+else:
+    print("no-track-1")
+PYR
+)"
+[ "$REUSED" = "0" ] || \
+  fail "the re-added track 1 carries $REUSED automation clip(s) from the track that was
+        removed — a sweep the user deleted is back on a new lane and now saved to disk"
+echo "  slot reuse: a re-added track does not inherit the removed track's automation"
 
 echo "automation_check: PASS"

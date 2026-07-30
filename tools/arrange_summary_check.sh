@@ -119,6 +119,55 @@ V3="$(cli get arrangement 2>/dev/null | sed -n 's/.*"version": \([0-9]*\).*/\1/p
         must be independent of the clip version, or the two invalidate each other"
 echo "  a note edit leaves the summary version alone ($V3)"
 
+# ---- THE METER MAP MUST SURVIVE A SAVE. Everything above reads the meter from the FIXTURE,
+# so it all passed while the save wrote no time_sig_map at all: `document` is default
+# constructed in the save, timeSigMap was only ever READ (at load, into songMeter), and the
+# save emitted the single song-wide numerator/denominator and nothing else. A project with a
+# meter change therefore loaded, played and published correctly and then came back from disk
+# flattened to one time signature — which moves every section boundary after the first meter
+# change, silently. A FRESH ENGINE is required: a same-process reload still holds the meter
+# from the load above, so it would pass with the save line deleted.
+cli do save arrout >/dev/null 2>&1 || true
+sleep 1.4
+kill "$ENG" 2>/dev/null || true
+wait "$ENG" 2>/dev/null || true
+
+SAVED_SIGS="$(python3 - "$TMP/arrout.uniproj.json" <<'PYS'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+pts = doc.get("time_sig_map", [])
+print(" ".join("%d:%d/%d" % (p["nanotick"], p["numerator"], p["denominator"]) for p in pts))
+PYS
+)"
+WANT_SIGS="0:4/4 $((4 * BAR44)):3/4"
+[ "$SAVED_SIGS" = "$WANT_SIGS" ] || \
+  fail "the save wrote time_sig_map
+        [$SAVED_SIGS]
+        expected
+        [$WANT_SIGS]
+        — without it the song reloads in one time signature and every section boundary
+        after the meter change moves"
+echo "  save: the meter map is written [$SAVED_SIGS]"
+
+SHM2="/arrsum2_$$"
+( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --run-seconds 16 >"$TMP/engine2.log" 2>&1 ) &
+ENG=$!
+sleep 2.5
+cli() { DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
+cli do load arrout >/dev/null 2>&1 || true
+sleep 1.8
+SUMMARY="$(cli get arrangement 2>/dev/null || true)"
+[ -n "$SUMMARY" ] || fail "the reloaded project published no arrangement summary"
+# The intro was grown to 6 bars above, so after the reload it must STILL span the meter
+# change: 4 bars of 4/4 + 2 of 3/4. A flattened meter would make it 6 bars of 4/4 and put
+# every later boundary in the wrong place.
+[ "$(field 1 end_tick)" = "$WANT_SPANNING" ] || \
+  fail "after save+reload the 6-bar intro ends at $(field 1 end_tick), not $WANT_SPANNING —
+        the meter map did not survive, so the song came back in 4/4 throughout"
+echo "$SUMMARY" | grep -q '"sig": "3/4"' || fail "the reloaded meter map has no 3/4 point"
+echo "  reload (fresh engine): the 3/4 point is back and the intro still spans it"
+
 kill "$ENG" 2>/dev/null || true
 wait "$ENG" 2>/dev/null || true
 echo "arrange_summary_check: PASS"

@@ -375,13 +375,20 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
         let id = ids.get(index).copied().unwrap_or(index as u32);
         let flag = flags.get(index).copied().unwrap_or(0);
         let is_master = flag & daw_bridge::layout::UI_TRACK_FLAG_MASTER != 0;
+        // `track_count` is the EXTENT, not a count of live tracks: ids never renumber, so a
+        // removed track leaves a tombstone that keeps its id put and is published with
+        // ABSENT for readers to skip. Printing it matters — without it a tombstoned slot and
+        // a real empty track look identical here, which is exactly what made "a track
+        // disappears on load" hard to pin down: the sparse-id load bug published a phantom
+        // lane in an unclaimed slot and this output could not tell it from a real one.
+        let is_absent = flag & daw_bridge::layout::UI_TRACK_FLAG_ABSENT != 0;
         let comma = if index + 1 == count { "" } else { "," };
         // M2.17: this track's OWN clip version — the base an edit to this track must
         // present. The global `clip_version` in `get transport` moves whenever ANY
         // track changes and is no longer the right base for a track-scoped edit.
         let clip_version = handle.clip_version_for_track(id);
         println!(
-            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
+            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
         );
     }
     println!("  ]");

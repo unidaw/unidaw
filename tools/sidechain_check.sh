@@ -88,15 +88,38 @@ PY
 run_capture() {  # $1=name  $2=take
   local name="$1" take="$2"
   local log="$TMP/engine_$name.log"
-  ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" \
-      DAW_PROJECT_DIR="$TMP" DAW_CAPTURE_WAV="$take" DAW_CAPTURE_SECONDS=6 \
-      ./daw_engine --run-seconds 6 >"$log" 2>&1 ) &
+  # A SEGMENT PER RUN, and readiness read from the log rather than slept for.
+  #
+  # This failed once inside a full-suite run — "bound R is silent, the sidechain key never
+  # reached the plugin" — and passed 3/3 immediately afterwards on the same binary. Two
+  # causes, both in the harness: a 6-second engine with `sleep 2` then `sleep 1` left barely
+  # 3 seconds of playback for a host that has to come up and negotiate an aux INPUT bus
+  # before the key can arrive, and both takes shared one shm name, so the second one could
+  # find the first take's segment still mapped and send `do load` into a ring nobody was
+  # reading (the bug that made multiout_check test its first pitch twice).
+  # The engine must reach its own exit: the capture ring is flushed to disk on clean
+  # shutdown, so killing it early leaves no WAV at all. 16 seconds is setup plus generous
+  # playback, not a wait for something.
+  local shm="${SHM}_$name"
+  ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$shm" \
+      DAW_PROJECT_DIR="$TMP" DAW_CAPTURE_WAV="$take" DAW_CAPTURE_SECONDS=20 \
+      ./daw_engine --run-seconds 16 >"$log" 2>&1 ) &
   local engine=$!
-  sleep 2
-  DAW_UI_SHM_NAME="$SHM" "$CLI" do load "$name" --force >/dev/null 2>&1 || true
-  sleep 1
-  DAW_UI_SHM_NAME="$SHM" "$CLI" do play --force >/dev/null 2>&1 || true
+  local i
+  for i in $(seq 1 120); do
+    if grep -q 'starting threads' "$log" 2>/dev/null; then break; fi
+    sleep 0.25
+  done
+  DAW_UI_SHM_NAME="$shm" "$CLI" do load "$name" --force >/dev/null 2>&1 || true
+  for i in $(seq 1 80); do
+    if grep -q '"event":"project.load"' "$log" 2>/dev/null; then break; fi
+    sleep 0.25
+  done
+  sleep 1.5   # let the host finish bringing up its buses before the key is expected
+  DAW_UI_SHM_NAME="$shm" "$CLI" do play --force >/dev/null 2>&1 || true
   wait "$engine"
+  grep -q '"event":"audio.capture_written"' "$log" || \
+    echo "  (warning: $name produced no capture — the analysis below has nothing to read)" >&2
 }
 
 gen_project "$TMP/bound.uniproj.json" 1

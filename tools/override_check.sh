@@ -148,6 +148,54 @@ BASE_LEFT="$(count_pitch 1 42)"
         overrides"
 echo "  revert: the added hat is gone, the clip's own 4 hats are untouched"
 
+# ---- A LOCAL EDIT IS ON THE UNDO STACK.
+#
+# Undo here is a whole-store SWAP, not a per-edit inverse — and applyLocalNoteEdit pushed
+# nothing. So the entry a Ctrl-Z popped was some EARLIER edit's, and restoring its store
+# wholesale deleted the override as a side effect; redo restored that edit's after-state,
+# which also predates the override, so it was unrecoverable. Nothing logged, nothing refused.
+#
+# The two assertions that separate a recorded local edit from an unrecorded one:
+#   UNDO must take back THE LOCAL EDIT (and leave the older clip-scope fix alone). Without
+#   the push, undo instead rolls back the clip-scope note on track 0 and the local note on
+#   track 1 stays exactly where it was — the opposite of both expectations.
+#   REDO must bring it back. Without the push there is no entry that carries it.
+cli do note --track 1 --local --nanotick $((17 * BAR + 1 * Q)) --pitch 50 \
+  --duration 60000 >/dev/null 2>&1 || true
+sleep 1.2
+[ "$(count_pitch 1 50)" = "1" ] || \
+  fail "the setup failed: the local note was not added, so the undo assertions below would
+        pass for the wrong reason"
+BEFORE_UNDO_CLIP="$(count_pitch 0 40)"
+[ "$BEFORE_UNDO_CLIP" = "3" ] || fail "expected the clip-scope fix on 3 choruses, got $BEFORE_UNDO_CLIP"
+
+cli do undo >/dev/null 2>&1 || true
+sleep 1.2
+AFTER_UNDO="$(count_pitch 1 50)"
+STILL_CLIP="$(count_pitch 0 40)"
+[ "$AFTER_UNDO" = "0" ] || \
+  fail "undo did not take back the local edit (pitch 50 count $AFTER_UNDO) — the local edit
+        is not on the undo stack, so Ctrl-Z reached past it to an older edit"
+[ "$STILL_CLIP" = "3" ] || \
+  fail "undo took back the LOCAL edit and also the older clip-scope fix (pitch 40 now on
+        $STILL_CLIP choruses, was 3) — one Ctrl-Z undid two edits"
+# AND it must be THIS edit that was undone, not the revert just before it. Without the local
+# edit on the stack, the entry Ctrl-Z pops is the revert's — which restores the store from
+# before the revert, bringing the reverted hat back and leaving the pitch-50 note untouched.
+# That satisfies both assertions above by accident, which is exactly how a control passes a
+# broken engine, so the resurrected hat is what actually distinguishes the two.
+UNDO_RESURRECTED="$(count_pitch 1 46)"
+[ "$UNDO_RESURRECTED" = "0" ] || \
+  fail "undo restored the REVERTED hat ($UNDO_RESURRECTED back) instead of taking back the
+        local edit — Ctrl-Z reached past the local edit to the previous entry"
+cli do redo >/dev/null 2>&1 || true
+sleep 1.2
+AFTER_REDO="$(count_pitch 1 50)"
+[ "$AFTER_REDO" = "1" ] || \
+  fail "redo did not restore the local edit (pitch 50 count $AFTER_REDO) — it was
+        destroyed rather than undone, which is data loss on a single keystroke"
+echo "  undo: a local edit is undone and redone on its own, without disturbing the clip fix"
+
 kill "$ENG" 2>/dev/null || true
 wait "$ENG" 2>/dev/null || true
 

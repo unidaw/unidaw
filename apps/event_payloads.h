@@ -290,6 +290,14 @@ inline const char* uiCommandTypeName(UiCommandType t) {
 // SetTrackName pack a NAME into the same bytes, so reading them as trackId/pitch/nanotick
 // yields numbers that look like data and are not. The history journal uses this to record
 // nothing rather than record garbage.
+//
+// THE RULE IS: an opcode dispatched with its own payload struct belongs here. Every opcode
+// added since this list was written has its own struct and none of them were added, so the
+// journal has been recording a section's packed name and an automation param id as a pitch
+// and a nanotick — numbers that look like data, which is the exact failure the comment above
+// describes. The list below is now the full set, derived by checking which opcodes the
+// engine dispatches via `entry.size == sizeof(daw::Ui*Payload)`; keep it that way when
+// adding one.
 inline bool uiCommandUsesGenericPayload(UiCommandType t) {
   switch (t) {
     case UiCommandType::SaveProject:
@@ -303,6 +311,28 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
     case UiCommandType::SetDeviceParam:
     case UiCommandType::RequestWaveform:
     case UiCommandType::RequestClipWindow:
+    // UiTrackRoutingPayload / UiModLinkCommandPayload / UiModSourceValuePayload
+    case UiCommandType::SetTrackRouting:
+    case UiCommandType::AddModLink:
+    case UiCommandType::RemoveModLink:
+    case UiCommandType::SetModSourceValue:
+    // UiPatcherGraphCommandPayload / UiPatcherNodeConfigPayload /
+    // UiDeviceEuclideanConfigPayload
+    case UiCommandType::AddPatcherNode:
+    case UiCommandType::RemovePatcherNode:
+    case UiCommandType::ConnectPatcherNodes:
+    case UiCommandType::SetPatcherNodeConfig:
+    case UiCommandType::SetDeviceEuclideanConfig:
+    // UiSectionCommandPayload — packs name[20]
+    case UiCommandType::AddSection:
+    case UiCommandType::RemoveSection:
+    case UiCommandType::RenameSection:
+    case UiCommandType::SetSectionLength:
+    case UiCommandType::MoveSection:
+    // UiAutomationCommandPayload packs uid16[16]; UiAutomationPointPayload packs
+    // paramId[16]
+    case UiCommandType::SetAutomationTarget:
+    case UiCommandType::WriteAutomationPoint:
       return false;
     default:
       return true;

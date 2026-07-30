@@ -49,7 +49,10 @@ sleep 1
 # Count only the DOCUMENT tracks: master is published alongside them and would otherwise
 # inflate every total by one.
 doc_tracks() {
-  DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null | grep -c '"master": false' || true
+  # `"absent": false` as well as non-master: track_count is the id EXTENT, so a removed track
+  # leaves a tombstone inside it that is published for its id and is not a track.
+  DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null \
+    | grep '"master": false' | grep -c '"absent": false' || true
 }
 master_strips() {
   DAW_UI_SHM_NAME="$SHM" "$CLI" get tracks 2>/dev/null | grep -c '"master": true' || true
@@ -65,6 +68,49 @@ DAW_UI_SHM_NAME="$SHM" "$CLI" do remove-track --track 1 --force >/dev/null 2>&1 
 DAW_UI_SHM_NAME="$SHM" "$CLI" do save result --force >/dev/null 2>&1 || true
 sleep 0.6
 wait "$ENG"; ENG_RC=$?
+
+# ---- AND IT MUST LOAD BACK. Everything above proved the FILE is right; nothing proved the
+# engine could read it again, and it could not.
+#
+# Ids never renumber, so a project saved after a removal has SPARSE ids — here [0,2]. The load
+# stored `document.tracks.size()` as the live track count, which is 2, and every publisher
+# clamps to it while the save skips `trackId >= liveTrackCount`. So track 2 was adopted and
+# loaded correctly and then hidden from the UI and dropped by the next save, while the
+# unclaimed slot 1 came back as an editable empty lane the same save wrote out as a real
+# track. One track destroyed, one invented, nothing reported.
+#
+# The frontend found this from the UI ("a track disappears on load") and it read as a rename
+# failure for days. No fixture caught it because every fixture has dense ids from zero —
+# fixtures are authored, not edited, and this needs a REMOVAL followed by a SAVE.
+#
+# A FRESH ENGINE is the point: the same process still holds the tracks from the edits above.
+SHM2="/addrm2_check_$$"
+( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --run-seconds 18 >"$TMP/eng2.log" 2>&1 ) &
+ENG2=$!
+for _ in $(seq 1 120); do
+  if grep -q 'starting threads' "$TMP/eng2.log" 2>/dev/null; then break; fi
+  sleep 0.25
+done
+DAW_UI_SHM_NAME="$SHM2" "$CLI" do load result --force >/dev/null 2>&1 || true
+for _ in $(seq 1 80); do
+  if grep -q '"event":"project.load"' "$TMP/eng2.log" 2>/dev/null; then break; fi
+  sleep 0.25
+done
+sleep 1.5
+# The ids that came back LIVE (a tombstone publishes with absent:true and is not a track).
+RELOADED="$(DAW_UI_SHM_NAME="$SHM2" "$CLI" get tracks 2>/dev/null \
+  | grep '"master": false' | grep '"absent": false' \
+  | sed -n 's/.*"track_id": \([0-9]*\).*/\1/p' | paste -sd, -)"
+TOMBSTONES="$(DAW_UI_SHM_NAME="$SHM2" "$CLI" get tracks 2>/dev/null \
+  | grep -c '"absent": true' || true)"
+# Save again: a load that hid a track would let this save delete it from disk for good.
+DAW_UI_SHM_NAME="$SHM2" "$CLI" do save result2 --force >/dev/null 2>&1 || true
+sleep 1.6
+kill "$ENG2" 2>/dev/null || true; wait "$ENG2" 2>/dev/null || true
+IDS2="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(str(t["track_id"]) for t in d.get("tracks",[]) if not t.get("is_master")))' "$TMP/result2.uniproj.json" 2>/dev/null || echo ERR)"
+echo "reloaded live ids       : [$RELOADED] (expect [0,2]) with $TOMBSTONES tombstone(s) (expect 1)"
+echo "re-saved track ids      : [$IDS2] (expect [0,2] — a second save must not lose one)"
 
 IDS="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(str(t["track_id"]) for t in d.get("tracks",[]) if not t.get("is_master")))' "$TMP/result.uniproj.json" 2>/dev/null || echo ERR)"
 SAVED_MASTERS="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(1 for t in d.get("tracks",[]) if t.get("is_master")))' "$TMP/result.uniproj.json" 2>/dev/null || echo ERR)"
@@ -87,6 +133,17 @@ ok=1
 # nothing).
 [ "$master_before" = "1" ] && [ "$master_after" = "1" ] \
   || { echo "FAIL: master strips $master_before -> $master_after, expected 1 -> 1"; ok=0; }
+[ "$RELOADED" = "0,2" ] \
+  || { echo "FAIL: loading the saved project back gave live ids [$RELOADED], expected [0,2].
+        A project saved after a track was removed has sparse ids, and a load that treats the
+        track COUNT as the id EXTENT hides the highest track and publishes the unclaimed slot
+        as a real one"; ok=0; }
+[ "$TOMBSTONES" = "1" ] \
+  || { echo "FAIL: $TOMBSTONES tombstone(s) after the reload, expected 1 — the removed id must
+        come back as a hole the reader skips, not as an editable empty lane"; ok=0; }
+[ "$IDS2" = "0,2" ] \
+  || { echo "FAIL: load -> save gave ids [$IDS2], expected [0,2]. The reload hid a track and
+        this save deleted it from disk"; ok=0; }
 [ "$SAVED_MASTERS" = "1" ] \
   || { echo "FAIL: the save wrote $SAVED_MASTERS is_master entries, expected exactly 1 —
         0 loses the master chain on reload, 2+ means the load will fight over which wins"; ok=0; }
