@@ -7,7 +7,11 @@
 
 use daw_bridge::control::EngineHandle;
 use daw_bridge::grid::NANOTICKS_PER_QUARTER;
-use daw_bridge::layout::{UiCommandPayload, UiCommandType, UiPatcherPresetCommandPayload};
+use daw_bridge::layout::{UiChainCommandPayload, UiCommandPayload, UiCommandType,
+                         UiModLinkCommandPayload, UiModLinkUid16Payload,
+                         UiModSourceValuePayload, UiPatcherPresetCommandPayload,
+                         UiSectionCommandPayload, MOD_LINK_ID_AUTO, MOD_RATE_BLOCK,
+                         MOD_SOURCE_MACRO, MOD_TARGET_VST_PARAM};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -315,6 +319,187 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
                 },
             }),
         },
+        /*
+         * THE ARRANGEMENT'S SPINE. A read and a write, because a section has no position of
+         * its own — where it begins is the sum of the lengths before it — so an agent asked
+         * to "make the chorus longer" has to see the order before it can change anything.
+         */
+        ToolSpec {
+            name: "sections",
+            description: "The song's sections, in order, each with its id, name, start bar \
+                          and length in bars. A section has a LENGTH and no position: where \
+                          it begins is the sum of the lengths before it.",
+            params: json!({ "type": "object", "properties": {} }),
+        },
+        ToolSpec {
+            name: "edit_section",
+            description: "Add, remove, rename, resize or reorder a section. \
+                          op=add needs bars (and takes name, at); \
+                          op=remove/rename/length/move need id; \
+                          op=rename needs name; op=length needs bars; op=move needs to. \
+                          `at` and `to` count from 1. CHANGING A LENGTH RIPPLES: every \
+                          placement at or after the boundary moves, on every track, and the \
+                          engine refuses the whole edit rather than shrinking into occupied \
+                          bars. Removing a section does NOT delete its music — the bars stay \
+                          and stop being named.",
+            params: json!({
+                "type": "object",
+                "required": ["op"],
+                "properties": {
+                    "op": { "type": "string", "enum": ["add", "remove", "rename", "length", "move"] },
+                    "id": { "type": "integer", "minimum": 1 },
+                    "bars": { "type": "integer", "minimum": 1, "maximum": 9999 },
+                    "name": { "type": "string" },
+                    "at": { "type": "integer", "minimum": 1 },
+                    "to": { "type": "integer", "minimum": 1 },
+                },
+            }),
+        },
+        /*
+         * THE DEVICE RACK. An agent could not touch it at all — not insert a plugin, not
+         * remove one, not reorder, not bypass — which meant "put a reverb after the delay"
+         * was outside its reach entirely, and ORDER IS WHAT A CHAIN IS.
+         */
+        ToolSpec {
+            name: "device_params",
+            description: "The parameters a device publishes: index, name, current value, and \
+                          the stable uid the engine addresses it by. Needed before modulating \
+                          anything — modulation is addressed by uid, not by index.",
+            params: json!({
+                "type": "object",
+                "properties": { "track": { "type": "integer", "minimum": 0 },
+                                "device": { "type": "integer", "minimum": 0 } },
+            }),
+        },
+        ToolSpec {
+            name: "add_device",
+            description: "Insert a device into a track's chain at a position (0 is first). \
+                          kind: vst_effect, vst_instrument or patcher. A VST needs `plugin`, \
+                          the name as the plugin catalogue reports it.",
+            params: json!({
+                "type": "object",
+                "required": ["track"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "kind": { "type": "string", "enum": ["vst_effect", "vst_instrument", "patcher"] },
+                    "position": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "remove_device",
+            description: "Take a device out of a chain. NOT undoable, and the device's \
+                          settings go with it.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device"],
+                "properties": { "track": { "type": "integer", "minimum": 0 },
+                                "device": { "type": "integer", "minimum": 0 } },
+            }),
+        },
+        ToolSpec {
+            name: "move_device",
+            description: "Reorder a chain: `position` is where the device ENDS UP, from 0. \
+                          The same compressor before and after a distortion are two \
+                          different sounds.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device", "position"],
+                "properties": { "track": { "type": "integer", "minimum": 0 },
+                                "device": { "type": "integer", "minimum": 0 },
+                                "position": { "type": "integer", "minimum": 0 } },
+            }),
+        },
+        ToolSpec {
+            name: "set_bypass",
+            description: "Switch a device off without removing it — the way to hear what it \
+                          is doing.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device", "on"],
+                "properties": { "track": { "type": "integer", "minimum": 0 },
+                                "device": { "type": "integer", "minimum": 0 },
+                                "on": { "type": "boolean" } },
+            }),
+        },
+        /*
+         * MODULATION. Three commands make one working link, and every one of them is
+         * load-bearing — the description says so, because an agent that sends only the first
+         * gets a link the engine accepts and never applies.
+         */
+        ToolSpec {
+            name: "modulate",
+            description: "Make a parameter move: a macro knob on one device drives a \
+                          parameter on a LATER one. Needs the parameter's uid from \
+                          device_params — the engine addresses modulation by uid and ignores \
+                          the index. MODULATION FLOWS FORWARD: the source device must sit \
+                          STRICTLY EARLIER in the chain than its target, so a parameter on \
+                          the first device cannot be modulated. depth 1 sweeps the whole \
+                          range. This also turns the knob to `value`, because a macro nobody \
+                          has turned is skipped and the link would be inaudible.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "source_device", "target_device", "param_uid"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "source_device": { "type": "integer", "minimum": 0 },
+                    "target_device": { "type": "integer", "minimum": 0 },
+                    "param_index": { "type": "integer", "minimum": 0 },
+                    "param_uid": { "type": "string" },
+                    "depth": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "bias": { "type": "number", "minimum": -1, "maximum": 1 },
+                    "value": { "type": "number", "minimum": 0, "maximum": 1 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "unmodulate",
+            description: "Remove a modulation link. The engine validates the link's devices \
+                          before it will remove it, so source_device and target_device are \
+                          required even though the id alone should be enough.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "link", "source_device", "target_device"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "link": { "type": "integer", "minimum": 1 },
+                    "source_device": { "type": "integer", "minimum": 0 },
+                    "target_device": { "type": "integer", "minimum": 0 },
+                    "param_index": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "set_macro",
+            description: "Turn a macro knob, 0 to 1. This is what MOVES a modulated \
+                          parameter — the link says how far, the knob says where.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "device", "value"],
+                "properties": { "track": { "type": "integer", "minimum": 0 },
+                                "device": { "type": "integer", "minimum": 0 },
+                                "source": { "type": "integer", "minimum": 0 },
+                                "value": { "type": "number", "minimum": 0, "maximum": 1 } },
+            }),
+        },
+        ToolSpec {
+            name: "set_lane_quantize",
+            description: "Pull a track's notes toward a grid WITHOUT moving them: the \
+                          authored ticks are unchanged on disk and only where the notes \
+                          SOUND changes. grid is a subdivision name or `off`. strength is a \
+                          percentage, swing -50..50.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "grid"],
+                "properties": {
+                    "track": { "type": "integer", "minimum": 0 },
+                    "grid": { "type": "string",
+                              "enum": ["off", "1/4", "1/8", "1/16", "1/32", "1/4t", "1/8t", "1/16t"] },
+                    "strength": { "type": "integer", "minimum": 0, "maximum": 100 },
+                    "swing": { "type": "integer", "minimum": -50, "maximum": 50 },
+                },
+            }),
+        },
         ToolSpec {
             name: "preview_note",
             description: "Sound a pitch on a track WITHOUT writing it — for auditioning.                           Held: send on=true, then on=false for the same pitch to release it.",
@@ -330,6 +515,423 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
             }),
         },
     ]
+}
+
+/// Sixteen bytes as 32 hex characters, or "" for the all-zero sentinel.
+///
+/// Zeros mean UNSET — the engine initialises a uid16 that way — and hexed naively that is 32
+/// characters of "0", which is a perfectly truthy string. A caller asking "does this
+/// parameter have a stable id?" would answer yes and then modulate nothing.
+fn hex16(b: &[u8; 16]) -> String {
+    if b.iter().all(|x| *x == 0) { return String::new(); }
+    let mut s = String::with_capacity(32);
+    for x in b { s.push_str(&format!("{x:02x}")); }
+    s
+}
+
+fn arg_f64(args: &Value, key: &str) -> Option<f64> {
+    args.get(key).and_then(|v| v.as_f64()).filter(|v| v.is_finite())
+}
+
+fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
+    args.get(key).and_then(|v| v.as_str())
+}
+
+/// The song's SPINE, resolved. Read from the arrange summary region, which the engine
+/// prefix-sums through the meter — nothing here recomputes a start bar.
+fn sections(handle: &EngineHandle) -> ToolResult {
+    let Some(sum) = handle.read_arrange_summary() else {
+        return ToolResult::err("the engine publishes no arrangement summary");
+    };
+    let n = (sum.section_count as usize).min(sum.sections.len());
+    let list: Vec<Value> = sum.sections[..n].iter().map(|s| json!({
+        "id": s.id,
+        "name": String::from_utf8_lossy(&s.name).trim_end_matches('\0').to_string(),
+        "start_bar": s.start_bar,
+        "bars": s.bar_count,
+        "start_tick": s.start_tick,
+        "end_tick": s.end_tick,
+    })).collect();
+    ToolResult::ok(json!({
+        "sections": list,
+        // Truncation is REPORTED. A short list that says nothing reads as the whole song,
+        // which is the one thing a spine must never imply.
+        "truncated": sum.sections_truncated,
+        // The furthest PLACEMENT, which is not the end of the last section: material can sit
+        // past the spine, where it plays and is unnamed.
+        "song_end_tick": sum.song_end_tick,
+    }))
+}
+
+/// One of the five section ops.
+fn edit_section(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(op) = arg_str(args, "op") else {
+        return ToolResult::err("edit_section needs \"op\": add, remove, rename, length or move");
+    };
+    let (cmd, addressed) = match op {
+        "add" => (UiCommandType::AddSection, false),
+        "remove" => (UiCommandType::RemoveSection, true),
+        "rename" => (UiCommandType::RenameSection, true),
+        "length" => (UiCommandType::SetSectionLength, true),
+        "move" => (UiCommandType::MoveSection, true),
+        _ => return ToolResult::err("op must be add, remove, rename, length or move"),
+    };
+    let id = arg_u64(args, "id").unwrap_or(0) as u32;
+    if addressed && id == 0 {
+        return ToolResult::err(format!("edit_section op {op:?} needs the \"id\" of an existing section"));
+    }
+    let bars = arg_u64(args, "bars").unwrap_or(0) as u32;
+    if matches!(op, "add" | "length") && bars == 0 {
+        // A zero-bar section is not a short section, it is a section with no bars in it.
+        return ToolResult::err(format!("edit_section op {op:?} needs \"bars\" of at least 1"));
+    }
+    let mut name = [0u8; 20];
+    if let Some(t) = arg_str(args, "name") {
+        let b = t.as_bytes();
+        let take = b.len().min(name.len());
+        name[..take].copy_from_slice(&b[..take]);
+    } else if op == "rename" {
+        return ToolResult::err("a rename needs a \"name\"");
+    }
+    /*
+     * NO POSITION MEANS APPEND, and that is not index 0.
+     *
+     * The engine clamps the insert index to the end, so u32::MAX appends and 0 inserts at the
+     * FRONT — an add with an unstated position built the song backwards. `at` and `to` count
+     * from 1 where a person says them, because the first section is section 1 the way the
+     * first bar is bar 1; the wire index is 0-based because it indexes an array.
+     */
+    let to_index = match arg_u64(args, "to").or_else(|| arg_u64(args, "at")) {
+        Some(n) => (n.max(1) - 1) as u32,
+        None if addressed => 0,
+        None => u32::MAX,
+    };
+    let p = UiSectionCommandPayload {
+        command_type: cmd as u16,
+        flags: 0,
+        section_id: id,
+        bar_count: bars,
+        to_index,
+        color_rgb: arg_u64(args, "color").unwrap_or(0) as u32,
+        name,
+    };
+    match handle.send_section_command(p) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "op": op, "id": id, "bars": bars })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// A device's parameters, with the uid modulation is addressed by.
+///
+/// ASK, THEN READ. The region holds ONE device at a time — whichever host answered last — so
+/// reading it without asking returns some other device's parameters, with a plausible name on
+/// them. `RequestDeviceParams` makes the engine ask that host and rewrite the region, and the
+/// short wait is for the round trip through the plugin host, which is out of process.
+///
+/// If the region still names a different device when the wait is up, that is REPORTED rather
+/// than returned as if it were the answer: a model handed the wrong plugin's parameter list
+/// will modulate the wrong plugin, confidently.
+fn device_params(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err("device_params needs \"track\" and \"device\"");
+    };
+    let mut req = blank(UiCommandType::RequestDeviceParams);
+    req.track_id = track as u32;
+    req.value0 = device as u32;
+    if let Err(e) = handle.send_command(req) { return ToolResult::err(e); }
+    // Poll rather than sleep once: a host that answers in 20ms should not cost 400.
+    let mut view = handle.read_device_params();
+    for _ in 0..40 {
+        if view.track_id == track as u32 && view.device_id == device as u32 && !view.params.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        view = handle.read_device_params();
+    }
+    if view.track_id != track as u32 || view.device_id != device as u32 {
+        return ToolResult::err(format!(
+            "the engine has not answered for track {track} device {device} — the region still \
+             holds track {} device {} ({:?}). The plugin host may still be starting.",
+            view.track_id, view.device_id, view.device_name));
+    }
+    ToolResult::ok(json!({
+        "track": view.track_id,
+        "device": view.device_id,
+        "name": view.device_name,
+        // The uid as HEX, not as sixteen numbers. `uid16` is a byte array, and json! would
+        // serialise it as `[10,27,...]` — which a model would then have to hex-encode itself
+        // before it could pass it back to `modulate`, and would sometimes get wrong. One
+        // representation, produced where the bytes are.
+        "params": view.params.iter().map(|q| json!({
+            "index": q.index, "name": q.name, "value": q.value,
+            "uid": hex16(&q.uid16),
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+/// A chain payload with the common fields filled in.
+fn chain_blank(cmd: UiCommandType, track: u32) -> UiChainCommandPayload {
+    UiChainCommandPayload {
+        command_type: cmd as u16,
+        flags: 0,
+        track_id: track,
+        // 0 is "whatever you hold" — the engine arbitrates chain edits on its own version and
+        // an agent has no reason to know one.
+        base_version: 0,
+        device_id: 0,
+        device_kind: 0,
+        insert_index: 0,
+        patcher_node_id: 0,
+        host_slot_index: 0,
+        bypass: 0,
+        reserved: [0u8; 4],
+    }
+}
+
+fn add_device(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("add_device needs \"track\"");
+    };
+    // The engine's DeviceKind numbering, mirrored from apps/device.h through the chain
+    // snapshot's `kind`. Named here rather than passed as a number, for the reason the
+    // sidecar's mod kinds are named: a literal that means something else after the next enum
+    // change is the kind that outlives its meaning.
+    let kind = match arg_str(args, "kind").unwrap_or("vst_effect") {
+        "patcher" | "patcher_event" => 0u32,
+        "vst_instrument" => 3,
+        "vst_effect" => 4,
+        other => return ToolResult::err(format!("unknown device kind {other:?}")),
+    };
+    let mut p = chain_blank(UiCommandType::AddDevice, track as u32);
+    p.device_kind = kind;
+    p.insert_index = arg_u64(args, "position").unwrap_or(0) as u32;
+    match handle.send_chain_command(p) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "track": track, "kind": kind })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+fn chain_edit(handle: &EngineHandle, args: &Value, cmd: UiCommandType) -> ToolResult {
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err("this needs \"track\" and \"device\"");
+    };
+    let mut p = chain_blank(cmd, track as u32);
+    p.device_id = device as u32;
+    match handle.send_chain_command(p) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "track": track, "device": device })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+fn move_device(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(pos) = arg_u64(args, "position") else {
+        return ToolResult::err("move_device needs \"position\" — where the device ends up, from 0");
+    };
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err("move_device needs \"track\" and \"device\"");
+    };
+    let mut p = chain_blank(UiCommandType::MoveDevice, track as u32);
+    p.device_id = device as u32;
+    p.insert_index = pos as u32;
+    match handle.send_chain_command(p) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "device": device, "position": pos })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+fn set_bypass(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err("set_bypass needs \"track\" and \"device\"");
+    };
+    let on = args.get("on").and_then(|v| v.as_bool()).unwrap_or(true);
+    let mut p = chain_blank(UiCommandType::UpdateDevice, track as u32);
+    p.device_id = device as u32;
+    // bit0 of flags says "the bypass field is meaningful" — an UpdateDevice that does not set
+    // it would carry a bypass of 0 and switch every device back on.
+    p.flags = 1;
+    p.bypass = if on { 1 } else { 0 };
+    match handle.send_chain_command(p) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "device": device, "bypassed": on })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// Make a modulation link, name its parameter, and turn the knob. THREE commands.
+///
+/// All three, because a link the engine accepts moves nothing without them: it addresses a
+/// VST parameter by uid16 alone (so an unnamed link is inert), and it resolves a source from
+/// the track's source states (so a macro nobody has turned is skipped). An agent sending only
+/// the first would get an accepted, published, inaudible modulation.
+///
+/// The uid CANNOT ride along with the add: `SetModLinkUid16` matches a link id exactly and the
+/// engine assigns the id, so naming it needs the id back first. Here the agent passes the
+/// link id it wants — an explicit id rather than AUTO — which is the one way to name it in the
+/// same call. `max(existing) + 1` is not knowable from this side, so an unused id is asked for
+/// and a collision is reported rather than guessed around.
+fn modulate(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(src), Some(dst)) = (arg_u64(args, "track"),
+                                               arg_u64(args, "source_device"),
+                                               arg_u64(args, "target_device")) else {
+        return ToolResult::err("modulate needs \"track\", \"source_device\" and \"target_device\"");
+    };
+    let Some(uid_hex) = arg_str(args, "param_uid") else {
+        return ToolResult::err("modulate needs \"param_uid\" — from device_params. \
+                                The engine addresses modulation by uid and ignores the index.");
+    };
+    if uid_hex.len() != 32 || !uid_hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return ToolResult::err("a param_uid is 32 hex characters");
+    }
+    if src == dst {
+        // Strictly earlier, which is the APPLIER's rule. The command validator is looser and
+        // would accept this, and then nothing would ever move.
+        return ToolResult::err("a modulation source must sit STRICTLY EARLIER in the chain \
+                                than its target — same device is accepted by the engine and \
+                                then never applied");
+    }
+    let mut uid16 = [0u8; 16];
+    for i in 0..16 {
+        uid16[i] = u8::from_str_radix(&uid_hex[i * 2..i * 2 + 2], 16).unwrap_or(0);
+    }
+    let link = arg_u64(args, "link").unwrap_or(0) as u32;
+    let flags = (MOD_SOURCE_MACRO & 0x0f) | ((MOD_TARGET_VST_PARAM & 0x0f) << 4)
+              | ((MOD_RATE_BLOCK & 0x03) << 8) | (1 << 10);
+    let add = UiModLinkCommandPayload {
+        command_type: UiCommandType::AddModLink as u16,
+        flags,
+        track_id: track as u32,
+        base_version: 0,
+        link_id: if link == 0 { MOD_LINK_ID_AUTO } else { link },
+        source_device_id: src as u32,
+        source_id: arg_u64(args, "source").unwrap_or(0) as u32,
+        target_device_id: dst as u32,
+        target_id: arg_u64(args, "param_index").unwrap_or(0) as u32,
+        depth: arg_f64(args, "depth").unwrap_or(1.0).clamp(0.0, 1.0) as f32,
+        bias: arg_f64(args, "bias").unwrap_or(0.0).clamp(-1.0, 1.0) as f32,
+    };
+    if let Err(e) = handle.send_mod_link_command(add) { return ToolResult::err(e); }
+    // The parameter's name, if the caller chose an explicit id. With AUTO the engine assigns
+    // one this side cannot predict, so the naming has to be a second call — said plainly in
+    // the result rather than left as a link that quietly does nothing.
+    let named = link != 0;
+    if named {
+        let uid = UiModLinkUid16Payload {
+            command_type: UiCommandType::SetModLinkUid16 as u16,
+            flags: 0,
+            track_id: track as u32,
+            base_version: 0,
+            link_id: link,
+            uid16,
+            reserved: [0u8; 8],
+        };
+        if let Err(e) = handle.send_mod_link_uid16(uid) { return ToolResult::err(e); }
+    }
+    // The knob. Half by default, so the link is audible: at 0 it is indistinguishable from a
+    // link that failed.
+    let value = arg_f64(args, "value").unwrap_or(0.5).clamp(0.0, 1.0) as f32;
+    let knob = UiModSourceValuePayload {
+        command_type: UiCommandType::SetModSourceValue as u16,
+        flags: MOD_SOURCE_MACRO,
+        track_id: track as u32,
+        base_version: 0,
+        source_device_id: src as u32,
+        source_id: arg_u64(args, "source").unwrap_or(0) as u32,
+        value,
+        reserved: [0u8; 16],
+    };
+    if let Err(e) = handle.send_mod_source_value(knob) { return ToolResult::err(e); }
+    ToolResult::ok(json!({
+        "sent": true, "link": link, "named": named, "macro": value,
+        "note": if named { Value::Null } else { json!(
+            "no \"link\" id was given, so the engine assigned one and the parameter is NOT \
+             named yet — the link will not move anything until SetModLinkUid16 names it. \
+             Pass an unused link id to have this call name it.") },
+    }))
+}
+
+fn unmodulate(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(link)) = (arg_u64(args, "track"), arg_u64(args, "link")) else {
+        return ToolResult::err("unmodulate needs \"track\" and \"link\"");
+    };
+    let (Some(src), Some(dst)) = (arg_u64(args, "source_device"), arg_u64(args, "target_device")) else {
+        // Required because the ENGINE requires them: RemoveModLink is handled after the same
+        // device validation as an add, so a removal naming only the link is refused as
+        // invalid_device — on the engine's log, where nothing here can read it.
+        return ToolResult::err("unmodulate needs \"source_device\" and \"target_device\" — \
+                                the engine validates them before it will remove a link");
+    };
+    let flags = (MOD_SOURCE_MACRO & 0x0f) | ((MOD_TARGET_VST_PARAM & 0x0f) << 4)
+              | ((MOD_RATE_BLOCK & 0x03) << 8) | (1 << 10);
+    let p = UiModLinkCommandPayload {
+        command_type: UiCommandType::RemoveModLink as u16,
+        flags,
+        track_id: track as u32,
+        base_version: 0,
+        link_id: link as u32,
+        source_device_id: src as u32,
+        source_id: 0,
+        target_device_id: dst as u32,
+        target_id: arg_u64(args, "param_index").unwrap_or(0) as u32,
+        depth: 0.0,
+        bias: 0.0,
+    };
+    match handle.send_mod_link_command(p) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "link": link })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+fn set_macro(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let (Some(track), Some(device)) = (arg_u64(args, "track"), arg_u64(args, "device")) else {
+        return ToolResult::err("set_macro needs \"track\" and \"device\"");
+    };
+    let Some(value) = arg_f64(args, "value") else {
+        return ToolResult::err("set_macro needs \"value\" from 0 to 1");
+    };
+    let p = UiModSourceValuePayload {
+        command_type: UiCommandType::SetModSourceValue as u16,
+        flags: MOD_SOURCE_MACRO,
+        track_id: track as u32,
+        base_version: 0,
+        source_device_id: device as u32,
+        source_id: arg_u64(args, "source").unwrap_or(0) as u32,
+        value: value.clamp(0.0, 1.0) as f32,
+        reserved: [0u8; 16],
+    };
+    match handle.send_mod_source_value(p) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "device": device, "value": value })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// Pull a lane toward a grid, NON-DESTRUCTIVELY.
+///
+/// Nothing on disk moves: the engine applies this to a separate scheduling copy, so the
+/// authored tick is still what is stored, saved and drawn, and only where the note SOUNDS
+/// changes. Worth saying to a model, which will otherwise assume a quantize rewrites notes.
+fn set_lane_quantize(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(track) = arg_u64(args, "track") else {
+        return ToolResult::err("set_lane_quantize needs \"track\"");
+    };
+    // Nanoticks, not a subdivision index: a lane can quantize to something its display grid
+    // does not show, and 960000 per quarter means a triplet is a third of the straight value
+    // above it rather than the next entry in a list.
+    let grid: u64 = match arg_str(args, "grid").unwrap_or("off") {
+        "off" => 0,
+        "1/4" => 960_000, "1/8" => 480_000, "1/16" => 240_000, "1/32" => 120_000,
+        "1/4t" => 640_000, "1/8t" => 320_000, "1/16t" => 160_000,
+        other => return ToolResult::err(format!("unknown grid {other:?}")),
+    };
+    let strength = arg_u64(args, "strength").unwrap_or(100).min(100);
+    let swing = args.get("swing").and_then(|v| v.as_i64()).unwrap_or(0).clamp(-50, 50);
+    let mut p = blank(UiCommandType::SetLaneQuantize);
+    p.track_id = track as u32;
+    p.note_nanotick_lo = (grid & 0xffff_ffff) as u32;
+    p.note_nanotick_hi = (grid >> 32) as u32;
+    // Thousandths on the wire, percent in the argument — nobody should type 850 to mean 85%.
+    p.value0 = (strength * 10) as u32;
+    // BIASED BY +500 so a negative swing survives an unsigned field. 500 is straight.
+    p.note_pitch = ((swing * 10) + 500) as u32;
+    send_now(handle, p, json!({ "track": track, "grid": grid, "strength": strength, "swing": swing }))
 }
 
 /// Renders the manifest as a JSON array — the form an LLM harness ingests to
@@ -392,6 +994,17 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),
+        "sections" => sections(handle),
+        "edit_section" => edit_section(handle, &call.args),
+        "device_params" => device_params(handle, &call.args),
+        "add_device" => add_device(handle, &call.args),
+        "remove_device" => chain_edit(handle, &call.args, UiCommandType::RemoveDevice),
+        "move_device" => move_device(handle, &call.args),
+        "set_bypass" => set_bypass(handle, &call.args),
+        "modulate" => modulate(handle, &call.args),
+        "unmodulate" => unmodulate(handle, &call.args),
+        "set_macro" => set_macro(handle, &call.args),
+        "set_lane_quantize" => set_lane_quantize(handle, &call.args),
         other => ToolResult::err(format!("unknown tool {other:?}")),
     }
 }

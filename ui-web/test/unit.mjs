@@ -2014,14 +2014,14 @@ const OP_REGISTRY = {
   load:      { cli: 'load',        agent: 'load' },
   // New this session, all three still owed a programmatic path.
   new:       { cli: null, agent: null, why: 'gap' },
-  deldevice: { cli: null, agent: null, why: 'gap' },
+  deldevice: { cli: null, agent: 'remove_device', why: 'gap' },
   // Bypass reached the ENGINE from daw-cli first (`do set-bypass`, backend's
   // verb) and this app second, so the CLI path is real and the agent's manifest
   // is what still owes it a tool.
-  bypass:    { cli: 'set-bypass', agent: null, why: 'gap' },
+  bypass:    { cli: 'set-bypass', agent: 'set_bypass' },
   // Reordering reached the engine from this app FIRST — daw-cli has no verb for it —
   // which is the opposite of the usual direction and worth recording as such.
-  movedevice: { cli: null, agent: null, why: 'gap' },
+  movedevice: { cli: null, agent: 'move_device', why: 'gap' },
   // Chords reached the CLI first (`do chord`) and this app's console never had them at
   // all — writing one meant typing a token into a cell, and removing one was impossible.
   chord:     { cli: 'chord', agent: null, why: 'gap' },
@@ -2031,7 +2031,7 @@ const OP_REGISTRY = {
   delharmony: { cli: null,   agent: null, why: 'gap' },
   // M1.13. daw-cli shipped `do quantize` with the engine, so the CLI path is real
   // from day one; the agent's manifest still owes it a tool.
-  quantize:  { cli: 'quantize', agent: null, why: 'gap' },
+  quantize:  { cli: 'quantize', agent: 'set_lane_quantize' },
   /*
    * THE SPINE. The CLI verb is one `do section <sub>` for the five edits and
    * `get arrangement` for the read, so all six point at a real path there. The agent
@@ -2042,25 +2042,40 @@ const OP_REGISTRY = {
    * recorded rather than papered over — `mods` is this app's only way to see what moves
    * what, and that is a real gap in the CLI's coverage rather than an omission here.
    */
+  /*
+   * READING what modulates what has no CLI verb and no agent tool, and the reason is
+   * structural rather than an omission: modulation is published as DIFFS on the engine's
+   * outbound ring, which is SINGLE CONSUMER. The sidecar's thread drains it and accumulates
+   * the links, so the console and the UI can read them — and an agent tool executing inside
+   * daw-agent cannot, because taking entries off that ring would steal them from every
+   * browser tab. It needs either a published region or the sidecar's store plumbed through
+   * `session.execute`. Recorded rather than papered over: an agent CAN modulate and cannot
+   * yet check its own work.
+   */
   mods:        { cli: null, agent: null, why: 'gap' },
-  map:         { cli: 'mod-link', agent: null, why: 'gap' },
-  unmap:       { cli: 'unmod-link', agent: null, why: 'gap' },
-  // `depth` is `mod-link` again: the engine expresses "change the depth" as an add with the
-  // same link id, so there is no separate verb on either side.
-  depth:       { cli: 'mod-link', agent: null, why: 'gap' },
+  // `depth` is `mod-link` again on the CLI. The agent reaches it through `modulate`, which
+  // takes a depth — there is no separate opcode to give it a tool of its own.
+  map:         { cli: 'mod-link', agent: 'modulate' },
+  unmap:       { cli: 'unmod-link', agent: 'unmodulate' },
+  // `depth` is `mod-link` again on the CLI. The agent reaches it through `modulate`, which
+  // takes a depth — there is no separate opcode to give it a tool of its own.
+  depth:       { cli: 'mod-link', agent: 'modulate' },
   /*
    * NO CLI VERB FOR THE MACRO KNOB. `mod-target` names a parameter and `mod-link` makes a
    * link, and nothing there turns a source — which means a link made from daw-cli cannot be
    * heard from daw-cli, because a macro nobody has turned is skipped by the applier.
    * Recorded as a gap on their side rather than left looking covered.
    */
-  macro:       { cli: null, agent: null, why: 'gap' },
-  sections:    { cli: 'arrangement', agent: null, why: 'gap' },
-  section:     { cli: 'section', agent: null, why: 'gap' },
-  delsection:  { cli: 'section', agent: null, why: 'gap' },
-  namesection: { cli: 'section', agent: null, why: 'gap' },
-  seclength:   { cli: 'section', agent: null, why: 'gap' },
-  movesection: { cli: 'section', agent: null, why: 'gap' },
+  macro:       { cli: null, agent: 'set_macro', why: 'gap' },
+  sections:    { cli: 'arrangement', agent: 'sections' },
+  // All five section edits are one agent tool with an `op`, because their arguments differ and
+  // a model calls one tool with a named op more reliably than it picks between five near
+  // synonyms. The CLI made the same choice — `do section <sub>`.
+  section:     { cli: 'section', agent: 'edit_section' },
+  delsection:  { cli: 'section', agent: 'edit_section' },
+  namesection: { cli: 'section', agent: 'edit_section' },
+  seclength:   { cli: 'section', agent: 'edit_section' },
+  movesection: { cli: 'section', agent: 'edit_section' },
   editor:    { cli: null, agent: null, why: 'gap' },
   // v22 (AddTrack=46/RemoveTrack=47). daw-cli shipped its verbs in the same
   // commit the engine did, so these are covered on the CLI from day one; the
@@ -2165,12 +2180,31 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
 // so an agent asked to A/B an insert still cannot. Worth closing — comparing with
 // and without a device is exactly the kind of judgement an agent should be able
 // to make on its own — and worth recording honestly until it is.
-const AGENT_GAP = ['addnode', 'bypass', 'chord', 'clear', 'columns', 'copy', 'cut',
-                   'del', 'delchord', 'deldevice', 'delharmony', 'delnode', 'editor',
-                   'gain', 'link', 'loop', 'movedevice', 'mute', 'new', 'paste', 'patch',
-                   'quantize', 'seek', 'solo', 'tempo', 'transpose',
-                   'delsection', 'movesection', 'namesection', 'seclength', 'section',
-                   'sections', 'map', 'unmap', 'depth', 'macro', 'mods'];
+/*
+ * Ops with no agent tool. SHORTER THAN IT WAS: sections, modulation, the device rack and lane
+ * quantize all have tools now, which is what took eleven names off this list.
+ *
+ * What is left divides into three kinds, and only the first is a real gap:
+ *
+ *  - REACHABLE AND UNGIVEN: `chord`, `delchord`, `delharmony`, `addnode`, `delnode`, `link`,
+ *    `patch`, `editor`. Every one is a command the engine takes and the agent has no way to
+ *    send. These are the next batch.
+ *  - COVERED UNDER ANOTHER NAME: `gain`, `mute`, `solo` are `set_mixer`; `loop` is `set_loop`;
+ *    `tempo` is `set_tempo`; `seek` is `transport`. Left here because the registry maps
+ *    CONSOLE commands to tools one-to-one and these are many-to-one, which is worth seeing as
+ *    an untidy row rather than hiding behind a name that implies a tool of its own.
+ *  - NOT THE AGENT'S BUSINESS: `clear`, `columns`, `copy`, `cut`, `paste`, `del`, `transpose`,
+ *    `new`. These operate on the CURSOR and the SELECTION — view state the agent does not
+ *    have and should not simulate. An agent edits by naming notes, which `add_notes` and
+ *    `delete_note` already do.
+ *
+ * `mods` is its own case and is explained on its registry row: the read is structurally
+ * unavailable to a tool, not merely unwritten.
+ */
+const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
+                   'del', 'delchord', 'delharmony', 'delnode', 'editor',
+                   'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
+                   'seek', 'solo', 'tempo', 'transpose', 'mods'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether

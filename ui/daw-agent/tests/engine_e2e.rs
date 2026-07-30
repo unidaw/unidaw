@@ -1133,3 +1133,214 @@ fn audio_clip_persists_and_flags_rail() {
     assert_eq!(clip["audio"]["source_path"].as_str(), Some("/takes/vox.wav"));
     assert_eq!(clip["audio"]["source_start_frame"].as_u64(), Some(44100));
 }
+
+// ---------------------------------------------------------------------------
+// THE TOOLS ADDED FOR THE SPINE, THE RACK, MODULATION AND LANE QUANTIZE.
+//
+// A tool that compiles is not a tool that works. Every one of these was written by reading the
+// engine's payloads, and reading them is exactly how four modulation facts came out wrong in a
+// row — a remove that needs the link's devices, an add that refuses an existing id, a uid that
+// cannot ride along with the add, and sixteen zero bytes that hex to a truthy string. So each
+// tool is CALLED and its effect checked against what the engine published, never against the
+// tool's own reply.
+// ---------------------------------------------------------------------------
+
+/// Every ToolSpec in the manifest has an arm in `execute`.
+///
+/// THE FORCING FUNCTION. A tool the model can see and cannot call answers "unknown tool", which
+/// reads to the model as the feature being absent and to us as the manifest being complete —
+/// the same shape as a console command whose api method does not exist, which this repo has
+/// shipped four times.
+///
+/// Called with NO arguments on purpose: a dispatched tool refuses by naming what it needs, and
+/// only an undispatched one says "unknown tool".
+#[test]
+fn every_tool_in_the_manifest_is_dispatched() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("dispatch");
+    let mut undispatched: Vec<String> = Vec::new();
+    for spec in daw_agent::tools::tool_manifest() {
+        let out = session.execute(&ToolCall { tool: spec.name.into(), args: json!({}) });
+        let text = format!("{:?}{:?}", out.error, out.output);
+        if text.contains("unknown tool") {
+            undispatched.push(spec.name.to_string());
+        }
+    }
+    assert!(undispatched.is_empty(), "tools in the manifest with no dispatch arm: {undispatched:?}");
+}
+
+/// The SPINE: added, renamed, resized with its ripple, reordered, removed — and read back from
+/// the engine's own arrangement summary each time.
+#[test]
+fn section_tools_drive_the_spine() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("sect");
+
+    let sections = |s: &AgentSession| -> Vec<Value> {
+        let out = s.execute(&ToolCall { tool: "sections".into(), args: json!({}) });
+        assert!(out.ok, "sections failed: {out:?}");
+        out.output["sections"].as_array().cloned().unwrap_or_default()
+    };
+    let settle = || std::thread::sleep(Duration::from_millis(400));
+
+    assert!(sections(&session).is_empty(), "a new project has no sections");
+
+    for (bars, name) in [(4u64, "intro"), (8, "verse")] {
+        let out = session.execute(&ToolCall {
+            tool: "edit_section".into(),
+            args: json!({"op":"add","bars":bars,"name":name}),
+        });
+        assert!(out.ok, "add {name} failed: {out:?}");
+        settle();
+    }
+    let list = sections(&session);
+    assert_eq!(list.len(), 2, "two sections: {list:?}");
+    /*
+     * IN ORDER, AND AT THE RIGHT BARS. Not a count — the engine clamps an insert index to the
+     * end, so an add with no stated position inserts at the FRONT unless the append sentinel
+     * goes out, and two adds built the song backwards when it did not. `verse` at bar 5 is the
+     * assertion that catches it; two-of-two passes either way round.
+     */
+    assert_eq!(list[0]["name"].as_str(), Some("intro"), "{list:?}");
+    assert_eq!(list[0]["start_bar"].as_u64(), Some(1), "{list:?}");
+    assert_eq!(list[1]["name"].as_str(), Some("verse"), "{list:?}");
+    assert_eq!(list[1]["start_bar"].as_u64(), Some(5), "{list:?}");
+
+    let id = list[0]["id"].as_u64().unwrap();
+    let out = session.execute(&ToolCall {
+        tool: "edit_section".into(), args: json!({"op":"rename","id":id,"name":"THE TOP"}),
+    });
+    assert!(out.ok, "rename failed: {out:?}");
+    settle();
+    assert_eq!(sections(&session)[0]["name"].as_str(), Some("THE TOP"));
+
+    let out = session.execute(&ToolCall {
+        tool: "edit_section".into(), args: json!({"op":"length","id":id,"bars":6}),
+    });
+    assert!(out.ok, "length failed: {out:?}");
+    settle();
+    let rippled = sections(&session);
+    assert_eq!(rippled[0]["bars"].as_u64(), Some(6), "{rippled:?}");
+    // ...AND EVERYTHING AFTER IT MOVED. A length change is not a local edit: a start is the sum
+    // of what precedes it, and the sum has changed.
+    assert_eq!(rippled[1]["start_bar"].as_u64(), Some(7),
+               "the section after a lengthened one must move: {rippled:?}");
+    assert_eq!(rippled[1]["bars"].as_u64(), Some(8), "while keeping its own length");
+
+    let out = session.execute(&ToolCall {
+        tool: "edit_section".into(), args: json!({"op":"move","id":id,"to":2}),
+    });
+    assert!(out.ok, "move failed: {out:?}");
+    settle();
+    assert_eq!(sections(&session)[1]["id"].as_u64(), Some(id), "moved to second place");
+
+    let out = session.execute(&ToolCall {
+        tool: "edit_section".into(), args: json!({"op":"remove","id":id}),
+    });
+    assert!(out.ok, "remove failed: {out:?}");
+    settle();
+    let left = sections(&session);
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert!(left.iter().all(|s| s["id"].as_u64() != Some(id)), "the right one went: {left:?}");
+}
+
+/// Every section refusal NAMES the argument it is about.
+///
+/// The model reads these. An `ok: false` with an empty body teaches it nothing and it will make
+/// the same call again — which is a loop that costs money and never converges.
+#[test]
+fn section_refusals_say_what_is_missing() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("sectref");
+    for (args, want) in [
+        (json!({"op":"wat"}), "add, remove, rename"),
+        (json!({"op":"remove"}), "id"),
+        (json!({"op":"length","id":1}), "bars"),
+        (json!({"op":"rename","id":1}), "name"),
+        (json!({}), "op"),
+    ] {
+        let out = session.execute(&ToolCall { tool: "edit_section".into(), args: args.clone() });
+        assert!(!out.ok, "{args} should be refused: {out:?}");
+        let why = out.error.clone().unwrap_or_default();
+        assert!(why.contains(want), "{args} refused without naming {want:?}: {why:?}");
+    }
+}
+
+/// MODULATION's refusals, which are the interesting half.
+///
+/// Three of the four ways to make an inert link are caught here rather than sent, because the
+/// engine accepts all three and then moves nothing: a same-device source (the applier requires
+/// STRICTLY earlier, the validator only refuses later), a malformed uid, and a missing uid. The
+/// fourth — an AUTO link id, which cannot be named in the same call — is not refused because it
+/// is a legitimate thing to do; it is REPORTED, and that is asserted too.
+#[test]
+fn modulate_refuses_the_links_that_could_not_work() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("modref");
+    let uid = "0".repeat(31) + "1";
+
+    let same = session.execute(&ToolCall {
+        tool: "modulate".into(),
+        args: json!({"track":0,"source_device":6,"target_device":6,"param_uid":uid}),
+    });
+    assert!(!same.ok, "a same-device link must be refused: {same:?}");
+    assert!(same.error.clone().unwrap_or_default().contains("EARLIER"),
+            "and the reason must be the forward rule: {same:?}");
+
+    let bad = session.execute(&ToolCall {
+        tool: "modulate".into(),
+        args: json!({"track":0,"source_device":5,"target_device":6,"param_uid":"nope"}),
+    });
+    assert!(!bad.ok && bad.error.clone().unwrap_or_default().contains("32 hex"),
+            "a malformed uid must be refused by shape: {bad:?}");
+
+    let none = session.execute(&ToolCall {
+        tool: "modulate".into(),
+        args: json!({"track":0,"source_device":5,"target_device":6}),
+    });
+    assert!(!none.ok && none.error.clone().unwrap_or_default().contains("param_uid"),
+            "a missing uid must be refused, since the engine ignores the index: {none:?}");
+
+    let rm = session.execute(&ToolCall {
+        tool: "unmodulate".into(), args: json!({"track":0,"link":1}),
+    });
+    assert!(!rm.ok, "a removal without the link's devices must be refused: {rm:?}");
+    assert!(rm.error.clone().unwrap_or_default().contains("source_device"),
+            "and say which: {rm:?}");
+}
+
+/// LANE QUANTIZE, where the UNITS are the whole risk.
+///
+/// Percent in and thousandths on the wire, and swing BIASED BY +500 so a negative value
+/// survives an unsigned field. A tool that forwarded the numbers unchanged would quantize at a
+/// tenth of the strength asked for, with a swing near the extreme — and both would look like
+/// settings that had been applied. Read back from the SAVED PROJECT, which is the engine's own
+/// account of what it holds.
+#[test]
+fn lane_quantize_tool_converts_its_units() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("quant");
+
+    let out = session.execute(&ToolCall {
+        tool: "set_lane_quantize".into(),
+        args: json!({"track":0,"grid":"1/16","strength":80,"swing":-20}),
+    });
+    assert!(out.ok, "set_lane_quantize failed: {out:?}");
+    std::thread::sleep(Duration::from_millis(500));
+    let save = session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"quantout"}) });
+    assert!(save.ok, "save failed: {save:?}");
+    let doc = read_project(&engine.proj, "quantout");
+    let q = &track(&doc, 0)["quantize"];
+    assert_eq!(q["grid_nanoticks"].as_u64(), Some(240_000),
+               "1/16 is 240000 nanoticks, not a subdivision index: {q:?}");
+    assert_eq!(q["strength_milli"].as_u64(), Some(800),
+               "80 percent is 800 thousandths: {q:?}");
+    assert_eq!(q["swing_milli"].as_i64(), Some(-200),
+               "-20 percent is -200 thousandths, unbiased again on the way out: {q:?}");
+
+    let bad = session.execute(&ToolCall {
+        tool: "set_lane_quantize".into(), args: json!({"track":0,"grid":"sixteenth"}),
+    });
+    assert!(!bad.ok && bad.error.clone().unwrap_or_default().contains("unknown grid"),
+            "an unknown grid must be refused by name: {bad:?}");
+}

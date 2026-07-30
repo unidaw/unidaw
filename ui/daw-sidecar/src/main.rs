@@ -5067,7 +5067,16 @@ mod tests {
         // them, which is a change to a NEIGHBOURING field and nothing this test
         // is about.
         assert!(json.contains("\"track\":2,\"version\":6,"), "{json}");
-        assert!(json.contains("\"devices\":[]}"), "{json}");
+        /*
+         * `"devices":[]` WITHOUT the closing brace.
+         *
+         * The comment above says matching an exact byte sequence broke this once when a
+         * neighbouring field was added, and then the fix pinned `devices` as the LAST field
+         * — which broke it again the moment `modVersion` and `modLinks` were appended after
+         * it. A test that asserts a field's POSITION is asserting the serialiser's field
+         * order, which is not what it is about.
+         */
+        assert!(json.contains("\"devices\":[]"), "{json}");
     }
 
     /// Same contract as the engine events: one shared store, one cursor per
