@@ -180,10 +180,15 @@ struct WaveformPyramid;  // apps/waveform_pyramid.h — built pre-downmix at dec
 // A decoded audio source, downmixed to mono, in float samples. `sampleRate` is
 // the source file's own rate (resample at play time against the engine rate).
 struct DecodedAudio {
-  std::vector<float> samples;      // mono, `frames` long
+  // PLANAR, one vector per source channel, each `frames` long. This used to be a single mono
+  // buffer built by averaging the channels — so a stereo loop dropped into the arrangement PLAYED
+  // AS MONO while the waveform drawn above it was per-channel and correct. A display that
+  // disagrees with what you hear is the class of bug this codebase exists to remove, and nothing
+  // caught it because every audio fixture in the suite is mono.
+  std::vector<std::vector<float>> channels;
   uint64_t frames = 0;
   double sampleRate = 0.0;
-  uint32_t sourceChannels = 0;     // channels in the source before downmix
+  uint32_t sourceChannels = 0;
   bool ok = false;
   // The min/max + Q15 pyramid for waveform display, built from the multi-channel
   // buffer before the mono downmix above (a downmix loses out-of-phase energy, so
@@ -193,7 +198,9 @@ struct DecodedAudio {
 
 // Decodes an audio file (wav/aiff/flac/... — whatever JUCE's basic formats read)
 // fully into memory, downmixing to mono. `ok` is false if the file can't be read.
-DecodedAudio decodeAudioFileMono(const std::string& path);
+// Named for what it does now: it preserves the source's channels. The old name said Mono and
+// that was the bug.
+DecodedAudio decodeAudioFile(const std::string& path);
 
 // Writes a mono float buffer as a 16-bit wav. Used by the offline bounce and by
 // tests that need a known source. Returns false on any I/O error.

@@ -1768,7 +1768,7 @@ std::vector<PluginScanResult> scanVst3File(const std::string& path,
   return results;
 }
 
-DecodedAudio decodeAudioFileMono(const std::string& path) {
+DecodedAudio decodeAudioFile(const std::string& path) {
   DecodedAudio out;
   juce::AudioFormatManager formats;
   formats.registerBasicFormats();
@@ -1801,14 +1801,15 @@ DecodedAudio decodeAudioFileMono(const std::string& path) {
         static_cast<uint64_t>(frames)));
   }
 
-  out.samples.resize(static_cast<size_t>(frames));
-  const float invChannels = 1.0f / static_cast<float>(channels);
-  for (juce::int64 i = 0; i < frames; ++i) {
-    float sum = 0.0f;
-    for (int c = 0; c < channels; ++c) {
-      sum += buffer.getSample(c, static_cast<int>(i));
-    }
-    out.samples[static_cast<size_t>(i)] = sum * invChannels;
+  // KEEP THE CHANNELS. This averaged them into one mono buffer and dropped the rest, so every
+  // stereo source in the arrangement played as a downmix — while the pyramid built ten lines
+  // above, from the same buffer, drew it honestly per channel.
+  out.channels.resize(static_cast<size_t>(channels));
+  for (int c = 0; c < channels; ++c) {
+    auto& dst = out.channels[static_cast<size_t>(c)];
+    dst.resize(static_cast<size_t>(frames));
+    const float* srcCh = buffer.getReadPointer(c);
+    std::copy(srcCh, srcCh + frames, dst.begin());
   }
   out.ok = true;
   return out;

@@ -477,6 +477,14 @@ struct UiClipExtentRegion {
 // A client deriving it would be reimplementing TimeSignatureMap::barBeatAt, and the first
 // disagreement would draw a marker at the wrong bar with nothing reporting it. One derivation, in
 // the engine, published.
+// A DEGENERATE SPAN IS A REAL STATE, not a bug in your decoder. The span between two markers is
+// derived — `markers[i+1].nanotick`, or `songEndTick` for the last — so it is ZERO when two
+// markers sit on one tick (legal: a boundary and a cue at the same place), and zero for the last
+// marker when no material follows it (an empty project has songEndTick 0, so the last span is
+// empty and correct). A client that culls with `<=` makes a marker at the view's start vanish,
+// and a zero-width block reads as a MISSING marker rather than as "nothing comes after this".
+// Found by the web UI on its first day drawing these; written down so the next client does not
+// have to find it too.
 struct UiMarker {
   uint32_t id = 0;
   uint32_t bar = 1;        // ONE-based, prefix-summed through the meter map

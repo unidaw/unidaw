@@ -357,9 +357,26 @@ bool writeWav16(const std::string& path,
 // (position/length in engine output frames, computed from its placement) plus the
 // decoded mono source it reads. Shared by shared_ptr so the audio thread never
 // touches the decode or the store.
+// PLANAR. `source` holds one vector per source channel — it used to be a single mono buffer,
+// because the decoder averaged every file down to feed a mono renderer, so a stereo loop played
+// as a downmix while its waveform drew per channel.
+struct AudioSourceBuffer {
+  std::vector<std::vector<float>> channels;
+  // Cached raw pointers, so the audio thread never walks a vector-of-vectors to find them.
+  // Built once when the buffer is; the vectors are const from then on.
+  std::vector<const float*> planes;
+  uint64_t frames = 0;
+  void buildPlanes() {
+    planes.clear();
+    planes.reserve(channels.size());
+    for (const auto& c : channels) {
+      planes.push_back(c.data());
+    }
+  }
+};
 struct AudioRegionRender {
   daw::AudioRegionParams params;
-  std::shared_ptr<const std::vector<float>> source;
+  std::shared_ptr<const AudioSourceBuffer> source;
   uint64_t sourceFrames = 0;
 };
 // A track's audio regions, published as an immutable snapshot the audio callback
@@ -439,6 +456,7 @@ public:
     const uint32_t maxMargin = numBlocks > 1 ? numBlocks - 1 : 1;
     m_playMargin = std::min(margin, maxMargin);
     m_audioScratch.assign(blockSize, 0.0f);
+    m_audioScratchR.assign(blockSize, 0.0f);
     // Preallocate the widest possible master (surround on a narrower device), so the
     // audio thread never allocates when a wider master is active.
     m_masterBuffer.assign(static_cast<size_t>(kMaxMasterChannels) * blockSize, 0.0f);
@@ -833,28 +851,50 @@ public:
         const float angle = (std::clamp(pan, -1.0f, 1.0f) + 1.0f) * 0.25f *
                             static_cast<float>(M_PI);
         for (const auto& region : *regions) {
-          if (!region.source || region.source->empty()) {
+          if (!region.source || region.source->planes.empty() ||
+              region.source->frames == 0) {
             continue;
           }
-          std::fill(m_audioScratch.begin(),
-                    m_audioScratch.begin() + numSamples, 0.0f);
-          daw::renderAudioRegionBlock(region.params, region.source->data(),
-                                      region.sourceFrames,
+          // TWO SCRATCH PLANES, rendered per source channel. This used to render one mono
+          // plane, because the decoder averaged every file down to feed it — so a stereo loop
+          // played as a downmix while its own waveform drew per channel.
+          const uint32_t srcCh =
+              static_cast<uint32_t>(region.source->planes.size());
+          const uint32_t useCh = std::min<uint32_t>(srcCh, 2);
+          float* planes[2] = {m_audioScratch.data(), m_audioScratchR.data()};
+          for (uint32_t c = 0; c < useCh; ++c) {
+            std::fill(planes[c], planes[c] + numSamples, 0.0f);
+          }
+          daw::renderAudioRegionBlock(region.params, region.source->planes.data(),
+                                      srcCh, region.sourceFrames,
                                       static_cast<int64_t>(m_transportSample),
-                                      numSamples, m_audioScratch.data());
-          // An audio clip is a mono source: place it in the master's front L/R phantom
-          // (constant-power cos/sin), leaving centre/LFE/surrounds silent on an
-          // N-channel master rather than smearing the mono into every channel.
+                                      numSamples, planes, useCh);
+          // PAN MEANS TWO DIFFERENT THINGS, and conflating them is how a centred stereo clip
+          // comes out narrower than the file:
+          //   MONO source   -> pan PLACES a point source. Constant-power cos/sin into the front
+          //                    L/R phantom, leaving centre/LFE/surrounds silent on an N-channel
+          //                    master rather than smearing one signal into every speaker.
+          //   STEREO source -> pan is a BALANCE. It attenuates one side and never repositions:
+          //                    at centre both sides pass at unity, which is the only setting
+          //                    that leaves the file as recorded.
           for (int ch = 0; ch < std::min(masterCh, 2); ++ch) {
             float* output = master[ch];
             if (!output) {
               continue;
             }
-            const float panGain = (ch == 0) ? std::cos(angle) : std::sin(angle);
-            const float channelGain =
-                gain * (masterCh >= 2 ? panGain : 1.0f);
+            float channelGain = gain;
+            if (masterCh >= 2) {
+              if (useCh >= 2) {
+                const float p = std::clamp(pan, -1.0f, 1.0f);
+                channelGain *= (ch == 0) ? std::min(1.0f, 1.0f - p)
+                                         : std::min(1.0f, 1.0f + p);
+              } else {
+                channelGain *= (ch == 0) ? std::cos(angle) : std::sin(angle);
+              }
+            }
+            const float* plane = planes[useCh >= 2 ? ch : 0];
             for (int i = 0; i < numSamples; ++i) {
-              output[i] += m_audioScratch[i] * channelGain;
+              output[i] += plane[i] * channelGain;
             }
           }
         }
@@ -1213,6 +1253,7 @@ public:
     m_transportSample = 0;
     if (m_audioScratch.size() != m_blockSize) {
       m_audioScratch.assign(m_blockSize, 0.0f);
+      m_audioScratchR.assign(m_blockSize, 0.0f);
     }
     m_startTime = std::chrono::steady_clock::now();
     if (m_playbackBlockId) {
@@ -1323,6 +1364,9 @@ private:
   std::array<std::atomic<uint64_t>, kBlockPosSlots> m_blockStartSample{};
   std::array<std::atomic<uint32_t>, kBlockPosSlots> m_blockStartValid{};
   std::vector<float> m_audioScratch;
+  // The second plane, for a stereo source. Sized with the first; the audio thread never
+  // allocates.
+  std::vector<float> m_audioScratchR;
 
   // Movement 4 surround master. The mix places tracks across an N-channel master. When
   // that master is WIDER than the audio device (a 5.1 mix on a stereo device — the
@@ -5248,7 +5292,7 @@ struct TrackRuntime {
     // Small per-rebuild decode cache so one file placed twice decodes once.
     struct Cached {
       std::string path;  // resolved absolute
-      std::shared_ptr<const std::vector<float>> samples;
+      std::shared_ptr<const AudioSourceBuffer> samples;
       uint64_t frames;
       double srcRate;
     };
@@ -5270,7 +5314,7 @@ struct TrackRuntime {
       }
       // Resolve the source relative to the project (portable, not CWD-bound).
       const std::string resolvedPath = resolveSourcePath(clip->audio.sourcePath);
-      std::shared_ptr<const std::vector<float>> src;
+      std::shared_ptr<const AudioSourceBuffer> src;
       uint64_t frames = 0;
       double srcRate = rate;
       bool have = false;
@@ -5284,7 +5328,7 @@ struct TrackRuntime {
         }
       }
       if (!have) {
-        auto dec = daw::decodeAudioFileMono(resolvedPath);
+        auto dec = daw::decodeAudioFile(resolvedPath);
         if (!dec.ok) {
           // Surface the miss: a silent `continue` is how a missing sample file
           // becomes "the waveform feature is broken" three weeks later. The failed
@@ -5295,7 +5339,13 @@ struct TrackRuntime {
               .field("path", resolvedPath);
           continue;
         }
-        src = std::make_shared<const std::vector<float>>(std::move(dec.samples));
+        {
+          auto buf = std::make_shared<AudioSourceBuffer>();
+          buf->channels = std::move(dec.channels);
+          buf->frames = dec.frames;
+          buf->buildPlanes();
+          src = std::move(buf);
+        }
         frames = dec.frames;
         srcRate = dec.sampleRate;
         cache.push_back({resolvedPath, src, frames, srcRate});
