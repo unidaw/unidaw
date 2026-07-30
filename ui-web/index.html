@@ -4471,6 +4471,41 @@ function syncNoteColumns() {
   tracker.measure();
 }
 
+/*
+ * How many characters the ops cell can show, measured ONCE from the DOM rather than derived.
+ *
+ * Derived would mean a second copy of the box model — the padding, the border and the font's
+ * advance — and this app has already paid for that: two probes in one evening measured a
+ * proportional fallback because they rebuilt the font from `getComputedStyle(...).font`, which
+ * serialises without a family. Measured off a real cell, there is nothing to get wrong.
+ *
+ * 0 until the first measurement, which draws the glyph run — the form that always fits, so a
+ * cold start is correct rather than clipped.
+ */
+let opsCellChars = 0;
+let _opsCharsSig = -1;
+function measureOpsChars() {
+  const cell = document.querySelector('.tk-cell[data-kind="fx"]') ||
+               document.querySelector('.tk-cell');
+  if (!cell) return;
+  const cs = getComputedStyle(cell);
+  const probe = document.createElement('span');
+  probe.style.position = 'absolute';
+  probe.style.visibility = 'hidden';
+  probe.style.whiteSpace = 'pre';
+  probe.style.fontFamily = cs.fontFamily;
+  probe.style.fontSize = cs.fontSize;
+  probe.style.fontWeight = cs.fontWeight;
+  probe.style.letterSpacing = cs.letterSpacing;
+  probe.textContent = '0'.repeat(20);
+  document.body.appendChild(probe);
+  const adv = probe.getBoundingClientRect().width / 20;
+  probe.remove();
+  const inner = cell.getBoundingClientRect().width
+              - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0);
+  opsCellChars = adv > 0 ? Math.max(0, Math.floor(inner / adv)) : 0;
+}
+
 const _vmOpts = { startRow: 0, rowCount: 0, tracks: 0, columns: 3, zoomIndex: 2,
                   cursor: null, playheadRow: 0, selection: null, engine: null,
                   pending: null, pendingCount: 0, entryOverlay: null,
@@ -4752,6 +4787,17 @@ function draw() {
   o.startRow = state.start; o.rowCount = tracker.poolSize;
   o.tracks = state.tracks; o.columns = state.columns; o.zoomIndex = state.zoom;
   o.noteColumns = state.noteColumns;
+  /*
+   * Measured after `resize()`, which is what creates the cells — measuring before it reads a
+   * pool that does not exist yet and answers 0 for ever, since a guard on "already measured"
+   * would never release. Re-measured when the shape changes rather than per frame: it forces
+   * layout, and the answer only moves when the font, the zoom or the cell width does.
+   */
+  if (!opsCellChars || _opsCharsSig !== state.columns) {
+    _opsCharsSig = state.columns;
+    measureOpsChars();
+  }
+  o.opsChars = opsCellChars;
   o.cursor = state.cursor; o.playheadRow = state.playhead; o.selection = state.selection;
   o.engine = state.useEngine === false ? null : engine;
   o.pending = pending; o.pendingCount = pendingCount;

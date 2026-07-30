@@ -2,7 +2,7 @@ import { pitchName } from './wire.js';
 import { nameChord } from './harmonymodel.js';
 import { DEFAULT_METER, createPosition, positionOf, sameMeter,
          ticksPerBar, ticksPerBeat, NANOTICKS_PER_QUARTER } from './meter.js';
-import { opsRun } from './rowops.js';
+import { opsRun, opsCellText } from './rowops.js';
 // The view-model: plain data describing exactly what is on screen right now.
 //
 // This is the boundary the whole frontend is built around. The renderer consumes
@@ -596,6 +596,16 @@ export function buildViewModel(opts, buf) {
     entryOverlay = null,
     // Optimistic edits, drawn over the engine's answer until it catches up.
     pending = null, pendingCount = 0,
+    /*
+     * How many characters the ops cell can show, measured by the caller.
+     *
+     * Passed in rather than derived because this file may not compute geometry
+     * (GUIDELINES 3.11) — a second copy of the box model here is how a paint and a
+     * hit test come to disagree. 0 means "never fits", which draws the glyph run:
+     * that is the right default for a caller that has not measured, because the run
+     * is the form that always fits.
+     */
+    opsChars = 0,
     /**
      * The engine's harmony timeline, [{tick, root, scaleId}], for the column
      * between the time gutter and the first track.
@@ -1259,10 +1269,16 @@ export function buildViewModel(opts, buf) {
          * The run is interned by mask in rowops.js, so this is a pointer
          * assignment and allocates nothing.
          */
-        const run = opsRun(n);
-        if (run) {
-          const c2 = row.cells[base + 2];
-          if (c2) { c2.text = run; c2.kind = 'fx'; }
+        const c2 = row.cells[base + 2];
+        if (c2) {
+          /*
+           * The fullest form that FITS: `p100` where there is room, `rpd` where there is not.
+           * `opsChars` is the cell's capacity in characters, measured by the caller — this file
+           * may not derive geometry (GUIDELINES 3.11), and a second copy of the box model here
+           * is how a paint and a hit test come to disagree.
+           */
+          const run = opsCellText(c2, n, opsChars, ticksPerBeat(meter));
+          if (run) { c2.text = run; c2.kind = 'fx'; }
         }
       }
     }
