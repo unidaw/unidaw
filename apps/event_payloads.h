@@ -840,8 +840,19 @@ struct UiModErrorPayload {
 static_assert(sizeof(UiModErrorPayload) == 40,
               "UiModErrorPayload must fit EventEntry payload");
 
+// PER-DEVICE ADDRESSING, carried in `flags` because the payload is exactly 40 bytes and full.
+//
+// Bit 15 says a deviceId is PRESENT; bits 0-14 are the id. The presence bit is not decoration:
+// nextDeviceId() starts at 0, so device id 0 is a real device and a bare 0 cannot mean
+// "unspecified". Without the bit, every existing caller sending flags=0 would silently start
+// addressing device 0 instead of taking the legacy whole-pool path.
+constexpr uint16_t kUiPatcherFlagHasDeviceId = 1u << 15;
+constexpr uint16_t kUiPatcherDeviceIdMask = 0x7FFFu;
+
 struct UiPatcherGraphCommandPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  // See kUiPatcherFlagHasDeviceId: bit 15 = a deviceId follows in bits 0-14. The graph edited is
+  // then THAT DEVICE's own, not the shared pool.
   uint16_t flags = 0;
   uint32_t trackId = 0;
   uint32_t baseVersion = 0;

@@ -86,7 +86,10 @@ daw-cli — control surface for a running engine
                                    routing read-back to merge against.
   daw-cli do patcher-node --track N --type euclidean|lfo|random-degree|
                           passthrough|audio-passthrough|event-out
-  daw-cli do patcher-unnode --track N --node ID
+                                   --device D edits THAT DEVICE's own graph, which is the
+                                   only form that is saved for a project with per-device
+                                   graphs; without it the edit goes to the shared pool
+  daw-cli do patcher-unnode --track N --node ID [--device D]
   daw-cli do patcher-connect --track N --src ID --dst ID
                              [--src-port P] [--dst-port P] [--kind event|audio|cv]
   daw-cli do patcher-config --track N --node ID --type T [type-specific flags]
@@ -452,6 +455,21 @@ fn send_named(handle: &EngineHandle, command: UiCommandType, name: &str) -> i32 
 /// a clip version would reject it whenever someone else was mid-edit, for a change that
 /// cannot conflict with theirs.
 /// Patcher node types, by name.
+/// Encode `--device N` into the patcher payload's `flags`, which is where per-device addressing
+/// lives (the payload is exactly 40 bytes and full).
+///
+/// Bit 15 marks the id as PRESENT and is not decoration: device ids start at 0, so a bare 0 cannot
+/// mean "unspecified". Without `--device` the command takes the legacy whole-pool path — which for
+/// a project with per-device graphs means the edit is applied to the shared pool and never saved,
+/// so pass it.
+fn patcher_device_flags(args: &[String]) -> u16 {
+    use daw_bridge::layout as L;
+    match flag_u64(args, "--device", None) {
+        Ok(id) => L::UI_PATCHER_FLAG_HAS_DEVICE_ID | ((id as u16) & L::UI_PATCHER_DEVICE_ID_MASK),
+        Err(_) => 0,
+    }
+}
+
 fn parse_node_type(raw: &str) -> Result<u32, String> {
     use daw_bridge::layout as L;
     Ok(match raw {
@@ -1275,6 +1293,20 @@ fn watch(handle: &EngineHandle) -> i32 {
 }
 
 fn main() {
+    // DIE QUIETLY ON A CLOSED PIPE, like every other Unix tool.
+    //
+    // Rust ignores SIGPIPE and turns the resulting EPIPE into a panic on write, so
+    // `daw-cli get notes | head -1` printed a panic and a backtrace note the moment its output
+    // outran the reader. Inside a check that read as "no published notes — the fixture did not
+    // load", i.e. the tool blaming the engine for the tool's own crash. It showed up as an
+    // intermittent failure because whether the write lands before or after `head` exits is a
+    // race, and the suite's flake reporting is what surfaced it.
+    //
+    // Restoring the default disposition makes a closed pipe kill the process silently, which is
+    // what a caller composing with `head`, `grep -q` or `paste` already assumes.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     // M2.18: the ring is multi-producer now, so nothing needs acknowledging. The flag
     // is still accepted (and ignored) because it appears in a lot of scripts and notes.
@@ -1855,6 +1887,7 @@ fn main() {
                             UiCommandType::AddPatcherNode as u16
                         },
                         track_id: track,
+                        flags: patcher_device_flags(&args),
                         node_id: flag_u64(&args, "--node", Some(0)).unwrap_or(0) as u32,
                         node_type,
                         ..Default::default()

@@ -2924,6 +2924,110 @@ struct TrackRuntime {
     return snapshot;
   };
 
+  // RE-ASSEMBLE THE PATCHER POOL FROM THE LIVE DEVICE GRAPHS.
+  //
+  // Each device owns an AUTHORED graph (device.patcher) with device-local node ids. The engine
+  // runs ONE pool with globally-unique ids, built by offsetting each device's subgraph, and each
+  // device's patcherNodeId is repointed at its own output node inside it. The authored graph is
+  // the source of truth; the pool is derived — so this is idempotent and can be re-run after any
+  // edit.
+  //
+  // Until now assembly happened ONLY at load, which is why editing a patcher graph at runtime did
+  // nothing to what was executing (and, before the save guard, corrupted the file instead). This
+  // is the same derivation the load performs, minus the document half: there is no document at
+  // edit time, only runtimes, which makes it shorter rather than harder.
+  //
+  // Returns false when there is nothing to assemble or the pool will not build. A pool that will
+  // not build is REPORTED and the previous one is left running — a bad edge in one device must not
+  // silently take down every other device's graph.
+  auto reassemblePatcherFromDevices = [&]() -> bool {
+    struct DevOut {
+      uint32_t trackId;
+      uint32_t deviceId;
+      uint32_t node;
+    };
+    daw::PatcherGraph pool;
+    std::vector<DevOut> outputs;
+    uint32_t base = 0;
+    for (auto* rt : snapshotTracks()) {
+      if (!rt || rt->removed.load(std::memory_order_acquire)) {
+        continue;
+      }
+      std::vector<daw::Device> devices;
+      {
+        std::lock_guard<std::mutex> lock(rt->trackMutex);
+        devices = rt->track.chain.devices;
+      }
+      daw::AssembledPatcher sub = daw::assemblePatcherPool(devices);
+      if (!sub.anyPerDevice) {
+        continue;
+      }
+      for (auto node : sub.pool.nodes) {
+        node.id += base;
+        pool.nodes.push_back(node);
+      }
+      for (auto edge : sub.pool.edges) {
+        edge.src.nodeId += base;
+        edge.dst.nodeId += base;
+        pool.edges.push_back(edge);
+      }
+      for (const auto& out : sub.deviceOutputs) {
+        outputs.push_back({rt->trackId, out.first, out.second + base});
+      }
+      base += static_cast<uint32_t>(sub.pool.nodes.size());
+    }
+    if (pool.nodes.empty()) {
+      return false;
+    }
+    if (!daw::buildPatcherGraph(pool)) {
+      DAW_EVENT("patcher.reassembly_failed")
+          .field("nodes", static_cast<uint64_t>(pool.nodes.size()))
+          .field("edges", static_cast<uint64_t>(pool.edges.size()))
+          .field("action", "previous_pool_left_running");
+      std::cerr << "Engine: patcher re-assembly FAILED (" << pool.nodes.size()
+                << " nodes) — one device's graph is invalid. The edit is kept, the PREVIOUS "
+                   "pool is still executing; run tools/daw_lint to find the bad edge."
+                << std::endl;
+      return false;
+    }
+    {
+      std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+      patcherGraphState.graph = std::move(pool);
+      patcherGraphState.nextNodeId = base;
+    }
+    patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
+    updatePatcherGraphSnapshot();
+    // Repoint each device at its output node in the new pool, so the RT DFS seeds from the right
+    // node and the published patcherNodeId names a real pool node. Skipping this is invisible for
+    // the FIRST contributing device (its block starts at offset 0, so authored == pooled) and
+    // wrong for every device after it — which is exactly the bug that made per-device scoping in
+    // the UI show foreign nodes as unowned orphans.
+    for (const auto& out : outputs) {
+      TrackRuntime* rt = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (out.trackId < tracks.size()) {
+          rt = tracks[out.trackId].get();
+        }
+      }
+      if (!rt) {
+        continue;
+      }
+      std::lock_guard<std::mutex> lock(rt->trackMutex);
+      for (auto& d : rt->track.chain.devices) {
+        if (d.id == out.deviceId) {
+          d.patcherNodeId = out.node;
+          break;
+        }
+      }
+    }
+    patcherAssembledFromDevices.store(true, std::memory_order_release);
+    DAW_EVENT("patcher.reassembled")
+        .field("devices", static_cast<uint64_t>(outputs.size()))
+        .field("nodes", static_cast<uint64_t>(base));
+    return true;
+  };
+
   struct ClipWindowPending {
     daw::ClipWindowRequest request;
   };
@@ -8353,10 +8457,128 @@ struct TrackRuntime {
       }
       return;
     }
+    // PER-DEVICE PATCHER EDITS. "Patcher is a device" moved the DATA model and the read-back to
+    // per-device graphs; the EDIT commands were never migrated and still addressed the one shared
+    // pool. For any project carrying per-device graphs that meant an edit landed in the pool and
+    // was never saved — applied, reported as applied, and gone on reload. Before the save guard it
+    // was worse: the same edit overwrote device 1's real graph with the whole pool.
+    //
+    // A SEPARATE BRANCH rather than a rewrite of the one below. The legacy whole-pool path is
+    // untouched, so a caller that does not ask for a device cannot be broken by this, and the new
+    // path is self-contained enough to read in one sitting.
+    //
+    // The edit is applied through the SAME helpers by wrapping the device's graph in a scratch
+    // PatcherGraphState. Reimplementing the cycle and port validation for device graphs is exactly
+    // how the two paths would drift into disagreeing about which edits are legal.
     if (entry.size == sizeof(daw::UiPatcherGraphCommandPayload) &&
         (commandType == daw::UiCommandType::AddPatcherNode ||
          commandType == daw::UiCommandType::RemovePatcherNode ||
          commandType == daw::UiCommandType::ConnectPatcherNodes)) {
+      daw::UiPatcherGraphCommandPayload probe{};
+      std::memcpy(&probe, entry.payload, sizeof(probe));
+      if ((probe.flags & daw::kUiPatcherFlagHasDeviceId) != 0) {
+        const uint32_t deviceId =
+            static_cast<uint32_t>(probe.flags & daw::kUiPatcherDeviceIdMask);
+        TrackRuntime* runtime = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(tracksMutex);
+          if (probe.trackId < tracks.size()) {
+            runtime = tracks[probe.trackId].get();
+          }
+        }
+        auto refuse = [&](const char* why) {
+          DAW_EVENT("patcher_device_edit.rejected")
+              .field("track", probe.trackId)
+              .field("device", deviceId)
+              .field("op", daw::uiCommandTypeName(commandType))
+              .field("reason", why);
+        };
+        if (!runtime) {
+          refuse("no_such_track");
+          return;
+        }
+        bool applied = false;
+        uint32_t newNodeId = 0;
+        const char* failure = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          daw::Device* device = nullptr;
+          for (auto& d : runtime->track.chain.devices) {
+            if (d.id == deviceId) {
+              device = &d;
+              break;
+            }
+          }
+          if (!device) {
+            failure = "no_such_device";
+          } else {
+            // Scratch state around THIS device's authored graph. nextNodeId comes from the
+            // graph itself so a new node cannot collide with one already in it.
+            daw::PatcherGraphState scratch;
+            scratch.graph = device->patcher;
+            uint32_t next = 0;
+            for (const auto& n : scratch.graph.nodes) {
+              next = std::max(next, n.id + 1);
+            }
+            scratch.nextNodeId = next;
+            if (commandType == daw::UiCommandType::AddPatcherNode) {
+              if (probe.nodeType >
+                  static_cast<uint32_t>(daw::PatcherNodeType::EventOut)) {
+                failure = "invalid_node_type";
+              } else {
+                newNodeId = daw::addPatcherNode(
+                    scratch, static_cast<daw::PatcherNodeType>(probe.nodeType));
+                // addPatcherNode returns UINT32_MAX when the graph will not BUILD with the new
+                // node and rolls it back. Treating that as success reported an edit that had been
+                // refused — and the report even carried 4294967295 as the new node id, which is
+                // the sentinel announcing itself.
+                applied = newNodeId != std::numeric_limits<uint32_t>::max();
+                if (!applied) {
+                  failure = "graph_would_not_build";
+                }
+              }
+            } else if (commandType == daw::UiCommandType::RemovePatcherNode) {
+              applied = daw::removePatcherNode(scratch, probe.nodeId);
+              if (!applied) {
+                failure = "invalid_node";
+              }
+            } else {
+              const auto result = daw::connectPatcherNodes(
+                  scratch, probe.srcNodeId, probe.srcPortId, probe.dstNodeId,
+                  probe.dstPortId,
+                  static_cast<daw::PatcherPortKind>(probe.edgeKind));
+              applied = result == daw::PatcherConnectResult::Ok;
+              if (!applied) {
+                failure = result == daw::PatcherConnectResult::InvalidNode
+                              ? "invalid_node"
+                              : (result == daw::PatcherConnectResult::InvalidPort
+                                     ? "invalid_port"
+                                     : (result == daw::PatcherConnectResult::Cycle
+                                            ? "cycle"
+                                            : "invalid_connection"));
+              }
+            }
+            if (applied) {
+              device->patcher = scratch.graph;
+              runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
+            }
+          }
+        }
+        if (!applied) {
+          refuse(failure ? failure : "failed");
+          return;
+        }
+        // The pool is DERIVED from the device graphs, so re-derive it — otherwise the edit is
+        // saved and does nothing until the next load, which is its own kind of lie.
+        const bool executing = reassemblePatcherFromDevices();
+        DAW_EVENT("patcher_device_edit.applied")
+            .field("track", probe.trackId)
+            .field("device", deviceId)
+            .field("op", daw::uiCommandTypeName(commandType))
+            .field("node", newNodeId)
+            .field("executing", executing);
+        return;
+      }
       daw::UiPatcherGraphCommandPayload graphPayload{};
       std::memcpy(&graphPayload, entry.payload, sizeof(graphPayload));
       constexpr uint16_t kGraphErrInvalidType = 1;

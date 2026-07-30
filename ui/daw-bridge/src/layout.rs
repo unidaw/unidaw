@@ -621,6 +621,14 @@ pub const MIXER_FLAG_SOLO: u16 = 1 << 1;
 /// makes a fix silently fail to propagate (quiet, and you may not notice for an hour).
 pub const UI_CLIP_EXTENT_LOCAL_EDITS: u32 = 1 << 23;
 
+/// Per-device addressing for the patcher graph commands, carried in the payload's `flags`
+/// because the payload is exactly 40 bytes and full. Bit 15 marks the id PRESENT; bits 0-14 are
+/// the id. The presence bit matters: device ids start at 0, so a bare 0 cannot mean
+/// "unspecified", and without the bit every caller sending flags=0 would silently start
+/// addressing device 0 instead of the legacy shared pool.
+pub const UI_PATCHER_FLAG_HAS_DEVICE_ID: u16 = 1 << 15;
+pub const UI_PATCHER_DEVICE_ID_MASK: u16 = 0x7FFF;
+
 /// `ui_track_mix_flags` bit 2: does this track quantize its notes to the harmony timeline?
 ///
 /// SetTrackHarmonyQuantize (10) had no read-back at all, so the only control that could be built
