@@ -306,6 +306,16 @@ target_include_directories(sampler_voice_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# Sampler S3: the octave mip-map. The headline assertion is ACOUSTIC — inharmonic fold-back at
+# +24 semitones, with and without it — because every structural test passes against a mip-map
+# that is built and never read.
+add_executable(sampler_mipmap_tests
+  apps/sampler_mipmap_tests_main.cpp
+)
+target_include_directories(sampler_mipmap_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # Sampler S1: the polyphonic layer — choke, NNA, stealing, and sample-accurate note-OFF, which
 # is the thing block segmentation exists for.
 add_executable(sampler_engine_tests
@@ -507,6 +517,11 @@ add_test(NAME sampler_voice
   COMMAND sampler_voice_tests
 )
 set_tests_properties(sampler_voice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_mipmap
+  COMMAND sampler_mipmap_tests
+)
+set_tests_properties(sampler_mipmap PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME sampler_engine
   COMMAND sampler_engine_tests
@@ -764,6 +779,7 @@ foreach(daw_test_target
     sampler_state_tests
     sampler_voice_tests
     sampler_engine_tests
+    sampler_mipmap_tests
     event_ring_mpsc_tests
     audio_io_tests
     device_chain_tests

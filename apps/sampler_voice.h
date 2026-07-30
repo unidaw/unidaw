@@ -27,6 +27,7 @@
 #include <cstdint>
 
 #include "apps/sampler_envelope.h"
+#include "apps/sampler_mipmap.h"
 
 namespace daw {
 
@@ -37,6 +38,12 @@ struct SamplerSourceView {
   uint32_t channels = 0;
   uint64_t frames = 0;
   double sampleRate = 0.0;
+
+  // BAND-LIMITED COPIES for pitching UP (apps/sampler_mipmap.h). levels[L-1] is 1/2^L rate.
+  // Absent (mipCount == 0) is legal and means "no anti-aliasing" — which is `Vintage` quality's
+  // whole point, and also what a source too short to decimate gets.
+  const MipLevel* mips = nullptr;
+  uint32_t mipCount = 0;
 
   bool valid() const { return planes != nullptr && channels > 0 && frames > 0; }
 };
@@ -49,6 +56,10 @@ struct SamplerVoiceSpec {
   double ratio = 1.0;     // varispeed, INCLUDING the source/engine rate conversion
   float gain = 1.0f;      // linear
   float pan = 0.0f;       // -1 left .. +1 right
+  // 0 Vintage, 1 Fast, 2 Studio. A SOUND, not a setting — see §3. Vintage deliberately skips the
+  // mip-map: SP-1200 grit is the point, and an offline render must NEVER quietly upgrade it, or
+  // the bounce stops matching what you heard.
+  uint8_t quality = 1;
   bool reverse = false;
   // LOOP, in level-0 source frames. loopMode 0 = off, 1 forward, 2 ping-pong, 3 backward.
   // The loop is only entered once playback reaches loopEnd; before that the slot plays normally
@@ -124,6 +135,20 @@ class SamplerVoice {
     looping_ = false;
     loopForward_ = true;
     releasedLoop_ = false;
+    // WHICH BAND-LIMITED LEVEL. Chosen once at note-on from the playback ratio; S3 fixes the
+    // ratio for the life of the voice, and a pitch envelope (which would move it per block) is
+    // the reason mipFrac() derives everything from the level-0 position rather than caching a
+    // per-level cursor.
+    //
+    // `Vintage` quality skips the mip-map ENTIRELY and that is the whole point of it: SP-1200
+    // grit is aliasing, deliberately. The offline render must never quietly upgrade it.
+    if (spec_.quality == 0 || spec_.source.mipCount == 0) {
+      mipLevel_ = 0;
+      mipBlend_ = 0.0f;
+    } else {
+      mipLevel_ = mipLevelFor(spec_.ratio, spec_.source.mipCount);
+      mipBlend_ = mipBlend(spec_.ratio, mipLevel_);
+    }
     // Smoothed values START at their target rather than at zero. A voice that ramps up from
     // silence on every note-on has a 1-block attack nobody asked for, which on a drum is the
     // difference between a kick and a thud.
@@ -379,26 +404,70 @@ class SamplerVoice {
   //
   // At the true start and end of the FILE, clamping remains correct: there is nothing beyond.
   float sampleAt(uint32_t ch, uint64_t frame, float t) const {
-    const float* plane = spec_.source.planes[ch];
-    const uint64_t last = spec_.source.frames - 1;
-    const uint64_t i0 = std::min(frame, last);
-    return hermite4(plane[neighbour(i0, -1, last)], plane[i0],
-                    plane[neighbour(i0, 1, last)], plane[neighbour(i0, 2, last)], t);
+    // LEVEL 0, or a band-limited level when pitching up. The level-L index is `frame >> L`,
+    // EXACT by construction, which is the entire reason position is 32.32 in level-0 frames
+    // rather than a float per level: a glide sweeping an octave boundary does not jump.
+    if (mipLevel_ == 0) {
+      return readLevel(spec_.source.planes, spec_.source.frames, 0, ch, frame, t);
+    }
+    const MipLevel& lo = spec_.source.mips[mipLevel_ - 1];
+    const float a = readLevel(lo.planes.data(), lo.frames, mipLevel_, ch,
+                              frame >> mipLevel_, mipFrac(frame, t, mipLevel_));
+    if (mipBlend_ <= 0.0f || mipLevel_ >= spec_.source.mipCount) {
+      return a;
+    }
+    // CROSSING the boundary rather than stepping over it. A static note at a boundary sounds
+    // correct on either level; a SWEEP through one does not, and sweeps are what pitch envelopes
+    // and glides do.
+    const MipLevel& hi = spec_.source.mips[mipLevel_];
+    const uint32_t L = mipLevel_ + 1;
+    const float b = readLevel(hi.planes.data(), hi.frames, L, ch, frame >> L, mipFrac(frame, t, L));
+    return a * (1.0f - mipBlend_) + b * mipBlend_;
   }
 
-  // Where tap `d` for centre `i0` actually lives. Inside an active loop this wraps into the loop
-  // range; outside one it clamps to the file.
-  uint64_t neighbour(uint64_t i0, int64_t d, uint64_t last) const {
+  // The fractional part of a level-L read position, DERIVED from the level-0 position so the two
+  // can never disagree. Shifting the integer part and recomputing the fraction independently is
+  // how a mip-mapped sampler ends up detuned per level.
+  static float mipFrac(uint64_t frame, float t, uint32_t level) {
+    const uint64_t mask = (1ull << level) - 1;
+    return (static_cast<float>(frame & mask) + t) / static_cast<float>(1ull << level);
+  }
+
+  // `level` is passed rather than inferred from the frame count: two levels of a short sample can
+  // round to the same length, and inferring would then read one while wrapping for the other.
+  float readLevel(const float* const* planes, uint64_t frames, uint32_t level, uint32_t ch,
+                  uint64_t frame, float t) const {
+    if (!planes || frames == 0) {
+      return 0.0f;
+    }
+    const float* plane = planes[std::min<uint32_t>(ch, spec_.source.channels - 1)];
+    const uint64_t last = frames - 1;
+    const uint64_t i0 = std::min(frame, last);
+    return hermite4(plane[neighbourAt(i0, -1, last, level)], plane[i0],
+                    plane[neighbourAt(i0, 1, last, level)],
+                    plane[neighbourAt(i0, 2, last, level)], t);
+  }
+
+  // Where tap `d` for centre `i0` lives at this level. Inside an active loop it wraps into the
+  // loop range; outside one it clamps to the file.
+  //
+  // THE LOOP RANGE IS SHIFTED FROM LEVEL-0 FRAMES, never recomputed per level. A loop whose
+  // bounds are derived independently at each level drifts against the read position, and the
+  // loop DETUNES as the note rises — a real bug in real samplers, and one that only shows up on
+  // sustained material transposed far.
+  uint64_t neighbourAt(uint64_t i0, int64_t d, uint64_t last, uint32_t level) const {
     int64_t x = static_cast<int64_t>(i0) + d;
     if (looping_ && loopLen_ > 1) {
-      const int64_t a = static_cast<int64_t>(spec_.loopStart);
-      const int64_t b = static_cast<int64_t>(loopEndClamped_);
-      if (x >= b) {
-        // Past the seam: continue from the loop's start. Ping-pong turns around instead of
-        // wrapping, so its neighbour is mirrored rather than translated.
-        x = spec_.loopMode == 2 ? (b - 1 - (x - b)) : (a + (x - b));
-      } else if (x < a) {
-        x = spec_.loopMode == 2 ? (a + (a - x)) : (b - (a - x));
+      const int64_t a = static_cast<int64_t>(spec_.loopStart >> level);
+      const int64_t b = static_cast<int64_t>(loopEndClamped_ >> level);
+      if (b > a) {
+        if (x >= b) {
+          // Ping-pong turns around, so its neighbour is MIRRORED rather than translated — that
+          // is what its seam actually is.
+          x = spec_.loopMode == 2 ? (b - 1 - (x - b)) : (a + (x - b));
+        } else if (x < a) {
+          x = spec_.loopMode == 2 ? (a + (a - x)) : (b - (a - x));
+        }
       }
     }
     if (x < 0) {
@@ -416,6 +485,8 @@ class SamplerVoice {
   bool looping_ = false;      // are we INSIDE the loop right now?
   bool loopForward_ = true;   // ping-pong direction
   bool releasedLoop_ = false; // a sustain loop that has been let go plays out to endFrame
+  uint32_t mipLevel_ = 0;     // which band-limited level this voice reads
+  float mipBlend_ = 0.0f;     // how much of level+1 to blend in across the boundary
   uint64_t age_ = 0;
   uint32_t noteId_ = 0;
   uint16_t slotId_ = 0;
