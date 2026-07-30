@@ -85,6 +85,35 @@ int keyCodeToPitch(int keyCode) {
   }
 }
 
+// A SHORT, STABLE TOKEN FOR THIS ENGINE INSTANCE, derived from the UI shm name.
+//
+// Two engines on one machine used to share both of the paths below: /tmp/daw_host_track_<n>.sock
+// and /daw_engine_shared_<n>, whose only name was the TRACK ID. So a second engine's host unlinked
+// the first's socket and both mapped the same per-track segment — one engine's audio written into
+// another's buffers, and hosts answering to whichever engine connected last. It is the same shape
+// as the four-engines-on-one-segment failure that looked like the engine dying, and it is not a
+// test-harness problem: two projects open at once collide exactly the same way.
+//
+// An engine that was given a NAME (DAW_UI_SHM_NAME) gets private paths derived from it. An unnamed
+// engine keeps the legacy names exactly, so the single-instance default and anything holding those
+// literals are unchanged. The token is a hash rather than the name itself because shm_open on
+// macOS takes 31 characters total and a readable name blows that budget on its own.
+std::string engineInstanceToken() {
+  const char* env = std::getenv("DAW_UI_SHM_NAME");
+  if (!env || env[0] == '\0') {
+    return {};
+  }
+  uint64_t h = 1469598103934665603ull;  // FNV-1a
+  for (const char* p = env; *p != '\0'; ++p) {
+    h ^= static_cast<unsigned char>(*p);
+    h *= 1099511628211ull;
+  }
+  char buf[9];
+  std::snprintf(buf, sizeof(buf), "%08x",
+                static_cast<uint32_t>(h ^ (h >> 32)));
+  return std::string(buf);
+}
+
 std::string trackSocketPath(uint32_t trackId) {
   if (const char* prefix = std::getenv("DAW_HOST_SOCKET_PREFIX")) {
     std::string base(prefix);
@@ -92,10 +121,19 @@ std::string trackSocketPath(uint32_t trackId) {
       return base + "_" + std::to_string(trackId) + ".sock";
     }
   }
+  const std::string token = engineInstanceToken();
+  if (!token.empty()) {
+    return "/tmp/daw_host_" + token + "_" + std::to_string(trackId) + ".sock";
+  }
   return "/tmp/daw_host_track_" + std::to_string(trackId) + ".sock";
 }
 
 std::string trackShmName(uint32_t trackId) {
+  const std::string token = engineInstanceToken();
+  if (!token.empty()) {
+    // "/dawshm_" + 8 + "_" + up to 10 digits = 27 <= 31, the macOS shm_open limit.
+    return "/dawshm_" + token + "_" + std::to_string(trackId);
+  }
   if (trackId == 0) {
     return "/daw_engine_shared";
   }
@@ -1762,6 +1800,12 @@ int main(int argc, char** argv) {
     header.uiArrangeOffset = offset;  // v27: section spine + meter map, resolved
     header.uiArrangeBytes = sizeof(daw::UiArrangeSummaryRegion);
     offset += daw::alignUp(header.uiArrangeBytes, 64);
+    header.uiAutomationOffset = offset;  // v28: which params are automated (standing list)
+    header.uiAutomationBytes = sizeof(daw::UiAutomationLaneRegion);
+    offset += daw::alignUp(header.uiAutomationBytes, 64);
+    header.uiAutomationSlotOffset = offset;  // v28: answered point queries (seqlock slots)
+    header.uiAutomationSlotBytes = sizeof(daw::UiAutomationSlotRegion);
+    offset += daw::alignUp(header.uiAutomationSlotBytes, 64);
     header.uiDeviceMeterOffset = offset;  // v24: per-insert meters
     offset += daw::alignUp(sizeof(daw::UiDeviceMeterRegion), 64);
     header.uiScalesOffset = offset;  // v16: scale registry read-back
@@ -2546,6 +2590,11 @@ struct TrackRuntime {
   // mid-edit with no diagnostic at all.
   std::mutex sectionMutex;
   std::atomic<uint32_t> sectionVersion{0};
+  // v28: moves whenever ANY automation changes — a point written, a lane created, a ripple that
+  // moved points, a load, a slot reused. Deliberately NOT the clip version: automation is not
+  // notes, and a client caching lanes on the clip version would re-read them on every keystroke.
+  // Same separation sectionVersion and quantizeVersion already have.
+  std::atomic<uint32_t> automationVersion{0};
   // The song's meter, held for the section derivation (positions come from tickAtBar).
   // Taken AFTER sectionMutex — see above.
   // NO SONG-LEVEL METER MAP. The meter lives on the SECTION (Jaakko's ruling), so the map is
@@ -3146,6 +3195,85 @@ struct TrackRuntime {
           runtime->trackClipVersion.load(std::memory_order_acquire), snap,
           laneQuantizeOf(*runtime));
     }
+  };
+
+  // v28: publish WHICH PARAMS ARE AUTOMATED — the standing lane list. Gated on
+  // automationVersion, so a note edit does not rewrite it and a client can cache on the number.
+  //
+  // This exists because automation was writable and unreadable: nothing in the header mentioned
+  // it, so the only lane a UI could offer was one you draw into and never see — blank while the
+  // song plays the sweep you authored. The LIST alone makes lanes discoverable; the points are
+  // answered on request (see the slot handler).
+  //
+  // The published `version` is this region's OWN GENERATION and starts at 1, so 0 means A WRITE IS
+  // IN FLIGHT. Reading version-body-version and requiring the two to match is NOT torn-safe on its
+  // own — the number only moves after the body is written, so a reader that samples it, reads a
+  // body mid-rewrite, and samples again before the stamp sees v0 == v1 and accepts garbage. That
+  // is the arrange summary's history verbatim, twenty lines below where this was first written;
+  // the 0 sentinel is what actually makes the write visible while it is happening.
+  uint32_t lastAutomationVersion = 0xFFFF'FFFFu;
+  uint32_t automationGeneration = 0;
+  auto writeUiAutomationLanes = [&](bool force) {
+    if (!uiShm.header || uiShm.header->uiAutomationOffset == 0) {
+      return;
+    }
+    const uint32_t version = automationVersion.load(std::memory_order_acquire);
+    if (!force && version == lastAutomationVersion) {
+      return;
+    }
+    lastAutomationVersion = version;
+    ++automationGeneration;
+    auto* region = reinterpret_cast<daw::UiAutomationLaneRegion*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiAutomationOffset);
+    // In flight from here until the stamp at the end.
+    region->version = 0;
+    std::atomic_thread_fence(std::memory_order_release);
+    // Clear first: a shorter list than last time must not leave the old tail readable, and
+    // `laneCount` alone would not stop a reader that scanned the array.
+    for (uint32_t i = 0; i < daw::kUiMaxAutomationLanes; ++i) {
+      region->lanes[i] = daw::UiAutomationLane{};
+    }
+    uint32_t count = 0;
+    uint32_t dropped = 0;
+    for (auto* rt : snapshotTracks()) {
+      if (!rt || !trackIsPersisted(*rt)) {
+        continue;  // a tombstone or a derived stem holds no authored automation
+      }
+      // FROM THE RT SNAPSHOT, NOT THE MODEL. This is the whole point of the region. The bug it
+      // exists to expose was a ripple that moved the points in rt->track and in the saved file
+      // while the snapshot the scheduler reads stayed put — right on disk, wrong in your ears.
+      // Publishing rt->track would have made this read-back agree with the file and disagree
+      // with the sound, which is a read-back that certifies the bug instead of catching it.
+      auto ts = std::atomic_load_explicit(&rt->trackSnapshot, std::memory_order_acquire);
+      if (!ts) {
+        continue;
+      }
+      for (const auto& clip : ts->automationClips) {
+        if (count >= daw::kUiMaxAutomationLanes) {
+          ++dropped;
+          continue;  // count the real total, not "at least one"
+        }
+        daw::UiAutomationLane& lane = region->lanes[count];
+        lane.trackId = rt->trackId;
+        lane.targetPluginIndex = clip.targetPluginIndex();
+        lane.pointCount = static_cast<uint32_t>(clip.points().size());
+        lane.flags = clip.discreteOnly() ? daw::kUiAutomationFlagDiscrete : 0u;
+        const std::string& id = clip.paramId();
+        const size_t n = std::min(id.size(), sizeof(lane.paramId) - 1);
+        std::memcpy(lane.paramId, id.data(), n);
+        ++count;
+      }
+    }
+    region->laneCount = count;
+    region->lanesTruncated = dropped;
+    if (dropped > 0) {
+      DAW_EVENT("automation_lanes.truncated")
+          .field("published", count)
+          .field("dropped", dropped)
+          .field("cap", static_cast<uint64_t>(daw::kUiMaxAutomationLanes));
+    }
+    std::atomic_thread_fence(std::memory_order_release);
+    region->version = automationGeneration;  // >= 1; 0 is the in-flight sentinel
   };
 
   // M3.25: publish the ARRANGEMENT SUMMARY — the section spine RESOLVED against the
@@ -6001,6 +6129,7 @@ struct TrackRuntime {
     songTimeSigNum.store(document.songTimeSigNumerator, std::memory_order_relaxed);
     songTimeSigDen.store(document.songTimeSigDenominator, std::memory_order_relaxed);
     sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+    automationVersion.fetch_add(1, std::memory_order_acq_rel);
     // A load replaces the song, so any hand-set loop belonged to the OLD one.
     loopUserSet.store(false, std::memory_order_release);
 
@@ -7705,6 +7834,88 @@ struct TrackRuntime {
       }
       return;
     }
+    // v28: ANSWER one automation lane's points into a seqlock slot. Same shape as the windowed
+    // waveform queries: the client picks a slot by its request sequence, the engine fills it and
+    // releases the seqlock, and every request field is ECHOED so a caller can tell WHICH question
+    // this is the answer to — without that, a slot reused for a different lane looks like an
+    // answer to the one you asked.
+    if (entry.size == sizeof(daw::UiAutomationLaneRequestPayload) &&
+        commandType == daw::UiCommandType::RequestAutomationLane) {
+      daw::UiAutomationLaneRequestPayload req{};
+      std::memcpy(&req, entry.payload, sizeof(req));
+      if (!uiShm.header || uiShm.header->uiAutomationSlotOffset == 0) {
+        return;
+      }
+      const std::string paramId(req.paramId, strnlen(req.paramId, sizeof(req.paramId)));
+      auto* slotRegion = reinterpret_cast<daw::UiAutomationSlotRegion*>(
+          reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiAutomationSlotOffset);
+      // The CLIENT chose the slot. Not drain-to-latest: two lanes asked for in the same frame
+      // must both be answerable, and a reader that has to guess which slot holds its answer is
+      // the write-only interface this whole region exists to end.
+      const uint32_t seq = req.requestSeq;
+      daw::UiAutomationSlot& slot =
+          slotRegion->slots[seq % daw::kUiAutomationSlots];
+      // Seqlock: ODD while writing. A reader that lands mid-write sees the odd value and retries
+      // rather than reading half a curve.
+      slot.seq.store(slot.seq.load(std::memory_order_relaxed) | 1u,
+                     std::memory_order_release);
+      std::atomic_thread_fence(std::memory_order_release);
+      slot.requestSeq = seq;
+      slot.trackId = req.trackId;
+      slot.pointCount = 0;
+      slot.pointsTruncated = 0;
+      slot.flags = 0;
+      slot.found = 0;
+      std::memset(slot.paramId, 0, sizeof(slot.paramId));
+      const size_t idLen = std::min(paramId.size(), sizeof(slot.paramId) - 1);
+      std::memcpy(slot.paramId, paramId.data(), idLen);
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (req.trackId < tracks.size()) {
+          runtime = tracks[req.trackId].get();
+        }
+      }
+      // Same source as the lane list: the snapshot the RT scheduler reads. An answer taken from
+      // the model would describe the document; what a caller is asking about is the song.
+      std::shared_ptr<const TrackStateSnapshot> ts;
+      if (runtime) {
+        ts = std::atomic_load_explicit(&runtime->trackSnapshot, std::memory_order_acquire);
+      }
+      if (ts) {
+        for (const auto& clip : ts->automationClips) {
+          if (clip.paramId() != paramId) {
+            continue;
+          }
+          slot.found = 1;
+          slot.flags = clip.discreteOnly() ? daw::kUiAutomationFlagDiscrete : 0u;
+          for (const auto& pt : clip.points()) {
+            if (slot.pointCount >= daw::kUiMaxAutomationPoints) {
+              ++slot.pointsTruncated;  // the real total, not "at least one"
+              continue;
+            }
+            auto& out = slot.points[slot.pointCount++];
+            out.nanotick = pt.nanotick;
+            out.value = pt.value;
+          }
+          break;
+        }
+      }
+      // `found` 0 is an ANSWER, not silence: "no such lane" is what a caller needs to hear when it
+      // asked about a param nothing automates, and it is distinguishable from a request that never
+      // arrived only because the slot was filled and released.
+      std::atomic_thread_fence(std::memory_order_release);
+      slot.seq.store((slot.seq.load(std::memory_order_relaxed) + 1u) & ~1u,
+                     std::memory_order_release);
+      slotRegion->requestSeq.store(seq, std::memory_order_release);
+      DAW_EVENT("automation_lane.answered")
+          .field("track", req.trackId)
+          .field("param", paramId)
+          .field("found", slot.found != 0)
+          .field("points", slot.pointCount)
+          .field("truncated", slot.pointsTruncated);
+      return;
+    }
     // M3.27: write an automation point. Automation playback has been built and tested
     // since M3 phase 1, but nothing ever CREATED a clip — this is the missing half.
     if (entry.size == sizeof(daw::UiAutomationPointPayload) &&
@@ -7783,6 +7994,7 @@ struct TrackRuntime {
       }
       std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
                                  std::memory_order_release);
+      automationVersion.fetch_add(1, std::memory_order_acq_rel);
       DAW_EVENT("automation.point")
           .field("track", ap.trackId)
           .field("param", paramId)
@@ -8023,6 +8235,10 @@ struct TrackRuntime {
           bumpClipVersionFor(rt);
         }
         clipDirty.store(true, std::memory_order_release);
+        // The ripple rebuilds automation clips, so anything caching lanes has to re-read. Bumped
+        // unconditionally rather than only when a point moved: the cost of one extra re-read is a
+        // re-read, and the cost of missing one is a curve drawn in the wrong place.
+        automationVersion.fetch_add(1, std::memory_order_acq_rel);
         recomputeSongEnd();
         sectionVersion.fetch_add(1, std::memory_order_acq_rel);
         DAW_EVENT("section.length_set")
@@ -13996,6 +14212,7 @@ struct TrackRuntime {
         writeUiClipAllSnapshot(false);
         writeUiClipExtents(false);
         writeUiArrangeSummary(false);
+        writeUiAutomationLanes(false);
         writeUiPatcher(false);
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);

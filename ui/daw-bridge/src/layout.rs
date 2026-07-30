@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 27;
+pub const K_SHM_VERSION: u16 = 28;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -35,7 +35,10 @@ pub const K_UI_MAX_SCALE_STEPS: usize = 48;
 pub const K_UI_MAX_DEVICE_PARAMS: usize = 256;
 // v18 waveform region sizes — mirror shared_memory.h kUi* constants.
 pub const K_UI_MAX_AUDIO_SOURCES: usize = 32;
-pub const K_UI_MAX_AUDIO_CLIPS: usize = 64;
+/// == K_UI_MAX_CLIP_EXTENTS, and now actually equal. It fell out of step when the extents
+/// went 64 -> 256, which left a project with more than 64 audio placements publishing
+/// complete rails with waveform data missing from the tail. Raised in v28.
+pub const K_UI_MAX_AUDIO_CLIPS: usize = K_UI_MAX_CLIP_EXTENTS;
 pub const K_UI_WAVEFORM_SLOTS: usize = 4;
 pub const K_UI_WAVEFORM_MAX_PAIRS: usize = 24576;
 pub const K_UI_EDIT_BATCH_MAX_OPS: usize = 32;
@@ -154,6 +157,12 @@ pub struct ShmHeader {
     /// one read and cannot see a mismatched pair.
     pub ui_arrange_offset: u64,
     pub ui_arrange_bytes: u64,
+    /// v28: automation read-back. The lane LIST is standing and version-gated; the SLOTS answer
+    /// per-request point queries.
+    pub ui_automation_offset: u64,
+    pub ui_automation_bytes: u64,
+    pub ui_automation_slot_offset: u64,
+    pub ui_automation_slot_bytes: u64,
 }
 
 /// uiTrackFlags bits (Movement 4).
@@ -371,6 +380,34 @@ pub struct UiClipExtent {
 /// constant moved first the two disagreed and every test still passed — the exact silent
 /// divergence the const_asserts exist to prevent. There is one on the region size now.
 pub const K_UI_MAX_CLIP_EXTENTS: usize = 256;
+
+/// v28: AUTOMATION READ-BACK. Automation could be written and never read — nothing in the header
+/// mentioned it — so the only lane a UI could offer was one you draw into and never see.
+///
+/// Two shapes for two questions. The LANE LIST is standing and version-gated, so lanes are
+/// discoverable without asking. The POINTS are answered per request into a seqlock slot, because a
+/// song can hold far more automation than a fixed region could carry and a UI only draws the lanes
+/// that are open.
+///
+/// NOT published: the resolved value at the playhead. Interpolation belongs to whoever draws — it
+/// is a picture, not a scheduling decision — and a published resolved value would be a second
+/// implementation that can disagree with what plays.
+pub const K_UI_MAX_AUTOMATION_LANES: usize = 64;
+pub const K_UI_MAX_AUTOMATION_POINTS: usize = 512;
+pub const K_UI_AUTOMATION_SLOTS: usize = 4;
+pub const UI_AUTOMATION_FLAG_DISCRETE: u32 = 1 << 0;
+
+// v28 automation read-back regions, generated from shared_memory.h. Hand-mirrored structs are
+// how the extents capacity diverged unnoticed; bindgen's layout_tests + the C++ static_asserts
+// pin these, and the const_asserts below tie each hand constant to a generated region size, so a
+// wrong count fails to COMPILE rather than publishing a short list at runtime.
+pub use crate::sys::{
+    daw_UiAutomationLane as UiAutomationLane,
+    daw_UiAutomationLaneRegion as UiAutomationLaneRegion,
+    daw_UiAutomationPointEntry as UiAutomationPointEntry,
+    daw_UiAutomationSlot as UiAutomationSlot,
+    daw_UiAutomationSlotRegion as UiAutomationSlotRegion,
+};
 
 #[repr(C)]
 pub struct UiClipExtentRegion {
@@ -609,6 +646,10 @@ pub enum UiCommandType {
     /// flags bit0 = on. Not version-gated: it changes no note, so it cannot invalidate
     /// anyone's in-flight edit.
     SetPlacementEditScope = 61,
+    /// v28: ask for ONE automation lane's points (UiAutomationLaneRequestPayload); answered
+    /// into a UiAutomationSlot seqlock slot the CALLER picked. The lane LIST is standing in
+    /// UiAutomationLaneRegion and needs no request.
+    RequestAutomationLane = 62,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -1027,6 +1068,40 @@ impl Default for UiAutomationPointPayload {
 
 pub const UI_AUTOMATION_DISCRETE: u16 = 1 << 0;
 
+/// v28: ASK for one automation lane's points (`UiCommandType::RequestAutomationLane`). Its own
+/// struct rather than a reuse of `UiAutomationPointPayload`, for one reason: the CLIENT owns
+/// `request_seq`, exactly as `RequestWaveform` does. That is what lets a caller know which slot
+/// its answer will land in before it asks, and match the echo without racing on a counter it
+/// never wrote.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiAutomationLaneRequestPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    /// Answered into `slots[request_seq % K_UI_AUTOMATION_SLOTS]`.
+    pub request_seq: u32,
+    pub track_id: u32,
+    pub target_plugin_index: u32,
+    pub param_id: [u8; 16],
+    pub reserved0: u32,
+    pub reserved1: u32,
+}
+
+impl Default for UiAutomationLaneRequestPayload {
+    fn default() -> Self {
+        Self {
+            command_type: UiCommandType::RequestAutomationLane as u16,
+            flags: 0,
+            request_seq: 0,
+            track_id: 0,
+            target_plugin_index: 0,
+            param_id: [0u8; 16],
+            reserved0: 0,
+            reserved1: 0,
+        }
+    }
+}
+
 /// M3.23 section commands (54-58). A section stores a name and a length in BARS; its
 /// POSITION is derived from the lengths before it, so there is deliberately no
 /// "move a section to bar N" — you change a length or the order and everything after
@@ -1435,6 +1510,7 @@ mod tests {
         const_assert_eq!(size_of::<UiPatcherNodeConfigPayload>(), 40);
         const_assert_eq!(size_of::<UiSectionCommandPayload>(), 40);
         const_assert_eq!(size_of::<UiAutomationPointPayload>(), 40);
+        const_assert_eq!(size_of::<UiAutomationLaneRequestPayload>(), 40);
         const_assert_eq!(size_of::<UiArrangeSection>(), 56);
         const_assert_eq!(size_of::<UiTimeSigPoint>(), 16);
         const_assert_eq!(size_of::<UiArrangeSummaryRegion>(), 4128);
@@ -1457,6 +1533,21 @@ mod tests {
         const_assert_eq!(
             size_of::<UiWaveformRegion>(),
             64 + K_UI_WAVEFORM_SLOTS * size_of::<UiWaveformSlot>()
+        );
+        // v28 automation. Same discipline: the counts are tied to the generated region sizes.
+        const_assert_eq!(size_of::<UiAutomationLane>(), 32);
+        const_assert_eq!(size_of::<UiAutomationPointEntry>(), 16);
+        const_assert_eq!(
+            size_of::<UiAutomationLaneRegion>(),
+            64 + K_UI_MAX_AUTOMATION_LANES * 32
+        );
+        const_assert_eq!(
+            size_of::<UiAutomationSlot>(),
+            64 + K_UI_MAX_AUTOMATION_POINTS * 16
+        );
+        const_assert_eq!(
+            size_of::<UiAutomationSlotRegion>(),
+            64 + K_UI_AUTOMATION_SLOTS * size_of::<UiAutomationSlot>()
         );
     }
 }

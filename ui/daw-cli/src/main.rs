@@ -1085,7 +1085,18 @@ fn get_waveform(handle: &EngineHandle, args: &[&str]) -> i32 {
     let first_frame: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
     let columns: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(16);
     let channel_mask: u32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(1);
-    let request_seq: u32 = 0x7A5E;
+    // Was a CONSTANT 0x7A5E, which is the trap documented in get_clip: the echo then matches on
+    // every call after the first, so a query for source 2 can take delivery of source 1's answer.
+    // Unique per invocation, and the echoed sourceId is checked too.
+    let request_seq: u32 = {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let id = pid.rotate_left(11) ^ nanos;
+        if id == 0 { 1 } else { id }
+    };
     let slot_index = (request_seq as usize) % 4; // K_UI_WAVEFORM_SLOTS
     let payload = UiWaveformRequestPayload {
         command_type: UiCommandType::RequestWaveform as u16,
@@ -1105,7 +1116,7 @@ fn get_waveform(handle: &EngineHandle, args: &[&str]) -> i32 {
         let _ = handle.send_waveform_request(payload);
         thread::sleep(Duration::from_millis(100));
         if let Some(v) = handle.read_waveform_slot(slot_index) {
-            if v.request_seq == request_seq {
+            if v.request_seq == request_seq && v.source_id == source_id {
                 let pairs: Vec<String> = v.pairs.iter().map(|p| p.to_string()).collect();
                 println!(
                     "{{ \"requestSeq\": {}, \"sourceId\": {}, \"status\": {}, \"decimation\": {}, \"columns\": {}, \"channels\": {}, \"firstFrame\": {}, \"frameCount\": {}, \"contentKey\": {}, \"flags\": {}, \"pairs\": [{}] }}",
@@ -1118,6 +1129,96 @@ fn get_waveform(handle: &EngineHandle, args: &[&str]) -> i32 {
         }
         if Instant::now() >= deadline {
             eprintln!("daw-cli: no waveform answer for source {source_id} (slot {slot_index})");
+            return 1;
+        }
+    }
+}
+
+/// v28: the standing automation lane list — "which params are automated, and on what track".
+/// A plain version-gated read: no request, no slot, nothing to match up.
+fn get_automation(handle: &EngineHandle) -> i32 {
+    let v = handle.read_automation_lanes();
+    println!("{{");
+    println!("  \"version\": {},", v.version);
+    // Truncation is REPORTED. An incomplete list that says nothing reads as a complete one, and
+    // "the automation lanes are missing" then arrives as a bug report about the lanes.
+    println!("  \"lanes_truncated\": {},", v.truncated);
+    println!("  \"lanes\": [");
+    for (i, lane) in v.lanes.iter().enumerate() {
+        let comma = if i + 1 == v.lanes.len() { "" } else { "," };
+        println!(
+            "    {{ \"track_id\": {}, \"param\": {:?}, \"device\": {}, \"points\": {}, \"discrete\": {} }}{comma}",
+            lane.track_id, lane.param_id, lane.target_plugin_index, lane.point_count,
+            lane.discrete
+        );
+    }
+    println!("  ]");
+    println!("}}");
+    0
+}
+
+/// v28: one lane's POINTS. Sends RequestAutomationLane and reads the slot it addressed.
+fn get_automation_points(handle: &EngineHandle, args: &[String]) -> i32 {
+    use daw_bridge::layout as L;
+    let track = flag_u64(args, "--track", Some(0)).unwrap_or(0) as u32;
+    let param = match flag(args, "--param") {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            eprintln!("daw-cli: --param is required (the automation clip's id, e.g. index:0)");
+            return 2;
+        }
+    };
+    let mut param_id = [0u8; 16];
+    let b = param.as_bytes();
+    let len = b.len().min(param_id.len());
+    param_id[..len].copy_from_slice(&b[..len]);
+    // UNIQUE PER INVOCATION, for the reason spelled out in get_clip: a constant request id makes
+    // every call after the first match the PREVIOUS call's answer the instant it is read, so
+    // asking about lane B returns lane A and the caller concludes its write was lost.
+    let request_seq = {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let id = pid.rotate_left(11) ^ nanos;
+        if id == 0 { 1 } else { id }
+    };
+    let slot_index = (request_seq as usize) % 4; // K_UI_AUTOMATION_SLOTS
+    let payload = L::UiAutomationLaneRequestPayload {
+        command_type: UiCommandType::RequestAutomationLane as u16,
+        flags: 0,
+        request_seq,
+        track_id: track,
+        target_plugin_index: flag_u64(args, "--device", Some(0xFFFF_FFFF))
+            .unwrap_or(0xFFFF_FFFF) as u32,
+        param_id,
+        reserved0: 0,
+        reserved1: 0,
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let _ = handle.send_automation_lane_request(payload);
+        thread::sleep(Duration::from_millis(80));
+        if let Some(a) = handle.read_automation_slot(slot_index) {
+            if a.request_seq == request_seq {
+                let pts: Vec<String> = a
+                    .points
+                    .iter()
+                    .map(|(t, v)| format!("{{ \"nanotick\": {t}, \"value\": {v} }}"))
+                    .collect();
+                println!(
+                    "{{ \"request_seq\": {}, \"track_id\": {}, \"param\": {:?}, \"found\": {}, \"discrete\": {}, \"points_truncated\": {}, \"points\": [{}] }}",
+                    a.request_seq, a.track_id, a.param_id, a.found, a.discrete,
+                    a.points_truncated, pts.join(", ")
+                );
+                // `found: false` is an ANSWER, and exit 0 says so. Only a request that was never
+                // answered at all is a failure of this command.
+                return 0;
+            }
+        }
+        if Instant::now() >= deadline {
+            eprintln!("daw-cli: no automation answer for track {track} param {param:?} (slot {slot_index})");
             return 1;
         }
     }
@@ -1349,6 +1450,17 @@ fn main() {
                 }
             }
         }
+        // Sends RequestAutomationLane before reading its answer, so it needs a writable
+        // handle — a read-only mmap makes the send a silent no-op and the wait always times out.
+        Some((&"get", rest)) if rest.first() == Some(&"automation-points") => {
+            match EngineHandle::attach(&name, true) {
+                Ok(handle) => get_automation_points(&handle, &args),
+                Err(err) => {
+                    eprintln!("daw-cli: {err}");
+                    1
+                }
+            }
+        }
         Some((&"get", rest)) if rest.first() == Some(&"waveform") => {
             match EngineHandle::attach(&name, true) {
                 Ok(handle) => get_waveform(&handle, rest),
@@ -1389,6 +1501,7 @@ fn main() {
                     0
                 }
                 Some(&"audio-sources") => get_audio_sources(&handle),
+                Some(&"automation") => get_automation(&handle),
                 Some(&"extents") => get_extents(&handle),
                 Some(&"arrangement") => {
                     match handle.read_arrange_summary() {

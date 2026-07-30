@@ -165,7 +165,12 @@ enum class UiCommandType : uint16_t {
   // per-placement answer to "which gesture chooses scope", chosen over a global mode because
   // forgetting the toggle fails LOUDLY (a note in three places) while being in the wrong mode
   // fails quietly (a fix that does not propagate).
-  SetPlacementEditScope = 61,  // next free 62
+  SetPlacementEditScope = 61,
+  // v28: answer ONE automation lane's points into a UiAutomationSlot. Reuses
+  // UiAutomationPointPayload (trackId + paramId identify the lane; nanotick/value ignored).
+  // Request/answer rather than a standing region because a song can hold far more automation than
+  // a fixed region could carry, and a UI only draws the lanes that are open.
+  RequestAutomationLane = 62,  // next free 63
 };
 
 // M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
@@ -189,6 +194,25 @@ struct UiAutomationPointPayload {
 static_assert(sizeof(UiAutomationPointPayload) == 40,
               "UiAutomationPointPayload must fit an EventEntry payload");
 constexpr uint16_t kUiAutomationDiscrete = 1u << 0;
+
+// v28: ASK for one automation lane's points (UiCommandType::RequestAutomationLane). Its own
+// struct rather than a reuse of UiAutomationPointPayload, for one reason: the CLIENT owns
+// `requestSeq`, exactly as RequestWaveform does. That is what lets a caller know which slot its
+// answer will land in before it asks, and match the echo without racing on a counter it never
+// wrote. Reusing the write payload would have meant an engine-assigned sequence and a reader that
+// has to guess.
+struct UiAutomationLaneRequestPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  uint16_t flags = 0;
+  uint32_t requestSeq = 0;   // answered into slots[requestSeq % kUiAutomationSlots]
+  uint32_t trackId = 0;
+  uint32_t targetPluginIndex = 0;
+  char paramId[16]{};
+  uint32_t reserved0 = 0;
+  uint32_t reserved1 = 0;
+};
+static_assert(sizeof(UiAutomationLaneRequestPayload) == 40,
+              "UiAutomationLaneRequestPayload must fit an EventEntry payload");
 
 // M3.23: one section command. `sectionId` addresses an existing section (0 = append, for
 // AddSection); `barCount` is the length for Add/SetSectionLength; `toIndex` is the
@@ -271,6 +295,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";
+    case UiCommandType::RequestAutomationLane: return "request_automation_lane";
   }
   return "op:unknown";
 }
@@ -322,6 +347,7 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
     // paramId[16]
     case UiCommandType::SetAutomationTarget:
     case UiCommandType::WriteAutomationPoint:
+    case UiCommandType::RequestAutomationLane:
       return false;
     default:
       return true;
