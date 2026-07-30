@@ -191,6 +191,19 @@ NOPE="$(points_of 0 nosuchparam)"
         engine never received, and a caller cannot tell 'nothing there' from 'still waiting'"
 echo "  answers: an unautomated param returns found:false rather than nothing at all"
 
+# ...AND WHEN THE ENGINE HAS NOTHING WHATSOEVER TO SAY. A track that does not exist is the most
+# extreme form of "nothing here", and it must still produce an ANSWER: a caller cannot tell "no
+# such lane" from "the engine has not got to my request yet" unless the empty case is written and
+# released like any other. The frontend agent reported this timing out and it did not reproduce —
+# but the case their report describes was only covered here with a track that HAD automation and
+# a different param name, which is the milder half of it.
+GHOST="$(points_of 5 cutoff)"
+[ "$GHOST" = "NOTFOUND" ] || \
+  fail "asking about a track that does not exist returned [$GHOST], expected NOTFOUND. An empty
+        answer still has to be WRITTEN and released — silence makes 'nothing there' and 'still
+        waiting' the same observation, which is the distinction this whole slot exists for"
+echo "  answers: a nonexistent track answers too, rather than leaving a caller on a timeout"
+
 # ---- CACHES, part 1: a NOTE edit must not move the automation version. The whole value of the
 # version is that a UI can cache lanes on it; if typing moved it, every keystroke would invalidate
 # every lane and the number would be worthless.

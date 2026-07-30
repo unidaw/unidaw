@@ -1053,7 +1053,13 @@ fn get_extents(handle: &EngineHandle) -> i32 {
         );
     }
     println!("[");
-    for e in &extents {
+    for (i, e) in extents.iter().enumerate() {
+        // NO TRAILING COMMA. This printed one after every entry including the last, so the output
+        // announced itself as JSON and would not parse — every check that consumed it grepped
+        // instead, so nothing noticed until one tried json.load. A read-back that cannot be
+        // parsed is a read-back you have to write a parser for, which is how a caller ends up
+        // scanning for a key and matching a value.
+        let comma = if i + 1 == extents.len() { "" } else { "," };
         let grid = daw_bridge::layout::unpack_clip_grid(e.flags)
             .map(|(lpb, n, d)| format!("{{ \"lpb\": {lpb}, \"time_sig\": \"{n}/{d}\" }}"))
             .unwrap_or_else(|| "null".to_string());
@@ -1066,8 +1072,11 @@ fn get_extents(handle: &EngineHandle) -> i32 {
         // what a UI draws to say "this appearance is customised", so a stale one — a mute whose
         // base note a later clip edit removed — lit it over nothing and no test could see that.
         let (overrides, has_overrides) = daw_bridge::layout::unpack_clip_overrides(e.flags);
+        // M2.57: is there another version of this appearance to swap to? An alternate nobody can
+        // see is the same as not having one.
+        let alt = e.flags & daw_bridge::layout::UI_CLIP_EXTENT_HAS_ALTERNATE != 0;
         println!(
-            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"audio\": {}, \"local_edits\": {local}, \"overrides\": {overrides}, \"has_overrides\": {has_overrides}, \"start\": {}, \"end\": {}, \"grid\": {} }},",
+            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"audio\": {}, \"local_edits\": {local}, \"overrides\": {overrides}, \"has_overrides\": {has_overrides}, \"has_alternate\": {alt}, \"start\": {}, \"end\": {}, \"grid\": {} }}{comma}",
             e.placement_id, e.clip_id, e.track_id, audio, e.start_tick, e.end_tick, grid
         );
     }
@@ -2282,6 +2291,38 @@ fn main() {
                     payload.base_version = handle.clip_version_for_track(track);
                     match handle.send_command(payload) {
                         Ok(()) => { println!("{{ \"sent\": \"revert-overrides\", \"placement\": {placement} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                // M2.57 SCRATCH CLIPS. `fork` gives an agent its own copy to write into and keeps
+                // yours as the alternate; `swap` is the A/B; `keep` drops the other once you have
+                // decided. What PLAYS is always the placement's clip, so there is no auditioning
+                // mode to get out of step with what you hear.
+                Some(&"scratch") => {
+                    let sub = rest.get(1).copied().unwrap_or("");
+                    let cmd = match sub {
+                        "fork" => UiCommandType::ForkPlacementClip,
+                        "swap" => UiCommandType::SwapPlacementClip,
+                        "keep" => UiCommandType::ClearPlacementAlternate,
+                        other => {
+                            eprintln!("daw-cli: scratch {other:?}: expected fork|swap|keep");
+                            std::process::exit(2)
+                        }
+                    };
+                    let placement = match flag_u64(&args, "--placement", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => {
+                            eprintln!("daw-cli: {e} (--placement names the appearance to fork or swap)");
+                            std::process::exit(2)
+                        }
+                    };
+                    let payload = track_structure_command(cmd, flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32);
+                    let payload = UiCommandPayload { value0: placement, ..payload };
+                    match handle.send_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"scratch {sub}\", \"placement\": {placement} }}");
+                            0
+                        }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }

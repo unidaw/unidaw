@@ -119,7 +119,11 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    thrown away at the IPC boundary, so a rack could show a knob's name and its current value
 //    text and nothing else. Setting a value in real units meant binary-searching the normalised
 //    value and reading the display back — which is a guessing loop, not an interface.
-constexpr uint16_t kShmVersion = 30;
+// v31: UiClipExtent bit 24 — this appearance has an ALTERNATE clip (M2.57 scratch clips). An
+//    agent forks the clip it was pointed at, writes into the copy, and the original becomes the
+//    alternate; swapping is the A/B. Published because an alternate nobody can see is the same as
+//    not having one.
+constexpr uint16_t kShmVersion = 31;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -892,6 +896,11 @@ constexpr uint32_t kUiClipExtentHasOverrides = 1u << 22;
 // placement is in that state — the same reason harmony quantize had to be published. A toggle
 // whose state cannot be read is a toggle the interface has to guess at.
 constexpr uint32_t kUiClipExtentLocalEdits = 1u << 23;
+// M2.57 bit 24: this appearance HAS AN ALTERNATE — another version of the clip it can swap to,
+// usually a draft an agent wrote. Published so a UI can offer the A/B at all: without it the
+// alternate exists in the document, plays nothing, and is invisible, which is the same as not
+// having it. What PLAYS is always the extent's clipId; this only says there is another one.
+constexpr uint32_t kUiClipExtentHasAlternate = 1u << 24;
 
 inline uint32_t packClipExtentOverrides(uint32_t count) {
   if (count == 0) {

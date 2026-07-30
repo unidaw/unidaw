@@ -772,6 +772,11 @@ std::string serializeProject(const ProjectDocument& document) {
         writer.key("local_edits", true);
 
       }
+      // M2.57: the other version of this appearance. Written only when there IS one, so a
+      // project that has never had an alternate stays byte-identical.
+      if (placement.alternateClipId != 0) {
+        writer.key("alternate_clip_id", placement.alternateClipId);
+      }
       writeEvents(writer, placement.adds);
       writer.beginArray("mutes");
       for (const EventId id : placement.mutes) {
@@ -1093,6 +1098,7 @@ bool deserializeProject(const std::string& json,
           }
           placement.lengthNanoticks = pTree.get<uint64_t>("length", 0);
           placement.localEdits = pTree.get<bool>("local_edits", false);
+          placement.alternateClipId = pTree.get<uint32_t>("alternate_clip_id", 0);
           readEvents(pTree, placement.adds);
           if (const auto mutes = pTree.get_child_optional("mutes")) {
             for (const auto& m : *mutes) {

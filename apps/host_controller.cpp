@@ -72,6 +72,7 @@ bool HostController::launch(const HostConfig& config) {
 
   // Ensure old socket is gone so waitForSocket actually waits for the new one
   ::unlink(config.socketPath.c_str());
+  ownedSocketPath_ = config.socketPath;
 
   std::cerr << "HostController: launching host (socket "
             << config.socketPath << ")" << std::endl;
@@ -332,6 +333,14 @@ void HostController::disconnectInternal(bool killHost) {
   // if we launched it.
   if (killHost) {
     killHostProcess();
+    // AND REMOVE THE SOCKET WE MADE. Unlinking only on the next LAUNCH was fine while the path
+    // was shared and reused; per-instance paths turn that into one leaked file per run. Only the
+    // path this controller launched — never a sweep of the directory, which would delete a live
+    // engine's socket out from under it.
+    if (!ownedSocketPath_.empty()) {
+      ::unlink(ownedSocketPath_.c_str());
+      ownedSocketPath_.clear();
+    }
   }
 }
 

@@ -1500,6 +1500,22 @@ int main(int argc, char** argv) {
   // (macOS has no MSG_NOSIGNAL); let them fail with EPIPE and exit cleanly.
   std::signal(SIGPIPE, SIG_IGN);
 
+  // --version: print the contract versions this binary was COMPILED against, and exit. The
+  // engine asks before it spawns anything, because a stale host is otherwise invisible until it
+  // fails to appear and the log fills with "connect ... No such file or directory".
+  //
+  // Both of us lost an hour to this on the same day: the host is a separate CMake target, so
+  // `cmake --build . --target daw_engine` after a header change leaves a host compiled against
+  // the old layout, and every symptom points somewhere else — sockets, plugins, the read-back.
+  for (int i = 1; i < argc; ++i) {
+    if (std::string(argv[i]) == "--version") {
+      std::printf("shm=%u control=%u\n",
+                  static_cast<unsigned>(daw::kShmVersion),
+                  static_cast<unsigned>(daw::kControlVersion));
+      return 0;
+    }
+  }
+
   std::string socketPath = "/tmp/daw_host.sock";
   HostState state;
   if (const char* env = std::getenv("DAW_ENGINE_TEST_MODE")) {
