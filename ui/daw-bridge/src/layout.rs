@@ -349,6 +349,23 @@ pub const UI_CLIP_GRID_LPB_MASK: u32 = 0x1f;
 pub const UI_CLIP_GRID_NUM_MASK: u32 = 0x1f;
 pub const UI_CLIP_GRID_DEN_EXP_MASK: u32 = 0x7;
 
+/// `UiClipExtent.flags` bits 14-21: how many overrides this appearance carries (adds + mutes),
+/// SATURATING at 255. Bit 22 is set whenever the count is non-zero. This is THE BADGE a UI draws
+/// to say "this appearance is customised", and until now it was published and unreadable from
+/// anywhere outside the engine — so a stale one (a mute whose base note a later clip edit
+/// removed) lit the badge over nothing with no way to observe it.
+pub const UI_CLIP_OVERRIDE_COUNT_SHIFT: u32 = 14;
+pub const UI_CLIP_OVERRIDE_COUNT_MASK: u32 = 0xff;
+
+/// Overrides on this appearance: (count, has_overrides). The count saturates at 255, so
+/// `has_overrides` with a count of 255 means "at least 255".
+pub fn unpack_clip_overrides(flags: u32) -> (u32, bool) {
+    (
+        (flags >> UI_CLIP_OVERRIDE_COUNT_SHIFT) & UI_CLIP_OVERRIDE_COUNT_MASK,
+        flags & UI_CLIP_EXTENT_HAS_OVERRIDES != 0,
+    )
+}
+
 /// Decode the per-clip grid from `UiClipExtent.flags`. Returns
 /// `Some((lines_per_beat, numerator, denominator))`, or `None` when no grid is
 /// published (the caller uses the song meter).

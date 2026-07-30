@@ -1061,8 +1061,12 @@ fn get_extents(handle: &EngineHandle) -> i32 {
         // `harmony_quantize` are: a toggle whose state cannot be read is one the interface has to
         // guess at.
         let local = e.flags & daw_bridge::layout::UI_CLIP_EXTENT_LOCAL_EDITS != 0;
+        // The OVERRIDE BADGE, published since M3.24 and readable from nowhere until now. It is
+        // what a UI draws to say "this appearance is customised", so a stale one — a mute whose
+        // base note a later clip edit removed — lit it over nothing and no test could see that.
+        let (overrides, has_overrides) = daw_bridge::layout::unpack_clip_overrides(e.flags);
         println!(
-            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"audio\": {}, \"local_edits\": {local}, \"start\": {}, \"end\": {}, \"grid\": {} }},",
+            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"audio\": {}, \"local_edits\": {local}, \"overrides\": {overrides}, \"has_overrides\": {has_overrides}, \"start\": {}, \"end\": {}, \"grid\": {} }},",
             e.placement_id, e.clip_id, e.track_id, audio, e.start_tick, e.end_tick, grid
         );
     }

@@ -30,11 +30,18 @@ inline std::vector<MusicalEvent> flattenPlacements(
         break;
       }
     }
-    if (clipDef && clipDef->kind == ClipKind::Audio) {
-      continue;
-    }
+    // An AUDIO clip has no symbolic events for this scheduler to play — the audio path decodes
+    // and mixes the region — but the PLACEMENT's `adds` are this appearance's own notes and have
+    // nothing to do with the clip's kind. Skipping the whole placement dropped them: a note typed
+    // into an audio region's cell was accepted, saved, badged as a local edit, and scheduled
+    // nowhere. Silent, and the note is the user's data.
+    //
+    // Emitting it rather than refusing the edit, on failure asymmetry — the criterion that
+    // settled the edit-scope question. If the note was a mistake it SOUNDS, and it is one delete
+    // away; dropped, nothing looks wrong and the work is gone.
+    const bool audioClip = clipDef && clipDef->kind == ClipKind::Audio;
     std::vector<MusicalEvent> resolved;
-    if (clipDef) {
+    if (clipDef && !audioClip) {
       for (const auto& e : clipDef->clip.events()) {
         bool muted = false;
         if (e.type == MusicalEventType::Note) {
@@ -54,7 +61,9 @@ inline std::vector<MusicalEvent> flattenPlacements(
     const uint64_t plLen =
         placement.lengthNanoticks > 0 ? placement.lengthNanoticks : clipLen;
     const auto scheduled =
-        placementEventsInWindow(resolved, clipLen, *placement.at, plLen, 0, windowEnd);
+        audioClip ? std::vector<ScheduledEvent>{}
+                  : placementEventsInWindow(resolved, clipLen, *placement.at, plLen, 0,
+                                            windowEnd);
     for (const auto& s : scheduled) {
       MusicalEvent ev = s.event;
       ev.nanotickOffset = s.absTick;

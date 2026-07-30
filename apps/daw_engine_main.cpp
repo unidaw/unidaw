@@ -5023,6 +5023,53 @@ struct TrackRuntime {
   // track.clip being derived is invisible to it.
   auto rebuildFlatAndPublish =
       [&](TrackRuntime& rt) -> std::shared_ptr<const ClipSnapshot> {
+    // A MUTE OUTLIVING ITS BASE NOTE keeps the override badge lit over nothing. Mute a note on
+    // one appearance, then delete that note from the CLIP, and the mute record survives pointing
+    // at a note id that no longer exists: the extent still publishes an override count and the
+    // local-edits flag, so the rail says "this appearance is customised" and there is nothing to
+    // find. Reverting the overrides then "clears" something inaudible.
+    //
+    // Pruned HERE because this is the single funnel every structural change goes through, so a
+    // dead mute cannot survive past one rebuild — and it also cleans up mutes orphaned by a clip
+    // swap or by loading a file whose ids do not line up, which keying on the removed id would
+    // miss. Only when the referenced clip EXISTS: if it is absent we cannot tell a dead mute
+    // from one whose clip has not been installed yet, and guessing would delete real overrides.
+    uint32_t prunedMutes = 0;
+    for (auto& pl : rt.sourcePlacements) {
+      if (pl.mutes.empty()) {
+        continue;
+      }
+      const daw::ProjectClip* clipDef = nullptr;
+      for (const auto& c : rt.ownedClips) {
+        if (c.id == pl.clipId) {
+          clipDef = &c;
+          break;
+        }
+      }
+      if (!clipDef) {
+        continue;
+      }
+      const size_t before = pl.mutes.size();
+      pl.mutes.erase(
+          std::remove_if(pl.mutes.begin(), pl.mutes.end(),
+                         [&](daw::EventId id) {
+                           for (const auto& e : clipDef->clip.events()) {
+                             if (e.type == daw::MusicalEventType::Note &&
+                                 e.payload.note.noteId == id) {
+                               return false;
+                             }
+                           }
+                           return true;
+                         }),
+          pl.mutes.end());
+      prunedMutes += static_cast<uint32_t>(before - pl.mutes.size());
+    }
+    if (prunedMutes > 0) {
+      DAW_EVENT("local_edit.mutes_pruned")
+          .field("track", rt.trackId)
+          .field("count", prunedMutes)
+          .field("reason", "base_note_gone");
+    }
     const uint64_t windowEnd = trackWindowEnd(rt);
     daw::MusicalClip flat;
     for (const auto& ev :
@@ -7112,6 +7159,54 @@ struct TrackRuntime {
   // The explicit bit wins on its own: a caller that SAID which it meant is never overridden. The
   // placement's own flag is the standing answer for when nobody said. Never inferred from whether
   // the cell is occupied.
+  // WHICH APPEARANCE IS THIS TICK IN? One lookup, for the same reason editIsLocalScope is one
+  // function: the scope decision and the target decision have to agree, and they were two
+  // separate loops that agreed only by accident.
+  //
+  // OVERLAPPING PLACEMENTS made both of them arbitrary. Each took the FIRST match in
+  // sourcePlacements — file order, or insertion order, which is nothing the user can see. Worse,
+  // they disagreed in a way that mattered: editIsLocalScope scanned for ANY placement under the
+  // tick with localEdits set, while the target loop took the first containing placement whether
+  // its flag was set or not. So with two overlapping appearances, one local and one not, the
+  // gesture could be RULED local and then applied to the placement that is not — an override
+  // recorded on an appearance the user never marked.
+  //
+  // The tie-break is the LATEST START among the placements containing the tick, and on an exact
+  // tie the later one in the list. "Topmost wins" is the convention every arranger uses for
+  // stacked material, and stating it is the point: an arbitrary rule that happens to be stable
+  // is still unpredictable to the person using it.
+  struct PlacementHit {
+    daw::ProjectPlacement* placement = nullptr;
+    uint64_t end = 0;
+    uint32_t candidates = 0;  // >1 means the tick was ambiguous and the rule decided
+  };
+  auto findPlacementAt = [&](TrackRuntime& rt, uint64_t nanotick) -> PlacementHit {
+    PlacementHit hit;
+    for (auto& pl : rt.sourcePlacements) {
+      if (!pl.at.has_value()) {
+        continue;  // loose session cell: no timeline position
+      }
+      uint64_t len = pl.lengthNanoticks;
+      if (len == 0) {
+        for (const auto& c : rt.ownedClips) {
+          if (c.id == pl.clipId) {
+            len = c.lengthNanoticks;
+            break;
+          }
+        }
+      }
+      if (nanotick < *pl.at || nanotick >= *pl.at + len) {
+        continue;
+      }
+      ++hit.candidates;
+      if (!hit.placement || *pl.at >= *hit.placement->at) {
+        hit.placement = &pl;
+        hit.end = *pl.at + len;
+      }
+    }
+    return hit;
+  };
+
   auto editIsLocalScope = [&](uint32_t trackId, uint64_t nanotick, uint16_t flags) -> bool {
     if ((flags & daw::kUiEditScopeLocal) != 0) {
       return true;
@@ -7127,24 +7222,18 @@ struct TrackRuntime {
       return false;
     }
     std::lock_guard<std::mutex> lock(runtime->trackMutex);
-    for (const auto& pl : runtime->sourcePlacements) {
-      if (!pl.at.has_value() || !pl.localEdits) {
-        continue;
-      }
-      uint64_t len = pl.lengthNanoticks;
-      if (len == 0) {
-        for (const auto& c : runtime->ownedClips) {
-          if (c.id == pl.clipId) {
-            len = c.lengthNanoticks;
-            break;
-          }
-        }
-      }
-      if (nanotick >= *pl.at && nanotick < *pl.at + len) {
-        return true;
-      }
+    // THE CHOSEN placement's flag, not "any placement here has it set" — so the scope decision
+    // and the target decision are the same decision about the same appearance.
+    const PlacementHit hit = findPlacementAt(*runtime, nanotick);
+    if (hit.candidates > 1) {
+      DAW_EVENT("local_edit.ambiguous_tick")
+          .field("track", trackId)
+          .field("nanotick", nanotick)
+          .field("candidates", hit.candidates)
+          .field("chose", hit.placement ? hit.placement->id : 0u)
+          .field("rule", "latest_start");
     }
-    return false;
+    return hit.placement != nullptr && hit.placement->localEdits;
   };
 
   auto applyLocalNoteEdit = [&](uint32_t trackId, uint64_t nanotick, uint64_t duration,
@@ -7189,27 +7278,9 @@ struct TrackRuntime {
       // Which APPEARANCE is this tick in? A local edit is meaningless without one: there
       // is no placement to hang the override on, so it is refused rather than silently
       // becoming a clip edit — which would be the opposite of what was asked for.
-      daw::ProjectPlacement* target = nullptr;
-      uint64_t targetEnd = 0;
-      for (auto& pl : runtime->sourcePlacements) {
-        if (!pl.at.has_value()) {
-          continue;
-        }
-        uint64_t len = pl.lengthNanoticks;
-        if (len == 0) {
-          for (const auto& c : runtime->ownedClips) {
-            if (c.id == pl.clipId) {
-              len = c.lengthNanoticks;
-              break;
-            }
-          }
-        }
-        if (nanotick >= *pl.at && nanotick < *pl.at + len) {
-          target = &pl;
-          targetEnd = *pl.at + len;
-          break;
-        }
-      }
+      const PlacementHit hit = findPlacementAt(*runtime, nanotick);
+      daw::ProjectPlacement* target = hit.placement;
+      const uint64_t targetEnd = hit.end;
       if (!target) {
         DAW_EVENT("local_edit.rejected")
             .field("track", trackId)
