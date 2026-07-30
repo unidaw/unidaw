@@ -80,6 +80,7 @@
 <script type="module">
 import { Tracker } from './src/tracker.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
+import { opsText } from './src/rowops.js';
 /*
  * `ticksPerBar` WAS NEVER IMPORTED, and `dockApi.ticksPerBar()` has been throwing
  * "ticksPerBar is not defined" since it shipped — a console method nobody had called. Found
@@ -87,7 +88,7 @@ import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
  * reference into an error on the first draw. The ratchet in unit.mjs checks that every method
  * the console CALLS exists on dockApi; nothing checked that dockApi's own bodies resolve.
  */
-import { ticksPerBar } from './src/meter.js';
+import { ticksPerBar, ticksPerBeat } from './src/meter.js';
 import M from './design/out/tokens.js';
 import { connectEngine, noEngine } from './src/engine.js';
 import { Chain } from './src/chain.js';
@@ -3927,9 +3928,26 @@ function updateChrome() {
   // differently and nothing on screen said which — see typeDegree.
   // Position WITHIN the note column, not the absolute column index: with more
   // than one note column, column 3 is another note field, not an effect.
+  /*
+   * WHAT THE OPS CELL ACTUALLY HOLDS, when the cursor is on it.
+   *
+   * The collapsed form is one character per op, which says WHICH ops a note carries and
+   * deliberately not what they are set to — that is what collapsed means. On a note with more
+   * ops than the cell can spell, `rpd` is honest and unreadable at the same time, and there was
+   * no way at all to find out that the `r` was a `ret3`.
+   *
+   * So the field readout, which otherwise says `#=fx` and nothing else, becomes the answer:
+   * stand on the cell and it prints the canonical string. That string is exactly what
+   * `parse_row_ops` accepts and exactly what an agent writes, so reading it teaches the grammar
+   * for typing it — one notation, learned in the place you use it.
+   *
+   * `#=fx` stays when the note has no ops, because "there is nothing here" and "you are in the
+   * effect field" are both worth saying and the second is all there is to say.
+   */
   o.digitMode = fieldOfCol(state.cursor.col) === 0
                   ? (state.entryMode === 'degree' ? '#=deg' : '#=note')
-              : fieldOfCol(state.cursor.col) === 1 ? '#=vel' : '#=fx';
+              : fieldOfCol(state.cursor.col) === 1 ? '#=vel'
+              : opsAtCursorText() || '#=fx';
   // 120000 when there is no engine, which is what the fixture plays at — not 0,
   // which would put "0.00 BPM" on screen for every golden and every headless run.
   o.tempoMilliBpm = engine && engine.tempoMilliBpm ? engine.tempoMilliBpm : 120000;
@@ -5164,6 +5182,21 @@ function chordAtCursor() {
     if (r === state.cursor.row) return c;
   }
   return null;
+}
+
+/**
+ * The canonical op string for the note under the cursor, or '' when there is none.
+ *
+ * Built per frame ONLY while the cursor sits on the ops field, which is a gesture rather than a
+ * loop — everywhere else this returns before it allocates anything. The draw path's no-allocate
+ * rule is about what runs on every cell of every frame; a single string for the one cell a
+ * person is standing on is not that.
+ */
+function opsAtCursorText() {
+  if (fieldOfCol(state.cursor.col) !== 2) return '';
+  const n = noteAtCursor();
+  if (!n) return '';
+  return opsText(n, ticksPerBeat(songMeter()));
 }
 
 function noteAtCursor() {
@@ -6784,7 +6817,13 @@ window.__uni = {
   strip: (t, which) => dockApi.strip(t, which),
   transport: (what) => dockApi.transport(what),
   zoom: (z) => dockApi.zoom(z),
-  probe: () => tracker.probe(),
+  probe: () => {
+    const p = tracker.probe();
+    // How many characters the ops cell can show — measured, and exposed so a test can tell
+    // "the ops did not fit" from "the ops did not render", which look identical on screen.
+    p.opsChars = opsCellChars;
+    return p;
+  },
   // The arrangement, by name. Delegated rather than reimplemented: these are
   // the SAME functions the console and the drag call, which is the whole rule
   // `dockApi` exists for.
