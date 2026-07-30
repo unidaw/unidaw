@@ -13,6 +13,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "apps/engine_instance.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
 #include "apps/device_chain.h"
@@ -298,7 +299,14 @@ int main() {
   int hostFd = -1;
   size_t hostSize = 0;
   void* hostBase = nullptr;
-  if (!waitForShm("/daw_engine_shared", hostFd, hostSize, hostBase)) {
+  // THE NAME THE ENGINE WILL ACTUALLY USE, asked for rather than assumed. This was the literal
+  // "/daw_engine_shared", which is only correct for an UNNAMED engine — and this test names its
+  // engine (DAW_UI_SHM_NAME above) precisely so two runs cannot collide. The moment the engine
+  // started deriving per-instance segment names from that, this test mapped a segment nobody was
+  // writing to and reported "failed to map host SHM". Same derivation, one definition.
+  ::setenv("DAW_UI_SHM_NAME", uiShmName.c_str(), 1);
+  const std::string hostShmName = daw::trackShmName(0);
+  if (!waitForShm(hostShmName.c_str(), hostFd, hostSize, hostBase)) {
     std::cerr << "device_chain_ui_live_tests_main: failed to map host SHM"
               << std::endl;
     return 1;
