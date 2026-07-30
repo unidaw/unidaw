@@ -1,82 +1,113 @@
 #!/usr/bin/env bash
-# Guards the ONE documented lock order in the engine: sectionMutex is taken BEFORE
-# songMeterMutex wherever both are held.
+# Finds any pair of mutexes the engine takes NESTED IN BOTH ORDERS — an AB/BA deadlock.
 #
-# WHY THIS IS A SOURCE CHECK AND NOT A RUNTIME ONE, stated plainly because it matters when
-# reading the result: the arrangement publisher once took these two the other way round from
-# SetSectionLength, which is an AB/BA deadlock — the publish thread holding songMeterMutex
-# and wanting sectionMutex while the command thread holds sectionMutex and wants
-# songMeterMutex wedges both forever, taking the control plane down with no diagnostic. The
-# inversion is a fact of the code, not a judgement call: two nested lock sites in opposite
-# orders.
+# WHY THIS EXISTS: the arrangement publisher once took songMeterMutex then sectionMutex while
+# SetSectionLength took sectionMutex then songMeterMutex. Both held them nested to resolve the
+# spine through the meter. That wedges both threads forever, takes the control plane with it, and
+# leaves every shared-memory reader spinning on a version that never moves.
 #
-# It is also very hard to hit. A stress run of 60 rapid `do section length` edits did NOT
-# reproduce it — each critical section is a few instructions and the publisher only rebuilds
-# once per section edit, so the window is microseconds wide and there are only as many
-# chances as there are edits. That means no dynamic test would have caught the regression,
-# and "we could not make it fail" is not evidence it is safe: a latent AB/BA freezes the
-# engine mid-session eventually, and the user's report is "it just hung".
+# WHY IT IS A SOURCE CHECK. A 60-edit stress run did NOT reproduce it: each critical section is a
+# few instructions, so the window is microseconds wide and there are only as many chances as
+# there are edits. No dynamic test would have caught the regression, and "we could not make it
+# fail" is not evidence a latent AB/BA is safe — it freezes the engine mid-session eventually,
+# and the report is "it just hung".
 #
-# So the guard is textual, and its limits are real: it matches the two mutexes by name in
-# one file, and it would miss an inversion introduced through a helper, a std::lock, or a
-# rename. It catches exactly the regression that happened, which is what it is for.
+# That original pair is now GONE rather than fixed: the meter moved onto the Section, the
+# song-level map was deleted, and there is only one of those two mutexes left to take. When that
+# happened this check said so — it fails when it matches nothing rather than passing vacuously,
+# which is the whole reason it was written that way. So it was generalised instead of deleted: it
+# now reports every nested pair it can see and fails on any that appears in both orders.
 #
-#   tools/lock_order_check.sh
+# LIMITS, stated because they are real: it matches `std::lock_guard<...> name(mutexName)` textually
+# within a brace scope in one file. It cannot see an inversion introduced through a helper
+# function, a std::lock, a std::unique_lock with deferred locking, or a rename. It catches the
+# shape that actually occurred.
+#
+#   tools/lock_order_check.sh          # fail on an inverted pair
+#   tools/lock_order_check.sh --list   # also print every nesting found
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LIST=0
+[ "${1:-}" = "--list" ] && LIST=1
 
-python3 - "$ROOT/apps/daw_engine_main.cpp" <<'PY'
+python3 - "$ROOT/apps/daw_engine_main.cpp" "$LIST" <<'PY'
 import re, sys
+from collections import defaultdict
 
-path = sys.argv[1]
+path, want_list = sys.argv[1], sys.argv[2] == "1"
 lines = open(path).read().splitlines()
+# The mutex expression, not just a bare word: the real nestings in this engine are on MEMBER
+# mutexes reached through a pointer (`rt->trackMutex`, `runtime->controllerMutex`), and a `\w+`
+# capture matched none of them — the first version of this check found 88 lock sites and zero
+# nestings for exactly that reason, and reported a clean bill of health it had not earned.
+#
+# Normalised to the last component, so `rt->trackMutex` and `runtime->trackMutex` are the same
+# mutex FOR ORDERING PURPOSES. They are different objects, and locking two tracks' mutexes
+# nested is its own hazard — but the question here is which KIND is taken before which, and
+# conflating instances is what makes that question answerable.
+LOCK = re.compile(r'lock_guard<[^>]*>\s+\w+\(([A-Za-z_][\w:.>-]*)\)')
 
-LOCK = re.compile(r'lock_guard<[^>]*>\s+\w+\((\w+)\)')
-FIRST, SECOND = "sectionMutex", "songMeterMutex"
+def mutex_name(expr):
+    for sep in ("->", "::", "."):
+        if sep in expr:
+            expr = expr.split(sep)[-1]
+    return expr
 
 def indent(s):
     return len(s) - len(s.lstrip())
 
-bad = []
+# For each lock, find every OTHER lock taken while it is still held: same brace scope, before it
+# closes. That is "outer -> inner", the ordering an AB/BA needs two of.
+nestings = defaultdict(list)   # (outer, inner) -> [(outer_line, inner_line)]
 for i, line in enumerate(lines):
     m = LOCK.search(line)
-    if not m or m.group(1) != SECOND:
+    if not m:
         continue
-    # Walk forward until this lock's enclosing block closes. Anything locking FIRST before
-    # that point is nested inside a SECOND lock, i.e. the inverted order.
+    outer = mutex_name(m.group(1))
     base = indent(line)
-    for j in range(i + 1, min(i + 80, len(lines))):
+    for j in range(i + 1, min(i + 120, len(lines))):
         nxt = lines[j]
-        stripped = nxt.strip()
-        if stripped.startswith("}") and indent(nxt) < base:
-            break                      # scope closed; the SECOND lock is released
+        if nxt.strip().startswith("}") and indent(nxt) < base:
+            break                       # the outer lock's scope ended
         m2 = LOCK.search(nxt)
-        if m2 and m2.group(1) == FIRST:
-            bad.append((i + 1, j + 1, line.strip(), nxt.strip()))
-            break
+        if m2:
+            inner = mutex_name(m2.group(1))
+            if inner != outer:
+                nestings[(outer, inner)].append((i + 1, j + 1))
 
-if bad:
-    print("lock_order_check: FAIL — %s taken while holding %s (AB/BA with SetSectionLength,"
-          " which takes them the other way):" % (FIRST, SECOND))
-    for a, b, la, lb in bad:
-        print("  %s:%d  %s" % (path, a, la))
-        print("  %s:%d  %s" % (path, b, lb))
-    print("  Fix: take %s first. See the comment at their declarations." % FIRST)
+if not nestings:
+    # Matching nothing is a failure, not a pass. A rename or a refactor that moved every lock
+    # would otherwise leave a green check guarding an empty set — which is exactly how this
+    # check reported its own obsolescence when the meter map was deleted.
+    print("lock_order_check: FAIL — found no nested lock pairs at all. Either the locking was"
+          " restructured or the pattern no longer matches; either way this is guarding nothing.")
     sys.exit(1)
 
-# The check must be able to FIND the locks at all — a rename would otherwise make it pass by
-# matching nothing, which is the failure mode of every grep-based test.
-seen_first = sum(1 for l in lines if (LOCK.search(l) or [None]) and LOCK.search(l)
-                 and LOCK.search(l).group(1) == FIRST)
-seen_second = sum(1 for l in lines if LOCK.search(l)
-                  and LOCK.search(l).group(1) == SECOND)
-if seen_first == 0 or seen_second == 0:
-    print("lock_order_check: FAIL — found %d %s and %d %s lock sites. The check is matching"
-          " nothing, so it is not guarding anything; update the names."
-          % (seen_first, FIRST, seen_second, SECOND))
+inverted = []
+for (a, b) in nestings:
+    if (b, a) in nestings and (b, a) < (a, b):
+        continue                        # report each pair once
+    if (b, a) in nestings:
+        inverted.append((a, b))
+
+if want_list:
+    print("  nested pairs (outer -> inner):")
+    for (a, b), sites in sorted(nestings.items()):
+        print("    %-22s -> %-22s  x%d" % (a, b, len(sites)))
+
+if inverted:
+    print("lock_order_check: FAIL — %d mutex pair(s) taken in BOTH orders (AB/BA deadlock):"
+          % len(inverted))
+    for (a, b) in inverted:
+        print("  %s then %s:" % (a, b))
+        for (o, i2) in nestings[(a, b)][:3]:
+            print("    %s:%d -> :%d" % (path, o, i2))
+        print("  %s then %s:" % (b, a))
+        for (o, i2) in nestings[(b, a)][:3]:
+            print("    %s:%d -> :%d" % (path, o, i2))
+    print("  Pick one order, apply it at both sites, and say so at the declarations.")
     sys.exit(1)
 
-print("lock_order_check: PASS — %d %s and %d %s lock sites, no inverted nesting"
-      % (seen_first, FIRST, seen_second, SECOND))
+print("lock_order_check: PASS — %d distinct nesting(s), none inverted" % len(nestings))
 PY

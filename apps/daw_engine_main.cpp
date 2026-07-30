@@ -2544,8 +2544,14 @@ struct TrackRuntime {
   std::atomic<uint32_t> sectionVersion{0};
   // The song's meter, held for the section derivation (positions come from tickAtBar).
   // Taken AFTER sectionMutex — see above.
-  daw::TimeSignatureMap songMeter;
-  std::mutex songMeterMutex;
+  // NO SONG-LEVEL METER MAP. The meter lives on the SECTION (Jaakko's ruling), so the map is
+  // DERIVED from the spine whenever something wants it — a ruler, the published read-back, a
+  // save. Deleting it also deletes the AB/BA deadlock this file used to carry: there is only
+  // one mutex left to take, so the inversion is not fixed, it is impossible.
+  //
+  // The song DEFAULT (songTimeSigNum/Den, already persisted) is what a section without its own
+  // meter inherits, and what material past the last section is measured in.
+
   // Whether the loop was set BY HAND. The loop follows the song end only while it was
   // not — otherwise every note you type would silently reset a loop you had chosen,
   // which is the opposite failure and a worse one.
@@ -2727,6 +2733,12 @@ struct TrackRuntime {
   // at load — relaxed atomics, since a meter one block stale is invisible.
   std::atomic<uint32_t> songTimeSigNum{4};
   std::atomic<uint32_t> songTimeSigDen{4};
+  auto songDefaultSig = [&]() -> daw::TimeSignature {
+    daw::TimeSignature sig;
+    sig.numerator = songTimeSigNum.load(std::memory_order_relaxed);
+    sig.denominator = songTimeSigDen.load(std::memory_order_relaxed);
+    return sig.valid() ? sig : daw::TimeSignature{4, 4};
+  };
 
   // Directory of the currently-loaded project file, so a clip's relative sourcePath
   // resolves against the project (portable) rather than the engine's CWD. Set by
@@ -3082,10 +3094,12 @@ struct TrackRuntime {
       // control plane and leaves every SHM reader spinning on a version that never moves.
       // The window is a few instructions wide, so it survived every test run and would
       // have shown up as the engine "just freezing" one time in a few thousand edits.
+      const daw::TimeSignature def = songDefaultSig();
       std::lock_guard<std::mutex> slock(sectionMutex);
-      std::lock_guard<std::mutex> mlock(songMeterMutex);
-      points = songMeter.points();
-      resolved = sectionList.resolve(songMeter);
+      resolved = sectionList.resolve(def);
+      // The meter points are a READ-BACK derived from the same spine, in the same critical
+      // section, so the two can never be published out of step with each other.
+      points = sectionList.deriveMeterMap(def).points();
     }
     // Clear first: a shorter spine than last time must not leave the old tail readable,
     // and `count` alone would not stop a reader that scanned the array.
@@ -5257,8 +5271,9 @@ struct TrackRuntime {
       //
       // Its own scope: sectionMutex is taken and released above, so the two are never held
       // nested here and the order documented at their declarations is not at stake.
-      std::lock_guard<std::mutex> mlock(songMeterMutex);
-      document.timeSigMap = songMeter.points();
+      const daw::TimeSignature def = songDefaultSig();
+      std::lock_guard<std::mutex> slock(sectionMutex);
+      document.timeSigMap = sectionList.deriveMeterMap(def).points();
     }
     document.harmonyTimeline = harmonyEvents;
 
@@ -5841,22 +5856,38 @@ struct TrackRuntime {
     loopStartNanotick.store(0, std::memory_order_release);
     loopEndNanotick.store(arrangementEnd, std::memory_order_release);
     songEndNanotick.store(arrangementEnd, std::memory_order_release);
-    // M3.23: adopt the section spine and the song's meter, so section positions derive
-    // from the loaded document rather than from whatever the last project left behind.
+    // M3.23: adopt the section spine, so section positions derive from the loaded document
+    // rather than from whatever the last project left behind.
+    //
+    // AND MIGRATE THE METER ONTO THE SECTIONS. A file written before the meter moved carries a
+    // tick-keyed `time_sig_map` and sections that know nothing about meter. Each section takes
+    // the meter in force at its start, and a section that SPANS a change is SPLIT there —
+    // because a meter change IS a section boundary now, so such a section was never really one
+    // section. Positions are computed through the OLD map, because that is what the file meant
+    // when it was written; reading it under the new rules would move the material.
+    //
+    // A file whose sections already carry meters passes through untouched: the derived map it
+    // was saved with reproduces exactly the meters it already has, so the split finds nothing
+    // to split. That is what makes this safe to run on every load rather than gated on a
+    // schema version nobody remembers to bump.
     {
       std::lock_guard<std::mutex> slock(sectionMutex);
       sectionList.setSections(document.sections);
-    }
-    {
-      std::lock_guard<std::mutex> mlock(songMeterMutex);
-      if (!document.timeSigMap.empty()) {
-        songMeter.setMap(document.timeSigMap);
-      } else {
-        songMeter.setMap({{0,
-                           daw::TimeSignature{document.songTimeSigNumerator,
-                                              document.songTimeSigDenominator}}});
+      if (!document.sections.empty() && !document.timeSigMap.empty()) {
+        daw::TimeSignatureMap oldMap;
+        oldMap.setMap(document.timeSigMap);
+        const auto migrated = daw::migrateSectionsFromMeterMap(
+            sectionList.sections(), oldMap, sectionList.nextId());
+        if (migrated.size() != sectionList.sections().size()) {
+          DAW_EVENT("sections.meter_migrated")
+              .field("before", static_cast<uint64_t>(sectionList.sections().size()))
+              .field("after", static_cast<uint64_t>(migrated.size()));
+        }
+        sectionList.setSections(migrated);
       }
     }
+    songTimeSigNum.store(document.songTimeSigNumerator, std::memory_order_relaxed);
+    songTimeSigDen.store(document.songTimeSigDenominator, std::memory_order_relaxed);
     sectionVersion.fetch_add(1, std::memory_order_acq_rel);
     // A load replaces the song, so any hand-set loop belonged to the OLD one.
     loopUserSet.store(false, std::memory_order_release);
@@ -7649,14 +7680,16 @@ struct TrackRuntime {
           }
           index = *found;
           sections = sectionList.sections();
-          std::lock_guard<std::mutex> mlock(songMeterMutex);
-          const auto before = sectionList.resolve(songMeter);
+          const auto before = sectionList.resolve(songDefaultSig());
           oldEndTick = before[index].endTick;
-          // The new end, taken THROUGH THE METER MAP rather than as
-          // startTick + bars * barLength: a section spanning a meter change has bars of
-          // two different lengths, and the naive product puts the boundary in the wrong
-          // place.
-          newEndTick = songMeter.tickAtBar(before[index].startBar + sp.barCount);
+          // startTick + bars * barLength is now CORRECT and it did not used to be. With a
+          // tick-keyed meter map a section could span two bar lengths, so the naive product put
+          // the boundary in the wrong place and this had to go through tickAtBar. With the meter
+          // on the SECTION every bar in it is the same length, so the product is exact — and the
+          // circular dependency that made rippling the meter unanswerable is gone with it.
+          newEndTick = before[index].startTick +
+                       static_cast<uint64_t>(sp.barCount) *
+                           before[index].meter.barNanoticks();
         }
         const int64_t delta =
             static_cast<int64_t>(newEndTick) - static_cast<int64_t>(oldEndTick);
@@ -7711,16 +7744,12 @@ struct TrackRuntime {
         // the modulation firing in the middle of what used to follow them. The comment on the
         // automation ripple makes exactly this argument; it simply was not applied here.
         //
-        // NOT THE METER MAP, and that is a decision rather than another omission. The
-        // section's new tick length is computed THROUGH the meter (tickAtBar above), so
-        // shifting meter points changes the very delta that was derived from them: growing a
-        // 4-bar 4/4 intro followed by a 3/4 change measures the two new bars as 3/4, and if
-        // the change then moved with the verse those bars would be 4/4 and the material would
-        // have moved by the wrong amount. Which reading is right depends on whether the change
-        // means "the verse is in 3/4" (belongs to the section, should move) or "from bar 5 we
-        // are in 3/4" (belongs to the timeline, should not). arrange_summary_check currently
-        // pins the second reading. Picking one silently is how a song ends up off its own bar
-        // grid, so it stays as it is until that question is answered.
+        // THE METER NEEDS NO RIPPLE AT ALL. It used to be the open question here — a
+        // tick-keyed map meant a section's length was computed THROUGH the meter, so moving
+        // meter points changed the very delta derived from them, and whether a meter change
+        // belonged to the section or to the timeline decided the answer. The meter now lives ON
+        // the section, so a section carries its meter with it by construction and there is
+        // nothing to move. The question is not answered, it is dissolved.
         uint32_t tempoMoved = 0;
         for (auto& pt : loadedTempoMap) {
           // Never the anchor at 0: a tempo map without a point at the origin has no tempo
