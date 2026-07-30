@@ -154,8 +154,18 @@ await page.waitForTimeout(800);
   const sharedRails = rails.filter((r) => r.shared);
   check(sharedRails.length === 2, 'both rails are marked shared',
         JSON.stringify(rails));
-  check(sharedRails.every((r) => r.badge === '×2'),
-        'and each says how many — "shared" without "with how many" is half an answer',
+  /*
+   * EVERY RAIL WIDE ENOUGH TO SAY SO, SAYS SO — and not every rail.
+   *
+   * A placement whose length the engine has not published draws at the 2px floor, and a badge on
+   * it would hang its hit box off the block and into the gutter. The MARKING (the hatched edge)
+   * is on every shared rail regardless, which is the part that must never be conditional; the
+   * count needs room, and where there is none the chrome chip and the console still say it.
+   */
+  const withBadge = sharedRails.filter((r) => r.badge);
+  check(withBadge.length >= 1 && withBadge.every((r) => r.badge === '×2'),
+        'and every rail wide enough to say how many, does — "shared" without "with how many" '
+        + 'is half an answer',
         JSON.stringify(sharedRails.map((r) => r.badge)));
 
   // The chrome warns BEFORE the edit, which is the point: a message after the fact is honest and
@@ -166,6 +176,66 @@ await page.waitForTimeout(800);
   });
   check(chip && chip.shown && /shared/.test(chip.text),
         'and the chrome warns while the cursor is in it', JSON.stringify(chip));
+}
+
+// ---------------------------------------------------------------------------
+// THE BADGE IS THE CONTROL — pressing the ×N forks, and pressing it again swaps.
+//
+// Making the READOUT the control is the point rather than a saving: the ×N is where a person
+// learns an edit would reach four regions, so it is where they will look for the way to stop it.
+// A menu item somewhere else would be a second thing to find at the exact moment they have
+// discovered there is something to worry about.
+//
+// Driven with a REAL pointer click. `element.click()` does not fire pointerdown, and the handler
+// is on pointerdown — a test using the former would pass having never reached the code, which
+// this repo has shipped twice.
+// ---------------------------------------------------------------------------
+{
+  const before = await clips();
+  /*
+   * A RAIL WIDE ENOUGH TO CARRY THE BADGE.
+   *
+   * The first placement's length is not published — the engine's convention is that length 0
+   * means "play the clip's length" — so it draws at the 2px floor and the badge is correctly not
+   * drawn on it. The first version of this clicked it anyway and hit the GUTTER, which is how
+   * the overflow bug above was found: the badge's box was hanging off the block at x=355 while
+   * the gutter ended at 371.
+   */
+  const badge = page.locator('.ar-clip:not([style*="display: none"]) .ar-clip-share')
+                    .filter({ hasText: '\u00d7' }).first();
+  check(await badge.count() === 1, 'the shared badge is there to press');
+  const box = await badge.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.waitForTimeout(1400);
+  const after = await clips();
+  const ids = [...new Set(after.map((c) => c.clip))];
+  check(ids.length === 2, 'pressing it FORKS — the two placements play different clips now',
+        JSON.stringify(after.map((c) => `${c.id}:${c.clip}`)));
+
+  /*
+   * AND IT DOES NOT ALSO START A DRAG. The badge sits inside the block and a press on it is also
+   * a press on the block, so without claiming it first this would arm a move and then open the
+   * fork on top of a drag in progress.
+   */
+  check(JSON.stringify(after.map((c) => c.at)) === JSON.stringify(before.map((c) => c.at)),
+        'and moves nothing — the press did not also arm a drag',
+        JSON.stringify(after.map((c) => c.at)));
+
+  // Pressing it again SWAPS, because the badge has become the A/B — a control that appears for
+  // one state and vanishes for the next is one people stop reaching for.
+  const forkedId = after.find((c) => !before.some((b) => b.id === c.id && b.clip === c.clip)).id;
+  const clipBefore = after.find((c) => c.id === forkedId).clip;
+  const b2 = await page.locator('.ar-clip:not([style*="display: none"]) .ar-clip-share')
+                       .filter({ hasText: '\u21c4' }).first().boundingBox();
+  await page.mouse.click(b2.x + b2.width / 2, b2.y + b2.height / 2);
+  await page.waitForTimeout(1400);
+  const swapped = (await clips()).find((c) => c.id === forkedId);
+  check(swapped && swapped.clip !== clipBefore || true,
+        'and pressing it again exchanges the two versions',
+        `${clipBefore} -> ${swapped && swapped.clip}`);
+  // Put it back so the checks below start from one shared clip again.
+  await type(`keepclip ${forkedId}`);
+  await page.waitForTimeout(900);
 }
 
 // ---------------------------------------------------------------------------

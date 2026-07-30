@@ -92,6 +92,15 @@ const WAVE_OVERSCAN_PX = 384;
 export const ARRANGE_CLIP_MARGIN_PX = WAVE_OVERSCAN_PX * 2;
 
 /**
+ * The narrowest rail that can carry the shared badge.
+ *
+ * Below this the badge's box hangs off the block and into the gutter beside it — visually
+ * clipped by the block's own overflow, and still hit-testable out there, over another surface's
+ * controls. Wide enough for "×12" plus its padding.
+ */
+const BADGE_MIN_W_PX = 26;
+
+/**
  * A marker stores no length, so the `+` button has nothing to ask for.
  *
  * It puts one at the playhead, which is where "here" is, and the span it begins runs to whatever
@@ -175,7 +184,7 @@ export class Arrange {
    * any playhead-following should stop on all three.
    */
   constructor(host, metrics,
-              { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit,
+              { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit, onClipFork,
                 onMarkerSelect, onTimeEdit, onMarkerRename,
                 onMarkerAdd, onMarkerDelete } = {}) {
     this.host = host;
@@ -192,6 +201,11 @@ export class Arrange {
     // before the engine had placement ops, and is still the right behaviour for
     // a surface bound without one.
     this.onClipEdit = onClipEdit;
+    /*
+     * Pressing the shared/forked badge. Absent, the badge is a READOUT and nothing more, which
+     * is what it was before scratch clips existed and is still a useful thing for it to be.
+     */
+    this.onClipFork = onClipFork;
     /*
      * THE SPINE's three gestures. Absent, the strip still DRAWS — a read-only spine is
      * a useful spine, and it is what this surface was before the engine had marker ops — so
@@ -610,6 +624,26 @@ export class Arrange {
    * rather than a surprise on release.
    */
   _clipDown(e, el) {
+    /*
+     * THE SHARED BADGE IS THE CONTROL.
+     *
+     * Claimed before the drag, because the badge sits inside the block and a press on it is also
+     * a press on the block — without this order, pressing it would arm a move and then open the
+     * thing it was pressed for on top of a drag.
+     *
+     * Making the READOUT the control is the point rather than a saving: the ×4 is where a person
+     * finds out an edit would reach four regions, so it is where they will look for the way to
+     * stop it. A separate menu item somewhere else would be a second thing to find, at the
+     * moment they have just learned there was something to worry about.
+     */
+    if (e.target && e.target.classList && e.target.classList.contains('ar-clip-share')) {
+      if (this.onClipFork) {
+        this.onClipFork({ track: el._pTrack, placement: el._pId,
+                          forked: el.classList.contains('forked') });
+      }
+      e.preventDefault();
+      return;
+    }
     if (!this.vm || !this.onClipEdit) return;
     // Only the primary button. A right-click is a context menu everywhere else
     // and starting a drag under one is how a clip ends up somewhere nobody
@@ -1579,7 +1613,28 @@ export class Arrange {
        * the number is what tells you whether an edit here changes one other thing or eleven.
        * Its own text node, so a name change does not rebuild it and it does not rebuild a name.
        */
-      const badge = shared ? `\u00d7${c.appearances}` : '';
+      /*
+       * The badge is shown for a FORKED placement too, as `\u21c4` — because that is where the
+       * swap lives, and a control that appears for one state and vanishes for the next is a
+       * control people stop reaching for. Shared shows the count; forked shows that there is
+       * another version to exchange with.
+       */
+      /*
+       * NOT ON A RAIL TOO NARROW TO HOLD IT.
+       *
+       * The badge is `right: 3px` inside the block, so on a 4px rail its box hangs off the left
+       * edge and into whatever is beside it — the gutter — where `.ar-clip`'s own overflow hides
+       * it but its hit box is still out there, over another surface's controls. MEASURED: a
+       * placement whose length the engine has not published draws at the 2px floor, and the
+       * badge's box landed at x=355 inside a gutter that ends at 371.
+       *
+       * So it is drawn only where it fits. The state is still reachable — the chrome chip says
+       * it, and `shared` and `fork` say it at the console — which is the right trade: a control
+       * you cannot see is worse than one you reach another way.
+       */
+      const roomForBadge = c.w >= BADGE_MIN_W_PX;
+      const badge = !roomForBadge ? ''
+        : c.hasAlternate ? '\u21c4' : shared ? `\u00d7${c.appearances}` : '';
       if (el._badge !== badge) { el._badge = badge; el._share.nodeValue = badge; }
       // A tooltip that says it in words, because a hatch and a number are a convention somebody
       // has to learn once — and the first time is best spent reading rather than guessing.

@@ -254,13 +254,22 @@
    shared. A forked placement is by definition NOT shared: it has its own clip. */
 .ar-clip.forked { border-left: 3px solid var(--uni-text-fx); }
 .ar-clip.forked::before { display: none; }
+/* The count IS the control: press it to fork a shared placement, or to swap a forked one.
+   `pointer-events: auto` and a cursor, because a readout that turns out to be a control is
+   better than a control that turns out to be a label — you find the second by trying. */
 .ar-clip-share {
   position: absolute; top: 1px; right: 3px;
   font-family: var(--font-mono); font-size: var(--font-size-fx);
   letter-spacing: var(--font-tracking-fx);
   color: var(--base-accent-ramp-400);
-  pointer-events: none;
+  padding: 0 3px;
+  border-radius: 2px;
+  cursor: pointer;
 }
+.ar-clip-share:hover { background: var(--uni-surface-cursor-cell); color: var(--base-text); }
+/* Nothing to press when nothing is shared: the span is empty then, and an empty box with a
+   pointer cursor is a control that does nothing. */
+.ar-clip-share:empty { pointer-events: none; }
 .ar-clip.forked .ar-clip-share { color: var(--uni-text-fx); }
 
 /* The waveform band. First child of the clip wrapper, so the clip blocks paint

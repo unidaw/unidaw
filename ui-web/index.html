@@ -444,6 +444,19 @@ const arrange = new Arrange(arrangeHost, metrics, {
     if (next === null) return;                       // cancelled is not a rename
     nameMarker(id, next);
   },
+  /**
+   * PRESSING THE SHARED BADGE.
+   *
+   * On a shared placement it FORKS — that is the act the badge is warning you might want. On a
+   * forked one it SWAPS, because the badge has become the A/B and that is the only thing anyone
+   * does with a fork afterwards.
+   *
+   * Both land on the same functions `fork` and `swapclip` call, so the pointer and the console
+   * cannot drift into meaning different things by "fork this".
+   */
+  onClipFork: ({ track, placement, forked }) => (forked
+    ? swapClipAt(track, placement)
+    : forkAt(track, placement)),
   onNav: (zoomIndex, startTick, laneScroll, why) => {
     state.arrangeZoom = clampZoom(zoomIndex);
     state.arrangeStart = Math.max(0, startTick);
@@ -757,6 +770,11 @@ function namePendingMaps() {
     pendingMaps.splice(i, 1);
   }
 }
+
+/** Fork one named placement. The rail's badge and the console's `fork` both come here. */
+function forkAt(track, placement) { return scratch('fork', track, placement); }
+/** ...and swap one, which is what the badge does once a placement has been forked. */
+function swapClipAt(track, placement) { return scratch('swap', track, placement); }
 
 /**
  * A scratch op on a NAMED placement, or on the one under the cursor.

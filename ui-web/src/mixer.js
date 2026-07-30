@@ -101,6 +101,23 @@ export class Mixer {
       const gain = textDiv('mx-gain', el);
       const pan = textDiv('mx-pan', el);
       /*
+       * PAN MEANS TWO THINGS, depending on what is playing.
+       *
+       * On a MONO source it places a point — constant power, the usual thing. On a STEREO source
+       * it is a BALANCE: it attenuates one side and never repositions, and at centre both sides
+       * pass at unity. Treating a stereo source as a point source makes a centred clip come out
+       * NARROWER than the file, which is subtler than a wrong position and harder to hear as a
+       * fault.
+       *
+       * The LABEL is the same either way — L50 / C / R50 is what every mixer writes for both —
+       * so what differs is the meaning, and the meaning is what the title says. It cannot be
+       * said per track: a track holds mono and stereo regions at once, so which behaviour you
+       * get depends on the clip under the playhead, and a label that claimed one would be wrong
+       * half the time.
+       */
+      pan.title = 'pan — places a mono source, balances a stereo one '
+                + '(a centred stereo clip passes both sides at unity)';
+      /*
        * WHERE THIS TRACK GOES.
        *
        * A real `<select>`. The app builds its own controls everywhere else, and
