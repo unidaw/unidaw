@@ -308,12 +308,18 @@ new feature's rule should have reached.
   the save guard added earlier, the same edit instead overwrote device 1's graph with the
   whole pool. This is the largest remaining gap in "patcher is a device".
 
-- **The section ripple carries placements and automation, but not the tempo map, the meter
-  map, or the harmony timeline.** A key change or a tempo change stays at its absolute tick
-  while the material around it moves. The code states the rule for automation and the same
-  argument applies verbatim to the other three. Note the trap: the save writes
-  `document.tempoMap = loadedTempoMap`, so rippling live tempo state without rippling the
-  retained map produces a song that plays rippled and saves un-rippled.
+- **The section ripple now carries tempo and harmony; the METER MAP is deliberately left, and
+  it is a question for you.** Tempo points and harmony events at or after the boundary move by
+  the delta (and the tempo provider is re-pushed, not just the retained map — otherwise the
+  song plays at the old tempo positions and saves at the new ones). The meter is different: a
+  section's new tick length is computed THROUGH the meter (`tickAtBar`), so shifting meter
+  points changes the very delta derived from them. Growing a 4-bar 4/4 intro followed by a 3/4
+  change measures the two new bars AS 3/4; if the change then moved with the verse those bars
+  would be 4/4 and the material would have moved by the wrong amount. Which is right depends on
+  whether a meter change means *"the verse is in 3/4"* (belongs to the section, should move) or
+  *"from bar 5 we are in 3/4"* (belongs to the timeline, should not). `arrange_summary_check`
+  currently pins the second reading. Picking one silently is how a song ends up off its own bar
+  grid, so nothing moves until you decide.
 
 - **Nothing publishes what automation actually PLAYED.** The engine keeps a `paramMirror` of
   the last emitted value per param but does not publish it, which is why the ripple/playback
