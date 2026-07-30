@@ -453,6 +453,15 @@ struct UiSetRowOpsPayload {
   uint8_t reserved[8]{};
 };
 static_assert(sizeof(UiSetRowOpsPayload) == 40, "UiSetRowOpsPayload must be 40 bytes");
+// THE WIRE ID MUST HOLD A WHOLE EventId. This is the guard the 32-bit version needed and did not
+// have: a size assertion on the STRUCT says nothing about whether a field is wide enough for the
+// quantity it carries, and the payload was a perfectly valid 40 bytes while silently addressing
+// the wrong note. Tying the halves to sizeof(EventId) means the next narrowing breaks the build
+// instead of the music.
+static_assert(sizeof(UiSetRowOpsPayload::noteIdLo) + sizeof(UiSetRowOpsPayload::noteIdHi) ==
+                  sizeof(EventId),
+              "SetRowOps must carry a whole EventId — the author lives in its top bits, and "
+              "dropping them makes an edit land on whichever note shares the counter");
 
 // SAMPLER LOAD (opcode 73). Exactly 40 bytes, which is the whole command payload — so `name`
 // gets 24 of them and is a project-relative FILE NAME rather than a path. See the opcode's
