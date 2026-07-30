@@ -1058,26 +1058,33 @@ public:
         }
         tracks = head;
       }
+      // AN ALL-MUTED PROJECT IS A LEGITIMATE RENDER — of silence. Skipping muted tracks
+      // outright made it indistinguishable from a project whose hosts never came up: both
+      // found no candidate, both timed out after 15s, both reported "no track host connected"
+      // and exited 2. A muted track's producer runs exactly as an unmuted one's does (it fills
+      // its plane, and that plane still feeds any child track, which is how a muted parent's
+      // stems stay audible), so the pipeline is up and process() will correctly mix silence.
+      //
+      // But mute cannot simply be ignored either, and that was the first cut of this fix. With
+      // one muted track already up and an unmuted one still launching, "any ready track" would
+      // be satisfied by the muted one and the render would START — writing silence over the
+      // head of the track it should have waited for. Muted tracks are therefore accepted ONLY
+      // when there is no unmuted track anywhere in the list to wait for.
+      //
+      // awaitNextBlock skips muted tracks unconditionally, and correctly: there the question is
+      // which tracks the NEXT MIX will read, and waiting on one that contributes nothing would
+      // deadlock a render that is correct. Here the question is whether the pipeline is up.
+      bool anyUnmutedTrack = false;
+      bool anyReadyMutedTrack = false;
       if (tracks) {
         for (const auto& track : *tracks) {
+          const bool muted = track.mute && track.mute->load(std::memory_order_relaxed);
+          if (!muted) {
+            anyUnmutedTrack = true;
+          }
           if (!track.completedBlockId || !track.header) {
             continue;
           }
-          // MUTE IS NOT A READINESS PROPERTY, and skipping muted tracks here made a project
-          // whose tracks are all muted indistinguishable from one whose hosts never came up:
-          // both found no candidate, both timed out after 15s, both reported "no track host
-          // connected" and exited 2. But an all-muted project is a perfectly legitimate render
-          // — of silence — and the renderer must produce it rather than fail.
-          //
-          // The question this function asks is whether the PIPELINE is up: host connected, and
-          // (once armed) the producer emitting. A muted track's producer runs exactly as an
-          // unmuted one's does — it fills its plane, and its aux plane still feeds any child
-          // track, which is how a muted parent's stems remain audible. Mute is applied at the
-          // mix, and process() reading a ready-but-muted track yields silence, which is right.
-          //
-          // awaitNextBlock DOES skip muted tracks, and correctly: there the question is which
-          // tracks the next mix will read, and waiting on one that contributes nothing would
-          // deadlock a render that is correct.
           if (track.hostReady && !track.hostReady->load(std::memory_order_acquire) ) {
             continue;
           }
@@ -1085,7 +1092,14 @@ public:
               !track.active->load(std::memory_order_acquire)) {
             continue;
           }
+          if (muted) {
+            anyReadyMutedTrack = true;
+            continue;
+          }
           return true;
+        }
+        if (anyReadyMutedTrack && !anyUnmutedTrack) {
+          return true;  // every track is muted: render the silence rather than fail
         }
       }
       if (std::chrono::steady_clock::now() >= deadline) {
@@ -2556,6 +2570,27 @@ struct TrackRuntime {
   // Last steady-state pipeline depth (producer blocks ahead of the device) sampled by the
   // reporter while playing — the transport-to-ear latency in blocks.
   std::atomic<uint32_t> observedPipelineBlocks{0};
+
+  // PRODUCER LOAD. The producer builds each block one block ahead of the device, so the whole
+  // pipeline holds together only while producing a block costs LESS than a block lasts. Past
+  // 1.0x it cannot catch up by definition: every block it falls further behind, the ring
+  // drains, and the callback starts dropping tracks.
+  //
+  // The owner's standing directive on this is "many sampler tracks saturating one producer
+  // thread MUST NEVER HAPPEN", and a directive you cannot measure is a hope. This is the
+  // measurement: wall-clock microseconds per produced block, the sampler DSP's share of it,
+  // the worst single block, and how many blocks went over budget. Load is
+  // producerBlockUsTotal / blocks / blockDurationUs.
+  //
+  // Counted, not sampled — a sampler that blows the budget on the one block where 64 voices
+  // start together is exactly the case a periodic sample misses. Written only by the producer
+  // thread, read by the reporter and the shutdown summary, so relaxed is enough.
+  std::atomic<uint64_t> producerBlocksTimed{0};
+  std::atomic<uint64_t> producerBlockUsTotal{0};
+  std::atomic<uint64_t> producerBlockUsMax{0};
+  std::atomic<uint64_t> producerSamplerUsTotal{0};
+  std::atomic<uint64_t> producerSamplerUsMax{0};
+  std::atomic<uint64_t> producerBlocksOverBudget{0};
 
   std::unique_ptr<daw::IRuntime> audioRuntime;
   std::unique_ptr<EngineAudioCallback> audioCallback;
@@ -12620,6 +12655,13 @@ struct TrackRuntime {
     const auto blockDuration =
         std::chrono::duration<double>(
             static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
+    // How long a block LASTS. Producing one must cost less than this or the producer can never
+    // catch up. This is the budget the load counters are measured against.
+    const uint64_t producerBlockBudgetUs =
+        engineConfig.sampleRate > 0.0
+            ? static_cast<uint64_t>(static_cast<double>(engineConfig.blockSize) /
+                                    engineConfig.sampleRate * 1e6)
+            : 0;
     const bool debugStall = std::getenv("DAW_ENGINE_DEBUG_STALL") != nullptr;
     const auto stallStart = std::chrono::steady_clock::now();
     uint64_t stallLogMs = 0;
@@ -12848,6 +12890,12 @@ struct TrackRuntime {
       }
 
       const uint32_t blockId = nextBlockId.fetch_add(1);
+      // Everything from here to the bottom of the loop is THIS block's production. The waits
+      // above are deliberately outside it: sleeping because the device has not drained a slot
+      // yet is the pipeline working, not the producer struggling, and folding that idle time in
+      // would report a healthy engine as loaded.
+      const auto blockWorkStart = std::chrono::steady_clock::now();
+      uint64_t blockSamplerUs = 0;
       const uint64_t sampleStart =
           static_cast<uint64_t>(engineConfig.blockSize) *
           static_cast<uint64_t>(blockId - 1);
@@ -15195,11 +15243,19 @@ struct TrackRuntime {
                   runtime->samplerStemBuffer.data() + i * engineConfig.blockSize;
             }
           }
+          // Timed separately from the block as a whole: this is the part that scales with the
+          // number of sampler tracks and the voices in them, so it is the part that answers
+          // "is the sampler what saturated the producer" without guessing.
+          const auto samplerStart = std::chrono::steady_clock::now();
           runtime->samplerRuntime.render(
               runtime->samplerAudioChannels.data(), channels, engineConfig.blockSize,
               runtime->samplerEvents.empty() ? nullptr : runtime->samplerEvents.data(),
               static_cast<uint32_t>(runtime->samplerEvents.size()),
               stemPlanes.empty() ? nullptr : stemPlanes.data(), stems);
+          blockSamplerUs += static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now() - samplerStart)
+                  .count());
           runtime->samplerStemCount = stems;
           runtime->samplerAudioValid = true;
         }
@@ -15560,6 +15616,43 @@ struct TrackRuntime {
           nextTicks = loopStartTicks + ((nextTicks - loopStartTicks) % loopLen);
         }
         transportNanotick.store(nextTicks, std::memory_order_release);
+      }
+      // Fold this block into the producer-load counters, BEFORE the throttle sleep below —
+      // that sleep is deliberate pacing, not work, and folding it in would report an idling
+      // producer as a saturated one. Only while PLAYING: a stopped transport still walks this
+      // loop to publish UI state, and those blocks have no deadline to measure against.
+      if (isPlaying) {
+        const uint64_t blockUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - blockWorkStart)
+                .count());
+        producerBlocksTimed.fetch_add(1, std::memory_order_relaxed);
+        producerBlockUsTotal.fetch_add(blockUs, std::memory_order_relaxed);
+        producerSamplerUsTotal.fetch_add(blockSamplerUs, std::memory_order_relaxed);
+        if (blockUs > producerBlockUsMax.load(std::memory_order_relaxed)) {
+          producerBlockUsMax.store(blockUs, std::memory_order_relaxed);
+        }
+        if (blockSamplerUs > producerSamplerUsMax.load(std::memory_order_relaxed)) {
+          producerSamplerUsMax.store(blockSamplerUs, std::memory_order_relaxed);
+        }
+        if (blockUs > producerBlockBudgetUs) {
+          producerBlocksOverBudget.fetch_add(1, std::memory_order_relaxed);
+          // WHICH block, and how much of it was the sampler. A mean is reassuring and a peak
+          // is not actionable without this: "8 sampler tracks peaked at 2.5x budget" could be
+          // steady-state DSP that a render pool fixes, or the one startup block that decodes
+          // samples, or a UI snapshot publish that no amount of DSP threading touches. The
+          // answer changes what you build, so it is recorded rather than guessed at.
+          //
+          // Rate-limited to the first 32: a genuinely saturated producer would otherwise log
+          // once per block forever, and the log itself becomes the load.
+          if (producerBlocksOverBudget.load(std::memory_order_relaxed) <= 32) {
+            DAW_EVENT("producer.over_budget")
+                .field("block", static_cast<uint64_t>(blockId))
+                .field("us", blockUs)
+                .field("sampler_us", blockSamplerUs)
+                .field("budget_us", producerBlockBudgetUs);
+          }
+        }
       }
       if (throttleInactive || throttlePlayback) {
         std::this_thread::sleep_for(blockDuration);
@@ -16737,6 +16830,53 @@ struct TrackRuntime {
   }
   if (xrunReporter.joinable()) {
     xrunReporter.join();
+  }
+
+  // PRODUCER LOAD SUMMARY. Reported whether or not there is an audio device: offline the
+  // producer is not paced to real time, but the microseconds it spends per block are the same
+  // microseconds it would spend live, so an offline render is a perfectly good way to ask
+  // "would this session have kept up" — and the only way to ask it reproducibly.
+  {
+    const uint64_t blocks = producerBlocksTimed.load(std::memory_order_relaxed);
+    if (blocks > 0) {
+      const uint64_t budgetUs =
+          engineConfig.sampleRate > 0.0
+              ? static_cast<uint64_t>(static_cast<double>(engineConfig.blockSize) /
+                                      engineConfig.sampleRate * 1e6)
+              : 0;
+      const uint64_t totalUs = producerBlockUsTotal.load(std::memory_order_relaxed);
+      const uint64_t samplerUs = producerSamplerUsTotal.load(std::memory_order_relaxed);
+      const uint64_t maxUs = producerBlockUsMax.load(std::memory_order_relaxed);
+      const uint64_t over = producerBlocksOverBudget.load(std::memory_order_relaxed);
+      const double meanUs = static_cast<double>(totalUs) / static_cast<double>(blocks);
+      const double load = budgetUs > 0 ? meanUs / static_cast<double>(budgetUs) : 0.0;
+      const double peakLoad =
+          budgetUs > 0 ? static_cast<double>(maxUs) / static_cast<double>(budgetUs) : 0.0;
+      const double samplerShare =
+          totalUs > 0 ? static_cast<double>(samplerUs) / static_cast<double>(totalUs) : 0.0;
+      DAW_EVENT("producer.load")
+          .field("blocks", blocks)
+          .field("budget_us", budgetUs)
+          .field("mean_us", static_cast<uint64_t>(meanUs))
+          .field("max_us", maxUs)
+          .field("sampler_mean_us",
+                 static_cast<uint64_t>(static_cast<double>(samplerUs) /
+                                       static_cast<double>(blocks)))
+          .field("sampler_max_us", producerSamplerUsMax.load(std::memory_order_relaxed))
+          .field("over_budget", over)
+          .field("load_milli", static_cast<uint64_t>(load * 1000.0))
+          .field("peak_load_milli", static_cast<uint64_t>(peakLoad * 1000.0));
+      std::cout << "Producer load: " << load << "x mean, " << peakLoad << "x peak ("
+                << static_cast<uint64_t>(meanUs) << " us mean, " << maxUs << " us worst, "
+                << budgetUs << " us budget) over " << blocks << " blocks; sampler DSP is "
+                << static_cast<uint64_t>(samplerShare * 100.0) << "% of it; " << over
+                << " block(s) over budget." << std::endl;
+      if (over > 0) {
+        std::cerr << "Engine: the producer went over its block budget " << over
+                  << " time(s). Past 1.0x it cannot catch up — every block it falls further "
+                     "behind and the callback starts dropping tracks." << std::endl;
+      }
+    }
   }
 
   // Stop audio output

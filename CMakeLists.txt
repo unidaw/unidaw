@@ -554,6 +554,13 @@ add_test(NAME sampler_stem
 )
 set_tests_properties(sampler_stem PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# 8 is the ctest size: enough tracks to show whether cost grows linearly, small enough not to
+# dominate the suite. Run it by hand with a larger argument to find the actual ceiling.
+add_test(NAME producer_load
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/producer_load_check.sh 8
+)
+set_tests_properties(producer_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_state
   COMMAND sampler_state_tests
 )
