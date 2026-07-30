@@ -5162,6 +5162,21 @@ struct TrackRuntime {
   // Assumes runtime->trackMutex is held; the caller atomic_stores the returned
   // snapshot after unlocking. The audio thread reads only the snapshot, so
   // track.clip being derived is invisible to it.
+  // The tick just past the last event in a clip — its content extent.
+  auto clipContentEnd = [](const daw::MusicalClip& clip) -> uint64_t {
+    uint64_t end = 0;
+    for (const auto& e : clip.events()) {
+      uint64_t dur = 0;
+      if (e.type == daw::MusicalEventType::Note) {
+        dur = e.payload.note.durationNanoticks;
+      } else if (e.type == daw::MusicalEventType::Chord) {
+        dur = e.payload.chord.durationNanoticks;
+      }
+      end = std::max(end, e.nanotickOffset + dur);
+    }
+    return end;
+  };
+
   auto rebuildFlatAndPublish =
       [&](TrackRuntime& rt) -> std::shared_ptr<const ClipSnapshot> {
     // A MUTE OUTLIVING ITS BASE NOTE keeps the override badge lit over nothing. Mute a note on
@@ -5228,11 +5243,23 @@ struct TrackRuntime {
       ext.placementId = pl.id;  // stable placement id (was the list index — now survives edits)
       ext.clipId = pl.clipId;
       ext.at = *pl.at;
+      // THE SAME THREE-STEP RULE locateEditTarget USES, and it did not before: an explicit
+      // placement length, else the clip's own loop length, else — for a LINEAR length-0 clip,
+      // which plays once and does not loop — the clip's CONTENT end.
+      //
+      // Missing the third step published startTick == endTick for such a placement, so a client
+      // testing containment found it EMPTY. The web UI's shared-clip warning went silent on
+      // exactly the placement somebody had just created, which is when they are most likely to
+      // type into it. Two answers to "how far does this placement reach": note entry said it
+      // covers its content, the published extent said it covers nothing.
       uint64_t length = pl.lengthNanoticks;
       for (const auto& c : rt.ownedClips) {
         if (c.id == pl.clipId) {
           if (length == 0) {
             length = c.lengthNanoticks;
+          }
+          if (length == 0) {
+            length = clipContentEnd(c.clip);
           }
           ext.name = c.name;
           ext.isAudio = c.kind == daw::ClipKind::Audio;
@@ -5409,20 +5436,6 @@ struct TrackRuntime {
     return list;
   };
 
-  // The tick just past the last event in a clip — its content extent.
-  auto clipContentEnd = [](const daw::MusicalClip& clip) -> uint64_t {
-    uint64_t end = 0;
-    for (const auto& e : clip.events()) {
-      uint64_t dur = 0;
-      if (e.type == daw::MusicalEventType::Note) {
-        dur = e.payload.note.durationNanoticks;
-      } else if (e.type == daw::MusicalEventType::Chord) {
-        dur = e.payload.chord.durationNanoticks;
-      }
-      end = std::max(end, e.nanotickOffset + dur);
-    }
-    return end;
-  };
 
   // Where a structural edit at an absolute tick lands: an index into ownedClips,
   // the clip-relative tick, and the covering placement.
