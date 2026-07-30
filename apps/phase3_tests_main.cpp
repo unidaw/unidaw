@@ -780,7 +780,11 @@ bool runAudioRegionTest() {
     p.regionLengthSamples = 50;
     p.sourceStartFrame = 5;
     std::vector<float> out(200, 0.0f);
-    daw::renderAudioRegionBlock(p, ramp.data(), ramp.size(), 80, 200, out.data());
+    {
+      const float* srcPlanes[1] = {ramp.data()};
+      float* outPlanes[1] = {out.data()};
+      daw::renderAudioRegionBlock(p, srcPlanes, 1, ramp.size(), 80, 200, outPlanes, 1);
+    }
     if (!approx(out[99 - 80], 0.0f)) return fail("frame before region must stay silent");
     if (!approx(out[100 - 80], 5.0f)) return fail("region start reads the in-point");
     if (!approx(out[120 - 80], 25.0f)) return fail("region frame 20 -> source 25");
@@ -795,7 +799,11 @@ bool runAudioRegionTest() {
     p.regionLengthSamples = 50;
     p.gain = 0.5f;
     std::vector<float> out(50, 0.0f);
-    daw::renderAudioRegionBlock(p, ramp.data(), ramp.size(), 0, 50, out.data());
+    {
+      const float* srcPlanes[1] = {ramp.data()};
+      float* outPlanes[1] = {out.data()};
+      daw::renderAudioRegionBlock(p, srcPlanes, 1, ramp.size(), 0, 50, outPlanes, 1);
+    }
     if (!approx(out[20], 10.0f)) return fail("gain 0.5 should halve the sample");
   }
 
@@ -808,7 +816,11 @@ bool runAudioRegionTest() {
     p.sourceRate = 72000.0;
     p.engineRate = 48000.0;
     std::vector<float> out(50, 0.0f);
-    daw::renderAudioRegionBlock(p, ramp.data(), ramp.size(), 0, 50, out.data());
+    {
+      const float* srcPlanes[1] = {ramp.data()};
+      float* outPlanes[1] = {out.data()};
+      daw::renderAudioRegionBlock(p, srcPlanes, 1, ramp.size(), 0, 50, outPlanes, 1);
+    }
     if (!approx(out[1], 1.5f)) return fail("resample interp: rel 1 -> 1.5");
     if (!approx(out[10], 15.0f)) return fail("resample: rel 10 -> source 15");
   }
@@ -822,7 +834,11 @@ bool runAudioRegionTest() {
     p.fadeInSamples = 10;
     p.fadeOutSamples = 10;
     std::vector<float> out(50, 0.0f);
-    daw::renderAudioRegionBlock(p, flat.data(), flat.size(), 0, 50, out.data());
+    {
+      const float* srcPlanes[1] = {flat.data()};
+      float* outPlanes[1] = {out.data()};
+      daw::renderAudioRegionBlock(p, srcPlanes, 1, flat.size(), 0, 50, outPlanes, 1);
+    }
     if (!approx(out[0], 0.0f)) return fail("fade-in starts at 0");
     if (!approx(out[5], 0.5f)) return fail("fade-in half way");
     if (!approx(out[10], 1.0f)) return fail("past fade-in is full gain");
@@ -837,7 +853,11 @@ bool runAudioRegionTest() {
     p.regionLengthSamples = 50;
     p.sourceStartFrame = 995;  // source has 1000 frames
     std::vector<float> out(50, 0.0f);
-    daw::renderAudioRegionBlock(p, ramp.data(), ramp.size(), 0, 50, out.data());
+    {
+      const float* srcPlanes[1] = {ramp.data()};
+      float* outPlanes[1] = {out.data()};
+      daw::renderAudioRegionBlock(p, srcPlanes, 1, ramp.size(), 0, 50, outPlanes, 1);
+    }
     if (!approx(out[4], 999.0f)) return fail("last in-range frame reads source 999");
     if (!approx(out[10], 0.0f)) return fail("past the source end must be silent");
   }

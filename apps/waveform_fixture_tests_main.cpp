@@ -1,6 +1,6 @@
 // Stage 5: the waveform pyramid, verified against the real fixture WAVs the frontend
 // designed to catch how peaks go wrong (presets/audio/waveform_probe*.wav). Decodes
-// through the actual product path (decodeAudioFileMono builds the pyramid pre-downmix)
+// through the actual product path (decodeAudioFile builds the pyramid from the same channels it keeps)
 // and asserts the section values — including the NEGATIVE direction the frontend asked
 // for: an impulse must stay full-scale at a coarse level, which an averaging pyramid
 // (the classic wrong implementation) cannot do. No audio device: pure file decode.
@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
   const std::string dir = argc > 1 ? argv[1] : "../presets/audio";
 
   // ---- Mono ----
-  const auto mono = decodeAudioFileMono(dir + "/waveform_probe.wav");
+  const auto mono = decodeAudioFile(dir + "/waveform_probe.wav");
   CHECK(mono.ok);
   CHECK(mono.pyramid != nullptr);
   if (!mono.pyramid) {
@@ -92,7 +92,7 @@ int main(int argc, char** argv) {
   }
 
   // ---- Stereo: L = -R ----
-  const auto st = decodeAudioFileMono(dir + "/waveform_probe_stereo.wav");
+  const auto st = decodeAudioFile(dir + "/waveform_probe_stereo.wav");
   CHECK(st.ok && st.pyramid != nullptr);
   if (st.pyramid) {
     const auto& s = *st.pyramid;

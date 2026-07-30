@@ -23,23 +23,23 @@ int main() {
       (std::filesystem::temp_directory_path() / "daw_audio_io_test.wav").string();
   assert(daw::writeWavMono(path, sine.data(), frames, rate));
 
-  const auto dec = daw::decodeAudioFileMono(path);
+  const auto dec = daw::decodeAudioFile(path);
   assert(dec.ok);
   assert(dec.frames == frames);
   assert(std::abs(dec.sampleRate - rate) < 1.0);
   assert(dec.sourceChannels == 1);
-  assert(dec.samples.size() == frames);
+  assert(dec.channels[0].size() == frames);
 
   // 16-bit wav round-trip: samples match within quantization (~1/32768).
   double maxErr = 0.0;
   for (uint64_t i = 0; i < frames; ++i) {
     maxErr = std::max(maxErr,
-                      std::abs(static_cast<double>(dec.samples[i]) - sine[i]));
+                      std::abs(static_cast<double>(dec.channels[0][i]) - sine[i]));
   }
   assert(maxErr < 1e-3);
 
   // A missing file decodes to ok=false rather than crashing.
-  const auto bad = daw::decodeAudioFileMono("/nonexistent/definitely/nope.wav");
+  const auto bad = daw::decodeAudioFile("/nonexistent/definitely/nope.wav");
   assert(!bad.ok);
 
   std::filesystem::remove(path);

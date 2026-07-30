@@ -31,7 +31,7 @@ struct MixerSettings {
 // start so audio regions are representable before it freezes — the retrofit that
 // symbolic-only formats never survive (ARCHITECTURE_REVIEW §7, Movement 4). The
 // engine plays both: Symbolic clips schedule notes, and Audio clips are decoded
-// (decodeAudioFileMono) and mixed by the audio callback (renderAudioRegionBlock).
+// (decodeAudioFile) and mixed by the audio callback (renderAudioRegionBlock).
 enum class ClipKind : uint8_t {
   Symbolic = 0,  // notes/chords in `clip`
   Audio = 1,     // a region of an audio source, described by `audio`
