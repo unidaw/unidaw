@@ -195,9 +195,16 @@ inline EnvRepair repairEnvShape(EnvShape& s) {
   return r;
 }
 
-// Value at an arbitrary time, ignoring loops. The runner owns looping (it needs direction state
-// for ping-pong); this is the pure shape lookup, which is why it can be tested on its own.
-inline float envValueAt(const EnvShape& s, double t) {
+// Value at an arbitrary time, ignoring loops. The runner owns looping; this is the pure shape
+// lookup, which is why it can be tested on its own.
+//
+// `hint` is an in/out cursor: the caller passes the segment index it used last time. Envelopes
+// are evaluated PER SAMPLE (see EnvRunner) and time almost always advances within the same
+// segment, so the common case is one comparison. Without it a 64-point envelope would cost a
+// linear scan per sample per voice — 196M comparisons/second at 64 voices, which is how a
+// "cheap" envelope ends up on the profile. A wrong hint costs correctness nothing: it falls
+// back to a binary search.
+inline float envValueAt(const EnvShape& s, double t, size_t* hint = nullptr) {
   if (s.points.empty()) {
     return 0.0f;
   }
@@ -208,9 +215,30 @@ inline float envValueAt(const EnvShape& s, double t) {
     return static_cast<float>(s.points.back().valueMilli) / 1000.0f;
   }
   size_t i = 0;
-  while (i + 1 < s.points.size() &&
-         static_cast<double>(s.points[i + 1].time) <= t) {
-    ++i;
+  const size_t n = s.points.size();
+  bool found = false;
+  if (hint && *hint + 1 < n) {
+    const size_t h = *hint;
+    if (static_cast<double>(s.points[h].time) <= t &&
+        t < static_cast<double>(s.points[h + 1].time)) {
+      i = h;
+      found = true;
+    }
+  }
+  if (!found) {
+    size_t lo = 0, hi = n - 1;  // last index whose time is <= t
+    while (lo < hi) {
+      const size_t mid = (lo + hi + 1) / 2;
+      if (static_cast<double>(s.points[mid].time) <= t) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    i = lo;
+    if (hint) {
+      *hint = i;
+    }
   }
   const EnvPoint& a = s.points[i];
   const EnvPoint& b = s.points[std::min(i + 1, s.points.size() - 1)];
@@ -231,160 +259,210 @@ inline float envValueAt(const EnvShape& s, double t) {
   return static_cast<float>(va + (vb - va) * u);
 }
 
-// The clock. Block-rate: advance() moves time forward by a span and returns the value at the end
-// of it, so the caller ramps from the previous value across the block.
+// THE CLOCK — AND IT IS A PURE FUNCTION OF ELAPSED FRAMES, WHICH IS NOT A STYLE CHOICE.
+//
+// The first version of this class was a block-rate accumulator: advance(n) moved an internal
+// position and returned the value at the end of the span, and the voice ramped linearly to it
+// across the block. That is what most samplers do, and it CANNOT satisfy the determinism property
+// this design commits to (§3.5): one note rendered at 64, 256 and 1024 frames must be
+// bit-identical.
+//
+// The reason is exact and unfixable within that shape. A linear ramp between block boundaries
+// CUTS THE CORNER wherever an envelope breakpoint falls inside a block — and where breakpoints
+// fall relative to block boundaries is precisely what changes with block size. The attack/decay
+// corner of an ADSR lands mid-block at 1024 and on a boundary at 64, so the two renders differ.
+// The sampler_voice_tests invariance check found this immediately; no ear would have.
+//
+// So the envelope is evaluated PER SAMPLE, from a pure function of the frame index:
+//
+//     valueAt(f)  depends only on (shape, unitsPerFrame, f, releasedAt)
+//
+// which makes blocking irrelevant by construction rather than by care. Everything that used to be
+// accumulator state — loop position, ping-pong direction, the release fade — is derived from `f`
+// with modular arithmetic, so there is no drift, no dependence on call history, and a voice can be
+// evaluated at any frame in any order and give the same answer.
+//
+// The cost objection the old comment raised is answered by the cursor hint in envValueAt(): the
+// common case is one comparison per sample, because time almost always stays in the same segment.
 class EnvRunner {
  public:
+  static constexpr uint64_t kNotReleased = ~0ull;
+
   // `unitsPerFrame` converts the host's frames to the envelope's time unit — microseconds per
   // frame, or nanoticks per frame. Keeping the conversion at the boundary is what lets timeBase
-  // be one field on the modulator instead of a flag the runner has to branch on.
+  // be one field on the modulator instead of a branch the runner has to carry.
   void start(const EnvShape* shape, double unitsPerFrame) {
     shape_ = shape;
     unitsPerFrame_ = unitsPerFrame;
-    pos_ = shape_ && !shape_->points.empty()
-               ? static_cast<double>(shape_->points.front().time)
-               : 0.0;
-    held_ = true;
-    forward_ = true;
+    elapsed_ = 0;
+    releasedAt_ = kNotReleased;
+    hint_ = 0;
     done_ = false;
-    fadeRemaining_ = 0.0;
-    value_ = shape_ ? envValueAt(*shape_, pos_) : 0.0f;
+    value_ = shape_ ? valueAt(0) : 0.0f;
   }
 
-  // Note-off. The sustain loop stops holding and time runs on from exactly where it is — not from
-  // the release point, which would jump the value and click.
-  //
-  // If a RELEASE loop is about to take over, the terminator is armed here: without it the loop
-  // cycles forever, `finished()` never becomes true, and the voice is never freed.
+  // Note-off. Records WHEN, rather than mutating a position — the value keeps running on from
+  // exactly where it is, and "where it is" stays a function of the frame index.
   void release() {
-    held_ = false;
-    if (shape_ && shape_->hasReleaseLoop() && shape_->releaseFade > 0) {
-      fadeRemaining_ = static_cast<double>(shape_->releaseFade);
-      fadeTotal_ = fadeRemaining_;
+    if (releasedAt_ == kNotReleased) {
+      releasedAt_ = elapsed_;
     }
   }
 
   bool active() const { return shape_ != nullptr && !done_; }
   bool finished() const { return done_; }
   float value() const { return value_; }
+  bool released() const { return releasedAt_ != kNotReleased; }
 
-  // Is a loop currently keeping this envelope alive? The voice needs to know, because its
-  // silence-floor guard must NOT fire at the bottom of a loop's cycle — a looping envelope that
-  // dips through zero is going to come back up, and killing the voice there truncates the loop
-  // instead of ending it.
+  // Is a loop currently keeping this envelope alive? The voice's silence-floor guard must not
+  // fire at the bottom of a loop's cycle — a looping envelope that dips through zero is going to
+  // come back up, and killing the voice there truncates the loop instead of ending it.
   bool looping() const {
     if (!shape_) {
       return false;
     }
-    const uint8_t a = held_ ? shape_->sustainLoopStart : shape_->releaseLoopStart;
-    const uint8_t b = held_ ? shape_->sustainLoopEnd : shape_->releaseLoopEnd;
+    const bool rel = released();
+    const uint8_t a = rel ? shape_->releaseLoopStart : shape_->sustainLoopStart;
+    const uint8_t b = rel ? shape_->releaseLoopEnd : shape_->sustainLoopEnd;
     if (a == kEnvLoopNone || a >= shape_->points.size() || b >= shape_->points.size()) {
       return false;
     }
-    // A zero-length loop is a HOLD, not a cycle: it never comes back up on its own, so the
-    // silence floor is free to end a voice sitting at zero in one.
+    // A zero-length loop is a HOLD, not a cycle: it never rises again on its own, so the silence
+    // floor is free to end a voice sitting in one.
     return shape_->points[b].time > shape_->points[a].time;
   }
 
+  // THE PURE EVALUATOR. `f` is frames since note-on. Depends on nothing else.
+  float valueAt(uint64_t f) const {
+    if (!shape_ || shape_->points.empty()) {
+      return 0.0f;
+    }
+    double t;
+    if (releasedAt_ == kNotReleased || f <= releasedAt_) {
+      t = heldTime(static_cast<double>(f) * unitsPerFrame_);
+    } else {
+      const double tAtRelease = heldTime(static_cast<double>(releasedAt_) * unitsPerFrame_);
+      const double since = static_cast<double>(f - releasedAt_) * unitsPerFrame_;
+      t = releasedTime(tAtRelease, since);
+    }
+    float v = envValueAt(*shape_, t, &hint_);
+    if (releasedAt_ != kNotReleased && f > releasedAt_ && shape_->hasReleaseLoop() &&
+        shape_->releaseFade > 0) {
+      const double since = static_cast<double>(f - releasedAt_) * unitsPerFrame_;
+      const double fade = static_cast<double>(shape_->releaseFade);
+      v *= since >= fade ? 0.0f : static_cast<float>(1.0 - since / fade);
+    }
+    return v;
+  }
+
+  // Would the envelope be finished at frame `f`? Also pure — the voice uses it to decide whether
+  // to keep a slot, and it must agree with valueAt() at every frame.
+  bool finishedAt(uint64_t f) const {
+    if (!shape_ || shape_->points.empty()) {
+      return true;
+    }
+    if (releasedAt_ == kNotReleased || f <= releasedAt_) {
+      return false;  // a held note is never finished, whatever its value
+    }
+    const double since = static_cast<double>(f - releasedAt_) * unitsPerFrame_;
+    if (shape_->hasReleaseLoop()) {
+      // THE TERMINATOR. A release loop cycles forever, so without this the voice would never be
+      // freed. repairEnvShape() guarantees releaseFade is set whenever a release loop is.
+      return shape_->releaseFade > 0 && since >= static_cast<double>(shape_->releaseFade);
+    }
+    const double tAtRelease = heldTime(static_cast<double>(releasedAt_) * unitsPerFrame_);
+    return tAtRelease + since >= static_cast<double>(shape_->points.back().time);
+  }
+
+  // Moves the clock forward and returns the value at the END of the span, for callers that work
+  // a block at a time. A per-sample caller uses valueAt(age + i) directly and never touches this.
   float advance(uint32_t frames) {
     if (!shape_ || shape_->points.empty()) {
       value_ = 0.0f;
       done_ = true;
       return value_;
     }
-    double dt = static_cast<double>(frames) * unitsPerFrame_;
-    // THE TERMINATOR. Counted down on the same clock as the envelope, so it scales with the time
-    // base and with `rate` exactly as the shape does — a release fade that ignored the time base
-    // would mean something different under microseconds than under nanoticks.
-    float fadeGain = 1.0f;
-    if (fadeRemaining_ > 0.0) {
-      fadeRemaining_ -= dt;
-      if (fadeRemaining_ <= 0.0) {
-        fadeRemaining_ = 0.0;
-        value_ = 0.0f;
-        done_ = true;
-        return value_;
-      }
-      fadeGain = static_cast<float>(fadeRemaining_ / fadeTotal_);
-    }
-    // A zero-length loop HOLDS. Wrapping by zero would spin forever, and "stay here while the key
-    // is down" is precisely what FT2's single sustain point means — so the degenerate case is the
-    // feature, not an error to reject.
-    uint8_t la = kEnvLoopNone, lb = kEnvLoopNone;
-    if (held_ && shape_->sustainLoopStart != kEnvLoopNone) {
-      la = shape_->sustainLoopStart;
-      lb = shape_->sustainLoopEnd;
-    } else if (!held_ && shape_->releaseLoopStart != kEnvLoopNone) {
-      la = shape_->releaseLoopStart;
-      lb = shape_->releaseLoopEnd;
-    }
-    if (la != kEnvLoopNone && la < shape_->points.size() && lb < shape_->points.size()) {
-      const double ta = static_cast<double>(shape_->points[la].time);
-      const double tb = static_cast<double>(shape_->points[lb].time);
-      const double len = tb - ta;
-      if (len <= 0.0) {
-        // Hold. Only advance up TO the hold point; once there, time stops.
-        pos_ = std::min(pos_ + dt, ta);
-        value_ = envValueAt(*shape_, pos_) * fadeGain;
-        return value_;
-      }
-      // Guard the loop arithmetic against a span longer than the loop itself — a tiny loop at a
-      // large block size is not exotic, it is a 3 ms loop at 1024 frames.
-      if (shape_->loopMode == kEnvLoopPingPong) {
-        while (dt > 0.0) {
-          const double room = forward_ ? (tb - pos_) : (pos_ - ta);
-          const double step = std::min(dt, std::max(room, 0.0));
-          pos_ += forward_ ? step : -step;
-          dt -= step;
-          if (dt > 0.0 || step >= room) {
-            forward_ = !forward_;
-            pos_ = std::clamp(pos_, ta, tb);
-            if (step <= 0.0 && dt > 0.0) {
-              // Degenerate: no room in either direction. Cannot happen with len > 0, but a
-              // spin here would be an audio-thread hang, so it ends rather than trusting that.
-              break;
-            }
-          }
-        }
-      } else if (shape_->loopMode == kEnvLoopBackward) {
-        pos_ -= dt;
-        while (pos_ < ta) {
-          pos_ += len;
-        }
-      } else {
-        pos_ += dt;
-        while (pos_ > tb) {
-          pos_ -= len;
-        }
-      }
-      value_ = envValueAt(*shape_, pos_) * fadeGain;
-      return value_;
-    }
-    pos_ += dt;
-    const double end = static_cast<double>(shape_->points.back().time);
-    if (pos_ >= end) {
-      pos_ = end;
-      // Finished means "will never change again", which is only true once the key is up. A held
-      // note that has run off the end of its envelope is still sounding at the last value.
-      if (!held_) {
-        done_ = true;
+    elapsed_ += frames;
+    value_ = valueAt(elapsed_);
+    if (finishedAt(elapsed_)) {
+      done_ = true;
+      if (shape_->hasReleaseLoop()) {
+        value_ = 0.0f;  // the fade reached zero; end AT zero rather than mid-cycle, or it clicks
       }
     }
-    value_ = envValueAt(*shape_, pos_) * fadeGain;
     return value_;
   }
 
+  uint64_t elapsed() const { return elapsed_; }
+
+  // For a per-sample caller: keep the clock in step with the frames it has actually rendered,
+  // so release() records the right frame and finished() agrees with valueAt().
+  void advanceTo(uint64_t f) { elapsed_ = f; }
+
  private:
+  // Folds a position into a loop range. Pure, closed-form, and identical whether it is called
+  // once per block or once per sample — which is the whole point.
+  static double fold(double x, double len, uint8_t mode) {
+    if (mode == kEnvLoopPingPong) {
+      const double period = len * 2.0;
+      double y = std::fmod(x, period);
+      if (y < 0.0) {
+        y += period;
+      }
+      return y < len ? y : period - y;  // triangle: up then back down
+    }
+    double y = std::fmod(x, len);
+    if (y < 0.0) {
+      y += len;
+    }
+    return mode == kEnvLoopBackward ? len - y : y;
+  }
+
+  // Where the envelope is at raw time `t`, while the key is held.
+  double heldTime(double t) const {
+    const uint8_t a = shape_->sustainLoopStart, b = shape_->sustainLoopEnd;
+    if (a == kEnvLoopNone || a >= shape_->points.size() || b >= shape_->points.size()) {
+      return t;
+    }
+    const double ta = static_cast<double>(shape_->points[a].time);
+    const double tb = static_cast<double>(shape_->points[b].time);
+    const double len = tb - ta;
+    if (len <= 0.0) {
+      // FT2's sustain POINT: hold. Wrapping by zero would spin forever, and "stay here while the
+      // key is down" is exactly what the degenerate case means — so it is the feature.
+      return std::min(t, ta);
+    }
+    if (shape_->loopMode == kEnvLoopBackward) {
+      return t <= ta ? t : tb - fold(t - ta, len, kEnvLoopForward);
+    }
+    return t <= tb ? t : ta + fold(t - ta, len, shape_->loopMode);
+  }
+
+  // Where it is `since` units after note-off, having been at `tAtRelease` when the key came up.
+  double releasedTime(double tAtRelease, double since) const {
+    const double t = tAtRelease + since;
+    const uint8_t a = shape_->releaseLoopStart, b = shape_->releaseLoopEnd;
+    if (a == kEnvLoopNone || a >= shape_->points.size() || b >= shape_->points.size()) {
+      return t;
+    }
+    const double ta = static_cast<double>(shape_->points[a].time);
+    const double tb = static_cast<double>(shape_->points[b].time);
+    const double len = tb - ta;
+    if (len <= 0.0) {
+      return std::min(t, ta);
+    }
+    if (shape_->loopMode == kEnvLoopBackward) {
+      return t <= ta ? t : tb - fold(t - ta, len, kEnvLoopForward);
+    }
+    return t <= tb ? t : ta + fold(t - ta, len, shape_->loopMode);
+  }
+
   const EnvShape* shape_ = nullptr;
   double unitsPerFrame_ = 0.0;
-  double pos_ = 0.0;
+  uint64_t elapsed_ = 0;
+  uint64_t releasedAt_ = kNotReleased;
+  mutable size_t hint_ = 0;  // segment cursor; a wrong value costs a binary search, never a wrong answer
   float value_ = 0.0f;
-  // The release terminator's countdown, in the shape's time unit. Non-zero only after release()
-  // armed it, which happens only when a release loop would otherwise run forever.
-  double fadeRemaining_ = 0.0;
-  double fadeTotal_ = 0.0;
-  bool held_ = false;
-  bool forward_ = true;
   bool done_ = false;
 };
 

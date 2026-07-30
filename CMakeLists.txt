@@ -289,6 +289,23 @@ target_include_directories(sampler_envelope_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# Sampler S1: the document — keymap resolution, derived facts, and the 15-char param-id wall.
+add_executable(sampler_state_tests
+  apps/sampler_state_tests_main.cpp
+)
+target_include_directories(sampler_state_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# Sampler S1: the voice. The headline property is BLOCK-SIZE INVARIANCE — one note rendered at
+# 64, 256 and 1024 frames must be bit-identical, which is what keeps intra-block starts honest.
+add_executable(sampler_voice_tests
+  apps/sampler_voice_tests_main.cpp
+)
+target_include_directories(sampler_voice_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # M3.24: `adds` are an appearance's own content — emitted once, not looped with the clip.
 add_executable(placement_adds_tests
   apps/placement_adds_tests_main.cpp
@@ -451,6 +468,16 @@ add_test(NAME sampler_envelope
   COMMAND sampler_envelope_tests
 )
 set_tests_properties(sampler_envelope PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_state
+  COMMAND sampler_state_tests
+)
+set_tests_properties(sampler_state PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_voice
+  COMMAND sampler_voice_tests
+)
+set_tests_properties(sampler_voice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME placement_adds
   COMMAND placement_adds_tests
@@ -700,6 +727,8 @@ foreach(daw_test_target
     placement_adds_tests
     markers_tests
     sampler_envelope_tests
+    sampler_state_tests
+    sampler_voice_tests
     event_ring_mpsc_tests
     audio_io_tests
     device_chain_tests

@@ -145,16 +145,15 @@ class SamplerVoice {
     if (!active_ || numFrames == 0 || outChannels == 0 || !out) {
       return;
     }
-    // ENVELOPE IS BLOCK-RATE AND RAMPED. advance() returns the value at the END of the span so the
-    // ramp across it is exact at both ends; per-sample evaluation of a 64-point envelope would
-    // cost a segment search per sample and buy nothing audible.
-    const float envStart = envValue_;
-    float envEnd = envValue_;
-    if (spec_.ampEnv && !spec_.ampEnv->empty()) {
-      envEnd = env_.advance(numFrames);
-      envValue_ = envEnd;
-    }
-    const float envDelta = (envEnd - envStart) / static_cast<float>(numFrames);
+    // THE ENVELOPE IS EVALUATED PER SAMPLE, from a pure function of the frame index.
+    //
+    // Block-rate evaluation with a linear ramp across the block is what most samplers do and it
+    // CANNOT be block-size invariant: the ramp cuts the corner wherever a breakpoint falls inside
+    // a block, and where breakpoints fall relative to block boundaries is exactly what changes
+    // with block size. EnvRunner::valueAt(f) depends only on the frame index, so blocking is
+    // irrelevant by construction rather than by care — and the cursor hint makes the common case
+    // one comparison per sample.
+    const bool haveEnv = spec_.ampEnv && !spec_.ampEnv->empty();
 
     // Pan means two different things and conflating them makes a centred stereo clip narrower
     // than the file. Same rule as placed audio clips, deliberately: one meaning of pan per source
@@ -184,7 +183,7 @@ class SamplerVoice {
       }
       const float t = static_cast<float>(pos_ & 0xFFFFFFFFull) / 4294967296.0f;
 
-      float amp = envStart + envDelta * static_cast<float>(i);
+      float amp = haveEnv ? env_.valueAt(age_) : 1.0f;
       if (fadeRemaining_ > 0) {
         amp *= static_cast<float>(fadeRemaining_) * fadeStep_;
         if (--fadeRemaining_ == 0) {
@@ -225,11 +224,15 @@ class SamplerVoice {
     //                envelope, silently wrong in two directions depending on which guard fires
     //                first. A release loop is terminated by EnvShape::releaseFade instead, which
     //                repairEnvShape() guarantees is present whenever a release loop is set.
+    if (haveEnv) {
+      envValue_ = env_.valueAt(age_);
+      env_.advanceTo(age_);
+      if (env_.finishedAt(age_)) {
+        active_ = false;
+      }
+    }
     if (released_ && !env_.looping() && std::fabs(envValue_) < kVoiceSilenceFloor) {
       envValue_ = 0.0f;
-      active_ = false;
-    }
-    if (spec_.ampEnv && !spec_.ampEnv->empty() && env_.finished()) {
       active_ = false;
     }
   }
