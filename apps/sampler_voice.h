@@ -80,15 +80,66 @@ struct SamplerVoiceSpec {
 // voice fixes both, and it is the cheaper of the two available fixes.
 inline constexpr float kVoiceSilenceFloor = 1.0e-6f;
 
-// 4-point cubic Hermite. `Fast` quality in §3: no ringing, cheap, right for drums and slices, and
-// the default. Fixes pitching DOWN; pitching UP is the mip-map's job in S3, and conflating those
-// two is the single most common sampler mistake.
+// THREE INTERPOLATORS, BECAUSE QUALITY IS A SOUND AND NOT A SETTING.
+//
+// All three fix pitching DOWN. NONE of them help pitching UP — that is the mip-map's job, and
+// conflating the two is the single most common sampler mistake.
+//
+//   Vintage  linear. -6 dB/oct image rejection, audibly gritty on pitched material, and paired
+//            with skipping the mip-map entirely. SP-1200 / S950 character, chosen on purpose.
+//   Fast     4-point cubic Hermite. No ringing, cheap, right for drums and slices. The default.
+//   Studio   16-tap windowed sinc. For melodic multisamples and long downward transposition,
+//            where Hermite's gentle high-end roll-off is audible as dullness.
+//
+// AN OFFLINE RENDER MUST NEVER UPGRADE THIS. A quality setting silently improved at bounce time
+// makes the render not match what you heard, which is exactly the class of divergence this
+// codebase spends its effort removing.
+
+// Linear. Deliberately the crude one.
+inline float lerpSample(float y0, float y1, float t) { return y0 + (y1 - y0) * t; }
+
+// 4-point cubic Hermite.
 inline float hermite4(float ym1, float y0, float y1, float y2, float t) {
   const float c0 = y0;
   const float c1 = 0.5f * (y1 - ym1);
   const float c2 = ym1 - 2.5f * y0 + 2.0f * y1 - 0.5f * y2;
   const float c3 = 0.5f * (y2 - ym1) + 1.5f * (y0 - y1);
   return ((c3 * t + c2) * t + c1) * t + c0;
+}
+
+inline constexpr int kSincTaps = 16;
+inline constexpr int kSincPhases = 128;
+
+// The sinc table, built ONCE at first use and never on the audio thread. A Kaiser window at
+// beta = 8 puts the stopband around -90 dB, matching the mip-map's filter so neither is the
+// weak link.
+//
+// PHASES ARE INTERPOLATED BETWEEN, not rounded to. 128 phases alone would quantise the read
+// position to 1/128 of a sample, which is its own (quiet, broadband) distortion — and a table
+// fine enough to skip that step would be 100x larger for no audible gain.
+struct SincTable {
+  float taps[kSincPhases + 1][kSincTaps]{};
+  SincTable() {
+    const double beta = 8.0;
+    const double denom = besselI0(beta);
+    for (int p = 0; p <= kSincPhases; ++p) {
+      const double frac = static_cast<double>(p) / static_cast<double>(kSincPhases);
+      for (int k = 0; k < kSincTaps; ++k) {
+        const double x = static_cast<double>(k - kSincTaps / 2 + 1) - frac;
+        const double sinc = (std::fabs(x) < 1e-9) ? 1.0 : std::sin(M_PI * x) / (M_PI * x);
+        const double r = x / static_cast<double>(kSincTaps / 2);
+        const double w = (std::fabs(r) >= 1.0)
+                             ? 0.0
+                             : besselI0(beta * std::sqrt(1.0 - r * r)) / denom;
+        taps[p][k] = static_cast<float>(sinc * w);
+      }
+    }
+  }
+};
+
+inline const SincTable& sincTable() {
+  static const SincTable t;
+  return t;
 }
 
 class SamplerVoice {
@@ -443,9 +494,29 @@ class SamplerVoice {
     const float* plane = planes[std::min<uint32_t>(ch, spec_.source.channels - 1)];
     const uint64_t last = frames - 1;
     const uint64_t i0 = std::min(frame, last);
-    return hermite4(plane[neighbourAt(i0, -1, last, level)], plane[i0],
-                    plane[neighbourAt(i0, 1, last, level)],
-                    plane[neighbourAt(i0, 2, last, level)], t);
+    switch (spec_.quality) {
+      case 0:  // Vintage — linear, and the grit is the point
+        return lerpSample(plane[i0], plane[neighbourAt(i0, 1, last, level)], t);
+      case 2: {  // Studio — 16-tap windowed sinc
+        const SincTable& tbl = sincTable();
+        const float fp = t * static_cast<float>(kSincPhases);
+        const int p = std::min(static_cast<int>(fp), kSincPhases - 1);
+        const float pf = fp - static_cast<float>(p);
+        float acc = 0.0f;
+        for (int k = 0; k < kSincTaps; ++k) {
+          const int64_t d = static_cast<int64_t>(k) - (kSincTaps / 2 - 1);
+          const float x = plane[neighbourAt(i0, d, last, level)];
+          // Blend BETWEEN phases rather than rounding to one: 128 phases alone quantise the read
+          // position to 1/128 of a sample, which is its own quiet broadband distortion.
+          acc += x * (tbl.taps[p][k] * (1.0f - pf) + tbl.taps[p + 1][k] * pf);
+        }
+        return acc;
+      }
+      default:  // Fast — Hermite
+        return hermite4(plane[neighbourAt(i0, -1, last, level)], plane[i0],
+                        plane[neighbourAt(i0, 1, last, level)],
+                        plane[neighbourAt(i0, 2, last, level)], t);
+    }
   }
 
   // Where tap `d` for centre `i0` lives at this level. Inside an active loop it wraps into the

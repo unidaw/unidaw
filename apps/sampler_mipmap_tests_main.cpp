@@ -258,6 +258,57 @@ int main() {
                  "or every untransposed drum in the kit is quietly filtered");
   }
 
+  // ---- THE THREE QUALITIES ARE THREE DIFFERENT SOUNDS.
+  //
+  // A "quality" control that does the same thing at every setting is its own defect, and an easy
+  // one to ship: Fast is the default, so Vintage and Studio can both be wired to it and nothing
+  // in a normal session looks wrong. Measured by IMAGING — the artefact interpolation actually
+  // governs — using a slot pitched DOWN, where the mip-map is not in the path at all and cannot
+  // confuse the result.
+  //
+  // Pitching down to 0.5x resamples a 10 kHz tone to 5 kHz. A perfect interpolator produces only
+  // that; a crude one leaves an image of the original around 19 kHz. So: energy at 19 kHz.
+  {
+    const uint64_t frames = 48000;
+    std::vector<std::vector<float>> src(1, std::vector<float>(frames));
+    for (uint64_t i = 0; i < frames; ++i) {
+      src[0][i] = static_cast<float>(
+          0.4 * std::sin(2.0 * M_PI * 10000.0 * static_cast<double>(i) / kRate));
+    }
+    const auto mips = daw::buildMipmap(src, frames);
+    std::vector<const float*> planes{src[0].data()};
+    daw::SamplerVoiceSpec spec;
+    spec.source.planes = planes.data();
+    spec.source.channels = 1;
+    spec.source.frames = frames;
+    spec.source.sampleRate = kRate;
+    spec.source.mips = mips.data();
+    spec.source.mipCount = static_cast<uint32_t>(mips.size());
+    spec.ratio = 0.5;  // an octave DOWN: interpolation only, no mip-map
+    spec.pan = -1.0f;
+
+    double img[3] = {0, 0, 0}, want[3] = {0, 0, 0};
+    for (uint8_t q = 0; q < 3; ++q) {
+      spec.quality = q;
+      const std::vector<float> out = renderVoice(spec, 16000);
+      want[q] = energyAt(out, 5000.0);   // the wanted, resampled tone
+      img[q] = energyAt(out, 19000.0);   // its image, which interpolation is what suppresses
+    }
+    for (uint8_t q = 0; q < 3; ++q) {
+      check(want[q] > 1e3, "every quality actually renders the wanted tone");
+    }
+    const double vintageDb = 10.0 * std::log10((img[0] + 1e-30) / (img[1] + 1e-30));
+    const double studioDb = 10.0 * std::log10((img[1] + 1e-30) / (img[2] + 1e-30));
+    std::printf("  imaging: Vintage is %.1f dB above Fast; Fast is %.1f dB above Studio\n",
+                vintageDb, studioDb);
+    check(vintageDb > 6.0,
+          "VINTAGE is audibly grittier than Fast. Linear interpolation is the point of it, and "
+          "if this reads 0 dB then Vintage is silently wired to Hermite and the setting is a lie");
+    check(studioDb > 6.0,
+          "STUDIO is cleaner than Fast. If this reads 0 dB the sinc path is not being taken, "
+          "which no normal session would ever reveal");
+  }
+
   if (g_fail == 0) {
     std::printf("sampler_mipmap_tests: PASS\n");
   }

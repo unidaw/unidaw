@@ -298,6 +298,7 @@ class SamplerRuntime {
       spec.startFrame = begin + extent * e.offsetFrac / 65536ull;
     }
     spec.reverse = slot->reverse != 0;
+    spec.quality = slot->quality;
     spec.loopStart = slot->loopStartFrame;
     spec.loopEnd = slot->loopEndFrame;
     spec.loopXfade = static_cast<uint32_t>(slot->loopXfadeFrames);
