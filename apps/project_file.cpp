@@ -339,6 +339,15 @@ void writeEvents(JsonWriter& writer, const std::vector<MusicalEvent>& events) {
     }
     if (note.probability > 0) {
       writer.key("probability", static_cast<uint32_t>(note.probability));
+      // v32: the sound address. Written only when SET, so a project without a sampler does not
+      // gain a `"sound": 0` on every note — the file stays diffable and the default stays
+      // invisible, which is what "0 means the keymap picks" should look like on disk too.
+      if (note.sound != 0) {
+        writer.key("sound", static_cast<uint32_t>(note.sound));
+      }
+      if (note.soundOffset != 0) {
+        writer.key("sound_offset", static_cast<uint32_t>(note.soundOffset));
+      }
     }
     if (note.delayNanoticks > 0) {
       writer.key("delay", static_cast<uint32_t>(note.delayNanoticks));
@@ -392,6 +401,10 @@ void readEvents(const boost::property_tree::ptree& tree,
           static_cast<uint8_t>(noteTree.get<uint32_t>("retrigger", 0));
       event.payload.note.probability =
           static_cast<uint8_t>(noteTree.get<uint32_t>("probability", 0));
+      event.payload.note.sound =
+          static_cast<uint16_t>(noteTree.get<uint32_t>("sound", 0));
+      event.payload.note.soundOffset =
+          static_cast<uint16_t>(noteTree.get<uint32_t>("sound_offset", 0));
       event.payload.note.delayNanoticks = noteTree.get<uint32_t>("delay", 0);
       out.push_back(event);
     }

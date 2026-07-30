@@ -73,7 +73,7 @@ inline std::vector<MusicalEvent> flattenPlacements(
       // field; capped at u16 like the published UiClipNote.placementId (a much later wrap
       // than the frontend's u8, and a u32 widen is a piano-roll-time lockstep if needed).
       if (ev.type == MusicalEventType::Note) {
-        ev.payload.note.reserved2 = static_cast<uint16_t>(placement.id);
+        ev.payload.note.placementId = static_cast<uint16_t>(placement.id);
       }
       out.push_back(ev);
     }
@@ -100,7 +100,7 @@ inline std::vector<MusicalEvent> flattenPlacements(
         continue;
       }
       if (ev.type == MusicalEventType::Note) {
-        ev.payload.note.reserved2 = static_cast<uint16_t>(placement.id);
+        ev.payload.note.placementId = static_cast<uint16_t>(placement.id);
       }
       out.push_back(ev);
     }

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 31;
+pub const K_SHM_VERSION: u16 = 32;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -335,6 +335,15 @@ pub struct UiClipNote {
     /// on negatives do not both agree with. It took the reserved word, so the struct is
     /// the same 40 bytes and nothing moved.
     pub dev_nanoticks: i32,
+    /// v32: THE SOUND ADDRESS. Which slot of the track's sampler this note plays. 0 = the keymap
+    /// picks it from pitch, which on an ordinary kit track is EVERY ROW — so draw 0 as empty
+    /// rather than as a literal zero. That sparseness is exactly why there is no permanent ops
+    /// column (SAMPLER_DESIGN R5).
+    pub sound: u16,
+    /// v32: the 9xx seek, as a FRACTION of the slot's extent (0..65535) rather than absolute
+    /// frames. Absolute breaks when the slot's sample is swapped or its slice re-cut.
+    pub sound_offset: u16,
+    pub reserved32: [u8; 4],
 }
 
 pub const UI_CLIP_NOTE_MUTED: u8 = 1 << 0;
@@ -1553,7 +1562,7 @@ mod tests {
         // Widened for the authored EventId; the C++ side static_asserts the
         // same size, so a mismatch fails at compile time on one end and here
         // on the other.
-        const_assert_eq!(size_of::<UiClipNote>(), 40);
+        const_assert_eq!(size_of::<UiClipNote>(), 48);
         assert_eq!(offset_of!(UiClipNote, t_on), 0);
         assert_eq!(offset_of!(UiClipNote, t_off), 8);
         assert_eq!(offset_of!(UiClipNote, note_id), 16);

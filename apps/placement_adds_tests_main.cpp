@@ -43,7 +43,7 @@ int main() {
   // Provenance: an add carries the placement id, like a base note.
   for (const auto& e : flattenPlacements({pl}, {hat}, 16*BAR))
     if (e.type==MusicalEventType::Note && e.payload.note.pitch==46)
-      CHECK(e.payload.note.reserved2 == 7);
+      CHECK(e.payload.note.placementId == 7);
   // An add on an AUDIO clip's placement still sounds. The audio skip used to `continue` over the
   // whole placement, so a note typed into an audio region's cell was accepted, saved and badged
   // as a local edit and scheduled nowhere — the note is the user's data and it was silently gone.
@@ -71,7 +71,7 @@ int main() {
       if (e.payload.note.pitch == 46) {
         ++addsHeard;
         CHECK(e.nanotickOffset == 2 * BAR + Q);
-        CHECK(e.payload.note.reserved2 == 11);
+        CHECK(e.payload.note.placementId == 11);
       }
       if (e.payload.note.pitch == 60) ++clipEvents;
     }

@@ -498,6 +498,11 @@ add_test(NAME sampler_load
 )
 set_tests_properties(sampler_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_test(NAME sampler_sound_address
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_sound_address_check.sh
+)
+set_tests_properties(sampler_sound_address PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_kit
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_kit_check.sh
 )

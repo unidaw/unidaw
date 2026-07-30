@@ -123,7 +123,7 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    agent forks the clip it was pointed at, writes into the copy, and the original becomes the
 //    alternate; swapping is the A/B. Published because an alternate nobody can see is the same as
 //    not having one.
-constexpr uint16_t kShmVersion = 31;
+constexpr uint16_t kShmVersion = 32;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -881,6 +881,14 @@ struct UiClipNote {
   // that ignores it is correct for every project without quantize. Took the reserved
   // word, so the struct is the same 40 bytes and no offset moved.
   int32_t devNanoticks = 0;
+  // v32: THE SOUND ADDRESS. 0 = the keymap picks the slot from pitch, which is every row on an
+  // ordinary kit track — so a UI should draw 0 as EMPTY rather than as "0". See SAMPLER_DESIGN R2
+  // and R5: the sparseness is exactly why there is no permanent ops column.
+  uint16_t sound = 0;
+  // v32: the 9xx seek, as a FRACTION of the slot's extent. Absolute frames would break when the
+  // slot's sample is swapped or its slice re-cut; a fraction survives both.
+  uint16_t soundOffset = 0;
+  uint8_t reserved32[4]{};
 };
 
 constexpr uint8_t kUiClipNoteMuted = 1u << 0;
@@ -949,7 +957,7 @@ constexpr uint32_t kUiClipGridLpbMax = 31;
 constexpr uint32_t kUiClipGridNumMax = 31;
 constexpr uint32_t kUiClipGridDenExpMax = 7;
 
-static_assert(sizeof(UiClipNote) == 40,
+static_assert(sizeof(UiClipNote) == 48,
               "UiClipNote layout must match the Rust mirror");
 
 struct UiClipChord {

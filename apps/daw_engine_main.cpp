@@ -2068,6 +2068,11 @@ struct Track {
     uint8_t velocity = 0;
     uint8_t column = 0;
     float tuningCents = 0.0f;
+    // The sound address travels with the strike. Without it a retriggered note's later strikes
+    // resolve through the keymap while the FIRST one played an explicit slot — so `ret4` on a
+    // sound-addressed row would play one snare and three of whatever the key maps to.
+    uint16_t sound = 0;
+    uint16_t soundOffset = 0;
   };
 
 struct TrackRuntime {
@@ -13096,7 +13101,8 @@ struct TrackRuntime {
           // called without activeNotesMutex held (it takes the lock itself).
           auto emitNoteOnWithOff = [&](uint64_t onTick, uint64_t duration,
                                        uint8_t pitch, uint8_t velocity,
-                                       uint8_t noteColumn, float noteTuningCents) {
+                                       uint8_t noteColumn, float noteTuningCents,
+                                       uint16_t sound = 0, uint16_t soundOffset = 0) {
             const uint64_t tickDelta = baseTickDelta + (onTick - rangeStart);
             const uint64_t eventSample =
                 blockSampleStart + tickDeltaToSamples(tickDelta);
@@ -13133,6 +13139,10 @@ struct TrackRuntime {
               se.pitch = pitch;
               se.velocity = velocity;
               se.column = noteColumn;
+              // R2's per-note sound address, straight through. 0 means the keymap picks the slot
+              // from pitch, which is the common case and costs nothing.
+              se.sound = sound;
+              se.offsetFrac = soundOffset;
               se.noteId = noteId;
               runtime.samplerEvents.push_back(se);
             }
@@ -13230,7 +13240,7 @@ struct TrackRuntime {
             }
             for (const auto& s : due) {
               emitNoteOnWithOff(s.onTick, s.durationNanoticks, s.pitch,
-                                s.velocity, s.column, s.tuningCents);
+                                s.velocity, s.column, s.tuningCents, s.sound, s.soundOffset);
             }
           }
 
@@ -13544,10 +13554,13 @@ struct TrackRuntime {
                     s.offTick > s.onTick ? s.offTick - s.onTick : 0;
                 if (onTick >= rangeStart && onTick < rangeEnd) {
                   emitNoteOnWithOff(onTick, dur, scheduledPitch, velocity, column,
-                                    tuningCents);
+                                    tuningCents, event->payload.note.sound,
+                                    event->payload.note.soundOffset);
                 } else {
                   queued.push_back(PendingStrike{onTick, dur, scheduledPitch,
-                                                 velocity, column, tuningCents});
+                                                 velocity, column, tuningCents,
+                                                 event->payload.note.sound,
+                                                 event->payload.note.soundOffset});
                 }
               }
               if (!queued.empty()) {
@@ -13571,7 +13584,9 @@ struct TrackRuntime {
               }
             } else {
               emitNoteOnWithOff(event->nanotickOffset, noteDuration,
-                                scheduledPitch, velocity, column, tuningCents);
+                                scheduledPitch, velocity, column, tuningCents,
+                                event->payload.note.sound,
+                                event->payload.note.soundOffset);
             }
           }
         };
