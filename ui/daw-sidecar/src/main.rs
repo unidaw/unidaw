@@ -1679,7 +1679,13 @@ fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static
     // no way to set it. A state you can see and cannot change is worse than one
     // you cannot see: it reads as a control that has stopped working.
     let byp = is_type(body, "bypass");
-    if !(add || del || open || byp) { return None; }
+    /*
+     * Reorder a device. ORDER IS WHAT A CHAIN IS — a compressor before a distortion
+     * is a different sound from the same two the other way round — and until now the
+     * rack could add a device and remove one and not change where it sat.
+     */
+    let mv = is_type(body, "movedevice");
+    if !(add || del || open || byp || mv) { return None; }
     let mut p = UiChainCommandPayload {
         command_type: UiCommandType::None as u16,
         flags: 0,
@@ -1703,6 +1709,33 @@ fn build_chain_edit(body: &str) -> Option<Result<UiChainCommandPayload, &'static
         };
         p.command_type = UiCommandType::OpenPluginEditor as u16;
         p.device_id = id as u32;
+        return Some(Ok(p));
+    }
+    if mv {
+        let Some(id) = parse_num(body, "\"device\"").filter(|id| *id >= 0) else {
+            return Some(Err("movedevice needs the id of the device to move"));
+        };
+        let Some(pos) = parse_num(body, "\"pos\"") else {
+            return Some(Err("movedevice needs the position to move it to"));
+        };
+        if pos < 0 { return Some(Err("a chain position cannot be negative")); }
+        /*
+         * `pos` IS THE DEVICE'S FINAL INDEX, and that is worth stating because the
+         * engine's implementation could be read either way: moveDeviceById ERASES the
+         * device and then inserts at the index, so the index is into the list
+         * WITHOUT it. Which happens to make the index the final resting position —
+         * move A to 2 in [A,B,C] gives [B,C,A] — but only because the two
+         * cancel. Read as "an index into the original list" it is off by one for
+         * every rightward move, silently, producing a chain one place from the one
+         * you asked for.
+         *
+         * The engine clamps past-the-end to the end, so "last" is expressible.
+         */
+        p.command_type = UiCommandType::MoveDevice as u16;
+        p.device_id = id as u32;
+        p.insert_index = pos as u32;
+        p.patcher_node_id = 0;
+        p.host_slot_index = 0;
         return Some(Ok(p));
     }
     if byp {
@@ -4738,6 +4771,34 @@ mod tests {
     }
 
     #[test]
+    fn movedevice_carries_the_final_index() {
+        let p = build_chain_edit(r#"{"type":"movedevice","track":2,"device":7,"pos":0}"#)
+            .expect("recognised").expect("built");
+        assert_eq!(p.command_type, UiCommandType::MoveDevice as u16);
+        assert_eq!(p.command_type, 16, "the engine's own number for it");
+        assert_eq!(p.track_id, 2);
+        assert_eq!(p.device_id, 7);
+        assert_eq!(p.insert_index, 0);
+        // Untouched, because MoveDevice reads neither — and the builder's defaults for
+        // an ADD are the auto sentinel, which would repoint a patcher node if the
+        // engine ever grew a reason to look.
+        assert_eq!(p.patcher_node_id, 0);
+        assert_eq!(p.host_slot_index, 0);
+
+        // Position 0 is a real position, so it must not be read as absent.
+        assert_eq!(build_chain_edit(r#"{"type":"movedevice","device":0,"pos":0}"#)
+                   .unwrap().unwrap().device_id, 0, "device 0 is a device");
+        assert!(build_chain_edit(r#"{"type":"movedevice","device":3}"#).unwrap().is_err(),
+                "no position is a refusal, not position 0");
+        assert!(build_chain_edit(r#"{"type":"movedevice","pos":1}"#).unwrap().is_err(),
+                "and no device id likewise");
+        assert!(build_chain_edit(r#"{"type":"movedevice","device":3,"pos":-1}"#)
+                .unwrap().is_err());
+        // A project named `movedevice` is not a move.
+        assert!(build_chain_edit(r#"{"type":"load","name":"movedevice"}"#).is_none());
+    }
+
+    #[test]
     fn bypass_names_the_state_it_wants_and_touches_only_that() {
         let p = build_chain_edit(r#"{"type":"bypass","track":2,"device":7,"on":1}"#)
             .expect("recognised").expect("built");
@@ -4867,7 +4928,7 @@ mod tests {
                      "note", "chord", "loop", "seek", "adddevice",
                      // Added with the builders below them: a verb absent from this
                      // list is a builder nothing protects.
-                     "deldevice", "openeditor", "bypass", "quantize", "routing",
+                     "deldevice", "openeditor", "bypass", "movedevice", "quantize", "routing",
                      "patchadd", "patchremove", "patchlink", "patchcfg",
                      "placement", "preview", "panic", "stop", "undo", "redo"] {
             let body = format!("{{\"type\":\"load\",\"name\":\"{verb}\"}}");

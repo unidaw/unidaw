@@ -318,8 +318,14 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
      * clip pool had it: measured, a pan across a song of regions spent ~600 bytes
      * a frame rewriting positions that had not changed.
      *
-     * The engine caps extents at 64, so this is bounded, and a slot with nothing
-     * in it this frame is hidden rather than removed (GUIDELINES 3.7).
+     * Bounded by the engine's kUiMaxClipExtents — 256 as of kShmVersion 27, and 64
+     * before it. Written as "the engine's cap" rather than as the number, because
+     * the number moved and this comment did not: it said 64 for a while after the
+     * engine had quadrupled it. A stale bound in a comment is how a hardcoded one
+     * gets written next to it.
+     *
+     * A slot with nothing in it this frame is hidden rather than removed
+     * (GUIDELINES 3.7).
      */
     clipSlots: 0,
     /**
@@ -526,9 +532,10 @@ export function buildArrangeModel(opts, buf) {
     buf._selTick = colon > 0 ? +selectedPlacement.slice(colon + 1) : -1;
   }
 
-  // Clips overlapping the window. Placements are already bounded by the engine
-  // (64 extents), but windowing here keeps the renderer's work proportional to
-  // what is visible rather than to what exists.
+  // Clips overlapping the window. Placements are already bounded by the engine's
+  // kUiMaxClipExtents (256 as of kShmVersion 27), but windowing here keeps the
+  // renderer's work proportional to what is VISIBLE rather than to what exists —
+  // which is the property that matters as that cap keeps rising.
   //
   // `clipMarginPx` widens THIS window and nothing else — not the grid, not the
   // ruler, not the loop. The renderer paints its waveform band wider than the

@@ -249,6 +249,18 @@ export function createCommands(api) {
                               a[2] === undefined ? 1 : Number(a[2]))
         ? (Number(a[2] === undefined ? 1 : a[2]) ? 'bypassed' : 'active') : 'no engine') },
     /*
+     * Reorder a device. `pos` is where it ENDS UP, counted from 0.
+     *
+     * Order is what a chain is, and the rack could add and remove without it — so the
+     * only way to reorder was delete-and-re-add, which throws the device's settings
+     * away to change its position.
+     */
+    movedevice: { help: 'movedevice <track> <device> <pos> — where it ends up, from 0',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             { name: 'pos', type: 'int', min: 0 }],
+      run: (a) => (api.moveDevice(Number(a[0]), Number(a[1]), Number(a[2]))
+        ? `device ${a[1]} to ${a[2]}` : 'no engine') },
+    /*
      * Pull a lane toward a grid — NON-DESTRUCTIVELY. Nothing on disk moves: the
      * engine applies this to a separate scheduling copy, so the authored tick is
      * still what is stored, saved and drawn, and only where the note SOUNDS

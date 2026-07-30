@@ -671,6 +671,29 @@ function delDevice(track, device) {
 }
 
 /**
+ * Move a device to a position in its chain.
+ *
+ * ORDER IS WHAT A CHAIN IS. The same compressor before and after a distortion are two
+ * different sounds, and until now the rack could add a device and remove one and not
+ * change where it sat — so the only way to reorder was to delete and re-add, which
+ * loses the device's settings.
+ *
+ * `pos` is the device's FINAL index. The engine erases it and re-inserts, so the index
+ * is into the list without it — which happens to make it the resting position, but only
+ * because the two cancel. Read as an index into the ORIGINAL list it is off by one for
+ * every rightward move.
+ *
+ * No `reqchain` afterwards: the engine emits a chain snapshot on every accepted move.
+ */
+function moveDevice(track, device, pos) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  conn.send({ type: 'movedevice', track, device, pos });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
  * Switch a device off without removing it.
  *
  * No `reqchain` afterwards, unlike delDevice: the engine emits a chain snapshot
@@ -1594,6 +1617,7 @@ const dockApi = {
   // were added to `__uni` first, where the console cannot see them — which is the
   // failure the comment above this object describes, twice more.
   bypass: bypassDevice,
+  moveDevice,
   quantize: setQuantize,
   // ...and `deldevice`, which has been calling a method dockApi never had since
   // the day it shipped. The button and the key work; typing the command threw.
@@ -4292,6 +4316,29 @@ addEventListener('keydown', (e) => {
           state.chainSelected = Math.max(0, state.chainSelected - 1);
         }
       }
+      return done();
+    }
+    /*
+     * SHIFT+ARROW MOVES THE DEVICE; plain arrow moves the SELECTION.
+     *
+     * The distinction every reorderable list uses, and it needs no new key: shift is
+     * already "extend/act on the thing" everywhere else in this app. The selection
+     * follows the device, because otherwise a second press moves whatever slid into
+     * the old slot — which is how a reorder becomes a shuffle.
+     */
+    if ((k === 'ArrowRight' || k === 'ArrowLeft') && e.shiftKey) {
+      const here = chains[rackTrack()];
+      const devs = (here && here.devices) || [];
+      const dev = devs[state.chainSelected];
+      const to = state.chainSelected + (k === 'ArrowRight' ? 1 : -1);
+      if (!dev || to < 0 || to >= devs.length) {
+        // Naming the edge rather than silently doing nothing: a key that works four
+        // times and then stops is a key you assume is broken.
+        state.reject = dev ? 'that device is already at the end' : 'select a device first';
+        return done();
+      }
+      moveDevice(rackTrack(), dev.id, to);
+      state.chainSelected = to;
       return done();
     }
     if (k === 'ArrowRight') {

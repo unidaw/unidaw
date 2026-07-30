@@ -3100,6 +3100,86 @@ section('the rack\'s keys act on the track the rack is showing');
   await loadAndWait('rack');
 }
 
+/*
+ * DEVICES CAN BE REORDERED, WHICH IS WHAT A CHAIN IS.
+ *
+ * The same compressor before and after a distortion are two different sounds. The rack
+ * could add a device and remove one and not change where it sat, so the only way to
+ * reorder was to delete and re-add — which throws the device's settings away in order
+ * to change its position.
+ *
+ * Asserted from the ENGINE's published chain, not from the order of the cards. The
+ * cards are what a reorder must LOOK like; the chain is what it has to BE, and a
+ * renderer that shuffles its own list would satisfy the first and change no sound.
+ */
+section('a device can be moved along its chain');
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await loadAndWait('rack');
+  await page.evaluate(() => window.__uni.run('goto 1 0'));
+  await page.waitForTimeout(500);
+
+  const order = () => page.evaluate(() => {
+    const c = window.__uni.chains()['0'];
+    return ((c && c.devices) || []).map((d) => d.id);
+  });
+  const before = await order();
+  ok(before.length >= 2, 'the track has devices to reorder', JSON.stringify(before));
+
+  // The console first, because it names an absolute position and so pins the INDEX
+  // semantics: the engine erases the device and re-inserts, which makes `pos` the
+  // final resting index rather than an index into the original list. Read the other
+  // way it is off by one for every rightward move.
+  const moved = String(await page.evaluate(
+    (id) => window.__uni.run(`movedevice 0 ${id} 0`), before[before.length - 1]));
+  await page.waitForTimeout(1500);
+  const after = await order();
+  ok(after[0] === before[before.length - 1],
+     'the last device moved to position 0 lands at position 0',
+     `${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
+  ok(after.length === before.length, 'and nothing was lost or duplicated',
+     JSON.stringify(after));
+  ok(new Set(after).size === after.length, 'and no id appears twice',
+     JSON.stringify(after));
+
+  /*
+   * SHIFT+ARROW moves the SELECTED device; plain arrow moves the selection. And the
+   * selection FOLLOWS the device — otherwise a second press moves whatever slid into
+   * the old slot, which turns a reorder into a shuffle.
+   */
+  const cards = await visible('.dv-card');
+  await cards[0].click();
+  await page.waitForTimeout(400);
+  ok((await page.evaluate(() => window.__uni.state().focus)) === 'chain',
+     'the rack has the keyboard');
+  const first = (await order())[0];
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.waitForTimeout(1500);
+  const shifted = await order();
+  ok(shifted[1] === first, 'Shift+Right moves it one place along',
+     `${JSON.stringify(after)} -> ${JSON.stringify(shifted)}`);
+  ok((await page.evaluate(() => window.__uni.state().chainSelected)) === 1,
+     'and the selection follows it, so a second press moves the same device');
+
+  await page.keyboard.press('Shift+ArrowLeft');
+  await page.waitForTimeout(1500);
+  ok((await order())[0] === first, 'and Shift+Left brings it back',
+     JSON.stringify(await order()));
+
+  // At the end, it says so rather than silently doing nothing — a key that works four
+  // times and then stops is a key you assume is broken.
+  await page.keyboard.press('Shift+ArrowLeft');
+  await page.waitForTimeout(700);
+  ok(/already at the end/.test(String(await page.evaluate(() => window.__uni.state().reject))),
+     'and at the edge it says why nothing happened',
+     String(await page.evaluate(() => window.__uni.state().reject)));
+
+  await page.evaluate(() => { window.__uni.state(); });
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  await loadAndWait('rack');
+}
+
 section('a device can be switched off without removing it');
 {
   // Back to the tracker first: the section before this one leaves the mixer up,

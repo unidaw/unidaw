@@ -808,7 +808,7 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
                      'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice', 'bypass',
-                     'quantize',
+                     'quantize', 'moveDevice',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
                      'selectedClip', 'ticksPerBar', 'master'];
@@ -2010,6 +2010,9 @@ const OP_REGISTRY = {
   // verb) and this app second, so the CLI path is real and the agent's manifest
   // is what still owes it a tool.
   bypass:    { cli: 'set-bypass', agent: null, why: 'gap' },
+  // Reordering reached the engine from this app FIRST — daw-cli has no verb for it —
+  // which is the opposite of the usual direction and worth recording as such.
+  movedevice: { cli: null, agent: null, why: 'gap' },
   // M1.13. daw-cli shipped `do quantize` with the engine, so the CLI path is real
   // from day one; the agent's manifest still owes it a tool.
   quantize:  { cli: 'quantize', agent: null, why: 'gap' },
@@ -2097,8 +2100,11 @@ const OP_REGISTRY = {
 /** Ops with no CLI path today. This list may SHRINK, never grow. */
 const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cut',
                  'del-clip', 'deldevice', 'delnode', 'editor', 'link', 'loop',
-                 'move-clip', 'new', 'paste', 'patch', 'redo', 'rename', 'seek',
-                 'stop', 'transpose', 'trim-clip', 'undo'];
+                 // Reordering reached the engine from this APP first — the usual
+                 // direction is the other way round, so the CLI owes it a verb rather
+                 // than the app owing the CLI one.
+                 'move-clip', 'movedevice', 'new', 'paste', 'patch', 'redo', 'rename',
+                 'seek', 'stop', 'transpose', 'trim-clip', 'undo'];
 /** Ops with no agent tool today. Same rule. */
 // `bypass` joins the list rather than being smuggled past it: the engine takes
 // the command and daw-cli sends it, but the agent's manifest has no tool for it,
@@ -2106,9 +2112,9 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
 // and without a device is exactly the kind of judgement an agent should be able
 // to make on its own — and worth recording honestly until it is.
 const AGENT_GAP = ['addnode', 'bypass', 'clear', 'columns', 'copy', 'cut', 'del',
-                   'deldevice', 'delnode', 'editor', 'gain', 'link', 'loop', 'mute',
-                   'new', 'paste', 'patch', 'quantize', 'seek', 'solo', 'tempo',
-                   'transpose'];
+                   'deldevice', 'delnode', 'editor', 'gain', 'link', 'loop',
+                   'movedevice', 'mute', 'new', 'paste', 'patch', 'quantize', 'seek',
+                   'solo', 'tempo', 'transpose'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether
@@ -2227,7 +2233,6 @@ const ENGINE_UNUSED = {
    * finding by whoever picks it up, so a rotted one is worse than none.
    */
   SetDeviceEuclideanConfig: 'gap — superseded by SetPatcherNodeConfig; nothing sends the per-device form',
-  MoveDevice: 'gap — devices cannot be reordered in the chain',
   SavePatcherPreset: 'gap — a patcher graph cannot be saved as a preset',
   SetTrackHarmonyQuantize: 'gap — the per-track harmony quantize flag is unreachable',
   DeleteChord: 'gap — a chord can be written and not removed',
