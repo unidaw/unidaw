@@ -130,6 +130,43 @@ await page.waitForTimeout(800);
   check(a === b + 1,
         'and a note written at one of them goes into that single shared clip',
         `${b} -> ${a} notes in clip ${ids[0]}`);
+
+  /*
+   * AND THE ENGINE COUNTED THE SAME NUMBER I DID.
+   *
+   * The engine emits `clip.shared_edit` with `placements_affected` whenever an edit lands in a
+   * clip that more than one placement plays. My warning says "shared by 2" from a completely
+   * different source — `appearances`, derived from the extent table on the client — and the two
+   * numbers have no path between them.
+   *
+   * WHICH IS THE ENTIRE VALUE OF THIS CHECK. Every other assertion in this file confirms my
+   * count is DISPLAYED; none of them can tell whether it is RIGHT. A stale extent, an
+   * off-by-one in the appearance walk, or a placement the client never learned about would show
+   * a confident, well-drawn, wrong number, and the person would be told two placements are at
+   * stake while three changed under them. Two independent derivations agreeing is the only
+   * evidence available that either is correct.
+   *
+   * Read from the engine's structured log rather than from the UI event ring because that is
+   * where this event lives — it is a log event, not a UiDiff, so nothing forwards it to the
+   * browser. Asked backend to put it on the ring; until then the file is the honest source and
+   * a test is the right consumer for it.
+   */
+  let engineSaid = null;
+  try {
+    const lines = readFileSync(join(stack.root, 'engine.log'), 'utf8').split('\n');
+    for (const l of lines) {
+      if (!l.includes('clip.shared_edit')) continue;
+      try { engineSaid = JSON.parse(l); } catch { /* a torn last line; keep the last good one */ }
+    }
+  } catch (e) { /* no log — reported by the check below, not swallowed */ }
+  check(engineSaid !== null,
+        'the engine reports the shared edit it just performed');
+  check(engineSaid && engineSaid.placements_affected === 2,
+        "and counts the same placements the app warned about — two derivations, no shared path",
+        engineSaid && String(engineSaid.placements_affected));
+  check(engineSaid && engineSaid.clip === ids[0],
+        'about the clip that actually took the note',
+        engineSaid && `${engineSaid.clip} vs ${ids[0]}`);
 }
 
 // ---------------------------------------------------------------------------
