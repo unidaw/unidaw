@@ -2960,6 +2960,29 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         // index stays pointing where it was. A child id is rejected engine-side:
         // aux stems are views into their parent's buses and go when it goes.
         p.command_type = UiCommandType::RemoveTrack as u16;
+    } else if is_type(body, "scratch") {
+        /*
+         * M2.57 SCRATCH CLIPS: fork, swap, keep.
+         *
+         * `fork` copies what a placement plays, points the placement at the copy, and keeps the
+         * original as its ALTERNATE. `swap` exchanges the two — that IS the A/B, and what plays
+         * is always the placement's clip, so there is no auditioning mode to fall out of step
+         * with what you hear. `keep` drops the other once you have decided, and keeping is doing
+         * nothing.
+         *
+         * `value0` is the PLACEMENT, not the clip: forking is about one appearance, and naming
+         * the clip would be naming the thing every appearance shares — the opposite of the point.
+         */
+        let op = parse_str(body, "\"op\"").unwrap_or("");
+        p.command_type = match op {
+            "fork" => UiCommandType::ForkPlacementClip as u16,
+            "swap" => UiCommandType::SwapPlacementClip as u16,
+            "keep" => UiCommandType::ClearPlacementAlternate as u16,
+            // An unknown op leaves command_type at None, which the engine ignores — so it is
+            // refused HERE instead, by name, rather than sent to be dropped in silence.
+            _ => return Err("scratch op must be fork, swap or keep"),
+        };
+        p.value0 = parse_num(body, "\"placement\"").unwrap_or(-1).max(0) as u32;
     } else if body.contains("\"undo\"") {
         p.command_type = UiCommandType::Undo as u16;
     } else if body.contains("\"redo\"") {

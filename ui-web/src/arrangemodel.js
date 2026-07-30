@@ -57,6 +57,35 @@ export const TICKS_PER_BAR = ticksPerBar(DEFAULT_METER);
  */
 const MARKER_MIN_PX = 9;
 
+/** UiClipExtent bit 24 (kUiClipExtentHasAlternate): this appearance has been forked. */
+const EXTENT_HAS_ALTERNATE = 1 << 24;
+
+/**
+ * How many placements play a clip.
+ *
+ * A LINEAR SCAN, memoised on the extents' revision. The count is wanted per visible clip per
+ * frame and the extent list can hold 256 entries, so scanning per clip would be quadratic on the
+ * one path that must not allocate or wander — but the answer only changes when the extents do,
+ * and the engine publishes a revision for exactly that.
+ *
+ * A plain object keyed by clip id rather than a Map: it is rebuilt wholesale when the revision
+ * moves, so there is nothing to delete, and `Object.create(null)` cannot collide with a
+ * prototype key the way `{}` can when a clip id is called "constructor".
+ */
+let _usesRev = -1;
+let _uses = Object.create(null);
+function clipUses(engine, clipId) {
+  if (engine.extentsRevision !== _usesRev) {
+    _usesRev = engine.extentsRevision;
+    _uses = Object.create(null);
+    for (let i = 0; i < engine.extentCount; i++) {
+      const id = engine.extents[i].clipId;
+      _uses[id] = (_uses[id] || 0) + 1;
+    }
+  }
+  return _uses[clipId] || 1;
+}
+
 /**
  * Horizontal zoom, in nanoticks per pixel. Coarser than the tracker's because
  * arrange is for seeing structure — at the finest level a bar is 512px, at the
@@ -280,6 +309,9 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
   for (let i = 0; i < clipCapacity; i++) {
     clips[i] = { id: 0, clipId: 0, track: 0, x: 0, w: 0, name: '',
                  audio: false, selected: false, startTick: 0, endTick: 0,
+                 // How many placements play this clip (1 = only this one), and whether this
+                 // appearance has been FORKED and has another version behind it.
+                 appearances: 1, hasAlternate: false,
                  /**
                   * What the clip reads, when it reads audio. Zero srcId means
                   * "nothing to draw yet" and covers three different states —
@@ -694,6 +726,26 @@ export function buildArrangeModel(opts, buf) {
       cl.w = Math.max(2, (e.endTick - e.startTick) / tpp);
       cl.name = e.name;
       cl.audio = !!e.audio;
+      /*
+       * HOW MANY PLACEMENTS PLAY THIS CLIP, and whether this one has been FORKED.
+       *
+       * The first is the question the arrangement could never answer: two placements of one clip
+       * draw as two rails with the same name, which is indistinguishable from two different
+       * clips that happen to share a name — so an edit inside one silently changed the others
+       * and nothing on screen said it would.
+       *
+       * Counted over the WHOLE extent list, not the visible one: a clip is shared whether or not
+       * its other appearances are on screen, and a rail that stopped saying so when you scrolled
+       * would be worse than one that never said it.
+       *
+       * `hasAlternate` is the engine's bit 24 — this appearance has been forked and another
+       * version sits behind it, one swap away. A THIRD state, and it has to be: "shared with
+       * others", "forked from them" and "the only one" are three different things to know before
+       * you type a note, and folding any two of them together is the lie this whole readout
+       * exists to stop.
+       */
+      cl.appearances = clipUses(engine, e.clipId);
+      cl.hasAlternate = !!(e.flags & EXTENT_HAS_ALTERNATE);
       // What this clip reads, if anything. Two lookups on plain objects keyed by
       // id — no allocation, and both misses are ordinary: the source table
       // arrives on a project load and the extents arrive at frame rate, so for a

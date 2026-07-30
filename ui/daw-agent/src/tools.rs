@@ -325,6 +325,60 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
          * its own — where it begins is the sum of the lengths before it — so an agent asked
          * to "make the chorus longer" has to see the order before it can change anything.
          */
+        /*
+         * SCRATCH CLIPS, which exist FOR this agent: it writes into its own copy of a clip, the
+         * human compares with one command, and neither fork nor swap touches the undo stack — so
+         * undo still undoes the last musical edit rather than the comparison.
+         */
+        ToolSpec {
+            name: "shared_clips",
+            description: "Which placements play the same clip, and which have been FORKED. Ask \
+                          this BEFORE editing notes: two placements of one clip are two separate \
+                          appearances of the SAME music, so an edit inside one changes all of \
+                          them. If that is not what you want, fork_placement first.",
+            params: json!({
+                "type": "object",
+                "properties": { "track": { "type": "integer", "minimum": 0 } },
+            }),
+        },
+        ToolSpec {
+            name: "fork_placement",
+            description: "Give one placement its own copy of the clip it plays, keeping the \
+                          original as its ALTERNATE. Use this before editing a shared clip when \
+                          the change should apply here only. Nothing is lost and nothing \
+                          destructive enters the undo stack — the other version is one \
+                          swap_placement_clip away.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "placement"],
+                "properties": { "track": { "type": "integer", "minimum": 0 },
+                                "placement": { "type": "integer", "minimum": 0 } },
+            }),
+        },
+        ToolSpec {
+            name: "swap_placement_clip",
+            description: "Exchange a placement's clip with its alternate — the A/B. What \
+                          PLAYS is always the placement's clip, so there is no audition mode to \
+                          leave and nothing to get out of step with what is heard.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "placement"],
+                "properties": { "track": { "type": "integer", "minimum": 0 },
+                                "placement": { "type": "integer", "minimum": 0 } },
+            }),
+        },
+        ToolSpec {
+            name: "keep_placement_clip",
+            description: "Drop a placement's alternate and keep what is playing. The decision, \
+                          after the comparison — keeping both is doing nothing, which is \
+                          the right default while you are unsure.",
+            params: json!({
+                "type": "object",
+                "required": ["track", "placement"],
+                "properties": { "track": { "type": "integer", "minimum": 0 },
+                                "placement": { "type": "integer", "minimum": 0 } },
+            }),
+        },
         ToolSpec {
             name: "markers",
             description: "The song's markers, in order: id, name, the bar and beat they fall on, \
@@ -614,6 +668,53 @@ fn arg_f64(args: &Value, key: &str) -> Option<f64> {
 
 fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|v| v.as_str())
+}
+
+/// Which placements share a clip, and which have been forked.
+///
+/// THE READ COMES FIRST, and it is the half that was missing everywhere: two placements of one
+/// clip are two appearances of the SAME music, and nothing said so — so an edit inside one
+/// changed all of them silently. A model that can fork but cannot see what is shared will fork
+/// the wrong things and leave the right ones alone.
+fn shared_clips(handle: &EngineHandle, args: &Value) -> ToolResult {
+    const HAS_ALTERNATE: u32 = 1 << 24;      // kUiClipExtentHasAlternate (v31)
+    let want = arg_u64(args, "track").map(|t| t as u32);
+    let extents = handle.read_clip_extents();
+    // Counted over ALL of them, not the filtered set: a clip is shared whether or not its other
+    // appearances are on the track being asked about, and a count that changed with the filter
+    // would be a different number for the same question.
+    let mut uses: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    for e in &extents { *uses.entry(e.clip_id).or_insert(0) += 1; }
+    let list: Vec<Value> = extents.iter()
+        .filter(|e| want.is_none() || want == Some(e.track_id))
+        .map(|e| json!({
+            "placement": e.placement_id,
+            "clip": e.clip_id,
+            "track": e.track_id,
+            "name": String::from_utf8_lossy(&e.name).trim_end_matches('\0').to_string(),
+            "start_tick": e.start_tick,
+            "end_tick": e.end_tick,
+            // How many appearances play this clip. 1 means an edit here changes only this one.
+            "appearances": uses.get(&e.clip_id).copied().unwrap_or(1),
+            // Forked: this appearance has its own copy with another version behind it.
+            "forked": (e.flags & HAS_ALTERNATE) != 0,
+        }))
+        .collect();
+    ToolResult::ok(json!({ "placements": list }))
+}
+
+/// One scratch op on one placement. They all ride UiCommandPayload: track in `track_id`, the
+/// PLACEMENT in `value0` — not the clip, because forking is about one appearance and naming the
+/// clip would name the thing every appearance shares.
+fn scratch(handle: &EngineHandle, args: &Value, cmd: UiCommandType) -> ToolResult {
+    let (Some(track), Some(placement)) = (arg_u64(args, "track"), arg_u64(args, "placement")) else {
+        return ToolResult::err("this needs \"track\" and \"placement\" — \
+                                the appearance to act on, from shared_clips");
+    };
+    let mut p = blank(cmd);
+    p.track_id = track as u32;
+    p.value0 = placement as u32;
+    send_now(handle, p, json!({ "track": track, "placement": placement }))
 }
 
 /// The song's MARKERS, with the span each one begins.
@@ -1239,6 +1340,10 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),
+        "shared_clips" => shared_clips(handle, &call.args),
+        "fork_placement" => scratch(handle, &call.args, UiCommandType::ForkPlacementClip),
+        "swap_placement_clip" => scratch(handle, &call.args, UiCommandType::SwapPlacementClip),
+        "keep_placement_clip" => scratch(handle, &call.args, UiCommandType::ClearPlacementAlternate),
         "markers" => markers(handle),
         "edit_marker" => edit_marker(handle, &call.args),
         "insert_time" => insert_time(handle, &call.args),

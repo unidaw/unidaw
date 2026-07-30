@@ -423,6 +423,12 @@
   color: var(--base-neutral-600);
   white-space: nowrap;
 }
+/* The cursor is inside a shared clip. The WARM colour, not the accent: this is the one chip
+   in the bar that is a warning rather than a state, and it must not read as another mode
+   badge. `.forked` is the third state — this appearance has its own copy. */
+.ch-shared { border-color: var(--uni-text-fx); color: var(--uni-text-fx); }
+.ch-shared.forked { border-style: dashed; }
+
 .ch-loop { border-color: var(--base-accent); color: var(--base-accent-ramp-300); }
 .ch-chip.unavailable {
   border-style: dashed;

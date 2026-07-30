@@ -759,6 +759,126 @@ function namePendingMaps() {
 }
 
 /**
+ * A scratch op on a NAMED placement, or on the one under the cursor.
+ *
+ * Defaulting to the cursor is what makes `fork` a single word at the console and a single click
+ * in the rail — and it refuses by name rather than acting on a guess when the cursor is over
+ * nothing, because forking the wrong appearance is a silent divergence.
+ */
+function scratchHere(op, track, placement) {
+  if (placement !== undefined && placement !== null && placement !== '') {
+    return scratch(op, track === undefined ? state.cursor.track : track, placement);
+  }
+  const at = placementAtCursor();
+  if (!at) { state.reject = 'no placement under the cursor'; schedule(); return false; }
+  return scratch(op, at.track, at.placement);
+}
+
+/**
+ * FORK a placement: give it its own copy of what it plays.
+ *
+ * The answer to "an edit here changes four regions". Forking is ONE VISIBLE ACT with a name and
+ * an undo entry, which is why it is better than the per-placement override MODE I nearly built:
+ * a mode you forgot to set fails quietly, a week later, as a fix that did not propagate.
+ *
+ * The original is kept as the placement's ALTERNATE — nothing is lost and nothing destructive
+ * enters the undo stack — so `swap` is a comparison rather than a decision, and `keep` is the
+ * decision when you are ready to make it.
+ */
+function scratch(op, track, placement) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  const p = Number(placement);
+  if (!Number.isFinite(p) || p < 0) {
+    // The PLACEMENT, not the clip. Forking is about one appearance; naming the clip would name
+    // the thing every appearance shares, which is the opposite of what fork means.
+    state.reject = 'which placement?'; schedule(); return false;
+  }
+  conn.send({ type: 'scratch', op, track: Number(track) || 0, placement: p });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
+ * The placement under the cursor, as the engine published it, or null.
+ *
+ * By TICK RANGE rather than by the selection: the selection is an arrangement idea and the
+ * cursor is the tracker's, and `fork` with no argument should mean "the one I am editing" on
+ * either surface.
+ */
+function placementAtCursor() {
+  if (!engine || !engine.extentCount) return null;
+  const track = state.cursor.track;
+  const tick = tickOfCursorRow();
+  for (let i = 0; i < engine.extentCount; i++) {
+    const e = engine.extents[i];
+    // Same rule as `sharedAtCursor`: an unpublished length extends forward rather than being
+    // an empty range that nothing can be inside.
+    if (e.track === track && tick >= e.startTick
+        && (tick < e.endTick || e.endTick <= e.startTick)) {
+      return { placement: e.placementId, clip: e.clipId, name: e.name, track,
+               forked: !!(e.flags & (1 << 24)) };
+    }
+  }
+  return null;
+}
+
+/**
+ * IS THE CURSOR INSIDE A PLACEMENT WHOSE CLIP IS PLAYED ELSEWHERE?
+ *
+ * Returns `{appearances, forked, name}` or null. This is the fact the arrangement and the tracker
+ * could never state: two placements of one clip are two rails with the same name, so an edit
+ * inside one silently changes the others and nothing says it will.
+ *
+ * BEFORE the edit, not after. A message that says "that changed 4 placements" is honest and a
+ * beat too late; a readout that says so while the cursor sits there is the difference between
+ * knowing and being told. It costs a scan of the extents per frame, bounded by the engine's cap
+ * and guarded on the extents' revision by `clipUses` upstream.
+ */
+function sharedAtCursor() {
+  if (!engine || !engine.extentCount) return null;
+  const track = state.cursor.track;
+  const tick = tickOfCursorRow();
+  for (let i = 0; i < engine.extentCount; i++) {
+    const e = engine.extents[i];
+    if (e.track !== track) continue;
+    /*
+     * `endTick <= startTick` MEANS "LENGTH NOT PUBLISHED", NOT "no length".
+     *
+     * The engine's own convention: a placement with length 0 plays its CLIP's length, which the
+     * extent does not carry — so a fresh placement publishes start == end and a strict range
+     * test finds it contains no tick at all. The warning then stayed silent on exactly the
+     * placement somebody had just made, which is when they are most likely to be about to type
+     * into it.
+     *
+     * Biased toward WARNING: an unpublished length is treated as extending forward. For a
+     * readout whose whole job is "you might not want to do this", a false warning costs a glance
+     * and a missed one costs the edit.
+     */
+    const unknownLength = e.endTick <= e.startTick;
+    if (tick < e.startTick) continue;
+    if (!unknownLength && tick >= e.endTick) continue;
+    let uses = 0;
+    for (let k = 0; k < engine.extentCount; k++) if (engine.extents[k].clipId === e.clipId) uses++;
+    const forked = !!(e.flags & (1 << 24));
+    // Only worth saying when there IS something to say: one appearance and no alternate is the
+    // ordinary case and a chip for it would be noise on every row of every song.
+    if (uses <= 1 && !forked) return null;
+    /*
+     * WHETHER IT IS AUDIO CHANGES WHAT THE WARNING MEANS.
+     *
+     * "an edit here changes all of them" is about NOTE edits into a shared symbolic clip. An
+     * audio region holds no notes, so the same sentence over one would be claiming a consequence
+     * that cannot happen — and a warning that is wrong once is a warning that gets ignored
+     * afterwards. The COUNT is a true and useful fact either way; only the claim about editing
+     * is dropped.
+     */
+    return { appearances: uses, forked, name: e.name, audio: !!e.audio };
+  }
+  return null;
+}
+
+/**
  * Is there a marker with this id RIGHT NOW?
  *
  * Every op but `add` addresses an existing marker, and the engine refuses an unknown id on its
@@ -2346,6 +2466,15 @@ const dockApi = {
   writeAutomation: (track, param, tick, value, discrete) =>
     writeAutomation(track, param, tick, value, discrete),
   automationPoints: (track, param) => requestAutomation(track, param),
+  /*
+   * SCRATCH CLIPS. `fork` gives this appearance its own copy and keeps the original behind it;
+   * `swap` is the A/B; `keep` drops the other once decided. With no placement they act on the
+   * one under the cursor, which is what "fork this" means when you are looking at it.
+   */
+  shared: () => sharedAtCursor(),
+  fork: (track, placement) => scratchHere('fork', track, placement),
+  swapClip: (track, placement) => scratchHere('swap', track, placement),
+  keepClip: (track, placement) => scratchHere('keep', track, placement),
   markers: () => markersOf(),
   addMarker: (tick, name) => addMarker(tick, name),
   delMarker: (id) => delMarker(id),
@@ -3690,6 +3819,7 @@ const _chromeOpts = { playheadTick: 0, transport: 0, linkText: '', octave: 0,
                       tempoPointCount: 0, meter: null,
                       editMode: true, followPlayhead: false, generating: '',
                       loopStartBar: 0, loopEndBar: 0, grooveMilli: 0,
+                      sharedText: '', sharedForked: false,
                       blockSize: 0, sampleRateHz: 0, docVersion: -1,
                       savedAgoSeconds: -1 };
 function updateChrome() {
@@ -3768,6 +3898,21 @@ function updateChrome() {
     for (let i = 0; i < engine.quantizeCount; i++) {
       if (engine.quantize[i].track === t) { o.grooveMilli = engine.quantize[i].swing || 0; break; }
     }
+  }
+  /*
+   * WHAT AN EDIT HERE WOULD TOUCH. Empty when the answer is "only this", which is nearly always
+   * — a chip that said "×1" on every row would be noise, and noise is how a warning stops being
+   * read.
+   */
+  {
+    const sh = sharedAtCursor();
+    o.sharedText = sh
+      ? (sh.forked ? 'forked copy' : `shared \u00d7${sh.appearances}`)
+      : '';
+    o.sharedForked = !!(sh && sh.forked);
+    // See `sharedAtCursor`: an audio region holds no notes, so the chip counts without claiming
+    // that typing here would reach the others.
+    o.sharedAudio = !!(sh && sh.audio);
   }
   o.blockSize = engine ? (engine.blockSize || 0) : 0;
   o.sampleRateHz = engine ? (engine.sampleRateHz || 0) : 0;
@@ -6937,6 +7082,10 @@ window.__uni = {
   modDepth: (track, link, depth) => dockApi.modDepth(track, link, depth),
   macro: (track, device, value) => dockApi.macro(track, device, value),
   // The SAME reader the console's `markers` uses, not a second one — see `dockApi`.
+  shared: () => dockApi.shared(),
+  fork: (track, placement) => dockApi.fork(track, placement),
+  swapClip: (track, placement) => dockApi.swapClip(track, placement),
+  keepClip: (track, placement) => dockApi.keepClip(track, placement),
   markers: () => dockApi.markers(),
   addMarker: (tick, name) => dockApi.addMarker(tick, name),
   delMarker: (id) => dockApi.delMarker(id),

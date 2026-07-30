@@ -276,6 +276,17 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
    * looking complete. Marked unavailable, with the reason in the title, exactly like the
    * record button.
    */
+  /*
+   * WHAT AN EDIT AT THE CURSOR WOULD TOUCH.
+   *
+   * The single most important thing this bar can say and the one it could not: a placement whose
+   * clip is played by three others looks exactly like one that is not, so an edit changes four
+   * regions and nothing warned you. Beside the transport rather than in a corner, because it is
+   * about what is ABOUT TO HAPPEN, and it is silent whenever the answer is "only this".
+   */
+  const sharedChip = label('ch-chip ch-shared', '');
+  let lastShared = null, lastSharedForked = null;
+
   const clickChip = label('ch-chip ch-click unavailable', 'CLICK');
   clickChip.title = 'Metronome — the engine has no click yet';
 
@@ -364,7 +375,7 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
    * `.ch-telemetry` is what takes the free space, so anything after it is pinned to the right
    * edge, and there is only room for one thing to be pinned there.
    */
-  host.append(brand, transport, pos, loopChip, clickChip, scales, tracks,
+  host.append(brand, transport, pos, sharedChip, loopChip, clickChip, scales, tracks,
               right, telemetry, savedChip, tabs);
   // The entry cluster, one row down when there is one. `.ch-entry-row` drops the group's left
   // rule, which is a separator between top-bar cells and reads as a stray line on its own.
@@ -400,7 +411,38 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
              // the engine and every one is ABSENT rather than defaulted when the engine has
              // not said — see each guard below for why that distinction is load-bearing.
              loopStartBar = 0, loopEndBar = 0, grooveMilli = 0,
+             sharedText = '', sharedForked = false, sharedAudio = false,
              blockSize = 0, sampleRateHz = 0, docVersion = -1, savedAgoSeconds = -1 }) {
+      /*
+       * SHARED, or forked, or nothing. Guarded on the TEXT, so the count changing repaints and a
+       * cursor moving between two equally-shared placements does not.
+       */
+      /*
+       * The key is the text AND whether it is audio, because the TITLE depends on both. Guarding
+       * on the text alone would leave the wrong sentence on a chip whose count had not changed
+       * while the cursor moved from a symbolic clip to an audio one — content moving while the
+       * key stands still, which is this codebase's signature bug.
+       */
+      const sharedKey = `${sharedText}|${sharedAudio ? 'a' : ''}`;
+      if (sharedKey !== lastShared) {
+        lastShared = sharedKey;
+        sharedChip.firstChild.nodeValue = sharedText;
+        sharedChip.style.display = sharedText ? '' : 'none';
+        /*
+         * The claim is only made where it is true. An audio region holds no notes, so "an edit
+         * here changes all of them" over one would promise a consequence that cannot happen —
+         * and a warning that is wrong once stops being read.
+         */
+        sharedChip.title = !sharedText ? ''
+          : sharedAudio
+            ? 'this audio clip is placed more than once'
+            : 'the clip under the cursor is played by more than one placement — '
+              + 'an edit here changes all of them';
+      }
+      if (sharedForked !== lastSharedForked) {
+        lastSharedForked = sharedForked;
+        sharedChip.classList.toggle('forked', sharedForked);
+      }
       /*
        * THE LOOP, in bars. Absent when there is none — a chip reading "LOOP 1-1" for a loop
        * that does not exist is a claim about the song, not an empty field.

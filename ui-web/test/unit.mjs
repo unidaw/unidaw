@@ -815,6 +815,7 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      // The spine. Six, because a section has six things you can do to it
                      // and every one is reachable from both surfaces — the strip's click,
                      // drag and double-click all come through these same methods.
+                     'shared', 'fork', 'swapClip', 'keepClip',
                      'markers', 'addMarker', 'delMarker', 'nameMarker', 'moveMarker',
                      'insertTime', 'setTimeSig',
                      // Modulation. `mapParam` takes a parameter INDEX and resolves the
@@ -2121,6 +2122,12 @@ const OP_REGISTRY = {
    * Recorded as a gap on their side rather than left looking covered.
    */
   macro:       { cli: null, agent: 'set_macro', why: 'gap' },
+  // SCRATCH CLIPS. The read has no CLI verb — daw-cli can fork and swap but cannot say what is
+  // shared, which is the half a person needs first. Recorded rather than claimed.
+  shared:      { cli: null, agent: 'shared_clips', why: 'gap' },
+  fork:        { cli: 'scratch', agent: 'fork_placement' },
+  swapclip:    { cli: 'scratch', agent: 'swap_placement_clip' },
+  keepclip:    { cli: 'scratch', agent: 'keep_placement_clip' },
   markers:     { cli: 'arrangement', agent: 'markers' },
   /*
    * All four marker edits are one agent tool with an `op`, because their arguments differ and a
@@ -2239,7 +2246,7 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                   * table. Recorded here rather than claimed, since claiming a path the check
                   * cannot see is worse than recording a gap that is nearly closed.
                   */
-                 'curve', 'autopoint'];
+                 'curve', 'autopoint', 'shared'];
 /** Ops with no agent tool today. Same rule. */
 // `bypass` joins the list rather than being smuggled past it: the engine takes
 // the command and daw-cli sends it, but the agent's manifest has no tool for it,
@@ -2428,27 +2435,6 @@ const ENGINE_UNUSED = {
    * the same failure it avoids: forgetting to set a mode fails QUIETLY, in the wrong lane,
    * where a self-addressing command cannot.
    */
-  /*
-   * M2.57 SCRATCH CLIPS (70-72), landed engine-side and not yet a surface here — and they are
-   * the answer to a question Jaakko asked while they were landing: how does a person know an
-   * edit will echo to every placement of a clip, and how do they say they want it not to?
-   *
-   * ForkPlacementClip copies the clip a placement plays, points the placement at the copy, and
-   * keeps the original as the placement's ALTERNATE. SwapPlacementClip exchanges the two, which
-   * IS the A/B — what plays is always `clipId`, so there is no audition mode to get out of step
-   * with what you hear. ClearPlacementAlternate drops the other version once you have decided,
-   * and keeping is doing nothing.
-   *
-   * That is a better shape than the per-placement override mode I was going to build: forking
-   * is one visible act with a name, where a mode you forgot to set fails quietly.
-   *
-   * WHAT IS STILL MISSING FIRST, and it is not a command: nothing in this app SAYS a clip is
-   * shared. Two placements of one clip draw as two rails with the same name, and an edit goes to
-   * the shared clip silently. The report comes before the controls.
-   */
-  ForkPlacementClip: 'gap — no "fork this placement" yet; the app does not say a clip is shared',
-  SwapPlacementClip: 'gap — with ForkPlacementClip; this is the A/B',
-  ClearPlacementAlternate: 'gap — with ForkPlacementClip',
   SetAutomationTarget: 'gap — WriteAutomationPoint carries its own paramId; no mode needed',
   /*
    * A PLACEMENT's own edit scope (61): note edits landing in it are recorded as overrides

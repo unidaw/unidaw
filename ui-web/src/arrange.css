@@ -239,6 +239,30 @@
   z-index: 2;
 }
 
+/* A placement whose clip is played by more than one of them.
+   The hatch is on the LEFT EDGE rather than across the block: a wash over the whole rail
+   would fight the waveform and the note material, which are what the rail is for. */
+.ar-clip.shared { border-left: 3px solid var(--uni-clip-rail); }
+.ar-clip.shared::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: repeating-linear-gradient(
+    135deg, transparent 0 2px, var(--base-accent) 2px 4px);
+  pointer-events: none;
+}
+/* FORKED: this appearance has its own copy and another version behind it. The warm colour,
+   not the accent — it is the state you act on, and it must not read as a stronger kind of
+   shared. A forked placement is by definition NOT shared: it has its own clip. */
+.ar-clip.forked { border-left: 3px solid var(--uni-text-fx); }
+.ar-clip.forked::before { display: none; }
+.ar-clip-share {
+  position: absolute; top: 1px; right: 3px;
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--base-accent-ramp-400);
+  pointer-events: none;
+}
+.ar-clip.forked .ar-clip-share { color: var(--uni-text-fx); }
+
 /* The waveform band. First child of the clip wrapper, so the clip blocks paint
    over it — a region's wash, border and name belong on top of its material.
    Its width, height and x are all written from JS, because all three are

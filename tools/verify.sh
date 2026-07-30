@@ -51,6 +51,7 @@ if [ "${1:-}" = "--engine" ]; then
   step "engine: e2e"           node "$WEB/ui-web/test/e2e.mjs"
   step "engine: journey"       node "$WEB/ui-web/test/journey.mjs"
   step "engine: markers "      node "$WEB/ui-web/test/markers.mjs"
+  step "engine: shared"        node "$WEB/ui-web/test/shared.mjs"
   step "engine: modulation"    node "$WEB/ui-web/test/mods.mjs"
   step "engine: chrome"        node "$WEB/ui-web/test/chrome.mjs"
   step "engine: layout"        node "$WEB/ui-web/test/layout.mjs"

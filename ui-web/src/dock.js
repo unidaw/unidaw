@@ -441,6 +441,41 @@ export function createCommands(api) {
      * transaction the engine refuses whole and undoes whole. Editing a label used to do that as
      * a side effect, with no undo entry big enough to hold it.
      */
+    /*
+     * SCRATCH CLIPS — the answer to "an edit here changes four regions".
+     *
+     * `shared` is the READ and comes first, because the controls are useless until the state is
+     * visible: two placements of one clip look identical to two different clips, and nothing
+     * said so before this. `fork` is the act; `swap` compares; `keep` decides.
+     *
+     * None of the three takes a clip. They take a PLACEMENT — one appearance — because forking
+     * the clip would be forking the thing every appearance shares.
+     */
+    shared: { help: 'shared \u2014 what an edit at the cursor would touch', args: NONE,
+      run: () => {
+        const s = api.shared();
+        if (!s) return 'the clip under the cursor is played by nothing else \u2014 an edit here '
+                     + 'changes only this placement';
+        return s.forked
+          ? `${s.name}: FORKED \u2014 this appearance has its own copy, with another version `
+            + 'behind it. `swap` compares them, `keep` drops the other.'
+          : `${s.name}: shared by ${s.appearances} placements \u2014 an edit here changes ALL of `
+            + 'them. `fork` gives this one its own copy.';
+      } },
+    fork: { help: 'fork [placement] \u2014 give this appearance its own copy of the clip',
+      args: [{ name: 'placement', type: 'int', min: 0, optional: true }],
+      // Nothing is lost: the original is kept as the placement's alternate, so this is not a
+      // decision yet — `keep` is.
+      run: (a) => (api.fork(undefined, a[0])
+        ? 'forked \u2014 the original is kept behind it; `swap` compares, `keep` decides'
+        : refusal(api)) },
+    swapclip: { help: 'swapclip [placement] \u2014 the A/B: exchange this clip with its alternate',
+      args: [{ name: 'placement', type: 'int', min: 0, optional: true }],
+      // What PLAYS is always the placement's clip, so there is no audition mode to leave.
+      run: (a) => (api.swapClip(undefined, a[0]) ? 'swapped' : refusal(api)) },
+    keepclip: { help: 'keepclip [placement] \u2014 drop the alternate; keep what is playing',
+      args: [{ name: 'placement', type: 'int', min: 0, optional: true }],
+      run: (a) => (api.keepClip(undefined, a[0]) ? 'kept what is playing' : refusal(api)) },
     markers: { help: 'markers — the song\u2019s named ticks, bar by bar', args: NONE,
       run: () => {
         const m = api.markers();

@@ -933,6 +933,12 @@ export class Arrange {
       const label = div('ar-clip-name', el);
       label.appendChild(document.createTextNode(''));
       el._label = label.firstChild;
+      // The shared-count badge, at the right end. Its own node so it and the name do not
+      // rebuild each other.
+      const share = div('ar-clip-share', el);
+      share.appendChild(document.createTextNode(''));
+      el._share = share.firstChild;
+      el._shared = null; el._forked = null; el._badge = null; el._title = null;
       el._x = -1; el._w = -1; el._y = -1; el._name = null;
       el._pTrack = -1; el._pTick = -1; el._bad = false;
       el._pId = -1; el._pEnd = -1;
@@ -1549,6 +1555,39 @@ export class Arrange {
       if (el._h !== lh) { el._h = lh; el.style.height = `${lh}px`; }
       if (el._name !== c.name) { el._name = c.name; el._label.nodeValue = c.name; }
       if (el._audio !== c.audio) { el._audio = c.audio; el.classList.toggle('audio', c.audio); }
+      /*
+       * SHARED, FORKED, OR THE ONLY ONE — three states, drawn as three.
+       *
+       * The arrangement could not say any of this: two placements of one clip drew as two rails
+       * with the same name, which is indistinguishable from two different clips that happen to
+       * share a name. So an edit inside one silently changed the others and nothing on screen
+       * said it would — the single worst thing this surface did not report.
+       *
+       * `.shared` is a hatched left edge and a count; `.forked` is the third state and is drawn
+       * DIFFERENTLY rather than as a kind of shared, because "this one has its own copy and
+       * another version behind it" is what you need to know before you swap, and folding it into
+       * either of the other two is the lie the readout exists to stop.
+       */
+      const shared = c.appearances > 1;
+      if (el._shared !== shared) { el._shared = shared; el.classList.toggle('shared', shared); }
+      if (el._forked !== c.hasAlternate) {
+        el._forked = c.hasAlternate;
+        el.classList.toggle('forked', c.hasAlternate);
+      }
+      /*
+       * The COUNT, in the rail, because "shared" without "with how many" is half an answer — and
+       * the number is what tells you whether an edit here changes one other thing or eleven.
+       * Its own text node, so a name change does not rebuild it and it does not rebuild a name.
+       */
+      const badge = shared ? `\u00d7${c.appearances}` : '';
+      if (el._badge !== badge) { el._badge = badge; el._share.nodeValue = badge; }
+      // A tooltip that says it in words, because a hatch and a number are a convention somebody
+      // has to learn once — and the first time is best spent reading rather than guessing.
+      const title = c.hasAlternate
+        ? `${c.name} — forked: this placement has its own copy, with another version behind it`
+        : shared ? `${c.name} — shared by ${c.appearances} placements; editing here changes all of them`
+        : '';
+      if (el._title !== title) { el._title = title; el.title = title; }
       // A source that would not decode, said on the block as well as on the
       // canvas: a region narrower than the stripe still has to look wrong.
       const bad = c.srcStatus === 2;
