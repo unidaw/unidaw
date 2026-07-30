@@ -3875,12 +3875,35 @@ fn serve(stream: TcpStream, shm: String, hz: u32, clients: Arc<AtomicU64>,
             let dp = handle.read_device_params();
             if dp.version != 0 && dp.version != params_version {
                 params_version = dp.version;
+                /*
+                 * WHAT THE PARAMETER IS, not just where it is (v30).
+                 *
+                 * Without these a rack can read "Cutoff is 0.62, displays 440 Hz" and cannot know
+                 * what 0.0 and 1.0 mean, whether it is a switch, or what to reset it to — so a
+                 * person setting a value in real units is doing a binary search against the
+                 * display string, which is a guessing loop rather than an interface.
+                 *
+                 * `minText`/`maxText` are the endpoints AS THE PLUGIN RENDERS THEM, and they are
+                 * the load-bearing pair: for a VST3 through JUCE the normalisable range is 0..1,
+                 * so `min`/`max` say nothing at all and the real range exists ONLY as that text.
+                 *
+                 * `automatable: false` means the plugin will IGNORE an automation lane pointed at
+                 * it — so drawing one would be a lie, and the rack needs to know before it offers.
+                 */
+                let esc = |t: &str| t.replace('\\', "").replace('"', "'");
                 let ps: Vec<String> = dp.params.iter().map(|q| format!(
-                    "{{\"index\":{},\"value\":{},\"name\":\"{}\",\"display\":\"{}\",\"uid\":\"{}\"}}",
+                    "{{\"index\":{},\"value\":{},\"name\":\"{}\",\"display\":\"{}\",\
+                     \"uid\":\"{}\",\"unit\":\"{}\",\"minText\":\"{}\",\"maxText\":\"{}\",\
+                     \"default\":{},\"steps\":{},\"discrete\":{},\"automatable\":{}}}",
                     q.index, q.value,
-                    q.name.replace('\\', "").replace('"', "'"),
-                    q.display.replace('\\', "").replace('"', "'"),
-                    q.uid16.iter().map(|b| format!("{b:02x}")).collect::<String>())).collect();
+                    esc(&q.name), esc(&q.display),
+                    q.uid16.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                    esc(&q.unit), esc(&q.min_text), esc(&q.max_text),
+                    // Finite or 0: a NaN default from a misbehaving plugin would produce JSON the
+                    // page cannot parse, and the failure would be the whole rack going blank
+                    // rather than one number looking wrong.
+                    if q.default_value.is_finite() { q.default_value } else { 0.0 },
+                    q.step_count, q.discrete, q.automatable)).collect();
                 let msg = format!(
                     "{{\"deviceParams\":{{\"version\":{},\"track\":{},\"device\":{},\"name\":\"{}\",\"params\":[{}]}}}}",
                     dp.version, dp.track_id, dp.device_id,

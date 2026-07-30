@@ -789,7 +789,8 @@ export class Chain {
       r._n = nm.firstChild; r._f = fill; r._v = v.firstChild; r._map = map;
       r._nv = null; r._fv = -1; r._vv = null; r._top = -1; r._pi = -1;
       r._uid = ''; r._pend = null; r._pendMilli = -1; r._pendText = '';
-      r._mod = -1; r._modInert = null;
+      r._mod = -1; r._modInert = null; r._meta = null; r._stepped = null;
+      r._mappable = null;
       rows.push(r);
     }
   }
@@ -817,6 +818,35 @@ export class Chain {
     r._pi = q.index;
     r._uid = q.uid;
     if (r._nv !== q.name) { r._nv = q.name; r._n.nodeValue = q.name; }
+    /*
+     * WHAT THIS PARAMETER IS, in the row's title — the range as the plugin renders it, the unit,
+     * whether it is a switch, and whether automation would be ignored.
+     *
+     * In the TITLE rather than on the row because there is no room for it at 17px and it is a
+     * thing you ask about one parameter at a time. Before this the rack drew every parameter as
+     * an anonymous 0..1 bar, so setting a value in real units meant dragging and reading the
+     * display string until it said the right thing — a binary search rather than an interface.
+     */
+    const meta = q.range || q.steps || !q.automatable
+      ? [q.range, q.steps ? `${q.steps} positions` : '',
+         q.automatable ? '' : 'not automatable'].filter(Boolean).join(' · ')
+      : '';
+    if (r._meta !== meta) { r._meta = meta; r.title = meta; }
+    /*
+     * A SWITCH IS DRAWN AS A SWITCH. `steps` non-zero means the value can only take that many
+     * positions, and a continuous bar over it says the values in between are reachable — which
+     * they are not. The class puts notches on the fill; the bar still drags, because a switch you
+     * can only set from the console is a switch nobody sets.
+     */
+    const stepped = q.steps > 0 && q.steps <= 16;
+    if (r._stepped !== stepped) {
+      r._stepped = stepped;
+      r.classList.toggle('stepped', stepped);
+      // The positions as a CSS variable, so the notches are drawn by the stylesheet rather than
+      // by this file inventing geometry the theme cannot change.
+      if (stepped) r.style.setProperty('--steps', String(q.steps));
+      else r.style.removeProperty('--steps');
+    }
 
     // An edit in flight wins over the published value, and says that it is one.
     // The plugin's display string is NOT reused while it does: "620 Hz" beside a
@@ -844,6 +874,22 @@ export class Chain {
      * different link still repaints — and so the id on the element is always the id the
      * badge is showing, which is what the click handler reads.
      */
+    /*
+     * NO MAP ON A PARAMETER THE PLUGIN WILL IGNORE.
+     *
+     * `automatable: false` (v30) means the plugin does not accept a value from a host for this —
+     * so a link pointed here is accepted by the engine, published, drawable, and moves nothing.
+     * That is the same class of lie the badge's third state exists to expose, and the cheapest
+     * fix is not to offer it: the badge is hidden rather than shown-and-refusing, because a
+     * control that says no is still a control somebody presses twice.
+     *
+     * The TITLE says why, on the row, so the absence is explained rather than merely present.
+     */
+    const mappable = q.automatable !== false;
+    if (r._mappable !== mappable) {
+      r._mappable = mappable;
+      r._map.style.display = mappable ? '' : 'none';
+    }
     if (r._mod !== q.mod || r._modInert !== q.modInert) {
       r._mod = q.mod; r._modInert = q.modInert;
       r._map.classList.toggle('on', q.mod !== 0 && !q.modInert);

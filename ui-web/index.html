@@ -1081,6 +1081,15 @@ function mapParam(track, device, param, uid) {
     state.reject = 'this parameter has no stable id — the engine addresses modulation by it';
     schedule(); return false;
   }
+  /*
+   * AND THE PLUGIN HAS TO ACCEPT IT. An `automatable: false` parameter ignores values from a
+   * host, so the link would be accepted, published, drawn — and inert. Refused here as well as
+   * hidden in the rack, because the console can reach a row the rack is not showing.
+   */
+  if (!paramAutomatable(track, device, param)) {
+    state.reject = 'this plugin ignores host automation for that parameter';
+    schedule(); return false;
+  }
   conn.send({ type: 'mod', op: 'add', track, srcDevice: src, srcId: 0,
               dstDevice: device, dstParam: param, depth: 1, bias: 0,
               source: 'macro', target: 'param', rate: 'block' });
@@ -1129,6 +1138,15 @@ function paramUidOf(track, device, index) {
  * plugin has no row for — the second is indistinguishable from the first on the wire, and
  * is what a project authored against another version of the same plugin leaves behind.
  */
+/** Does the plugin accept a host value for this parameter? Absent means yes — see mapParam. */
+function paramAutomatable(track, device, index) {
+  const dp = deviceParams[paramKey(track, device)];
+  const list = dp && dp.params;
+  if (!Array.isArray(list)) return true;
+  for (const p of list) if (p.index === index) return p.automatable !== false;
+  return true;
+}
+
 function paramIndexOfUid(track, device, uid) {
   const dp = deviceParams[paramKey(track, device)];
   const list = dp && dp.params;

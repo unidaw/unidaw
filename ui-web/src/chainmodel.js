@@ -236,6 +236,21 @@ function createParamSlot() {
     mod: 0,
     /** How far the source sweeps it, 0..1 of the parameter's range. */
     modDepth: 0,
+    /*
+     * WHAT THE PARAMETER IS (v30), not just where it is.
+     *
+     * `range` is the endpoints AS THE PLUGIN RENDERS THEM — "-60.0 dB .. 0.0 dB" — and it is the
+     * load-bearing one: for a VST3 through JUCE the normalisable range is 0..1, so the numeric
+     * min and max say nothing and the real range exists only as that text.
+     *
+     * `steps` non-zero means a SWITCH with that many positions, and drawing one as a continuous
+     * bar is not merely ugly: it says the value between two positions is reachable, and it is not.
+     *
+     * `automatable: false` means the plugin will IGNORE an automation lane pointed here, so the
+     * rack must not offer one — a control that accepts a curve nothing reads is the same class of
+     * lie as a modulation badge over a link that moves nothing.
+     */
+    unit: '', range: '', steps: 0, automatable: true, defaultValue: 0,
     /**
      * The link exists and CANNOT WORK: it has no uid16, and the engine addresses a VST
      * parameter by uid16 alone. Drawn differently from a working link, because a badge
@@ -505,6 +520,18 @@ export function buildChainModel(opts, buf) {
         p.index = q.index === undefined ? k : q.index;
         p.uid = q.uid || '';
         p.name = q.name;
+        p.unit = q.unit || '';
+        p.steps = q.steps || 0;
+        // Absent means TRUE. A plugin that publishes nothing about automatability is not saying
+        // "no" — and defaulting to no would hide the lane on every plugin that predates the field.
+        p.automatable = q.automatable !== false;
+        p.defaultValue = typeof q.default === 'number' ? q.default : 0;
+        /*
+         * The range, built ONCE per parameter rather than per frame, and only when both ends have
+         * text. A half-range ("-60.0 dB .. ") is worse than none: it reads as a plugin that
+         * failed to answer rather than as one that was never asked.
+         */
+        p.range = (q.minText && q.maxText) ? `${q.minText} .. ${q.maxText}` : '';
         // ALREADY NORMALISED. The engine publishes milli-units and the bridge
         // divides by 1000 before it reaches here, so dividing again put every
         // bar at a thousandth of its length — all of them empty, next to

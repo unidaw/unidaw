@@ -167,6 +167,19 @@
 .dv-p-v { flex: 0 0 58px; text-align: right; color: var(--base-accent-ramp-300);
           overflow: hidden; white-space: nowrap; }
 
+/* A SWITCH, not a fader. `--steps` is the number of positions, written by the renderer from
+   what the plugin published — the notches are drawn here so a theme can change them, and the
+   bar still drags because a switch you can only set from the console is one nobody sets.
+
+   `repeating-linear-gradient` over the TRACK rather than the fill: the notches mark where the
+   value can land, which is a property of the parameter and not of where it currently is. */
+.dv-p.stepped .dv-p-bar {
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--uni-rule-track) 0 1px,
+    transparent 1px calc(100% / var(--steps, 2)));
+}
+
 /* MAP — the modulation badge, at the right end of a parameter row.
    Dim and outlined when nothing moves this parameter, LIT in the accent when
    something does. Both states are clickable and it never changes size between them:
