@@ -6116,11 +6116,25 @@ struct TrackRuntime {
     {
       std::lock_guard<std::mutex> slock(sectionMutex);
       sectionList.setSections(document.sections);
+      // SAY IT when the document had to be repaired. A file can carry duplicate section ids or
+      // a zero — hand-authored, merged, or written by an older build — and indexOfId returns
+      // the FIRST match, so the second section sharing an id was unaddressable: renaming it
+      // renamed the other one. Reassigning silently would be changing someone's document
+      // without telling them, which is the half of this that matters.
+      if (sectionList.repaired() > 0) {
+        DAW_EVENT("sections.ids_repaired")
+            .field("count", sectionList.repaired())
+            .field("reason", "duplicate_or_zero_id");
+        std::cerr << "Load: " << sectionList.repaired()
+                  << " section id(s) in this project were duplicated or zero and have been "
+                     "reassigned — a duplicate id makes one of the two sections impossible to "
+                     "address." << std::endl;
+      }
       if (!document.sections.empty() && !document.timeSigMap.empty()) {
         daw::TimeSignatureMap oldMap;
         oldMap.setMap(document.timeSigMap);
         const auto migrated = daw::migrateSectionsFromMeterMap(
-            sectionList.sections(), oldMap, sectionList.nextId());
+            sectionList.sections(), oldMap, sectionList.peekNextId());
         if (migrated.size() != sectionList.sections().size()) {
           DAW_EVENT("sections.meter_migrated")
               .field("before", static_cast<uint64_t>(sectionList.sections().size()))
@@ -8096,6 +8110,54 @@ struct TrackRuntime {
               }
             }
             spans.emplace_back(pl.id, *pl.at, *pl.at + len);
+          }
+        }
+        // AUTOMATION IS MATERIAL TOO, and the refusal above guarded only placements.
+        //
+        // The argument for refusing a shrink into occupied bars is written out on planRipple:
+        // rippleTick moves what is at or after the boundary, so material INSIDE the removed
+        // bars does not move — the later section boundaries slide over it instead, and a
+        // placement that was in the intro is silently now in the verse with no note changed.
+        // A filter sweep is re-sectioned by exactly the same mechanism, and there is a second,
+        // worse consequence for automation specifically: a point AT the old boundary lands on
+        // the new end, and if a point is already there `addPoint` REPLACES it. So the shrink
+        // silently destroys one of them, with no undo entry that would put it back.
+        //
+        // Scanned separately from `spans` rather than folded into planRipple, which stays a
+        // pure geometry helper — and reported by track and PARAM, because "something is in the
+        // way" is not actionable when the thing is one lane out of sixty.
+        if (delta < 0) {
+          const uint64_t magnitude = static_cast<uint64_t>(-delta);
+          const uint64_t vacatedStart =
+              oldEndTick > magnitude ? oldEndTick - magnitude : 0;
+          for (auto* rt : trackSnap) {
+            if (!rt || rt->removed.load(std::memory_order_acquire)) {
+              continue;
+            }
+            std::lock_guard<std::mutex> tlock(rt->trackMutex);
+            for (const auto& clip : rt->track.automationClips) {
+              for (const auto& pt : clip.points()) {
+                if (pt.nanotick >= vacatedStart && pt.nanotick <= oldEndTick) {
+                  DAW_EVENT("section.rejected")
+                      .field("op", "set_section_length")
+                      .field("section", sp.sectionId)
+                      .field("reason", "automation_in_removed_bars")
+                      .field("track", rt->trackId)
+                      .field("param", clip.paramId())
+                      .field("nanotick", pt.nanotick);
+                  std::cerr << "UI: SetSectionLength refused — automation on track "
+                            << rt->trackId << " param '" << clip.paramId()
+                            << "' has a point at " << pt.nanotick
+                            << ", inside the bars this would remove. Shrinking would leave the "
+                               "sweep where it is while the sections slide over it, and would "
+                               "collapse a point at the boundary onto the one already there."
+                            << std::endl;
+                  historyAppend("set_section_length",
+                                "rejected:automation_in_removed_bars", rt->trackId, 0, "");
+                  return;
+                }
+              }
+            }
           }
         }
         const auto plan = daw::planRipple(spans, oldEndTick, delta);

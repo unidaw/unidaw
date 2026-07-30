@@ -17,7 +17,7 @@
 # can disagree with what plays, and "two answers to what is the cutoff at bar 9" is the class of
 # bug this whole read-back exists to make visible.
 #
-# FIVE PROPERTIES:
+# SIX PROPERTIES:
 #   LISTS      the lane list names the automated params, per track, with their point counts
 #   POINTS     a requested lane comes back with the ticks and values that were written
 #   ANSWERS    a param nothing automates returns found:false — an ANSWER, not silence
@@ -37,6 +37,10 @@
 #              the entire difference between a check and a rubber stamp.
 #   CACHES     the version moves on an automation write and does NOT move on a note edit, so
 #              caching on it is safe and is not invalidated by ordinary typing
+#   REFUSES    a shrink into bars that hold automation is refused, by lane name. The refusal
+#              guarded placements only; automation is material by the same argument, and worse,
+#              a point at the boundary collapses onto the one at the new end because addPoint
+#              replaces. Measured without the guard: two points became one
 #
 # Needs a real audio device (non-test mode) + the C++ and daw-cli targets built.
 #   tools/automation_readback_check.sh
@@ -239,6 +243,30 @@ GOT_RES="$(points_of 0 res)"
   fail "the 'res' lane sat entirely after the boundary and should have moved whole to
         [$WANT_RES], but reads [$GOT_RES]"
 echo "  ripples: the read-back shows the moved ticks — the RT snapshot rippled, not just the model"
+
+# ---- A SHRINK INTO AUTOMATION IS REFUSED. The refusal guarded PLACEMENTS only, and automation
+# is material by the same argument: rippleTick moves what is at or after the boundary, so a sweep
+# inside the removed bars stays where it is while the later section boundaries slide over it —
+# re-sectioned, with no point changed and nothing to see. And worse for automation specifically:
+# a point AT the old boundary lands on the new end, and addPoint REPLACES at an existing tick, so
+# the shrink silently destroys one of the two.
+#
+# MEASURED WITHOUT THE GUARD: two points at bars 7 and 9 became ONE point, keeping the later
+# value. Section 1 is 6 bars here and there is a point at bar 4 (3*BAR), so shrinking to 3 bars
+# vacates [3*BAR, 6*BAR] and must be refused.
+BEFORE_SHRINK="$(points_of 0 cutoff)"
+cli do section length --id 1 --bars 3 >/dev/null 2>&1 || true
+sleep 1.4
+grep '"event":"section.rejected"' "$TMP/eng.log" | grep -q '"reason":"automation_in_removed_bars"' ||   fail "shrinking a section into bars that hold automation was NOT refused. What happens instead
+        is silent: the sweep stays put, the sections slide over it, and a point at the boundary
+        collapses onto the one already at the new end — one of the two is gone with no undo entry
+        that would put it back: $(grep -o '"event":"section[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
+grep '"event":"section.rejected"' "$TMP/eng.log" | tail -1 | grep -q '"param":"cutoff"' ||   fail "the refusal did not name the lane in the way. 'Something is in the way' is not actionable
+        when the something is one lane out of sixty"
+AFTER_SHRINK="$(points_of 0 cutoff)"
+[ "$AFTER_SHRINK" = "$BEFORE_SHRINK" ] ||   fail "the refused shrink still changed the automation: [$BEFORE_SHRINK] became [$AFTER_SHRINK].
+        A refusal has to be whole — a half-applied ripple is a corrupted arrangement"
+echo "  refuses: a shrink into bars holding automation is refused by lane name, and changes nothing"
 
 # ---- AND THE FILE AGREES. The read-back and the save are two views of the same edit; if they
 # disagree, one of them is the bug, and the point of checking both is that neither can hide it.

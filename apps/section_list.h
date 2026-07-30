@@ -83,12 +83,43 @@ class SectionList {
  public:
   // Drops zero-bar sections. Everything else is kept in the order given — the ORDER is
   // the arrangement, so this must never sort.
+  //
+  // ALSO RAISES the id watermark, and REPAIRS ids that cannot be addressed. Two failures
+  // this closes, both of which let one id mean two different sections:
+  //
+  //   * `nextId` used to be max(existing) + 1, which REUSES. Add 1,2,3; remove 3; add
+  //     again and the new section is 3 as well — so a reference held across those edits
+  //     (an undo entry, a client's selection, a saved marker) silently addresses whatever
+  //     took the slot instead of failing to resolve. The comment on nextId already claimed
+  //     ids are never reused within a session; the watermark is what makes that true.
+  //   * a FILE can carry duplicates or a zero id (hand-authored, merged, or written by an
+  //     older build). indexOfId returns the first match, so a second section with that id
+  //     was simply unaddressable: renaming or resizing it edited the first one. Duplicates
+  //     and zeros are reassigned from the watermark, and `repaired()` reports how many so
+  //     the caller can say it happened rather than quietly changing the document.
   void setSections(std::vector<Section> sections) {
     sections.erase(std::remove_if(sections.begin(), sections.end(),
                                   [](const Section& s) { return s.barCount == 0; }),
                    sections.end());
+    for (const auto& s : sections) {
+      nextId_ = std::max(nextId_, s.id + 1);
+    }
+    repaired_ = 0;
+    std::vector<uint32_t> seen;
+    seen.reserve(sections.size());
+    for (auto& s : sections) {
+      const bool dup = std::find(seen.begin(), seen.end(), s.id) != seen.end();
+      if (s.id == 0 || dup) {
+        s.id = nextId_++;
+        ++repaired_;
+      }
+      seen.push_back(s.id);
+    }
     sections_ = std::move(sections);
   }
+
+  // How many ids the last setSections had to reassign (0 = the document was already sound).
+  uint32_t repaired() const { return repaired_; }
 
   const std::vector<Section>& sections() const { return sections_; }
   bool empty() const { return sections_.empty(); }
@@ -188,19 +219,20 @@ class SectionList {
     return std::nullopt;
   }
 
-  // The next unused id, so a caller can add without scanning. Ids are never reused
-  // within a session: a stale reference must fail to resolve rather than silently
-  // address whatever took the slot.
-  uint32_t nextId() const {
-    uint32_t highest = 0;
-    for (const auto& s : sections_) {
-      highest = std::max(highest, s.id);
-    }
-    return highest + 1;
-  }
+  // The next unused id, so a caller can add without scanning. Ids are never reused within a
+  // session: a stale reference must fail to resolve rather than silently address whatever took
+  // the slot. That is why this CONSUMES from a monotonic watermark instead of returning
+  // max(existing) + 1 — the latter hands out the id of a section you just deleted.
+  uint32_t nextId() { return nextId_++; }
+
+  // The watermark without consuming it, for a caller that allocates a run of ids itself (the
+  // meter migration splits sections and takes several).
+  uint32_t peekNextId() const { return nextId_; }
 
  private:
   std::vector<Section> sections_;  // ORDER IS THE ARRANGEMENT — never sorted
+  uint32_t nextId_ = 1;            // monotonic; never goes back, so an id is never reused
+  uint32_t repaired_ = 0;
 };
 
 // MIGRATION from the old tick-keyed meter map onto per-section meters.
