@@ -2428,6 +2428,27 @@ const ENGINE_UNUSED = {
    * the same failure it avoids: forgetting to set a mode fails QUIETLY, in the wrong lane,
    * where a self-addressing command cannot.
    */
+  /*
+   * M2.57 SCRATCH CLIPS (70-72), landed engine-side and not yet a surface here — and they are
+   * the answer to a question Jaakko asked while they were landing: how does a person know an
+   * edit will echo to every placement of a clip, and how do they say they want it not to?
+   *
+   * ForkPlacementClip copies the clip a placement plays, points the placement at the copy, and
+   * keeps the original as the placement's ALTERNATE. SwapPlacementClip exchanges the two, which
+   * IS the A/B — what plays is always `clipId`, so there is no audition mode to get out of step
+   * with what you hear. ClearPlacementAlternate drops the other version once you have decided,
+   * and keeping is doing nothing.
+   *
+   * That is a better shape than the per-placement override mode I was going to build: forking
+   * is one visible act with a name, where a mode you forgot to set fails quietly.
+   *
+   * WHAT IS STILL MISSING FIRST, and it is not a command: nothing in this app SAYS a clip is
+   * shared. Two placements of one clip draw as two rails with the same name, and an edit goes to
+   * the shared clip silently. The report comes before the controls.
+   */
+  ForkPlacementClip: 'gap — no "fork this placement" yet; the app does not say a clip is shared',
+  SwapPlacementClip: 'gap — with ForkPlacementClip; this is the A/B',
+  ClearPlacementAlternate: 'gap — with ForkPlacementClip',
   SetAutomationTarget: 'gap — WriteAutomationPoint carries its own paramId; no mode needed',
   /*
    * A PLACEMENT's own edit scope (61): note edits landing in it are recorded as overrides
