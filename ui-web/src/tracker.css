@@ -109,6 +109,15 @@
 /* Track borders are deliberately heavier than the rules between columns inside
    a track — without that, N single-column tracks read as one undifferentiated
    grid of thin lines. */
+/* The two spacers standing in for tracks that are not rendered. Zero by default, so a row
+   with every track present behaves exactly as it did. `flex: 0 0 auto` because a spacer that
+   could grow or shrink would silently absorb the rounding the width model is asserted against. */
+.tk-spacer {
+  flex: 0 0 auto;
+  width: 0;
+  height: 100%;
+}
+
 .tk-track {
   display: flex;
   background: var(--tint);

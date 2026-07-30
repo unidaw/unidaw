@@ -361,12 +361,51 @@ export class Tracker {
      * the row is built. Building it once here makes both an index loop, and
      * incidentally makes cellEl a subscript instead of a querySelector.
      */
+    /*
+     * THE TWO SPACERS that will let this row hold only the tracks on screen.
+     *
+     * The plan this came from wanted `.tk-track` taken out of flex flow and positioned
+     * absolutely from the model. That works, and it costs more than it needs to: the row's
+     * gutter is `position: sticky`, which wants a flow context, and `scrollWidth` — which the
+     * scroll clamp reads — collapses the moment the tracks stop being in flow.
+     *
+     * A leading spacer sized to `trackLeft[first]` and a trailing one covering the rest keeps
+     * ALL of that working with no JS scroll interception at all: flex still lays the row out,
+     * the gutter still sticks, and `scrollWidth` still equals the strip's true extent because
+     * the spacers are exactly the tracks that are not there.
+     *
+     * Zero-width today — every track is still rendered — so this commit changes nothing it can
+     * be blamed for. That is the point of landing them separately: if the sticky gutter or the
+     * scroll extent were going to object, they object now, against a tree where the goldens are
+     * byte-identical and the only variable is two empty divs.
+     */
+    const lead = el('div', 'tk-spacer tk-spacer-lead');
+    const tail = el('div', 'tk-spacer tk-spacer-tail');
+    row.append(lead);
+    row._lead = lead;
+    row._tail = tail;
+    row._leadW = -1;
+    row._tailW = -1;
+
     const cells = new Array(trackCount * columns);
     let k = 0;
     const laneBars = new Array(trackCount);
     const laneEls = new Array(trackCount);
     for (let t = 0; t < trackCount; t++) {
       const tr = el('div', 'tk-track');
+      /*
+       * THE TRACK'S IDENTITY, on the element.
+       *
+       * Everything that wanted a track used to find it by POSITION —
+       * `.tk-track:nth-child(n + 3)`, which bakes in "gutter, harm-spacer, then tracks" — and
+       * that assumption broke the moment a spacer was added in front. It will break far worse
+       * when the row holds only the tracks on screen, where the third child might be track 9.
+       *
+       * This is the absolute track index and never a render slot. Nothing outside this file may
+       * learn a slot: `trackAt` and `hitTest` return track ids, and this attribute is how a
+       * test or an agent asks the same question of the DOM.
+       */
+      tr.dataset.track = String(t);
       tr.style.setProperty('--tint', `var(--uni-track-tint-${t % 8})`);
       /**
        * The lane's clip-local bar:beat readout — the FIRST child of the track,
@@ -412,6 +451,7 @@ export class Tracker {
       }
       row.append(tr);
     }
+    row.append(tail);
     row._cells = cells;
     row._laneBars = laneBars;
     row._lanes = laneEls;

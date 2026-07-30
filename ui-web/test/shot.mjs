@@ -522,8 +522,11 @@ for (const scene of SCENES) {
 
   if (scene.childTracks) {
     const t = await page.evaluate(() => {
+      // By data-track, not by nth-child: the positional form baked in "gutter, harm-spacer,
+      // then tracks", which stopped being true the moment the row gained a spacer — and stops
+      // being true in a much bigger way once the row holds only the tracks on screen.
       const w = (i) => {
-        const e = document.querySelector(`.tk-row[data-row="0"] .tk-track:nth-child(${i + 3})`);
+        const e = document.querySelector(`.tk-row[data-row="0"] .tk-track[data-track="${i}"]`);
         return e ? Math.round(e.getBoundingClientRect().width) : -1;
       };
       const hw = (i) => {
