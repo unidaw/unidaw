@@ -141,6 +141,22 @@ const METER_FLOOR_MB = -6000;
  * screen and mean different things, and the distinction is what stops an
  * instrument's absent input from drawing as a very quiet signal.
  */
+/**
+ * A millibel reading as the dB string a card prints.
+ *
+ * Named and exported so it can be TESTED. It was an inline `(mb / 100).toFixed(1)`,
+ * and the e2e that "checked" it compared the model's own string against the same
+ * string in the DOM — true by construction, and it stayed green when the divisor was
+ * mutated from 100 to 10. A check that compares a value to itself defends the copy,
+ * not the arithmetic.
+ *
+ * SILENT gets the symbol rather than a number, because there is no dB value for
+ * nothing and -327.7 is what the sentinel would print.
+ */
+export function meterDb(mb) {
+  return mb === METER_SILENT ? "−∞" : (mb / 100).toFixed(1);
+}
+
 export function meterScale(mb) {
   if (mb === METER_SILENT || mb <= METER_FLOOR_MB) return 0;
   if (mb >= 0) return 1;
@@ -515,8 +531,7 @@ export function buildChainModel(opts, buf) {
         c.hasIn = (d.caps & CAP_AUDIO) !== 0 && d.kind !== KIND_VST_INSTRUMENT;
         if (c._mOut !== e.outPeak) {
           c._mOut = e.outPeak;
-          c.meterText = e.outPeak === METER_SILENT
-            ? '−∞' : (e.outPeak / 100).toFixed(1);
+          c.meterText = meterDb(e.outPeak);
         }
         break;
       }

@@ -405,6 +405,22 @@ export class Arrange {
   _clipMove(e) {
     const d = this._clipDrag;
     if (!d) return;
+    /*
+     * NO BUTTON, NO DRAG.
+     *
+     * `pointerup` is bound to the band, and the pointer is only CAPTURED once the
+     * gesture passes the slop threshold — deliberately, so a click stays a click and
+     * `dblclick` still lands on the clip. Which leaves a window: press on a clip,
+     * release before moving 3px and outside the band, and no pointerup ever reaches
+     * this element. The drag stays armed. Move back over the arrangement later, with
+     * no button held, and the clip follows the pointer — and the next click commits
+     * the move.
+     *
+     * Escape already abandoned a drag whose pointerup was eaten, but that requires
+     * knowing you are in one. `buttons` is the truth the browser gives us on every
+     * move: zero means nothing is pressed, whatever we think we are doing.
+     */
+    if (e.buttons === 0) { this._clipCancel(); return; }
     if (!d.live) {
       if (Math.abs(e.clientX - d.x0) < CLIP_DRAG_SLOP_PX
           && Math.abs(e.clientY - d.y0) < CLIP_DRAG_SLOP_PX) return;

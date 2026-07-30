@@ -19,9 +19,10 @@
  * key is pressed.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
 import { startStack } from './stack.mjs';
+import { readWav, rmsBetween } from './wav.mjs';
 
 const WAV = '/tmp/panic_check.wav';
 const SECS = 18;
@@ -53,6 +54,9 @@ await page.waitForFunction(
 await page.waitForTimeout(1500);
 
 await page.keyboard.press(' ');
+// Stamped, so the windows below are anchored to what actually happened rather than to
+// an assumption about how long the setup took.
+const playedAt = Date.now();
 await page.waitForTimeout(5000);
 
 await page.evaluate(() => window.__uni.run('stop'));
@@ -69,6 +73,7 @@ check(!afterStop.said, 'and says nothing — it is an ordinary stop',
 // The second press. Through the console, which routes to the same function the
 // transport button does — one meaning of "stop", whichever way you reach it.
 await page.evaluate(() => window.__uni.run('stop'));
+const panickedAt = Date.now();
 await page.waitForTimeout(400);
 const afterPanic = await page.evaluate(() => window.__uni.state().reject);
 check(/panic/i.test(String(afterPanic)), 'the second press says it panicked',
@@ -81,23 +86,34 @@ stack.stop();
 if (!existsSync(WAV)) {
   check(false, 'a capture was produced', WAV);
 } else {
-  const buf = readFileSync(WAV);
-  const at = buf.indexOf('data');
-  /** Loudness over a window of the capture, in seconds. */
-  const rms = (from, to) => {
-    let sum = 0, n = 0;
-    const a = at + 8 + Math.round(from * RATE) * 4;
-    const b = Math.min(buf.length - 1, at + 8 + Math.round(to * RATE) * 4);
-    for (let i = a; i < b; i += 2) { const v = buf.readInt16LE(i) / 32768; sum += v * v; n++; }
-    return n ? Math.sqrt(sum / n) : 0;
-  };
-  const playing = rms(2, 5);
-  const stopped = rms(9, 13);
-  console.log(`  playing ${playing.toFixed(5)}   after panic ${stopped.toFixed(5)}`);
   /*
-   * SOMETHING WAS SOUNDING FIRST. Without this the whole suite passes on a run
-   * where the plugins never loaded — silence before and silence after, which is
-   * the failure mode every audio test has to be built against.
+   * THE WINDOWS COME FROM THE HARNESS, not from arithmetic about how long setup took.
+   *
+   * This file used to hand-roll its own WAV reader and place its windows at fixed
+   * offsets — rms(2,5) for "playing", rms(9,13) for "after panic" — which only
+   * lined up because plugin scanning happened to take about as long as it did on the
+   * machine that wrote them. Setup time here is dominated by how long the audio
+   * DEVICE takes to open: milliseconds on the built-in output, seconds on a Bluetooth
+   * speaker. A window two seconds out reads the wrong phase.
+   *
+   * `stack.captureOffset` turns a wall-clock instant into an offset into the file,
+   * because both ends of the ring are knowable: the last sample is `runSeconds` after
+   * the device opened, and the first is `captureSeconds` before that. And `readWav`
+   * is the shared reader, so a change to the engine's capture format does not have to
+   * be found in two places.
+   */
+  const { mono, rate } = readWav(WAV);
+  const at = (ms) => stack.captureOffset(ms);
+  const playing = rmsBetween(mono, rate, at(playedAt + 1500), at(playedAt + 4500));
+  const stopped = rmsBetween(mono, rate, at(panickedAt + 2000), at(panickedAt + 6000));
+  console.log(`  playing ${playing.toFixed(5)}   after panic ${stopped.toFixed(5)}` +
+              `   (capture ${(mono.length / rate).toFixed(1)}s,` +
+              ` windows ${at(playedAt + 1500).toFixed(1)}s and` +
+              ` ${at(panickedAt + 2000).toFixed(1)}s)`);
+  /*
+   * SOMETHING WAS SOUNDING FIRST. Without this the whole suite passes on a run where
+   * the plugins never loaded — silence before and silence after, which is the failure
+   * mode every audio test has to be built against.
    */
   check(playing > 0.01, 'the song was actually playing', playing.toFixed(5));
   check(stopped < 0.001, 'and panic left silence', stopped.toFixed(5));

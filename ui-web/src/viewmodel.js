@@ -1095,7 +1095,21 @@ export function buildViewModel(opts, buf) {
           // tracker should not make you leave to tell them apart.
           c0.aggCount = (c0.aggCount || 1) + 1;
           if (c0._same === undefined) c0._same = c0.text;
+          if (c0._sameVel === undefined) c0._sameVel = c0._firstVel;
           if (c0._same !== null && c0._same !== pitchName(n.pitch)) c0._same = null;
+          /*
+           * ...and whether the VELOCITIES agree, which is a different question.
+           *
+           * The velocity cell printed a number whenever the PITCHES matched — so two
+           * C-4s at 20 and 127 showed one of them, whichever arrived last, as though
+           * it were the velocity of the cell. An arbitrary number presented as a
+           * fact, and it changes when the wire reorders.
+           *
+           * Tracked separately rather than folded into `_same`: "4x C-4" at velocity
+           * 100 each SHOULD print 100 — that is useful and true — and only a genuine
+           * disagreement is a "mix".
+           */
+          if (c0._sameVel !== null && c0._sameVel !== n.velocity) c0._sameVel = null;
           // Interned, because a chord makes this fire on every row that has one
           // and the cells are cleared each frame \u2014 so a per-cell guard cannot
           // work here and the string has to come from somewhere. Both domains
@@ -1208,6 +1222,11 @@ export function buildViewModel(opts, buf) {
           // with it, or a cell that briefly held a chord keeps reporting its range.
           c0.aggCount = 0;
           c0.aggLo = 0; c0.aggHi = 0;
+          c0._sameVel = undefined;
+          // The first note's velocity, so a later collision can compare against it:
+          // by the time the second note arrives this cell no longer knows the first
+          // one's, and the collide branch needs both to answer "do they agree".
+          c0._firstVel = n.velocity;
           c0._same = undefined;
           // ...and the ribbon's spread, or a cell that briefly held a chord would
           // keep drawing its range after the chord became one note.
@@ -1219,8 +1238,13 @@ export function buildViewModel(opts, buf) {
         if (c1) {
           // One velocity is a number; several are not, and printing the last
           // one to arrive would be a number nobody could act on.
-          c1.text = c0 && c0.kind === 'collide' && c0._same === null
-            ? 'mix' : velocityText(n.velocity);
+          // `mix` only when the velocities actually disagree — the old condition
+          // asked whether the PITCHES did, which is a different question and left an
+          // arbitrary one of several velocities on screen.
+          c1.text = c0 && c0.kind === 'collide' && c0._sameVel === null
+            ? 'mix' : velocityText(c0 && c0.kind === 'collide'
+                                   ? (c0._sameVel === undefined ? n.velocity : c0._sameVel)
+                                   : n.velocity);
           c1.kind = 'inst';
         }
       }

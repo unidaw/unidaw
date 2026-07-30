@@ -103,6 +103,49 @@ if (!connected) {
   process.exit(2);
 }
 
+/*
+ * AND WAIT FOR THE ENGINE TO HAVE PUBLISHED A SONG.
+ *
+ * `canSend` above proves the socket is up. It does not prove the engine has finished
+ * loading its default project, and the first three assertions in this file are about
+ * notes, track names and per-lane grids — so on a busy machine they read an empty
+ * document and the run opens with three failures that look like a broken build.
+ *
+ * That happened tonight, with several suites and a restarted stack competing for the
+ * box: "0 notes on 0 tracks", then green on the next run with nothing changed. Same
+ * class as the segment race stack.mjs already documents, one layer up: waiting for a
+ * channel to open is not waiting for the thing that comes down it.
+ */
+await page.waitForFunction(
+  () => { const s = window.__uni.engineState(); return s && s.trackCount > 0; },
+  null, { timeout: 20000 }).catch(() => {});
+
+/**
+ * Load a project and WAIT FOR THE ENGINE TO SAY IT DID.
+ *
+ * `loadProject` + a fixed sleep is what most of this file does, and it is the source
+ * of the flakiest failure in it: a load that lands late repopulates the document in a
+ * LATER section, so a clip count that was 0 reads 4 and the failure appears three
+ * screens from its cause. It failed that way three times tonight, on a machine
+ * running several suites at once.
+ *
+ * The engine publishes a load counter. Waiting on it turns "probably done by now"
+ * into "done", and costs nothing when it already is.
+ */
+const loadAndWait = async (name) => {
+  const before = await page.evaluate(() => {
+    const l = window.__uni.loadStatus();
+    return l ? l.seq : 0;
+  });
+  await page.evaluate((n) => window.__uni.loadProject(n), name);
+  await page.waitForFunction(
+    (s) => { const l = window.__uni.loadStatus(); return l && l.seq > s && l.ok; },
+    before, { timeout: 15000 }).catch(() => {});
+  // One frame for the renderers to pick it up: the load counter moves on the wire,
+  // and the surfaces draw on the next scheduled frame after that.
+  await page.waitForTimeout(400);
+};
+
 const E = () => page.evaluate(() => window.__uni.engineState());
 const run = async (line, wait = 150) => {
   const out = await page.evaluate((l) => window.__uni.run(l), line);
@@ -1037,8 +1080,7 @@ section('a keystroke saves your work to your song');
   // Back to a clean document, and to the SAME one this section inherited: the
   // in-memory copy still carries the scratch edit, and the next section is
   // entitled to the fixture as authored.
-  if (incoming) await page.evaluate((n) => window.__uni.loadProject(n), incoming);
-  await page.waitForTimeout(2000);
+  if (incoming) await loadAndWait(incoming);
 }
 
 section('dock');
@@ -3055,8 +3097,7 @@ section('the rack\'s keys act on the track the rack is showing');
   await page.evaluate(() => window.__uni.run('master off'));
   await page.waitForTimeout(800);
   await page.evaluate(() => { window.__uni.state().focus = 'centre'; });
-  await page.evaluate(() => window.__uni.loadProject('rack'));
-  await page.waitForTimeout(2000);
+  await loadAndWait('rack');
 }
 
 section('a device can be switched off without removing it');
@@ -3272,8 +3313,7 @@ section('a note on the ninth track is not thrown away');
 
   // Reloading is the whole undo: the added tracks and the clip the note created
   // live only in the in-memory document, and nothing was saved.
-  await page.evaluate((n) => window.__uni.loadProject(n || 'meter'), inherited);
-  await page.waitForTimeout(2000);
+  await loadAndWait(inherited || 'meter');
 }
 
 section('an edit lands on a track other than the last one edited');

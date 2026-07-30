@@ -36,7 +36,7 @@ import { ticksPerBar, ticksPerBeat, positionOf, createPosition, sameMeter,
          meterText } from '../src/meter.js';
 import { buildChainModel, createChainBuffer, paramKey, createParamEdits, findParamEdit,
          setParamEdit, dropParamEdit, reapParamEdits, MAX_PARAMS,
-         EDIT_HOLD_MS, meterScale, METER_SILENT } from '../src/chainmodel.js';
+         EDIT_HOLD_MS, meterScale, meterDb, METER_SILENT } from '../src/chainmodel.js';
 import { createCommands, checkArgs, runCommand, parseHelpArgs } from '../src/dock.js';
 import { unpackClipGrid } from '../src/wire.js';
 
@@ -1221,6 +1221,81 @@ test('every icon the app names exists in the bundled set', () => {
  * would have to be blessed against whatever it currently draws — and it was blessed,
  * with the ribbon at the floor.
  */
+/*
+ * A COLLIDED CELL'S VELOCITY IS "mix" ONLY WHEN THE VELOCITIES DISAGREE.
+ *
+ * It printed a number whenever the PITCHES matched — so two C-4s at 20 and 127 showed
+ * one of them, whichever arrived last, as though it were the velocity of the cell. An
+ * arbitrary value presented as a fact, and it changes when the wire reorders.
+ *
+ * The condition asked about pitch for a quantity that is velocity. Both directions are
+ * pinned here, because dropping the condition entirely would be the other error: "4x
+ * C-4" at velocity 100 each should print 100, which is useful and true.
+ */
+/*
+ * CHORDS AT AN AGGREGATING ZOOM.
+ *
+ * The note loop is gated on `!zoom.aggregate` — at 1 bar per row a cell holds a COUNT,
+ * and placing an individual note in it would put a name where the cell is summarising
+ * something else. The chord loop has no such gate. This asks what it actually does,
+ * because "it is inconsistent" is not the same as "it is wrong" and the answer decides
+ * the fix.
+ */
+test('what a chord does at an aggregating zoom', () => {
+  const engine = gridEngine([4]);
+  engine.chords = [{ tick: 16 * 960000, duration: 960000, id: 1, track: 0, degree: 0,
+                     quality: 1, inversion: 0, octave: 4, flags: 0, row: 4 }];
+  engine.chordCount = 1;
+  // zoomIndex 4 is "1 bar" — aggregate. The sidecar computed `row` for the grid the
+  // viewport asked for, so the row it carries is the authority.
+  const vm = buildViewModel({ startRow: 0, rowCount: 8, tracks: 1, columns: 3,
+                              zoomIndex: 4, engine }, createBuffer(8, 1, 3));
+  let placed = -1;
+  for (let r = 0; r < 8; r++) {
+    for (const c of vm.rows[r].cells) {
+      if (c.kind === 'chord' || (c.text && /^[iIvV]/.test(c.text))) { placed = r; break; }
+    }
+    if (placed >= 0) break;
+  }
+  /*
+   * It lands on the row the WIRE said, which is the row the sidecar computed for this
+   * viewport's grid — so it is where it belongs, not 4x or 16x down the timeline. The
+   * inconsistency with the note loop is real and benign: a chord is one name per span,
+   * which is exactly what an aggregate row wants, where a note is one of possibly
+   * hundreds and cannot be.
+   */
+  assert.equal(placed, 4, 'a chord is placed on the row the wire gave it');
+});
+
+test('a collided cell prints a velocity only when they agree', () => {
+  const ROW = ZOOM_LEVELS[1].rowNanoticks;
+  const mk = (pitch, vel, id) => ({
+    tOn: 0, tOff: 100, id, pitch, velocity: vel, column: 0, track: 0,
+    retrigger: 0, probability: 0, delayTicks: 0, devTicks: 0, row: 0,
+    muted: false, isAdd: false, placementId: 1,
+  });
+  const velOf = (notes) => {
+    const engine = gridEngine([4]);
+    engine.notes = notes; engine.noteCount = notes.length;
+    const vm = buildViewModel({ startRow: 0, rowCount: 2, tracks: 1, columns: 3,
+                                zoomIndex: 1, engine }, createBuffer(2, 1, 3));
+    return { note: vm.rows[0].cells[0].text, vel: vm.rows[0].cells[1].text };
+  };
+
+  // SAME pitch, DIFFERENT velocities — the case that printed an arbitrary one.
+  const differ = velOf([mk(60, 20, 1), mk(60, 127, 2)]);
+  assert.match(differ.note, /C-4/, 'the pill still names the pitch');
+  assert.equal(differ.vel, 'mix', 'and the velocity refuses to pick one of them');
+
+  // SAME pitch, SAME velocity — a doubled note, and 100 is the honest answer.
+  const agree = velOf([mk(60, 100, 3), mk(60, 100, 4)]);
+  assert.notEqual(agree.vel, 'mix', 'two notes at one velocity print it');
+
+  // DIFFERENT pitches, different velocities: still a mix.
+  assert.equal(velOf([mk(60, 20, 5), mk(67, 127, 6)]).vel, 'mix',
+               'a chord in one column with differing velocities is a mix too');
+});
+
 test('a cell holding several notes reports the spread of them', () => {
   const engine = gridEngine([4]);
   const mk = (row, pitch, id) => ({
@@ -1710,6 +1785,24 @@ const ALT_OPS = {
  * factor still draws a plausible bar that moves with the music, and the only
  * way to notice is to compare it against a number nobody has on screen.
  */
+/*
+ * AND THE dB NUMBER ON THE CARD IS THE dB NUMBER.
+ *
+ * The e2e "checked" this by comparing the model's string against the same string in
+ * the DOM — true by construction. Mutating the divisor from 100 to 10 kept the whole
+ * suite green, because both sides of that comparison came from the same expression.
+ *
+ * This is the arithmetic on its own, against numbers written out by hand.
+ */
+test('a millibel reading prints as dB', () => {
+  assert.equal(meterDb(0), '0.0', 'full scale');
+  assert.equal(meterDb(-3450), '-34.5', 'a hundredth of a dB per millibel');
+  assert.equal(meterDb(-600), '-6.0', 'and a round one stays round');
+  assert.equal(meterDb(-12000), '-120.0', 'the bottom of the engine\'s range');
+  // Not "-327.7": there is no dB value for nothing, and the sentinel is not a level.
+  assert.equal(meterDb(METER_SILENT), '−∞', 'silence is a symbol, not a number');
+});
+
 test('a millibel reading lands where the scale says', () => {
   // 0 mB is FULL SCALE on this contract, not silence. Getting this backwards
   // would draw a stopped transport as a pegged meter, which is what the engine
@@ -2142,6 +2235,16 @@ const ENGINE_UNUSED = {
   SetAutomationTarget: 'gap — automation has no UI at all',
   SetModSourceValue: 'gap — macro/mod values are unreachable',
   /*
+   * INVISIBLE TO THIS AUDIT UNTIL NOW. The name-matching pattern was
+   * `[A-Z][A-Za-z]+`, which silently skips anything with a DIGIT in it — so this
+   * command was neither reported as unwired nor recorded as a gap. The audit had a
+   * hole the exact shape of the thing it exists to find.
+   *
+   * The gap itself is with AddModLink and RemoveModLink above: modulation has no
+   * surface here at all, so there is nothing to give a durable id to yet.
+   */
+  SetModLinkUid16: 'gap — modulation has no UI, so nothing has a uid to set',
+  /*
    * ARRANGEMENT SECTIONS (54-58), landed engine-side and not yet a surface here.
    *
    * Recorded rather than half-wired, and the reason is the same one that held lane
@@ -2177,7 +2280,19 @@ test('every engine command has a caller, or a recorded reason it has none', asyn
   const { readFileSync } = await import('node:fs');
   const hdr = readFileSync(new URL('../../apps/event_payloads.h', import.meta.url), 'utf8');
   const block = hdr.slice(hdr.indexOf('enum class UiCommandType'));
-  const names = [...block.slice(0, block.indexOf('};')).matchAll(/^\s+([A-Z][A-Za-z]+) = \d+,/gm)]
+  /*
+   * `[A-Za-z0-9]`, because a NAME WITH A DIGIT IN IT was invisible to this audit.
+   *
+   * `[A-Z][A-Za-z]+` silently skipped `SetModLinkUid16`, so an engine command was
+   * neither reported as unwired nor recorded as a gap — the audit had a hole shaped
+   * exactly like the thing it exists to find. Two commands were being dropped when
+   * this was measured.
+   *
+   * The count assertion below is what makes the widening safe to trust: it fails if
+   * the pattern ever stops matching the source, which is the failure mode every
+   * source-reading check has to guard against.
+   */
+  const names = [...block.slice(0, block.indexOf('};')).matchAll(/^\s+([A-Z][A-Za-z0-9]+) = \d+,/gm)]
     .map((m) => m[1]).filter((n) => n !== 'None');
   assert.ok(names.length > 15, `the engine's command enum was parsed: ${names.length}`);
 
