@@ -2087,6 +2087,43 @@ struct TrackRuntime {
            !rt.removed.load(std::memory_order_acquire) &&
            rt.trackId < liveTrackCount.load(std::memory_order_acquire);
   };
+  // Everything a track CONTAINS, wiped in one place. The caller must already hold
+  // runtime->trackMutex.
+  //
+  // Three paths repurpose an existing runtime — AddTrack refilling a tombstone, the load
+  // blanking a slot past the new document, and reconcileChildTracks recycling a slot as a
+  // stem — and all three cleared the same four fields by hand (chain, placements, owned
+  // clips, editable ids) while all three forgot the same two: `automationClips` and
+  // `modRegistry.links`. Neither is cleared anywhere else either; both are only ever
+  // ASSIGNED, at load, for tracks the document actually names.
+  //
+  // So: remove a track that had a filter sweep and a mod link, add a track, and the new
+  // track carries the deleted one's automation and a link naming device ids that no longer
+  // exist — device ids restart per track, so the leftover link can end up modulating
+  // whatever device now sits in that slot. Both are then written to disk by the next save.
+  // Three copies of a list that has to stay complete is the bug; one function is the fix.
+  auto resetTrackContent = [](TrackRuntime& rt) {
+    rt.track.chain = daw::TrackChain{};
+    rt.track.modRegistry.links.clear();
+    rt.track.automationClips.clear();
+    rt.track.harmonyQuantize = false;
+    rt.sourcePlacements.clear();
+    rt.ownedClips.clear();
+    rt.editableClipIds.clear();
+    rt.arrangementDirty.store(false, std::memory_order_relaxed);
+    // Lane settings and the mixer belong to the track that is gone, not to whatever takes
+    // the slot next. A leftover solo is the worst of these: the whole project goes quiet
+    // and the reason is on a lane the user thinks they deleted.
+    rt.mixGainLinear.store(1.0f, std::memory_order_relaxed);
+    rt.mixPan.store(0.0f, std::memory_order_relaxed);
+    rt.mixMute.store(false, std::memory_order_relaxed);
+    rt.mixSolo.store(false, std::memory_order_relaxed);
+    rt.quantizeGrid.store(0, std::memory_order_release);
+    rt.quantizeStrength.store(0, std::memory_order_release);
+    rt.quantizeSwing.store(0, std::memory_order_release);
+    rt.linesPerBeat.store(4, std::memory_order_relaxed);
+  };
+
   // What was AUTHORED ON A STEM, parked between the load and the derivation.
   //
   // A child lane does not exist when the project is parsed: it appears only after the
@@ -2307,9 +2344,17 @@ struct TrackRuntime {
   // renaming a section moves no note, so it must not invalidate anyone's in-flight edit —
   // the same separation quantizeVersion has.
   daw::SectionList sectionList;
+  // LOCK ORDER, and it is not optional: sectionMutex is taken BEFORE songMeterMutex
+  // wherever both are needed. Deriving a section's position requires both (the spine says
+  // how many bars, the meter says how long a bar is), so they get held nested in more than
+  // one place — and the first version of this took them in one order in the arrangement
+  // publisher and the other order in SetSectionLength. That is an AB/BA deadlock a few
+  // instructions wide: it never fired in a test and would eventually have wedged the engine
+  // mid-edit with no diagnostic at all.
   std::mutex sectionMutex;
   std::atomic<uint32_t> sectionVersion{0};
   // The song's meter, held for the section derivation (positions come from tickAtBar).
+  // Taken AFTER sectionMutex — see above.
   daw::TimeSignatureMap songMeter;
   std::mutex songMeterMutex;
   // Whether the loop was set BY HAND. The loop follows the song end only while it was
@@ -2813,9 +2858,17 @@ struct TrackRuntime {
     std::vector<daw::ResolvedSection> resolved;
     std::vector<daw::TimeSignaturePoint> points;
     {
+      // LOCK ORDER: sectionMutex BEFORE songMeterMutex, always — see both declarations.
+      // This used to take them the other way round while SetSectionLength took them in
+      // this one, and both hold them nested to resolve the spine through the meter. That
+      // is an AB/BA deadlock: the publish thread grabbing songMeterMutex at the moment the
+      // command thread grabs sectionMutex wedges both forever, which takes down the whole
+      // control plane and leaves every SHM reader spinning on a version that never moves.
+      // The window is a few instructions wide, so it survived every test run and would
+      // have shown up as the engine "just freezing" one time in a few thousand edits.
+      std::lock_guard<std::mutex> slock(sectionMutex);
       std::lock_guard<std::mutex> mlock(songMeterMutex);
       points = songMeter.points();
-      std::lock_guard<std::mutex> slock(sectionMutex);
       resolved = sectionList.resolve(songMeter);
     }
     // Clear first: a shorter spine than last time must not leave the old tail readable,
@@ -3484,11 +3537,7 @@ struct TrackRuntime {
         rt->active.store(false, std::memory_order_release);
         {
           std::lock_guard<std::mutex> tlock(rt->trackMutex);
-          rt->track.chain = daw::TrackChain{};
-          rt->sourcePlacements.clear();
-          rt->ownedClips.clear();
-          rt->editableClipIds.clear();
-          rt->arrangementDirty.store(false, std::memory_order_relaxed);
+          resetTrackContent(*rt);
           rt->trackName = childName;
           rt->trackSnapshot = buildTrackSnapshot(rt->track);
         }
@@ -4965,6 +5014,21 @@ struct TrackRuntime {
     // Re-emit the adopted song time signature so it survives a load->save.
     document.songTimeSigNumerator = songTimeSigNum.load(std::memory_order_relaxed);
     document.songTimeSigDenominator = songTimeSigDen.load(std::memory_order_relaxed);
+    {
+      // The METER MAP, from the live engine. Nothing wrote this: `document` is default
+      // constructed here, timeSigMap was only ever READ (at load, into songMeter), and the
+      // save emitted the single song-wide numerator/denominator above and nothing else. So
+      // a project with a meter change loaded, played and published correctly — the
+      // arrangement summary resolves the spine through it — and then save/reload flattened
+      // the whole song back to one time signature, silently moving every section boundary
+      // after the first meter change. Exactly the shape of the automation that could be
+      // heard and never saved.
+      //
+      // Its own scope: sectionMutex is taken and released above, so the two are never held
+      // nested here and the order documented at their declarations is not at stake.
+      std::lock_guard<std::mutex> mlock(songMeterMutex);
+      document.timeSigMap = songMeter.points();
+    }
     document.harmonyTimeline = harmonyEvents;
 
     std::vector<TrackRuntime*> runtimes;
@@ -6072,20 +6136,23 @@ struct TrackRuntime {
           runtime->lastAuxOutMask = 0;
           runtime->lastSidechainMask = 0;
         }
-        {
-          std::lock_guard<std::mutex> tlock(runtime->trackMutex);
-          runtime->track.chain = daw::TrackChain{};
-        }
         std::shared_ptr<const ClipSnapshot> snapshot;
         {
           std::lock_guard<std::mutex> tlock(runtime->trackMutex);
-          if (runtime->sourcePlacements.empty() && runtime->ownedClips.empty()) {
-            continue;  // already blank
+          // "Already blank" used to mean "no placements and no owned clips", which called a
+          // slot still holding automation and mod links blank and skipped it — so the
+          // leftovers survived precisely the pass meant to remove them, and rode into
+          // whatever recycled the slot next. Ask the same question resetTrackContent
+          // answers.
+          const bool alreadyBlank = runtime->sourcePlacements.empty() &&
+                                    runtime->ownedClips.empty() &&
+                                    runtime->track.automationClips.empty() &&
+                                    runtime->track.modRegistry.links.empty() &&
+                                    runtime->track.chain.devices.empty();
+          if (alreadyBlank) {
+            continue;
           }
-          runtime->sourcePlacements.clear();
-          runtime->ownedClips.clear();
-          runtime->editableClipIds.clear();
-          runtime->arrangementDirty.store(false, std::memory_order_relaxed);
+          resetTrackContent(*runtime);
           snapshot = rebuildFlatAndPublish(*runtime);
           std::atomic_store_explicit(&runtime->audioRender,
                                      rebuildAudioRender(*runtime),
@@ -6479,6 +6546,14 @@ struct TrackRuntime {
     std::shared_ptr<const ClipSnapshot> snapshot;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      // UNDO. Overrides live ON the placement, so the ordinary store snapshot already
+      // carries them — and this pushed nothing, which was worse than it sounds. Undo here
+      // is a whole-store SWAP, not a per-edit inverse: type a note, add a local hat, press
+      // Ctrl-Z, and the entry that pops is the note's, restoring the store from before the
+      // note — taking the hat with it. Redo re-applies the note's after-state, which also
+      // predates the hat. So one undo destroyed the override and redo could not bring it
+      // back. Recorded exactly like applyPlacementEdit below.
+      TrackStoreState storeBefore = snapshotTrackStore(*runtime);
       // Which APPEARANCE is this tick in? A local edit is meaningless without one: there
       // is no placement to hang the override on, so it is refused rather than silently
       // becoming a clip edit — which would be the opposite of what was asked for.
@@ -6568,6 +6643,8 @@ struct TrackRuntime {
       if (changed) {
         runtime->arrangementDirty.store(true, std::memory_order_relaxed);
         snapshot = rebuildFlatAndPublish(*runtime);
+        pushStructuralUndo(trackId, std::move(storeBefore),
+                           snapshotTrackStore(*runtime));
       }
     }
     if (!changed) {
@@ -7283,6 +7360,7 @@ struct TrackRuntime {
             continue;
           }
           std::shared_ptr<const ClipSnapshot> snap;
+          std::shared_ptr<const TrackStateSnapshot> stateSnap;
           {
             std::lock_guard<std::mutex> tlock(rt->trackMutex);
             bool touched = false;
@@ -7330,9 +7408,22 @@ struct TrackRuntime {
             snap = rebuildFlatAndPublish(*rt);
             std::atomic_store_explicit(&rt->audioRender, rebuildAudioRender(*rt),
                                        std::memory_order_release);
+            // And the TRACK snapshot, which is the only copy of the automation the RT
+            // scheduler ever reads. Without this the ripple moved the points in the model
+            // and in the saved file while what PLAYED stayed at the old positions — so the
+            // sweep was in the right place on disk, the wrong place in your ears, and it
+            // jumped the next time the project was opened. WriteAutomationPoint already
+            // says exactly this ("a point that is not republished is a point that does not
+            // play"); the rule just was not applied here. automation_check missed it by
+            // reading only the saved file.
+            stateSnap = buildTrackSnapshot(rt->track);
           }
           if (snap) {
             std::atomic_store_explicit(&rt->clipSnapshot, snap,
+                                       std::memory_order_release);
+          }
+          if (stateSnap) {
+            std::atomic_store_explicit(&rt->trackSnapshot, stateSnap,
                                        std::memory_order_release);
           }
           bumpClipVersionFor(rt);
@@ -8462,6 +8553,13 @@ struct TrackRuntime {
       std::shared_ptr<const ClipSnapshot> snapshot;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        // "No inverses to replay, just two lists to drop" is true of the FORWARD op and
+        // was the wrong conclusion about undo: this is the most destructive edit in the
+        // whole override feature — it throws away every add and mute on an appearance at
+        // once — and it pushed nothing. With undo being a whole-store swap, the next Ctrl-Z
+        // both failed to restore what revert deleted AND rolled back some older edit
+        // instead. The store snapshot carries the placements, so recording it is enough.
+        TrackStoreState storeBefore = snapshotTrackStore(*runtime);
         for (auto& pl : runtime->sourcePlacements) {
           if (pl.id != placementId) {
             continue;
@@ -8476,6 +8574,8 @@ struct TrackRuntime {
         if (found && (clearedAdds > 0 || clearedMutes > 0)) {
           runtime->arrangementDirty.store(true, std::memory_order_relaxed);
           snapshot = rebuildFlatAndPublish(*runtime);
+          pushStructuralUndo(payload.trackId, std::move(storeBefore),
+                             snapshotTrackStore(*runtime));
         }
       }
       if (!found) {
@@ -8548,11 +8648,7 @@ struct TrackRuntime {
           if (ok) {
             {
               std::lock_guard<std::mutex> tlock(existing->trackMutex);
-              existing->track.chain = daw::TrackChain{};
-              existing->sourcePlacements.clear();
-              existing->ownedClips.clear();
-              existing->editableClipIds.clear();
-              existing->arrangementDirty.store(false, std::memory_order_relaxed);
+              resetTrackContent(*existing);
               existing->trackName = "Track " + std::to_string(slot + 1);
               existing->trackSnapshot = buildTrackSnapshot(existing->track);
             }

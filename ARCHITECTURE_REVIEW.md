@@ -225,3 +225,103 @@ Audio file I/O, recording, PDC, buses and sends, sidechain (currently structural
 **6. Do you want linked structure, actually?** The panel is split and the disagreement is real. Cubase has shipped shared copies since the 1990s and Reaper has pooled MIDI items; both work, both are minority features. The competing reading — that by the last 20% of a track chorus 3 differs from chorus 1 in twenty small ways and the reference has become a liability — would kill the arrangement thesis. You will know after Movement 1, from your own use, whether you actually reach for "fix it once" or for "make this one unique." **Do not build Movement 3 until you have that data on yourself.**
 
 **7. What does "done" look like for the patcher?** It is currently a proto with a real DAG and a UI you have already written off. It can be a generator that materializes into clips (small, useful, in scope) or a modular environment (large, and a worse Reaktor). Nothing in this document requires the second, and everything in it gets cheaper if you commit to the first.
+---
+
+## 8. Defects found after the Movements closed
+
+Two sweeps ran once Movements 2 and 3 were closed on the engine side: every
+`tools/*_check.sh` run TOGETHER for the first time (which is now `tools/all_checks.sh`), and
+a six-lens adversarial bug panel over the whole of Movement 2/3. Both found real bugs, and
+what they found says something about where this codebase leaks.
+
+**The pattern is not "wrong logic". It is "a rule was written down and then not applied at
+the second site."** Every confirmed defect below is a case where the code already contained a
+comment stating the correct rule, and a later change did not follow it. That is worth knowing
+because it predicts where to look next: not at the new feature, but at every other place the
+new feature's rule should have reached.
+
+### Fixed
+
+- **No note could ever be entered on a multi-out stem.** A child track's PUBLISHED clip
+  version and the version the engine ACCEPTS against disagreed — the clip-all region rebuilds
+  only when the clip version moves, and deriving a child bumped nothing, so the region kept
+  the rebuild from before the child existed (where that slot advertised the GLOBAL version)
+  while the child's own counter sat at 0. Every edit was refused as stale, forever, and
+  daw-cli reported success. `AddTrack` already did both bumps and said why.
+
+- **What you author on a stem was thrown away by the save.** Aux children were skipped
+  entirely, for a good reason (a child written as a plain track reloads as a phantom
+  top-level lane) with an unexamined consequence. Now persisted as a flagged entry keyed by
+  BUS INDEX and lifted out at load, the way the master track already was.
+
+- **Automation written to a track the save discards was accepted and lost.** The handler
+  checked only `trackId < tracks.size()`, which is true for a tombstone, a leftover slot, and
+  an aux child. One `trackIsPersisted` predicate now serves both the save and the handler.
+
+- **A reused track slot inherited the dead track's automation and mod links.** Three paths
+  repurpose a runtime and all three cleared the same four fields by hand while all three
+  forgot the same two. Delete a track with a filter sweep and a mod link, add a track, and
+  the new lane carried both — and saved them. A leftover mod link names device ids that
+  restart per track, so it can modulate whatever now sits in that slot. One
+  `resetTrackContent` now wipes everything a track contains, and the load's "already blank"
+  early-out no longer calls a slot blank while it still holds them.
+
+- **An AB/BA deadlock between the arrangement publisher and `SetSectionLength`.** Deriving a
+  section's position needs both the spine and the meter, so both are held nested — and the
+  two sites took them in opposite orders. Confirmed by inspection; NOT reproduced by a
+  60-edit stress run, because each critical section is a few instructions wide. That is
+  exactly why no dynamic test would have caught it and why the guard
+  (`tools/lock_order_check.sh`) is a source check with its limits stated.
+
+- **A meter change was destroyed by save + reload.** `document.timeSigMap` was only ever
+  READ. The save emitted the single song-wide numerator/denominator and nothing else, so a
+  tempo-mapped, meter-mapped song loaded and published correctly and came back from disk
+  flattened to one time signature — moving every section boundary after the first meter
+  change. `arrange_summary_check` missed it by reading the meter from its own fixture.
+
+- **A local override was destroyed by the next Ctrl-Z, and redo could not bring it back.**
+  Undo is a whole-store SWAP, and local edits plus `RevertPlacementOverrides` pushed no
+  entry — so the entry that popped was an older edit's, and restoring its store deleted the
+  override as a side effect.
+
+- **Rippled automation played at its old position and saved at the new one.** The ripple
+  republished the flat clip and the audio render but not the track snapshot, which is the
+  only copy of the automation the RT scheduler reads. `WriteAutomationPoint` already carries
+  the comment "a point that is not republished is a point that does not play".
+
+- **An automation point could never be corrected.** `addPoint` inserted unconditionally, so
+  writing a new value at an existing tick left both and the file grew per attempt.
+
+- **The history journal recorded a section's packed name as a pitch.**
+  `uiCommandUsesGenericPayload` documents its own rule ("reading them as
+  trackId/pitch/nanotick yields numbers that look like data and are not") and had not gained
+  a single entry since it was written, while every opcode added since carries its own payload
+  struct.
+
+### Open, and worth knowing about
+
+- **The patcher's EDIT commands still address the global pool, not a device.** Items 1-3
+  migrated the data model and the read-back to per-device graphs; `AddPatcherNode` /
+  `RemovePatcherNode` / `ConnectPatcherNodes` were never migrated. Their payload has a
+  `trackId` used only to label the emitted error, and no `deviceId`. For any project carrying
+  per-device graphs a live patcher edit therefore lands in the pool and is never saved. Before
+  the save guard added earlier, the same edit instead overwrote device 1's graph with the
+  whole pool. This is the largest remaining gap in "patcher is a device".
+
+- **The section ripple carries placements and automation, but not the tempo map, the meter
+  map, or the harmony timeline.** A key change or a tempo change stays at its absolute tick
+  while the material around it moves. The code states the rule for automation and the same
+  argument applies verbatim to the other three. Note the trap: the save writes
+  `document.tempoMap = loadedTempoMap`, so rippling live tempo state without rippling the
+  retained map produces a song that plays rippled and saves un-rippled.
+
+- **Nothing publishes what automation actually PLAYED.** The engine keeps a `paramMirror` of
+  the last emitted value per param but does not publish it, which is why the ripple/playback
+  divergence above could only be found by reading code — every automation test asserts on the
+  saved file. Publishing it would also serve the UI.
+
+- **A plain project may gain the engine's boot-default patcher graph on save.** Startup seeds
+  the pool with a Euclidean(16/5) + Passthrough, and the legacy "park the pool on the first
+  instrument" branch fires for any document with devices and no per-device graphs. Not yet
+  verified empirically; a Euclidean node generates notes, so if it is real the save invents
+  audible authored data.

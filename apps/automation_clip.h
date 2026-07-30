@@ -24,12 +24,25 @@ class AutomationClip {
         discreteOnly_(discreteOnly),
         targetPluginIndex_(targetPluginIndex) {}
 
+  // Writing at a tick that already has a point REPLACES it. Inserting unconditionally (as
+  // this used to) meant a point could never be corrected: writing a new value at the same
+  // tick left both, so "fix that filter value" produced two points and the file grew by one
+  // on every attempt. valueAt guards the zero-length span so nothing divided by zero, and
+  // the scheduler emitted both to the plugin in the same block — defined behaviour over
+  // junk data, which is why it went unnoticed.
+  //
+  // Replacing also collapses duplicates the old behaviour already wrote to disk, since the
+  // loader funnels through here — so a file with a doubled point heals on its next load.
   void addPoint(AutomationPoint point) {
     const auto it = std::lower_bound(
         points_.begin(), points_.end(), point.nanotick,
         [](const AutomationPoint& lhs, uint64_t tick) {
           return lhs.nanotick < tick;
         });
+    if (it != points_.end() && it->nanotick == point.nanotick) {
+      *it = point;
+      return;
+    }
     points_.insert(it, point);
   }
 

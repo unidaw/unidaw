@@ -63,28 +63,62 @@ echo
 pass=0
 fail=0
 skip=0
+flaky=0
 FAILED=()
 SKIPPED=()
+FLAKY=()
 
+# A check that fails once and passes on a retry is reported as FLAKY, never as a pass.
+#
+# Almost every check waits a FIXED two seconds for the engine to come up. That is plenty on
+# an idle machine and not always enough at the end of a 35-check run or while a build is
+# going, and when it is not enough the CLI attaches to nothing and the check fails with a
+# row of -1s that looks exactly like the feature being broken. Three different checks did
+# this over one night, each passing 2-3/3 in isolation immediately afterwards.
+#
+# Retrying keeps the suite's verdict from being a coin flip, and naming the retry keeps that
+# from hiding a real intermittent bug: a genuine failure fails twice, and a check that only
+# passed the second time is called out rather than folded into the pass count. The proper fix
+# is for each check to wait for the engine's own readiness line instead of sleeping; until
+# then this at least tells the truth about which ones are unstable.
 for f in "${CHECKS[@]}"; do
   name="$(basename "$f" .sh)"
   log="$LOGDIR/$name.log"
   start=$SECONDS
   bash "$f" >"$log" 2>&1
   rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+    cp "$log" "$log.first-attempt" 2>/dev/null || true
+    bash "$f" >"$log" 2>&1
+    rc2=$?
+    if [ "$rc2" -eq 0 ]; then
+      dur=$((SECONDS - start))
+      printf '  %-34s FLAKY %3ds  (failed once, passed on retry)\n' "$name" "$dur"
+      flaky=$((flaky + 1)); FLAKY+=("$name")
+      continue
+    fi
+    rc=$rc2
+  fi
   dur=$((SECONDS - start))
   case "$rc" in
     0) printf '  %-34s PASS  %3ds\n' "$name" "$dur"; pass=$((pass + 1)) ;;
     2) printf '  %-34s SKIP  %3ds  (%s)\n' "$name" "$dur" \
          "$(tail -3 "$log" | tr -d '\n' | cut -c1-60)"
        skip=$((skip + 1)); SKIPPED+=("$name") ;;
-    *) printf '  %-34s FAIL  %3ds  rc=%d\n' "$name" "$dur" "$rc"
+    *) printf '  %-34s FAIL  %3ds  rc=%d (twice)\n' "$name" "$dur" "$rc"
        fail=$((fail + 1)); FAILED+=("$name") ;;
   esac
 done
 
 echo
-echo "$pass passed, $fail failed, $skip skipped"
+echo "$pass passed, $fail failed, $skip skipped, $flaky flaky"
+
+if [ "$flaky" -gt 0 ]; then
+  echo
+  echo "FLAKY (failed once, passed on retry — first attempt kept as *.log.first-attempt):"
+  for n in "${FLAKY[@]}"; do echo "  $n"; done
+  echo "  These are not passes. Read the first attempt before trusting the retry."
+fi
 
 # A skip is not a pass. Name them, so "everything green" can never mean "half of it never
 # ran" — the checks that need a real plugin skip on a machine without it, and that is
