@@ -236,6 +236,23 @@ pub struct UiSamplerMarkerPayload {
     pub reserved: [u8; 8],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerEmitRowsPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub source_local_id: u32,
+    pub at_nanotick: u64,
+    /// One row per slice, this far apart. 0 = DERIVE from each slice's own length at the current
+    /// tempo, which reproduces the break as recorded; an explicit step re-fits it to a grid.
+    pub step_nanoticks: u64,
+    pub column: u8,
+    pub velocity: u8,
+    pub reserved: [u8; 6],
+}
+
 /// RequestSamplerKit (75).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -822,6 +839,12 @@ pub enum UiCommandType {
     /// Adds, moves or removes ONE slice marker. The one that matters live: dragging a boundary
     /// changes what a slice PLAYS without touching what any row SAYS.
     SamplerMarker = 77,
+
+    /// Writes the PATTERN that reproduces a chop: one row per slice, each naming its slice by ID.
+    /// Octatrack's CREATE LINEAR LOCKS and Bitwig's slice-to-drum-machine clip as one command —
+    /// with the difference that matters: re-cutting afterwards moves what the rows PLAY without
+    /// moving what they SAY. Bitwig emits its clip once, one-way.
+    SamplerEmitRows = 78,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -1883,6 +1906,7 @@ mod wire_layout {
             UiSamplerKitRequestPayload,
             UiSamplerSlicePayload,
             UiSamplerMarkerPayload,
+            UiSamplerEmitRowsPayload,
         );
     }
 
@@ -1897,6 +1921,7 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSamplerKitRequestPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerSlicePayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerMarkerPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerEmitRowsPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 32);
     }
 }

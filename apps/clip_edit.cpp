@@ -24,7 +24,9 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
                              std::atomic<uint32_t>& clipVersion,
                              bool recordUndo,
                              uint64_t spanEndNanotick,
-                             std::optional<EventId> noteIdOverride) {
+                             std::optional<EventId> noteIdOverride,
+                             uint16_t sound,
+                             uint16_t soundOffset) {
   const uint8_t column = static_cast<uint8_t>(flags & 0xffu);
   clip.removeChordAt(nanotick, column);
   clip.removeNoteAt(nanotick, column);
@@ -51,6 +53,10 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
   event.payload.note.column = column;
   event.payload.note.durationNanoticks = duration;
   event.payload.note.noteId = noteId;
+  // The sound address rides with the note, so a chop emitted as rows names its slices explicitly
+  // and a later re-cut moves what they play without touching what they say.
+  event.payload.note.sound = sound;
+  event.payload.note.soundOffset = soundOffset;
   clip.addEvent(std::move(event));
 
   ClipEditResult result;

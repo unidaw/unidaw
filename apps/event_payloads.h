@@ -246,7 +246,18 @@ enum class UiCommandType : uint16_t {
   /// Adds, moves or removes ONE slice marker. The fine-grained companion to SamplerSlice, and
   /// the one that matters live: dragging a boundary changes what a slice PLAYS without touching
   /// what any row SAYS.
-  SamplerMarker = 77,  // next free 78
+  SamplerMarker = 77,
+
+  /// Writes the PATTERN that reproduces a chop: one row per slice, each naming its slice by id.
+  ///
+  /// This is Octatrack's CREATE LINEAR LOCKS and Bitwig's slice-to-drum-machine clip as one
+  /// command — with the difference that matters: the rows address slices by ID, so re-cutting
+  /// afterwards moves what they PLAY without moving what they SAY. Bitwig emits its clip once,
+  /// one-way; re-slice there and you re-write the part.
+  ///
+  /// Press play and it is the break, following the project tempo with no stretching at all,
+  /// because the ROWS are the timing.
+  SamplerEmitRows = 78,  // next free 79
 };
 
 // SAMPLER LOAD (opcode 73). Exactly 40 bytes, which is the whole command payload — so `name`
@@ -325,6 +336,21 @@ struct UiSamplerMarkerPayload {
 };
 static_assert(sizeof(UiSamplerMarkerPayload) == 40,
               "UiSamplerMarkerPayload must fit the command payload exactly");
+
+struct UiSamplerEmitRowsPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerEmitRows);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t sourceLocalId = 0;
+  uint64_t atNanotick = 0;      // where the pattern starts
+  uint64_t stepNanoticks = 0;   // one row per slice, this far apart; 0 = derive from the slices
+  uint8_t column = 0;
+  uint8_t velocity = 100;
+  uint8_t reserved[6]{};
+};
+static_assert(sizeof(UiSamplerEmitRowsPayload) == 40,
+              "UiSamplerEmitRowsPayload must fit the command payload exactly");
 
 // WHICH slot field SamplerSetSlot writes. Named rather than an index into the struct, so adding
 // a field never renumbers an existing one — a renumbered selector would silently write the wrong
@@ -525,6 +551,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::RequestSamplerKit: return "request_sampler_kit";
     case UiCommandType::SamplerSlice: return "sampler_slice";
     case UiCommandType::SamplerMarker: return "sampler_marker";
+    case UiCommandType::SamplerEmitRows: return "sampler_emit_rows";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";

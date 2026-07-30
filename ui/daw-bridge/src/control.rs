@@ -1198,6 +1198,17 @@ impl EngineHandle {
         )
     }
 
+    /// Write the pattern that reproduces a chop.
+    pub fn send_sampler_emit_rows(
+        &self,
+        payload: crate::layout::UiSamplerEmitRowsPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerEmitRowsPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerEmitRowsPayload>(),
+        )
+    }
+
     /// Send a track-routing replace (SetTrackRouting). Same ring as send_command; a
     /// distinct payload shape.
     pub fn send_routing_command(

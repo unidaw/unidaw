@@ -7541,8 +7541,9 @@ struct TrackRuntime {
                           uint8_t velocity,
                           uint16_t flags,
                           bool recordUndo,
-                          std::optional<daw::EventId> noteIdOverride =
-                              std::nullopt) -> bool {
+                          std::optional<daw::EventId> noteIdOverride = std::nullopt,
+                          uint16_t sound = 0,
+                          uint16_t soundOffset = 0) -> bool {
     TrackRuntime* runtime = nullptr;
     {
       std::lock_guard<std::mutex> lock(tracksMutex);
@@ -7604,7 +7605,8 @@ struct TrackRuntime {
           result = daw::addNoteToClip(clip, trackId, target.relTick, duration,
                                       pitch, velocity, flags,
                                       runtime->trackClipVersion,
-                                      recordUndo, relSpanEnd, noteIdOverride);
+                                      recordUndo, relSpanEnd, noteIdOverride,
+                                      sound, soundOffset);
         }
         if (result) {
           // HOW MANY APPEARANCES THIS EDIT REACHED. A clip is CONTENT and a placement is an
@@ -9922,6 +9924,128 @@ struct TrackRuntime {
           .field("name", name);
       return;
     }
+    // ---- SAMPLER EMIT ROWS (78). Writes the pattern that reproduces the chop.
+    if (entry.size == sizeof(daw::UiSamplerEmitRowsPayload) &&
+        commandType == daw::UiCommandType::SamplerEmitRows) {
+      daw::UiSamplerEmitRowsPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.emit_rejected").field("track", p.trackId).field("reason", "no_such_track");
+        return;
+      }
+
+      // Collect (sliceId -> the slot that plays it, and that slot's key) from the SNAPSHOT, so
+      // the rows written match what the engine will actually sound.
+      struct Row {
+        uint16_t sliceId = 0;
+        uint16_t slotId = 0;
+        uint8_t key = 60;
+        uint64_t frame = 0;
+      };
+      std::vector<Row> rows;
+      double sampleRate = 48000.0;
+      uint64_t sourceFrames = 0;
+      {
+        std::shared_ptr<const daw::SamplerRender> snap;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snap = runtime->samplerSnapshot;
+        }
+        if (!snap) {
+          DAW_EVENT("sampler.emit_rejected").field("track", p.trackId).field("reason", "no_sampler");
+          return;
+        }
+        const daw::SamplerSourceAudio* audio =
+            snap->audioFor(static_cast<uint16_t>(p.sourceLocalId));
+        if (!audio) {
+          DAW_EVENT("sampler.emit_rejected")
+              .field("track", p.trackId)
+              .field("source", p.sourceLocalId)
+              .field("reason", "no_such_source");
+          return;
+        }
+        sampleRate = audio->sampleRate > 0 ? audio->sampleRate : 48000.0;
+        sourceFrames = audio->frames;
+        for (const auto& ss : snap->state.sliceSets) {
+          if (ss.sourceLocalId != static_cast<uint16_t>(p.sourceLocalId)) {
+            continue;
+          }
+          for (const auto& m : ss.markers) {
+            Row r;
+            r.sliceId = m.id;
+            r.frame = m.frame;
+            for (const auto& sl : snap->state.slots) {
+              if (sl.sliceId == m.id) {
+                r.slotId = sl.id;
+                r.key = sl.rootKey;
+              }
+            }
+            // A slice with NO SLOT is skipped rather than emitted with sound 0 — sound 0 means
+            // "let pitch pick", which would silently play whatever the keymap says instead of
+            // that slice. A row that plays the wrong audio is worse than a row that is absent.
+            if (r.slotId != 0) {
+              rows.push_back(r);
+            }
+          }
+        }
+      }
+      if (rows.empty()) {
+        DAW_EVENT("sampler.emit_rejected")
+            .field("track", p.trackId)
+            .field("source", p.sourceLocalId)
+            .field("reason", "no_sliced_slots");
+        return;
+      }
+      std::sort(rows.begin(), rows.end(),
+                [](const Row& a, const Row& b) { return a.frame < b.frame; });
+
+      // THE ROWS ARE THE TIMING. With time-stretch rejected, this is HOW a 174 bpm break plays
+      // at 140: each slice starts on its own row, and the rows follow the project tempo. Nothing
+      // is stretched and nothing has to be.
+      //
+      // A step of 0 means "derive it": space the rows by each slice's own LENGTH, converted to
+      // ticks at the current tempo, which reproduces the break at the tempo it was recorded at.
+      // An explicit step re-fits it to a grid instead.
+      const double bpm = tempoProvider.bpmAtNanotick(p.atNanotick);
+      const double ticksPerFrame =
+          (60.0 * static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter)) /
+          ((bpm > 0.0 ? bpm : 120.0) * sampleRate);
+      uint32_t written = 0;
+      uint64_t tick = p.atNanotick;
+      for (size_t i = 0; i < rows.size(); ++i) {
+        const uint64_t nextFrame =
+            (i + 1 < rows.size()) ? rows[i + 1].frame : sourceFrames;
+        const uint64_t sliceFrames = nextFrame > rows[i].frame ? nextFrame - rows[i].frame : 0;
+        const uint64_t step =
+            p.stepNanoticks > 0
+                ? p.stepNanoticks
+                : static_cast<uint64_t>(static_cast<double>(sliceFrames) * ticksPerFrame);
+        if (step == 0) {
+          continue;
+        }
+        const uint16_t flags = static_cast<uint16_t>(p.column);
+        if (applyAddNote(p.trackId, tick, step, rows[i].key, p.velocity, flags,
+                         /*recordUndo=*/written == 0, std::nullopt, rows[i].slotId, 0)) {
+          ++written;
+        }
+        tick += step;
+      }
+      DAW_EVENT("sampler.rows_emitted")
+          .field("track", p.trackId)
+          .field("source", p.sourceLocalId)
+          .field("rows", written)
+          .field("at", p.atNanotick)
+          .field("end", tick);
+      return;
+    }
+
     // ---- SAMPLER SLICE (76) and SAMPLER MARKER (77).
     //
     // Both edit the SliceSet and then refresh the snapshot, so a re-chop takes effect on the NEXT

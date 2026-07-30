@@ -129,8 +129,44 @@ for s in sliced:
 print("  read-back: %d slice slots, each fixed-pitch on its own key" % len(sliced))
 ' || fail "the kit read-back did not show the sliced slots"
 
+# ---- EMIT ROWS. The pattern that reproduces the chop, written by ONE command: a row per slice,
+# each naming its slice BY ID. Press play and it is the break, following the project tempo with
+# no stretching — because the ROWS are the timing.
+#
+# This is Octatrack's CREATE LINEAR LOCKS and Bitwig's slice-to-drum-machine clip, with the
+# difference that matters: re-cutting afterwards moves what the rows PLAY without moving what
+# they SAY. Bitwig emits its clip once, one-way.
+cli do sampler-emit-rows --track 0 --device 1 --source 1 --at 0 --column 0 >/dev/null 2>&1 || true
+sleep 1.5
+EMITTED="$(grep -o '"event":"sampler.rows_emitted"[^}]*' "$TMP/eng.log" | tail -1)"
+[ -n "$EMITTED" ] || fail "no sampler.rows_emitted event:
+        $(grep -o '"event":"sampler.emit_rejected"[^}]*' "$TMP/eng.log" | tail -2)"
+ROWS="$(echo "$EMITTED" | sed -n 's/.*"rows":\([0-9]*\).*/\1/p')"
+[ "$ROWS" -ge 2 ] || fail "emit-rows wrote only $ROWS rows for $MADE slices: $EMITTED"
+echo "  emits: $ROWS rows written, one per slice ($EMITTED)"
+
 cli do save chop --force >/dev/null 2>&1 || true
 sleep 1.8
+
+# ---- THE EMITTED ROWS ADDRESS THEIR SLICES BY ID. A row with sound 0 would let the KEYMAP pick,
+# which on this device would play whatever sits on that key rather than the slice the row means —
+# and it would look completely fine until the kit changed.
+python3 - "$TMP/chop.uniproj.json" <<'PYE'
+import json, sys
+d = json.load(open(sys.argv[1]))
+notes = [n for c in d.get("clips", []) for n in c.get("notes", [])]
+assert notes, "emit-rows wrote no notes into the project"
+addressed = [n for n in notes if n.get("sound", 0) != 0]
+assert len(addressed) == len(notes), \
+    "%d of %d emitted rows have NO sound address — those rows let the keymap pick the slot, " \
+    "which plays whatever sits on that key rather than the slice the row means" % (
+        len(notes) - len(addressed), len(notes))
+slots = {n["sound"] for n in notes}
+assert len(slots) == len(notes), \
+    "emitted rows share a sound address (%r) — one row per SLICE means one address per row" % slots
+print("  addressed: all %d emitted rows name their own slice by id" % len(notes))
+PYE
+[ $? -eq 0 ] || fail "the emitted rows do not address their slices"
 
 # ---- RE-CUTS LIVE. Add a marker while the engine is running; it must take effect with no row
 # rewritten and no slice renumbered.

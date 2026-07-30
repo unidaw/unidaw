@@ -12,7 +12,7 @@ use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{
     UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
     UiCommandType, UiPatcherPresetCommandPayload, UiSamplerKitRequestPayload,
-    UiSamplerLoadPayload, UiSamplerMarkerPayload, UiSamplerSetSlotPayload, UiSamplerSlicePayload,
+    UiSamplerEmitRowsPayload, UiSamplerLoadPayload, UiSamplerMarkerPayload, UiSamplerSetSlotPayload, UiSamplerSlicePayload,
     UiWaveformRequestPayload, MASTER_TRACK_ID, SAMPLER_LOAD_FIXED_PITCH, SAMPLER_MARKER_ADD,
     SAMPLER_MARKER_MOVE, SAMPLER_MARKER_REMOVE, SAMPLER_SLICE_CLEAR, SAMPLER_SLICE_EQUAL,
     SAMPLER_SLICE_TRANSIENT, SAMPLER_SLOT_FIELDS, UI_SAMPLER_KIT_SLOTS,
@@ -39,6 +39,8 @@ daw-cli — control surface for a running engine
                                    chop a source; --slots makes one playable slot per slice
   daw-cli do sampler-marker --track N --source 1 --op add|move|remove [--marker ID] [--frame F]
                                    nudge one boundary — ids are stable, so no row moves
+  daw-cli do sampler-emit-rows --track N --source 1 [--at TICK] [--step TICKS] [--column C]
+                                   write the pattern that reproduces the chop
   daw-cli get arrangement          the markers (bar AND tick, resolved) + the meter map,
                                    the meter map, and the song end
   daw-cli get notes --track N      that track's notes from the published region
@@ -2325,6 +2327,39 @@ fn main() {
                                     1
                                 }
                             }
+                        }
+                    }
+                }
+                Some(&"sampler-emit-rows") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let source = flag_u64(&args, "--source", Some(1)).unwrap_or(1) as u32;
+                    let at = flag_u64(&args, "--at", Some(0)).unwrap_or(0);
+                    // 0 = derive each row's length from its slice, which reproduces the break as
+                    // recorded. An explicit --step re-fits it to a grid instead.
+                    let step = flag_u64(&args, "--step", Some(0)).unwrap_or(0);
+                    let column = flag_u64(&args, "--column", Some(0)).unwrap_or(0) as u8;
+                    let velocity = flag_u64(&args, "--velocity", Some(100)).unwrap_or(100) as u8;
+                    let payload = UiSamplerEmitRowsPayload {
+                        command_type: UiCommandType::SamplerEmitRows as u16,
+                        flags: 0,
+                        track_id: track,
+                        device_id: device,
+                        source_local_id: source,
+                        at_nanotick: at,
+                        step_nanoticks: step,
+                        column,
+                        velocity,
+                        reserved: [0; 6],
+                    };
+                    match handle.send_sampler_emit_rows(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"sampler-emit-rows\", \"track\": {track}, \"source\": {source}, \"at\": {at}, \"step\": {step} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
                         }
                     }
                 }
