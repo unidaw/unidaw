@@ -2693,8 +2693,33 @@ struct TrackRuntime {
     std::vector<daw::ProjectClip> clips;
     std::vector<uint32_t> editable;
   };
+  // A WHOLE-SONG STORE, for the one edit that is not a track edit.
+  //
+  // A section-length ripple moves every placement on EVERY track, plus the tempo map, the harmony
+  // timeline and every automation clip, in one transaction — and it pushed no undo entry at all.
+  // EngineUndoEntry carries at most two tracks (`hasSecond`, added for a cross-track placement
+  // move), so there was nothing it could have pushed: the largest destructive edit in the program
+  // was the one you could not take back. The refusal messages tell you to "empty those bars
+  // first", which is thin comfort when the mistake was pressing the wrong thing.
+  //
+  // Same store-swap model as the per-track undo, and the same consequence, stated rather than
+  // discovered: undo restores the song to a captured state, so an edit made AFTER the ripple and
+  // undone by it goes with it. That is what a swap means; it is not a per-edit inverse.
+  struct SongStoreState {
+    // Per track, by stable trackId — including the automation clips, which TrackStoreState does
+    // not carry and which the ripple rewrites.
+    std::vector<std::pair<uint32_t, TrackStoreState>> tracks;
+    std::vector<std::pair<uint32_t, std::vector<daw::AutomationClip>>> automation;
+    std::vector<daw::Section> sections;
+    std::vector<daw::ProjectTempoPoint> tempoMap;
+    std::vector<daw::HarmonyEvent> harmony;
+  };
   struct EngineUndoEntry {
     bool structural = false;
+    // A SONG-scoped entry (a section ripple). Mutually exclusive with `structural`.
+    bool song = false;
+    SongStoreState songBefore;
+    SongStoreState songAfter;
     uint32_t trackId = 0;
     TrackStoreState before;
     TrackStoreState after;
@@ -5441,6 +5466,32 @@ struct TrackRuntime {
     return s;
   };
 
+  // The whole song's structural state, for a section ripple's before/after. Takes each track's
+  // mutex in turn rather than all at once — this runs on the control thread with no other lock
+  // held, and holding every trackMutex simultaneously is how a lock-order inversion gets written.
+  auto snapshotSongStore = [&]() -> SongStoreState {
+    SongStoreState s;
+    for (auto* rt : snapshotTracks()) {
+      if (!rt || rt->removed.load(std::memory_order_acquire)) {
+        continue;
+      }
+      std::lock_guard<std::mutex> lock(rt->trackMutex);
+      s.tracks.emplace_back(rt->trackId, snapshotTrackStore(*rt));
+      s.automation.emplace_back(rt->trackId, rt->track.automationClips);
+    }
+    {
+      std::lock_guard<std::mutex> slock(sectionMutex);
+      s.sections = sectionList.sections();
+    }
+    s.tempoMap = loadedTempoMap;
+    {
+      std::lock_guard<std::mutex> hlock(harmonyMutex);
+      s.harmony = harmonyEvents;
+    }
+    return s;
+  };
+
+
   auto pushStructuralUndo = [&](uint32_t trackId, TrackStoreState before,
                                 TrackStoreState after) {
     EngineUndoEntry e;
@@ -5497,6 +5548,67 @@ struct TrackRuntime {
     clipDirty.store(true, std::memory_order_release);
     emitClipResync(trackId, bumpClipVersionFor(runtime));
     return true;
+  };
+
+  // Put the whole song back. Everything the ripple touched, or the restore is partial — and a
+  // partial restore of a ripple is worse than none: the placements would be back where they were
+  // while the tempo change and the filter sweep stayed at their new positions.
+  auto restoreSongStore = [&](const SongStoreState& state) -> bool {
+    bool any = false;
+    for (const auto& [trackId, store] : state.tracks) {
+      if (restoreTrackStore(trackId, store)) {
+        any = true;
+      }
+    }
+    for (const auto& [trackId, clips] : state.automation) {
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (trackId < tracks.size()) {
+          runtime = tracks[trackId].get();
+        }
+      }
+      if (!runtime) {
+        continue;
+      }
+      std::shared_ptr<const TrackStateSnapshot> snap;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        runtime->track.automationClips = clips;
+        // The RT scheduler reads automation from the SNAPSHOT, so a restored point that is not
+        // republished is a point that does not play — the same rule as every other write here.
+        snap = buildTrackSnapshot(runtime->track);
+      }
+      std::atomic_store_explicit(&runtime->trackSnapshot, snap,
+                                 std::memory_order_release);
+      any = true;
+    }
+    {
+      std::lock_guard<std::mutex> slock(sectionMutex);
+      sectionList.setSections(state.sections);
+    }
+    loadedTempoMap = state.tempoMap;
+    {
+      // The PROVIDER is what the transport reads, so a restored map that the provider did not see
+      // would play at the wrong tempo positions and save at the right ones — the divergence the
+      // ripple itself had to fix.
+      std::vector<daw::TempoPoint> pts;
+      pts.reserve(loadedTempoMap.size());
+      for (const auto& pt : loadedTempoMap) {
+        pts.push_back({pt.nanotick, pt.bpm});
+      }
+      tempoProvider.setMap(std::move(pts));
+    }
+    {
+      std::lock_guard<std::mutex> hlock(harmonyMutex);
+      harmonyEvents = state.harmony;
+    }
+    harmonyDirty.store(true, std::memory_order_release);
+    harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
+    automationVersion.fetch_add(1, std::memory_order_acq_rel);
+    sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+    recomputeSongEnd();
+    return any;
   };
 
   // Snapshots the live session into a ProjectDocument and writes it. Each
@@ -8266,6 +8378,9 @@ struct TrackRuntime {
                         0xFFFFFFFFu, 0, "");
           return;
         }
+        // CAPTURED HERE, after every refusal and before the first mutation, so a refused ripple
+        // costs nothing and an applied one is fully recoverable.
+        SongStoreState songBefore = snapshotSongStore();
         // Apply: the spine, then every placement, then the derived state.
         {
           std::lock_guard<std::mutex> slock(sectionMutex);
@@ -8408,13 +8523,25 @@ struct TrackRuntime {
         automationVersion.fetch_add(1, std::memory_order_acq_rel);
         recomputeSongEnd();
         sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+        {
+          EngineUndoEntry e;
+          e.song = true;
+          e.songBefore = std::move(songBefore);
+          e.songAfter = snapshotSongStore();
+          pushUndo(std::move(e));
+        }
         DAW_EVENT("section.length_set")
             .field("section", sp.sectionId)
             .field("bars", sp.barCount)
             .field("delta_ticks", static_cast<int64_t>(delta))
             .field("placements_moved", plan.moved)
             .field("tempo_points_moved", tempoMoved)
-            .field("harmony_events_moved", harmonyMoved);
+            .field("harmony_events_moved", harmonyMoved)
+            .field("undoable", true);
+        // JOURNALLED ON SUCCESS. Only the rejections were recorded, so history.jsonl held every
+        // refused ripple and no applied one — the opposite of what a "what changed since Tuesday"
+        // artifact is for.
+        historyAppend("set_section_length", "received", 0xFFFFFFFFu, 0, "");
         return;
       }
 
@@ -10725,7 +10852,16 @@ struct TrackRuntime {
       if (!undo) {
         return;
       }
-      if (undo->structural) {
+      if (undo->song) {
+        // The whole song at once. A partial restore of a ripple is worse than none: the
+        // placements would be back where they were while the tempo change and the filter sweep
+        // stayed at their new positions.
+        if (restoreSongStore(undo->songBefore)) {
+          DAW_EVENT("undo.song").field("scope", "section_ripple");
+          std::lock_guard<std::mutex> lock(undoMutex);
+          redoStack.push_back(std::move(*undo));
+        }
+      } else if (undo->structural) {
         // Store swap: restore the track's pre-edit placements + clips. A cross-track move
         // restores BOTH tracks so the placement is never briefly in neither.
         bool ok = restoreTrackStore(undo->trackId, undo->before);
@@ -10765,7 +10901,13 @@ struct TrackRuntime {
       if (!redo) {
         return;
       }
-      if (redo->structural) {
+      if (redo->song) {
+        if (restoreSongStore(redo->songAfter)) {
+          DAW_EVENT("redo.song").field("scope", "section_ripple");
+          std::lock_guard<std::mutex> lock(undoMutex);
+          undoStack.push_back(std::move(*redo));
+        }
+      } else if (redo->structural) {
         // Store swap: re-apply the track's post-edit placements + clips (both tracks for a
         // cross-track move).
         bool ok = restoreTrackStore(redo->trackId, redo->after);
