@@ -7414,6 +7414,66 @@ struct TrackRuntime {
           sections[index].barCount = sp.barCount;
           sectionList.setSections(std::move(sections));
         }
+        // AND THE SONG-LEVEL TIMELINES. The ripple moved every placement and every automation
+        // point, and left a tempo change and a key change sitting at their absolute ticks — so
+        // inserting bars into the intro slid the material later and left the tempo change and
+        // the modulation firing in the middle of what used to follow them. The comment on the
+        // automation ripple makes exactly this argument; it simply was not applied here.
+        //
+        // NOT THE METER MAP, and that is a decision rather than another omission. The
+        // section's new tick length is computed THROUGH the meter (tickAtBar above), so
+        // shifting meter points changes the very delta that was derived from them: growing a
+        // 4-bar 4/4 intro followed by a 3/4 change measures the two new bars as 3/4, and if
+        // the change then moved with the verse those bars would be 4/4 and the material would
+        // have moved by the wrong amount. Which reading is right depends on whether the change
+        // means "the verse is in 3/4" (belongs to the section, should move) or "from bar 5 we
+        // are in 3/4" (belongs to the timeline, should not). arrange_summary_check currently
+        // pins the second reading. Picking one silently is how a song ends up off its own bar
+        // grid, so it stays as it is until that question is answered.
+        uint32_t tempoMoved = 0;
+        for (auto& pt : loadedTempoMap) {
+          // Never the anchor at 0: a tempo map without a point at the origin has no tempo
+          // before its first change.
+          if (pt.nanotick != 0 && pt.nanotick >= oldEndTick) {
+            pt.nanotick = daw::rippleTick(pt.nanotick, oldEndTick, delta);
+            ++tempoMoved;
+          }
+        }
+        if (tempoMoved > 0) {
+          std::sort(loadedTempoMap.begin(), loadedTempoMap.end(),
+                    [](const daw::ProjectTempoPoint& a, const daw::ProjectTempoPoint& b) {
+                      return a.nanotick < b.nanotick;
+                    });
+          // The provider is what the transport actually reads, so a retained map that moved
+          // and a provider that did not would play at the old tempo positions and save at the
+          // new ones — the same divergence the automation republish above exists to prevent.
+          std::vector<daw::TempoPoint> pts;
+          pts.reserve(loadedTempoMap.size());
+          for (const auto& pt : loadedTempoMap) {
+            pts.push_back({pt.nanotick, pt.bpm});
+          }
+          tempoProvider.setMap(std::move(pts));
+        }
+        uint32_t harmonyMoved = 0;
+        {
+          std::lock_guard<std::mutex> hlock(harmonyMutex);
+          for (auto& ev : harmonyEvents) {
+            if (ev.nanotick >= oldEndTick) {
+              ev.nanotick = daw::rippleTick(ev.nanotick, oldEndTick, delta);
+              ++harmonyMoved;
+            }
+          }
+          if (harmonyMoved > 0) {
+            std::sort(harmonyEvents.begin(), harmonyEvents.end(),
+                      [](const daw::HarmonyEvent& a, const daw::HarmonyEvent& b) {
+                        return a.nanotick < b.nanotick;
+                      });
+          }
+        }
+        if (harmonyMoved > 0) {
+          harmonyDirty.store(true, std::memory_order_release);
+          harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
+        }
         for (auto* rt : trackSnap) {
           if (!rt || rt->removed.load(std::memory_order_acquire)) {
             continue;
@@ -7494,7 +7554,9 @@ struct TrackRuntime {
             .field("section", sp.sectionId)
             .field("bars", sp.barCount)
             .field("delta_ticks", static_cast<int64_t>(delta))
-            .field("placements_moved", plan.moved);
+            .field("placements_moved", plan.moved)
+            .field("tempo_points_moved", tempoMoved)
+            .field("harmony_events_moved", harmonyMoved);
         return;
       }
 
