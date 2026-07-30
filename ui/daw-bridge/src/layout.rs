@@ -163,9 +163,47 @@ pub struct ShmHeader {
     pub ui_automation_bytes: u64,
     pub ui_automation_slot_offset: u64,
     pub ui_automation_slot_bytes: u64,
+    /// v29: the song's end in ticks, mirrored from the arrange region. NOT a second source of
+    /// truth — the same number written from the same atomic in the same pass, put where a reader
+    /// that needs it every frame can get it without a second region read.
+    ///
+    /// This was missing from this mirror until v32. Harmless in practice (regions are addressed
+    /// by the offsets the header itself carries, so a SHORT mirror still reads correctly), but a
+    /// mirror that silently lags the contract is how the next field lands in the wrong place.
+    pub ui_song_end_tick: u64,
+    /// v32: one sampler device's kit, on request.
+    pub ui_sampler_kit_offset: u64,
+    pub ui_sampler_kit_bytes: u64,
 }
 
 /// uiTrackFlags bits (Movement 4).
+/// v32: THE SAMPLER KIT READ-BACK. Request/answer with a CLIENT-OWNED request_seq: it names the
+/// slot the answer lands in (`request_seq % UI_SAMPLER_KIT_SLOTS`), so a caller knows where to
+/// look BEFORE it asks rather than scanning for a reply that resembles its question.
+///
+/// Published from the SNAPSHOT the producer reads, not from the document — a read-back built from
+/// the model answers "what was configured" while the audio thread plays something else, which is
+/// precisely the divergence a read-back exists to catch.
+pub const UI_MAX_SAMPLER_SLOTS: usize = 64;
+pub const UI_SAMPLER_KIT_SLOTS: usize = 2;
+
+/// The slot's source did not resolve, so it will be SILENT. A flag rather than something to infer
+/// from `length_frames == 0`, because "silent because the file is missing" and "silent because the
+/// sample is empty" are different problems and a UI should be able to say which.
+pub const UI_SAMPLER_SLOT_SOURCE_MISSING: u8 = 1 << 2;
+
+/// RequestSamplerKit (75).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerKitRequestPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub request_seq: u32,
+    pub reserved: [u8; 24],
+}
+
 pub const UI_TRACK_FLAG_COLLAPSED: u8 = 1 << 0;
 /// Set when ui_track_parent_id is meaningful; without it, parent_id 0 is ambiguous
 /// (top-level vs child of track 0).
@@ -233,6 +271,16 @@ pub use crate::sys::{
     daw_UiAudioClip as UiAudioClip, daw_UiAudioSource as UiAudioSource,
     daw_UiAudioSourceRegion as UiAudioSourceRegion, daw_UiWaveformRegion as UiWaveformRegion,
     daw_UiWaveformSlot as UiWaveformSlot,
+};
+
+// v32 sampler kit read-back. ALIASES of the generated structs rather than a hand-written mirror:
+// these live in shared_memory.h, bindgen owns them, and a second hand-maintained copy is exactly
+// the "two facts about one thing" shape — with the added charm that the two would be checked
+// against each other by nobody. (Command payloads, by contrast, come from event_payloads.h which
+// is NOT bindgen'd, so those stay hand-written and are pinned by the wire_layout test instead.)
+pub use crate::sys::{
+    daw_UiSamplerKitRegion as UiSamplerKitRegion, daw_UiSamplerKitSlot as UiSamplerKitSlot,
+    daw_UiSamplerSlotEntry as UiSamplerSlotEntry,
 };
 
 #[repr(C, align(64))]
@@ -718,6 +766,9 @@ pub enum UiCommandType {
     /// make every edit a read-modify-write, so two callers touching different fields would
     /// clobber each other with stale copies of the rest.
     SamplerSetSlot = 74,
+
+    /// Asks the engine to publish one sampler device's kit into a `UiSamplerKitSlot`.
+    RequestSamplerKit = 75,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -1776,6 +1827,7 @@ mod wire_layout {
             UiArrangeTimeCommandPayload,
             UiSamplerLoadPayload,
             UiSamplerSetSlotPayload,
+            UiSamplerKitRequestPayload,
         );
     }
 
@@ -1787,5 +1839,7 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiChainCommandPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerLoadPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerSetSlotPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerKitRequestPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 32);
     }
 }

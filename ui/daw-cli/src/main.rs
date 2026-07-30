@@ -11,8 +11,10 @@ use std::time::{Duration, Instant};
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{
     UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
-    UiCommandType, UiPatcherPresetCommandPayload, UiSamplerLoadPayload, UiSamplerSetSlotPayload,
-    UiWaveformRequestPayload, MASTER_TRACK_ID, SAMPLER_LOAD_FIXED_PITCH, SAMPLER_SLOT_FIELDS,
+    UiCommandType, UiPatcherPresetCommandPayload, UiSamplerKitRequestPayload,
+    UiSamplerLoadPayload, UiSamplerSetSlotPayload, UiWaveformRequestPayload, MASTER_TRACK_ID,
+    SAMPLER_LOAD_FIXED_PITCH, SAMPLER_SLOT_FIELDS, UI_SAMPLER_KIT_SLOTS,
+    UI_SAMPLER_SLOT_SOURCE_MISSING,
 };
 
 const USAGE: &str = "\
@@ -28,6 +30,8 @@ daw-cli — control surface for a running engine
                                    lay a KIT: N samples on N consecutive keys, fixed pitch
   daw-cli do sampler-slot --track N --device D --slot S --field voice-group --value 1
                                    edit one slot field (--field with no match lists them all)
+  daw-cli get sampler-kit --track N [--device D]
+                                   the device's slots, as the ENGINE has them
   daw-cli get arrangement          the markers (bar AND tick, resolved) + the meter map,
                                    the meter map, and the song end
   daw-cli get notes --track N      that track's notes from the published region
@@ -1136,6 +1140,68 @@ fn get_audio_sources(handle: &EngineHandle) -> i32 {
 
 // get waveform <sourceId> <decimation> <firstFrame> <columns> [channelMask]
 // Sends RequestWaveform and reads the seqlocked answer slot back.
+/// v32: asks the engine to publish one sampler device's kit and prints the answer.
+///
+/// The request sequence is CLIENT-OWNED and it picks the slot the answer lands in, so this reads
+/// ONE place rather than scanning — which is the whole reason that pattern exists.
+fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
+    let track = flag_u64(args, "--track", Some(0)).unwrap_or(0) as u32;
+    let device = flag_u64(args, "--device", Some(0)).unwrap_or(0) as u32;
+    // Any non-zero sequence works; a caller polling repeatedly should vary it so a stale answer
+    // from a previous question is distinguishable from this one's.
+    let seq = flag_u64(args, "--seq", Some(1)).unwrap_or(1) as u32;
+    let payload = UiSamplerKitRequestPayload {
+        command_type: UiCommandType::RequestSamplerKit as u16,
+        flags: 0,
+        track_id: track,
+        device_id: device,
+        request_seq: seq,
+        reserved: [0; 24],
+    };
+    if let Err(err) = handle.send_sampler_kit_request(payload) {
+        eprintln!("daw-cli: {err}");
+        return 1;
+    }
+    let index = (seq as usize) % UI_SAMPLER_KIT_SLOTS;
+    for _ in 0..200 {
+        if let Some(v) = handle.read_sampler_kit_slot(index) {
+            // The echo is the point: a slot reused for a DIFFERENT question looks exactly like an
+            // answer to this one without it.
+            if v.request_seq == seq {
+                if !v.found {
+                    println!("{{ \"found\": false, \"track\": {track}, \"device\": {device} }}");
+                    return 0;
+                }
+                println!("{{");
+                println!("  \"found\": true,");
+                println!("  \"track\": {},", v.track_id);
+                println!("  \"device\": {},", v.device_id);
+                println!("  \"voice_cap\": {},", v.voice_cap);
+                println!("  \"active_voices\": {},", v.active_voices);
+                println!("  \"steals\": {},", v.steals);
+                println!("  \"unmapped\": {},", v.unmapped);
+                println!("  \"slots_truncated\": {},", v.slots_truncated);
+                let body: Vec<String> = v.slots.iter().map(|e| {
+                    format!(
+                        "    {{ \"slot\": {}, \"source\": {}, \"key_low\": {}, \"key_high\": {}, \"root\": {}, \"vel_low\": {}, \"vel_high\": {}, \"voice_group\": {}, \"nna\": {}, \"gate\": {}, \"reverse\": {}, \"source_missing\": {}, \"gain_mb\": {}, \"pan\": {}, \"mod_set\": {}, \"stem\": {}, \"quality\": {}, \"length_frames\": {} }}",
+                        e.slotId, e.sourceLocalId, e.keyLow, e.keyHigh, e.rootKey,
+                        e.velLow, e.velHigh, e.voiceGroup, e.nna,
+                        (e.flags & 1) != 0, (e.flags & 2) != 0,
+                        (e.flags & UI_SAMPLER_SLOT_SOURCE_MISSING) != 0,
+                        e.gainMillibels, e.panThousandths, e.modSetId, e.outputStem,
+                        e.quality, e.lengthFrames)
+                }).collect();
+                println!("  \"slots\": [\n{}\n  ]", body.join(",\n"));
+                println!("}}");
+                return 0;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    eprintln!("daw-cli: no answer for sampler-kit seq {seq} within 2s");
+    1
+}
+
 fn get_waveform(handle: &EngineHandle, args: &[&str]) -> i32 {
     let source_id: u32 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1);
     let decimation: u32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(64);
@@ -1512,6 +1578,17 @@ fn main() {
         Some((&"get", rest)) if rest.first() == Some(&"automation-points") => {
             match EngineHandle::attach(&name, true) {
                 Ok(handle) => get_automation_points(&handle, &args),
+                Err(err) => {
+                    eprintln!("daw-cli: {err}");
+                    1
+                }
+            }
+        }
+        // `get sampler-kit` needs to WRITE (the request) as well as read, so it attaches
+        // read-write like `get waveform` does rather than through the read-only path below.
+        Some((&"get", rest)) if rest.first() == Some(&"sampler-kit") => {
+            match EngineHandle::attach(&name, true) {
+                Ok(handle) => get_sampler_kit(&handle, &args),
                 Err(err) => {
                     eprintln!("daw-cli: {err}");
                     1

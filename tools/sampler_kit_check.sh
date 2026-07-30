@@ -123,6 +123,47 @@ SET="$(grep -c '"event":"sampler.slot_set"' "$TMP/eng.log")"
         $(grep -o '\"event\":\"sampler.set_slot_rejected\"[^}]*' "$TMP/eng.log" | tail -3)"
 echo "  configures: voice groups and NNA set by command, no JSON"
 
+# ---- THE READ-BACK. A UI cannot draw a kit it cannot see, and until v32 the only way to know
+# what slots a sampler had was to save the project and read the file.
+#
+# PUBLISHED FROM THE SNAPSHOT THE PRODUCER READS, not from the document. That is what gives this
+# teeth: a read-back built from the model would answer "what was configured" while the audio
+# thread plays something else, and catching exactly that divergence is what a read-back is FOR.
+KIT="$(cli get sampler-kit --track 0 --device 1 --seq 7 2>&1)"
+echo "$KIT" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print("BADJSON: " + raw[:200]); raise SystemExit(1)
+assert d.get("found") is True, d
+assert len(d["slots"]) == 8, "expected 8 slots in the read-back, got %d" % len(d["slots"])
+assert d["slots_truncated"] == 0, d["slots_truncated"]
+by = {s["slot"]: s for s in d["slots"]}
+for i in range(1, 9):
+    assert by[i]["root"] == 35 + i, (i, by[i]["root"])
+    # The SOURCE RESOLVED. A slot whose file is missing is reported as such rather than left to
+    # be inferred from a zero length — "silent because the file is missing" and "silent because
+    # the sample is empty" are different problems.
+    assert by[i]["source_missing"] is False, by[i]
+    assert by[i]["length_frames"] > 0, by[i]
+# The configuration set by command earlier must be what the ENGINE has, not merely what the
+# document says — these two read from different places and this is where they are compared.
+assert by[1]["voice_group"] == 1 and by[2]["voice_group"] == 1, "choke group not in the read-back"
+assert by[3]["voice_group"] == 0, "an unrelated slot has a voice group"
+assert by[4]["nna"] == 2, "NNA=Continue not in the read-back"
+assert d["voice_cap"] > 0, d
+print("  reads back: 8 slots, choke group and NNA as the ENGINE has them (not as the file says)")
+' || fail "the kit read-back did not match: $KIT"
+
+# ---- AND A DEVICE THAT IS NOT THERE ANSWERS "not found" rather than an empty kit. An empty
+# answer and a missing device look identical to a caller, and only one of them is a bug.
+MISSING="$(cli get sampler-kit --track 0 --device 99 --seq 9 2>&1)"
+echo "$MISSING" | grep -q '"found": false' || \
+  fail "asking for a device that does not exist should answer found:false, got: $MISSING"
+echo "  refuses: a missing device answers found:false, not an empty kit"
+
 cli do save kit --force >/dev/null 2>&1 || true
 sleep 1.8
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""

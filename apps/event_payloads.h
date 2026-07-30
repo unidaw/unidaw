@@ -230,7 +230,13 @@ enum class UiCommandType : uint16_t {
   /// carrying every field, because a whole-slot payload would not fit 40 bytes AND would make
   /// every edit a read-modify-write of state the caller may not have — two callers editing
   /// different fields would clobber each other with stale copies of the rest.
-  SamplerSetSlot = 74,  // next free 75
+  SamplerSetSlot = 74,
+
+  /// Asks the engine to publish one sampler device's kit into a UiSamplerKitSlot. The client owns
+  /// `requestSeq` and it picks the slot, so a caller knows where its answer will land BEFORE it
+  /// asks — the same shape as RequestAutomationLane and RequestWaveform, and the reason that
+  /// shape exists rather than scanning for a reply that looks like yours.
+  RequestSamplerKit = 75,  // next free 76
 };
 
 // SAMPLER LOAD (opcode 73). Exactly 40 bytes, which is the whole command payload — so `name`
@@ -254,6 +260,19 @@ static_assert(sizeof(UiSamplerLoadPayload) == 40,
               "UiSamplerLoadPayload must fit the command payload exactly");
 
 inline constexpr uint16_t kSamplerLoadFixedPitch = 1u << 0;
+
+// RequestSamplerKit (75). The client owns `requestSeq`: it names the slot the answer lands in
+// (requestSeq % kUiSamplerKitSlots), so a caller reads one place rather than scanning.
+struct UiSamplerKitRequestPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::RequestSamplerKit);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;   // 0 = the first sampler on the track
+  uint32_t requestSeq = 0;
+  uint8_t reserved[24]{};
+};
+static_assert(sizeof(UiSamplerKitRequestPayload) == 40,
+              "UiSamplerKitRequestPayload must fit the command payload exactly");
 
 // WHICH slot field SamplerSetSlot writes. Named rather than an index into the struct, so adding
 // a field never renumbers an existing one — a renumbered selector would silently write the wrong
@@ -451,6 +470,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::ClearPlacementAlternate: return "clear_placement_alternate";
     case UiCommandType::SamplerLoad: return "sampler_load";
     case UiCommandType::SamplerSetSlot: return "sampler_set_slot";
+    case UiCommandType::RequestSamplerKit: return "request_sampler_kit";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";

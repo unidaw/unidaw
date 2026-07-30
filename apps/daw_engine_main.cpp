@@ -1884,6 +1884,9 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(sizeof(daw::UiAudioSourceRegion), 64);
     header.uiWaveformOffset = offset;      // v18: windowed waveform answer slots
     offset += daw::alignUp(sizeof(daw::UiWaveformRegion), 64);
+    header.uiSamplerKitOffset = offset;    // v32: one sampler device's kit, on request
+    header.uiSamplerKitBytes = sizeof(daw::UiSamplerKitRegion);
+    offset += daw::alignUp(header.uiSamplerKitBytes, 64);
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
@@ -9918,6 +9921,115 @@ struct TrackRuntime {
           .field("name", name);
       return;
     }
+    // ---- REQUEST SAMPLER KIT (75). Publishes one device's kit into a seqlock slot.
+    if (entry.size == sizeof(daw::UiSamplerKitRequestPayload) &&
+        commandType == daw::UiCommandType::RequestSamplerKit) {
+      daw::UiSamplerKitRequestPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      if (!uiShm.header || uiShm.header->uiSamplerKitOffset == 0) {
+        return;
+      }
+      auto* region = reinterpret_cast<daw::UiSamplerKitRegion*>(
+          reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiSamplerKitOffset);
+      // THE CLIENT OWNS THE SEQUENCE and it picks the slot, so a caller reads one place rather
+      // than scanning for an answer that looks like a reply to its own question.
+      daw::UiSamplerKitSlot& slot = region->slots[p.requestSeq % daw::kUiSamplerKitSlots];
+
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+
+      // SEQLOCK: odd while writing. A reader that sees an odd sequence, or a different one either
+      // side of its read, retries — the only way a 2 KB answer publishes without a lock the
+      // reader could hold while the engine needs to move on.
+      const uint32_t before = slot.seq.load(std::memory_order_relaxed) | 1u;
+      slot.seq.store(before, std::memory_order_release);
+      std::atomic_thread_fence(std::memory_order_release);
+
+      slot.requestSeq = p.requestSeq;
+      slot.trackId = p.trackId;
+      slot.deviceId = p.deviceId;
+      slot.slotCount = 0;
+      slot.slotsTruncated = 0;
+      slot.found = 0;
+      slot.voiceCap = 0;
+      slot.activeVoices = 0;
+      slot.steals = 0;
+      slot.unmapped = 0;
+
+      if (runtime) {
+        // PUBLISHED FROM THE SNAPSHOT THE PRODUCER READS, NOT FROM THE DOCUMENT. That is the
+        // decision that gives this read-back teeth: the model would answer "what was configured"
+        // while the audio thread plays something else, and catching exactly that divergence is
+        // what a read-back is for.
+        std::shared_ptr<const daw::SamplerRender> snap;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snap = runtime->samplerSnapshot;
+        }
+        if (snap && (p.deviceId == 0 || runtime->samplerDeviceId == p.deviceId)) {
+          slot.found = 1;
+          slot.deviceId = runtime->samplerDeviceId;
+          slot.voiceCap = snap->state.voiceCap;
+          slot.activeVoices = runtime->samplerRuntime.activeVoices();
+          slot.steals = static_cast<uint32_t>(runtime->samplerRuntime.stealCount());
+          slot.unmapped = static_cast<uint32_t>(runtime->samplerRuntime.unmappedCount());
+          uint32_t n = 0;
+          for (const auto& sl : snap->state.slots) {
+            if (n >= daw::kUiMaxSamplerSlots) {
+              // NEVER A SILENT TRUNCATION. A kit larger than the region says so, so a UI can draw
+              // "and 12 more" rather than quietly showing a short list as though it were whole.
+              slot.slotsTruncated = static_cast<uint32_t>(snap->state.slots.size()) - n;
+              break;
+            }
+            daw::UiSamplerSlotEntry& e = slot.slots[n++];
+            e = daw::UiSamplerSlotEntry{};
+            e.slotId = sl.id;
+            e.sourceLocalId = sl.sourceLocalId;
+            e.keyLow = sl.keyLow;
+            e.keyHigh = sl.keyHigh;
+            e.rootKey = sl.rootKey;
+            e.velLow = sl.velLow;
+            e.velHigh = sl.velHigh;
+            e.voiceGroup = sl.voiceGroup;
+            e.nna = static_cast<uint8_t>(sl.nna);
+            e.flags = static_cast<uint8_t>((sl.gate ? 1u : 0u) | (sl.reverse ? 2u : 0u));
+            e.gainMillibels = sl.gainMillibels;
+            e.panThousandths = sl.panThousandths;
+            e.modSetId = sl.modSetId;
+            e.outputStem = sl.outputStem;
+            e.quality = sl.quality;
+            const daw::SamplerSourceAudio* audio = snap->audioFor(sl.sourceLocalId);
+            e.lengthFrames = audio ? static_cast<uint32_t>(audio->frames) : 0;
+            // "Silent because the file is missing" and "silent because the sample is empty" are
+            // different problems, and a UI should be able to say which — so the reason is a FLAG
+            // rather than something to infer from a zero length.
+            if (!audio) {
+              e.flags |= daw::kUiSamplerSlotSourceMissing;
+            }
+          }
+          slot.slotCount = n;
+        }
+      }
+
+      std::atomic_thread_fence(std::memory_order_release);
+      slot.seq.store(before + 1, std::memory_order_release);
+      region->requestSeq.store(p.requestSeq, std::memory_order_release);
+      DAW_EVENT("sampler.kit_published")
+          .field("track", p.trackId)
+          .field("device", slot.deviceId)
+          .field("seq", p.requestSeq)
+          .field("found", slot.found)
+          .field("slots", slot.slotCount)
+          .field("truncated", slot.slotsTruncated)
+          .field("voices", slot.activeVoices);
+      return;
+    }
+
     // ---- SAMPLER SET SLOT (74). One field of one slot.
     if (entry.size == sizeof(daw::UiSamplerSetSlotPayload) &&
         commandType == daw::UiCommandType::SamplerSetSlot) {

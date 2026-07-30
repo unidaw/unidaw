@@ -316,6 +316,12 @@ struct alignas(64) ShmHeader {
   // the unnamed tail past the last marker from this, and asked for a field rather than a second
   // region read for one integer.
   uint64_t uiSongEndTick = 0;
+  // v32: one sampler device's kit, on request. Published from the SNAPSHOT the producer reads,
+  // not from the document — a read-back built from the model answers "what was configured" while
+  // the audio thread plays something else, which is precisely the divergence a read-back exists
+  // to catch.
+  uint64_t uiSamplerKitOffset = 0;
+  uint64_t uiSamplerKitBytes = 0;
 };
 
 // uiTrackFlags bits.
@@ -831,6 +837,73 @@ struct alignas(64) UiAutomationSlotRegion {
   ShmAtomicU32 requestSeq{0};
   uint32_t reserved[15]{};
   UiAutomationSlot slots[kUiAutomationSlots]{};
+};
+
+// ---------------------------------------------------------------------------------------------
+// v32: THE SAMPLER KIT READ-BACK.
+//
+// A UI cannot draw a kit it cannot see, and until this existed the only way to know what slots a
+// sampler had was to save the project and read the file. Request/answer with a CLIENT-OWNED
+// requestSeq, exactly as RequestAutomationLane and RequestWaveform do — the reason that pattern
+// exists is so a caller knows which slot its answer will land in BEFORE it asks, rather than
+// scanning for one that looks like a reply to its question.
+//
+// PUBLISHED FROM THE SNAPSHOT THE PRODUCER READS, not from the document. That is the decision
+// that gives a read-back teeth: publishing the model would answer "what was configured" while
+// the audio thread is playing something else, and the whole point of a read-back is to catch
+// exactly that divergence.
+constexpr uint32_t kUiMaxSamplerSlots = 64;
+constexpr uint32_t kUiSamplerKitSlots = 2;
+
+// One slot, flattened for display. Deliberately NOT the whole SamplerSlot: this is what a kit
+// grid draws, and a region that mirrored every field would have to be re-versioned every time
+// the device gained one.
+struct UiSamplerSlotEntry {          // 32 B
+  uint16_t slotId = 0;
+  uint16_t sourceLocalId = 0;
+  uint8_t keyLow = 0;
+  uint8_t keyHigh = 0;
+  uint8_t rootKey = 0;
+  uint8_t velLow = 0;
+  uint8_t velHigh = 0;
+  uint8_t voiceGroup = 0;
+  uint8_t nna = 0;
+  uint8_t flags = 0;                 // bit0 gate, bit1 reverse, bit2 SOURCE MISSING
+  int16_t gainMillibels = 0;
+  int16_t panThousandths = 0;
+  uint16_t modSetId = 0;
+  uint8_t outputStem = 0;
+  uint8_t quality = 0;
+  uint32_t lengthFrames = 0;         // 0 = the source did not resolve, so the slot is silent
+  uint32_t reserved[2]{};
+};
+static_assert(sizeof(UiSamplerSlotEntry) == 32, "UiSamplerSlotEntry must be 32 bytes");
+
+// bit2: the slot's source did not resolve, so it will be SILENT. Published rather than left to
+// be inferred from lengthFrames == 0, because "silent because the file is missing" and "silent
+// because the sample is empty" are different problems and a UI should be able to say which.
+inline constexpr uint8_t kUiSamplerSlotSourceMissing = 1u << 2;
+
+struct alignas(64) UiSamplerKitSlot {
+  ShmAtomicU32 seq{0};        // ODD while writing (seqlock)
+  uint32_t requestSeq = 0;    // echo
+  uint32_t trackId = 0;       // echo
+  uint32_t deviceId = 0;      // echo
+  uint32_t slotCount = 0;
+  uint32_t slotsTruncated = 0;  // never silent: a kit larger than the region says so
+  uint32_t found = 0;         // 1 = there is a sampler there; 0 = no such (track, device)
+  uint32_t voiceCap = 0;
+  uint32_t activeVoices = 0;  // from the RUNTIME, so "is it playing" is answerable
+  uint32_t steals = 0;        // telemetry: a pool running out is a musical fact, not a secret
+  uint32_t unmapped = 0;      // notes that hit no slot — a kit silent everywhere is diagnosable
+  uint32_t reserved[5]{};
+  UiSamplerSlotEntry slots[kUiMaxSamplerSlots]{};
+};
+
+struct alignas(64) UiSamplerKitRegion {
+  ShmAtomicU32 requestSeq{0};
+  uint32_t reserved[15]{};
+  UiSamplerKitSlot slots[kUiSamplerKitSlots]{};
 };
 
 // One answer slot. A windowed min/max reply for one RequestWaveform, published under

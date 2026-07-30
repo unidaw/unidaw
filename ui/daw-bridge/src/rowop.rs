@@ -138,8 +138,45 @@ mod tests {
             retrigger: 2,
             probability: 50,
             delay: None,
+            sound: 0,
+            sound_offset: 0,
         });
         assert!(parse_row_ops("").unwrap().is_empty());
+    }
+
+    #[test]
+    fn sound_address_parses_and_zero_is_refused() {
+        let ops = parse_row_ops("s5").unwrap();
+        assert_eq!(ops.sound, 5);
+        // `s0` is REFUSED, not accepted as 0. Zero is the SENTINEL meaning "let pitch pick the
+        // slot", so accepting it would give two ways to say one thing — and one of them looks
+        // like an explicit choice while being the opposite.
+        assert!(parse_row_ops("s0").is_err());
+        assert!(parse_row_ops("sx").is_err());
+        // An unset sound is 0, which is how a blank cell reads.
+        assert_eq!(parse_row_ops("ret2").unwrap().sound, 0);
+    }
+
+    #[test]
+    fn sample_offset_is_written_coarse_and_stored_fine() {
+        // Written in 1/256ths for tracker muscle memory (the 9xx notation), stored at full u16
+        // resolution — the coarse notation is for the hands, not a limit on what is expressible.
+        assert_eq!(parse_row_ops("o128").unwrap().sound_offset, 128 * 256);
+        assert_eq!(parse_row_ops("o0").unwrap().sound_offset, 0);
+        assert!(parse_row_ops("o256").is_err());
+        assert!(parse_row_ops("oz").is_err());
+    }
+
+    #[test]
+    fn sound_token_is_not_mistaken_for_anything_else() {
+        // The single-letter prefixes must not swallow each other. "s" is checked before "p"/"d",
+        // and "ret" before all of them.
+        let ops = parse_row_ops("ret3 s7 o64 p60 d1/6").unwrap();
+        assert_eq!(ops.retrigger, 3);
+        assert_eq!(ops.sound, 7);
+        assert_eq!(ops.sound_offset, 64 * 256);
+        assert_eq!(ops.probability, 60);
+        assert_eq!(ops.delay, Some((1, 6)));
     }
 
     #[test]
