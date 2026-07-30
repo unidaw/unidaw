@@ -7,6 +7,7 @@
 
 #include "apps/patcher_abi.h"
 #include "apps/patcher_graph.h"
+#include "apps/sampler_state.h"
 
 namespace daw {
 
@@ -16,6 +17,10 @@ enum class DeviceKind : uint8_t {
   PatcherAudio = 2,
   VstInstrument = 3,
   VstEffect = 4,
+  // The built-in sampler (docs/SAMPLER_DESIGN.md). A head-of-chain instrument like a VST
+  // instrument, but rendered IN the engine rather than in a host process — so it writes into the
+  // host input plane ahead of the chain and a VST effect can follow it on the same track.
+  Sampler = 5,
 };
 
 constexpr uint32_t kDeviceIdAuto = 0xFFFFFFFFu;
@@ -65,6 +70,10 @@ struct Device {
   bool hasEuclideanConfig = false;
   PatcherEuclideanConfig euclideanConfig{};
   VstRef vstRef{};
+  // The sampler's document, when kind == Sampler. Serialized under "sampler" in the device
+  // object, the same shape as the "euclidean" / "patcher" children beside it.
+  bool hasSampler = false;
+  SamplerState sampler{};
   // This device's patcher DAG — the modulators/generators that drive it. Empty =
   // none. Per-device (a track can have several), superseding the single
   // per-track patcher. Only the authored nodes/edges are serialized; topoOrder

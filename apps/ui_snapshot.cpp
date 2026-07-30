@@ -60,8 +60,13 @@ ClipWindowResult buildUiClipWindowSnapshot(const MusicalClip& clip,
       // with its placement's stable id in the payload's spare field; publish it so the UI
       // can group notes by clip. (placementFlags — muted/add — is still a later refinement.)
       note.placementFlags = 0;
-      note.placementId = event.payload.note.reserved2;
+      note.placementId = event.payload.note.placementId;
       note.delayNanoticks = event.payload.note.delayNanoticks;
+      // v32: the sound address. 0 is the common case (the keymap picks the slot from pitch), so
+      // a UI should draw 0 as EMPTY rather than as a literal zero — on an ordinary kit track it
+      // is every row, and that sparseness is why there is no permanent ops column (R5).
+      note.sound = event.payload.note.sound;
+      note.soundOffset = event.payload.note.soundOffset;
       // M1.13: how far this note MOVES when it sounds, in nanoticks, signed — notes are
       // pulled earlier as often as later. tOn stays the authored value, so the UI draws
       // the note where it was played and a mark to where it is heard.

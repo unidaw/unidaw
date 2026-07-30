@@ -279,6 +279,62 @@ target_include_directories(markers_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# Sampler S1: multipoint drawable envelopes. The claim under test is that ADSR is a VIEW of the
+# same points (docs/SAMPLER_DESIGN.md R4) — if that is false, the sampler has two envelope models
+# pretending to be one and every later feature has to ask which it is talking to.
+add_executable(sampler_envelope_tests
+  apps/sampler_envelope_tests_main.cpp
+)
+target_include_directories(sampler_envelope_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# Sampler S1: the document — keymap resolution, derived facts, and the 15-char param-id wall.
+add_executable(sampler_state_tests
+  apps/sampler_state_tests_main.cpp
+)
+target_include_directories(sampler_state_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# Sampler S1: the voice. The headline property is BLOCK-SIZE INVARIANCE — one note rendered at
+# 64, 256 and 1024 frames must be bit-identical, which is what keeps intra-block starts honest.
+add_executable(sampler_voice_tests
+  apps/sampler_voice_tests_main.cpp
+)
+target_include_directories(sampler_voice_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# Sampler S5: slicing. The assertions are about IDENTITY, not audio — "slice 5 still plays the
+# same frames after an insert at slice 2" is not a detail, it is the feature that lets a chop be
+# re-cut while it plays.
+add_executable(sampler_slice_tests
+  apps/sampler_slice_tests_main.cpp
+)
+target_include_directories(sampler_slice_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# Sampler S3: the DSP — mip-map, the three interpolators, and the filter. Every assertion here is
+# ACOUSTIC, because the structural versions all pass against a feature that is built and never
+# read: the levels exist, the setting is stored, the filter is constructed.
+add_executable(sampler_dsp_tests
+  apps/sampler_dsp_tests_main.cpp
+)
+target_include_directories(sampler_dsp_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# Sampler S1: the polyphonic layer — choke, NNA, stealing, and sample-accurate note-OFF, which
+# is the thing block segmentation exists for.
+add_executable(sampler_engine_tests
+  apps/sampler_engine_tests_main.cpp
+)
+target_include_directories(sampler_engine_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # M3.24: `adds` are an appearance's own content — emitted once, not looped with the clip.
 add_executable(placement_adds_tests
   apps/placement_adds_tests_main.cpp
@@ -436,6 +492,71 @@ add_test(NAME markers
   COMMAND markers_tests
 )
 set_tests_properties(markers PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_envelope
+  COMMAND sampler_envelope_tests
+)
+set_tests_properties(sampler_envelope PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_check
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_check.sh
+)
+set_tests_properties(sampler_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_load
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_load_check.sh
+)
+set_tests_properties(sampler_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_chop
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_chop_check.sh
+)
+set_tests_properties(sampler_chop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_slice_stability
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_slice_stability_check.sh
+)
+set_tests_properties(sampler_slice_stability PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_sound_address
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_sound_address_check.sh
+)
+set_tests_properties(sampler_sound_address PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_kit
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_kit_check.sh
+)
+set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_determinism
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_determinism_check.sh
+)
+set_tests_properties(sampler_determinism PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_state
+  COMMAND sampler_state_tests
+)
+set_tests_properties(sampler_state PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_voice
+  COMMAND sampler_voice_tests
+)
+set_tests_properties(sampler_voice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_slice
+  COMMAND sampler_slice_tests
+)
+set_tests_properties(sampler_slice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_dsp
+  COMMAND sampler_dsp_tests
+)
+set_tests_properties(sampler_dsp PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_engine
+  COMMAND sampler_engine_tests
+)
+set_tests_properties(sampler_engine PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME placement_adds
   COMMAND placement_adds_tests
@@ -684,6 +805,12 @@ foreach(daw_test_target
     time_signature_tests
     placement_adds_tests
     markers_tests
+    sampler_envelope_tests
+    sampler_state_tests
+    sampler_voice_tests
+    sampler_engine_tests
+    sampler_dsp_tests
+    sampler_slice_tests
     event_ring_mpsc_tests
     audio_io_tests
     device_chain_tests

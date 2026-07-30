@@ -232,8 +232,185 @@ enum class UiCommandType : uint16_t {
   /// nothing, which is the right default for the case where the agent was useful.
   ForkPlacementClip = 70,
   SwapPlacementClip = 71,
-  ClearPlacementAlternate = 72,  // next free 73
+  ClearPlacementAlternate = 72,
+
+  /// SAMPLER (docs/SAMPLER_DESIGN.md S1). Loads an audio file into the device as a new SOURCE
+  /// and mints a SLOT that plays it. This is the whole "useful line": drop a sample, name it
+  /// from a row, hear it.
+  ///
+  /// The file is named RELATIVE TO THE PROJECT DIRECTORY, not by absolute path — partly because
+  /// a path does not fit in a 40-byte payload, and mostly because R3 makes the project a MODULE
+  /// with its samples inside it. A project that refers to a sample by absolute path stops
+  /// playing the moment you send it to someone, which is the thing R3 exists to prevent, so the
+  /// command that creates the reference should not be able to express one.
+  SamplerLoad = 73,
+
+  /// Edits ONE FIELD of one sampler slot. A field selector plus a value, rather than a payload
+  /// carrying every field, because a whole-slot payload would not fit 40 bytes AND would make
+  /// every edit a read-modify-write of state the caller may not have — two callers editing
+  /// different fields would clobber each other with stale copies of the rest.
+  SamplerSetSlot = 74,
+
+  /// Asks the engine to publish one sampler device's kit into a UiSamplerKitSlot. The client owns
+  /// `requestSeq` and it picks the slot, so a caller knows where its answer will land BEFORE it
+  /// asks — the same shape as RequestAutomationLane and RequestWaveform, and the reason that
+  /// shape exists rather than scanning for a reply that looks like yours.
+  RequestSamplerKit = 75,
+
+  /// Slices a source: transient detection, equal division, or one marker at a time. Mints STABLE
+  /// marker ids — an insert never renumbers an existing one, which is what lets a chop be re-cut
+  /// while it plays (docs/SAMPLER_DESIGN.md §5.1).
+  SamplerSlice = 76,
+
+  /// Adds, moves or removes ONE slice marker. The fine-grained companion to SamplerSlice, and
+  /// the one that matters live: dragging a boundary changes what a slice PLAYS without touching
+  /// what any row SAYS.
+  SamplerMarker = 77,
+
+  /// Writes the PATTERN that reproduces a chop: one row per slice, each naming its slice by id.
+  ///
+  /// This is Octatrack's CREATE LINEAR LOCKS and Bitwig's slice-to-drum-machine clip as one
+  /// command — with the difference that matters: the rows address slices by ID, so re-cutting
+  /// afterwards moves what they PLAY without moving what they SAY. Bitwig emits its clip once,
+  /// one-way; re-slice there and you re-write the part.
+  ///
+  /// Press play and it is the break, following the project tempo with no stretching at all,
+  /// because the ROWS are the timing.
+  SamplerEmitRows = 78,  // next free 79
 };
+
+// SAMPLER LOAD (opcode 73). Exactly 40 bytes, which is the whole command payload — so `name`
+// gets 24 of them and is a project-relative FILE NAME rather than a path. See the opcode's
+// comment: that is the module model (R3), not just a size constraint.
+//
+// `flags` bit 0 = FIXED PITCH: keyLow == keyHigh == rootKey, which is how a drum stays a drum
+// across the keyboard. Clear it and the slot spans the full range as a playable zone. There is
+// deliberately no mapping-MODE enum anywhere — the mode is derived from the keys (§1), and this
+// flag chooses which keys to write, not a mode to store.
+struct UiSamplerLoadPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerLoad);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint8_t rootKey = 60;
+  uint8_t reserved[3]{};
+  char name[24]{};
+};
+static_assert(sizeof(UiSamplerLoadPayload) == 40,
+              "UiSamplerLoadPayload must fit the command payload exactly");
+
+inline constexpr uint16_t kSamplerLoadFixedPitch = 1u << 0;
+
+// RequestSamplerKit (75). The client owns `requestSeq`: it names the slot the answer lands in
+// (requestSeq % kUiSamplerKitSlots), so a caller reads one place rather than scanning.
+struct UiSamplerKitRequestPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::RequestSamplerKit);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;   // 0 = the first sampler on the track
+  uint32_t requestSeq = 0;
+  uint8_t reserved[24]{};
+};
+static_assert(sizeof(UiSamplerKitRequestPayload) == 40,
+              "UiSamplerKitRequestPayload must fit the command payload exactly");
+
+// How SamplerSlice cuts. Named rather than numbered by position, so adding a mode never changes
+// what an existing saved macro or agent script means.
+enum class SamplerSliceMode : uint16_t {
+  Transient = 0,  // detection, driven by `sensitivity`
+  Equal = 1,      // `count` equal divisions — for material with no transients to find
+  Clear = 2,      // remove every marker, back to one whole-source slice
+};
+
+struct UiSamplerSlicePayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSlice);
+  uint16_t mode = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t sourceLocalId = 0;
+  uint32_t sensitivity = 500;   // 0..1000, Transient mode
+  uint32_t count = 16;          // Equal mode
+  uint32_t maxSlices = 64;
+  uint32_t snapNanoticks = 0;   // 0 = no snap; else the row grid, so the chop is tempo-adaptive
+  // Non-zero MAKES A SLOT PER SLICE from `slotBaseKey` upward, which is the gesture that turns a
+  // chop into something playable in one command rather than N.
+  uint8_t makeSlots = 0;
+  uint8_t slotBaseKey = 36;
+  uint8_t reserved[6]{};
+};
+static_assert(sizeof(UiSamplerSlicePayload) == 40,
+              "UiSamplerSlicePayload must fit the command payload exactly");
+
+enum class SamplerMarkerOp : uint16_t { Add = 0, Move = 1, Remove = 2 };
+
+struct UiSamplerMarkerPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerMarker);
+  uint16_t op = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t sourceLocalId = 0;
+  uint32_t markerId = 0;   // Move/Remove
+  uint64_t frame = 0;      // Add/Move
+  uint8_t reserved[8]{};
+};
+static_assert(sizeof(UiSamplerMarkerPayload) == 40,
+              "UiSamplerMarkerPayload must fit the command payload exactly");
+
+struct UiSamplerEmitRowsPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerEmitRows);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t sourceLocalId = 0;
+  uint64_t atNanotick = 0;      // where the pattern starts
+  uint64_t stepNanoticks = 0;   // one row per slice, this far apart; 0 = derive from the slices
+  uint8_t column = 0;
+  uint8_t velocity = 100;
+  uint8_t reserved[6]{};
+};
+static_assert(sizeof(UiSamplerEmitRowsPayload) == 40,
+              "UiSamplerEmitRowsPayload must fit the command payload exactly");
+
+// WHICH slot field SamplerSetSlot writes. Named rather than an index into the struct, so adding
+// a field never renumbers an existing one — a renumbered selector would silently write the wrong
+// field on a saved macro or an agent's script.
+enum class SamplerSlotField : uint16_t {
+  VoiceGroup = 0,
+  Nna = 1,
+  Gate = 2,
+  Reverse = 3,
+  GainMillibels = 4,   // signed
+  PanThousandths = 5,  // signed
+  TuneCents = 6,       // signed
+  PitchTrackMilli = 7, // signed
+  RootKey = 8,
+  KeyLow = 9,
+  KeyHigh = 10,
+  VelLow = 11,
+  VelHigh = 12,
+  SelectMode = 13,
+  Polyphony = 14,
+  ChokeFadeUs = 15,
+  ModSetId = 16,
+  OutputStem = 17,
+  Quality = 18,
+  LayerGroup = 19,
+};
+
+// One slot field. `value` is SIGNED: four of the fields above are, and a negative gain, tune or
+// pan is a normal setting rather than an error — the euclidean octave_offset bug was exactly a
+// signed value pushed through an unsigned path.
+struct UiSamplerSetSlotPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetSlot);
+  uint16_t field = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t slotId = 0;
+  int32_t value = 0;
+  uint8_t reserved[20]{};
+};
+static_assert(sizeof(UiSamplerSetSlotPayload) == 40,
+              "UiSamplerSetSlotPayload must fit the command payload exactly");
 
 // M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
 // (the engine hashes it to the uid16 the wire and the param mirror use) — 16 bytes, which
@@ -388,6 +565,12 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::ForkPlacementClip: return "fork_placement_clip";
     case UiCommandType::SwapPlacementClip: return "swap_placement_clip";
     case UiCommandType::ClearPlacementAlternate: return "clear_placement_alternate";
+    case UiCommandType::SamplerLoad: return "sampler_load";
+    case UiCommandType::SamplerSetSlot: return "sampler_set_slot";
+    case UiCommandType::RequestSamplerKit: return "request_sampler_kit";
+    case UiCommandType::SamplerSlice: return "sampler_slice";
+    case UiCommandType::SamplerMarker: return "sampler_marker";
+    case UiCommandType::SamplerEmitRows: return "sampler_emit_rows";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";

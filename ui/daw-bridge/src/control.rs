@@ -141,6 +141,25 @@ pub struct AudioSourcesView {
 }
 
 /// A windowed waveform answer read out of one UiWaveformSlot under its seqlock.
+/// v32: one answered sampler kit. `slots` is already truncated to `slot_count`, and
+/// `slots_truncated` says how many the region could not carry — never a silent short list.
+#[derive(Clone, Debug)]
+pub struct SamplerKitView {
+    pub request_seq: u32,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub found: bool,
+    pub voice_cap: u32,
+    pub active_voices: u32,
+    /// Telemetry. A voice pool running out is a musical fact, not a secret.
+    pub steals: u32,
+    /// Notes that hit no slot — a kit that is silent everywhere is diagnosable from this.
+    pub unmapped: u32,
+    pub slots_truncated: u32,
+    pub slots: Vec<crate::layout::UiSamplerSlotEntry>,
+}
+
+
 /// `pairs` is channel-planar then column then (min,max): for channel c column i,
 /// pairs[(c*columns + i)*2] and +1. `status`: 0 ok, 1 truncated, 2 notready, 3 bad.
 #[derive(Debug, Clone, Default)]
@@ -1206,6 +1225,113 @@ impl EngineHandle {
         self.write_entry(
             &payload as *const crate::layout::UiChainCommandPayload as *const u8,
             std::mem::size_of::<crate::layout::UiChainCommandPayload>(),
+        )
+    }
+
+    /// Load a sample into a sampler device, minting a source and a slot.
+    pub fn send_sampler_load(
+        &self,
+        payload: crate::layout::UiSamplerLoadPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerLoadPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerLoadPayload>(),
+        )
+    }
+
+    /// Edit one field of one sampler slot.
+    pub fn send_sampler_set_slot(
+        &self,
+        payload: crate::layout::UiSamplerSetSlotPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerSetSlotPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerSetSlotPayload>(),
+        )
+    }
+
+    /// Ask the engine to publish one sampler device's kit, then read the answer.
+    pub fn send_sampler_kit_request(
+        &self,
+        payload: crate::layout::UiSamplerKitRequestPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerKitRequestPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerKitRequestPayload>(),
+        )
+    }
+
+    /// Reads one answered kit slot under its seqlock. `None` while the engine is mid-write or
+    /// the region does not exist.
+    pub fn read_sampler_kit_slot(&self, index: usize) -> Option<SamplerKitView> {
+        if index >= crate::layout::UI_SAMPLER_KIT_SLOTS {
+            return None;
+        }
+        let off = unsafe { (*self.header).ui_sampler_kit_offset };
+        if off == 0 {
+            return None;
+        }
+        let region = self._mmap.as_ptr().wrapping_add(off as usize)
+            as *const crate::layout::UiSamplerKitRegion;
+        let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
+        let seq_ptr = unsafe { std::ptr::addr_of!((*slot).seq) } as *const AtomicU32;
+        for _ in 0..4096 {
+            let v0 = unsafe { (*seq_ptr).load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue; // engine mid-write
+            }
+            let snap = unsafe { std::ptr::read_volatile(slot) };
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*seq_ptr).load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                let n = (snap.slotCount as usize).min(crate::layout::UI_MAX_SAMPLER_SLOTS);
+                return Some(SamplerKitView {
+                    request_seq: snap.requestSeq,
+                    track_id: snap.trackId,
+                    device_id: snap.deviceId,
+                    found: snap.found != 0,
+                    voice_cap: snap.voiceCap,
+                    active_voices: snap.activeVoices,
+                    steals: snap.steals,
+                    unmapped: snap.unmapped,
+                    slots_truncated: snap.slotsTruncated,
+                    slots: snap.slots[..n].to_vec(),
+                });
+            }
+        }
+        None
+    }
+
+    /// Slice a source (transient / equal / clear).
+    pub fn send_sampler_slice(
+        &self,
+        payload: crate::layout::UiSamplerSlicePayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerSlicePayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerSlicePayload>(),
+        )
+    }
+
+    /// Add, move or remove one slice marker.
+    pub fn send_sampler_marker(
+        &self,
+        payload: crate::layout::UiSamplerMarkerPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerMarkerPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerMarkerPayload>(),
+        )
+    }
+
+    /// Write the pattern that reproduces a chop.
+    pub fn send_sampler_emit_rows(
+        &self,
+        payload: crate::layout::UiSamplerEmitRowsPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerEmitRowsPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerEmitRowsPayload>(),
         )
     }
 

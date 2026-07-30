@@ -55,6 +55,8 @@
 #include "apps/lane_quantize.h"
 #include "apps/markers.h"
 #include "apps/ripple.h"
+#include "apps/sampler_engine.h"
+#include "apps/sampler_slice.h"
 #include "apps/musical_structures.h"
 #include "apps/placement_schedule.h"
 #include "apps/note_entry.h"
@@ -1537,7 +1539,8 @@ int main(int argc, char** argv) {
   std::string pluginPath;
   bool spawnHost = true;
   int runSeconds = -1;
-  std::string renderName;  // non-empty => offline render (see --render)
+  std::string renderName;
+  uint32_t forcedBlockSize = 0;  // non-empty => offline render (see --render)
   std::string startupProject;  // non-empty => load it before running (see --project)
   bool testMode = false;
   bool noAudio = false;
@@ -1580,6 +1583,14 @@ int main(int argc, char** argv) {
       // fixing the "everything 4x too fast" bug — so being the consumer is all that is
       // needed to run at host speed.
       renderName = argv[i + 1];
+      ++i;
+    } else if (arg == "--block-size" && i + 1 < argc) {
+      // Forces the engine's block size, which the offline render otherwise takes from its
+      // default (there is no audio device to ask). It exists so BLOCK-SIZE INVARIANCE is
+      // checkable end to end and not only in a unit test: docs/SAMPLER_DESIGN.md §3.5 requires
+      // one project rendered at 64, 256 and 1024 frames to be bit-identical, and a property
+      // that cannot be exercised through the real engine is a property nobody is defending.
+      forcedBlockSize = static_cast<uint32_t>(std::max(1, std::atoi(argv[i + 1])));
       ++i;
     }
   }
@@ -1794,6 +1805,13 @@ int main(int argc, char** argv) {
               << " Hz for offline timing" << std::endl;
     audioBackend.reset();
   }
+  // --block-size wins over both, and it is applied AFTER the device probe so an offline render
+  // is not silently given the device's buffer instead of the one it asked for. It exists so
+  // block-size invariance is checkable through the real engine (§3.5).
+  if (forcedBlockSize > 0) {
+    baseConfig.blockSize = forcedBlockSize;
+    std::cerr << "Block size forced to " << baseConfig.blockSize << " samples" << std::endl;
+  }
 
   const std::string pluginCachePath = defaultPluginCachePath();
   const auto pluginCache = daw::readPluginCache(pluginCachePath);
@@ -1899,6 +1917,9 @@ int main(int argc, char** argv) {
     offset += daw::alignUp(sizeof(daw::UiAudioSourceRegion), 64);
     header.uiWaveformOffset = offset;      // v18: windowed waveform answer slots
     offset += daw::alignUp(sizeof(daw::UiWaveformRegion), 64);
+    header.uiSamplerKitOffset = offset;    // v32: one sampler device's kit, on request
+    header.uiSamplerKitBytes = sizeof(daw::UiSamplerKitRegion);
+    offset += daw::alignUp(header.uiSamplerKitBytes, 64);
     uiShm.size = daw::alignUp(offset, 64);
 
     if (::ftruncate(uiShm.fd, static_cast<off_t>(uiShm.size)) != 0) {
@@ -2083,6 +2104,11 @@ struct Track {
     uint8_t velocity = 0;
     uint8_t column = 0;
     float tuningCents = 0.0f;
+    // The sound address travels with the strike. Without it a retriggered note's later strikes
+    // resolve through the keymap while the FIRST one played an explicit slot — so `ret4` on a
+    // sound-addressed row would play one snare and three of whatever the key maps to.
+    uint16_t sound = 0;
+    uint16_t soundOffset = 0;
   };
 
 struct TrackRuntime {
@@ -2202,6 +2228,22 @@ struct TrackRuntime {
 
     std::vector<float> patcherAudioBuffer;
     std::vector<float*> patcherAudioChannels;
+
+    // THE BUILT-IN SAMPLER. Rendered on the PRODUCER thread into its own per-track buffer, which
+    // is then written into the host input plane AHEAD of the plugin chain — so a VST effect can
+    // follow the sampler on the same track. Rendering straight into the master sum (the way
+    // placed audio clips do) would have made that structurally impossible.
+    //
+    // A separate buffer from patcherAudio rather than a shared one: a track can carry both a
+    // sampler and a patcher audio node, and two producers writing one buffer is the "two facts
+    // about one thing" shape, here with the second one silently overwriting the first.
+    daw::SamplerRuntime samplerRuntime;
+    std::vector<daw::SamplerEvent> samplerEvents;   // this block's, sorted by sample offset
+    std::vector<float> samplerAudioBuffer;
+    std::vector<float*> samplerAudioChannels;
+    bool samplerAudioValid = false;
+    uint32_t samplerDeviceId = 0;                   // 0 = this track has no sampler
+    std::shared_ptr<const daw::SamplerRender> samplerSnapshot;
     std::vector<daw::EventEntry> patcherScratchpad;
     std::vector<PatcherNodeBuffer> patcherNodeBuffers;
     std::vector<std::array<float, kPatcherMaxModOutputs>> patcherNodeModOutputs;
@@ -5194,6 +5236,21 @@ struct TrackRuntime {
   // Assumes runtime->trackMutex is held; the caller atomic_stores the returned
   // snapshot after unlocking. The audio thread reads only the snapshot, so
   // track.clip being derived is invisible to it.
+  // The tick just past the last event in a clip — its content extent.
+  auto clipContentEnd = [](const daw::MusicalClip& clip) -> uint64_t {
+    uint64_t end = 0;
+    for (const auto& e : clip.events()) {
+      uint64_t dur = 0;
+      if (e.type == daw::MusicalEventType::Note) {
+        dur = e.payload.note.durationNanoticks;
+      } else if (e.type == daw::MusicalEventType::Chord) {
+        dur = e.payload.chord.durationNanoticks;
+      }
+      end = std::max(end, e.nanotickOffset + dur);
+    }
+    return end;
+  };
+
   auto rebuildFlatAndPublish =
       [&](TrackRuntime& rt) -> std::shared_ptr<const ClipSnapshot> {
     // A MUTE OUTLIVING ITS BASE NOTE keeps the override badge lit over nothing. Mute a note on
@@ -5260,11 +5317,23 @@ struct TrackRuntime {
       ext.placementId = pl.id;  // stable placement id (was the list index — now survives edits)
       ext.clipId = pl.clipId;
       ext.at = *pl.at;
+      // THE SAME THREE-STEP RULE locateEditTarget USES, and it did not before: an explicit
+      // placement length, else the clip's own loop length, else — for a LINEAR length-0 clip,
+      // which plays once and does not loop — the clip's CONTENT end.
+      //
+      // Missing the third step published startTick == endTick for such a placement, so a client
+      // testing containment found it EMPTY. The web UI's shared-clip warning went silent on
+      // exactly the placement somebody had just created, which is when they are most likely to
+      // type into it. Two answers to "how far does this placement reach": note entry said it
+      // covers its content, the published extent said it covers nothing.
       uint64_t length = pl.lengthNanoticks;
       for (const auto& c : rt.ownedClips) {
         if (c.id == pl.clipId) {
           if (length == 0) {
             length = c.lengthNanoticks;
+          }
+          if (length == 0) {
+            length = clipContentEnd(c.clip);
           }
           ext.name = c.name;
           ext.isAudio = c.kind == daw::ClipKind::Audio;
@@ -5299,6 +5368,107 @@ struct TrackRuntime {
     std::error_code rec;
     std::filesystem::path canon = std::filesystem::weakly_canonical(base, rec);
     return rec ? base.lexically_normal().string() : canon.string();
+  };
+
+  // THE SAMPLER'S SNAPSHOT. Decodes every source the device names and flattens the document into
+  // the immutable form the producer thread reads (docs/SAMPLER_DESIGN.md §3.5).
+  //
+  // Runs OFF the audio path — it opens files — and the result is handed over by
+  // atomic_store_explicit, exactly as trackSnapshot and audioRender already are. The snapshot
+  // OWNS its audio by shared_ptr, so a render in flight keeps its buffers alive by construction
+  // and the last reference dies here, on the command thread, where a free is legal.
+  auto rebuildSamplerRender =
+      [&](const daw::SamplerState& st,
+          uint32_t trackId,
+          uint32_t deviceId) -> std::shared_ptr<const daw::SamplerRender> {
+    auto out = std::make_shared<daw::SamplerRender>();
+    out->state = st;
+    out->sampleRate = engineConfig.sampleRate;
+    out->keymap.rebuild(out->state);
+    uint32_t decoded = 0, failed = 0, changed = 0;
+    for (const auto& src : st.sources) {
+      const std::string path = resolveSourcePath(src.path);
+      daw::DecodedAudio dec = daw::decodeAudioFile(path);
+      if (!dec.ok || dec.channels.empty() || dec.frames == 0) {
+        // NEVER A QUIET SUBSTITUTION. A missing sample leaves a null entry, so the slot is
+        // SILENT and says so — loading "something else" is the kHostSlotIndexUnresolved failure,
+        // where every structural check passes and only the audio is wrong.
+        out->audio.push_back(nullptr);
+        ++failed;
+        DAW_EVENT("sampler.source_missing")
+            .field("track", trackId)
+            .field("device", deviceId)
+            .field("source", static_cast<uint32_t>(src.localId))
+            .field("path", path);
+        continue;
+      }
+      auto audio = std::make_shared<daw::SamplerSourceAudio>();
+      audio->channels = std::move(dec.channels);
+      audio->frames = dec.frames;
+      audio->sampleRate = dec.sampleRate;
+      audio->buildPlanes();
+      out->audio.push_back(std::move(audio));
+      ++decoded;
+      // The content key is ADVISORY: recomputed here so a changed file is REPORTED, never so the
+      // stored value can be trusted. Loud difference beats quiet substitution for audio.
+      if (src.contentKey != 0) {
+        uint64_t fileSize = 0, mtimeNs = 0;
+        std::error_code sec;
+        auto sz = std::filesystem::file_size(path, sec);
+        if (!sec) fileSize = static_cast<uint64_t>(sz);
+        std::error_code tec;
+        auto ft = std::filesystem::last_write_time(path, tec);
+        if (!tec) {
+          mtimeNs = static_cast<uint64_t>(
+              std::chrono::duration_cast<std::chrono::nanoseconds>(ft.time_since_epoch())
+                  .count());
+        }
+        const uint64_t now = daw::computeWaveformContentKey(
+            path, fileSize, mtimeNs, dec.frames, dec.sampleRate, dec.sourceChannels,
+            daw::kDecoderVersion, daw::kWaveformFormatVersion);
+        if (now != 0 && now != src.contentKey) {
+          ++changed;
+          DAW_EVENT("sampler.source_changed")
+              .field("track", trackId)
+              .field("device", deviceId)
+              .field("source", static_cast<uint32_t>(src.localId))
+              .field("path", path)
+              .field("saved_key", src.contentKey)
+              .field("current_key", now);
+        }
+      }
+    }
+    DAW_EVENT("sampler.render_built")
+        .field("track", trackId)
+        .field("device", deviceId)
+        .field("slots", static_cast<uint32_t>(st.slots.size()))
+        .field("decoded", decoded)
+        .field("failed", failed)
+        .field("changed", changed);
+    return out;
+  };
+
+  // Installs (or clears) a track's sampler from its device chain. Called from EVERY site that
+  // changes a chain, so "did you remember to rebuild the sampler" is not a question anyone has to
+  // answer twice. Caller holds trackMutex.
+  auto refreshSamplerForTrack = [&](TrackRuntime& rt) {
+    const daw::Device* found = nullptr;
+    for (const auto& d : rt.track.chain.devices) {
+      if (d.kind == daw::DeviceKind::Sampler && d.hasSampler) {
+        found = &d;
+        break;  // one sampler per track for now: it is a head-of-chain instrument
+      }
+    }
+    if (!found) {
+      rt.samplerDeviceId = 0;
+      rt.samplerSnapshot.reset();
+      rt.samplerRuntime.setSnapshot(nullptr);
+      return;
+    }
+    rt.samplerDeviceId = found->id;
+    rt.samplerSnapshot = rebuildSamplerRender(found->sampler, rt.trackId, found->id);
+    rt.samplerRuntime.configure(found->sampler.voiceCap, engineConfig.sampleRate);
+    rt.samplerRuntime.setSnapshot(rt.samplerSnapshot);
   };
 
   // Resolve a track's placed AUDIO clips into a sample-domain render list for the
@@ -5441,20 +5611,6 @@ struct TrackRuntime {
     return list;
   };
 
-  // The tick just past the last event in a clip — its content extent.
-  auto clipContentEnd = [](const daw::MusicalClip& clip) -> uint64_t {
-    uint64_t end = 0;
-    for (const auto& e : clip.events()) {
-      uint64_t dur = 0;
-      if (e.type == daw::MusicalEventType::Note) {
-        dur = e.payload.note.durationNanoticks;
-      } else if (e.type == daw::MusicalEventType::Chord) {
-        dur = e.payload.chord.durationNanoticks;
-      }
-      end = std::max(end, e.nanotickOffset + dur);
-    }
-    return end;
-  };
 
   // Where a structural edit at an absolute tick lands: an index into ownedClips,
   // the clip-relative tick, and the covering placement.
@@ -6891,6 +7047,7 @@ struct TrackRuntime {
           }
         }
         runtime->track.chain = std::move(loadedChain);
+        refreshSamplerForTrack(*runtime);
         // Adopt the project's routing so track-to-track sends and the sidechain source
         // survive a reopen (previously the runtime kept its default master-out routing
         // and a saved sidechain/send was silently dropped). Read by rebuildHostForChain
@@ -7416,8 +7573,9 @@ struct TrackRuntime {
                           uint8_t velocity,
                           uint16_t flags,
                           bool recordUndo,
-                          std::optional<daw::EventId> noteIdOverride =
-                              std::nullopt) -> bool {
+                          std::optional<daw::EventId> noteIdOverride = std::nullopt,
+                          uint16_t sound = 0,
+                          uint16_t soundOffset = 0) -> bool {
     TrackRuntime* runtime = nullptr;
     {
       std::lock_guard<std::mutex> lock(tracksMutex);
@@ -7479,7 +7637,8 @@ struct TrackRuntime {
           result = daw::addNoteToClip(clip, trackId, target.relTick, duration,
                                       pitch, velocity, flags,
                                       runtime->trackClipVersion,
-                                      recordUndo, relSpanEnd, noteIdOverride);
+                                      recordUndo, relSpanEnd, noteIdOverride,
+                                      sound, soundOffset);
         }
         if (result) {
           // HOW MANY APPEARANCES THIS EDIT REACHED. A clip is CONTENT and a placement is an
@@ -9797,6 +9956,638 @@ struct TrackRuntime {
           .field("name", name);
       return;
     }
+    // ---- SAMPLER EMIT ROWS (78). Writes the pattern that reproduces the chop.
+    if (entry.size == sizeof(daw::UiSamplerEmitRowsPayload) &&
+        commandType == daw::UiCommandType::SamplerEmitRows) {
+      daw::UiSamplerEmitRowsPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.emit_rejected").field("track", p.trackId).field("reason", "no_such_track");
+        return;
+      }
+
+      // Collect (sliceId -> the slot that plays it, and that slot's key) from the SNAPSHOT, so
+      // the rows written match what the engine will actually sound.
+      struct Row {
+        uint16_t sliceId = 0;
+        uint16_t slotId = 0;
+        uint8_t key = 60;
+        uint64_t frame = 0;
+      };
+      std::vector<Row> rows;
+      double sampleRate = 48000.0;
+      uint64_t sourceFrames = 0;
+      {
+        std::shared_ptr<const daw::SamplerRender> snap;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snap = runtime->samplerSnapshot;
+        }
+        if (!snap) {
+          DAW_EVENT("sampler.emit_rejected").field("track", p.trackId).field("reason", "no_sampler");
+          return;
+        }
+        const daw::SamplerSourceAudio* audio =
+            snap->audioFor(static_cast<uint16_t>(p.sourceLocalId));
+        if (!audio) {
+          DAW_EVENT("sampler.emit_rejected")
+              .field("track", p.trackId)
+              .field("source", p.sourceLocalId)
+              .field("reason", "no_such_source");
+          return;
+        }
+        sampleRate = audio->sampleRate > 0 ? audio->sampleRate : 48000.0;
+        sourceFrames = audio->frames;
+        for (const auto& ss : snap->state.sliceSets) {
+          if (ss.sourceLocalId != static_cast<uint16_t>(p.sourceLocalId)) {
+            continue;
+          }
+          for (const auto& m : ss.markers) {
+            Row r;
+            r.sliceId = m.id;
+            r.frame = m.frame;
+            for (const auto& sl : snap->state.slots) {
+              if (sl.sliceId == m.id) {
+                r.slotId = sl.id;
+                r.key = sl.rootKey;
+              }
+            }
+            // A slice with NO SLOT is skipped rather than emitted with sound 0 — sound 0 means
+            // "let pitch pick", which would silently play whatever the keymap says instead of
+            // that slice. A row that plays the wrong audio is worse than a row that is absent.
+            if (r.slotId != 0) {
+              rows.push_back(r);
+            }
+          }
+        }
+      }
+      if (rows.empty()) {
+        DAW_EVENT("sampler.emit_rejected")
+            .field("track", p.trackId)
+            .field("source", p.sourceLocalId)
+            .field("reason", "no_sliced_slots");
+        return;
+      }
+      std::sort(rows.begin(), rows.end(),
+                [](const Row& a, const Row& b) { return a.frame < b.frame; });
+
+      // THE ROWS ARE THE TIMING. With time-stretch rejected, this is HOW a 174 bpm break plays
+      // at 140: each slice starts on its own row, and the rows follow the project tempo. Nothing
+      // is stretched and nothing has to be.
+      //
+      // A step of 0 means "derive it": space the rows by each slice's own LENGTH, converted to
+      // ticks at the current tempo, which reproduces the break at the tempo it was recorded at.
+      // An explicit step re-fits it to a grid instead.
+      const double bpm = tempoProvider.bpmAtNanotick(p.atNanotick);
+      const double ticksPerFrame =
+          (60.0 * static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter)) /
+          ((bpm > 0.0 ? bpm : 120.0) * sampleRate);
+      uint32_t written = 0;
+      uint64_t tick = p.atNanotick;
+      for (size_t i = 0; i < rows.size(); ++i) {
+        const uint64_t nextFrame =
+            (i + 1 < rows.size()) ? rows[i + 1].frame : sourceFrames;
+        const uint64_t sliceFrames = nextFrame > rows[i].frame ? nextFrame - rows[i].frame : 0;
+        const uint64_t step =
+            p.stepNanoticks > 0
+                ? p.stepNanoticks
+                : static_cast<uint64_t>(static_cast<double>(sliceFrames) * ticksPerFrame);
+        if (step == 0) {
+          continue;
+        }
+        const uint16_t flags = static_cast<uint16_t>(p.column);
+        if (applyAddNote(p.trackId, tick, step, rows[i].key, p.velocity, flags,
+                         /*recordUndo=*/written == 0, std::nullopt, rows[i].slotId, 0)) {
+          ++written;
+        }
+        tick += step;
+      }
+      DAW_EVENT("sampler.rows_emitted")
+          .field("track", p.trackId)
+          .field("source", p.sourceLocalId)
+          .field("rows", written)
+          .field("at", p.atNanotick)
+          .field("end", tick);
+      return;
+    }
+
+    // ---- SAMPLER SLICE (76) and SAMPLER MARKER (77).
+    //
+    // Both edit the SliceSet and then refresh the snapshot, so a re-chop takes effect on the NEXT
+    // note without touching a single row. That is §5.1: the extent is derived from marker order,
+    // so nothing downstream had to be rewritten.
+    if ((entry.size == sizeof(daw::UiSamplerSlicePayload) &&
+         commandType == daw::UiCommandType::SamplerSlice) ||
+        (entry.size == sizeof(daw::UiSamplerMarkerPayload) &&
+         commandType == daw::UiCommandType::SamplerMarker)) {
+      const bool isSlice = commandType == daw::UiCommandType::SamplerSlice;
+      daw::UiSamplerSlicePayload sp{};
+      daw::UiSamplerMarkerPayload mp{};
+      if (isSlice) {
+        std::memcpy(&sp, entry.payload, sizeof(sp));
+      } else {
+        std::memcpy(&mp, entry.payload, sizeof(mp));
+      }
+      const uint32_t trackId = isSlice ? sp.trackId : mp.trackId;
+      const uint32_t deviceId = isSlice ? sp.deviceId : mp.deviceId;
+      const uint32_t sourceId = isSlice ? sp.sourceLocalId : mp.sourceLocalId;
+
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (trackId < tracks.size()) {
+          runtime = tracks[trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.slice_rejected").field("track", trackId).field("reason", "no_such_track");
+        return;
+      }
+
+      // The DECODED source is needed for both: detection reads its audio, and every marker op
+      // needs its length to validate a frame against. Read from the SNAPSHOT, which is the same
+      // audio the producer plays — resolving the file again here could disagree with it.
+      std::shared_ptr<const daw::SamplerRender> snap;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        snap = runtime->samplerSnapshot;
+      }
+      const daw::SamplerSourceAudio* audio = snap ? snap->audioFor(static_cast<uint16_t>(sourceId))
+                                                  : nullptr;
+      if (!audio || audio->frames == 0) {
+        DAW_EVENT("sampler.slice_rejected")
+            .field("track", trackId)
+            .field("source", sourceId)
+            .field("reason", "no_such_source");
+        return;
+      }
+
+      uint32_t made = 0, removed = 0, slotsMade = 0;
+      bool ok = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler || (deviceId != 0 && d.id != deviceId)) {
+            continue;
+          }
+          daw::SliceSet* set = nullptr;
+          for (auto& ss : d.sampler.sliceSets) {
+            if (ss.sourceLocalId == static_cast<uint16_t>(sourceId)) {
+              set = &ss;
+            }
+          }
+          if (!set) {
+            daw::SliceSet fresh;
+            fresh.sourceLocalId = static_cast<uint16_t>(sourceId);
+            fresh.nextMarkerId = 1;
+            d.sampler.sliceSets.push_back(fresh);
+            set = &d.sampler.sliceSets.back();
+          }
+          if (isSlice) {
+            std::vector<uint64_t> frames;
+            switch (static_cast<daw::SamplerSliceMode>(sp.mode)) {
+              case daw::SamplerSliceMode::Clear:
+                removed = static_cast<uint32_t>(set->markers.size());
+                set->markers.clear();
+                // nextMarkerId is NOT reset. Clearing removes boundaries; it does not make the
+                // retired ids safe to hand out again, and a note still naming one must stay
+                // silent rather than acquiring different audio.
+                break;
+              case daw::SamplerSliceMode::Equal:
+                frames = daw::divideEqually(audio->frames, sp.count);
+                break;
+              case daw::SamplerSliceMode::Transient:
+              default: {
+                // Detection wants ONE channel. The left is the convention here rather than a
+                // downmix: a downmix can cancel a transient that is hard-panned, and losing a hit
+                // to phase is a worse failure than ignoring the right channel.
+                daw::SliceDetectOptions opt;
+                opt.sensitivity = sp.sensitivity;
+                opt.maxSlices = sp.maxSlices ? sp.maxSlices : 64;
+                frames = daw::detectTransients(audio->channels[0], audio->frames, opt);
+                break;
+              }
+            }
+            if (sp.snapNanoticks > 0 && !frames.empty()) {
+              // The grid arrives in NANOTICKS and the markers are in FRAMES, so it converts here
+              // against this project's tempo — which is what makes the chop tempo-adaptive rather
+              // than tied to the rate the file happened to be recorded at.
+              const double bpm = tempoProvider.bpmAtNanotick(0);
+              const double framesPerTick =
+                  (bpm > 0.0 ? bpm : 120.0) /
+                  (60.0 * static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter)) *
+                  audio->sampleRate;
+              const uint64_t gridFrames =
+                  static_cast<uint64_t>(sp.snapNanoticks * framesPerTick);
+              if (gridFrames > 0) {
+                daw::snapToGrid(frames, gridFrames);
+              }
+            }
+            made = daw::applySliceFrames(*set, frames, audio->frames);
+            if (sp.makeSlots) {
+              // ONE SLOT PER SLICE, on consecutive keys. This is the gesture that turns a chop
+              // into something playable in one command rather than N — and every slot names its
+              // slice by ID, so a later re-cut moves what they play without moving any row.
+              uint8_t key = sp.slotBaseKey;
+              for (const auto& m : set->markers) {
+                bool exists = false;
+                for (const auto& sl : d.sampler.slots) {
+                  if (sl.sliceId == m.id) {
+                    exists = true;
+                  }
+                }
+                if (exists || key > 127) {
+                  ++key;
+                  continue;
+                }
+                daw::SamplerSlot sl;
+                sl.id = d.sampler.nextSlotId++;
+                sl.sourceLocalId = static_cast<uint16_t>(sourceId);
+                sl.sliceId = m.id;
+                sl.keyLow = sl.keyHigh = sl.rootKey = key++;
+                // FIXED PITCH: a slice played from its own key should sound as recorded, not
+                // transposed by where it happens to sit on the keyboard.
+                sl.pitchTrackMilli = 0;
+                sl.modSetId = d.sampler.modSets.empty() ? 1 : d.sampler.modSets.front().id;
+                d.sampler.slots.push_back(sl);
+                ++slotsMade;
+              }
+            }
+            ok = true;
+          } else {
+            switch (static_cast<daw::SamplerMarkerOp>(mp.op)) {
+              case daw::SamplerMarkerOp::Add:
+                ok = daw::insertSliceMarker(*set, mp.frame, audio->frames) != 0;
+                made = ok ? 1 : 0;
+                break;
+              case daw::SamplerMarkerOp::Move:
+                ok = daw::moveSliceMarker(*set, static_cast<uint16_t>(mp.markerId), mp.frame,
+                                          audio->frames);
+                break;
+              case daw::SamplerMarkerOp::Remove:
+                ok = daw::removeSliceMarker(*set, static_cast<uint16_t>(mp.markerId));
+                removed = ok ? 1 : 0;
+                break;
+            }
+          }
+          break;
+        }
+        if (ok) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!ok) {
+        DAW_EVENT("sampler.slice_rejected")
+            .field("track", trackId)
+            .field("device", deviceId)
+            .field("source", sourceId)
+            .field("reason", isSlice ? "no_sampler_device" : "marker_op_refused");
+        return;
+      }
+      DAW_EVENT(isSlice ? "sampler.sliced" : "sampler.marker")
+          .field("track", trackId)
+          .field("device", deviceId)
+          .field("source", sourceId)
+          .field("made", made)
+          .field("removed", removed)
+          .field("slots", slotsMade);
+      return;
+    }
+
+    // ---- REQUEST SAMPLER KIT (75). Publishes one device's kit into a seqlock slot.
+    if (entry.size == sizeof(daw::UiSamplerKitRequestPayload) &&
+        commandType == daw::UiCommandType::RequestSamplerKit) {
+      daw::UiSamplerKitRequestPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      if (!uiShm.header || uiShm.header->uiSamplerKitOffset == 0) {
+        return;
+      }
+      auto* region = reinterpret_cast<daw::UiSamplerKitRegion*>(
+          reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiSamplerKitOffset);
+      // THE CLIENT OWNS THE SEQUENCE and it picks the slot, so a caller reads one place rather
+      // than scanning for an answer that looks like a reply to its own question.
+      daw::UiSamplerKitSlot& slot = region->slots[p.requestSeq % daw::kUiSamplerKitSlots];
+
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+
+      // SEQLOCK: odd while writing. A reader that sees an odd sequence, or a different one either
+      // side of its read, retries — the only way a 2 KB answer publishes without a lock the
+      // reader could hold while the engine needs to move on.
+      const uint32_t before = slot.seq.load(std::memory_order_relaxed) | 1u;
+      slot.seq.store(before, std::memory_order_release);
+      std::atomic_thread_fence(std::memory_order_release);
+
+      slot.requestSeq = p.requestSeq;
+      slot.trackId = p.trackId;
+      slot.deviceId = p.deviceId;
+      slot.slotCount = 0;
+      slot.slotsTruncated = 0;
+      slot.found = 0;
+      slot.voiceCap = 0;
+      slot.activeVoices = 0;
+      slot.steals = 0;
+      slot.unmapped = 0;
+
+      if (runtime) {
+        // PUBLISHED FROM THE SNAPSHOT THE PRODUCER READS, NOT FROM THE DOCUMENT. That is the
+        // decision that gives this read-back teeth: the model would answer "what was configured"
+        // while the audio thread plays something else, and catching exactly that divergence is
+        // what a read-back is for.
+        std::shared_ptr<const daw::SamplerRender> snap;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snap = runtime->samplerSnapshot;
+        }
+        if (snap && (p.deviceId == 0 || runtime->samplerDeviceId == p.deviceId)) {
+          slot.found = 1;
+          slot.deviceId = runtime->samplerDeviceId;
+          slot.voiceCap = snap->state.voiceCap;
+          slot.activeVoices = runtime->samplerRuntime.activeVoices();
+          slot.steals = static_cast<uint32_t>(runtime->samplerRuntime.stealCount());
+          slot.unmapped = static_cast<uint32_t>(runtime->samplerRuntime.unmappedCount());
+          uint32_t n = 0;
+          for (const auto& sl : snap->state.slots) {
+            if (n >= daw::kUiMaxSamplerSlots) {
+              // NEVER A SILENT TRUNCATION. A kit larger than the region says so, so a UI can draw
+              // "and 12 more" rather than quietly showing a short list as though it were whole.
+              slot.slotsTruncated = static_cast<uint32_t>(snap->state.slots.size()) - n;
+              break;
+            }
+            daw::UiSamplerSlotEntry& e = slot.slots[n++];
+            e = daw::UiSamplerSlotEntry{};
+            e.slotId = sl.id;
+            e.sourceLocalId = sl.sourceLocalId;
+            e.keyLow = sl.keyLow;
+            e.keyHigh = sl.keyHigh;
+            e.rootKey = sl.rootKey;
+            e.velLow = sl.velLow;
+            e.velHigh = sl.velHigh;
+            e.voiceGroup = sl.voiceGroup;
+            e.nna = static_cast<uint8_t>(sl.nna);
+            e.flags = static_cast<uint8_t>((sl.gate ? 1u : 0u) | (sl.reverse ? 2u : 0u));
+            e.gainMillibels = sl.gainMillibels;
+            e.panThousandths = sl.panThousandths;
+            e.modSetId = sl.modSetId;
+            e.outputStem = sl.outputStem;
+            e.quality = sl.quality;
+            e.sliceId = sl.sliceId;
+            const daw::SamplerSourceAudio* audio = snap->audioFor(sl.sourceLocalId);
+            e.lengthFrames = audio ? static_cast<uint32_t>(audio->frames) : 0;
+            // "Silent because the file is missing" and "silent because the sample is empty" are
+            // different problems, and a UI should be able to say which — so the reason is a FLAG
+            // rather than something to infer from a zero length.
+            if (!audio) {
+              e.flags |= daw::kUiSamplerSlotSourceMissing;
+            }
+          }
+          slot.slotCount = n;
+        }
+      }
+
+      std::atomic_thread_fence(std::memory_order_release);
+      slot.seq.store(before + 1, std::memory_order_release);
+      region->requestSeq.store(p.requestSeq, std::memory_order_release);
+      DAW_EVENT("sampler.kit_published")
+          .field("track", p.trackId)
+          .field("device", slot.deviceId)
+          .field("seq", p.requestSeq)
+          .field("found", slot.found)
+          .field("slots", slot.slotCount)
+          .field("truncated", slot.slotsTruncated)
+          .field("voices", slot.activeVoices);
+      return;
+    }
+
+    // ---- SAMPLER SET SLOT (74). One field of one slot.
+    if (entry.size == sizeof(daw::UiSamplerSetSlotPayload) &&
+        commandType == daw::UiCommandType::SamplerSetSlot) {
+      daw::UiSamplerSetSlotPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.set_slot_rejected")
+            .field("track", p.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      const char* why = "no_such_slot";
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          for (auto& slot : d.sampler.slots) {
+            if (slot.id != p.slotId) {
+              continue;
+            }
+            const int32_t v = p.value;
+            // CLAMPED, NOT REFUSED, for range fields — a value out of range is almost always a
+            // caller's arithmetic rather than an intent, and refusing leaves the kit in a state
+            // the caller thinks it changed. Fields where a wrong value would be a DIFFERENT
+            // sound rather than a clipped one (modSetId, slot ids) are validated instead.
+            auto u8c = [](int32_t x) {
+              return static_cast<uint8_t>(std::clamp(x, 0, 255));
+            };
+            auto keyc = [](int32_t x) {
+              return static_cast<uint8_t>(std::clamp(x, 0, 127));
+            };
+            switch (static_cast<daw::SamplerSlotField>(p.field)) {
+              case daw::SamplerSlotField::VoiceGroup: slot.voiceGroup = u8c(v); break;
+              case daw::SamplerSlotField::Nna:
+                slot.nna = static_cast<daw::SamplerNna>(std::clamp(v, 0, 2));
+                break;
+              case daw::SamplerSlotField::Gate: slot.gate = v ? 1 : 0; break;
+              case daw::SamplerSlotField::Reverse: slot.reverse = v ? 1 : 0; break;
+              case daw::SamplerSlotField::GainMillibels:
+                slot.gainMillibels = static_cast<int16_t>(std::clamp(v, -9600, 2400));
+                break;
+              case daw::SamplerSlotField::PanThousandths:
+                slot.panThousandths = static_cast<int16_t>(std::clamp(v, -1000, 1000));
+                break;
+              case daw::SamplerSlotField::TuneCents:
+                slot.tuneCents = static_cast<int16_t>(std::clamp(v, -4800, 4800));
+                break;
+              case daw::SamplerSlotField::PitchTrackMilli:
+                slot.pitchTrackMilli = static_cast<int16_t>(std::clamp(v, -2000, 2000));
+                break;
+              case daw::SamplerSlotField::RootKey: slot.rootKey = keyc(v); break;
+              case daw::SamplerSlotField::KeyLow: slot.keyLow = keyc(v); break;
+              case daw::SamplerSlotField::KeyHigh: slot.keyHigh = keyc(v); break;
+              case daw::SamplerSlotField::VelLow: slot.velLow = keyc(v); break;
+              case daw::SamplerSlotField::VelHigh: slot.velHigh = keyc(v); break;
+              case daw::SamplerSlotField::SelectMode:
+                slot.selectMode = static_cast<uint8_t>(std::clamp(v, 0, 3));
+                break;
+              case daw::SamplerSlotField::Polyphony: slot.polyphony = u8c(v); break;
+              case daw::SamplerSlotField::ChokeFadeUs:
+                slot.chokeFadeUs = static_cast<uint32_t>(std::clamp(v, 0, 1000000));
+                break;
+              case daw::SamplerSlotField::ModSetId: {
+                // A mod set that does not exist would leave the slot with NO amp envelope, so
+                // it would go silent — refused rather than clamped, because "silent" is not a
+                // near-miss of what the caller asked for.
+                const uint16_t want = static_cast<uint16_t>(std::max(0, v));
+                if (!d.sampler.findModSet(want)) {
+                  why = "no_such_mod_set";
+                  goto done;
+                }
+                slot.modSetId = want;
+                break;
+              }
+              case daw::SamplerSlotField::OutputStem: slot.outputStem = u8c(v); break;
+              case daw::SamplerSlotField::Quality:
+                slot.quality = static_cast<uint8_t>(std::clamp(v, 0, 2));
+                break;
+              case daw::SamplerSlotField::LayerGroup:
+                slot.layerGroup = static_cast<uint16_t>(std::clamp(v, 0, 65535));
+                break;
+              default:
+                why = "unknown_field";
+                goto done;
+            }
+            applied = true;
+            goto done;
+          }
+        }
+      done:
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        DAW_EVENT("sampler.set_slot_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("slot", p.slotId)
+            .field("field", static_cast<uint32_t>(p.field))
+            .field("reason", why);
+        return;
+      }
+      DAW_EVENT("sampler.slot_set")
+          .field("track", p.trackId)
+          .field("device", p.deviceId)
+          .field("slot", p.slotId)
+          .field("field", static_cast<uint32_t>(p.field))
+          .field("value", static_cast<int64_t>(p.value));
+      return;
+    }
+
+    // ---- SAMPLER LOAD (73). Mints a SOURCE and a SLOT that plays it.
+    if (entry.size == sizeof(daw::UiSamplerLoadPayload) &&
+        commandType == daw::UiCommandType::SamplerLoad) {
+      daw::UiSamplerLoadPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      const std::string name(p.name, strnlen(p.name, sizeof(p.name)));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime || name.empty()) {
+        DAW_EVENT("sampler.load_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("reason", name.empty() ? "empty_name" : "no_such_track");
+        return;
+      }
+      uint16_t newSlot = 0, newSource = 0;
+      bool found = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          found = true;
+          d.hasSampler = true;
+          if (d.sampler.modSets.empty()) {
+            d.sampler.modSets.push_back(daw::defaultModSet(1));
+            d.sampler.nextModSetId = 2;
+          }
+          // ONE SOURCE PER FILE. Loading the same file twice reuses the source rather than
+          // decoding it again — two slots pointing at one source is the normal case (a slice
+          // set is exactly that), and a duplicate would double the memory for no benefit.
+          for (const auto& src : d.sampler.sources) {
+            if (src.path == name) {
+              newSource = src.localId;
+              break;
+            }
+          }
+          if (newSource == 0) {
+            daw::SamplerSource src;
+            src.localId = d.sampler.nextSourceId++;
+            src.path = name;
+            d.sampler.sources.push_back(src);
+            newSource = src.localId;
+          }
+          daw::SamplerSlot slot;
+          slot.id = d.sampler.nextSlotId++;
+          slot.name = name;
+          slot.sourceLocalId = newSource;
+          slot.rootKey = p.rootKey;
+          // The mapping is DERIVED from the keys, so this writes keys rather than a mode.
+          if (p.flags & daw::kSamplerLoadFixedPitch) {
+            slot.keyLow = slot.keyHigh = p.rootKey;
+          } else {
+            slot.keyLow = 0;
+            slot.keyHigh = 127;
+          }
+          slot.modSetId = d.sampler.modSets.front().id;
+          d.sampler.slots.push_back(slot);
+          newSlot = slot.id;
+          break;
+        }
+        if (found) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!found) {
+        DAW_EVENT("sampler.load_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("reason", "no_sampler_device");
+        return;
+      }
+      // Whether the FILE resolved is reported by rebuildSamplerRender (sampler.source_missing /
+      // sampler.render_built), so a slot that will be silent says so at load rather than at
+      // playback. The slot is still created either way: a broken reference you can see and fix
+      // beats a command that quietly did nothing.
+      DAW_EVENT("sampler.loaded")
+          .field("track", p.trackId)
+          .field("device", p.deviceId)
+          .field("slot", static_cast<uint32_t>(newSlot))
+          .field("source", static_cast<uint32_t>(newSource))
+          .field("root", static_cast<uint32_t>(p.rootKey))
+          .field("fixed_pitch", (p.flags & daw::kSamplerLoadFixedPitch) ? 1u : 0u)
+          .field("file", name);
+      return;
+    }
+
     if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
         (commandType == daw::UiCommandType::SaveProject ||
          commandType == daw::UiCommandType::LoadProject)) {
@@ -9980,6 +10771,11 @@ struct TrackRuntime {
                                         daw::DeviceCapabilityProcessesAudio);
           case daw::DeviceKind::VstEffect:
             return daw::DeviceCapabilityProcessesAudio;
+          case daw::DeviceKind::Sampler:
+            // Consumes MIDI and produces audio, exactly like a VST instrument — the difference
+            // is WHERE it renders, not what it is.
+            return static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
+                                        daw::DeviceCapabilityProcessesAudio);
         }
         return daw::DeviceCapabilityNone;
       };
@@ -10008,6 +10804,17 @@ struct TrackRuntime {
             device.vstRef.name = entry.name;
             device.vstRef.path = entry.path;
             device.vstRef.uid16 = entry.pluginUid16;
+          }
+          // A NEW SAMPLER ARRIVES ABLE TO MAKE A SOUND. It has one mod set with an amp
+          // envelope whose attack is INSTANT, because the first thing anyone drops on a sampler
+          // is a drum and a 10 ms attack on a kick is a defect you have to go looking for. It
+          // has no slots yet — sampler-load mints those — so it is silent until a sample is
+          // loaded, which is honest rather than surprising.
+          if (device.kind == daw::DeviceKind::Sampler) {
+            device.hasSampler = true;
+            device.sampler = daw::SamplerState{};
+            device.sampler.modSets.push_back(daw::defaultModSet(1));
+            device.sampler.nextModSetId = 2;
           }
           device.bypass = chainPayload.bypass != 0;
           device.capabilityMask = capabilityMaskForKind(device.kind);
@@ -11746,6 +12553,10 @@ struct TrackRuntime {
     // The producer renders/dispatches each block ahead of the device and paces to it;
     // any preemption here directly starves the ring. Raise it above background/UI work.
     daw::elevateToAudioPriority();
+    // DENORMALS FLUSH TO ZERO on the producer, which is where the sampler renders. Set once per
+    // thread rather than per block: it is a control-register write, and doing it in the render
+    // loop would cost more than the denormals it prevents.
+    daw::enableFlushToZero();
     const auto blockDuration =
         std::chrono::duration<double>(
             static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
@@ -12704,6 +13515,18 @@ struct TrackRuntime {
               offPayload.noteId = activeNote.noteId;
               std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
               pushScratchpad(noteOffEntry, activeNote.endNanotick);
+              if (runtime.samplerDeviceId != 0) {
+                daw::SamplerEvent se;
+                const int64_t off = static_cast<int64_t>(eventSample) -
+                                    static_cast<int64_t>(blockSampleStart);
+                se.offsetInBlock = static_cast<uint32_t>(
+                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
+                                       ? engineConfig.blockSize - 1
+                                       : off));
+                se.kind = daw::SamplerEventKind::NoteOff;
+                se.noteId = activeNote.noteId;
+                runtime.samplerEvents.push_back(se);
+              }
               runtime.activeNotes.erase(noteIt);
               removeNoteIdFromColumn(column, noteId);
             }
@@ -12740,6 +13563,18 @@ struct TrackRuntime {
               offPayload.noteId = activeNote.noteId;
               std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
               pushScratchpad(noteOffEntry, activeNote.endNanotick);
+              if (runtime.samplerDeviceId != 0) {
+                daw::SamplerEvent se;
+                const int64_t off = static_cast<int64_t>(eventSample) -
+                                    static_cast<int64_t>(blockSampleStart);
+                se.offsetInBlock = static_cast<uint32_t>(
+                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
+                                       ? engineConfig.blockSize - 1
+                                       : off));
+                se.kind = daw::SamplerEventKind::NoteOff;
+                se.noteId = activeNote.noteId;
+                runtime.samplerEvents.push_back(se);
+              }
               runtime.activeNotes.erase(noteIt);
               removeNoteIdFromColumn(activeNote.column, noteId);
             }
@@ -12752,7 +13587,8 @@ struct TrackRuntime {
           // called without activeNotesMutex held (it takes the lock itself).
           auto emitNoteOnWithOff = [&](uint64_t onTick, uint64_t duration,
                                        uint8_t pitch, uint8_t velocity,
-                                       uint8_t noteColumn, float noteTuningCents) {
+                                       uint8_t noteColumn, float noteTuningCents,
+                                       uint16_t sound = 0, uint16_t soundOffset = 0) {
             const uint64_t tickDelta = baseTickDelta + (onTick - rangeStart);
             const uint64_t eventSample =
                 blockSampleStart + tickDeltaToSamples(tickDelta);
@@ -12778,6 +13614,24 @@ struct TrackRuntime {
             midiPayload.noteId = noteId;
             std::memcpy(midiEntry.payload, &midiPayload, sizeof(midiPayload));
             pushScratchpad(midiEntry, onTick);
+            // TEE TO THE BUILT-IN SAMPLER, with the sample offset that the hosted-plugin path
+            // computes and then throws away (MidiEvent.sampleOffset is never populated — see
+            // docs/SAMPLER_DESIGN.md §3.5). `offset` above is already the exact frame within
+            // this block, so the sampler starts the voice THERE rather than at the boundary.
+            if (runtime.samplerDeviceId != 0) {
+              daw::SamplerEvent se;
+              se.offsetInBlock = static_cast<uint32_t>(offset);
+              se.kind = daw::SamplerEventKind::NoteOn;
+              se.pitch = pitch;
+              se.velocity = velocity;
+              se.column = noteColumn;
+              // R2's per-note sound address, straight through. 0 means the keymap picks the slot
+              // from pitch, which is the common case and costs nothing.
+              se.sound = sound;
+              se.offsetFrac = soundOffset;
+              se.noteId = noteId;
+              runtime.samplerEvents.push_back(se);
+            }
             if (traceNotes) {
               DAW_EVENT("note.emit")
                   .field("track", runtime.trackId)
@@ -12824,6 +13678,18 @@ struct TrackRuntime {
                 offPayload.noteId = noteId;
                 std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                 pushScratchpad(noteOffEntry, noteEndTick);
+              if (runtime.samplerDeviceId != 0) {
+                daw::SamplerEvent se;
+                const int64_t off = static_cast<int64_t>(eventSample) -
+                                    static_cast<int64_t>(blockSampleStart);
+                se.offsetInBlock = static_cast<uint32_t>(
+                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
+                                       ? engineConfig.blockSize - 1
+                                       : off));
+                se.kind = daw::SamplerEventKind::NoteOff;
+                se.noteId = noteId;
+                runtime.samplerEvents.push_back(se);
+              }
               }
             } else {
               std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
@@ -12860,7 +13726,7 @@ struct TrackRuntime {
             }
             for (const auto& s : due) {
               emitNoteOnWithOff(s.onTick, s.durationNanoticks, s.pitch,
-                                s.velocity, s.column, s.tuningCents);
+                                s.velocity, s.column, s.tuningCents, s.sound, s.soundOffset);
             }
           }
 
@@ -12898,6 +13764,17 @@ struct TrackRuntime {
                   offPayload.noteId = activeNote.noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                   pushScratchpad(noteOffEntry, activeNote.endNanotick);
+              if (runtime.samplerDeviceId != 0) {
+                daw::SamplerEvent se;
+                const int64_t off = offOffset;
+                se.offsetInBlock = static_cast<uint32_t>(
+                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
+                                       ? engineConfig.blockSize - 1
+                                       : off));
+                se.kind = daw::SamplerEventKind::NoteOff;
+                se.noteId = activeNote.noteId;
+                runtime.samplerEvents.push_back(se);
+              }
                   notesToRemove.push_back(noteId);
                 }
               }
@@ -13075,6 +13952,18 @@ struct TrackRuntime {
                       offPayload.noteId = noteId;
                       std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                       pushScratchpad(noteOffEntry, noteEndTick);
+              if (runtime.samplerDeviceId != 0) {
+                daw::SamplerEvent se;
+                const int64_t off = static_cast<int64_t>(eventSample) -
+                                    static_cast<int64_t>(blockSampleStart);
+                se.offsetInBlock = static_cast<uint32_t>(
+                    off < 0 ? 0 : (off >= static_cast<int64_t>(engineConfig.blockSize)
+                                       ? engineConfig.blockSize - 1
+                                       : off));
+                se.kind = daw::SamplerEventKind::NoteOff;
+                se.noteId = noteId;
+                runtime.samplerEvents.push_back(se);
+              }
                     }
                   } else if (duration > 0) {
                     std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
@@ -13151,10 +14040,13 @@ struct TrackRuntime {
                     s.offTick > s.onTick ? s.offTick - s.onTick : 0;
                 if (onTick >= rangeStart && onTick < rangeEnd) {
                   emitNoteOnWithOff(onTick, dur, scheduledPitch, velocity, column,
-                                    tuningCents);
+                                    tuningCents, event->payload.note.sound,
+                                    event->payload.note.soundOffset);
                 } else {
                   queued.push_back(PendingStrike{onTick, dur, scheduledPitch,
-                                                 velocity, column, tuningCents});
+                                                 velocity, column, tuningCents,
+                                                 event->payload.note.sound,
+                                                 event->payload.note.soundOffset});
                 }
               }
               if (!queued.empty()) {
@@ -13178,7 +14070,9 @@ struct TrackRuntime {
               }
             } else {
               emitNoteOnWithOff(event->nanotickOffset, noteDuration,
-                                scheduledPitch, velocity, column, tuningCents);
+                                scheduledPitch, velocity, column, tuningCents,
+                                event->payload.note.sound,
+                                event->payload.note.soundOffset);
             }
           }
         };
@@ -13830,7 +14724,23 @@ struct TrackRuntime {
         auto trackStatePtr = std::atomic_load_explicit(&runtime->trackSnapshot,
                                                        std::memory_order_acquire);
         const auto& trackState = trackStatePtr ? *trackStatePtr : kEmptyTrackState;
-        std::unique_lock<std::mutex> lock(runtime->controllerMutex, std::try_to_lock);
+        // TRY-LOCK IN REALTIME, BLOCKING WAIT OFFLINE.
+        //
+        // Skipping a track's whole block when this mutex is contended is the right realtime
+        // trade: a late block is worse than a dropped one when a device is waiting. It is the
+        // WRONG trade offline, and it was making renders non-reproducible — measured at roughly
+        // one run in six, differing by exactly one block somewhere in the middle, which is the
+        // hardest possible way for it to fail.
+        //
+        // The offline render already inverts the other two policies for the same reason (never
+        // skip a block, never prime with silence, never starve — WAIT). This is the third, and
+        // it was simply missed: nothing routed audio THROUGH a host in an offline render until
+        // the sampler did, so a skipped block used to cost a note to a plugin and now costs a
+        // hole in a sustaining voice. Found by tools/sampler_determinism_check.sh.
+        std::unique_lock<std::mutex> lock =
+            offlineRender ? std::unique_lock<std::mutex>(runtime->controllerMutex)
+                          : std::unique_lock<std::mutex>(runtime->controllerMutex,
+                                                         std::try_to_lock);
         if (!lock.owns_lock()) {
           continue;
         }
@@ -14164,6 +15074,55 @@ struct TrackRuntime {
             audioGraphPtr ? *audioGraphPtr : kEmptyAudioGraph;
 
         const uint32_t blockIndex = blockId % engineConfig.numBlocks;
+          // ---- THE BUILT-IN SAMPLER RENDERS HERE, on the PRODUCER thread.
+        //
+        // Not in the audio callback (which only consumes finished blocks, so the sampler is off
+        // the hardest-deadline thread by construction) and not into the master sum (which has
+        // already passed every plugin, so a VST effect could never follow the sampler on the
+        // same track). Its output goes into the host input plane below, AHEAD of the chain.
+        runtime->samplerAudioValid = false;
+        if (runtime->samplerDeviceId != 0 && runtime->samplerRuntime.snapshot()) {
+          const uint32_t channels = std::max<uint32_t>(engineConfig.numChannelsOut, 2u);
+          const size_t need = static_cast<size_t>(channels) * engineConfig.blockSize;
+          if (runtime->samplerAudioBuffer.size() != need) {
+            runtime->samplerAudioBuffer.assign(need, 0.0f);
+          } else {
+            std::fill(runtime->samplerAudioBuffer.begin(), runtime->samplerAudioBuffer.end(),
+                      0.0f);
+          }
+          if (runtime->samplerAudioChannels.size() != channels) {
+            runtime->samplerAudioChannels.resize(channels);
+          }
+          for (uint32_t ch = 0; ch < channels; ++ch) {
+            runtime->samplerAudioChannels[ch] = runtime->samplerAudioBuffer.data() +
+                                                static_cast<size_t>(ch) * engineConfig.blockSize;
+          }
+          // The event list is built in emit order, which is tick order, but a retrigger's
+          // strikes and a note-off scheduled earlier in the same block can interleave — so it is
+          // sorted rather than assumed. stable_sort because two events at one sample must keep
+          // the order they were emitted in: a note-off and the note-on that replaces it landing
+          // on the same frame is a repeat, and swapping them would cut the NEW note.
+          std::stable_sort(runtime->samplerEvents.begin(), runtime->samplerEvents.end(),
+                           [](const daw::SamplerEvent& a, const daw::SamplerEvent& b) {
+                             return a.offsetInBlock < b.offsetInBlock;
+                           });
+          // Nanoticks per frame for THIS block, for tempo-synced envelopes. Recomputed per block
+          // rather than cached: under a tempo ramp a stale ratio detunes every running envelope.
+          const double bpmNow = tempoProvider.bpmAtNanotick(blockStartTicks);
+          runtime->samplerRuntime.setNanotickPerFrame(
+              (bpmNow > 0.0 ? bpmNow : 120.0) *
+              static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter) /
+              (60.0 * engineConfig.sampleRate));
+          runtime->samplerRuntime.render(
+              runtime->samplerAudioChannels.data(), channels, engineConfig.blockSize,
+              runtime->samplerEvents.empty() ? nullptr : runtime->samplerEvents.data(),
+              static_cast<uint32_t>(runtime->samplerEvents.size()));
+          runtime->samplerAudioValid = true;
+        }
+        runtime->samplerEvents.clear();
+
+
+
         bool patcherAudioValid = patcherAudioWritten;
         if (patcherAudioValid && !runtime->inputAudioChannels.empty()) {
           const uint32_t channels =
@@ -14330,7 +15289,18 @@ struct TrackRuntime {
               continue;
             }
             if (segIndex == 0) {
-              if (patcherAudioValid && ch < runtime->patcherAudioChannels.size() &&
+              // THE SAMPLER FEEDS THE HEAD OF THE CHAIN. Only on the FIRST segment: later
+              // segments carry the previous segment's OUTPUT back in, and re-injecting the
+              // sampler there would make it play once per plugin run.
+              //
+              // It is checked before the patcher's audio because a track carrying both has the
+              // sampler as its instrument and the patcher node as an effect; ordered the other
+              // way, adding a patcher audio node would silently mute the sampler.
+              if (runtime->samplerAudioValid && ch < runtime->samplerAudioChannels.size() &&
+                  runtime->samplerAudioChannels[ch]) {
+                std::memcpy(input, runtime->samplerAudioChannels[ch],
+                            static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
+              } else if (patcherAudioValid && ch < runtime->patcherAudioChannels.size() &&
                   runtime->patcherAudioChannels[ch]) {
                 std::memcpy(input, runtime->patcherAudioChannels[ch],
                             static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
@@ -15083,6 +16053,7 @@ struct TrackRuntime {
                   case daw::DeviceKind::PatcherAudio: label = "patcher_audio"; break;
                   case daw::DeviceKind::VstInstrument: label = "vst_instrument"; break;
                   case daw::DeviceKind::VstEffect: label = "vst_effect"; break;
+                  case daw::DeviceKind::Sampler: label = "sampler"; break;
                 }
               }
               if (label) {
@@ -15178,9 +16149,16 @@ struct TrackRuntime {
   // agrees on samples-per-block.
   const double effSampleRate =
       audioBackend ? audioBackend->sampleRate() : engineConfig.sampleRate;
-  const uint32_t effBlockSize = audioBackend
-                                    ? static_cast<uint32_t>(audioBackend->blockSize())
-                                    : engineConfig.blockSize;
+  // --block-size WINS over the device's buffer. Without this the engine's config and the render
+  // pump disagreed: the config took the forced size while the pump kept taking the device's, so
+  // the callback strode 512 frames through 64-frame buffers and produced audio that was garbage
+  // in a plausible-sounding way. Caught by the determinism check on its first end-to-end run —
+  // which is the check doing exactly its job, on the tooling rather than on the sampler.
+  const uint32_t effBlockSize =
+      forcedBlockSize > 0
+          ? forcedBlockSize
+          : (audioBackend ? static_cast<uint32_t>(audioBackend->blockSize())
+                          : engineConfig.blockSize);
   const int effOutChannels = audioBackend ? audioBackend->outputChannels() : 2;
   if (!testMode) {
     audioRuntime = daw::createJuceRuntime();

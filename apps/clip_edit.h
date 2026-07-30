@@ -72,7 +72,12 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
                              std::atomic<uint32_t>& clipVersion,
                              bool recordUndo,
                              uint64_t spanEndNanotick,
-                             std::optional<EventId> noteIdOverride = std::nullopt);
+                             std::optional<EventId> noteIdOverride = std::nullopt,
+                             // THE SOUND ADDRESS (SAMPLER_DESIGN R2). 0 = the keymap picks the
+                             // slot from pitch, which is every row on an ordinary kit track.
+                             // Non-zero names a slot explicitly, and pitch still means varispeed.
+                             uint16_t sound = 0,
+                             uint16_t soundOffset = 0);
 
 // An OFF gesture. Stores nothing: it ends the note sounding in `column` at
 // `nanotick`. Returns nullopt when nothing was sounding there.

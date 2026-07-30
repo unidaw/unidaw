@@ -16,7 +16,7 @@ Three reasons decided it.
 
 ### Where the briefs disagree on fact
 
-- **Two-devices calls the 256-param cap "decisive" (`apps/shared_memory.h:615`). It is misapplied, and it is not decisive.** Slot state is *structure* — persisted in `project.json`, edited by commands, versioned by the store-swap — not device parameters. `UiDeviceParamsRegion` is an on-request, single-device *display* window; nothing forces every editable field into it. The design below publishes ~24 global params plus the **selected slot's** ~16, which is 40 of 256. Automation of any slot still works for all slots, because `AutomationClip` is keyed on a param-id **string** (`WriteAutomationPoint`, `apps/event_payloads.h:154-157`) hashed to a uid16 — `"slot:7:decay"` needs no published slot. The cap constrains a *display* region, and it would constrain a Battery-style device exactly as hard. Claim rejected.
+- **Two-devices calls the 256-param cap "decisive" (`apps/shared_memory.h:615`). It is misapplied, and it is not decisive.** Slot state is *structure* — persisted in `project.json`, edited by commands, versioned by the store-swap — not device parameters. `UiDeviceParamsRegion` is an on-request, single-device *display* window; nothing forces every editable field into it. The design below publishes ~24 global params plus the **selected slot's** ~16, which is 40 of 256. Automation of any slot still works for all slots, because `AutomationClip` is keyed on a param-id **string** (`WriteAutomationPoint`, `apps/event_payloads.h:154-157`) hashed to a uid16 — `"s7.gain"` needs no published slot. The cap constrains a *display* region, and it would constrain a Battery-style device exactly as hard. Claim rejected.
 - **One-device's headline ("slice a break, play one slice at five pitches") does not prove one device.** Its own brief concedes this and the concession is correct. It proves per-row sound addressing. I have re-pitched it as R2.
 - **Two-devices is right that bus topology wants to be static per device kind** (`kMaxBusesPerDevice = 32`, the replace-not-merge invalidation rule at `apps/shared_memory.h:658-665`). The answer is not a second device: it is that **stem count is set at instantiation and changing it emits a full chain snapshot** — a renegotiation the contract already defines and readers already handle. It is a known event, not a novel hazard.
 - **Two-devices is right that choke is a relation and NNA is a voice rule.** They are not contradictory; they are two fields (`voiceGroup: u8`, `nna: u8`), both meaningful on every slot, both inert at their defaults.
@@ -55,18 +55,45 @@ struct SliceSet {
   std::vector<SliceMarker> markers;  // kept sorted by frame; ids never reordered
 };
 
+// A point on a freely-drawn envelope. Time is STRICTLY INCREASING; the editor
+// enforces it, the loader repairs it (and says so), the voice assumes it.
+struct EnvPoint {
+  uint32_t time = 0;            // in the envelope's timeBase unit, from t=0
+  int16_t  valueMilli = 0;      // -1000..1000; the target's domain gives it meaning
+  int8_t   tension = 0;         // -100..100 toward the previous point; 0 = linear
+  uint8_t  flags = 0;           // bit0 STEP: hold this value until the next point
+};
+
+// One modulator. A LIST of these, not a fixed set of fields — so "two LFOs on
+// cutoff" needs no new struct, and a domain nobody uses costs nothing.
+enum class ModTarget : uint8_t { Volume, Panning, Pitch, Cutoff, Resonance };
+enum class ModKind   : uint8_t { Envelope, Lfo };
+
+struct SamplerModulator {
+  uint16_t  id = 0;             // stable; what an automation lane names
+  ModTarget target = ModTarget::Volume;
+  ModKind   kind   = ModKind::Envelope;
+  int16_t   depthMilli = 1000;  // signed. AUTOMATABLE.
+  uint8_t   apply = 0;          // 0 add, 1 multiply (multiply is right for Volume)
+  uint16_t  rateMilli = 1000;   // time-scale multiplier, 250..4000. AUTOMATABLE.
+  uint8_t   timeBase = 0;       // 0 = microseconds, 1 = nanoticks (tempo-synced)
+  // --- ModKind::Envelope
+  std::vector<EnvPoint> points; // <= kMaxEnvPoints (64)
+  uint8_t sustainLoopStart = 0xFF, sustainLoopEnd = 0xFF;  // 0xFF = none
+  uint8_t releaseLoopStart = 0xFF, releaseLoopEnd = 0xFF;  // 0xFF = none
+  uint8_t loopMode = 1;         // 1 forward, 2 ping-pong, 3 backward
+  // --- ModKind::Lfo
+  PatcherLfoConfig lfo{};       // reuses the patcher LFO, unchanged
+};
+
 // The Renoise steal: settings shared BY REFERENCE, so 16 slots point at 2 envelopes.
 struct SamplerModSet {
   uint16_t id = 0;
   char name[24]{};
-  // AHDSR in nanoseconds; sustain in thousandths.
-  uint32_t ampAttackNs, ampHoldNs, ampDecayNs, ampReleaseNs; uint16_t ampSustainMilli;
-  uint32_t filtAttackNs, filtDecayNs, filtReleaseNs;         uint16_t filtSustainMilli;
   uint8_t  filterType = 0;      // 0 off, 1 LP12, 2 LP24, 3 HP, 4 BP
   uint16_t cutoffMilli = 1000, resonanceMilli = 0;
-  int16_t  filtEnvDepthMilli = 0;
-  uint32_t pitchDecayNs = 0; int16_t pitchEnvCents = 0;   // the 808/909 move
-  PatcherLfoConfig lfo{}; uint8_t lfoDest = 0;            // reuses the patcher LFO
+  uint16_t nextModulatorId = 1;
+  std::vector<SamplerModulator> modulators;
 };
 
 struct SamplerSlot {
@@ -76,7 +103,8 @@ struct SamplerSlot {
   uint16_t sliceId = 0;         // 0 = whole source
   uint64_t startFrame = 0, endFrame = 0;   // ignored when sliceId != 0
   uint64_t loopStartFrame = 0, loopEndFrame = 0, loopXfadeFrames = 0;
-  uint8_t  loopMode = 0;        // 0 off, 1 forward, 2 ping-pong
+  uint8_t  loopMode = 0;        // 0 off, 1 forward, 2 ping-pong, 3 backward
+  uint8_t  sustainLoop = 0;     // 1 = the loop releases at note-off and plays out
   uint8_t  keyLow = 0, keyHigh = 127, rootKey = 60;
   int16_t  pitchTrackMilli = 1000;   // 1000 = full varispeed, 0 = fixed pitch
   int16_t  tuneCents = 0;
@@ -117,6 +145,53 @@ struct NotePayload {            // apps/musical_structures.h:94
 ```
 
 **Resolution rule, stated once so it can never drift:** if `sound != 0`, the slot is that id and `pitch` means varispeed relative to that slot's `rootKey`. If `sound == 0`, the slot is found by `(pitch, velocity, layerGroup, selectMode)` through the keymap and `pitch` means the same thing. Pitch has exactly one meaning either way. There is **no implicit carry** of `sound` down a column — the tracker's entry mode carries the last-typed value forward by *writing it into the row*. Stored explicitly, entered implicitly.
+
+### Envelopes: one structure, two editors
+
+**Owner's spec:** multipoint, freely drawn, loopable — FT2's loopable envelope section — *"or you can choose ADSR if you want to make it simpler."*
+
+The ruling that makes that one feature instead of two: **ADSR is not a different envelope type. It is four points with a one-point sustain loop.** The ADSR editor writes exactly the same `points` the pencil writes, so switching editors is a view change, not a conversion, and nothing is lost or invented in either direction.
+
+```
+  A                                   ADSR as points
+  |‾\                                   0: t=0                     v=0
+  |  \____________                      1: t=A                     v=1000
+  |  D      S      \  R                 2: t=A+D                   v=sustain
+  |________________ \___                3: t=A+D+R                 v=0
+   ^        ^          ^              sustainLoop = {2, 2}   (hold at point 2)
+   0        2..2 held  note-off       releaseLoop = none
+```
+
+**Two loops, and that is the whole model:**
+
+| | active | FT2 / IT equivalent |
+|---|---|---|
+| **sustain loop** | while the key is held | FT2's sustain *point* is `start == end`; IT's sustain loop is `start < end` |
+| **release loop** | after note-off | IT's regular loop; FT2 has no equivalent |
+| neither | plays straight through to the last point and holds there | |
+
+FT2's sustain point and IT's sustain loop are therefore the same mechanism at two lengths, which is why there is no separate `sustainPoint` field to disagree with the loop indices. `loopMode` (forward / ping-pong / backward) applies to whichever loop is running.
+
+**Time.** `timeBase` picks the unit *for the whole envelope* — microseconds (a decay that means the same at any tempo, right for drums) or nanoticks (an envelope that follows the project, right for a filter sweep across a bar). One field decides it; there is no per-point unit and no "sync" flag layered on top of an absolute time, because that is two facts about one duration.
+
+**What is automatable, and what is deliberately not.** Automation here is keyed on a param-id string (§5.4), so a modulator exposes exactly two:
+
+- `m<set>.<mod>.d` — depth: how much it moves the target
+- `m<set>.<mod>.r` — rate: the time-scale multiplier, 0.25× to 4×
+
+**The names are short for a reason, and it is a hard limit rather than taste.** `UiAutomationPointPayload.paramId` is `char[16]` (`apps/event_payloads.h:235`) and the engine **refuses** any id of 16 or more characters (`apps/daw_engine_main.cpp:8442-8448`), because the read-back slot nul-terminates inside its own 16 bytes — a 16-byte id would be written in full and read back one byte short, so the write and the answer would name different lanes forever. **The real budget is 15.** The obvious spelling blows it: `modset:1:resonance` is 18 characters and would be rejected on write. So the namespace is a dotted path with one-letter roots, and it fits with three-digit ids to spare:
+
+| | example | worst case at 3-digit ids |
+|---|---|---|
+| slot field | `s7.gain`, `s7.pan`, `s7.tune` | `s999.tune` = 9 |
+| modset field | `m1.cut`, `m1.res` | `m999.res` = 8 |
+| modulator | `m1.3.d`, `m1.3.r` | `m999.999.d` = 10 |
+
+The refusal is loud (`automation.rejected` with the offending id), so this would not have shipped silently — but it would have shipped as "automation mysteriously does not work on resonance", which is worse than a compile error and cheaper to prevent than to diagnose. **Whatever generates these ids gets a check that asserts every one fits**, in the commit that adds the generator.
+
+The **points are not automatable**. Automating a 64-point shape is not a knob, it is a second envelope wearing a lane; if you want the shape to change over the song, add a modulator. Depth and rate are the two that a hand on a controller actually wants, and both are one `int16_t` in the same modulation system everything else uses — including the linter that already reports dangling mod-links.
+
+**Repair is loud.** Out-of-order points, loop indices past the end, `start > end`: the loader clamps, sets `repaired_`, and fires `DAW_EVENT("sampler.envelope_repaired")` with the modulator id and what it changed — the `MarkerList::repaired_` precedent (`apps/markers.h`). A silently-clamped envelope is a sound you cannot explain.
 
 ### What is NOT stored, and why
 
@@ -180,7 +255,76 @@ Note-off ends a `gate = 1` voice (release) and is **ignored** by a one-shot slot
 
 **Not tricky — say so, so the effort goes to the mip-map instead:** AHDSR segment stepping, gain/pan, choke (a table lookup and a ramp, not DSP), and the keymap lookup, which is an O(1) `[128][2]` index table rebuilt on the UI thread at edit time and swapped in by pointer.
 
-**One prerequisite the repo does not have:** `decodeAudioFileMono` (`platform_juce/juce_wrapper.cpp:1771`) downmixes and throws the per-channel buffer away at line 1803. The sampler needs a channel-preserving decode. The pyramid work already proves the decoder reads all channels — it is a ~15 line addition (`decodeAudioFileSource` returning planar channels), not a project.
+**~~One prerequisite the repo does not have:~~ DONE, 2026-07-29.** This section used to say the sampler needed a channel-preserving decode because `decodeAudioFileMono` downmixed and threw the per-channel buffer away. That was fixed while chasing the stereo-clip downmix bug: `decodeAudioFile` (`platform_juce/juce_wrapper.cpp:1771`) now returns planar `DecodedAudio::channels`, and the old name is gone — *"The old name said Mono, and that was the bug."* No prerequisite remains.
+
+---
+
+## 3.5 THE REAL-TIME ARCHITECTURE
+
+The rules this code lives under. Most are the repo's already; the ones that are **new** are marked, because a rule nobody can point at is a rule nobody follows. Numbered 3.5 rather than 4 so the §-references elsewhere in this document keep pointing where they say.
+
+### Ownership and threads
+
+Three threads touch sampler state, and only one of them owns it.
+
+| thread | may do |
+|---|---|
+| **command** | edit `SamplerState` — the document. Owns it outright. |
+| **producer** | schedule notes, run the patcher, fill host input planes. |
+| **audio callback** | read a published snapshot. Nothing else. |
+
+`SamplerState` is **never read by the audio thread**. What the audio thread reads is a `SamplerRender` snapshot: immutable, flattened, pointer-stable, built on the command thread and published with `std::atomic_store_explicit` exactly as `runtime->trackSnapshot` and `runtime->audioRender` already are (`apps/daw_engine_main.cpp:5700,5739`). The same pattern, not a second one — a codebase with two ways to hand state to the audio thread has two ways to get it wrong.
+
+The snapshot **owns the sample audio by `shared_ptr`**, which buys two things at once:
+
+- the audio thread holding a snapshot keeps its buffers alive *by construction*, so there is no separate lifetime rule that could be forgotten;
+- replacing a sample drops the old buffer's last reference **on the command thread**, where calling `operator delete` is legal.
+
+The second is the one that bites. A `shared_ptr` released from the audio callback can free memory, and "the audio thread never frees" is not a property you can bolt on afterwards — it has to be where the last reference lives. Publishing the new snapshot and letting the old one die on the command thread makes it impossible rather than merely unlikely.
+
+> **Flagged, pre-existing, deliberately not fixed here.** `std::atomic_load_explicit(&shared_ptr)` is *not* lock-free in libc++ — it takes a spinlock from a global pool keyed on the address. The engine already does this on the RT path (`:3336`), so the sampler follows the established pattern rather than inventing a second one for itself. But it is a spinlock on the audio thread, which is a priority inversion waiting for an unlucky scheduler decision, and it deserves its own look across the whole engine rather than a local workaround in one device.
+
+### What the audio thread may not do
+
+No allocation, no locks, no syscalls, no `std::function`, no file I/O, no logging. The voice pool is `voiceCap` voices allocated at instantiation and never resized while running; changing `voiceCap` or `stemCount` is a snapshot swap, which is the chain-renegotiation event the contract already defines and readers already handle.
+
+### Sample-accurate voice starts — where the built-in beats the plugin path
+
+`EventEntry.sample_time` is an absolute sample position (`patcher_rust/src/lib.rs:83`), so a note's exact frame is already known by the time anything schedules it. Voices start at their **intra-block offset**, not at the block boundary.
+
+This is worth stating because the alternative is free and wrong.
+
+**And the same gap exists on the plugin path, but it is not architectural — it is an unconnected wire.** `MidiEvent.sampleOffset` exists (`platform_juce/juce_wrapper.h:13`) and the host *honours* it: `platform_juce/juce_wrapper.cpp:1011` sets `e.sampleOffset = ev.sampleOffset` on the direct VST3 event path. But **the engine never populates it** — grep across `daw_engine_main.cpp` returns nothing. So every note reaching a hosted plugin is quantised to the block boundary (2.7 ms of jitter at 128 frames, 11 ms at 512) for no reason other than a missing assignment.
+
+That reframes it. It is not a limitation of the out-of-process design to be routed around; it is a cheap fix that improves **every hosted plugin**, and it should be done rather than left as a reason the built-in is better. Filed as its own item, not folded into S1 — the sampler does not depend on it, and a fix that improves all plugins deserves its own check rather than riding in on a device commit.
+
+Until then, `d1/6`, swing and humanised timing land more precisely on the built-in sampler than on any VST, and the sampler must not throw that away by rendering block-aligned for symmetry with a path that is momentarily less accurate than it is.
+
+### Determinism is a testable property, not an aspiration
+
+Two renders of one project must agree, and both senses are checkable:
+
+- **Across block sizes.** 64, 256 and 1024 frames must produce **bit-identical** output. Sample-accurate starts are what make this true; block-aligned starts make it false by construction, which is the honest reason the previous section is not merely nice. The repo has the precedent — `random_degree` is seeded from a musical tick snapped to a 1/64-quarter grid precisely so it is buffer-size independent, and that is locked by a test (`patcher_rust/src/lib.rs:407-421`).
+- **Offline versus realtime.** The offline render already inverts three policies (never skip a block, never prime with silence, never starve — wait instead). Voice stealing must therefore be keyed on note order and musical position, never on wall-clock or on arrival time, or a bounce steals different voices than the audition did.
+
+`tools/sampler_determinism_check.sh` renders one project at three block sizes and diffs the WAVs. Most shipping DAWs do not clear that bar; it is nearly free here because every piece it needs already exists.
+
+### Denormals — NEW, and nothing in the repo handles this today
+
+An envelope tail decaying toward zero enters denormal range and *stays* there for as long as the voice lives. On x86 a denormal multiply costs roughly 100× a normal one, so a sustained pad's tail can push a comfortable render into underruns for no audible reason at all. Grep across `apps/` and `platform_juce/` finds no FTZ, no DAZ, no flush, no `ScopedNoDenormals`.
+
+Two defences, both cheap, and the first is a correctness win independently:
+
+- **Flush the envelope.** Below ~1e-6 (−120 dBFS, inaudible) the amp envelope snaps to zero and the voice **ends**. That also stops inaudible voices occupying the pool forever, which is a voice-allocation bug in its own right.
+- **FTZ/DAZ on the audio thread** for the arithmetic that remains — filters especially. Set once at thread start, not per block.
+
+### Smoothing — everything audible ramps
+
+`EnvRunner::advance()` returns the value at the **end** of the span precisely so the caller can ramp linearly across the block; that is why it is block-rate rather than per-sample. Per-voice gain and pan are one-pole smoothed. A parameter that jumps is a click, and a click in a sampler is indistinguishable from a bug in the loop points — so the smoothing is not polish, it is what keeps the real defects legible.
+
+### Testability: the DSP knows nothing about the engine
+
+`apps/sampler_envelope.h` has no engine, no device, no audio and no I/O dependency, which is why its tests run in milliseconds against no fixture. `apps/sampler_voice.h` takes planar `const float*` in and writes planar out, and is testable the same way. The engine wiring stays thin on purpose: **if a sampler bug can only be reproduced through a running engine, the split is in the wrong place** — and this repo has spent enough time on green suites that pass with the bug present to take that seriously.
 
 ---
 
@@ -259,7 +403,7 @@ Five things, each a consequence of something this program already has.
 
 3. **A patcher `SliceSelect` node can drive WHICH SLICE per row, reproducibly, at any buffer size.** `random_degree` already rewrites a gate's pitch and is seeded from the event's musical tick snapped to a 1/64-quarter grid, so it is buffer-size independent and locked by a unit test (`patcher_rust/src/lib.rs:407-421`). `SliceSelect` is the same node writing `sound` instead of `pitch`. That makes "euclidean rhythm × weighted-random slice over an amen, identical on every render" three nodes and a save. Battery cannot generate anything at all; Simpler cannot either; Renoise's phrases can, but not reproducibly across render settings. And it is possible *only* because §2 made the sound address a per-note field.
 
-4. **Per-slot everything is automatable and mod-linkable without any container, and without hitting the 256-param wall.** Automation is keyed on a param-id string; `"slot:7:cutoff"` is a lane like any other, so a mod-link from an earlier device's LFO to slot 7's cutoff uses the shipped `AddModLink` path with its forward-flow refusal rule. Battery has a fixed shallow modulation slot set and no scripting; Live needs a macro-mapped rack. Here it is the same modulation system as everything else — which also means the linter already sees dangling sampler links.
+4. **Everything is automatable and mod-linkable without any container, and without hitting the 256-param wall.** Automation is keyed on a param-id string, so `"s7.gain"`, `"m1.cut"` and `"m1.3.d"` are lanes like any other (short by necessity — the engine refuses ids over 15 characters, see §2), and a mod-link from an earlier device's LFO to any of them uses the shipped `AddModLink` path with its forward-flow refusal rule. The namespace tells the truth about the by-reference model rather than papering over it: a per-slot field is addressed on the slot, and a *shared* field is addressed on the set — so one lane moving all sixteen slots that share modset 1 is the feature working, visibly, not a surprise. Battery has a fixed shallow modulation slot set and no scripting; Live needs a macro-mapped rack. Here it is the same modulation system as everything else — which also means the linter already sees dangling sampler links.
 
 5. **A slot's stem becomes a first-class track, so per-slot processing costs nothing structural.** `--stem 1` plus `extract-stem` gives the kick a track with per-lane quantize, an arrangement lane, its own automation, its own devices, PDC already correct (Movement 4 phase 3, verified) and sidechain already wired (phase 4). Battery gives you an output number and then you leave the device; Live gives you a pad chain that is not a track. This is the argument that *would* have justified two devices in any other codebase and does not justify it in this one.
 
@@ -269,17 +413,35 @@ Rejected as "just a feature list": velocity layers, round-robin, filter types, r
 
 ## 6. BUILD ORDER
 
-**S1 — the sampler exists and plays. No contract bump.** `DeviceKind::Sampler`, `SamplerState` with one slot, `project.json` round-trip (`save_roundtrip_check.sh` + an *edited* fixture per `edited_roundtrip_check.sh`), channel-preserving decode, one voice class with Hermite + AHDSR, note-on/off through the existing dispatch, `add-device --kind sampler` and `sampler-load`. **This is the useful line**: load a sample, play it from the tracker. Verified with `DAW_CAPTURE_WAV` + `tools/perceptual.py`, not by ear.
+**S1 — the sampler exists and plays. No contract bump.** `DeviceKind::Sampler`, `SamplerState` with one slot, `project.json` round-trip (`save_roundtrip_check.sh` + an *edited* fixture per `edited_roundtrip_check.sh`), channel-preserving decode, one voice class with Hermite, note-on/off through the existing dispatch, `add-device --kind sampler` and `sampler-load`. **This is the useful line**: load a sample, play it from the tracker. Verified with `DAW_CAPTURE_WAV` + `tools/perceptual.py`, not by ear — plus `tools/sampler_determinism_check.sh` (§3.5): one project rendered at 64, 256 and 1024 frames must come out **bit-identical**. That check belongs in S1 and not later, because it is the one that fails loudly the moment a voice starts on a block boundary instead of its own sample, and retrofitting sample-accurate starts after the rest is built is exactly the kind of rework this ordering exists to avoid.
+
+**Where it renders, decided by looking rather than assuming (2026-07-30).** The sampler generates into the **host input plane's main channels**, the way `runtime->patcherAudioChannels` already does (`apps/daw_engine_main.cpp:2172`, written at `:14280`) — *not* straight into the master sum the way placed audio clips do (`:868`). The difference is whether a VST effect can follow the sampler on the same track: audio mixed into master has already passed every plugin, so the easy path would have made "sampler → reverb" structurally impossible and would not have shown up until S3.
+
+This also answers what the sampler lays groundwork for. Built-in **instruments** are nearly free after S1, because that input-plane slot is the whole mechanism. Built-in **effects** are cheaper than they look too: chain segmentation already exists (`:14042-14105`) — a run of VSTs is one segment, a non-VST device breaks it, and between segments the previous output is copied back into the input — and `DeviceKind::PatcherAudio` already uses it. A built-in effect is a kind that breaks a segment the same way, not a new audio path.
+
+**The cost that does NOT generalize, flagged rather than absorbed silently:** `DeviceKind` is a flat enum and the engine asks `kind == VstInstrument || kind == PatcherInstrument` in ~35 places. Most are asking a *capability* question, and `capabilityMask` (`apps/device_chain.h:36-40`) already has the bits. S1 adds `isInstrumentDevice()` / `rendersInEngine()` predicates and routes NEW code through them; converting the existing sites is a separate cleanup that pays for itself at built-in #2 and not before.
+
+The envelope ships in its **final shape** here — `SamplerModulator` with `points`, both loops, `timeBase` — seeded with the four ADSR points and a one-point sustain loop. S1 only needs the runner to walk points and honour the loops; the pencil editor comes later. Shipping a fixed-AHDSR struct now and replacing it in S3 would mean a format migration for files written in between, and R4 already tells us the answer, so there is no reason to write the throwaway.
 
 **S2 — the kit. No contract bump.** Multi-slot, keymap table, `--files`/`--base-key`, `voiceGroup`, `nna`, modSets by reference, velocity layers and round-robin. Playable by pitch through the keymap. UI reads the kit via a CLI/JSON path until S4.
 
-**S3 — the DSP that makes it not sound cheap. No contract bump.** The octave mip-map, level crossfade, sinc16, the three quality settings, loop modes + seam-crossing interpolation + loop crossfade, reverse, pitch envelope. Negative control required: render a slot pitched +24 with `quality=Studio` and with the mip-map *disabled*, and assert the fold-back energy differs by ≥ 40 dB. A green suite that passes with the mip-map bypassed is the recurring trap here.
+**S3 — the DSP that makes it not sound cheap. No contract bump.** The octave mip-map, level crossfade, sinc16, the three quality settings, sample loop modes (forward / ping-pong / **backward**) + seam-crossing interpolation + loop crossfade, reverse, the filter, and the rest of the modulator targets (Pitch, Cutoff, Resonance, Panning) now that Volume runs. Negative control required: render a slot pitched +24 with `quality=Studio` and with the mip-map *disabled*, and assert the fold-back energy differs by ≥ 40 dB. A green suite that passes with the mip-map bypassed is the recurring trap here.
 
-**S4 — the sound address. ⚠️ CONTRACT BUMP, kShmVersion 31 → 32.** `NotePayload.sound` takes `reserved2` in memory for free, but **`UiClipNote` is exactly 40 bytes with no spare** — `devNanoticks` took the last reserved word (`apps/shared_memory.h:856-875`). Adding `uint16_t sound` grows it to 48 with alignment. That bump must carry, in one move: `UiClipNote.sound`, the `s:` token in `ui/daw-bridge/src/rowop.rs` `OP_SCHEMA`, the `RequestSamplerKit` command + `UiSamplerKitRegion` answer region (same request/answer shape as `RequestAutomationLane`), the Rust layout mirror in `daw-bridge/src/layout.rs`, and the C++ `static_assert`s — **announced on the agent bus before it lands**. Batch the long-deferred row-op display fields (`retrigger`/`probability`/`delay` in the snapshot) into the same bump; they have been waiting for exactly this.
+A second negative control, for the envelope, because a loop that does not loop is inaudible in a short render: draw a 3-point sawtooth on Volume with a sustain loop, hold a note for 8 loop periods, and assert the captured envelope has **8 peaks**. Disable the loop and it must find 1. `tools/perceptual.py` already extracts an amplitude contour.
+
+**S4 — the sound address. ⚠️ CONTRACT BUMP, kShmVersion 31 → 32.** `NotePayload.sound` takes `reserved2` in memory for free, but **`UiClipNote` is exactly 40 bytes with no spare** — `devNanoticks` took the last reserved word (`apps/shared_memory.h:856-875`). Adding `uint16_t sound` grows it to 48 with alignment. That bump must carry, in one move: `UiClipNote.sound`, the `s:` token in `ui/daw-bridge/src/rowop.rs` `OP_SCHEMA`, the `RequestSamplerKit` command + `UiSamplerKitRegion` answer region (same request/answer shape as `RequestAutomationLane`), the Rust layout mirror in `daw-bridge/src/layout.rs`, and the C++ `static_assert`s — **announced on the agent bus before it lands**.
+
+Take the **sample offset** (the `9xx` seek) in the same bump — a second `uint16_t`, and the 40→48 growth pays for both or neither. Store it as a **fraction of the slot's extent**, not as absolute frames: classic `9xx` is `xx × 256` frames, which breaks the moment the slot's sample is swapped, and here a slot can name a *slice*, so absolute breaks on a re-chop too. A `uint16_t` fraction is also finer than `9xx`'s 256-frame steps, since there is no byte budget to serve; the notation can still read in 1/256ths for muscle memory.
+
+~~Batch the long-deferred row-op display fields into the same bump.~~ **Already shipped** — `UiClipNote` carries `retrigger`, `probability` and `devNanoticks` (`apps/shared_memory.h:872-883`) and `apps/ui_snapshot.cpp:57-64` populates them. Only *setting* an op from a command is missing, and that needs a `UiCommandType`, not a `kShmVersion` bump.
 
 **S5 — slicing.** `SliceSet`, stable markers, transient detection with sensitivity, equal-division and manual modes, row-grid snap, `sampler-slice`, `sampler-marker add/move/remove`, `sampler-emit-rows`. Worthless before S4 and excellent after it.
 
 **S6 — stems.** `outputStem` onto the existing aux output plane, `extract-stem` to a child track, chain-snapshot renegotiation on `stemCount` change. No bump; the plane ships.
+
+**S7 — the module (R3), independent of S1–S6 and sequenceable anywhere after S1.** **`.uni`** — a zip holding `project.json` plus a `samples/` directory, written atomically (temp + rename, as the current save already does) and read back by path *inside* the archive. The loader keeps reading a loose directory, so the two forms are the same document at two levels of packing and nothing has to be converted to work. Two properties worth a check apiece: a zip round-trips to a byte-identical `project.json`, and a project moved to another machine with no shared filesystem still plays — which is the entire point and is not provable with a path-referencing save.
+
+The extension is **`.uni`**, not `.uniproj` (owner, 2026-07-30). It is the module's name, and it should read like one: `.mod`, `.xm`, `.it`, `.uni`. The loose working directory keeps `.uniproj.json` as it is now, so the two forms stay visibly distinct — a zip you send and a directory you edit — rather than one extension meaning two different things on disk.
 
 **Optional, in preference order:** the `SliceSelect` patcher node (highest payoff per line of the lot); vintage bit/rate-reduction; a destructive sample editor (trim/normalise/fade/reverse/DC — genuinely wanted, genuinely a separate surface, do it last); MIDI-per-bus for the kit.
 
@@ -287,14 +449,26 @@ Rejected as "just a feature list": velocity layers, round-robin, filter types, r
 
 ---
 
-## 7. OPEN QUESTIONS — OWNER ONLY
+## 7. RULINGS — 2026-07-30
 
-1. **Notation for the sound address.** `s:snare` (legible, breaks visually on rename) or `s#7` (stable, opaque)? My proposal: store the id, notate the name, renaming rewrites nothing. Confirm.
-2. **Does a blank `sound` always mean "keymap"?** Or should a track be settable to sound-addressed-only, so pitch never selects and a 64-slot kit stays fully chromatic? Affects whether a keyboard can play the kit at all.
-3. **Kit grid: fixed page or growing?** Fixed 8×8 with pages buys spatial memory (Battery's real win); growing removes the ceiling and loses the muscle memory. I would take fixed. You decide.
+Answered by the owner. These are decisions, not proposals; the sections above are written to them.
+
+**R1 — per-slot processing is a stem, and the stem makes its own track.** *"Can't we treat it as a multi-out instrument that automatically has its own audio tracks?"* — Yes, and that is the design. Per-slot insert chains do **not** exist and will not; `outputStem` routes a slot to an aux stereo bus, and `reconcileChildTracks` already derives a child track from the host's `lastAuxOutMask` (Movement 4 phase 5, shipped and verified). So the gesture is right-click a pad → **extract to track**, and what you get is a *real* track — arrangement lane, per-lane quantize, its own devices, PDC correct, sidechain wired — not Live's pad chain, which is a hidden track that can never be one. The thing that would have justified a second device in any other codebase is free here.
+
+**R2 — the sound address is a per-note field, entered as a row op.** Not a new column. `NotePayload.sound` is `uint16_t` taking `reserved2`, so the in-memory struct does not grow; the notation joins the existing typed `OP_SCHEMA` in `ui/daw-bridge/src/rowop.rs` beside `ret3` / `p60` / `d1/6`, which buys completion, docs, the linter and agent-writability for nothing. Rejected on the way: a dedicated column (owner: *"I'm wary of adding a lot of columns that are mostly empty"* — and he is right, see R4), and FT2/IT-style packing of effects into the volume/pan columns, which is a 1990s one-byte budget artifact and buys nothing here.
+
+**R3 — the project is a module, and it is called `.uni`.** A **zip**, samples embedded, exactly as MOD/XM/IT and Renoise and Live do it. *"It's easy to send someone the zip."* Broken sample links stop existing. The loader still reads a loose directory, so a project stays diffable while you work and zips when you send it. Breaking the existing hand-written fixtures is not an argument against — owner, explicitly, and he was right that it was the tail wagging the dog.
+
+**R4 — envelopes are multipoint, freely drawn and loopable; ADSR is a *view* of the same points.** See §2 "Envelopes: one structure, two editors". Sustain loop + release loop, FT2's sustain point being the one-point degenerate case. Forward, ping-pong and backward, for both the envelope loops and the sample loop.
+
+**R5 — no permanent ops column; it appears where it is used.** Both families are sparse in the common case: ops (retrigger/probability/delay) are occasional by nature, and `sound` is blank on an ordinary kit track because **blank means "pitch picks the slot"** — it only fills in when you deliberately want the same slot at another pitch. So the column is drawn per track when something in that track uses one, with a marker in the note cell so you can see a row carries ops without the column being open. **Exact display is the frontend's call** (asked 2026-07-30); the engine side is publishing `sound` in `UiClipNote` and, if they want it, a per-track "uses ops" flag so the editor need not scan every note per draw.
+
+### Still open — owner only
+
+1. **Notation for the sound address.** `s:snare` (legible, breaks visually on rename) or `s#7` (stable, opaque)? My proposal: store the id, notate the name, renaming rewrites nothing.
+2. **Does a blank `sound` always mean "keymap"?** R5 assumes yes. Should a track be settable to sound-addressed-only, so pitch never selects and a 64-slot kit stays fully chromatic? Affects whether a keyboard can play the kit at all — and, now, how often the ops column appears.
+3. **Kit grid: fixed page or growing?** Fixed 8×8 with pages buys spatial memory (Battery's real win); growing removes the ceiling and loses the muscle memory. I would take fixed.
 4. **Voice cap scope** — per device (my default, 64), per track, or global? Sets the CPU ceiling and whether a 16-slot kit at 1/32 ever steals.
-5. **Samples in the project: reference-by-relative-path, or embed in the `.uniproj` zip** that `PROJECT_PERSISTENCE.md` already promises? Embedding kills broken links forever and makes the document large and less diffable.
-6. **Changed source file (contentKey mismatch): load-and-badge, or refuse-and-report?** The `kHostSlotIndexUnresolved` precedent says refuse. I specced load-and-badge because silence is worse than a warned difference for audio. Overrule me if you disagree.
-7. **Is "extract to child track" the only per-slot processing answer, forever?** I designed on yes. If you ever want per-slot insert chains, say it now — that turns the sampler into a rack and changes §2 fundamentally.
-8. **Default slice snap: row grid (tempo-adaptive, free re-fit) or transient (faithful to the source)?** Both exist; which one is the un-thinking gesture.
+5. **Changed source file (contentKey mismatch): load-and-badge, or refuse-and-report?** The `kHostSlotIndexUnresolved` precedent says refuse. I specced load-and-badge because silence is worse than a warned difference for audio. Note R3 shrinks this: an embedded sample cannot change under you, so this now only bites a project still living as a loose directory.
+6. **Default slice snap: row grid (tempo-adaptive, free re-fit) or transient (faithful to the source)?** Both exist; which one is the un-thinking gesture.
 9. **Out of scope but named:** the Elektron gap this repo half-has — retrigger *volume ramp* and *conditional* trigs (`1:2`, `FILL`, `PRE`) beyond the existing `retN`/`pN`. That is row-op work, not sampler work. Want it queued behind S4's bump, or separately?

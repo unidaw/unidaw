@@ -1,5 +1,7 @@
 #include "apps/project_file.h"
 
+#include "apps/sampler_serialize.h"
+
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -8,6 +10,7 @@
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 
+#include "apps/event_log.h"
 #include "apps/patcher_assemble.h"
 #include "apps/patcher_preset.h"
 
@@ -196,6 +199,7 @@ const char* deviceKindToString(DeviceKind kind) {
     case DeviceKind::PatcherAudio: return "patcher_audio";
     case DeviceKind::VstInstrument: return "vst_instrument";
     case DeviceKind::VstEffect: return "vst_effect";
+    case DeviceKind::Sampler: return "sampler";
   }
   return "patcher_event";
 }
@@ -206,6 +210,7 @@ bool deviceKindFromString(const std::string& text, DeviceKind& out) {
   if (text == "patcher_audio") { out = DeviceKind::PatcherAudio; return true; }
   if (text == "vst_instrument") { out = DeviceKind::VstInstrument; return true; }
   if (text == "vst_effect") { out = DeviceKind::VstEffect; return true; }
+  if (text == "sampler") { out = DeviceKind::Sampler; return true; }
   return false;
 }
 
@@ -335,6 +340,20 @@ void writeEvents(JsonWriter& writer, const std::vector<MusicalEvent>& events) {
     if (note.probability > 0) {
       writer.key("probability", static_cast<uint32_t>(note.probability));
     }
+    // v32: the sound address. Written only when SET, so a project without a sampler does not gain
+    // a `"sound": 0` on every note — the file stays diffable and the default stays invisible,
+    // which is what "0 means the keymap picks" should look like on disk too.
+    //
+    // ITS OWN CONDITION, not nested in probability's. It was, briefly, which meant a sound
+    // address only persisted on notes that ALSO had a probability — so an emitted chop saved as
+    // rows with no addresses and played whatever the keymap said. Caught by the chop check
+    // asserting every emitted row names its slice.
+    if (note.sound != 0) {
+      writer.key("sound", static_cast<uint32_t>(note.sound));
+    }
+    if (note.soundOffset != 0) {
+      writer.key("sound_offset", static_cast<uint32_t>(note.soundOffset));
+    }
     if (note.delayNanoticks > 0) {
       writer.key("delay", static_cast<uint32_t>(note.delayNanoticks));
     }
@@ -387,6 +406,10 @@ void readEvents(const boost::property_tree::ptree& tree,
           static_cast<uint8_t>(noteTree.get<uint32_t>("retrigger", 0));
       event.payload.note.probability =
           static_cast<uint8_t>(noteTree.get<uint32_t>("probability", 0));
+      event.payload.note.sound =
+          static_cast<uint16_t>(noteTree.get<uint32_t>("sound", 0));
+      event.payload.note.soundOffset =
+          static_cast<uint16_t>(noteTree.get<uint32_t>("sound_offset", 0));
       event.payload.note.delayNanoticks = noteTree.get<uint32_t>("delay", 0);
       out.push_back(event);
     }
@@ -668,6 +691,11 @@ std::string serializeProject(const ProjectDocument& document) {
         writer.key("name", device.vstRef.name);
         writer.key("path", device.vstRef.path);
         writer.key("uid16", device.vstRef.uid16);
+        writer.endChildObject();
+      }
+      if (device.hasSampler) {
+        writer.beginChildObject("sampler");
+        daw::writeSamplerState(writer, device.sampler);
         writer.endChildObject();
       }
       if (device.hasEuclideanConfig) {
@@ -998,6 +1026,23 @@ bool deserializeProject(const std::string& json,
             device.vstRef.name = ref->get<std::string>("name", "");
             device.vstRef.path = ref->get<std::string>("path", "");
             device.vstRef.uid16 = ref->get<std::string>("uid16", "");
+          }
+          if (const auto sampler = deviceTree.get_child_optional("sampler")) {
+            device.hasSampler = true;
+            daw::SamplerLoadReport rep;
+            device.sampler = daw::readSamplerState(*sampler, &rep);
+            // Repairs and dangling references are REPORTED, never silently accepted. A slot
+            // pointing at a source that is not in the file would otherwise be re-pointed at
+            // whatever is there and play the WRONG SAMPLE — every structural check still
+            // passing while only the audio is wrong, which is the kHostSlotIndexUnresolved
+            // lesson exactly.
+            if (rep.any()) {
+              DAW_EVENT("project.sampler_repaired")
+                  .field("device", device.id)
+                  .field("envelopes_repaired", rep.envelopesRepaired)
+                  .field("slots_missing_source", rep.slotsWithMissingSource)
+                  .field("slots_missing_mod_set", rep.slotsWithMissingModSet);
+            }
           }
           if (const auto euclid = deviceTree.get_child_optional("euclidean")) {
             device.hasEuclideanConfig = true;

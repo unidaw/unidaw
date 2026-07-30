@@ -29,6 +29,33 @@
 
 namespace daw {
 
+// FLUSH DENORMALS TO ZERO on the CALLING thread. Nothing else in this repo did this, and it is
+// not a micro-optimisation: a filter or an envelope decaying toward zero enters the denormal
+// range and STAYS there for as long as the voice lives, at roughly 100x the cost of normal
+// arithmetic on x86. A sustained pad's tail can push a comfortable render into underruns for no
+// audible reason at all, and the profile blames whatever happened to be running at the time.
+//
+// Set ONCE per thread, at start, not per block — it is a control-register write, and doing it in
+// the render loop would cost more than the denormals.
+//
+// On Apple Silicon the FPU flushes denormals by default in the ARM64 ABI, so this is a no-op
+// there rather than a lie: the flag it sets is the same one, and setting it costs nothing.
+inline void enableFlushToZero() {
+#if defined(__x86_64__) || defined(_M_X64)
+  // FTZ (bit 15) makes denormal RESULTS flush to zero; DAZ (bit 6) makes denormal INPUTS read as
+  // zero. Both are needed: FTZ alone still pays full cost on a denormal that arrives from a
+  // buffer written by something else.
+  unsigned int csr = __builtin_ia32_stmxcsr();
+  csr |= (1u << 15) | (1u << 6);
+  __builtin_ia32_ldmxcsr(csr);
+#elif defined(__aarch64__)
+  uint64_t fpcr = 0;
+  __asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
+  fpcr |= (1ull << 24);  // FZ
+  __asm__ __volatile__("msr fpcr, %0" : : "r"(fpcr));
+#endif
+}
+
 // Raise the CALLING thread's scheduling class toward the audio deadline. Best-effort:
 // a failure or an unsupported platform simply leaves the thread at default priority.
 inline void elevateToAudioPriority() {

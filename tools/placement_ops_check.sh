@@ -43,8 +43,10 @@ sleep 2
 DAW_UI_SHM_NAME="$SHM" "$CLI" do load p --force >/dev/null 2>&1 || true
 sleep 1
 
-# get extents prints a trailing comma before ']' (not strict JSON). A small helper file
-# avoids inline-python quoting hell. `parse.py byclip <clipId>` -> "pid start end";
+# `get extents` used to print a trailing comma before ']', so it announced itself as JSON and
+# would not parse — fixed once something finally called json.load on it instead of grepping. The
+# tolerant re.sub below is kept as a belt for an older engine and is a no-op on valid output. A
+# helper file rather than inline python avoids quoting hell. `parse.py byclip <clipId>` -> "pid start end";
 # `parse.py count` -> N. Reads the last snapshot in ext.json.
 cat > "$TMP/parse.py" <<'PY'
 import json, re, sys
@@ -84,6 +86,50 @@ C_AFTER_RM=$(count)
 DAW_UI_SHM_NAME="$SHM" "$CLI" do add-placement --track 0 --clip 1 --at $((6*BAR)) --length $BAR --force >/dev/null 2>&1 || true
 sleep 0.4; snap
 C_AFTER_ADD=$(count)
+
+# ---- A LENGTH-0 PLACEMENT OF A LENGTH-0 CLIP STILL COVERS ITS CONTENT.
+#
+# Length 0 means "use the clip's length"; a clip length of 0 means a LINEAR clip that plays once
+# and does not loop. Both zero used to publish startTick == endTick, so a client testing
+# containment found the placement EMPTY — and the web UI's shared-clip warning went silent on
+# exactly the placement somebody had just created, which is when they are most likely to type into
+# it. Note entry already resolved this correctly (locateEditTarget's three-step rule: explicit
+# length, else the clip's loop length, else its content end), so the engine held two answers to
+# "how far does this placement reach" and published the wrong one.
+python3 - "$TMP/zero.uniproj.json" "$Q" <<'PYZ'
+import json, sys
+out, Q = sys.argv[1], int(sys.argv[2])
+def routing():
+    r = lambda k="none": {"kind": k, "track_id": 0, "input_id": 0}
+    return {"midi_in": r(), "midi_out": r(), "audio_in": r(),
+            "audio_out": r("master"), "pre_fader_send": True}
+# Content ends at 2Q: two quarter notes back to back.
+clip = {"id": 1, "name": "linear", "length": 0, "kind": "symbolic",
+        "notes": [{"nanotick": 0, "duration": Q, "pitch": 60, "velocity": 100,
+                   "column": 0, "note_id": 1},
+                  {"nanotick": Q, "duration": Q, "pitch": 64, "velocity": 100,
+                   "column": 0, "note_id": 2}]}
+tr = {"track_id": 0, "name": "A", "harmony_quantize": False, "lines_per_beat": 4,
+      "mixer": {"gain_db": 0.0, "pan": 0.0, "mute": False, "solo": False},
+      "routing": routing(), "device_chain": [], "mod_links": [],
+      "placements": [{"clip_id": 1, "id": 1, "at": 0, "length": 0,
+                      "notes": [], "chords": [], "mutes": []}]}
+json.dump({"schema_version": 4, "meta": {"name": "zero"}, "nanoticks_per_quarter": Q,
+           "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [],
+           "clips": [clip], "tracks": [tr]}, open(out, "w"))
+PYZ
+DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" do load zero --force >/dev/null 2>&1 || true
+sleep 1.5
+snap
+ZSPAN="$(python3 "$TMP/parse.py" "$TMP/ext.json" byclip 1 2>/dev/null || echo "NONE")"
+case "$ZSPAN" in
+  "1 0 $((2 * Q))") echo "  zero-length: a linear clip's placement covers its content ($ZSPAN)" ;;
+  "1 0 0") echo "FAIL: a length-0 placement of a length-0 clip publishes an EMPTY extent (start ==
+        end). A client testing containment finds nothing there, so anything keyed on 'which
+        placement is the cursor in' goes silent on a freshly created placement"; ok=0 ;;
+  *) echo "FAIL: unexpected extent for the linear clip: [$ZSPAN], expected '1 0 $((2 * Q))'"; ok=0 ;;
+esac
+
 wait "$ENG" 2>/dev/null || true
 
 echo "after move  : clip1 placement=$P1b start=$S1b (want id==$P1, start==$((4*BAR)))"

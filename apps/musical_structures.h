@@ -96,15 +96,45 @@ struct NotePayload {
   uint8_t velocity = 0;
   uint8_t column = 0;
   uint8_t reserved = 0;
+  // THE SOUND ADDRESS (docs/SAMPLER_DESIGN.md R2). Which slot of the track's sampler this note
+  // plays. 0 = resolve through the keymap, which is the common case: on an ordinary kit track
+  // pitch picks the slot and this is blank on every row. It fills in only when you deliberately
+  // want the SAME slot at a different pitch — one snare, five pitches, one column, which is the
+  // amen-break gesture and the whole reason this is a per-NOTE field rather than a device setting.
+  //
+  // Pitch means exactly one thing either way: varispeed relative to the slot's rootKey. That is
+  // what makes the two addressing modes one mechanism instead of two.
+  //
+  // THESE TWO FIELDS SIT IN THE ALIGNMENT HOLE before durationNanoticks, which is where the spare
+  // space actually was. R2 planned to take `reserved2` — but that field is NOT reserved, it
+  // carries the note->placement backlink (v23) and was simply named badly. And there is no TAIL
+  // padding either: the struct was exactly 32 bytes with no slack at the end. The hole at offset
+  // 4..7, opened by uint64 alignment, is the one genuinely free space, and it fits both fields
+  // exactly — so the conclusion (the in-memory note does not grow) survives, on corrected
+  // reasoning rather than the original.
+  uint16_t sound = 0;
+  // THE 9xx SEEK, as a fraction of the slot's extent (0 = from the start, 65535 = the end).
+  //
+  // NOT absolute frames, which is what FT2/IT store. Absolute breaks the moment the slot's sample
+  // is swapped, and here a slot can name a SLICE, so it breaks on a re-chop too — a fraction
+  // survives both. It is also finer than 9xx's 256-frame granularity, there being no one-byte
+  // budget to serve.
+  uint16_t soundOffset = 0;
   uint64_t durationNanoticks = 0;
   EventId noteId = kEventIdNone;
   // Per-note row ops (item 12), applied at playback. Defaults are inert, so a
   // note without ops behaves exactly as before.
   uint8_t retrigger = 0;    // 0/1 = one strike; N>=2 = N even strikes over the note
   uint8_t probability = 0;  // 0 = always; 1..=100 = percent chance to sound
-  uint16_t reserved2 = 0;
+  // The stable id of the placement this note came from (v23). Named for what it holds: it was
+  // called `reserved2` long after it stopped being reserved, which is how the sampler's design
+  // came to plan on taking it.
+  uint16_t placementId = 0;
   uint32_t delayNanoticks = 0;  // onset delay, absolute ticks
 };
+// The two fields above took existing padding, so the in-memory note did NOT grow. Pinned, because
+// this struct is copied per note per block and a silent growth is a real cost.
+static_assert(sizeof(NotePayload) == 32, "NotePayload must not grow");
 
 struct ChordPayload {
   uint32_t chordId = 0;

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 31;
+pub const K_SHM_VERSION: u16 = 32;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -174,9 +174,108 @@ pub struct ShmHeader {
     pub ui_automation_bytes: u64,
     pub ui_automation_slot_offset: u64,
     pub ui_automation_slot_bytes: u64,
+    /// v29: the song's end in ticks, mirrored from the arrange region. NOT a second source of
+    /// truth — the same number written from the same atomic in the same pass, put where a reader
+    /// that needs it every frame can get it without a second region read.
+    ///
+    /// This was missing from this mirror until v32. Harmless in practice (regions are addressed
+    /// by the offsets the header itself carries, so a SHORT mirror still reads correctly), but a
+    /// mirror that silently lags the contract is how the next field lands in the wrong place.
+    pub ui_song_end_tick: u64,
+    /// v32: one sampler device's kit, on request.
+    pub ui_sampler_kit_offset: u64,
+    pub ui_sampler_kit_bytes: u64,
 }
 
 /// uiTrackFlags bits (Movement 4).
+/// v32: THE SAMPLER KIT READ-BACK. Request/answer with a CLIENT-OWNED request_seq: it names the
+/// slot the answer lands in (`request_seq % UI_SAMPLER_KIT_SLOTS`), so a caller knows where to
+/// look BEFORE it asks rather than scanning for a reply that resembles its question.
+///
+/// Published from the SNAPSHOT the producer reads, not from the document — a read-back built from
+/// the model answers "what was configured" while the audio thread plays something else, which is
+/// precisely the divergence a read-back exists to catch.
+pub const UI_MAX_SAMPLER_SLOTS: usize = 64;
+pub const UI_SAMPLER_KIT_SLOTS: usize = 2;
+
+/// The slot's source did not resolve, so it will be SILENT. A flag rather than something to infer
+/// from `length_frames == 0`, because "silent because the file is missing" and "silent because the
+/// sample is empty" are different problems and a UI should be able to say which.
+pub const UI_SAMPLER_SLOT_SOURCE_MISSING: u8 = 1 << 2;
+
+/// SamplerSlice (76) modes. NAMED rather than numbered by position, so adding a mode never
+/// changes what an existing saved macro or agent script means.
+pub const SAMPLER_SLICE_TRANSIENT: u16 = 0;
+pub const SAMPLER_SLICE_EQUAL: u16 = 1;
+pub const SAMPLER_SLICE_CLEAR: u16 = 2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerSlicePayload {
+    pub command_type: u16,
+    pub mode: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub source_local_id: u32,
+    pub sensitivity: u32,
+    pub count: u32,
+    pub max_slices: u32,
+    /// 0 = no snap; else the row grid in nanoticks, which makes the chop tempo-adaptive from the
+    /// moment it is made rather than tied to the rate the file was recorded at.
+    pub snap_nanoticks: u32,
+    /// Non-zero makes a SLOT PER SLICE from `slot_base_key` upward — the gesture that turns a
+    /// chop into something playable in one command rather than N.
+    pub make_slots: u8,
+    pub slot_base_key: u8,
+    pub reserved: [u8; 6],
+}
+
+pub const SAMPLER_MARKER_ADD: u16 = 0;
+pub const SAMPLER_MARKER_MOVE: u16 = 1;
+pub const SAMPLER_MARKER_REMOVE: u16 = 2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerMarkerPayload {
+    pub command_type: u16,
+    pub op: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub source_local_id: u32,
+    pub marker_id: u32,
+    pub frame: u64,
+    pub reserved: [u8; 8],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerEmitRowsPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub source_local_id: u32,
+    pub at_nanotick: u64,
+    /// One row per slice, this far apart. 0 = DERIVE from each slice's own length at the current
+    /// tempo, which reproduces the break as recorded; an explicit step re-fits it to a grid.
+    pub step_nanoticks: u64,
+    pub column: u8,
+    pub velocity: u8,
+    pub reserved: [u8; 6],
+}
+
+/// RequestSamplerKit (75).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerKitRequestPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub request_seq: u32,
+    pub reserved: [u8; 24],
+}
+
 pub const UI_TRACK_FLAG_COLLAPSED: u8 = 1 << 0;
 /// Set when ui_track_parent_id is meaningful; without it, parent_id 0 is ambiguous
 /// (top-level vs child of track 0).
@@ -244,6 +343,16 @@ pub use crate::sys::{
     daw_UiAudioClip as UiAudioClip, daw_UiAudioSource as UiAudioSource,
     daw_UiAudioSourceRegion as UiAudioSourceRegion, daw_UiWaveformRegion as UiWaveformRegion,
     daw_UiWaveformSlot as UiWaveformSlot,
+};
+
+// v32 sampler kit read-back. ALIASES of the generated structs rather than a hand-written mirror:
+// these live in shared_memory.h, bindgen owns them, and a second hand-maintained copy is exactly
+// the "two facts about one thing" shape — with the added charm that the two would be checked
+// against each other by nobody. (Command payloads, by contrast, come from event_payloads.h which
+// is NOT bindgen'd, so those stay hand-written and are pinned by the wire_layout test instead.)
+pub use crate::sys::{
+    daw_UiSamplerKitRegion as UiSamplerKitRegion, daw_UiSamplerKitSlot as UiSamplerKitSlot,
+    daw_UiSamplerSlotEntry as UiSamplerSlotEntry,
 };
 
 #[repr(C, align(64))]
@@ -346,6 +455,15 @@ pub struct UiClipNote {
     /// on negatives do not both agree with. It took the reserved word, so the struct is
     /// the same 40 bytes and nothing moved.
     pub dev_nanoticks: i32,
+    /// v32: THE SOUND ADDRESS. Which slot of the track's sampler this note plays. 0 = the keymap
+    /// picks it from pitch, which on an ordinary kit track is EVERY ROW — so draw 0 as empty
+    /// rather than as a literal zero. That sparseness is exactly why there is no permanent ops
+    /// column (SAMPLER_DESIGN R5).
+    pub sound: u16,
+    /// v32: the 9xx seek, as a FRACTION of the slot's extent (0..65535) rather than absolute
+    /// frames. Absolute breaks when the slot's sample is swapped or its slice re-cut.
+    pub sound_offset: u16,
+    pub reserved32: [u8; 4],
 }
 
 pub const UI_CLIP_NOTE_MUTED: u8 = 1 << 0;
@@ -780,6 +898,35 @@ pub enum UiCommandType {
     ForkPlacementClip = 70,
     SwapPlacementClip = 71,
     ClearPlacementAlternate = 72,
+
+    /// SAMPLER (SAMPLER_DESIGN S1). Loads an audio file as a new SOURCE and mints a SLOT that
+    /// plays it — the whole "drop a sample, name it from a row, hear it" line. Carries
+    /// UiSamplerLoadPayload, not the generic one.
+    SamplerLoad = 73,
+
+    /// Edits ONE FIELD of one sampler slot (SamplerSlotField + a signed value). One field at a
+    /// time rather than a whole-slot payload: a whole slot does not fit 40 bytes, and it would
+    /// make every edit a read-modify-write, so two callers touching different fields would
+    /// clobber each other with stale copies of the rest.
+    SamplerSetSlot = 74,
+
+    /// Asks the engine to publish one sampler device's kit into a `UiSamplerKitSlot`.
+    RequestSamplerKit = 75,
+
+    /// Slices a source: transient detection, equal division, or clear. Mints STABLE marker ids —
+    /// an insert never renumbers an existing one, which is what lets a chop be re-cut while it
+    /// plays (SAMPLER_DESIGN §5.1).
+    SamplerSlice = 76,
+
+    /// Adds, moves or removes ONE slice marker. The one that matters live: dragging a boundary
+    /// changes what a slice PLAYS without touching what any row SAYS.
+    SamplerMarker = 77,
+
+    /// Writes the PATTERN that reproduces a chop: one row per slice, each naming its slice by ID.
+    /// Octatrack's CREATE LINEAR LOCKS and Bitwig's slice-to-drum-machine clip as one command —
+    /// with the difference that matters: re-cutting afterwards moves what the rows PLAY without
+    /// moving what they SAY. Bitwig emits its clip once, one-way.
+    SamplerEmitRows = 78,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -1357,6 +1504,67 @@ pub const TRACK_ROUTE_TRACK: u8 = 2;
 pub const TRACK_ROUTE_EXTERNAL_INPUT: u8 = 3;
 
 #[repr(C)]
+/// SAMPLER LOAD (opcode 73). Mirrors apps/event_payloads.h UiSamplerLoadPayload exactly —
+/// 40 bytes, the whole command payload. `name` is a PROJECT-RELATIVE file name rather than a
+/// path: that is the module model (SAMPLER_DESIGN R3), not merely a size constraint. A project
+/// that refers to a sample by absolute path stops playing the moment you send it to someone.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiSamplerLoadPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub root_key: u8,
+    pub reserved: [u8; 3],
+    pub name: [u8; 24],
+}
+
+/// keyLow == keyHigh == rootKey: how a drum stays a drum across the keyboard. Clear it for a
+/// playable zone. There is no mapping-MODE stored anywhere — this chooses which KEYS to write.
+pub const SAMPLER_LOAD_FIXED_PITCH: u16 = 1 << 0;
+
+/// Mirrors apps/event_payloads.h UiSamplerSetSlotPayload. `value` is SIGNED: gain, pan, tune and
+/// pitch-track all take negative values as normal settings.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerSetSlotPayload {
+    pub command_type: u16,
+    pub field: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub slot_id: u32,
+    pub value: i32,
+    pub reserved: [u8; 20],
+}
+
+/// Which slot field SamplerSetSlot writes. NAMED rather than an index into the struct, so adding
+/// a field never renumbers an existing one — a renumbered selector would silently write the
+/// wrong field on a saved macro or an agent's script.
+pub const SAMPLER_SLOT_FIELDS: &[(&str, u16)] = &[
+    ("voice-group", 0),
+    ("nna", 1),
+    ("gate", 2),
+    ("reverse", 3),
+    ("gain-mb", 4),
+    ("pan", 5),
+    ("tune-cents", 6),
+    ("pitch-track", 7),
+    ("root", 8),
+    ("key-low", 9),
+    ("key-high", 10),
+    ("vel-low", 11),
+    ("vel-high", 12),
+    ("select-mode", 13),
+    ("polyphony", 14),
+    ("choke-fade-us", 15),
+    ("mod-set", 16),
+    ("stem", 17),
+    ("quality", 18),
+    ("layer-group", 19),
+];
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UiChainCommandPayload {
     pub command_type: u16,
@@ -1583,7 +1791,10 @@ mod tests {
         // Widened for the authored EventId; the C++ side static_asserts the
         // same size, so a mismatch fails at compile time on one end and here
         // on the other.
-        const_assert_eq!(size_of::<UiClipNote>(), 40);
+        // v32: 40 -> 48 for the sampler's sound address (`sound` + `sound_offset`).
+        // Append-only, so no existing offset moved — the assertions below are the
+        // proof of that and must keep passing rather than being renumbered.
+        const_assert_eq!(size_of::<UiClipNote>(), 48);
         // Named commands are transmuted into a UiCommandPayload slot; see
         // UiPatcherPresetCommandPayload::as_command.
         const_assert_eq!(size_of::<UiCommandPayload>(), 40);
@@ -1752,5 +1963,86 @@ mod tests {
             size_of::<UiAutomationSlotRegion>(),
             64 + K_UI_AUTOMATION_SLOTS * size_of::<UiAutomationSlot>()
         );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE WIRE-LAYOUT GUARD.
+//
+// Every struct in this file mirrors a C++ struct that the engine memcpy's out of a shared-memory
+// ring. That correspondence rests entirely on `#[repr(C)]`, and LOSING IT IS SILENT: Rust is free
+// to reorder the fields of a default-repr struct, so the code still compiles, the CLI still
+// prints "sent", and the engine reads whatever landed at offset 0.
+//
+// That is not hypothetical. `UiChainCommandPayload` lost its `#[repr(C)]` to a careless insertion
+// above it, and every add-device command arrived at the engine with commandType 0 — silently
+// ignored, no error anywhere, and the first hypothesis was that add-device had been broken for
+// some time. It had been broken for four minutes.
+//
+// So: assert the property the engine actually depends on. Not the size — a reordered struct can
+// keep its size — but that `command_type` is the FIRST field, since that is the byte the engine
+// dispatches on (`handleUiEntry` reads a UiCommandPayload header out of every entry regardless of
+// which payload it really is).
+#[cfg(test)]
+mod wire_layout {
+    use super::*;
+
+    macro_rules! command_type_first {
+        ($($t:ty),+ $(,)?) => {
+            $(
+                assert_eq!(
+                    std::mem::offset_of!($t, command_type), 0,
+                    concat!(stringify!($t),
+                            "::command_type is not at offset 0 — the struct has lost #[repr(C)] \
+                             and Rust has reordered it. The engine dispatches on the first two \
+                             bytes of every command payload, so this one will arrive as \
+                             commandType 0 and be silently ignored.")
+                );
+            )+
+        };
+    }
+
+    #[test]
+    fn command_type_is_always_the_first_field() {
+        command_type_first!(
+            UiCommandPayload,
+            UiChainCommandPayload,
+            UiChordCommandPayload,
+            UiClipWindowCommandPayload,
+            UiPatcherGraphCommandPayload,
+            UiPatcherNodeConfigPayload,
+            UiPatcherPresetCommandPayload,
+            UiSetParamPayload,
+            UiWaveformRequestPayload,
+            UiTrackRoutingPayload,
+            UiModLinkCommandPayload,
+            UiModLinkUid16Payload,
+            UiModSourceValuePayload,
+            UiAutomationPointPayload,
+            UiAutomationLaneRequestPayload,
+            UiMarkerCommandPayload,
+            UiArrangeTimeCommandPayload,
+            UiSamplerLoadPayload,
+            UiSamplerSetSlotPayload,
+            UiSamplerKitRequestPayload,
+            UiSamplerSlicePayload,
+            UiSamplerMarkerPayload,
+            UiSamplerEmitRowsPayload,
+        );
+    }
+
+    // The engine dispatches by SIZE as well as by commandType, so a payload whose size drifts
+    // from its C++ twin is never dispatched at all. These numbers are the C++ static_asserts.
+    #[test]
+    fn command_payload_sizes_match_the_engine() {
+        assert_eq!(std::mem::size_of::<UiCommandPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiChainCommandPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerLoadPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerSetSlotPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerKitRequestPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerSlicePayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerMarkerPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerEmitRowsPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 32);
     }
 }

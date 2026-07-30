@@ -2472,6 +2472,28 @@ const ENGINE_UNUSED = {
    * override is visible.
    */
   RevertPlacementOverrides: 'gap — no way to send a placement back to its shared clip',
+  /*
+   * THE SAMPLER (73, 74, 75, and the slice/marker/emit trio), landed across S1-S5 while this
+   * side was designing how per-note ops draw. Recorded as one gap with one reason rather than
+   * six, because they are one feature and half of them is not useful.
+   *
+   * The reason is the same one that held sections back, and it is not "no time": a sampler
+   * reachable only by console verb is a sampler you can only verify by saving the file and
+   * reading it. What makes it worth having is the KIT — seeing which slot a pad is, which
+   * slice a marker cut, and dragging that marker while it plays. `RequestSamplerKit` is the
+   * read-back that makes any of that drawable, so it is the one to wire first, and the
+   * commands follow the surface rather than leading it.
+   *
+   * What is NOT blocked, and is being built now: the per-note ops that ADDRESS the sampler.
+   * `s` (sound slot) and `o` (offset) are row ops on UiClipNote, not sampler commands — they
+   * ride the clip-edit path that already exists, which is why they land before the kit does.
+   */
+  SamplerLoad: 'gap — the sampler wants its kit drawn before its commands are reachable',
+  SamplerSetSlot: 'gap — with SamplerLoad',
+  RequestSamplerKit: 'gap — the read-back to wire FIRST; it is what makes a kit drawable',
+  SamplerSlice: 'gap — with SamplerLoad; slicing wants markers on a waveform, not a verb',
+  SamplerMarker: 'gap — with SamplerSlice',
+  SamplerEmitRows: 'gap — with SamplerSlice; emits a chop into the pattern',
 };
 
 test('every engine command has a caller, or a recorded reason it has none', async () => {

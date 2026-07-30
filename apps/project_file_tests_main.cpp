@@ -897,6 +897,219 @@ int main(int argc, char** argv) {
     }
   }
 
+  // ---- THE SAMPLER SURVIVES A SAVE AND A RELOAD, AND THE FIXTURE IS *EDITED*.
+  //
+  // Every field below is set AWAY from its default on purpose. A default-constructed state
+  // round-trips perfectly through a serializer that writes nothing at all, which is the shape of
+  // test this repo has shipped before and now checks for deliberately (tools/
+  // edited_roundtrip_check.sh exists for exactly this reason). If a field is dropped from the
+  // writer or the reader, one of these comparisons fails.
+  {
+    daw::ProjectDocument doc;
+    doc.nanoticksPerQuarter = 960000;
+    doc.tempoMap.push_back({0, 120.0});
+    daw::ProjectTrack track;
+    track.trackId = 0;
+    track.name = "S";
+
+    daw::Device dev;
+    dev.id = 1;
+    dev.kind = daw::DeviceKind::Sampler;
+    dev.hasSampler = true;
+    daw::SamplerState& st = dev.sampler;
+    st.nextSlotId = 9;
+    st.nextSourceId = 4;
+    st.nextModSetId = 3;
+    st.stemCount = 5;
+    st.voiceCap = 31;
+    st.defaultView = 1;
+    st.sources.push_back({2, "samples/amen.wav", 0xDEADBEEFCAFEull, 0});
+    st.sources.push_back({3, "samples/kick.wav", 7ull, 0});
+
+    daw::SliceSet ss;
+    ss.sourceLocalId = 2;
+    ss.nextMarkerId = 5;
+    ss.markers.push_back({1, 1000, -37, 1, 2});
+    ss.markers.push_back({4, 90210, 12, 0, 0});
+    st.sliceSets.push_back(ss);
+
+    daw::SamplerModSet ms;
+    ms.id = 2;
+    ms.name = "bright";
+    ms.filterType = 3;
+    ms.cutoffMilli = 640;
+    ms.resonanceMilli = 210;
+    ms.nextModulatorId = 7;
+    daw::SamplerModulator mod;
+    mod.id = 6;
+    mod.target = daw::ModTarget::Cutoff;
+    mod.kind = daw::ModKind::Envelope;
+    mod.depthMilli = -750;  // SIGNED and negative: an envelope that closes a filter
+    mod.apply = 1;
+    mod.rateMilli = 2500;
+    mod.timeBase = 1;
+    mod.editor = 1;
+    mod.env.points = {{0, -1000, -40, 0}, {1234, 900, 25, daw::kEnvPointStep}, {5678, 0, 0, 0}};
+    mod.env.sustainLoopStart = 1;
+    mod.env.sustainLoopEnd = 2;
+    mod.env.releaseLoopStart = daw::kEnvLoopNone;
+    mod.env.releaseLoopEnd = daw::kEnvLoopNone;
+    mod.env.loopMode = daw::kEnvLoopPingPong;
+    mod.env.releaseFade = 0;
+    mod.lfo.frequency_hz = 3.5f;
+    mod.lfo.depth = 0.25f;
+    mod.lfo.bias = -0.5f;
+    mod.lfo.phase_offset = 0.75f;
+    ms.modulators.push_back(mod);
+    st.modSets.push_back(ms);
+
+    daw::SamplerSlot slot;
+    slot.id = 8;
+    slot.name = "amen.05";
+    slot.sourceLocalId = 2;
+    slot.sliceId = 4;
+    slot.startFrame = 111;
+    slot.endFrame = 222;
+    slot.loopStartFrame = 130;
+    slot.loopEndFrame = 200;
+    slot.loopXfadeFrames = 256;
+    slot.loopMode = 3;  // backward
+    slot.sustainLoop = 1;
+    slot.keyLow = 24;
+    slot.keyHigh = 96;
+    slot.rootKey = 48;
+    slot.pitchTrackMilli = -500;  // signed
+    slot.tuneCents = -1200;       // signed
+    slot.velLow = 20;
+    slot.velHigh = 110;
+    slot.layerGroup = 3;
+    slot.selectMode = 2;
+    slot.gate = 1;
+    slot.reverse = 1;
+    slot.gainMillibels = -640;    // signed
+    slot.panThousandths = -333;   // signed
+    slot.voiceGroup = 4;
+    slot.nna = daw::SamplerNna::Continue;
+    slot.polyphony = 7;
+    slot.chokeFadeUs = 12345;
+    slot.modSetId = 2;
+    slot.outputStem = 6;
+    slot.quality = 2;
+    st.slots.push_back(slot);
+
+    track.chain.devices.push_back(dev);
+    doc.tracks.push_back(track);
+
+    const std::string path = "/tmp/daw_sampler_roundtrip.uniproj.json";
+    require(daw::saveProject(doc, path), "sampler round trip: save failed");
+
+    daw::ProjectDocument back;
+    require(daw::loadProject(back, path), "sampler round trip: load failed");
+    require(!back.tracks.empty() && !back.tracks[0].chain.devices.empty(),
+            "sampler round trip: the device is gone");
+    if (!back.tracks.empty() && !back.tracks[0].chain.devices.empty()) {
+      const daw::Device& d2 = back.tracks[0].chain.devices[0];
+      require(d2.kind == daw::DeviceKind::Sampler,
+              "sampler round trip: the device kind did not survive");
+      require(d2.hasSampler, "sampler round trip: hasSampler did not survive");
+      const daw::SamplerState& s2 = d2.sampler;
+
+      require(s2.nextSlotId == 9 && s2.nextSourceId == 4 && s2.nextModSetId == 3,
+              "sampler round trip: the id counters did not survive -- reusing an id is how a "
+              "note ends up pointing at a different sound");
+      require(s2.stemCount == 5 && s2.voiceCap == 31 && s2.defaultView == 1,
+              "sampler round trip: the device-level settings did not survive");
+
+      require(s2.sources.size() == 2, "sampler round trip: sources lost");
+      require(!s2.sources.empty() && s2.sources[0].localId == 2 &&
+                  s2.sources[0].path == "samples/amen.wav" &&
+                  s2.sources[0].contentKey == 0xDEADBEEFCAFEull,
+              "sampler round trip: a source's identity, path or content key was lost");
+
+      require(s2.sliceSets.size() == 1 && s2.sliceSets[0].markers.size() == 2,
+              "sampler round trip: slice markers lost");
+      if (s2.sliceSets.size() == 1 && s2.sliceSets[0].markers.size() == 2) {
+        require(s2.sliceSets[0].nextMarkerId == 5,
+                "sampler round trip: the marker id counter was lost -- reusing a marker id "
+                "silently re-points every note that named the old one");
+        require(s2.sliceSets[0].markers[0].id == 1 && s2.sliceSets[0].markers[0].frame == 1000 &&
+                    s2.sliceSets[0].markers[0].tuneCents == -37,
+                "sampler round trip: a marker's NEGATIVE tune did not survive -- the euclidean "
+                "config's octave_offset went through unsigned and -1 became 4294967295, so this "
+                "is checked rather than assumed");
+      }
+
+      require(s2.modSets.size() == 1, "sampler round trip: mod sets lost");
+      if (s2.modSets.size() == 1) {
+        const daw::SamplerModSet& m2 = s2.modSets[0];
+        require(m2.id == 2 && m2.name == "bright" && m2.filterType == 3 &&
+                    m2.cutoffMilli == 640 && m2.resonanceMilli == 210 && m2.nextModulatorId == 7,
+                "sampler round trip: mod set fields lost");
+        require(m2.modulators.size() == 1, "sampler round trip: modulators lost");
+        if (m2.modulators.size() == 1) {
+          const daw::SamplerModulator& o = m2.modulators[0];
+          require(o.id == 6 && o.target == daw::ModTarget::Cutoff &&
+                      o.kind == daw::ModKind::Envelope,
+                  "sampler round trip: modulator identity/target/kind lost");
+          require(o.depthMilli == -750,
+                  "sampler round trip: a NEGATIVE modulator depth did not survive -- an envelope "
+                  "that closes a filter rather than opening it is a normal setting");
+          require(o.apply == 1 && o.rateMilli == 2500 && o.timeBase == 1 && o.editor == 1,
+                  "sampler round trip: modulator apply/rate/timeBase/editor lost");
+          require(o.env.points.size() == 3, "sampler round trip: envelope points lost");
+          if (o.env.points.size() == 3) {
+            require(o.env.points[0].valueMilli == -1000 && o.env.points[0].tension == -40,
+                    "sampler round trip: a negative envelope value or tension was lost");
+            require(o.env.points[1].flags == daw::kEnvPointStep,
+                    "sampler round trip: the STEP flag was lost -- a stepped shape would come "
+                    "back interpolated, which is a different sound");
+            require(o.env.points[1].time == 1234 && o.env.points[1].valueMilli == 900 &&
+                        o.env.points[1].tension == 25,
+                    "sampler round trip: envelope point values lost");
+          }
+          require(o.env.sustainLoopStart == 1 && o.env.sustainLoopEnd == 2,
+                  "sampler round trip: the sustain loop was lost");
+          require(o.env.releaseLoopStart == daw::kEnvLoopNone,
+                  "sampler round trip: the release-loop SENTINEL did not survive -- 0xFF must "
+                  "come back as 0xFF and not as 0, which is a legal point index");
+          require(o.env.loopMode == daw::kEnvLoopPingPong,
+                  "sampler round trip: the loop mode was lost");
+          require(o.lfo.frequency_hz > 3.4f && o.lfo.frequency_hz < 3.6f &&
+                      o.lfo.bias < -0.4f && o.lfo.bias > -0.6f,
+                  "sampler round trip: LFO config lost (including its NEGATIVE bias)");
+        }
+      }
+
+      require(s2.slots.size() == 1, "sampler round trip: slots lost");
+      if (s2.slots.size() == 1) {
+        const daw::SamplerSlot& t = s2.slots[0];
+        require(t.id == 8 && t.name == "amen.05", "sampler round trip: slot identity lost");
+        require(t.sourceLocalId == 2 && t.sliceId == 4,
+                "sampler round trip: the slot's source/slice reference was lost");
+        require(t.startFrame == 111 && t.endFrame == 222 && t.loopStartFrame == 130 &&
+                    t.loopEndFrame == 200 && t.loopXfadeFrames == 256,
+                "sampler round trip: slot frame extents lost");
+        require(t.loopMode == 3 && t.sustainLoop == 1,
+                "sampler round trip: the BACKWARD loop mode was lost -- backward silently "
+                "becoming forward is the exact failure this repo keeps deleting");
+        require(t.keyLow == 24 && t.keyHigh == 96 && t.rootKey == 48,
+                "sampler round trip: the keymap zone was lost");
+        require(t.pitchTrackMilli == -500 && t.tuneCents == -1200 && t.gainMillibels == -640 &&
+                    t.panThousandths == -333,
+                "sampler round trip: one of the four SIGNED slot fields came back wrong");
+        require(t.velLow == 20 && t.velHigh == 110 && t.layerGroup == 3 && t.selectMode == 2,
+                "sampler round trip: velocity layering lost");
+        require(t.gate == 1 && t.reverse == 1 && t.voiceGroup == 4 &&
+                    t.nna == daw::SamplerNna::Continue,
+                "sampler round trip: gate/reverse/voiceGroup/NNA lost -- NNA=Continue coming "
+                "back as Cut would silently truncate every ringing note");
+        require(t.polyphony == 7 && t.chokeFadeUs == 12345 && t.modSetId == 2 &&
+                    t.outputStem == 6 && t.quality == 2,
+                "sampler round trip: the remaining slot fields were lost");
+      }
+    }
+  }
+
   if (failures != 0) {
     std::cerr << "project_file_tests_main: " << failures << " failure(s)" << std::endl;
     return 1;

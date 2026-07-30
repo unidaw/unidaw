@@ -64,7 +64,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 const WIRE_LANES: usize = 16;
 
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 22;
+const WIRE_VERSION: u16 = 23;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -79,8 +79,13 @@ const HEADER_BYTES: usize = 56;
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
 const FULL_HEADER_BYTES: usize = 180;
-#[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
-const NOTE_BYTES: usize = 40;
+/// Bytes per note on the BROWSER wire — `NOTE_BYTES` in ui-web/src/wire.js.
+///
+/// NOT the engine's `UiClipNote` stride, which is 48 at kShmVersion 32 and comes from the typed
+/// struct rather than a constant. This one said 40 while wire.js said 44, was `allow(dead_code)`
+/// and therefore checked by nothing, and documented a layout that had moved on without it — a
+/// comment that lies is worse than no comment. It is asserted against the packer below now.
+const NOTE_BYTES: usize = 48;
 
 /// The client's current viewport. It owns zoom and scroll; we own the
 /// projection, because LaneGrid is the authority on tick<->row and reimplementing
@@ -250,6 +255,12 @@ struct WireNote {
     /// deliberate stride change on both sides.
     placement_id: u8,
     delay_nanoticks: u32,
+    /// v32 THE SOUND ADDRESS: which sampler slot this note plays. 0 = the keymap picks it from
+    /// pitch, which is every row on an ordinary kit track — so a UI draws 0 as EMPTY, not "0".
+    sound: u16,
+    /// v32 the 9xx seek, as a FRACTION of the slot's extent. Absolute frames break when the
+    /// slot's sample is swapped or its slice re-cut; a fraction survives both.
+    sound_offset: u16,
     /// Row index under the client's current grid, computed by LaneGrid here so
     /// the frontend never re-derives the projection.
     row: u32,
@@ -638,6 +649,11 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.extend_from_slice(&p.to_le_bytes());
     }
     for n in &f.notes {
+        // NOTE_BYTES is asserted per note rather than declared and forgotten. It sat at 40 while
+        // the packer wrote 44, `allow(dead_code)`, checked by nothing — the exact shape this
+        // project keeps writing down: an invariant that depends on remembering breaks on the
+        // sixth occasion, so write the check.
+        let note_start = out.len();
         out.extend_from_slice(&n.t_on.to_le_bytes());
         out.extend_from_slice(&n.t_off.to_le_bytes());
         out.extend_from_slice(&n.note_id.to_le_bytes());
@@ -658,6 +674,13 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         // WIRE_VERSION is bumped: a page reading 40 where the sidecar writes 44
         // rejects the frame outright instead of rendering nonsense.
         out.extend_from_slice(&n.dev_nanoticks.to_le_bytes());      // 40, to 44
+        // 44..48, v32. Same bargain as the 40->44 growth above: both sides move together and
+        // WIRE_VERSION goes with them, so a page reading 44 where this writes 48 REJECTS the
+        // frame rather than decoding every extent after the notes as garbage.
+        out.extend_from_slice(&n.sound.to_le_bytes());              // 44
+        out.extend_from_slice(&n.sound_offset.to_le_bytes());       // 46, to 48
+        debug_assert_eq!(out.len() - note_start, NOTE_BYTES,
+                         "note stride drifted from NOTE_BYTES / wire.js");
     }
     // 64 bytes each, matching UiClipExtent. The stride is load-bearing for the
     // aggregates that follow it; widening it without the client is what made
@@ -1094,6 +1117,8 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
                     placement_id: note.placement_id as u8,
                     delay_nanoticks: note.delay_nanoticks,
                     dev_nanoticks: note.dev_nanoticks,
+                    sound: note.sound,
+                    sound_offset: note.sound_offset,
                     row: vp_grid.row_of_tick(note.t_on) as u32,
                 });
             }

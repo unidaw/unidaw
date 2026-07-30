@@ -7,7 +7,7 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 22;
+export const WIRE_VERSION = 23;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
@@ -28,7 +28,7 @@ const MIXER_BYTES = 12;
  * and WIRE_VERSION goes with them, so a mismatched page rejects the frame rather
  * than rendering nonsense.
  */
-const NOTE_BYTES = 44;
+const NOTE_BYTES = 48;
 /** Mirrors daw_bridge::layout::UiClipExtent. */
 const EXTENT_BYTES = 64;
 /** UI_CLIP_EXTENT_AUDIO — the placement is an audio region (schema v3). */
@@ -260,6 +260,7 @@ function note(store, i) {
   if (!n) {
     n = { tOn: 0, tOff: 0, id: 0, pitch: 0, velocity: 0, column: 0, track: 0,
           retrigger: 0, probability: 0, delayTicks: 0, devTicks: 0, row: 0,
+          sound: 0, soundOffset: 0,
           muted: false, isAdd: false, placementId: 0 };
     store.notes[i] = n;
   }
@@ -469,8 +470,22 @@ export function decode(buf, store) {
        * and then adds the delay. One mark, from written to heard.
        */
       n.devTicks = v.getInt32(o + 40, true);
-      // Offsets 30/31 are the note's two spare bytes; the 40-byte stride is
-      // load-bearing for every section after the notes.
+      /*
+       * v32 THE SOUND ADDRESS, and the seek into it.
+       *
+       * `sound` is 0 on every row of an ordinary kit track — the keymap picks the slot from
+       * pitch — so ZERO IS ABSENCE here, exactly as it is for probability and retrigger, and
+       * `rowops.js` already treats a falsy value that way. Drawing "0" would claim the note
+       * addresses slot zero, which is not a slot.
+       *
+       * `soundOffset` is a FRACTION of the slot's extent rather than a frame count: absolute
+       * frames break when the slot's sample is swapped, and a slot can name a slice, so they
+       * break on a re-chop too.
+       */
+      n.sound = v.getUint16(o + 44, true);
+      n.soundOffset = v.getUint16(o + 46, true);
+      // Offsets 30/31 are the note's two spare bytes; the stride is load-bearing
+      // for every section after the notes.
       const pf = v.getUint8(o + 30);
       n.muted = (pf & 1) !== 0;      // still shipped, drawn struck out
       n.isAdd = (pf & 2) !== 0;      // an override add, shown with provenance
