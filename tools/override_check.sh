@@ -137,6 +137,37 @@ AFTER_MUTE="$(count_pitch 0 36)"
         local delete must not reach the clip"
 echo "  local delete: the bass is silenced in chorus 2 only (2 of 3 remain)"
 
+# ---- A LOCAL DELETE ON A LOOP REPEAT. The hat clip is 1 bar across 4, so bars 2-4 of the
+# appearance are ITERATIONS of the same clip note — and the base notes only exist once, at
+# offsets inside the clip. The lookup compared the PLACEMENT-relative tick against those
+# offsets, so a delete anywhere past the first bar matched nothing, muted nothing, and returned
+# without a word. Everything above missed it because the only local DELETE it does is on the
+# bass, whose clip fills its placement exactly and therefore never loops.
+#
+# Deleting the hat in the THIRD iteration mutes that clip note in this appearance — all four
+# iterations, which is what an additive-only override can express (the override belongs to the
+# appearance; within it the note recurs). The point of the assertion is that it does SOMETHING:
+# 4 was the broken answer.
+cli do delete-note --track 1 --local --nanotick $((18 * BAR)) --pitch 42 >/dev/null 2>&1 || true
+sleep 1.2
+LOOPDEL="$(count_pitch 1 42)"
+[ "$LOOPDEL" = "0" ] || \
+  fail "a local delete in the third iteration of a looping clip left $LOOPDEL hat(s) — 4 means
+        the base-note lookup used the placement-relative tick against clip-relative offsets,
+        matched nothing, and silently did nothing"
+grep -q '"event":"local_edit.noop"' "$TMP/engine.log" && \
+  fail "the local delete reported itself as a no-op, so it found no note to mute" || true
+echo "  loop delete: a local delete inside a loop repeat mutes the clip note in this appearance"
+
+# Put it back so the revert assertions below still measure what they were written to measure.
+cli do revert-overrides --track 1 --placement 21 >/dev/null 2>&1 || true
+sleep 1.2
+[ "$(count_pitch 1 42)" = "4" ] || fail "the revert did not restore the base hats"
+cli do note --track 1 --local --nanotick $((18 * BAR + 2 * Q)) --pitch 46 \
+  --duration 60000 >/dev/null 2>&1 || true
+sleep 1.2
+[ "$(count_pitch 1 46)" = "1" ] || fail "could not re-add the local hat for the revert test"
+
 # ---- ONE-CLICK REVERT clears the overrides on one appearance and leaves the clip alone.
 cli do revert-overrides --track 1 --placement 21 >/dev/null 2>&1 || true
 sleep 1.2

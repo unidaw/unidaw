@@ -6645,6 +6645,26 @@ struct TrackRuntime {
       // Overrides are PLACEMENT-RELATIVE, so they survive the placement being moved —
       // that is the difference between "the hat in chorus 3" and "a hat at bar 27".
       const uint64_t rel = nanotick - *target->at;
+      // A CLIP SHORTER THAN ITS PLACEMENT LOOPS, and the base notes only exist once — at
+      // offsets inside the clip. So the base-note lookup below needs the CLIP-relative tick,
+      // not the placement-relative one: with a 1-bar clip across 4 bars, a local delete
+      // anywhere in bars 2-4 compared rel (>= one bar) against every event's offset (< one
+      // bar), matched nothing, muted nothing, and returned false without a word. Adds are
+      // unaffected — they are placement-relative by design, which is what lets an add live
+      // past the clip's length instead of repeating with it.
+      //
+      // Muting by note id silences that clip note in EVERY iteration of this appearance,
+      // which is what the additive-only model can express: the override belongs to the
+      // appearance, and within the appearance the note recurs. Per-iteration muting would
+      // need the mute record to carry an iteration index.
+      uint64_t clipLen = 0;
+      for (const auto& c : runtime->ownedClips) {
+        if (c.id == target->clipId) {
+          clipLen = c.lengthNanoticks;
+          break;
+        }
+      }
+      const uint64_t clipRel = (clipLen > 0 && rel >= clipLen) ? (rel % clipLen) : rel;
       if (deleting) {
         // Deleting an ADD removes it; deleting a BASE note mutes it. Two different
         // records for what looks like one gesture, because the base note is not ours to
@@ -6669,7 +6689,7 @@ struct TrackRuntime {
             }
             for (const auto& e : c.clip.events()) {
               if (e.type != daw::MusicalEventType::Note ||
-                  e.nanotickOffset != rel ||
+                  e.nanotickOffset != clipRel ||
                   e.payload.note.pitch != pitch ||
                   e.payload.note.column != column) {
                 continue;
@@ -6707,6 +6727,15 @@ struct TrackRuntime {
       }
     }
     if (!changed) {
+      // A local edit that found its placement and then changed nothing used to return
+      // silently — which is how the loop-repeat delete above stayed hidden. A gesture that
+      // does nothing is worth one line: the caller cannot otherwise tell it from success.
+      DAW_EVENT("local_edit.noop")
+          .field("track", trackId)
+          .field("nanotick", nanotick)
+          .field("pitch", static_cast<uint32_t>(pitch))
+          .field("op", deleting ? "delete" : "add")
+          .field("reason", deleting ? "no_add_or_base_note_matched" : "duplicate_add");
       return false;
     }
     if (snapshot) {
