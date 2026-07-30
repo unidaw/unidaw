@@ -599,7 +599,7 @@ let arrangeBuf = null;
 // What we last SENT to the mixer. Not the truth any more — the engine publishes
 // gain, pan and mute/solo back (SHM v12), and reconcileMixer drops these entries
 // as it confirms them. See mixermodel.js.
-const mixerState = createMixerState(16);
+const mixerState = createMixerState(64);
 let mixerBuf = null;
 let mixRevision = 0;
 const mixerHost = document.getElementById('mixer');
@@ -4218,7 +4218,8 @@ const _mixerOpts = { tracks: 8, engine: null, mixer: null, mixRevision: 0, chain
 // number is kept here instead. Same for the arrangement below.
 let mixerBufTracks = -1;
 function drawMixer() {
-  const n = Math.min(state.tracks, 16);
+  // Every track gets a strip. The mixer does NOT virtualize — see the note on `drawArrange`.
+  const n = Math.min(state.tracks, MAX_TRACKS);
   if (!mixerBuf || mixerBufTracks !== n) { mixerBufTracks = n; mixerBuf = createMixerBuffer(n); }
   // The scope is driven by the ENGINE's rate, not the draw rate: it samples on
   // every published frame (see onChange) and only paints here. Sampling in draw
@@ -4250,7 +4251,16 @@ const _arrangeOpts = { loop: null, startTick: 0, width: 0, zoomIndex: 0, tracks:
                        clipMarginPx: ARRANGE_CLIP_MARGIN_PX, meter: null };
 let arrangeBufLanes = -1;
 function drawArrange() {
-  const lanes = Math.min(state.tracks, 16);
+  /*
+   * Every track gets a lane.
+   *
+   * Neither this surface nor the mixer virtualizes — only the tracker does — so raising this
+   * from 16 to 64 is a real cost on both, paid per track whether or not it is on screen. It is
+   * raised anyway because the alternative is what was there before: a silent truncation that
+   * showed the first sixteen and said nothing about the rest. A cost that can be measured beats
+   * a lie that cannot be seen; the numbers are in the commit that raised it.
+   */
+  const lanes = Math.min(state.tracks, MAX_TRACKS);
   if (!arrangeBuf || arrangeBufLanes !== lanes) {
     arrangeBufLanes = lanes;
     arrangeBuf = createArrangeBuffer(lanes, 128);
@@ -6606,7 +6616,15 @@ conn = WANTS_ENGINE ? connectEngine({
       for (let t = 0; t < store.trackCount; t++) {
         if ((store.trackFlags[t] & TRACK_FLAG_MASTER) === 0) lanes = t + 1;
       }
-      const n = Math.min(lanes, 16);
+      /*
+       * THE ENGINE'S COUNT, not a UI cap.
+       *
+       * This clamped to 16 for one reason — every surface built a DOM element per track, so the
+       * seventeenth was unaffordable. The tracker virtualizes now, the wire carries 64 lanes,
+       * and `MAX_TRACKS` has said 64 all along; this literal was the thing actually holding the
+       * line, and it held it silently: a project with 20 tracks simply showed 16.
+       */
+      const n = Math.min(lanes, MAX_TRACKS);
       if (state.tracks !== n) {
         state.tracks = n;
         if (state.cursor.track >= n) state.cursor.track = n - 1;

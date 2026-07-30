@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 23;
+export const WIRE_VERSION = 24;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 180;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
+const HEADER_BYTES = 228;  // ...+ lpb 64 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -240,7 +240,7 @@ export function createStore() {
     patcherVersion: -1, patcherDevice: 0, patcherNodes: [], patcherEdges: [],
     /** Per-track lines_per_beat. Needed to render a lane on its own grid AND to
      *  compute the tick a write targets — both halves of the projection. */
-    lpb: new Uint8Array(16),
+    lpb: new Uint8Array(64),
     /** The lines-per-beat the incoming rows are projected in. Part of the note
      *  cache key: zoom moves every row without touching clipVersion or
      *  noteCount, so a cache keyed only on those serves rows from the old grid. */
@@ -300,33 +300,38 @@ export function decode(buf, store) {
   const aggRows = v.getUint32(52, true);
   const aggTracks = v.getUint16(56, true);
   const extentCount = v.getUint16(58, true);
-  // Sixteen lanes' worth, matching what the renderer can draw. This was 8 until
-  // kShmVersion 21 widened the engine's own array to 64: at 8 the lanes past the
-  // eighth silently had NO grid and fell back to the zoom's, which is a wrong grid
-  // that looks like a choice. Every offset below shifted by 8 when it widened —
-  // GUIDELINES 2.3, and the reason the encoder asserts its own header length and a
-  // Rust test reads these literals.
-  for (let i = 0; i < 16; i++) store.lpb[i] = v.getUint8(60 + i);
-  const mixerVersion = v.getUint32(76, true);
-  const mixCount = v.getUint16(80, true);
-  const harmonyCount = v.getUint16(82, true);
-  const nameCount = v.getUint16(84, true);
-  const patcherVersion = v.getUint32(86, true);
-  const patcherDevice = v.getUint32(90, true);
-  const nodeCount = v.getUint16(94, true);
-  const edgeCount = v.getUint16(96, true);
-  store.loopStart = Number(v.getBigUint64(100, true));
-  store.loopEnd = Number(v.getBigUint64(108, true));
-  store.loadSeq = v.getUint32(116, true);
-  store.loadOk = v.getUint32(120, true);
-  store.tempoMilliBpm = v.getUint32(124, true) || 120000;
-  store.tempoPointCount = v.getUint32(128, true);
+  // SIXTY-FOUR lanes' worth — `kUiMaxTracks`, so the wire can carry every track the engine
+  // can hold. This was 8, then 16, and each widening had the same cause: a lane past the end
+  // silently had NO grid and fell back to the zoom's, which is a wrong grid that looks like a
+  // choice. At 16 that was invisible because nothing could make a seventeenth track; the track
+  // cap is what hid it, and the cap is going away.
+  //
+  // Every offset below shifted by 48 when it widened — GUIDELINES 2.3, and the reason the
+  // encoder asserts its own header length and a Rust test reads these literals. The encoder
+  // needs no offset edit at all: it writes the header in order, so growing the array moves
+  // everything after it. Only this side spells offsets out, which is why only this side can
+  // get them wrong.
+  for (let i = 0; i < 64; i++) store.lpb[i] = v.getUint8(60 + i);
+  const mixerVersion = v.getUint32(124, true);
+  const mixCount = v.getUint16(128, true);
+  const harmonyCount = v.getUint16(130, true);
+  const nameCount = v.getUint16(132, true);
+  const patcherVersion = v.getUint32(134, true);
+  const patcherDevice = v.getUint32(138, true);
+  const nodeCount = v.getUint16(142, true);
+  const edgeCount = v.getUint16(144, true);
+  store.loopStart = Number(v.getBigUint64(148, true));
+  store.loopEnd = Number(v.getBigUint64(156, true));
+  store.loadSeq = v.getUint32(164, true);
+  store.loadOk = v.getUint32(168, true);
+  store.tempoMilliBpm = v.getUint32(172, true) || 120000;
+  store.tempoPointCount = v.getUint32(176, true);
   // `|| 4` on both: the sidecar already defaults them, so a zero here means a
   // frame from something older or a field mislaid, and 4/4 is the assumption the
   // whole page made before v19 anyway. A zero denominator would divide by zero in
   // every bar computation downstream of this line.
-  store.songTimeSigNum = v.getUint16(132, true) || 4;
-  store.songTimeSigDen = v.getUint16(134, true) || 4;
+  store.songTimeSigNum = v.getUint16(180, true) || 4;
+  store.songTimeSigDen = v.getUint16(182, true) || 4;
   // The child-track block is LAST in the frame, so its offset is everything else
   // added up. Decoded after the sections it follows — see PARENT_AT below.
 
@@ -441,7 +446,7 @@ export function decode(buf, store) {
    * suite passed over all three because it changed the ZOOM before reading — which
    * moves `rowGrid` and forces the copy for an unrelated reason.
    */
-  const quantizeVersion = v.getUint32(140, true);
+  const quantizeVersion = v.getUint32(188, true);
   if (clipVersion !== store.clipVersion || noteCount !== store.noteCount
       || rowGrid !== store.rowGrid
       || quantizeVersion !== store.quantizeVersion) {
@@ -607,7 +612,7 @@ export function decode(buf, store) {
   {
     const at = AFTER_MIXER + peakCount * 4 + noteCount * NOTE_BYTES
              + extentCount * EXTENT_BYTES + aggN * 8 + store.trackCount * 8;
-    const want = v.getUint16(98, true);
+    const want = v.getUint16(146, true);
     const have = Math.max(0, Math.min(want, (buf.byteLength - at) / CHORD_BYTES | 0));
     while (store.chords.length < have) {
       store.chords.push({ tick: 0, duration: 0, id: 0, track: 0, degree: 0,
@@ -657,7 +662,7 @@ export function decode(buf, store) {
    */
   {
     const at = store.chordsEnd;
-    const want = v.getUint16(136, true);
+    const want = v.getUint16(184, true);
     const have = Math.max(0, Math.min(want, (buf.byteLength - at) / METER_BYTES | 0));
     while (store.meters.length < have) {
       store.meters.push({ track: 0, device: 0, inPeak: 0, outPeak: 0, inRms: 0, outRms: 0 });
@@ -689,7 +694,7 @@ export function decode(buf, store) {
    */
   {
     const at = store.metersEnd;
-    const want = v.getUint16(144, true);
+    const want = v.getUint16(192, true);
     const have = Math.max(0, Math.min(want, (buf.byteLength - at) / QUANTIZE_BYTES | 0));
     while (store.quantize.length < have) {
       store.quantize.push({ track: 0, grid: 0, strength: 0, swing: 0 });
@@ -724,11 +729,11 @@ export function decode(buf, store) {
    */
   {
     const at = store.quantizeEnd;
-    const want = v.getUint16(148, true);
-    const generation = v.getUint32(152, true);
+    const want = v.getUint16(196, true);
+    const generation = v.getUint32(200, true);
     const have = Math.max(0, Math.min(want, (buf.byteLength - at) / MARKER_BYTES | 0));
-    store.songEnd = Number(v.getBigUint64(156, true));
-    store.markersTruncated = v.getUint16(150, true);
+    store.songEnd = Number(v.getBigUint64(204, true));
+    store.markersTruncated = v.getUint16(198, true);
     if (generation !== store.arrangeVersion || have !== store.markerCount) {
       store.arrangeVersion = generation;
       while (store.markers.length < have) {
@@ -794,10 +799,10 @@ export function decode(buf, store) {
    */
   {
     const at = store.markersEnd;
-    const want = v.getUint16(172, true);
-    const version = v.getUint32(176, true);
+    const want = v.getUint16(220, true);
+    const version = v.getUint32(224, true);
     const have = Math.max(0, Math.min(want, (buf.byteLength - at) / AUTOMATION_BYTES | 0));
-    store.automationTruncated = v.getUint16(174, true);
+    store.automationTruncated = v.getUint16(222, true);
     if (version !== store.automationVersion || have !== store.automationCount) {
       store.automationVersion = version;
       while (store.automation.length < have) {

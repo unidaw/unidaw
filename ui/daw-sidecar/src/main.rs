@@ -61,10 +61,16 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 /// reached the browser, so they could not be seen, edited or played from the
 /// tracker. No fixture has more than six tracks, which is exactly why nothing
 /// caught it: the ninth track a person adds is where it starts.
-const WIRE_LANES: usize = 16;
+/// Sixty-four — `kUiMaxTracks`, so the wire carries every track the engine can hold.
+///
+/// Was 8, then 16. Each widening had the same cause and the same symptom: a lane past the end
+/// had no grid on the client and silently fell back to the zoom's, which is a wrong grid that
+/// looks like a choice. At 16 it was invisible because the UI capped tracks at 16 — the cap was
+/// hiding the truncation, and the cap is what this change removes.
+const WIRE_LANES: usize = 64;
 
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 23;
+const WIRE_VERSION: u16 = 24;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -78,7 +84,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 180;
+const FULL_HEADER_BYTES: usize = 228;
 /// Bytes per note on the BROWSER wire — `NOTE_BYTES` in ui-web/src/wire.js.
 ///
 /// NOT the engine's `UiClipNote` stride, which is 48 at kShmVersion 32 and comes from the typed
@@ -281,7 +287,6 @@ struct WireNote {
     dev_nanoticks: i32,
 }
 
-#[derive(Default)]
 struct Frame {
     version: u64,
     seq: u64,
@@ -318,6 +323,10 @@ struct Frame {
      * TIED TO THE RENDERER'S LANE CAP. Widen the cap and this widens with it, or
      * the same silence comes back one lane further out.
      */
+    /// `#[serde]`-free, but note the `#[derive(Default)]` on Frame cannot cover this: Rust
+    /// implements Default for `[T; N]` only up to N = 32, and this is 64. Hence the attribute
+    /// below, which defaults it by function instead.
+    #[allow(dead_code)]
     lpb: [u8; WIRE_LANES],
     /// A track's CHORDS, which the engine has always published and this side has
     /// never forwarded.
@@ -478,6 +487,67 @@ struct Frame {
     patcher_edges: Vec<(u32, u32, u32, u32, u8)>,
     /// Scratch, reused so the aggregation path allocates nothing per frame.
     ev: Vec<(u64, u8)>,
+}
+
+impl Default for Frame {
+  /// Hand-written because `[u8; 64]` has no `Default` — Rust stops deriving it for
+  /// arrays at 32 elements, and the lane block is 64 now (`kUiMaxTracks`).
+  fn default() -> Self {
+    Self {
+      version: Default::default(),
+      seq: Default::default(),
+      playhead_nanotick: Default::default(),
+      visual_sample: Default::default(),
+      transport: Default::default(),
+      track_count: Default::default(),
+      clip_version: Default::default(),
+      harmony_version: Default::default(),
+      window_start: Default::default(),
+      window_end: Default::default(),
+      peaks: Default::default(),
+      notes: Default::default(),
+      aggs: Default::default(),
+      agg_rows: Default::default(),
+      agg_tracks: Default::default(),
+      lpb: [0; WIRE_LANES],
+      chords: Default::default(),
+      meters: Default::default(),
+      quantize: Default::default(),
+      quantize_version: Default::default(),
+      markers: Default::default(),
+      arrange_version: Default::default(),
+      markers_truncated: Default::default(),
+      song_end_tick: Default::default(),
+      block_size: Default::default(),
+      sample_rate_hz: Default::default(),
+      automation: Default::default(),
+      automation_version: Default::default(),
+      automation_truncated: Default::default(),
+      extents: Default::default(),
+      notes_grid: Default::default(),
+      stale: Default::default(),
+      mixer: Default::default(),
+      mixer_version: Default::default(),
+      loop_start: Default::default(),
+      loop_end: Default::default(),
+      load_seq: Default::default(),
+      load_ok: Default::default(),
+      tempo_milli_bpm: Default::default(),
+      tempo_point_count: Default::default(),
+      song_time_sig_num: Default::default(),
+      song_time_sig_den: Default::default(),
+      track_parent: Default::default(),
+      harmony: Default::default(),
+      harmony_read_at: Default::default(),
+      harmony_ever_read: Default::default(),
+      names: Default::default(),
+      patcher_version: Default::default(),
+      patcher_device: Default::default(),
+      patcher_nodes: Default::default(),
+      patcher_edges: Default::default(),
+      ev: Default::default(),
+    }
+  }
 }
 
 fn encode(f: &Frame, out: &mut Vec<u8>) {

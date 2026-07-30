@@ -923,8 +923,10 @@ test('a bad argument is refused by name, not coerced', () => {
   // number or a NaN and the command carried on with it.
   assert.equal(checkArgs('gain', cmds.gain, ['0', '400']),
                'gain: <dB> must be between -96 and 12, got 400');
-  assert.equal(checkArgs('gain', cmds.gain, ['16', '0']),
-               'gain: <track> must be between 0 and 15, got 16',
+  // 64 is one past `kUiMaxTracks`, which is what the bound means now — it was 16 while the
+  // mixer had sixteen strips and the track-count intake clamped there.
+  assert.equal(checkArgs('gain', cmds.gain, ['64', '0']),
+               'gain: <track> must be between 0 and 63, got 64',
                'sixteen strips exist; the seventeenth threw a TypeError about undefined');
   assert.equal(checkArgs('note', cmds.note, ['60.5']),
                'note: <pitch> must be a whole number, got "60.5"');
@@ -938,7 +940,7 @@ test('a bad argument is refused by name, not coerced', () => {
   assert.equal(checkArgs('follow', cmds.follow, ['of']),
                'follow: "of" is not one of on, off', 'anything but "off" used to mean on');
   // And the ones that were always fine still are.
-  assert.equal(checkArgs('gain', cmds.gain, ['15', '-96']), null);
+  assert.equal(checkArgs('gain', cmds.gain, ['63', '-96']), null);
   assert.equal(checkArgs('note', cmds.note, ['127', '480000', '100']), null);
   assert.equal(checkArgs('tempo', cmds.tempo, ['128.5']), null, 'a decimal bpm');
   assert.equal(checkArgs('transpose', cmds.transpose, ['-12']), null, 'a signed field');

@@ -52,11 +52,13 @@ const NONE = Object.freeze([]);
 const ON_OFF = Object.freeze({ name: 'on|off', type: 'enum', values: ['on', 'off'],
                                optional: true });
 
-// Sixteen mixer strips exist (`createMixerState(16)` in index.html), and the
-// tracker's cursor is clamped to the same count. `gain 16 0` indexed past the
-// end of that array and reported "Cannot read properties of undefined", which
-// names nothing the person typed.
-const MAX_TRACK = 15;
+// `kUiMaxTracks` is 64 and `MAX_TRACKS` in index.html has said so all along; the mixer strips
+// and the track-count intake were the things actually capping this at 16, and both are 64 now.
+//
+// The bound still matters for the reason it was introduced: `gain 64 0` indexes past the end of
+// the mixer array and reported "Cannot read properties of undefined", which names nothing the
+// person typed. A refusal that says `<track> must be between 0 and 63` does.
+const MAX_TRACK = 63;
 const MIDI_MAX = 127;
 // The wire carries milli-BPM, so anything under a thousandth rounds to a tempo
 // of zero — which the engine refuses, several layers further away from the
