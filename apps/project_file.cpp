@@ -1,5 +1,7 @@
 #include "apps/project_file.h"
 
+#include "apps/sampler_serialize.h"
+
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -8,6 +10,7 @@
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 
+#include "apps/event_log.h"
 #include "apps/patcher_assemble.h"
 #include "apps/patcher_preset.h"
 
@@ -196,6 +199,7 @@ const char* deviceKindToString(DeviceKind kind) {
     case DeviceKind::PatcherAudio: return "patcher_audio";
     case DeviceKind::VstInstrument: return "vst_instrument";
     case DeviceKind::VstEffect: return "vst_effect";
+    case DeviceKind::Sampler: return "sampler";
   }
   return "patcher_event";
 }
@@ -206,6 +210,7 @@ bool deviceKindFromString(const std::string& text, DeviceKind& out) {
   if (text == "patcher_audio") { out = DeviceKind::PatcherAudio; return true; }
   if (text == "vst_instrument") { out = DeviceKind::VstInstrument; return true; }
   if (text == "vst_effect") { out = DeviceKind::VstEffect; return true; }
+  if (text == "sampler") { out = DeviceKind::Sampler; return true; }
   return false;
 }
 
@@ -670,6 +675,11 @@ std::string serializeProject(const ProjectDocument& document) {
         writer.key("uid16", device.vstRef.uid16);
         writer.endChildObject();
       }
+      if (device.hasSampler) {
+        writer.beginChildObject("sampler");
+        daw::writeSamplerState(writer, device.sampler);
+        writer.endChildObject();
+      }
       if (device.hasEuclideanConfig) {
         writer.beginChildObject("euclidean");
         writer.key("steps", static_cast<uint32_t>(device.euclideanConfig.steps));
@@ -998,6 +1008,23 @@ bool deserializeProject(const std::string& json,
             device.vstRef.name = ref->get<std::string>("name", "");
             device.vstRef.path = ref->get<std::string>("path", "");
             device.vstRef.uid16 = ref->get<std::string>("uid16", "");
+          }
+          if (const auto sampler = deviceTree.get_child_optional("sampler")) {
+            device.hasSampler = true;
+            daw::SamplerLoadReport rep;
+            device.sampler = daw::readSamplerState(*sampler, &rep);
+            // Repairs and dangling references are REPORTED, never silently accepted. A slot
+            // pointing at a source that is not in the file would otherwise be re-pointed at
+            // whatever is there and play the WRONG SAMPLE — every structural check still
+            // passing while only the audio is wrong, which is the kHostSlotIndexUnresolved
+            // lesson exactly.
+            if (rep.any()) {
+              DAW_EVENT("project.sampler_repaired")
+                  .field("device", device.id)
+                  .field("envelopes_repaired", rep.envelopesRepaired)
+                  .field("slots_missing_source", rep.slotsWithMissingSource)
+                  .field("slots_missing_mod_set", rep.slotsWithMissingModSet);
+            }
           }
           if (const auto euclid = deviceTree.get_child_optional("euclidean")) {
             device.hasEuclideanConfig = true;
