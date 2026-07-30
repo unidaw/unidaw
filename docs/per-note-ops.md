@@ -237,6 +237,62 @@ defined — and no way for the two to disagree, because there are not two of the
    track header carries the legend (`[SOPRD]`), which is where the eye goes anyway when the
    question is "what does this track do".
 
+### N OP COLUMNS, EACH A GROUP OF UP TO SIX — and why that is the last piece
+
+Jaakko: *"or have multiple op columns like renoise, each with a mask (say, max 6 each)."*
+
+Yes, and it earns its place for a reason beyond width. Renoise does have this — the manual says
+*"There can be up to twelve Note and eight Master FX columns"* — so the affordance is familiar.
+But what N groups actually buy here is **PARTIAL ZOOM**, which a single mask cannot give at any
+width: with one mask per track you expand everything or nothing.
+
+```
+T05 break              [SO] ▾ expanded     [PRD] ▸ collapsed
+row  note  vel  slot  offset   ops
+0000 C-4   112   04   37/256   PRD
+0001 ···    ··   ··       ··   ···
+0002 D#4    96   04      1/3   PR·
+```
+
+You are chopping, so slot and offset are open as values while probability, retrigger and delay
+stay one character each. **Neither group is hidden.** That is the entire difference from
+Renoise, and it is not a small one — see below.
+
+**A column is a GROUP of up to six families, and each group has its own zoom.** Collapsed, it
+renders as a mask of one character per family. Expanded, each slot becomes a value column. Six
+is a readability bound, not a storage one: six characters is a glance, twelve is a word you
+have to read.
+
+**THE DEFAULT MUST BE ZERO CONFIGURATION**, or this becomes the setup step Jaakko does not
+want. One group, holding whatever families that track uses, auto-splitting at six. The slot set
+is still *derived*; grouping is an optional refinement you reach for when you want partial
+zoom, never a prerequisite for typing an op.
+
+### What we must do that Renoise does not
+
+The survey found Renoise's own documented failures, and both are direct consequences of a
+column being a visibility switch rather than a zoom:
+
+> **Hidden = silent, and hidden = invisible.** Hiding a note or effect column stops it playing,
+> with no warning and no indicator that data is hidden. This produces recurring "where did my
+> notes go" threads, an unimplemented 2011 feature request...
+
+> Renoise 3.5 release notes: *"Pattern Editor Pasting: Now automatically enables columns from
+> the clipboard content."* Before 3.5, pasted data could land in hidden sub-columns and
+> silently disappear from view.
+
+So:
+
+1. **Collapsing can never hide or silence anything.** A collapsed group still shows every
+   family it holds, one character each, and playback is untouched. Visibility and existence are
+   different axes here and must never be wired together. This is the single most important
+   invariant in the design, and it is the one Renoise has had open since 2011.
+2. **Tab traverses groups.** Renoise's Tab skips Master FX columns entirely — a complaint from
+   their own long-time tool developers, who call it *"probably the most used shortcut besides
+   arrow keys"*. A group you cannot Tab into is a group you will not use.
+3. **Paste auto-reveals nothing, because nothing is hidden.** The 3.5 bug cannot occur: pasted
+   ops light up in the mask whether or not any group is expanded.
+
 **SCANNING A VALUE — bring one or two forward, on the track being tuned.**
 
 A column exists for exactly one job: comparing a number down 64 rows. You are never tuning six
