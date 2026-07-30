@@ -698,6 +698,11 @@ pub enum UiCommandType {
     ForkPlacementClip = 70,
     SwapPlacementClip = 71,
     ClearPlacementAlternate = 72,
+
+    /// SAMPLER (SAMPLER_DESIGN S1). Loads an audio file as a new SOURCE and mints a SLOT that
+    /// plays it — the whole "drop a sample, name it from a row, hear it" line. Carries
+    /// UiSamplerLoadPayload, not the generic one.
+    SamplerLoad = 73,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -1259,6 +1264,27 @@ pub const TRACK_ROUTE_TRACK: u8 = 2;
 pub const TRACK_ROUTE_EXTERNAL_INPUT: u8 = 3;
 
 #[repr(C)]
+/// SAMPLER LOAD (opcode 73). Mirrors apps/event_payloads.h UiSamplerLoadPayload exactly —
+/// 40 bytes, the whole command payload. `name` is a PROJECT-RELATIVE file name rather than a
+/// path: that is the module model (SAMPLER_DESIGN R3), not merely a size constraint. A project
+/// that refers to a sample by absolute path stops playing the moment you send it to someone.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiSamplerLoadPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub root_key: u8,
+    pub reserved: [u8; 3],
+    pub name: [u8; 24],
+}
+
+/// keyLow == keyHigh == rootKey: how a drum stays a drum across the keyboard. Clear it for a
+/// playable zone. There is no mapping-MODE stored anywhere — this chooses which KEYS to write.
+pub const SAMPLER_LOAD_FIXED_PITCH: u16 = 1 << 0;
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UiChainCommandPayload {
     pub command_type: u16,
@@ -1634,5 +1660,75 @@ mod tests {
             size_of::<UiAutomationSlotRegion>(),
             64 + K_UI_AUTOMATION_SLOTS * size_of::<UiAutomationSlot>()
         );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// THE WIRE-LAYOUT GUARD.
+//
+// Every struct in this file mirrors a C++ struct that the engine memcpy's out of a shared-memory
+// ring. That correspondence rests entirely on `#[repr(C)]`, and LOSING IT IS SILENT: Rust is free
+// to reorder the fields of a default-repr struct, so the code still compiles, the CLI still
+// prints "sent", and the engine reads whatever landed at offset 0.
+//
+// That is not hypothetical. `UiChainCommandPayload` lost its `#[repr(C)]` to a careless insertion
+// above it, and every add-device command arrived at the engine with commandType 0 — silently
+// ignored, no error anywhere, and the first hypothesis was that add-device had been broken for
+// some time. It had been broken for four minutes.
+//
+// So: assert the property the engine actually depends on. Not the size — a reordered struct can
+// keep its size — but that `command_type` is the FIRST field, since that is the byte the engine
+// dispatches on (`handleUiEntry` reads a UiCommandPayload header out of every entry regardless of
+// which payload it really is).
+#[cfg(test)]
+mod wire_layout {
+    use super::*;
+
+    macro_rules! command_type_first {
+        ($($t:ty),+ $(,)?) => {
+            $(
+                assert_eq!(
+                    std::mem::offset_of!($t, command_type), 0,
+                    concat!(stringify!($t),
+                            "::command_type is not at offset 0 — the struct has lost #[repr(C)] \
+                             and Rust has reordered it. The engine dispatches on the first two \
+                             bytes of every command payload, so this one will arrive as \
+                             commandType 0 and be silently ignored.")
+                );
+            )+
+        };
+    }
+
+    #[test]
+    fn command_type_is_always_the_first_field() {
+        command_type_first!(
+            UiCommandPayload,
+            UiChainCommandPayload,
+            UiChordCommandPayload,
+            UiClipWindowCommandPayload,
+            UiPatcherGraphCommandPayload,
+            UiPatcherNodeConfigPayload,
+            UiPatcherPresetCommandPayload,
+            UiSetParamPayload,
+            UiWaveformRequestPayload,
+            UiTrackRoutingPayload,
+            UiModLinkCommandPayload,
+            UiModLinkUid16Payload,
+            UiModSourceValuePayload,
+            UiAutomationPointPayload,
+            UiAutomationLaneRequestPayload,
+            UiMarkerCommandPayload,
+            UiArrangeTimeCommandPayload,
+            UiSamplerLoadPayload,
+        );
+    }
+
+    // The engine dispatches by SIZE as well as by commandType, so a payload whose size drifts
+    // from its C++ twin is never dispatched at all. These numbers are the C++ static_asserts.
+    #[test]
+    fn command_payload_sizes_match_the_engine() {
+        assert_eq!(std::mem::size_of::<UiCommandPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiChainCommandPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerLoadPayload>(), 40);
     }
 }

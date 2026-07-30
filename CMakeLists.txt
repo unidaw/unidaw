@@ -483,6 +483,11 @@ add_test(NAME sampler_check
 )
 set_tests_properties(sampler_check PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_test(NAME sampler_load
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_load_check.sh
+)
+set_tests_properties(sampler_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_determinism
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_determinism_check.sh
 )

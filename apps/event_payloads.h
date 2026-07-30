@@ -213,8 +213,41 @@ enum class UiCommandType : uint16_t {
   /// nothing, which is the right default for the case where the agent was useful.
   ForkPlacementClip = 70,
   SwapPlacementClip = 71,
-  ClearPlacementAlternate = 72,  // next free 73
+  ClearPlacementAlternate = 72,
+
+  /// SAMPLER (docs/SAMPLER_DESIGN.md S1). Loads an audio file into the device as a new SOURCE
+  /// and mints a SLOT that plays it. This is the whole "useful line": drop a sample, name it
+  /// from a row, hear it.
+  ///
+  /// The file is named RELATIVE TO THE PROJECT DIRECTORY, not by absolute path — partly because
+  /// a path does not fit in a 40-byte payload, and mostly because R3 makes the project a MODULE
+  /// with its samples inside it. A project that refers to a sample by absolute path stops
+  /// playing the moment you send it to someone, which is the thing R3 exists to prevent, so the
+  /// command that creates the reference should not be able to express one.
+  SamplerLoad = 73,  // next free 74
 };
+
+// SAMPLER LOAD (opcode 73). Exactly 40 bytes, which is the whole command payload — so `name`
+// gets 24 of them and is a project-relative FILE NAME rather than a path. See the opcode's
+// comment: that is the module model (R3), not just a size constraint.
+//
+// `flags` bit 0 = FIXED PITCH: keyLow == keyHigh == rootKey, which is how a drum stays a drum
+// across the keyboard. Clear it and the slot spans the full range as a playable zone. There is
+// deliberately no mapping-MODE enum anywhere — the mode is derived from the keys (§1), and this
+// flag chooses which keys to write, not a mode to store.
+struct UiSamplerLoadPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerLoad);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint8_t rootKey = 60;
+  uint8_t reserved[3]{};
+  char name[24]{};
+};
+static_assert(sizeof(UiSamplerLoadPayload) == 40,
+              "UiSamplerLoadPayload must fit the command payload exactly");
+
+inline constexpr uint16_t kSamplerLoadFixedPitch = 1u << 0;
 
 // M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
 // (the engine hashes it to the uid16 the wire and the param mirror use) — 16 bytes, which
@@ -369,6 +402,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::ForkPlacementClip: return "fork_placement_clip";
     case UiCommandType::SwapPlacementClip: return "swap_placement_clip";
     case UiCommandType::ClearPlacementAlternate: return "clear_placement_alternate";
+    case UiCommandType::SamplerLoad: return "sampler_load";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";

@@ -9913,6 +9913,100 @@ struct TrackRuntime {
           .field("name", name);
       return;
     }
+    // ---- SAMPLER LOAD (73). Mints a SOURCE and a SLOT that plays it.
+    if (entry.size == sizeof(daw::UiSamplerLoadPayload) &&
+        commandType == daw::UiCommandType::SamplerLoad) {
+      daw::UiSamplerLoadPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      const std::string name(p.name, strnlen(p.name, sizeof(p.name)));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime || name.empty()) {
+        DAW_EVENT("sampler.load_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("reason", name.empty() ? "empty_name" : "no_such_track");
+        return;
+      }
+      uint16_t newSlot = 0, newSource = 0;
+      bool found = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          found = true;
+          d.hasSampler = true;
+          if (d.sampler.modSets.empty()) {
+            d.sampler.modSets.push_back(daw::defaultModSet(1));
+            d.sampler.nextModSetId = 2;
+          }
+          // ONE SOURCE PER FILE. Loading the same file twice reuses the source rather than
+          // decoding it again — two slots pointing at one source is the normal case (a slice
+          // set is exactly that), and a duplicate would double the memory for no benefit.
+          for (const auto& src : d.sampler.sources) {
+            if (src.path == name) {
+              newSource = src.localId;
+              break;
+            }
+          }
+          if (newSource == 0) {
+            daw::SamplerSource src;
+            src.localId = d.sampler.nextSourceId++;
+            src.path = name;
+            d.sampler.sources.push_back(src);
+            newSource = src.localId;
+          }
+          daw::SamplerSlot slot;
+          slot.id = d.sampler.nextSlotId++;
+          slot.name = name;
+          slot.sourceLocalId = newSource;
+          slot.rootKey = p.rootKey;
+          // The mapping is DERIVED from the keys, so this writes keys rather than a mode.
+          if (p.flags & daw::kSamplerLoadFixedPitch) {
+            slot.keyLow = slot.keyHigh = p.rootKey;
+          } else {
+            slot.keyLow = 0;
+            slot.keyHigh = 127;
+          }
+          slot.modSetId = d.sampler.modSets.front().id;
+          d.sampler.slots.push_back(slot);
+          newSlot = slot.id;
+          break;
+        }
+        if (found) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!found) {
+        DAW_EVENT("sampler.load_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("reason", "no_sampler_device");
+        return;
+      }
+      // Whether the FILE resolved is reported by rebuildSamplerRender (sampler.source_missing /
+      // sampler.render_built), so a slot that will be silent says so at load rather than at
+      // playback. The slot is still created either way: a broken reference you can see and fix
+      // beats a command that quietly did nothing.
+      DAW_EVENT("sampler.loaded")
+          .field("track", p.trackId)
+          .field("device", p.deviceId)
+          .field("slot", static_cast<uint32_t>(newSlot))
+          .field("source", static_cast<uint32_t>(newSource))
+          .field("root", static_cast<uint32_t>(p.rootKey))
+          .field("fixed_pitch", (p.flags & daw::kSamplerLoadFixedPitch) ? 1u : 0u)
+          .field("file", name);
+      return;
+    }
+
     if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
         (commandType == daw::UiCommandType::SaveProject ||
          commandType == daw::UiCommandType::LoadProject)) {
@@ -10096,6 +10190,11 @@ struct TrackRuntime {
                                         daw::DeviceCapabilityProcessesAudio);
           case daw::DeviceKind::VstEffect:
             return daw::DeviceCapabilityProcessesAudio;
+          case daw::DeviceKind::Sampler:
+            // Consumes MIDI and produces audio, exactly like a VST instrument — the difference
+            // is WHERE it renders, not what it is.
+            return static_cast<uint8_t>(daw::DeviceCapabilityConsumesMidi |
+                                        daw::DeviceCapabilityProcessesAudio);
         }
         return daw::DeviceCapabilityNone;
       };
@@ -10124,6 +10223,17 @@ struct TrackRuntime {
             device.vstRef.name = entry.name;
             device.vstRef.path = entry.path;
             device.vstRef.uid16 = entry.pluginUid16;
+          }
+          // A NEW SAMPLER ARRIVES ABLE TO MAKE A SOUND. It has one mod set with an amp
+          // envelope whose attack is INSTANT, because the first thing anyone drops on a sampler
+          // is a drum and a 10 ms attack on a kick is a defect you have to go looking for. It
+          // has no slots yet — sampler-load mints those — so it is silent until a sample is
+          // loaded, which is honest rather than surprising.
+          if (device.kind == daw::DeviceKind::Sampler) {
+            device.hasSampler = true;
+            device.sampler = daw::SamplerState{};
+            device.sampler.modSets.push_back(daw::defaultModSet(1));
+            device.sampler.nextModSetId = 2;
           }
           device.bypass = chainPayload.bypass != 0;
           device.capabilityMask = capabilityMaskForKind(device.kind);
@@ -15315,6 +15425,7 @@ struct TrackRuntime {
                   case daw::DeviceKind::PatcherAudio: label = "patcher_audio"; break;
                   case daw::DeviceKind::VstInstrument: label = "vst_instrument"; break;
                   case daw::DeviceKind::VstEffect: label = "vst_effect"; break;
+                  case daw::DeviceKind::Sampler: label = "sampler"; break;
                 }
               }
               if (label) {

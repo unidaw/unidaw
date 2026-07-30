@@ -1083,6 +1083,17 @@ impl EngineHandle {
         )
     }
 
+    /// Load a sample into a sampler device, minting a source and a slot.
+    pub fn send_sampler_load(
+        &self,
+        payload: crate::layout::UiSamplerLoadPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerLoadPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerLoadPayload>(),
+        )
+    }
+
     /// Send a track-routing replace (SetTrackRouting). Same ring as send_command; a
     /// distinct payload shape.
     pub fn send_routing_command(

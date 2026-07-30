@@ -11,7 +11,8 @@ use std::time::{Duration, Instant};
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{
     UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
-    UiCommandType, UiPatcherPresetCommandPayload, UiWaveformRequestPayload, MASTER_TRACK_ID,
+    UiCommandType, UiPatcherPresetCommandPayload, UiSamplerLoadPayload, UiWaveformRequestPayload,
+    MASTER_TRACK_ID, SAMPLER_LOAD_FIXED_PITCH,
 };
 
 const USAGE: &str = "\
@@ -20,6 +21,9 @@ daw-cli — control surface for a running engine
   daw-cli watch                    stream transport state (default)
   daw-cli get transport            transport + versions as JSON
   daw-cli get tracks               per-track state as JSON
+  daw-cli do add-device --track N --kind sampler
+  daw-cli do sampler-load --track N --device D --file NAME [--root 60] [--fixed-pitch]
+                                   load a sample (project-relative name) and mint a slot
   daw-cli get arrangement          the markers (bar AND tick, resolved) + the meter map,
                                    the meter map, and the song end
   daw-cli get notes --track N      that track's notes from the published region
@@ -1890,6 +1894,10 @@ fn main() {
                         "patcher_audio" => Some(2),
                         "vst_instrument" => Some(3),
                         "vst_effect" => Some(4),
+                        // The built-in sampler. A head-of-chain instrument like a VST
+                        // instrument, but rendered in the engine, so a VST effect can follow it
+                        // on the same track.
+                        "sampler" => Some(5),
                         _ => None,
                     };
                     match kind {
@@ -1930,6 +1938,63 @@ fn main() {
                                     eprintln!("daw-cli: {err}");
                                     1
                                 }
+                            }
+                        }
+                    }
+                }
+                Some(&"sampler-load") => {
+                    // --file is a name RELATIVE TO THE PROJECT DIRECTORY, capped at 24 bytes by
+                    // the command payload. Absolute paths are refused rather than truncated: a
+                    // silently shortened path resolves to nothing and the slot is mysteriously
+                    // silent, while a refusal says what to do about it.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let root = flag_u64(&args, "--root", Some(60)).unwrap_or(60) as u8;
+                    let file = args
+                        .iter()
+                        .position(|a| a == "--file")
+                        .and_then(|i| args.get(i + 1))
+                        .cloned()
+                        .unwrap_or_default();
+                    let fixed = args.iter().any(|a| a == "--fixed-pitch");
+                    if file.is_empty() {
+                        eprintln!("daw-cli: sampler-load needs --file <name>");
+                        2
+                    } else if file.starts_with('/') || file.contains("..") {
+                        eprintln!(
+                            "daw-cli: --file is relative to the project directory, not a path \
+                             (a project that names a sample by absolute path stops playing the \
+                             moment you send someone the module)"
+                        );
+                        2
+                    } else if file.len() >= 24 {
+                        eprintln!(
+                            "daw-cli: --file is capped at 23 bytes by the command payload, got {}",
+                            file.len()
+                        );
+                        2
+                    } else {
+                        let mut name = [0u8; 24];
+                        name[..file.len()].copy_from_slice(file.as_bytes());
+                        let payload = UiSamplerLoadPayload {
+                            command_type: UiCommandType::SamplerLoad as u16,
+                            flags: if fixed { SAMPLER_LOAD_FIXED_PITCH } else { 0 },
+                            track_id: track,
+                            device_id: device,
+                            root_key: root,
+                            reserved: [0; 3],
+                            name,
+                        };
+                        match handle.send_sampler_load(payload) {
+                            Ok(()) => {
+                                println!(
+                                    "{{ \"sent\": \"sampler-load\", \"track\": {track}, \"device\": {device}, \"file\": {file:?}, \"root\": {root}, \"fixed_pitch\": {fixed} }}"
+                                );
+                                0
+                            }
+                            Err(err) => {
+                                eprintln!("daw-cli: {err}");
+                                1
                             }
                         }
                     }
