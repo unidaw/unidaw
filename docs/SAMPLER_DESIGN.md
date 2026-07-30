@@ -245,7 +245,7 @@ Note-off ends a `gate = 1` voice (release) and is **ignored** by a one-shot slot
 
 **Not tricky — say so, so the effort goes to the mip-map instead:** AHDSR segment stepping, gain/pan, choke (a table lookup and a ramp, not DSP), and the keymap lookup, which is an O(1) `[128][2]` index table rebuilt on the UI thread at edit time and swapped in by pointer.
 
-**One prerequisite the repo does not have:** `decodeAudioFileMono` (`platform_juce/juce_wrapper.cpp:1771`) downmixes and throws the per-channel buffer away at line 1803. The sampler needs a channel-preserving decode. The pyramid work already proves the decoder reads all channels — it is a ~15 line addition (`decodeAudioFileSource` returning planar channels), not a project.
+**~~One prerequisite the repo does not have:~~ DONE, 2026-07-29.** This section used to say the sampler needed a channel-preserving decode because `decodeAudioFileMono` downmixed and threw the per-channel buffer away. That was fixed while chasing the stereo-clip downmix bug: `decodeAudioFile` (`platform_juce/juce_wrapper.cpp:1771`) now returns planar `DecodedAudio::channels`, and the old name is gone — *"The old name said Mono, and that was the bug."* No prerequisite remains.
 
 ---
 
@@ -282,7 +282,13 @@ No allocation, no locks, no syscalls, no `std::function`, no file I/O, no loggin
 
 `EventEntry.sample_time` is an absolute sample position (`patcher_rust/src/lib.rs:83`), so a note's exact frame is already known by the time anything schedules it. Voices start at their **intra-block offset**, not at the block boundary.
 
-This is worth stating because the alternative is free and wrong. `MidiEvent.sampleOffset` exists (`platform_juce/juce_wrapper.h:13`) and **the engine never populates it** — grep for it across `daw_engine_main.cpp` returns nothing. Notes reaching a *hosted plugin* are therefore quantised to the block boundary: 2.7 ms of jitter at 128 frames, 11 ms at 512. That is a pre-existing limitation of the out-of-process path and not S1's to fix, but it means the `d1/6` delay row op, swing, and humanised timing land **more precisely on the built-in sampler than on any VST**, and the sampler must not throw that away by rendering block-aligned for symmetry with a path that is less accurate than it is.
+This is worth stating because the alternative is free and wrong.
+
+**And the same gap exists on the plugin path, but it is not architectural — it is an unconnected wire.** `MidiEvent.sampleOffset` exists (`platform_juce/juce_wrapper.h:13`) and the host *honours* it: `platform_juce/juce_wrapper.cpp:1011` sets `e.sampleOffset = ev.sampleOffset` on the direct VST3 event path. But **the engine never populates it** — grep across `daw_engine_main.cpp` returns nothing. So every note reaching a hosted plugin is quantised to the block boundary (2.7 ms of jitter at 128 frames, 11 ms at 512) for no reason other than a missing assignment.
+
+That reframes it. It is not a limitation of the out-of-process design to be routed around; it is a cheap fix that improves **every hosted plugin**, and it should be done rather than left as a reason the built-in is better. Filed as its own item, not folded into S1 — the sampler does not depend on it, and a fix that improves all plugins deserves its own check rather than riding in on a device commit.
+
+Until then, `d1/6`, swing and humanised timing land more precisely on the built-in sampler than on any VST, and the sampler must not throw that away by rendering block-aligned for symmetry with a path that is momentarily less accurate than it is.
 
 ### Determinism is a testable property, not an aspiration
 
@@ -413,7 +419,11 @@ The envelope ships in its **final shape** here — `SamplerModulator` with `poin
 
 A second negative control, for the envelope, because a loop that does not loop is inaudible in a short render: draw a 3-point sawtooth on Volume with a sustain loop, hold a note for 8 loop periods, and assert the captured envelope has **8 peaks**. Disable the loop and it must find 1. `tools/perceptual.py` already extracts an amplitude contour.
 
-**S4 — the sound address. ⚠️ CONTRACT BUMP, kShmVersion 31 → 32.** `NotePayload.sound` takes `reserved2` in memory for free, but **`UiClipNote` is exactly 40 bytes with no spare** — `devNanoticks` took the last reserved word (`apps/shared_memory.h:856-875`). Adding `uint16_t sound` grows it to 48 with alignment. That bump must carry, in one move: `UiClipNote.sound`, the `s:` token in `ui/daw-bridge/src/rowop.rs` `OP_SCHEMA`, the `RequestSamplerKit` command + `UiSamplerKitRegion` answer region (same request/answer shape as `RequestAutomationLane`), the Rust layout mirror in `daw-bridge/src/layout.rs`, and the C++ `static_assert`s — **announced on the agent bus before it lands**. Batch the long-deferred row-op display fields (`retrigger`/`probability`/`delay` in the snapshot) into the same bump; they have been waiting for exactly this.
+**S4 — the sound address. ⚠️ CONTRACT BUMP, kShmVersion 31 → 32.** `NotePayload.sound` takes `reserved2` in memory for free, but **`UiClipNote` is exactly 40 bytes with no spare** — `devNanoticks` took the last reserved word (`apps/shared_memory.h:856-875`). Adding `uint16_t sound` grows it to 48 with alignment. That bump must carry, in one move: `UiClipNote.sound`, the `s:` token in `ui/daw-bridge/src/rowop.rs` `OP_SCHEMA`, the `RequestSamplerKit` command + `UiSamplerKitRegion` answer region (same request/answer shape as `RequestAutomationLane`), the Rust layout mirror in `daw-bridge/src/layout.rs`, and the C++ `static_assert`s — **announced on the agent bus before it lands**.
+
+Take the **sample offset** (the `9xx` seek) in the same bump — a second `uint16_t`, and the 40→48 growth pays for both or neither. Store it as a **fraction of the slot's extent**, not as absolute frames: classic `9xx` is `xx × 256` frames, which breaks the moment the slot's sample is swapped, and here a slot can name a *slice*, so absolute breaks on a re-chop too. A `uint16_t` fraction is also finer than `9xx`'s 256-frame steps, since there is no byte budget to serve; the notation can still read in 1/256ths for muscle memory.
+
+~~Batch the long-deferred row-op display fields into the same bump.~~ **Already shipped** — `UiClipNote` carries `retrigger`, `probability` and `devNanoticks` (`apps/shared_memory.h:872-883`) and `apps/ui_snapshot.cpp:57-64` populates them. Only *setting* an op from a command is missing, and that needs a `UiCommandType`, not a `kShmVersion` bump.
 
 **S5 — slicing.** `SliceSet`, stable markers, transient detection with sensitivity, equal-division and manual modes, row-grid snap, `sampler-slice`, `sampler-marker add/move/remove`, `sampler-emit-rows`. Worthless before S4 and excellent after it.
 
