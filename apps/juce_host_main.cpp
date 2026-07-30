@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -139,6 +140,26 @@ int main(int argc, char** argv) {
       scanPaths.push_back("/Library/Audio/Plug-Ins/VST3");
       if (const char* home = std::getenv("HOME")) {
         scanPaths.push_back(std::string(home) + "/Library/Audio/Plug-Ins/VST3");
+      }
+      // AND OUR OWN Identity BUILD. It is the only instrument every machine running this repo
+      // definitely has, and half the fixtures want exactly one deterministic instrument — so a
+      // preset naming "Identity" resolves the same way everywhere instead of matching whatever
+      // that machine's scan happens to hold. On the frontend's machine that was an Elektron
+      // hardware controller, and two of their end-to-end checks failed as "buses 0/0" and "no
+      // parameters", which says nothing about the bus publisher and everything about which
+      // plugin turned up. Suggested by them, and it is the right fix.
+      //
+      // Relative to the binary rather than the working directory: the scanner may be invoked
+      // from anywhere, and a path that only resolves from build/ is a path that silently does
+      // not resolve.
+      for (const char* candidate : {"identity_plugin_artefacts/VST3",
+                                    "build/identity_plugin_artefacts/VST3",
+                                    "../build/identity_plugin_artefacts/VST3"}) {
+        std::error_code ec;
+        if (std::filesystem::exists(candidate, ec)) {
+          scanPaths.push_back(candidate);
+          break;
+        }
       }
     }
     std::cout << "Rescanning plugins..." << std::endl;

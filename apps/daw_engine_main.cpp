@@ -1527,6 +1527,68 @@ int main(int argc, char** argv) {
       ++i;
     }
   }
+
+  // A STALE HOST BINARY IS DETECTED HERE, BEFORE ANY HOST IS SPAWNED.
+  //
+  // This started out just before the threads launch, which is TOO LATE: the tracks are set up
+  // first and that is where hosts are connected, so the engine still died with 'waitForSocket
+  // timed out' and the diagnostic never printed. A check that fires after the thing it explains
+  // has already failed is not a check.
+  //
+  // juce_host_process is a SEPARATE CMake TARGET, so `cmake --build . --target daw_engine` after
+  // a contract change leaves a host compiled against the old layout. What that looked like before
+  // this check: the host fails to appear, the log fills with "connect(...) failed: No such file
+  // or directory", and every symptom points somewhere else — the sockets, the plugin scan, the
+  // read-back you just added. Two of us lost an hour to it on the same day, independently.
+  //
+  // The check is EXACT rather than a heuristic on file times: the host reports the versions it
+  // was compiled against and exits. One fork at startup, and it turns an hour into a line.
+  {
+    const std::string hostExe = [] {
+      if (const char* env = std::getenv("DAW_HOST_BINARY")) {
+        if (env[0] != '\0') {
+          return std::string(env);
+        }
+      }
+      return std::string("./juce_host_process");
+    }();
+    std::string probe;
+    if (FILE* pipe = ::popen((hostExe + " --version 2>/dev/null").c_str(), "r")) {
+      char buf[128];
+      while (std::fgets(buf, sizeof(buf), pipe) != nullptr) {
+        probe += buf;
+      }
+      ::pclose(pipe);
+    }
+    unsigned hostShm = 0, hostControl = 0;
+    const bool parsed =
+        std::sscanf(probe.c_str(), "shm=%u control=%u", &hostShm, &hostControl) == 2;
+    if (!parsed) {
+      // An OLDER host predates --version entirely, which is itself the answer. Not fatal — it
+      // may be a deliberately pinned binary — but it is said out loud rather than discovered.
+      std::cerr << "Engine: WARNING could not read the host binary's contract version ("
+                << hostExe << "). If it fails to start, rebuild ALL targets, not just "
+                   "daw_engine." << std::endl;
+      DAW_EVENT("host.version_unknown").field("binary", hostExe);
+    } else if (hostShm != daw::kShmVersion || hostControl != daw::kControlVersion) {
+      std::cerr << "Engine: REFUSING TO START — the host binary is stale.\n"
+                << "  " << hostExe << " was built against shm=" << hostShm
+                << " control=" << hostControl << "\n"
+                << "  this engine expects              shm=" << daw::kShmVersion
+                << " control=" << daw::kControlVersion << "\n"
+                << "  juce_host_process is a SEPARATE TARGET: build everything, not just "
+                   "daw_engine.\n"
+                << "      cmake --build build -j8" << std::endl;
+      DAW_EVENT("host.version_mismatch")
+          .field("binary", hostExe)
+          .field("host_shm", hostShm)
+          .field("host_control", hostControl)
+          .field("engine_shm", static_cast<uint64_t>(daw::kShmVersion))
+          .field("engine_control", static_cast<uint64_t>(daw::kControlVersion));
+      return 1;
+    }
+  }
+
   // OFFLINE RENDER state, declared here so the producer thread below can capture it.
   const bool offlineRender = !renderName.empty();
   int offlineChannels = 2;  // the master width the pump renders at; set when the mix is wired

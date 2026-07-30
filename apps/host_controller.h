@@ -139,6 +139,12 @@ class HostController {
   BlockMailbox* mailbox_ = nullptr;
   std::shared_ptr<SharedMemoryView> shmView_;
   pid_t hostPid_ = -1;
+  // The socket path THIS controller launched, so a clean shutdown can remove it. Sockets used to
+  // be unlinked only on the NEXT launch, which was harmless when the path was
+  // /tmp/daw_host_track_<n>.sock and every run reused it — and became a leak the moment the paths
+  // were made per-instance, because then every run leaves a new file behind. The frontend agent
+  // found 978 of them.
+  std::string ownedSocketPath_;
 };
 
 }  // namespace daw
