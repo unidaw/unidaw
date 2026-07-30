@@ -47,6 +47,20 @@ const t0 = stack.audioStartedAt;
 const browser = await chromium.launch({ channel: 'chrome' });
 const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
 
+/*
+ * PAGE ERRORS ARE A RESULT, not noise.
+ *
+ * This suite drove a browser and ignored whatever it threw. That is how a readout shipped
+ * raising `ticksPerBeat is not defined` on every frame — a missing import in index.html, which
+ * no unit test can see because none of them run the draw path, and which the suites that DO
+ * listen missed because none of them visited the field that used it.
+ *
+ * A listener is necessary and not sufficient: it only catches what this suite's own path
+ * touches. That is still strictly more than nothing, and it costs two lines.
+ */
+const pageErrors = [];
+page.on('pageerror', (e) => { if (!pageErrors.includes(e.message)) pageErrors.push(e.message); });
+
 await page.goto(stack.url, { waitUntil: 'load' });
 await page.waitForTimeout(1000);
 await page.evaluate(() => window.__uni.loadProject('generator'));
@@ -108,6 +122,9 @@ const cAt = bAt + PHASE;
 check(await setBypass(instrument, false) === false, 'and back on');
 
 await waitUntil(cAt + PHASE - 500);
+check(pageErrors.length === 0, 'nothing threw in the browser while this ran',
+      pageErrors.slice(0, 3).join(' | '));
+
 await browser.close();
 await new Promise((r) => setTimeout(r, Math.max(0, t0 + RUN * 1000 + 2500 - Date.now())));
 stack.stop();
