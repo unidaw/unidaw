@@ -186,7 +186,7 @@ export class Arrange {
   constructor(host, metrics,
               { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit, onClipFork,
                 onMarkerSelect, onTimeEdit, onMarkerRename,
-                onMarkerAdd, onMarkerDelete } = {}) {
+                onMarkerAdd, onMarkerDelete, onAutomationWrite } = {}) {
     this.host = host;
     this.metrics = metrics;
     this.host.className = 'ar';
@@ -206,6 +206,12 @@ export class Arrange {
      * is what it was before scratch clips existed and is still a useful thing for it to be.
      */
     this.onClipFork = onClipFork;
+    /*
+     * Where a point dragged on the curve goes. Absent, the mode can still be entered and the
+     * lane still takes the pointer — and nothing is written, which is the right behaviour for a
+     * surface bound without a writer and is exactly what a read-only arrangement should do.
+     */
+    this.onAutomationWrite = onAutomationWrite;
     /*
      * THE SPINE's three gestures. Absent, the strip still DRAWS — a read-only spine is
      * a useful spine, and it is what this surface was before the engine had marker ops — so
@@ -330,6 +336,33 @@ export class Arrange {
     this._auSig = '';
     this._auColor = '';
     this.autoRepaints = 0;
+    /*
+     * EDITING THE CURVE WITH A POINTER.
+     *
+     * The canvas is `pointer-events: none` by default and that is correct: the lane belongs to
+     * the clips, and a curve that swallowed clicks would make every region in an automated track
+     * undraggable. So editing is a MODE — `automationEdit` in the options — and while it is on
+     * the canvas takes the pointer and the clips below do not.
+     *
+     * A mode rather than a modifier key because a modifier is invisible: there is no way to look
+     * at the screen and know whether the next click will move a region or write a point, and
+     * that is a bad property for a gesture that changes the music. The mode has a lit chip in
+     * the chrome, the lane is tinted while it is on, and the console can turn it on and off —
+     * which is also what makes it testable without inventing a keyboard event.
+     *
+     * WHAT IT CAN DO IS DELIBERATELY HALF OF WHAT IT SHOULD. `WriteAutomationPoint` can add a
+     * point and replace one at the same tick, and there is no opcode to REMOVE a point. So a
+     * point can be created and its value dragged; it cannot be moved in time (that is a write at
+     * the new tick plus a remove at the old one, and without the remove it litters) and it
+     * cannot be deleted. Backend has the request. The mode says so rather than offering a
+     * gesture that half-works.
+     */
+    this._auDrag = null;
+    this.autoWrites = 0;
+    this.autoCanvas.addEventListener('pointerdown', (e) => this._autoDown(e));
+    this.autoCanvas.addEventListener('pointermove', (e) => this._autoMove(e));
+    this.autoCanvas.addEventListener('pointerup', (e) => this._autoUp(e));
+    this.autoCanvas.addEventListener('pointercancel', () => this._autoCancel());
 
     this.playhead = div('ar-playhead', this.band);
 
@@ -459,6 +492,137 @@ export class Arrange {
     if (!this.vm) return 0;
     const r = this.ruler.getBoundingClientRect();
     return this.vm.view.startTick + (e.clientX - r.left) * this.vm.view.ticksPerPixel;
+  }
+
+  /**
+   * The automation lane under the pointer, with the geometry the curve is DRAWN with.
+   *
+   * Returns the same `top` and `height` `_paintAutomation` computes, from one place, because a
+   * hit test that derived them separately would drift from the picture the moment either changed
+   * — and "the point I grabbed is not the point I clicked" is an unfixable-feeling bug.
+   */
+  _autoLaneAt(e) {
+    const vm = this.vm;
+    if (!vm || !this.autoCurves) return null;
+    const r = this.clipsEl.getBoundingClientRect();
+    const y = e.clientY - r.top;
+    for (let i = 0; i < vm.laneCount; i++) {
+      const lane = vm.lanes[i];
+      const top = lane.y - (vm.laneScroll || 0) + 3;
+      const height = lane.height - 6;
+      if (y < top || y > top + height) continue;
+      const curve = this.autoCurves.forTrack(lane.track);
+      // No curve means nothing automates this track — there is no lane to edit, and inventing
+      // one here would be this surface deciding which parameter a click meant.
+      if (!curve || !curve.param) return null;
+      return { track: lane.track, param: curve.param, curve, top, height,
+               value: Math.max(0, Math.min(1, 1 - (y - top) / height)) };
+    }
+    return null;
+  }
+
+  /**
+   * Grab the point under the pointer, or make one there.
+   *
+   * The grabbed point's TICK is fixed for the whole gesture: a drag changes its value and never
+   * its time, because moving it in time needs a remove that does not exist yet. Snapping the
+   * tick at grab time rather than following the pointer is what keeps that honest — the point
+   * stays where it was and only its height follows the hand.
+   */
+  _autoDown(e) {
+    if (e.button !== 0) return;
+    const at = this._autoLaneAt(e);
+    if (!at) return;
+    const vm = this.vm;
+    const tpp = vm.view.ticksPerPixel;
+    const r = this.clipsEl.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const tick = Math.max(0, Math.round(vm.view.startTick + x * tpp));
+    // The nearest existing point within a finger's width, in PIXELS rather than ticks: the
+    // tolerance a person feels is a distance on the glass, and at a different zoom the same tick
+    // window is a different target.
+    const HIT_PX = 6;
+    let grabbed = -1, best = HIT_PX;
+    const pts = (at.curve.points) || [];
+    for (let k = 0; k < pts.length; k++) {
+      const d = Math.abs((pts[k][0] - vm.view.startTick) / tpp - x);
+      if (d <= best) { best = d; grabbed = k; }
+    }
+    const atTick = grabbed >= 0 ? pts[grabbed][0] : tick;
+    // The lane's box is captured WITH the drag: see `_autoMove` for why the pointer wandering
+    // into the next lane must not start reading that lane's geometry.
+    this._auDrag = { track: at.track, param: at.param, tick: atTick, value: at.value,
+                     created: grabbed < 0, top0: at.top, h0: at.height };
+    this.autoCanvas.setPointerCapture(e.pointerId);
+    this._autoWrite();
+    e.preventDefault();
+  }
+
+  _autoMove(e) {
+    const d = this._auDrag;
+    if (!d) return;
+    /*
+     * The value comes from the ORIGINAL lane's box, not from whatever lane the pointer has
+     * wandered into. A drag that crossed into the track below would otherwise start reading its
+     * geometry and the value would jump — and the point being edited never changed lanes.
+     */
+    const r = this.clipsEl.getBoundingClientRect();
+    const y = e.clientY - r.top;
+    const v = Math.max(0, Math.min(1, 1 - (y - d.top0) / d.h0));
+    if (Math.abs(v - d.value) < 0.002) return;   // below what a pixel can show
+    d.value = v;
+    this._autoWrite();
+    // The overlay is what the hand is doing; repaint it now rather than waiting for the
+    // engine's answer, or the point would lag the pointer by a round trip.
+    this._paintNow();
+    e.preventDefault();
+  }
+
+  _autoUp() { this._auDrag = null; this._paintNow(); }
+
+  _autoCancel() { this._auDrag = null; this._paintNow(); }
+
+  /**
+   * Send the point, at most once per frame.
+   *
+   * A pointermove can fire far more often than the display refreshes, and every write is a
+   * message the engine answers with a whole republished lane. Coalescing to the frame is the
+   * difference between a drag and a flood; the value that lands is the last one, which is the
+   * one the hand ended on.
+   */
+  _autoWrite() {
+    const d = this._auDrag;
+    if (!d) return;
+    /*
+     * THE PAYLOAD IS CAPTURED NOW, not read inside the frame.
+     *
+     * Reading `this._auDrag` in the callback lost every CLICK: a press and release inside one
+     * frame sets the drag, schedules the write, and clears the drag before the frame runs — so
+     * the callback found null and sent nothing. Dragging worked, because a drag keeps producing
+     * moves across frames, which is exactly the kind of bug a console-driven test cannot see
+     * and a pointer-driven one finds on its first click.
+     *
+     * The pending record is MUTATED rather than replaced, so a drag at 120Hz allocates nothing.
+     */
+    if (!this._auSend) this._auSend = { track: 0, param: '', tick: 0, value: 0 };
+    this._auSend.track = d.track;
+    this._auSend.param = d.param;
+    this._auSend.tick = d.tick;
+    this._auSend.value = d.value;
+    if (this._auPending) return;
+    this._auPending = true;
+    requestAnimationFrame(() => {
+      this._auPending = false;
+      if (!this.onAutomationWrite) return;
+      this.autoWrites++;
+      this.onAutomationWrite(this._auSend);
+    });
+  }
+
+  /** Repaint the curve layer now, bypassing the signature — the drag overlay changed. */
+  _paintNow() {
+    this._auSig = '';
+    if (this.vm) this._paintAutomation(this.vm);
   }
 
   /**
@@ -1768,8 +1932,12 @@ export class Arrange {
     const h = Math.max(1, Math.round(this.clipsEl.clientHeight));
     // The signature includes the CURVE REVISION rather than the curves themselves: comparing
     // point arrays per frame would cost more than the paint it is trying to avoid.
+    const d = this._auDrag;
     const sig = `${curves.revision}|${vm.view.startTick}|${vm.view.ticksPerPixel}|${w}x${h}`
-              + `|${vm.laneHeight}|${vm.laneCount}|${vm.laneScroll}|${dpr}`;
+              + `|${vm.laneHeight}|${vm.laneCount}|${vm.laneScroll}|${dpr}|${vm.automationEdit}`
+              // The GESTURE is part of the picture: the dragged point is drawn where the hand
+              // has it, not where the engine last said it was, so the guard must see it move.
+              + (d ? `|${d.track}:${d.param}@${d.tick}=${Math.round(d.value * 1000)}` : '|-');
     if (sig === this._auSig) return;
     this._auSig = sig;
     this.autoRepaints++;
@@ -1780,6 +1948,14 @@ export class Arrange {
       this.autoCanvas.style.width = `${w}px`;
       this.autoCanvas.style.height = `${h}px`;
     }
+    /*
+     * THE MODE IS WHAT MAKES THE LAYER CLICKABLE. Toggled here rather than in the handler,
+     * because a canvas that swallowed the pointer while the mode was off would make every clip
+     * in an automated track undraggable — the failure would look like broken clip dragging and
+     * nothing would point at automation.
+     */
+    this.autoCanvas.classList.toggle('edit', !!vm.automationEdit);
+
     const ctx = this.autoCtx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
@@ -1803,10 +1979,21 @@ export class Arrange {
       const top = lane.y - (vm.laneScroll || 0) + 3;
       const height = lane.height - 6;
       if (top + height < 0 || top > h) continue;
+      /*
+       * THE POINT UNDER THE HAND, drawn at the value the hand has it.
+       *
+       * The engine is authoritative and this does not pretend otherwise: the override lives only
+       * while the pointer is down and is dropped on release, when the republished lane takes
+       * over. Without it the curve would lag the pointer by a full round trip — and worse,
+       * `writeAutomation` drops the cached curve on every write, so the line would vanish and
+       * reappear on every frame of a drag.
+       */
+      const drag = (d && d.track === lane.track && d.param === c.param) ? d : null;
       ctx.beginPath();
       let started = false;
       for (let k = 0; k < c.points.length; k++) {
-        const [tick, value] = c.points[k];
+        const [tick, raw] = c.points[k];
+        const value = (drag && tick === drag.tick) ? drag.value : raw;
         const x = (tick - startTick) / tpp;
         const y = top + (1 - Math.max(0, Math.min(1, value))) * height;
         if (!started) { ctx.moveTo(x, y); started = true; continue; }
@@ -1817,7 +2004,10 @@ export class Arrange {
          */
         if (c.discrete) {
           const prev = c.points[k - 1];
-          const py = top + (1 - Math.max(0, Math.min(1, prev[1]))) * height;
+          // The previous point may be the one being dragged too — read it through the same
+          // override, or the step would be drawn from a value no longer on screen.
+          const pv = (drag && prev[0] === drag.tick) ? drag.value : prev[1];
+          const py = top + (1 - Math.max(0, Math.min(1, pv))) * height;
           ctx.lineTo(x, py);
         }
         ctx.lineTo(x, y);
@@ -1825,9 +2015,28 @@ export class Arrange {
       // ...and CARRY ON to the right edge. A curve that stops at its last point looks like a
       // parameter that stops being automated there; it holds that value to the end of the song.
       const last = c.points[c.points.length - 1];
-      const lastY = top + (1 - Math.max(0, Math.min(1, last[1]))) * height;
+      const lastV = (drag && last[0] === drag.tick) ? drag.value : last[1];
+      const lastY = top + (1 - Math.max(0, Math.min(1, lastV))) * height;
       ctx.lineTo(w, lastY);
       ctx.stroke();
+
+      /*
+       * A HANDLE UNDER THE HAND.
+       *
+       * Drawn separately from the polyline rather than spliced into it, for the case that made
+       * the line alone insufficient: a point being CREATED is not in `c.points` at all until the
+       * engine answers, so a drag that started on empty lane would show nothing moving for a
+       * whole round trip. A dot at the gesture's own position is immediate and is true for both
+       * cases — the grabbed point and the new one.
+       */
+      if (drag) {
+        const dx = (drag.tick - startTick) / tpp;
+        const dy = top + (1 - Math.max(0, Math.min(1, drag.value))) * height;
+        ctx.beginPath();
+        ctx.arc(dx, dy, 3, 0, Math.PI * 2);
+        ctx.fillStyle = this._auColor;
+        ctx.fill();
+      }
     }
   }
 
@@ -1919,6 +2128,15 @@ export class Arrange {
       automation: {
         bound: !!this.autoCurves,
         repaints: this.autoRepaints,
+        /** The mode, and what the pointer has done through it. */
+        edit: !!vm.automationEdit,
+        clickable: this.autoCanvas.classList.contains('edit'),
+        writes: this.autoWrites,
+        dragging: this._auDrag
+          ? { track: this._auDrag.track, param: this._auDrag.param,
+              tick: this._auDrag.tick, value: Math.round(this._auDrag.value * 1000) / 1000,
+              created: this._auDrag.created }
+          : null,
         drawn: (() => {
           if (!this.autoCurves) return 0;
           let n = 0;

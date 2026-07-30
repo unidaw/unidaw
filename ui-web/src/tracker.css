@@ -429,6 +429,21 @@
 .ch-shared { border-color: var(--uni-text-fx); color: var(--uni-text-fx); }
 .ch-shared.forked { border-style: dashed; }
 
+/* DRAW — off, it is an ordinary chip that happens to be pressable; on, it is filled, because a
+   mode that changes what a click does to the music should not be a subtle border change. The
+   font and metrics come from .ch-chip; only the button reset is needed here. */
+.ch-draw {
+  font: inherit;
+  background: none;
+  cursor: pointer;
+}
+.ch-draw:hover { border-color: var(--base-accent); color: var(--base-accent-ramp-300); }
+.ch-draw.on {
+  background: var(--base-accent);
+  border-color: var(--base-accent);
+  color: var(--base-neutral-100);
+}
+
 .ch-loop { border-color: var(--base-accent); color: var(--base-accent-ramp-300); }
 .ch-chip.unavailable {
   border-style: dashed;

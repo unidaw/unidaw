@@ -235,8 +235,19 @@
    repaint every waveform on screen. */
 .ar-auto {
   position: absolute; top: 0; left: 0;
+  /* The lane belongs to the CLIPS by default. A curve layer that swallowed clicks would make
+     every region in an automated track undraggable, which reads as broken dragging and points
+     nowhere near automation. */
   pointer-events: none;
   z-index: 2;
+}
+
+/* ...until the mode is on, when the curve takes the pointer and the clips below do not. The
+   crosshair is the only thing on screen that says which of the two a click will hit, so it is
+   not decoration: it is the mode being legible at the pointer rather than only in the chrome. */
+.ar-auto.edit {
+  pointer-events: auto;
+  cursor: crosshair;
 }
 
 /* A placement whose clip is played by more than one of them.

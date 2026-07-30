@@ -803,7 +803,8 @@ test('a project row leaves its meta line to the renderer', () => {
  * not a function" the moment anyone typed it. The op-registry test did not
  * notice, because it checks that a command is DECLARED, not that it can run.
  */
-const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
+const API_METHODS = ['automationEdit', 'automationEditing',
+                     'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
                      'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
@@ -2184,6 +2185,13 @@ const OP_REGISTRY = {
   // Edit mode is a property of the KEYBOARD, and an agent has no keyboard — it
   // calls add_notes, which writes regardless. So this is view state for the same
   // reason zoom is, even though it is a command a human wants in the palette.
+  /*
+   * `draw` is the automation curve taking the pointer. VIEW state, and genuinely so rather than
+   * conveniently: it changes what a click does to a surface, and an agent driving a headless
+   * engine has no click. The capability underneath it — writing a point — is not view state and
+   * does have a programmatic path, which is `write_automation_point`.
+   */
+  draw:      { cli: null, agent: null, why: 'view' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },

@@ -150,6 +150,9 @@ const chrome = createChrome(document.getElementById('chrome'), {
   // does not have. That divergence is the bug this app keeps finding.
   onAddTrack: () => addTrack(),
   onRemoveTrack: () => removeTrack(),
+  // The pointer's way into the automation mode. Same function the `draw` command calls, so the
+  // button and the console cannot come to mean different things by "draw".
+  onDraw: () => setAutomationEdit(),
 });
 // No write path yet — the command ring needs a channel the write-only socket
 // does not have. The buttons exist and say so rather than pretending.
@@ -457,6 +460,20 @@ const arrange = new Arrange(arrangeHost, metrics, {
   onClipFork: ({ track, placement, forked }) => (forked
     ? swapClipAt(track, placement)
     : forkAt(track, placement)),
+  /*
+   * DRAGGING A POINT ON THE CURVE.
+   *
+   * Lands on `writeAutomation` — the same function `autopoint` calls — so the pointer and the
+   * console cannot come to mean different things by "set this point". The surface owns the
+   * gesture and this owns what a point IS, which is the same split every other control here
+   * makes.
+   *
+   * The lane's discreteness is NOT passed: it is fixed when the clip is created and the engine
+   * ignores the flag afterwards, so sending a guess would be this side asserting something it
+   * does not decide.
+   */
+  onAutomationWrite: ({ track, param, tick, value }) =>
+    writeAutomation(track, param, tick, value),
   onNav: (zoomIndex, startTick, laneScroll, why) => {
     state.arrangeZoom = clampZoom(zoomIndex);
     state.arrangeStart = Math.max(0, startTick);
@@ -1345,6 +1362,29 @@ const automationReader = {
     return null;
   },
 };
+
+/**
+ * Turn pointer editing of the automation curve on or off.
+ *
+ * Refused when nothing on this track is automated, and that refusal is the useful part: the
+ * mode with no lane under it is a crosshair over an empty strip that writes points into a
+ * parameter nobody chose. Automation has to EXIST before it can be drawn on, and the way to
+ * make it exist is `autopoint` — which is a real ordering, not an arbitrary one.
+ *
+ * @param {boolean} [on] what to set it to; omitted flips it.
+ */
+function setAutomationEdit(on) {
+  const want = on === undefined ? !state.automationEdit : !!on;
+  if (want && !automationOf(state.cursor.track)?.list.length) {
+    state.reject = `nothing automates track ${state.cursor.track} yet — write a point first`;
+    schedule();
+    return false;
+  }
+  state.automationEdit = want;
+  state.reject = null;
+  schedule();
+  return true;
+}
 
 /**
  * WRITE one automation point.
@@ -2502,6 +2542,10 @@ const dockApi = {
   writeAutomation: (track, param, tick, value, discrete) =>
     writeAutomation(track, param, tick, value, discrete),
   automationPoints: (track, param) => requestAutomation(track, param),
+  automationEdit: (on) => setAutomationEdit(on),
+  /** Is the curve layer taking the pointer? Read separately from setting it, so a test and a
+   *  chip can both ask without either of them toggling anything. */
+  automationEditing: () => state.automationEdit,
   /*
    * SCRATCH CLIPS. `fork` gives this appearance its own copy and keeps the original behind it;
    * `swap` is the A/B; `keep` drops the other once decided. With no placement they act on the
@@ -3197,6 +3241,15 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: FIELDS_PER_NOTE,
    * asking a surface that does not know what the console has been talking to.
    */
   selectedMarker: 0,
+  /*
+   * Is the arrangement's curve layer taking the pointer?
+   *
+   * A MODE and not a modifier key. A modifier is invisible: there is no way to look at the
+   * screen and know whether the next click moves a region or writes an automation point, and
+   * that is a bad property for a gesture that changes the music. This has a lit chip, a tinted
+   * crosshair over the lane, and a console verb — so it can be seen, felt and scripted.
+   */
+  automationEdit: false,
   // The roll shares the stage with the arrangement when a clip is open.
   /**
    * The SECOND centre pane's view, or null for one pane.
@@ -3969,6 +4022,15 @@ function updateChrome() {
   // has no card to hang a badge on, which is precisely the case that has been
   // reported as phantom notes three times.
   o.generating = generatorPhrase();
+  /*
+   * THE AUTOMATION MODE, and whether it is reachable at all.
+   *
+   * `drawable` is asked of the cursor's track rather than of the song: the mode edits the lane
+   * under the pointer, and a DRAW button lit because some other track has a curve would enter a
+   * mode with nothing to draw on.
+   */
+  o.drawing = state.automationEdit;
+  o.drawable = !!automationOf(state.cursor.track)?.list.length;
   chrome.update(o);
 }
 
@@ -4166,6 +4228,7 @@ function drawMixer() {
 const _arrangeOpts = { loop: null, startTick: 0, width: 0, zoomIndex: 0, tracks: 0,
                        engine: null, laneHeight: 0, cursor: { track: 0, tick: 0 },
                        selectedPlacement: -1, audio: null, selectedMarker: 0,
+                       automationEdit: false,
                        clipMarginPx: ARRANGE_CLIP_MARGIN_PX, meter: null };
 let arrangeBufLanes = -1;
 function drawArrange() {
@@ -4191,6 +4254,7 @@ function drawArrange() {
   o.cursor.tick = tickOfCursorRow();
   o.selectedPlacement = state.selectedPlacement;
   o.selectedMarker = state.selectedMarker;
+  o.automationEdit = state.automationEdit;
   // How far the lane strip is scrolled. The model has always accepted this and
   // always received the default 0, so the arrangement could not be scrolled
   // vertically no matter how many tracks a song had.
@@ -7112,6 +7176,8 @@ window.__uni = {
   automation: (track) => dockApi.automation(track),
   writeAutomation: (t, p, k, v, d) => dockApi.writeAutomation(t, p, k, v, d),
   automationPoints: (track, param) => dockApi.automationPoints(track, param),
+  automationEdit: (on) => dockApi.automationEdit(on),
+  automationEditing: () => dockApi.automationEditing(),
   mods: (track) => dockApi.mods(track),
   mapParam: (track, device, param) => dockApi.mapParam(track, device, param),
   unmapParam: (track, link) => dockApi.unmapParam(track, link),

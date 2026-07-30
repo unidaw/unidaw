@@ -361,6 +361,26 @@ export function createCommands(api) {
       // them is what a second call at the same tick does.
       run: (a) => (api.writeAutomation(Number(a[0]), a[1], Number(a[2]), Number(a[3]))
         ? `${a[1]} = ${a[3]} at ${a[2]} (a point at that tick is replaced)` : refusal(api)) },
+    /*
+     * `draw` rather than `automationedit`, because it is typed as often as `note` is and the
+     * long name is the one nobody reaches for. What it turns on is the pointer: with it lit, a
+     * click on the curve makes a point and a drag changes its value.
+     *
+     * WHAT IT CANNOT DO IS PART OF THE HELP. There is no opcode to remove an automation point,
+     * so a point cannot be moved in time (a move is a write plus a remove) and cannot be
+     * deleted. Saying so here rather than letting the gesture fail silently: an interface that
+     * quietly ignores half a drag is worse than one that says which half it has.
+     */
+    draw: { help: 'draw [on|off] — edit the automation curve with the pointer '
+                + '(value only; a point cannot yet be moved in time or removed)',
+      args: [ON_OFF],
+      run: (a) => {
+        const want = a[0] === undefined ? undefined : a[0] === 'on';
+        if (!api.automationEdit(want)) return refusal(api);
+        return api.automationEditing()
+          ? 'drawing — click the curve to add a point, drag it to change its value'
+          : 'not drawing — the lane belongs to the clips again';
+      } },
     curve: { help: 'curve <track> <param> — one automation lane, point by point',
       args: [A_TRACK, { name: 'param', type: 'text' }],
       run: (a) => {

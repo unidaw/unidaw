@@ -83,7 +83,7 @@ export const VIEW_TABS = [
  * are narrower than 1680, so this must not depend on the room being there.
  */
 export function createChrome(host, { onPlay, onStop, onScales, onView,
-                                     onAddTrack, onRemoveTrack,
+                                     onAddTrack, onRemoveTrack, onDraw,
                                      secondaryHost = null } = {}) {
   host.className = 'chrome';
 
@@ -287,6 +287,23 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
   const sharedChip = label('ch-chip ch-shared', '');
   let lastShared = null, lastSharedForked = null;
 
+  /*
+   * DRAW — the automation curve takes the pointer.
+   *
+   * A BUTTON rather than a chip, because it is the only way to reach the mode without typing
+   * and a mode you can only enter from a console is a mode most people never find. Beside the
+   * shared chip because both answer the same question — what will the next click do to the
+   * music — and that question is worth one place on the bar rather than two.
+   *
+   * Hidden entirely when nothing is automated. A lit control for a mode that will refuse is
+   * worse than no control: it says the thing is available and then argues.
+   */
+  const drawChip = document.createElement('button');
+  drawChip.className = 'ch-chip ch-draw';
+  drawChip.type = 'button';
+  drawChip.appendChild(document.createTextNode('DRAW'));
+  let lastDraw = null, lastDrawable = null;
+
   const clickChip = label('ch-chip ch-click unavailable', 'CLICK');
   clickChip.title = 'Metronome — the engine has no click yet';
 
@@ -375,7 +392,7 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
    * `.ch-telemetry` is what takes the free space, so anything after it is pinned to the right
    * edge, and there is only room for one thing to be pinned there.
    */
-  host.append(brand, transport, pos, sharedChip, loopChip, clickChip, scales, tracks,
+  host.append(brand, transport, pos, sharedChip, drawChip, loopChip, clickChip, scales, tracks,
               right, telemetry, savedChip, tabs);
   // The entry cluster, one row down when there is one. `.ch-entry-row` drops the group's left
   // rule, which is a separator between top-bar cells and reads as a stray line on its own.
@@ -389,6 +406,7 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
   if (onPlay) play.addEventListener('click', onPlay);
   if (onStop) stop.addEventListener('click', onStop);
   if (onScales) scales.addEventListener('click', onScales);
+  if (onDraw) drawChip.addEventListener('click', onDraw);
   if (onAddTrack) addTrk.addEventListener('click', onAddTrack);
   if (onRemoveTrack) delTrk.addEventListener('click', onRemoveTrack);
 
@@ -407,6 +425,9 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
              tempoMilliBpm = 120000, tempoPointCount = 0, meter = DEFAULT_METER,
              digitMode: digitModeText = '', generating = '',
              editMode: editOn = true, followPlayhead: followOn = false,
+             // The automation mode, and whether it can be entered at all. Two facts, not one:
+             // OFF and UNAVAILABLE look the same on a lit chip and mean different things.
+             drawing = false, drawable = false,
              // The design's telemetry and its two chips. Every one of them is a fact from
              // the engine and every one is ABSENT rather than defaulted when the engine has
              // not said — see each guard below for why that distinction is load-bearing.
@@ -442,6 +463,23 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
       if (sharedForked !== lastSharedForked) {
         lastSharedForked = sharedForked;
         sharedChip.classList.toggle('forked', sharedForked);
+      }
+      /*
+       * DRAW, in its two independent facts. Guarded on both — `null` seeds, so the first frame
+       * applies whichever state it starts in rather than skipping because the default happened
+       * to equal it. That has cost this file a bug already.
+       */
+      if (drawable !== lastDrawable) {
+        lastDrawable = drawable;
+        drawChip.style.display = drawable ? '' : 'none';
+      }
+      if (drawing !== lastDraw) {
+        lastDraw = drawing;
+        drawChip.classList.toggle('on', !!drawing);
+        drawChip.title = drawing
+          ? 'Click the curve to add a point, drag it to change its value. '
+            + 'A point cannot yet be moved in time or removed.'
+          : 'Edit the automation curve with the pointer';
       }
       /*
        * THE LOOP, in bars. Absent when there is none — a chip reading "LOOP 1-1" for a loop

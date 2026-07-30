@@ -477,6 +477,14 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
      * viewport fact, not a durable one, and nothing stores it past the session.
      */
     laneScroll: 0,
+    /*
+     * Is the automation curve editable with the pointer right now?
+     *
+     * In the MODEL rather than read from the DOM by the renderer, so the paint signature can
+     * include it: turning the mode on tints the lane, which is a change to the picture, and a
+     * guard that could not see it would leave the tint one frame behind the mode.
+     */
+    automationEdit: false,
     cursor: { track: 0, tick: 0 },
     /**
      * The selection, split into the two numbers it is made of. See the clip
@@ -528,7 +536,7 @@ export function buildArrangeModel(opts, buf) {
     startTick = 0, width = 1200, zoomIndex = 3, tracks: laneCount = 8, loop = null,
     engine = null, laneHeight = 44, cursor = NO_CURSOR,
     selectedPlacement = -1, laneScroll = 0, audio = null, clipMarginPx = 0,
-    selectedMarker = 0,
+    selectedMarker = 0, automationEdit = false,
     // The SONG's meter — what the ruler numbers and where the bar lines go. A clip
     // in another meter draws its own accents inside those bars; that grid rides on
     // the clip and is not this.
@@ -556,6 +564,7 @@ export function buildArrangeModel(opts, buf) {
   // fit, which is a measured box and not something this file may re-derive
   // (GUIDELINES 3.11) — the renderer clamps it against the real one.
   buf.laneScroll = Math.max(0, laneScroll);
+  buf.automationEdit = !!automationEdit;
 
   for (let t = 0; t < laneCount && t < buf.lanes.length; t++) {
     const lane = buf.lanes[t];
