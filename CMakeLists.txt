@@ -548,6 +548,12 @@ add_test(NAME sampler_determinism
 )
 set_tests_properties(sampler_determinism PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Four offline renders, one of which is the negative control that gives the others teeth.
+add_test(NAME sampler_stem
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_stem_check.sh
+)
+set_tests_properties(sampler_stem PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_state
   COMMAND sampler_state_tests
 )

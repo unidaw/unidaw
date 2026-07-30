@@ -121,13 +121,21 @@ class SamplerRuntime {
   uint64_t stealCount() const { return steals_; }
   uint64_t unmappedCount() const { return unmapped_; }
 
-  // Renders one block. `events` must be sorted by offsetInBlock; the caller has them in order
-  // already because they come off a time-ordered schedule.
+  // Renders one block into MAIN out, plus optional per-STEM stereo pairs.
+  //
+  // `stemPlanes` is numStems*2 channels: stem N (1-based) writes to stemPlanes[(N-1)*2] and +1.
+  // A slot with outputStem == 0 goes to the main output, which is the ordinary case; a slot with
+  // a stem goes THERE INSTEAD, not as well. Sending it to both would double it in the master the
+  // moment its child track was unmuted, which is a bug you only hear as "the kick is loud".
   void render(float* const* out,
               uint32_t outChannels,
               uint32_t numFrames,
               const SamplerEvent* events,
-              uint32_t numEvents) {
+              uint32_t numEvents,
+              float* const* stemPlanes = nullptr,
+              uint32_t stemCount = 0) {
+    stemPlanes_ = stemPlanes;
+    stemCount_ = stemCount;
     if (!out || outChannels == 0 || numFrames == 0) {
       return;
     }
@@ -147,7 +155,15 @@ class SamplerRuntime {
       const uint32_t span = next - cursor;
       if (span > 0) {
         for (auto& v : voices_) {
-          if (v.active()) {
+          if (!v.active()) {
+            continue;
+          }
+          const SamplerSlot* slot = snap_ ? snap_->state.findSlot(v.slotId()) : nullptr;
+          const uint8_t stem = slot ? slot->outputStem : 0;
+          if (stem > 0 && stemPlanes_ && stem <= stemCount_) {
+            float* pair[2] = {stemPlanes_[(stem - 1) * 2], stemPlanes_[(stem - 1) * 2 + 1]};
+            v.render(pair, 2, cursor, span);
+          } else {
             v.render(out, outChannels, cursor, span);
           }
         }
@@ -424,6 +440,8 @@ class SamplerRuntime {
   // Per-key round-robin counters, so two toms cycling their alternates do not steal each other's
   // turn. A single global counter would make every round-robin in the kit advance together.
   uint32_t rrCounter_[128]{};
+  float* const* stemPlanes_ = nullptr;
+  uint32_t stemCount_ = 0;
 };
 
 }  // namespace daw

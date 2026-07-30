@@ -1063,9 +1063,21 @@ public:
           if (!track.completedBlockId || !track.header) {
             continue;
           }
-          if (track.mute && track.mute->load(std::memory_order_relaxed)) {
-            continue;
-          }
+          // MUTE IS NOT A READINESS PROPERTY, and skipping muted tracks here made a project
+          // whose tracks are all muted indistinguishable from one whose hosts never came up:
+          // both found no candidate, both timed out after 15s, both reported "no track host
+          // connected" and exited 2. But an all-muted project is a perfectly legitimate render
+          // — of silence — and the renderer must produce it rather than fail.
+          //
+          // The question this function asks is whether the PIPELINE is up: host connected, and
+          // (once armed) the producer emitting. A muted track's producer runs exactly as an
+          // unmuted one's does — it fills its plane, and its aux plane still feeds any child
+          // track, which is how a muted parent's stems remain audible. Mute is applied at the
+          // mix, and process() reading a ready-but-muted track yields silence, which is right.
+          //
+          // awaitNextBlock DOES skip muted tracks, and correctly: there the question is which
+          // tracks the next mix will read, and waiting on one that contributes nothing would
+          // deadlock a render that is correct.
           if (track.hostReady && !track.hostReady->load(std::memory_order_acquire) ) {
             continue;
           }
@@ -1726,7 +1738,21 @@ int main(int argc, char** argv) {
   // it unconditionally keeps the SHM layout uniform; a track with no sidechain route
   // just leaves those channels silent, and a plugin without a sidechain bus ignores
   // them. This is what lets the engine key a compressor off another track's output.
-  baseConfig.numChannelsIn = baseConfig.numChannelsOut + kSidechainChannels;
+  // ...AND an aux INPUT plane of the same width as the aux output plane, so an IN-ENGINE
+  // instrument's stems can reach the child tracks.
+  //
+  // The aux OUTPUT plane exists for a multi-out PLUGIN: the plugin writes its stems there and
+  // reconcileChildTracks derives a child per bus. The built-in sampler is not a plugin — it
+  // renders in the engine — so it had no way to reach that plane at all, and S6 in
+  // SAMPLER_DESIGN assumed otherwise. This is the fix: the sampler writes its stems into the
+  // LAST numAuxChannelsOut channels of the INPUT plane, and the host copies aux-in to aux-out
+  // before its plugins run. The sampler's audio then travels the same route as everything else
+  // — through the chain — rather than needing a private path around it.
+  //
+  // The offset is DERIVED on both sides as (numChannelsIn - numAuxChannelsOut) rather than sent
+  // as a third field, so the two cannot disagree about where the plane starts.
+  baseConfig.numChannelsIn =
+      baseConfig.numChannelsOut + kSidechainChannels + kMaxAuxOutputChannels;
   // Movement 4 multi-out: reserve the aux OUTPUT plane so a multi-out instrument's stems
   // reach the engine for its child tracks. Sized once here for every host; a track
   // without a multi-out plugin just never writes it.
@@ -2210,6 +2236,10 @@ struct TrackRuntime {
     std::vector<float> samplerAudioBuffer;
     std::vector<float*> samplerAudioChannels;
     bool samplerAudioValid = false;
+    // Per-stem stereo pairs, written into the aux INPUT region below so the host can carry them
+    // to the aux OUTPUT plane where the child tracks read.
+    std::vector<float> samplerStemBuffer;
+    uint32_t samplerStemCount = 0;
     uint32_t samplerDeviceId = 0;                   // 0 = this track has no sampler
     std::shared_ptr<const daw::SamplerRender> samplerSnapshot;
     std::vector<daw::EventEntry> patcherScratchpad;
@@ -4083,18 +4113,42 @@ struct TrackRuntime {
       std::lock_guard<std::mutex> lock(parent.controllerMutex);
       mask = parent.lastAuxOutMask;
     }
-    if (mask == 0) {
-      return;
+    // A SAMPLER'S STEMS ARE A SECOND SOURCE OF BUSES, and the first one this function ever had
+    // that is not a plugin.
+    //
+    // requestBusLayout asks the HOST what buses it has. An in-engine instrument has no plugin to
+    // ask, so a track whose only multi-out source is the sampler reports mask 0 and would get no
+    // children at all — which is exactly what S6 in SAMPLER_DESIGN missed. The buses are
+    // SYNTHESISED from stemCount instead: one stereo bus per stem, laid out in the aux plane the
+    // same way a plugin's would be, so everything downstream is identical either way.
+    uint32_t samplerStems = 0;
+    {
+      std::lock_guard<std::mutex> lock(parent.trackMutex);
+      if (parent.samplerSnapshot) {
+        samplerStems = parent.samplerSnapshot->state.stemCount;
+      }
     }
-    uint32_t hostIndex = 0;
-    for (uint32_t m = mask; (m & 1u) == 0u && hostIndex < 32; m >>= 1) {
-      ++hostIndex;
+    if (mask == 0 && samplerStems == 0) {
+      return;
     }
     std::vector<daw::HostBusWire> buses;
     bool truncated = false;
-    {
+    if (mask != 0) {
+      uint32_t hostIndex = 0;
+      for (uint32_t m = mask; (m & 1u) == 0u && hostIndex < 32; m >>= 1) {
+        ++hostIndex;
+      }
       std::lock_guard<std::mutex> lock(parent.controllerMutex);
       parent.controller.requestBusLayout(hostIndex, buses, truncated);
+    }
+    for (uint32_t i = 0; i < samplerStems && i < kMaxAuxOutputChannels / 2; ++i) {
+      daw::HostBusWire b{};
+      b.index = static_cast<uint16_t>(i + 1);   // bus 0 is the main output
+      b.channelCount = 2;                       // stems are stereo
+      b.channelOffset =
+          static_cast<uint16_t>(baseConfig.numChannelsOut + i * 2);
+      b.flags = 4u;                             // enabled, output, not main
+      buses.push_back(b);
     }
     std::string parentName;
     {
@@ -15119,10 +15173,34 @@ struct TrackRuntime {
               (bpmNow > 0.0 ? bpmNow : 120.0) *
               static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter) /
               (60.0 * engineConfig.sampleRate));
+          // STEMS. A slot with outputStem != 0 renders into its own stereo pair in the AUX
+          // INPUT region — the last numAuxChannelsOut channels of the input plane — which the
+          // host copies to the aux OUTPUT plane, where reconcileChildTracks reads it. The
+          // sampler's stems therefore travel the same route as a multi-out plugin's, and the
+          // child-track machinery does not need to know which produced them.
+          const daw::SamplerRender* snapPtr = runtime->samplerRuntime.snapshot();
+          const uint32_t stems = snapPtr ? snapPtr->state.stemCount : 0;
+          std::vector<float*> stemPlanes;
+          if (stems > 0) {
+            const size_t need = static_cast<size_t>(stems) * 2 * engineConfig.blockSize;
+            if (runtime->samplerStemBuffer.size() != need) {
+              runtime->samplerStemBuffer.assign(need, 0.0f);
+            } else {
+              std::fill(runtime->samplerStemBuffer.begin(), runtime->samplerStemBuffer.end(),
+                        0.0f);
+            }
+            stemPlanes.resize(static_cast<size_t>(stems) * 2);
+            for (size_t i = 0; i < stemPlanes.size(); ++i) {
+              stemPlanes[i] =
+                  runtime->samplerStemBuffer.data() + i * engineConfig.blockSize;
+            }
+          }
           runtime->samplerRuntime.render(
               runtime->samplerAudioChannels.data(), channels, engineConfig.blockSize,
               runtime->samplerEvents.empty() ? nullptr : runtime->samplerEvents.data(),
-              static_cast<uint32_t>(runtime->samplerEvents.size()));
+              static_cast<uint32_t>(runtime->samplerEvents.size()),
+              stemPlanes.empty() ? nullptr : stemPlanes.data(), stems);
+          runtime->samplerStemCount = stems;
           runtime->samplerAudioValid = true;
         }
         runtime->samplerEvents.clear();
@@ -15283,6 +15361,28 @@ struct TrackRuntime {
             // Movement 4: channels after the main bus carry the sidechain (key) input,
             // the same for every segment (it feeds the first plugin's sidechain bus).
             if (ch >= engineConfig.numChannelsOut) {
+              // THE AUX INPUT REGION is the LAST numAuxChannelsOut channels of the plane, and
+              // the sidechain sits between it and the main channels. Derived here the same way
+              // the host derives it, so the two cannot disagree about where the boundary is.
+              const uint32_t auxInBase =
+                  engineConfig.numChannelsIn > engineConfig.numAuxChannelsOut
+                      ? engineConfig.numChannelsIn - engineConfig.numAuxChannelsOut
+                      : engineConfig.numChannelsIn;
+              if (ch >= auxInBase) {
+                // A SAMPLER STEM (kControlVersion 14). The host copies these to the aux OUTPUT
+                // plane, where reconcileChildTracks reads them — so the sampler's stems reach a
+                // child track by the same route a multi-out plugin's do.
+                const uint32_t stemCh = ch - auxInBase;
+                const size_t base = static_cast<size_t>(stemCh) * engineConfig.blockSize;
+                if (runtime->samplerAudioValid &&
+                    base + engineConfig.blockSize <= runtime->samplerStemBuffer.size()) {
+                  std::memcpy(input, runtime->samplerStemBuffer.data() + base,
+                              static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
+                } else {
+                  std::fill(input, input + engineConfig.blockSize, 0.0f);
+                }
+                continue;
+              }
               const size_t base = static_cast<size_t>(ch - engineConfig.numChannelsOut) *
                                   engineConfig.blockSize;
               if (base + engineConfig.blockSize <=
