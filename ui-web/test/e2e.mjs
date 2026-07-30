@@ -155,14 +155,40 @@ const loadAndWait = async (name) => {
  * changed. The meter is the condition — waiting for it to leave the silence sentinel is
  * waiting for the thing the assertions are about.
  */
+/**
+ * Start the transport and wait for something to be AUDIBLE on a device.
+ *
+ * RETURNS WHY IT GAVE UP. The first version swallowed its timeout and returned nothing, so a
+ * failure downstream read "a real dBFS level while playing: -32768" and left four causes
+ * indistinguishable: the plugin never loaded, the transport never started, the transport
+ * started and the song was silent, or the meter belongs to another device. This has failed
+ * intermittently and named none of them.
+ *
+ * The transport is started through the API rather than with Space. A keypress goes to whatever
+ * has focus, and by this point in a 411-check run that may be the console or the browser rail —
+ * where Space types a space. An intermittent audio failure whose real cause is focus is the
+ * worst kind of flake, because the audio path is where everyone looks.
+ */
 const playUntilAudible = async (device = 0, ms = 12000) => {
-  await page.keyboard.press(' ');
-  await page.waitForFunction((d) => {
+  await page.evaluate(() => window.__uni.transport('play'));
+  const ok = await page.waitForFunction((d) => {
     const m = (window.__uni.deviceMeters() || []).find((x) => x.device === d);
     return m && m.outPeak > -32768;
-  }, device, { timeout: ms }).catch(() => {});
+  }, device, { timeout: ms }).then(() => true).catch(() => false);
   // One more frame, so the renderer has drawn what the store now holds.
   await page.waitForTimeout(400);
+  if (ok) return { ok: true };
+  // It did not sound. Say what the machine looked like, in the four terms that tell the causes
+  // apart — a report a person can act on instead of one number that is always the same.
+  return {
+    ok: false,
+    transport: await page.evaluate(() => (window.__uni.engineState() || {}).transport),
+    chain: await page.evaluate(() => {
+      const c = window.__uni.chainProbe();
+      return c ? { titles: c.titles, params: c.params } : null;
+    }),
+    meters: await page.evaluate(() => window.__uni.deviceMeters()),
+  };
 };
 
 const E = () => page.evaluate(() => window.__uni.engineState());
@@ -3583,11 +3609,14 @@ section('every insert says what it is putting out');
   ok(inst && inst.outPeak === SILENT, 'and reads SILENT while stopped, not 0 dBFS',
      inst && String(inst.outPeak));
 
-  await playUntilAudible();
+  const heard = await playUntilAudible();
   const playing = await page.evaluate(() => window.__uni.deviceMeters());
   const live = playing.find((m) => m.device === 0);
   ok(live && live.outPeak > -6000 && live.outPeak < 0,
-     'and a real dBFS level while playing', live && String(live.outPeak));
+     'and a real dBFS level while playing',
+     // The whole picture when it did not sound: which plugin loaded, whether the transport ran,
+     // and every meter — because "-32768" alone has told me nothing three times.
+     live && live.outPeak > -32768 ? String(live.outPeak) : JSON.stringify(heard).slice(0, 300));
   // An instrument has no audio input and says so, rather than inventing a level.
   ok(live && live.inPeak === SILENT, 'while its input stays silent — it has none',
      live && String(live.inPeak));
