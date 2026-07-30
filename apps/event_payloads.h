@@ -213,7 +213,7 @@ enum class UiCommandType : uint16_t {
   /// nothing, which is the right default for the case where the agent was useful.
   ForkPlacementClip = 70,
   SwapPlacementClip = 71,
-  ClearPlacementAlternate = 72,  // next free 63
+  ClearPlacementAlternate = 72,  // next free 73
 };
 
 // M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
