@@ -121,6 +121,20 @@ export function quantizeGridName(nanoticks) {
   return nanoticks > 0 ? nanoticks + 't' : 'off';
 }
 
+/**
+ * WHY A COMMAND FAILED, in the app's own words.
+ *
+ * Every one of these `run` bodies had `: 'no engine'` on the false branch, which is one
+ * cause of failure standing in for all of them: `namesection 2` aimed at a section that
+ * had been removed answered "no engine" with the engine right there. The app already
+ * writes a reason to the reject line for a person to read — this is the same sentence,
+ * for whoever is reading the dock instead.
+ */
+function refusal(api) {
+  const s = api.state && api.state();
+  return (s && s.reject) || 'no engine';
+}
+
 /** `gain <track> <dB>` — built from the schema, quoted by every refusal. */
 function signatureOf(name, args) {
   let s = name;
@@ -305,6 +319,67 @@ export function createCommands(api) {
              { name: 'pos', type: 'int', min: 0 }],
       run: (a) => (api.moveDevice(Number(a[0]), Number(a[1]), Number(a[2]))
         ? `device ${a[1]} to ${a[2]}` : 'no engine') },
+    /*
+     * THE SPINE: the named spans the song is built out of.
+     *
+     * A SECTION HAS A LENGTH AND NO POSITION, and every one of these commands is that
+     * fact in a different mood. Where a section begins is the sum of the lengths before
+     * it, so there is no "move this section to bar 9" — only `seclength`, which changes
+     * one length and ripples everything after it, and `movesection`, which changes the
+     * ORDER. Both are answered by the engine, which owns the sum.
+     *
+     * Six commands rather than one with an op keyword, because each has its own
+     * arguments and its own help line, and the help list is how anyone — a person or a
+     * model — finds out these exist at all. `sections` is the read: the dock is text, so
+     * without it the spine would be a thing you could only edit by looking at the strip.
+     */
+    sections: { help: 'sections — the spine, bar by bar', args: NONE,
+      run: () => {
+        const s = api.sections();
+        if (!s) return 'no engine';
+        if (!s.count) return 'no sections — `section 8 verse` names the first eight bars';
+        const rows = s.list.map((x) =>
+          `${x.id}  bar ${x.startBar}–${x.startBar + x.bars - 1}  ${x.bars}b  ${x.name}`);
+        // The truncation is REPORTED, not dropped. A short list that says nothing reads
+        // as the whole song, which is the one thing a spine must never imply.
+        if (s.truncated) rows.push(`… and ${s.truncated} more the engine could not publish`);
+        return rows.join('\n');
+      } },
+    section: { help: 'section <bars> [name] — a new section at the end of the song',
+      args: [{ name: 'bars', type: 'int', min: 1, max: 9999 },
+             { name: 'name', type: 'text', rest: true, optional: true }],
+      // `a.slice(1).join(' ')`, not `a[1]`: a `rest` argument arrives as the SEPARATE
+      // words it was typed as, and taking the first one renamed a section to "VERSE"
+      // when the person typed "VERSE A". `rename` above does the same join for the same
+      // reason, which is where the shape should have been read from.
+      run: (a) => {
+        const name = a.slice(1).join(' ');
+        return api.addSection(Number(a[0]), name) ? `${name || 'Section'} · ${a[0]} bars`
+                                                  : refusal(api);
+      } },
+    delsection: { help: 'delsection <id> — unname the span; the material stays put',
+      args: [{ name: 'id', type: 'int', min: 1 }],
+      // Removing a section does NOT delete its bars — the engine leaves the material
+      // where it is and it simply stops being named. Said here because "delete" reads
+      // as destructive and this one is not.
+      run: (a) => (api.delSection(Number(a[0])) ? `section ${a[0]} unnamed` : refusal(api)) },
+    namesection: { help: 'namesection <id> <name> — rename a section',
+      args: [{ name: 'id', type: 'int', min: 1 },
+             { name: 'name', type: 'text', rest: true }],
+      run: (a) => {
+        const name = a.slice(1).join(' ');
+        return api.nameSection(Number(a[0]), name) ? `section ${a[0]}: ${name}` : refusal(api);
+      } },
+    seclength: { help: 'seclength <id> <bars> — and everything after it moves',
+      args: [{ name: 'id', type: 'int', min: 1 },
+             { name: 'bars', type: 'int', min: 1, max: 9999 }],
+      run: (a) => (api.secLength(Number(a[0]), Number(a[1]))
+        ? `section ${a[0]} is ${a[1]} bars — later material follows` : refusal(api)) },
+    movesection: { help: 'movesection <id> <place> — reorder the spine; place counts from 1',
+      args: [{ name: 'id', type: 'int', min: 1 },
+             { name: 'place', type: 'int', min: 1 }],
+      run: (a) => (api.moveSection(Number(a[0]), Number(a[1]))
+        ? `section ${a[0]} is now number ${a[1]}` : refusal(api)) },
     /*
      * Pull a lane toward a grid — NON-DESTRUCTIVELY. Nothing on disk moves: the
      * engine applies this to a separate scheduling copy, so the authored tick is

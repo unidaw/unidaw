@@ -23,6 +23,7 @@ export default {
     "cellWidth": 76,
     "laneBarWidth": 40,
     "headerHeight": 24,
+    "spineHeight": 17,
     "minimapWidth": 30
   },
   "base": {

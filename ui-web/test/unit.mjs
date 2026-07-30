@@ -811,7 +811,12 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      'quantize', 'moveDevice', 'chord', 'delChord', 'deleteHarmony',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
-                     'selectedClip', 'ticksPerBar', 'master'];
+                     'selectedClip', 'ticksPerBar', 'master',
+                     // The spine. Six, because a section has six things you can do to it
+                     // and every one is reachable from both surfaces — the strip's click,
+                     // drag and double-click all come through these same methods.
+                     'sections', 'addSection', 'delSection', 'nameSection', 'secLength',
+                     'moveSection'];
 
 function stubApi() {
   const calls = [];
@@ -2023,6 +2028,17 @@ const OP_REGISTRY = {
   // M1.13. daw-cli shipped `do quantize` with the engine, so the CLI path is real
   // from day one; the agent's manifest still owes it a tool.
   quantize:  { cli: 'quantize', agent: null, why: 'gap' },
+  /*
+   * THE SPINE. The CLI verb is one `do section <sub>` for the five edits and
+   * `get arrangement` for the read, so all six point at a real path there. The agent
+   * still owes a tool — recorded as a gap with the rest of that list, not waved through.
+   */
+  sections:    { cli: 'arrangement', agent: null, why: 'gap' },
+  section:     { cli: 'section', agent: null, why: 'gap' },
+  delsection:  { cli: 'section', agent: null, why: 'gap' },
+  namesection: { cli: 'section', agent: null, why: 'gap' },
+  seclength:   { cli: 'section', agent: null, why: 'gap' },
+  movesection: { cli: 'section', agent: null, why: 'gap' },
   editor:    { cli: null, agent: null, why: 'gap' },
   // v22 (AddTrack=46/RemoveTrack=47). daw-cli shipped its verbs in the same
   // commit the engine did, so these are covered on the CLI from day one; the
@@ -2122,7 +2138,9 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
 const AGENT_GAP = ['addnode', 'bypass', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'del', 'delchord', 'deldevice', 'delharmony', 'delnode', 'editor',
                    'gain', 'link', 'loop', 'movedevice', 'mute', 'new', 'paste', 'patch',
-                   'quantize', 'seek', 'solo', 'tempo', 'transpose'];
+                   'quantize', 'seek', 'solo', 'tempo', 'transpose',
+                   'delsection', 'movesection', 'namesection', 'seclength', 'section',
+                   'sections'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether
@@ -2296,11 +2314,6 @@ const ENGINE_UNUSED = {
    * A `section add` console verb with nothing drawn would be a feature you can only
    * verify by saving the file and reading it.
    */
-  AddSection: 'gap — sections need drawing on the arrangement, not just commands',
-  RemoveSection: 'gap — with AddSection',
-  RenameSection: 'gap — with AddSection',
-  SetSectionLength: 'gap — with AddSection',
-  MoveSection: 'gap — with AddSection',
   /*
    * Placement overrides can be WRITTEN from this UI (a note typed into a placement
    * becomes an override) and cannot be reverted, so "back to the shared clip" is

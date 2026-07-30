@@ -18,6 +18,7 @@ pub mod theme {
     pub const METRICS_CELL_WIDTH: f32 = 76.0;
     pub const METRICS_LANE_BAR_WIDTH: f32 = 40.0;
     pub const METRICS_HEADER_HEIGHT: f32 = 24.0;
+    pub const METRICS_SPINE_HEIGHT: f32 = 17.0;
     pub const METRICS_MINIMAP_WIDTH: f32 = 30.0;
     pub const BASE_BG: u32 = 0xff161826;
     pub const BASE_SURFACE: u32 = 0xff232532;

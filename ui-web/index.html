@@ -400,6 +400,38 @@ const arrange = new Arrange(arrangeHost, metrics, {
     sendPlacement(msg);
     if (laneRefused) state.reject = 'moving a clip between tracks is not supported yet';
   },
+  /**
+   * THE SPINE's three gestures, each landing on the SAME function the console calls.
+   *
+   * Select is local — nothing about which section you are looking at is the engine's
+   * business — but the id it stores is the id the console names, so `seclength` with no
+   * argument and a click on the strip are talking about one thing. Length and rename go
+   * through `secLength` and `nameSection`, which is what `seclength` and `namesection`
+   * call: two surfaces, one meaning.
+   */
+  onSectionSelect: (id) => {
+    // Clicking the selected one again clears it. A selection you cannot drop is a mode.
+    state.selectedSection = state.selectedSection === id ? 0 : id;
+    schedule();
+  },
+  onSectionLength: (id, bars) => secLength(id, bars),
+  onSectionAdd: (bars) => addSection(bars, 'Section'),
+  onSectionDelete: (id) => {
+    // With nothing selected this says which action is missing rather than guessing at
+    // a section — a `−` that quietly removes the last one is a destructive button
+    // firing on an ambiguous intent.
+    if (!id) { state.reject = 'select a section first'; schedule(); return false; }
+    return delSection(id);
+  },
+  onSectionRename: (id, was) => {
+    // `prompt` rather than an inline editor, deliberately and for now: the strip is 17px
+    // tall and an in-place field there would be a second text-entry implementation to
+    // keep in step with the mixer's rename for the sake of one row. It is named here so
+    // the shortcut is visible rather than looking like the intended end state.
+    const next = window.prompt('Section name', was || '');
+    if (next === null) return;                       // cancelled is not a rename
+    nameSection(id, next);
+  },
   onNav: (zoomIndex, startTick, laneScroll, why) => {
     state.arrangeZoom = clampZoom(zoomIndex);
     state.arrangeStart = Math.max(0, startTick);
@@ -658,6 +690,134 @@ function sendGraph(msg) {
   if (!conn || !conn.send(msg)) { state.reject = 'no engine'; return false; }
   state.reject = null;
   return true;
+}
+
+/**
+ * A SPINE edit, to the engine.
+ *
+ * Nothing optimistic here either, and this one has the strongest reason of the three:
+ * a section length change RIPPLES — every later section, every placement at or after
+ * the boundary on every track, the tempo points and the harmony events — and the
+ * engine plans it across the whole song and refuses it WHOLE if it would shrink into
+ * occupied bars. A picture drawn ahead of that answer is either right by luck or shows
+ * an arrangement that does not exist, and the arrangement's whole job is to say where
+ * things are.
+ *
+ * The refusal reaches the reject line through the ack channel, like every other
+ * sidecar refusal — see `onAck`. The engine's own refusals (no such section, zero
+ * bars, a blocking placement) currently reach only its log, which is a reporting gap
+ * on that side and is recorded as one.
+ */
+function sendSection(msg) {
+  if (!conn || !conn.send(msg)) { state.reject = 'no engine'; return false; }
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
+ * The spine as the engine published it, or null before the first frame.
+ *
+ * `slice(0, sectionCount)` and not the whole array: `store.sections` is a POOL that
+ * grows and is never shrunk, so its tail after a removal is the section that was just
+ * deleted, name and position intact. The decoder blanks that tail now precisely so
+ * this mistake shows as an id-0 nameless span rather than as a convincing ghost — but
+ * respecting the count is still the reader's job, and this is the reader.
+ */
+function sectionsOf() {
+  if (!engine) return null;
+  const list = [];
+  const n = Math.min(engine.sectionCount, engine.sections.length);
+  for (let i = 0; i < n; i++) {
+    const s = engine.sections[i];
+    list.push({ id: s.id, name: s.name, startBar: s.startBar, bars: s.bars,
+                startTick: s.startTick, endTick: s.endTick, color: s.color });
+  }
+  return { version: engine.arrangeVersion, count: n,
+           truncated: engine.sectionsTruncated | 0, songEnd: engine.songEnd, list };
+}
+
+/**
+ * Is there a section with this id RIGHT NOW?
+ *
+ * Every op but `add` addresses an existing section, and the engine refuses an unknown
+ * id — as `no_such_section`, on its own log, where the browser cannot read it. So a
+ * rename aimed at a section that had just been removed came back as "section 2: VERSE"
+ * and nothing had happened: the dock printed the optimistic sentence, the engine
+ * refused in silence, and the two together said the opposite of the truth.
+ *
+ * Checked HERE because the published spine is the same list the user is looking at. It
+ * does not make the engine's refusal reachable — that is a reporting gap on that side
+ * and is recorded as one — it means the common case answers itself, by name, before
+ * anything is sent.
+ */
+function sectionExists(id) {
+  const s = sectionsOf();
+  if (!s) return false;
+  for (const x of s.list) if (x.id === id) return true;
+  return false;
+}
+
+/** A new section at the end of the song. No `at`, so the sidecar appends. */
+function addSection(bars, name) {
+  const b = Math.max(1, Math.round(Number(bars) || 0));
+  return sendSection({ type: 'section', op: 'add', bars: b, name: name || 'Section' });
+}
+
+/**
+ * Unname a span. NOT destructive: the engine leaves the material where it is and it
+ * simply stops being named — deleting the bars is a different operation and is not
+ * what removing a label means. Said here as well as in the help, because "delete"
+ * reads as destructive and a confirm on this would be asking about the wrong thing.
+ */
+function delSection(id) {
+  const n = Number(id) || 0;
+  if (n <= 0) { state.reject = 'which section?'; schedule(); return false; }
+  if (!sectionExists(n)) { state.reject = `no section ${n}`; schedule(); return false; }
+  if (state.selectedSection === n) state.selectedSection = 0;
+  return sendSection({ type: 'section', op: 'remove', id: n });
+}
+
+function nameSection(id, name) {
+  const n = Number(id) || 0;
+  const t = String(name === undefined ? '' : name).trim();
+  if (n <= 0) { state.reject = 'which section?'; schedule(); return false; }
+  if (!sectionExists(n)) { state.reject = `no section ${n}`; schedule(); return false; }
+  // Refused HERE, with a reason, rather than sent as an empty name for the engine to
+  // drop in silence — the same rule the sidecar applies to `rename` with no name.
+  if (!t) { state.reject = 'a section needs a name'; schedule(); return false; }
+  return sendSection({ type: 'section', op: 'rename', id: n, name: t });
+}
+
+/**
+ * Change one section's length, and everything after it moves.
+ *
+ * This is the only spine op that touches material: the engine plans the ripple across
+ * every track in one transaction and refuses it whole if it would shrink into occupied
+ * bars, because a half-applied ripple is a corrupted arrangement with no undo entry to
+ * restore. So nothing is drawn here until the answer comes back.
+ */
+function secLength(id, bars) {
+  const n = Number(id) || 0;
+  const b = Math.round(Number(bars) || 0);
+  if (n <= 0) { state.reject = 'which section?'; schedule(); return false; }
+  if (!sectionExists(n)) { state.reject = `no section ${n}`; schedule(); return false; }
+  // A zero-bar section is not a short section, it is a section with no bars in it.
+  if (b < 1) { state.reject = 'a section needs at least one bar'; schedule(); return false; }
+  return sendSection({ type: 'section', op: 'length', id: n, bars: b });
+}
+
+/**
+ * Reorder the spine. `place` counts from 1 where a person says it, because the first
+ * section is section 1 the way the first bar is bar 1; the wire index is 0-based
+ * because it indexes an array, and the sidecar converts.
+ */
+function moveSection(id, place) {
+  const n = Number(id) || 0;
+  const p = Math.max(1, Math.round(Number(place) || 1));
+  if (n <= 0) { state.reject = 'which section?'; schedule(); return false; }
+  if (!sectionExists(n)) { state.reject = `no section ${n}`; schedule(); return false; }
+  return sendSection({ type: 'section', op: 'move', id: n, to: p });
 }
 
 /**
@@ -1656,6 +1816,22 @@ const dockApi = {
     return deleteChord(c);
   },
   quantize: setQuantize,
+  /*
+   * THE SPINE. Six entries because a section has six things you can do to it, and every
+   * one of them is reachable from both surfaces: the strip's click, drag and rename all
+   * come through these, so the console and the pointer cannot drift into meaning
+   * different things by "make this section eight bars".
+   *
+   * `sections` is the READ, and it is here rather than only on `__uni` because the dock
+   * is text: without it the spine would be a thing you could edit from the console and
+   * only inspect by looking at the picture.
+   */
+  sections: () => sectionsOf(),
+  addSection: (bars, name) => addSection(bars, name),
+  delSection: (id) => delSection(id),
+  nameSection: (id, name) => nameSection(id, name),
+  secLength: (id, bars) => secLength(id, bars),
+  moveSection: (id, place) => moveSection(id, place),
   // ...and `deldevice`, which has been calling a method dockApi never had since
   // the day it shipped. The button and the key work; typing the command threw.
   delDevice,
@@ -1952,7 +2128,19 @@ const dockApi = {
     sendMixer(t);
   },
   state: () => ({ view: state.view, cursor: state.cursor, zoom: state.zoom,
-                  octave: state.octave, project: state.currentProject }),
+                  octave: state.octave, project: state.currentProject,
+                  /*
+                   * ...and WHY THE LAST THING WAS REFUSED.
+                   *
+                   * This projection had no `reject`, so a console command whose api
+                   * method returned false could only guess at the reason and every one
+                   * of them guessed "no engine" — which is how `namesection` aimed at a
+                   * section that had been removed answered "no engine" with the engine
+                   * right there and the real sentence, "no section 2", already written
+                   * on the chrome. `dock.js`'s `refusal()` reads it from here.
+                   */
+                  reject: state.reject,
+                  selectedSection: state.selectedSection }),
   engine: () => (engine ? { transport: engine.transport, tick: engine.playheadTick,
                             notes: engine.noteCount, tracks: engine.trackCount,
                             clipVersion: engine.clipVersion, stale: engine.stale } : null),
@@ -2310,6 +2498,15 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: FIELDS_PER_NOTE,
   // projection differs, which is the whole point of the view-model boundary.
   projects: [], view: 'tracker', arrangeZoom: 3, arrangeStart: 0, arrangeLaneScroll: 0,
   selectedPlacement: null,
+  /**
+   * Which SECTION is selected, by id. 0 is none — section ids start at 1.
+   *
+   * On `state` rather than inside the arrange renderer, because the console names
+   * sections by id and the strip selects them by click, and the two have to mean the
+   * same thing by "this section" — `delsection` with no argument would otherwise be
+   * asking a surface that does not know what the console has been talking to.
+   */
+  selectedSection: 0,
   // The roll shares the stage with the arrangement when a clip is open.
   /**
    * The SECOND centre pane's view, or null for one pane.
@@ -3103,7 +3300,7 @@ function drawMixer() {
 /** Arrange draws from the same store; only the projection differs. */
 const _arrangeOpts = { loop: null, startTick: 0, width: 0, zoomIndex: 0, tracks: 0,
                        engine: null, laneHeight: 0, cursor: { track: 0, tick: 0 },
-                       selectedPlacement: -1, audio: null,
+                       selectedPlacement: -1, audio: null, selectedSection: 0,
                        clipMarginPx: ARRANGE_CLIP_MARGIN_PX, meter: null };
 let arrangeBufLanes = -1;
 function drawArrange() {
@@ -3128,6 +3325,7 @@ function drawArrange() {
   o.cursor.track = state.cursor.track;
   o.cursor.tick = tickOfCursorRow();
   o.selectedPlacement = state.selectedPlacement;
+  o.selectedSection = state.selectedSection;
   // How far the lane strip is scrolled. The model has always accepted this and
   // always received the default 0, so the arrangement could not be scrolled
   // vertically no matter how many tracks a song had.
@@ -5909,10 +6107,16 @@ window.__uni = {
    * quietly short list reads as "the song ends here", which is the one thing a spine
    * must never lie about.
    */
-  sections: () => (engine ? { version: engine.arrangeVersion, count: engine.sectionCount,
-    truncated: engine.sectionsTruncated, songEnd: engine.songEnd,
-    // `slice(0, count)` — `sections` is a pool and its tail is whatever was there before.
-    list: engine.sections.slice(0, engine.sectionCount).map((s) => ({ ...s })) } : null),
+  // The SAME reader the console's `sections` uses, not a second one — see `dockApi`.
+  sections: () => dockApi.sections(),
+  addSection: (bars, name) => dockApi.addSection(bars, name),
+  delSection: (id) => dockApi.delSection(id),
+  nameSection: (id, name) => dockApi.nameSection(id, name),
+  secLength: (id, bars) => dockApi.secLength(id, bars),
+  moveSection: (id, place) => dockApi.moveSection(id, place),
+  /** Which section the strip has selected. The console names ids; this is the click. */
+  selectSection: (id) => { state.selectedSection = Number(id) || 0; schedule();
+                           return state.selectedSection; },
   loop: () => (engine ? { start: engine.loopStart, end: engine.loopEnd } : null),
   // What the RULER is showing, which during a drag is not what the engine has.
   loopShown: () => loopOverride() || (engine ? { start: engine.loopStart, end: engine.loopEnd } : null),

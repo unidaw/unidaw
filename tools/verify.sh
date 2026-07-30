@@ -50,6 +50,7 @@ if [ "${1:-}" = "--engine" ]; then
   step "engine: reachability"  node "$WEB/ui-web/test/reachable.mjs"
   step "engine: e2e"           node "$WEB/ui-web/test/e2e.mjs"
   step "engine: journey"       node "$WEB/ui-web/test/journey.mjs"
+  step "engine: sections"      node "$WEB/ui-web/test/sections.mjs"
   step "engine: placements"    node "$WEB/ui-web/test/placement.mjs"
   # The AUDIO suites. Each captures the master output and asserts on the sound, so
   # they are the only checks here that can tell "the value changed" from "the change

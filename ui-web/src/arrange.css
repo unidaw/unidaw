@@ -1,7 +1,15 @@
 /* Arrange view. Values come from tokens.css; nothing is hardcoded here that the
    design system already names. */
 
+/* How much of the band the TIME AXIS occupies — the bar numbers plus the spine.
+   A calc rather than a token because the generator emits scalars and this is a sum;
+   it lives HERE, once, so the heads, the lanes, the grid and the clips all read one
+   value. Computing it separately in each of them is how a lane strip ends up a
+   strip-height out of step with the heads that name it, which the comment above
+   `.ar-heads` records happening once already. */
 .ar {
+  --metrics-axis-height:
+    calc(var(--metrics-header-height) + var(--metrics-spine-height));
   position: absolute; inset: 0;
   display: flex;
   background: var(--uni-surface-tracker-bg);
@@ -27,7 +35,7 @@
    row. The offset moved onto a box that clips instead. */
 .ar-heads {
   position: absolute; left: 0; right: 0;
-  top: var(--metrics-header-height); bottom: 0;
+  top: var(--metrics-axis-height); bottom: 0;
   overflow: hidden;
 }
 /* The moving part. Separate from the clipper above because a transform on the
@@ -84,7 +92,115 @@
 
 .ar-lanes, .ar-grid, .ar-clips {
   position: absolute; left: 0; right: 0; bottom: 0;
+  top: var(--metrics-axis-height);
+}
+
+/* THE SPINE: the named spans the song is built out of, on the time axis directly
+   under the bar numbers. Its own strip rather than a row inside the ruler, because
+   the ruler owns the loop drag across its whole height — see the comment where it is
+   created for why two gestures must not share one box. */
+.ar-spine {
+  position: absolute; left: 0; right: 0;
   top: var(--metrics-header-height);
+  height: var(--metrics-spine-height);
+  background: var(--uni-surface-header-bg);
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  overflow: hidden; z-index: 2;
+  user-select: none; -webkit-user-select: none;
+}
+
+/* The spine's gutter cell — the row's name and the two buttons that make a section.
+   At the spine's own y in the gutter, so it lines up with the strip it controls. */
+.ar-spine-head {
+  position: absolute; left: 0; right: 0;
+  top: var(--metrics-header-height);
+  height: var(--metrics-spine-height);
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  display: flex; align-items: center; gap: 2px;
+  padding: 0 4px 0 8px;
+  z-index: 3;
+}
+.ar-spine-label {
+  flex: 1 1 auto;
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx); color: var(--uni-text-gutter);
+  white-space: nowrap; overflow: hidden;
+}
+.ar-spine-btn {
+  flex: 0 0 auto;
+  min-width: 13px; text-align: center;
+  font-family: var(--font-mono); font-size: var(--font-size-gutter);
+  line-height: calc(var(--metrics-spine-height) - 4px);
+  color: var(--uni-text-instrument);
+  border: 1px solid var(--uni-rule-gutter);
+  border-radius: 2px;
+  cursor: pointer;
+  user-select: none; -webkit-user-select: none;
+}
+.ar-spine-btn:hover { color: var(--base-text); border-color: var(--base-accent); }
+
+/* `--sec` is the engine's own colour for this section, written inline by the
+   renderer. It is ABSENT when the engine gave none — not black — so every use goes
+   through a fallback rather than through a zero. */
+.ar-section {
+  position: absolute; top: 0; left: 0; height: 100%;
+  box-sizing: border-box;
+  /* The accent when the engine gave no colour, not the dim rule colour: this border
+     IS the boundary between two sections, and a boundary you cannot see is a spine
+     that reads as one undivided span. */
+  border-left: 2px solid var(--sec, var(--base-accent));
+  border-right: 1px solid var(--uni-rule-gutter);
+  background: var(--uni-surface-row-alt);
+  overflow: hidden;
+  cursor: pointer;
+  display: flex; align-items: center;
+}
+.ar-section.sel {
+  background: var(--uni-surface-selection);
+  border-left-color: var(--base-accent);
+}
+.ar-section-name {
+  padding-left: 5px;
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--sec, var(--uni-text-instrument));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+/* The boundary. A CHILD and not a pseudo-element, because it is a drag target and a
+   pseudo-element cannot be hit — and wide enough to grab: the boundary is a 1px line
+   and nobody can hit a 1px line. */
+.ar-section-grip {
+  position: absolute; top: 0; bottom: 0; right: 0;
+  width: 7px;
+  cursor: ew-resize;
+}
+.ar-section-grip:hover { background: var(--base-accent); opacity: 0.45; }
+
+/* Material the spine does not reach: outlined and hatched rather than filled, because
+   it is a span that EXISTS and is not named — a solid block would read as a section
+   whose label failed to draw. No cursor and no pointer events: there is nothing here to
+   grab, since the thing it describes is the absence of a section. */
+.ar-section-tail {
+  position: absolute; top: 0; left: 0; height: 100%;
+  box-sizing: border-box;
+  border-left: 1px dashed var(--uni-rule-track);
+  background: repeating-linear-gradient(
+    135deg, transparent 0 5px, var(--uni-surface-row-alt) 5px 10px);
+  pointer-events: none;
+}
+
+/* "There are more sections than the engine could publish." Outside the scrolled
+   wrapper, because it is a statement about the LIST and not about a position on the
+   timeline — it must not pan away from the thing it is qualifying. */
+.ar-spine-more {
+  position: absolute; top: 0; right: 4px; z-index: 3;
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-fx);   /* the warm one — this is a warning */
+  line-height: var(--metrics-spine-height);
+  pointer-events: none;
 }
 .ar-grid, .ar-lanes { pointer-events: none; }
 

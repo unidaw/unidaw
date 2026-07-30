@@ -372,6 +372,59 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
      */
     ruler: new Float64Array(128), rulerBar: new Int32Array(128), rulerCount: 0,
     rulerFirst: 0,
+    /**
+     * THE SPINE — the named spans the song is built out of.
+     *
+     * Objects rather than parallel typed arrays, unlike the ruler above, because a
+     * section carries a NAME and a name cannot live in a Float64Array. Allocated once
+     * at the engine's cap: 64 spans is the whole song's structure, not a per-frame
+     * quantity, and the pool never resizes.
+     *
+     * `x` and `w` are ABSOLUTE pixels — `tick / tpp` with no `startTick` in them, the
+     * same rule as the clips and the ruler, so a pan is one transform.
+     *
+     * `startBar` and the ticks come from the ENGINE already resolved. Nothing here
+     * prefix-sums the lengths: the sum runs through the meter at every boundary, and a
+     * second implementation of it would drift the first time a meter changed mid-song
+     * — silently, and only in the picture.
+     */
+    sections: Array.from({ length: 64 }, () => ({
+      id: 0, x: 0, w: 0, name: '', color: 0, startBar: 1, bars: 0, index: 0,
+    })),
+    sectionCount: 0, sectionFirst: 0,
+    /**
+     * Which section is selected, by id. 0 is none — section ids start at 1.
+     *
+     * The PAGE's, passed in like `selectedPlacement`, not the renderer's own. A surface
+     * that keeps its own idea of what is selected is a surface the console cannot
+     * agree with, and both of them have to mean the same thing by "this section".
+     */
+    selectedSection: 0,
+    /**
+     * Non-zero means the engine had MORE sections than it could publish. Carried so
+     * the strip can say so: a spine that stops without a word reads as the end of the
+     * song, which is the one thing it must never say by accident.
+     */
+    sectionsTruncated: 0,
+    /**
+     * The end of the last section, which is NOT `songEnd`. The engine's song end is
+     * the furthest PLACEMENT — material can sit past the spine, and it plays and is
+     * unnamed. Both are published and neither is derivable from the other.
+     */
+    spineEndTick: 0,
+    /**
+     * MATERIAL PAST THE SPINE, as a span with no name and no handle.
+     *
+     * `songEnd` is the furthest PLACEMENT and `spineEndTick` is the end of the last
+     * section, and neither is derivable from the other: material can sit past the spine,
+     * where it plays and is simply unnamed. Drawn because the alternative is a strip that
+     * stops at the last section while clips carry on to the right of it, which reads as
+     * the song ending there.
+     *
+     * With NO sections at all the tail is the whole song, which is what an unsectioned
+     * project honestly looks like — not an empty strip.
+     */
+    tailOn: false, tailX: 0, tailW: 0,
     /** Also viewport pixels, and for the same reason as `loop`. */
     playheadX: -1,
     /**
@@ -435,6 +488,7 @@ export function buildArrangeModel(opts, buf) {
     startTick = 0, width = 1200, zoomIndex = 3, tracks: laneCount = 8, loop = null,
     engine = null, laneHeight = 44, cursor = NO_CURSOR,
     selectedPlacement = -1, laneScroll = 0, audio = null, clipMarginPx = 0,
+    selectedSection = 0,
     // The SONG's meter — what the ruler numbers and where the bar lines go. A clip
     // in another meter draws its own accents inside those bars; that grid rides on
     // the clip and is not this.
@@ -515,6 +569,56 @@ export function buildArrangeModel(opts, buf) {
     r++;
   }
   buf.rulerCount = r;
+
+  /*
+   * The spine. Bound for the sections IN VIEW, and slotted by the section's index in
+   * the song rather than by its position in the visible list — the ruler's rule
+   * (GUIDELINES 3.4) and for the ruler's reason: by position, panning past one
+   * boundary would shift every later section into a different element and rebind its
+   * name, its width and its colour on a frame that moved nothing.
+   *
+   * `sectionCount` and not `sections.length`: the store's array is a POOL whose tail
+   * is whatever was there before a removal. Reading past the count is how a deleted
+   * section keeps being drawn, and this is the third place this week that mistake was
+   * available.
+   */
+  let s = 0, sFirst = 0, spineEnd = 0;
+  buf.sectionsTruncated = engine ? (engine.sectionsTruncated | 0) : 0;
+  if (engine && engine.sectionCount > 0) {
+    const n = Math.min(engine.sectionCount, engine.sections.length);
+    for (let i = 0; i < n; i++) {
+      const sec = engine.sections[i];
+      // Every section, not just the visible ones: the spine's end is a fact about the
+      // song and the last section is usually off screen to the right.
+      if (sec.endTick > spineEnd) spineEnd = sec.endTick;
+      if (sec.endTick <= startTick || sec.startTick >= endTick) continue;
+      if (s < buf.sections.length) {
+        if (s === 0) sFirst = i;
+        const o = buf.sections[s];
+        o.id = sec.id; o.index = i;
+        o.name = sec.name; o.color = sec.color;
+        o.startBar = sec.startBar; o.bars = sec.bars;
+        o.x = sec.startTick / tpp;                 // absolute; see `scrollX`
+        o.w = (sec.endTick - sec.startTick) / tpp;
+        s++;
+      }
+    }
+  }
+  buf.selectedSection = selectedSection;
+  buf.sectionCount = s;
+  buf.sectionFirst = sFirst;
+  buf.spineEndTick = spineEnd;
+  const songEnd = engine ? (engine.songEnd || 0) : 0;
+  // Only when it is actually longer, and only the part in view. `songEnd` is 0 before the
+  // engine has computed one, and a tail from 0 to 0 is not a tail.
+  buf.tailOn = songEnd > spineEnd;
+  if (buf.tailOn) {
+    const from = Math.max(spineEnd, startTick);
+    const to = Math.min(songEnd, endTick);
+    buf.tailOn = to > from;
+    buf.tailX = from / tpp;
+    buf.tailW = Math.max(0, (to - from) / tpp);
+  }
 
   // The selection arrives as the string key "track:startTick" (see
   // `placementKey`), and asking "is this clip the selected one?" used to build

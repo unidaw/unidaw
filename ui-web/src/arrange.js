@@ -92,6 +92,17 @@ const WAVE_OVERSCAN_PX = 384;
 export const ARRANGE_CLIP_MARGIN_PX = WAVE_OVERSCAN_PX * 2;
 
 /**
+ * How long a section the `+` button makes.
+ *
+ * Four bars, which is a phrase — and it is a DEFAULT rather than the only answer: the
+ * boundary drag changes it immediately and `section <bars> [name]` says it outright. A
+ * button that has to ask how many bars before it can do anything is a button that is
+ * slower than typing, and the length is the easiest thing about a section to change
+ * after the fact.
+ */
+export const SECTION_ADD_BARS = 4;
+
+/**
  * Columns per requested window.
  *
  * Requests are TILED — anchored to a multiple of `decimation * WAVE_TILE_COLS`
@@ -167,7 +178,9 @@ export class Arrange {
    * any playhead-following should stop on all three.
    */
   constructor(host, metrics,
-              { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit } = {}) {
+              { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit,
+                onSectionSelect, onSectionLength, onSectionRename,
+                onSectionAdd, onSectionDelete } = {}) {
     this.host = host;
     this.metrics = metrics;
     this.host.className = 'ar';
@@ -182,11 +195,54 @@ export class Arrange {
     // before the engine had placement ops, and is still the right behaviour for
     // a surface bound without one.
     this.onClipEdit = onClipEdit;
+    /*
+     * THE SPINE's three gestures. Absent, the strip still DRAWS — a read-only spine is
+     * a useful spine, and it is what this surface was before the engine had section
+     * ops — so each is guarded independently rather than the strip being conditional on
+     * having a controller.
+     */
+    this.onSectionSelect = onSectionSelect;
+    this.onSectionLength = onSectionLength;
+    this.onSectionRename = onSectionRename;
+    this.onSectionAdd = onSectionAdd;
+    this.onSectionDelete = onSectionDelete;
 
     this.gutter = div('ar-gutter', host);
     // Two boxes, not one: the outer clips at the lane strip's top edge so a head
     // scrolled off slides UNDER the ruler, and the inner is the thing that moves.
     // Translating the clipper would take its own clip rectangle with it.
+    /*
+     * The spine's gutter cell: what the row IS, and the two buttons that make one.
+     *
+     * In the GUTTER at the spine's own y, so it lines up with the strip it controls and
+     * scrolls with neither axis. Add and remove were the two things the spine could
+     * only be given from the console — a drag can change a length and a double-click a
+     * name, but neither can bring a section into existence — and console-only is not
+     * done.
+     */
+    this.spineHead = div('ar-spine-head', this.gutter);
+    this.spineHeadLabel = div('ar-spine-label', this.spineHead);
+    this.spineHeadLabel.appendChild(document.createTextNode('SECTIONS'));
+    this.spineAdd = div('ar-spine-btn', this.spineHead);
+    this.spineAdd.appendChild(document.createTextNode('+'));
+    this.spineAdd.title = `add a ${SECTION_ADD_BARS}-bar section at the end of the song`;
+    this.spineDel = div('ar-spine-btn', this.spineHead);
+    this.spineDel.appendChild(document.createTextNode('−'));
+    this.spineDel.title = 'unname the selected section — the material stays put';
+    // pointerdown, not click: `element.click()` never fires pointerdown, so a handler
+    // bound to the latter is unreachable from a driver that clicks — which is how a
+    // bypass test once passed having never toggled anything (GUIDELINES 2.15).
+    this.spineAdd.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      if (this.onSectionAdd) this.onSectionAdd(SECTION_ADD_BARS);
+    });
+    this.spineDel.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      // Which section: the SELECTED one, from the model — the same id the console
+      // names. With none selected this says so rather than guessing at the last.
+      if (this.onSectionDelete) this.onSectionDelete(this.vm ? this.vm.selectedSection : 0);
+    });
+
     this.headsClip = div('ar-heads', this.gutter);
     this.headsEl = div('ar-heads-in', this.headsClip);
     this.band = div('ar-band', host);
@@ -203,6 +259,33 @@ export class Arrange {
     // transform on a clipper takes its clip rectangle along with it. Created
     // after `this.loop` so the bar numbers still paint over the loop bracket.
     this.rulerIn = div('ar-scroll', this.ruler);
+    /*
+     * THE SPINE STRIP, between the bar numbers and the lanes.
+     *
+     * Its own strip rather than a row inside the ruler, because the ruler owns the
+     * loop drag across its whole height and a section is a different target with a
+     * different gesture on it — a boundary drag that ripples the song. Sharing one
+     * box would mean one pointerdown deciding between two edits by y, which is the
+     * shape of every "the click did the other thing" report in this file's history.
+     *
+     * Above the lanes and below the numbers, because that is where the structure is:
+     * a section names a span of TIME, so it belongs on the time axis, not in the
+     * gutter where the tracks are named.
+     */
+    this.spine = div('ar-spine', this.band);
+    this.spineIn = div('ar-scroll', this.spine);
+    /**
+     * The "there are more sections than I could publish" marker. Pinned to the right
+     * of the strip and OUTSIDE the scrolled wrapper: it is a statement about the list,
+     * not about a position on the timeline, so it must not pan away.
+     */
+    /**
+     * The unnamed tail: material the spine does not reach. Inside the SCROLLED wrapper,
+     * because unlike the truncation marker it IS a position on the timeline.
+     */
+    this.spineTail = div('ar-section-tail', this.spineIn);
+    this.spineMore = div('ar-spine-more', this.spine);
+    this.spineMore.appendChild(document.createTextNode(''));
     this.lanesEl = div('ar-lanes', this.band);
     this.gridEl = div('ar-grid', this.band);
     this.gridIn = div('ar-scroll', this.gridEl);
@@ -225,6 +308,9 @@ export class Arrange {
     this._clipSeen = new Uint8Array(0);
     this.gridPool = [];
     this.rulerPool = [];
+    this.spinePool = [];
+    this._spineMoreN = -1;
+    this._tailOn = null; this._tailX = -1; this._tailW = -1;
     this.laneCount = 0;
     this.vm = null;
 
@@ -248,6 +334,24 @@ export class Arrange {
     this._wvSig = new Float64Array(0); this._wvSigN = -1;
     this.waveRepaints = 0; this.waveDrawn = 0;
     this.waveWanted = 0; this.waveHeld = 0;
+
+    /*
+     * The spine's own handlers, on the spine's own box.
+     *
+     * NOT on the ruler, and this is the mechanical reason the strip is a separate strip:
+     * `_loopDown` never looks at `e.target`, so ANY pointerdown inside `.ar-ruler`
+     * starts a loop drag — the bar numbers and the loop bracket only avoid stealing it
+     * by being `pointer-events: none`. A boundary handle has to be grabbable, so a grip
+     * living in the ruler would force a `closest()` early-out into an existing gesture
+     * whose failure is silent in both directions: either the edge drag also sets a loop,
+     * or the ruler stops setting loops wherever a section happens to be. Two boxes
+     * cannot alias.
+     */
+    this.spine.addEventListener('pointerdown', (e) => this._spineDown(e));
+    this.spine.addEventListener('pointermove', (e) => this._spineMove(e));
+    this.spine.addEventListener('pointerup', (e) => this._spineUp(e));
+    this.spine.addEventListener('pointercancel', () => this._spineCancel());
+    this.spine.addEventListener('dblclick', (e) => this._spineDbl(e));
 
     // The ruler is where a loop is set, because that is where it is drawn.
     this.ruler.addEventListener('pointerdown', (e) => this._loopDown(e));
@@ -323,6 +427,113 @@ export class Arrange {
     if (!this.vm) return 0;
     const r = this.ruler.getBoundingClientRect();
     return this.vm.view.startTick + (e.clientX - r.left) * this.vm.view.ticksPerPixel;
+  }
+
+  /**
+   * The section under the pointer, as the MODEL has it — not as the DOM does.
+   *
+   * From the model because the element is a pooled slot and its identity is the ring's
+   * phase, so `e.target` alone answers "which element" and not "which section". The id
+   * is on the element for exactly this hop, and the model row is what carries the span
+   * the drag needs.
+   */
+  _sectionAt(e) {
+    if (!this.vm) return null;
+    const el = e.target && e.target.closest && e.target.closest('.ar-section');
+    if (!el) return null;
+    const id = Number(el.dataset.section || 0);
+    if (!id) return null;
+    for (let i = 0; i < this.vm.sectionCount; i++) {
+      if (this.vm.sections[i].id === id) return { el, sec: this.vm.sections[i] };
+    }
+    return null;
+  }
+
+  /**
+   * A pointerdown on the spine: the GRIP starts a boundary drag, anywhere else selects.
+   *
+   * The grip is told apart by its own dataset flag rather than by measuring the pointer
+   * against the element's right edge — the edge test is the same arithmetic done twice,
+   * once in CSS to draw the handle and once here to hit it, and the two drift the moment
+   * the handle's width changes in only one of them.
+   */
+  _spineDown(e) {
+    const hit = this._sectionAt(e);
+    if (!hit) return;
+    const isGrip = !!(e.target && e.target.dataset && e.target.dataset.grip);
+    if (isGrip && this.onSectionLength) {
+      /*
+       * THE SECTION'S OWN BAR LENGTH, from its published resolved span.
+       *
+       * `(endTick - startTick) / bars`, and NOT `ticksPerBar(songMeter())`. The meter
+       * belongs to the section now, so a 7/8 section inside a 4/4 song has bars this
+       * file cannot compute from the song — and the resolved span is the engine's own
+       * answer for that section, already divided by the count it was resolved with.
+       * Using the song's bar would make the drag land on lengths the section cannot
+       * have, which reads as the boundary sticking rather than as a wrong unit.
+       */
+      const barTicks = hit.sec.bars > 0
+        ? (hit.sec.w * this.vm.view.ticksPerPixel) / hit.sec.bars
+        : 0;
+      if (!(barTicks > 0)) return;
+      this._secDrag = { id: hit.sec.id, bars: hit.sec.bars, barTicks,
+                        x0: e.clientX, el: hit.el, w0: hit.sec.w, shown: hit.sec.bars };
+      this.spine.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+    if (this.onSectionSelect) this.onSectionSelect(hit.sec.id);
+  }
+
+  /**
+   * The boundary, following the pointer — as a PREVIEW on the element's width only.
+   *
+   * Nothing is sent while dragging and nothing else moves: the engine plans the ripple
+   * across every track and refuses it whole if it would shrink into occupied bars, so
+   * the later sections and the clips must not slide until that answer comes back. What
+   * the strip shows meanwhile is a width, which is honest — it is where the boundary
+   * WOULD go — and the model overwrites it on the next frame after the engine speaks.
+   */
+  _spineMove(e) {
+    const d = this._secDrag;
+    if (!d) return;
+    const dBars = Math.round((e.clientX - d.x0) * this.vm.view.ticksPerPixel / d.barTicks);
+    // At least one bar: a zero-bar section is not a short section, it is a section with
+    // no bars in it, and the engine refuses it as `zero_bars`. Clamped here so the drag
+    // stops at 1 instead of asking for something that will be refused.
+    const bars = Math.max(1, d.bars + dBars);
+    if (bars === d.shown) return;
+    d.shown = bars;
+    const w = bars * d.barTicks / this.vm.view.ticksPerPixel;
+    d.el._w = w;                       // keep the render guard in step with the preview
+    d.el.style.width = `${w}px`;
+  }
+
+  _spineUp(e) {
+    const d = this._secDrag;
+    if (!d) return;
+    this._secDrag = null;
+    this.spine.releasePointerCapture(e.pointerId);
+    // Unchanged is not an edit. Sending it would spend a ripple plan and a version bump
+    // on a click that landed back where it started.
+    if (d.shown === d.bars) { d.el._w = d.w0; d.el.style.width = `${d.w0}px`; return; }
+    this.onSectionLength(d.id, d.shown);
+  }
+
+  /** A cancelled drag reverts the preview. It must not commit a length nobody chose. */
+  _spineCancel() {
+    const d = this._secDrag;
+    if (!d) return;
+    this._secDrag = null;
+    d.el._w = d.w0;
+    d.el.style.width = `${d.w0}px`;
+  }
+
+  /** Double-click renames. The page owns the prompt: this file knows about pixels. */
+  _spineDbl(e) {
+    const hit = this._sectionAt(e);
+    if (!hit || !this.onSectionRename) return;
+    this.onSectionRename(hit.sec.id, hit.sec.name);
   }
 
   _loopDown(e) {
@@ -668,6 +879,25 @@ export class Arrange {
       this.rulerPool.push(el);
     }
     return this.rulerPool;
+  }
+
+  /**
+   * The spine's element pool. One block per section, each with a name and a boundary
+   * grip at its right edge — the grip is a child rather than a pseudo-element because
+   * it is a TARGET, and a pseudo-element cannot be hit.
+   */
+  _spine(n) {
+    while (this.spinePool.length < n) {
+      const el = div('ar-section', this.spineIn);
+      const label = div('ar-section-name', el);
+      label.appendChild(document.createTextNode(''));
+      const grip = div('ar-section-grip', el);
+      grip.dataset.grip = '1';
+      el._nm = label.firstChild;
+      el._x = -1; el._w = -1; el._name = null; el._color = -1; el._id = 0;
+      this.spinePool.push(el);
+    }
+    return this.spinePool;
   }
 
   _clip(n) {
@@ -1108,6 +1338,7 @@ export class Arrange {
       this._sx = sx;
       const xf = `translateX(${-sx}px)`;
       this.rulerIn.style.transform = xf;
+      this.spineIn.style.transform = xf;
       this.gridIn.style.transform = xf;
       this.clipsIn.style.transform = xf;
     }
@@ -1144,6 +1375,88 @@ export class Arrange {
     for (let i = rShown; i < rn; i++) {
       const el = ruler[(rBase + i) % rn];
       if (el.style.display !== 'none') el.style.display = 'none';
+    }
+
+    /*
+     * The spine. Ring-slotted by the section's index in the SONG, like the ruler above
+     * — `vm.sectionFirst` is that index for the first visible one.
+     *
+     * The selected section gets the class rather than an inline colour, so a theme
+     * change repaints it without this file knowing a single colour value. The section's
+     * OWN colour is inline, because it is data the engine published and not a theme
+     * decision — and it is written as a custom property so the CSS decides how much of
+     * it to use for the fill, the border and the label.
+     */
+    const spine = this._spine(vm.sectionCount);
+    const sn = spine.length, sShown = Math.min(vm.sectionCount, sn);
+    const sBase = sn ? (((vm.sectionFirst % sn) + sn) % sn) : 0;
+    for (let i = 0; i < sShown; i++) {
+      const el = spine[(sBase + i) % sn], sec = vm.sections[i];
+      if (el.style.display === 'none') el.style.display = '';
+      if (el._x !== sec.x) { el._x = sec.x; el.style.transform = `translateX(${sec.x}px)`; }
+      /*
+       * THE DRAGGED SECTION KEEPS ITS PREVIEW WIDTH.
+       *
+       * Without this exclusion the next frame — and there is always a next frame, the
+       * playhead alone schedules one — rebinds the width from the model, which is still
+       * the OLD length because nothing has been sent yet. So the boundary snapped back
+       * under the pointer while the drag was live, the gesture read as broken, and the
+       * command it finally sent was correct: the edit worked and the preview lied about
+       * it, which is the worse way round.
+       *
+       * Only the width, and only this one element. Its x is still the model's, because
+       * a section's start is the sum of what precedes it and dragging its END cannot
+       * move that.
+       */
+      const dragging = this._secDrag && this._secDrag.id === sec.id;
+      if (!dragging && el._w !== sec.w) { el._w = sec.w; el.style.width = `${sec.w}px`; }
+      if (el._name !== sec.name) { el._name = sec.name; el._nm.nodeValue = sec.name; }
+      if (el._color !== sec.color) {
+        el._color = sec.color;
+        // 0 means "the engine gave this one no colour", which is not black — it is
+        // "use the theme's". Writing #000000 for it would paint an invisible section.
+        el.style.removeProperty('--sec');
+        if (sec.color) {
+          el.style.setProperty('--sec',
+            `#${sec.color.toString(16).padStart(6, '0')}`);
+        }
+      }
+      // The id lives on the element because the pointer handlers read it from the
+      // event target: a boundary drag has to know WHICH section it is resizing, and
+      // recovering that from x would re-derive what the model already bound.
+      if (el._id !== sec.id) {
+        el._id = sec.id;
+        el.dataset.section = String(sec.id);
+      }
+      const sel = sec.id !== 0 && sec.id === vm.selectedSection;
+      if (el._sel !== sel) { el._sel = sel; el.classList.toggle('sel', sel); }
+    }
+    for (let i = sShown; i < sn; i++) {
+      const el = spine[(sBase + i) % sn];
+      if (el.style.display !== 'none') el.style.display = 'none';
+    }
+    // The unnamed tail. Guarded field by field like everything else here, so a song
+    // whose end has not moved costs three integer compares.
+    if (this._tailOn !== vm.tailOn) {
+      this._tailOn = vm.tailOn;
+      this.spineTail.style.display = vm.tailOn ? '' : 'none';
+    }
+    if (vm.tailOn) {
+      if (this._tailX !== vm.tailX) {
+        this._tailX = vm.tailX;
+        this.spineTail.style.transform = `translateX(${vm.tailX}px)`;
+      }
+      if (this._tailW !== vm.tailW) {
+        this._tailW = vm.tailW;
+        this.spineTail.style.width = `${vm.tailW}px`;
+      }
+    }
+    // TRUNCATION IS DRAWN. A short list that says nothing reads as the end of the song.
+    if (this._spineMoreN !== vm.sectionsTruncated) {
+      this._spineMoreN = vm.sectionsTruncated;
+      this.spineMore.firstChild.nodeValue =
+        vm.sectionsTruncated ? `+${vm.sectionsTruncated} not shown` : '';
+      this.spineMore.style.display = vm.sectionsTruncated ? '' : 'none';
     }
 
     const grid = this._grid(vm.gridCount);
@@ -1316,6 +1629,44 @@ export class Arrange {
       loop: vm.loop.on ? { x: Math.round(vm.loop.x), w: Math.round(vm.loop.w) } : null,
       rulerTicks: vm.rulerCount,
       firstBar: vm.rulerCount ? vm.rulerBar[0] : -1,
+      /**
+       * The SPINE as the strip drew it, read back from the DOM and not from the model.
+       *
+       * From the DOM on purpose: the model having a section in it proves the decode,
+       * and the whole failure this feature can have is a span the engine published and
+       * the strip did not draw. `visible` walks the pool and reports what is actually
+       * on screen, in the ring's own order resolved back to reading order, so a test
+       * can compare it against the engine's list directly.
+       */
+      spine: {
+        count: vm.sectionCount,
+        truncated: vm.sectionsTruncated,
+        endTick: vm.spineEndTick,
+        selected: vm.selectedSection,
+        pool: this.spinePool.length,
+        // Only the shown slots, in reading order — the ring's phase is an internal
+        // detail and a test comparing against the engine must not have to undo it.
+        visible: (() => {
+          const out = [];
+          const sn = this.spinePool.length;
+          if (!sn) return out;
+          const base = ((vm.sectionFirst % sn) + sn) % sn;
+          for (let i = 0; i < Math.min(vm.sectionCount, sn); i++) {
+            const el = this.spinePool[(base + i) % sn];
+            out.push({ id: el._id, name: el._nm.nodeValue,
+                       x: Math.round(el._x), w: Math.round(el._w),
+                       shown: el.style.display !== 'none' });
+          }
+          return out;
+        })(),
+        // What the truncation marker SAYS, so "it is drawn" is assertable rather than
+        // inferred from a count that only the model has.
+        moreText: this.spineMore.firstChild.nodeValue,
+        // The unnamed tail, as the DOM has it. `on` from the element rather than the
+        // model, so "the model wants a tail" and "a tail is drawn" stay separable.
+        tail: { on: this.spineTail.style.display !== 'none',
+                x: Math.round(vm.tailX), w: Math.round(vm.tailW) },
+      },
       /**
        * Ticks between consecutive bar NUMBERS — the song's bar times whatever
        * stride the ruler thinned to.
