@@ -286,31 +286,60 @@ learnable. You never hold 200 glyphs in your head — only the four to eight thi
 the track header names them. A header cannot label a column whose contents vary row to row; a
 legend can, because it describes the track rather than the column.
 
-### The font trap under the glyphs
+### THE GLYPHS ARE NOT IN THE FONT WE SHIP
 
-**Measured, at 11 px IBM Plex Mono: the cell advance is 6.60 px, and every ASCII character
-matches it exactly.** (An earlier figure here said 7.57 px. That probe built its span from
-`getComputedStyle(...).font`, which serialises without a family, so it measured a proportional
-fallback — `0` came out 7.57 and `W` 12.09, in a font where they must be equal. The shorthand
-was the bug.)
+The alarming one. `--font-mono` is
+`"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace` and the file shipped is
+**`ibm-plex-mono-latin-400-normal.woff2`** — the LATIN SUBSET.
 
-Coverage, same measurement:
+Measured at 11 px, with the family list narrowed to `"IBM Plex Mono"` alone:
 
-| set | result |
+| characters | advance |
 |---|---|
-| `○ ◔ ◑ ◕ ●` pie | safe |
-| `▁ ▃ ▅ ▇ █` blocks | safe |
-| `◀ ◁ ◆ ▷ ▶` triangles | safe |
-| `░ ▒ ▓` shade | safe |
-| `↻ ⇥ ↦ →` arrows | safe |
-| `⟳` | **FAILS — 7.48 px**, falls back to another font |
-| `∿` | **FAILS — 6.42 px** |
+| `0` `W` `·` `±` — ASCII | **6.600** |
+| `● ◑ █ ▅ ▶ ◆ ▒ →` — every geometric/block glyph | **6.623** |
 
-Geometric shapes and block elements are reliable; arrows are a coin flip. **A glyph missing from
-the font falls back to one with a different advance and misaligns the entire grid.** With a
-200-op vocabulary that is 200 chances to break alignment, so `OP_SCHEMA`'s glyph column needs a
-ratchet asserting every glyph measures the reference advance — checked in CI, not by eye, and
-re-checked when the font changes.
+**A monospace font has ONE advance.** Two advances under one family declaration is proof the
+second set is coming from somewhere else — the browser falls back per missing glyph regardless
+of what the family list says. The shapes are not in the file; they are being drawn by a macOS
+system font that happens to land within 0.023 px.
+
+So an earlier version of this section published a table of "safe" glyphs. It was measuring a
+macOS fallback. On Windows or Linux those resolve differently, and a ratchet written against
+them would have passed here and failed on another machine — which is the worst kind of green.
+
+(For the record the same section also once reported a 7.57 px advance. That probe built its
+span from `getComputedStyle(...).font`, which serialises without a family, so it measured a
+proportional fallback: `0` came out 7.57 and `W` 12.09, in a font where they must be equal. Two
+different probe bugs, both in the same direction — measuring a font other than the one on
+screen.)
+
+### SHIP AN OP-GLYPH FONT
+
+Jaakko: *"we can also switch up the font if you want more glyphs."* Yes — but the reason is
+stronger than wanting more. **We currently ship none of them.**
+
+The right form is not a bigger general-purpose font but a purpose-built subset, and there is
+already precedent in the tree: `ui-web/src/icons/Phosphor.woff2` ships for the chrome icons, so
+the loading pattern exists.
+
+A private-use-area op font gives four things no general font can:
+
+1. **Guaranteed coverage.** No fallback, ever, on any OS. For a 200-op vocabulary that is 200
+   chances to misalign the grid, and this is the only way to close all of them.
+2. **Guaranteed advance.** Drawn to the 6.60 px grid, so the ratchet asserts EXACTLY rather
+   than within-0.023-px.
+3. **Glyphs that depict the op.** `▶` means "play" to everybody; the offset op deserves a mark
+   that means offset, not borrowed geometry that merely looks distinct.
+4. **A few KB.** Two hundred glyphs is nothing.
+
+Iosevka, DejaVu Sans Mono or JetBrains Mono would all cover more than the Latin subset, but you
+would still be choosing from whatever shapes happen to exist, still hostage to that font's
+advance table, and still unable to draw an op-specific mark. Since the font is changing either
+way, the custom subset is strictly better and about the same work to wire in.
+
+**The ratchet, either way:** every glyph in `OP_SCHEMA` must measure the reference ASCII advance,
+asserted in CI against the EMBEDDED face — not by eye, and not on one developer's machine.
 
 ### What we must do that Renoise does not
 
