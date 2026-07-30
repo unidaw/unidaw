@@ -300,7 +300,16 @@ new feature's rule should have reached.
 
 ### Open, and worth knowing about
 
-- **The patcher's EDIT commands still address the global pool, not a device.** Items 1-3
+- **RESOLVED: the patcher's edit commands now address a DEVICE.** `--device D` on
+  `patcher-node`/`patcher-unnode`/`patcher-connect`, carried in the payload's `flags` (bit 15
+  marks the id present — device ids start at 0, so a bare 0 cannot mean "unspecified"). The edit
+  goes into that device's own authored graph, is therefore saved, and the POOL IS RE-DERIVED
+  immediately: assembly used to happen only at load, so even a correctly-addressed edit was inert
+  until the next open. A pool that will not build is reported and the previous one keeps running.
+  Covered by `tools/patcher_device_edit_check.sh` (lands, isolated from the other device, saved
+  across a fresh-engine reload, executing).
+
+  *The gap it closed, kept because the shape recurs:* items 1-3
   migrated the data model and the read-back to per-device graphs; `AddPatcherNode` /
   `RemovePatcherNode` / `ConnectPatcherNodes` were never migrated. Their payload has a
   `trackId` used only to label the emitted error, and no `deviceId`. For any project carrying
