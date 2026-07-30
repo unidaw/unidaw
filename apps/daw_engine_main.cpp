@@ -7450,7 +7450,37 @@ struct TrackRuntime {
                                       recordUndo, relSpanEnd, noteIdOverride);
         }
         if (result) {
+          // HOW MANY APPEARANCES THIS EDIT REACHED. A clip is CONTENT and a placement is an
+          // APPEARANCE, so an edit to a clip placed four times changes all four — that is the
+          // Movement 3 promise ("fix the bass in chorus 1 and all three choruses change") and it
+          // is also the most surprising thing in the program if nothing says it out loud. Two
+          // placements of one clip draw as two identical rails; a note typed into one silently
+          // rewrites the other, and there is no moment where the model announces itself.
+          //
+          // Counted HERE, where the answer is exact, rather than left to a client to infer by
+          // grouping extents by clip id. On the event stream and in history.jsonl, so "this
+          // changed 4 placements" is available to a console, to the linter, and to whoever reads
+          // the journal a week later asking what happened.
+          //
+          // Counted AFTER forkOwnedClip: a copy-on-write fork repoints this track's placements,
+          // so a count taken before it would be the pre-fork clip's.
           forkOwnedClip(*runtime, target.ownedIndex);
+          if (target.ownedIndex < runtime->ownedClips.size()) {
+            const uint32_t editedClipId = runtime->ownedClips[target.ownedIndex].id;
+            uint32_t appearances = 0;
+            for (const auto& pl : runtime->sourcePlacements) {
+              if (pl.clipId == editedClipId) {
+                ++appearances;
+              }
+            }
+            if (appearances > 1) {
+              DAW_EVENT("clip.shared_edit")
+                  .field("track", trackId)
+                  .field("clip", editedClipId)
+                  .field("nanotick", nanotick)
+                  .field("placements_affected", appearances);
+            }
+          }
           growLengthsForContent(*runtime, target);
           shiftDiffTick(result->diff, target.placementAt);
           runtime->arrangementDirty.store(true, std::memory_order_relaxed);
@@ -7833,7 +7863,37 @@ struct TrackRuntime {
                                          flags, runtime->trackClipVersion,
                                          recordUndo);
         if (result) {
+          // HOW MANY APPEARANCES THIS EDIT REACHED. A clip is CONTENT and a placement is an
+          // APPEARANCE, so an edit to a clip placed four times changes all four — that is the
+          // Movement 3 promise ("fix the bass in chorus 1 and all three choruses change") and it
+          // is also the most surprising thing in the program if nothing says it out loud. Two
+          // placements of one clip draw as two identical rails; a note typed into one silently
+          // rewrites the other, and there is no moment where the model announces itself.
+          //
+          // Counted HERE, where the answer is exact, rather than left to a client to infer by
+          // grouping extents by clip id. On the event stream and in history.jsonl, so "this
+          // changed 4 placements" is available to a console, to the linter, and to whoever reads
+          // the journal a week later asking what happened.
+          //
+          // Counted AFTER forkOwnedClip: a copy-on-write fork repoints this track's placements,
+          // so a count taken before it would be the pre-fork clip's.
           forkOwnedClip(*runtime, target.ownedIndex);
+          if (target.ownedIndex < runtime->ownedClips.size()) {
+            const uint32_t editedClipId = runtime->ownedClips[target.ownedIndex].id;
+            uint32_t appearances = 0;
+            for (const auto& pl : runtime->sourcePlacements) {
+              if (pl.clipId == editedClipId) {
+                ++appearances;
+              }
+            }
+            if (appearances > 1) {
+              DAW_EVENT("clip.shared_edit")
+                  .field("track", trackId)
+                  .field("clip", editedClipId)
+                  .field("nanotick", nanotick)
+                  .field("placements_affected", appearances);
+            }
+          }
           growLengthsForContent(*runtime, target);
           shiftDiffTick(result->diff, target.placementAt);
           runtime->arrangementDirty.store(true, std::memory_order_relaxed);
