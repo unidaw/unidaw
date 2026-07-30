@@ -47,7 +47,10 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 //    stands. Gated here because an old host wouldn't allocate/init the ring.
 // v13: HostParamWire carries what a parameter IS — unit, default, range, the endpoint TEXTS,
 // step count and flags. The wrapper already collected all of it; the wire dropped it.
-constexpr uint16_t kControlVersion = 13;
+// 14: the input plane gained an aux INPUT region (the last numAuxChannelsOut channels), so an
+// in-engine instrument's stems can reach the aux OUTPUT plane and become child tracks. The host
+// copies aux-in to aux-out before its plugins run.
+constexpr uint16_t kControlVersion = 14;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,

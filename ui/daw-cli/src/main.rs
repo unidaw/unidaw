@@ -13,7 +13,10 @@ use daw_bridge::layout::{
     UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
     UiCommandType, UiPatcherPresetCommandPayload, UiSamplerKitRequestPayload,
     UiSamplerEmitRowsPayload, UiSamplerLoadPayload, UiSamplerMarkerPayload, UiSamplerSetSlotPayload, UiSamplerSlicePayload,
-    UiWaveformRequestPayload, MASTER_TRACK_ID, SAMPLER_LOAD_FIXED_PITCH, SAMPLER_MARKER_ADD,
+    UiSamplerEnvelopePayload, UiSetRowOpsPayload, UiWaveformRequestPayload,
+    MASTER_TRACK_ID, SAMPLER_ENV_AMP, ROW_OP_MASK_DELAY,
+    ROW_OP_MASK_PROBABILITY, ROW_OP_MASK_RETRIGGER, ROW_OP_MASK_SOUND, ROW_OP_MASK_SOUND_OFFSET,
+    SAMPLER_LOAD_FIXED_PITCH, SAMPLER_MARKER_ADD,
     SAMPLER_MARKER_MOVE, SAMPLER_MARKER_REMOVE, SAMPLER_SLICE_CLEAR, SAMPLER_SLICE_EQUAL,
     SAMPLER_SLICE_TRANSIENT, SAMPLER_SLOT_FIELDS, UI_SAMPLER_KIT_SLOTS,
     UI_SAMPLER_SLOT_SOURCE_MISSING,
@@ -38,9 +41,14 @@ daw-cli — control surface for a running engine
                           [--sensitivity 0-1000] [--count 16] [--snap TICKS] [--slots]
                                    chop a source; --slots makes one playable slot per slice
   daw-cli do sampler-marker --track N --source 1 --op add|move|remove [--marker ID] [--frame F]
+  daw-cli do set-row-ops --track N --note ID [--clip ID] [--ret N] [--prob N] [--sound N] [--offset N] [--delay TICKS] [--clear ret,prob,sound,offset,delay]
+  daw-cli do sampler-env --track N [--device ID] [--mod-set ID] [--amp|--modulator ID] --attack US --decay US --sustain MILLI --release US [--sync] [--rate MILLI]
+  daw-cli do sampler-env-draw --track N --points t,v[,tension[,step]];... [--sustain-loop A,B] [--release-loop A,B] [--release-fade US] [--sync] [--rate MILLI]
                                    nudge one boundary — ids are stable, so no row moves
   daw-cli do sampler-emit-rows --track N --source 1 [--at TICK] [--step TICKS] [--column C]
                                    write the pattern that reproduces the chop
+  daw-cli do save-module NAME      write NAME.uni — one file, samples inside, sendable
+  daw-cli do load-module NAME      unpack NAME.uni beside itself and open it
   daw-cli get arrangement          the markers (bar AND tick, resolved) + the meter map,
                                    the meter map, and the song end
   daw-cli get notes --track N      that track's notes from the published region
@@ -1714,6 +1722,24 @@ fn main() {
                     }
                     code
                 }
+                // THE `.uni` MODULE. `save` writes a directory you edit; `save-module` writes a
+                // FILE you send. Both forms stay on disk and they are the same document.
+                Some(&"save-module") => {
+                    let project = rest.get(1).copied().unwrap_or("default");
+                    let code = send_named(&handle, UiCommandType::SaveModule, project);
+                    if code == 0 {
+                        println!("{{ \"saved_module\": \"{}.uni\" }}", escape(project));
+                    }
+                    code
+                }
+                Some(&"load-module") => {
+                    let project = rest.get(1).copied().unwrap_or("default");
+                    let code = send_named(&handle, UiCommandType::LoadModule, project);
+                    if code == 0 {
+                        println!("{{ \"loaded_module\": \"{}.uni\" }}", escape(project));
+                    }
+                    code
+                }
                 Some(&"play") => {
                     let payload = UiCommandPayload {
                         command_type: UiCommandType::TogglePlay as u16,
@@ -2260,6 +2286,269 @@ fn main() {
                                     eprintln!("daw-cli: {err}");
                                     1
                                 }
+                            }
+                        }
+                    }
+                }
+                Some(&"sampler-env-draw") => {
+                    use daw_bridge::layout as L;
+                    // The PENCIL. Goes over the bulk carrier because N points do not fit in the
+                    // ring's 40-byte payload — the reason opcode 83 exists.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let mod_set = flag_u64(&args, "--mod-set", Some(0)).unwrap_or(0) as u32;
+                    let rate = flag_u64(&args, "--rate", Some(1000)).unwrap_or(1000) as u16;
+                    let release_fade = flag_u64(&args, "--release-fade", Some(0)).unwrap_or(0) as u32;
+                    let sync = args.iter().any(|a| a == "--sync");
+                    let pair = |key: &str| -> (u8, u8) {
+                        match flag(&args, key) {
+                            Some(raw) => {
+                                let mut it = raw.split(',');
+                                let a = it.next().and_then(|x| x.trim().parse::<u8>().ok());
+                                let b = it.next().and_then(|x| x.trim().parse::<u8>().ok());
+                                match (a, b) {
+                                    (Some(a), Some(b)) => (a, b),
+                                    _ => (255, 255),
+                                }
+                            }
+                            None => (255, 255),
+                        }
+                    };
+                    let (sus_a, sus_b) = pair("--sustain-loop");
+                    let (rel_a, rel_b) = pair("--release-loop");
+                    let points_raw = flag(&args, "--points").unwrap_or_default();
+                    let mut pts: Vec<L::UiEnvPointWire> = Vec::new();
+                    let mut bad: Option<String> = None;
+                    for spec in points_raw.split(';').filter(|x| !x.trim().is_empty()) {
+                        let f: Vec<&str> = spec.split(',').map(|x| x.trim()).collect();
+                        if f.len() < 2 {
+                            bad = Some(format!("point {spec:?} needs at least time,value"));
+                            break;
+                        }
+                        let t = f[0].parse::<u32>();
+                        let v = f[1].parse::<i16>();
+                        let tension = if f.len() > 2 { f[2].parse::<i8>().unwrap_or(0) } else { 0 };
+                        let step = if f.len() > 3 { f[3].parse::<u8>().unwrap_or(0) } else { 0 };
+                        match (t, v) {
+                            (Ok(t), Ok(v)) => pts.push(L::UiEnvPointWire {
+                                time: t,
+                                value_milli: v,
+                                tension,
+                                flags: if step != 0 { 1 } else { 0 },
+                            }),
+                            _ => {
+                                bad = Some(format!("point {spec:?} is not time,value"));
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(err) = bad {
+                        eprintln!("daw-cli: {err}");
+                        2
+                    } else if pts.len() < 2 {
+                        // Refused, not padded: one point is not a shape, and inventing a second
+                        // would be the tool deciding what the envelope means.
+                        eprintln!("daw-cli: --points needs at least two points, e.g. --points 0,0;300000,1000");
+                        2
+                    } else {
+                        let header = L::UiSamplerEnvPointsHeader {
+                            command_type: UiCommandType::SamplerSetEnvelopePoints as u16,
+                            flags: SAMPLER_ENV_AMP,
+                            track_id: track,
+                            device_id: device,
+                            mod_set_id: mod_set,
+                            modulator_id: 0,
+                            time_base: if sync { 1 } else { 0 },
+                            reserved: 0,
+                            rate_milli: rate,
+                            point_count: pts.len() as u16,
+                            sustain_loop_start: sus_a,
+                            sustain_loop_end: sus_b,
+                            release_loop_start: rel_a,
+                            release_loop_end: rel_b,
+                            release_fade,
+                        };
+                        let mut buf = Vec::with_capacity(32 + pts.len() * 8);
+                        buf.extend_from_slice(unsafe {
+                            std::slice::from_raw_parts(
+                                &header as *const L::UiSamplerEnvPointsHeader as *const u8,
+                                std::mem::size_of::<L::UiSamplerEnvPointsHeader>(),
+                            )
+                        });
+                        for p in &pts {
+                            buf.extend_from_slice(unsafe {
+                                std::slice::from_raw_parts(
+                                    p as *const L::UiEnvPointWire as *const u8,
+                                    std::mem::size_of::<L::UiEnvPointWire>(),
+                                )
+                            });
+                        }
+                        // The stream id is send_bulk's to pick — see its comment. This used
+                        // to derive one from the pid here, which is constant for a process
+                        // sending twice and would have interleaved two draws into one buffer.
+                        match handle.send_bulk(&buf) {
+                            Ok(()) => {
+                                let n = pts.len();
+                                let bytes = buf.len();
+                                println!("{{ \"sent\": \"sampler-env-draw\", \"track\": {track}, \"points\": {n}, \"bytes\": {bytes} }}");
+                                0
+                            }
+                            Err(err) => {
+                                eprintln!("daw-cli: {err}");
+                                1
+                            }
+                        }
+                    }
+                }
+                Some(&"sampler-env") => {
+                    // Times are in the modulator's own unit: microseconds by default, nanoticks
+                    // with --sync. The unit travels WITH the numbers, so "300 ms attack" cannot
+                    // silently become 300 nanoticks against a mod set someone switched to sync.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let mod_set = flag_u64(&args, "--mod-set", Some(0)).unwrap_or(0) as u32;
+                    let modulator = flag_u64(&args, "--modulator", Some(0)).unwrap_or(0) as u16;
+                    let attack = flag_u64(&args, "--attack", Some(0)).unwrap_or(0) as u32;
+                    let decay = flag_u64(&args, "--decay", Some(0)).unwrap_or(0) as u32;
+                    let release = flag_u64(&args, "--release", Some(0)).unwrap_or(0) as u32;
+                    let sustain = flag_u64(&args, "--sustain", Some(1000)).unwrap_or(1000) as i16;
+                    let rate = flag_u64(&args, "--rate", Some(1000)).unwrap_or(1000) as u16;
+                    let sync = args.iter().any(|a| a == "--sync");
+                    // --amp is the default: naming a modulator by id is the exception, and a
+                    // caller who has not read the mod set has no id to name.
+                    let amp = modulator == 0 || args.iter().any(|a| a == "--amp");
+                    let payload = UiSamplerEnvelopePayload {
+                        command_type: UiCommandType::SamplerSetEnvelope as u16,
+                        flags: if amp { SAMPLER_ENV_AMP } else { 0 },
+                        track_id: track,
+                        device_id: device,
+                        mod_set_id: mod_set,
+                        modulator_id: modulator,
+                        time_base: if sync { 1 } else { 0 },
+                        reserved1: 0,
+                        attack,
+                        decay,
+                        release,
+                        sustain_milli: sustain,
+                        rate_milli: rate,
+                        reserved2: 0,
+                    };
+                    match handle.send_sampler_envelope(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"sampler-env\", \"track\": {track}, \"attack\": {attack}, \"decay\": {decay}, \"sustain\": {sustain}, \"release\": {release}, \"sync\": {sync} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
+                Some(&"set-row-ops") => {
+                    // ONLY the ops named on the command line are touched. --clear names ops to
+                    // REMOVE. That is the mask: a flag absent leaves the op alone, a flag present
+                    // sets it, --clear zeroes it. Without the distinction there is no way to drop
+                    // one op from a note without restating the other four.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let clip = flag_u64(&args, "--clip", Some(0)).unwrap_or(0) as u32;
+                    let note = flag_u64(&args, "--note", Some(0)).unwrap_or(0) as u32;
+                    let clear_arg = args
+                        .iter()
+                        .position(|a| a == "--clear")
+                        .and_then(|i| args.get(i + 1))
+                        .cloned()
+                        .unwrap_or_default();
+                    let mut mask: u16 = 0;
+                    let mut retrigger: u8 = 0;
+                    let mut probability: u8 = 0;
+                    let mut sound: u16 = 0;
+                    let mut sound_offset: u16 = 0;
+                    let mut delay_nanoticks: u32 = 0;
+                    let mut parse_error: Option<String> = None;
+                    // PRESENCE is what sets the mask bit, so a value must be read with `flag`
+                    // (was it given?) rather than flag_u64 (what is it, or a default?). A parse
+                    // failure is REFUSED rather than defaulted: "--ret banana" silently becoming
+                    // "--ret 0" would clear an op the caller was trying to set.
+                    let mut take = |key: &str, bit: u16| -> Option<u64> {
+                        let raw = flag(&args, key)?;
+                        match raw.parse::<u64>() {
+                            Ok(v) => {
+                                mask |= bit;
+                                Some(v)
+                            }
+                            Err(_) => {
+                                parse_error = Some(format!("{key} expects a number, got {raw:?}"));
+                                None
+                            }
+                        }
+                    };
+                    if let Some(v) = take("--ret", ROW_OP_MASK_RETRIGGER) {
+                        retrigger = v as u8;
+                    }
+                    if let Some(v) = take("--prob", ROW_OP_MASK_PROBABILITY) {
+                        probability = v as u8;
+                    }
+                    if let Some(v) = take("--sound", ROW_OP_MASK_SOUND) {
+                        sound = v as u16;
+                    }
+                    if let Some(v) = take("--offset", ROW_OP_MASK_SOUND_OFFSET) {
+                        sound_offset = v as u16;
+                    }
+                    if let Some(v) = take("--delay", ROW_OP_MASK_DELAY) {
+                        delay_nanoticks = v as u32;
+                    }
+                    // --clear names ops to REMOVE: the mask bit is set and the value stays zero.
+                    for (name, bit) in [
+                        ("ret", ROW_OP_MASK_RETRIGGER),
+                        ("prob", ROW_OP_MASK_PROBABILITY),
+                        ("sound", ROW_OP_MASK_SOUND),
+                        ("offset", ROW_OP_MASK_SOUND_OFFSET),
+                        ("delay", ROW_OP_MASK_DELAY),
+                    ] {
+                        if clear_arg.split(',').any(|c| c.trim() == name) {
+                            mask |= bit;
+                            match name {
+                                "ret" => retrigger = 0,
+                                "prob" => probability = 0,
+                                "sound" => sound = 0,
+                                "offset" => sound_offset = 0,
+                                _ => delay_nanoticks = 0,
+                            }
+                        }
+                    }
+                    if let Some(err) = parse_error {
+                        eprintln!("daw-cli: {err}");
+                        2
+                    } else if note == 0 {
+                        eprintln!("daw-cli: set-row-ops needs --note <id>");
+                        2
+                    } else if mask == 0 {
+                        // Refused rather than sent as a no-op: a command that names no op is a
+                        // typo, and silently succeeding would report a write that never happened.
+                        eprintln!("daw-cli: set-row-ops names no op — pass at least one of --ret --prob --sound --offset --delay, or --clear <names>");
+                        2
+                    } else {
+                        let payload = UiSetRowOpsPayload {
+                            command_type: UiCommandType::SetRowOps as u16,
+                            mask,
+                            track_id: track,
+                            clip_id: clip,
+                            note_id: note,
+                            delay_nanoticks,
+                            sound,
+                            sound_offset,
+                            retrigger,
+                            probability,
+                            reserved: [0; 14],
+                        };
+                        match handle.send_set_row_ops(payload) {
+                            Ok(()) => {
+                                println!("{{ \"sent\": \"set-row-ops\", \"track\": {track}, \"note\": {note}, \"mask\": {mask} }}");
+                                0
+                            }
+                            Err(err) => {
+                                eprintln!("daw-cli: {err}");
+                                1
                             }
                         }
                     }

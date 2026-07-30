@@ -10,20 +10,33 @@
 #
 #   BLOCK-SIZE     rendering at 64, 256 and 1024 frames must not DRIFT and must not DROP OUT.
 #   INDEPENDENT    Asserted here as an energy-envelope match rather than as bit-identity,
-#                  because bit-identity across block sizes is currently blocked by a
-#                  PRE-EXISTING defect in the shared note scheduler, not by the sampler:
+#                  because bit-identity across block sizes is blocked by a PRE-EXISTING defect
+#                  in the shared note scheduler, not by the sampler. Measured divergence:
+#                  64 vs 256 and 64 vs 1024 at frame 7352, 256 vs 1024 at frame 25201.
 #
-#                    emitNoteOnWithOff computes eventSample as blockSampleStart +
-#                    tickDeltaToSamples(onTick - rangeStart), and both of those depend on where
-#                    the block boundary fell — so a note lands on a sample that differs by ONE
-#                    between block sizes. Measured: one note at frame 7350 renders identically
-#                    up to 7350 and diverges at 7351, at every block size pair.
+#                  THIS PARAGRAPH USED TO NAME THE WRONG FIX, and the correction is worth more
+#                  than the original claim. It said the cure was tickConverter.
+#                  nanoticksToSamplesAbsolute() — the M3.22 lesson ("positions are ABSOLUTE,
+#                  integrated over the tempo map") applied to the note scheduler. That was tried.
+#                  Rewriting tickDeltaToSamples to return the difference of two absolute
+#                  positions changed every render's audio (170k-250k bytes) and moved the
+#                  divergence frames by exactly ZERO: still 7352, 7352, 25201. It was reverted.
 #
-#                  The fix already exists in the tree — tickConverter.nanoticksToSamplesAbsolute(),
-#                  which rebuildAudioRender uses for audio clips. It is the M3.22 lesson
-#                  ("positions are ABSOLUTE, integrated over the tempo map") never applied to the
-#                  NOTE scheduler. Tracked separately; when it lands, restore the bit-identical
-#                  assertion below and delete this paragraph.
+#                  The real cause is a BASE mismatch, not a delta one. A note's frame is
+#                  blockSampleStart + offset. blockSampleStart is an exact counter, blockSize *
+#                  (blockId - 1). The offset is measured from blockStartTicks, which the producer
+#                  advances by adding samplesToNanoticks(blockSize) — a value ROUNDED to a whole
+#                  nanotick every block. At 120 bpm / 44.1 kHz a 256-frame block is 11145.9 ticks
+#                  and a 64-frame block is 2786.48, so the two grids accumulate rounding error at
+#                  different rates and the tick position slides against the sample counter by
+#                  about 1.3 samples per 7000 frames at 64 frames. Rewriting the delta cannot
+#                  help, because both formulations measure from the same drifting base.
+#
+#                  The fix is to stop keeping the position as two facts that disagree: either
+#                  carry the fractional remainder when advancing the transport, or derive
+#                  blockSampleStart from the tick rather than counting it. Both touch the
+#                  engine's master clock, so neither is a drive-by. Tracked as task #84; when it
+#                  lands, restore the bit-identical assertion below and delete this paragraph.
 #
 # THE SAMPLER'S OWN INVARIANCE IS ALREADY PROVEN BIT-EXACTLY, in sampler_voice_tests: one voice
 # rendered at 64/256/1024 is byte-for-byte equal. That test failed on its first run against a

@@ -664,6 +664,30 @@ bool handleProcessBlock(HostState& state, const daw::ProcessBlockRequest& reques
       std::fill(state.auxOutputPtrs[ch],
                 state.auxOutputPtrs[ch] + state.header->blockSize, 0.0f);
     }
+    // AUX IN -> AUX OUT, BEFORE the plugins run (kControlVersion 14).
+    //
+    // An IN-ENGINE instrument — the built-in sampler — writes its stems into the last
+    // numAuxChannelsOut channels of the INPUT plane, because it has no plugin here to write the
+    // output plane for it. Copying them across gives them the same route as a multi-out
+    // plugin's stems: reconcileChildTracks reads the output plane either way and does not need
+    // to know which produced them.
+    //
+    // BEFORE the plugins, not after: a plugin that owns an aux bus overwrites what it owns, and
+    // one that does not (an ordinary effect on the main bus) leaves the copy intact. Doing it
+    // afterwards would erase a real multi-out plugin's stems with silence.
+    //
+    // The offset is DERIVED, not sent: the aux input region is the LAST numAuxChannelsOut
+    // channels of the input plane. One fact, computed the same way on both sides.
+    if (state.header->numChannelsIn >= state.numAuxChannelsOut) {
+      const uint32_t auxInBase = state.header->numChannelsIn - state.numAuxChannelsOut;
+      for (uint32_t ch = 0; ch < state.numAuxChannelsOut; ++ch) {
+        const uint32_t src = auxInBase + ch;
+        if (src < state.inputPtrs.size() && state.inputPtrs[src]) {
+          std::memcpy(state.auxOutputPtrs[ch], state.inputPtrs[src],
+                      static_cast<size_t>(state.header->blockSize) * sizeof(float));
+        }
+      }
+    }
   }
 
   std::unique_lock<std::mutex> pluginLock(state.pluginsMutex);

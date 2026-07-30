@@ -67,6 +67,11 @@ DECLARED_NO_CLI = {
                            "clip is created, which covers the case that exists today",
     "SetDeviceEuclideanConfig": "the patcher node config surface as a whole is unbuilt "
                                 "on the CLI side; see the patcher ops below",
+    "BulkChunk": "a TRANSPORT, not a verb — it carries a fragment of some other command "
+                 "and has no meaning on its own. EngineHandle::send_bulk chunks a payload "
+                 "into these, and the commands that ride it (sampler-env-draw today) are "
+                 "the things with CLI paths. A `do bulk-chunk` would only let a caller "
+                 "hand-assemble a message the sender already builds correctly",
 }
 
 missing = []

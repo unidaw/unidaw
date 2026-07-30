@@ -1324,6 +1324,79 @@ impl EngineHandle {
         )
     }
 
+    /// Send an arbitrarily long payload as BulkChunk (83) entries for the engine to reassemble.
+    ///
+    /// `payload` must already begin with the real commandType as its first u16 — the assembled
+    /// buffer IS a payload, which is what keeps one dispatch rule instead of two.
+    ///
+    /// The last chunk is ZERO-PADDED to 32 bytes rather than short, so every entry on the ring is
+    /// the same size and the reader never needs a length field it could disagree with. The
+    /// message's own header carries the real length; trailing zeroes are the payload's business.
+    pub fn send_bulk(&self, payload: &[u8]) -> Result<(), String> {
+        // THE STREAM ID IS OURS TO PICK, not the caller's. The engine merges chunks that share
+        // an id, so reusing one while an earlier message is still incomplete interleaves two
+        // payloads into one buffer and delivers a corrupt message that still parses. Asking
+        // callers to vary it is asking them to hold a correctness property the library can
+        // simply guarantee — and the first caller I wrote derived it from the pid, which is
+        // CONSTANT for a process sending twice.
+        //
+        // Seeded from the pid so two processes are unlikely to collide, incremented per message
+        // so one process never collides with itself. Never zero: a zero id is the obvious value
+        // for an uninitialised sender, and keeping it out of circulation makes that mistake
+        // visible instead of merging into a real stream.
+        static NEXT_STREAM: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+        let seed = std::process::id() as u16;
+        let n = NEXT_STREAM.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let stream_id = seed.wrapping_add(n) | 1;
+        if payload.len() < 2 {
+            return Err("bulk payload must carry a commandType".to_string());
+        }
+        let chunks = payload.len().div_ceil(crate::layout::BULK_CHUNK_BYTES);
+        if chunks == 0 || chunks > 512 {
+            return Err(format!("bulk payload needs {chunks} chunks, max 512"));
+        }
+        for seq in 0..chunks {
+            let start = seq * crate::layout::BULK_CHUNK_BYTES;
+            let end = usize::min(start + crate::layout::BULK_CHUNK_BYTES, payload.len());
+            let mut bytes = [0u8; 32];
+            bytes[..end - start].copy_from_slice(&payload[start..end]);
+            let chunk = crate::layout::UiBulkChunkPayload {
+                command_type: crate::layout::UiCommandType::BulkChunk as u16,
+                stream_id,
+                seq: seq as u16,
+                total: chunks as u16,
+                bytes,
+            };
+            self.write_entry(
+                &chunk as *const crate::layout::UiBulkChunkPayload as *const u8,
+                std::mem::size_of::<crate::layout::UiBulkChunkPayload>(),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Set a sampler modulator's ADSR (SamplerSetEnvelope).
+    pub fn send_sampler_envelope(
+        &self,
+        payload: crate::layout::UiSamplerEnvelopePayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerEnvelopePayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerEnvelopePayload>(),
+        )
+    }
+
+    /// Write a note's row ops (SetRowOps). The write half of what the engine already publishes.
+    pub fn send_set_row_ops(
+        &self,
+        payload: crate::layout::UiSetRowOpsPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSetRowOpsPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSetRowOpsPayload>(),
+        )
+    }
+
     /// Write the pattern that reproduces a chop.
     pub fn send_sampler_emit_rows(
         &self,

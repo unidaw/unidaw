@@ -437,15 +437,52 @@ Take the **sample offset** (the `9xx` seek) in the same bump — a second `uint1
 
 **S5 — slicing.** `SliceSet`, stable markers, transient detection with sensitivity, equal-division and manual modes, row-grid snap, `sampler-slice`, `sampler-marker add/move/remove`, `sampler-emit-rows`. Worthless before S4 and excellent after it.
 
-**S6 — stems.** `outputStem` onto the existing aux output plane, `extract-stem` to a child track, chain-snapshot renegotiation on `stemCount` change. No bump; the plane ships.
+**S6 — stems. ⚠️ THIS SECTION WAS WRONG AND IS CORRECTED HERE (investigated 2026-07-31).**
 
-**S7 — the module (R3), independent of S1–S6 and sequenceable anywhere after S1.** **`.uni`** — a zip holding `project.json` plus a `samples/` directory, written atomically (temp + rename, as the current save already does) and read back by path *inside* the archive. The loader keeps reading a loose directory, so the two forms are the same document at two levels of packing and nothing has to be converted to work. Two properties worth a check apiece: a zip round-trips to a byte-identical `project.json`, and a project moved to another machine with no shared filesystem still plays — which is the entire point and is not provable with a path-referencing save.
+It said: "`outputStem` onto the existing aux output plane, `extract-stem` to a child track. No bump; the plane ships." The plane does ship — **for hosted plugins**, and the sampler is not one. The design assumed a path that does not exist for an in-engine instrument.
+
+What is actually there:
+
+- a child track reads *a bus slice of the **parent's** aux output plane* in the parent's SHM (`apps/daw_engine_main.cpp:413-424`), produced by the parent's **host** in lockstep with its `completedBlockId`;
+- `reconcileChildTracks` (`:4074`) derives children by calling `parent.controller.requestBusLayout()` — it asks the **host** what buses it has, and a sampler has no host plugin to ask;
+- with no plugins the host copies input→output for the main channels and **zeroes the rest**, so the aux channels are cleared;
+- `numChannelsIn` is `numChannelsOut + kSidechainChannels` (`:1729`) — there is no room in the input plane for stems.
+
+**The right fix is to widen the input plane** so the sampler's stems ride through the host: `numChannelsIn = numChannelsOut + kSidechainChannels + N`, with the host copying aux-in → aux-out when it has no plugins. That is the shape that matches how everything else here works — the sampler's audio goes *through* the chain, and its stems are simply more channels of it. It costs a per-track SHM contract change (a `kControlVersion` bump) plus a host change, which is **bigger than this section assumed**. `reconcileChildTracks` also needs a second source of bus information: when a track has a sampler with `stemCount > 0`, synthesise one stereo bus per stem rather than asking a host that has nothing to say.
+
+The alternative — the engine writing the aux plane directly after the host completes — is more contained but invents a new ownership rule (the engine writing into host-owned SHM) and races unless carefully sequenced. Rejected on those grounds.
+
+**✅ DONE 2026-07-31, built exactly as corrected above.** `kControlVersion` 13 → 14; the aux INPUT region is the **last** `numAuxChannelsOut` channels of the input plane, its base *derived* as `numChannelsIn - numAuxChannelsOut` on **both** sides rather than sent (one fact, computed the same way twice). The host copies aux-in → aux-out **before** its plugins run, so a plugin that owns an aux bus overwrites what it owns and an ordinary main-bus effect leaves the copy intact — doing it afterwards would erase a real multi-out plugin's stems with silence. `SamplerRuntime::render` takes `stemPlanes`/`stemCount` and a slot with `outputStem != 0` renders to its stem pair **instead of** the main output, never both.
+
+Verified by `tools/sampler_stem_check.sh` (ctest `sampler_stem`), and the shape of that check is worth recording. **The obvious test cannot see the feature at all:** a child track sits at unity gain, so a slot arriving via its stem sums to exactly what it would have summed to on the main output. The first version compared stemmed and un-stemmed renders, got *byte-identical* energies, and reported PASS — it would have passed with the entire stem path deleted. The discriminator is to **mute the parent**: a child carries its own mute and reads the parent's aux plane, which is written before the parent's mixer, so a stemmed slot survives its parent's mute and an un-stemmed one does not. Both renders are in the check, the second as the control. Three separate negative controls confirmed it fails when the sampler ignores `outputStem`, when the host skips the aux copy, and when `reconcileChildTracks` ignores `stemCount`.
+
+One engine defect fell out of writing it: `awaitAnyReadyTrack` skipped **muted** tracks when deciding whether there was anything to render, so a project whose tracks are all muted was indistinguishable from one whose hosts never came up — 15s timeout, "no track host connected", exit 2. An all-muted project is a legitimate render *of silence*. Mute is a mixer property, not a readiness one; the muted-track skip is right in `awaitNextBlock` (which asks what the next mix will read) and wrong here (which asks whether the pipeline is up). Fixed, and the check's control render is now also its regression test.
+
+**S7 — the module (R3). ✅ DONE 2026-07-31.** Implemented as `apps/zip_container.h` (a
+dependency-free STORE-only zip — `project_file.cpp` is shared with `daw_lint`, which does not
+link JUCE, so JUCE's `ZipFile` was unavailable and a zip library would have become the linter's
+dependency too) plus `saveProjectModule` / `loadProjectModule`, opcodes 79/80, and
+`daw-cli do save-module | load-module`. Verified by `tools/module_check.sh`, whose load-bearing
+assertion is the **move**: the module is copied to another directory, the originals are DELETED,
+and it still plays. `unzip -t` accepts the archives, and two saves of one project are
+byte-identical (the timestamp is fixed at the format's epoch, so a save is not a diff).
+
+STORED, not deflated, and that is a decision: the payload is mostly WAV, which deflates by
+10–20%; a stored entry stays byte-identical inside the archive so a content key computed on the
+file matches one computed on the extracted copy; and MOD and XM are not compressed either. A
+module is a container.
+
+Original plan, for the record: **`.uni`** — a zip holding `project.json` plus a `samples/` directory, written atomically (temp + rename, as the current save already does) and read back by path *inside* the archive. The loader keeps reading a loose directory, so the two forms are the same document at two levels of packing and nothing has to be converted to work. Two properties worth a check apiece: a zip round-trips to a byte-identical `project.json`, and a project moved to another machine with no shared filesystem still plays — which is the entire point and is not provable with a path-referencing save.
 
 The extension is **`.uni`**, not `.uniproj` (owner, 2026-07-30). It is the module's name, and it should read like one: `.mod`, `.xm`, `.it`, `.uni`. The loose working directory keeps `.uniproj.json` as it is now, so the two forms stay visibly distinct — a zip you send and a directory you edit — rather than one extension meaning two different things on disk.
 
 **Optional, in preference order:** the `SliceSelect` patcher node (highest payoff per line of the lot); vintage bit/rate-reduction; a destructive sample editor (trim/normalise/fade/reverse/DC — genuinely wanted, genuinely a separate surface, do it last); MIDI-per-bus for the kit.
 
 **Also flag:** `apps/event_payloads.h:212` says `ClearPlacementAlternate = 72, // next free 63`. That trailing comment is stale — 63 is `SetModLinkDepth`. **Next free is 73.** Sampler verbs take 73–80; announce the range on the bus when claimed. Every one needs a `daw-cli` path or `tools/op_registry_check.sh` fails, which is correct and is the reason the whole thing will be agent-drivable on day one.
+
+**Opcodes since, both announced on the bus before landing.** `SetRowOps = 81` — the WRITE half of the per-note ops. The engine had published `retrigger`, `probability`, `devNanoticks`, `sound` and `soundOffset` since v23/v32 and no command could set one, so every op was readable and none writable; the editor could draw an ops cell it had no way to commit. Addressed by note id, with a mask where a bit clear means "leave this op alone" and a bit set with a zero value means "clear it" — without the distinction there is no way to remove one op without resending the other four. `SamplerSetEnvelope = 82` — the ADSR, which `sampler-slot` could only *choose* (`mod-set`) and never edit, so the most-used control on any sampler was reachable solely by hand-editing JSON. Times carry their own `timeBase` in the same payload, and the amp envelope is minted if the mod set has none, because that is the state every project starts in. **Next free is 83.**
+
+**Still missing, and it is the pencil editor's blocker:** a hand-drawn multi-point envelope does not fit in 40 bytes, and there is no inward bulk carrier (task #85) — the outbound direction has SHM regions, the inbound direction has only the 40-byte ring payload. `SamplerSetEnvelope` deliberately ships ADSR alone rather than "ADSR plus a truncated point list", which would be a worse contract than the complete half.
 
 ---
 

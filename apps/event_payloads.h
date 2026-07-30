@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 
 namespace daw {
 
@@ -276,8 +277,185 @@ enum class UiCommandType : uint16_t {
   ///
   /// Press play and it is the break, following the project tempo with no stretching at all,
   /// because the ROWS are the timing.
-  SamplerEmitRows = 78,  // next free 79
+  SamplerEmitRows = 78,
+
+  /// Save/load the project as a `.uni` MODULE — a zip holding project.json plus every sample
+  /// (docs/SAMPLER_DESIGN.md R3). "It is easy to send someone the zip." Broken sample links stop
+  /// existing, because there are no links.
+  ///
+  /// They ride the same payload as SaveProject/LoadProject (a packed NAME), because they are the
+  /// same operation at a different level of packing — not a different kind of save.
+  SaveModule = 79,
+  LoadModule = 80,
+
+  /// Writes a note's ROW OPS: retrigger, probability, the sound address, the sample offset and
+  /// the onset delay. Addressed by NOTE ID, not by position.
+  ///
+  /// These have been PUBLISHED on UiClipNote since v23 and v32 and no command could ever set
+  /// one, so every op was readable and none was writable — the editor could draw an ops cell it
+  /// had no way to commit. This is that missing half, and nothing else: no kShmVersion bump,
+  /// because every field it writes is already on the wire outbound.
+  ///
+  /// THE MASK IS THE POINT. A bit CLEAR means "leave this op alone"; a bit SET with a zero value
+  /// means "clear this op". Without the distinction there is no way to remove one op from a note
+  /// without resending the other four, and a partial resend is how two facts about one note
+  /// start disagreeing.
+  SetRowOps = 81,
+
+  /// Sets a sampler modulator's ADSR — the single most-used control on any sampler, and until
+  /// this existed it could only be reached by hand-editing the project JSON. `sampler-slot`
+  /// could CHOOSE a slot's mod set and nothing could edit what was in one.
+  ///
+  /// ADSR fits in 40 bytes, so this needs no bulk carrier. A hand-drawn multi-point envelope
+  /// does not, and is deliberately not here: that is the pencil editor, it needs an inward
+  /// carrier for payloads over 40 bytes (task #85), and shipping half of it as "ADSR plus a
+  /// truncated point list" would be a worse contract than shipping the half that is complete.
+  SamplerSetEnvelope = 82,
+
+  /// ONE CHUNK OF A LONGER COMMAND. The inward bulk carrier.
+  ///
+  /// Outbound has SHM regions for anything large; inbound had only the ring's 40-byte payload,
+  /// so every UI->engine command was capped at 40 bytes and anything variable-length — a drawn
+  /// envelope, a canonical op string, a list of anything — simply had no way across.
+  ///
+  /// Rather than mint a second UI-WRITTEN SHM region, with the new ownership rules, the new race
+  /// and the new version to keep in step that implies, a long message is chunked across ordinary
+  /// ring entries. The reassembled buffer IS a payload, carrying the REAL commandType as its
+  /// first uint16 — so once assembled a bulk command looks exactly like a small one and there is
+  /// one dispatch rule rather than two.
+  BulkChunk = 83,
+
+  /// A hand-drawn multi-point envelope: the pencil, where SamplerSetEnvelope (82) is the sliders.
+  /// Arrives over BulkChunk because N points do not fit in 40 bytes.
+  SamplerSetEnvelopePoints = 84,  // next free 85
 };
+
+// BULK CHUNK (opcode 83). 40 bytes like every other ring payload; 32 of them are cargo.
+//
+// `seq` and `total` are what make a lost chunk DETECTABLE. A carrier that simply concatenated
+// whatever arrived would deliver a truncated message that parses — an envelope with half its
+// points is a valid envelope, and the failure would be a wrong sound rather than an error.
+struct UiBulkChunkPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::BulkChunk);
+  uint16_t streamId = 0;  // separates concurrent senders; any nonzero value the sender likes
+  uint16_t seq = 0;       // 0-based
+  uint16_t total = 0;     // number of chunks in this stream
+  uint8_t bytes[32]{};
+};
+static_assert(sizeof(UiBulkChunkPayload) == 40, "UiBulkChunkPayload must be 40 bytes");
+inline constexpr std::size_t kBulkChunkBytes = 32;
+// A bound on what one sender can cost the engine. 512 chunks is 16 KB assembled, far past any
+// envelope, and past it the stream is REFUSED rather than truncated.
+inline constexpr uint16_t kBulkMaxChunks = 512;
+// How many partial streams the engine will hold at once. A sender that dies mid-message costs a
+// buffer until it is evicted, not a leak.
+inline constexpr std::size_t kBulkMaxStreams = 8;
+
+// The assembled SamplerSetEnvelopePoints (84) payload: this header, then `pointCount` points.
+//
+// 255 in a loop index means NO LOOP, matching kEnvLoopNone in sampler_envelope.h. The engine runs
+// repairEnvShape over whatever arrives, which enforces the invariant that is not the caller's job
+// to remember: a release loop must have a non-zero releaseFade, or the envelope never finishes,
+// the voice never frees, and the leak is silent.
+struct UiSamplerEnvPointsHeader {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetEnvelopePoints);
+  uint16_t flags = 0;  // kSamplerEnvAmp
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t modSetId = 0;
+  uint16_t modulatorId = 0;
+  uint8_t timeBase = 0;
+  uint8_t reserved = 0;
+  uint16_t rateMilli = 1000;
+  uint16_t pointCount = 0;
+  uint8_t sustainLoopStart = 255;
+  uint8_t sustainLoopEnd = 255;
+  uint8_t releaseLoopStart = 255;
+  uint8_t releaseLoopEnd = 255;
+  uint32_t releaseFade = 0;
+};
+static_assert(sizeof(UiSamplerEnvPointsHeader) == 32,
+              "UiSamplerEnvPointsHeader must be 32 bytes");
+
+// One drawn point. `tension` is toward the NEXT point: 0 linear, positive ease-in, negative
+// ease-out. `flags` bit 0 = STEP — hold this value until the next point's time, then jump, which
+// is what makes sample-and-hold shapes drawable without a second envelope kind.
+struct UiEnvPointWire {
+  uint32_t time = 0;
+  int16_t valueMilli = 0;
+  int8_t tension = 0;
+  uint8_t flags = 0;
+};
+static_assert(sizeof(UiEnvPointWire) == 8, "UiEnvPointWire must be 8 bytes");
+
+// SamplerSetEnvelope flags.
+enum : uint16_t {
+  // Target the AMP envelope — the one modulating Volume — whatever its id, creating it if the
+  // mod set has none. Almost every caller means this, and requiring an id first would make the
+  // common case a two-step round trip against state the caller has not read yet.
+  kSamplerEnvAmp = 1u << 0,
+};
+
+// SAMPLER SET ENVELOPE (opcode 82). 40 bytes.
+//
+// TIMES ARE IN THE MODULATOR'S OWN UNIT, named by `timeBase` in the same payload: 0 =
+// microseconds (a decay that means the same at any tempo — right for drums), 1 = nanoticks (an
+// envelope that follows the project — right for a bar-long sweep). Carrying the unit WITH the
+// numbers is what makes the command complete: a payload of bare durations would mean different
+// things depending on state the sender never saw, and "set a 300 ms attack" would silently
+// become a 300-nanotick one against a mod set someone else had switched to tempo-sync.
+struct UiSamplerEnvelopePayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetEnvelope);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t modSetId = 0;
+  uint16_t modulatorId = 0;
+  uint8_t timeBase = 0;
+  uint8_t reserved1 = 0;
+  uint32_t attack = 0;
+  uint32_t decay = 0;
+  uint32_t release = 0;
+  int16_t sustainMilli = 1000;
+  uint16_t rateMilli = 1000;
+  uint32_t reserved2 = 0;
+};
+static_assert(sizeof(UiSamplerEnvelopePayload) == 40,
+              "UiSamplerEnvelopePayload must be 40 bytes");
+
+// SetRowOps mask bits. Which ops the payload is actually speaking about — see the opcode.
+enum : uint16_t {
+  kRowOpMaskRetrigger = 1u << 0,
+  kRowOpMaskProbability = 1u << 1,
+  kRowOpMaskSound = 1u << 2,
+  kRowOpMaskSoundOffset = 1u << 3,
+  kRowOpMaskDelay = 1u << 4,
+};
+
+// SET ROW OPS (opcode 81). 40 bytes like every other command payload.
+//
+// `delayNanoticks` is ABSOLUTE TICKS, not the num/den fraction the notation uses. NotePayload
+// stores absolute ticks and the bridge's RowOps resolves the fraction against a beat length at
+// parse time, so the wire carries what the store holds — one fact, converted once, rather than a
+// second representation for the engine to re-derive and disagree about.
+//
+// There is deliberately no PAN field, though the notation has one: pan is not on NotePayload,
+// which is pinned at 32 bytes by static_assert, so adding it is a real decision about growing
+// the per-note-per-block copy and not something to slip in beside four fields that already fit.
+struct UiSetRowOpsPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SetRowOps);
+  uint16_t mask = 0;
+  uint32_t trackId = 0;
+  uint32_t clipId = 0;
+  uint32_t noteId = 0;
+  uint32_t delayNanoticks = 0;
+  uint16_t sound = 0;
+  uint16_t soundOffset = 0;
+  uint8_t retrigger = 0;
+  uint8_t probability = 0;
+  uint8_t reserved[14]{};
+};
+static_assert(sizeof(UiSetRowOpsPayload) == 40, "UiSetRowOpsPayload must be 40 bytes");
 
 // SAMPLER LOAD (opcode 73). Exactly 40 bytes, which is the whole command payload — so `name`
 // gets 24 of them and is a project-relative FILE NAME rather than a path. See the opcode's
@@ -571,6 +749,12 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SamplerSlice: return "sampler_slice";
     case UiCommandType::SamplerMarker: return "sampler_marker";
     case UiCommandType::SamplerEmitRows: return "sampler_emit_rows";
+    case UiCommandType::SaveModule: return "save_module";
+    case UiCommandType::LoadModule: return "load_module";
+    case UiCommandType::SetRowOps: return "set_row_ops";
+    case UiCommandType::SamplerSetEnvelope: return "sampler_set_envelope";
+    case UiCommandType::BulkChunk: return "bulk_chunk";
+    case UiCommandType::SamplerSetEnvelopePoints: return "sampler_set_envelope_points";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";
@@ -596,6 +780,8 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
   switch (t) {
     case UiCommandType::SaveProject:
     case UiCommandType::LoadProject:
+    case UiCommandType::SaveModule:
+    case UiCommandType::LoadModule:
     case UiCommandType::SetTrackName:
     case UiCommandType::SavePatcherPreset:
     case UiCommandType::AddDevice:
@@ -648,6 +834,8 @@ inline bool uiCommandIsGlobalScope(UiCommandType t) {
     case UiCommandType::SetLoopRange:
     case UiCommandType::SaveProject:
     case UiCommandType::LoadProject:
+    case UiCommandType::SaveModule:
+    case UiCommandType::LoadModule:
     case UiCommandType::Undo:
     case UiCommandType::Redo:
     case UiCommandType::Panic:

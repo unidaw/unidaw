@@ -86,6 +86,65 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
   return result;
 }
 
+std::optional<ClipEditResult> setNoteRowOps(MusicalClip& clip,
+                                            uint32_t trackId,
+                                            EventId noteId,
+                                            const RowOpEdit& edit,
+                                            std::atomic<uint32_t>& clipVersion,
+                                            bool recordUndo) {
+  MusicalEvent* event = clip.findNoteById(noteId);
+  if (event == nullptr) {
+    return std::nullopt;
+  }
+  // REFUSED, NOT CLAMPED. probability is a percentage and 1..=100 is its whole range; retrigger
+  // is a strike count. A value outside those does not have an obvious right answer, and quietly
+  // substituting one gives the musician a row that says something the note does not do. Better
+  // the command fails loudly and the caller finds out it sent nonsense.
+  if ((edit.mask & kRowOpMaskProbability) != 0 && edit.probability > 100) {
+    return std::nullopt;
+  }
+
+  NotePayload& note = event->payload.note;
+  if ((edit.mask & kRowOpMaskRetrigger) != 0) {
+    note.retrigger = edit.retrigger;
+  }
+  if ((edit.mask & kRowOpMaskProbability) != 0) {
+    note.probability = edit.probability;
+  }
+  if ((edit.mask & kRowOpMaskSound) != 0) {
+    note.sound = edit.sound;
+  }
+  if ((edit.mask & kRowOpMaskSoundOffset) != 0) {
+    note.soundOffset = edit.soundOffset;
+  }
+  if ((edit.mask & kRowOpMaskDelay) != 0) {
+    note.delayNanoticks = edit.delayNanoticks;
+  }
+
+  ClipEditResult result;
+  result.nextClipVersion = clipVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+  result.diff.diffType = static_cast<uint16_t>(UiDiffType::UpdateNote);
+  result.diff.trackId = trackId;
+  result.diff.clipVersion = result.nextClipVersion;
+  result.diff.noteNanotickLo =
+      static_cast<uint32_t>(event->nanotickOffset & 0xffffffffu);
+  result.diff.noteNanotickHi =
+      static_cast<uint32_t>((event->nanotickOffset >> 32) & 0xffffffffu);
+  result.diff.noteDurationLo =
+      static_cast<uint32_t>(note.durationNanoticks & 0xffffffffu);
+  result.diff.noteDurationHi =
+      static_cast<uint32_t>((note.durationNanoticks >> 32) & 0xffffffffu);
+  result.diff.notePitch = note.pitch;
+  result.diff.noteVelocity = note.velocity;
+  result.diff.noteColumn = note.column;
+  // No fine-grained UndoEntry: there is no undo type that means "these five fields were these
+  // five values", and inventing one would be a second way to describe a note's state. The engine
+  // wraps this in a STRUCTURAL undo (a whole-store snapshot), which restores the ops exactly
+  // because it restores the notes themselves.
+  (void)recordUndo;
+  return result;
+}
+
 std::optional<ClipEditResult> removeNoteFromClip(MusicalClip& clip,
                                                  uint32_t trackId,
                                                  uint64_t nanotick,

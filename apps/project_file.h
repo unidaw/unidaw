@@ -248,6 +248,30 @@ bool deserializeProject(const std::string& json,
 
 // Writes atomically: a temp file beside the target, then rename, so an
 // interrupted save can never truncate an existing project.
+// ---------------------------------------------------------------------------------------------
+// THE `.uni` MODULE (docs/SAMPLER_DESIGN.md R3).
+//
+// "The project is a module, and it is called .uni" — a zip holding project.json plus a samples/
+// directory, exactly as MOD, XM, IT, Renoise and Live all do it. Broken sample links stop
+// existing, and sending someone a song is sending them one file.
+//
+// THE LOOSE DIRECTORY IS NOT REPLACED. The two forms are the same document at two levels of
+// packing: a directory you edit and diff while working, a file you send. Packing rewrites every
+// asset path to `samples/NAME`; unpacking writes them back out beside a project.json, so the
+// unpacked form is an ordinary project the rest of the program already knows how to open.
+//
+// `assetBaseDir` resolves the document's relative asset paths when packing. `unpackDir` is where
+// unpacking puts them.
+bool saveProjectModule(const ProjectDocument& document,
+                       const std::string& modulePath,
+                       const std::string& assetBaseDir,
+                       std::string* error = nullptr);
+
+bool loadProjectModule(ProjectDocument& document,
+                       const std::string& modulePath,
+                       const std::string& unpackDir,
+                       std::string* error = nullptr);
+
 bool saveProject(const ProjectDocument& document,
                  const std::string& path,
                  std::string* error = nullptr);

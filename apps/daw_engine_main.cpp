@@ -34,6 +34,7 @@
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
 #include "apps/rt_thread.h"
+#include "apps/render_pool.h"
 #include "apps/host_controller.h"
 #include "apps/plugin_cache.h"
 #include "apps/patcher_abi.h"
@@ -1058,12 +1059,31 @@ public:
         }
         tracks = head;
       }
+      // AN ALL-MUTED PROJECT IS A LEGITIMATE RENDER — of silence. Skipping muted tracks
+      // outright made it indistinguishable from a project whose hosts never came up: both
+      // found no candidate, both timed out after 15s, both reported "no track host connected"
+      // and exited 2. A muted track's producer runs exactly as an unmuted one's does (it fills
+      // its plane, and that plane still feeds any child track, which is how a muted parent's
+      // stems stay audible), so the pipeline is up and process() will correctly mix silence.
+      //
+      // But mute cannot simply be ignored either, and that was the first cut of this fix. With
+      // one muted track already up and an unmuted one still launching, "any ready track" would
+      // be satisfied by the muted one and the render would START — writing silence over the
+      // head of the track it should have waited for. Muted tracks are therefore accepted ONLY
+      // when there is no unmuted track anywhere in the list to wait for.
+      //
+      // awaitNextBlock skips muted tracks unconditionally, and correctly: there the question is
+      // which tracks the NEXT MIX will read, and waiting on one that contributes nothing would
+      // deadlock a render that is correct. Here the question is whether the pipeline is up.
+      bool anyUnmutedTrack = false;
+      bool anyReadyMutedTrack = false;
       if (tracks) {
         for (const auto& track : *tracks) {
-          if (!track.completedBlockId || !track.header) {
-            continue;
+          const bool muted = track.mute && track.mute->load(std::memory_order_relaxed);
+          if (!muted) {
+            anyUnmutedTrack = true;
           }
-          if (track.mute && track.mute->load(std::memory_order_relaxed)) {
+          if (!track.completedBlockId || !track.header) {
             continue;
           }
           if (track.hostReady && !track.hostReady->load(std::memory_order_acquire) ) {
@@ -1073,7 +1093,14 @@ public:
               !track.active->load(std::memory_order_acquire)) {
             continue;
           }
+          if (muted) {
+            anyReadyMutedTrack = true;
+            continue;
+          }
           return true;
+        }
+        if (anyReadyMutedTrack && !anyUnmutedTrack) {
+          return true;  // every track is muted: render the silence rather than fail
         }
       }
       if (std::chrono::steady_clock::now() >= deadline) {
@@ -1753,7 +1780,21 @@ int main(int argc, char** argv) {
   // it unconditionally keeps the SHM layout uniform; a track with no sidechain route
   // just leaves those channels silent, and a plugin without a sidechain bus ignores
   // them. This is what lets the engine key a compressor off another track's output.
-  baseConfig.numChannelsIn = baseConfig.numChannelsOut + kSidechainChannels;
+  // ...AND an aux INPUT plane of the same width as the aux output plane, so an IN-ENGINE
+  // instrument's stems can reach the child tracks.
+  //
+  // The aux OUTPUT plane exists for a multi-out PLUGIN: the plugin writes its stems there and
+  // reconcileChildTracks derives a child per bus. The built-in sampler is not a plugin — it
+  // renders in the engine — so it had no way to reach that plane at all, and S6 in
+  // SAMPLER_DESIGN assumed otherwise. This is the fix: the sampler writes its stems into the
+  // LAST numAuxChannelsOut channels of the INPUT plane, and the host copies aux-in to aux-out
+  // before its plugins run. The sampler's audio then travels the same route as everything else
+  // — through the chain — rather than needing a private path around it.
+  //
+  // The offset is DERIVED on both sides as (numChannelsIn - numAuxChannelsOut) rather than sent
+  // as a third field, so the two cannot disagree about where the plane starts.
+  baseConfig.numChannelsIn =
+      baseConfig.numChannelsOut + kSidechainChannels + kMaxAuxOutputChannels;
   // Movement 4 multi-out: reserve the aux OUTPUT plane so a multi-out instrument's stems
   // reach the engine for its child tracks. Sized once here for every host; a track
   // without a multi-out plugin just never writes it.
@@ -2242,6 +2283,10 @@ struct TrackRuntime {
     std::vector<float> samplerAudioBuffer;
     std::vector<float*> samplerAudioChannels;
     bool samplerAudioValid = false;
+    // Per-stem stereo pairs, written into the aux INPUT region below so the host can carry them
+    // to the aux OUTPUT plane where the child tracks read.
+    std::vector<float> samplerStemBuffer;
+    uint32_t samplerStemCount = 0;
     uint32_t samplerDeviceId = 0;                   // 0 = this track has no sampler
     std::shared_ptr<const daw::SamplerRender> samplerSnapshot;
     std::vector<daw::EventEntry> patcherScratchpad;
@@ -2558,6 +2603,47 @@ struct TrackRuntime {
   // Last steady-state pipeline depth (producer blocks ahead of the device) sampled by the
   // reporter while playing — the transport-to-ear latency in blocks.
   std::atomic<uint32_t> observedPipelineBlocks{0};
+
+  // PRODUCER LOAD. The producer builds each block one block ahead of the device, so the whole
+  // pipeline holds together only while producing a block costs LESS than a block lasts. Past
+  // 1.0x it cannot catch up by definition: every block it falls further behind, the ring
+  // drains, and the callback starts dropping tracks.
+  //
+  // The owner's standing directive on this is "many sampler tracks saturating one producer
+  // thread MUST NEVER HAPPEN", and a directive you cannot measure is a hope. This is the
+  // measurement: wall-clock microseconds per produced block, the sampler DSP's share of it,
+  // the worst single block, and how many blocks went over budget. Load is
+  // producerBlockUsTotal / blocks / blockDurationUs.
+  //
+  // Counted, not sampled — a sampler that blows the budget on the one block where 64 voices
+  // start together is exactly the case a periodic sample misses. Written only by the producer
+  // thread, read by the reporter and the shutdown summary, so relaxed is enough.
+  std::atomic<uint64_t> producerBlocksTimed{0};
+  std::atomic<uint64_t> producerBlockUsTotal{0};
+  std::atomic<uint64_t> producerBlockUsMax{0};
+  std::atomic<uint64_t> producerSamplerUsTotal{0};
+  std::atomic<uint64_t> producerSamplerUsMax{0};
+  std::atomic<uint64_t> producerBlocksOverBudget{0};
+
+  // The pool the per-track work runs on. Sized to leave the audio callback, the master render
+  // thread and the OS room to breathe rather than claiming every core — a producer that
+  // finishes a block fractionally sooner by starving the thread that PLAYS it has made things
+  // worse. DAW_ENGINE_RENDER_THREADS overrides; 0 or 1 keeps everything on the producer thread,
+  // which is also the reference the parallel path is checked for bit-identical output against.
+  daw::RenderPool renderPool;
+  {
+    const unsigned hw = std::thread::hardware_concurrency();
+    unsigned want = hw > 3 ? hw - 2 : 1;
+    if (const char* env = std::getenv("DAW_ENGINE_RENDER_THREADS")) {
+      const int n = std::atoi(env);
+      want = n > 0 ? static_cast<unsigned>(n) : 1;
+    }
+    if (want > 1) {
+      renderPool.start(want - 1);  // the producer thread is the other worker
+    }
+    std::cout << "Render pool: " << (renderPool.workerCount() + 1)
+              << " thread(s) for per-track production" << std::endl;
+  }
 
   std::unique_ptr<daw::IRuntime> audioRuntime;
   std::unique_ptr<EngineAudioCallback> audioCallback;
@@ -4115,18 +4201,42 @@ struct TrackRuntime {
       std::lock_guard<std::mutex> lock(parent.controllerMutex);
       mask = parent.lastAuxOutMask;
     }
-    if (mask == 0) {
-      return;
+    // A SAMPLER'S STEMS ARE A SECOND SOURCE OF BUSES, and the first one this function ever had
+    // that is not a plugin.
+    //
+    // requestBusLayout asks the HOST what buses it has. An in-engine instrument has no plugin to
+    // ask, so a track whose only multi-out source is the sampler reports mask 0 and would get no
+    // children at all — which is exactly what S6 in SAMPLER_DESIGN missed. The buses are
+    // SYNTHESISED from stemCount instead: one stereo bus per stem, laid out in the aux plane the
+    // same way a plugin's would be, so everything downstream is identical either way.
+    uint32_t samplerStems = 0;
+    {
+      std::lock_guard<std::mutex> lock(parent.trackMutex);
+      if (parent.samplerSnapshot) {
+        samplerStems = parent.samplerSnapshot->state.stemCount;
+      }
     }
-    uint32_t hostIndex = 0;
-    for (uint32_t m = mask; (m & 1u) == 0u && hostIndex < 32; m >>= 1) {
-      ++hostIndex;
+    if (mask == 0 && samplerStems == 0) {
+      return;
     }
     std::vector<daw::HostBusWire> buses;
     bool truncated = false;
-    {
+    if (mask != 0) {
+      uint32_t hostIndex = 0;
+      for (uint32_t m = mask; (m & 1u) == 0u && hostIndex < 32; m >>= 1) {
+        ++hostIndex;
+      }
       std::lock_guard<std::mutex> lock(parent.controllerMutex);
       parent.controller.requestBusLayout(hostIndex, buses, truncated);
+    }
+    for (uint32_t i = 0; i < samplerStems && i < kMaxAuxOutputChannels / 2; ++i) {
+      daw::HostBusWire b{};
+      b.index = static_cast<uint16_t>(i + 1);   // bus 0 is the main output
+      b.channelCount = 2;                       // stems are stereo
+      b.channelOffset =
+          static_cast<uint16_t>(baseConfig.numChannelsOut + i * 2);
+      b.flags = 4u;                             // enabled, output, not main
+      buses.push_back(b);
     }
     std::string parentName;
     {
@@ -7697,6 +7807,102 @@ struct TrackRuntime {
     return true;
   };
 
+  // SET ROW OPS (81). The write half of the per-note ops the engine has been publishing since
+  // v23 and v32 — retrigger, probability, the sound address, the sample offset, the onset delay.
+  // Until this existed every one of them was readable and none was writable.
+  //
+  // ADDRESSED BY NOTE ID, not by (tick, column). The client is editing a note under a cursor and
+  // knows exactly which one it means; re-deriving it from a position would reintroduce the
+  // ambiguity the stable id exists to remove, and two notes can legitimately share a tick and a
+  // column. `clipId` narrows the search when the caller knows it and is ignored when zero.
+  //
+  // Commits exactly like a note edit, because it IS one: snapshot for undo, mutate the owned
+  // clip, fork it (copy-on-write, so editing a clip placed four times does not silently rewrite
+  // a clip another track shares), re-derive the flat clip, bump both versions. Undo is the
+  // structural whole-store snapshot rather than a fine-grained entry — restoring the notes
+  // restores their ops, and a second description of a note's state is a second thing to disagree.
+  auto applySetRowOps = [&](uint32_t trackId,
+                            uint32_t clipId,
+                            daw::EventId noteId,
+                            const daw::RowOpEdit& edit,
+                            bool recordUndo) -> bool {
+    TrackRuntime* runtime = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      if (trackId < tracks.size()) {
+        runtime = tracks[trackId].get();
+      }
+    }
+    if (!runtime) {
+      DAW_EVENT("rowops.rejected")
+          .field("track", trackId)
+          .field("note", static_cast<uint64_t>(noteId))
+          .field("reason", "no_such_track");
+      return false;
+    }
+
+    std::optional<daw::ClipEditResult> result;
+    std::shared_ptr<const ClipSnapshot> snapshot;
+    uint64_t placementAt = 0;
+    {
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      TrackStoreState before = snapshotTrackStore(*runtime);
+      size_t ownedIndex = runtime->ownedClips.size();
+      for (size_t i = 0; i < runtime->ownedClips.size(); ++i) {
+        if (clipId != 0 && runtime->ownedClips[i].id != clipId) {
+          continue;
+        }
+        if (runtime->ownedClips[i].clip.findNoteById(noteId) != nullptr) {
+          ownedIndex = i;
+          break;
+        }
+      }
+      if (ownedIndex >= runtime->ownedClips.size()) {
+        DAW_EVENT("rowops.rejected")
+            .field("track", trackId)
+            .field("clip", clipId)
+            .field("note", static_cast<uint64_t>(noteId))
+            .field("reason", "no_such_note");
+        return false;
+      }
+      // Where this clip sits, so the diff's tick is on the timeline rather than clip-relative —
+      // the same shiftDiffTick a note edit does.
+      for (const auto& pl : runtime->sourcePlacements) {
+        if (pl.clipId == runtime->ownedClips[ownedIndex].id && pl.at) {
+          placementAt = *pl.at;
+          break;
+        }
+      }
+      result = daw::setNoteRowOps(runtime->ownedClips[ownedIndex].clip, trackId, noteId,
+                                  edit, runtime->trackClipVersion, recordUndo);
+      if (result) {
+        forkOwnedClip(*runtime, ownedIndex);
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+        snapshot = rebuildFlatAndPublish(*runtime);
+        if (recordUndo) {
+          pushStructuralUndo(trackId, std::move(before), snapshotTrackStore(*runtime));
+        }
+      }
+    }
+    if (!result) {
+      DAW_EVENT("rowops.rejected")
+          .field("track", trackId)
+          .field("note", static_cast<uint64_t>(noteId))
+          .field("reason", "out_of_range");
+      return false;
+    }
+    shiftDiffTick(result->diff, placementAt);
+    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);  // see applyAddNote for the order
+    clipDirty.store(true, std::memory_order_release);
+    emitUiDiff(result->diff);
+    DAW_EVENT("rowops.set")
+        .field("track", trackId)
+        .field("note", static_cast<uint64_t>(noteId))
+        .field("mask", static_cast<uint64_t>(edit.mask));
+    return true;
+  };
+
   // Arrangement placement ops (Move/Resize/Remove/Add) all mutate a track's placement
   // store and commit exactly like a note edit: snapshot for undo, mutate, re-derive the
   // flat clip + audio render, push the undo, republish + bump the clip version so the UI
@@ -8427,6 +8633,196 @@ struct TrackRuntime {
     return false;
   };
 
+  // ---- THE INWARD BULK CARRIER (opcode 83).
+  //
+  // Reassembly state for messages too long for one 40-byte ring payload. Lives here, in the UI
+  // command thread's scope, because that thread is the only one that drains the ring — the same
+  // reason every other handler below keeps its state here rather than behind a lock.
+  struct BulkStream {
+    uint16_t streamId = 0;
+    uint16_t total = 0;
+    uint32_t received = 0;
+    uint64_t lastTouched = 0;  // for eviction; a counter, not a clock
+    std::vector<bool> seen;
+    std::vector<uint8_t> data;
+  };
+  std::vector<BulkStream> bulkStreams;
+  uint64_t bulkTick = 0;
+
+  // Dispatch an ASSEMBLED bulk payload. Its first uint16 is the real commandType, so a bulk
+  // command looks exactly like a small one at this point and there is one dispatch rule rather
+  // than two — the carrier is a transport detail and nothing downstream needs to know a message
+  // arrived in pieces.
+  auto handleAssembledBulk = [&](const std::vector<uint8_t>& buf) {
+    if (buf.size() < sizeof(uint16_t)) {
+      return;
+    }
+    uint16_t inner = 0;
+    std::memcpy(&inner, buf.data(), sizeof(inner));
+    const auto innerType = static_cast<daw::UiCommandType>(inner);
+
+    // ---- SAMPLER SET ENVELOPE POINTS (84). The pencil, where 82 is the sliders.
+    if (innerType == daw::UiCommandType::SamplerSetEnvelopePoints) {
+      if (buf.size() < sizeof(daw::UiSamplerEnvPointsHeader)) {
+        DAW_EVENT("bulk.rejected")
+            .field("op", static_cast<uint32_t>(inner))
+            .field("bytes", static_cast<uint64_t>(buf.size()))
+            .field("reason", "short_header");
+        return;
+      }
+      daw::UiSamplerEnvPointsHeader h{};
+      std::memcpy(&h, buf.data(), sizeof(h));
+      const size_t need =
+          sizeof(h) + static_cast<size_t>(h.pointCount) * sizeof(daw::UiEnvPointWire);
+      // REFUSED, not truncated. An envelope with half its points is a VALID envelope, so a
+      // carrier that delivered what arrived would produce a wrong sound rather than an error —
+      // which is the whole reason seq/total exist.
+      if (h.pointCount < 2 || buf.size() < need) {
+        DAW_EVENT("bulk.rejected")
+            .field("op", static_cast<uint32_t>(inner))
+            .field("points", static_cast<uint32_t>(h.pointCount))
+            .field("bytes", static_cast<uint64_t>(buf.size()))
+            .field("need", static_cast<uint64_t>(need))
+            .field("reason", h.pointCount < 2 ? "too_few_points" : "short_payload");
+        return;
+      }
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (h.trackId < tracks.size()) {
+          runtime = tracks[h.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.envelope_rejected")
+            .field("track", h.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      daw::EnvShape shape;
+      shape.points.reserve(h.pointCount);
+      for (uint16_t i = 0; i < h.pointCount; ++i) {
+        daw::UiEnvPointWire w{};
+        std::memcpy(&w, buf.data() + sizeof(h) + static_cast<size_t>(i) * sizeof(w), sizeof(w));
+        daw::EnvPoint pt;
+        pt.time = w.time;
+        pt.valueMilli = std::clamp<int16_t>(w.valueMilli, -1000, 1000);
+        pt.tension = w.tension;
+        pt.flags = w.flags;
+        shape.points.push_back(pt);
+      }
+      shape.sustainLoopStart = h.sustainLoopStart;
+      shape.sustainLoopEnd = h.sustainLoopEnd;
+      shape.releaseLoopStart = h.releaseLoopStart;
+      shape.releaseLoopEnd = h.releaseLoopEnd;
+      shape.releaseFade = h.releaseFade;
+
+      bool applied = false;
+      uint16_t targetId = 0;
+      daw::EnvRepair repair;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (h.deviceId != 0 && d.id != h.deviceId)) {
+            continue;
+          }
+          for (auto& ms : d.sampler.modSets) {
+            if (h.modSetId != 0 && ms.id != h.modSetId) {
+              continue;
+            }
+            daw::SamplerModulator* mod = nullptr;
+            if ((h.flags & daw::kSamplerEnvAmp) != 0) {
+              for (auto& m : ms.modulators) {
+                if (m.kind == daw::ModKind::Envelope &&
+                    m.target == daw::ModTarget::Volume) {
+                  mod = &m;
+                  break;
+                }
+              }
+              if (mod == nullptr) {
+                daw::SamplerModulator fresh;
+                fresh.id = ms.nextModulatorId++;
+                fresh.kind = daw::ModKind::Envelope;
+                fresh.target = daw::ModTarget::Volume;
+                fresh.apply = 1;
+                fresh.depthMilli = 1000;
+                ms.modulators.push_back(fresh);
+                mod = &ms.modulators.back();
+              }
+            } else {
+              for (auto& m : ms.modulators) {
+                if (m.id == h.modulatorId) {
+                  mod = &m;
+                  break;
+                }
+              }
+            }
+            if (mod == nullptr) {
+              break;
+            }
+            mod->kind = daw::ModKind::Envelope;
+            mod->env = shape;
+            mod->timeBase = h.timeBase != 0 ? 1 : 0;
+            mod->rateMilli = static_cast<uint16_t>(
+                std::clamp<int32_t>(h.rateMilli == 0 ? 1000 : h.rateMilli, 250, 4000));
+            // THE PENCIL, explicitly — and it never flips back to the sliders on its own.
+            mod->editor = 1;
+            // Enforces the one invariant that is not the caller's job to remember: a release
+            // loop must have a non-zero releaseFade, or the envelope never finishes, the voice
+            // never frees, and the leak is silent.
+            //
+            // REPORTED, never silent. repairEnvShape's own comment says the caller fires this,
+            // and it is right: a clamped envelope is a sound the user cannot explain, and a
+            // drawn shape is exactly where a bad index or a backwards time arrives. Discarding
+            // the result would turn "your release loop was out of range and I removed it" into
+            // "it does not sound like I drew it".
+            repair = daw::repairEnvShape(mod->env);
+            targetId = mod->id;
+            applied = true;
+            break;
+          }
+          if (applied) {
+            break;
+          }
+        }
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        DAW_EVENT("sampler.envelope_rejected")
+            .field("track", h.trackId)
+            .field("mod_set", h.modSetId)
+            .field("reason", "no_such_mod_set_or_modulator");
+        return;
+      }
+      DAW_EVENT("sampler.envelope_points_set")
+          .field("track", h.trackId)
+          .field("modulator", static_cast<uint32_t>(targetId))
+          .field("points", static_cast<uint32_t>(h.pointCount))
+          .field("bytes", static_cast<uint64_t>(buf.size()));
+      if (repair.any()) {
+        DAW_EVENT("sampler.envelope_repaired")
+            .field("track", h.trackId)
+            .field("modulator", static_cast<uint32_t>(targetId))
+            .field("reordered", repair.reorderedPoints)
+            .field("dropped", repair.droppedPoints)
+            .field("cleared_sustain_loop", repair.clearedSustainLoop ? 1u : 0u)
+            .field("cleared_release_loop", repair.clearedReleaseLoop ? 1u : 0u)
+            .field("swapped_sustain_loop", repair.swappedSustainLoop ? 1u : 0u)
+            .field("swapped_release_loop", repair.swappedReleaseLoop ? 1u : 0u)
+            .field("added_release_fade", repair.addedReleaseFade ? 1u : 0u);
+      }
+      return;
+    }
+
+    DAW_EVENT("bulk.rejected")
+        .field("op", static_cast<uint32_t>(inner))
+        .field("bytes", static_cast<uint64_t>(buf.size()))
+        .field("reason", "unknown_inner_op");
+  };
+
   auto handleUiEntry = [&](const daw::EventEntry& entry) {
     if (entry.type != static_cast<uint16_t>(daw::EventType::UiCommand)) {
       return;
@@ -8438,6 +8834,77 @@ struct TrackRuntime {
     std::memcpy(&header, entry.payload, sizeof(header));
     const auto commandType =
         static_cast<daw::UiCommandType>(header.commandType);
+
+    // ---- BULK CHUNK (83). Intercepted BEFORE the journal: a 17-chunk envelope would otherwise
+    // write 17 indistinguishable lines and bury the command it spells. The ASSEMBLED command
+    // journals itself.
+    if (entry.size == sizeof(daw::UiBulkChunkPayload) &&
+        commandType == daw::UiCommandType::BulkChunk) {
+      daw::UiBulkChunkPayload c{};
+      std::memcpy(&c, entry.payload, sizeof(c));
+      if (c.total == 0 || c.total > daw::kBulkMaxChunks || c.seq >= c.total) {
+        DAW_EVENT("bulk.rejected")
+            .field("stream", static_cast<uint32_t>(c.streamId))
+            .field("seq", static_cast<uint32_t>(c.seq))
+            .field("total", static_cast<uint32_t>(c.total))
+            .field("reason", "bad_chunk_header");
+        return;
+      }
+      ++bulkTick;
+      BulkStream* stream = nullptr;
+      for (auto& s : bulkStreams) {
+        if (s.streamId == c.streamId && s.total == c.total) {
+          stream = &s;
+          break;
+        }
+      }
+      if (stream == nullptr) {
+        // BOUNDED. A sender that dies mid-message costs a buffer until it is evicted, not a
+        // leak — so the oldest partial stream goes rather than the newest being refused, which
+        // would let one abandoned stream block the carrier for everyone.
+        if (bulkStreams.size() >= daw::kBulkMaxStreams) {
+          size_t oldest = 0;
+          for (size_t i = 1; i < bulkStreams.size(); ++i) {
+            if (bulkStreams[i].lastTouched < bulkStreams[oldest].lastTouched) {
+              oldest = i;
+            }
+          }
+          DAW_EVENT("bulk.evicted")
+              .field("stream", static_cast<uint32_t>(bulkStreams[oldest].streamId))
+              .field("received", bulkStreams[oldest].received)
+              .field("total", static_cast<uint32_t>(bulkStreams[oldest].total));
+          bulkStreams.erase(bulkStreams.begin() + static_cast<long>(oldest));
+        }
+        BulkStream fresh;
+        fresh.streamId = c.streamId;
+        fresh.total = c.total;
+        fresh.seen.assign(c.total, false);
+        fresh.data.assign(static_cast<size_t>(c.total) * daw::kBulkChunkBytes, 0);
+        bulkStreams.push_back(std::move(fresh));
+        stream = &bulkStreams.back();
+      }
+      stream->lastTouched = bulkTick;
+      // A REPEATED chunk is not a second chunk. Counting it would complete a stream that is
+      // still missing a piece, and deliver a message with a hole in it.
+      if (!stream->seen[c.seq]) {
+        stream->seen[c.seq] = true;
+        ++stream->received;
+        std::memcpy(stream->data.data() + static_cast<size_t>(c.seq) * daw::kBulkChunkBytes,
+                    c.bytes, daw::kBulkChunkBytes);
+      }
+      if (stream->received == stream->total) {
+        std::vector<uint8_t> assembled = std::move(stream->data);
+        const uint16_t doneId = stream->streamId;
+        bulkStreams.erase(bulkStreams.begin() +
+                          static_cast<long>(stream - bulkStreams.data()));
+        DAW_EVENT("bulk.assembled")
+            .field("stream", static_cast<uint32_t>(doneId))
+            .field("chunks", static_cast<uint32_t>(c.total))
+            .field("bytes", static_cast<uint64_t>(assembled.size()));
+        handleAssembledBulk(assembled);
+      }
+      return;
+    }
     // Journal every command the engine acts on, in order. Recorded here — the one point
     // every command passes through — rather than at ~20 handlers, so a new opcode cannot
     // silently escape the journal. Outcome is "received"; a command later refused by the
@@ -10078,6 +10545,27 @@ struct TrackRuntime {
       return;
     }
 
+    // ---- SET ROW OPS (81).
+    //
+    // Checked against the opcode as well as the size, like every other handler here: three
+    // command payloads are 40 bytes and dispatching on size alone would route them to whichever
+    // branch happened to be tested first.
+    if (entry.size == sizeof(daw::UiSetRowOpsPayload) &&
+        commandType == daw::UiCommandType::SetRowOps) {
+      daw::UiSetRowOpsPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      daw::RowOpEdit edit;
+      edit.mask = p.mask;
+      edit.retrigger = p.retrigger;
+      edit.probability = p.probability;
+      edit.sound = p.sound;
+      edit.soundOffset = p.soundOffset;
+      edit.delayNanoticks = p.delayNanoticks;
+      applySetRowOps(p.trackId, p.clipId, static_cast<daw::EventId>(p.noteId), edit,
+                     /*recordUndo=*/true);
+      return;
+    }
+
     // ---- SAMPLER SLICE (76) and SAMPLER MARKER (77).
     //
     // Both edit the SliceSet and then refresh the snapshot, so a re-chop takes effect on the NEXT
@@ -10494,6 +10982,134 @@ struct TrackRuntime {
       return;
     }
 
+    // ---- SAMPLER SET ENVELOPE (82). The ADSR, which nothing could reach before.
+    if (entry.size == sizeof(daw::UiSamplerEnvelopePayload) &&
+        commandType == daw::UiCommandType::SamplerSetEnvelope) {
+      daw::UiSamplerEnvelopePayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.envelope_rejected")
+            .field("track", p.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      const char* why = "no_such_mod_set";
+      uint16_t targetId = 0;
+      daw::EnvRepair repair;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          for (auto& ms : d.sampler.modSets) {
+            if (p.modSetId != 0 && ms.id != p.modSetId) {
+              continue;
+            }
+            daw::SamplerModulator* mod = nullptr;
+            if ((p.flags & daw::kSamplerEnvAmp) != 0) {
+              // The amp envelope, whatever its id — and MINTED if the mod set has none, which is
+              // the state every project starts in. Refusing here would mean a caller had to
+              // create a modulator through some other command that does not exist.
+              for (auto& m : ms.modulators) {
+                if (m.kind == daw::ModKind::Envelope &&
+                    m.target == daw::ModTarget::Volume) {
+                  mod = &m;
+                  break;
+                }
+              }
+              if (mod == nullptr) {
+                daw::SamplerModulator fresh;
+                fresh.id = ms.nextModulatorId++;
+                fresh.kind = daw::ModKind::Envelope;
+                fresh.target = daw::ModTarget::Volume;
+                fresh.apply = 1;  // multiply — the right combination for Volume
+                fresh.depthMilli = 1000;
+                ms.modulators.push_back(fresh);
+                mod = &ms.modulators.back();
+              }
+            } else {
+              for (auto& m : ms.modulators) {
+                if (m.id == p.modulatorId) {
+                  mod = &m;
+                  break;
+                }
+              }
+              if (mod == nullptr) {
+                why = "no_such_modulator";
+                break;
+              }
+            }
+            mod->kind = daw::ModKind::Envelope;
+            mod->env = daw::makeAdsr(p.attack, p.decay,
+                                     std::clamp<int32_t>(p.sustainMilli, 0, 1000),
+                                     p.release);
+            mod->timeBase = p.timeBase != 0 ? 1 : 0;
+            // 250..4000 matches the field's documented range. Zero would divide by zero in the
+            // runner's unit conversion, so it is not merely out of range but unusable.
+            mod->rateMilli = static_cast<uint16_t>(
+                std::clamp<int32_t>(p.rateMilli == 0 ? 1000 : p.rateMilli, 250, 4000));
+            // The ADSR editor, explicitly. Never inferred from the shape — see the field's
+            // comment: sniffing "four points with a sustain loop?" would flip the editor out
+            // from under someone who hand-drew a four-point curve.
+            mod->editor = 0;
+            // Reported, never silent — see the pencil path. An ADSR can be repaired too: a
+            // sustain of 0 with attack+decay+release all 0 collapses four points onto one time,
+            // and the user should be told their envelope was nudged rather than left wondering.
+            repair = daw::repairEnvShape(mod->env);
+            targetId = mod->id;
+            applied = true;
+            break;
+          }
+          if (applied || why != nullptr) {
+            break;
+          }
+        }
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        DAW_EVENT("sampler.envelope_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("mod_set", p.modSetId)
+            .field("reason", why);
+        return;
+      }
+      DAW_EVENT("sampler.envelope_set")
+          .field("track", p.trackId)
+          .field("mod_set", p.modSetId)
+          .field("modulator", static_cast<uint32_t>(targetId))
+          .field("attack", static_cast<uint64_t>(p.attack))
+          .field("decay", static_cast<uint64_t>(p.decay))
+          .field("sustain_milli", static_cast<int64_t>(p.sustainMilli))
+          .field("release", static_cast<uint64_t>(p.release))
+          .field("time_base", static_cast<uint32_t>(p.timeBase));
+      if (repair.any()) {
+        DAW_EVENT("sampler.envelope_repaired")
+            .field("track", p.trackId)
+            .field("modulator", static_cast<uint32_t>(targetId))
+            .field("reordered", repair.reorderedPoints)
+            .field("dropped", repair.droppedPoints)
+            .field("cleared_sustain_loop", repair.clearedSustainLoop ? 1u : 0u)
+            .field("cleared_release_loop", repair.clearedReleaseLoop ? 1u : 0u)
+            .field("swapped_sustain_loop", repair.swappedSustainLoop ? 1u : 0u)
+            .field("swapped_release_loop", repair.swappedReleaseLoop ? 1u : 0u)
+            .field("added_release_fade", repair.addedReleaseFade ? 1u : 0u);
+      }
+      return;
+    }
+
     // ---- SAMPLER LOAD (73). Mints a SOURCE and a SLOT that plays it.
     if (entry.size == sizeof(daw::UiSamplerLoadPayload) &&
         commandType == daw::UiCommandType::SamplerLoad) {
@@ -10585,6 +11201,77 @@ struct TrackRuntime {
           .field("root", static_cast<uint32_t>(p.rootKey))
           .field("fixed_pitch", (p.flags & daw::kSamplerLoadFixedPitch) ? 1u : 0u)
           .field("file", name);
+      return;
+    }
+
+    // ---- SAVE/LOAD MODULE (79/80). The .uni: one file you can send someone.
+    if (entry.size == sizeof(daw::UiPatcherPresetCommandPayload) &&
+        (commandType == daw::UiCommandType::SaveModule ||
+         commandType == daw::UiCommandType::LoadModule)) {
+      daw::UiPatcherPresetCommandPayload np{};
+      std::memcpy(&np, entry.payload, sizeof(np));
+      std::string name(np.name, strnlen(np.name, sizeof(np.name)));
+      if (name.empty()) {
+        name = "default";
+      }
+      const std::string dir = daw::defaultProjectDir();
+      std::error_code ec;
+      std::filesystem::create_directories(dir, ec);
+      const std::string modulePath = (std::filesystem::path(dir) / (name + ".uni")).string();
+      std::string err;
+      if (commandType == daw::UiCommandType::SaveModule) {
+        // Assets resolve against the directory the project was LOADED from, which is where the
+        // sampler's project-relative names point. Using the save directory instead would work
+        // only when they happen to be the same, and fail silently when they are not.
+        // SAVE LOOSE FIRST, THEN PACK WHAT WAS SAVED. Not because it is fewer lines — it is
+        // more — but because building the document a SECOND way here would be a second answer to
+        // "what is this project", and the two would drift. saveProjectToPath already reads LIVE
+        // engine state, which is the part that is easy to get wrong; packing its output inherits
+        // that for free.
+        //
+        // It also leaves both forms on disk, which is the model: a directory you edit and diff,
+        // a file you send.
+        const std::string loosePath =
+            (std::filesystem::path(dir) / (name + ".uniproj.json")).string();
+        bool ok = saveProjectToPath(loosePath, &err);
+        if (ok) {
+          daw::ProjectDocument doc;
+          ok = daw::loadProject(doc, loosePath, &err);
+          if (ok) {
+            // Assets resolve against the directory the project was LOADED from, which is where
+            // the sampler's project-relative names point. Using the SAVE directory instead would
+            // work only when the two happen to coincide, and fail silently when they do not.
+            ok = daw::saveProjectModule(
+                doc, modulePath, loadedProjectDir.empty() ? dir : loadedProjectDir, &err);
+          }
+        }
+        DAW_EVENT("project.module_saved")
+            .field("path", modulePath)
+            .field("ok", ok)
+            .field("error", ok ? std::string() : err);
+      } else {
+        // Unpacked BESIDE the module, into a directory named after it. The unpacked form is an
+        // ordinary loose project — the two forms are one document at two levels of packing, so
+        // opening a module leaves you working exactly as if you had never packed it.
+        const std::string unpackDir = (std::filesystem::path(dir) / name).string();
+        daw::ProjectDocument doc;
+        const bool ok = daw::loadProjectModule(doc, modulePath, unpackDir, &err);
+        if (ok) {
+          const std::string docPath =
+              (std::filesystem::path(unpackDir) / "project.json").string();
+          const bool applied = loadProjectFromPath(docPath, &err);
+          DAW_EVENT("project.module_loaded")
+              .field("path", modulePath)
+              .field("unpacked", unpackDir)
+              .field("ok", applied)
+              .field("error", applied ? std::string() : err);
+        } else {
+          DAW_EVENT("project.module_loaded")
+              .field("path", modulePath)
+              .field("ok", false)
+              .field("error", err);
+        }
+      }
       return;
     }
 
@@ -12560,6 +13247,13 @@ struct TrackRuntime {
     const auto blockDuration =
         std::chrono::duration<double>(
             static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);
+    // How long a block LASTS. Producing one must cost less than this or the producer can never
+    // catch up. This is the budget the load counters are measured against.
+    const uint64_t producerBlockBudgetUs =
+        engineConfig.sampleRate > 0.0
+            ? static_cast<uint64_t>(static_cast<double>(engineConfig.blockSize) /
+                                    engineConfig.sampleRate * 1e6)
+            : 0;
     const bool debugStall = std::getenv("DAW_ENGINE_DEBUG_STALL") != nullptr;
     const auto stallStart = std::chrono::steady_clock::now();
     uint64_t stallLogMs = 0;
@@ -12788,6 +13482,16 @@ struct TrackRuntime {
       }
 
       const uint32_t blockId = nextBlockId.fetch_add(1);
+      // Everything from here to the bottom of the loop is THIS block's production. The waits
+      // above are deliberately outside it: sleeping because the device has not drained a slot
+      // yet is the pipeline working, not the producer struggling, and folding that idle time in
+      // would report a healthy engine as loaded.
+      const auto blockWorkStart = std::chrono::steady_clock::now();
+      // Summed across every track, and once the pool is running that means across threads —
+      // so this is sampler CPU time, which can exceed the block's wall clock. That is the
+      // number worth having: it says how much sampler work the block contained, independently
+      // of how many threads it was spread over.
+      std::atomic<uint64_t> blockSamplerUs{0};
       const uint64_t sampleStart =
           static_cast<uint64_t>(engineConfig.blockSize) *
           static_cast<uint64_t>(blockId - 1);
@@ -14717,9 +15421,12 @@ struct TrackRuntime {
       // cleared inside the loop would only reach whichever track happened to be first.
       const bool doPanic = panicPending.exchange(false, std::memory_order_acq_rel);
 
-      for (auto* runtime : trackSnapshot) {
+      // ONE TRACK'S WHOLE BLOCK. Lifted out of the `for` it used to be so it can run on the
+      // render pool; the body below is otherwise unchanged, and the four guard clauses that
+      // were `continue` are now `return` because "skip this track" is what they always meant.
+      auto processTrack = [&](TrackRuntime* runtime) {
         if (!runtime->hostReady.load(std::memory_order_acquire)) {
-          continue;
+          return;
         }
         auto trackStatePtr = std::atomic_load_explicit(&runtime->trackSnapshot,
                                                        std::memory_order_acquire);
@@ -14742,15 +15449,15 @@ struct TrackRuntime {
                           : std::unique_lock<std::mutex>(runtime->controllerMutex,
                                                          std::try_to_lock);
         if (!lock.owns_lock()) {
-          continue;
+          return;
         }
         if (!runtime->controller.shmHeader()) {
-          continue;
+          return;
         }
         auto ringCtrl = getRingCtrl(*runtime);
         auto ringStd = getRingStd(*runtime);
         if (ringCtrl.mask == 0 || ringStd.mask == 0) {
-          continue;
+          return;
         }
 
         // Keystroke forwarding (kControlVersion 10): drain any keys this track's plugin
@@ -15113,10 +15820,44 @@ struct TrackRuntime {
               (bpmNow > 0.0 ? bpmNow : 120.0) *
               static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter) /
               (60.0 * engineConfig.sampleRate));
+          // STEMS. A slot with outputStem != 0 renders into its own stereo pair in the AUX
+          // INPUT region — the last numAuxChannelsOut channels of the input plane — which the
+          // host copies to the aux OUTPUT plane, where reconcileChildTracks reads it. The
+          // sampler's stems therefore travel the same route as a multi-out plugin's, and the
+          // child-track machinery does not need to know which produced them.
+          const daw::SamplerRender* snapPtr = runtime->samplerRuntime.snapshot();
+          const uint32_t stems = snapPtr ? snapPtr->state.stemCount : 0;
+          std::vector<float*> stemPlanes;
+          if (stems > 0) {
+            const size_t need = static_cast<size_t>(stems) * 2 * engineConfig.blockSize;
+            if (runtime->samplerStemBuffer.size() != need) {
+              runtime->samplerStemBuffer.assign(need, 0.0f);
+            } else {
+              std::fill(runtime->samplerStemBuffer.begin(), runtime->samplerStemBuffer.end(),
+                        0.0f);
+            }
+            stemPlanes.resize(static_cast<size_t>(stems) * 2);
+            for (size_t i = 0; i < stemPlanes.size(); ++i) {
+              stemPlanes[i] =
+                  runtime->samplerStemBuffer.data() + i * engineConfig.blockSize;
+            }
+          }
+          // Timed separately from the block as a whole: this is the part that scales with the
+          // number of sampler tracks and the voices in them, so it is the part that answers
+          // "is the sampler what saturated the producer" without guessing.
+          const auto samplerStart = std::chrono::steady_clock::now();
           runtime->samplerRuntime.render(
               runtime->samplerAudioChannels.data(), channels, engineConfig.blockSize,
               runtime->samplerEvents.empty() ? nullptr : runtime->samplerEvents.data(),
-              static_cast<uint32_t>(runtime->samplerEvents.size()));
+              static_cast<uint32_t>(runtime->samplerEvents.size()),
+              stemPlanes.empty() ? nullptr : stemPlanes.data(), stems);
+          blockSamplerUs.fetch_add(
+              static_cast<uint64_t>(
+                  std::chrono::duration_cast<std::chrono::microseconds>(
+                      std::chrono::steady_clock::now() - samplerStart)
+                      .count()),
+              std::memory_order_relaxed);
+          runtime->samplerStemCount = stems;
           runtime->samplerAudioValid = true;
         }
         runtime->samplerEvents.clear();
@@ -15277,6 +16018,28 @@ struct TrackRuntime {
             // Movement 4: channels after the main bus carry the sidechain (key) input,
             // the same for every segment (it feeds the first plugin's sidechain bus).
             if (ch >= engineConfig.numChannelsOut) {
+              // THE AUX INPUT REGION is the LAST numAuxChannelsOut channels of the plane, and
+              // the sidechain sits between it and the main channels. Derived here the same way
+              // the host derives it, so the two cannot disagree about where the boundary is.
+              const uint32_t auxInBase =
+                  engineConfig.numChannelsIn > engineConfig.numAuxChannelsOut
+                      ? engineConfig.numChannelsIn - engineConfig.numAuxChannelsOut
+                      : engineConfig.numChannelsIn;
+              if (ch >= auxInBase) {
+                // A SAMPLER STEM (kControlVersion 14). The host copies these to the aux OUTPUT
+                // plane, where reconcileChildTracks reads them — so the sampler's stems reach a
+                // child track by the same route a multi-out plugin's do.
+                const uint32_t stemCh = ch - auxInBase;
+                const size_t base = static_cast<size_t>(stemCh) * engineConfig.blockSize;
+                if (runtime->samplerAudioValid &&
+                    base + engineConfig.blockSize <= runtime->samplerStemBuffer.size()) {
+                  std::memcpy(input, runtime->samplerStemBuffer.data() + base,
+                              static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
+                } else {
+                  std::fill(input, input + engineConfig.blockSize, 0.0f);
+                }
+                continue;
+              }
               const size_t base = static_cast<size_t>(ch - engineConfig.numChannelsOut) *
                                   engineConfig.blockSize;
               if (base + engineConfig.blockSize <=
@@ -15446,7 +16209,73 @@ struct TrackRuntime {
             enqueueInboundMidi(*dst, routedMidi, sampleStart, nextBlockSampleStart);
           }
         }
+      };
+
+      // WHICH TRACKS MAY RUN TOGETHER.
+      //
+      // Almost everything processTrack touches belongs to its own track: its SHM, its rings,
+      // its buffers, its sampler. Two things do not, and they decide this partition.
+      //
+      // The first is track-to-track ROUTING. A track whose audioOut or midiOut names another
+      // track pushes into that track's inbound buffers at the end of its block, and the
+      // destination swaps those buffers in at the start of its own. Whether the destination
+      // sees this block's audio or next block's therefore depends on which of the two runs
+      // first — and the audio accumulates with `+=`, which is not associative in floating
+      // point, so even the order of two sources into one destination is audible. Both ENDS of
+      // every such route go in the serial group, in exactly the order they have today.
+      //
+      // The second is the keyjazz PREVIEW path, which allocates note ids from one shared
+      // counter. Ids do not change what is heard, but they do change what is logged and
+      // matched, and a block with previews is a block where a human just pressed a key — there
+      // is nothing to parallelise for. Those blocks run entirely serially.
+      //
+      // Everything left is isolated by construction: no route reaches it, so no other track's
+      // work is observable to it and its own work is observable to no one. Running those
+      // together cannot change the result, which is why the parallel and serial paths are
+      // checked for BIT-IDENTICAL output rather than merely similar output.
+      //
+      // (The plugin-editor keystroke drain also writes shared transport state. Only one editor
+      // can hold keyboard focus, so only one track's key ring is ever non-empty in a block.)
+      std::vector<TrackRuntime*> serialTracks;
+      std::vector<TrackRuntime*> parallelTracks;
+      {
+        std::vector<uint32_t> routeEndpoints;
+        for (auto* runtime : trackSnapshot) {
+          auto tsPtr = std::atomic_load_explicit(&runtime->trackSnapshot,
+                                                 std::memory_order_acquire);
+          if (!tsPtr) {
+            continue;
+          }
+          const auto& r = tsPtr->routing;
+          if (r.audioOut.kind == daw::TrackRouteKind::Track) {
+            routeEndpoints.push_back(runtime->trackId);
+            routeEndpoints.push_back(r.audioOut.trackId);
+          }
+          if (r.midiOut.kind == daw::TrackRouteKind::Track) {
+            routeEndpoints.push_back(runtime->trackId);
+            routeEndpoints.push_back(r.midiOut.trackId);
+          }
+        }
+        const bool allSerial = !previewThisBlock.empty();
+        for (auto* runtime : trackSnapshot) {
+          const bool routed =
+              std::find(routeEndpoints.begin(), routeEndpoints.end(), runtime->trackId) !=
+              routeEndpoints.end();
+          if (allSerial || routed) {
+            serialTracks.push_back(runtime);
+          } else {
+            parallelTracks.push_back(runtime);
+          }
+        }
       }
+      // Serial group first, in track order — the order it has always run in. No route touches
+      // a parallel-group track, so nothing in the parallel group can observe this.
+      for (auto* runtime : serialTracks) {
+        processTrack(runtime);
+      }
+      renderPool.parallelFor(parallelTracks.size(), [&](std::size_t i) {
+        processTrack(parallelTracks[i]);
+      });
 
       if (isPlaying) {
         uint64_t nextTicks = blockStartTicks + blockTicks;
@@ -15454,6 +16283,44 @@ struct TrackRuntime {
           nextTicks = loopStartTicks + ((nextTicks - loopStartTicks) % loopLen);
         }
         transportNanotick.store(nextTicks, std::memory_order_release);
+      }
+      // Fold this block into the producer-load counters, BEFORE the throttle sleep below —
+      // that sleep is deliberate pacing, not work, and folding it in would report an idling
+      // producer as a saturated one. Only while PLAYING: a stopped transport still walks this
+      // loop to publish UI state, and those blocks have no deadline to measure against.
+      if (isPlaying) {
+        const uint64_t blockUs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - blockWorkStart)
+                .count());
+        producerBlocksTimed.fetch_add(1, std::memory_order_relaxed);
+        producerBlockUsTotal.fetch_add(blockUs, std::memory_order_relaxed);
+        const uint64_t samplerUs = blockSamplerUs.load(std::memory_order_relaxed);
+        producerSamplerUsTotal.fetch_add(samplerUs, std::memory_order_relaxed);
+        if (blockUs > producerBlockUsMax.load(std::memory_order_relaxed)) {
+          producerBlockUsMax.store(blockUs, std::memory_order_relaxed);
+        }
+        if (samplerUs > producerSamplerUsMax.load(std::memory_order_relaxed)) {
+          producerSamplerUsMax.store(samplerUs, std::memory_order_relaxed);
+        }
+        if (blockUs > producerBlockBudgetUs) {
+          producerBlocksOverBudget.fetch_add(1, std::memory_order_relaxed);
+          // WHICH block, and how much of it was the sampler. A mean is reassuring and a peak
+          // is not actionable without this: "8 sampler tracks peaked at 2.5x budget" could be
+          // steady-state DSP that a render pool fixes, or the one startup block that decodes
+          // samples, or a UI snapshot publish that no amount of DSP threading touches. The
+          // answer changes what you build, so it is recorded rather than guessed at.
+          //
+          // Rate-limited to the first 32: a genuinely saturated producer would otherwise log
+          // once per block forever, and the log itself becomes the load.
+          if (producerBlocksOverBudget.load(std::memory_order_relaxed) <= 32) {
+            DAW_EVENT("producer.over_budget")
+                .field("block", static_cast<uint64_t>(blockId))
+                .field("us", blockUs)
+                .field("sampler_us", samplerUs)
+                .field("budget_us", producerBlockBudgetUs);
+          }
+        }
       }
       if (throttleInactive || throttlePlayback) {
         std::this_thread::sleep_for(blockDuration);
@@ -16631,6 +17498,53 @@ struct TrackRuntime {
   }
   if (xrunReporter.joinable()) {
     xrunReporter.join();
+  }
+
+  // PRODUCER LOAD SUMMARY. Reported whether or not there is an audio device: offline the
+  // producer is not paced to real time, but the microseconds it spends per block are the same
+  // microseconds it would spend live, so an offline render is a perfectly good way to ask
+  // "would this session have kept up" — and the only way to ask it reproducibly.
+  {
+    const uint64_t blocks = producerBlocksTimed.load(std::memory_order_relaxed);
+    if (blocks > 0) {
+      const uint64_t budgetUs =
+          engineConfig.sampleRate > 0.0
+              ? static_cast<uint64_t>(static_cast<double>(engineConfig.blockSize) /
+                                      engineConfig.sampleRate * 1e6)
+              : 0;
+      const uint64_t totalUs = producerBlockUsTotal.load(std::memory_order_relaxed);
+      const uint64_t samplerUs = producerSamplerUsTotal.load(std::memory_order_relaxed);
+      const uint64_t maxUs = producerBlockUsMax.load(std::memory_order_relaxed);
+      const uint64_t over = producerBlocksOverBudget.load(std::memory_order_relaxed);
+      const double meanUs = static_cast<double>(totalUs) / static_cast<double>(blocks);
+      const double load = budgetUs > 0 ? meanUs / static_cast<double>(budgetUs) : 0.0;
+      const double peakLoad =
+          budgetUs > 0 ? static_cast<double>(maxUs) / static_cast<double>(budgetUs) : 0.0;
+      const double samplerShare =
+          totalUs > 0 ? static_cast<double>(samplerUs) / static_cast<double>(totalUs) : 0.0;
+      DAW_EVENT("producer.load")
+          .field("blocks", blocks)
+          .field("budget_us", budgetUs)
+          .field("mean_us", static_cast<uint64_t>(meanUs))
+          .field("max_us", maxUs)
+          .field("sampler_mean_us",
+                 static_cast<uint64_t>(static_cast<double>(samplerUs) /
+                                       static_cast<double>(blocks)))
+          .field("sampler_max_us", producerSamplerUsMax.load(std::memory_order_relaxed))
+          .field("over_budget", over)
+          .field("load_milli", static_cast<uint64_t>(load * 1000.0))
+          .field("peak_load_milli", static_cast<uint64_t>(peakLoad * 1000.0));
+      std::cout << "Producer load: " << load << "x mean, " << peakLoad << "x peak ("
+                << static_cast<uint64_t>(meanUs) << " us mean, " << maxUs << " us worst, "
+                << budgetUs << " us budget) over " << blocks << " blocks; sampler DSP is "
+                << static_cast<uint64_t>(samplerShare * 100.0) << "% of it; " << over
+                << " block(s) over budget." << std::endl;
+      if (over > 0) {
+        std::cerr << "Engine: the producer went over its block budget " << over
+                  << " time(s). Past 1.0x it cannot catch up — every block it falls further "
+                     "behind and the callback starts dropping tracks." << std::endl;
+      }
+    }
   }
 
   // Stop audio output

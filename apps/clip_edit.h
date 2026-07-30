@@ -88,6 +88,29 @@ std::optional<ClipEditResult> endNoteInColumn(MusicalClip& clip,
                                               std::atomic<uint32_t>& clipVersion,
                                               bool recordUndo);
 
+// The values a SetRowOps edit is carrying, and which of them it means. `mask` uses the
+// kRowOpMask* bits from event_payloads.h: a bit CLEAR leaves that op untouched, a bit SET with a
+// zero value CLEARS it. See the opcode comment for why both are needed.
+struct RowOpEdit {
+  uint16_t mask = 0;
+  uint8_t retrigger = 0;
+  uint8_t probability = 0;
+  uint16_t sound = 0;
+  uint16_t soundOffset = 0;
+  uint32_t delayNanoticks = 0;
+};
+
+// Writes row ops onto an existing note, addressed by id. Returns nullopt when there is no such
+// note in this clip, or when a value is out of range — REFUSED rather than clamped, because a
+// silently corrected op is a note that does not do what the row says it does, and the row is
+// what the musician reads.
+std::optional<ClipEditResult> setNoteRowOps(MusicalClip& clip,
+                                            uint32_t trackId,
+                                            EventId noteId,
+                                            const RowOpEdit& edit,
+                                            std::atomic<uint32_t>& clipVersion,
+                                            bool recordUndo);
+
 std::optional<ClipEditResult> removeNoteFromClip(MusicalClip& clip,
                                                  uint32_t trackId,
                                                  uint64_t nanotick,

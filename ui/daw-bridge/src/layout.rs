@@ -236,6 +236,121 @@ pub const SAMPLER_MARKER_REMOVE: u16 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+/// BulkChunk (83) — one chunk of a longer command. The inward bulk carrier.
+///
+/// Outbound has SHM regions; inbound had only the ring's 40-byte payload, so any variable-length
+/// UI->engine command had no way across. A long message is chunked across ordinary ring entries
+/// and the reassembled buffer IS a payload, carrying the real commandType as its first u16 — so
+/// once assembled a bulk command looks exactly like a small one.
+///
+/// `seq`/`total` make a LOST chunk detectable. Concatenating whatever arrived would deliver a
+/// truncated message that still parses, and a wrong sound is worse than an error.
+pub struct UiBulkChunkPayload {
+    pub command_type: u16,
+    pub stream_id: u16,
+    pub seq: u16,
+    pub total: u16,
+    pub bytes: [u8; 32],
+}
+
+pub const BULK_CHUNK_BYTES: usize = 32;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+/// Header of an assembled SamplerSetEnvelopePoints (84) payload; `point_count` points follow.
+/// 255 in a loop index means NO LOOP.
+pub struct UiSamplerEnvPointsHeader {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub mod_set_id: u32,
+    pub modulator_id: u16,
+    pub time_base: u8,
+    pub reserved: u8,
+    pub rate_milli: u16,
+    pub point_count: u16,
+    pub sustain_loop_start: u8,
+    pub sustain_loop_end: u8,
+    pub release_loop_start: u8,
+    pub release_loop_end: u8,
+    pub release_fade: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+/// One drawn point. `tension` is toward the NEXT point: 0 linear, positive ease-in, negative
+/// ease-out. `flags` bit 0 = STEP — hold until the next point's time, then jump.
+pub struct UiEnvPointWire {
+    pub time: u32,
+    pub value_milli: i16,
+    pub tension: i8,
+    pub flags: u8,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+/// SamplerSetEnvelope (82). The ADSR — until this existed the only way to reach a sampler
+/// envelope was to hand-edit the project JSON.
+///
+/// Times are in the modulator's OWN unit, named by `time_base` in the same payload: 0 =
+/// microseconds, 1 = nanoticks. Carrying the unit with the numbers is what makes the command
+/// complete — bare durations would mean different things depending on state the sender never saw.
+pub struct UiSamplerEnvelopePayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub mod_set_id: u32,
+    pub modulator_id: u16,
+    pub time_base: u8,
+    pub reserved1: u8,
+    pub attack: u32,
+    pub decay: u32,
+    pub release: u32,
+    pub sustain_milli: i16,
+    pub rate_milli: u16,
+    pub reserved2: u32,
+}
+
+/// Target the AMP envelope whatever its id, minting one if the mod set has none.
+pub const SAMPLER_ENV_AMP: u16 = 1 << 0;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+/// SetRowOps (81). The write half of the per-note ops the engine has published since v23/v32.
+///
+/// `mask` says which fields this payload is speaking about: a bit CLEAR leaves that op alone, a
+/// bit SET with a zero value CLEARS it. Without the distinction there is no way to remove one op
+/// from a note without resending the other four.
+///
+/// `delay_nanoticks` is ABSOLUTE ticks, not the num/den fraction the notation uses — RowOps
+/// resolves the fraction against a beat length at parse time, so the wire carries what the store
+/// holds. There is deliberately no pan field: pan is not on the engine's NotePayload, which is
+/// pinned at 32 bytes.
+pub struct UiSetRowOpsPayload {
+    pub command_type: u16,
+    pub mask: u16,
+    pub track_id: u32,
+    pub clip_id: u32,
+    pub note_id: u32,
+    pub delay_nanoticks: u32,
+    pub sound: u16,
+    pub sound_offset: u16,
+    pub retrigger: u8,
+    pub probability: u8,
+    pub reserved: [u8; 14],
+}
+
+/// SetRowOps mask bits — which ops the payload means.
+pub const ROW_OP_MASK_RETRIGGER: u16 = 1 << 0;
+pub const ROW_OP_MASK_PROBABILITY: u16 = 1 << 1;
+pub const ROW_OP_MASK_SOUND: u16 = 1 << 2;
+pub const ROW_OP_MASK_SOUND_OFFSET: u16 = 1 << 3;
+pub const ROW_OP_MASK_DELAY: u16 = 1 << 4;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct UiSamplerMarkerPayload {
     pub command_type: u16,
     pub op: u16,
@@ -927,6 +1042,28 @@ pub enum UiCommandType {
     /// with the difference that matters: re-cutting afterwards moves what the rows PLAY without
     /// moving what they SAY. Bitwig emits its clip once, one-way.
     SamplerEmitRows = 78,
+
+    /// Save/load the project as a `.uni` MODULE — a zip holding project.json plus every sample.
+    /// "It is easy to send someone the zip." Broken sample links stop existing, because there
+    /// are no links. Same packed-NAME payload as SaveProject/LoadProject: this is the same
+    /// operation at a different level of packing, not a different kind of save.
+    SaveModule = 79,
+    LoadModule = 80,
+
+    /// Writes a note's ROW OPS — retrigger, probability, sound address, sample offset, onset
+    /// delay — addressed by NOTE ID. These have been published since v23/v32 and no command
+    /// could set one, so every op was readable and none writable. No kShmVersion bump: every
+    /// field it writes is already on the wire outbound.
+    SetRowOps = 81,
+
+    /// Sets a sampler modulator's ADSR. ADSR fits in 40 bytes; a hand-drawn multi-point
+    /// envelope does not and is deliberately not here — that needs an inward bulk carrier.
+    SamplerSetEnvelope = 82,
+
+    /// One chunk of a longer command — the inward bulk carrier.
+    BulkChunk = 83,
+    /// A hand-drawn multi-point envelope, carried over BulkChunk.
+    SamplerSetEnvelopePoints = 84,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -2028,6 +2165,9 @@ mod wire_layout {
             UiSamplerSlicePayload,
             UiSamplerMarkerPayload,
             UiSamplerEmitRowsPayload,
+            UiSetRowOpsPayload,
+            UiSamplerEnvelopePayload,
+            UiBulkChunkPayload,
         );
     }
 
@@ -2043,6 +2183,12 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSamplerSlicePayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerMarkerPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerEmitRowsPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSetRowOpsPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerEnvelopePayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiBulkChunkPayload>(), 40);
+        // Not a ring payload — the ASSEMBLED shapes, which the engine memcpys.
+        assert_eq!(std::mem::size_of::<UiSamplerEnvPointsHeader>(), 32);
+        assert_eq!(std::mem::size_of::<UiEnvPointWire>(), 8);
         assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 32);
     }
 }
