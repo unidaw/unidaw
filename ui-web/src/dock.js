@@ -367,7 +367,10 @@ export function createCommands(api) {
         const c = api.automationPoints(Number(a[0]), a[1]);
         // `null` is "asked, not answered yet" — a different fact from "nothing automates
         // that", which the engine says explicitly with found:false.
-        if (!c) return 'asking the engine… run it again in a moment';
+        // The answer arrives on the ack channel and prints ITSELF into this log — see the
+        // `automation` branch in `onAck`. This line is a receipt for the question, not an
+        // instruction to ask it again.
+        if (!c) return 'asking the engine…';
         if (!c.found) return `nothing automates ${a[1]} on track ${a[0]}`;
         const rows = c.points.map(([tick, v]) => `${tick}  ${v.toFixed(3)}`);
         if (c.truncated) rows.push(`… and ${c.truncated} more points than the slot could carry`);

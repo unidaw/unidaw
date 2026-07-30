@@ -6175,6 +6175,23 @@ conn = WANTS_ENGINE ? connectEngine({
             track: a.track, param: a.param, found: !!a.found, discrete: !!a.discrete,
             truncated: a.truncated | 0, points: a.points || [],
           });
+          /*
+           * ...AND SAY SO IN THE LOG.
+           *
+           * A curve is fetched asynchronously, so `curve` can only answer "asking the engine"
+           * and the real answer arrives here. Telling the person to run it again is an
+           * interface making them poll for something that already happened — and it made my own
+           * suite report the engine as unresponsive when it had answered perfectly, because the
+           * check read the placeholder.
+           *
+           * `found: false` is logged too, and is the more important half: "nothing automates
+           * that" is an ANSWER, and a console that stayed silent for it would leave the
+           * question looking unanswered for ever.
+           */
+          dock.log('out', a.found
+            ? `${a.param} on track ${a.track}: ${(a.points || []).length} points`
+              + `${a.truncated ? ` (+${a.truncated} truncated)` : ''}`
+            : `nothing automates ${a.param} on track ${a.track}`);
         }
         schedule();
         return;

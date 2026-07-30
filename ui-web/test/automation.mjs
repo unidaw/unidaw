@@ -186,27 +186,31 @@ await page.waitForTimeout(1500);
 // and it is not mine.
 // ---------------------------------------------------------------------------
 {
-  const said = await type('curve 0 nosuchparam');
-  if (/nothing automates/i.test(said)) {
-    check(true, 'asking for a lane that does not exist is ANSWERED, not left hanging');
-  } else {
-    /*
-     * The engine does not answer a RequestAutomationLane for a parameter with no automation. It
-     * is documented as answering `found: 0` — "nothing automates that" is an ANSWER — and
-     * instead nothing is written to the slot at all, so every caller waits out its timeout.
-     *
-     * NOT MINE, and verified with backend's own tool rather than inferred from my wire:
-     *     daw-cli get automation-points --track 0 --param cutoff
-     *     daw-cli: no automation answer for track 0 param "cutoff" (slot 0)
-     *
-     * Blocked rather than deleted, so it turns green on their side instead of being
-     * rediscovered on mine. The symptom here is a console line that says "asking the engine…"
-     * for ever; the app does not hang, because the request times out and says so.
-     */
-    block('asking for a lane that does not exist is ANSWERED, not left hanging',
-          'the engine writes no slot for a param with no automation, so the request times out. '
-          + 'Documented as found:0. Reproduced with daw-cli get automation-points.');
-  }
+  /*
+   * A LANE THAT DOES NOT EXIST IS AN ANSWER, and the answer arrives ASYNCHRONOUSLY.
+   *
+   * `curve` returns a receipt — "asking the engine" — and the real answer prints itself into
+   * the log when it lands. The first version of this check read the RECEIPT and reported the
+   * engine as unresponsive; backend could not reproduce it and was right not to. The engine
+   * answers `found: false` on every path, which is the whole reason the slot exists.
+   *
+   * So this asks, waits, and reads the log — which is what a person does. And the lesson is one
+   * I have written down twice this week in other words: a receipt is not an outcome.
+   */
+  await type('curve 0 nosuchparam');
+  await page.waitForTimeout(1800);
+  /*
+   * A CHEAP command to read the log back, NOT `help`.
+   *
+   * `help` prints sixty lines into a 300-line ring and pushed the answer out of it, so this
+   * check failed while the answer was sitting in the log a moment earlier. A probe that changes
+   * what it measures is the oldest mistake in this file.
+   */
+  const log = await page.evaluate(() => window.__uni.run('oct 4'));
+  const said = (log || []).join(' | ');
+  check(/nothing automates nosuchparam/i.test(said),
+        'asking for a lane that does not exist is ANSWERED, not left hanging',
+        said.slice(-180));
 }
 
 check(errors.length === 0, 'and nothing threw while asking', errors.slice(0, 2).join(' | '));
