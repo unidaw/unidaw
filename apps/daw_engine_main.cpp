@@ -6099,6 +6099,20 @@ struct TrackRuntime {
     // grows the track set to fit the document but never shrank it, so a smaller
     // project loaded after a larger one left the previous project's rails (and audio)
     // standing — the UI drew clips from a project the user had closed.
+    // The live EXTENT is one past the highest id the document names, which is NOT the
+    // number of tracks it has: ids never renumber, so a project saved after its slot 0 was
+    // removed has ids [1,2,3] and size 3. Both the tombstone pass below and the
+    // liveTrackCount store further down need the same number, so it is computed once.
+    uint32_t liveTrackExtent = 0;
+    for (const auto& s : document.tracks) {
+      // Master and aux children are lifted out of document.tracks before this runs; the
+      // guard is here because kMasterTrackId is 0xFFFF0000 and folding its +1 into the extent
+      // would publish four billion lanes if that ever stopped being true.
+      if (s.isMaster || s.isAuxChild) {
+        continue;
+      }
+      liveTrackExtent = std::max(liveTrackExtent, s.trackId + 1);
+    }
     {
       auto inDocument = [&](uint32_t tid) {
         for (const auto& s : document.tracks) {
@@ -6119,7 +6133,20 @@ struct TrackRuntime {
       }
       for (auto* runtime : engineTracks) {
         if (inDocument(runtime->trackId)) {
+          // A slot the document DOES name is live, even if it was a tombstone before this
+          // load.
+          runtime->removed.store(false, std::memory_order_release);
           continue;
+        }
+        // A slot INSIDE the extent that the document does not name is a hole: the id
+        // belongs to a track that was removed before the save. Tombstone it so it is
+        // published with kUiTrackFlagAbsent (the reader skips it instead of drawing a
+        // phantom lane), the save skips it, and AddTrack refills it. Without this the
+        // unclaimed slot came back as an editable empty "Track 1" and the next save wrote
+        // it out as a real track — so the round trip INVENTED a track as well as losing
+        // one.
+        if (runtime->trackId < liveTrackExtent) {
+          runtime->removed.store(true, std::memory_order_release);
         }
         // A track the new project doesn't define must not linger as a phantom lane:
         // reset its published name and, if it was an aux child of the old project,
@@ -6186,8 +6213,21 @@ struct TrackRuntime {
     // The UI should see exactly the loaded document's tracks (aux children re-extend
     // this as they are derived). This is what stops a smaller project loaded after a
     // larger one from leaving phantom lanes.
-    liveTrackCount.store(static_cast<uint32_t>(document.tracks.size()),
-                         std::memory_order_release);
+    //
+    // A COUNT IS NOT AN EXTENT, and storing `document.tracks.size()` here was data loss.
+    // Ids never renumber, so a project saved after a track was removed has sparse ids: three
+    // tracks with ids [1,2,3] and size 3. Every publisher clamps to liveTrackCount and the
+    // save skips `trackId >= liveTrackCount`, so track 3 was adopted and loaded correctly —
+    // `get notes --track 3` returned its note — and then hidden from the UI and dropped by
+    // the next save. Meanwhile the unclaimed slot 0 was inside the count and came back as an
+    // editable empty lane that the same save wrote out as a real track. Measured: ids [1,2,3]
+    // with clips [1,2,3] round-tripped to ids [0,1,2] with clips [1,2]. One track destroyed,
+    // one invented, nothing reported.
+    //
+    // No fixture caught it because every fixture has dense ids from zero — they are authored,
+    // not edited, and this needs a REMOVAL followed by a SAVE, which only a session does.
+    // Reported from the UI as "a track disappears on load"; the file was right both times.
+    liveTrackCount.store(liveTrackExtent, std::memory_order_release);
 
     // Restore plugin state. The chain was just rebuilt from the project above,
     // so on a clean reopen the live chain matches the saved one and state lands;
