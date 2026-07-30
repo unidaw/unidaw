@@ -237,6 +237,27 @@ const stageEl = document.getElementById('stage');
  * publishes them — see `__uni.scales()`, which is where the names come from, so
  * a caller can say "Minor" without this file owning a second table.
  */
+/**
+ * Remove a key change from the harmony timeline, by TICK.
+ *
+ * The other half of setHarmony, and missing for the same reason it was: harmony could be
+ * read from every surface in the app and written from none, and once writing landed a key
+ * change could be added and never taken off. A timeline you can only add to is one you
+ * stop using.
+ *
+ * The HARMONY version, not the clip's — same guard, same trap: sending nothing means base
+ * 0, which matches only an engine whose harmony has never changed, so it would work once
+ * and be silently refused after any project load.
+ */
+function deleteHarmony(tick) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  conn.send({ type: 'delharmony', tick: Math.max(0, Math.round(tick || 0)),
+              base: engine ? engine.harmonyVersion : 0 });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
 function setHarmony(root, scale, tick) {
   if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
   const r = ((Math.round(root) % 12) + 12) % 12;
@@ -1618,12 +1639,32 @@ const dockApi = {
   // failure the comment above this object describes, twice more.
   bypass: bypassDevice,
   moveDevice,
+  /*
+   * Chords, at the cursor. There was NO console path to a chord at all — neither
+   * writing one nor removing one — so the only way to make a chord was to type a
+   * degree token into a tracker cell, and there was no way at all to unmake one.
+   *
+   * Both go through the same functions the keyboard uses, so the two surfaces cannot
+   * drift into meaning different things by "a chord at the cursor".
+   */
+  chord: (degree, quality, inv, oct) => writeChord({
+    degree, quality: quality === undefined ? 1 : quality,
+    inv: inv || 0, oct: oct === undefined ? 4 : oct, spread: 0, ht: 0, hv: 0, dur: 0 }),
+  delChord: () => {
+    const c = chordAtCursor();
+    if (!c) { state.reject = 'no chord here'; schedule(); return false; }
+    return deleteChord(c);
+  },
   quantize: setQuantize,
   // ...and `deldevice`, which has been calling a method dockApi never had since
   // the day it shipped. The button and the key work; typing the command threw.
   delDevice,
   noteColumns: (n) => uniNoteColumns(n),
   harmony: (root, scale, tick) => setHarmony(root, scaleIdNamed(scale), tick),
+  // On dockApi, where the CONSOLE can reach it. Four times now I have added a method to
+  // `__uni` and expected the console to see it; the ratchet catches it in milliseconds
+  // now instead of a suite failing three screens away.
+  deleteHarmony: (tick) => deleteHarmony(tick),
   /**
    * Hand a sentence to the agent.
    *
@@ -3923,6 +3964,29 @@ function transposeSelection(semitones) {
 }
 
 /** The engine note the cursor is sitting on, or null. */
+/**
+ * The chord under the cursor, or null.
+ *
+ * Mirrors noteAtCursor, including the row SCALING — a chord's published row is in the
+ * grid the sidecar last projected, and the cursor is in the current zoom's, so a
+ * comparison without the scale matches on the wrong row at every zoom but one.
+ *
+ * A chord occupies the track's FIRST note column, which is where the view model draws
+ * it: a chord is a property of the track at that moment rather than of one of its note
+ * columns, so it does not take the cursor's column into account.
+ */
+function chordAtCursor() {
+  if (!engine) return null;
+  const scale = engine.rowGrid > 0 ? ZOOM_LEVELS[state.zoom].linesPerBeat / engine.rowGrid : 1;
+  for (let i = 0; i < engine.chordCount; i++) {
+    const c = engine.chords[i];
+    if (c.track !== state.cursor.track) continue;
+    const r = scale === 1 ? c.row : Math.round(c.row * scale);
+    if (r === state.cursor.row) return c;
+  }
+  return null;
+}
+
 function noteAtCursor() {
   if (!engine) return null;
   const scale = engine.rowGrid > 0 ? ZOOM_LEVELS[state.zoom].linesPerBeat / engine.rowGrid : 1;
@@ -3991,15 +4055,47 @@ function deleteAtCursor() {
     state.reject = `zoom in to edit — a row here is ${ZOOM_LEVELS[state.zoom].label}`;
     return false;
   }
-  // Nothing here to delete is a fact worth reporting. Sending the command anyway
-  // and saying "delete" reads as success, and the engine quietly ignores it.
-  if (engine && !noteAtCursor()) { state.reject = 'no note here'; return false; }
+  /*
+   * A CHORD IS DELETABLE TOO, and it was not.
+   *
+   * This checked for a NOTE and refused with "no note here" when the cursor was on a
+   * chord — so a chord could be written and never removed. Creating something you
+   * cannot delete is worse than not being able to create it, and the refusal read as
+   * "there is nothing here" while a chord name sat in the cell.
+   *
+   * Notes first, because a note and a chord can share a row: the cell says so (it
+   * draws `collide`), and deleting the note you can see the pitch of is the less
+   * surprising of the two. A second press then takes the chord.
+   */
+  if (engine && !noteAtCursor()) {
+    const chord = chordAtCursor();
+    if (chord) return deleteChord(chord);
+    state.reject = 'nothing here to delete';
+    return false;
+  }
   const base = engine ? engine.clipVersion : 0;
   if (!conn.send({ type: 'delete', track: state.cursor.track, tick: tickOfCursorRow(),
                    // WHICH column's note. Without it, deleting in the second
                    // column removes the first column's note instead.
                    column: noteColOf(state.cursor.col) })) return false;
   addPending(state.cursor.row, state.cursor.track, 0, '', base);
+  return true;
+}
+
+/**
+ * Remove a chord, BY ID.
+ *
+ * The engine accepts either an id or a (track, tick, column) position, and the id is
+ * the one to use when there is one: two chords in a row's span are distinguishable by
+ * id and not by the tick a row rounds to. Position is what the console falls back to
+ * when a person is naming a place rather than a thing.
+ */
+function deleteChord(chord) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; return false; }
+  if (!conn.send({ type: 'delchord', track: chord.track, tick: chord.tick,
+                   id: chord.id })) return false;
+  state.reject = null;
+  schedule();
   return true;
 }
 
@@ -5827,7 +5923,7 @@ window.__uni = {
     track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' }),
   delDevice,                          // the same function the button and the key call
   addTrack, removeTrack,
-  setHarmony, scaleIdNamed,
+  setHarmony, deleteHarmony, scaleIdNamed,
   // The version a harmony write must quote. Exposed so a test can see the
   // number the engine is about to compare against.
   harmonyVersion: () => (engine ? engine.harmonyVersion : -1),

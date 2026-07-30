@@ -1402,12 +1402,24 @@ fn build_chord(body: &str) -> Option<UiChordCommandPayload> {
     // `a_project_may_be_named_after_a_command` is about exactly this hole; every
     // other verb was converted and this one was missed, and the loop that would have
     // caught it lists "chord" among its verbs without ever calling this function.
-    if !is_type(body, "chord") { return None; }
+    /*
+     * ONE BUILDER, TWO COMMANDS, because they are one payload. `delchord` removes a
+     * chord — by its ID when the caller has one, and by (track, tick, column) when it
+     * does not, which is what the engine's own handler branches on.
+     *
+     * A chord could be WRITTEN and not removed: `del` at the cursor checks for a NOTE
+     * and refuses with "no note here" when the cursor is on a chord, so a chord you
+     * typed by mistake stayed for the life of the song. Creating something you cannot
+     * delete is worse than not being able to create it.
+     */
+    let del = is_type(body, "delchord");
+    if !(is_type(body, "chord") || del) { return None; }
     let n = |k: &str, d: i64| parse_num(body, k).unwrap_or(d);
     let tick = n("\"tick\"", 0).max(0) as u64;
     let dur = n("\"dur\"", 0).max(0) as u64;
     Some(UiChordCommandPayload {
-        command_type: UiCommandType::WriteChord as u16,
+        command_type: if del { UiCommandType::DeleteChord } else { UiCommandType::WriteChord }
+            as u16,
         // Low byte of flags is the column.
         flags: (n("\"column\"", 0).clamp(0, 255) as u16) & 0xff,
         track_id: n("\"track\"", 0).max(0) as u32,
@@ -1425,7 +1437,16 @@ fn build_chord(body: &str) -> Option<UiChordCommandPayload> {
         humanize_timing: n("\"ht\"", 0).clamp(0, 255) as u8,
         humanize_velocity: n("\"hv\"", 0).clamp(0, 255) as u8,
         reserved: 0,
-        spread_nanoticks: n("\"spread\"", 0).clamp(0, u32::MAX as i64) as u32,
+        /*
+         * TWO MEANINGS, ONE FIELD, and that is the engine's doing rather than mine:
+         * on a WRITE this is the chord's spread in nanoticks; on a DELETE the same
+         * bytes carry the chord ID, and 0 means "whatever is at this tick and column".
+         *
+         * Named as `id` on a delete so a caller does not have to know that, and so a
+         * `spread` accidentally left in a delete message cannot be read as an id.
+         */
+        spread_nanoticks: if del { n("\"id\"", 0).clamp(0, u32::MAX as i64) as u32 }
+                          else { n("\"spread\"", 0).clamp(0, u32::MAX as i64) as u32 },
     })
 }
 
@@ -2218,6 +2239,19 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
         p.command_type = UiCommandType::WriteHarmony as u16;
         p.note_pitch = (parse_num(body, "\"root\"").unwrap_or(0).rem_euclid(12)) as u32;
         p.value0 = parse_num(body, "\"scale\"").unwrap_or(0).max(0) as u32;
+    } else if is_type(body, "delharmony") {
+        /*
+         * Remove a key change. The other half of the pair above, and missing for the
+         * same reason: harmony could be read everywhere and written nowhere, and once
+         * writing landed a key change could be ADDED to the timeline and never taken
+         * off. A timeline you can only add to is one you stop using.
+         *
+         * Addressed by TICK, which is what the engine matches on — `removeHarmony`
+         * takes a nanotick and reports "event not found" otherwise. The tick comes
+         * from the event the caller is looking at, so the round trip is exact rather
+         * than a search for the nearest.
+         */
+        p.command_type = UiCommandType::DeleteHarmony as u16;
     } else if is_type(body, "addtrack") {
         // v1 APPENDS at the extent — no insert-after, no fields read. The engine
         // refuses at kUiMaxTracks rather than growing past what the UI region can
@@ -4771,6 +4805,41 @@ mod tests {
     }
 
     #[test]
+    fn a_chord_can_be_deleted_by_id_or_by_position() {
+        let by_id = build_chord(r#"{"type":"delchord","track":2,"tick":960000,"id":41}"#)
+            .expect("recognised");
+        assert_eq!(by_id.command_type, UiCommandType::DeleteChord as u16);
+        assert_eq!(by_id.command_type, 9, "the engine's own number for it");
+        assert_eq!(by_id.track_id, 2);
+        assert_eq!(u64::from(by_id.nanotick_lo), 960_000);
+        /*
+         * THE ID RIDES IN `spread_nanoticks`, which on a WRITE means the chord's spread.
+         * The engine reuses the field, so the same bytes mean two different things
+         * depending on the command — which is exactly the sort of overload that gets
+         * read wrong once and then believed. Pinned in both directions below.
+         */
+        assert_eq!(by_id.spread_nanoticks, 41, "the id, not a spread");
+
+        // No id: the engine removes whatever is at that tick and column.
+        let by_pos = build_chord(r#"{"type":"delchord","track":1,"tick":480000,"column":1}"#)
+            .expect("recognised");
+        assert_eq!(by_pos.spread_nanoticks, 0, "0 means 'whatever is here'");
+        assert_eq!(by_pos.flags & 0xff, 1, "and the column still selects which");
+
+        // A `spread` left in a delete message must NOT become an id — the field is named
+        // for what it means on THIS command.
+        assert_eq!(build_chord(r#"{"type":"delchord","track":0,"tick":0,"spread":9999}"#)
+                   .expect("recognised").spread_nanoticks, 0);
+        // ...and a WRITE still reads spread as a spread.
+        let w = build_chord(r#"{"type":"chord","track":0,"degree":3,"spread":1234}"#)
+            .expect("recognised");
+        assert_eq!(w.command_type, UiCommandType::WriteChord as u16);
+        assert_eq!(w.spread_nanoticks, 1234);
+        // And a project named `delchord` is neither.
+        assert!(build_chord(r#"{"type":"load","name":"delchord"}"#).is_none());
+    }
+
+    #[test]
     fn movedevice_carries_the_final_index() {
         let p = build_chain_edit(r#"{"type":"movedevice","track":2,"device":7,"pos":0}"#)
             .expect("recognised").expect("built");
@@ -4929,6 +4998,7 @@ mod tests {
                      // Added with the builders below them: a verb absent from this
                      // list is a builder nothing protects.
                      "deldevice", "openeditor", "bypass", "movedevice", "quantize", "routing",
+                     "delchord",
                      "patchadd", "patchremove", "patchlink", "patchcfg",
                      "placement", "preview", "panic", "stop", "undo", "redo"] {
             let body = format!("{{\"type\":\"load\",\"name\":\"{verb}\"}}");

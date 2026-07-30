@@ -146,6 +146,25 @@ const loadAndWait = async (name) => {
   await page.waitForTimeout(400);
 };
 
+/**
+ * Press play and WAIT FOR SOUND, not for a clock.
+ *
+ * A fixed sleep after the space bar is a guess about how long a plugin takes to make its
+ * first sample, and on a busy box it is wrong: three meter assertions failed together
+ * reporting the instrument SILENT while playing, then passed on a re-run with nothing
+ * changed. The meter is the condition — waiting for it to leave the silence sentinel is
+ * waiting for the thing the assertions are about.
+ */
+const playUntilAudible = async (device = 0, ms = 12000) => {
+  await page.keyboard.press(' ');
+  await page.waitForFunction((d) => {
+    const m = (window.__uni.deviceMeters() || []).find((x) => x.device === d);
+    return m && m.outPeak > -32768;
+  }, device, { timeout: ms }).catch(() => {});
+  // One more frame, so the renderer has drawn what the store now holds.
+  await page.waitForTimeout(400);
+};
+
 const E = () => page.evaluate(() => window.__uni.engineState());
 const run = async (line, wait = 150) => {
   const out = await page.evaluate((l) => window.__uni.run(l), line);
@@ -3112,6 +3131,112 @@ section('the rack\'s keys act on the track the rack is showing');
  * cards are what a reorder must LOOK like; the chain is what it has to BE, and a
  * renderer that shuffles its own list would satisfy the first and change no sound.
  */
+/*
+ * A CHORD CAN BE REMOVED, WHICH IT COULD NOT BE.
+ *
+ * `del` at the cursor looked for a NOTE and answered "no note here" when the cursor was
+ * on a chord — with a chord name sitting in the cell. So a chord typed by mistake stayed
+ * for the life of the song, and the refusal claimed the cell was empty.
+ *
+ * Being able to create something you cannot delete is worse than not being able to
+ * create it: the first is a trap, the second is a missing feature.
+ */
+section('a chord can be taken back');
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await loadAndWait('meter');
+  await page.evaluate(() => window.__uni.run('goto 12 0'));
+  await page.waitForTimeout(400);
+
+  const chords = () => page.evaluate(() => (window.__uni.chords() || []).length);
+  const before = await chords();
+
+  // Written through the CONSOLE, which had no chord command at all until now — the only
+  // way to make one was typing a degree token into a cell.
+  const said = String(await page.evaluate(() => window.__uni.run('chord 4 seventh')));
+  await page.waitForTimeout(1200);
+  const after = await chords();
+  ok(after === before + 1, 'the console writes a chord', `${before} -> ${after} (${said})`);
+
+  // And the cell shows it, or the delete below would be aimed at something invisible.
+  const drawn = await page.evaluate(() => {
+    const c = [...document.querySelectorAll('.tk-cell[data-kind="chord"]')]
+      .filter((e) => e.offsetParent);
+    return c.map((e) => e.textContent.trim());
+  });
+  ok(drawn.length > 0, 'and the tracker draws it', JSON.stringify(drawn));
+
+  /*
+   * BACKSPACE TAKES IT AWAY. The same key that deletes a note, because "remove what is
+   * under the cursor" is one idea — needing a different key for a chord would be the
+   * app's data model leaking into the keyboard.
+   */
+  await page.keyboard.press('Backspace');
+  await page.waitForTimeout(1200);
+  ok((await chords()) === before, 'and Backspace on it removes it',
+     `${after} -> ${await chords()}`);
+  ok(!/no note here/.test(String(await page.evaluate(() => window.__uni.state().reject))),
+     'without claiming the cell was empty',
+     String(await page.evaluate(() => window.__uni.state().reject)));
+
+  // An empty cell still refuses, and says what it means rather than naming notes only.
+  await page.keyboard.press('Backspace');
+  await page.waitForTimeout(700);
+  ok(/nothing here/.test(String(await page.evaluate(() => window.__uni.state().reject))),
+     'and an empty cell says there is nothing here',
+     String(await page.evaluate(() => window.__uni.state().reject)));
+
+  // The console can remove one too, so neither surface is missing half the pair.
+  await page.evaluate(() => window.__uni.run('chord 2'));
+  await page.waitForTimeout(1200);
+  ok((await chords()) === before + 1, 'a second chord goes in');
+  const gone = String(await page.evaluate(() => window.__uni.run('delchord')));
+  await page.waitForTimeout(1200);
+  ok((await chords()) === before, 'and `delchord` takes it out',
+     `${gone} — ${before + 1} -> ${await chords()}`);
+
+  await loadAndWait('meter');
+}
+
+/*
+ * AND A KEY CHANGE CAN BE TAKEN OFF THE TIMELINE.
+ *
+ * Same shape as the chord, one layer up: the engine has taken DeleteHarmony since before
+ * this UI existed and nothing sent it, so once writing a key change landed, the timeline
+ * could only ever grow. A timeline you can only add to is one you stop using.
+ */
+section('a key change can be taken off the timeline');
+{
+  const events = () => page.evaluate(() => (window.__uni.harmony() || []).length);
+  const before = await events();
+
+  await page.evaluate(() => window.__uni.run('harmony 7 minor 3840000'));
+  await page.waitForTimeout(1400);
+  const added = await events();
+  ok(added === before + 1, 'a key change goes on at a tick', `${before} -> ${added}`);
+
+  const said = String(await page.evaluate(() => window.__uni.run('delharmony 3840000')));
+  await page.waitForTimeout(1400);
+  ok((await events()) === before, 'and `delharmony` takes it off',
+     `${added} -> ${await events()} (${said})`);
+
+  /*
+   * THE VERSION GUARD IS THE TRAP HERE, and it is worth a check of its own. DeleteHarmony
+   * is gated on the HARMONY version, not the clip's — send nothing and the base is 0,
+   * which matches only an engine whose harmony has never changed. So a naive
+   * implementation works once on a fresh boot and is silently refused ever after. Doing
+   * it twice in a row is what tells those apart.
+   */
+  await page.evaluate(() => window.__uni.run('harmony 2 dorian 7680000'));
+  await page.waitForTimeout(1400);
+  ok((await events()) === before + 1, 'a second one goes on after the first was removed');
+  await page.evaluate(() => window.__uni.run('delharmony 7680000'));
+  await page.waitForTimeout(1400);
+  ok((await events()) === before,
+     'and comes off too — so the version guard is being fed a moving number',
+     String(await events()));
+}
+
 section('a device can be moved along its chain');
 {
   await page.evaluate(() => window.__uni.run('view tracker'));
@@ -3458,8 +3583,7 @@ section('every insert says what it is putting out');
   ok(inst && inst.outPeak === SILENT, 'and reads SILENT while stopped, not 0 dBFS',
      inst && String(inst.outPeak));
 
-  await page.keyboard.press(' ');
-  await page.waitForTimeout(3500);
+  await playUntilAudible();
   const playing = await page.evaluate(() => window.__uni.deviceMeters());
   const live = playing.find((m) => m.device === 0);
   ok(live && live.outPeak > -6000 && live.outPeak < 0,
@@ -3565,8 +3689,7 @@ section('every insert says what it is putting out');
      'and its peak is far below what it was playing',
      `${silent.tick} against ${loudEnough} playing`);
 
-  await page.keyboard.press(' ');
-  await page.waitForTimeout(3000);
+  await playUntilAudible();
   const loud = await drawnFill();
   ok(parseInt(loud.width, 10) > 0, 'and playing, it draws something again',
      JSON.stringify(loud));

@@ -266,6 +266,34 @@ export function createCommands(api) {
                               a[2] === undefined ? 1 : Number(a[2]))
         ? (Number(a[2] === undefined ? 1 : a[2]) ? 'bypassed' : 'active') : 'no engine') },
     /*
+     * A CHORD AT THE CURSOR, and the removal of one.
+     *
+     * Neither existed here. A chord could only be made by typing a degree token into a
+     * tracker cell, and could not be unmade at all: `del` looked for a NOTE and
+     * answered "no note here" while a chord name sat in the cell. Being able to create
+     * something you cannot delete is worse than not being able to create it.
+     *
+     * Degrees are 1-BASED here, as musicians write them — I, II, III — and 0-based on
+     * the wire. Converted once, at this boundary, which is the same rule the entry
+     * tokens follow.
+     */
+    chord: { help: 'chord <degree> [triad|seventh|degree] [inv] [oct] — at the cursor',
+      args: [{ name: 'degree', type: 'int', min: 1, max: 13 },
+             oneOf(['triad', 'seventh', 'degree'], true),
+             { name: 'inv', type: 'int', min: 0, max: 3, optional: true },
+             { name: 'oct', type: 'int', min: 0, max: 9, optional: true }],
+      run: (a) => {
+        // The engine's own numbering: 0 = the degree alone, 1 = triad, 2 = seventh.
+        const QUALITY = { degree: 0, triad: 1, seventh: 2 };
+        const q = a[1] === undefined ? 1 : QUALITY[a[1]];
+        return api.chord(Number(a[0]) - 1, q, a[2] === undefined ? 0 : Number(a[2]),
+                         a[3] === undefined ? 4 : Number(a[3]))
+          ? `chord ${a[0]}` : 'refused';
+      } },
+    delchord: { help: 'delchord — remove the chord at the cursor',
+      args: [],
+      run: () => (api.delChord() ? 'removed' : 'no chord here') },
+    /*
      * Reorder a device. `pos` is where it ENDS UP, counted from 0.
      *
      * Order is what a chain is, and the rack could add and remove without it — so the
@@ -393,6 +421,18 @@ export function createCommands(api) {
              { name: 'tick', type: 'int', min: 0, optional: true }],
       run: (a) => (api.harmony(Number(a[0]), a[1], a[2] === undefined ? 0 : Number(a[2]))
                    ? `key set` : 'refused') },
+    /*
+     * ...and taking one off. A timeline you can only add to is one you stop using, and
+     * that is what this was: the engine has taken DeleteHarmony since before this UI
+     * existed and nothing sent it.
+     *
+     * By TICK, which is what the engine matches on. `tick` defaults to 0 because the
+     * event at 0 is the song's key and the one most likely to be wrong first.
+     */
+    delharmony: { help: 'delharmony [tick] — remove the key change at a tick',
+      args: [{ name: 'tick', type: 'int', min: 0, optional: true }],
+      run: (a) => (api.deleteHarmony(a[0] === undefined ? 0 : Number(a[0]))
+                   ? 'removed' : 'no engine') },
     /*
      * PLACEMENTS. The arrangement's drag, said in words.
      *

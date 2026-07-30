@@ -808,7 +808,7 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
                      'nodes', 'addNode', 'delNode', 'linkNodes', 'patch', 'copy', 'paste',
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice', 'bypass',
-                     'quantize', 'moveDevice',
+                     'quantize', 'moveDevice', 'chord', 'delChord', 'deleteHarmony',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
                      'selectedClip', 'ticksPerBar', 'master'];
@@ -2013,6 +2013,13 @@ const OP_REGISTRY = {
   // Reordering reached the engine from this app FIRST — daw-cli has no verb for it —
   // which is the opposite of the usual direction and worth recording as such.
   movedevice: { cli: null, agent: null, why: 'gap' },
+  // Chords reached the CLI first (`do chord`) and this app's console never had them at
+  // all — writing one meant typing a token into a cell, and removing one was impossible.
+  chord:     { cli: 'chord', agent: null, why: 'gap' },
+  delchord:  { cli: null,    agent: null, why: 'gap' },
+  // The engine has taken DeleteHarmony since before this UI existed and nothing sent it,
+  // so a key change could be added to the timeline and never taken off.
+  delharmony: { cli: null,   agent: null, why: 'gap' },
   // M1.13. daw-cli shipped `do quantize` with the engine, so the CLI path is real
   // from day one; the agent's manifest still owes it a tool.
   quantize:  { cli: 'quantize', agent: null, why: 'gap' },
@@ -2103,18 +2110,19 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                  // Reordering reached the engine from this APP first — the usual
                  // direction is the other way round, so the CLI owes it a verb rather
                  // than the app owing the CLI one.
-                 'move-clip', 'movedevice', 'new', 'paste', 'patch', 'redo', 'rename',
-                 'seek', 'stop', 'transpose', 'trim-clip', 'undo'];
+                 'delchord', 'delharmony', 'move-clip', 'movedevice', 'new', 'paste',
+                 'patch', 'redo', 'rename', 'seek', 'stop', 'transpose', 'trim-clip',
+                 'undo'];
 /** Ops with no agent tool today. Same rule. */
 // `bypass` joins the list rather than being smuggled past it: the engine takes
 // the command and daw-cli sends it, but the agent's manifest has no tool for it,
 // so an agent asked to A/B an insert still cannot. Worth closing — comparing with
 // and without a device is exactly the kind of judgement an agent should be able
 // to make on its own — and worth recording honestly until it is.
-const AGENT_GAP = ['addnode', 'bypass', 'clear', 'columns', 'copy', 'cut', 'del',
-                   'deldevice', 'delnode', 'editor', 'gain', 'link', 'loop',
-                   'movedevice', 'mute', 'new', 'paste', 'patch', 'quantize', 'seek',
-                   'solo', 'tempo', 'transpose'];
+const AGENT_GAP = ['addnode', 'bypass', 'chord', 'clear', 'columns', 'copy', 'cut',
+                   'del', 'delchord', 'deldevice', 'delharmony', 'delnode', 'editor',
+                   'gain', 'link', 'loop', 'movedevice', 'mute', 'new', 'paste', 'patch',
+                   'quantize', 'seek', 'solo', 'tempo', 'transpose'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether
@@ -2235,8 +2243,6 @@ const ENGINE_UNUSED = {
   SetDeviceEuclideanConfig: 'gap — superseded by SetPatcherNodeConfig; nothing sends the per-device form',
   SavePatcherPreset: 'gap — a patcher graph cannot be saved as a preset',
   SetTrackHarmonyQuantize: 'gap — the per-track harmony quantize flag is unreachable',
-  DeleteChord: 'gap — a chord can be written and not removed',
-  DeleteHarmony: 'gap — same',
   RequestClipWindow: 'the sidecar owns the viewport and asks on the client\'s behalf',
   // These three are referenced by NAME elsewhere but never sent as a command from
   // a frontend path, which is the distinction this test draws: a struct that
