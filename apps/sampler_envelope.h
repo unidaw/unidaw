@@ -68,6 +68,10 @@ inline constexpr uint8_t kEnvLoopBackward = 3;
 // principle and ~16 in practice) and it bounds the SHM publish, which an unbounded vector cannot.
 inline constexpr size_t kMaxEnvPoints = 64;
 
+// Default terminator for a release-looping envelope. Long enough to be a musical tail rather
+// than a cut, short enough that a stuck voice is impossible.
+inline constexpr uint32_t kDefaultReleaseFade = 500000;  // 0.5 s in the shape's time unit
+
 // The drawable shape. Time unit is the owning modulator's `timeBase`; this struct does not know
 // whether a tick is a microsecond or a nanotick, and does not need to.
 struct EnvShape {
@@ -76,8 +80,25 @@ struct EnvShape {
   uint8_t releaseLoopStart = kEnvLoopNone, releaseLoopEnd = kEnvLoopNone;
   uint8_t loopMode = kEnvLoopForward;  // applies to whichever loop is running
 
+  // THE TERMINATOR, and the reason FT2's and IT's weirdest field is not an era quirk.
+  //
+  // A RELEASE loop runs forever by definition: after note-off the envelope cycles and never
+  // reaches a last point, so `finished()` would never become true and the voice would never be
+  // freed. IT and FT2 both solve this with a per-instrument FADEOUT — a linear countdown after
+  // note-off that multiplies everything — and that is exactly the missing piece here.
+  //
+  // Applied ONLY after release, and only when a release loop is what is keeping the envelope
+  // alive. repairEnvShape() guarantees it is non-zero whenever a release loop is set, so a voice
+  // leak is structurally impossible rather than dependent on the caller remembering.
+  //
+  // The numeric scaling is deliberately NOT ported from FT2 or IT: the two disagree with each
+  // other and the values do not port between the formats anyway, so copying either would be
+  // importing an incompatibility for no benefit.
+  uint32_t releaseFade = 0;  // in this shape's time unit; 0 = none
+
   bool empty() const { return points.empty(); }
   uint32_t duration() const { return points.empty() ? 0u : points.back().time; }
+  bool hasReleaseLoop() const { return releaseLoopStart != kEnvLoopNone; }
 };
 
 // ADSR AS POINTS. Not a conversion and not a second representation — this is what the simple
@@ -113,9 +134,11 @@ struct EnvRepair {
   bool clearedReleaseLoop = false;
   bool swappedSustainLoop = false;  // start > end
   bool swappedReleaseLoop = false;
+  bool addedReleaseFade = false;  // a release loop with no terminator would leak the voice
   bool any() const {
     return reorderedPoints || droppedPoints || clearedSustainLoop ||
-           clearedReleaseLoop || swappedSustainLoop || swappedReleaseLoop;
+           clearedReleaseLoop || swappedSustainLoop || swappedReleaseLoop ||
+           addedReleaseFade;
   }
 };
 
@@ -159,6 +182,15 @@ inline EnvRepair repairEnvShape(EnvShape& s) {
   fixLoop(s.releaseLoopStart, s.releaseLoopEnd, r.clearedReleaseLoop, r.swappedReleaseLoop);
   if (s.loopMode < kEnvLoopForward || s.loopMode > kEnvLoopBackward) {
     s.loopMode = kEnvLoopForward;
+  }
+  // A RELEASE LOOP WITHOUT A TERMINATOR IS A VOICE LEAK, so the invariant is enforced here
+  // rather than trusted to whoever built the shape. After note-off a release loop cycles
+  // forever and the envelope never reaches a last point, so nothing else would ever free the
+  // voice. Repaired loudly, like every other repair, because a fade the user did not ask for
+  // is audible and they should be told it was added.
+  if (s.hasReleaseLoop() && s.releaseFade == 0) {
+    s.releaseFade = kDefaultReleaseFade;
+    r.addedReleaseFade = true;
   }
   return r;
 }
@@ -215,16 +247,44 @@ class EnvRunner {
     held_ = true;
     forward_ = true;
     done_ = false;
+    fadeRemaining_ = 0.0;
     value_ = shape_ ? envValueAt(*shape_, pos_) : 0.0f;
   }
 
   // Note-off. The sustain loop stops holding and time runs on from exactly where it is — not from
   // the release point, which would jump the value and click.
-  void release() { held_ = false; }
+  //
+  // If a RELEASE loop is about to take over, the terminator is armed here: without it the loop
+  // cycles forever, `finished()` never becomes true, and the voice is never freed.
+  void release() {
+    held_ = false;
+    if (shape_ && shape_->hasReleaseLoop() && shape_->releaseFade > 0) {
+      fadeRemaining_ = static_cast<double>(shape_->releaseFade);
+      fadeTotal_ = fadeRemaining_;
+    }
+  }
 
   bool active() const { return shape_ != nullptr && !done_; }
   bool finished() const { return done_; }
   float value() const { return value_; }
+
+  // Is a loop currently keeping this envelope alive? The voice needs to know, because its
+  // silence-floor guard must NOT fire at the bottom of a loop's cycle — a looping envelope that
+  // dips through zero is going to come back up, and killing the voice there truncates the loop
+  // instead of ending it.
+  bool looping() const {
+    if (!shape_) {
+      return false;
+    }
+    const uint8_t a = held_ ? shape_->sustainLoopStart : shape_->releaseLoopStart;
+    const uint8_t b = held_ ? shape_->sustainLoopEnd : shape_->releaseLoopEnd;
+    if (a == kEnvLoopNone || a >= shape_->points.size() || b >= shape_->points.size()) {
+      return false;
+    }
+    // A zero-length loop is a HOLD, not a cycle: it never comes back up on its own, so the
+    // silence floor is free to end a voice sitting at zero in one.
+    return shape_->points[b].time > shape_->points[a].time;
+  }
 
   float advance(uint32_t frames) {
     if (!shape_ || shape_->points.empty()) {
@@ -233,6 +293,20 @@ class EnvRunner {
       return value_;
     }
     double dt = static_cast<double>(frames) * unitsPerFrame_;
+    // THE TERMINATOR. Counted down on the same clock as the envelope, so it scales with the time
+    // base and with `rate` exactly as the shape does — a release fade that ignored the time base
+    // would mean something different under microseconds than under nanoticks.
+    float fadeGain = 1.0f;
+    if (fadeRemaining_ > 0.0) {
+      fadeRemaining_ -= dt;
+      if (fadeRemaining_ <= 0.0) {
+        fadeRemaining_ = 0.0;
+        value_ = 0.0f;
+        done_ = true;
+        return value_;
+      }
+      fadeGain = static_cast<float>(fadeRemaining_ / fadeTotal_);
+    }
     // A zero-length loop HOLDS. Wrapping by zero would spin forever, and "stay here while the key
     // is down" is precisely what FT2's single sustain point means — so the degenerate case is the
     // feature, not an error to reject.
@@ -251,7 +325,7 @@ class EnvRunner {
       if (len <= 0.0) {
         // Hold. Only advance up TO the hold point; once there, time stops.
         pos_ = std::min(pos_ + dt, ta);
-        value_ = envValueAt(*shape_, pos_);
+        value_ = envValueAt(*shape_, pos_) * fadeGain;
         return value_;
       }
       // Guard the loop arithmetic against a span longer than the loop itself — a tiny loop at a
@@ -283,7 +357,7 @@ class EnvRunner {
           pos_ -= len;
         }
       }
-      value_ = envValueAt(*shape_, pos_);
+      value_ = envValueAt(*shape_, pos_) * fadeGain;
       return value_;
     }
     pos_ += dt;
@@ -296,7 +370,7 @@ class EnvRunner {
         done_ = true;
       }
     }
-    value_ = envValueAt(*shape_, pos_);
+    value_ = envValueAt(*shape_, pos_) * fadeGain;
     return value_;
   }
 
@@ -305,6 +379,10 @@ class EnvRunner {
   double unitsPerFrame_ = 0.0;
   double pos_ = 0.0;
   float value_ = 0.0f;
+  // The release terminator's countdown, in the shape's time unit. Non-zero only after release()
+  // armed it, which happens only when a release loop would otherwise run forever.
+  double fadeRemaining_ = 0.0;
+  double fadeTotal_ = 0.0;
   bool held_ = false;
   bool forward_ = true;
   bool done_ = false;

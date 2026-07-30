@@ -274,22 +274,40 @@ int main() {
     check(differs, "backward is not silently aliased to forward");
   }
 
-  // ---- RELEASE LOOP. IT has one, FT2 does not, and it is the reason the two loops are separate
-  // fields rather than one pair with a mode.
+  // ---- RELEASE LOOP, AND THE TERMINATOR THAT KEEPS IT FROM LEAKING THE VOICE.
+  //
+  // IT has a release loop, FT2 does not, and it is the reason the two loops are separate fields
+  // rather than one pair with a mode. It is ALSO where the first version of this file was wrong
+  // in two directions at once, which is why the assertions below are specific:
+  //
+  //   the leak       a release loop cycles forever, so `finished()` never became true and the
+  //                  voice was never freed.
+  //   the truncation the voice's own silence-floor guard would then kill the voice at the FIRST
+  //                  TROUGH of that loop — the opposite failure, from the same envelope,
+  //                  depending only on which guard happened to fire first.
+  //
+  // The fix is the field that reads as an FT2/IT era quirk and is not: a per-envelope FADEOUT
+  // after note-off. repairEnvShape() guarantees one exists whenever a release loop does, so the
+  // leak is structurally impossible rather than left to the caller.
   {
     daw::EnvShape s;
     s.points = {{0, 1000, 0, 0}, {100, 0, 0, 0}, {200, 1000, 0, 0}};
     s.sustainLoopStart = 0;
     s.sustainLoopEnd = 0;  // hold at full while held
     s.releaseLoopStart = 1;
-    s.releaseLoopEnd = 2;  // then cycle 0 <-> 1000 forever
+    s.releaseLoopEnd = 2;  // then cycle 0 <-> 1000
+    s.releaseFade = 2000;  // ...for this long, and then stop
     daw::EnvRunner r;
     r.start(&s, kUnit);
     checkNear(r.advance(1000), 1.0f, 1e-3f, "held at the sustain point");
+    check(!r.looping(), "a zero-length sustain loop is a HOLD, not a cycle");
     r.release();
+    check(r.looping(), "after note-off the release loop is what is keeping it alive");
+
     bool moved = false;
     float prev = r.value();
-    for (int i = 0; i < 500; ++i) {
+    int steps = 0;
+    for (; steps < 2000 && !r.finished(); ++steps) {
       const float v = r.advance(7);
       if (std::fabs(v - prev) > 1e-4f) {
         moved = true;
@@ -297,7 +315,34 @@ int main() {
       prev = v;
     }
     check(moved, "the release loop keeps running after note-off");
-    check(!r.finished(), "a release-looping envelope does not finish on its own");
+    // THE LEAK ASSERTION. Without a terminator this loop never ends and `steps` hits its cap.
+    check(r.finished(), "a release-looping envelope TERMINATES via releaseFade — without it the "
+                        "voice is never freed, which is a voice leak, not a long tail");
+    check(steps < 2000, "and it terminates in bounded time");
+    checkNear(r.value(), 0.0f, 1e-4f, "and it ends AT ZERO rather than wherever the loop was, "
+                                      "because a fade that stops mid-cycle is a click");
+  }
+
+  // ---- AND THE REPAIR THAT MAKES THE LEAK UNREACHABLE. A release loop with no fade is not a
+  // valid shape, so it is repaired rather than trusted — the caller cannot forget.
+  {
+    daw::EnvShape s;
+    s.points = {{0, 1000, 0, 0}, {100, 0, 0, 0}, {200, 1000, 0, 0}};
+    s.releaseLoopStart = 1;
+    s.releaseLoopEnd = 2;
+    s.releaseFade = 0;  // would leak
+    const daw::EnvRepair r = daw::repairEnvShape(s);
+    check(r.addedReleaseFade, "a release loop without a terminator is repaired, and REPORTED — "
+                              "an added fade is audible and the user should be told");
+    check(s.releaseFade > 0, "and the shape now terminates");
+  }
+  {
+    // The negative control: no release loop means no fade is invented. A terminator on an
+    // envelope that already ends would cut its release short.
+    daw::EnvShape s = daw::makeAdsr(10, 20, 500, 30);
+    const daw::EnvRepair r = daw::repairEnvShape(s);
+    check(!r.addedReleaseFade, "an envelope that already terminates gets no fade added");
+    check(s.releaseFade == 0, "and its releaseFade stays zero");
   }
 
   // ---- REPAIR IS LOUD. Every one of these was a silent clamp somewhere before it was a rule.

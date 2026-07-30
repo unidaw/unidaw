@@ -214,9 +214,18 @@ class SamplerVoice {
 
     // THE DENORMAL / STUCK-VOICE GUARD. An amp envelope decaying toward zero never reaches it, so
     // without this the voice holds a pool slot forever AND runs its arithmetic in the denormal
-    // range at ~100x cost. Only applies once released: a HELD note at zero (the bottom of a drawn
-    // envelope's dip) is still a live note and must come back when the envelope rises.
-    if (released_ && std::fabs(envValue_) < kVoiceSilenceFloor) {
+    // range at ~100x cost.
+    //
+    // TWO CONDITIONS, and each one alone is a bug:
+    //   released_    a HELD note at zero — the bottom of a drawn envelope's dip — is still a live
+    //                note and must come back when the envelope rises.
+    //   !looping()   a RELEASE-LOOPING note at zero is also going to come back up. Killing it at
+    //                the first trough would truncate the loop rather than end it, which is the
+    //                opposite failure from the voice leak this guard exists to prevent — the same
+    //                envelope, silently wrong in two directions depending on which guard fires
+    //                first. A release loop is terminated by EnvShape::releaseFade instead, which
+    //                repairEnvShape() guarantees is present whenever a release loop is set.
+    if (released_ && !env_.looping() && std::fabs(envValue_) < kVoiceSilenceFloor) {
       envValue_ = 0.0f;
       active_ = false;
     }
