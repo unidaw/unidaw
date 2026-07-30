@@ -437,9 +437,36 @@ Take the **sample offset** (the `9xx` seek) in the same bump — a second `uint1
 
 **S5 — slicing.** `SliceSet`, stable markers, transient detection with sensitivity, equal-division and manual modes, row-grid snap, `sampler-slice`, `sampler-marker add/move/remove`, `sampler-emit-rows`. Worthless before S4 and excellent after it.
 
-**S6 — stems.** `outputStem` onto the existing aux output plane, `extract-stem` to a child track, chain-snapshot renegotiation on `stemCount` change. No bump; the plane ships.
+**S6 — stems. ⚠️ THIS SECTION WAS WRONG AND IS CORRECTED HERE (investigated 2026-07-31).**
 
-**S7 — the module (R3), independent of S1–S6 and sequenceable anywhere after S1.** **`.uni`** — a zip holding `project.json` plus a `samples/` directory, written atomically (temp + rename, as the current save already does) and read back by path *inside* the archive. The loader keeps reading a loose directory, so the two forms are the same document at two levels of packing and nothing has to be converted to work. Two properties worth a check apiece: a zip round-trips to a byte-identical `project.json`, and a project moved to another machine with no shared filesystem still plays — which is the entire point and is not provable with a path-referencing save.
+It said: "`outputStem` onto the existing aux output plane, `extract-stem` to a child track. No bump; the plane ships." The plane does ship — **for hosted plugins**, and the sampler is not one. The design assumed a path that does not exist for an in-engine instrument.
+
+What is actually there:
+
+- a child track reads *a bus slice of the **parent's** aux output plane* in the parent's SHM (`apps/daw_engine_main.cpp:413-424`), produced by the parent's **host** in lockstep with its `completedBlockId`;
+- `reconcileChildTracks` (`:4074`) derives children by calling `parent.controller.requestBusLayout()` — it asks the **host** what buses it has, and a sampler has no host plugin to ask;
+- with no plugins the host copies input→output for the main channels and **zeroes the rest**, so the aux channels are cleared;
+- `numChannelsIn` is `numChannelsOut + kSidechainChannels` (`:1729`) — there is no room in the input plane for stems.
+
+**The right fix is to widen the input plane** so the sampler's stems ride through the host: `numChannelsIn = numChannelsOut + kSidechainChannels + N`, with the host copying aux-in → aux-out when it has no plugins. That is the shape that matches how everything else here works — the sampler's audio goes *through* the chain, and its stems are simply more channels of it. It costs a per-track SHM contract change (a `kControlVersion` bump) plus a host change, which is **bigger than this section assumed**. `reconcileChildTracks` also needs a second source of bus information: when a track has a sampler with `stemCount > 0`, synthesise one stereo bus per stem rather than asking a host that has nothing to say.
+
+The alternative — the engine writing the aux plane directly after the host completes — is more contained but invents a new ownership rule (the engine writing into host-owned SHM) and races unless carefully sequenced. Rejected on those grounds.
+
+**S7 — the module (R3). ✅ DONE 2026-07-31.** Implemented as `apps/zip_container.h` (a
+dependency-free STORE-only zip — `project_file.cpp` is shared with `daw_lint`, which does not
+link JUCE, so JUCE's `ZipFile` was unavailable and a zip library would have become the linter's
+dependency too) plus `saveProjectModule` / `loadProjectModule`, opcodes 79/80, and
+`daw-cli do save-module | load-module`. Verified by `tools/module_check.sh`, whose load-bearing
+assertion is the **move**: the module is copied to another directory, the originals are DELETED,
+and it still plays. `unzip -t` accepts the archives, and two saves of one project are
+byte-identical (the timestamp is fixed at the format's epoch, so a save is not a diff).
+
+STORED, not deflated, and that is a decision: the payload is mostly WAV, which deflates by
+10–20%; a stored entry stays byte-identical inside the archive so a content key computed on the
+file matches one computed on the extracted copy; and MOD and XM are not compressed either. A
+module is a container.
+
+Original plan, for the record: **`.uni`** — a zip holding `project.json` plus a `samples/` directory, written atomically (temp + rename, as the current save already does) and read back by path *inside* the archive. The loader keeps reading a loose directory, so the two forms are the same document at two levels of packing and nothing has to be converted to work. Two properties worth a check apiece: a zip round-trips to a byte-identical `project.json`, and a project moved to another machine with no shared filesystem still plays — which is the entire point and is not provable with a path-referencing save.
 
 The extension is **`.uni`**, not `.uniproj` (owner, 2026-07-30). It is the module's name, and it should read like one: `.mod`, `.xm`, `.it`, `.uni`. The loose working directory keeps `.uniproj.json` as it is now, so the two forms stay visibly distinct — a zip you send and a directory you edit — rather than one extension meaning two different things on disk.
 

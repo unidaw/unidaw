@@ -257,7 +257,16 @@ enum class UiCommandType : uint16_t {
   ///
   /// Press play and it is the break, following the project tempo with no stretching at all,
   /// because the ROWS are the timing.
-  SamplerEmitRows = 78,  // next free 79
+  SamplerEmitRows = 78,
+
+  /// Save/load the project as a `.uni` MODULE — a zip holding project.json plus every sample
+  /// (docs/SAMPLER_DESIGN.md R3). "It is easy to send someone the zip." Broken sample links stop
+  /// existing, because there are no links.
+  ///
+  /// They ride the same payload as SaveProject/LoadProject (a packed NAME), because they are the
+  /// same operation at a different level of packing — not a different kind of save.
+  SaveModule = 79,
+  LoadModule = 80,  // next free 81
 };
 
 // SAMPLER LOAD (opcode 73). Exactly 40 bytes, which is the whole command payload — so `name`
@@ -552,6 +561,8 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SamplerSlice: return "sampler_slice";
     case UiCommandType::SamplerMarker: return "sampler_marker";
     case UiCommandType::SamplerEmitRows: return "sampler_emit_rows";
+    case UiCommandType::SaveModule: return "save_module";
+    case UiCommandType::LoadModule: return "load_module";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";
@@ -577,6 +588,8 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
   switch (t) {
     case UiCommandType::SaveProject:
     case UiCommandType::LoadProject:
+    case UiCommandType::SaveModule:
+    case UiCommandType::LoadModule:
     case UiCommandType::SetTrackName:
     case UiCommandType::SavePatcherPreset:
     case UiCommandType::AddDevice:
@@ -629,6 +642,8 @@ inline bool uiCommandIsGlobalScope(UiCommandType t) {
     case UiCommandType::SetLoopRange:
     case UiCommandType::SaveProject:
     case UiCommandType::LoadProject:
+    case UiCommandType::SaveModule:
+    case UiCommandType::LoadModule:
     case UiCommandType::Undo:
     case UiCommandType::Redo:
     case UiCommandType::Panic:

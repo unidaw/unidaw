@@ -845,6 +845,13 @@ pub enum UiCommandType {
     /// with the difference that matters: re-cutting afterwards moves what the rows PLAY without
     /// moving what they SAY. Bitwig emits its clip once, one-way.
     SamplerEmitRows = 78,
+
+    /// Save/load the project as a `.uni` MODULE — a zip holding project.json plus every sample.
+    /// "It is easy to send someone the zip." Broken sample links stop existing, because there
+    /// are no links. Same packed-NAME payload as SaveProject/LoadProject: this is the same
+    /// operation at a different level of packing, not a different kind of save.
+    SaveModule = 79,
+    LoadModule = 80,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;

@@ -28,6 +28,8 @@ std::string makeName(const char* prefix, pid_t pid) {
   return std::string(prefix) + "_" + std::to_string(pid);
 }
 
+// Waits for the segment to EXIST and be mappable. That is NOT the same as the engine having
+// finished writing it — see waitForUiRing below, which is the part this used to be missing.
 bool waitForShm(const std::string& name, int& fd, size_t& size, void*& base) {
   for (int attempt = 0; attempt < 200; ++attempt) {
     fd = ::shm_open(name.c_str(), O_RDWR, 0600);
@@ -44,6 +46,35 @@ bool waitForShm(const std::string& name, int& fd, size_t& size, void*& base) {
       fd = -1;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return false;
+}
+
+// WAIT FOR THE RING, NOT MERELY FOR THE MAPPING.
+//
+// The engine ftruncates the segment to its full size and THEN fills the header, so a reader that
+// waits only for "mappable and non-zero-sized" can win the race and read a header that is still
+// all zeros — ringUiOffset 0, and makeEventRing hands back a ring with mask 0.
+//
+// That is what made this test flaky: roughly one run in six aborted on `assert(ringUi.mask != 0)`
+// while the engine's own "UI rings ready" line printed AFTERWARDS in the same log. It survived
+// across sessions as "device_chain_ui failed once and could not be reproduced" because a single
+// re-run almost always passes.
+//
+// The fix is to wait on the field actually being read, plus the magic and version that say the
+// header is a header at all — not on a proxy for readiness.
+bool waitForUiRing(void* base, daw::EventRingView& out) {
+  auto* header = reinterpret_cast<daw::ShmHeader*>(base);
+  for (int attempt = 0; attempt < 400; ++attempt) {
+    if (header->magic == daw::kShmMagic && header->version == daw::kShmVersion &&
+        header->ringUiOffset != 0) {
+      daw::EventRingView ring = daw::makeEventRing(base, header->ringUiOffset);
+      if (ring.mask != 0) {
+        out = ring;
+        return true;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   return false;
 }
@@ -170,7 +201,8 @@ int main() {
   assert(mapped);
 
   auto* header = reinterpret_cast<daw::ShmHeader*>(base);
-  daw::EventRingView ringUi = daw::makeEventRing(base, header->ringUiOffset);
+  daw::EventRingView ringUi{};
+  assert(waitForUiRing(base, ringUi));
   assert(ringUi.mask != 0);
 
   daw::UiChainCommandPayload addPayload{};

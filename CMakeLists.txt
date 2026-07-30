@@ -306,6 +306,16 @@ target_include_directories(sampler_voice_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# S7: the .uni module container. Two properties carry the format and both are about what happens
+# when something is WRONG — a corrupt entry must be REFUSED rather than returned, and identical
+# content must produce an identical file so "did anything change?" stays answerable.
+add_executable(zip_container_tests
+  apps/zip_container_tests_main.cpp
+)
+target_include_directories(zip_container_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # Sampler S5: slicing. The assertions are about IDENTITY, not audio — "slice 5 still plays the
 # same frames after an insert at slice 2" is not a detail, it is the feature that lets a chop be
 # re-cut while it plays.
@@ -508,6 +518,11 @@ add_test(NAME sampler_load
 )
 set_tests_properties(sampler_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_test(NAME module
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/module_check.sh
+)
+set_tests_properties(module PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_chop
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_chop_check.sh
 )
@@ -542,6 +557,11 @@ add_test(NAME sampler_voice
   COMMAND sampler_voice_tests
 )
 set_tests_properties(sampler_voice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME zip_container
+  COMMAND zip_container_tests
+)
+set_tests_properties(zip_container PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME sampler_slice
   COMMAND sampler_slice_tests
@@ -811,6 +831,7 @@ foreach(daw_test_target
     sampler_engine_tests
     sampler_dsp_tests
     sampler_slice_tests
+    zip_container_tests
     event_ring_mpsc_tests
     audio_io_tests
     device_chain_tests

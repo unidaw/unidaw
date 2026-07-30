@@ -41,6 +41,8 @@ daw-cli — control surface for a running engine
                                    nudge one boundary — ids are stable, so no row moves
   daw-cli do sampler-emit-rows --track N --source 1 [--at TICK] [--step TICKS] [--column C]
                                    write the pattern that reproduces the chop
+  daw-cli do save-module NAME      write NAME.uni — one file, samples inside, sendable
+  daw-cli do load-module NAME      unpack NAME.uni beside itself and open it
   daw-cli get arrangement          the markers (bar AND tick, resolved) + the meter map,
                                    the meter map, and the song end
   daw-cli get notes --track N      that track's notes from the published region
@@ -1726,6 +1728,24 @@ fn main() {
                     let code = send_named(&handle, UiCommandType::LoadProject, project);
                     if code == 0 {
                         println!("{{ \"loaded\": \"{}\" }}", escape(project));
+                    }
+                    code
+                }
+                // THE `.uni` MODULE. `save` writes a directory you edit; `save-module` writes a
+                // FILE you send. Both forms stay on disk and they are the same document.
+                Some(&"save-module") => {
+                    let project = rest.get(1).copied().unwrap_or("default");
+                    let code = send_named(&handle, UiCommandType::SaveModule, project);
+                    if code == 0 {
+                        println!("{{ \"saved_module\": \"{}.uni\" }}", escape(project));
+                    }
+                    code
+                }
+                Some(&"load-module") => {
+                    let project = rest.get(1).copied().unwrap_or("default");
+                    let code = send_named(&handle, UiCommandType::LoadModule, project);
+                    if code == 0 {
+                        println!("{{ \"loaded_module\": \"{}.uni\" }}", escape(project));
                     }
                     code
                 }

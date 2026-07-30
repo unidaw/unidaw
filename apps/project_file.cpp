@@ -1,6 +1,7 @@
 #include "apps/project_file.h"
 
 #include "apps/sampler_serialize.h"
+#include "apps/zip_container.h"
 
 #include <cstdio>
 #include <fstream>
@@ -1209,6 +1210,220 @@ bool deserializeProject(const std::string& json,
 
   document = std::move(parsed);
   return true;
+}
+
+namespace {
+
+// Every asset the document references, as (nameInsideTheModule, pathOnDisk). Two sources: the
+// sampler's sources and placed AUDIO CLIPS. Missing either would produce a module that opens and
+// is silent in one place, which is the failure the whole format exists to prevent.
+struct Asset {
+  std::string inModule;  // "samples/kick.wav"
+  std::string onDisk;
+};
+
+std::string moduleAssetName(const std::string& path) {
+  const size_t slash = path.find_last_of("/\\");
+  const std::string base = slash == std::string::npos ? path : path.substr(slash + 1);
+  return "samples/" + (base.empty() ? std::string("sample.wav") : base);
+}
+
+std::string joinDir(const std::string& dir, const std::string& rel) {
+  if (rel.empty()) {
+    return rel;
+  }
+  if (!rel.empty() && rel[0] == '/') {
+    return rel;  // already absolute
+  }
+  if (dir.empty()) {
+    return rel;
+  }
+  return dir.back() == '/' ? dir + rel : dir + "/" + rel;
+}
+
+std::vector<uint8_t> readWholeFile(const std::string& path, bool* ok) {
+  std::ifstream f(path, std::ios::binary | std::ios::ate);
+  if (!f) {
+    *ok = false;
+    return {};
+  }
+  const std::streamsize n = f.tellg();
+  f.seekg(0);
+  std::vector<uint8_t> bytes(static_cast<size_t>(n));
+  if (n > 0 && !f.read(reinterpret_cast<char*>(bytes.data()), n)) {
+    *ok = false;
+    return {};
+  }
+  *ok = true;
+  return bytes;
+}
+
+}  // namespace
+
+bool saveProjectModule(const ProjectDocument& document,
+                       const std::string& modulePath,
+                       const std::string& assetBaseDir,
+                       std::string* error) {
+  auto fail = [&](const std::string& why) {
+    if (error) {
+      *error = why;
+    }
+    return false;
+  };
+
+  // A COPY, because packing REWRITES the asset paths to their names inside the module. The
+  // caller's document is left alone: packing is a way of sending the project, not an edit to it.
+  ProjectDocument packed = document;
+  std::vector<Asset> assets;
+  auto note = [&](std::string& pathField) {
+    if (pathField.empty()) {
+      return;
+    }
+    const std::string inModule = moduleAssetName(pathField);
+    const std::string onDisk = joinDir(assetBaseDir, pathField);
+    bool already = false;
+    for (const auto& a : assets) {
+      if (a.inModule == inModule) {
+        already = true;
+      }
+    }
+    if (!already) {
+      assets.push_back({inModule, onDisk});
+    }
+    pathField = inModule;
+  };
+
+  for (auto& clip : packed.clips) {
+    if (clip.kind == ClipKind::Audio) {
+      note(clip.audio.sourcePath);
+    }
+  }
+  for (auto& track : packed.tracks) {
+    for (auto& device : track.chain.devices) {
+      if (device.kind != DeviceKind::Sampler || !device.hasSampler) {
+        continue;
+      }
+      for (auto& src : device.sampler.sources) {
+        note(src.path);
+      }
+    }
+  }
+
+  std::vector<ZipEntry> entries;
+  // project.json FIRST, so a reader can find the document without scanning the whole archive —
+  // and so `unzip -l` shows something recognisable at the top.
+  {
+    const std::string json = serializeProject(packed);
+    ZipEntry e;
+    e.name = "project.json";
+    e.data.assign(json.begin(), json.end());
+    entries.push_back(std::move(e));
+  }
+  for (const auto& a : assets) {
+    bool ok = false;
+    std::vector<uint8_t> bytes = readWholeFile(a.onDisk, &ok);
+    if (!ok) {
+      // REFUSED, not skipped. A module missing a sample is only discovered when that pad is
+      // played, and by then it has been sent to somebody.
+      return fail("cannot read asset " + a.onDisk + " for " + a.inModule);
+    }
+    ZipEntry e;
+    e.name = a.inModule;
+    e.data = std::move(bytes);
+    entries.push_back(std::move(e));
+  }
+
+  // ATOMIC: build beside the target and rename. A half-written module is a lost song and this
+  // format has no way to be partially valid.
+  const std::string tmp = modulePath + ".tmp";
+  if (!zipWriteFile(tmp, entries)) {
+    return fail("cannot write " + tmp);
+  }
+  std::error_code ec;
+  std::filesystem::rename(tmp, modulePath, ec);
+  if (ec) {
+    std::filesystem::remove(tmp, ec);
+    return fail("cannot rename into place: " + modulePath);
+  }
+  return true;
+}
+
+bool loadProjectModule(ProjectDocument& document,
+                       const std::string& modulePath,
+                       const std::string& unpackDir,
+                       std::string* error) {
+  auto fail = [&](const std::string& why) {
+    if (error) {
+      *error = why;
+    }
+    return false;
+  };
+  std::vector<ZipEntry> entries;
+  if (!zipReadFile(modulePath, entries, error)) {
+    return false;
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(unpackDir, ec);
+  if (ec) {
+    return fail("cannot create " + unpackDir);
+  }
+
+  const ZipEntry* doc = nullptr;
+  for (const auto& e : entries) {
+    if (e.name == "project.json") {
+      doc = &e;
+    }
+  }
+  if (!doc) {
+    return fail("no project.json in " + modulePath);
+  }
+
+  // UNPACK EVERY ASSET before parsing, so the document that comes out refers to files that are
+  // already there. Parsing first and unpacking lazily would make "the sample is missing" depend
+  // on when it happened to be needed.
+  for (const auto& e : entries) {
+    if (e.name == "project.json") {
+      continue;
+    }
+    // Reject anything that would escape the unpack directory. A module is a file you were SENT,
+    // and "../../.ssh/authorized_keys" is a legal zip entry name.
+    if (e.name.find("..") != std::string::npos || (!e.name.empty() && e.name[0] == '/')) {
+      return fail("module entry escapes its directory: " + e.name);
+    }
+    const std::string out = joinDir(unpackDir, e.name);
+    const size_t slash = out.find_last_of('/');
+    if (slash != std::string::npos) {
+      std::filesystem::create_directories(out.substr(0, slash), ec);
+    }
+    std::ofstream f(out, std::ios::binary | std::ios::trunc);
+    if (!f) {
+      return fail("cannot write " + out);
+    }
+    if (!e.data.empty()) {
+      f.write(reinterpret_cast<const char*>(e.data.data()),
+              static_cast<std::streamsize>(e.data.size()));
+    }
+    if (!f) {
+      return fail("cannot write " + out);
+    }
+  }
+
+  const std::string docPath = joinDir(unpackDir, "project.json");
+  {
+    std::ofstream f(docPath, std::ios::binary | std::ios::trunc);
+    if (!f) {
+      return fail("cannot write " + docPath);
+    }
+    f.write(reinterpret_cast<const char*>(doc->data.data()),
+            static_cast<std::streamsize>(doc->data.size()));
+    if (!f) {
+      return fail("cannot write " + docPath);
+    }
+  }
+  // And load it as an ORDINARY project, because that is what it now is. The unpacked form is not
+  // a special case — it is the loose directory, which is the whole point of the two forms being
+  // one document at two levels of packing.
+  return loadProject(document, docPath, error);
 }
 
 bool saveProject(const ProjectDocument& document,
