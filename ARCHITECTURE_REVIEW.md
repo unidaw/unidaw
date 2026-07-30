@@ -308,8 +308,21 @@ new feature's rule should have reached.
   the save guard added earlier, the same edit instead overwrote device 1's graph with the
   whole pool. This is the largest remaining gap in "patcher is a device".
 
-- **The section ripple now carries tempo and harmony; the METER MAP is deliberately left, and
-  it is a question for you.** Tempo points and harmony events at or after the boundary move by
+- **RESOLVED (your ruling): the meter is on the SECTION and the song-level map is gone.** A
+  `Section` now carries its own numerator/denominator, `resolve()` is a plain prefix sum of
+  `barCount * barLength(section.meter)`, and the tick-keyed `time_sig_map` is DERIVED from the
+  spine for publishing and saving rather than being a source of truth. The old open question
+  below is not answered, it is dissolved — a section carries its meter with it by construction,
+  so there is nothing to ripple. Deleting the map also deleted the AB/BA deadlock this file used
+  to carry: one of the two mutexes no longer exists, so the inversion is impossible rather than
+  fixed. `tools/lock_order_check.sh` reported its own obsolescence when that happened (it fails
+  when it matches nothing) and was generalised to catch any nested mutex pair taken in both
+  orders. The constraint the model imposes, written down because it is real: a meter change
+  cannot happen mid-section — it IS a section boundary. Old files migrate on load by splitting
+  any section that spanned a change, keeping the original id on the first half so a stored
+  reference still resolves to the same music, and saying so on the event stream.
+
+  *The question this replaced, kept because the reasoning is the useful part:* Tempo points and harmony events at or after the boundary move by
   the delta (and the tempo provider is re-pushed, not just the retained map — otherwise the
   song plays at the old tempo positions and saves at the new ones). The meter is different: a
   section's new tick length is computed THROUGH the meter (`tickAtBar`), so shifting meter

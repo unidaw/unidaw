@@ -522,6 +522,14 @@ std::string serializeProject(const ProjectDocument& document) {
       writer.key("name", section.name);
       writer.key("bars", section.barCount);
       writer.key("color_rgb", section.colorRgb);
+      // THIS SECTION'S METER, written only when it has one — a section that inherits the song
+      // default stays byte-identical to what it was before the meter moved here. The pair is
+      // written together or not at all: half a time signature is not a time signature, and a
+      // reader finding a numerator with no denominator would have to invent one.
+      if (section.meter && section.meter->valid()) {
+        writer.key("numerator", section.meter->numerator);
+        writer.key("denominator", section.meter->denominator);
+      }
       writer.endArrayElement();
     }
     writer.endArray();
@@ -814,6 +822,18 @@ bool deserializeProject(const std::string& json,
       section.name = entry.second.get<std::string>("name", "");
       section.barCount = entry.second.get<uint32_t>("bars", 0);
       section.colorRgb = entry.second.get<uint32_t>("color_rgb", 0);
+      // The meter, only if BOTH halves are present and the result is a real signature. A
+      // partial or nonsense pair (4/5 is a typo, not a time signature) is treated as absent so
+      // the section inherits the song default rather than resolving against a bar length of
+      // zero, which would put every later section on top of it.
+      {
+        const uint32_t num = entry.second.get<uint32_t>("numerator", 0);
+        const uint32_t den = entry.second.get<uint32_t>("denominator", 0);
+        const daw::TimeSignature sig{num, den};
+        if (num > 0 && den > 0 && sig.valid()) {
+          section.meter = sig;
+        }
+      }
       // A zero-bar section occupies no time and could never be pointed at. Dropping it
       // here rather than carrying it means the loaded spine is always resolvable.
       if (section.barCount > 0) {

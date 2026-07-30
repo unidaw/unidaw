@@ -972,7 +972,16 @@ fn get_device_params(handle: &EngineHandle, args: &[&str]) -> i32 {
 
 // get extents — dump the published clip rails, decoding each clip's packed grid.
 fn get_extents(handle: &EngineHandle) -> i32 {
-    let extents = handle.read_clip_extents();
+    let (extents, truncated) = handle.read_clip_extents_with_truncation();
+    // Truncation FIRST, and as a comment line before the array, so it cannot be missed by
+    // something that only reads the entries. A truncated list nobody notices reads as a
+    // complete one.
+    if truncated > 0 {
+        eprintln!(
+            "daw-cli: WARNING {truncated} clip extent(s) did not fit and are NOT in this list — \
+             the rails are incomplete"
+        );
+    }
     println!("[");
     for e in &extents {
         let grid = daw_bridge::layout::unpack_clip_grid(e.flags)

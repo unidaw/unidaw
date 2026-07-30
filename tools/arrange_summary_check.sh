@@ -32,16 +32,21 @@ TMP="$(mktemp -d)"
 SHM="/arrsum_$$"
 trap 'rm -rf "$TMP"' EXIT
 
-# intro 4 bars, verse 8, chorus 8 — with the meter dropping to 3/4 at bar 5, which is
-# exactly where the verse begins. So the verse and chorus are in 3/4 and the intro is not.
+# intro 4 bars of 4/4, then verse 8 and chorus 8 in 3/4 — the METER IS ON THE SECTION now, so a
+# meter change is a section boundary rather than a point in a tick-keyed map.
+#
+# The fixture stays MIXED-METER on purpose. Rewriting it to one signature would have made it pass
+# an implementation that ignored the meter entirely, which is the easiest way to turn a model
+# change into a test that verifies nothing. What must still hold is the composition: the verse's
+# END has to land where 8 bars of 3/4 put it, not where 8 bars of 4/4 would.
 cat > "$TMP/arr.uniproj.json" <<EOF
 { "schema_version": 4, "meta": { "name": "arr" }, "nanoticks_per_quarter": $Q,
   "tempo_map": [ { "nanotick": 0, "bpm": 120 } ], "harmony_timeline": [],
   "sections": [ { "id": 1, "name": "intro", "bars": 4 },
-                { "id": 2, "name": "verse", "bars": 8 },
-                { "id": 3, "name": "chorus", "bars": 8 } ],
-  "time_sig_map": [ { "nanotick": 0, "numerator": 4, "denominator": 4 },
-                    { "nanotick": $((4 * BAR44)), "numerator": 3, "denominator": 4 } ],
+                { "id": 2, "name": "verse", "bars": 8,
+                  "numerator": 3, "denominator": 4 },
+                { "id": 3, "name": "chorus", "bars": 8,
+                  "numerator": 3, "denominator": 4 } ],
   "clips": [ { "id": 1, "name": "c", "length": $BAR44, "kind": "symbolic", "notes": [] } ],
   "tracks": [ { "track_id": 0, "name": "T",
     "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
@@ -69,7 +74,7 @@ field() { echo "$SUMMARY" | tr '{' '\n' | grep "\"id\": $1," | sed -n "s/.*\"$2\
 # BY HAND: the intro is 4 bars of 4/4.
 WANT_INTRO_END=$((4 * BAR44))
 # The verse begins there and is 8 bars of 3/4.
-WANT_VERSE_END=$((4 * BAR44 + 8 * BAR34))
+WANT_VERSE_END=$((4 * BAR44 + 8 * BAR34))  # 4 bars of 4/4, then 8 of 3/4
 [ "$(field 1 start_tick)" = "0" ] || fail "intro should start at 0"
 [ "$(field 1 end_tick)" = "$WANT_INTRO_END" ] || \
   fail "intro should end at $WANT_INTRO_END (4 bars of 4/4), got $(field 1 end_tick)"
@@ -98,15 +103,24 @@ SUMMARY="$(cli get arrangement 2>/dev/null || true)"
 V2="$(echo "$SUMMARY" | sed -n 's/.*"version": \([0-9]*\).*/\1/p' | head -1)"
 [ "$V2" != "$V1" ] || fail "the summary version did not move after a section edit ($V1)"
 
-# 6 bars of intro now SPANS the meter change: 4 bars of 4/4 plus 2 of 3/4. A summary that
-# multiplied one bar length by the count would get this wrong, which is why the fixture is
-# built this way.
-WANT_SPANNING=$((4 * BAR44 + 2 * BAR34))
-[ "$(field 1 end_tick)" = "$WANT_SPANNING" ] || \
-  fail "an intro spanning the meter change should end at $WANT_SPANNING (4 bars of 4/4 +
-        2 of 3/4), got $(field 1 end_tick) — the derivation is using one bar length for a
-        section whose bars are two different lengths"
-echo "  after the edit: version $V1 -> $V2, and the intro correctly spans the meter change"
+# A 6-bar intro is 6 bars OF ITS OWN METER (4/4) — a section has one meter now, so growing it
+# cannot silently pull bars of a different length into it, which is exactly the failure the old
+# tick-keyed map allowed. And the verse must move by the 2 bars added, measured in the INTRO's
+# meter rather than its own.
+WANT_GROWN=$((6 * BAR44))
+[ "$(field 1 end_tick)" = "$WANT_GROWN" ] || \
+  fail "a 6-bar 4/4 intro should end at $WANT_GROWN, got $(field 1 end_tick)"
+[ "$(field 2 start_tick)" = "$WANT_GROWN" ] || \
+  fail "the verse should start where the grown intro ends ($WANT_GROWN), got
+        $(field 2 start_tick) — a section's start is a consequence of the lengths before it"
+# THE COMPOSITION, which is what the mixed-meter fixture is for: the verse is still 8 bars of
+# 3/4, so its span is unchanged even though it moved.
+WANT_VERSE_SPAN=$((8 * BAR34))
+VERSE_SPAN=$(( $(field 2 end_tick) - $(field 2 start_tick) ))
+[ "$VERSE_SPAN" = "$WANT_VERSE_SPAN" ] || \
+  fail "the 3/4 verse should span $WANT_VERSE_SPAN (8 bars of 3/4), got $VERSE_SPAN — the
+        derivation is using the wrong bar length for it"
+echo "  after the edit: version $V1 -> $V2, intro 6 bars of 4/4, verse still 8 bars of 3/4"
 
 # A note edit must NOT move the summary version, or a section rename and a typed note
 # would invalidate each other's caches.
@@ -162,7 +176,11 @@ pts = doc.get("time_sig_map", [])
 print(" ".join("%d:%d/%d" % (p["nanotick"], p["numerator"], p["denominator"]) for p in pts))
 PYS
 )"
-WANT_SIGS="0:4/4 $((4 * BAR44)):3/4"
+# The 3/4 point sits at 6 bars, not 4, because the intro was GROWN to 6 above — and that is the
+# whole point of the meter living on the section: the derived map followed the spine with nobody
+# rippling it. Under the old tick-keyed map this point would have stayed at bar 5 while the verse
+# moved to bar 7, silently putting two bars of the verse in the wrong meter.
+WANT_SIGS="0:4/4 $((6 * BAR44)):3/4"
 [ "$SAVED_SIGS" = "$WANT_SIGS" ] || \
   fail "the save wrote time_sig_map
         [$SAVED_SIGS]
@@ -182,15 +200,71 @@ cli do load arrout >/dev/null 2>&1 || true
 sleep 1.8
 SUMMARY="$(cli get arrangement 2>/dev/null || true)"
 [ -n "$SUMMARY" ] || fail "the reloaded project published no arrangement summary"
-# The intro was grown to 6 bars above, so after the reload it must STILL span the meter
-# change: 4 bars of 4/4 + 2 of 3/4. A flattened meter would make it 6 bars of 4/4 and put
-# every later boundary in the wrong place.
-[ "$(field 1 end_tick)" = "$WANT_SPANNING" ] || \
-  fail "after save+reload the 6-bar intro ends at $(field 1 end_tick), not $WANT_SPANNING —
-        the meter map did not survive, so the song came back in 4/4 throughout"
+# THE RELOAD MUST REPRODUCE THE MIXED METER. The intro is 6 bars of 4/4 and the verse 8 bars of
+# 3/4, so the verse's SPAN is what proves the per-section meter survived: a project that came back
+# in one signature would give the verse 8 bars of 4/4 and every later boundary would move.
+[ "$(field 1 end_tick)" = "$WANT_GROWN" ] || \
+  fail "after save+reload the 6-bar 4/4 intro ends at $(field 1 end_tick), not $WANT_GROWN"
+RELOADED_VERSE_SPAN=$(( $(field 2 end_tick) - $(field 2 start_tick) ))
+[ "$RELOADED_VERSE_SPAN" = "$WANT_VERSE_SPAN" ] || \
+  fail "after save+reload the verse spans $RELOADED_VERSE_SPAN, not $WANT_VERSE_SPAN (8 bars of
+        3/4) — the section's own meter did not survive, so the song came back in 4/4 throughout"
 echo "$SUMMARY" | grep -q '"sig": "3/4"' || fail "the reloaded meter map has no 3/4 point"
-echo "  reload (fresh engine): the 3/4 point is back and the intro still spans it"
+echo "  reload (fresh engine): the intro is still 6 bars of 4/4 and the verse 8 bars of 3/4"
 
 kill "$ENG" 2>/dev/null || true
 wait "$ENG" 2>/dev/null || true
+# ---- MIGRATION FROM THE OLD MODEL. A file written before the meter moved carries a tick-keyed
+# time_sig_map and sections that know nothing about meter. Each section must take the meter in
+# force at its start — and a section that SPANS a change must be SPLIT there, because under this
+# model a meter change IS a section boundary, so such a section was never really one section.
+#
+# The fixture is an 8-bar intro with the meter dropping to 3/4 at bar 5, i.e. HALFWAY THROUGH it.
+# That is the case that cannot be expressed after the change and therefore the only one worth
+# testing: a map whose changes already line up with boundaries would migrate trivially.
+cat > "$TMP/legacy.uniproj.json" <<EOF
+{ "schema_version": 4, "meta": { "name": "legacy" }, "nanoticks_per_quarter": $Q,
+  "tempo_map": [ { "nanotick": 0, "bpm": 120 } ], "harmony_timeline": [],
+  "sections": [ { "id": 1, "name": "intro", "bars": 8 },
+                { "id": 2, "name": "verse", "bars": 4 } ],
+  "time_sig_map": [ { "nanotick": 0, "numerator": 4, "denominator": 4 },
+                    { "nanotick": $((4 * BAR44)), "numerator": 3, "denominator": 4 } ],
+  "clips": [ { "id": 1, "name": "c", "length": $BAR44, "kind": "symbolic", "notes": [] } ],
+  "tracks": [ { "track_id": 0, "name": "T",
+    "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+    "device_chain": [], "mod_links": [],
+    "placements": [ { "clip_id": 1, "id": 1, "at": 0, "length": $BAR44,
+                      "notes": [], "chords": [], "mutes": [] } ] } ] }
+EOF
+SHM3="/arrsum3_$$"
+( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --run-seconds 16 >"$TMP/engine3.log" 2>&1 ) &
+ENG=$!
+sleep 2.5
+cli() { DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
+cli do load legacy >/dev/null 2>&1 || true
+sleep 1.8
+SUMMARY="$(cli get arrangement 2>/dev/null || true)"
+[ -n "$SUMMARY" ] || fail "the legacy project published no arrangement summary"
+
+# The 8-bar intro becomes TWO sections: 4 bars of 4/4 keeping id 1, then 4 bars of 3/4 with a
+# fresh id. Positions must be IDENTICAL to what the old model produced, because the file's
+# meaning has not changed — only how it is stated.
+SECTION_COUNT="$(echo "$SUMMARY" | grep -c '"start_bar"')"
+[ "$SECTION_COUNT" = "3" ] || \
+  fail "the 8-bar intro spanning a meter change should migrate to 3 sections (4 bars of 4/4,
+        4 of 3/4, then the verse), got $SECTION_COUNT — a section cannot hold two meters now, so
+        one that did must be split rather than silently resolved with one of them"
+[ "$(field 1 end_tick)" = "$((4 * BAR44))" ] || \
+  fail "the first half of the split intro should keep id 1 and end at $((4 * BAR44)) (4 bars of
+        4/4), got $(field 1 end_tick) — a stored reference to id 1 must still resolve to the
+        same music"
+grep -q '"event":"sections.meter_migrated"' "$TMP/engine3.log" || \
+  fail "the split happened without saying so. A load that silently restructures the
+        arrangement is exactly the kind of change a person needs told about"
+echo "  migration: an 8-bar intro spanning a 3/4 change split into 4+4, id 1 kept, and reported"
+
+kill "$ENG" 2>/dev/null || true
+wait "$ENG" 2>/dev/null || true
+
 echo "arrange_summary_check: PASS"

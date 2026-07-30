@@ -386,7 +386,10 @@ pub const K_UI_MAX_CLIP_EXTENTS: usize = 256;
 #[repr(C)]
 pub struct UiClipExtentRegion {
     pub count: u32,
-    pub reserved: u32,
+    /// How many extents did NOT fit. Non-zero means the rails are incomplete — the cap went
+    /// 64 -> 256 and the overflow stayed a bare `break`, so the truncation was silent at both
+    /// sizes. Took the reserved word; the region is the same size.
+    pub truncated: u32,
     pub extents: [UiClipExtent; K_UI_MAX_CLIP_EXTENTS],
 }
 
