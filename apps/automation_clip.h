@@ -104,14 +104,25 @@ class AutomationClip {
   // For persistence and for the override/ripple paths. Points are kept sorted by tick,
   // which addPoint maintains, so a consumer can rely on the order.
   const std::vector<AutomationPoint>& points() const { return points_; }
-  // Shift every point by a signed delta, saturating at 0. Used by the section ripple so
-  // automation moves with the material it belongs to — without this, inserting bars into
-  // the intro slid every note later and left the filter sweep behind.
-  void shiftPoints(int64_t delta) {
+  // A TIME EDIT moves the points at or after `fromTick` by a signed delta, saturating at 0, so
+  // automation travels with the material it belongs to — without this, inserting bars into the
+  // intro slides every note later and leaves the filter sweep behind. Returns true if anything
+  // moved, so a caller can report what it carried.
+  //
+  // This WAS `shiftPoints(delta)`, which moved EVERY point and had zero callers despite a comment
+  // claiming the ripple used it. The semantics never matched: a ripple must leave earlier material
+  // alone, so the ripple rebuilt each clip inline instead and the helper sat there being wrong.
+  // Same rule as daw::rippleTick, deliberately — an automation point and a placement in the same
+  // bar must not part company.
+  bool rippleFrom(uint64_t fromTick, int64_t delta) {
     if (delta == 0) {
-      return;
+      return false;
     }
+    bool moved = false;
     for (auto& p : points_) {
+      if (p.nanotick < fromTick) {
+        continue;
+      }
       if (delta > 0) {
         const uint64_t d = static_cast<uint64_t>(delta);
         p.nanotick = (p.nanotick > UINT64_MAX - d) ? UINT64_MAX : p.nanotick + d;
@@ -119,7 +130,12 @@ class AutomationClip {
         const uint64_t d = static_cast<uint64_t>(-delta);
         p.nanotick = p.nanotick > d ? p.nanotick - d : 0;
       }
+      moved = true;
     }
+    // Moving points can collide two onto one tick when the delta is negative; the caller refuses
+    // that case up front (a removal whose bars hold automation), so the order here is preserved
+    // rather than re-deduplicated — which would silently destroy the very point it refused over.
+    return moved;
   }
   bool discreteOnly() const { return discreteOnly_; }
   uint32_t targetPluginIndex() const { return targetPluginIndex_; }

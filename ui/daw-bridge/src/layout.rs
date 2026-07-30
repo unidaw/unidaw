@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 28;
+pub const K_SHM_VERSION: u16 = 29;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -652,11 +652,9 @@ pub enum UiCommandType {
     /// value0 = strength in thousandths, note_pitch = swing in thousandths BIASED by
     /// +500 (so 500 = straight). Changes what SOUNDS; never touches a stored note.
     SetLaneQuantize = 53,
-    AddSection = 54,
-    RemoveSection = 55,
-    RenameSection = 56,
-    SetSectionLength = 57,
-    MoveSection = 58,
+    // 54-58 RETIRED with the Section spine (v29), and deliberately NOT reused: a client still
+    // sending 57 for "set this section's length" would get something else entirely, and a command
+    // that quietly does a different thing is the failure mode this contract exists to prevent.
     RevertPlacementOverrides = 59,
     WriteAutomationPoint = 60,
     /// Set (or clear) ONE placement's edit scope. trackId, value0 = placementId,
@@ -672,6 +670,19 @@ pub enum UiCommandType {
     /// changed the id, dropped the uid16 and was not atomic — so a depth SLIDER was impossible.
     /// AddModLink still refuses an existing id rather than replacing.
     SetModLinkDepth = 63,
+    /// v29 ARRANGEMENT ops, replacing the retired section family. Marker ops are TOTAL — they
+    /// name a position, move no material, and cannot be refused for anything but a bad id.
+    AddMarker = 64,
+    RemoveMarker = 65,
+    RenameMarker = 66,
+    MoveMarker = 67,
+    /// Insert or replace a meter point (flags bit0 = flatten to this one signature). THIS is
+    /// where mid-song meter is authored; a Section's meter was reachable from no command at all.
+    SetTimeSignature = 68,
+    /// The ripple as its own command: insert or remove arrangement time at a tick, carrying every
+    /// placement, tempo point, harmony event, automation point, meter point and marker at or
+    /// after it in ONE refusable, undoable transaction.
+    InsertRemoveTime = 69,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -971,34 +982,38 @@ impl Default for UiModSourceValuePayload {
     }
 }
 
-/// v27 (M3.25): a section, published RESOLVED — `start_bar` and `start_tick` are already
-/// prefix-summed through the meter map. Resolved on purpose: the model stores only bar
-/// COUNTS, so a client deriving positions would be reimplementing the engine's
-/// `SectionList::resolve`, and the first disagreement would draw a section in the wrong
-/// place with nothing reporting an error.
+/// v29: a MARKER — a named tick. Replaces `UiArrangeSection`, same 56 bytes, so the region and
+/// every offset after it are unchanged; only the meaning moved, which is exactly why the wire
+/// version had to.
+///
+/// THE BAR IS PUBLISHED RESOLVED, and that is why this region exists rather than the client just
+/// reading the marker list: a bar number is a PREFIX SUM across every meter change before it, NOT
+/// `tick / bar_length`. Deriving it here would be reimplementing the engine's
+/// `TimeSignatureMap::barBeatAt`, and the first disagreement draws a marker at the wrong bar with
+/// nothing reporting an error.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct UiArrangeSection {
+pub struct UiMarker {
     pub id: u32,
-    /// ONE-based, like every ruler.
-    pub start_bar: u32,
-    pub bar_count: u32,
+    /// ONE-based, like every ruler. Prefix-summed through the meter map.
+    pub bar: u32,
+    /// ONE-based within the bar.
+    pub beat: u32,
     pub color_rgb: u32,
-    pub start_tick: u64,
-    /// Exclusive.
-    pub end_tick: u64,
+    pub nanotick: u64,
+    pub reserved: u64,
     pub name: [u8; 24],
 }
 
-impl Default for UiArrangeSection {
+impl Default for UiMarker {
     fn default() -> Self {
         Self {
             id: 0,
-            start_bar: 1,
-            bar_count: 0,
+            bar: 1,
+            beat: 1,
             color_rgb: 0,
-            start_tick: 0,
-            end_tick: 0,
+            nanotick: 0,
+            reserved: 0,
             name: [0u8; 24],
         }
     }
@@ -1012,26 +1027,32 @@ pub struct UiTimeSigPoint {
     pub denominator: u32,
 }
 
-/// The section spine and the song's meter in ONE region with one version, because they are
-/// read together — a section's tick position comes from the meter, and two regions could
-/// be seen mismatched. `version` moves when the SPINE or the METER changes and never when
-/// a note does, so a section rename does not invalidate an in-flight clip edit.
+/// The markers and the song's meter in ONE region with one version, because they are read
+/// together — a marker's BAR comes from the meter, and two regions could be seen mismatched.
+/// `version` moves when the markers or the meter change and never when a note does, so renaming
+/// a marker does not invalidate an in-flight clip edit. **0 means a write is IN FLIGHT** — retry
+/// rather than treating it as empty.
+///
+/// v29: the time-signature points are AUTHORITATIVE now, not a derived read-back of a spine. This
+/// is where mid-song meter lives.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct UiArrangeSummaryRegion {
     pub version: u32,
-    pub section_count: u32,
+    pub marker_count: u32,
     pub time_sig_count: u32,
     /// How many did NOT fit. Non-zero means the list you are reading is incomplete —
     /// published rather than dropped silently, because a truncated list that says nothing
     /// reads as a complete one.
-    pub sections_truncated: u32,
+    pub markers_truncated: u32,
     pub time_sig_truncated: u32,
     pub reserved: u32,
-    /// The furthest placement end. NOT the end of the last section: material can sit past
-    /// the spine, and it plays and is unnamed.
+    /// The furthest placement end. NOT marker-derived: material can sit past the last marker, and
+    /// it plays and is unnamed. Also mirrored in the header as `ui_song_end_tick`, written from
+    /// the same atomic — the same number where a per-frame reader can get it without a second
+    /// region read.
     pub song_end_tick: u64,
-    pub sections: [UiArrangeSection; K_UI_MAX_SECTIONS],
+    pub markers: [UiMarker; K_UI_MAX_MARKERS],
     pub time_sig_points: [UiTimeSigPoint; K_UI_MAX_TIME_SIG_POINTS],
 }
 
@@ -1052,7 +1073,7 @@ pub const UI_CLIP_EXTENT_HAS_OVERRIDES: u32 = 1 << 22;
 pub const UI_EDIT_SCOPE_LOCAL: u16 = 1 << 15;
 pub const UI_EDIT_COLUMN_MASK: u16 = 0x00FF;
 
-pub const K_UI_MAX_SECTIONS: usize = 64;
+pub const K_UI_MAX_MARKERS: usize = 64;
 pub const K_UI_MAX_TIME_SIG_POINTS: usize = 32;
 
 /// M3.27 (60): one automation point. `param_id` is the STRING the clip is keyed on (the
@@ -1124,42 +1145,63 @@ impl Default for UiAutomationLaneRequestPayload {
     }
 }
 
-/// M3.23 section commands (54-58). A section stores a name and a length in BARS; its
-/// POSITION is derived from the lengths before it, so there is deliberately no
-/// "move a section to bar N" — you change a length or the order and everything after
-/// follows. `SetSectionLength` RIPPLES every placement at or after the boundary in one
-/// transaction, and REFUSES a shrink into occupied bars rather than stacking placements
-/// onto one tick (the refusal is reported as `section.rejected` with the blocking
-/// placement id).
+/// v29 MARKER commands (64-67). A marker is a named tick; `marker_id` addresses an existing one
+/// (0 with AddMarker = let the engine assign and report the id it chose). Marker ops are TOTAL:
+/// they move no material and cannot be refused for anything but a bad id.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
-pub struct UiSectionCommandPayload {
+pub struct UiMarkerCommandPayload {
     pub command_type: u16,
     pub flags: u16,
-    /// Addresses an existing section. 0 with AddSection means "append".
-    pub section_id: u32,
-    /// Length in bars, for AddSection and SetSectionLength.
-    pub bar_count: u32,
-    /// Destination index for MoveSection, and the insert position for AddSection.
-    pub to_index: u32,
+    pub marker_id: u32,
+    pub nanotick_lo: u32,
+    pub nanotick_hi: u32,
     pub color_rgb: u32,
     /// 20 bytes — what is left of the 40-byte slot. A longer name is truncated.
     pub name: [u8; 20],
 }
 
-impl Default for UiSectionCommandPayload {
+impl Default for UiMarkerCommandPayload {
     fn default() -> Self {
         Self {
             command_type: 0,
             flags: 0,
-            section_id: 0,
-            bar_count: 0,
-            to_index: 0,
+            marker_id: 0,
+            nanotick_lo: 0,
+            nanotick_hi: 0,
             color_rgb: 0,
             name: [0u8; 20],
         }
     }
 }
+
+/// v29 TIMELINE commands (68-69) — the two that change time rather than a label.
+///
+///   `SetTimeSignature`   insert-or-replace a meter point at `nanotick`; `UI_TIME_SIG_FLATTEN`
+///                        replaces the whole map with this one signature.
+///   `InsertRemoveTime`   `delta` BARS of arrangement time inserted (positive) or removed
+///                        (negative) at `nanotick`. Bars, not ticks, because a bar's length
+///                        depends on the meter in force there — which the engine knows
+///                        authoritatively and a client would have to re-derive.
+///                        `UI_TIME_EDIT_DELTA_IS_TICKS` switches to raw ticks.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiArrangeTimeCommandPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub nanotick_lo: u32,
+    pub nanotick_hi: u32,
+    pub delta: i32,
+    pub numerator: u32,
+    pub denominator: u32,
+    pub reserved0: u32,
+    pub reserved1: u32,
+    pub reserved2: u32,
+    pub reserved3: u32,
+}
+
+pub const UI_TIME_SIG_FLATTEN: u16 = 1 << 0;
+pub const UI_TIME_EDIT_DELTA_IS_TICKS: u16 = 1 << 1;
 
 /// PatcherNodeType, mirroring apps/patcher_graph.h.
 pub const PATCHER_NODE_RUST_KERNEL: u32 = 0;
@@ -1530,10 +1572,11 @@ mod tests {
         const_assert_eq!(size_of::<UiModSourceValuePayload>(), 40);
         const_assert_eq!(size_of::<UiPatcherGraphCommandPayload>(), 40);
         const_assert_eq!(size_of::<UiPatcherNodeConfigPayload>(), 40);
-        const_assert_eq!(size_of::<UiSectionCommandPayload>(), 40);
+        const_assert_eq!(size_of::<UiMarkerCommandPayload>(), 40);
+        const_assert_eq!(size_of::<UiArrangeTimeCommandPayload>(), 40);
         const_assert_eq!(size_of::<UiAutomationPointPayload>(), 40);
         const_assert_eq!(size_of::<UiAutomationLaneRequestPayload>(), 40);
-        const_assert_eq!(size_of::<UiArrangeSection>(), 56);
+        const_assert_eq!(size_of::<UiMarker>(), 56);
         const_assert_eq!(size_of::<UiTimeSigPoint>(), 16);
         const_assert_eq!(size_of::<UiArrangeSummaryRegion>(), 4128);
         // The extents region had NO size assert, which is how its capacity constant

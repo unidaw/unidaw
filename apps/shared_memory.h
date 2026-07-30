@@ -104,7 +104,17 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    section in the wrong place with nothing reporting it.
 //    Also in this bump: kUiMaxClipExtents 64 -> 256 (64 was reached by a six-track
 //    project and the overflow was a silent `break`).
-constexpr uint16_t kShmVersion = 28;
+// v29: MARKERS REPLACE SECTIONS, and the song's time-signature MAP becomes authoritative.
+//    The Section spine is gone: a marker is a named tick, mid-song meter is a point in the meter
+//    map, and inserting or removing arrangement time is its own command (InsertRemoveTime) rather
+//    than a side effect of setting a section's length. apps/markers.h records why in full — the
+//    short version is that a section's own meter was unreachable by any command and honoured by
+//    nothing downstream, and every spine op had two possible meanings while implementing one of
+//    each.
+//    UiArrangeSummaryRegion keeps its shape and its 4,128 bytes (UiMarker is the same 56 bytes
+//    UiArrangeSection was), so no offset after it moves. The version still had to move: a v28
+//    reader would parse markers as sections and draw spans that were never there.
+constexpr uint16_t kShmVersion = 29;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -133,7 +143,7 @@ constexpr uint32_t kUiMaxClipExtents = 256;
 // scale rather than note scale — a song with more than 64 named sections or 32 meter
 // changes is beyond what this tool is for, and both counts are published alongside a
 // TRUNCATED count so hitting the wall is visible rather than silent.
-constexpr uint32_t kUiMaxSections = 64;
+constexpr uint32_t kUiMaxMarkers = 64;
 constexpr uint32_t kUiMaxTimeSigPoints = 32;
 constexpr uint32_t kUiMaxHarmonyEvents = 512;
 constexpr uint32_t kUiEditBatchMaxOps = 32;
@@ -291,6 +301,12 @@ struct alignas(64) ShmHeader {
   uint64_t uiAutomationBytes = 0;
   uint64_t uiAutomationSlotOffset = 0;
   uint64_t uiAutomationSlotBytes = 0;
+  // v29: the song's end in ticks, mirrored from songEndNanotick. It is ALSO in the arrange
+  // region, written from the same atomic in the same pass — this is not a second source of truth,
+  // it is the same number where the reader that needs it every frame can get it. A client draws
+  // the unnamed tail past the last marker from this, and asked for a field rather than a second
+  // region read for one integer.
+  uint64_t uiSongEndTick = 0;
 };
 
 // uiTrackFlags bits.
@@ -437,25 +453,31 @@ struct UiClipExtentRegion {
 };
 
 // M3.25 (v27): the ARRANGEMENT SUMMARY — the section spine and the song's meter map, in
-// ONE region with one version, because they are read together (a section's tick position
-// comes from the meter) and a reader that had them in two places could see a mismatched
-// pair.
+// ONE region with one version, because they are read together (a marker's BAR number comes from
+// the meter) and a reader that had them in two places could see a mismatched pair.
 //
-// THE SECTIONS ARE PUBLISHED RESOLVED — startBar AND startTick, already prefix-summed
-// through the meter map. That is deliberate: the model stores only bar COUNTS, so a
-// client that had to derive positions would be reimplementing `SectionList::resolve`,
-// and the first time the two implementations disagreed the UI would draw chorus 2 in the
-// wrong place with nothing reporting an error. One derivation, in the engine, published.
-struct UiArrangeSection {
+// v29: MARKERS REPLACE SECTIONS. A marker is a named tick, not a span with a bar count — see
+// apps/markers.h for why the spine went. The region keeps its shape and its size: UiMarker is the
+// same 56 bytes UiArrangeSection was and the counts are unchanged, so the 4,128-byte region and
+// every offset after it stay put. Only the meaning of the array changed, which is exactly why the
+// VERSION had to move: a v28 reader would parse markers as sections and draw spans that do not
+// exist.
+//
+// THE BAR NUMBER IS PUBLISHED RESOLVED, and that is the whole reason this is not just the marker
+// list: a bar number is a prefix sum across every meter change before it, NOT tick / barLength.
+// A client deriving it would be reimplementing TimeSignatureMap::barBeatAt, and the first
+// disagreement would draw a marker at the wrong bar with nothing reporting it. One derivation, in
+// the engine, published.
+struct UiMarker {
   uint32_t id = 0;
-  uint32_t startBar = 1;  // ONE-based, like BarBeat and every ruler
-  uint32_t barCount = 0;
+  uint32_t bar = 1;        // ONE-based, prefix-summed through the meter map
+  uint32_t beat = 1;       // ONE-based within the bar
   uint32_t colorRgb = 0;
-  uint64_t startTick = 0;
-  uint64_t endTick = 0;  // exclusive
+  uint64_t nanotick = 0;
+  uint64_t reserved = 0;
   char name[24]{};
 };
-static_assert(sizeof(UiArrangeSection) == 56, "UiArrangeSection is wire format");
+static_assert(sizeof(UiMarker) == 56, "UiMarker is wire format");
 
 struct UiTimeSigPoint {
   uint64_t nanotick = 0;
@@ -465,20 +487,23 @@ struct UiTimeSigPoint {
 static_assert(sizeof(UiTimeSigPoint) == 16, "UiTimeSigPoint is wire format");
 
 struct UiArrangeSummaryRegion {
-  // Moves when the SPINE or the METER changes — never when a note does, so a section
-  // rename does not invalidate anyone's in-flight clip edit.
+  // Moves when the MARKERS or the METER change — never when a note does, so renaming a marker
+  // does not invalidate anyone's in-flight clip edit. 0 means A WRITE IS IN FLIGHT: reading
+  // version-body-version and requiring the two to match is NOT torn-safe on its own, because the
+  // number only moves after the body is written.
   uint32_t version = 0;
-  uint32_t sectionCount = 0;
+  uint32_t markerCount = 0;
   uint32_t timeSigCount = 0;
-  // How many sections / meter points did NOT fit. Published rather than dropped in
-  // silence: a truncated list that says nothing reads as a complete one.
-  uint32_t sectionsTruncated = 0;
+  // How many markers / meter points did NOT fit. Published rather than dropped in silence: a
+  // truncated list that says nothing reads as a complete one.
+  uint32_t markersTruncated = 0;
   uint32_t timeSigTruncated = 0;
   uint32_t reserved = 0;
-  // The song's end in ticks — the furthest placement end, which is NOT the same as the
-  // end of the last section. Material can sit past the spine; it plays and is unnamed.
+  // The song's end in ticks — the furthest placement end. It is NOT marker-derived and never was:
+  // material can sit past the last marker, and it plays. It rides in this region because this is
+  // where it has always been published; a client caching on `version` gets it for free.
   uint64_t songEndTick = 0;
-  UiArrangeSection sections[kUiMaxSections]{};
+  UiMarker markers[kUiMaxMarkers]{};
   UiTimeSigPoint timeSigPoints[kUiMaxTimeSigPoints]{};
 };
 

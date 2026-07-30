@@ -37,7 +37,7 @@
 #              the entire difference between a check and a rubber stamp.
 #   CACHES     the version moves on an automation write and does NOT move on a note edit, so
 #              caching on it is safe and is not invalidated by ordinary typing
-#   REFUSES    a shrink into bars that hold automation is refused, by lane name. The refusal
+#   REFUSES    a removal of bars that hold automation is refused, by lane name. The refusal
 #              guarded placements only; automation is material by the same argument, and worse,
 #              a point at the boundary collapses onto the one at the new end because addPoint
 #              replaces. Measured without the guard: two points became one
@@ -65,7 +65,7 @@ fail() {
   exit 1
 }
 
-# TWO sections and TWO automation lanes on one track. Two sections is the minimum that can ripple;
+# TWO markers and TWO automation lanes on one track. Two markers show the ripple carries them;
 # two lanes is the minimum that can show the list is a list rather than a hardcoded first answer.
 # A point before the boundary and points after it, so the ripple has to move some and not others.
 python3 - "$TMP/ar.uniproj.json" "$Q" <<'PY'
@@ -79,7 +79,7 @@ def routing():
 clip = {"id": 1, "name": "c", "length": BAR, "kind": "symbolic",
         "notes": [{"nanotick": 0, "duration": Q, "pitch": 60, "velocity": 100,
                    "column": 0, "note_id": 1}]}
-# `cutoff` straddles the section-1 boundary (bar 4 = tick 4*BAR): one point inside section 1,
+# `cutoff` straddles the edit point (bar 5 = tick 4*BAR): one point before it,
 # two after it. `res` is entirely after the boundary, so it moves whole.
 auto = [
     {"param_id": "cutoff", "target_plugin_index": 4294967295, "discrete": False,
@@ -94,13 +94,14 @@ tr = {"track_id": 0, "name": "T", "harmony_quantize": False, "lines_per_beat": 4
       "routing": routing(), "device_chain": [], "mod_links": [],
       "automation": auto,
       # Placements are what the ripple REFUSES over: a shrink into occupied bars is rejected, so
-      # keep the material inside section 1 and grow rather than shrink.
+      # keep the material before the edit point and insert rather than remove.
       "placements": [{"clip_id": 1, "id": 1, "at": 0, "length": BAR,
                       "notes": [], "chords": [], "mutes": []}]}
-sections = [{"id": 1, "name": "intro", "bars": 4}, {"id": 2, "name": "verse", "bars": 8}]
+markers = [{"id": 1, "nanotick": 0, "name": "intro", "color_rgb": 0},
+           {"id": 2, "nanotick": 4 * BAR, "name": "verse", "color_rgb": 0}]
 json.dump({"schema_version": 4, "meta": {"name": "ar"}, "nanoticks_per_quarter": Q,
            "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [],
-           "sections": sections, "clips": [clip], "tracks": [tr]}, open(out, "w"))
+           "markers": markers, "clips": [clip], "tracks": [tr]}, open(out, "w"))
 PY
 
 SHM="/archk_$$"
@@ -216,14 +217,14 @@ case "$GOT2" in
 esac
 echo "  caches: an automation write moves the version ($V1 -> $V2) and the point is readable"
 
-# ---- RIPPLES. Grow section 1 from 4 bars to 6 and every point at or after the OLD boundary
-# (bar 4) must move by 2 bars, while the point inside section 1 stays. Asserted against the
+# ---- RIPPLES. Insert 2 bars at bar 5, and every point at or after that point
+# must move by 2 bars, while the points before it stay. Asserted against the
 # READ-BACK, which is published from the RT snapshot — so this fails if the ripple moves the
 # model and the file but not what plays.
-cli do section length --id 1 --bars 6 >/dev/null 2>&1 || true
+cli do time insert --nanotick 15360000 --bars 2 >/dev/null 2>&1 || true
 sleep 1.5
-grep -q '"event":"section.length_set"' "$TMP/eng.log" || \
-  fail "SetSectionLength was not applied: $(grep -o '"event":"section[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
+grep -q '"event":"time.edited"' "$TMP/eng.log" || \
+  fail "the time edit was not applied: $(grep -o '"event":"time[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
 
 # Expected after a +2 bar insert at the bar-4 boundary:
 #   2*BAR (inside section 1)  stays
@@ -244,7 +245,7 @@ GOT_RES="$(points_of 0 res)"
         [$WANT_RES], but reads [$GOT_RES]"
 echo "  ripples: the read-back shows the moved ticks — the RT snapshot rippled, not just the model"
 
-# ---- A SHRINK INTO AUTOMATION IS REFUSED. The refusal guarded PLACEMENTS only, and automation
+# ---- A REMOVAL OF BARS HOLDING AUTOMATION IS REFUSED. The refusal guarded PLACEMENTS only, and automation
 # is material by the same argument: rippleTick moves what is at or after the boundary, so a sweep
 # inside the removed bars stays where it is while the later section boundaries slide over it —
 # re-sectioned, with no point changed and nothing to see. And worse for automation specifically:
@@ -252,21 +253,22 @@ echo "  ripples: the read-back shows the moved ticks — the RT snapshot rippled
 # the shrink silently destroys one of the two.
 #
 # MEASURED WITHOUT THE GUARD: two points at bars 7 and 9 became ONE point, keeping the later
-# value. Section 1 is 6 bars here and there is a point at bar 4 (3*BAR), so shrinking to 3 bars
-# vacates [3*BAR, 6*BAR] and must be refused.
+# value. There is a point at 3*BAR, so removing 3 bars ending at 6*BAR vacates [3*BAR, 6*BAR]
+# and must be refused.
 BEFORE_SHRINK="$(points_of 0 cutoff)"
-cli do section length --id 1 --bars 3 >/dev/null 2>&1 || true
+# Removing 3 bars ending at bar 7 vacates [3*BAR, 6*BAR], which holds a point.
+cli do time remove --nanotick 23040000 --bars 3 >/dev/null 2>&1 || true
 sleep 1.4
-grep '"event":"section.rejected"' "$TMP/eng.log" | grep -q '"reason":"automation_in_removed_bars"' ||   fail "shrinking a section into bars that hold automation was NOT refused. What happens instead
-        is silent: the sweep stays put, the sections slide over it, and a point at the boundary
+grep '"event":"time_edit.rejected"' "$TMP/eng.log" | grep -q '"reason":"automation_in_removed_bars"' ||   fail "removing bars that hold automation was NOT refused. What happens instead
+        is silent: the sweep stays put, the markers slide over it, and a point at the boundary
         collapses onto the one already at the new end — one of the two is gone with no undo entry
-        that would put it back: $(grep -o '"event":"section[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
-grep '"event":"section.rejected"' "$TMP/eng.log" | tail -1 | grep -q '"param":"cutoff"' ||   fail "the refusal did not name the lane in the way. 'Something is in the way' is not actionable
+        that would put it back: $(grep -o '"event":"time[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
+grep '"event":"time_edit.rejected"' "$TMP/eng.log" | tail -1 | grep -q '"param":"cutoff"' ||   fail "the refusal did not name the lane in the way. 'Something is in the way' is not actionable
         when the something is one lane out of sixty"
 AFTER_SHRINK="$(points_of 0 cutoff)"
-[ "$AFTER_SHRINK" = "$BEFORE_SHRINK" ] ||   fail "the refused shrink still changed the automation: [$BEFORE_SHRINK] became [$AFTER_SHRINK].
+[ "$AFTER_SHRINK" = "$BEFORE_SHRINK" ] ||   fail "the refused removal still changed the automation: [$BEFORE_SHRINK] became [$AFTER_SHRINK].
         A refusal has to be whole — a half-applied ripple is a corrupted arrangement"
-echo "  refuses: a shrink into bars holding automation is refused by lane name, and changes nothing"
+echo "  refuses: a removal of bars holding automation is refused by lane name, and changes nothing"
 
 # ---- AND THE FILE AGREES. The read-back and the save are two views of the same edit; if they
 # disagree, one of them is the bug, and the point of checking both is that neither can hide it.

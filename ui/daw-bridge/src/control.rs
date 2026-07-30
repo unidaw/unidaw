@@ -1134,14 +1134,26 @@ impl EngineHandle {
         )
     }
 
-    /// Send a section command (add/remove/rename/set-length/move).
-    pub fn send_section_command(
+    /// v29: send a MARKER command (add / remove / rename / move). Total — a marker names a
+    /// position and moves no material.
+    pub fn send_marker_command(
         &self,
-        payload: crate::layout::UiSectionCommandPayload,
+        payload: crate::layout::UiMarkerCommandPayload,
     ) -> Result<(), String> {
         self.write_entry(
-            &payload as *const crate::layout::UiSectionCommandPayload as *const u8,
-            std::mem::size_of::<crate::layout::UiSectionCommandPayload>(),
+            &payload as *const crate::layout::UiMarkerCommandPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiMarkerCommandPayload>(),
+        )
+    }
+
+    /// v29: send a TIMELINE command — SetTimeSignature, or InsertRemoveTime (the ripple).
+    pub fn send_arrange_time_command(
+        &self,
+        payload: crate::layout::UiArrangeTimeCommandPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiArrangeTimeCommandPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiArrangeTimeCommandPayload>(),
         )
     }
 

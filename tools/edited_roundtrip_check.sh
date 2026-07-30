@@ -11,7 +11,7 @@
 #   - a project saved after a track was REMOVED has sparse ids, and the load treated the track
 #     count as the id extent — destroying the highest track and inventing a phantom one. No
 #     fixture has a tombstone, because you do not author a hole.
-#   - the "maximal" fixture that save_roundtrip_check calls faithful has zero sections, zero
+#   - the "maximal" fixture that save_roundtrip_check calls faithful has zero markers, zero
 #     automation and zero placement overrides. It predates three Movements. So "through-engine
 #     save is faithful" had never round-tripped any of Movement 3.
 #
@@ -113,15 +113,16 @@ cli do note --track 2 --local --nanotick $((2 * BAR)) --pitch 55 --duration $Q \
                                                   >/dev/null 2>&1 || true; sleep 0.6
 cli do delete-note --track 2 --local --nanotick 0 --pitch 63 \
                                                   >/dev/null 2>&1 || true; sleep 0.6
-cli do section add --bars 4 --name intro          >/dev/null 2>&1 || true; sleep 0.5
-cli do section add --bars 8 --name verse          >/dev/null 2>&1 || true; sleep 0.5
+cli do marker add --nanotick 0 --name intro       >/dev/null 2>&1 || true; sleep 0.5
+cli do marker add --nanotick $((4 * BAR)) --name verse >/dev/null 2>&1 || true; sleep 0.5
+cli do time-sig --sig 7/8 --nanotick $((4 * BAR)) >/dev/null 2>&1 || true; sleep 0.5
 # On track 0, which SURVIVES. The first version of this wrote automation to track 1 and then
 # removed track 1 — so the point was correctly gone and the check accused the engine of losing
 # it. Writing to the track you are about to delete tests deletion, not persistence.
 cli do automation --track 0 --param index:0 --nanotick $((1 * BAR)) --value 0.7 \
                                                   >/dev/null 2>&1 || true; sleep 0.6
 cli do remove-track --track 1 --force             >/dev/null 2>&1 || true; sleep 0.6
-cli do section length --id 1 --bars 6             >/dev/null 2>&1 || true; sleep 0.8
+cli do time insert --nanotick $((4 * BAR)) --bars 2 >/dev/null 2>&1 || true; sleep 0.8
 
 cli do save editedA --force >/dev/null 2>&1 || true
 sleep 1.8
@@ -141,11 +142,13 @@ adds = sum(len(p.get("notes", [])) for t in tracks for p in t.get("placements", 
 mutes = sum(len(p.get("mutes", [])) for t in tracks for p in t.get("placements", []))
 autos = sum(len(t.get("automation", [])) for t in tracks)
 apts = sum(len(c.get("points", [])) for t in tracks for c in t.get("automation", []))
-secs = [(s.get("name"), s.get("bars")) for s in d.get("sections", [])]
+marks = [(m.get("name"), m.get("nanotick")) for m in d.get("markers", [])]
+meter = [(p.get("nanotick"), "%d/%d" % (p.get("numerator"), p.get("denominator")))
+         for p in d.get("time_sig_map", [])]
 notes = sum(len(c.get("notes", [])) for c in d.get("clips", []))
-print("ids=%s name0=%r adds=%d mutes=%d autoclips=%d autopoints=%d sections=%s "
+print("ids=%s name0=%r adds=%d mutes=%d autoclips=%d autopoints=%d markers=%s meter=%s "
       "clipnotes=%d masters=%d"
-      % (ids, names.get(0), adds, mutes, autos, apts, secs, notes,
+      % (ids, names.get(0), adds, mutes, autos, apts, marks, meter, notes,
          sum(1 for t in d.get("tracks", []) if t.get("is_master"))))
 PYS
 }
@@ -171,8 +174,11 @@ case "$A" in
   *) fail "the automation point is not in the session's own save: $A" ;;
 esac
 case "$A" in
-  *"sections=[('intro', 6), ('verse', 8)]"*) ;;
-  *) fail "the sections (intro grown to 6, verse 8) are not in the session's own save: $A" ;;
+  *"markers=[('intro', 0), ('verse', 23040000)] meter=[(0, '4/4'), (23040000, '7/8')]"*) ;;
+  *) fail "the markers and the meter are not in the session's own save. 'verse' was placed at
+        4 bars and a 7/8 change with it; inserting 2 bars there moved BOTH to 6 bars
+        (23040000), which is the property — a marker and the meter point under it must not part
+        company. Got: \$A" ;;
 esac
 # The removed track leaves a HOLE: ids 0, 2, 3 with 1 gone. This is the shape no authored
 # fixture has.
@@ -180,7 +186,8 @@ case "$A" in
   *"ids=[0, 2, 3]"*) ;;
   *) fail "expected sparse ids [0, 2, 3] after removing the middle track: $A" ;;
 esac
-echo "  and it is genuinely edited: a tombstone at id 1, an override, automation, a grown section"
+echo "  and it is genuinely edited: a tombstone at id 1, an override, automation, markers, a"
+echo "  mid-song 7/8, and a time insert that carried both"
 
 # ---- RELOAD IN A FRESH ENGINE AND SAVE AGAIN.
 SHM2="/edrt2_$$"

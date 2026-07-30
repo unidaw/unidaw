@@ -510,36 +510,40 @@ std::string serializeProject(const ProjectDocument& document) {
   writer.key("time_sig_denominator", document.songTimeSigDenominator);
   writer.endChildObject();
 
-  // M3.23: the section spine. Written only when there IS one, so a project with no
-  // named structure is byte-identical to what it was before this field existed —
-  // successive saves of an unchanged document have to stay identical, and an empty array
-  // in every file would make every old project show a diff on its first save.
-  if (!document.sections.empty()) {
-    writer.beginArray("sections");
-    for (const auto& section : document.sections) {
+  // M3.28: NAMED POSITIONS. Written only when there ARE any, so a project with no named
+  // structure is byte-identical to what it was — successive saves of an unchanged document have
+  // to stay identical, and an empty array in every file would make every project show a diff on
+  // its first save.
+  if (!document.markers.empty()) {
+    writer.beginArray("markers");
+    for (const auto& marker : document.markers) {
       writer.beginArrayElement();
-      writer.key("id", section.id);
-      writer.key("name", section.name);
-      writer.key("bars", section.barCount);
-      writer.key("color_rgb", section.colorRgb);
-      // THIS SECTION'S METER, written only when it has one — a section that inherits the song
-      // default stays byte-identical to what it was before the meter moved here. The pair is
-      // written together or not at all: half a time signature is not a time signature, and a
-      // reader finding a numerator with no denominator would have to invent one.
-      if (section.meter && section.meter->valid()) {
-        writer.key("numerator", section.meter->numerator);
-        writer.key("denominator", section.meter->denominator);
-      }
+      writer.key("id", marker.id);
+      writer.key("nanotick", marker.nanotick);
+      writer.key("name", marker.name);
+      writer.key("color_rgb", marker.colorRgb);
       writer.endArrayElement();
     }
     writer.endArray();
   }
 
-  // M3.22: the song's time-signature map. Written only when there IS one, so a project
-  // in a single meter is byte-identical to what it was before this field existed —
-  // successive saves of an unchanged document have to stay identical, and an empty
-  // array in every file would make every old project show a diff on first save.
-  if (!document.timeSigMap.empty()) {
+  // M3.28: the song's time-signature map, now AUTHORITATIVE rather than derived from the spine.
+  //
+  // Written only when it says something the single `timebase.time_sig_*` pair could not — more
+  // than one point, or one point that is not the song default at tick 0. That keeps a one-meter
+  // project byte-identical, which was the original intent and which the engine had broken: the
+  // save used to assign this field unconditionally from deriveMeterMap(), which on an empty spine
+  // yields exactly one point {0, songDefault}. So every save emitted a time_sig_map key even for
+  // projects that never had one — and worse, a project carrying a REAL multi-point map with no
+  // sections had every change after the first destroyed on its next save, because the load-time
+  // migration was gated on the spine being non-empty. Both go away with the spine.
+  const bool meterSaysMore =
+      document.timeSigMap.size() > 1 ||
+      (document.timeSigMap.size() == 1 &&
+       (document.timeSigMap.front().nanotick != 0 ||
+        document.timeSigMap.front().sig.numerator != document.songTimeSigNumerator ||
+        document.timeSigMap.front().sig.denominator != document.songTimeSigDenominator));
+  if (meterSaysMore) {
     writer.beginArray("time_sig_map");
     for (const auto& point : document.timeSigMap) {
       writer.beginArrayElement();
@@ -825,30 +829,17 @@ bool deserializeProject(const std::string& json,
       root.get<uint32_t>("timebase.time_sig_numerator", 4);
   parsed.songTimeSigDenominator =
       root.get<uint32_t>("timebase.time_sig_denominator", 4);
-  if (const auto sectionList = root.get_child_optional("sections")) {
-    for (const auto& entry : *sectionList) {
-      daw::Section section;
-      section.id = entry.second.get<uint32_t>("id", 0);
-      section.name = entry.second.get<std::string>("name", "");
-      section.barCount = entry.second.get<uint32_t>("bars", 0);
-      section.colorRgb = entry.second.get<uint32_t>("color_rgb", 0);
-      // The meter, only if BOTH halves are present and the result is a real signature. A
-      // partial or nonsense pair (4/5 is a typo, not a time signature) is treated as absent so
-      // the section inherits the song default rather than resolving against a bar length of
-      // zero, which would put every later section on top of it.
-      {
-        const uint32_t num = entry.second.get<uint32_t>("numerator", 0);
-        const uint32_t den = entry.second.get<uint32_t>("denominator", 0);
-        const daw::TimeSignature sig{num, den};
-        if (num > 0 && den > 0 && sig.valid()) {
-          section.meter = sig;
-        }
-      }
-      // A zero-bar section occupies no time and could never be pointed at. Dropping it
-      // here rather than carrying it means the loaded spine is always resolvable.
-      if (section.barCount > 0) {
-        parsed.sections.push_back(std::move(section));
-      }
+  if (const auto markerList = root.get_child_optional("markers")) {
+    for (const auto& entry : *markerList) {
+      daw::Marker marker;
+      marker.id = entry.second.get<uint32_t>("id", 0);
+      marker.nanotick = entry.second.get<uint64_t>("nanotick", 0);
+      marker.name = entry.second.get<std::string>("name", "");
+      marker.colorRgb = entry.second.get<uint32_t>("color_rgb", 0);
+      // A zero id is REPAIRED by MarkerList on install, not dropped here: a marker with a name
+      // and a position is meaningful even if whoever wrote the file left the id out, and dropping
+      // it would silently lose a label from a hand-written project.
+      parsed.markers.push_back(std::move(marker));
     }
   }
   if (const auto sigMap = root.get_child_optional("time_sig_map")) {

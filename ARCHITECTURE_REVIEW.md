@@ -394,9 +394,13 @@ real, all nine are fixed, each with a negative control. Four were data loss.*
   change measures the two new bars AS 3/4; if the change then moved with the verse those bars
   would be 4/4 and the material would have moved by the wrong amount. Which is right depends on
   whether a meter change means *"the verse is in 3/4"* (belongs to the section, should move) or
-  *"from bar 5 we are in 3/4"* (belongs to the timeline, should not). `arrange_summary_check`
-  currently pins the second reading. Picking one silently is how a song ends up off its own bar
-  grid, so nothing moves until you decide.
+  *"from bar 5 we are in 3/4"* (belongs to the timeline, should not). Picking one silently is how
+  a song ends up off its own bar grid, so nothing moves until you decide.
+
+  *(Resolved by v29 in the second direction, and by deletion rather than decision: the meter is a
+  tick-keyed map again and a time edit CARRIES its points, the same way it carries the tempo map.
+  The reason the map was deleted — "lengthening a section left the meter points behind" — was a
+  missing line in the ripple, not a property of the model.)*
 
 - **DECISION NEEDED: the four section ops disagree about re-sectioning.** `SetSectionLength`
   RIPPLES — it moves every placement at or after the boundary — and refuses a shrink whose

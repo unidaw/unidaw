@@ -53,7 +53,8 @@
 #include "apps/latency_manager.h"
 #include "apps/time_base.h"
 #include "apps/lane_quantize.h"
-#include "apps/section_list.h"
+#include "apps/markers.h"
+#include "apps/ripple.h"
 #include "apps/musical_structures.h"
 #include "apps/placement_schedule.h"
 #include "apps/note_entry.h"
@@ -2521,33 +2522,38 @@ struct TrackRuntime {
   // you would add a section at bar 4, press play, and hear nothing, with no explanation
   // anywhere. Recomputed whenever a placement edit changes the arrangement.
   std::atomic<uint64_t> songEndNanotick{0};
-  // M3.23: the section spine, and its own version counter. Deliberately NOT clipVersion:
-  // renaming a section moves no note, so it must not invalidate anyone's in-flight edit —
-  // the same separation quantizeVersion has.
-  daw::SectionList sectionList;
-  // LOCK ORDER, and it is not optional: sectionMutex is taken BEFORE songMeterMutex
-  // wherever both are needed. Deriving a section's position requires both (the spine says
-  // how many bars, the meter says how long a bar is), so they get held nested in more than
-  // one place — and the first version of this took them in one order in the arrangement
-  // publisher and the other order in SetSectionLength. That is an AB/BA deadlock a few
-  // instructions wide: it never fired in a test and would eventually have wedged the engine
-  // mid-edit with no diagnostic at all.
-  std::mutex sectionMutex;
-  std::atomic<uint32_t> sectionVersion{0};
+  // v29: THE ARRANGEMENT — named positions and the song's meter. Its own version counter,
+  // deliberately NOT clipVersion: renaming a marker moves no note, so it must not invalidate
+  // anyone's in-flight edit — the same separation quantizeVersion has.
+  //
+  // ONE MUTEX FOR BOTH, and that is a simplification the spine could not have. The old pair
+  // (sectionMutex + songMeterMutex) had to be held NESTED because deriving a section's position
+  // needed both — the spine said how many bars, the meter said how long a bar is — and the first
+  // version took them in one order in the arrangement publisher and the other in
+  // SetSectionLength. That is an AB/BA deadlock a few instructions wide: it never fired in a test
+  // and would have wedged the engine mid-edit with no diagnostic. Moving the meter onto the
+  // section deleted one of the two; deleting the section deletes the derivation itself, so a
+  // marker's bar is a lookup in the map and there is no pair left to invert.
+  daw::MarkerList markerList;
+  daw::TimeSignatureMap songMeter;
+  std::mutex arrangeMutex;
+  std::atomic<uint32_t> arrangeVersion{0};
+  // AN RT-SAFE COPY OF THE METER, for the audio/host thread. The play head has to report the
+  // signature at the PLAYHEAD, not the song default — that is the whole point of an authoritative
+  // meter map, and reporting the default is the bug this replaces. The RT cannot take arrangeMutex,
+  // so the map is published as an immutable snapshot and swapped atomically, exactly like
+  // trackSnapshot. Never null after startup.
+  std::shared_ptr<const daw::TimeSignatureMap> meterSnapshot =
+      std::make_shared<const daw::TimeSignatureMap>();
   // v28: moves whenever ANY automation changes — a point written, a lane created, a ripple that
   // moved points, a load, a slot reused. Deliberately NOT the clip version: automation is not
   // notes, and a client caching lanes on the clip version would re-read them on every keystroke.
   // Same separation sectionVersion and quantizeVersion already have.
   std::atomic<uint32_t> automationVersion{0};
-  // The song's meter, held for the section derivation (positions come from tickAtBar).
-  // Taken AFTER sectionMutex — see above.
-  // NO SONG-LEVEL METER MAP. The meter lives on the SECTION (Jaakko's ruling), so the map is
-  // DERIVED from the spine whenever something wants it — a ruler, the published read-back, a
-  // save. Deleting it also deletes the AB/BA deadlock this file used to carry: there is only
-  // one mutex left to take, so the inversion is not fixed, it is impossible.
-  //
-  // The song DEFAULT (songTimeSigNum/Den, already persisted) is what a section without its own
-  // meter inherits, and what material past the last section is measured in.
+  // songTimeSigNum/Den below are the map's FIRST point, kept as their own fields because the
+  // header, the TransportPayload and the play head all read them and because every file written
+  // before the map existed means exactly this. A project in one meter has an empty map and these
+  // two numbers; a project with a 7/8 bridge has both, and the MAP wins.
 
   // Whether the loop was set BY HAND. The loop follows the song end only while it was
   // not — otherwise every note you type would silently reset a loop you had chosen,
@@ -2710,7 +2716,12 @@ struct TrackRuntime {
     // not carry and which the ripple rewrites.
     std::vector<std::pair<uint32_t, TrackStoreState>> tracks;
     std::vector<std::pair<uint32_t, std::vector<daw::AutomationClip>>> automation;
-    std::vector<daw::Section> sections;
+    // v29: markers and the METER MAP, which a time edit moves the same way it moves everything
+    // else. The meter is in here because it is authoritative now — a restore that put the notes
+    // back and left a 7/8 point at its rippled tick would be a partial restore of exactly the
+    // kind this struct exists to prevent.
+    std::vector<daw::Marker> markers;
+    std::vector<daw::TimeSignaturePoint> meterPoints;
     std::vector<daw::ProjectTempoPoint> tempoMap;
     std::vector<daw::HarmonyEvent> harmony;
   };
@@ -3266,67 +3277,67 @@ struct TrackRuntime {
   // body mid-rewrite, then sampled again BEFORE the writer stamped, saw v0 == v1 and accepted
   // torn data. A seqlock needs the write to be visible while it is happening, which is what the
   // 0 sentinel below provides — the same odd/even trick the main ui_version already uses.
-  uint32_t lastArrangeSpineVersion = 0xFFFF'FFFFu;
+  uint32_t lastArrangeVersion = 0xFFFF'FFFFu;
   uint64_t lastArrangeSongEnd = 0xFFFF'FFFF'FFFF'FFFFull;
   uint32_t arrangeGeneration = 0;
   auto writeUiArrangeSummary = [&](bool force) {
     if (!uiShm.header || uiShm.header->uiArrangeOffset == 0) {
       return;
     }
-    const uint32_t spineVersion = sectionVersion.load(std::memory_order_acquire);
+    const uint32_t version = arrangeVersion.load(std::memory_order_acquire);
     const uint64_t songEnd = songEndNanotick.load(std::memory_order_acquire);
-    if (!force && spineVersion == lastArrangeSpineVersion &&
-        songEnd == lastArrangeSongEnd) {
+    if (!force && version == lastArrangeVersion && songEnd == lastArrangeSongEnd) {
       return;
     }
-    lastArrangeSpineVersion = spineVersion;
+    lastArrangeVersion = version;
     lastArrangeSongEnd = songEnd;
     ++arrangeGeneration;
     auto* region = reinterpret_cast<daw::UiArrangeSummaryRegion*>(
         reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiArrangeOffset);
-    // In flight from here until the stamp at the end: a reader that samples 0 retries instead
-    // of reading a half-rewritten spine.
+    // In flight from here until the stamp at the end: a reader that samples 0 retries instead of
+    // reading a half-rewritten list. Reading version-body-version and requiring the two to match
+    // is NOT torn-safe on its own — the number only moves after the body is written.
     region->version = 0;
     std::atomic_thread_fence(std::memory_order_release);
-    std::vector<daw::ResolvedSection> resolved;
+    std::vector<daw::Marker> markers;
     std::vector<daw::TimeSignaturePoint> points;
+    std::vector<daw::BarBeat> where;
     {
-      // LOCK ORDER: sectionMutex BEFORE songMeterMutex, always — see both declarations.
-      // This used to take them the other way round while SetSectionLength took them in
-      // this one, and both hold them nested to resolve the spine through the meter. That
-      // is an AB/BA deadlock: the publish thread grabbing songMeterMutex at the moment the
-      // command thread grabs sectionMutex wedges both forever, which takes down the whole
-      // control plane and leaves every SHM reader spinning on a version that never moves.
-      // The window is a few instructions wide, so it survived every test run and would
-      // have shown up as the engine "just freezing" one time in a few thousand edits.
-      const daw::TimeSignature def = songDefaultSig();
-      std::lock_guard<std::mutex> slock(sectionMutex);
-      resolved = sectionList.resolve(def);
-      // The meter points are a READ-BACK derived from the same spine, in the same critical
-      // section, so the two can never be published out of step with each other.
-      points = sectionList.deriveMeterMap(def).points();
+      // ONE lock, where the spine needed two held nested. A marker's bar is a LOOKUP in the
+      // meter map, not a derivation that needs the spine and the meter simultaneously, so the
+      // AB/BA pair this used to carry does not exist to invert.
+      std::lock_guard<std::mutex> alock(arrangeMutex);
+      markers = markerList.markers();
+      points = songMeter.points();
+      where.reserve(markers.size());
+      for (const auto& m : markers) {
+        where.push_back(songMeter.barBeatAt(m.nanotick));
+      }
     }
-    // Clear first: a shorter spine than last time must not leave the old tail readable,
-    // and `count` alone would not stop a reader that scanned the array.
-    for (uint32_t i = 0; i < daw::kUiMaxSections; ++i) {
-      region->sections[i] = daw::UiArrangeSection{};
+    // Clear first: a shorter list than last time must not leave the old tail readable, and
+    // `count` alone would not stop a reader that scanned the array.
+    for (uint32_t i = 0; i < daw::kUiMaxMarkers; ++i) {
+      region->markers[i] = daw::UiMarker{};
     }
     for (uint32_t i = 0; i < daw::kUiMaxTimeSigPoints; ++i) {
       region->timeSigPoints[i] = daw::UiTimeSigPoint{};
     }
-    const uint32_t sectionFit =
-        std::min<uint32_t>(static_cast<uint32_t>(resolved.size()), daw::kUiMaxSections);
-    for (uint32_t i = 0; i < sectionFit; ++i) {
-      auto& out = region->sections[i];
-      out.id = resolved[i].id;
-      out.startBar = static_cast<uint32_t>(resolved[i].startBar);
-      out.barCount = resolved[i].barCount;
-      out.colorRgb = resolved[i].colorRgb;
-      out.startTick = resolved[i].startTick;
-      out.endTick = resolved[i].endTick;
-      const size_t n =
-          std::min(resolved[i].name.size(), sizeof(out.name) - 1);
-      std::memcpy(out.name, resolved[i].name.data(), n);
+    const uint32_t markerFit =
+        std::min<uint32_t>(static_cast<uint32_t>(markers.size()), daw::kUiMaxMarkers);
+    for (uint32_t i = 0; i < markerFit; ++i) {
+      auto& out = region->markers[i];
+      out.id = markers[i].id;
+      out.colorRgb = markers[i].colorRgb;
+      out.nanotick = markers[i].nanotick;
+      // THE BAR IS RESOLVED HERE, and that is the reason this region exists rather than the
+      // client reading the marker list: a bar number is a prefix sum across every meter change
+      // before it, NOT tick / barLength. A client deriving it would be reimplementing
+      // TimeSignatureMap::barBeatAt, and the first disagreement draws a marker at the wrong bar
+      // with nothing reporting it.
+      out.bar = static_cast<uint32_t>(where[i].bar);
+      out.beat = where[i].beat;
+      const size_t n = std::min(markers[i].name.size(), sizeof(out.name) - 1);
+      std::memcpy(out.name, markers[i].name.data(), n);
       out.name[n] = '\0';
     }
     const uint32_t pointFit =
@@ -3336,20 +3347,22 @@ struct TrackRuntime {
       region->timeSigPoints[i].numerator = points[i].sig.numerator;
       region->timeSigPoints[i].denominator = points[i].sig.denominator;
     }
-    region->sectionCount = sectionFit;
+    region->markerCount = markerFit;
     region->timeSigCount = pointFit;
-    region->sectionsTruncated =
-        static_cast<uint32_t>(resolved.size()) - sectionFit;
+    region->markersTruncated = static_cast<uint32_t>(markers.size()) - markerFit;
     region->timeSigTruncated = static_cast<uint32_t>(points.size()) - pointFit;
-    // The same value the gate compared, not a fresh load: re-reading here could publish a
-    // song end this rebuild was not triggered by and will not be triggered by again.
+    // The same value the gate compared, not a fresh load: re-reading here could publish a song
+    // end this rebuild was not triggered by and will not be triggered by again. It is ALSO in
+    // the header (uiSongEndTick) because a client reads it every frame for the unnamed tail and
+    // one integer is not worth a second region read — the header is written from the same
+    // atomic, so they cannot disagree.
     region->songEndTick = songEnd;
-    if (region->sectionsTruncated > 0 || region->timeSigTruncated > 0) {
-      // Said out loud, not just in the region: a truncated list nobody notices reads as
-      // a complete one, which is how "the arrangement view is missing sections" becomes
-      // a bug report about the view.
+    if (region->markersTruncated > 0 || region->timeSigTruncated > 0) {
+      // Said out loud, not just in the region: a truncated list nobody notices reads as a
+      // complete one, which is how "the arrangement view is missing markers" becomes a bug
+      // report about the view.
       DAW_EVENT("arrange.truncated")
-          .field("sections_dropped", region->sectionsTruncated)
+          .field("markers_dropped", region->markersTruncated)
           .field("timesig_dropped", region->timeSigTruncated);
     }
     std::atomic_thread_fence(std::memory_order_release);
@@ -5480,8 +5493,9 @@ struct TrackRuntime {
       s.automation.emplace_back(rt->trackId, rt->track.automationClips);
     }
     {
-      std::lock_guard<std::mutex> slock(sectionMutex);
-      s.sections = sectionList.sections();
+      std::lock_guard<std::mutex> alock(arrangeMutex);
+      s.markers = markerList.markers();
+      s.meterPoints = songMeter.points();
     }
     s.tempoMap = loadedTempoMap;
     {
@@ -5584,8 +5598,16 @@ struct TrackRuntime {
       any = true;
     }
     {
-      std::lock_guard<std::mutex> slock(sectionMutex);
-      sectionList.setSections(state.sections);
+      std::lock_guard<std::mutex> alock(arrangeMutex);
+      markerList.setMarkers(state.markers);
+      songMeter.setMap(state.meterPoints);
+      // The RT reads the meter from a snapshot, so a restored map that is not republished is a
+      // map the play head never sees — the same rule the automation republish above follows.
+      std::atomic_store_explicit(
+          &meterSnapshot,
+          std::static_pointer_cast<const daw::TimeSignatureMap>(
+              std::make_shared<daw::TimeSignatureMap>(songMeter)),
+          std::memory_order_release);
     }
     loadedTempoMap = state.tempoMap;
     {
@@ -5606,7 +5628,7 @@ struct TrackRuntime {
     harmonyDirty.store(true, std::memory_order_release);
     harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
     automationVersion.fetch_add(1, std::memory_order_acq_rel);
-    sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+    arrangeVersion.fetch_add(1, std::memory_order_acq_rel);
     recomputeSongEnd();
     return any;
   };
@@ -5628,12 +5650,21 @@ struct TrackRuntime {
     document.nanoticksPerQuarter = daw::NanotickConverter::kNanoticksPerQuarter;
     document.seed = projectSeed.load(std::memory_order_relaxed);
     {
-      // M3.23: the spine is LIVE state (section ops edit it), so the save must read the
-      // ENGINE's copy — not whatever the document loaded with. Writing the loaded value
-      // would silently discard every section edit made this session, which is exactly how
-      // the mod links were lost once already.
-      std::lock_guard<std::mutex> slock(sectionMutex);
-      document.sections = sectionList.sections();
+      // LIVE state, so the save reads the ENGINE's copy — not whatever the document loaded with.
+      // Writing the loaded value would silently discard every arrangement edit made this session,
+      // which is exactly how the mod links were lost once already.
+      //
+      // THE METER MAP IS WRITTEN AS IT IS, not derived. It used to be assigned unconditionally
+      // from deriveMeterMap(), which on an empty spine yields exactly one point {0, songDefault}
+      // — so every save emitted a time_sig_map key even for projects that never had one, and a
+      // project carrying a REAL multi-point map with no sections had every change after the first
+      // destroyed on its next save (the load-time migration was gated on the spine being
+      // non-empty, so nothing put them back). The map is the source of truth now, so the save
+      // just writes it, and project_file.cpp decides whether it says more than the single
+      // song-wide pair.
+      std::lock_guard<std::mutex> alock(arrangeMutex);
+      document.markers = markerList.markers();
+      document.timeSigMap = songMeter.points();
     }
     // Re-emit the full retained tempo map so a load->save round-trip keeps tempo
     // changes, not just the current tempo. (A never-loaded session defaults to 120.)
@@ -5641,22 +5672,6 @@ struct TrackRuntime {
     // Re-emit the adopted song time signature so it survives a load->save.
     document.songTimeSigNumerator = songTimeSigNum.load(std::memory_order_relaxed);
     document.songTimeSigDenominator = songTimeSigDen.load(std::memory_order_relaxed);
-    {
-      // The METER MAP, from the live engine. Nothing wrote this: `document` is default
-      // constructed here, timeSigMap was only ever READ (at load, into songMeter), and the
-      // save emitted the single song-wide numerator/denominator above and nothing else. So
-      // a project with a meter change loaded, played and published correctly — the
-      // arrangement summary resolves the spine through it — and then save/reload flattened
-      // the whole song back to one time signature, silently moving every section boundary
-      // after the first meter change. Exactly the shape of the automation that could be
-      // heard and never saved.
-      //
-      // Its own scope: sectionMutex is taken and released above, so the two are never held
-      // nested here and the order documented at their declarations is not at stake.
-      const daw::TimeSignature def = songDefaultSig();
-      std::lock_guard<std::mutex> slock(sectionMutex);
-      document.timeSigMap = sectionList.deriveMeterMap(def).points();
-    }
     document.harmonyTimeline = harmonyEvents;
 
     std::vector<TrackRuntime*> runtimes;
@@ -6238,53 +6253,56 @@ struct TrackRuntime {
     loopStartNanotick.store(0, std::memory_order_release);
     loopEndNanotick.store(arrangementEnd, std::memory_order_release);
     songEndNanotick.store(arrangementEnd, std::memory_order_release);
-    // M3.23: adopt the section spine, so section positions derive from the loaded document
-    // rather than from whatever the last project left behind.
+    // v29: install the arrangement — the markers and the song's METER MAP.
     //
-    // AND MIGRATE THE METER ONTO THE SECTIONS. A file written before the meter moved carries a
-    // tick-keyed `time_sig_map` and sections that know nothing about meter. Each section takes
-    // the meter in force at its start, and a section that SPANS a change is SPLIT there —
-    // because a meter change IS a section boundary now, so such a section was never really one
-    // section. Positions are computed through the OLD map, because that is what the file meant
-    // when it was written; reading it under the new rules would move the material.
-    //
-    // A file whose sections already carry meters passes through untouched: the derived map it
-    // was saved with reproduces exactly the meters it already has, so the split finds nothing
-    // to split. That is what makes this safe to run on every load rather than gated on a
-    // schema version nobody remembers to bump.
+    // The map is AUTHORITATIVE now, so it is installed as written rather than derived from
+    // anything. songTimeSigNum/Den stay the map's origin in spirit: a project in one meter carries
+    // only those two numbers and an empty map, and the seed below makes signatureAt(0) answer
+    // correctly either way.
     {
-      std::lock_guard<std::mutex> slock(sectionMutex);
-      sectionList.setSections(document.sections);
-      // SAY IT when the document had to be repaired. A file can carry duplicate section ids or
-      // a zero — hand-authored, merged, or written by an older build — and indexOfId returns
-      // the FIRST match, so the second section sharing an id was unaddressable: renaming it
-      // renamed the other one. Reassigning silently would be changing someone's document
-      // without telling them, which is the half of this that matters.
-      if (sectionList.repaired() > 0) {
-        DAW_EVENT("sections.ids_repaired")
-            .field("count", sectionList.repaired())
+      std::lock_guard<std::mutex> alock(arrangeMutex);
+      markerList.setMarkers(document.markers);
+      // SAY IT when the document had to be repaired. A file can carry duplicate marker ids or a
+      // zero — hand-authored, merged, or written by an older build — and a lookup returns the
+      // FIRST match, so the second marker sharing an id was unaddressable: renaming it renamed
+      // the other one. Reassigning silently would be changing someone's document without telling
+      // them, which is the half of this that matters.
+      if (markerList.repaired() > 0) {
+        DAW_EVENT("markers.ids_repaired")
+            .field("count", markerList.repaired())
             .field("reason", "duplicate_or_zero_id");
-        std::cerr << "Load: " << sectionList.repaired()
-                  << " section id(s) in this project were duplicated or zero and have been "
-                     "reassigned — a duplicate id makes one of the two sections impossible to "
-                     "address." << std::endl;
+        std::cerr << "Load: " << markerList.repaired()
+                  << " marker id(s) in this project were duplicated or zero and have been "
+                     "reassigned — a duplicate id makes one of the two impossible to address."
+                  << std::endl;
       }
-      if (!document.sections.empty() && !document.timeSigMap.empty()) {
-        daw::TimeSignatureMap oldMap;
-        oldMap.setMap(document.timeSigMap);
-        const auto migrated = daw::migrateSectionsFromMeterMap(
-            sectionList.sections(), oldMap, sectionList.peekNextId());
-        if (migrated.size() != sectionList.sections().size()) {
-          DAW_EVENT("sections.meter_migrated")
-              .field("before", static_cast<uint64_t>(sectionList.sections().size()))
-              .field("after", static_cast<uint64_t>(migrated.size()));
+      std::vector<daw::TimeSignaturePoint> meter = document.timeSigMap;
+      if (meter.empty()) {
+        const daw::TimeSignature def{document.songTimeSigNumerator,
+                                     document.songTimeSigDenominator};
+        if (def.valid()) {
+          meter.push_back({0, def});
         }
-        sectionList.setSections(migrated);
       }
+      songMeter.setMap(std::move(meter));
+      // The RT reads the meter from a snapshot; a map installed without republishing is a map
+      // the play head never sees.
+      std::atomic_store_explicit(
+          &meterSnapshot,
+          std::static_pointer_cast<const daw::TimeSignatureMap>(
+              std::make_shared<daw::TimeSignatureMap>(songMeter)),
+          std::memory_order_release);
     }
-    songTimeSigNum.store(document.songTimeSigNumerator, std::memory_order_relaxed);
-    songTimeSigDen.store(document.songTimeSigDenominator, std::memory_order_relaxed);
-    sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+    // GUARDED HERE TOO. The adoption above applies `?: 4` and this line used to re-store the raw
+    // document value, so the guard was dead and a project with numerator 0 reached the play head
+    // as a NaN bar start. Both sites now agree.
+    songTimeSigNum.store(
+        document.songTimeSigNumerator ? document.songTimeSigNumerator : 4,
+        std::memory_order_relaxed);
+    songTimeSigDen.store(
+        document.songTimeSigDenominator ? document.songTimeSigDenominator : 4,
+        std::memory_order_relaxed);
+    arrangeVersion.fetch_add(1, std::memory_order_acq_rel);
     automationVersion.fetch_add(1, std::memory_order_acq_rel);
     // A load replaces the song, so any hand-set loop belonged to the OLD one.
     loopUserSet.store(false, std::memory_order_release);
@@ -6624,12 +6642,22 @@ struct TrackRuntime {
             // an Analog Heat. The device stays in the chain and stays inert, which is visible;
             // project.plugin_missing above already says which one and why.
             //
-            // Except when the path is right there on disk — a plugin loaded by path need not
-            // appear in the scan at all, which is the same exemption the report above makes.
+            // TWO EXEMPTIONS, and the second one cost a suite run to find:
+            //
+            //   * the path is right there on disk — a plugin loaded by path need not appear in
+            //     the scan at all, which is the same exemption the report above makes.
+            //   * the slot is the DIRECT SENTINEL. Direct means "the engine's default plugin",
+            //     which is an intentional value, not a stale index into someone else's machine —
+            //     it is what every test fixture and the fake instrument use, with a name like
+            //     "identity" that resolves to nothing in the cache. Overwriting it made seven
+            //     audio checks render silence at once, which is how I know the first version of
+            //     this was too broad: my own negative control used a real slot index, so it
+            //     never exercised the case that actually mattered.
             std::error_code pathEc;
             const bool onDisk = !device.vstRef.path.empty() &&
                                 std::filesystem::exists(device.vstRef.path, pathEc);
-            if (!onDisk) {
+            const bool direct = device.hostSlotIndex == daw::kHostSlotIndexDirect;
+            if (!onDisk && !direct) {
               device.hostSlotIndex = daw::kHostSlotIndexUnresolved;
             }
           }
@@ -8223,61 +8251,174 @@ struct TrackRuntime {
     }
     // M3.23 SECTION ops. All five are SONG-scoped: the spine belongs to no track, and
     // SetSectionLength moves placements on every track at once.
-    if (entry.size == sizeof(daw::UiSectionCommandPayload) &&
-        (commandType == daw::UiCommandType::AddSection ||
-         commandType == daw::UiCommandType::RemoveSection ||
-         commandType == daw::UiCommandType::RenameSection ||
-         commandType == daw::UiCommandType::SetSectionLength ||
-         commandType == daw::UiCommandType::MoveSection)) {
-      daw::UiSectionCommandPayload sp{};
-      std::memcpy(&sp, entry.payload, sizeof(sp));
-      if (static_cast<daw::UiCommandType>(sp.commandType) != commandType) {
+    // v29 MARKER ops — naming a position. TOTAL: they move no material, so there is nothing to
+    // plan, refuse or undo beyond the list itself. That separation is the whole design: every
+    // section op used to have two possible meanings (re-partition the labels, or insert and remove
+    // arrangement time) and implemented one of each, so a boundary drag moved the music while
+    // adding a section silently re-sectioned it.
+    if (entry.size == sizeof(daw::UiMarkerCommandPayload) &&
+        (commandType == daw::UiCommandType::AddMarker ||
+         commandType == daw::UiCommandType::RemoveMarker ||
+         commandType == daw::UiCommandType::RenameMarker ||
+         commandType == daw::UiCommandType::MoveMarker)) {
+      daw::UiMarkerCommandPayload mp{};
+      std::memcpy(&mp, entry.payload, sizeof(mp));
+      if (static_cast<daw::UiCommandType>(mp.commandType) != commandType) {
         return;
       }
-      const std::string name(sp.name, strnlen(sp.name, sizeof(sp.name)));
-      auto reject = [&](const char* reason) {
-        DAW_EVENT("section.rejected")
+      const std::string name(mp.name, strnlen(mp.name, sizeof(mp.name)));
+      const uint64_t tick = (static_cast<uint64_t>(mp.nanotickHi) << 32) | mp.nanotickLo;
+      bool ok = false;
+      const char* what = "";
+      const char* reason = "no_such_marker";
+      uint32_t markerId = mp.markerId;
+      {
+        std::lock_guard<std::mutex> alock(arrangeMutex);
+        if (commandType == daw::UiCommandType::AddMarker) {
+          daw::Marker m;
+          m.id = mp.markerId;  // 0 = let the list assign from its watermark
+          m.nanotick = tick;
+          m.name = name.empty() ? "Marker" : name;
+          m.colorRgb = mp.colorRgb;
+          // The ASSIGNED id comes back, so a caller that sent 0 learns which marker it made.
+          // Reporting the sentinel instead is a mistake this codebase has made twice already.
+          markerId = markerList.add(std::move(m));
+          ok = markerId != 0;
+          reason = "id_exists";
+          what = "added";
+        } else if (commandType == daw::UiCommandType::RemoveMarker) {
+          ok = markerList.remove(mp.markerId);
+          what = "removed";
+        } else if (commandType == daw::UiCommandType::RenameMarker) {
+          if (name.empty()) {
+            reason = "empty_name";  // a marker with no name is a flag with nothing to read
+          } else {
+            ok = markerList.rename(mp.markerId, name);
+          }
+          what = "renamed";
+        } else {
+          ok = markerList.moveTo(mp.markerId, tick);
+          what = "moved";
+        }
+      }
+      if (!ok) {
+        DAW_EVENT("marker.rejected")
             .field("op", daw::uiCommandTypeName(commandType))
-            .field("section", sp.sectionId)
+            .field("marker", mp.markerId)
             .field("reason", reason);
         historyAppend(daw::uiCommandTypeName(commandType),
                       (std::string("rejected:") + reason).c_str(), 0xFFFFFFFFu, 0, "");
-      };
+        return;
+      }
+      arrangeVersion.fetch_add(1, std::memory_order_acq_rel);
+      DAW_EVENT("marker.changed")
+          .field("op", daw::uiCommandTypeName(commandType))
+          .field("marker", markerId)
+          .field("nanotick", tick)
+          .field("what", what);
+      historyAppend(daw::uiCommandTypeName(commandType), "received", 0xFFFFFFFFu, 0, "");
+      return;
+    }
 
-      // SetSectionLength is the only one that touches placements, and it does so across
-      // EVERY track in one transaction — so it is planned first and refused whole. A
-      // half-applied ripple is a corrupted arrangement with no undo entry to restore.
-      if (commandType == daw::UiCommandType::SetSectionLength) {
-        if (sp.barCount == 0) {
-          reject("zero_bars");  // a section with no span cannot be pointed at
+    // v29 TIMELINE ops — the meter, and inserting or removing arrangement time.
+    if (entry.size == sizeof(daw::UiArrangeTimeCommandPayload) &&
+        (commandType == daw::UiCommandType::SetTimeSignature ||
+         commandType == daw::UiCommandType::InsertRemoveTime)) {
+      daw::UiArrangeTimeCommandPayload tp{};
+      std::memcpy(&tp, entry.payload, sizeof(tp));
+      if (static_cast<daw::UiCommandType>(tp.commandType) != commandType) {
+        return;
+      }
+      const uint64_t atTick = (static_cast<uint64_t>(tp.nanotickHi) << 32) | tp.nanotickLo;
+
+      // ---- SET TIME SIGNATURE. THIS is where mid-song meter is authored. A Section's meter was
+      // reachable from no command at all, which is why that capability was a stub only a
+      // hand-edited file could exercise.
+      if (commandType == daw::UiCommandType::SetTimeSignature) {
+        const daw::TimeSignature sig{tp.numerator, tp.denominator};
+        if (!sig.valid()) {
+          // REFUSED, not clamped. 4/5 is a typo, not a time signature, and silently turning it
+          // into 4/4 would put the ruler somewhere the caller never asked for.
+          DAW_EVENT("time_sig.rejected")
+              .field("nanotick", atTick)
+              .field("numerator", tp.numerator)
+              .field("denominator", tp.denominator)
+              .field("reason", "invalid_signature");
+          historyAppend("set_time_signature", "rejected:invalid_signature", 0xFFFFFFFFu, 0, "");
           return;
         }
-        std::vector<daw::Section> sections;
-        size_t index = 0;
-        uint64_t oldEndTick = 0, newEndTick = 0;
+        const bool flatten = (tp.flags & daw::kUiTimeSigFlatten) != 0;
+        uint32_t pointCount = 0;
         {
-          std::lock_guard<std::mutex> slock(sectionMutex);
-          const auto found = sectionList.indexOfId(sp.sectionId);
-          if (!found) {
-            reject("no_such_section");
-            return;
+          std::lock_guard<std::mutex> alock(arrangeMutex);
+          std::vector<daw::TimeSignaturePoint> points;
+          if (!flatten) {
+            points = songMeter.points();
+            points.erase(std::remove_if(points.begin(), points.end(),
+                                        [&](const daw::TimeSignaturePoint& p) {
+                                          return p.nanotick == atTick;
+                                        }),
+                         points.end());
           }
-          index = *found;
-          sections = sectionList.sections();
-          const auto before = sectionList.resolve(songDefaultSig());
-          oldEndTick = before[index].endTick;
-          // startTick + bars * barLength is now CORRECT and it did not used to be. With a
-          // tick-keyed meter map a section could span two bar lengths, so the naive product put
-          // the boundary in the wrong place and this had to go through tickAtBar. With the meter
-          // on the SECTION every bar in it is the same length, so the product is exact — and the
-          // circular dependency that made rippling the meter unanswerable is gone with it.
-          newEndTick = before[index].startTick +
-                       static_cast<uint64_t>(sp.barCount) *
-                           before[index].meter.barNanoticks();
+          points.push_back({flatten ? 0 : atTick, sig});
+          songMeter.setMap(std::move(points));
+          pointCount = songMeter.pointCount();
+          std::atomic_store_explicit(
+              &meterSnapshot,
+              std::static_pointer_cast<const daw::TimeSignatureMap>(
+                  std::make_shared<daw::TimeSignatureMap>(songMeter)),
+              std::memory_order_release);
+          // The origin point is also the song-wide pair every older reader uses — the SHM header,
+          // the transport payload, the play head's fallback. Kept in step here so the two can
+          // never disagree about what bar 1 is in.
+          const daw::TimeSignature origin = songMeter.signatureAt(0);
+          songTimeSigNum.store(origin.numerator, std::memory_order_relaxed);
+          songTimeSigDen.store(origin.denominator, std::memory_order_relaxed);
         }
-        const int64_t delta =
-            static_cast<int64_t>(newEndTick) - static_cast<int64_t>(oldEndTick);
-        // Every non-loose placement on every track, so the plan sees the whole song.
+        arrangeVersion.fetch_add(1, std::memory_order_acq_rel);
+        DAW_EVENT("time_sig.set")
+            .field("nanotick", atTick)
+            .field("numerator", sig.numerator)
+            .field("denominator", sig.denominator)
+            .field("flatten", flatten)
+            .field("points", pointCount);
+        historyAppend("set_time_signature", "received", 0xFFFFFFFFu, 0, "");
+        return;
+      }
+
+      // ---- INSERT / REMOVE TIME: the ripple, as its own command over a tick range.
+      //
+      // The delta arrives in BARS by default, because a bar is the musical unit and its length
+      // depends on the meter in force at that tick — which the engine knows authoritatively and a
+      // caller would otherwise re-derive from the published map, with the first disagreement
+      // moving the music by the wrong amount.
+      int64_t delta = 0;
+      {
+        std::lock_guard<std::mutex> alock(arrangeMutex);
+        if ((tp.flags & daw::kUiTimeEditDeltaIsTicks) != 0) {
+          delta = tp.delta;
+        } else {
+          // THE METER JUST BEFORE THE POINT, not at it. A meter point sitting exactly at `atTick`
+          // MOVES with this edit — it is at-or-after — so the bars being inserted are in the
+          // PRECEDING meter, not the one that used to start here.
+          //
+          // Measured: inserting 4 bars at a tick where 7/8 begins used signatureAt(atTick) = 7/8
+          // and moved everything by 4 * 3.5 quarters, while the inserted span was still 4/4. The
+          // 7/8 point landed at 7.5 bars — off the bar grid — and TimeSignatureMap::setMap then
+          // snapped it forward to bar 8, silently parting it from the marker that moved with it.
+          const uint64_t probe = atTick > 0 ? atTick - 1 : 0;
+          const uint64_t barLen = songMeter.signatureAt(probe).barNanoticks();
+          delta = static_cast<int64_t>(tp.delta) * static_cast<int64_t>(barLen);
+        }
+      }
+      if (delta == 0) {
+        DAW_EVENT("time_edit.rejected")
+            .field("nanotick", atTick)
+            .field("reason", "zero_delta");
+        historyAppend("insert_remove_time", "rejected:zero_delta", 0xFFFFFFFFu, 0, "");
+        return;
+      }
+      {
         std::vector<std::tuple<uint32_t, uint64_t, uint64_t>> spans;
         const auto trackSnap = snapshotTracks();
         for (auto* rt : trackSnap) {
@@ -8318,7 +8459,7 @@ struct TrackRuntime {
         if (delta < 0) {
           const uint64_t magnitude = static_cast<uint64_t>(-delta);
           const uint64_t vacatedStart =
-              oldEndTick > magnitude ? oldEndTick - magnitude : 0;
+              atTick > magnitude ? atTick - magnitude : 0;
           for (auto* rt : trackSnap) {
             if (!rt || rt->removed.load(std::memory_order_acquire)) {
               continue;
@@ -8326,22 +8467,22 @@ struct TrackRuntime {
             std::lock_guard<std::mutex> tlock(rt->trackMutex);
             for (const auto& clip : rt->track.automationClips) {
               for (const auto& pt : clip.points()) {
-                if (pt.nanotick >= vacatedStart && pt.nanotick <= oldEndTick) {
-                  DAW_EVENT("section.rejected")
-                      .field("op", "set_section_length")
-                      .field("section", sp.sectionId)
+                if (pt.nanotick >= vacatedStart && pt.nanotick <= atTick) {
+                  DAW_EVENT("time_edit.rejected")
+                      .field("op", "insert_remove_time")
+                      .field("nanotick", atTick)
                       .field("reason", "automation_in_removed_bars")
                       .field("track", rt->trackId)
                       .field("param", clip.paramId())
                       .field("nanotick", pt.nanotick);
-                  std::cerr << "UI: SetSectionLength refused — automation on track "
+                  std::cerr << "UI: InsertRemoveTime refused — automation on track "
                             << rt->trackId << " param '" << clip.paramId()
                             << "' has a point at " << pt.nanotick
                             << ", inside the bars this would remove. Shrinking would leave the "
-                               "sweep where it is while the sections slide over it, and would "
+                               "sweep where it is while the markers slide over it, and would "
                                "collapse a point at the boundary onto the one already there."
                             << std::endl;
-                  historyAppend("set_section_length",
+                  historyAppend("insert_remove_time",
                                 "rejected:automation_in_removed_bars", rt->trackId, 0, "");
                   return;
                 }
@@ -8349,43 +8490,66 @@ struct TrackRuntime {
             }
           }
         }
-        const auto plan = daw::planRipple(spans, oldEndTick, delta);
+        const auto plan = daw::planRipple(spans, atTick, delta);
         if (plan.outcome != daw::RippleOutcome::Ok) {
           const bool straddling =
               plan.outcome == daw::RippleOutcome::RefusedStraddlingPlacement;
           const char* reason =
               straddling ? "straddling_placement" : "content_in_removed_bars";
-          DAW_EVENT("section.rejected")
-              .field("op", "set_section_length")
-              .field("section", sp.sectionId)
+          DAW_EVENT("time_edit.rejected")
+              .field("op", "insert_remove_time")
+              .field("nanotick", atTick)
               .field("reason", reason)
               .field("blocking_placement", plan.blockingPlacementId);
           if (straddling) {
-            std::cerr << "UI: SetSectionLength refused — placement "
+            std::cerr << "UI: InsertRemoveTime refused — placement "
                       << plan.blockingPlacementId
-                      << " crosses this section's end, so the inserted bars would land INSIDE "
+                      << " crosses the edit point, so the inserted bars would land INSIDE "
                          "it: it would keep its start and length while everything after it "
                          "moved away. Split or shorten it first — whether those bars belong "
                          "inside it or after it is a musical decision this command cannot make."
                       << std::endl;
           } else {
-            std::cerr << "UI: SetSectionLength refused — placement "
+            std::cerr << "UI: InsertRemoveTime refused — placement "
                       << plan.blockingPlacementId
                       << " lives in the bars this would remove. Shrinking would stack it "
                          "onto one tick or delete it; empty those bars first." << std::endl;
           }
-          historyAppend("set_section_length", (std::string("rejected:") + reason).c_str(),
+          historyAppend("insert_remove_time", (std::string("rejected:") + reason).c_str(),
                         0xFFFFFFFFu, 0, "");
           return;
         }
         // CAPTURED HERE, after every refusal and before the first mutation, so a refused ripple
         // costs nothing and an applied one is fully recoverable.
         SongStoreState songBefore = snapshotSongStore();
-        // Apply: the spine, then every placement, then the derived state.
+        // APPLY. There is no spine to update — the TIMELINE is what moves, and everything keyed
+        // to a tick moves with it.
+        uint32_t markersMoved = 0;
+        uint32_t meterMoved = 0;
         {
-          std::lock_guard<std::mutex> slock(sectionMutex);
-          sections[index].barCount = sp.barCount;
-          sectionList.setSections(std::move(sections));
+          std::lock_guard<std::mutex> alock(arrangeMutex);
+          markersMoved = markerList.rippleFrom(atTick, delta);
+          // THE METER MOVES TOO, and this is the thing the spine could never reach: a 7/8 bridge
+          // is a point in this map, so inserting bars before it has to carry it or the bridge
+          // lands in the wrong place. The spine could not have this bug — its meter was welded to
+          // a section — and could not have the capability either, since no command could set one.
+          auto meterPoints = songMeter.points();
+          for (auto& pt : meterPoints) {
+            // Never the origin at 0: a map with no point at tick 0 has no meter before its first
+            // change, which is the same rule the tempo map follows two blocks down.
+            if (pt.nanotick != 0 && pt.nanotick >= atTick) {
+              pt.nanotick = daw::rippleTick(pt.nanotick, atTick, delta);
+              ++meterMoved;
+            }
+          }
+          if (meterMoved > 0) {
+            songMeter.setMap(std::move(meterPoints));
+            std::atomic_store_explicit(
+                &meterSnapshot,
+                std::static_pointer_cast<const daw::TimeSignatureMap>(
+                    std::make_shared<daw::TimeSignatureMap>(songMeter)),
+                std::memory_order_release);
+          }
         }
         // AND THE SONG-LEVEL TIMELINES. The ripple moved every placement and every automation
         // point, and left a tempo change and a key change sitting at their absolute ticks — so
@@ -8403,8 +8567,8 @@ struct TrackRuntime {
         for (auto& pt : loadedTempoMap) {
           // Never the anchor at 0: a tempo map without a point at the origin has no tempo
           // before its first change.
-          if (pt.nanotick != 0 && pt.nanotick >= oldEndTick) {
-            pt.nanotick = daw::rippleTick(pt.nanotick, oldEndTick, delta);
+          if (pt.nanotick != 0 && pt.nanotick >= atTick) {
+            pt.nanotick = daw::rippleTick(pt.nanotick, atTick, delta);
             ++tempoMoved;
           }
         }
@@ -8427,8 +8591,8 @@ struct TrackRuntime {
         {
           std::lock_guard<std::mutex> hlock(harmonyMutex);
           for (auto& ev : harmonyEvents) {
-            if (ev.nanotick >= oldEndTick) {
-              ev.nanotick = daw::rippleTick(ev.nanotick, oldEndTick, delta);
+            if (ev.nanotick >= atTick) {
+              ev.nanotick = daw::rippleTick(ev.nanotick, atTick, delta);
               ++harmonyMoved;
             }
           }
@@ -8456,7 +8620,7 @@ struct TrackRuntime {
               if (!pl.at.has_value()) {
                 continue;
               }
-              const uint64_t moved = daw::rippleTick(*pl.at, oldEndTick, delta);
+              const uint64_t moved = daw::rippleTick(*pl.at, atTick, delta);
               if (moved != *pl.at) {
                 pl.at = moved;
                 touched = true;
@@ -8468,25 +8632,17 @@ struct TrackRuntime {
             // of the edit, silently.
             for (auto& clip : rt->track.automationClips) {
               // Only points at or after the boundary move, matching rippleTick's rule for
-              // placements, so a sweep in an earlier section stays put.
-              std::vector<daw::AutomationPoint> kept;
-              const auto& pts = clip.points();
-              bool anyMoved = false;
-              for (const auto& p : pts) {
-                if (p.nanotick >= oldEndTick) {
-                  anyMoved = true;
-                  break;
-                }
-              }
-              if (anyMoved) {
-                daw::AutomationClip rebuilt(clip.paramId(), clip.discreteOnly(),
-                                            clip.targetPluginIndex());
-                for (const auto& p : pts) {
-                  daw::AutomationPoint moved = p;
-                  moved.nanotick = daw::rippleTick(p.nanotick, oldEndTick, delta);
-                  rebuilt.addPoint(moved);
-                }
-                clip = std::move(rebuilt);
+              // placements, so a sweep earlier in the song stays put.
+              //
+              // This used to rebuild the clip inline — construct a fresh one, re-addPoint every
+              // point through rippleTick — because AutomationClip's own helper shifted EVERY
+              // point and so could not be used. The helper has the right rule now
+              // (AutomationClip::rippleFrom) and the duplication is gone. The rebuild also had a
+              // hazard the direct move does not: addPoint REPLACES at a colliding tick, so a
+              // negative delta that collapsed two points destroyed one. The caller refuses that
+              // case up front, but relying on a refusal to prevent silent data loss two layers
+              // down is thinner than not having the hazard.
+              if (clip.rippleFrom(atTick, delta)) {
                 touched = true;
               }
             }
@@ -8522,7 +8678,7 @@ struct TrackRuntime {
         // re-read, and the cost of missing one is a curve drawn in the wrong place.
         automationVersion.fetch_add(1, std::memory_order_acq_rel);
         recomputeSongEnd();
-        sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+        arrangeVersion.fetch_add(1, std::memory_order_acq_rel);
         {
           EngineUndoEntry e;
           e.song = true;
@@ -8530,160 +8686,20 @@ struct TrackRuntime {
           e.songAfter = snapshotSongStore();
           pushUndo(std::move(e));
         }
-        DAW_EVENT("section.length_set")
-            .field("section", sp.sectionId)
-            .field("bars", sp.barCount)
+        DAW_EVENT("time.edited")
+            .field("nanotick", atTick)
             .field("delta_ticks", static_cast<int64_t>(delta))
             .field("placements_moved", plan.moved)
             .field("tempo_points_moved", tempoMoved)
             .field("harmony_events_moved", harmonyMoved)
+            .field("markers_moved", markersMoved)
+            .field("meter_points_moved", meterMoved)
             .field("undoable", true);
         // JOURNALLED ON SUCCESS. Only the rejections were recorded, so history.jsonl held every
         // refused ripple and no applied one — the opposite of what a "what changed since Tuesday"
         // artifact is for.
-        historyAppend("set_section_length", "received", 0xFFFFFFFFu, 0, "");
-        return;
-      }
-
-      // The other four touch the spine only, so no placement moves and no clip version
-      // changes — a rename must not invalidate anyone's in-flight note edit.
-      //
-      // BUT "the spine only" is not the same as "nothing changed". Inserting, removing or
-      // reordering a section moves every LATER boundary while the material stays at its ticks,
-      // so a placement that was in the intro can end up in the verse — which is precisely the
-      // outcome SetSectionLength REFUSES a shrink to avoid. The four ops disagree with each
-      // other about whether that is acceptable, and picking a side is a product decision (it is
-      // written up in ARCHITECTURE_REVIEW section 8 for Jaakko).
-      //
-      // What is not a decision: it must not be SILENT. So the re-sectioning is COUNTED — by
-      // resolving the spine before and after and asking, for each placement, whether the
-      // section containing it changed identity — and reported. A number a caller can see is the
-      // difference between a surprising behaviour and an invisible one.
-      std::vector<std::pair<uint32_t, uint64_t>> placementTicks;  // (id, at)
-      {
-        for (auto* rt : snapshotTracks()) {
-          if (!rt || rt->removed.load(std::memory_order_acquire)) {
-            continue;
-          }
-          std::lock_guard<std::mutex> tlock(rt->trackMutex);
-          for (const auto& pl : rt->sourcePlacements) {
-            if (pl.at.has_value()) {
-              placementTicks.emplace_back(pl.id, *pl.at);
-            }
-          }
-        }
-      }
-      bool ok = false;
-      const char* what = "";
-      uint32_t resectioned = 0;
-      {
-        std::lock_guard<std::mutex> slock(sectionMutex);
-        auto sections = sectionList.sections();
-        // Which section holds each placement BEFORE the edit. 0 = past the last section, which
-        // is a real place to be: material there is playing, it just has no name.
-        const daw::TimeSignature songSig = songDefaultSig();
-        std::vector<uint32_t> before;
-        before.reserve(placementTicks.size());
-        {
-          const auto resolved = sectionList.resolve(songSig);
-          for (const auto& [id, at] : placementTicks) {
-            (void)id;
-            uint32_t owner = 0;
-            for (const auto& r : resolved) {
-              if (at >= r.startTick && at < r.endTick) {
-                owner = r.id;
-                break;
-              }
-            }
-            before.push_back(owner);
-          }
-        }
-        if (commandType == daw::UiCommandType::AddSection) {
-          if (sp.barCount == 0) {
-            reject("zero_bars");
-            return;
-          }
-          daw::Section s;
-          s.id = sectionList.nextId();
-          s.name = name.empty() ? "Section" : name;
-          s.barCount = sp.barCount;
-          s.colorRgb = sp.colorRgb;
-          // toIndex past the end appends, which is what "add a section" usually means.
-          const size_t at = std::min<size_t>(sp.toIndex, sections.size());
-          sections.insert(sections.begin() + static_cast<long>(at), std::move(s));
-          ok = true;
-          what = "added";
-        } else {
-          const auto found = sectionList.indexOfId(sp.sectionId);
-          if (!found) {
-            reject("no_such_section");
-            return;
-          }
-          const size_t index = *found;
-          if (commandType == daw::UiCommandType::RemoveSection) {
-            // Removing a section does NOT ripple: the material stays where it is and
-            // simply stops being named. Deleting the bars is a different, destructive
-            // operation and is not what removing a label means.
-            sections.erase(sections.begin() + static_cast<long>(index));
-            ok = true;
-            what = "removed";
-          } else if (commandType == daw::UiCommandType::RenameSection) {
-            if (name.empty()) {
-              reject("empty_name");
-              return;
-            }
-            sections[index].name = name;
-            ok = true;
-            what = "renamed";
-          } else if (commandType == daw::UiCommandType::MoveSection) {
-            const size_t to = std::min<size_t>(sp.toIndex, sections.size() - 1);
-            if (to == index) {
-              reject("already_there");
-              return;
-            }
-            auto moved = sections[index];
-            sections.erase(sections.begin() + static_cast<long>(index));
-            sections.insert(sections.begin() + static_cast<long>(to), std::move(moved));
-            ok = true;
-            what = "moved";
-          }
-        }
-        if (ok) {
-          sectionList.setSections(std::move(sections));
-          const auto resolved = sectionList.resolve(songSig);
-          for (size_t i = 0; i < placementTicks.size(); ++i) {
-            uint32_t owner = 0;
-            for (const auto& r : resolved) {
-              if (placementTicks[i].second >= r.startTick &&
-                  placementTicks[i].second < r.endTick) {
-                owner = r.id;
-                break;
-              }
-            }
-            if (owner != before[i]) {
-              ++resectioned;
-            }
-          }
-        }
-      }
-      if (ok) {
-        sectionVersion.fetch_add(1, std::memory_order_acq_rel);
-        if (resectioned > 0) {
-          std::cerr << "UI: " << daw::uiCommandTypeName(commandType) << " moved the boundaries "
-                    << "under " << resectioned
-                    << " placement(s) — they are in a different section than they were, with no "
-                       "note changed. The material did not move; the spine did."
-                    << std::endl;
-        }
-        DAW_EVENT("section.changed")
-            .field("op", daw::uiCommandTypeName(commandType))
-            .field("section", sp.sectionId)
-            .field("what", what)
-            // How much material now sits in a different section. 0 for a rename, and for an
-            // append past the end where nothing follows.
-            .field("resectioned", resectioned);
-        historyAppend(daw::uiCommandTypeName(commandType), "received", 0xFFFFFFFFu, 0, "");
-      }
+        historyAppend("insert_remove_time", "received", 0xFFFFFFFFu, 0, "");
+        return;      }
       return;
     }
     if (entry.size == sizeof(daw::UiTrackRoutingPayload) &&
@@ -13884,14 +13900,28 @@ struct TrackRuntime {
           transport.ppqPosition =
               static_cast<double>(blockStartTicks) /
               static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter);
-          // Quarter notes per bar = numerator * 4 / denominator (ppq counts quarters),
-          // so a 7/8 bar is 3.5 quarters and a tempo-synced plugin's bar start is
-          // right in any meter, not just 4/4.
-          const uint32_t tsNum = songTimeSigNum.load(std::memory_order_relaxed);
-          const uint32_t tsDen = songTimeSigDen.load(std::memory_order_relaxed);
+          // Quarter notes per bar = numerator * 4 / denominator (ppq counts quarters), so a 7/8
+          // bar is 3.5 quarters and a tempo-synced plugin's bar start is right in any meter.
+          //
+          // v29: THE METER AT THE PLAYHEAD, not the song default. This read the song-wide pair,
+          // so a mid-song meter change did not reach the plugins at all — every tempo-synced
+          // delay and arp kept counting the opening signature through a 7/8 bridge. It was not
+          // observable before because nothing could author a change; the meter map is
+          // authoritative now, so it can be, and this is the read that makes it mean something.
+          //
+          // From an immutable snapshot, swapped atomically: the RT cannot take arrangeMutex.
+          const auto meter =
+              std::atomic_load_explicit(&meterSnapshot, std::memory_order_acquire);
+          const daw::TimeSignature sig =
+              meter ? meter->signatureAt(blockStartTicks) : daw::TimeSignature{};
+          // Guarded, and this is not belt-and-braces: numerator 0 gives beatsPerBar 0 and a NaN
+          // bar start, which a plugin then divides by. A load used to guard the adopted value
+          // and then RE-STORE it unguarded fifty lines later, so the guard was dead.
           const double beatsPerBar =
-              tsDen > 0 ? static_cast<double>(tsNum) * 4.0 / static_cast<double>(tsDen)
-                        : 4.0;
+              (sig.numerator > 0 && sig.denominator > 0)
+                  ? static_cast<double>(sig.numerator) * 4.0 /
+                        static_cast<double>(sig.denominator)
+                  : 4.0;
           transport.ppqPositionOfLastBarStart =
               std::floor(transport.ppqPosition / beatsPerBar) * beatsPerBar;
           transport.isPlaying = playing.load(std::memory_order_acquire);
@@ -14445,6 +14475,11 @@ struct TrackRuntime {
             loopStartNanotick.load(std::memory_order_acquire);
         uiShm.header->uiLoopEnd =
             loopEndNanotick.load(std::memory_order_acquire);
+        // v29: the song's end, for the unnamed tail past the last marker. Inside the same
+        // seqlock frame as the loop and the playhead, so a client cannot read a song end from
+        // one edit and a playhead from another.
+        uiShm.header->uiSongEndTick =
+            songEndNanotick.load(std::memory_order_acquire);
         // v19: the song's time signature, for the ruler + time gutter.
         uiShm.header->uiSongTimeSigNum =
             songTimeSigNum.load(std::memory_order_relaxed);

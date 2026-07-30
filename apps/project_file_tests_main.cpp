@@ -795,37 +795,35 @@ int main(int argc, char** argv) {
               "a track with no automation must not write the key at all");
     }
 
-    // M3.23: the section spine round-trips, ORDER INTACT — the order IS the
-    // arrangement, so a serializer that sorted or de-duplicated would silently rewrite
-    // the song. And a project with no sections must not gain the key, or every old
-    // project shows a diff on its first save.
+    // v29: MARKERS round-trip, with their ids, names, colours and positions — and a project with
+    // no markers must not gain the key, or every project shows a diff on its first save.
     {
-      daw::ProjectDocument spined;
-      // Ids DELIBERATELY out of order relative to position: the intro is id 5, the
-      // chorus id 2, the verse id 9. A serializer or parser that sorted by id — the
-      // obvious thing to do to a list of things with ids — would reorder the song, and
-      // an in-id-order fixture could not tell. (This fixture WAS in id order at first,
-      // and the sort-by-id control passed against it, proving nothing.)
-      daw::Section a; a.id = 5; a.name = "intro"; a.barCount = 8; a.colorRgb = 0x112233;
-      daw::Section b; b.id = 2; b.name = "chorus"; b.barCount = 4;
-      daw::Section c; c.id = 9; c.name = "verse"; c.barCount = 16;
-      spined.sections = {a, b, c};
+      daw::ProjectDocument marked;
+      // Ids DELIBERATELY out of order relative to POSITION: the intro is id 5 at tick 0, the
+      // chorus id 2 later, the verse id 9 later still. A parser that sorted by id — the obvious
+      // thing to do to a list of things with ids — would put them in the wrong places, and a
+      // fixture in id order could not tell. (The section fixture this replaces WAS in id order at
+      // first, and the sort-by-id control passed against it, proving nothing.)
+      daw::Marker a; a.id = 5; a.name = "intro";  a.nanotick = 0;         a.colorRgb = 0x112233;
+      daw::Marker b; b.id = 2; b.name = "chorus"; b.nanotick = 8 * 4 * 960000ull;
+      daw::Marker c; c.id = 9; c.name = "verse";  c.nanotick = 12 * 4 * 960000ull;
+      marked.markers = {a, b, c};
       daw::ProjectDocument back;
       std::string err;
-      require(daw::deserializeProject(daw::serializeProject(spined), back, &err),
-              "sectioned document did not parse");
-      require(back.sections.size() == 3, "sections lost on round trip");
-      require(back.sections[0].id == 5 && back.sections[1].id == 2 &&
-                  back.sections[2].id == 9,
-              "section ORDER changed — the order is the arrangement");
-      require(back.sections[0].name == "intro" && back.sections[2].name == "verse",
-              "section names lost");
-      require(back.sections[1].barCount == 4, "section bar count lost");
-      require(back.sections[0].colorRgb == 0x112233, "section colour lost");
+      require(daw::deserializeProject(daw::serializeProject(marked), back, &err),
+              "marked document did not parse");
+      require(back.markers.size() == 3, "markers lost on round trip");
+      require(back.markers[0].id == 5 && back.markers[1].id == 2 &&
+                  back.markers[2].id == 9,
+              "marker ids or order changed — order follows POSITION, not id");
+      require(back.markers[0].name == "intro" && back.markers[2].name == "verse",
+              "marker names lost");
+      require(back.markers[1].nanotick == 8 * 4 * 960000ull, "marker position lost");
+      require(back.markers[0].colorRgb == 0x112233, "marker colour lost");
 
       daw::ProjectDocument plain;
-      require(daw::serializeProject(plain).find("sections") == std::string::npos,
-              "a project with no sections must not write the key at all");
+      require(daw::serializeProject(plain).find("markers") == std::string::npos,
+              "a project with no markers must not write the key at all");
     }
 
     // M3.22: the song's time-signature MAP round-trips, and a project WITHOUT one is

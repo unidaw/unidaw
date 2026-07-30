@@ -3,7 +3,13 @@
 #
 # WHY THIS EXISTS: the arrangement publisher once took songMeterMutex then sectionMutex while
 # SetSectionLength took sectionMutex then songMeterMutex. Both held them nested to resolve the
-# spine through the meter. That wedges both threads forever, takes the control plane with it, and
+# spine through the meter.
+#
+# BOTH OF THOSE MUTEXES ARE NOW GONE. Moving the meter onto the section deleted one; deleting the
+# section (v29) deleted the derivation itself, so a marker's bar is a lookup in the meter map and
+# there is no pair left to invert. This check therefore no longer guards a known-dangerous pair —
+# it guards the GENERAL property, which is what it was generalised to do when the first pair was
+# dissolved. It fails when it matches nothing, so it will say so if the analysis stops working. That wedges both threads forever, takes the control plane with it, and
 # leaves every shared-memory reader spinning on a version that never moves.
 #
 # WHY IT IS A SOURCE CHECK. A 60-edit stress run did NOT reproduce it: each critical section is a
