@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 
 import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
 import { ROW_OPS, opGlyph, opsRun, opsText, opsCellText } from '../src/rowops.js';
+import { DEVICE_KINDS } from '../src/chainmodel.js';
 import {
   parseToken, parseChord, pitchOf, pitchToToken, hexValue, shiftDigit, NOTE_KEYS,
 } from '../src/entry.js';
@@ -2681,4 +2682,29 @@ test('the ops cell cache rebuilds when a value changes and not otherwise', () =>
   assert.equal(c, 'p61', 'a changed value rebuilds — a guard that never releases is the other bug');
   // Width changing rebuilds too: the same note in a narrowed cell must fall back.
   assert.equal(opsCellText(cell, note, 2, 960000), 'p');
+});
+
+test('the device-kind table matches the engine enum', async () => {
+  /*
+   * `DEVICE_KINDS` mirrors `enum class DeviceKind` in apps/device_chain.h, and nothing forced
+   * them to agree. They did not: the sampler shipped as kind 5 while this list stopped at 4, so
+   * every sampler card read "kind 5 #9" with a fallback badge — which looks exactly like a
+   * device whose kind has no name, rather than like a table that is one entry short.
+   *
+   * Parsed from the HEADER, so the check is against the definition rather than against itself.
+   */
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../../apps/device_chain.h', import.meta.url), 'utf8');
+  const block = src.slice(src.indexOf('enum class DeviceKind'));
+  const body = block.slice(0, block.indexOf('};'));
+  const names = [...body.matchAll(/^\s*([A-Z][A-Za-z]*)\s*=\s*(\d+)/gm)]
+    .map((m) => [m[1], Number(m[2])])
+    .sort((a, b) => a[1] - b[1]);
+  assert.ok(names.length > 4, `parsed the enum: ${JSON.stringify(names)}`);
+  // The VALUES must be dense from 0, or an index-keyed table is the wrong shape entirely.
+  assert.deepEqual(names.map((n) => n[1]), names.map((_, i) => i),
+    'DeviceKind is dense from 0, which is what makes an array the right mirror');
+  assert.equal(DEVICE_KINDS.length, names.length,
+    `every kind is named: engine has ${JSON.stringify(names.map((n) => n[0]))}, `
+    + `this side has ${JSON.stringify(DEVICE_KINDS)}`);
 });

@@ -138,6 +138,25 @@ const ask = async (track, device) => {
         text.slice(-200));
 }
 
+// ---------------------------------------------------------------------------
+// AND THE RACK NAMES IT. A device whose kind has no entry in the client's table renders as
+// "kind 5 #9" with a fallback badge — which reads as a device the app does not understand,
+// rather than as a table one entry short. The sampler shipped exactly that way.
+// ---------------------------------------------------------------------------
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.waitForTimeout(600);
+  const card = await page.evaluate(() => {
+    const t = document.querySelector('.dv-card .dv-title, .dv-title');
+    const b = document.querySelector('.dv-card .dv-badge, .dv-badge');
+    return { title: t && t.textContent, badge: b && b.textContent };
+  });
+  check(card.title && !/kind 5/.test(card.title),
+        'the sampler card is named, not "kind 5"', JSON.stringify(card));
+  check(card.badge === 'UNI',
+        'and badged UNI — it runs IN the engine, not in a host process', JSON.stringify(card));
+}
+
 check(errors.length === 0, 'and nothing threw', errors.slice(0, 3).join(' | '));
 
 await browser.close();

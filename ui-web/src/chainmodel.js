@@ -34,13 +34,23 @@ import { generatorsFrom } from './patchermodel.js';
 const EMPTY_EDGES = Object.freeze([]);
 let _genMask = null;
 
-/** DeviceKind, from apps/device_chain.h. */
+/**
+ * DeviceKind, from apps/device_chain.h. A test parses that enum and holds this list equal to it,
+ * because a hand-maintained mirror of an engine enum drifts — this one already had: the sampler
+ * landed as kind 5 and every sampler on screen read "kind 5 #9" with a generic badge, which is
+ * what an unnamed kind looks like and not what a missing entry looks like.
+ */
 export const DEVICE_KINDS = [
   'patcher event', 'patcher instrument', 'patcher audio', 'VST instrument', 'VST effect',
+  'sampler',
 ];
 
 /** The short badge each kind gets, matching the design's PATCHER / VST3 / UNI. */
-const KIND_BADGE = ['PATCHER', 'PATCHER', 'PATCHER', 'VST3', 'VST3'];
+const KIND_BADGE = ['PATCHER', 'PATCHER', 'PATCHER', 'VST3', 'VST3',
+                    // UNI, not VST3: the sampler is rendered IN the engine rather than in a
+                    // host process, and the badge is the one thing on the card that says where
+                    // a device actually runs.
+                    'UNI'];
 
 /** DeviceCapability bits, same header. */
 const CAPS = [
