@@ -2234,6 +2234,24 @@ struct TrackRuntime {
   std::cout << "Engine: Ready for tracker input" << std::endl;
 
   daw::PatcherGraphState patcherGraphState;
+  // Has anyone actually EDITED the shared pool this session?
+  //
+  // The save's legacy branch parks the pool on the first instrument so the one global graph
+  // the engine used to run round-trips. But the engine seeds that pool at startup with a
+  // demo graph (Euclidean 16/5 + Passthrough + AudioPassthrough), so the branch fired for any
+  // project that had a device and no per-device graph of its own — and loading a plain
+  // one-instrument project and saving it stamped three patcher nodes onto the user's
+  // instrument that they never created. Verified: a fixture with zero patcher data anywhere
+  // came back with ['euclidean', 'passthrough', 'audio_passthrough']. Not audible in that
+  // configuration, but it is authored-looking data invented by a save, and it flips
+  // documentHasPerDeviceGraphs on the next load so the second save takes a different branch
+  // than the first.
+  //
+  // Parking a pool the user edited is the round-trip this branch exists for; parking the boot
+  // default is just litter. Once the patcher's edit commands are per-device (they still
+  // address the pool — the largest remaining gap in "patcher is a device") this never becomes
+  // true and the branch can go.
+  std::atomic<bool> patcherPoolEdited{false};
   // True when the running pool was assembled from per-device graphs (>= 2 devices
   // each carrying one) at load. Save then preserves each device's own graph rather
   // than parking the live single graph on one device (the legacy path).
@@ -5331,7 +5349,8 @@ struct TrackRuntime {
       }
     } else if (!document.tracks.empty() &&
                !document.tracks.front().chain.devices.empty() &&
-               !documentHasPerDeviceGraphs(document)) {
+               !documentHasPerDeviceGraphs(document) &&
+               patcherPoolEdited.load(std::memory_order_acquire)) {
       // Legacy single graph: the engine runs one global graph that lives only in
       // patcherGraphState (edited live), so park it on the first track's
       // instrument (else its first device) so the song round-trips.
@@ -7900,6 +7919,7 @@ struct TrackRuntime {
                                 0);
           return;
         }
+        patcherPoolEdited.store(true, std::memory_order_release);
         updatePatcherGraphSnapshot();
         emitPatcherGraphDelta(graphPayload.trackId,
                               0,
@@ -7924,6 +7944,7 @@ struct TrackRuntime {
                                 0);
           return;
         }
+        patcherPoolEdited.store(true, std::memory_order_release);
         updatePatcherGraphSnapshot();
         emitPatcherGraphDelta(graphPayload.trackId,
                               1,
@@ -7986,6 +8007,7 @@ struct TrackRuntime {
                                 graphPayload.edgeKind);
           return;
         }
+        patcherPoolEdited.store(true, std::memory_order_release);
         updatePatcherGraphSnapshot();
         emitPatcherGraphDelta(graphPayload.trackId,
                               2,
@@ -8080,6 +8102,7 @@ struct TrackRuntime {
                               0);
         return;
       }
+      patcherPoolEdited.store(true, std::memory_order_release);
       updatePatcherGraphSnapshot();
       emitPatcherGraphDelta(configPayload.trackId,
                             3,
