@@ -137,6 +137,42 @@ AFTER_MUTE="$(count_pitch 0 36)"
         local delete must not reach the clip"
 echo "  local delete: the bass is silenced in chorus 2 only (2 of 3 remain)"
 
+# ---- A LOCAL ADD WITH NO EXPLICIT LENGTH MUST STILL SOUND, and an OFF must be refused.
+#
+# The scheduler skips a zero-duration event outright, so a note stored with length 0 can never
+# sound — while still being saved and counted in the override badge. Clip scope already handled
+# this by computing a span to at least the end of the bar; local scope stored the 0. daw-cli
+# defaults --duration to 0, so `do note --local --pitch N` was exactly that gesture: accepted,
+# reported applied, permanently silent.
+cli do note --track 1 --local --nanotick $((17 * BAR + 1 * Q)) --pitch 51 >/dev/null 2>&1 || true
+sleep 1.2
+NODUR="$(count_pitch 1 51)"
+[ "$NODUR" = "1" ] || fail "the local add of pitch 51 did not land at all (count $NODUR)"
+# ASSERT THE DURATION, not the existence. A zero-length note is still published, so counting it
+# passes against the broken engine — the first version of this check did exactly that and the
+# negative control is what caught it. The scheduler skips a zero-duration event, so a non-zero
+# length is the property that means "this will sound".
+NODUR_LEN="$(cli get notes --track 1 2>/dev/null | tr '{' '\n' | grep '"pitch": 51,' \
+  | sed -n 's/.*"duration": \([0-9]*\).*/\1/p' | head -1)"
+[ "${NODUR_LEN:-0}" -gt 0 ] || \
+  fail "a local add with no --duration was stored with length ${NODUR_LEN:-?} — the scheduler
+        skips a zero-duration event, so it is saved and badge-counted and permanently silent.
+        Clip scope computes a span for the same gesture; local scope stored the 0."
+echo "  no length: a local add without --duration gets a real length (${NODUR_LEN}) and sounds"
+
+# Velocity 0 AND length 0 is the tracker OFF gesture — it ends the note sounding in a column
+# and stores no event. As an additive override that is meaningless, and routing it here stored a
+# phantom note-shaped nothing. It must be refused with a reason, not accepted.
+cli do note --track 1 --local --nanotick $((17 * BAR + 3 * Q)) --pitch 53 --velocity 0 \
+  >/dev/null 2>&1 || true
+sleep 1.2
+[ "$(count_pitch 1 53)" = "0" ] || \
+  fail "an OFF gesture in local scope stored a phantom event ($(count_pitch 1 53) of pitch 53)"
+grep -q '"reason":"note_off_needs_clip_scope"' "$TMP/engine.log" || \
+  fail "the OFF gesture in local scope was dropped without saying why — a command accepted and
+        silently absent is the shape this whole feature keeps failing in"
+echo "  off gesture: refused in local scope, with a reason"
+
 # ---- A LOCAL DELETE ON A LOOP REPEAT. The hat clip is 1 bar across 4, so bars 2-4 of the
 # appearance are ITERATIONS of the same clip note — and the base notes only exist once, at
 # offsets inside the clip. The lookup compared the PLACEMENT-relative tick against those
@@ -155,8 +191,9 @@ LOOPDEL="$(count_pitch 1 42)"
   fail "a local delete in the third iteration of a looping clip left $LOOPDEL hat(s) — 4 means
         the base-note lookup used the placement-relative tick against clip-relative offsets,
         matched nothing, and silently did nothing"
-grep -q '"event":"local_edit.noop"' "$TMP/engine.log" && \
-  fail "the local delete reported itself as a no-op, so it found no note to mute" || true
+grep '"event":"local_edit.noop"' "$TMP/engine.log" | grep -q '"pitch":42' && \
+  fail "the local delete of pitch 42 reported itself as a no-op, so it found no note to mute" \
+  || true
 echo "  loop delete: a local delete inside a loop repeat mutes the clip note in this appearance"
 
 # Put it back so the revert assertions below still measure what they were written to measure.

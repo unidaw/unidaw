@@ -6601,6 +6601,20 @@ struct TrackRuntime {
     if (!runtime) {
       return false;
     }
+    // THE OFF GESTURE IS NOT AN OVERRIDE. Velocity 0 with length 0 means "end the note
+    // sounding in this column" — it ends something on the flat stream and stores no event of
+    // its own, which is a clip-level operation. Routed through here it became an ADD carrying
+    // velocity 0 and length 0: a phantom that can never sound, is saved, and counts toward the
+    // override badge. Refuse it and say so; silently storing a note-shaped nothing is worse
+    // than answering no. Checked BEFORE the length default below, which would otherwise erase
+    // the very thing that identifies the gesture.
+    if (!deleting && velocity == 0 && duration == 0) {
+      DAW_EVENT("local_edit.rejected")
+          .field("track", trackId)
+          .field("nanotick", nanotick)
+          .field("reason", "note_off_needs_clip_scope");
+      return false;
+    }
     bool changed = false;
     std::shared_ptr<const ClipSnapshot> snapshot;
     {
@@ -6617,6 +6631,7 @@ struct TrackRuntime {
       // is no placement to hang the override on, so it is refused rather than silently
       // becoming a clip edit — which would be the opposite of what was asked for.
       daw::ProjectPlacement* target = nullptr;
+      uint64_t targetEnd = 0;
       for (auto& pl : runtime->sourcePlacements) {
         if (!pl.at.has_value()) {
           continue;
@@ -6632,6 +6647,7 @@ struct TrackRuntime {
         }
         if (nanotick >= *pl.at && nanotick < *pl.at + len) {
           target = &pl;
+          targetEnd = *pl.at + len;
           break;
         }
       }
@@ -6706,13 +6722,32 @@ struct TrackRuntime {
           }
         }
       } else {
+        // A NOTE WITH NO LENGTH NEVER SOUNDS: the scheduler skips a zero-duration event
+        // outright and expandNoteOps returns no strikes. Clip scope already handles this — it
+        // computes a span reaching at least the end of the bar containing the note, because
+        // "a note entered past the current span still needs room to sound". Local scope stored
+        // the 0 verbatim, so the SAME gesture produced a real note through one path and a
+        // saved, badge-counted silence through the other. daw-cli defaults --duration to 0, so
+        // `do note --local --pitch 60` was exactly that gesture.
+        //
+        // Same rule as clip scope, clamped to the appearance: an override belongs to this
+        // placement and must not sound past it.
+        uint64_t addDuration = duration;
+        if (addDuration == 0) {
+          const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
+          const uint64_t barAfter = (nanotick / bar + 1) * bar;
+          addDuration = barAfter > nanotick ? barAfter - nanotick : bar;
+          if (targetEnd > nanotick && nanotick + addDuration > targetEnd) {
+            addDuration = targetEnd - nanotick;
+          }
+        }
         daw::MusicalEvent add;
         add.nanotickOffset = rel;
         add.type = daw::MusicalEventType::Note;
         add.payload.note.pitch = pitch;
         add.payload.note.velocity = velocity;
         add.payload.note.column = column;
-        add.payload.note.durationNanoticks = duration;
+        add.payload.note.durationNanoticks = addDuration;
         // A local add gets its own note id from the clip's allocator space so it can be
         // addressed (and deleted) like any other note.
         add.payload.note.noteId = nextClipId.fetch_add(1, std::memory_order_relaxed);
