@@ -125,21 +125,87 @@ The value for the note under the cursor goes in a status line — the full canon
 which costs no horizontal space and replaces `digitMode`, the only current indication of which
 field the cursor is in.
 
-### What does NOT ship: per-track value columns
+## 2b. SO HOW DO YOU EXPRESS ALL SIX? THREE SURFACES, NOT SIX COLUMNS
 
-The synthesis wanted opt-in per-track value columns on top of the mask (Renoise's model), and
-priced them against a 1570 px strip.
+"More columns" is the wrong axis, and the arithmetic says so plainly. Reading, typing and
+scanning are three different tasks and they do not want the same surface.
 
-**Measured: the track host is 466 px.** At today's 230 px per track that is two tracks visible.
-The first refutation corrected 1570 to 1052 by adding up the shell CSS; the real number is
-lower still. Every width table in every proposal — and in the refutation — was wrong.
+**Measured strip: `.tk-host` is 1050 px at a 1680 px window** (1930 px at 2560), which matches
+the shell CSS — centre 1082 minus the 30 px minimap. An earlier draft of this document said
+466 px; that was the *content* width of a two-track song, not the container. The refutation's
+1052 was right and the mask design's 1570 was wrong.
 
-So the column question is not decidable yet, and shipping columns priced against a number
-three times too large would be building on sand. The mask stands on its own: it is narrower
-than what it replaces, so it wins at *any* width, and it fixes the silent-drop bug regardless.
+| track shape | width | tracks in 1050 px |
+|---|---|---|
+| today | 230 px | 4 |
+| base, with mask | **174 px** | **6** |
+| one track with 2 value columns + rest base | 249 px | 5 |
+| **all six columns open on one track** | **367 px** | **2** |
 
-**Ship the mask. Defer the columns until the strip width is settled with the panes in their
-real state.**
+That last row is the answer to "more columns?" — **no, not six.** Six columns on one track
+costs more than the entire strip can spend. But the mask makes the base track *narrower* than
+today, so bringing one or two values forward on the track you are working on still leaves more
+on screen than the current layout does.
+
+### Surface 1 — TYPING: one cell, one string, all six ops
+
+No columns are involved at all. The canonical form is already a whitespace-separated list —
+`parse_row_ops` takes `"ret3 p60 d1/6"` today — so the ops cell is a **text field**, and you
+type the whole set into it in one gesture:
+
+```
+S04 o1/3 p85 pan+22 ret3 d1/6
+```
+
+Order-free, nothing outranks anything, one undo entry. This is also exactly what an agent
+writes, which is the same string, which is the point: one grammar, one editor, no second
+notation to keep in step.
+
+### Surface 2 — READING AT A GLANCE: the mask, always on, every row of every track
+
+```
+       │ T05 break          ▸ ││ T06 vox            ▸ │
+ row   │ ln │ note  │vel│ ops  ││ ln │ note  │vel│ ops  │
+───────┼────┼───────┼───┼──────┼┼────┼───────┼───┼──────┤
+ 0000  │ ▌  │ C-4   │112│SOP<RD││ ▏  │ D-3   │ 96│SOP>·D│
+ 0001  │ ▐  │ ···   │ ··│      ││ ▏  │ ···   │ ··│      │
+ 0002  │ ▌  │ D#4   │ 96│SOP>R·││ ▏  │ D-3   │104│S··=·D│
+ 0003  │ ▎  │ C-4   │ 72│SO·<RD││ ▏  │ ···   │ ··│      │
+         40   56     32    44        40   56    32    44     = 174px each
+```
+
+Row 0000 carries **all six at once** and every one of them is visible, on every track,
+simultaneously. 44 px. This is the part that has to be free, and it is.
+
+### Surface 3 — SCANNING A VALUE: bring one or two forward, per track
+
+A column exists for exactly one job: comparing a number down 64 rows. You never need six of
+them, because you are never tuning six parameters at once — you are tuning the one you are
+tuning. Open offset and probability on the break track you are chopping:
+
+```
+       │ T05 break                       ▸ o p ││ T06 vox            ▸ │
+ row   │ ln │ note  │vel│ ops  │offset │prob ││ ln │ note  │vel│ ops  │
+───────┼────┼───────┼───┼──────┼───────┼─────┼┼────┼───────┼───┼──────┤
+ 0000  │ ▌  │ C-4   │112│SOP<RD│37/256 │  60 ││ ▏  │ D-3   │ 96│SOP>·D│
+ 0002  │ ▌  │ D#4   │ 96│SOP>R·│   1/3 │  85 ││ ▏  │ D-3   │104│S··=·D│
+         └──────────── 249px ────────────┘        └───── 174px ─────┘
+```
+
+**The mask is what makes this safe.** In Renoise, closing a sub-column hides the fact that
+anything is in it. Here it cannot: the mask is permanent and non-toggleable, so a closed column
+is a *magnification* control and never a hiding one. `O` still shows on row 0000 whether or not
+the offset column is open.
+
+And the status line carries the full canonical string for the note under the cursor, so the
+cursor row is completely readable at all times with no columns open at all.
+
+### What that means for shipping
+
+The mask ships first and stands alone: narrower than what it replaces, fixes the live
+silent-drop bug, needs nothing from the engine. Columns follow, priced against 1050 px rather
+than 1570 — two per track, opt-in, and only affordable *because* the mask made the base track
+56 px narrower.
 
 ---
 
@@ -175,10 +241,9 @@ both the marker and the extent will pass a test that never exercised the derive.
    only for starting part-way into a sound you did not chop. That is a real but rare want. It
    costs a schema entry and a wire field. Keep it, or wait until something needs it?
 
-2. **Are the value columns wanted at all**, once the mask means nothing is hidden? The mask
-   says *which* ops a row carries; reading *what* a retrigger is set to still means parking the
-   cursor. At a 466 px strip, columns may simply never be affordable — in which case the answer
-   is a better inspector, not a wider grid.
+2. **Two value columns per track, or more?** Two is what the 1050 px strip affords while still
+   showing five tracks. Three would be 4 tracks; all six would be 2. The cap is a judgement
+   about how many numbers you actually tune at once, not a technical limit.
 
 3. **Where does automation live?** It is an arrangement lane here, and a pattern effect column
    in every tracker. Jaakko listed it among the simultaneous things, which suggests it is wanted
