@@ -7,6 +7,9 @@ Makefile
 compile_commands.json
 ui/target/
 ui/daw-bridge/target/
+# Cargo output for the patcher crate. 58 of these were tracked, so every build produced a
+# diff of fingerprint blobs and .rlib files alongside the real change.
+patcher_rust/target/
 .env
 
 *.a
