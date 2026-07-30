@@ -371,8 +371,7 @@ export function createCommands(api) {
      * deleted. Saying so here rather than letting the gesture fail silently: an interface that
      * quietly ignores half a drag is worse than one that says which half it has.
      */
-    draw: { help: 'draw [on|off] — edit the automation curve with the pointer '
-                + '(value only; a point cannot yet be moved in time or removed)',
+    draw: { help: 'draw [on|off] — edit the automation curve with the pointer, value only',
       args: [ON_OFF],
       run: (a) => {
         const want = a[0] === undefined ? undefined : a[0] === 'on';
