@@ -630,3 +630,18 @@
 }
 .tk-cell.dev.dev-early::after { left: 0; }
 .tk-cell.dev.dev-late::after  { left: auto; right: 0; }
+
+/* THE RULER: one exemplar of each track width class, measured instead of every track.
+
+   `visibility: hidden` and NOT `display: none` — a display-none box measures 0, and a zero
+   width here would make every track sit at x=0. That failure has already happened once in this
+   file, from a different cause, and it made all 612 cells unclickable.
+
+   Out of flow and pinned to the top so it occupies no space and cannot scroll into view. It
+   still lays out, which is the entire point: it is what CSS is asked for a width. */
+.tk-ruler {
+  position: absolute;
+  top: 0; left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}

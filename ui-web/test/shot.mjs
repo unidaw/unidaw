@@ -722,6 +722,52 @@ for (const scene of SCENES) {
     ok(worst <= 1, `every header sits over its track: worst drift ${worst}px`,
        JSON.stringify(align));
 
+    /*
+     * THE WIDTH MODEL AGAINST THE RENDERED BOX.
+     *
+     * `measure()` used to read a box per track, so the model and the paint could not disagree
+     * — they were the same measurement. Now JS owns the prefix sum (four box reads for the two
+     * width classes, then addition), which is what lets it hold a position for a track it has
+     * not drawn, and which is the prerequisite for virtualizing the track axis.
+     *
+     * That trade is only safe with this assertion. Compared against the MODEL rather than
+     * header-against-lane, because a systematic bias moves both of those together — the
+     * alignment check above passes happily with the whole strip 2px-per-track short, which is
+     * precisely the historical bug.
+     *
+     * Tolerance 1px, not 2: offsetLeft and offsetWidth are integer-rounded, so a fractional box
+     * and an integer sum can differ by one at a fractional devicePixelRatio. A SYSTEMATIC error
+     * compounds and so exceeds 1 by the second track — which is what makes 1 the right line.
+     */
+    const pin = await page.evaluate(() => {
+      const g = window.__uni.probe();
+      const row = document.querySelector('.tk-row');
+      const out = [];
+      for (const tr of row.querySelectorAll('.tk-track')) {
+        const t = Number(tr.dataset.track ?? tr.firstElementChild?.dataset.track ?? -1);
+        if (t < 0 || !g.trackGeom) continue;
+        const m = g.trackGeom(t);
+        out.push({ t,
+          dLeft: Math.round(tr.offsetLeft - g.stripLeft) - Math.round(m.left),
+          dWidth: Math.round(tr.offsetWidth) - Math.round(m.width) });
+      }
+      return { out, contentWidth: g.contentWidth, scrollW: row.scrollWidth,
+               classes: g.widthClasses };
+    });
+    if (pin.out.length) {
+      const off = pin.out.filter((o) => Math.abs(o.dLeft) > 1 || Math.abs(o.dWidth) > 1);
+      ok(off.length === 0,
+         `the width model matches the rendered box for all ${pin.out.length} drawn tracks`,
+         JSON.stringify(off.slice(0, 4)) + ' classes=' + JSON.stringify(pin.classes));
+      /*
+       * ...and the whole strip. Only assertable while every track still has DOM — when the
+       * track axis virtualizes, `scrollWidth` stops being the extent and the model becomes the
+       * only answer. Which is the point: this check is what earns the right to remove it.
+       */
+      ok(Math.abs(pin.contentWidth - pin.scrollW) <= 1,
+         `the model's strip width equals the DOM's: ${pin.contentWidth} vs ${pin.scrollW}`);
+    }
+
     // AND THE HIT TEST. It used to divide by one stride; with ragged tracks it has
     // to find the track by its measured box, and subtract that track's OWN readout
     // width before resolving a column. Driven through the real hitTest with real

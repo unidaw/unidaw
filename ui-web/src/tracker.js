@@ -83,6 +83,32 @@ export class Tracker {
     // when you look at track 12.
     this.harmLane = el('div', 'tk-harm-lane');
     this.harmPool = [];
+    /*
+     * THE RULER: one exemplar of each track WIDTH CLASS, measured instead of every track.
+     *
+     * `measure()` used to read a box per track — O(tracks) layout reads on every shape change —
+     * and, more importantly, it could only learn the width of a track that was RENDERED. That
+     * is the thing standing between this file and virtualizing the track axis: you cannot ask
+     * the browser how wide a track is if you have not drawn it.
+     *
+     * There are only ever three widths: folded (0), plain, and plain-plus-lane-bar. So measure
+     * one of each and SUM IN JS. That keeps the box model in the stylesheet — the rule
+     * GUIDELINES 3.11 actually states, which is about two authorities disagreeing, not about
+     * arithmetic — while making the prefix sum something this file owns rather than something
+     * it reads back out of flex layout.
+     *
+     * It is worth being exact about the rule, because this looks like breaking it. The repo
+     * ALREADY computes track geometry as a cold-start fallback in index.html, and that
+     * computation is already wrong: `cellWidth * columns + laneBarWidth` is 268 against a real
+     * 270, missing the 2px border — the very mistake 3.11 is named after, with a comment above
+     * it saying so. Measuring two real boxes and adding is strictly better than that, and
+     * strictly better than reading N boxes, because CSS stays the only authority on a width.
+     *
+     * `visibility: hidden` rather than `display: none`: a display-none box measures 0, which is
+     * how this file once recorded a zero-width strip and made all 612 cells unclickable.
+     */
+    this.ruler = null;
+    this._wPlain = 0; this._wBar = 0; this._wLaneBar = 0;
     host.append(this.rails, this.harmLane, this.band);
   }
 
@@ -108,6 +134,10 @@ export class Tracker {
     this.cols = columns;
     this.band.textContent = '';
     this.pool = Array.from({ length: need }, () => this.makeRow(rowCount, columns));
+    // The ruler carries `columns` cells like any track, so it is rebuilt with the pool — a
+    // ruler measured at three columns while the strip draws six would put every track after
+    // the first in the wrong place, which is the failure this whole model exists to prevent.
+    this.buildRuler(columns);
     this.band.append(...this.pool);
     /**
      * The new rows carry NO lane classes, so the cached signatures must stop
@@ -151,50 +181,63 @@ export class Tracker {
    * disagreeing by a border width.
    */
   measure() {
-    const row = this.pool[0];
-    if (!row) return;
-    /**
-     * A HIDDEN SURFACE MEASURES AS ZERO, AND ZERO IS NOT A MEASUREMENT.
+    /*
+     * THE PREFIX SUM IS OURS NOW.
      *
-     * `display: none` makes every offsetLeft and offsetWidth 0, so measuring the
-     * tracker while another surface is up recorded stripLeft 0, trackWidth 0 for
-     * every lane, and a trackStride guessed from the cell width. hitTest then
-     * refused every point in the grid — `track >= this.tracks` — and clicking
-     * anywhere did nothing at all. Not "slightly wrong": 612 clickable cells
-     * became 0.
+     * This used to read `offsetLeft` and `offsetWidth` from every track and take `scrollWidth`
+     * off the row — i.e. it asked flex layout to do the summation and read the answer back. That
+     * works only for tracks that are RENDERED, which is exactly the wall between this file and
+     * virtualizing the track axis.
      *
-     * Reaching it took only resizing a pane while looking at the arrangement and
-     * then switching back, which is an ordinary thing to do, and it left the
-     * tracker mouse-dead with nothing on screen to say so.
+     * Now: four box reads for the two width classes (see `measureClasses`), then addition. CSS
+     * is still the only authority on how wide a track is; this file is the authority on where
+     * they sit, which is a different fact and one it can hold for tracks it has not drawn.
      *
-     * Returning keeps the last real measurement, which is stale but survivable;
-     * the caller re-measures when the surface is shown again.
+     * A test pins the model against the rendered box for every drawn track, so the two cannot
+     * drift — that assertion is the whole reason this is safe, and it is what the old
+     * "measured, never derived" comment was really protecting.
      */
-    const box = this.host.getBoundingClientRect();
-    if (box.width < 1 || box.height < 1) return;
-    this.contentWidth = row.scrollWidth;
-    const tracks = row.querySelectorAll('.tk-track');
-    this.stripLeft = tracks[0] ? tracks[0].offsetLeft : this.m.gutterWidth;
-    const n = tracks.length;
-    if (!this.trackLeft || this.trackLeft.length < n) {
-      this.trackLeft = new Float64Array(n * 2);
-      this.trackWidth = new Float64Array(n * 2);
-      this.laneBarW = new Float64Array(n * 2);
+    const n = this.tracks | 0;
+    if (!n) return;
+    this.measureClasses();
+    if (!this._wPlain) return;      // nothing measured yet; keep the last real geometry
+
+    /*
+     * stripLeft is still MEASURED. It is the gutter plus the harmony spacer — structure this
+     * file does not own and has no class for — so summing it would be the second authority the
+     * rule warns about. One box read, and only when a row exists to read it from.
+     */
+    const row = this.pool[0];
+    if (row) {
+      const first = row.querySelector('.tk-track');
+      if (first) {
+        const box = this.host.getBoundingClientRect();
+        if (box.width >= 1 && box.height >= 1) this.stripLeft = first.offsetLeft;
+      }
     }
-    let widest = 0;
+    if (!this.stripLeft) this.stripLeft = this.m.gutterWidth;
+
+    if (!this.trackLeft || this.trackLeft.length < n + 1) {
+      this.trackLeft = new Float64Array((n + 1) * 2);
+      this.trackWidth = new Float64Array((n + 1) * 2);
+      this.laneBarW = new Float64Array((n + 1) * 2);
+    }
+    let widest = 0, x = 0;
     for (let t = 0; t < n; t++) {
-      const tr = tracks[t];
-      this.trackLeft[t] = tr.offsetLeft - this.stripLeft;
-      this.trackWidth[t] = tr.offsetWidth;
-      const first = tr.firstElementChild;
-      this.laneBarW[t] = first && first.classList.contains('tk-lane-bar')
-        ? first.offsetWidth : 0;
-      if (tr.offsetWidth > widest) widest = tr.offsetWidth;
+      const w = this.trackWidthOf(t);
+      this.trackLeft[t] = x;
+      this.trackWidth[t] = w;
+      this.laneBarW[t] = (this._laneHidden && this._laneHidden[t]) ? 0
+                       : ((this._laneShow && this._laneShow[t]) ? this._wLaneBar : 0);
+      x += w;
+      if (w > widest) widest = w;
     }
+    // One past the end, so the strip's extent is a subscript rather than a special case.
+    this.trackLeft[n] = x;
     this.trackCountMeasured = n;
-    this.trackStride = n > 1 ? tracks[1].offsetLeft - tracks[0].offsetLeft
-                             : (widest || this.m.cellWidth * this.cols);
-    this.widestTrack = widest || this.m.cellWidth * this.cols;
+    this.contentWidth = this.stripLeft + x;
+    this.trackStride = widest || this.m.cellWidth * this.cols;
+    this.widestTrack = this.trackStride;
   }
 
   /**
@@ -210,6 +253,10 @@ export class Tracker {
     if (this._laneSig === sig && this._hiddenSig === hiddenSig) return false;
     this._laneSig = sig;
     this._hiddenSig = hiddenSig;
+    // KEPT, not just applied: the width model asks these for every track, including ones with
+    // no DOM. Held by reference — the caller rebuilds them per frame into the same arrays.
+    this._laneShow = laneShow;
+    this._laneHidden = laneHidden;
     for (let i = 0; i < this.pool.length; i++) {
       const lanes = this.pool[i]._lanes;
       if (!lanes) continue;
@@ -248,6 +295,51 @@ export class Tracker {
   /** How far right the band can travel before the strip's end meets the edge. */
   maxScrollX(viewportWidth) {
     return Math.max(0, (this.contentWidth || 0) - viewportWidth);
+  }
+
+  /**
+   * (Re)build the ruler for the current column count. Two tracks: index 0 carries its lane bar,
+   * index 1 does not. Their widths are the two non-zero width classes.
+   */
+  buildRuler(columns) {
+    if (this.ruler) this.ruler.remove();
+    const r = this.makeRow(2, columns);
+    r.classList.add('tk-ruler');
+    // The classes that decide the two width classes, applied to the exemplars rather than
+    // inferred: `no-lane` is what actually removes the bar, so the exemplar must wear it.
+    r._lanes[1].classList.add('no-lane');
+    this.ruler = r;
+    this._rulerBar = r._lanes[0];
+    this._rulerPlain = r._lanes[1];
+    this.host.appendChild(r);
+  }
+
+  /**
+   * The two non-zero width classes, in four box reads, on shape change only.
+   *
+   * Returns false when nothing moved, so a caller can skip the prefix sum — and false when the
+   * surface is hidden, keeping the last real measurement. Stale class widths are survivable in
+   * a way stale per-track geometry never was: a class is (a track with a bar, a track without),
+   * and neither can change while the surface is not on screen.
+   */
+  measureClasses() {
+    if (!this._rulerPlain) return false;
+    const box = this.host.getBoundingClientRect();
+    if (box.width < 1 || box.height < 1) return false;
+    const plain = this._rulerPlain, bar = this._rulerBar;
+    const wp = plain.offsetWidth, wb = bar.offsetWidth;
+    const lbEl = bar.firstElementChild;
+    const wl = lbEl ? lbEl.offsetWidth : 0;
+    if (!wp || !wb) return false;
+    if (wp === this._wPlain && wb === this._wBar && wl === this._wLaneBar) return false;
+    this._wPlain = wp; this._wBar = wb; this._wLaneBar = wl;
+    return true;
+  }
+
+  /** The width of track `t`, from its class. Defined for every track, drawn or not. */
+  trackWidthOf(t) {
+    if (this._laneHidden && this._laneHidden[t]) return 0;
+    return (this._laneShow && this._laneShow[t]) ? this._wBar : this._wPlain;
   }
 
   makeRow(trackCount, columns) {
@@ -828,6 +920,23 @@ export class Tracker {
   /** What an agent (or a test) asks. Structure, not pixels. */
   probe() {
     return {
+      /*
+       * THE WIDTH MODEL, exposed so a test can pin it against the rendered box.
+       *
+       * This is the assertion that makes JS-owned geometry safe: the old code measured every
+       * track, so paint and hit-test could not disagree by construction. Now they could, and
+       * the only thing standing between "could" and "does" is a check that runs on every scene
+       * — including the ragged ones, where a per-class model and a single stride give different
+       * answers.
+       */
+      stripLeft: this.stripLeft,
+      contentWidth: this.contentWidth,
+      widthClasses: { plain: this._wPlain, bar: this._wBar, laneBar: this._wLaneBar },
+      trackGeom: (t) => ({
+        left: this.trackLeft ? this.trackLeft[t] : 0,
+        width: this.trackWidth ? this.trackWidth[t] : 0,
+        laneBarW: this.laneBarW ? this.laneBarW[t] : 0,
+      }),
       startRow: this.vm.window.startRow,
       rowCount: this.vm.rows.length,
       tracks: this.vm.tracks.length,
