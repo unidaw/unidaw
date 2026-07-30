@@ -605,10 +605,22 @@ pub enum UiCommandType {
     MoveSection = 58,
     RevertPlacementOverrides = 59,
     WriteAutomationPoint = 60,
+    /// Set (or clear) ONE placement's edit scope. trackId, value0 = placementId,
+    /// flags bit0 = on. Not version-gated: it changes no note, so it cannot invalidate
+    /// anyone's in-flight edit.
+    SetPlacementEditScope = 61,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
 pub const MIXER_FLAG_SOLO: u16 = 1 << 1;
+/// `UiClipExtent.flags` bit 23: this appearance takes edits LOCALLY — a note typed into it
+/// becomes an override on it rather than a change to the clip every appearance shares.
+///
+/// Chosen over a global "local edit mode" on failure asymmetry: forget the toggle and the note
+/// appears in every appearance (loud, one undo away), whereas being in the wrong global mode
+/// makes a fix silently fail to propagate (quiet, and you may not notice for an hour).
+pub const UI_CLIP_EXTENT_LOCAL_EDITS: u32 = 1 << 23;
+
 /// `ui_track_mix_flags` bit 2: does this track quantize its notes to the harmony timeline?
 ///
 /// SetTrackHarmonyQuantize (10) had no read-back at all, so the only control that could be built

@@ -1904,6 +1904,10 @@ struct ClipExtentInfo {
   // UI can badge a placement that differs from its clip — without it, "this chorus is
   // not quite the others" is invisible until you look at every note.
   uint32_t overrideCount = 0;
+  // Whether this appearance takes edits LOCALLY (ProjectPlacement::localEdits). Published so the
+  // UI can show which placement is in that state; a toggle whose state cannot be read is one the
+  // interface has to guess at.
+  bool localEdits = false;
 };
 
 struct Track {
@@ -3196,6 +3200,9 @@ struct TrackRuntime {
         // Saturating at 255 with a separate has-overrides bit, so a big count can never
         // read as none.
         extFlags |= daw::packClipExtentOverrides(ext.overrideCount);
+        if (ext.localEdits) {
+          extFlags |= daw::kUiClipExtentLocalEdits;
+        }
         // Pack the clip's own musical grid into the spare flag bits (0 => the reader
         // falls back to the song meter). Clamp + refuse loudly per the three rules.
         for (const auto& oc : runtime->ownedClips) {
@@ -4812,6 +4819,7 @@ struct TrackRuntime {
       ext.endTick = *pl.at + length;
       ext.overrideCount =
           static_cast<uint32_t>(pl.adds.size() + pl.mutes.size());
+      ext.localEdits = pl.localEdits;
       rt.clipExtents.push_back(std::move(ext));
     }
     // M1.13: the clip the UI draws and the clip that SOUNDS are already two objects —
@@ -6846,6 +6854,49 @@ struct TrackRuntime {
   // edit that would MODIFY a base note is decomposed into mute(original) + add(new), so
   // the override list is always a set of things added and things silenced, and reverting
   // is deleting both vectors rather than replaying inverses.
+  // DOES THIS EDIT BELONG TO THE APPEARANCE OR TO THE CLIP? One function, because WriteNote and
+  // DeleteNote both have to answer it and two copies would eventually disagree about the same
+  // gesture — which for this feature means the same keystroke doing different things depending on
+  // which handler ran.
+  //
+  // The explicit bit wins on its own: a caller that SAID which it meant is never overridden. The
+  // placement's own flag is the standing answer for when nobody said. Never inferred from whether
+  // the cell is occupied.
+  auto editIsLocalScope = [&](uint32_t trackId, uint64_t nanotick, uint16_t flags) -> bool {
+    if ((flags & daw::kUiEditScopeLocal) != 0) {
+      return true;
+    }
+    TrackRuntime* runtime = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      if (trackId < tracks.size()) {
+        runtime = tracks[trackId].get();
+      }
+    }
+    if (!runtime) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(runtime->trackMutex);
+    for (const auto& pl : runtime->sourcePlacements) {
+      if (!pl.at.has_value() || !pl.localEdits) {
+        continue;
+      }
+      uint64_t len = pl.lengthNanoticks;
+      if (len == 0) {
+        for (const auto& c : runtime->ownedClips) {
+          if (c.id == pl.clipId) {
+            len = c.lengthNanoticks;
+            break;
+          }
+        }
+      }
+      if (nanotick >= *pl.at && nanotick < *pl.at + len) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   auto applyLocalNoteEdit = [&](uint32_t trackId, uint64_t nanotick, uint64_t duration,
                                 uint8_t pitch, uint8_t velocity, uint8_t column,
                                 bool deleting) -> bool {
@@ -8963,7 +9014,7 @@ struct TrackRuntime {
       const uint16_t flags = payload.flags;
       // M3.24: the caller says whether this belongs to the CLIP (every appearance) or to
       // THIS APPEARANCE. Default is clip scope, which is exactly today's behaviour.
-      if ((flags & daw::kUiEditScopeLocal) != 0) {
+      if (editIsLocalScope(payload.trackId, noteNanotick, flags)) {
         applyLocalNoteEdit(payload.trackId, noteNanotick, noteDuration, pitch, velocity,
                            static_cast<uint8_t>(flags & daw::kUiEditColumnMask),
                            /*deleting=*/false);
@@ -8984,7 +9035,7 @@ struct TrackRuntime {
       const uint8_t pitch =
           static_cast<uint8_t>(std::min<uint32_t>(payload.notePitch, 127));
       const uint16_t flags = payload.flags;
-      if ((flags & daw::kUiEditScopeLocal) != 0) {
+      if (editIsLocalScope(payload.trackId, noteNanotick, flags)) {
         applyLocalNoteEdit(payload.trackId, noteNanotick, /*duration=*/0, pitch,
                            /*velocity=*/0,
                            static_cast<uint8_t>(flags & daw::kUiEditColumnMask),
@@ -8992,6 +9043,69 @@ struct TrackRuntime {
       } else {
         applyRemoveNote(payload.trackId, noteNanotick, pitch, flags, true);
       }
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetPlacementEditScope)) {
+      // value0 = placementId, flags bit0 = on. Deliberately NOT version-gated: this changes no
+      // note, so it cannot invalidate anyone's in-flight edit — the same reasoning that keeps a
+      // section rename off the clip version.
+      const uint32_t placementId = payload.value0;
+      const bool on = (payload.flags & 1u) != 0;
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("placement_scope.rejected")
+            .field("track", payload.trackId)
+            .field("placement", placementId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool found = false;
+      std::shared_ptr<const ClipSnapshot> snapshot;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& pl : runtime->sourcePlacements) {
+          if (pl.id != placementId) {
+            continue;
+          }
+          found = true;
+          pl.localEdits = on;
+          break;
+        }
+        if (found) {
+          // RE-DERIVE, don't just bump. The published extents are rebuilt from
+          // rt.clipExtents, and clipExtents is DERIVED inside rebuildFlatAndPublish — so
+          // bumping the clip version alone rebuilt the region out of a stale vector and the
+          // flag stayed false. The read-back existed and reported the old answer, which is
+          // worse than not having it: a UI would have drawn the toggle as off after setting it.
+          snapshot = rebuildFlatAndPublish(*runtime);
+        }
+      }
+      if (snapshot) {
+        std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
+                                   std::memory_order_release);
+      }
+      if (!found) {
+        // Naming a placement that is not there can never succeed on a retry, so say so rather
+        // than reporting a scope change that did not happen.
+        DAW_EVENT("placement_scope.rejected")
+            .field("track", payload.trackId)
+            .field("placement", placementId)
+            .field("reason", "no_such_placement");
+        return;
+      }
+      // The published extents carry the flag, and they rebuild on the clip version — so bump it
+      // or the toggle stays invisible until some unrelated note edit happens to republish.
+      bumpClipVersionFor(runtime);
+      clipDirty.store(true, std::memory_order_release);
+      DAW_EVENT("placement_scope.set")
+          .field("track", payload.trackId)
+          .field("placement", placementId)
+          .field("local", on);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RevertPlacementOverrides)) {
       // M3.24: the one-click revert. Clears BOTH override vectors on one placement, which

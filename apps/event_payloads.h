@@ -158,7 +158,14 @@ enum class UiCommandType : uint16_t {
   // since Movement 3 phase 1, but NOTHING in the engine ever created a clip to play —
   // there was no authoring command and no persistence, so the feature was unreachable.
   // This is the owner half: a point is addressed by (track, paramId, tick).
-  WriteAutomationPoint = 60,  // next free 61
+  WriteAutomationPoint = 60,
+  // Set (or clear) a PLACEMENT's own edit scope. Reuses UiCommandPayload: trackId,
+  // value0 = placementId, flags bit0 = on. When set, note edits landing in that placement are
+  // recorded as overrides on it without the caller passing kUiEditScopeLocal each time — the
+  // per-placement answer to "which gesture chooses scope", chosen over a global mode because
+  // forgetting the toggle fails LOUDLY (a note in three places) while being in the wrong mode
+  // fails quietly (a fix that does not propagate).
+  SetPlacementEditScope = 61,  // next free 62
 };
 
 // M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
@@ -263,6 +270,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::MoveSection: return "move_section";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
+    case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";
   }
   return "op:unknown";
 }

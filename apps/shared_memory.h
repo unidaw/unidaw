@@ -741,6 +741,11 @@ constexpr uint32_t kUiClipExtentAudio = 1u << 0;
 constexpr uint32_t kUiClipExtentOverrideShift = 14;
 constexpr uint32_t kUiClipExtentOverrideMask = 0xFFu << kUiClipExtentOverrideShift;
 constexpr uint32_t kUiClipExtentHasOverrides = 1u << 22;
+// This appearance takes edits LOCALLY: a note typed into it becomes an override on it rather
+// than a change to the clip every appearance shares. Published so the UI can show WHICH
+// placement is in that state — the same reason harmony quantize had to be published. A toggle
+// whose state cannot be read is a toggle the interface has to guess at.
+constexpr uint32_t kUiClipExtentLocalEdits = 1u << 23;
 
 inline uint32_t packClipExtentOverrides(uint32_t count) {
   if (count == 0) {
@@ -773,6 +778,7 @@ inline uint32_t unpackClipExtentOverrides(uint32_t flags) {
 //   bits 11-13 timeSigDenominator  3 bits  exponent 0..7 => denominator 1..128
 //   bits 14-21 overrideCount       8 bits  M3.24, SATURATING at 255 (see below)
 //   bit  22    hasOverrides        M3.24, set whenever the count is non-zero
+//   bit  23    localEdits          the placement's own edit scope (see below)
 constexpr uint32_t kUiClipGridLpbShift = 1;
 constexpr uint32_t kUiClipGridNumShift = 6;
 constexpr uint32_t kUiClipGridDenExpShift = 11;

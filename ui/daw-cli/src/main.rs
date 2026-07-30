@@ -53,6 +53,13 @@ daw-cli — control surface for a running engine
                                    writes one automation point. --discrete makes the
                                    value STEP at each point instead of interpolating,
                                    and is fixed when the clip is created.
+  daw-cli do placement-scope --track N --placement P [--on 0|1]
+                                   mark ONE appearance as taking edits locally: a note
+                                   typed into it becomes an override on it rather than a
+                                   change to the clip every appearance shares. Chosen over
+                                   a global mode because forgetting the toggle fails loudly
+                                   (the note appears everywhere) while the wrong mode fails
+                                   quietly (a fix that does not propagate).
   daw-cli do revert-overrides --track N --placement P
                                    clears every add and mute on one appearance, in one
                                    step — possible only because overrides are
@@ -1012,8 +1019,12 @@ fn get_extents(handle: &EngineHandle) -> i32 {
             .map(|(lpb, n, d)| format!("{{ \"lpb\": {lpb}, \"time_sig\": \"{n}/{d}\" }}"))
             .unwrap_or_else(|| "null".to_string());
         let audio = e.flags & daw_bridge::layout::UI_CLIP_EXTENT_AUDIO != 0;
+        // The appearance's own edit scope, printed for the same reason `absent` and
+        // `harmony_quantize` are: a toggle whose state cannot be read is one the interface has to
+        // guess at.
+        let local = e.flags & daw_bridge::layout::UI_CLIP_EXTENT_LOCAL_EDITS != 0;
         println!(
-            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"audio\": {}, \"start\": {}, \"end\": {}, \"grid\": {} }},",
+            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"audio\": {}, \"local_edits\": {local}, \"start\": {}, \"end\": {}, \"grid\": {} }},",
             e.placement_id, e.clip_id, e.track_id, audio, e.start_tick, e.end_tick, grid
         );
     }
@@ -2043,6 +2054,28 @@ fn main() {
                     payload.base_version = handle.clip_version_for_track(track);
                     match handle.send_command(payload) {
                         Ok(()) => { println!("{{ \"sent\": \"revert-overrides\", \"placement\": {placement} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"placement-scope") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let placement = match flag_u64(&args, "--placement", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    // Default ON: the verb exists to MARK an appearance as taking local edits,
+                    // so the bare form does the thing its name says. `--on 0` clears it.
+                    let on = flag_u64(&args, "--on", Some(1)).unwrap_or(1);
+                    let mut payload = track_structure_command(
+                        UiCommandType::SetPlacementEditScope, track);
+                    payload.value0 = placement;
+                    payload.flags = if on != 0 { 1 } else { 0 };
+                    match handle.send_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"placement-scope\", \"placement\": {placement}, \"local\": {} }}",
+                                     on != 0);
+                            0
+                        }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
