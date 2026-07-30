@@ -335,8 +335,14 @@ fn get_notes(handle: &EngineHandle, args: &[String]) -> i32 {
     for index in 0..count {
         let note = snapshot.notes[index];
         let comma = if index + 1 == count { "" } else { "," };
+        // DURATION, derived here from the published tOn/tOff rather than stored twice. Its
+        // absence was a real gap: the scheduler skips a zero-duration event outright, so a note
+        // with no length is published, saved and badge-counted while being permanently silent —
+        // and this output could not tell it from a note that sounds. A test written against it
+        // asserted the note EXISTED and passed against an engine that stored length 0.
+        let duration = note.t_off.saturating_sub(note.t_on);
         println!(
-            "    {{ \"nanotick\": {}, \"pitch\": {}, \"velocity\": {}, \"column\": {}, \
+            "    {{ \"nanotick\": {}, \"duration\": {duration}, \"pitch\": {}, \"velocity\": {}, \"column\": {}, \
              \"dev\": {}, \"delay\": {}, \"sounds_at\": {} }}{comma}",
             note.t_on, note.pitch, note.velocity, note.column,
             note.dev_nanoticks, note.delay_nanoticks,

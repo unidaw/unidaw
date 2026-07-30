@@ -6633,6 +6633,20 @@ struct TrackRuntime {
     if (!runtime) {
       return false;
     }
+    // THE OFF GESTURE IS NOT AN OVERRIDE. Velocity 0 with length 0 means "end the note
+    // sounding in this column" — it ends something on the flat stream and stores no event of
+    // its own, which is a clip-level operation. Routed through here it became an ADD carrying
+    // velocity 0 and length 0: a phantom that can never sound, is saved, and counts toward the
+    // override badge. Refuse it and say so; silently storing a note-shaped nothing is worse
+    // than answering no. Checked BEFORE the length default below, which would otherwise erase
+    // the very thing that identifies the gesture.
+    if (!deleting && velocity == 0 && duration == 0) {
+      DAW_EVENT("local_edit.rejected")
+          .field("track", trackId)
+          .field("nanotick", nanotick)
+          .field("reason", "note_off_needs_clip_scope");
+      return false;
+    }
     bool changed = false;
     std::shared_ptr<const ClipSnapshot> snapshot;
     {
@@ -6649,6 +6663,7 @@ struct TrackRuntime {
       // is no placement to hang the override on, so it is refused rather than silently
       // becoming a clip edit — which would be the opposite of what was asked for.
       daw::ProjectPlacement* target = nullptr;
+      uint64_t targetEnd = 0;
       for (auto& pl : runtime->sourcePlacements) {
         if (!pl.at.has_value()) {
           continue;
@@ -6664,6 +6679,7 @@ struct TrackRuntime {
         }
         if (nanotick >= *pl.at && nanotick < *pl.at + len) {
           target = &pl;
+          targetEnd = *pl.at + len;
           break;
         }
       }
@@ -6677,6 +6693,26 @@ struct TrackRuntime {
       // Overrides are PLACEMENT-RELATIVE, so they survive the placement being moved —
       // that is the difference between "the hat in chorus 3" and "a hat at bar 27".
       const uint64_t rel = nanotick - *target->at;
+      // A CLIP SHORTER THAN ITS PLACEMENT LOOPS, and the base notes only exist once — at
+      // offsets inside the clip. So the base-note lookup below needs the CLIP-relative tick,
+      // not the placement-relative one: with a 1-bar clip across 4 bars, a local delete
+      // anywhere in bars 2-4 compared rel (>= one bar) against every event's offset (< one
+      // bar), matched nothing, muted nothing, and returned false without a word. Adds are
+      // unaffected — they are placement-relative by design, which is what lets an add live
+      // past the clip's length instead of repeating with it.
+      //
+      // Muting by note id silences that clip note in EVERY iteration of this appearance,
+      // which is what the additive-only model can express: the override belongs to the
+      // appearance, and within the appearance the note recurs. Per-iteration muting would
+      // need the mute record to carry an iteration index.
+      uint64_t clipLen = 0;
+      for (const auto& c : runtime->ownedClips) {
+        if (c.id == target->clipId) {
+          clipLen = c.lengthNanoticks;
+          break;
+        }
+      }
+      const uint64_t clipRel = (clipLen > 0 && rel >= clipLen) ? (rel % clipLen) : rel;
       if (deleting) {
         // Deleting an ADD removes it; deleting a BASE note mutes it. Two different
         // records for what looks like one gesture, because the base note is not ours to
@@ -6701,7 +6737,7 @@ struct TrackRuntime {
             }
             for (const auto& e : c.clip.events()) {
               if (e.type != daw::MusicalEventType::Note ||
-                  e.nanotickOffset != rel ||
+                  e.nanotickOffset != clipRel ||
                   e.payload.note.pitch != pitch ||
                   e.payload.note.column != column) {
                 continue;
@@ -6718,13 +6754,32 @@ struct TrackRuntime {
           }
         }
       } else {
+        // A NOTE WITH NO LENGTH NEVER SOUNDS: the scheduler skips a zero-duration event
+        // outright and expandNoteOps returns no strikes. Clip scope already handles this — it
+        // computes a span reaching at least the end of the bar containing the note, because
+        // "a note entered past the current span still needs room to sound". Local scope stored
+        // the 0 verbatim, so the SAME gesture produced a real note through one path and a
+        // saved, badge-counted silence through the other. daw-cli defaults --duration to 0, so
+        // `do note --local --pitch 60` was exactly that gesture.
+        //
+        // Same rule as clip scope, clamped to the appearance: an override belongs to this
+        // placement and must not sound past it.
+        uint64_t addDuration = duration;
+        if (addDuration == 0) {
+          const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
+          const uint64_t barAfter = (nanotick / bar + 1) * bar;
+          addDuration = barAfter > nanotick ? barAfter - nanotick : bar;
+          if (targetEnd > nanotick && nanotick + addDuration > targetEnd) {
+            addDuration = targetEnd - nanotick;
+          }
+        }
         daw::MusicalEvent add;
         add.nanotickOffset = rel;
         add.type = daw::MusicalEventType::Note;
         add.payload.note.pitch = pitch;
         add.payload.note.velocity = velocity;
         add.payload.note.column = column;
-        add.payload.note.durationNanoticks = duration;
+        add.payload.note.durationNanoticks = addDuration;
         // A local add gets its own note id from the clip's allocator space so it can be
         // addressed (and deleted) like any other note.
         add.payload.note.noteId = nextClipId.fetch_add(1, std::memory_order_relaxed);
@@ -6739,6 +6794,15 @@ struct TrackRuntime {
       }
     }
     if (!changed) {
+      // A local edit that found its placement and then changed nothing used to return
+      // silently — which is how the loop-repeat delete above stayed hidden. A gesture that
+      // does nothing is worth one line: the caller cannot otherwise tell it from success.
+      DAW_EVENT("local_edit.noop")
+          .field("track", trackId)
+          .field("nanotick", nanotick)
+          .field("pitch", static_cast<uint32_t>(pitch))
+          .field("op", deleting ? "delete" : "add")
+          .field("reason", deleting ? "no_add_or_base_note_matched" : "duplicate_add");
       return false;
     }
     if (snapshot) {
@@ -7446,6 +7510,66 @@ struct TrackRuntime {
           sections[index].barCount = sp.barCount;
           sectionList.setSections(std::move(sections));
         }
+        // AND THE SONG-LEVEL TIMELINES. The ripple moved every placement and every automation
+        // point, and left a tempo change and a key change sitting at their absolute ticks — so
+        // inserting bars into the intro slid the material later and left the tempo change and
+        // the modulation firing in the middle of what used to follow them. The comment on the
+        // automation ripple makes exactly this argument; it simply was not applied here.
+        //
+        // NOT THE METER MAP, and that is a decision rather than another omission. The
+        // section's new tick length is computed THROUGH the meter (tickAtBar above), so
+        // shifting meter points changes the very delta that was derived from them: growing a
+        // 4-bar 4/4 intro followed by a 3/4 change measures the two new bars as 3/4, and if
+        // the change then moved with the verse those bars would be 4/4 and the material would
+        // have moved by the wrong amount. Which reading is right depends on whether the change
+        // means "the verse is in 3/4" (belongs to the section, should move) or "from bar 5 we
+        // are in 3/4" (belongs to the timeline, should not). arrange_summary_check currently
+        // pins the second reading. Picking one silently is how a song ends up off its own bar
+        // grid, so it stays as it is until that question is answered.
+        uint32_t tempoMoved = 0;
+        for (auto& pt : loadedTempoMap) {
+          // Never the anchor at 0: a tempo map without a point at the origin has no tempo
+          // before its first change.
+          if (pt.nanotick != 0 && pt.nanotick >= oldEndTick) {
+            pt.nanotick = daw::rippleTick(pt.nanotick, oldEndTick, delta);
+            ++tempoMoved;
+          }
+        }
+        if (tempoMoved > 0) {
+          std::sort(loadedTempoMap.begin(), loadedTempoMap.end(),
+                    [](const daw::ProjectTempoPoint& a, const daw::ProjectTempoPoint& b) {
+                      return a.nanotick < b.nanotick;
+                    });
+          // The provider is what the transport actually reads, so a retained map that moved
+          // and a provider that did not would play at the old tempo positions and save at the
+          // new ones — the same divergence the automation republish above exists to prevent.
+          std::vector<daw::TempoPoint> pts;
+          pts.reserve(loadedTempoMap.size());
+          for (const auto& pt : loadedTempoMap) {
+            pts.push_back({pt.nanotick, pt.bpm});
+          }
+          tempoProvider.setMap(std::move(pts));
+        }
+        uint32_t harmonyMoved = 0;
+        {
+          std::lock_guard<std::mutex> hlock(harmonyMutex);
+          for (auto& ev : harmonyEvents) {
+            if (ev.nanotick >= oldEndTick) {
+              ev.nanotick = daw::rippleTick(ev.nanotick, oldEndTick, delta);
+              ++harmonyMoved;
+            }
+          }
+          if (harmonyMoved > 0) {
+            std::sort(harmonyEvents.begin(), harmonyEvents.end(),
+                      [](const daw::HarmonyEvent& a, const daw::HarmonyEvent& b) {
+                        return a.nanotick < b.nanotick;
+                      });
+          }
+        }
+        if (harmonyMoved > 0) {
+          harmonyDirty.store(true, std::memory_order_release);
+          harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
+        }
         for (auto* rt : trackSnap) {
           if (!rt || rt->removed.load(std::memory_order_acquire)) {
             continue;
@@ -7526,7 +7650,9 @@ struct TrackRuntime {
             .field("section", sp.sectionId)
             .field("bars", sp.barCount)
             .field("delta_ticks", static_cast<int64_t>(delta))
-            .field("placements_moved", plan.moved);
+            .field("placements_moved", plan.moved)
+            .field("tempo_points_moved", tempoMoved)
+            .field("harmony_events_moved", harmonyMoved);
         return;
       }
 

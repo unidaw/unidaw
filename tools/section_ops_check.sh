@@ -40,11 +40,20 @@ TMP="$(mktemp -d)"
 SHM="/socchk_$$"
 trap 'rm -rf "$TMP"' EXIT
 
-# <name> <sections-json> <placements-json>
+# <name> <sections-json> <placements-json> [tempo-json] [harmony-json]
 mk() {
+  set +u
+  # NOT `${4:-[ { ... } ]}`: a `}` inside a ${var:-default} closes the expansion, so that
+  # default produced `[ { "nanotick": 0, "bpm": 120 ` plus a stray `]}` — malformed JSON, a
+  # load that silently failed, and a check that died with no output at all.
+  local tempo="$4"
+  local harmony="$5"
+  [ -n "$tempo" ] || tempo='[ { "nanotick": 0, "bpm": 120 } ]'
+  [ -n "$harmony" ] || harmony='[]'
+  set -u
   cat > "$TMP/$1.uniproj.json" <<EOF
 { "schema_version": 4, "meta": { "name": "$1" }, "nanoticks_per_quarter": $Q,
-  "tempo_map": [ { "nanotick": 0, "bpm": 120 } ], "harmony_timeline": [],
+  "tempo_map": $tempo, "harmony_timeline": $harmony,
   "sections": $2,
   "clips": [ { "id": 1, "name": "c", "length": $BAR, "kind": "symbolic", "notes": [
       { "nanotick": 0, "duration": 240000, "pitch": 60, "velocity": 100,
@@ -59,6 +68,17 @@ mk ripple \
   '[ { "id": 1, "name": "intro", "bars": 4 }, { "id": 2, "name": "verse", "bars": 8 } ]' \
   "[ { \"clip_id\": 1, \"id\": 1, \"at\": 0, \"length\": $BAR, \"notes\": [], \"chords\": [], \"mutes\": [] },
      { \"clip_id\": 1, \"id\": 2, \"at\": $((4 * BAR)), \"length\": $BAR, \"notes\": [], \"chords\": [], \"mutes\": [] } ]"
+# A SECOND ripple fixture carrying a tempo change and a key change on BOTH sides of the
+# boundary, so the ripple has something to carry and something it must leave alone.
+mk timelines \
+  '[ { "id": 1, "name": "intro", "bars": 4 }, { "id": 2, "name": "verse", "bars": 8 } ]' \
+  "[ { \"clip_id\": 1, \"id\": 1, \"at\": 0, \"length\": $BAR, \"notes\": [], \"chords\": [], \"mutes\": [] },
+     { \"clip_id\": 1, \"id\": 2, \"at\": $((4 * BAR)), \"length\": $BAR, \"notes\": [], \"chords\": [], \"mutes\": [] } ]" \
+  "[ { \"nanotick\": 0, \"bpm\": 120 },
+     { \"nanotick\": $((2 * BAR)), \"bpm\": 90 },
+     { \"nanotick\": $((4 * BAR)), \"bpm\": 140 } ]" \
+  "[ { \"nanotick\": $((1 * BAR)), \"root\": 0, \"scale_id\": 0, \"flags\": 0 },
+     { \"nanotick\": $((4 * BAR)), \"root\": 7, \"scale_id\": 0, \"flags\": 0 } ]"
 mk blocked \
   '[ { "id": 1, "name": "intro", "bars": 8 } ]' \
   "[ { \"clip_id\": 1, \"id\": 9, \"at\": $((6 * BAR)), \"length\": $BAR, \"notes\": [], \"chords\": [], \"mutes\": [] } ]"
@@ -72,10 +92,13 @@ fail() { echo "  FAIL: $*"; kill "$ENG" 2>/dev/null || true; wait "$ENG" 2>/dev/
 
 # Where is placement N right now, per the engine's published extents?
 at_of() {
-  cli get extents 2>/dev/null \
+  # `|| true`: with no matching extent the grep exits 1, and under `set -o pipefail` inside
+  # `P2="$(at_of 2)"` that killed the whole script before it printed a single line — so a load
+  # that had failed looked identical to a crash.
+  { cli get extents 2>/dev/null \
     | tr '{' '\n' \
     | grep "\"placement\": $1," \
-    | sed -n 's/.*"start": \([0-9]*\).*/\1/p' | head -1
+    | sed -n 's/.*"start": \([0-9]*\).*/\1/p' | head -1; } || true
 }
 
 cli do load ripple >/dev/null 2>&1 || true
@@ -153,5 +176,62 @@ MOVED="$(grep -c '"event":"section.length_set"' "$TMP/engine.log" || true)"
 grep -q '"placements_moved":1' "$TMP/engine.log" || \
   fail "a successful ripple did not report how many placements it moved"
 echo "  successful ripples report their moved count"
+
+# ---- THE SONG-LEVEL TIMELINES RIPPLE TOO.
+#
+# The ripple moved placements and automation and left a tempo change and a key change sitting
+# at their absolute ticks — so inserting bars into the intro slid the material later and left
+# the tempo change and the modulation firing in the middle of what used to follow them. The
+# comment on the automation ripple makes exactly that argument; it was never applied to these.
+#
+# The fixture straddles the boundary DELIBERATELY: a tempo point at bar 2 and a key change at
+# bar 1 are inside the intro and must not move, while the tempo point and key change at bar 4
+# are at the boundary and must. A test with only later-side entries would pass an engine that
+# moved everything, which is just as wrong and much harder to notice.
+SHM2="/socchk2_$$"
+( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --run-seconds 20 >"$TMP/engine2.log" 2>&1 ) &
+ENG=$!
+for _ in $(seq 1 120); do
+  if grep -q 'starting threads' "$TMP/engine2.log" 2>/dev/null; then break; fi
+  sleep 0.25
+done
+cli() { DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
+cli do load timelines >/dev/null 2>&1 || true
+for _ in $(seq 1 80); do
+  if grep -q '"event":"project.load"' "$TMP/engine2.log" 2>/dev/null; then break; fi
+  sleep 0.25
+done
+sleep 1
+# Grow the intro 4 -> 8 bars: everything at or after bar 4 moves by 4 bars.
+cli do section length --id 1 --bars 8 >/dev/null 2>&1 || true
+sleep 1.3
+cli do save timeout >/dev/null 2>&1 || true
+sleep 1.6
+kill "$ENG" 2>/dev/null || true; wait "$ENG" 2>/dev/null || true
+
+TL="$(python3 - "$TMP/timeout.uniproj.json" <<'PYT'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+t = " ".join("%d:%g" % (p["nanotick"], p["bpm"]) for p in doc.get("tempo_map", []))
+h = " ".join("%d:%d" % (e["nanotick"], e["root"]) for e in doc.get("harmony_timeline", []))
+print("TEMPO[%s] HARMONY[%s]" % (t, h))
+PYT
+)"
+WANT_TL="TEMPO[0:120 $((2 * BAR)):90 $((8 * BAR)):140] HARMONY[$((1 * BAR)):0 $((8 * BAR)):7]"
+[ "$TL" = "$WANT_TL" ] || fail "after growing the intro by 4 bars the song timelines should be
+        $WANT_TL
+        got
+        $TL
+        — a tempo or key change at the boundary must move with the material, and one inside
+        the section must not"
+echo "  timelines: the tempo change and key change at the boundary moved 4 bars, the earlier ones did not"
+
+# The engine says how much it carried, so a no-op is distinguishable from a ripple that worked.
+grep -q '"tempo_points_moved":1' "$TMP/engine2.log" || \
+  fail "the ripple did not report moving exactly 1 tempo point"
+grep -q '"harmony_events_moved":1' "$TMP/engine2.log" || \
+  fail "the ripple did not report moving exactly 1 harmony event"
+echo "  and reports what it carried (1 tempo point, 1 key change)"
 
 echo "section_ops_check: PASS"
