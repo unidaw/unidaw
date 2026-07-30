@@ -180,34 +180,62 @@ S04 o1/3 p85 pan+22 ret3 d1/6
 Order-free, nothing outranks anything, one undo entry — and it is the identical string an agent
 writes. One grammar, one editor, no second notation to keep in step.
 
-**READING AT A GLANCE — the mask, always on, every row of every track.**
+**READING AT A GLANCE — the mask: one character per family THAT TRACK USES.**
 
-Six fixed slots, one character each, never shifting:
+Not fixed global slots. That was my proposal and Jaakko replaced it with a better one: *"what
+if we didn't have fixed slots, just mask whatever effects are in the column? Renoise has a lot
+of pattern effects."*
 
-| idx | family | glyphs |
-|---|---|---|
-| 0 | sound slot | `·` `S` |
-| 1 | offset | `·` `O` |
-| 2 | probability | `·` `P` |
-| 3 | pan | `·` `<` `=` `>` |
-| 4 | retrigger | `·` `R` |
-| 5 | delay | `·` `D` |
+He is right, and fixed slots was me importing a constraint from a design that is already
+straining under it. The Renoise survey turns up two failures that come straight from fixing the
+column set:
+
+- *"Instrument — 2 chars. CANNOT be hidden either (a standing user request)."* Renoise users
+  are asking for exactly what Jaakko is worried about and cannot get it.
+- The volume sub-column is **overloaded** with ten commands (`Ix Ox Ux Dx Gx Cx Bx Qx Yx Rx`),
+  and panning hosts most of them again. So a Renoise note cannot carry volume *and*
+  probability in the same note column — one slot, and they fight for it. That is the same
+  silent-loss bug this document exists to fix, canonised as a file format.
+
+**THE RULE: a track's slot set is the set of op families used ANYWHERE IN THAT TRACK, in
+`OP_SCHEMA` order.**
+
+- a track using nothing → zero slots, zero width. The sparse case costs nothing, not even dots.
+- a track using probability and retrigger → two slots: `PR`, `P·`, `·R`, `··`
+- a track using six → six
+- the vocabulary may grow to twenty-five, because no single track uses twenty-five
+
+**Per TRACK, not per NOTE.** That is the one refinement that carries the design. If the slots
+were per-note — just compact whatever that row happens to have — positions would shift from row
+to row and scanning down a column would be impossible, which is the direction anyone actually
+scans. Per-track keeps position meaningful exactly where it is read.
+
+A family declares a *glyph function*, not a letter, so a multi-state family still costs one
+character: pan renders `<` `=` `>`.
+
+**And this collapses the mask and the value columns into ONE mechanism.** Same slot set, same
+order, same derivation — the mask is simply the columns rendered at one character each:
 
 ```
-       │ T05 break          ▸ ││ T06 vox            ▸ │
- row   │ ln │ note  │vel│ ops  ││ ln │ note  │vel│ ops  │
-───────┼────┼───────┼───┼──────┼┼────┼───────┼───┼──────┤
- 0000  │ ▌  │ C-4   │112│SOP>RD││ ▏  │ D-3   │ 96│··P·RD│
- 0001  │ ▐  │ ···   │ ··│      ││ ▏  │ ···   │ ··│      │
- 0002  │ ▌  │ D#4   │ 96│SOP<R·││ ▏  │ D-3   │104│S··=·D│
+collapsed                          expanded
+T05 break [SOPRD]                  T05 break
+row  note  vel  ops                row  note  vel  slot offset prob ret dly
+0000 C-4   112  SOP>RD             0000 C-4   112   04  37/256   60   3  1/6
+0001 ···    ··                     0001 ···    ··   ··      ··   ··  ··   ··
+0002 D#4    96  SOP<R·             0002 D#4    96   04     1/3   85   3   ··
 ```
 
-`SOP>RD` is all six at once, none outranking another. Because the positions never move, the eye
-learns "slot 4 is retrigger" and a whole pattern can be scanned for *which rows carry retrigs*
-with nothing opened. 128 possible strings, interned at module load, so the draw path writes a
-pointer and allocates nothing.
+That is a ZOOM, not a second feature. One width rule, one concept, one place the order is
+defined — and no way for the two to disagree, because there are not two of them.
 
-Blank — not dotted — on a track with no ops, so an ordinary kit track carries no new ink.
+**Two costs, stated rather than buried:**
+
+1. The slot set grows the first time a family is used in a track — one character of reflow.
+   Make it **grow-only within a session**, so deleting the last `p60` does not shrink the
+   column under the hands that are still working in it. It re-fits on load.
+2. Position means different things in different tracks, so cross-track scanning weakens. The
+   track header carries the legend (`[SOPRD]`), which is where the eye goes anyway when the
+   question is "what does this track do".
 
 **SCANNING A VALUE — bring one or two forward, on the track being tuned.**
 
