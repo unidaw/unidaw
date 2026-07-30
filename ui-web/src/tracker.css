@@ -310,8 +310,16 @@
      wrong the moment anything else wanted the row below it — it covered the
      breadcrumb, and an absolutely positioned element covering a flex sibling
      shows no sign of doing so. Height stays here because it is this bar's own. */
-  height: 38px; display: flex; align-items: center; gap: 18px;
+  /* 12, not 18. MEASURED: the bar's cells came to 1455px and eleven 18px gaps plus the
+     padding made 1681 in a 1680px window, so the tempo readout wrapped to "BPM" on its own
+     line and the entry cluster to two. A tighter rhythm is also what the design has — it
+     groups by separator rules rather than by air. */
+  height: 38px; display: flex; align-items: center; gap: 12px;
   padding: 0 14px; box-sizing: border-box;
+  /* NOWRAP, so running out of room truncates the flexible cell instead of growing the bar's
+     height. A wrapped chrome does not merely look wrong: `height: 38px` clips it, so the
+     second line is half visible and the first is pushed off centre. */
+  flex-wrap: nowrap;
   background: var(--uni-surface-header-bg);
   border-bottom: 1px solid var(--uni-rule-gutter);
   font-family: var(--font-chrome); z-index: 4; user-select: none;
@@ -320,8 +328,10 @@
 .ch-name { font-weight: 600; font-size: 13px; letter-spacing: .16em; color: var(--base-text); }
 .ch-ver  { font-size: 9px; letter-spacing: .14em; color: var(--base-neutral-600); }
 .ch-group {
-  display: flex; align-items: center; gap: 10px;
-  padding-left: 14px; border-left: 1px solid var(--uni-rule-gutter);
+  display: flex; align-items: center; gap: 8px;
+  padding-left: 12px; border-left: 1px solid var(--uni-rule-gutter);
+  /* Every cell keeps its own content on one line. The BAR yields, not the words in it. */
+  white-space: nowrap;
 }
 .ch-btn {
   display: grid; place-items: center; gap: 6px; grid-auto-flow: column;
@@ -337,8 +347,74 @@
   font-family: var(--font-mono); font-size: 12px; letter-spacing: .04em;
   color: var(--base-text); min-width: 78px;
 }
-.ch-meta { font-size: 10px; letter-spacing: .06em; color: var(--base-neutral-600); }
-.ch-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.ch-meta { font-size: 10px; letter-spacing: .06em; color: var(--base-neutral-600);
+            white-space: nowrap; }
+
+/* The tempo above the meter, as the design has it. Two lines in one cell, which is
+   what buys the horizontal room the telemetry needs — the bar is 1680px wide and
+   every readout in it competes for the same row. */
+.ch-stack { display: flex; flex-direction: column; gap: 1px; line-height: 1.15;
+             white-space: nowrap; }
+.ch-stack-row { display: flex; align-items: baseline; }
+.ch-groove { color: var(--base-accent-ramp-700); }
+
+/* LOOP and CLICK: state you can read at a glance rather than a control you have to
+   open something to check. `.on` is the accent-bordered lit form the design uses for
+   an active loop; `.unavailable` is the third state — drawn, in place, and NOT a
+   thing you can press, because the capability does not exist in the engine yet.
+   Distinct from disabled-because-of-context: this says "this belongs here and is not
+   built", and saying it is better than a bar that looks complete. */
+/* The entry cluster in the row below. `margin-left: auto` puts it at the right end, before
+   the key readout the breadcrumb already pins there; the group's left rule goes, because it
+   separates top-bar cells and on its own reads as a stray vertical line. */
+/* The entry cluster in the row below.
+ *
+ * `order: 2` and not DOM order. The breadcrumb's own cells are created LAZILY, on the first
+ * draw, so appending the cluster at construction put it BEFORE them — and `margin-left: auto`
+ * then pushed the breadcrumb to the right instead of the cluster. Flex `order` states the
+ * intention directly and cannot be undone by whatever gets appended next.
+ *
+ * The group's left rule goes: it separates top-bar cells, and on its own in a quieter row it
+ * reads as a stray vertical line. */
+.ch-entry-row {
+  order: 2;
+  margin-left: auto;
+  padding-left: 0; border-left: none;
+  gap: 10px;
+}
+
+.ch-chip {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em;
+  padding: 2px 6px; border-radius: 3px; box-sizing: border-box;
+  border: 1px solid var(--uni-rule-gutter);
+  color: var(--base-neutral-600);
+  white-space: nowrap;
+}
+.ch-loop { border-color: var(--base-accent); color: var(--base-accent-ramp-300); }
+.ch-chip.unavailable {
+  border-style: dashed;
+  border-color: var(--base-neutral-900);
+  color: var(--base-neutral-800);
+  cursor: not-allowed;
+}
+/* The same for a BUTTON that is drawn and not built — the record button. Dashed, dim,
+   and it must not respond to hover: a hover highlight on something that cannot be
+   pressed is an invitation. */
+.ch-btn.unavailable, .ch-btn:disabled {
+  border-style: dashed; border-color: var(--base-neutral-900);
+  color: var(--base-neutral-800); cursor: not-allowed;
+}
+.ch-btn.unavailable:hover, .ch-btn:disabled:hover {
+  border-color: var(--base-neutral-900); color: var(--base-neutral-800);
+}
+
+/* The machine's own numbers, pushed to the right so they sit before the tabs. `auto`
+   here and NOT on `.ch-right`: whichever element takes the free space defines where
+   the right-hand group begins, and having two of them means the second never moves. */
+.ch-telemetry { margin-left: auto; gap: 12px; }
+.ch-saved { border-color: var(--base-neutral-800); }
+
+.ch-right { display: flex; align-items: center; gap: 12px; }
 .ch-scale { font-family: var(--font-mono); font-size: 11px; color: var(--base-accent-ramp-300); }
 .ch-key   { font-size: 9px; letter-spacing: .08em; color: var(--base-accent-ramp-700); }
 .ch-link  { font-family: var(--font-mono); font-size: 9px; letter-spacing: .06em;
@@ -347,7 +423,13 @@
 
 /* The mode row: one button per surface, with the key that reaches it. The keys
    are printed because a shortcut nobody can discover is not a shortcut. */
-.ch-tabs { display: flex; align-items: center; gap: 2px; margin-left: 4px; }
+/* ONE container round all of them, as the design draws it: the tabs are a set you
+   choose from, and a row of unbounded buttons reads as five separate controls that
+   happen to be adjacent. */
+.ch-tabs {
+  display: flex; align-items: center; gap: 2px;
+  padding: 2px; border: 1px solid var(--uni-rule-gutter); border-radius: 5px;
+}
 .ch-tab {
   display: flex; align-items: baseline; gap: 5px;
   padding: 3px 8px;

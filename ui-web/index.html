@@ -80,6 +80,14 @@
 <script type="module">
 import { Tracker } from './src/tracker.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
+/*
+ * `ticksPerBar` WAS NEVER IMPORTED, and `dockApi.ticksPerBar()` has been throwing
+ * "ticksPerBar is not defined" since it shipped — a console method nobody had called. Found
+ * because the chrome's new loop readout calls it on every frame, which turned a latent
+ * reference into an error on the first draw. The ratchet in unit.mjs checks that every method
+ * the console CALLS exists on dockApi; nothing checked that dockApi's own bodies resolve.
+ */
+import { ticksPerBar } from './src/meter.js';
 import M from './design/out/tokens.js';
 import { connectEngine, noEngine } from './src/engine.js';
 import { Chain } from './src/chain.js';
@@ -130,6 +138,10 @@ const paneBot = document.getElementById('paneBot');
 const paneEdge = document.getElementById('paneEdge');
 const trackerPane = document.getElementById('trackerPane');
 const chrome = createChrome(document.getElementById('chrome'), {
+  // The entry cluster mounts in the breadcrumb row. See createChrome: the top bar is out of
+  // horizontal room once the design's readouts are in it, and the design has no entry state
+  // there in either view.
+  secondaryHost: document.getElementById('crumb'),
   onView: (v) => { state.view = v; if (v === 'piano') fitPiano(); state.focus = 'centre'; schedule(); },
   onPlay: () => cmd('play'),
   onStop: () => stopOrPanic(),
@@ -2338,7 +2350,11 @@ const dockApi = {
   setView: (v) => { if (v) { state.view = v; if (v === 'piano') fitPiano(); } schedule(); return state.view; },
   load: (n) => { forgetPatcherGraph(); forgetChains();
                  const ok = conn && conn.loadProject(n); if (ok) state.currentProject = n; return ok; },
-  save: (n) => { const ok = conn && conn.saveProject(n); if (ok) state.currentProject = n; return ok; },
+  save: (n) => {
+    const ok = conn && conn.saveProject(n);
+    if (ok) { state.currentProject = n; confirmSaved(n); }
+    return ok;
+  },
   listProjects: () => conn && conn.send({ type: 'list' }),
   /**
    * Play, pause, stop — and stop TWICE is panic.
@@ -3416,6 +3432,49 @@ function currentKey() {
 }
 
 /**
+ * WHEN THE PROJECT FILE WAS LAST WRITTEN, in `performance.now()` terms. -1 for never.
+ *
+ * NOT "when a save was sent". `SaveProject`'s outcome goes to the engine's own log and there
+ * is no published result — no `uiSaveSeq`/`uiSaveOk` pair like the loader got — so an ack
+ * means the command was queued and nothing more. A chip reading "saved 40s ago" on the
+ * strength of that would be confident about exactly the failure it exists to catch.
+ *
+ * So this is set from the FILE. The sidecar stats it and reports its age, and the chip counts
+ * from there.
+ */
+let savedAtMs = -1;
+/** Which save we are waiting to confirm, so a stale reply cannot claim a newer one. */
+let savePending = '';
+
+/**
+ * Ask whether a save actually landed, a moment after sending it.
+ *
+ * The delay is for the engine's own write, which happens on its command thread — asking
+ * immediately would stat a file that is about to be written and report the PREVIOUS save's
+ * age, which is the most misleading answer available.
+ *
+ * Two chances, because a busy engine can take longer than one interval and "not yet" and
+ * "never" must not be confused. If neither answers, the chip says nothing and the reject line
+ * says the save could not be confirmed — which is the honest end state, not silence.
+ */
+function confirmSaved(name) {
+  savePending = name;
+  let tries = 0;
+  const ask = () => {
+    if (savePending !== name) return;      // a newer save has taken over
+    if (!conn || !conn.send({ type: 'savedstate', name })) return;
+    if (++tries < 2) setTimeout(ask, 1200);
+    else setTimeout(() => {
+      if (savePending !== name) return;
+      savePending = '';
+      state.reject = `could not confirm that ${name} was written`;
+      schedule();
+    }, 1500);
+  };
+  setTimeout(ask, 700);
+}
+
+/**
  * The chrome, from state. One place, called by every surface's draw.
  *
  * It was five hand-copied call sites building the same object, and adding a
@@ -3453,7 +3512,10 @@ const _chromeOpts = { playheadTick: 0, transport: 0, linkText: '', octave: 0,
                       editStep: 0, velocity: 100, rejectText: '', viewName: '',
                       keyName: '', digitMode: '', tempoMilliBpm: 120000,
                       tempoPointCount: 0, meter: null,
-                      editMode: true, followPlayhead: false, generating: '' };
+                      editMode: true, followPlayhead: false, generating: '',
+                      loopStartBar: 0, loopEndBar: 0, grooveMilli: 0,
+                      blockSize: 0, sampleRateHz: 0, docVersion: -1,
+                      savedAgoSeconds: -1 };
 function updateChrome() {
   const o = _chromeOpts;
   o.playheadTick = engine ? engine.playheadTick : 0;
@@ -3478,6 +3540,53 @@ function updateChrome() {
   o.tempoMilliBpm = engine && engine.tempoMilliBpm ? engine.tempoMilliBpm : 120000;
   o.tempoPointCount = engine ? engine.tempoPointCount : 0;
   o.meter = songMeter();
+  /*
+   * THE LOOP, IN BARS. From `loopShown` rather than the engine directly, so a drag in
+   * progress reads as the span the pointer is on — the ruler and the chip must not disagree
+   * about where the loop is while it is being set.
+   *
+   * Bars are 1-based and the tick is 0-based, so bar = tick / barTicks + 1. The END bar is
+   * the last bar the loop COVERS, which is the bar the end tick sits in less one when it
+   * lands exactly on a boundary: a loop of bars 1 to 3 ends at the start of bar 4, and
+   * printing "1-4" for it would claim a bar the loop does not play.
+   */
+  {
+    const lp = loopOverride() || (engine ? { start: engine.loopStart, end: engine.loopEnd } : null);
+    const barTicks = ticksPerBar(songMeter());
+    if (lp && lp.end > lp.start && barTicks > 0) {
+      o.loopStartBar = Math.floor(lp.start / barTicks) + 1;
+      o.loopEndBar = Math.max(o.loopStartBar, Math.ceil(lp.end / barTicks));
+    } else {
+      o.loopStartBar = 0; o.loopEndBar = 0;
+    }
+  }
+  /*
+   * THE GROOVE: the CURSOR TRACK's swing, in thousandths as the engine holds it.
+   *
+   * The cursor's track and not the song's, because swing is per lane — there is no song-level
+   * groove to report, and picking track 0 would show a number that belongs to a track you may
+   * not be looking at.
+   */
+  o.grooveMilli = (() => {
+    // `swing`, not `swingMilli`. `quantizeOf` returns `{grid, strength, swing}` and the first
+    // version read a name that does not exist — so the groove was permanently absent and
+    // looked exactly like a straight lane. The third guessed field name this session; looked
+    // up now, as the others were.
+    const q = quantizeOf(state.cursor.track);
+    return q ? (q.swing || 0) : 0;
+  })();
+  o.blockSize = engine ? (engine.blockSize || 0) : 0;
+  o.sampleRateHz = engine ? (engine.sampleRateHz || 0) : 0;
+  o.docVersion = engine ? engine.clipVersion : -1;
+  /*
+   * HOW LONG AGO THE SAVE WAS, in whole seconds, or -1 for "never in this session".
+   *
+   * Recomputed here rather than ticked by a timer: this runs on every frame the app draws
+   * anyway, and a second timer whose only job is to age a string is a second thing to stop
+   * when the tab is hidden.
+   */
+  o.savedAgoSeconds = savedAtMs > 0
+    ? Math.max(0, Math.floor((performance.now() - savedAtMs) / 1000)) : -1;
   o.editMode = state.editMode;
   o.followPlayhead = state.followPlayhead;
   // The same phrase the device card uses, put where it can be SEEN. See the
@@ -5812,6 +5921,31 @@ conn = WANTS_ENGINE ? connectEngine({
           : a.agent === 'done' ? (a.text || '')
           : a.text;
         if (body) dock.log(kind, body);
+        schedule();
+        return;
+      }
+    }
+    /*
+     * A SAVE, CONFIRMED FROM THE FILE. Claimed before the generic error branch, and by a
+     * field name of its own, for the reason that branch's comment gives: this channel is
+     * shared and matching on a substring is how one shape starts eating another's.
+     */
+    if (typeof msg === 'string' && msg.indexOf('"saved"') >= 0) {
+      let parsed = null;
+      try { parsed = JSON.parse(msg); } catch (e) { /* not ours after all */ }
+      if (parsed && parsed.saved) {
+        const r = parsed.saved;
+        if (r.name === savePending) {
+          if (r.exists) {
+            savePending = '';
+            // From the file's OWN age, not from now: the engine wrote it some hundreds of
+            // milliseconds ago and the chip should not restart its clock on our asking.
+            savedAtMs = performance.now() - (Number(r.age_seconds) || 0) * 1000;
+            state.reject = null;
+          }
+          // Not existing yet is NOT an answer — the next attempt may find it. Silence here
+          // and the timeout above is what turns "not yet" into a reported failure.
+        }
         schedule();
         return;
       }

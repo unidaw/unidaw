@@ -296,6 +296,23 @@ impl EngineHandle {
 
     /// The published loop span in nanoticks (start, end) — mirrors the engine's
     /// SetLoopRange, so the UI can draw the loop region.
+    /// The audio device's block size in frames and its rate in Hz.
+    ///
+    /// Both zero until the engine has opened a device, which is a state worth forwarding
+    /// rather than defaulting: a latency readout of "0.0ms" says the machine is perfect,
+    /// and what it means is that nothing has started yet.
+    ///
+    /// The rate is rounded to an integer here. It is a double in the header and 44100 or
+    /// 48000 in practice, and a readout that says 47999.9 would be worse than one that
+    /// cannot say a fractional rate at all.
+    pub fn device_block(&self) -> (u32, u32) {
+        unsafe {
+            let block = std::ptr::read_volatile(&(*self.header).block_size);
+            let rate = std::ptr::read_volatile(&(*self.header).sample_rate);
+            (block, if rate.is_finite() && rate > 0.0 { rate.round() as u32 } else { 0 })
+        }
+    }
+
     pub fn loop_range(&self) -> (u64, u64) {
         unsafe {
             (

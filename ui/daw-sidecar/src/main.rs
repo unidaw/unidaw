@@ -62,7 +62,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 const WIRE_LANES: usize = 16;
 
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 19;
+const WIRE_VERSION: u16 = 20;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -76,7 +76,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 164;
+const FULL_HEADER_BYTES: usize = 172;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
 const NOTE_BYTES: usize = 40;
 
@@ -370,6 +370,11 @@ struct Frame {
     /// can sit past the spine, and it plays and is unnamed.
     sections_truncated: u32,
     song_end_tick: u64,
+    /// The audio device's block size in frames and its rate in Hz — the two facts the
+    /// latency readout is made of. Zero until the engine has opened a device, which is
+    /// distinct from "a block of zero": the chrome draws nothing rather than "0.0ms".
+    block_size: u32,
+    sample_rate_hz: u32,
     /// Real clip placements from the engine. placement_id, clip_id, track,
     /// flags, start/end tick, name. Loose session placements are excluded
     /// upstream. `flags` bit0 is UI_CLIP_EXTENT_AUDIO — an audio region, which
@@ -556,6 +561,20 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&(f.sections_truncated.min(0xffff) as u16).to_le_bytes()); // 150
     out.extend_from_slice(&f.arrange_version.to_le_bytes());         // 152
     out.extend_from_slice(&f.song_end_tick.to_le_bytes());           // 156, to 164
+    /*
+     * THE AUDIO DEVICE'S BLOCK AND RATE, so the chrome can say what the latency IS.
+     *
+     * Derived rather than published: `blockSize / sampleRate` is the output latency in
+     * seconds and there is no second answer to it, so sending the two facts is better than
+     * sending a computed millisecond figure — a person tuning the buffer wants to see the
+     * block size itself, and anything else that needs the rate has it.
+     *
+     * The rate as an INTEGER Hz. It is a double in the header and 44100 or 48000 in
+     * practice; four bytes of float precision on a value that is always an integer would
+     * cost the same and invite a readout that says 47999.9.
+     */
+    out.extend_from_slice(&f.block_size.to_le_bytes());               // 164
+    out.extend_from_slice(&f.sample_rate_hz.to_le_bytes());           // 168, to 172
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
     // variable section and nothing here noticed.
@@ -885,6 +904,10 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     // not this one.
     out.names = h.read_track_names();
 
+    let (bs, sr) = h.device_block();
+    out.block_size = bs;
+    out.sample_rate_hz = sr;
+
     let (ls, le) = h.loop_range();
     out.loop_start = ls;
     out.loop_end = le;
@@ -1212,6 +1235,50 @@ fn new_project(dir: &str, name: &str) -> Result<(), &'static str> {
     std::fs::create_dir_all(dir).map_err(|_| "cannot create the project directory")?;
     std::fs::write(&path, doc).map_err(|_| "cannot write the project")?;
     Ok(())
+}
+
+/// HAS THIS PROJECT ACTUALLY BEEN WRITTEN, and how long ago?
+///
+/// The FILE, not an ack. `SaveProject`'s outcome goes to `DAW_EVENT("project.save")` and
+/// nowhere a browser can read — there is no `uiSaveSeq`/`uiSaveOk` pair mirroring the one the
+/// loader got in v15 — so an ack means "the command was queued" and nothing more. A chip
+/// reading "saved 40s ago" on the strength of that would be confident for exactly the failure
+/// it exists to catch: the write that did not happen.
+///
+/// So this stats the artefact. `age_seconds` is how old the file is, `bytes` is its size, and
+/// `exists: false` is the answer when nothing was written — which is a fact the interface can
+/// act on rather than an absence it has to guess about.
+///
+/// The name is sanitised the way a save is: a caller cannot use this to stat `../../etc`.
+fn saved_state(dir: &str, name: &str) -> String {
+    if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+        return "{\"error\":\"that is not a project name\"}".to_string();
+    }
+    let path = std::path::Path::new(dir).join(format!("{name}.uniproj.json"));
+    let Ok(md) = std::fs::metadata(&path) else {
+        return format!("{{\"saved\":{{\"exists\":false,\"name\":\"{}\"}}}}", escape_json(name));
+    };
+    let age = md.modified().ok()
+        .and_then(|t| t.elapsed().ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("{{\"saved\":{{\"exists\":true,\"name\":\"{}\",\"age_seconds\":{},\"bytes\":{}}}}}",
+            escape_json(name), age, md.len())
+}
+
+/// A name as a JSON string body. Filesystem names reach the client, and a quote or a backslash
+/// in one would produce a reply the page silently fails to parse — losing the WHOLE message
+/// rather than one field.
+fn escape_json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' | '\\' => { out.push('\\'); out.push(c); }
+            c if c < ' ' => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn list_projects(dir: &str) -> String {
@@ -2852,6 +2919,20 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         }
                         if is_type(&t, "list") {
                             let reply = list_projects(&projects);
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+                        /*
+                         * "Was this project actually written?" — answered from the FILE.
+                         *
+                         * A save's outcome reaches the engine's log and nothing else, so an
+                         * ack says the command was queued and no more. The chrome asks this
+                         * after a save and prints the file's own age, which is a fact about
+                         * the artefact rather than a claim about a message.
+                         */
+                        if is_type(&t, "savedstate") {
+                            let name = parse_str(&t, "\"name\"").unwrap_or("").to_string();
+                            let reply = saved_state(&projects, &name);
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }

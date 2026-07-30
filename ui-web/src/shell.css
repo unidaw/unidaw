@@ -77,6 +77,10 @@
   overflow: hidden;
   white-space: nowrap;
 }
+/* The breadcrumb's own cells sort BEFORE anything mounted into this row from elsewhere — the
+   chrome's entry cluster is `order: 2`. Stated on both sides so neither has to know the
+   other's DOM position. */
+#crumb > span { order: 1; }
 #crumb .cr-sep { color: var(--uni-rule-track); }
 #crumb .cr-strong { color: var(--uni-text-instrument); }
 #crumb .cr-right { margin-left: auto; color: var(--base-neutral-600); }

@@ -64,8 +64,27 @@ export const VIEW_TABS = [
   { view: 'mixer', label: 'MIXER', key: 'F8' },
 ];
 
+/**
+ * @param {HTMLElement} host the top bar
+ * @param {HTMLElement} [secondaryHost] the row below it, for the entry cluster
+ *
+ * WHY THE ENTRY CLUSTER GOES SOMEWHERE ELSE. Measured: the top bar's cells came to 1583px in
+ * a 1680px window once the design's loop chip, telemetry and saved chip were in it, and the
+ * entry cluster is 348 of those — so something had to leave, and the design's own answer is
+ * that entry state is not top-bar material at all (it has none there, in either view).
+ *
+ * The row below is where it goes rather than the design's bottom status bar, because that bar
+ * does not exist yet and building it is its own piece. This keeps the state VISIBLE — a
+ * tracker where you cannot see the octave you are typing into writes the wrong notes silently
+ * — while taking it out of a bar it no longer fits in. Same elements, same guards, mounted one
+ * row down; nothing about how they update changes.
+ *
+ * Without a secondary host it stays in the top bar, which is what the fixtures do — and they
+ * are narrower than 1680, so this must not depend on the room being there.
+ */
 export function createChrome(host, { onPlay, onStop, onScales, onView,
-                                     onAddTrack, onRemoveTrack } = {}) {
+                                     onAddTrack, onRemoveTrack,
+                                     secondaryHost = null } = {}) {
   host.className = 'chrome';
 
   const brand = document.createElement('div');
@@ -78,7 +97,22 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
   transport.className = 'ch-group';
   const play = button('ch-play', 'ph ph-play', 'Play / pause');
   const stop = button('', 'ph ph-stop', 'Stop');
-  transport.append(play, stop);
+  /*
+   * THE THIRD BUTTON, and it is DISABLED on purpose.
+   *
+   * The design has three and the engine has no record command at all — nothing on the
+   * command enumeration arms a take. Drawing it live would be the worst version: a button
+   * that looks like every other one and does nothing, which is the failure this file has
+   * shipped three times (splitter.js unbuilt, delDevice unreachable, onNav never passed).
+   *
+   * Drawn and marked unavailable instead, with the reason in its title. That is a different
+   * claim from an ordinary button — it says "this belongs here and is not built" — and it is
+   * the honest one while the capability is a backend request.
+   */
+  const rec = button('ch-rec', 'ph ph-record', 'Record — the engine has no record command yet');
+  rec.disabled = true;
+  rec.classList.add('unavailable');
+  transport.append(play, stop, rec);
 
   const pos = document.createElement('div');
   pos.className = 'ch-group';
@@ -101,7 +135,28 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
   // already honest. See meter.js.
   const sig = label('ch-meta', meterText(DEFAULT_METER));
   let lastMeterKey = -1;
-  pos.append(posLabel, tempo, sig);
+  /*
+   * THE GROOVE, which is the cursor track's lane SWING and not a separate setting.
+   *
+   * On the second line beside the meter, as the design has it. Swing is the one quantize
+   * field whose effect is a feel rather than a position, and it was previously visible only
+   * on the lane badge in the tracker — so in the arrangement or the mixer there was no way
+   * to see that the track you were listening to was swung.
+   *
+   * Absent, not zero, when the lane is straight: "groove 0%" is a setting and no groove is
+   * the absence of one, and printing the first for the second fills the bar with noise.
+   */
+  const groove = label('ch-meta ch-groove', '');
+  let lastGroove = -2;
+  // Two lines, in one cell. `ch-stack` puts the tempo above the meter, which is the design's
+  // arrangement and buys the horizontal room the telemetry needs.
+  const posMeta = document.createElement('div');
+  posMeta.className = 'ch-stack';
+  const posMeta2 = document.createElement('div');
+  posMeta2.className = 'ch-stack-row';
+  posMeta2.append(sig, groove);
+  posMeta.append(tempo, posMeta2);
+  pos.append(posLabel, posMeta);
 
   // Entry state. A tracker where you cannot see the octave you are typing into
   // is a tracker that writes the wrong notes silently.
@@ -183,8 +238,37 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
   const genWarn = label('ch-mode ch-gen', '');
   let lastGen = null;
   let lastEdit = null, lastFollow = null;
-  entry.append(viewLabel, octLabel, stepLabel, velLabel, digitMode, editMode,
-               followMode, genWarn);
+  /*
+   * NO VIEW LABEL HERE. The tabs say which surface is showing, in the accent, and the
+   * breadcrumb says it again in words — a third copy in the entry cluster was one more thing
+   * competing for a row that is now shared with the breadcrumb. It stays constructed because
+   * `update` writes to it and a null would be a fourth branch in a hot path; it is simply not
+   * mounted, which is cheaper than making every write conditional.
+   */
+  entry.append(octLabel, stepLabel, velLabel, digitMode, editMode, followMode, genWarn);
+
+  /*
+   * THE LOOP, as a readout of the bars it spans.
+   *
+   * A READOUT and not a toggle, and the reason is the engine's: a loop is expressed by its
+   * range and `SetLoopRange` refuses `end <= start`, so there is no command that means
+   * "stop looping". A chip that looked like a toggle and could only ever be switched ON
+   * would be worse than one that only reports. Asked backend for a way to clear a loop.
+   *
+   * Bars, not ticks, because that is what the design says and what a person means by a loop.
+   */
+  const loopChip = label('ch-chip ch-loop', '');
+  let lastLoopKey = '';
+  /*
+   * THE METRONOME, which the engine does not have.
+   *
+   * Not a single command anywhere arms a click, so this cannot be wired at all — and the
+   * design puts it here, which makes its absence worth SHOWING rather than leaving the bar
+   * looking complete. Marked unavailable, with the reason in the title, exactly like the
+   * record button.
+   */
+  const clickChip = label('ch-chip ch-click unavailable', 'CLICK');
+  clickChip.title = 'Metronome — the engine has no click yet';
 
   const scales = document.createElement('button');
   scales.className = 'ch-btn ch-scales';
@@ -200,10 +284,43 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
   // exists rather than a console warning.
   const reject = label('ch-reject', '');
 
+  /*
+   * THE MACHINE, in the two numbers that are actually knowable.
+   *
+   * `lat` is `blockSize / sampleRate`, which IS the output latency and has no second answer
+   * — and both facts now cross the wire so it is read rather than assumed. `shm` is the
+   * document version, which is what tells you an edit landed.
+   *
+   * THE DESIGN ALSO ASKS FOR `dsp N%` AND `pdc N smp` AND THOSE ARE NOT DRAWN, because the
+   * engine publishes neither. A DSP meter reading 0% would say the machine is idle while it
+   * struggles, and a PDC of 0 samples would say the compensation is off when Movement 4
+   * landed it — both are worse than a gap, and both are backend requests. The bar is short
+   * here on purpose and the reason is written down.
+   */
+  const telemetry = document.createElement('div');
+  telemetry.className = 'ch-group ch-telemetry';
+  const latLabel = label('ch-meta', '');
+  const shmLabel = label('ch-meta', '');
+  // Two labels in a flex row with a gap, not two strings in one node: they change at entirely
+  // different rates — the latency once per device open, the version on every edit — and one
+  // node would rebuild both strings at the rate of the faster one.
+  telemetry.append(latLabel, shmLabel);
+  let lastLat = -1, lastShm = -1;
+  /*
+   * WHEN THE PROJECT WAS LAST SAVED, in words.
+   *
+   * "40s ago" rather than a clock time, because the question a person is asking is how much
+   * work is at risk, and that is an interval. It says nothing at all until a save has
+   * succeeded — an unsaved session reading "saved never" is noise, and reading "saved 0s
+   * ago" would be a lie.
+   */
+  const savedChip = label('ch-chip ch-saved', '');
+  let lastSavedText = '';
+
   const right = document.createElement('div');
   right.className = 'ch-right';
   const link = label('ch-link', 'connecting');
-  right.append(reject, link, scales);
+  right.append(reject, link);
 
   // Track structure. In the chrome rather than in the tracker and the arrange
   // view separately: tracks are a property of the song, not of the surface you
@@ -219,7 +336,34 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
   const delTrk = button('', 'ph ph-minus', 'Remove the cursor’s track');
   tracks.append(addTrk, delTrk);
 
-  host.append(brand, transport, pos, entry, tracks, tabs, right);
+  /*
+   * THE ORDER IS THE DESIGN'S.
+   *
+   * brand · transport · position · loop/click · the harmony chip · entry state · [gap] ·
+   * telemetry · saved · tabs. The harmony chip moves from the far right to just after the
+   * transport cluster, which is where the design puts it — and that is not decoration: what
+   * key the song is in belongs next to what bar you are on, not beside the connection state.
+   *
+   * The ENTRY cluster stays. The design has no entry state in the top bar at all — it lives
+   * in a bottom status bar this build does not have yet — and moving it out before that bar
+   * exists would delete the only place the octave you are typing into is visible.
+   */
+  /*
+   * ...AND THE TABS ARE LAST, flush to the bar's right padding, as the design has them. The
+   * connection state and the reject line go BEFORE the telemetry rather than after the tabs:
+   * `.ch-telemetry` is what takes the free space, so anything after it is pinned to the right
+   * edge, and there is only room for one thing to be pinned there.
+   */
+  host.append(brand, transport, pos, loopChip, clickChip, scales, tracks,
+              right, telemetry, savedChip, tabs);
+  // The entry cluster, one row down when there is one. `.ch-entry-row` drops the group's left
+  // rule, which is a separator between top-bar cells and reads as a stray line on its own.
+  if (secondaryHost) {
+    entry.classList.add('ch-entry-row');
+    secondaryHost.appendChild(entry);
+  } else {
+    host.insertBefore(entry, tracks);
+  }
 
   if (onPlay) play.addEventListener('click', onPlay);
   if (onStop) stop.addEventListener('click', onStop);
@@ -241,7 +385,69 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
              velocity = 100, rejectText = '', viewName = '', keyName = '',
              tempoMilliBpm = 120000, tempoPointCount = 0, meter = DEFAULT_METER,
              digitMode: digitModeText = '', generating = '',
-             editMode: editOn = true, followPlayhead: followOn = false }) {
+             editMode: editOn = true, followPlayhead: followOn = false,
+             // The design's telemetry and its two chips. Every one of them is a fact from
+             // the engine and every one is ABSENT rather than defaulted when the engine has
+             // not said — see each guard below for why that distinction is load-bearing.
+             loopStartBar = 0, loopEndBar = 0, grooveMilli = 0,
+             blockSize = 0, sampleRateHz = 0, docVersion = -1, savedAgoSeconds = -1 }) {
+      /*
+       * THE LOOP, in bars. Absent when there is none — a chip reading "LOOP 1-1" for a loop
+       * that does not exist is a claim about the song, not an empty field.
+       */
+      const loopKey = loopEndBar > loopStartBar ? `${loopStartBar}\u2013${loopEndBar}` : '';
+      if (loopKey !== lastLoopKey) {
+        lastLoopKey = loopKey;
+        loopChip.firstChild.nodeValue = loopKey ? `LOOP ${loopKey}` : '';
+        // The chip is hidden rather than emptied, so it takes no width when there is no loop
+        // and nothing beside it shifts when one appears... except it does shift, which is why
+        // this is a display toggle and not an opacity one: an invisible chip that still holds
+        // its space is a permanent gap in a bar that is short of room.
+        loopChip.style.display = loopKey ? '' : 'none';
+      }
+      /*
+       * THE GROOVE. Thousandths in, percent out, and ABSENT at zero: a straight lane has no
+       * groove, and "groove 0%" is a setting where nothing is the absence of one.
+       */
+      if (grooveMilli !== lastGroove) {
+        lastGroove = grooveMilli;
+        // NON-BREAKING spaces round the separator. A leading ordinary space in a text node
+        // collapses to nothing against the sibling beside it, so this read "4/4· groove 20%".
+        groove.firstChild.nodeValue = grooveMilli
+          ? `\u00a0\u00b7\u00a0groove ${Math.round(grooveMilli / 10)}%` : '';
+      }
+      /*
+       * THE LATENCY, derived from the device's own block and rate.
+       *
+       * Nothing at all until both have arrived. Zero block or zero rate means the engine has
+       * not opened a device, and "0.0ms" would report a perfect machine for a machine that
+       * has not started — the exact shape of lie this bar exists to avoid.
+       */
+      const latTenths = (blockSize > 0 && sampleRateHz > 0)
+        ? Math.round((blockSize / sampleRateHz) * 10000) : -1;
+      if (latTenths !== lastLat) {
+        lastLat = latTenths;
+        latLabel.firstChild.nodeValue = latTenths < 0 ? ''
+          : `${blockSize} smp \u00b7 lat ${(latTenths / 10).toFixed(1)}ms`;
+      }
+      if (docVersion !== lastShm) {
+        lastShm = docVersion;
+        shmLabel.firstChild.nodeValue = docVersion < 0 ? '' : `doc v${docVersion}`;
+      }
+      /*
+       * WHEN IT WAS LAST SAVED. Silent until a save has succeeded: a session that has never
+       * been saved reading "saved never" is noise, and "saved 0s ago" would be a lie about
+       * work that is entirely at risk.
+       */
+      const savedText = savedAgoSeconds < 0 ? ''
+        : savedAgoSeconds < 60 ? `saved ${savedAgoSeconds}s ago`
+        : savedAgoSeconds < 3600 ? `saved ${Math.floor(savedAgoSeconds / 60)}m ago`
+        : `saved ${Math.floor(savedAgoSeconds / 3600)}h ago`;
+      if (savedText !== lastSavedText) {
+        lastSavedText = savedText;
+        savedChip.firstChild.nodeValue = savedText;
+        savedChip.style.display = savedText ? '' : 'none';
+      }
       if (digitModeText !== lastDigitMode) {
         lastDigitMode = digitModeText;
         digitMode.firstChild.nodeValue = digitModeText;

@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 19;
+export const WIRE_VERSION = 20;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 164;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
+const HEADER_BYTES = 172;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -201,6 +201,14 @@ export function createStore() {
      * section: material can sit past the spine, and it plays and is unnamed.
      */
     arrangeVersion: 0, songEnd: 0,
+    /**
+     * The audio device's block size in frames and its rate in Hz.
+     *
+     * Both 0 until the engine has opened a device, and that is a STATE and not a default:
+     * a latency readout of "0.0ms" says the machine is perfect, when what it means is that
+     * nothing has started. The chrome draws nothing while they are zero.
+     */
+    blockSize: 0, sampleRateHz: 0,
     /**
      * Moves when a lane's quantize changes and NEVER when a note does — backend
      * kept it off the clip version deliberately, since quantize moves no authored
@@ -687,6 +695,8 @@ export function decode(buf, store) {
     const generation = v.getUint32(152, true);
     const have = Math.max(0, Math.min(want, (buf.byteLength - at) / SECTION_BYTES | 0));
     store.songEnd = Number(v.getBigUint64(156, true));
+    store.blockSize = v.getUint32(164, true);
+    store.sampleRateHz = v.getUint32(168, true);
     store.sectionsTruncated = v.getUint16(150, true);
     if (generation !== store.arrangeVersion || have !== store.sectionCount) {
       store.arrangeVersion = generation;

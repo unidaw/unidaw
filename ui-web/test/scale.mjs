@@ -26,6 +26,15 @@ const PROJECT = process.argv[2] || 'stress-128';
 const BARS = Number(process.argv[3] || (PROJECT === 'stress-512' ? 512 : 128));
 const BAR = 3840000;
 const BUDGET = 16.6;
+/**
+ * A STACK YOU STARTED YOURSELF, at the default port. This suite does not spawn one — it is a
+ * hand-run measurement against a session you are already looking at, which is the point: the
+ * numbers mean something because the engine has real plugins in it.
+ *
+ * Said here because running it with nothing on 8173 used to die with "Cannot read properties
+ * of null" from inside a wait loop, which reads as a broken app rather than a missing stack.
+ * It now says what is absent.
+ */
 const PAGE = 'http://127.0.0.1:8173/index.html';
 
 const br = await chromium.launch({ channel: 'chrome', headless: false });
@@ -45,14 +54,27 @@ let notes = 0;
 for (let i = 0; i < 160; i++) {
   await page.waitForTimeout(250);
   const n = await page.evaluate(() => window.__uni.engineStats().lastSeq);
+  /*
+   * `loadStatus()` IS NULL until the first frame arrives, and this dereferenced it — so on any
+   * run where the socket takes longer than 250ms to deliver a frame, the suite died with
+   * "Cannot read properties of null" before making a single assertion. Not a failure about the
+   * app: a crash in the waiting.
+   */
   const st = await page.evaluate(() => window.__uni.loadStatus());
-  if (st.seq > 0 && st.ok && i > 8) { notes = n; break; }
+  if (st && st.seq > 0 && st.ok && i > 8) { notes = n; break; }
 }
 const loadMs = Date.now() - t0;
 const stat = await page.evaluate(() => ({
   reject: window.__uni.state().reject,
   load: window.__uni.loadStatus(),
 }));
+// Likewise here: an absent status is "the engine never spoke", which is a different report
+// from "the load was refused" and must not read as a crash.
+if (!stat.load) {
+  console.log('  BLOCKED  the engine published no frame at all — nothing to measure.');
+  console.log('           This suite needs a stack you started: tools/webstack.sh, then rerun.');
+  process.exit(1);
+}
 if (stat.load.ok !== 1) {
   console.log(`  the engine refused ${PROJECT}: ${JSON.stringify(stat)}`);
   await br.close();

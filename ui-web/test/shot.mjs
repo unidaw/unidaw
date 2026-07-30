@@ -416,8 +416,20 @@ for (const scene of SCENES) {
     const km = await page.evaluate(() => window.__uni.keymap());
     ok(hp.rows === km.global + km.surface,
        `overlay renders the whole keymap: ${hp.rows} of ${km.global + km.surface}`);
-    const shown = await page.evaluate(() => document.querySelector('.ch-view')?.textContent);
-    ok(shown === hp.surface.toUpperCase(), `chrome names the surface: ${shown} vs ${hp.surface}`);
+    /*
+     * WHICH SURFACE IS SHOWING, from the LIT TAB.
+     *
+     * This read `.ch-view`, a text label in the entry cluster, which is no longer mounted: the
+     * top bar ran out of horizontal room once the design's readouts went in, the tabs and the
+     * breadcrumb both already said the same thing, and a third copy was the one to go.
+     *
+     * The claim is unchanged and worth keeping — the chrome must say what you are looking at —
+     * so it is asserted against the answer that survived. The tab is the LOUDER of the two,
+     * and `data-view` is the engine-facing name, which is what `hp.surface` is.
+     */
+    const shown = await page.evaluate(() =>
+      document.querySelector('.ch-tab.on')?.dataset.view);
+    ok(shown === hp.surface, `a lit tab names the surface: ${shown} vs ${hp.surface}`);
     console.log(`  ${hp.surface}: ${hp.rows} keys in ${hp.sections} sections`);
     await shoot(scene);
     continue;
