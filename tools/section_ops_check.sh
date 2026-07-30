@@ -234,4 +234,81 @@ grep -q '"harmony_events_moved":1' "$TMP/engine2.log" || \
   fail "the ripple did not report moving exactly 1 harmony event"
 echo "  and reports what it carried (1 tempo point, 1 key change)"
 
+# ---- A GROW THAT WOULD SPLIT A PLACEMENT IS REFUSED. The shrink already refuses anything
+# OVERLAPPING the bars it removes, on the argument that a straddler would be silently truncated.
+# The grow did not, and left the straddler exactly where it was while everything after it moved —
+# so the inserted bars landed INSIDE it: its notes go on sounding across bars that are supposed
+# to be new and empty, and it now overlaps whatever slid away.
+#
+# There is no answer to pick silently. Split it? Stretch it? Accept the overlap? Each is a
+# different musical intention and the command carries none of them.
+python3 - "$TMP/straddle.uniproj.json" "$Q" <<'PYS'
+import json, sys
+out, Q = sys.argv[1], int(sys.argv[2])
+BAR = Q * 4
+def routing():
+    r = lambda k="none": {"kind": k, "track_id": 0, "input_id": 0}
+    return {"midi_in": r(), "midi_out": r(), "audio_in": r(),
+            "audio_out": r("master"), "pre_fader_send": True}
+clip = {"id": 1, "name": "c", "length": BAR, "kind": "symbolic",
+        "notes": [{"nanotick": 0, "duration": Q, "pitch": 60, "velocity": 100,
+                   "column": 0, "note_id": 1}]}
+# Section 1 ends at bar 5 (4 * BAR). Placement 1 spans bars 4-6, straddling it; placement 2 sits
+# wholly after, so a grow would move it while the straddler stayed.
+tr = {"track_id": 0, "name": "A", "harmony_quantize": False, "lines_per_beat": 4,
+      "mixer": {"gain_db": 0.0, "pan": 0.0, "mute": False, "solo": False},
+      "routing": routing(), "device_chain": [], "mod_links": [],
+      "placements": [{"clip_id": 1, "id": 1, "at": 3 * BAR, "length": 2 * BAR,
+                      "notes": [], "chords": [], "mutes": []},
+                     {"clip_id": 1, "id": 2, "at": 6 * BAR, "length": BAR,
+                      "notes": [], "chords": [], "mutes": []}]}
+json.dump({"schema_version": 4, "meta": {"name": "straddle"}, "nanoticks_per_quarter": Q,
+           "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [],
+           "sections": [{"id": 1, "name": "intro", "bars": 4},
+                        {"id": 2, "name": "verse", "bars": 8}],
+           "clips": [clip], "tracks": [tr]}, open(out, "w"))
+PYS
+
+SHM3="/socchk3_$$"
+( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --run-seconds 18 >"$TMP/engine3.log" 2>&1 ) &
+ENG=$!
+for _ in $(seq 1 120); do
+  if grep -q 'starting threads' "$TMP/engine3.log" 2>/dev/null; then break; fi
+  sleep 0.25
+done
+cli() { DAW_UI_SHM_NAME="$SHM3" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
+cli do load straddle >/dev/null 2>&1 || true
+for _ in $(seq 1 80); do
+  if grep -q '"event":"project.load"' "$TMP/engine3.log" 2>/dev/null; then break; fi
+  sleep 0.25
+done
+sleep 1
+cli do section length --id 1 --bars 6 >/dev/null 2>&1 || true
+sleep 1.3
+cli do save straddleout --force >/dev/null 2>&1 || true
+sleep 1.6
+kill "$ENG" 2>/dev/null || true; wait "$ENG" 2>/dev/null || true
+
+grep '"event":"section.rejected"' "$TMP/engine3.log" | grep -q '"reason":"straddling_placement"' || \
+  fail "growing a section whose end falls INSIDE a placement was not refused. What happens
+        instead is invisible: the straddler keeps its start and length while everything after it
+        moves away, so the inserted bars end up inside it and it overlaps the material that
+        slid: $(grep -o '"event":"section[a-z._]*"[^}]*' "$TMP/engine3.log" | tail -1)"
+grep '"event":"section.rejected"' "$TMP/engine3.log" | tail -1 | grep -q '"blocking_placement":1' || \
+  fail "the refusal did not name placement 1 as the straddler"
+ST="$(python3 - "$TMP/straddleout.uniproj.json" <<'PYST'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+pl = " ".join("%d@%d" % (p["id"], p["at"]) for p in doc["tracks"][0]["placements"])
+sec = " ".join("%d:%d" % (s["id"], s["bars"]) for s in doc.get("sections", []))
+print("PL[%s] SEC[%s]" % (pl, sec))
+PYST
+)"
+WANT_ST="PL[1@$((3 * BAR)) 2@$((6 * BAR))] SEC[1:4 2:8]"
+[ "$ST" = "$WANT_ST" ] || \
+  fail "the refused grow still changed something: expected $WANT_ST, got $ST. A refusal has to be
+        whole — a half-applied ripple across tracks is a corrupted arrangement with no undo entry"
+echo "  refuse: a grow whose boundary falls inside placement 1 is refused, and nothing moved"
+
 echo "section_ops_check: PASS"

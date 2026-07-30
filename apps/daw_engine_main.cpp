@@ -8162,16 +8162,30 @@ struct TrackRuntime {
         }
         const auto plan = daw::planRipple(spans, oldEndTick, delta);
         if (plan.outcome != daw::RippleOutcome::Ok) {
+          const bool straddling =
+              plan.outcome == daw::RippleOutcome::RefusedStraddlingPlacement;
+          const char* reason =
+              straddling ? "straddling_placement" : "content_in_removed_bars";
           DAW_EVENT("section.rejected")
               .field("op", "set_section_length")
               .field("section", sp.sectionId)
-              .field("reason", "content_in_removed_bars")
+              .field("reason", reason)
               .field("blocking_placement", plan.blockingPlacementId);
-          std::cerr << "UI: SetSectionLength refused — placement "
-                    << plan.blockingPlacementId
-                    << " lives in the bars this would remove. Shrinking would stack it "
-                       "onto one tick or delete it; empty those bars first." << std::endl;
-          historyAppend("set_section_length", "rejected:content_in_removed_bars",
+          if (straddling) {
+            std::cerr << "UI: SetSectionLength refused — placement "
+                      << plan.blockingPlacementId
+                      << " crosses this section's end, so the inserted bars would land INSIDE "
+                         "it: it would keep its start and length while everything after it "
+                         "moved away. Split or shorten it first — whether those bars belong "
+                         "inside it or after it is a musical decision this command cannot make."
+                      << std::endl;
+          } else {
+            std::cerr << "UI: SetSectionLength refused — placement "
+                      << plan.blockingPlacementId
+                      << " lives in the bars this would remove. Shrinking would stack it "
+                         "onto one tick or delete it; empty those bars first." << std::endl;
+          }
+          historyAppend("set_section_length", (std::string("rejected:") + reason).c_str(),
                         0xFFFFFFFFu, 0, "");
           return;
         }
@@ -8329,11 +8343,57 @@ struct TrackRuntime {
 
       // The other four touch the spine only, so no placement moves and no clip version
       // changes — a rename must not invalidate anyone's in-flight note edit.
+      //
+      // BUT "the spine only" is not the same as "nothing changed". Inserting, removing or
+      // reordering a section moves every LATER boundary while the material stays at its ticks,
+      // so a placement that was in the intro can end up in the verse — which is precisely the
+      // outcome SetSectionLength REFUSES a shrink to avoid. The four ops disagree with each
+      // other about whether that is acceptable, and picking a side is a product decision (it is
+      // written up in ARCHITECTURE_REVIEW section 8 for Jaakko).
+      //
+      // What is not a decision: it must not be SILENT. So the re-sectioning is COUNTED — by
+      // resolving the spine before and after and asking, for each placement, whether the
+      // section containing it changed identity — and reported. A number a caller can see is the
+      // difference between a surprising behaviour and an invisible one.
+      std::vector<std::pair<uint32_t, uint64_t>> placementTicks;  // (id, at)
+      {
+        for (auto* rt : snapshotTracks()) {
+          if (!rt || rt->removed.load(std::memory_order_acquire)) {
+            continue;
+          }
+          std::lock_guard<std::mutex> tlock(rt->trackMutex);
+          for (const auto& pl : rt->sourcePlacements) {
+            if (pl.at.has_value()) {
+              placementTicks.emplace_back(pl.id, *pl.at);
+            }
+          }
+        }
+      }
       bool ok = false;
       const char* what = "";
+      uint32_t resectioned = 0;
       {
         std::lock_guard<std::mutex> slock(sectionMutex);
         auto sections = sectionList.sections();
+        // Which section holds each placement BEFORE the edit. 0 = past the last section, which
+        // is a real place to be: material there is playing, it just has no name.
+        const daw::TimeSignature songSig = songDefaultSig();
+        std::vector<uint32_t> before;
+        before.reserve(placementTicks.size());
+        {
+          const auto resolved = sectionList.resolve(songSig);
+          for (const auto& [id, at] : placementTicks) {
+            (void)id;
+            uint32_t owner = 0;
+            for (const auto& r : resolved) {
+              if (at >= r.startTick && at < r.endTick) {
+                owner = r.id;
+                break;
+              }
+            }
+            before.push_back(owner);
+          }
+        }
         if (commandType == daw::UiCommandType::AddSection) {
           if (sp.barCount == 0) {
             reject("zero_bars");
@@ -8386,14 +8446,38 @@ struct TrackRuntime {
         }
         if (ok) {
           sectionList.setSections(std::move(sections));
+          const auto resolved = sectionList.resolve(songSig);
+          for (size_t i = 0; i < placementTicks.size(); ++i) {
+            uint32_t owner = 0;
+            for (const auto& r : resolved) {
+              if (placementTicks[i].second >= r.startTick &&
+                  placementTicks[i].second < r.endTick) {
+                owner = r.id;
+                break;
+              }
+            }
+            if (owner != before[i]) {
+              ++resectioned;
+            }
+          }
         }
       }
       if (ok) {
         sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+        if (resectioned > 0) {
+          std::cerr << "UI: " << daw::uiCommandTypeName(commandType) << " moved the boundaries "
+                    << "under " << resectioned
+                    << " placement(s) — they are in a different section than they were, with no "
+                       "note changed. The material did not move; the spine did."
+                    << std::endl;
+        }
         DAW_EVENT("section.changed")
             .field("op", daw::uiCommandTypeName(commandType))
             .field("section", sp.sectionId)
-            .field("what", what);
+            .field("what", what)
+            // How much material now sits in a different section. 0 for a rename, and for an
+            // append past the end where nothing follows.
+            .field("resectioned", resectioned);
         historyAppend(daw::uiCommandTypeName(commandType), "received", 0xFFFFFFFFu, 0, "");
       }
       return;

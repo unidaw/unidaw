@@ -343,18 +343,60 @@ new feature's rule should have reached.
   currently pins the second reading. Picking one silently is how a song ends up off its own bar
   grid, so nothing moves until you decide.
 
-- **The extent caps still truncate silently.** `kUiMaxClipExtents` went 64 → 256 and the
-  overflow is still a bare `break` with no count and no event, while the arrange region in the
-  same change *does* publish truncation counts. And `kUiMaxAudioClips = 64; // ==
-  kUiMaxClipExtents` is now a false comment: a project with more than 64 audio placements
-  publishes up to 256 extents and only 64 audio clips, so the rails draw boxes with no waveform
-  and the header asserts the two are equal. Raising it changes the region size, so it wants
-  batching with the next contract bump.
+- **DECISION NEEDED: the four section ops disagree about re-sectioning.** `SetSectionLength`
+  RIPPLES — it moves every placement at or after the boundary — and refuses a shrink whose
+  removed bars hold anything, on the argument written out on `planRipple`: material inside those
+  bars would not move, the later boundaries would slide over it, and a placement that was in the
+  intro would silently be in the verse. `AddSection`, `RemoveSection` and `MoveSection` cause
+  exactly that outcome and allow it. Inserting a 4-bar section at index 0 moves every later
+  boundary while the material stays at its ticks.
 
-- **Nothing publishes what automation actually PLAYED.** The engine keeps a `paramMirror` of
-  the last emitted value per param but does not publish it, which is why the ripple/playback
-  divergence above could only be found by reading code — every automation test asserts on the
-  saved file. Publishing it would also serve the UI.
+  Two readings, and they are both defensible:
+
+  1. *Add/Remove/Move are LABEL operations.* The spine names spans; naming a new one does not
+     move music. Then `SetSectionLength` is the odd one out for rippling at all, and its refusal
+     is protecting against something the other three do freely.
+  2. *A section's bar count is a length of arrangement.* Then adding a section INSERTS that many
+     bars and the music after it moves, exactly as lengthening one does — and Remove should
+     refuse when its bars are occupied, for the same reason a shrink does.
+
+  My reading is (2) for Add and Remove, because the model already says a position is derived from
+  the lengths before it, and inserting a length is the same geometric act as extending one.
+  `MoveSection` is genuinely harder — reordering sections of unequal length would have to permute
+  the material, which is a much larger feature than a label reorder — so it may want to refuse
+  outright when anything follows it.
+
+  Nothing has been changed behaviourally, because picking silently is the failure mode this
+  whole section is about. What HAS changed: the re-sectioning is now COUNTED and reported
+  (`section.changed` carries `resectioned`, plus a stderr line), so the behaviour is visible
+  while the question is open. Verified: a rename reports 0, an append past the end reports 0, and
+  inserting a section at index 0 of a two-placement project reports 2.
+
+- **RESOLVED: the extent caps report their truncation, and the false comment is now true.**
+  `UiClipExtentRegion` carries a `truncated` count and the audio region a `clipsTruncated`, both
+  surfaced by `daw-cli get extents`; `kUiMaxAudioClips` really is `kUiMaxClipExtents` (256) as
+  its comment always claimed. *The gap it closed:* the overflow was a bare `break` with no count
+  and no event while the arrange region in the same change did publish counts, and a project with
+  more than 64 audio placements published up to 256 extents and only 64 audio clips — so the
+  rails drew boxes with no waveform in the tail and nothing said why. Covered by
+  `tools/extent_truncation_check.sh`.
+
+- **RESOLVED: automation has a read-back, and it publishes what PLAYS.** v28 adds
+  `UiAutomationLaneRegion` (the standing, version-gated lane list) and four seqlock slots that
+  answer per-lane point queries the CALLER addresses. Both are filled from the RT track
+  SNAPSHOT, not from `rt->track` — which is the whole point, and was measured both ways: break
+  the ripple's snapshot republish and `tools/automation_readback_check.sh` fails with the old
+  ticks; leave that bug in place but publish from the model and all its properties pass over a
+  broken engine. A model-sourced read-back would have agreed with the saved file and certified
+  the bug.
+
+  *Deliberately not published:* the resolved value at the playhead. Interpolation belongs to
+  whoever draws the curve; a published resolved value is a second implementation of it that can
+  disagree with what plays, which is the class of bug this read-back exists to expose.
+
+  It immediately paid for itself: the shrink refusal guarding placements but not automation
+  (a point at the boundary collapsing onto the one at the new end, two points becoming one) was
+  found and fixed with it, and could not have been asserted from a test before it existed.
 
 ### Fixed after the first pass
 

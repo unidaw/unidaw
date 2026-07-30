@@ -311,6 +311,16 @@ inline std::vector<Section> migrateSectionsFromMeterMap(
 enum class RippleOutcome {
   Ok,
   RefusedContentInVacatedRange,
+  // A GROW with a placement STRADDLING the boundary. The shrink already refuses anything
+  // overlapping the range it removes, for the reason stated above; the grow did not, and left
+  // the straddler exactly where it was while everything after it moved. So the inserted bars
+  // appear INSIDE that placement: its notes go on sounding across bars that are supposed to be
+  // new and empty, and it now overlaps whatever moved.
+  //
+  // There is no right answer to pick silently. Split it? Stretch it? Leave it and accept the
+  // overlap? Each is a different musical intention and the command carries none of them.
+  // Refusing says so and leaves the decision where it belongs.
+  RefusedStraddlingPlacement,
 };
 
 struct RippleResult {
@@ -345,6 +355,18 @@ inline RippleResult planRipple(
     for (const auto& [id, at, end] : spans) {
       if (end > vacatedStart && at < fromTick) {
         result.outcome = RippleOutcome::RefusedContentInVacatedRange;
+        result.blockingPlacementId = id;
+        return result;
+      }
+    }
+  }
+  if (delta > 0) {
+    // Straddling the boundary the bars are inserted AT. `at >= fromTick` moves and `at <
+    // fromTick` does not, so a span crossing it is split by the edit without being split by
+    // anything: it keeps its start and its length while the material after it slides away.
+    for (const auto& [id, at, end] : spans) {
+      if (at < fromTick && end > fromTick) {
+        result.outcome = RippleOutcome::RefusedStraddlingPlacement;
         result.blockingPlacementId = id;
         return result;
       }
