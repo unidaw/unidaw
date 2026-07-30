@@ -1955,6 +1955,9 @@ struct ClipExtentInfo {
   // UI can badge a placement that differs from its clip — without it, "this chorus is
   // not quite the others" is invisible until you look at every note.
   uint32_t overrideCount = 0;
+  // M2.57: this appearance has an ALTERNATE clip to swap to (a draft). Published so the A/B can
+  // be offered; an alternate nobody can see is the same as not having one.
+  bool hasAlternate = false;
   // Whether this appearance takes edits LOCALLY (ProjectPlacement::localEdits). Published so the
   // UI can show which placement is in that state; a toggle whose state cannot be read is one the
   // interface has to guess at.
@@ -3478,6 +3481,9 @@ struct TrackRuntime {
         extFlags |= daw::packClipExtentOverrides(ext.overrideCount);
         if (ext.localEdits) {
           extFlags |= daw::kUiClipExtentLocalEdits;
+        }
+        if (ext.hasAlternate) {
+          extFlags |= daw::kUiClipExtentHasAlternate;
         }
         // Pack the clip's own musical grid into the spare flag bits (0 => the reader
         // falls back to the song meter). Clamp + refuse loudly per the three rules.
@@ -5193,6 +5199,7 @@ struct TrackRuntime {
       ext.overrideCount =
           static_cast<uint32_t>(pl.adds.size() + pl.mutes.size());
       ext.localEdits = pl.localEdits;
+      ext.hasAlternate = pl.alternateClipId != 0;
       rt.clipExtents.push_back(std::move(ext));
     }
     // M1.13: the clip the UI draws and the clip that SOUNDS are already two objects —
@@ -5827,23 +5834,30 @@ struct TrackRuntime {
       // preserve the arrangement's structure (multiple placements, per-placement
       // overrides), the M3.2 bug the reroute fixes.
       if (!trackPlacements.empty()) {
-        for (const auto& pl : trackPlacements) {
-          bool present = false;
-          for (const auto& c : document.clips) {
-            if (c.id == pl.clipId) {
-              present = true;
-              break;
-            }
+        // EVERY CLIP A PLACEMENT NAMES, and a placement names TWO: the one it plays and its
+        // ALTERNATE. Collecting only clipId dropped the alternate from the file — so an agent's
+        // draft survived until you saved, and was gone when you reopened, with the placement
+        // still carrying an alternate_clip_id pointing at nothing. Accepted, played, and lost:
+        // the exact shape of the mod links and the multi-out stems before them.
+        auto emitClip = [&](uint32_t clipId) {
+          if (clipId == 0) {
+            return;
           }
-          if (present) {
-            continue;
+          for (const auto& c : document.clips) {
+            if (c.id == clipId) {
+              return;
+            }
           }
           for (const auto& c : trackOwnedClips) {
-            if (c.id == pl.clipId) {
+            if (c.id == clipId) {
               document.clips.push_back(c);
-              break;
+              return;
             }
           }
+        };
+        for (const auto& pl : trackPlacements) {
+          emitClip(pl.clipId);
+          emitClip(pl.alternateClipId);
         }
         track.placements = std::move(trackPlacements);
       } else if (!trackClip.events().empty()) {
@@ -10058,6 +10072,128 @@ struct TrackRuntime {
       } else {
         applyRemoveNote(payload.trackId, noteNanotick, pitch, flags, true);
       }
+    } else if (payload.commandType ==
+                   static_cast<uint16_t>(daw::UiCommandType::ForkPlacementClip) ||
+               payload.commandType ==
+                   static_cast<uint16_t>(daw::UiCommandType::SwapPlacementClip) ||
+               payload.commandType ==
+                   static_cast<uint16_t>(daw::UiCommandType::ClearPlacementAlternate)) {
+      // M2.57 SCRATCH CLIPS. value0 = placementId.
+      //
+      // The problem: an agent that writes into your clip leaves you undoing its work, with its
+      // edits interleaved with yours in one undo stack and no way to hear the two side by side.
+      // The model already had the right primitive — a clip is CONTENT and a placement is an
+      // APPEARANCE — so "the agent's version" is just another clip, and comparing is retargeting
+      // the appearance.
+      //
+      // WHAT PLAYS IS ALWAYS clipId. There is deliberately no "auditioning" flag: a second fact
+      // about which clip you are hearing is a second fact that can disagree with the first, and
+      // this codebase has spent most of its debugging time on exactly that shape.
+      const auto scratchOp = static_cast<daw::UiCommandType>(payload.commandType);
+      const uint32_t placementId = payload.value0;
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("scratch.rejected")
+            .field("op", daw::uiCommandTypeName(scratchOp))
+            .field("track", payload.trackId)
+            .field("placement", placementId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool found = false;
+      const char* reason = "no_such_placement";
+      uint32_t nowPlaying = 0;
+      uint32_t alternate = 0;
+      std::shared_ptr<const ClipSnapshot> snapshot;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& pl : runtime->sourcePlacements) {
+          if (pl.id != placementId) {
+            continue;
+          }
+          if (scratchOp == daw::UiCommandType::ForkPlacementClip) {
+            // COPY the clip this placement plays, point the placement at the copy, and keep the
+            // original as the alternate. Only THIS placement is retargeted — other appearances of
+            // the same clip keep playing the original, which is the whole point of forking rather
+            // than editing: "fix the bass in chorus 1" still reaches all three choruses, and a
+            // draft of chorus 1 does not.
+            const daw::ProjectClip* source = nullptr;
+            for (const auto& c : runtime->ownedClips) {
+              if (c.id == pl.clipId) {
+                source = &c;
+                break;
+              }
+            }
+            if (!source) {
+              reason = "no_such_clip";
+              break;
+            }
+            daw::ProjectClip copy = *source;
+            copy.id = nextClipId.fetch_add(1, std::memory_order_acq_rel);
+            copy.name = source->name + " (draft)";
+            runtime->ownedClips.push_back(std::move(copy));
+            runtime->editableClipIds.push_back(runtime->ownedClips.back().id);
+            pl.alternateClipId = pl.clipId;
+            pl.clipId = runtime->ownedClips.back().id;
+            found = true;
+          } else if (scratchOp == daw::UiCommandType::SwapPlacementClip) {
+            if (pl.alternateClipId == 0) {
+              reason = "no_alternate";
+              break;
+            }
+            std::swap(pl.clipId, pl.alternateClipId);
+            found = true;
+          } else {
+            if (pl.alternateClipId == 0) {
+              reason = "no_alternate";
+              break;
+            }
+            pl.alternateClipId = 0;
+            found = true;
+          }
+          nowPlaying = pl.clipId;
+          alternate = pl.alternateClipId;
+          break;
+        }
+        if (found) {
+          // RE-DERIVE rather than bump. The published extents are built inside
+          // rebuildFlatAndPublish, so bumping the version alone rebuilds the region from a stale
+          // vector and the swap is inaudible AND invisible — the exact failure the edit-scope
+          // toggle hit.
+          snapshot = rebuildFlatAndPublish(*runtime);
+          std::atomic_store_explicit(&runtime->audioRender, rebuildAudioRender(*runtime),
+                                     std::memory_order_release);
+        }
+      }
+      if (!found) {
+        DAW_EVENT("scratch.rejected")
+            .field("op", daw::uiCommandTypeName(scratchOp))
+            .field("track", payload.trackId)
+            .field("placement", placementId)
+            .field("reason", reason);
+        return;
+      }
+      if (snapshot) {
+        std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
+                                   std::memory_order_release);
+      }
+      bumpClipVersionFor(runtime);
+      clipDirty.store(true, std::memory_order_release);
+      recomputeSongEnd();
+      DAW_EVENT("scratch.applied")
+          .field("op", daw::uiCommandTypeName(scratchOp))
+          .field("track", payload.trackId)
+          .field("placement", placementId)
+          .field("playing_clip", nowPlaying)
+          .field("alternate_clip", alternate);
+      historyAppend(daw::uiCommandTypeName(scratchOp), "received", payload.trackId, 0, "");
+      return;
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetPlacementEditScope)) {
       // value0 = placementId, flags bit0 = on. Deliberately NOT version-gated: this changes no

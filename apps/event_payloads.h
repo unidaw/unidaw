@@ -198,7 +198,22 @@ enum class UiCommandType : uint16_t {
   /// tick, carrying every placement, tempo point, harmony event, automation point, meter point and
   /// marker at or after it — in ONE refusable, undoable transaction. Refuses a removal whose bars
   /// hold anything, and an insertion whose boundary falls inside a placement.
-  InsertRemoveTime = 69,  // next free 63
+  InsertRemoveTime = 69,
+  /// M2.57 SCRATCH CLIPS — a write target an agent can be given instead of your document.
+  ///
+  /// ForkPlacementClip copies the clip a placement plays into a new one, points the placement at
+  /// the copy, and keeps the original as the placement's ALTERNATE. So an agent handed a forked
+  /// placement writes into its own copy; yours is one command away and nothing destructive
+  /// entered the undo stack.
+  ///
+  /// SwapPlacementClip exchanges clipId and alternateClipId — that IS the A/B. What plays is
+  /// always clipId, so there is no "auditioning" mode to get out of step with what you hear.
+  ///
+  /// ClearPlacementAlternate drops the other version once you have decided. Keeping is doing
+  /// nothing, which is the right default for the case where the agent was useful.
+  ForkPlacementClip = 70,
+  SwapPlacementClip = 71,
+  ClearPlacementAlternate = 72,  // next free 63
 };
 
 // M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
@@ -351,6 +366,9 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::MoveMarker: return "move_marker";
     case UiCommandType::SetTimeSignature: return "set_time_signature";
     case UiCommandType::InsertRemoveTime: return "insert_remove_time";
+    case UiCommandType::ForkPlacementClip: return "fork_placement_clip";
+    case UiCommandType::SwapPlacementClip: return "swap_placement_clip";
+    case UiCommandType::ClearPlacementAlternate: return "clear_placement_alternate";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";

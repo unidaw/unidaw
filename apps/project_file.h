@@ -107,6 +107,21 @@ struct ProjectPlacement {
   // whether the cell is occupied: that breaks the promise in one direction or the other
   // depending on the rule you pick, which is why an explicit signal exists at all.
   bool localEdits = false;
+  // M2.57: THE OTHER VERSION OF THIS APPEARANCE. 0 = none.
+  //
+  // What plays is always `clipId` — there is no second fact about it and no "am I auditioning"
+  // mode to get out of step with what you hear. An alternate is simply another clip this
+  // placement can swap to, and SwapPlacementClip exchanges the two. That is the whole mechanism.
+  //
+  // It exists for the agent: an agent that writes straight into your clip leaves you undoing its
+  // work, with its edits interleaved with yours in one undo stack and no way to hear the two
+  // side by side. Instead it forks your clip, writes into the copy, and yours becomes the
+  // alternate — so comparing is one command, keeping is doing nothing, and rejecting is one more
+  // command. None of it touches undo, because none of it is a destructive edit.
+  //
+  // Persisted, so a draft survives closing the project. Written only when non-zero, so a project
+  // that has never had an alternate stays byte-identical.
+  uint32_t alternateClipId = 0;
 };
 
 struct ProjectTrack {

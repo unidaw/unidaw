@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 30;
+pub const K_SHM_VERSION: u16 = 31;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -690,6 +690,14 @@ pub enum UiCommandType {
     /// placement, tempo point, harmony event, automation point, meter point and marker at or
     /// after it in ONE refusable, undoable transaction.
     InsertRemoveTime = 69,
+    /// M2.57 SCRATCH CLIPS — a write target for an agent, instead of your document.
+    /// `ForkPlacementClip` copies what a placement plays, points the placement at the copy, and
+    /// keeps the original as the ALTERNATE. `SwapPlacementClip` exchanges the two — that IS the
+    /// A/B, and what plays is always `clip_id`, so there is no auditioning mode to fall out of
+    /// step with what you hear. `ClearPlacementAlternate` drops the other once you have decided.
+    ForkPlacementClip = 70,
+    SwapPlacementClip = 71,
+    ClearPlacementAlternate = 72,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -701,6 +709,11 @@ pub const MIXER_FLAG_SOLO: u16 = 1 << 1;
 /// appears in every appearance (loud, one undo away), whereas being in the wrong global mode
 /// makes a fix silently fail to propagate (quiet, and you may not notice for an hour).
 pub const UI_CLIP_EXTENT_LOCAL_EDITS: u32 = 1 << 23;
+
+/// M2.57 bit 24: this appearance HAS AN ALTERNATE clip to swap to (usually an agent's draft).
+/// Published so the A/B can be offered at all — an alternate nobody can see is the same as not
+/// having one. What PLAYS is always the extent's `clip_id`; this only says there is another.
+pub const UI_CLIP_EXTENT_HAS_ALTERNATE: u32 = 1 << 24;
 
 /// Per-device addressing for the patcher graph commands, carried in the payload's `flags`
 /// because the payload is exactly 40 bytes and full. Bit 15 marks the id PRESENT; bits 0-14 are
