@@ -383,6 +383,39 @@
   gap: 10px;
 }
 
+/* REMOVE THIS TRACK, on the track's own header. Hidden until the header is hovered:
+   sixteen visible ✕ marks along the top of a tracker is an invitation, and the action
+   cannot be undone. Absolutely positioned so it takes no width — a header is sized
+   from the MEASURED track stride and a control in its flow would push the name off
+   centre by exactly the amount that is supposed to be invisible. */
+.hdel {
+  /* The LEFT edge. The quantize badge already owns `right: 3px` and is vertically centred, so
+     anything on that side either overlaps it or has to know its height — and the track name is
+     centred, which leaves the left free. */
+  position: absolute; left: 2px; top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px; line-height: 10px;
+  color: var(--uni-text-empty);
+  cursor: pointer;
+  opacity: 0;
+  padding: 0 2px;
+}
+.htrack:hover .hdel { opacity: 1; }
+.hdel:hover { color: var(--uni-text-fx); }
+/* A folded lane has no room for anything, and its header has no border either. */
+.htrack.folded .hdel { display: none; }
+
+/* ADD A TRACK, at the end of the row — the position the new lane will occupy. */
+.hadd {
+  flex: 0 0 22px; width: 22px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--uni-text-gutter);
+  border-left: 1px solid var(--uni-rule-column);
+  cursor: pointer;
+}
+.hadd:hover { color: var(--base-accent); }
+
 .ch-chip {
   font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em;
   padding: 2px 6px; border-radius: 3px; box-sizing: border-box;

@@ -3087,9 +3087,40 @@ function buildHead() {
     q.appendChild(document.createTextNode(''));
     el.appendChild(q);
     el._qEl = q; el._qTxt = null;
+    /*
+     * REMOVE THIS TRACK, on the track's own header.
+     *
+     * Not "the cursor's track", which is what the chrome's `−` means: two ways to say it, and
+     * the ambiguous one is the destructive one. This session already found a delete confirmation
+     * naming one device while destroying another on a different track — the same class of
+     * mistake, and the fix is the same, which is that a destructive control should be ON the
+     * thing it destroys.
+     *
+     * Hidden until the header is hovered, because sixteen visible ✕ marks along the top of a
+     * tracker is an invitation, and this cannot be undone. `removeTrack` names the track in its
+     * confirm; nothing here asks a second time.
+     */
+    const del = document.createElement('span');
+    del.className = 'hdel';
+    del.appendChild(document.createTextNode('\u00d7'));
+    del.title = 'Remove this track';
+    el.appendChild(del);
     headRow.append(el);
     heads.push(el);
   }
+  /*
+   * ...AND ADD ONE, at the end of the row — which is literally where the next track appears.
+   *
+   * Jaakko asked for the track controls to sit "closer to the actual tracks" than the chrome,
+   * and this is as close as it gets: the `+` is in the position the new lane will occupy. The
+   * chrome's pair stays, because the arrangement and the mixer have no header row and removing
+   * the global path would make adding a track pointer-unreachable in two of five surfaces.
+   */
+  const add = document.createElement('div');
+  add.className = 'hadd';
+  add.appendChild(document.createTextNode('+'));
+  add.title = 'Add a track';
+  headRow.append(add);
   // The track headers, as an array. paintHeadLpb ran `headRow.children[t + 1]`
   // per track per frame; `.children` is a live HTMLCollection and indexing it is
   // a binding call, for a list that cannot change without this function running
@@ -3117,6 +3148,21 @@ function buildHead() {
    * and a listener per head would be rebound with them.
    */
   headRow.addEventListener('pointerdown', (e) => {
+    /*
+     * The track controls, claimed BEFORE the quantize badge and before any drag: both are inside
+     * a header, so a press on either is also a press on the header, and the badge's handler
+     * starts a strength scrub. Without this order pressing ✕ would also drag the lane's quantize
+     * — and then open a confirm on top of it.
+     */
+    if (e.target.closest('.hadd')) { e.preventDefault(); addTrack(); return; }
+    const killer = e.target.closest('.hdel');
+    if (killer) {
+      e.preventDefault();
+      const t = Number(killer.parentElement.dataset.track);
+      // THIS track, from the element — not the cursor's. That is the whole point of the control.
+      if (Number.isFinite(t)) removeTrack(t);
+      return;
+    }
     const badge = e.target.closest('.hquant');
     if (!badge) return;
     const track = Number(badge.parentElement.dataset.track);

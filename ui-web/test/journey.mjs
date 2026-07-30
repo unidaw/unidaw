@@ -328,6 +328,43 @@ ok(inArrange === 'arrange', 'F2 switches to the arrangement', inArrange);
 }
 
 // ---------------------------------------------------------------------------
+step('7b. add and remove a track from the lanes themselves');
+/*
+ * THE POINT OF THESE CONTROLS is that they name the track they act on.
+ *
+ * The chrome's `−` removes THE CURSOR'S track, which is an ambiguity in a destructive control:
+ * this session already found a delete confirmation naming one device while destroying another on
+ * a different track. So the `✕` on a header removes THAT header's track, and this test proves it
+ * by removing a track the cursor is NOT on and checking which one went.
+ */
+await page.keyboard.press('F1');
+await settle(400);
+{
+  const before = await page.evaluate(() => window.__uni.names());
+  await page.locator('.hadd').click();
+  await settle(1200);
+  const grown = await page.evaluate(() => window.__uni.names());
+  ok(grown.length > before.length, 'the + at the end of the header row adds a track',
+     `${before.length} -> ${grown.length}`);
+
+  // Put the cursor somewhere ELSE, so "the cursor's track" and "this header's track" differ.
+  await page.evaluate(() => window.__uni.goto(0, 0));
+  await settle(300);
+  const tree = await page.evaluate(() => window.__uni.trackTree().filter((t) => !t.absent));
+  const victim = tree[tree.length - 1];
+  const victimName = await page.evaluate((t) => window.__uni.names()[t], victim.track);
+  await page.locator(`.htrack[data-track="${victim.track}"] .hdel`).click({ force: true });
+  await settle(1400);
+  ok(/Remove /.test(String(lastDialog)) && String(lastDialog).includes(String(victimName)),
+     'and the ✕ on a header asks about THAT track by name', String(lastDialog));
+  const after = await page.evaluate(() => window.__uni.trackTree().filter((t) => !t.absent));
+  ok(!after.some((t) => t.track === victim.track),
+     'and removes it — not the one the cursor is on',
+     `${JSON.stringify(tree.map((t) => t.track))} -> ${JSON.stringify(after.map((t) => t.track))}`);
+  ok(after.some((t) => t.track === 0), 'which is still there', JSON.stringify(after.map((t) => t.track)));
+}
+
+// ---------------------------------------------------------------------------
 step('8. mix');
 await page.keyboard.press('F8');
 await settle(500);
