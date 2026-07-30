@@ -581,7 +581,11 @@ public:
             maxCompleted, track.completedBlockId->load(std::memory_order_acquire));
       }
       const uint32_t cushion = std::min(m_numBlocks, m_playMargin + 2);
-      if (anyActive && maxCompleted < cushion && m_primeWait < kMaxPrimeCallbacks) {
+      // Offline needs no cushion: there is no jitter to absorb and the pump has already
+      // established that block 1 is rendered. Priming here would emit a leading run of
+      // silence into the file.
+      if (!m_offline && anyActive && maxCompleted < cushion &&
+          m_primeWait < kMaxPrimeCallbacks) {
         ++m_primeWait;
         return;  // silence this callback; try again once the pipeline has filled
       }
@@ -621,14 +625,20 @@ public:
       // Check if this track has the block we need
       uint32_t completed = track.completedBlockId->load(std::memory_order_acquire);
 
-      // If we haven't started yet, sync to the most recent block.
-      if (m_lastPlayedBlockId == 0 && completed > 0) {
-        nextBlockToPlay = completed > m_playMargin ? completed - m_playMargin : 1;
-      }
-      // If we're falling behind the ring, jump forward to the freshest block.
-      if (completed > m_lastPlayedBlockId &&
-          completed - m_lastPlayedBlockId > m_numBlocks) {
-        nextBlockToPlay = completed > m_playMargin ? completed - m_playMargin : 1;
+      // Both jumps below SKIP BLOCKS to stay current, which is right for a device (a late
+      // block is better dropped than played late) and wrong for a render (a skipped block is a
+      // hole in the file). Offline plays every block in order from 1, and the pump guarantees
+      // the one it wants is ready before calling here — so neither jump can be needed.
+      if (!m_offline) {
+        // If we haven't started yet, sync to the most recent block.
+        if (m_lastPlayedBlockId == 0 && completed > 0) {
+          nextBlockToPlay = completed > m_playMargin ? completed - m_playMargin : 1;
+        }
+        // If we're falling behind the ring, jump forward to the freshest block.
+        if (completed > m_lastPlayedBlockId &&
+            completed - m_lastPlayedBlockId > m_numBlocks) {
+          nextBlockToPlay = completed > m_playMargin ? completed - m_playMargin : 1;
+        }
       }
 
       // Check if the block we want is ready
@@ -993,6 +1003,132 @@ public:
   bool capturing() const { return !m_capture.empty(); }
   int captureChannels() const { return m_captureChannels; }
 
+  void setOfflineMode(bool on) { m_offline = on; }
+
+  // OFFLINE ONLY. Wait until at least one track is ready to contribute, so the per-block wait
+  // below has something to wait FOR.
+  //
+  // Without this the render was fast, byte-identical and completely silent — awaitNextBlock
+  // skips tracks whose host is not ready (waiting on one would deadlock a render that is
+  // correct), so with no host up yet it returned immediately, process() found nothing to mix,
+  // and 345 blocks of zeros were written in milliseconds. Two of the three properties held
+  // perfectly. A wait that has nothing to wait for is not a wait.
+  // `requireActive`: whether the track must already be PRODUCING, not merely connected.
+  //
+  // The two are needed at different moments and conflating them deadlocks. `active` is set by
+  // the PRODUCER, and offline the producer is held until the pump arms it — so a pre-roll that
+  // waited for `active` would wait for a thread that is waiting for the pre-roll. That is
+  // exactly what happened: 15 seconds of nothing, then "no host became ready", with the host
+  // plainly up in the log. So: wait for CONNECTED before arming, and for PRODUCING after.
+  bool awaitAnyReadyTrack(uint32_t timeoutMs, bool requireActive) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    for (;;) {
+      std::vector<TrackInfo>* tracks = m_tracksPtr.load(std::memory_order_seq_cst);
+      for (;;) {
+        m_tracksHazard.store(tracks, std::memory_order_seq_cst);
+        std::vector<TrackInfo>* head = m_tracksPtr.load(std::memory_order_seq_cst);
+        if (head == tracks) {
+          break;
+        }
+        tracks = head;
+      }
+      if (tracks) {
+        for (const auto& track : *tracks) {
+          if (!track.completedBlockId || !track.header) {
+            continue;
+          }
+          if (track.mute && track.mute->load(std::memory_order_relaxed)) {
+            continue;
+          }
+          if (track.hostReady && !track.hostReady->load(std::memory_order_acquire) ) {
+            continue;
+          }
+          if (requireActive && track.active &&
+              !track.active->load(std::memory_order_acquire)) {
+            continue;
+          }
+          return true;
+        }
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+  }
+
+  // OFFLINE ONLY. Block until every track that will contribute to the next block has
+  // rendered it, so the following process() cannot starve. Returns true when ready; on
+  // timeout returns false and reports which track was behind and by how much.
+  //
+  // This is the whole difference between a render and playback. The RT path must never
+  // block, so a late host makes it drop that track for one callback and carry on — right
+  // for a device, and a hole in a file. Here the deadline belongs to nobody, so waiting
+  // is free and dropping is unacceptable. The wait is still BOUNDED: a wedged plugin must
+  // fail the render loudly, not hang it forever with no output and no reason.
+  bool awaitNextBlock(uint32_t timeoutMs, uint32_t* stalledTrackOut,
+                      uint32_t* stalledGapOut) {
+    // Same hazard-pointer acquire the mix uses. The naive read (load, use) is what caused a
+    // SIGSEGV a few hundred ms into playback once already: the writer freed the version
+    // between the load and the publish. Copied deliberately rather than factored out — the
+    // comment on the original explains a subtlety worth reading at both sites.
+    std::vector<TrackInfo>* tracks = m_tracksPtr.load(std::memory_order_seq_cst);
+    for (;;) {
+      m_tracksHazard.store(tracks, std::memory_order_seq_cst);
+      std::vector<TrackInfo>* head = m_tracksPtr.load(std::memory_order_seq_cst);
+      if (head == tracks) {
+        break;
+      }
+      tracks = head;
+    }
+    if (!tracks) {
+      return true;  // nothing to wait for
+    }
+    const uint32_t want = m_lastPlayedBlockId + 1;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    for (;;) {
+      uint32_t worstTrack = 0;
+      uint32_t worstGap = 0;
+      for (const auto& track : *tracks) {
+        if (!track.completedBlockId || !track.header) {
+          continue;
+        }
+        // Exactly the tracks process() will read from: a muted, hostless or inactive track
+        // contributes nothing, so waiting on it would deadlock a render that is correct.
+        if (track.mute && track.mute->load(std::memory_order_relaxed)) {
+          continue;
+        }
+        if (track.hostReady && !track.hostReady->load(std::memory_order_acquire)) {
+          continue;
+        }
+        if (track.active && !track.active->load(std::memory_order_acquire)) {
+          continue;
+        }
+        const uint32_t completed =
+            track.completedBlockId->load(std::memory_order_acquire);
+        if (completed < want && want - completed > worstGap) {
+          worstGap = want - completed;
+          worstTrack = track.trackId;
+        }
+      }
+      if (worstGap == 0) {
+        return true;
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
+        if (stalledTrackOut) {
+          *stalledTrackOut = worstTrack;
+        }
+        if (stalledGapOut) {
+          *stalledGapOut = worstGap;
+        }
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+  }
+
   // Underrun telemetry snapshot for a low-priority reporter (see the members below).
   uint64_t starveCallbacks() const {
     return m_starveCallbacks.load(std::memory_order_relaxed);
@@ -1139,6 +1275,10 @@ private:
   std::atomic<uint32_t>* m_playbackBlockId;
   std::chrono::steady_clock::time_point m_startTime;
   uint64_t m_totalSamplesProcessed = 0;
+  // OFFLINE RENDER. Inverts three policies that are right for a device and wrong for a file:
+  // never skip a block to stay current, never prime with silence, and never starve — the pump
+  // waits instead, so the mix is glitch-free by construction rather than by luck.
+  bool m_offline = false;
   uint32_t m_lastPlayedBlockId = 0;  // Track which block we played last
   uint32_t m_primeWait = 0;          // callbacks spent priming the pipeline after Play
 
@@ -1370,6 +1510,8 @@ int main(int argc, char** argv) {
   std::string pluginPath;
   bool spawnHost = true;
   int runSeconds = -1;
+  std::string renderName;  // non-empty => offline render (see --render)
+  std::string startupProject;  // non-empty => load it before running (see --project)
   bool testMode = false;
   for (int i = 1; i + 1 < argc; ++i) {
     const std::string arg = argv[i];
@@ -1384,8 +1526,37 @@ int main(int argc, char** argv) {
     } else if (arg == "--run-seconds") {
       runSeconds = std::max(0, std::atoi(argv[i + 1]));
       ++i;
+    } else if (arg == "--project" && i + 1 < argc) {
+      // Load this project at startup. Required for --render, because the pump begins as soon
+      // as the threads are up — there is no window in which a CLI could send a load, and the
+      // first render I ran produced a perfectly-sized file of pure silence for exactly that
+      // reason.
+      startupProject = argv[i + 1];
+      ++i;
+    } else if (arg == "--render" && i + 1 < argc) {
+      // OFFLINE RENDER (§7 Q4). Runs the whole mix with no audio device and no wall clock:
+      // the pump waits for every host to finish each block, then mixes it, so the render is
+      // glitch-free by construction rather than by luck. The producer already paces to the
+      // block the CONSUMER has played rather than to a device clock — a consequence of
+      // fixing the "everything 4x too fast" bug — so being the consumer is all that is
+      // needed to run at host speed.
+      renderName = argv[i + 1];
+      ++i;
     }
   }
+  // OFFLINE RENDER state, declared here so the producer thread below can capture it.
+  const bool offlineRender = !renderName.empty();
+  int offlineChannels = 2;  // the master width the pump renders at; set when the mix is wired
+  bool renderFailed = false;  // a stalled render must exit non-zero, not just warn
+  // DETERMINISM GATE. The producer starts as soon as a host is ready and runs free while
+  // audioPlaybackBlockId is still 0 (there is nothing to pace to yet), filling the ring with
+  // blocks produced BEFORE the transport was started. How many depends on how fast the hosts
+  // came up, so the render's first blocks varied run to run and two renders of one project were
+  // not byte-identical — which the determinism assertion in offline_render_check caught on its
+  // first run. Offline holds the producer until the pump has started the transport, so block 1
+  // is always tick 0 and block N is always N blocks in.
+  std::atomic<bool> offlineProducerArmed{false};
+
   if (const char* env = std::getenv("DAW_ENGINE_TEST_MODE")) {
     testMode = std::string(env) == "1";
   }
@@ -10085,6 +10256,12 @@ struct TrackRuntime {
           static_cast<int64_t>(engineConfig.blockSize), atNanotick);
     };
     while (running.load()) {
+      // Offline: produce nothing until the pump says the transport is at a known start. See
+      // offlineProducerArmed.
+      if (offlineRender && !offlineProducerArmed.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
       if (testThrottleMs > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(testThrottleMs));
       }
@@ -13436,20 +13613,39 @@ struct TrackRuntime {
       currentBlockId++;
     }
   });
+  // The audio parameters the mix is built at. With a device they are the DEVICE's (adopted
+  // earlier, because a hardcoded 48 kHz plays everything off-speed on any other rate). Offline
+  // there is no device, so the engine's own config stands — the same numbers the producer, the
+  // per-track SHM stride and the hosts were already configured with, so every stage still
+  // agrees on samples-per-block.
+  const double effSampleRate =
+      audioBackend ? audioBackend->sampleRate() : engineConfig.sampleRate;
+  const uint32_t effBlockSize = audioBackend
+                                    ? static_cast<uint32_t>(audioBackend->blockSize())
+                                    : engineConfig.blockSize;
+  const int effOutChannels = audioBackend ? audioBackend->outputChannels() : 2;
   if (!testMode) {
     audioRuntime = daw::createJuceRuntime();
     // Opened earlier to adopt its sample rate; here we just wire the callback.
-    if (!audioBackend) {
+    //
+    // OFFLINE takes this same branch with no device: it needs every bit of the setup below
+    // (the callback, the master width, the master FX wiring and its render thread) and differs
+    // only in what DRIVES it at the end — a pump instead of the device's callback. Hoisting
+    // 200 lines of delicate master-FX wiring out of here to share it would have been the
+    // riskier way to say the same thing.
+    if (!audioBackend && !offlineRender) {
       std::cerr << "No audio device; running without audio output" << std::endl;
     } else {
-      std::cout << "Audio device: " << audioBackend->deviceName() << std::endl;
-      std::cout << "  Sample rate: " << audioBackend->sampleRate()
+      std::cout << "Audio device: "
+                << (audioBackend ? audioBackend->deviceName() : "(offline render)")
+                << std::endl;
+      std::cout << "  Sample rate: " << effSampleRate
                 << " (engine now matches)" << std::endl;
-      std::cout << "  Buffer size: " << audioBackend->blockSize()
+      std::cout << "  Buffer size: " << effBlockSize
                 << " (engine expects: " << engineConfig.blockSize << ")" << std::endl;
       audioCallback = std::make_unique<EngineAudioCallback>(
-          audioBackend->sampleRate(),
-          static_cast<uint32_t>(audioBackend->blockSize()),
+          effSampleRate,
+          effBlockSize,
           engineConfig.numBlocks,
           &audioPlaybackBlockId);
       audioCallback->setPlaying(&playing);
@@ -13459,14 +13655,14 @@ struct TrackRuntime {
       // HERE, before the master FX wiring below, because the master host must be opened at
       // the master's true width: sized at a fixed 2 it could never match a surround mix,
       // and the gate would leave a master effect installed, hosted and inaudible.
-      int masterChannels = std::max(2, audioBackend->outputChannels());
+      int masterChannels = std::max(2, effOutChannels);
       if (const char* mc = std::getenv("DAW_MASTER_CHANNELS")) {
         const int parsed = std::atoi(mc);
         if (parsed > masterChannels) {
           masterChannels = std::min(parsed, 8);
           audioCallback->setMasterChannels(masterChannels);
           std::cout << "Surround master: " << masterChannels
-                    << " channels (device has " << audioBackend->outputChannels()
+                    << " channels (device has " << effOutChannels
                     << ")" << std::endl;
         }
       }
@@ -13484,7 +13680,7 @@ struct TrackRuntime {
         audioCallback->setMasterFxWiring(
             &masterFxActive, &masterTrack->hostReady,
             static_cast<uint32_t>(masterChannels),
-            static_cast<uint32_t>(audioBackend->blockSize()));
+            effBlockSize);
         // 4b render thread: one block behind the callback, it drives the master host —
         // take the summed block, write it to the host's input plane, process, read the
         // output plane, hand it back for the callback to emit next block. This is the ONLY
@@ -13647,16 +13843,25 @@ struct TrackRuntime {
             }
           }
           const auto frames =
-              static_cast<size_t>(audioBackend->sampleRate() * seconds);
+              static_cast<size_t>(effSampleRate * seconds);
           audioCallback->enableCapture(frames, masterChannels);
           DAW_EVENT("audio.capture_armed")
               .field("path", std::string(capturePath))
               .field("seconds", seconds);
         }
       }
-      if (audioBackend->start([&](float* const* outputs, int numChannels, int numFrames) {
-            audioCallback->process(outputs, numChannels, numFrames);
-          })) {
+      if (offlineRender) {
+        // Offline: the callback is driven by a PUMP instead of the device, and the pump waits.
+        // Wiring only — the loop itself runs after the threads are up (see the render section
+        // further down), because it needs the producer and the hosts alive to feed it.
+        audioCallback->setOfflineMode(true);
+        offlineChannels = masterChannels;
+        std::cout << "Offline render: " << effSampleRate << " Hz, " << effBlockSize
+                  << " samples/block, " << masterChannels << " channels" << std::endl;
+      } else if (audioBackend->start(
+                     [&](float* const* outputs, int numChannels, int numFrames) {
+                       audioCallback->process(outputs, numChannels, numFrames);
+                     })) {
         std::cout << "Audio output started" << std::endl;
       } else {
         std::cerr << "Failed to start audio output" << std::endl;
@@ -13710,7 +13915,171 @@ struct TrackRuntime {
     });
   }
 
-  if (runSeconds >= 0) {
+  // --project: load before anything runs. For a render this is mandatory (the pump starts as
+  // soon as the threads are up, so there is no window for a CLI load); on its own it just saves
+  // a round trip. Reported loudly on failure and the render is abandoned rather than writing a
+  // file of silence, which is what the first version did and it looked exactly like success.
+  bool startupLoadFailed = false;
+  if (!startupProject.empty()) {
+    const std::filesystem::path path = std::filesystem::path(daw::defaultProjectDir()) /
+                                       (startupProject + ".uniproj.json");
+    std::string error;
+    const bool ok = loadProjectFromPath(path.string(), &error);
+    projectLoadOk.store(ok ? 1u : 0u, std::memory_order_release);
+    projectLoadSeq.fetch_add(1, std::memory_order_acq_rel);
+    DAW_EVENT("project.load")
+        .field("path", path.string())
+        .field("ok", ok)
+        .field("startup", true)
+        .field("error", ok ? std::string() : error);
+    if (!ok) {
+      std::cerr << "Startup load FAILED for " << path.string() << ": " << error << std::endl;
+      startupLoadFailed = true;
+    } else {
+      std::cout << "Startup load: " << path.string() << std::endl;
+      // No sleep here: a render waits for a host to be READY (awaitAnyReadyTrack), which is
+      // the condition that actually matters, and a fixed guess would be both slower and
+      // occasionally wrong.
+    }
+  }
+  if (offlineRender && startupLoadFailed) {
+    std::cerr << "Offline render abandoned: nothing was loaded to render" << std::endl;
+    renderFailed = true;
+    running.store(false);
+  } else if (offlineRender && audioCallback) {
+    // THE OFFLINE PUMP. This is the whole of "faster than realtime": be the consumer.
+    //
+    // The producer already paces to `audioPlaybackBlockId` — the block the CONSUMER has
+    // played — rather than to a device clock, which fell out of fixing the "everything 4x too
+    // fast" bug. So nothing here needs to schedule anything: render a block, and the producer
+    // runs ahead as fast as the hosts can go. There is no sleep in the loop except the 200us
+    // backoff inside awaitNextBlock, and no wall clock anywhere.
+    //
+    // Every block is WAITED FOR, never dropped. process() would otherwise contribute silence
+    // for a track whose host is late, which is correct for a device and a hole in a file.
+    const uint32_t blockSize = effBlockSize;
+    const int channels = std::max(2, offlineChannels);
+    // Length: --run-seconds if given, else the song end plus a tail so releases and delays
+    // are not cut off mid-decay. A render that stops exactly at the last note is wrong in a
+    // way that is easy to miss and annoying to discover later.
+    const uint64_t songEndTick = songEndNanotick.load(std::memory_order_acquire);
+    double seconds = runSeconds > 0 ? static_cast<double>(runSeconds) : 0.0;
+    if (seconds <= 0.0) {
+      const double songSeconds =
+          songEndTick > 0 ? tempoProvider.secondsAtNanotick(songEndTick) : 0.0;
+      seconds = songSeconds + 2.0;  // tail
+    }
+    const uint64_t totalBlocks = blockSize > 0
+        ? static_cast<uint64_t>(std::ceil(seconds * effSampleRate / blockSize))
+        : 0;
+    std::cout << "Offline render: " << seconds << "s (" << totalBlocks << " blocks)"
+              << std::endl;
+
+    std::vector<std::vector<float>> planes(static_cast<size_t>(channels),
+                                          std::vector<float>(blockSize, 0.0f));
+    std::vector<float*> planePtrs(static_cast<size_t>(channels), nullptr);
+    for (int ch = 0; ch < channels; ++ch) {
+      planePtrs[static_cast<size_t>(ch)] = planes[static_cast<size_t>(ch)].data();
+    }
+    std::vector<float> interleaved;
+    interleaved.reserve(static_cast<size_t>(totalBlocks) * blockSize *
+                        static_cast<size_t>(channels));
+
+    // SOMETHING TO RENDER, first. A host launch is asynchronous (socket, Hello, plugin load),
+    // and a render that starts before any host is ready produces a perfectly sized file of
+    // silence — see awaitAnyReadyTrack.
+    // NOT an early return: the threads below are still joinable and returning from main here
+    // aborted the process (std::terminate on a joinable thread), which is a worse failure than
+    // the one being reported. Flag it and fall through to the normal shutdown.
+    bool haveSomethingToRender =
+        audioCallback->awaitAnyReadyTrack(15000, /*requireActive=*/false);
+    if (!haveSomethingToRender) {
+      std::cerr << "Offline render abandoned: no track host connected in 15s, so there is "
+                   "nothing to render" << std::endl;
+      DAW_EVENT("render.no_ready_track");
+      renderFailed = true;
+    }
+
+    // A KNOWN START, then arm the producer. Order matters: rewind first so the transport is at
+    // the loop start, start the transport, and only then let the producer emit block 1 — which
+    // is therefore always tick 0. Arming before starting the transport would reintroduce exactly
+    // the variability the gate exists to remove.
+    resetTimeline.store(true, std::memory_order_release);
+    playing.store(true, std::memory_order_release);
+    offlineProducerArmed.store(true, std::memory_order_release);
+    // Now that production is running, wait for a track to be genuinely PRODUCING before the
+    // first block is mixed — otherwise block 1 is mixed while every track is still inactive,
+    // which writes one block of silence at the head of every render.
+    if (haveSomethingToRender &&
+        !audioCallback->awaitAnyReadyTrack(15000, /*requireActive=*/true)) {
+      std::cerr << "Offline render abandoned: production never started (no track became active "
+                   "within 15s of the transport starting)" << std::endl;
+      DAW_EVENT("render.production_never_started");
+      renderFailed = true;
+      haveSomethingToRender = false;
+    }
+    uint64_t rendered = 0;
+    bool stalled = false;
+    for (uint64_t b = 0; haveSomethingToRender && b < totalBlocks && running.load(); ++b) {
+      uint32_t stalledTrack = 0;
+      uint32_t stalledGap = 0;
+      // Generous: a plugin's first blocks can be slow (it may be allocating), and this is not
+      // a latency deadline — it only has to be short enough that a WEDGED host fails the
+      // render instead of hanging it forever with no output and no reason.
+      if (!audioCallback->awaitNextBlock(5000, &stalledTrack, &stalledGap)) {
+        DAW_EVENT("render.stalled")
+            .field("block", b)
+            .field("track", stalledTrack)
+            .field("blocks_short", stalledGap);
+        std::cerr << "Offline render STALLED at block " << b << ": track " << stalledTrack
+                  << " is " << stalledGap << " block(s) behind and stopped advancing."
+                  << std::endl;
+        stalled = true;
+        break;
+      }
+      for (int ch = 0; ch < channels; ++ch) {
+        std::fill(planes[static_cast<size_t>(ch)].begin(),
+                  planes[static_cast<size_t>(ch)].end(), 0.0f);
+      }
+      audioCallback->process(planePtrs.data(), channels,
+                             static_cast<int>(blockSize));
+      for (uint32_t f = 0; f < blockSize; ++f) {
+        for (int ch = 0; ch < channels; ++ch) {
+          interleaved.push_back(planes[static_cast<size_t>(ch)][f]);
+        }
+      }
+      ++rendered;
+    }
+    playing.store(false, std::memory_order_release);
+
+    if (!haveSomethingToRender) {
+      std::cout << "Offline render: nothing written" << std::endl;
+      running.store(false);
+    }
+    const std::string outPath =
+        // Beside the projects, the same place a save lands — so a render is findable next to
+        // the thing it came from rather than in the build directory.
+        (std::filesystem::path(daw::defaultProjectDir()) / (renderName + ".wav")).string();
+    const bool wrote = haveSomethingToRender &&
+                      writeWav16(outPath, interleaved,
+                                  static_cast<size_t>(rendered) * blockSize, channels,
+                                  static_cast<uint32_t>(effSampleRate));
+    if (wrote) {
+      DAW_EVENT("render.written")
+          .field("path", outPath)
+          .field("blocks", rendered)
+          .field("channels", static_cast<uint64_t>(channels))
+          .field("sample_rate", static_cast<uint64_t>(effSampleRate));
+      std::cout << "Offline render written: " << outPath << " (" << rendered
+                << " blocks)" << std::endl;
+    } else {
+      std::cerr << "Offline render: failed to write " << outPath << std::endl;
+    }
+    if (stalled) {
+      renderFailed = true;
+    }
+    running.store(false);
+  } else if (runSeconds >= 0) {
     std::this_thread::sleep_for(std::chrono::seconds(runSeconds));
     running.store(false);
   }
@@ -13793,5 +14162,11 @@ struct TrackRuntime {
     ::shm_unlink(uiShm.name.c_str());
   }
 
+  // A render that stalled or had nothing to render exits NON-ZERO. A shell check that reads
+  // only the exit code must not be told a silent or truncated file was a success — the whole
+  // point of the loud-failure discipline is that the caller does not have to go looking.
+  if (renderFailed) {
+    return 2;
+  }
   return 0;
 }
