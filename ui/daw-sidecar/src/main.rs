@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{EventEntry, UiChainCommandPayload, UiChordCommandPayload,
+                         UiSectionCommandPayload,
                         UiCommandPayload, UiCommandType,
                         UiDiffType, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
                         UiPatcherPresetCommandPayload, UiSetParamPayload,
@@ -56,7 +57,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 const WIRE_LANES: usize = 16;
 
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 18;
+const WIRE_VERSION: u16 = 19;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -70,7 +71,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 148;
+const FULL_HEADER_BYTES: usize = 164;
 #[allow(dead_code)] // documents the wire layout for ui-web/src/wire.js
 const NOTE_BYTES: usize = 40;
 
@@ -342,6 +343,28 @@ struct Frame {
     /// kept it off the clip version on purpose: quantize moves no authored note, so
     /// it must not invalidate anyone's in-flight edit. The page caches on it.
     quantize_version: u32,
+    /// v27 arrangement SECTIONS, already resolved by the engine: (id, start_bar,
+    /// bar_count, color, start_tick, end_tick, name).
+    ///
+    /// RESOLVED IS THE POINT. A Section stores only a bar COUNT and never a position, so
+    /// start_bar and start_tick are prefix-summed through the meter map by the engine.
+    /// Deriving them here would be a second implementation of SectionList::resolve, and
+    /// the first time the two disagreed the arrangement would draw chorus 2 in the wrong
+    /// place with nothing reporting an error. Same argument as note rows and as
+    /// dev_nanoticks: one derivation, in the engine.
+    sections: Vec<(u32, u32, u32, u32, u64, u64, [u8; 24])>,
+    /// The arrange region's OWN generation. Moves on a spine or meter change and NEVER on
+    /// a note edit, so the page can cache the spine on it and keep the cache through
+    /// typing. Forwarded so the client can do exactly that.
+    arrange_version: u32,
+    /// How many sections did NOT fit, and the furthest placement END.
+    ///
+    /// Truncation is forwarded rather than dropped because a short list that says nothing
+    /// reads as a complete one — which turns "the arrangement is missing sections" into a
+    /// bug report about the view. `song_end` is NOT the end of the last section: material
+    /// can sit past the spine, and it plays and is unnamed.
+    sections_truncated: u32,
+    song_end_tick: u64,
     /// Real clip placements from the engine. placement_id, clip_id, track,
     /// flags, start/end tick, name. Loose session placements are excluded
     /// upstream. `flags` bit0 is UI_CLIP_EXTENT_AUDIO — an audio region, which
@@ -510,7 +533,24 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
      */
     out.extend_from_slice(&f.quantize_version.to_le_bytes());        // 140
     out.extend_from_slice(&(f.quantize.len() as u16).to_le_bytes()); // 144
-    out.extend_from_slice(&0u16.to_le_bytes());                      // 146, to 148
+    out.extend_from_slice(&0u16.to_le_bytes());                      // 146
+    /*
+     * v27 ARRANGEMENT SPINE (wire 19). Count, truncation, the region's own generation,
+     * and the song end.
+     *
+     * The GENERATION is on the wire rather than being inferred, because it is what the
+     * page caches the spine on: it moves when the spine or the meter changes and never
+     * when a note does, so the cache survives typing and cannot go stale on a rename.
+     * Deriving "did this change" by comparing the list would be work done to always
+     * answer yes.
+     *
+     * TRUNCATION travels too. A short list that says nothing reads as a complete one,
+     * which turns "the arrangement is missing sections" into a bug report about the view.
+     */
+    out.extend_from_slice(&(f.sections.len() as u16).to_le_bytes()); // 148
+    out.extend_from_slice(&(f.sections_truncated.min(0xffff) as u16).to_le_bytes()); // 150
+    out.extend_from_slice(&f.arrange_version.to_le_bytes());         // 152
+    out.extend_from_slice(&f.song_end_tick.to_le_bytes());           // 156, to 164
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
     // variable section and nothing here noticed.
@@ -671,6 +711,29 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         out.extend_from_slice(&grid.to_le_bytes());       // 12
         out.extend_from_slice(&0u32.to_le_bytes());       // 20, to 24
     }
+
+    /*
+     * THE SECTION SPINE, and now THIS is last.
+     *
+     * Appended after the quantize block for the reason every section in this function is
+     * appended after the one before it: a section inserted ahead of another shifts it, and
+     * this file's history is a list of the times that happened. The "nothing follows this"
+     * line moves with the position rather than being left as a claim that stopped being
+     * true.
+     *
+     * 56 bytes each, counted by the u16 at header offset 148. Both ticks are u64 because a
+     * section's position is a tick count, and both are ALREADY RESOLVED by the engine —
+     * the bar number too. Nothing here derives a position.
+     */
+    for &(id, start_bar, bar_count, color, start_tick, end_tick, name) in &f.sections {
+        out.extend_from_slice(&id.to_le_bytes());          // 0
+        out.extend_from_slice(&start_bar.to_le_bytes());   // 4
+        out.extend_from_slice(&bar_count.to_le_bytes());   // 8
+        out.extend_from_slice(&color.to_le_bytes());       // 12
+        out.extend_from_slice(&start_tick.to_le_bytes());  // 16
+        out.extend_from_slice(&end_tick.to_le_bytes());    // 24
+        out.extend_from_slice(&name);                      // 32, to 56
+    }
 }
 
 /// Whether the harmony we hold is out of date. Its own version, not the clip
@@ -741,6 +804,33 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
         for (slot, &(grid, strength, swing)) in lanes.iter().enumerate() {
             if grid == 0 || slot >= ids.len() { continue; }
             out.quantize.push((ids[slot], grid, strength, swing));
+        }
+    }
+
+    /*
+     * THE ARRANGEMENT SPINE, gated on the region's OWN generation.
+     *
+     * `read_arrange_summary` does the version-body-version read; a generation of 0 means a
+     * write is in flight and the bridge returns nothing, so a torn spine — some sections
+     * from before an edit and some from after — cannot reach the page. Backend's first
+     * guard here did not work, because the version only changed AFTER the body was
+     * written: a reader that sampled, read, and sampled again before the stamp saw the two
+     * agree and accepted garbage. Worth remembering as the shape rather than the instance.
+     *
+     * Re-read only when the generation MOVES. It moves on a spine or meter change and never
+     * on a note edit, so this costs one integer compare per frame while somebody is typing.
+     */
+    if let Some(sum) = h.read_arrange_summary() {
+        if sum.version != 0 && sum.version != out.arrange_version {
+            out.arrange_version = sum.version;
+            out.sections_truncated = sum.sections_truncated;
+            out.song_end_tick = sum.song_end_tick;
+            out.sections.clear();
+            let n = (sum.section_count as usize).min(sum.sections.len());
+            for sec in &sum.sections[..n] {
+                out.sections.push((sec.id, sec.start_bar, sec.bar_count, sec.color_rgb,
+                                   sec.start_tick, sec.end_tick, sec.name));
+            }
         }
     }
 
@@ -1852,6 +1942,81 @@ fn resolve_base(handle: &EngineHandle, track_id: u32, sent: u32, command_type: u
     handle.clip_version_for_track(track_id)
 }
 
+/// One of the five SECTION commands, or None if this message is not one.
+///
+///   {"type":"section","op":"add","name":"chorus","bars":8,"at":2}
+///   {"type":"section","op":"remove","id":3}
+///   {"type":"section","op":"rename","id":3,"name":"chorus 2"}
+///   {"type":"section","op":"length","id":3,"bars":16}
+///   {"type":"section","op":"move","id":3,"to":0}
+///
+/// A SECTION STORES A NAME AND A LENGTH IN BARS AND NEVER A START POSITION. That is the
+/// whole shape of the feature: there is no "move this section to bar 9", because where a
+/// section begins is the sum of the lengths before it. So the only ways to move one are to
+/// change a length or to change the ORDER, and everything after it follows — which is why
+/// `length` RIPPLES every placement at or after the boundary and can be refused as a unit.
+///
+/// `name` is 20 bytes here and 24 in the read-back, which is not a mistake of mine: the
+/// command payload has 20 left of its 40-byte slot. A longer name is truncated by the
+/// engine, so it is truncated HERE too, at the same length, rather than being sent whole
+/// and coming back shorter than what was typed.
+fn build_section(body: &str) -> Option<Result<UiSectionCommandPayload, &'static str>> {
+    if !is_type(body, "section") { return None; }
+    let Some(op) = parse_str(body, "\"op\"") else {
+        return Some(Err("section needs an op: add, remove, rename, length or move"));
+    };
+    let (command_type, addressed) = match op {
+        // The bool is "this op names an EXISTING section", which everything but add does.
+        "add" => (UiCommandType::AddSection, false),
+        "remove" => (UiCommandType::RemoveSection, true),
+        "rename" => (UiCommandType::RenameSection, true),
+        "length" => (UiCommandType::SetSectionLength, true),
+        "move" => (UiCommandType::MoveSection, true),
+        _ => return Some(Err("section op must be add, remove, rename, length or move")),
+    };
+    let id = parse_num(body, "\"id\"").unwrap_or(0).max(0) as u32;
+    // Every op but `add` addresses an EXISTING section, and 0 is the append sentinel — so a
+    // missing id would silently become "append" on a remove or a rename.
+    if id == 0 && addressed {
+        return Some(Err("that section op needs the id of an existing section"));
+    }
+    let bars = parse_num(body, "\"bars\"");
+    let is_length = command_type as u16 == UiCommandType::SetSectionLength as u16;
+    if is_length && !matches!(bars, Some(b) if b > 0) {
+        // A length of zero is not a short section, it is a section with no bars in it —
+        // refused here rather than sent for the engine to interpret.
+        return Some(Err("a section length needs a positive number of bars"));
+    }
+    let mut name = [0u8; 20];
+    if let Some(n) = parse_str(body, "\"name\"") {
+        let b = n.as_bytes();
+        let take = b.len().min(name.len());
+        name[..take].copy_from_slice(&b[..take]);
+    } else if command_type as u16 == UiCommandType::RenameSection as u16 {
+        return Some(Err("a rename needs a name"));
+    }
+    Some(Ok(UiSectionCommandPayload {
+        command_type: command_type as u16,
+        flags: 0,
+        section_id: id,
+        bar_count: bars.unwrap_or(0).clamp(0, u32::MAX as i64) as u32,
+        // NO `at` MEANS APPEND, AND THAT IS NOT INDEX 0.
+        //
+        // The engine clamps toIndex to the end, so u32::MAX appends — and 0 inserts at
+        // the FRONT. Defaulting the missing case to 0 made `section add` build the song
+        // backwards: two adds and the second one was bar 1. `at` is 1-based where a person
+        // says it (the first section is section 1, as bars are), so it converts here; the
+        // wire index is 0-based because it indexes an array.
+        to_index: match parse_num(body, "\"to\"").or_else(|| parse_num(body, "\"at\"")) {
+            Some(n) => (n.max(1) - 1).clamp(0, u32::MAX as i64) as u32,
+            None if addressed => 0,       // move without a `to` means "to the front"
+            None => u32::MAX,             // add without an `at` means "at the end"
+        },
+        color_rgb: parse_num(body, "\"color\"").unwrap_or(0).clamp(0, 0xffffff) as u32,
+        name,
+    }))
+}
+
 /// The most parameters the engine's region carries, kUiMaxDeviceParams.
 const MAX_DEVICE_PARAMS: i64 = 256;
 
@@ -2665,6 +2830,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"routing\":{},\"kind\":{},\"to\":{}}}",
                                         p.track_id, p.audio_out_kind, p.audio_out_track_id),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // The arrangement's SPINE. Own 40-byte payload again.
+                        if let Some(r) = build_section(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_section_command(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"section\":{},\"type\":{},\"bars\":{}}}",
+                                        p.section_id, p.command_type, p.bar_count),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };

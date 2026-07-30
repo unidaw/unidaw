@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 18;
+export const WIRE_VERSION = 19;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 148;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
+const HEADER_BYTES = 164;  // ...+ lpb 16 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -161,6 +161,8 @@ export function createStore() {
     chordsEnd: 0,
     /** Likewise for the section after the meters. */
     metersEnd: 0,
+    /** ...and for the one after the quantize block. */
+    quantizeEnd: 0,
     /**
      * v24 per-insert meters, pooled. Keyed by (track, device) — MATCHED ON
      * device id and never on position, because the engine's compacted insert
@@ -182,6 +184,23 @@ export function createStore() {
      * that payload field is unsigned; this does not.
      */
     quantize: [], quantizeCount: 0,
+    /**
+     * v27 the arrangement's SECTION SPINE, pooled. Already resolved by the engine —
+     * `startTick`, `endTick` and `startBar` are prefix-summed through the meter map there,
+     * so nothing here derives a position from a bar count.
+     *
+     * `sectionsTruncated` non-zero means the list is INCOMPLETE. Forwarded rather than
+     * dropped, because a short list that says nothing reads as a complete one.
+     */
+    sections: [], sectionCount: 0, sectionsTruncated: 0,
+    /**
+     * The arrange region's own generation, and the furthest placement end.
+     *
+     * The generation moves on a spine or meter change and NEVER on a note edit, so the
+     * spine can be cached on it and survive typing. `songEnd` is not the end of the last
+     * section: material can sit past the spine, and it plays and is unnamed.
+     */
+    arrangeVersion: 0, songEnd: 0,
     /**
      * Moves when a lane's quantize changes and NEVER when a note does — backend
      * kept it off the clip version deliberately, since quantize moves no authored
@@ -649,6 +668,73 @@ export function decode(buf, store) {
     // here so the comparison above sees LAST frame's value, which is the whole
     // point of a version gate.
     store.quantizeVersion = quantizeVersion;
+    store.quantizeEnd = at + have * QUANTIZE_BYTES;
+  }
+
+  /*
+   * THE SECTION SPINE, and now THIS is the last section of the frame.
+   *
+   * Bounds-checked like every block before it: a frame from an older sidecar simply stops
+   * here, and reading past a DataView throws — which would take the socket handler and the
+   * whole UI down to report a field that is merely absent.
+   *
+   * Copied only when the arrange GENERATION moves. It moves on a spine or meter change and
+   * never on a note edit, so this is one integer compare per frame while somebody types.
+   */
+  {
+    const at = store.quantizeEnd;
+    const want = v.getUint16(148, true);
+    const generation = v.getUint32(152, true);
+    const have = Math.max(0, Math.min(want, (buf.byteLength - at) / SECTION_BYTES | 0));
+    store.songEnd = Number(v.getBigUint64(156, true));
+    store.sectionsTruncated = v.getUint16(150, true);
+    if (generation !== store.arrangeVersion || have !== store.sectionCount) {
+      store.arrangeVersion = generation;
+      while (store.sections.length < have) {
+        store.sections.push({ id: 0, startBar: 1, bars: 0, color: 0,
+                              startTick: 0, endTick: 0, name: '' });
+      }
+      for (let i = 0; i < have; i++) {
+        const o = at + i * SECTION_BYTES;
+        const sec = store.sections[i];
+        sec.id = v.getUint32(o, true);
+        sec.startBar = v.getUint32(o + 4, true);
+        sec.bars = v.getUint32(o + 8, true);
+        sec.color = v.getUint32(o + 12, true);
+        sec.startTick = Number(v.getBigUint64(o + 16, true));
+        sec.endTick = Number(v.getBigUint64(o + 24, true));
+        // Nul-PADDED, not nul-terminated: a 24-character name carries no terminator, so
+        // the scan is bounded by the field and stops at the first nul. Scanning for a
+        // terminator instead walks into whatever follows.
+        let name = '';
+        for (let k = 0; k < 24; k++) {
+          const c = v.getUint8(o + 32 + k);
+          if (c === 0) break;
+          name += String.fromCharCode(c);
+        }
+        sec.name = name;
+      }
+      /*
+       * AND BLANK THE TAIL. `sections` is a POOL — it grows and is never shrunk, because
+       * shrinking it would allocate in the frame loop — so after a removal the array is
+       * longer than the count and the last entry is the section that was just deleted,
+       * still carrying its name and its position.
+       *
+       * Every reader is supposed to stop at `sectionCount`, and this is the third time
+       * this week a count-versus-extent read has drawn something that does not exist: a
+       * phantom track in a tombstoned slot, an extent mistaken for a live count, and my
+       * own accessor here returning a removed section. Documentation did not prevent any
+       * of them. So the pool is left in a state where forgetting is VISIBLE rather than
+       * plausible: a reader that ignores the count now sees id 0 with no name, which is
+       * obviously nothing, instead of a ghost that looks exactly like a real section.
+       */
+      for (let i = have; i < store.sections.length; i++) {
+        const sec = store.sections[i];
+        sec.id = 0; sec.startBar = 1; sec.bars = 0; sec.color = 0;
+        sec.startTick = 0; sec.endTick = 0; sec.name = '';
+      }
+      store.sectionCount = have;
+    }
   }
 
   store.ok = true;
@@ -661,6 +747,8 @@ const CHORD_BYTES = 40;
 const METER_BYTES = 16;
 /** 24 bytes each; see the sidecar's encode. */
 const QUANTIZE_BYTES = 24;
+/** 56 bytes each; see the sidecar's encode. */
+const SECTION_BYTES = 56;
 /** kUiMeterSilent — silent or below the floor, NOT "no reading". */
 export const METER_SILENT = -32768;
 

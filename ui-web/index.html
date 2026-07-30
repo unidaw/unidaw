@@ -5896,6 +5896,23 @@ window.__uni = {
     return state.view;
   },
   arrangeProbe: () => arrange.probe(),
+  /**
+   * The arrangement's SPINE, as the engine published it.
+   *
+   * `start_bar` and `start_tick` arrive already resolved — the engine prefix-sums the
+   * lengths through the meter map, so a section knows where it begins and nothing here
+   * recomputes it. That matters because the sum depends on the time signature at every
+   * boundary, and a second implementation of it would drift silently the first time a
+   * meter changed mid-song.
+   *
+   * `truncated` non-zero means the list is INCOMPLETE and must be drawn as such. A
+   * quietly short list reads as "the song ends here", which is the one thing a spine
+   * must never lie about.
+   */
+  sections: () => (engine ? { version: engine.arrangeVersion, count: engine.sectionCount,
+    truncated: engine.sectionsTruncated, songEnd: engine.songEnd,
+    // `slice(0, count)` — `sections` is a pool and its tail is whatever was there before.
+    list: engine.sections.slice(0, engine.sectionCount).map((s) => ({ ...s })) } : null),
   loop: () => (engine ? { start: engine.loopStart, end: engine.loopEnd } : null),
   // What the RULER is showing, which during a drag is not what the engine has.
   loopShown: () => loopOverride() || (engine ? { start: engine.loopStart, end: engine.loopEnd } : null),
