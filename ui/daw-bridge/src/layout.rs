@@ -225,6 +225,34 @@ pub const SAMPLER_MARKER_REMOVE: u16 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+/// SamplerSetEnvelope (82). The ADSR — until this existed the only way to reach a sampler
+/// envelope was to hand-edit the project JSON.
+///
+/// Times are in the modulator's OWN unit, named by `time_base` in the same payload: 0 =
+/// microseconds, 1 = nanoticks. Carrying the unit with the numbers is what makes the command
+/// complete — bare durations would mean different things depending on state the sender never saw.
+pub struct UiSamplerEnvelopePayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub mod_set_id: u32,
+    pub modulator_id: u16,
+    pub time_base: u8,
+    pub reserved1: u8,
+    pub attack: u32,
+    pub decay: u32,
+    pub release: u32,
+    pub sustain_milli: i16,
+    pub rate_milli: u16,
+    pub reserved2: u32,
+}
+
+/// Target the AMP envelope whatever its id, minting one if the mod set has none.
+pub const SAMPLER_ENV_AMP: u16 = 1 << 0;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 /// SetRowOps (81). The write half of the per-note ops the engine has published since v23/v32.
 ///
 /// `mask` says which fields this payload is speaking about: a bit CLEAR leaves that op alone, a
@@ -891,6 +919,10 @@ pub enum UiCommandType {
     /// could set one, so every op was readable and none writable. No kShmVersion bump: every
     /// field it writes is already on the wire outbound.
     SetRowOps = 81,
+
+    /// Sets a sampler modulator's ADSR. ADSR fits in 40 bytes; a hand-drawn multi-point
+    /// envelope does not and is deliberately not here — that needs an inward bulk carrier.
+    SamplerSetEnvelope = 82,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -1954,6 +1986,7 @@ mod wire_layout {
             UiSamplerMarkerPayload,
             UiSamplerEmitRowsPayload,
             UiSetRowOpsPayload,
+            UiSamplerEnvelopePayload,
         );
     }
 
@@ -1970,6 +2003,7 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSamplerMarkerPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerEmitRowsPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSetRowOpsPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerEnvelopePayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 32);
     }
 }

@@ -13,7 +13,8 @@ use daw_bridge::layout::{
     UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
     UiCommandType, UiPatcherPresetCommandPayload, UiSamplerKitRequestPayload,
     UiSamplerEmitRowsPayload, UiSamplerLoadPayload, UiSamplerMarkerPayload, UiSamplerSetSlotPayload, UiSamplerSlicePayload,
-    UiSetRowOpsPayload, UiWaveformRequestPayload, MASTER_TRACK_ID, ROW_OP_MASK_DELAY,
+    UiSamplerEnvelopePayload, UiSetRowOpsPayload, UiWaveformRequestPayload,
+    MASTER_TRACK_ID, SAMPLER_ENV_AMP, ROW_OP_MASK_DELAY,
     ROW_OP_MASK_PROBABILITY, ROW_OP_MASK_RETRIGGER, ROW_OP_MASK_SOUND, ROW_OP_MASK_SOUND_OFFSET,
     SAMPLER_LOAD_FIXED_PITCH, SAMPLER_MARKER_ADD,
     SAMPLER_MARKER_MOVE, SAMPLER_MARKER_REMOVE, SAMPLER_SLICE_CLEAR, SAMPLER_SLICE_EQUAL,
@@ -41,6 +42,7 @@ daw-cli — control surface for a running engine
                                    chop a source; --slots makes one playable slot per slice
   daw-cli do sampler-marker --track N --source 1 --op add|move|remove [--marker ID] [--frame F]
   daw-cli do set-row-ops --track N --note ID [--clip ID] [--ret N] [--prob N] [--sound N] [--offset N] [--delay TICKS] [--clear ret,prob,sound,offset,delay]
+  daw-cli do sampler-env --track N [--device ID] [--mod-set ID] [--amp|--modulator ID] --attack US --decay US --sustain MILLI --release US [--sync] [--rate MILLI]
                                    nudge one boundary — ids are stable, so no row moves
   daw-cli do sampler-emit-rows --track N --source 1 [--at TICK] [--step TICKS] [--column C]
                                    write the pattern that reproduces the chop
@@ -2299,6 +2301,50 @@ fn main() {
                                     1
                                 }
                             }
+                        }
+                    }
+                }
+                Some(&"sampler-env") => {
+                    // Times are in the modulator's own unit: microseconds by default, nanoticks
+                    // with --sync. The unit travels WITH the numbers, so "300 ms attack" cannot
+                    // silently become 300 nanoticks against a mod set someone switched to sync.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let mod_set = flag_u64(&args, "--mod-set", Some(0)).unwrap_or(0) as u32;
+                    let modulator = flag_u64(&args, "--modulator", Some(0)).unwrap_or(0) as u16;
+                    let attack = flag_u64(&args, "--attack", Some(0)).unwrap_or(0) as u32;
+                    let decay = flag_u64(&args, "--decay", Some(0)).unwrap_or(0) as u32;
+                    let release = flag_u64(&args, "--release", Some(0)).unwrap_or(0) as u32;
+                    let sustain = flag_u64(&args, "--sustain", Some(1000)).unwrap_or(1000) as i16;
+                    let rate = flag_u64(&args, "--rate", Some(1000)).unwrap_or(1000) as u16;
+                    let sync = args.iter().any(|a| a == "--sync");
+                    // --amp is the default: naming a modulator by id is the exception, and a
+                    // caller who has not read the mod set has no id to name.
+                    let amp = modulator == 0 || args.iter().any(|a| a == "--amp");
+                    let payload = UiSamplerEnvelopePayload {
+                        command_type: UiCommandType::SamplerSetEnvelope as u16,
+                        flags: if amp { SAMPLER_ENV_AMP } else { 0 },
+                        track_id: track,
+                        device_id: device,
+                        mod_set_id: mod_set,
+                        modulator_id: modulator,
+                        time_base: if sync { 1 } else { 0 },
+                        reserved1: 0,
+                        attack,
+                        decay,
+                        release,
+                        sustain_milli: sustain,
+                        rate_milli: rate,
+                        reserved2: 0,
+                    };
+                    match handle.send_sampler_envelope(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"sampler-env\", \"track\": {track}, \"attack\": {attack}, \"decay\": {decay}, \"sustain\": {sustain}, \"release\": {release}, \"sync\": {sync} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
                         }
                     }
                 }

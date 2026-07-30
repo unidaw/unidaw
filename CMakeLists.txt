@@ -561,6 +561,13 @@ add_test(NAME producer_load
 )
 set_tests_properties(producer_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A live engine sets the envelope, then the saved project is rendered OFFLINE and the audio is
+# measured — a check that read the numbers back would pass with the envelope never reaching a voice.
+add_test(NAME sampler_envelope_write
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_envelope_write_check.sh
+)
+set_tests_properties(sampler_envelope_write PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A live engine, but it asserts on the DOCUMENT rather than on audio, so it needs no device.
 add_test(NAME row_ops_write
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/row_ops_write_check.sh

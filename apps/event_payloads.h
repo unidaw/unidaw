@@ -280,8 +280,53 @@ enum class UiCommandType : uint16_t {
   /// means "clear this op". Without the distinction there is no way to remove one op from a note
   /// without resending the other four, and a partial resend is how two facts about one note
   /// start disagreeing.
-  SetRowOps = 81,  // next free 82
+  SetRowOps = 81,
+
+  /// Sets a sampler modulator's ADSR — the single most-used control on any sampler, and until
+  /// this existed it could only be reached by hand-editing the project JSON. `sampler-slot`
+  /// could CHOOSE a slot's mod set and nothing could edit what was in one.
+  ///
+  /// ADSR fits in 40 bytes, so this needs no bulk carrier. A hand-drawn multi-point envelope
+  /// does not, and is deliberately not here: that is the pencil editor, it needs an inward
+  /// carrier for payloads over 40 bytes (task #85), and shipping half of it as "ADSR plus a
+  /// truncated point list" would be a worse contract than shipping the half that is complete.
+  SamplerSetEnvelope = 82,  // next free 83
 };
+
+// SamplerSetEnvelope flags.
+enum : uint16_t {
+  // Target the AMP envelope — the one modulating Volume — whatever its id, creating it if the
+  // mod set has none. Almost every caller means this, and requiring an id first would make the
+  // common case a two-step round trip against state the caller has not read yet.
+  kSamplerEnvAmp = 1u << 0,
+};
+
+// SAMPLER SET ENVELOPE (opcode 82). 40 bytes.
+//
+// TIMES ARE IN THE MODULATOR'S OWN UNIT, named by `timeBase` in the same payload: 0 =
+// microseconds (a decay that means the same at any tempo — right for drums), 1 = nanoticks (an
+// envelope that follows the project — right for a bar-long sweep). Carrying the unit WITH the
+// numbers is what makes the command complete: a payload of bare durations would mean different
+// things depending on state the sender never saw, and "set a 300 ms attack" would silently
+// become a 300-nanotick one against a mod set someone else had switched to tempo-sync.
+struct UiSamplerEnvelopePayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetEnvelope);
+  uint16_t flags = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t modSetId = 0;
+  uint16_t modulatorId = 0;
+  uint8_t timeBase = 0;
+  uint8_t reserved1 = 0;
+  uint32_t attack = 0;
+  uint32_t decay = 0;
+  uint32_t release = 0;
+  int16_t sustainMilli = 1000;
+  uint16_t rateMilli = 1000;
+  uint32_t reserved2 = 0;
+};
+static_assert(sizeof(UiSamplerEnvelopePayload) == 40,
+              "UiSamplerEnvelopePayload must be 40 bytes");
 
 // SetRowOps mask bits. Which ops the payload is actually speaking about — see the opcode.
 enum : uint16_t {
@@ -612,6 +657,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SaveModule: return "save_module";
     case UiCommandType::LoadModule: return "load_module";
     case UiCommandType::SetRowOps: return "set_row_ops";
+    case UiCommandType::SamplerSetEnvelope: return "sampler_set_envelope";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";

@@ -10689,6 +10689,118 @@ struct TrackRuntime {
       return;
     }
 
+    // ---- SAMPLER SET ENVELOPE (82). The ADSR, which nothing could reach before.
+    if (entry.size == sizeof(daw::UiSamplerEnvelopePayload) &&
+        commandType == daw::UiCommandType::SamplerSetEnvelope) {
+      daw::UiSamplerEnvelopePayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.envelope_rejected")
+            .field("track", p.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      const char* why = "no_such_mod_set";
+      uint16_t targetId = 0;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          for (auto& ms : d.sampler.modSets) {
+            if (p.modSetId != 0 && ms.id != p.modSetId) {
+              continue;
+            }
+            daw::SamplerModulator* mod = nullptr;
+            if ((p.flags & daw::kSamplerEnvAmp) != 0) {
+              // The amp envelope, whatever its id — and MINTED if the mod set has none, which is
+              // the state every project starts in. Refusing here would mean a caller had to
+              // create a modulator through some other command that does not exist.
+              for (auto& m : ms.modulators) {
+                if (m.kind == daw::ModKind::Envelope &&
+                    m.target == daw::ModTarget::Volume) {
+                  mod = &m;
+                  break;
+                }
+              }
+              if (mod == nullptr) {
+                daw::SamplerModulator fresh;
+                fresh.id = ms.nextModulatorId++;
+                fresh.kind = daw::ModKind::Envelope;
+                fresh.target = daw::ModTarget::Volume;
+                fresh.apply = 1;  // multiply — the right combination for Volume
+                fresh.depthMilli = 1000;
+                ms.modulators.push_back(fresh);
+                mod = &ms.modulators.back();
+              }
+            } else {
+              for (auto& m : ms.modulators) {
+                if (m.id == p.modulatorId) {
+                  mod = &m;
+                  break;
+                }
+              }
+              if (mod == nullptr) {
+                why = "no_such_modulator";
+                break;
+              }
+            }
+            mod->kind = daw::ModKind::Envelope;
+            mod->env = daw::makeAdsr(p.attack, p.decay,
+                                     std::clamp<int32_t>(p.sustainMilli, 0, 1000),
+                                     p.release);
+            mod->timeBase = p.timeBase != 0 ? 1 : 0;
+            // 250..4000 matches the field's documented range. Zero would divide by zero in the
+            // runner's unit conversion, so it is not merely out of range but unusable.
+            mod->rateMilli = static_cast<uint16_t>(
+                std::clamp<int32_t>(p.rateMilli == 0 ? 1000 : p.rateMilli, 250, 4000));
+            // The ADSR editor, explicitly. Never inferred from the shape — see the field's
+            // comment: sniffing "four points with a sustain loop?" would flip the editor out
+            // from under someone who hand-drew a four-point curve.
+            mod->editor = 0;
+            daw::repairEnvShape(mod->env);
+            targetId = mod->id;
+            applied = true;
+            break;
+          }
+          if (applied || why != nullptr) {
+            break;
+          }
+        }
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        DAW_EVENT("sampler.envelope_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("mod_set", p.modSetId)
+            .field("reason", why);
+        return;
+      }
+      DAW_EVENT("sampler.envelope_set")
+          .field("track", p.trackId)
+          .field("mod_set", p.modSetId)
+          .field("modulator", static_cast<uint32_t>(targetId))
+          .field("attack", static_cast<uint64_t>(p.attack))
+          .field("decay", static_cast<uint64_t>(p.decay))
+          .field("sustain_milli", static_cast<int64_t>(p.sustainMilli))
+          .field("release", static_cast<uint64_t>(p.release))
+          .field("time_base", static_cast<uint32_t>(p.timeBase));
+      return;
+    }
+
     // ---- SAMPLER LOAD (73). Mints a SOURCE and a SLOT that plays it.
     if (entry.size == sizeof(daw::UiSamplerLoadPayload) &&
         commandType == daw::UiCommandType::SamplerLoad) {

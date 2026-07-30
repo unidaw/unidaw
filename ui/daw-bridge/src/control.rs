@@ -1198,6 +1198,17 @@ impl EngineHandle {
         )
     }
 
+    /// Set a sampler modulator's ADSR (SamplerSetEnvelope).
+    pub fn send_sampler_envelope(
+        &self,
+        payload: crate::layout::UiSamplerEnvelopePayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerEnvelopePayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerEnvelopePayload>(),
+        )
+    }
+
     /// Write a note's row ops (SetRowOps). The write half of what the engine already publishes.
     pub fn send_set_row_ops(
         &self,
