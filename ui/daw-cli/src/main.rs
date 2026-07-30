@@ -2398,11 +2398,10 @@ fn main() {
                                 )
                             });
                         }
-                        // A stream id distinct per invocation, so two agents drawing at once do
-                        // not interleave into one buffer. The pid is enough: the engine only
-                        // needs them to differ, not to mean anything.
-                        let stream = (std::process::id() as u16) | 1;
-                        match handle.send_bulk(stream, &buf) {
+                        // The stream id is send_bulk's to pick — see its comment. This used
+                        // to derive one from the pid here, which is constant for a process
+                        // sending twice and would have interleaved two draws into one buffer.
+                        match handle.send_bulk(&buf) {
                             Ok(()) => {
                                 let n = pts.len();
                                 let bytes = buf.len();

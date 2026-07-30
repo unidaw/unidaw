@@ -10,7 +10,7 @@
 # It is what makes this check possible: the carrier is only trustworthy if something that came
 # across it can be HEARD, and a hand-drawn envelope is audible in a way a byte count is not.
 #
-# FOUR PROPERTIES:
+# FIVE PROPERTIES:
 #   ARRIVES     a payload spanning several chunks reassembles with every point intact — asserted
 #               on the POINT COUNT the engine parsed, not on the assembled byte count, which is
 #               the zero-padded transport length and would be an assertion about the padding
@@ -20,6 +20,8 @@
 #   STEPS       a STEP point holds its value and then jumps, which is the flag that makes
 #               sample-and-hold drawable without a second envelope kind. Measured as a FLAT
 #               stretch followed by a change, because that is what "hold then jump" means
+#   REPAIRS     a shape the engine had to fix says so. A release loop with no terminator is a
+#               voice leak; the engine adds one, and a fade the user did not draw is audible
 #   REFUSES     a truncated message is REFUSED, not delivered. An envelope missing half its
 #               points is still a VALID envelope, so a carrier that delivered what arrived would
 #               produce a wrong sound instead of an error — this is the property seq/total exist
@@ -198,6 +200,19 @@ raise SystemExit(0 if $S_HOLD < 400 and $S_AFTER > 800 else 1)" || \
   fail "a STEP point did not hold then jump: mid-hold=$S_HOLD, after=$S_AFTER. Halfway between a
         0 point and a 1000 point, STEPPED means still 0 — a linear segment would read about half
         way up, which is what dropping the flag produces"
+
+# ---- REPAIRS ARE ANNOUNCED. A release loop with no release fade is a VOICE LEAK: after note-off
+# the envelope cycles forever, never reaches a last point, and nothing frees the voice. The engine
+# adds a terminator — and must SAY it did, because a fade the user did not draw is audible and
+# "it does not sound like I drew it" is the worst possible way to find out.
+draw repaired --track 0 --points "0,0;100000,1000;400000,300;800000,0" --release-loop 2,3
+REP="$(grep -o '"event":"sampler.envelope_repaired"[^}]*' "$TMP/repaired.eng.log" | tail -1)"
+[ -n "$REP" ] || fail "an envelope with a release loop and no release fade was repaired silently.
+        repairEnvShape adds the terminator that stops the voice leaking, and its own comment says
+        the caller must report it — a clamped envelope is a sound the user cannot explain"
+echo "  repaired:  $REP"
+echo "$REP" | grep -q '"added_release_fade":1' || \
+  fail "the repair was reported but not as an added release fade: $REP"
 
 # ---- REFUSES. A payload whose header claims more points than the bytes carry must be refused
 # rather than delivered short. Sent by hand, because no correct sender would build one.

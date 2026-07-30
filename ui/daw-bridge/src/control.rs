@@ -1206,7 +1206,22 @@ impl EngineHandle {
     /// The last chunk is ZERO-PADDED to 32 bytes rather than short, so every entry on the ring is
     /// the same size and the reader never needs a length field it could disagree with. The
     /// message's own header carries the real length; trailing zeroes are the payload's business.
-    pub fn send_bulk(&self, stream_id: u16, payload: &[u8]) -> Result<(), String> {
+    pub fn send_bulk(&self, payload: &[u8]) -> Result<(), String> {
+        // THE STREAM ID IS OURS TO PICK, not the caller's. The engine merges chunks that share
+        // an id, so reusing one while an earlier message is still incomplete interleaves two
+        // payloads into one buffer and delivers a corrupt message that still parses. Asking
+        // callers to vary it is asking them to hold a correctness property the library can
+        // simply guarantee — and the first caller I wrote derived it from the pid, which is
+        // CONSTANT for a process sending twice.
+        //
+        // Seeded from the pid so two processes are unlikely to collide, incremented per message
+        // so one process never collides with itself. Never zero: a zero id is the obvious value
+        // for an uninitialised sender, and keeping it out of circulation makes that mistake
+        // visible instead of merging into a real stream.
+        static NEXT_STREAM: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+        let seed = std::process::id() as u16;
+        let n = NEXT_STREAM.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let stream_id = seed.wrapping_add(n) | 1;
         if payload.len() < 2 {
             return Err("bulk payload must carry a commandType".to_string());
         }

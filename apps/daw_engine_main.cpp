@@ -8687,6 +8687,7 @@ struct TrackRuntime {
 
       bool applied = false;
       uint16_t targetId = 0;
+      daw::EnvRepair repair;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         for (auto& d : runtime->track.chain.devices) {
@@ -8738,7 +8739,13 @@ struct TrackRuntime {
             // Enforces the one invariant that is not the caller's job to remember: a release
             // loop must have a non-zero releaseFade, or the envelope never finishes, the voice
             // never frees, and the leak is silent.
-            daw::repairEnvShape(mod->env);
+            //
+            // REPORTED, never silent. repairEnvShape's own comment says the caller fires this,
+            // and it is right: a clamped envelope is a sound the user cannot explain, and a
+            // drawn shape is exactly where a bad index or a backwards time arrives. Discarding
+            // the result would turn "your release loop was out of range and I removed it" into
+            // "it does not sound like I drew it".
+            repair = daw::repairEnvShape(mod->env);
             targetId = mod->id;
             applied = true;
             break;
@@ -8763,6 +8770,18 @@ struct TrackRuntime {
           .field("modulator", static_cast<uint32_t>(targetId))
           .field("points", static_cast<uint32_t>(h.pointCount))
           .field("bytes", static_cast<uint64_t>(buf.size()));
+      if (repair.any()) {
+        DAW_EVENT("sampler.envelope_repaired")
+            .field("track", h.trackId)
+            .field("modulator", static_cast<uint32_t>(targetId))
+            .field("reordered", repair.reorderedPoints)
+            .field("dropped", repair.droppedPoints)
+            .field("cleared_sustain_loop", repair.clearedSustainLoop ? 1u : 0u)
+            .field("cleared_release_loop", repair.clearedReleaseLoop ? 1u : 0u)
+            .field("swapped_sustain_loop", repair.swappedSustainLoop ? 1u : 0u)
+            .field("swapped_release_loop", repair.swappedReleaseLoop ? 1u : 0u)
+            .field("added_release_fade", repair.addedReleaseFade ? 1u : 0u);
+      }
       return;
     }
 
@@ -10952,6 +10971,7 @@ struct TrackRuntime {
       bool applied = false;
       const char* why = "no_such_mod_set";
       uint16_t targetId = 0;
+      daw::EnvRepair repair;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         for (auto& d : runtime->track.chain.devices) {
@@ -11010,7 +11030,10 @@ struct TrackRuntime {
             // comment: sniffing "four points with a sustain loop?" would flip the editor out
             // from under someone who hand-drew a four-point curve.
             mod->editor = 0;
-            daw::repairEnvShape(mod->env);
+            // Reported, never silent — see the pencil path. An ADSR can be repaired too: a
+            // sustain of 0 with attack+decay+release all 0 collapses four points onto one time,
+            // and the user should be told their envelope was nudged rather than left wondering.
+            repair = daw::repairEnvShape(mod->env);
             targetId = mod->id;
             applied = true;
             break;
@@ -11040,6 +11063,18 @@ struct TrackRuntime {
           .field("sustain_milli", static_cast<int64_t>(p.sustainMilli))
           .field("release", static_cast<uint64_t>(p.release))
           .field("time_base", static_cast<uint32_t>(p.timeBase));
+      if (repair.any()) {
+        DAW_EVENT("sampler.envelope_repaired")
+            .field("track", p.trackId)
+            .field("modulator", static_cast<uint32_t>(targetId))
+            .field("reordered", repair.reorderedPoints)
+            .field("dropped", repair.droppedPoints)
+            .field("cleared_sustain_loop", repair.clearedSustainLoop ? 1u : 0u)
+            .field("cleared_release_loop", repair.clearedReleaseLoop ? 1u : 0u)
+            .field("swapped_sustain_loop", repair.swappedSustainLoop ? 1u : 0u)
+            .field("swapped_release_loop", repair.swappedReleaseLoop ? 1u : 0u)
+            .field("added_release_fade", repair.addedReleaseFade ? 1u : 0u);
+      }
       return;
     }
 
