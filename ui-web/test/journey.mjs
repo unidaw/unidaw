@@ -42,10 +42,18 @@ page.on('response', (r) => {
 });
 // Confirms are part of the flow (removing a track, removing a device). Accept
 // them by default; a step that wants to cancel says so.
-let lastDialog = null, dialogAnswer = 'accept';
+let lastDialog = null, dialogAnswer = 'accept', dialogText = null;
 page.on('dialog', async (d) => {
   lastDialog = d.message();
-  if (dialogAnswer === 'accept') await d.accept(); else await d.dismiss();
+  /*
+   * `dialogText` for a PROMPT, and it matters that this is separate from accepting.
+   *
+   * `accept()` with no argument answers a prompt with its DEFAULT value — which for the section
+   * rename is the name it already has, so the rename appeared to work and changed nothing.
+   * A step that means to TYPE something has to say what.
+   */
+  if (dialogAnswer !== 'accept') { await d.dismiss(); return; }
+  await (dialogText === null ? d.accept() : d.accept(dialogText));
 });
 
 let pass = 0, fail = 0, gaps = [];
@@ -265,6 +273,59 @@ await page.keyboard.press('F2');
 await settle(500);
 const inArrange = (await st()).view;
 ok(inArrange === 'arrange', 'F2 switches to the arrangement', inArrange);
+
+/*
+ * ...AND NAME A SPAN OF IT. Sections have their own suite; this is here because the spine is
+ * part of what a person does in an arrangement, and the journey is the one suite that runs
+ * things in the order a session runs them. A feature that only works in the middle of its own
+ * suite is a feature that works in a laboratory.
+ *
+ * By POINTER, through the strip's own gutter button, because that is the path a person takes —
+ * the console path is covered where the console is covered.
+ */
+{
+  await page.locator('.ar-spine-btn').nth(0).click();
+  await settle(900);
+  const spine = await page.evaluate(() => window.__uni.sections());
+  ok(spine && spine.count === 1, 'the + in the sections gutter names the first four bars',
+     JSON.stringify(spine && spine.list));
+  // Double-click renames it. The prompt is the page's; the harness's dialog handler answers it,
+  // and `dialogText` is what makes that a rename rather than an accept-the-default.
+  dialogText = 'verse one';
+  const box = await page.locator('.ar-section').first().boundingBox();
+  await page.mouse.dblclick(box.x + 20, box.y + box.height / 2);
+  await settle(900);
+  dialogText = null;
+  const named = await page.evaluate(() => window.__uni.sections());
+  ok(named && named.list[0] && named.list[0].name === 'verse one',
+     'and double-clicking it renames the section',
+     JSON.stringify(named && named.list[0]));
+  /*
+   * DRAG ITS BOUNDARY, which is the gesture the whole feature is for — and check the RIPPLE,
+   * because a length change is not a local edit: every later section starts later, since a
+   * start is the sum of the lengths before it.
+   */
+  await page.locator('.ar-spine-btn').nth(0).click();      // a second section to be moved
+  await settle(900);
+  const before = await page.evaluate(() => window.__uni.sections());
+  const first = before.list[0];
+  const el = page.locator(`.ar-section[data-section="${first.id}"]`);
+  const b2 = await el.boundingBox();
+  const barPx = b2.width / first.bars;
+  const y = b2.y + b2.height / 2;
+  await page.mouse.move(b2.x + b2.width - 3, y);
+  await page.mouse.down();
+  await page.mouse.move(b2.x + b2.width - 3 + 2 * barPx, y, { steps: 8 });
+  await page.mouse.up();
+  await settle(1200);
+  const after = await page.evaluate(() => window.__uni.sections());
+  ok(after.list[0].bars === first.bars + 2,
+     'dragging its right edge makes the section longer',
+     `${first.bars} -> ${after.list[0].bars}`);
+  ok(after.list[1] && after.list[1].startBar === before.list[1].startBar + 2,
+     'and the section after it moves — the spine is a prefix sum',
+     `${before.list[1] && before.list[1].startBar} -> ${after.list[1] && after.list[1].startBar}`);
+}
 
 // ---------------------------------------------------------------------------
 step('8. mix');

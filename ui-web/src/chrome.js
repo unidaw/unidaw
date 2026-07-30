@@ -258,7 +258,16 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
    * Bars, not ticks, because that is what the design says and what a person means by a loop.
    */
   const loopChip = label('ch-chip ch-loop', '');
-  let lastLoopKey = '';
+  /*
+   * `null`, NOT `''` — a sentinel no real value can equal.
+   *
+   * Seeded to the empty string, the first frame's key is also '' so the guard skips, and the
+   * `display: none` that HIDES an absent chip is never written. The chip then holds its space
+   * and its border for a loop that does not exist, forever, until one is set. Every other
+   * guard in this file has the same shape and the same trap: a cache seeded to a value the
+   * first frame can produce never applies its initial state.
+   */
+  let lastLoopKey = null;
   /*
    * THE METRONOME, which the engine does not have.
    *
@@ -315,7 +324,8 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
    * ago" would be a lie.
    */
   const savedChip = label('ch-chip ch-saved', '');
-  let lastSavedText = '';
+  // `null` for the reason `lastLoopKey` gives: seeded to '' the hidden state is never applied.
+  let lastSavedText = null;
 
   const right = document.createElement('div');
   right.className = 'ch-right';

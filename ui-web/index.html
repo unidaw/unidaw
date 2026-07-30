@@ -6647,6 +6647,21 @@ window.__uni = {
   nameSection: (id, name) => dockApi.nameSection(id, name),
   secLength: (id, bars) => dockApi.secLength(id, bars),
   moveSection: (id, place) => dockApi.moveSection(id, place),
+  /**
+   * The audio device's block and rate, as the engine published them.
+   *
+   * Exposed so the chrome's latency readout can be checked against a division done somewhere
+   * else — a suite that read the readout and believed it would pass on any plausible constant.
+   */
+  /*
+   * ...and the SONG'S BAR in ticks. On `dockApi` and not here, for the FIFTH time this session:
+   * the ratchet in unit.mjs checks that every method the console calls exists on `dockApi`, and
+   * nothing checks that a `__uni` hook a test reaches for exists at all. Delegating, so there is
+   * one implementation and both names find it.
+   */
+  ticksPerBar: () => dockApi.ticksPerBar(),
+  deviceAudio: () => (engine ? { blockSize: engine.blockSize || 0,
+                                 sampleRateHz: engine.sampleRateHz || 0 } : null),
   /** Which section the strip has selected. The console names ids; this is the click. */
   selectSection: (id) => { state.selectedSection = Number(id) || 0; schedule();
                            return state.selectedSection; },
