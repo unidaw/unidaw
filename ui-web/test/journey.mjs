@@ -790,10 +790,24 @@ step('22. the song survives a save and a reload');
    * Reported with the repro. Blocked rather than deleted so it turns green when the
    * loader does, instead of being rediscovered here.
    */
-  blocked(afterNames.length === beforeNames.length,
-          'the same number of tracks comes back',
-          'engine: a project saved after a track was removed loses a track on LOAD — '
-          + `${beforeNames.length} live -> ${afterNames.length}`);
+  /*
+   * NO LONGER BLOCKED. A project saved after a track was removed used to lose a track
+   * when it was loaded back — and, it turned out, to INVENT one as well.
+   *
+   * The cause was one word next to where I had guessed: the load stored a track COUNT
+   * where it needed an id EXTENT. Ids never renumber, so a file whose ids ran [1,2,3]
+   * had size 3, every publisher clamped to that, and track 3 was adopted and loaded
+   * perfectly and then hidden from every reader — while the unclaimed slot 0 sat
+   * inside the count and came back as an editable empty lane the next save wrote out
+   * as real. One destroyed, one fabricated, nothing reported.
+   *
+   * That is also why it read as a rename bug from here: the name array I was diffing
+   * had a shifted entry AND a missing one, and the phantom in slot 0 supplied the
+   * "Track 1".
+   */
+  ok(afterNames.length === beforeNames.length,
+     'the same number of tracks comes back',
+     `${beforeNames.length} live -> ${afterNames.length}`);
   /*
    * AND THE NAMES OF THE TRACKS THAT DID COME BACK.
    *
@@ -814,12 +828,12 @@ step('22. the song survives a save and a reload');
    * itself, so it failed for reasons that had nothing to do with names, and the
    * marker's explanation was a guess that read like a finding.
    *
-   * Renames round-trip. What does not is the track count, one check above.
+   * Renames round-trip. The count failure that used to be tangled up with this one is
+   * fixed too, so the whole live list is compared again rather than a prefix of it.
    */
-  ok(JSON.stringify(afterNames) === JSON.stringify(beforeNames.slice(0, afterNames.length)),
+  ok(JSON.stringify(afterNames) === JSON.stringify(beforeNames),
      'and so do the track names',
-          'engine: SetTrackName updates the UI mirror but not the saved project',
-          `${JSON.stringify(beforeNames)} -> ${JSON.stringify(afterNames)}`);
+     `${JSON.stringify(beforeNames)} -> ${JSON.stringify(afterNames)}`);
 }
 
 // ---------------------------------------------------------------------------
