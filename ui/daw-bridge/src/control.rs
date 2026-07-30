@@ -1198,6 +1198,17 @@ impl EngineHandle {
         )
     }
 
+    /// Write a note's row ops (SetRowOps). The write half of what the engine already publishes.
+    pub fn send_set_row_ops(
+        &self,
+        payload: crate::layout::UiSetRowOpsPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSetRowOpsPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSetRowOpsPayload>(),
+        )
+    }
+
     /// Write the pattern that reproduces a chop.
     pub fn send_sampler_emit_rows(
         &self,

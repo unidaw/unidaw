@@ -266,8 +266,56 @@ enum class UiCommandType : uint16_t {
   /// They ride the same payload as SaveProject/LoadProject (a packed NAME), because they are the
   /// same operation at a different level of packing — not a different kind of save.
   SaveModule = 79,
-  LoadModule = 80,  // next free 81
+  LoadModule = 80,
+
+  /// Writes a note's ROW OPS: retrigger, probability, the sound address, the sample offset and
+  /// the onset delay. Addressed by NOTE ID, not by position.
+  ///
+  /// These have been PUBLISHED on UiClipNote since v23 and v32 and no command could ever set
+  /// one, so every op was readable and none was writable — the editor could draw an ops cell it
+  /// had no way to commit. This is that missing half, and nothing else: no kShmVersion bump,
+  /// because every field it writes is already on the wire outbound.
+  ///
+  /// THE MASK IS THE POINT. A bit CLEAR means "leave this op alone"; a bit SET with a zero value
+  /// means "clear this op". Without the distinction there is no way to remove one op from a note
+  /// without resending the other four, and a partial resend is how two facts about one note
+  /// start disagreeing.
+  SetRowOps = 81,  // next free 82
 };
+
+// SetRowOps mask bits. Which ops the payload is actually speaking about — see the opcode.
+enum : uint16_t {
+  kRowOpMaskRetrigger = 1u << 0,
+  kRowOpMaskProbability = 1u << 1,
+  kRowOpMaskSound = 1u << 2,
+  kRowOpMaskSoundOffset = 1u << 3,
+  kRowOpMaskDelay = 1u << 4,
+};
+
+// SET ROW OPS (opcode 81). 40 bytes like every other command payload.
+//
+// `delayNanoticks` is ABSOLUTE TICKS, not the num/den fraction the notation uses. NotePayload
+// stores absolute ticks and the bridge's RowOps resolves the fraction against a beat length at
+// parse time, so the wire carries what the store holds — one fact, converted once, rather than a
+// second representation for the engine to re-derive and disagree about.
+//
+// There is deliberately no PAN field, though the notation has one: pan is not on NotePayload,
+// which is pinned at 32 bytes by static_assert, so adding it is a real decision about growing
+// the per-note-per-block copy and not something to slip in beside four fields that already fit.
+struct UiSetRowOpsPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SetRowOps);
+  uint16_t mask = 0;
+  uint32_t trackId = 0;
+  uint32_t clipId = 0;
+  uint32_t noteId = 0;
+  uint32_t delayNanoticks = 0;
+  uint16_t sound = 0;
+  uint16_t soundOffset = 0;
+  uint8_t retrigger = 0;
+  uint8_t probability = 0;
+  uint8_t reserved[14]{};
+};
+static_assert(sizeof(UiSetRowOpsPayload) == 40, "UiSetRowOpsPayload must be 40 bytes");
 
 // SAMPLER LOAD (opcode 73). Exactly 40 bytes, which is the whole command payload — so `name`
 // gets 24 of them and is a project-relative FILE NAME rather than a path. See the opcode's
@@ -563,6 +611,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SamplerEmitRows: return "sampler_emit_rows";
     case UiCommandType::SaveModule: return "save_module";
     case UiCommandType::LoadModule: return "load_module";
+    case UiCommandType::SetRowOps: return "set_row_ops";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";

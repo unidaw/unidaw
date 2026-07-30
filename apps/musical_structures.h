@@ -242,6 +242,29 @@ struct MusicalEvent {
     return std::nullopt;
   }
 
+  /// The note carrying `id`, if it is in this clip.
+  ///
+  /// BY ID, not by (tick, column), because a row-op edit addresses a note that is already on
+  /// screen under a cursor — the client knows exactly which note it means, and re-deriving it
+  /// from a position would reintroduce the ambiguity the stable id exists to remove. Two notes
+  /// can share a tick and a column (a chord stack); only one can share an id.
+  ///
+  /// Row ops never move a note, so a caller mutating through this pointer cannot break the
+  /// tick-sorted invariant addEvent maintains. Onset DELAY is applied at playback
+  /// (expandNoteStrikes adds it to the start tick) rather than stored as a new position, which
+  /// is what keeps that true — and is also why nudging a note by an op never reorders the clip.
+  MusicalEvent* findNoteById(EventId id) {
+    if (id == kEventIdNone) {
+      return nullptr;
+    }
+    for (auto& event : events_) {
+      if (event.type == MusicalEventType::Note && event.payload.note.noteId == id) {
+        return &event;
+      }
+    }
+    return nullptr;
+  }
+
   /// The note in `column` that is still sounding at `tick`, if any. Events are
   /// kept sorted, so the last one starting before `tick` is the candidate.
   MusicalEvent* soundingNoteInColumn(uint64_t tick, uint8_t column) {

@@ -7775,6 +7775,102 @@ struct TrackRuntime {
     return true;
   };
 
+  // SET ROW OPS (81). The write half of the per-note ops the engine has been publishing since
+  // v23 and v32 — retrigger, probability, the sound address, the sample offset, the onset delay.
+  // Until this existed every one of them was readable and none was writable.
+  //
+  // ADDRESSED BY NOTE ID, not by (tick, column). The client is editing a note under a cursor and
+  // knows exactly which one it means; re-deriving it from a position would reintroduce the
+  // ambiguity the stable id exists to remove, and two notes can legitimately share a tick and a
+  // column. `clipId` narrows the search when the caller knows it and is ignored when zero.
+  //
+  // Commits exactly like a note edit, because it IS one: snapshot for undo, mutate the owned
+  // clip, fork it (copy-on-write, so editing a clip placed four times does not silently rewrite
+  // a clip another track shares), re-derive the flat clip, bump both versions. Undo is the
+  // structural whole-store snapshot rather than a fine-grained entry — restoring the notes
+  // restores their ops, and a second description of a note's state is a second thing to disagree.
+  auto applySetRowOps = [&](uint32_t trackId,
+                            uint32_t clipId,
+                            daw::EventId noteId,
+                            const daw::RowOpEdit& edit,
+                            bool recordUndo) -> bool {
+    TrackRuntime* runtime = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      if (trackId < tracks.size()) {
+        runtime = tracks[trackId].get();
+      }
+    }
+    if (!runtime) {
+      DAW_EVENT("rowops.rejected")
+          .field("track", trackId)
+          .field("note", static_cast<uint64_t>(noteId))
+          .field("reason", "no_such_track");
+      return false;
+    }
+
+    std::optional<daw::ClipEditResult> result;
+    std::shared_ptr<const ClipSnapshot> snapshot;
+    uint64_t placementAt = 0;
+    {
+      std::lock_guard<std::mutex> lock(runtime->trackMutex);
+      TrackStoreState before = snapshotTrackStore(*runtime);
+      size_t ownedIndex = runtime->ownedClips.size();
+      for (size_t i = 0; i < runtime->ownedClips.size(); ++i) {
+        if (clipId != 0 && runtime->ownedClips[i].id != clipId) {
+          continue;
+        }
+        if (runtime->ownedClips[i].clip.findNoteById(noteId) != nullptr) {
+          ownedIndex = i;
+          break;
+        }
+      }
+      if (ownedIndex >= runtime->ownedClips.size()) {
+        DAW_EVENT("rowops.rejected")
+            .field("track", trackId)
+            .field("clip", clipId)
+            .field("note", static_cast<uint64_t>(noteId))
+            .field("reason", "no_such_note");
+        return false;
+      }
+      // Where this clip sits, so the diff's tick is on the timeline rather than clip-relative —
+      // the same shiftDiffTick a note edit does.
+      for (const auto& pl : runtime->sourcePlacements) {
+        if (pl.clipId == runtime->ownedClips[ownedIndex].id && pl.at) {
+          placementAt = *pl.at;
+          break;
+        }
+      }
+      result = daw::setNoteRowOps(runtime->ownedClips[ownedIndex].clip, trackId, noteId,
+                                  edit, runtime->trackClipVersion, recordUndo);
+      if (result) {
+        forkOwnedClip(*runtime, ownedIndex);
+        runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+        snapshot = rebuildFlatAndPublish(*runtime);
+        if (recordUndo) {
+          pushStructuralUndo(trackId, std::move(before), snapshotTrackStore(*runtime));
+        }
+      }
+    }
+    if (!result) {
+      DAW_EVENT("rowops.rejected")
+          .field("track", trackId)
+          .field("note", static_cast<uint64_t>(noteId))
+          .field("reason", "out_of_range");
+      return false;
+    }
+    shiftDiffTick(result->diff, placementAt);
+    std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
+    clipVersion.fetch_add(1, std::memory_order_acq_rel);  // see applyAddNote for the order
+    clipDirty.store(true, std::memory_order_release);
+    emitUiDiff(result->diff);
+    DAW_EVENT("rowops.set")
+        .field("track", trackId)
+        .field("note", static_cast<uint64_t>(noteId))
+        .field("mask", static_cast<uint64_t>(edit.mask));
+    return true;
+  };
+
   // Arrangement placement ops (Move/Resize/Remove/Add) all mutate a track's placement
   // store and commit exactly like a note edit: snapshot for undo, mutate, re-derive the
   // flat clip + audio render, push the undo, republish + bump the clip version so the UI
@@ -10153,6 +10249,27 @@ struct TrackRuntime {
           .field("rows", written)
           .field("at", p.atNanotick)
           .field("end", tick);
+      return;
+    }
+
+    // ---- SET ROW OPS (81).
+    //
+    // Checked against the opcode as well as the size, like every other handler here: three
+    // command payloads are 40 bytes and dispatching on size alone would route them to whichever
+    // branch happened to be tested first.
+    if (entry.size == sizeof(daw::UiSetRowOpsPayload) &&
+        commandType == daw::UiCommandType::SetRowOps) {
+      daw::UiSetRowOpsPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      daw::RowOpEdit edit;
+      edit.mask = p.mask;
+      edit.retrigger = p.retrigger;
+      edit.probability = p.probability;
+      edit.sound = p.sound;
+      edit.soundOffset = p.soundOffset;
+      edit.delayNanoticks = p.delayNanoticks;
+      applySetRowOps(p.trackId, p.clipId, static_cast<daw::EventId>(p.noteId), edit,
+                     /*recordUndo=*/true);
       return;
     }
 

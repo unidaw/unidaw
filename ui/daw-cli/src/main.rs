@@ -13,7 +13,9 @@ use daw_bridge::layout::{
     UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
     UiCommandType, UiPatcherPresetCommandPayload, UiSamplerKitRequestPayload,
     UiSamplerEmitRowsPayload, UiSamplerLoadPayload, UiSamplerMarkerPayload, UiSamplerSetSlotPayload, UiSamplerSlicePayload,
-    UiWaveformRequestPayload, MASTER_TRACK_ID, SAMPLER_LOAD_FIXED_PITCH, SAMPLER_MARKER_ADD,
+    UiSetRowOpsPayload, UiWaveformRequestPayload, MASTER_TRACK_ID, ROW_OP_MASK_DELAY,
+    ROW_OP_MASK_PROBABILITY, ROW_OP_MASK_RETRIGGER, ROW_OP_MASK_SOUND, ROW_OP_MASK_SOUND_OFFSET,
+    SAMPLER_LOAD_FIXED_PITCH, SAMPLER_MARKER_ADD,
     SAMPLER_MARKER_MOVE, SAMPLER_MARKER_REMOVE, SAMPLER_SLICE_CLEAR, SAMPLER_SLICE_EQUAL,
     SAMPLER_SLICE_TRANSIENT, SAMPLER_SLOT_FIELDS, UI_SAMPLER_KIT_SLOTS,
     UI_SAMPLER_SLOT_SOURCE_MISSING,
@@ -38,6 +40,7 @@ daw-cli — control surface for a running engine
                           [--sensitivity 0-1000] [--count 16] [--snap TICKS] [--slots]
                                    chop a source; --slots makes one playable slot per slice
   daw-cli do sampler-marker --track N --source 1 --op add|move|remove [--marker ID] [--frame F]
+  daw-cli do set-row-ops --track N --note ID [--clip ID] [--ret N] [--prob N] [--sound N] [--offset N] [--delay TICKS] [--clear ret,prob,sound,offset,delay]
                                    nudge one boundary — ids are stable, so no row moves
   daw-cli do sampler-emit-rows --track N --source 1 [--at TICK] [--step TICKS] [--column C]
                                    write the pattern that reproduces the chop
@@ -2295,6 +2298,115 @@ fn main() {
                                     eprintln!("daw-cli: {err}");
                                     1
                                 }
+                            }
+                        }
+                    }
+                }
+                Some(&"set-row-ops") => {
+                    // ONLY the ops named on the command line are touched. --clear names ops to
+                    // REMOVE. That is the mask: a flag absent leaves the op alone, a flag present
+                    // sets it, --clear zeroes it. Without the distinction there is no way to drop
+                    // one op from a note without restating the other four.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let clip = flag_u64(&args, "--clip", Some(0)).unwrap_or(0) as u32;
+                    let note = flag_u64(&args, "--note", Some(0)).unwrap_or(0) as u32;
+                    let clear_arg = args
+                        .iter()
+                        .position(|a| a == "--clear")
+                        .and_then(|i| args.get(i + 1))
+                        .cloned()
+                        .unwrap_or_default();
+                    let mut mask: u16 = 0;
+                    let mut retrigger: u8 = 0;
+                    let mut probability: u8 = 0;
+                    let mut sound: u16 = 0;
+                    let mut sound_offset: u16 = 0;
+                    let mut delay_nanoticks: u32 = 0;
+                    let mut parse_error: Option<String> = None;
+                    // PRESENCE is what sets the mask bit, so a value must be read with `flag`
+                    // (was it given?) rather than flag_u64 (what is it, or a default?). A parse
+                    // failure is REFUSED rather than defaulted: "--ret banana" silently becoming
+                    // "--ret 0" would clear an op the caller was trying to set.
+                    let mut take = |key: &str, bit: u16| -> Option<u64> {
+                        let raw = flag(&args, key)?;
+                        match raw.parse::<u64>() {
+                            Ok(v) => {
+                                mask |= bit;
+                                Some(v)
+                            }
+                            Err(_) => {
+                                parse_error = Some(format!("{key} expects a number, got {raw:?}"));
+                                None
+                            }
+                        }
+                    };
+                    if let Some(v) = take("--ret", ROW_OP_MASK_RETRIGGER) {
+                        retrigger = v as u8;
+                    }
+                    if let Some(v) = take("--prob", ROW_OP_MASK_PROBABILITY) {
+                        probability = v as u8;
+                    }
+                    if let Some(v) = take("--sound", ROW_OP_MASK_SOUND) {
+                        sound = v as u16;
+                    }
+                    if let Some(v) = take("--offset", ROW_OP_MASK_SOUND_OFFSET) {
+                        sound_offset = v as u16;
+                    }
+                    if let Some(v) = take("--delay", ROW_OP_MASK_DELAY) {
+                        delay_nanoticks = v as u32;
+                    }
+                    // --clear names ops to REMOVE: the mask bit is set and the value stays zero.
+                    for (name, bit) in [
+                        ("ret", ROW_OP_MASK_RETRIGGER),
+                        ("prob", ROW_OP_MASK_PROBABILITY),
+                        ("sound", ROW_OP_MASK_SOUND),
+                        ("offset", ROW_OP_MASK_SOUND_OFFSET),
+                        ("delay", ROW_OP_MASK_DELAY),
+                    ] {
+                        if clear_arg.split(',').any(|c| c.trim() == name) {
+                            mask |= bit;
+                            match name {
+                                "ret" => retrigger = 0,
+                                "prob" => probability = 0,
+                                "sound" => sound = 0,
+                                "offset" => sound_offset = 0,
+                                _ => delay_nanoticks = 0,
+                            }
+                        }
+                    }
+                    if let Some(err) = parse_error {
+                        eprintln!("daw-cli: {err}");
+                        2
+                    } else if note == 0 {
+                        eprintln!("daw-cli: set-row-ops needs --note <id>");
+                        2
+                    } else if mask == 0 {
+                        // Refused rather than sent as a no-op: a command that names no op is a
+                        // typo, and silently succeeding would report a write that never happened.
+                        eprintln!("daw-cli: set-row-ops names no op — pass at least one of --ret --prob --sound --offset --delay, or --clear <names>");
+                        2
+                    } else {
+                        let payload = UiSetRowOpsPayload {
+                            command_type: UiCommandType::SetRowOps as u16,
+                            mask,
+                            track_id: track,
+                            clip_id: clip,
+                            note_id: note,
+                            delay_nanoticks,
+                            sound,
+                            sound_offset,
+                            retrigger,
+                            probability,
+                            reserved: [0; 14],
+                        };
+                        match handle.send_set_row_ops(payload) {
+                            Ok(()) => {
+                                println!("{{ \"sent\": \"set-row-ops\", \"track\": {track}, \"note\": {note}, \"mask\": {mask} }}");
+                                0
+                            }
+                            Err(err) => {
+                                eprintln!("daw-cli: {err}");
+                                1
                             }
                         }
                     }

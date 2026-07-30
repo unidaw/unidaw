@@ -225,6 +225,39 @@ pub const SAMPLER_MARKER_REMOVE: u16 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+/// SetRowOps (81). The write half of the per-note ops the engine has published since v23/v32.
+///
+/// `mask` says which fields this payload is speaking about: a bit CLEAR leaves that op alone, a
+/// bit SET with a zero value CLEARS it. Without the distinction there is no way to remove one op
+/// from a note without resending the other four.
+///
+/// `delay_nanoticks` is ABSOLUTE ticks, not the num/den fraction the notation uses — RowOps
+/// resolves the fraction against a beat length at parse time, so the wire carries what the store
+/// holds. There is deliberately no pan field: pan is not on the engine's NotePayload, which is
+/// pinned at 32 bytes.
+pub struct UiSetRowOpsPayload {
+    pub command_type: u16,
+    pub mask: u16,
+    pub track_id: u32,
+    pub clip_id: u32,
+    pub note_id: u32,
+    pub delay_nanoticks: u32,
+    pub sound: u16,
+    pub sound_offset: u16,
+    pub retrigger: u8,
+    pub probability: u8,
+    pub reserved: [u8; 14],
+}
+
+/// SetRowOps mask bits — which ops the payload means.
+pub const ROW_OP_MASK_RETRIGGER: u16 = 1 << 0;
+pub const ROW_OP_MASK_PROBABILITY: u16 = 1 << 1;
+pub const ROW_OP_MASK_SOUND: u16 = 1 << 2;
+pub const ROW_OP_MASK_SOUND_OFFSET: u16 = 1 << 3;
+pub const ROW_OP_MASK_DELAY: u16 = 1 << 4;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct UiSamplerMarkerPayload {
     pub command_type: u16,
     pub op: u16,
@@ -852,6 +885,12 @@ pub enum UiCommandType {
     /// operation at a different level of packing, not a different kind of save.
     SaveModule = 79,
     LoadModule = 80,
+
+    /// Writes a note's ROW OPS — retrigger, probability, sound address, sample offset, onset
+    /// delay — addressed by NOTE ID. These have been published since v23/v32 and no command
+    /// could set one, so every op was readable and none writable. No kShmVersion bump: every
+    /// field it writes is already on the wire outbound.
+    SetRowOps = 81,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -1914,6 +1953,7 @@ mod wire_layout {
             UiSamplerSlicePayload,
             UiSamplerMarkerPayload,
             UiSamplerEmitRowsPayload,
+            UiSetRowOpsPayload,
         );
     }
 
@@ -1929,6 +1969,7 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSamplerSlicePayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerMarkerPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerEmitRowsPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSetRowOpsPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 32);
     }
 }

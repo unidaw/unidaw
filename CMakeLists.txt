@@ -561,6 +561,12 @@ add_test(NAME producer_load
 )
 set_tests_properties(producer_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A live engine, but it asserts on the DOCUMENT rather than on audio, so it needs no device.
+add_test(NAME row_ops_write
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/row_ops_write_check.sh
+)
+set_tests_properties(row_ops_write PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # The thread count must not be observable in the output. Byte-for-byte, not a tolerance.
 add_test(NAME render_pool
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/render_pool_check.sh
