@@ -30,6 +30,7 @@
 
 #include "platform_juce/juce_wrapper.h"
 #include "apps/audio_shm.h"
+#include "apps/engine_instance.h"
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
 #include "apps/rt_thread.h"
@@ -85,33 +86,14 @@ int keyCodeToPitch(int keyCode) {
   }
 }
 
-std::string trackSocketPath(uint32_t trackId) {
-  if (const char* prefix = std::getenv("DAW_HOST_SOCKET_PREFIX")) {
-    std::string base(prefix);
-    if (!base.empty()) {
-      return base + "_" + std::to_string(trackId) + ".sock";
-    }
-  }
-  return "/tmp/daw_host_track_" + std::to_string(trackId) + ".sock";
-}
-
-std::string trackShmName(uint32_t trackId) {
-  if (trackId == 0) {
-    return "/daw_engine_shared";
-  }
-  return "/daw_engine_shared_" + std::to_string(trackId);
-}
-
-std::string uiShmName() {
-  if (const char* env = std::getenv("DAW_UI_SHM_NAME")) {
-    std::string name(env);
-    if (!name.empty() && name.front() != '/') {
-      name.insert(name.begin(), '/');
-    }
-    return name;
-  }
-  return "/daw_engine_ui";
-}
+// The per-instance path derivations live in apps/engine_instance.h — engineInstanceToken,
+// trackSocketPath, trackShmName and uiShmName. They are in a header because a ctest harness
+// hardcoded "/daw_engine_shared" and broke the moment the engine started deriving the name;
+// duplicating the derivation there would have been the same bug from the other side.
+using daw::engineInstanceToken;
+using daw::trackShmName;
+using daw::trackSocketPath;
+using daw::uiShmName;
 
 bool uiDebugEnabled() {
   static const bool enabled = []() {
@@ -1794,6 +1776,12 @@ int main(int argc, char** argv) {
     header.uiArrangeOffset = offset;  // v27: section spine + meter map, resolved
     header.uiArrangeBytes = sizeof(daw::UiArrangeSummaryRegion);
     offset += daw::alignUp(header.uiArrangeBytes, 64);
+    header.uiAutomationOffset = offset;  // v28: which params are automated (standing list)
+    header.uiAutomationBytes = sizeof(daw::UiAutomationLaneRegion);
+    offset += daw::alignUp(header.uiAutomationBytes, 64);
+    header.uiAutomationSlotOffset = offset;  // v28: answered point queries (seqlock slots)
+    header.uiAutomationSlotBytes = sizeof(daw::UiAutomationSlotRegion);
+    offset += daw::alignUp(header.uiAutomationSlotBytes, 64);
     header.uiDeviceMeterOffset = offset;  // v24: per-insert meters
     offset += daw::alignUp(sizeof(daw::UiDeviceMeterRegion), 64);
     header.uiScalesOffset = offset;  // v16: scale registry read-back
@@ -1936,6 +1924,10 @@ struct ClipExtentInfo {
   // UI can badge a placement that differs from its clip — without it, "this chorus is
   // not quite the others" is invisible until you look at every note.
   uint32_t overrideCount = 0;
+  // Whether this appearance takes edits LOCALLY (ProjectPlacement::localEdits). Published so the
+  // UI can show which placement is in that state; a toggle whose state cannot be read is one the
+  // interface has to guess at.
+  bool localEdits = false;
 };
 
 struct Track {
@@ -2574,6 +2566,11 @@ struct TrackRuntime {
   // mid-edit with no diagnostic at all.
   std::mutex sectionMutex;
   std::atomic<uint32_t> sectionVersion{0};
+  // v28: moves whenever ANY automation changes — a point written, a lane created, a ripple that
+  // moved points, a load, a slot reused. Deliberately NOT the clip version: automation is not
+  // notes, and a client caching lanes on the clip version would re-read them on every keystroke.
+  // Same separation sectionVersion and quantizeVersion already have.
+  std::atomic<uint32_t> automationVersion{0};
   // The song's meter, held for the section derivation (positions come from tickAtBar).
   // Taken AFTER sectionMutex — see above.
   // NO SONG-LEVEL METER MAP. The meter lives on the SECTION (Jaakko's ruling), so the map is
@@ -2728,8 +2725,33 @@ struct TrackRuntime {
     std::vector<daw::ProjectClip> clips;
     std::vector<uint32_t> editable;
   };
+  // A WHOLE-SONG STORE, for the one edit that is not a track edit.
+  //
+  // A section-length ripple moves every placement on EVERY track, plus the tempo map, the harmony
+  // timeline and every automation clip, in one transaction — and it pushed no undo entry at all.
+  // EngineUndoEntry carries at most two tracks (`hasSecond`, added for a cross-track placement
+  // move), so there was nothing it could have pushed: the largest destructive edit in the program
+  // was the one you could not take back. The refusal messages tell you to "empty those bars
+  // first", which is thin comfort when the mistake was pressing the wrong thing.
+  //
+  // Same store-swap model as the per-track undo, and the same consequence, stated rather than
+  // discovered: undo restores the song to a captured state, so an edit made AFTER the ripple and
+  // undone by it goes with it. That is what a swap means; it is not a per-edit inverse.
+  struct SongStoreState {
+    // Per track, by stable trackId — including the automation clips, which TrackStoreState does
+    // not carry and which the ripple rewrites.
+    std::vector<std::pair<uint32_t, TrackStoreState>> tracks;
+    std::vector<std::pair<uint32_t, std::vector<daw::AutomationClip>>> automation;
+    std::vector<daw::Section> sections;
+    std::vector<daw::ProjectTempoPoint> tempoMap;
+    std::vector<daw::HarmonyEvent> harmony;
+  };
   struct EngineUndoEntry {
     bool structural = false;
+    // A SONG-scoped entry (a section ripple). Mutually exclusive with `structural`.
+    bool song = false;
+    SongStoreState songBefore;
+    SongStoreState songAfter;
     uint32_t trackId = 0;
     TrackStoreState before;
     TrackStoreState after;
@@ -2952,6 +2974,110 @@ struct TrackRuntime {
     return snapshot;
   };
 
+  // RE-ASSEMBLE THE PATCHER POOL FROM THE LIVE DEVICE GRAPHS.
+  //
+  // Each device owns an AUTHORED graph (device.patcher) with device-local node ids. The engine
+  // runs ONE pool with globally-unique ids, built by offsetting each device's subgraph, and each
+  // device's patcherNodeId is repointed at its own output node inside it. The authored graph is
+  // the source of truth; the pool is derived — so this is idempotent and can be re-run after any
+  // edit.
+  //
+  // Until now assembly happened ONLY at load, which is why editing a patcher graph at runtime did
+  // nothing to what was executing (and, before the save guard, corrupted the file instead). This
+  // is the same derivation the load performs, minus the document half: there is no document at
+  // edit time, only runtimes, which makes it shorter rather than harder.
+  //
+  // Returns false when there is nothing to assemble or the pool will not build. A pool that will
+  // not build is REPORTED and the previous one is left running — a bad edge in one device must not
+  // silently take down every other device's graph.
+  auto reassemblePatcherFromDevices = [&]() -> bool {
+    struct DevOut {
+      uint32_t trackId;
+      uint32_t deviceId;
+      uint32_t node;
+    };
+    daw::PatcherGraph pool;
+    std::vector<DevOut> outputs;
+    uint32_t base = 0;
+    for (auto* rt : snapshotTracks()) {
+      if (!rt || rt->removed.load(std::memory_order_acquire)) {
+        continue;
+      }
+      std::vector<daw::Device> devices;
+      {
+        std::lock_guard<std::mutex> lock(rt->trackMutex);
+        devices = rt->track.chain.devices;
+      }
+      daw::AssembledPatcher sub = daw::assemblePatcherPool(devices);
+      if (!sub.anyPerDevice) {
+        continue;
+      }
+      for (auto node : sub.pool.nodes) {
+        node.id += base;
+        pool.nodes.push_back(node);
+      }
+      for (auto edge : sub.pool.edges) {
+        edge.src.nodeId += base;
+        edge.dst.nodeId += base;
+        pool.edges.push_back(edge);
+      }
+      for (const auto& out : sub.deviceOutputs) {
+        outputs.push_back({rt->trackId, out.first, out.second + base});
+      }
+      base += static_cast<uint32_t>(sub.pool.nodes.size());
+    }
+    if (pool.nodes.empty()) {
+      return false;
+    }
+    if (!daw::buildPatcherGraph(pool)) {
+      DAW_EVENT("patcher.reassembly_failed")
+          .field("nodes", static_cast<uint64_t>(pool.nodes.size()))
+          .field("edges", static_cast<uint64_t>(pool.edges.size()))
+          .field("action", "previous_pool_left_running");
+      std::cerr << "Engine: patcher re-assembly FAILED (" << pool.nodes.size()
+                << " nodes) — one device's graph is invalid. The edit is kept, the PREVIOUS "
+                   "pool is still executing; run tools/daw_lint to find the bad edge."
+                << std::endl;
+      return false;
+    }
+    {
+      std::lock_guard<std::mutex> lock(patcherGraphState.mutex);
+      patcherGraphState.graph = std::move(pool);
+      patcherGraphState.nextNodeId = base;
+    }
+    patcherGraphState.version.fetch_add(1, std::memory_order_acq_rel);
+    updatePatcherGraphSnapshot();
+    // Repoint each device at its output node in the new pool, so the RT DFS seeds from the right
+    // node and the published patcherNodeId names a real pool node. Skipping this is invisible for
+    // the FIRST contributing device (its block starts at offset 0, so authored == pooled) and
+    // wrong for every device after it — which is exactly the bug that made per-device scoping in
+    // the UI show foreign nodes as unowned orphans.
+    for (const auto& out : outputs) {
+      TrackRuntime* rt = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (out.trackId < tracks.size()) {
+          rt = tracks[out.trackId].get();
+        }
+      }
+      if (!rt) {
+        continue;
+      }
+      std::lock_guard<std::mutex> lock(rt->trackMutex);
+      for (auto& d : rt->track.chain.devices) {
+        if (d.id == out.deviceId) {
+          d.patcherNodeId = out.node;
+          break;
+        }
+      }
+    }
+    patcherAssembledFromDevices.store(true, std::memory_order_release);
+    DAW_EVENT("patcher.reassembled")
+        .field("devices", static_cast<uint64_t>(outputs.size()))
+        .field("nodes", static_cast<uint64_t>(base));
+    return true;
+  };
+
   struct ClipWindowPending {
     daw::ClipWindowRequest request;
   };
@@ -3070,6 +3196,85 @@ struct TrackRuntime {
           runtime->trackClipVersion.load(std::memory_order_acquire), snap,
           laneQuantizeOf(*runtime));
     }
+  };
+
+  // v28: publish WHICH PARAMS ARE AUTOMATED — the standing lane list. Gated on
+  // automationVersion, so a note edit does not rewrite it and a client can cache on the number.
+  //
+  // This exists because automation was writable and unreadable: nothing in the header mentioned
+  // it, so the only lane a UI could offer was one you draw into and never see — blank while the
+  // song plays the sweep you authored. The LIST alone makes lanes discoverable; the points are
+  // answered on request (see the slot handler).
+  //
+  // The published `version` is this region's OWN GENERATION and starts at 1, so 0 means A WRITE IS
+  // IN FLIGHT. Reading version-body-version and requiring the two to match is NOT torn-safe on its
+  // own — the number only moves after the body is written, so a reader that samples it, reads a
+  // body mid-rewrite, and samples again before the stamp sees v0 == v1 and accepts garbage. That
+  // is the arrange summary's history verbatim, twenty lines below where this was first written;
+  // the 0 sentinel is what actually makes the write visible while it is happening.
+  uint32_t lastAutomationVersion = 0xFFFF'FFFFu;
+  uint32_t automationGeneration = 0;
+  auto writeUiAutomationLanes = [&](bool force) {
+    if (!uiShm.header || uiShm.header->uiAutomationOffset == 0) {
+      return;
+    }
+    const uint32_t version = automationVersion.load(std::memory_order_acquire);
+    if (!force && version == lastAutomationVersion) {
+      return;
+    }
+    lastAutomationVersion = version;
+    ++automationGeneration;
+    auto* region = reinterpret_cast<daw::UiAutomationLaneRegion*>(
+        reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiAutomationOffset);
+    // In flight from here until the stamp at the end.
+    region->version = 0;
+    std::atomic_thread_fence(std::memory_order_release);
+    // Clear first: a shorter list than last time must not leave the old tail readable, and
+    // `laneCount` alone would not stop a reader that scanned the array.
+    for (uint32_t i = 0; i < daw::kUiMaxAutomationLanes; ++i) {
+      region->lanes[i] = daw::UiAutomationLane{};
+    }
+    uint32_t count = 0;
+    uint32_t dropped = 0;
+    for (auto* rt : snapshotTracks()) {
+      if (!rt || !trackIsPersisted(*rt)) {
+        continue;  // a tombstone or a derived stem holds no authored automation
+      }
+      // FROM THE RT SNAPSHOT, NOT THE MODEL. This is the whole point of the region. The bug it
+      // exists to expose was a ripple that moved the points in rt->track and in the saved file
+      // while the snapshot the scheduler reads stayed put — right on disk, wrong in your ears.
+      // Publishing rt->track would have made this read-back agree with the file and disagree
+      // with the sound, which is a read-back that certifies the bug instead of catching it.
+      auto ts = std::atomic_load_explicit(&rt->trackSnapshot, std::memory_order_acquire);
+      if (!ts) {
+        continue;
+      }
+      for (const auto& clip : ts->automationClips) {
+        if (count >= daw::kUiMaxAutomationLanes) {
+          ++dropped;
+          continue;  // count the real total, not "at least one"
+        }
+        daw::UiAutomationLane& lane = region->lanes[count];
+        lane.trackId = rt->trackId;
+        lane.targetPluginIndex = clip.targetPluginIndex();
+        lane.pointCount = static_cast<uint32_t>(clip.points().size());
+        lane.flags = clip.discreteOnly() ? daw::kUiAutomationFlagDiscrete : 0u;
+        const std::string& id = clip.paramId();
+        const size_t n = std::min(id.size(), sizeof(lane.paramId) - 1);
+        std::memcpy(lane.paramId, id.data(), n);
+        ++count;
+      }
+    }
+    region->laneCount = count;
+    region->lanesTruncated = dropped;
+    if (dropped > 0) {
+      DAW_EVENT("automation_lanes.truncated")
+          .field("published", count)
+          .field("dropped", dropped)
+          .field("cap", static_cast<uint64_t>(daw::kUiMaxAutomationLanes));
+    }
+    std::atomic_thread_fence(std::memory_order_release);
+    region->version = automationGeneration;  // >= 1; 0 is the in-flight sentinel
   };
 
   // M3.25: publish the ARRANGEMENT SUMMARY — the section spine RESOLVED against the
@@ -3228,6 +3433,9 @@ struct TrackRuntime {
         // Saturating at 255 with a separate has-overrides bit, so a big count can never
         // read as none.
         extFlags |= daw::packClipExtentOverrides(ext.overrideCount);
+        if (ext.localEdits) {
+          extFlags |= daw::kUiClipExtentLocalEdits;
+        }
         // Pack the clip's own musical grid into the spare flag bits (0 => the reader
         // falls back to the song meter). Clamp + refuse loudly per the three rules.
         for (const auto& oc : runtime->ownedClips) {
@@ -4391,6 +4599,10 @@ struct TrackRuntime {
     }
     const uint32_t version =
         modVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    // Counted and reported. The diffs go out on the UI ring, which a shell test cannot read, so
+    // "did the load publish this project's modulation" had no observable answer — which is part of
+    // why it went unnoticed that the answer was NO.
+    uint32_t published = 0;
     auto encodeFlags = [&](const daw::ModLink& link) -> uint16_t {
       uint16_t flags = 0;
       flags |= static_cast<uint16_t>(link.source.kind) & 0x0Fu;
@@ -4399,6 +4611,32 @@ struct TrackRuntime {
       flags |= (link.enabled ? 1u : 0u) << 10;
       return flags;
     };
+    // AN EMPTY REGISTRY MUST STILL PUBLISH. This loop over the links meant a track with no links
+    // emitted NOTHING, so removing a track's LAST link was invisible: removing one of several is
+    // fine (the rest republish under a new version) but the last one left a lit badge for a link
+    // that no longer exists. The chain snapshot already solved this — a one-entry sentinel so the
+    // VERSION still travels — and kModLinkIdAuto does the same job here. Reported by the frontend
+    // agent, who was dropping the last link client-side to work around it.
+    if (registry.links.empty()) {
+      daw::UiModLinkDiffPayload payload{};
+      payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ModSnapshot);
+      payload.trackId = runtime.trackId;
+      payload.modVersion = version;
+      payload.linkId = daw::kModLinkIdAuto;  // "this track has no links", not "link 4294967295"
+      DAW_EVENT("modsnapshot.published")
+          .field("track", runtime.trackId)
+          .field("links", 0)
+          .field("version", version)
+          .field("empty_sentinel", true);
+      daw::EventEntry entry{};
+      entry.sampleTime = 0;
+      entry.blockId = 0;
+      entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+      entry.size = sizeof(payload);
+      std::memcpy(entry.payload, &payload, sizeof(payload));
+      daw::ringWrite(ringUiOut, entry);
+      return;
+    }
     for (const auto& link : registry.links) {
       daw::UiModLinkDiffPayload payload{};
       payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ModSnapshot);
@@ -4419,6 +4657,7 @@ struct TrackRuntime {
       entry.size = sizeof(payload);
       std::memcpy(entry.payload, &payload, sizeof(payload));
       daw::ringWrite(ringUiOut, entry);
+      ++published;
       if (link.target.kind == daw::ModTargetKind::VstParam) {
         daw::UiModLinkUid16DiffPayload uidPayload{};
         uidPayload.diffType = static_cast<uint16_t>(daw::UiDiffType::ModLinkUid16);
@@ -4435,6 +4674,11 @@ struct TrackRuntime {
         daw::ringWrite(ringUiOut, uidEntry);
       }
     }
+    DAW_EVENT("modsnapshot.published")
+        .field("track", runtime.trackId)
+        .field("links", published)
+        .field("version", version)
+        .field("empty_sentinel", false);
   };
 
   auto emitModError = [&](uint16_t errorCode, uint32_t trackId, uint32_t linkId) {
@@ -4456,7 +4700,10 @@ struct TrackRuntime {
     daw::ringWrite(ringUiOut, entry);
     DAW_EVENT("modlink.rejected")
         .field("track", trackId)
+        // A refusal that arrives BEFORE the auto-assign reports the sentinel, because there is no
+        // id yet. Flag it rather than let 4294967295 read as a link that exists.
         .field("link", linkId)
+        .field("auto", linkId == daw::kModLinkIdAuto)
         .field("reason", errorScopeName("mod", errorCode));
     historyAppend("mod_link", ("rejected:" + errorScopeName("mod", errorCode)).c_str(),
                   trackId, 0, "");
@@ -4813,6 +5060,53 @@ struct TrackRuntime {
   // track.clip being derived is invisible to it.
   auto rebuildFlatAndPublish =
       [&](TrackRuntime& rt) -> std::shared_ptr<const ClipSnapshot> {
+    // A MUTE OUTLIVING ITS BASE NOTE keeps the override badge lit over nothing. Mute a note on
+    // one appearance, then delete that note from the CLIP, and the mute record survives pointing
+    // at a note id that no longer exists: the extent still publishes an override count and the
+    // local-edits flag, so the rail says "this appearance is customised" and there is nothing to
+    // find. Reverting the overrides then "clears" something inaudible.
+    //
+    // Pruned HERE because this is the single funnel every structural change goes through, so a
+    // dead mute cannot survive past one rebuild — and it also cleans up mutes orphaned by a clip
+    // swap or by loading a file whose ids do not line up, which keying on the removed id would
+    // miss. Only when the referenced clip EXISTS: if it is absent we cannot tell a dead mute
+    // from one whose clip has not been installed yet, and guessing would delete real overrides.
+    uint32_t prunedMutes = 0;
+    for (auto& pl : rt.sourcePlacements) {
+      if (pl.mutes.empty()) {
+        continue;
+      }
+      const daw::ProjectClip* clipDef = nullptr;
+      for (const auto& c : rt.ownedClips) {
+        if (c.id == pl.clipId) {
+          clipDef = &c;
+          break;
+        }
+      }
+      if (!clipDef) {
+        continue;
+      }
+      const size_t before = pl.mutes.size();
+      pl.mutes.erase(
+          std::remove_if(pl.mutes.begin(), pl.mutes.end(),
+                         [&](daw::EventId id) {
+                           for (const auto& e : clipDef->clip.events()) {
+                             if (e.type == daw::MusicalEventType::Note &&
+                                 e.payload.note.noteId == id) {
+                               return false;
+                             }
+                           }
+                           return true;
+                         }),
+          pl.mutes.end());
+      prunedMutes += static_cast<uint32_t>(before - pl.mutes.size());
+    }
+    if (prunedMutes > 0) {
+      DAW_EVENT("local_edit.mutes_pruned")
+          .field("track", rt.trackId)
+          .field("count", prunedMutes)
+          .field("reason", "base_note_gone");
+    }
     const uint64_t windowEnd = trackWindowEnd(rt);
     daw::MusicalClip flat;
     for (const auto& ev :
@@ -4844,6 +5138,7 @@ struct TrackRuntime {
       ext.endTick = *pl.at + length;
       ext.overrideCount =
           static_cast<uint32_t>(pl.adds.size() + pl.mutes.size());
+      ext.localEdits = pl.localEdits;
       rt.clipExtents.push_back(std::move(ext));
     }
     // M1.13: the clip the UI draws and the clip that SOUNDS are already two objects —
@@ -5203,6 +5498,32 @@ struct TrackRuntime {
     return s;
   };
 
+  // The whole song's structural state, for a section ripple's before/after. Takes each track's
+  // mutex in turn rather than all at once — this runs on the control thread with no other lock
+  // held, and holding every trackMutex simultaneously is how a lock-order inversion gets written.
+  auto snapshotSongStore = [&]() -> SongStoreState {
+    SongStoreState s;
+    for (auto* rt : snapshotTracks()) {
+      if (!rt || rt->removed.load(std::memory_order_acquire)) {
+        continue;
+      }
+      std::lock_guard<std::mutex> lock(rt->trackMutex);
+      s.tracks.emplace_back(rt->trackId, snapshotTrackStore(*rt));
+      s.automation.emplace_back(rt->trackId, rt->track.automationClips);
+    }
+    {
+      std::lock_guard<std::mutex> slock(sectionMutex);
+      s.sections = sectionList.sections();
+    }
+    s.tempoMap = loadedTempoMap;
+    {
+      std::lock_guard<std::mutex> hlock(harmonyMutex);
+      s.harmony = harmonyEvents;
+    }
+    return s;
+  };
+
+
   auto pushStructuralUndo = [&](uint32_t trackId, TrackStoreState before,
                                 TrackStoreState after) {
     EngineUndoEntry e;
@@ -5259,6 +5580,67 @@ struct TrackRuntime {
     clipDirty.store(true, std::memory_order_release);
     emitClipResync(trackId, bumpClipVersionFor(runtime));
     return true;
+  };
+
+  // Put the whole song back. Everything the ripple touched, or the restore is partial — and a
+  // partial restore of a ripple is worse than none: the placements would be back where they were
+  // while the tempo change and the filter sweep stayed at their new positions.
+  auto restoreSongStore = [&](const SongStoreState& state) -> bool {
+    bool any = false;
+    for (const auto& [trackId, store] : state.tracks) {
+      if (restoreTrackStore(trackId, store)) {
+        any = true;
+      }
+    }
+    for (const auto& [trackId, clips] : state.automation) {
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (trackId < tracks.size()) {
+          runtime = tracks[trackId].get();
+        }
+      }
+      if (!runtime) {
+        continue;
+      }
+      std::shared_ptr<const TrackStateSnapshot> snap;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        runtime->track.automationClips = clips;
+        // The RT scheduler reads automation from the SNAPSHOT, so a restored point that is not
+        // republished is a point that does not play — the same rule as every other write here.
+        snap = buildTrackSnapshot(runtime->track);
+      }
+      std::atomic_store_explicit(&runtime->trackSnapshot, snap,
+                                 std::memory_order_release);
+      any = true;
+    }
+    {
+      std::lock_guard<std::mutex> slock(sectionMutex);
+      sectionList.setSections(state.sections);
+    }
+    loadedTempoMap = state.tempoMap;
+    {
+      // The PROVIDER is what the transport reads, so a restored map that the provider did not see
+      // would play at the wrong tempo positions and save at the right ones — the divergence the
+      // ripple itself had to fix.
+      std::vector<daw::TempoPoint> pts;
+      pts.reserve(loadedTempoMap.size());
+      for (const auto& pt : loadedTempoMap) {
+        pts.push_back({pt.nanotick, pt.bpm});
+      }
+      tempoProvider.setMap(std::move(pts));
+    }
+    {
+      std::lock_guard<std::mutex> hlock(harmonyMutex);
+      harmonyEvents = state.harmony;
+    }
+    harmonyDirty.store(true, std::memory_order_release);
+    harmonyVersion.fetch_add(1, std::memory_order_acq_rel);
+    automationVersion.fetch_add(1, std::memory_order_acq_rel);
+    sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+    recomputeSongEnd();
+    return any;
   };
 
   // Snapshots the live session into a ProjectDocument and writes it. Each
@@ -5905,11 +6287,25 @@ struct TrackRuntime {
     {
       std::lock_guard<std::mutex> slock(sectionMutex);
       sectionList.setSections(document.sections);
+      // SAY IT when the document had to be repaired. A file can carry duplicate section ids or
+      // a zero — hand-authored, merged, or written by an older build — and indexOfId returns
+      // the FIRST match, so the second section sharing an id was unaddressable: renaming it
+      // renamed the other one. Reassigning silently would be changing someone's document
+      // without telling them, which is the half of this that matters.
+      if (sectionList.repaired() > 0) {
+        DAW_EVENT("sections.ids_repaired")
+            .field("count", sectionList.repaired())
+            .field("reason", "duplicate_or_zero_id");
+        std::cerr << "Load: " << sectionList.repaired()
+                  << " section id(s) in this project were duplicated or zero and have been "
+                     "reassigned — a duplicate id makes one of the two sections impossible to "
+                     "address." << std::endl;
+      }
       if (!document.sections.empty() && !document.timeSigMap.empty()) {
         daw::TimeSignatureMap oldMap;
         oldMap.setMap(document.timeSigMap);
         const auto migrated = daw::migrateSectionsFromMeterMap(
-            sectionList.sections(), oldMap, sectionList.nextId());
+            sectionList.sections(), oldMap, sectionList.peekNextId());
         if (migrated.size() != sectionList.sections().size()) {
           DAW_EVENT("sections.meter_migrated")
               .field("before", static_cast<uint64_t>(sectionList.sections().size()))
@@ -5921,6 +6317,7 @@ struct TrackRuntime {
     songTimeSigNum.store(document.songTimeSigNumerator, std::memory_order_relaxed);
     songTimeSigDen.store(document.songTimeSigDenominator, std::memory_order_relaxed);
     sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+    automationVersion.fetch_add(1, std::memory_order_acq_rel);
     // A load replaces the song, so any hand-set loop belonged to the OLD one.
     loopUserSet.store(false, std::memory_order_release);
 
@@ -6252,6 +6649,21 @@ struct TrackRuntime {
               device.vstRef.vendor, device.vstRef.name);
           if (resolution.match != daw::VstMatch::None) {
             device.hostSlotIndex = static_cast<uint32_t>(resolution.index);
+          } else {
+            // A NAMED PLUGIN THAT IS NOT HERE LOADS NOTHING. The file's own host_slot_index is an
+            // index into the machine it was SAVED on, so using it when the ref fails to resolve
+            // loads whatever now sits at that number: rack.uniproj.json asks for Identity and got
+            // an Analog Heat. The device stays in the chain and stays inert, which is visible;
+            // project.plugin_missing above already says which one and why.
+            //
+            // Except when the path is right there on disk — a plugin loaded by path need not
+            // appear in the scan at all, which is the same exemption the report above makes.
+            std::error_code pathEc;
+            const bool onDisk = !device.vstRef.path.empty() &&
+                                std::filesystem::exists(device.vstRef.path, pathEc);
+            if (!onDisk) {
+              device.hostSlotIndex = daw::kHostSlotIndexUnresolved;
+            }
           }
         }
         runtime->track.chain = std::move(loadedChain);
@@ -6312,7 +6724,18 @@ struct TrackRuntime {
       // Re-publish the rack now that it holds the project's devices. The
       // all-tracks snapshot above ran before this loop restored them, so on its
       // own it would leave a UI showing the pre-load chain.
+      //
+      // ROUTING AND MOD LINKS NEED THE SAME REPUBLISH, and did not have it. The reasoning in the
+      // comment above applies to all three identically — the all-tracks emit runs 150 lines
+      // before `modRegistry.links = source.modLinks` — and only the chain was fixed. For
+      // modulation it was worse than a stale value: emitModSnapshot iterated the links, so an
+      // EMPTY registry emitted nothing at all. Net effect, reported by the frontend agent: open a
+      // project with modulation in it and the UI is told NOTHING, forever, with no way to ask.
+      // There is no RequestModSnapshot, so it was absent rather than late. presets/projects/
+      // rack.uniproj.json ships a link and a fresh load published zero.
       emitChainSnapshot(*runtime);
+      emitRoutingSnapshot(*runtime);
+      emitModSnapshot(*runtime);
     }
 
     // Restore the MASTER track's chain/mixer lifted out above (patcher-is-a-device 4a).
@@ -6878,6 +7301,91 @@ struct TrackRuntime {
   // edit that would MODIFY a base note is decomposed into mute(original) + add(new), so
   // the override list is always a set of things added and things silenced, and reverting
   // is deleting both vectors rather than replaying inverses.
+  // DOES THIS EDIT BELONG TO THE APPEARANCE OR TO THE CLIP? One function, because WriteNote and
+  // DeleteNote both have to answer it and two copies would eventually disagree about the same
+  // gesture — which for this feature means the same keystroke doing different things depending on
+  // which handler ran.
+  //
+  // The explicit bit wins on its own: a caller that SAID which it meant is never overridden. The
+  // placement's own flag is the standing answer for when nobody said. Never inferred from whether
+  // the cell is occupied.
+  // WHICH APPEARANCE IS THIS TICK IN? One lookup, for the same reason editIsLocalScope is one
+  // function: the scope decision and the target decision have to agree, and they were two
+  // separate loops that agreed only by accident.
+  //
+  // OVERLAPPING PLACEMENTS made both of them arbitrary. Each took the FIRST match in
+  // sourcePlacements — file order, or insertion order, which is nothing the user can see. Worse,
+  // they disagreed in a way that mattered: editIsLocalScope scanned for ANY placement under the
+  // tick with localEdits set, while the target loop took the first containing placement whether
+  // its flag was set or not. So with two overlapping appearances, one local and one not, the
+  // gesture could be RULED local and then applied to the placement that is not — an override
+  // recorded on an appearance the user never marked.
+  //
+  // The tie-break is the LATEST START among the placements containing the tick, and on an exact
+  // tie the later one in the list. "Topmost wins" is the convention every arranger uses for
+  // stacked material, and stating it is the point: an arbitrary rule that happens to be stable
+  // is still unpredictable to the person using it.
+  struct PlacementHit {
+    daw::ProjectPlacement* placement = nullptr;
+    uint64_t end = 0;
+    uint32_t candidates = 0;  // >1 means the tick was ambiguous and the rule decided
+  };
+  auto findPlacementAt = [&](TrackRuntime& rt, uint64_t nanotick) -> PlacementHit {
+    PlacementHit hit;
+    for (auto& pl : rt.sourcePlacements) {
+      if (!pl.at.has_value()) {
+        continue;  // loose session cell: no timeline position
+      }
+      uint64_t len = pl.lengthNanoticks;
+      if (len == 0) {
+        for (const auto& c : rt.ownedClips) {
+          if (c.id == pl.clipId) {
+            len = c.lengthNanoticks;
+            break;
+          }
+        }
+      }
+      if (nanotick < *pl.at || nanotick >= *pl.at + len) {
+        continue;
+      }
+      ++hit.candidates;
+      if (!hit.placement || *pl.at >= *hit.placement->at) {
+        hit.placement = &pl;
+        hit.end = *pl.at + len;
+      }
+    }
+    return hit;
+  };
+
+  auto editIsLocalScope = [&](uint32_t trackId, uint64_t nanotick, uint16_t flags) -> bool {
+    if ((flags & daw::kUiEditScopeLocal) != 0) {
+      return true;
+    }
+    TrackRuntime* runtime = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(tracksMutex);
+      if (trackId < tracks.size()) {
+        runtime = tracks[trackId].get();
+      }
+    }
+    if (!runtime) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(runtime->trackMutex);
+    // THE CHOSEN placement's flag, not "any placement here has it set" — so the scope decision
+    // and the target decision are the same decision about the same appearance.
+    const PlacementHit hit = findPlacementAt(*runtime, nanotick);
+    if (hit.candidates > 1) {
+      DAW_EVENT("local_edit.ambiguous_tick")
+          .field("track", trackId)
+          .field("nanotick", nanotick)
+          .field("candidates", hit.candidates)
+          .field("chose", hit.placement ? hit.placement->id : 0u)
+          .field("rule", "latest_start");
+    }
+    return hit.placement != nullptr && hit.placement->localEdits;
+  };
+
   auto applyLocalNoteEdit = [&](uint32_t trackId, uint64_t nanotick, uint64_t duration,
                                 uint8_t pitch, uint8_t velocity, uint8_t column,
                                 bool deleting) -> bool {
@@ -6920,27 +7428,9 @@ struct TrackRuntime {
       // Which APPEARANCE is this tick in? A local edit is meaningless without one: there
       // is no placement to hang the override on, so it is refused rather than silently
       // becoming a clip edit — which would be the opposite of what was asked for.
-      daw::ProjectPlacement* target = nullptr;
-      uint64_t targetEnd = 0;
-      for (auto& pl : runtime->sourcePlacements) {
-        if (!pl.at.has_value()) {
-          continue;
-        }
-        uint64_t len = pl.lengthNanoticks;
-        if (len == 0) {
-          for (const auto& c : runtime->ownedClips) {
-            if (c.id == pl.clipId) {
-              len = c.lengthNanoticks;
-              break;
-            }
-          }
-        }
-        if (nanotick >= *pl.at && nanotick < *pl.at + len) {
-          target = &pl;
-          targetEnd = *pl.at + len;
-          break;
-        }
-      }
+      const PlacementHit hit = findPlacementAt(*runtime, nanotick);
+      daw::ProjectPlacement* target = hit.placement;
+      const uint64_t targetEnd = hit.end;
       if (!target) {
         DAW_EVENT("local_edit.rejected")
             .field("track", trackId)
@@ -7582,6 +8072,88 @@ struct TrackRuntime {
       }
       return;
     }
+    // v28: ANSWER one automation lane's points into a seqlock slot. Same shape as the windowed
+    // waveform queries: the client picks a slot by its request sequence, the engine fills it and
+    // releases the seqlock, and every request field is ECHOED so a caller can tell WHICH question
+    // this is the answer to — without that, a slot reused for a different lane looks like an
+    // answer to the one you asked.
+    if (entry.size == sizeof(daw::UiAutomationLaneRequestPayload) &&
+        commandType == daw::UiCommandType::RequestAutomationLane) {
+      daw::UiAutomationLaneRequestPayload req{};
+      std::memcpy(&req, entry.payload, sizeof(req));
+      if (!uiShm.header || uiShm.header->uiAutomationSlotOffset == 0) {
+        return;
+      }
+      const std::string paramId(req.paramId, strnlen(req.paramId, sizeof(req.paramId)));
+      auto* slotRegion = reinterpret_cast<daw::UiAutomationSlotRegion*>(
+          reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiAutomationSlotOffset);
+      // The CLIENT chose the slot. Not drain-to-latest: two lanes asked for in the same frame
+      // must both be answerable, and a reader that has to guess which slot holds its answer is
+      // the write-only interface this whole region exists to end.
+      const uint32_t seq = req.requestSeq;
+      daw::UiAutomationSlot& slot =
+          slotRegion->slots[seq % daw::kUiAutomationSlots];
+      // Seqlock: ODD while writing. A reader that lands mid-write sees the odd value and retries
+      // rather than reading half a curve.
+      slot.seq.store(slot.seq.load(std::memory_order_relaxed) | 1u,
+                     std::memory_order_release);
+      std::atomic_thread_fence(std::memory_order_release);
+      slot.requestSeq = seq;
+      slot.trackId = req.trackId;
+      slot.pointCount = 0;
+      slot.pointsTruncated = 0;
+      slot.flags = 0;
+      slot.found = 0;
+      std::memset(slot.paramId, 0, sizeof(slot.paramId));
+      const size_t idLen = std::min(paramId.size(), sizeof(slot.paramId) - 1);
+      std::memcpy(slot.paramId, paramId.data(), idLen);
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (req.trackId < tracks.size()) {
+          runtime = tracks[req.trackId].get();
+        }
+      }
+      // Same source as the lane list: the snapshot the RT scheduler reads. An answer taken from
+      // the model would describe the document; what a caller is asking about is the song.
+      std::shared_ptr<const TrackStateSnapshot> ts;
+      if (runtime) {
+        ts = std::atomic_load_explicit(&runtime->trackSnapshot, std::memory_order_acquire);
+      }
+      if (ts) {
+        for (const auto& clip : ts->automationClips) {
+          if (clip.paramId() != paramId) {
+            continue;
+          }
+          slot.found = 1;
+          slot.flags = clip.discreteOnly() ? daw::kUiAutomationFlagDiscrete : 0u;
+          for (const auto& pt : clip.points()) {
+            if (slot.pointCount >= daw::kUiMaxAutomationPoints) {
+              ++slot.pointsTruncated;  // the real total, not "at least one"
+              continue;
+            }
+            auto& out = slot.points[slot.pointCount++];
+            out.nanotick = pt.nanotick;
+            out.value = pt.value;
+          }
+          break;
+        }
+      }
+      // `found` 0 is an ANSWER, not silence: "no such lane" is what a caller needs to hear when it
+      // asked about a param nothing automates, and it is distinguishable from a request that never
+      // arrived only because the slot was filled and released.
+      std::atomic_thread_fence(std::memory_order_release);
+      slot.seq.store((slot.seq.load(std::memory_order_relaxed) + 1u) & ~1u,
+                     std::memory_order_release);
+      slotRegion->requestSeq.store(seq, std::memory_order_release);
+      DAW_EVENT("automation_lane.answered")
+          .field("track", req.trackId)
+          .field("param", paramId)
+          .field("found", slot.found != 0)
+          .field("points", slot.pointCount)
+          .field("truncated", slot.pointsTruncated);
+      return;
+    }
     // M3.27: write an automation point. Automation playback has been built and tested
     // since M3 phase 1, but nothing ever CREATED a clip — this is the missing half.
     if (entry.size == sizeof(daw::UiAutomationPointPayload) &&
@@ -7596,6 +8168,17 @@ struct TrackRuntime {
         DAW_EVENT("automation.rejected")
             .field("track", ap.trackId)
             .field("reason", "empty_param_id");
+        return;
+      }
+      // A name that FILLS the field with no terminator cannot be answered. The read-back slot
+      // nul-terminates inside its own 16 bytes, so a 16-byte id would be stored in full and read
+      // back one byte short: the write and the answer would name different lanes forever, and
+      // nothing would report it. Refuse the write rather than create a lane nobody can query.
+      if (paramId.size() >= sizeof(ap.paramId)) {
+        DAW_EVENT("automation.rejected")
+            .field("track", ap.trackId)
+            .field("param", paramId)
+            .field("reason", "param_id_not_representable");
         return;
       }
       TrackRuntime* runtime = nullptr;
@@ -7660,6 +8243,7 @@ struct TrackRuntime {
       }
       std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
                                  std::memory_order_release);
+      automationVersion.fetch_add(1, std::memory_order_acq_rel);
       DAW_EVENT("automation.point")
           .field("track", ap.trackId)
           .field("param", paramId)
@@ -7749,21 +8333,86 @@ struct TrackRuntime {
             spans.emplace_back(pl.id, *pl.at, *pl.at + len);
           }
         }
+        // AUTOMATION IS MATERIAL TOO, and the refusal above guarded only placements.
+        //
+        // The argument for refusing a shrink into occupied bars is written out on planRipple:
+        // rippleTick moves what is at or after the boundary, so material INSIDE the removed
+        // bars does not move — the later section boundaries slide over it instead, and a
+        // placement that was in the intro is silently now in the verse with no note changed.
+        // A filter sweep is re-sectioned by exactly the same mechanism, and there is a second,
+        // worse consequence for automation specifically: a point AT the old boundary lands on
+        // the new end, and if a point is already there `addPoint` REPLACES it. So the shrink
+        // silently destroys one of them, with no undo entry that would put it back.
+        //
+        // Scanned separately from `spans` rather than folded into planRipple, which stays a
+        // pure geometry helper — and reported by track and PARAM, because "something is in the
+        // way" is not actionable when the thing is one lane out of sixty.
+        if (delta < 0) {
+          const uint64_t magnitude = static_cast<uint64_t>(-delta);
+          const uint64_t vacatedStart =
+              oldEndTick > magnitude ? oldEndTick - magnitude : 0;
+          for (auto* rt : trackSnap) {
+            if (!rt || rt->removed.load(std::memory_order_acquire)) {
+              continue;
+            }
+            std::lock_guard<std::mutex> tlock(rt->trackMutex);
+            for (const auto& clip : rt->track.automationClips) {
+              for (const auto& pt : clip.points()) {
+                if (pt.nanotick >= vacatedStart && pt.nanotick <= oldEndTick) {
+                  DAW_EVENT("section.rejected")
+                      .field("op", "set_section_length")
+                      .field("section", sp.sectionId)
+                      .field("reason", "automation_in_removed_bars")
+                      .field("track", rt->trackId)
+                      .field("param", clip.paramId())
+                      .field("nanotick", pt.nanotick);
+                  std::cerr << "UI: SetSectionLength refused — automation on track "
+                            << rt->trackId << " param '" << clip.paramId()
+                            << "' has a point at " << pt.nanotick
+                            << ", inside the bars this would remove. Shrinking would leave the "
+                               "sweep where it is while the sections slide over it, and would "
+                               "collapse a point at the boundary onto the one already there."
+                            << std::endl;
+                  historyAppend("set_section_length",
+                                "rejected:automation_in_removed_bars", rt->trackId, 0, "");
+                  return;
+                }
+              }
+            }
+          }
+        }
         const auto plan = daw::planRipple(spans, oldEndTick, delta);
         if (plan.outcome != daw::RippleOutcome::Ok) {
+          const bool straddling =
+              plan.outcome == daw::RippleOutcome::RefusedStraddlingPlacement;
+          const char* reason =
+              straddling ? "straddling_placement" : "content_in_removed_bars";
           DAW_EVENT("section.rejected")
               .field("op", "set_section_length")
               .field("section", sp.sectionId)
-              .field("reason", "content_in_removed_bars")
+              .field("reason", reason)
               .field("blocking_placement", plan.blockingPlacementId);
-          std::cerr << "UI: SetSectionLength refused — placement "
-                    << plan.blockingPlacementId
-                    << " lives in the bars this would remove. Shrinking would stack it "
-                       "onto one tick or delete it; empty those bars first." << std::endl;
-          historyAppend("set_section_length", "rejected:content_in_removed_bars",
+          if (straddling) {
+            std::cerr << "UI: SetSectionLength refused — placement "
+                      << plan.blockingPlacementId
+                      << " crosses this section's end, so the inserted bars would land INSIDE "
+                         "it: it would keep its start and length while everything after it "
+                         "moved away. Split or shorten it first — whether those bars belong "
+                         "inside it or after it is a musical decision this command cannot make."
+                      << std::endl;
+          } else {
+            std::cerr << "UI: SetSectionLength refused — placement "
+                      << plan.blockingPlacementId
+                      << " lives in the bars this would remove. Shrinking would stack it "
+                         "onto one tick or delete it; empty those bars first." << std::endl;
+          }
+          historyAppend("set_section_length", (std::string("rejected:") + reason).c_str(),
                         0xFFFFFFFFu, 0, "");
           return;
         }
+        // CAPTURED HERE, after every refusal and before the first mutation, so a refused ripple
+        // costs nothing and an applied one is fully recoverable.
+        SongStoreState songBefore = snapshotSongStore();
         // Apply: the spine, then every placement, then the derived state.
         {
           std::lock_guard<std::mutex> slock(sectionMutex);
@@ -7900,25 +8549,87 @@ struct TrackRuntime {
           bumpClipVersionFor(rt);
         }
         clipDirty.store(true, std::memory_order_release);
+        // The ripple rebuilds automation clips, so anything caching lanes has to re-read. Bumped
+        // unconditionally rather than only when a point moved: the cost of one extra re-read is a
+        // re-read, and the cost of missing one is a curve drawn in the wrong place.
+        automationVersion.fetch_add(1, std::memory_order_acq_rel);
         recomputeSongEnd();
         sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+        {
+          EngineUndoEntry e;
+          e.song = true;
+          e.songBefore = std::move(songBefore);
+          e.songAfter = snapshotSongStore();
+          pushUndo(std::move(e));
+        }
         DAW_EVENT("section.length_set")
             .field("section", sp.sectionId)
             .field("bars", sp.barCount)
             .field("delta_ticks", static_cast<int64_t>(delta))
             .field("placements_moved", plan.moved)
             .field("tempo_points_moved", tempoMoved)
-            .field("harmony_events_moved", harmonyMoved);
+            .field("harmony_events_moved", harmonyMoved)
+            .field("undoable", true);
+        // JOURNALLED ON SUCCESS. Only the rejections were recorded, so history.jsonl held every
+        // refused ripple and no applied one — the opposite of what a "what changed since Tuesday"
+        // artifact is for.
+        historyAppend("set_section_length", "received", 0xFFFFFFFFu, 0, "");
         return;
       }
 
       // The other four touch the spine only, so no placement moves and no clip version
       // changes — a rename must not invalidate anyone's in-flight note edit.
+      //
+      // BUT "the spine only" is not the same as "nothing changed". Inserting, removing or
+      // reordering a section moves every LATER boundary while the material stays at its ticks,
+      // so a placement that was in the intro can end up in the verse — which is precisely the
+      // outcome SetSectionLength REFUSES a shrink to avoid. The four ops disagree with each
+      // other about whether that is acceptable, and picking a side is a product decision (it is
+      // written up in ARCHITECTURE_REVIEW section 8 for Jaakko).
+      //
+      // What is not a decision: it must not be SILENT. So the re-sectioning is COUNTED — by
+      // resolving the spine before and after and asking, for each placement, whether the
+      // section containing it changed identity — and reported. A number a caller can see is the
+      // difference between a surprising behaviour and an invisible one.
+      std::vector<std::pair<uint32_t, uint64_t>> placementTicks;  // (id, at)
+      {
+        for (auto* rt : snapshotTracks()) {
+          if (!rt || rt->removed.load(std::memory_order_acquire)) {
+            continue;
+          }
+          std::lock_guard<std::mutex> tlock(rt->trackMutex);
+          for (const auto& pl : rt->sourcePlacements) {
+            if (pl.at.has_value()) {
+              placementTicks.emplace_back(pl.id, *pl.at);
+            }
+          }
+        }
+      }
       bool ok = false;
       const char* what = "";
+      uint32_t resectioned = 0;
       {
         std::lock_guard<std::mutex> slock(sectionMutex);
         auto sections = sectionList.sections();
+        // Which section holds each placement BEFORE the edit. 0 = past the last section, which
+        // is a real place to be: material there is playing, it just has no name.
+        const daw::TimeSignature songSig = songDefaultSig();
+        std::vector<uint32_t> before;
+        before.reserve(placementTicks.size());
+        {
+          const auto resolved = sectionList.resolve(songSig);
+          for (const auto& [id, at] : placementTicks) {
+            (void)id;
+            uint32_t owner = 0;
+            for (const auto& r : resolved) {
+              if (at >= r.startTick && at < r.endTick) {
+                owner = r.id;
+                break;
+              }
+            }
+            before.push_back(owner);
+          }
+        }
         if (commandType == daw::UiCommandType::AddSection) {
           if (sp.barCount == 0) {
             reject("zero_bars");
@@ -7971,14 +8682,38 @@ struct TrackRuntime {
         }
         if (ok) {
           sectionList.setSections(std::move(sections));
+          const auto resolved = sectionList.resolve(songSig);
+          for (size_t i = 0; i < placementTicks.size(); ++i) {
+            uint32_t owner = 0;
+            for (const auto& r : resolved) {
+              if (placementTicks[i].second >= r.startTick &&
+                  placementTicks[i].second < r.endTick) {
+                owner = r.id;
+                break;
+              }
+            }
+            if (owner != before[i]) {
+              ++resectioned;
+            }
+          }
         }
       }
       if (ok) {
         sectionVersion.fetch_add(1, std::memory_order_acq_rel);
+        if (resectioned > 0) {
+          std::cerr << "UI: " << daw::uiCommandTypeName(commandType) << " moved the boundaries "
+                    << "under " << resectioned
+                    << " placement(s) — they are in a different section than they were, with no "
+                       "note changed. The material did not move; the spine did."
+                    << std::endl;
+        }
         DAW_EVENT("section.changed")
             .field("op", daw::uiCommandTypeName(commandType))
             .field("section", sp.sectionId)
-            .field("what", what);
+            .field("what", what)
+            // How much material now sits in a different section. 0 for a rename, and for an
+            // append past the end where nothing follows.
+            .field("resectioned", resectioned);
         historyAppend(daw::uiCommandTypeName(commandType), "received", 0xFFFFFFFFu, 0, "");
       }
       return;
@@ -8064,13 +8799,15 @@ struct TrackRuntime {
     }
     if (entry.size == sizeof(daw::UiModLinkCommandPayload) &&
         (commandType == daw::UiCommandType::AddModLink ||
-         commandType == daw::UiCommandType::RemoveModLink)) {
+         commandType == daw::UiCommandType::RemoveModLink ||
+         commandType == daw::UiCommandType::SetModLinkDepth)) {
       daw::UiModLinkCommandPayload modPayload{};
       std::memcpy(&modPayload, entry.payload, sizeof(modPayload));
       const auto commandType =
           static_cast<daw::UiCommandType>(modPayload.commandType);
       if (commandType != daw::UiCommandType::AddModLink &&
-          commandType != daw::UiCommandType::RemoveModLink) {
+          commandType != daw::UiCommandType::RemoveModLink &&
+          commandType != daw::UiCommandType::SetModLinkDepth) {
         return;
       }
       constexpr uint16_t kModErrTrackMissing = 1;
@@ -8090,6 +8827,72 @@ struct TrackRuntime {
         emitModError(kModErrTrackMissing, modPayload.trackId, modPayload.linkId);
         return;
       }
+      // A REMOVE NEEDS ONLY (track, link), AND A DEPTH CHANGE ONLY (track, link, depth). Both
+      // used to fall through the ADD's validation below — kind decoding, findDevicePos on both
+      // device ids, and the forward-order test — so a caller that knew a link's id still had to
+      // send the devices it happens to connect. Unstated ids default to 0, so on a project whose
+      // device ids start higher EVERY removal was refused as kModErrInvalidDevice while the
+      // caller was told it succeeded, and the links piled up. It looked correct only because
+      // rack.uniproj.json has a device 0, so the default resolved there.
+      //
+      // Reported by the frontend agent, who worked around it by looking each link up and sending
+      // its devices. Validating what a command does not use is how a command acquires arguments
+      // that have nothing to do with it.
+      if (commandType == daw::UiCommandType::RemoveModLink ||
+          commandType == daw::UiCommandType::SetModLinkDepth) {
+        const bool removing = commandType == daw::UiCommandType::RemoveModLink;
+        bool touched = false;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          auto& links = runtime->track.modRegistry.links;
+          if (removing) {
+            const auto before = links.size();
+            links.erase(std::remove_if(links.begin(), links.end(),
+                                       [&](const daw::ModLink& link) {
+                                         return link.linkId == modPayload.linkId;
+                                       }),
+                        links.end());
+            touched = links.size() != before;
+          } else {
+            // IN PLACE, so the id, the uid16 and the source/target survive. Remove+add was the
+            // only way to change a depth, and it changed the id, dropped the uid16 (which
+            // silently disables the modulation) and was not atomic — which put a depth SLIDER
+            // out of reach, since a continuous gesture would tear the link down and rebuild it
+            // every frame. That was a UI limitation caused by the opcode set.
+            for (auto& link : links) {
+              if (link.linkId != modPayload.linkId) {
+                continue;
+              }
+              link.depth = modPayload.depth;
+              link.bias = modPayload.bias;
+              link.enabled = ((modPayload.flags >> 10) & 0x1u) != 0;
+              touched = true;
+              break;
+            }
+          }
+        }
+        if (!touched) {
+          emitModError(kModErrLinkMissing, modPayload.trackId, modPayload.linkId);
+          return;
+        }
+        std::shared_ptr<const TrackStateSnapshot> snapshot;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snapshot = buildTrackSnapshot(runtime->track);
+        }
+        std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
+                                   std::memory_order_release);
+        emitModSnapshot(*runtime);
+        DAW_EVENT(removing ? "modlink.removed" : "modlink.depth_set")
+            .field("track", modPayload.trackId)
+            .field("link", modPayload.linkId)
+            .field("depth", static_cast<double>(modPayload.depth))
+            .field("bias", static_cast<double>(modPayload.bias));
+        historyAppend(daw::uiCommandTypeName(commandType), "received",
+                      modPayload.trackId, 0, "");
+        return;
+      }
+
       auto decodeSourceKind = [&](uint16_t flags) -> std::optional<daw::ModSourceKind> {
         const uint8_t raw = static_cast<uint8_t>(flags & 0x0Fu);
         if (raw > static_cast<uint8_t>(daw::ModSourceKind::PatcherNodeOutput)) {
@@ -8153,20 +8956,11 @@ struct TrackRuntime {
         emitModError(kModErrOrderViolation, modPayload.trackId, modPayload.linkId);
         return;
       }
+      // ADD ONLY from here — remove and depth returned above.
       bool updated = false;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        if (commandType == daw::UiCommandType::RemoveModLink) {
-          auto& links = runtime->track.modRegistry.links;
-          const auto before = links.size();
-          links.erase(std::remove_if(links.begin(),
-                                     links.end(),
-                                     [&](const daw::ModLink& link) {
-                                       return link.linkId == modPayload.linkId;
-                                     }),
-                      links.end());
-          updated = links.size() != before;
-        } else {
+        {
           auto& links = runtime->track.modRegistry.links;
           if (modPayload.linkId == daw::kModLinkIdAuto) {
             uint32_t nextId = 1;
@@ -8174,6 +8968,14 @@ struct TrackRuntime {
               nextId = std::max(nextId, link.linkId + 1);
             }
             modPayload.linkId = nextId;
+            // SAY WHICH ID. The caller sent the AUTO sentinel, so until this event existed the
+            // only thing it could report was the sentinel itself — and a caller that then passed
+            // 4294967295 to RemoveModLink matched nothing. Same shape as addPatcherNode's
+            // UINT32_MAX-on-failure being reported as a new node id.
+            DAW_EVENT("modlink.added")
+                .field("track", modPayload.trackId)
+                .field("link", nextId)
+                .field("auto", true);
           } else {
             const bool exists =
                 std::any_of(links.begin(),
@@ -8213,8 +9015,6 @@ struct TrackRuntime {
                                    snapshot,
                                    std::memory_order_release);
         emitModSnapshot(*runtime);
-      } else if (commandType == daw::UiCommandType::RemoveModLink) {
-        emitModError(kModErrLinkMissing, modPayload.trackId, modPayload.linkId);
       }
       return;
     }
@@ -8334,10 +9134,128 @@ struct TrackRuntime {
       }
       return;
     }
+    // PER-DEVICE PATCHER EDITS. "Patcher is a device" moved the DATA model and the read-back to
+    // per-device graphs; the EDIT commands were never migrated and still addressed the one shared
+    // pool. For any project carrying per-device graphs that meant an edit landed in the pool and
+    // was never saved — applied, reported as applied, and gone on reload. Before the save guard it
+    // was worse: the same edit overwrote device 1's real graph with the whole pool.
+    //
+    // A SEPARATE BRANCH rather than a rewrite of the one below. The legacy whole-pool path is
+    // untouched, so a caller that does not ask for a device cannot be broken by this, and the new
+    // path is self-contained enough to read in one sitting.
+    //
+    // The edit is applied through the SAME helpers by wrapping the device's graph in a scratch
+    // PatcherGraphState. Reimplementing the cycle and port validation for device graphs is exactly
+    // how the two paths would drift into disagreeing about which edits are legal.
     if (entry.size == sizeof(daw::UiPatcherGraphCommandPayload) &&
         (commandType == daw::UiCommandType::AddPatcherNode ||
          commandType == daw::UiCommandType::RemovePatcherNode ||
          commandType == daw::UiCommandType::ConnectPatcherNodes)) {
+      daw::UiPatcherGraphCommandPayload probe{};
+      std::memcpy(&probe, entry.payload, sizeof(probe));
+      if ((probe.flags & daw::kUiPatcherFlagHasDeviceId) != 0) {
+        const uint32_t deviceId =
+            static_cast<uint32_t>(probe.flags & daw::kUiPatcherDeviceIdMask);
+        TrackRuntime* runtime = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(tracksMutex);
+          if (probe.trackId < tracks.size()) {
+            runtime = tracks[probe.trackId].get();
+          }
+        }
+        auto refuse = [&](const char* why) {
+          DAW_EVENT("patcher_device_edit.rejected")
+              .field("track", probe.trackId)
+              .field("device", deviceId)
+              .field("op", daw::uiCommandTypeName(commandType))
+              .field("reason", why);
+        };
+        if (!runtime) {
+          refuse("no_such_track");
+          return;
+        }
+        bool applied = false;
+        uint32_t newNodeId = 0;
+        const char* failure = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          daw::Device* device = nullptr;
+          for (auto& d : runtime->track.chain.devices) {
+            if (d.id == deviceId) {
+              device = &d;
+              break;
+            }
+          }
+          if (!device) {
+            failure = "no_such_device";
+          } else {
+            // Scratch state around THIS device's authored graph. nextNodeId comes from the
+            // graph itself so a new node cannot collide with one already in it.
+            daw::PatcherGraphState scratch;
+            scratch.graph = device->patcher;
+            uint32_t next = 0;
+            for (const auto& n : scratch.graph.nodes) {
+              next = std::max(next, n.id + 1);
+            }
+            scratch.nextNodeId = next;
+            if (commandType == daw::UiCommandType::AddPatcherNode) {
+              if (probe.nodeType >
+                  static_cast<uint32_t>(daw::PatcherNodeType::EventOut)) {
+                failure = "invalid_node_type";
+              } else {
+                newNodeId = daw::addPatcherNode(
+                    scratch, static_cast<daw::PatcherNodeType>(probe.nodeType));
+                // addPatcherNode returns UINT32_MAX when the graph will not BUILD with the new
+                // node and rolls it back. Treating that as success reported an edit that had been
+                // refused — and the report even carried 4294967295 as the new node id, which is
+                // the sentinel announcing itself.
+                applied = newNodeId != std::numeric_limits<uint32_t>::max();
+                if (!applied) {
+                  failure = "graph_would_not_build";
+                }
+              }
+            } else if (commandType == daw::UiCommandType::RemovePatcherNode) {
+              applied = daw::removePatcherNode(scratch, probe.nodeId);
+              if (!applied) {
+                failure = "invalid_node";
+              }
+            } else {
+              const auto result = daw::connectPatcherNodes(
+                  scratch, probe.srcNodeId, probe.srcPortId, probe.dstNodeId,
+                  probe.dstPortId,
+                  static_cast<daw::PatcherPortKind>(probe.edgeKind));
+              applied = result == daw::PatcherConnectResult::Ok;
+              if (!applied) {
+                failure = result == daw::PatcherConnectResult::InvalidNode
+                              ? "invalid_node"
+                              : (result == daw::PatcherConnectResult::InvalidPort
+                                     ? "invalid_port"
+                                     : (result == daw::PatcherConnectResult::Cycle
+                                            ? "cycle"
+                                            : "invalid_connection"));
+              }
+            }
+            if (applied) {
+              device->patcher = scratch.graph;
+              runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
+            }
+          }
+        }
+        if (!applied) {
+          refuse(failure ? failure : "failed");
+          return;
+        }
+        // The pool is DERIVED from the device graphs, so re-derive it — otherwise the edit is
+        // saved and does nothing until the next load, which is its own kind of lie.
+        const bool executing = reassemblePatcherFromDevices();
+        DAW_EVENT("patcher_device_edit.applied")
+            .field("track", probe.trackId)
+            .field("device", deviceId)
+            .field("op", daw::uiCommandTypeName(commandType))
+            .field("node", newNodeId)
+            .field("executing", executing);
+        return;
+      }
       daw::UiPatcherGraphCommandPayload graphPayload{};
       std::memcpy(&graphPayload, entry.payload, sizeof(graphPayload));
       constexpr uint16_t kGraphErrInvalidType = 1;
@@ -8653,8 +9571,28 @@ struct TrackRuntime {
       std::memcpy(&presetPayload, entry.payload, sizeof(presetPayload));
       std::string name(presetPayload.name,
                        strnlen(presetPayload.name, sizeof(presetPayload.name)));
+      // Every exit from here reports the OUTCOME, including the early refusals. A caller that
+      // gets nothing back cannot tell "refused" from "still working" from "written", and the
+      // one thing it must not do is tell the user it saved.
+      auto reportPreset = [&](bool ok, const std::string& why) {
+        daw::UiPresetSavedPayload result{};
+        result.diffType = static_cast<uint16_t>(daw::UiDiffType::PresetSaved);
+        result.ok = ok ? 1u : 0u;
+        const size_t n = std::min(name.size(), sizeof(result.name) - 1);
+        std::memcpy(result.name, name.data(), n);
+        daw::UiDiffPayload asDiff{};
+        static_assert(sizeof(result) <= sizeof(asDiff),
+                      "the preset result must fit the diff slot it rides");
+        std::memcpy(&asDiff, &result, sizeof(result));
+        emitUiDiff(asDiff);
+        DAW_EVENT("patcher_preset.saved")
+            .field("name", name)
+            .field("ok", ok)
+            .field("error", why);
+      };
       if (name.empty()) {
         std::cerr << "UI: SavePatcherPreset failed - empty name" << std::endl;
+        reportPreset(false, "empty_name");
         return;
       }
       const std::string dir = daw::defaultPatcherPresetDir();
@@ -8663,6 +9601,7 @@ struct TrackRuntime {
       if (ec) {
         std::cerr << "UI: SavePatcherPreset failed - cannot create dir "
                   << dir << std::endl;
+        reportPreset(false, "cannot_create_dir");
         return;
       }
       const std::filesystem::path path =
@@ -8672,8 +9611,10 @@ struct TrackRuntime {
                                   path.string(),
                                   &error)) {
         std::cerr << "UI: SavePatcherPreset failed - " << error << std::endl;
+        reportPreset(false, error);
       } else {
         std::cerr << "UI: Saved patcher preset " << path.string() << std::endl;
+        reportPreset(true, std::string());
       }
       return;
     }
@@ -8972,7 +9913,7 @@ struct TrackRuntime {
       const uint16_t flags = payload.flags;
       // M3.24: the caller says whether this belongs to the CLIP (every appearance) or to
       // THIS APPEARANCE. Default is clip scope, which is exactly today's behaviour.
-      if ((flags & daw::kUiEditScopeLocal) != 0) {
+      if (editIsLocalScope(payload.trackId, noteNanotick, flags)) {
         applyLocalNoteEdit(payload.trackId, noteNanotick, noteDuration, pitch, velocity,
                            static_cast<uint8_t>(flags & daw::kUiEditColumnMask),
                            /*deleting=*/false);
@@ -8993,7 +9934,7 @@ struct TrackRuntime {
       const uint8_t pitch =
           static_cast<uint8_t>(std::min<uint32_t>(payload.notePitch, 127));
       const uint16_t flags = payload.flags;
-      if ((flags & daw::kUiEditScopeLocal) != 0) {
+      if (editIsLocalScope(payload.trackId, noteNanotick, flags)) {
         applyLocalNoteEdit(payload.trackId, noteNanotick, /*duration=*/0, pitch,
                            /*velocity=*/0,
                            static_cast<uint8_t>(flags & daw::kUiEditColumnMask),
@@ -9001,6 +9942,69 @@ struct TrackRuntime {
       } else {
         applyRemoveNote(payload.trackId, noteNanotick, pitch, flags, true);
       }
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetPlacementEditScope)) {
+      // value0 = placementId, flags bit0 = on. Deliberately NOT version-gated: this changes no
+      // note, so it cannot invalidate anyone's in-flight edit — the same reasoning that keeps a
+      // section rename off the clip version.
+      const uint32_t placementId = payload.value0;
+      const bool on = (payload.flags & 1u) != 0;
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("placement_scope.rejected")
+            .field("track", payload.trackId)
+            .field("placement", placementId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool found = false;
+      std::shared_ptr<const ClipSnapshot> snapshot;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& pl : runtime->sourcePlacements) {
+          if (pl.id != placementId) {
+            continue;
+          }
+          found = true;
+          pl.localEdits = on;
+          break;
+        }
+        if (found) {
+          // RE-DERIVE, don't just bump. The published extents are rebuilt from
+          // rt.clipExtents, and clipExtents is DERIVED inside rebuildFlatAndPublish — so
+          // bumping the clip version alone rebuilt the region out of a stale vector and the
+          // flag stayed false. The read-back existed and reported the old answer, which is
+          // worse than not having it: a UI would have drawn the toggle as off after setting it.
+          snapshot = rebuildFlatAndPublish(*runtime);
+        }
+      }
+      if (snapshot) {
+        std::atomic_store_explicit(&runtime->clipSnapshot, snapshot,
+                                   std::memory_order_release);
+      }
+      if (!found) {
+        // Naming a placement that is not there can never succeed on a retry, so say so rather
+        // than reporting a scope change that did not happen.
+        DAW_EVENT("placement_scope.rejected")
+            .field("track", payload.trackId)
+            .field("placement", placementId)
+            .field("reason", "no_such_placement");
+        return;
+      }
+      // The published extents carry the flag, and they rebuild on the clip version — so bump it
+      // or the toggle stays invisible until some unrelated note edit happens to republish.
+      bumpClipVersionFor(runtime);
+      clipDirty.store(true, std::memory_order_release);
+      DAW_EVENT("placement_scope.set")
+          .field("track", payload.trackId)
+          .field("placement", placementId)
+          .field("local", on);
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::RevertPlacementOverrides)) {
       // M3.24: the one-click revert. Clears BOTH override vectors on one placement, which
@@ -9913,7 +10917,16 @@ struct TrackRuntime {
       if (!undo) {
         return;
       }
-      if (undo->structural) {
+      if (undo->song) {
+        // The whole song at once. A partial restore of a ripple is worse than none: the
+        // placements would be back where they were while the tempo change and the filter sweep
+        // stayed at their new positions.
+        if (restoreSongStore(undo->songBefore)) {
+          DAW_EVENT("undo.song").field("scope", "section_ripple");
+          std::lock_guard<std::mutex> lock(undoMutex);
+          redoStack.push_back(std::move(*undo));
+        }
+      } else if (undo->structural) {
         // Store swap: restore the track's pre-edit placements + clips. A cross-track move
         // restores BOTH tracks so the placement is never briefly in neither.
         bool ok = restoreTrackStore(undo->trackId, undo->before);
@@ -9953,7 +10966,13 @@ struct TrackRuntime {
       if (!redo) {
         return;
       }
-      if (redo->structural) {
+      if (redo->song) {
+        if (restoreSongStore(redo->songAfter)) {
+          DAW_EVENT("redo.song").field("scope", "section_ripple");
+          std::lock_guard<std::mutex> lock(undoMutex);
+          undoStack.push_back(std::move(*redo));
+        }
+      } else if (redo->structural) {
         // Store swap: re-apply the track's post-edit placements + clips (both tracks for a
         // cross-track move).
         bool ok = restoreTrackStore(redo->trackId, redo->after);
@@ -13518,6 +14537,15 @@ struct TrackRuntime {
                 1000.0));
             if (rt->mixMute.load(std::memory_order_relaxed)) flags |= daw::kMixerFlagMute;
             if (rt->mixSolo.load(std::memory_order_relaxed)) flags |= daw::kMixerFlagSolo;
+            // Harmony quantize is a per-track boolean the UI has to be able to READ, or the
+            // toggle for it can only ever be write-only. Read under trackMutex like the name,
+            // since it lives in the track struct rather than in an atomic.
+            {
+              std::lock_guard<std::mutex> tlock(rt->trackMutex);
+              if (rt->track.harmonyQuantize) {
+                flags |= daw::kUiMixFlagHarmonyQuantize;
+              }
+            }
           }
           if (gainMb != lastGainMillibels[i] || panTh != lastPanThousandths[i] ||
               flags != lastMixFlags[i]) {
@@ -13693,6 +14721,7 @@ struct TrackRuntime {
         writeUiClipAllSnapshot(false);
         writeUiClipExtents(false);
         writeUiArrangeSummary(false);
+        writeUiAutomationLanes(false);
         writeUiPatcher(false);
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);

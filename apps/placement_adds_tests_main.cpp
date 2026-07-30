@@ -44,6 +44,41 @@ int main() {
   for (const auto& e : flattenPlacements({pl}, {hat}, 16*BAR))
     if (e.type==MusicalEventType::Note && e.payload.note.pitch==46)
       CHECK(e.payload.note.reserved2 == 7);
+  // An add on an AUDIO clip's placement still sounds. The audio skip used to `continue` over the
+  // whole placement, so a note typed into an audio region's cell was accepted, saved and badged
+  // as a local edit and scheduled nowhere — the note is the user's data and it was silently gone.
+  // The clip's own events stay out of the symbolic scheduler (the audio path plays the region),
+  // which is what the second CHECK pins: fixing the add must not start scheduling audio clips.
+  {
+    ProjectClip region;
+    region.id = 5;
+    region.name = "loop";
+    region.lengthNanoticks = 4 * BAR;
+    region.kind = ClipKind::Audio;
+    region.audio.sourcePath = "/nonexistent/loop.wav";
+    // A symbolic event ON the audio clip, which must NOT be scheduled — an audio clip's payload
+    // is its region, and anything symbolic sitting in it is not this scheduler's business.
+    region.clip.addEvent(note(0, 60, 500));
+    ProjectPlacement onAudio;
+    onAudio.clipId = 5;
+    onAudio.id = 11;
+    onAudio.at = 2 * BAR;
+    onAudio.lengthNanoticks = 4 * BAR;
+    onAudio.adds.push_back(note(Q, 46, 902));
+    int addsHeard = 0, clipEvents = 0;
+    for (const auto& e : flattenPlacements({onAudio}, {region}, 16 * BAR)) {
+      if (e.type != MusicalEventType::Note) continue;
+      if (e.payload.note.pitch == 46) {
+        ++addsHeard;
+        CHECK(e.nanotickOffset == 2 * BAR + Q);
+        CHECK(e.payload.note.reserved2 == 11);
+      }
+      if (e.payload.note.pitch == 60) ++clipEvents;
+    }
+    CHECK(addsHeard == 1);
+    CHECK(clipEvents == 0);
+  }
+
   std::printf(fails ? "placement_adds_tests: %d failure(s)\n" : "placement_adds_tests: all passed\n", fails);
   return fails ? 1 : 0;
 }

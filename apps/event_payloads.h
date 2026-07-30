@@ -177,7 +177,26 @@ enum class UiCommandType : uint16_t {
   // since Movement 3 phase 1, but NOTHING in the engine ever created a clip to play —
   // there was no authoring command and no persistence, so the feature was unreachable.
   // This is the owner half: a point is addressed by (track, paramId, tick).
-  WriteAutomationPoint = 60,  // next free 61
+  WriteAutomationPoint = 60,
+  // Set (or clear) a PLACEMENT's own edit scope. Reuses UiCommandPayload: trackId,
+  // value0 = placementId, flags bit0 = on. When set, note edits landing in that placement are
+  // recorded as overrides on it without the caller passing kUiEditScopeLocal each time — the
+  // per-placement answer to "which gesture chooses scope", chosen over a global mode because
+  // forgetting the toggle fails LOUDLY (a note in three places) while being in the wrong mode
+  // fails quietly (a fix that does not propagate).
+  SetPlacementEditScope = 61,
+  // v28: answer ONE automation lane's points into a UiAutomationSlot. Reuses
+  // UiAutomationPointPayload (trackId + paramId identify the lane; nanotick/value ignored).
+  // Request/answer rather than a standing region because a song can hold far more automation than
+  // a fixed region could carry, and a UI only draws the lanes that are open.
+  RequestAutomationLane = 62,
+  /// v28: change an existing mod link's depth/bias/enabled IN PLACE, addressed by linkId
+  /// (UiModLinkCommandPayload; the device/kind fields are ignored). Add-then-remove was the only
+  /// way to do this, and it changed the id, dropped the uid16 and was not atomic — so a depth
+  /// SLIDER was out of reach: a continuous gesture would tear the link down and rebuild it every
+  /// frame. AddModLink deliberately still REFUSES an existing id rather than replacing, so a
+  /// colliding add cannot silently overwrite a link.
+  SetModLinkDepth = 63,  // next free 63
 };
 
 // M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
@@ -201,6 +220,25 @@ struct UiAutomationPointPayload {
 static_assert(sizeof(UiAutomationPointPayload) == 40,
               "UiAutomationPointPayload must fit an EventEntry payload");
 constexpr uint16_t kUiAutomationDiscrete = 1u << 0;
+
+// v28: ASK for one automation lane's points (UiCommandType::RequestAutomationLane). Its own
+// struct rather than a reuse of UiAutomationPointPayload, for one reason: the CLIENT owns
+// `requestSeq`, exactly as RequestWaveform does. That is what lets a caller know which slot its
+// answer will land in before it asks, and match the echo without racing on a counter it never
+// wrote. Reusing the write payload would have meant an engine-assigned sequence and a reader that
+// has to guess.
+struct UiAutomationLaneRequestPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  uint16_t flags = 0;
+  uint32_t requestSeq = 0;   // answered into slots[requestSeq % kUiAutomationSlots]
+  uint32_t trackId = 0;
+  uint32_t targetPluginIndex = 0;
+  char paramId[16]{};
+  uint32_t reserved0 = 0;
+  uint32_t reserved1 = 0;
+};
+static_assert(sizeof(UiAutomationLaneRequestPayload) == 40,
+              "UiAutomationLaneRequestPayload must fit an EventEntry payload");
 
 // M3.23: one section command. `sectionId` addresses an existing section (0 = append, for
 // AddSection); `barCount` is the length for Add/SetSectionLength; `toIndex` is the
@@ -282,6 +320,9 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::MoveSection: return "move_section";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
+    case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";
+    case UiCommandType::RequestAutomationLane: return "request_automation_lane";
+    case UiCommandType::SetModLinkDepth: return "set_mod_link_depth";
   }
   return "op:unknown";
 }
@@ -333,6 +374,8 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
     // paramId[16]
     case UiCommandType::SetAutomationTarget:
     case UiCommandType::WriteAutomationPoint:
+    case UiCommandType::RequestAutomationLane:
+    case UiCommandType::SetModLinkDepth:
       return false;
     default:
       return true;
@@ -407,6 +450,12 @@ enum class UiDiffType : uint16_t {
   // diffType and ignores unknown values is unaffected, which is why it needs no
   // kShmVersion bump.
   ClipRejected = 15,
+  // The OUTCOME of a SavePatcherPreset (29). The command has always worked and nothing said
+  // whether the file was written — daw-cli learned the path from the engine's stderr, which a
+  // browser cannot read. So a "save this graph as a preset" button could only ever lie about
+  // half the time. Additive like ClipRejected: a reader that switches on diffType and ignores
+  // unknown values is unaffected, so no kShmVersion bump.
+  PresetSaved = 16,
 };
 
 // Why a clip edit was refused. Distinct codes rather than one "rejected", because the
@@ -417,6 +466,23 @@ enum class UiClipRejectReason : uint16_t {
   StaleBase = 1,      // baseVersion != the engine's current version for this scope
   UnknownTrack = 2,   // no such track
 };
+
+// SavePatcherPreset's result. Rides the same 40-byte diff slot; diffType FIRST for the same
+// reason as everything else here.
+//
+// The NAME is echoed rather than the full path: the path is the engine's business (it owns the
+// preset directory) and a 28-byte field could truncate one, which is worse than useless — a
+// caller matching a truncated path against what it asked for could conclude the wrong save
+// succeeded. The name is what the caller sent, so it can be matched exactly.
+struct UiPresetSavedPayload {
+  uint16_t diffType = static_cast<uint16_t>(UiDiffType::PresetSaved);
+  uint16_t ok = 0;  // 1 = written, 0 = failed (the reason is on the event stream)
+  char name[28]{};
+  uint32_t reserved[2]{};
+};
+
+static_assert(sizeof(UiPresetSavedPayload) == 40,
+              "UiPresetSavedPayload must fit EventEntry payload");
 
 // Rides the same 40-byte diff slot as every other payload; diffType is FIRST, so a
 // reader dispatches on it and never on the payload's size (UiChainDiffPayload and
@@ -828,8 +894,19 @@ struct UiModErrorPayload {
 static_assert(sizeof(UiModErrorPayload) == 40,
               "UiModErrorPayload must fit EventEntry payload");
 
+// PER-DEVICE ADDRESSING, carried in `flags` because the payload is exactly 40 bytes and full.
+//
+// Bit 15 says a deviceId is PRESENT; bits 0-14 are the id. The presence bit is not decoration:
+// nextDeviceId() starts at 0, so device id 0 is a real device and a bare 0 cannot mean
+// "unspecified". Without the bit, every existing caller sending flags=0 would silently start
+// addressing device 0 instead of taking the legacy whole-pool path.
+constexpr uint16_t kUiPatcherFlagHasDeviceId = 1u << 15;
+constexpr uint16_t kUiPatcherDeviceIdMask = 0x7FFFu;
+
 struct UiPatcherGraphCommandPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  // See kUiPatcherFlagHasDeviceId: bit 15 = a deviceId follows in bits 0-14. The graph edited is
+  // then THAT DEVICE's own, not the shared pool.
   uint16_t flags = 0;
   uint32_t trackId = 0;
   uint32_t baseVersion = 0;

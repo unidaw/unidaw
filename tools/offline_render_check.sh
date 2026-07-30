@@ -21,6 +21,33 @@
 #                   the same peak. A render that is fast, repeatable and WRONG would satisfy the
 #                   first two perfectly.
 #
+# THIS CHECK IS NOW LOAD-BEARING for seven others. These render instead of capturing:
+#
+#   tempo_map_audio  audio_loop  audio_clip_playback  surround  child_track
+#   pdc_alignment    patcher_device_migration
+#
+# Their subject is musical or arithmetic — where a clip lands, whether a bus reaches the mix, how
+# far apart two onsets are — and none of it needs a sound card. Together they went from about 119
+# seconds of wall time to about 11, and three of them got STRONGER in the process: audio_loop now
+# asserts pass 1 instead of excusing it as a startup transient, pdc_alignment measures its offset
+# as exactly 512 samples rather than approximately, and patcher_device_migration dropped the
+# 8-block workaround it needed because a starved realtime producer emits silence that looks like a
+# dead generator.
+#
+# So the equivalence THIS check pins is what those seven now rest on. If a render ever stops
+# matching the device, they all quietly stop testing the thing they claim to.
+#
+# WHAT STAYS ON REAL HARDWARE, and why, so the boundary is written down rather than inferred:
+#   audio_stability      its subject IS the realtime pipeline — underruns, block depth, deadlines
+#   sidechain            cross-track pull under a real clock
+#   master_fx            the one-block-latency host on the master sum
+#   panic, preview_note  interactive: they send a command MID-PLAYBACK, which a batch render at
+#                        host speed cannot time
+#   level_match_bypass   toggles bypass mid-run, same reason
+#   midi_per_bus         types a note onto a DERIVED child at runtime. Moving it into the fixture
+#                        would route it through aux-child persistence instead of the runtime edit
+#                        path — a different mechanism, and the one it exists to test
+#
 # Needs a real audio device for the comparison half + the C++ and daw-cli targets built.
 #   tools/offline_render_check.sh
 #

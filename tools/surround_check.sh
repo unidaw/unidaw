@@ -41,13 +41,17 @@ PY
 
 run() {  # $1=name  -> prints "ch0 ch1 ch2 ch3 ch4 ch5" peaks
   local name="$1"
+  # RENDERED OFFLINE. No sound card is involved in the answer this check asks, and the render
+  # pump never skips a block or primes with silence, so a missing signal is a missing signal
+  # rather than an underrun that may not repeat. The realtime pull path is pinned by
+  # offline_render_check (a render against a device capture of the same fixture) and by the
+  # checks that deliberately stay on hardware: audio_stability, sidechain, master_fx, panic,
+  # preview_note, level_match_bypass.
   ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_MASTER_CHANNELS=6 DAW_UI_SHM_NAME="$SHM" \
-      DAW_PROJECT_DIR="$TMP" DAW_CAPTURE_WAV="$TMP/$name.wav" DAW_CAPTURE_SECONDS=5 \
-      ./daw_engine --run-seconds 6 >"$TMP/$name.log" 2>&1 ) &
-  local e=$!; sleep 2
-  DAW_UI_SHM_NAME="$SHM" "$CLI" do load "$name" --force >/dev/null 2>&1 || true; sleep 1
-  DAW_UI_SHM_NAME="$SHM" "$CLI" do play --force >/dev/null 2>&1 || true
-  wait "$e"
+      DAW_PROJECT_DIR="$TMP" \
+      ./daw_engine --project "$name" --render "$name" --run-seconds 5 \
+      >"$TMP/$name.log" 2>&1 ) \
+    || { echo "  FAIL: the '$name' render exited non-zero"; exit 1; }
   python3 - "$TMP/$name.wav" <<'PY'
 import sys,wave,struct
 w=wave.open(sys.argv[1],'rb');ch=w.getnchannels();n=w.getnframes();s=struct.unpack('<'+'h'*(n*ch),w.readframes(n));w.close()

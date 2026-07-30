@@ -53,6 +53,13 @@ daw-cli — control surface for a running engine
                                    writes one automation point. --discrete makes the
                                    value STEP at each point instead of interpolating,
                                    and is fixed when the clip is created.
+  daw-cli do placement-scope --track N --placement P [--on 0|1]
+                                   mark ONE appearance as taking edits locally: a note
+                                   typed into it becomes an override on it rather than a
+                                   change to the clip every appearance shares. Chosen over
+                                   a global mode because forgetting the toggle fails loudly
+                                   (the note appears everywhere) while the wrong mode fails
+                                   quietly (a fix that does not propagate).
   daw-cli do revert-overrides --track N --placement P
                                    clears every add and mute on one appearance, in one
                                    step — possible only because overrides are
@@ -79,7 +86,10 @@ daw-cli — control surface for a running engine
                                    routing read-back to merge against.
   daw-cli do patcher-node --track N --type euclidean|lfo|random-degree|
                           passthrough|audio-passthrough|event-out
-  daw-cli do patcher-unnode --track N --node ID
+                                   --device D edits THAT DEVICE's own graph, which is the
+                                   only form that is saved for a project with per-device
+                                   graphs; without it the edit goes to the shared pool
+  daw-cli do patcher-unnode --track N --node ID [--device D]
   daw-cli do patcher-connect --track N --src ID --dst ID
                              [--src-port P] [--dst-port P] [--kind event|audio|cv]
   daw-cli do patcher-config --track N --node ID --type T [type-specific flags]
@@ -365,6 +375,8 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
     let names = handle.read_track_names();
     let devices = handle.read_track_device_names();
     let (ids, flags) = handle.read_track_ids_and_flags();
+    // The per-track boolean byte, which carries harmony-quantize alongside mute/solo.
+    let mixers = handle.read_mixer();
     println!("{{");
     println!("  \"track_count\": {count},");
     println!("  \"tracks\": [");
@@ -388,13 +400,20 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
         // disappears on load" hard to pin down: the sparse-id load bug published a phantom
         // lane in an unclaimed slot and this output could not tell it from a real one.
         let is_absent = flag & daw_bridge::layout::UI_TRACK_FLAG_ABSENT != 0;
+        // SetTrackHarmonyQuantize had no read-back at all, so a toggle for it could only be
+        // write-only. Printed here for the same reason `absent` is: state you cannot read is
+        // state a control has to invent.
+        let harmony_q = mixers
+            .get(index)
+            .map(|m| m.flags & daw_bridge::layout::MIX_FLAG_HARMONY_QUANTIZE != 0)
+            .unwrap_or(false);
         let comma = if index + 1 == count { "" } else { "," };
         // M2.17: this track's OWN clip version — the base an edit to this track must
         // present. The global `clip_version` in `get transport` moves whenever ANY
         // track changes and is no longer the right base for a track-scoped edit.
         let clip_version = handle.clip_version_for_track(id);
         println!(
-            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
+            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
         );
     }
     println!("  ]");
@@ -421,6 +440,21 @@ fn send_named(handle: &EngineHandle, command: UiCommandType, name: &str) -> i32 
 /// a clip version would reject it whenever someone else was mid-edit, for a change that
 /// cannot conflict with theirs.
 /// Patcher node types, by name.
+/// Encode `--device N` into the patcher payload's `flags`, which is where per-device addressing
+/// lives (the payload is exactly 40 bytes and full).
+///
+/// Bit 15 marks the id as PRESENT and is not decoration: device ids start at 0, so a bare 0 cannot
+/// mean "unspecified". Without `--device` the command takes the legacy whole-pool path — which for
+/// a project with per-device graphs means the edit is applied to the shared pool and never saved,
+/// so pass it.
+fn patcher_device_flags(args: &[String]) -> u16 {
+    use daw_bridge::layout as L;
+    match flag_u64(args, "--device", None) {
+        Ok(id) => L::UI_PATCHER_FLAG_HAS_DEVICE_ID | ((id as u16) & L::UI_PATCHER_DEVICE_ID_MASK),
+        Err(_) => 0,
+    }
+}
+
 fn parse_node_type(raw: &str) -> Result<u32, String> {
     use daw_bridge::layout as L;
     Ok(match raw {
@@ -739,6 +773,26 @@ fn flag_i64(args: &[String], key: &str, default: i64) -> Result<i64, String> {
     }
 }
 
+/// A param id packed into the 16-byte wire field, REFUSING anything that would not survive it.
+///
+/// 15 bytes, not 16: the read-back slot nul-terminates within its own 16-byte array, so a name
+/// that filled all 16 would be written in full and read back one byte short — the write and the
+/// answer would name different lanes forever, with nothing reporting it. Truncating silently is
+/// worse than refusing, because the caller is told the lane it asked for was the lane it got.
+fn param_id_bytes(param: &str) -> Result<[u8; 16], String> {
+    let b = param.as_bytes();
+    if b.len() > 15 {
+        return Err(format!(
+            "--param {param:?} is {} bytes; the wire field holds 15. Truncating it would write \
+to a different lane than the one you named, so this is refused rather than guessed.",
+            b.len()
+        ));
+    }
+    let mut out = [0u8; 16];
+    out[..b.len()].copy_from_slice(b);
+    Ok(out)
+}
+
 fn flag_f64(args: &[String], key: &str, default: f64) -> Result<f64, String> {
     match flag(args, key) {
         Some(raw) => raw
@@ -988,8 +1042,16 @@ fn get_extents(handle: &EngineHandle) -> i32 {
             .map(|(lpb, n, d)| format!("{{ \"lpb\": {lpb}, \"time_sig\": \"{n}/{d}\" }}"))
             .unwrap_or_else(|| "null".to_string());
         let audio = e.flags & daw_bridge::layout::UI_CLIP_EXTENT_AUDIO != 0;
+        // The appearance's own edit scope, printed for the same reason `absent` and
+        // `harmony_quantize` are: a toggle whose state cannot be read is one the interface has to
+        // guess at.
+        let local = e.flags & daw_bridge::layout::UI_CLIP_EXTENT_LOCAL_EDITS != 0;
+        // The OVERRIDE BADGE, published since M3.24 and readable from nowhere until now. It is
+        // what a UI draws to say "this appearance is customised", so a stale one — a mute whose
+        // base note a later clip edit removed — lit it over nothing and no test could see that.
+        let (overrides, has_overrides) = daw_bridge::layout::unpack_clip_overrides(e.flags);
         println!(
-            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"audio\": {}, \"start\": {}, \"end\": {}, \"grid\": {} }},",
+            "  {{ \"placement\": {}, \"clip\": {}, \"track\": {}, \"audio\": {}, \"local_edits\": {local}, \"overrides\": {overrides}, \"has_overrides\": {has_overrides}, \"start\": {}, \"end\": {}, \"grid\": {} }},",
             e.placement_id, e.clip_id, e.track_id, audio, e.start_tick, e.end_tick, grid
         );
     }
@@ -1032,7 +1094,18 @@ fn get_waveform(handle: &EngineHandle, args: &[&str]) -> i32 {
     let first_frame: u64 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(0);
     let columns: u32 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(16);
     let channel_mask: u32 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(1);
-    let request_seq: u32 = 0x7A5E;
+    // Was a CONSTANT 0x7A5E, which is the trap documented in get_clip: the echo then matches on
+    // every call after the first, so a query for source 2 can take delivery of source 1's answer.
+    // Unique per invocation, and the echoed sourceId is checked too.
+    let request_seq: u32 = {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let id = pid.rotate_left(11) ^ nanos;
+        if id == 0 { 1 } else { id }
+    };
     let slot_index = (request_seq as usize) % 4; // K_UI_WAVEFORM_SLOTS
     let payload = UiWaveformRequestPayload {
         command_type: UiCommandType::RequestWaveform as u16,
@@ -1052,7 +1125,7 @@ fn get_waveform(handle: &EngineHandle, args: &[&str]) -> i32 {
         let _ = handle.send_waveform_request(payload);
         thread::sleep(Duration::from_millis(100));
         if let Some(v) = handle.read_waveform_slot(slot_index) {
-            if v.request_seq == request_seq {
+            if v.request_seq == request_seq && v.source_id == source_id {
                 let pairs: Vec<String> = v.pairs.iter().map(|p| p.to_string()).collect();
                 println!(
                     "{{ \"requestSeq\": {}, \"sourceId\": {}, \"status\": {}, \"decimation\": {}, \"columns\": {}, \"channels\": {}, \"firstFrame\": {}, \"frameCount\": {}, \"contentKey\": {}, \"flags\": {}, \"pairs\": [{}] }}",
@@ -1065,6 +1138,96 @@ fn get_waveform(handle: &EngineHandle, args: &[&str]) -> i32 {
         }
         if Instant::now() >= deadline {
             eprintln!("daw-cli: no waveform answer for source {source_id} (slot {slot_index})");
+            return 1;
+        }
+    }
+}
+
+/// v28: the standing automation lane list — "which params are automated, and on what track".
+/// A plain version-gated read: no request, no slot, nothing to match up.
+fn get_automation(handle: &EngineHandle) -> i32 {
+    let v = handle.read_automation_lanes();
+    println!("{{");
+    println!("  \"version\": {},", v.version);
+    // Truncation is REPORTED. An incomplete list that says nothing reads as a complete one, and
+    // "the automation lanes are missing" then arrives as a bug report about the lanes.
+    println!("  \"lanes_truncated\": {},", v.truncated);
+    println!("  \"lanes\": [");
+    for (i, lane) in v.lanes.iter().enumerate() {
+        let comma = if i + 1 == v.lanes.len() { "" } else { "," };
+        println!(
+            "    {{ \"track_id\": {}, \"param\": {:?}, \"device\": {}, \"points\": {}, \"discrete\": {} }}{comma}",
+            lane.track_id, lane.param_id, lane.target_plugin_index, lane.point_count,
+            lane.discrete
+        );
+    }
+    println!("  ]");
+    println!("}}");
+    0
+}
+
+/// v28: one lane's POINTS. Sends RequestAutomationLane and reads the slot it addressed.
+fn get_automation_points(handle: &EngineHandle, args: &[String]) -> i32 {
+    use daw_bridge::layout as L;
+    let track = flag_u64(args, "--track", Some(0)).unwrap_or(0) as u32;
+    let param = match flag(args, "--param") {
+        Some(p) if !p.is_empty() => p,
+        _ => {
+            eprintln!("daw-cli: --param is required (the automation clip's id, e.g. index:0)");
+            return 2;
+        }
+    };
+    let param_id = match param_id_bytes(&param) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("daw-cli: {e}"); return 2 }
+    };
+    // UNIQUE PER INVOCATION, for the reason spelled out in get_clip: a constant request id makes
+    // every call after the first match the PREVIOUS call's answer the instant it is read, so
+    // asking about lane B returns lane A and the caller concludes its write was lost.
+    let request_seq = {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        let id = pid.rotate_left(11) ^ nanos;
+        if id == 0 { 1 } else { id }
+    };
+    let slot_index = (request_seq as usize) % 4; // K_UI_AUTOMATION_SLOTS
+    let payload = L::UiAutomationLaneRequestPayload {
+        command_type: UiCommandType::RequestAutomationLane as u16,
+        flags: 0,
+        request_seq,
+        track_id: track,
+        target_plugin_index: flag_u64(args, "--device", Some(0xFFFF_FFFF))
+            .unwrap_or(0xFFFF_FFFF) as u32,
+        param_id,
+        reserved0: 0,
+        reserved1: 0,
+    };
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let _ = handle.send_automation_lane_request(payload);
+        thread::sleep(Duration::from_millis(80));
+        if let Some(a) = handle.read_automation_slot(slot_index) {
+            if a.request_seq == request_seq {
+                let pts: Vec<String> = a
+                    .points
+                    .iter()
+                    .map(|(t, v)| format!("{{ \"nanotick\": {t}, \"value\": {v} }}"))
+                    .collect();
+                println!(
+                    "{{ \"request_seq\": {}, \"track_id\": {}, \"param\": {:?}, \"found\": {}, \"discrete\": {}, \"points_truncated\": {}, \"points\": [{}] }}",
+                    a.request_seq, a.track_id, a.param_id, a.found, a.discrete,
+                    a.points_truncated, pts.join(", ")
+                );
+                // `found: false` is an ANSWER, and exit 0 says so. Only a request that was never
+                // answered at all is a failure of this command.
+                return 0;
+            }
+        }
+        if Instant::now() >= deadline {
+            eprintln!("daw-cli: no automation answer for track {track} param {param:?} (slot {slot_index})");
             return 1;
         }
     }
@@ -1240,6 +1403,20 @@ fn watch(handle: &EngineHandle) -> i32 {
 }
 
 fn main() {
+    // DIE QUIETLY ON A CLOSED PIPE, like every other Unix tool.
+    //
+    // Rust ignores SIGPIPE and turns the resulting EPIPE into a panic on write, so
+    // `daw-cli get notes | head -1` printed a panic and a backtrace note the moment its output
+    // outran the reader. Inside a check that read as "no published notes — the fixture did not
+    // load", i.e. the tool blaming the engine for the tool's own crash. It showed up as an
+    // intermittent failure because whether the write lands before or after `head` exits is a
+    // race, and the suite's flake reporting is what surfaced it.
+    //
+    // Restoring the default disposition makes a closed pipe kill the process silently, which is
+    // what a caller composing with `head`, `grep -q` or `paste` already assumes.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     // M2.18: the ring is multi-producer now, so nothing needs acknowledging. The flag
     // is still accepted (and ignored) because it appears in a lot of scripts and notes.
@@ -1276,6 +1453,17 @@ fn main() {
         Some((&"get", rest)) if rest.first() == Some(&"device-params") => {
             match EngineHandle::attach(&name, true) {
                 Ok(handle) => get_device_params(&handle, rest),
+                Err(err) => {
+                    eprintln!("daw-cli: {err}");
+                    1
+                }
+            }
+        }
+        // Sends RequestAutomationLane before reading its answer, so it needs a writable
+        // handle — a read-only mmap makes the send a silent no-op and the wait always times out.
+        Some((&"get", rest)) if rest.first() == Some(&"automation-points") => {
+            match EngineHandle::attach(&name, true) {
+                Ok(handle) => get_automation_points(&handle, &args),
                 Err(err) => {
                     eprintln!("daw-cli: {err}");
                     1
@@ -1322,6 +1510,7 @@ fn main() {
                     0
                 }
                 Some(&"audio-sources") => get_audio_sources(&handle),
+                Some(&"automation") => get_automation(&handle),
                 Some(&"extents") => get_extents(&handle),
                 Some(&"arrangement") => {
                     match handle.read_arrange_summary() {
@@ -1820,6 +2009,7 @@ fn main() {
                             UiCommandType::AddPatcherNode as u16
                         },
                         track_id: track,
+                        flags: patcher_device_flags(&args),
                         node_id: flag_u64(&args, "--node", Some(0)).unwrap_or(0) as u32,
                         node_type,
                         ..Default::default()
@@ -1905,15 +2095,59 @@ fn main() {
                     }
                     code
                 }
+                // Change an existing link's depth/bias/enabled IN PLACE. Remove+add was the
+                // only way, and it changed the id, dropped the uid16 (which silently disables
+                // the modulation) and was not atomic — so a depth SLIDER was impossible: a
+                // continuous gesture would tear the link down and rebuild it every frame.
+                Some(&"mod-depth") => {
+                    use daw_bridge::layout as L;
+                    let link = match flag_u64(&args, "--link", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e} (--link is required — this addresses an EXISTING link)"); std::process::exit(2) }
+                    };
+                    let depth = match flag_f64(&args, "--depth", f64::NAN) {
+                        Ok(v) if !v.is_nan() => v as f32,
+                        _ => { eprintln!("daw-cli: --depth is required"); std::process::exit(2) }
+                    };
+                    let enabled = flag_u64(&args, "--enabled", Some(1)).unwrap_or(1) != 0;
+                    let payload = L::UiModLinkCommandPayload {
+                        command_type: UiCommandType::SetModLinkDepth as u16,
+                        // Only bit 10 (enabled) is read for a depth change; the kind bits are
+                        // ignored, which is the whole point of the opcode existing.
+                        flags: if enabled { 1u16 << 10 } else { 0 },
+                        track_id: flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32,
+                        link_id: link,
+                        depth,
+                        bias: flag_f64(&args, "--bias", 0.0).unwrap_or(0.0) as f32,
+                        ..Default::default()
+                    };
+                    match handle.send_mod_link_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"mod-depth\", \"track\": {}, \"link\": {link}, \"depth\": {depth} }}", payload.track_id);
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
                 Some(&"mod-link") | Some(&"unmod-link") => {
                     let removing = rest.first() == Some(&"unmod-link");
                     match mod_link_command(&args, removing) {
                         Ok(payload) => match handle.send_mod_link_command(payload) {
                             Ok(()) => {
+                                // NEVER print the AUTO sentinel as if it were the id. It read
+                                // back as 4294967295, which a caller would then pass to
+                                // `unmod-link --link` and match nothing. The engine now names the
+                                // id it assigned on the event stream (modlink.added).
+                                let auto = payload.link_id == daw_bridge::layout::MOD_LINK_ID_AUTO;
                                 println!(
                                     "{{ \"sent\": {:?}, \"track\": {}, \"link\": {} }}",
                                     if removing { "unmod-link" } else { "mod-link" },
-                                    payload.track_id, payload.link_id
+                                    payload.track_id,
+                                    if auto {
+                                        "\"auto — see modlink.added on the event stream\"".to_string()
+                                    } else {
+                                        payload.link_id.to_string()
+                                    }
                                 );
                                 0
                             }
@@ -1986,10 +2220,14 @@ fn main() {
                         Ok(v) if !v.is_nan() => v as f32,
                         _ => { eprintln!("daw-cli: --value is required (normalised 0..1)"); std::process::exit(2) }
                     };
-                    let mut param_id = [0u8; 16];
-                    let b = param.as_bytes();
-                    let len = b.len().min(param_id.len());
-                    param_id[..len].copy_from_slice(&b[..len]);
+                    // REFUSED, not truncated. The wire field is 16 bytes and the read-back
+                    // nul-terminates within it, so 15 is the real limit. Silently cutting a
+                    // longer id writes to a DIFFERENT lane than the one named — and then reads
+                    // back a third thing — with the caller told it succeeded.
+                    let param_id = match param_id_bytes(&param) {
+                        Ok(v) => v,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
                     let discrete = args.iter().any(|a| a == "--discrete");
                     let payload = L::UiAutomationPointPayload {
                         command_type: UiCommandType::WriteAutomationPoint as u16,
@@ -2019,6 +2257,28 @@ fn main() {
                     payload.base_version = handle.clip_version_for_track(track);
                     match handle.send_command(payload) {
                         Ok(()) => { println!("{{ \"sent\": \"revert-overrides\", \"placement\": {placement} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"placement-scope") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let placement = match flag_u64(&args, "--placement", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
+                    // Default ON: the verb exists to MARK an appearance as taking local edits,
+                    // so the bare form does the thing its name says. `--on 0` clears it.
+                    let on = flag_u64(&args, "--on", Some(1)).unwrap_or(1);
+                    let mut payload = track_structure_command(
+                        UiCommandType::SetPlacementEditScope, track);
+                    payload.value0 = placement;
+                    payload.flags = if on != 0 { 1 } else { 0 };
+                    match handle.send_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"placement-scope\", \"placement\": {placement}, \"local\": {} }}",
+                                     on != 0);
+                            0
+                        }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
@@ -2053,6 +2313,17 @@ fn main() {
                     }
                     if matches!(cmd, UiCommandType::RenameSection) && flag(&args, "--name").is_none() {
                         eprintln!("daw-cli: --name is required for section rename");
+                        std::process::exit(2);
+                    }
+                    // `--index` is REQUIRED for a move. Its default is u32::MAX, which the engine
+                    // clamps to the last position — so `section move --id 1` with no index
+                    // silently reordered the arrangement to put that section at the END. A
+                    // destructive default that looks like a no-op is the worst kind: the caller
+                    // gets `{"sent": "section move"}` and the song is rearranged.
+                    if matches!(cmd, UiCommandType::MoveSection) && flag(&args, "--index").is_none()
+                    {
+                        eprintln!("daw-cli: --index is required for section move (0 = first). \
+Without it the section moves to the END, which is not a sensible default for a reorder.");
                         std::process::exit(2);
                     }
                     let payload = L::UiSectionCommandPayload {

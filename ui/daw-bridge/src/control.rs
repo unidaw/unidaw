@@ -26,6 +26,9 @@ use crate::layout::{
     K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_SCALES, K_UI_MAX_SCALE_STEPS,
     K_UI_MAX_TRACKS, UiAudioSourceRegion, UiWaveformRegion, UiWaveformRequestPayload,
     K_UI_MAX_AUDIO_CLIPS, K_UI_MAX_AUDIO_SOURCES, K_UI_WAVEFORM_MAX_PAIRS, K_UI_WAVEFORM_SLOTS,
+    UiAutomationLaneRegion, UiAutomationLaneRequestPayload, UiAutomationSlotRegion,
+    K_UI_AUTOMATION_SLOTS, K_UI_MAX_AUTOMATION_LANES, K_UI_MAX_AUTOMATION_POINTS,
+    UI_AUTOMATION_FLAG_DISCRETE,
 };
 use crate::reader::{SeqlockReader, UiSnapshot};
 
@@ -135,6 +138,48 @@ pub struct WaveformSlotView {
     pub status: u32,
     pub flags: u32,
     pub pairs: Vec<i16>,
+}
+
+/// One entry of the standing automation lane list (UiAutomationLaneRegion). This answers "which
+/// params are automated on this track" without asking for anything — the list is version-gated,
+/// so a UI can draw the lane headers from a cheap read and only request POINTS for lanes it opens.
+#[derive(Debug, Clone, Default)]
+pub struct AutomationLaneView {
+    pub track_id: u32,
+    /// `PARAM_TARGET_ALL` (0xFFFF_FFFF) = every plugin on the track.
+    pub target_plugin_index: u32,
+    pub param_id: String,
+    pub point_count: u32,
+    pub discrete: bool,
+}
+
+/// The whole lane list plus its version. `version` moves when ANY automation changes and is NOT
+/// the clip version, so typing a note does not invalidate a cached lane list. `truncated` non-zero
+/// means lanes did not fit: the list is INCOMPLETE, and a caller that ignores this draws a
+/// confident picture with lanes missing from it.
+#[derive(Debug, Clone, Default)]
+pub struct AutomationLanesView {
+    pub version: u32,
+    pub truncated: u32,
+    pub lanes: Vec<AutomationLaneView>,
+}
+
+/// One answered lane, read out of a UiAutomationSlot under its seqlock. The echoed
+/// `request_seq`/`track_id`/`param_id` are the point: a slot is reused mod the slot count, so
+/// without them an answer to somebody else's question looks like an answer to yours. `found ==
+/// false` is an ANSWER — "nothing automates that param" — not silence.
+#[derive(Debug, Clone, Default)]
+pub struct AutomationLaneAnswer {
+    pub request_seq: u32,
+    pub track_id: u32,
+    pub param_id: String,
+    pub found: bool,
+    pub discrete: bool,
+    pub points_truncated: u32,
+    /// (nanotick, normalised 0..1), in tick order. The RESOLVED value between points is
+    /// deliberately absent: interpolation is a picture, and a second implementation of it that
+    /// can disagree with what plays is the exact class of bug this read-back exists to expose.
+    pub points: Vec<(u64, f32)>,
 }
 
 /// Read a nul-terminated C `char` array (from a bindgen-generated struct, where
@@ -789,6 +834,108 @@ impl EngineHandle {
                     status: snap.status,
                     flags: snap.flags,
                     pairs: snap.pairs[..n].to_vec(),
+                });
+            }
+        }
+        None
+    }
+
+    /// v28: the standing automation lane list. Version-gated like the other published regions —
+    /// read it, compare `version` to what you cached, and skip the redraw when it has not moved.
+    /// Returns an empty view (version 0) when the engine predates the region.
+    pub fn read_automation_lanes(&self) -> AutomationLanesView {
+        let off = unsafe { (*self.header).ui_automation_offset };
+        if off == 0 {
+            return AutomationLanesView::default();
+        }
+        let region = self._mmap.as_ptr().wrapping_add(off as usize)
+            as *const UiAutomationLaneRegion;
+        // Same discipline as the arrange summary, for the same reason: version 0 means a write is
+        // IN FLIGHT. Sampling the version, reading the body, and sampling again is NOT torn-safe
+        // by itself — the engine only moves the number after writing, so a reader that lands
+        // inside a rewrite sees v0 == v1 over a half-cleared array. Published generations are >= 1.
+        for _ in 0..4096 {
+            let v0 = unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*region).version)) };
+            if v0 == 0 {
+                continue;
+            }
+            let count = unsafe {
+                std::ptr::read_volatile(std::ptr::addr_of!((*region).laneCount))
+            } as usize;
+            let truncated = unsafe {
+                std::ptr::read_volatile(std::ptr::addr_of!((*region).lanesTruncated))
+            };
+            let count = count.min(K_UI_MAX_AUTOMATION_LANES);
+            let mut lanes = Vec::with_capacity(count);
+            for i in 0..count {
+                let lane = unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*region).lanes[i])) };
+                lanes.push(AutomationLaneView {
+                    track_id: lane.trackId,
+                    target_plugin_index: lane.targetPluginIndex,
+                    param_id: cchar_str(&lane.paramId),
+                    point_count: lane.pointCount,
+                    discrete: lane.flags & UI_AUTOMATION_FLAG_DISCRETE != 0,
+                });
+            }
+            fence(Ordering::Acquire);
+            let v1 = unsafe { std::ptr::read_volatile(std::ptr::addr_of!((*region).version)) };
+            if v0 == v1 {
+                return AutomationLanesView { version: v0, truncated, lanes };
+            }
+        }
+        AutomationLanesView::default()
+    }
+
+    /// Asks for one lane's points. The CALLER owns `request_seq` and therefore knows the slot the
+    /// answer lands in: `read_automation_slot(request_seq as usize % K_UI_AUTOMATION_SLOTS)`.
+    pub fn send_automation_lane_request(
+        &self,
+        payload: UiAutomationLaneRequestPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const UiAutomationLaneRequestPayload as *const u8,
+            std::mem::size_of::<UiAutomationLaneRequestPayload>(),
+        )
+    }
+
+    /// Reads one automation answer slot under its per-slot seqlock (seq ODD while the engine is
+    /// writing). Returns None if the region is absent, the index is out of range, or the writer
+    /// never settled. The caller must still check `request_seq` against what it asked: slots are
+    /// reused mod the slot count, so a stale answer is indistinguishable from a fresh one on
+    /// anything but the echo.
+    pub fn read_automation_slot(&self, index: usize) -> Option<AutomationLaneAnswer> {
+        if index >= K_UI_AUTOMATION_SLOTS {
+            return None;
+        }
+        let off = unsafe { (*self.header).ui_automation_slot_offset };
+        if off == 0 {
+            return None;
+        }
+        let region = self._mmap.as_ptr().wrapping_add(off as usize)
+            as *const UiAutomationSlotRegion;
+        let slot = unsafe { std::ptr::addr_of!((*region).slots[index]) };
+        let seq_ptr = unsafe { std::ptr::addr_of!((*slot).seq) } as *const AtomicU32;
+        for _ in 0..4096 {
+            let v0 = unsafe { (*seq_ptr).load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue; // engine mid-write
+            }
+            let snap = unsafe { std::ptr::read_volatile(slot) };
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*seq_ptr).load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                let n = (snap.pointCount as usize).min(K_UI_MAX_AUTOMATION_POINTS);
+                return Some(AutomationLaneAnswer {
+                    request_seq: snap.requestSeq,
+                    track_id: snap.trackId,
+                    param_id: cchar_str(&snap.paramId),
+                    found: snap.found != 0,
+                    discrete: snap.flags & UI_AUTOMATION_FLAG_DISCRETE != 0,
+                    points_truncated: snap.pointsTruncated,
+                    points: snap.points[..n]
+                        .iter()
+                        .map(|p| (p.nanotick, p.value))
+                        .collect(),
                 });
             }
         }

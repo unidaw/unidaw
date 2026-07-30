@@ -216,6 +216,50 @@ BASE_LEFT="$(count_pitch 1 42)"
         overrides"
 echo "  revert: the added hat is gone, the clip's own 4 hats are untouched"
 
+# ---- THE PLACEMENT'S OWN EDIT SCOPE (Jaakko's call): mark ONE appearance, then type NORMALLY.
+#
+# Everything above passes --local per edit. That works and is what daw-cli does, but it is not an
+# interface: something has to decide, per keystroke, which scope was meant. The answer chosen is a
+# per-placement toggle rather than a global mode, on failure asymmetry — forget the toggle and the
+# note appears in all three choruses (loud, one undo away), whereas being in the wrong global mode
+# makes "fix the bass in chorus 1" silently NOT propagate (quiet, and easy to miss for an hour).
+#
+# THE DISCRIMINATING ASSERTION is that the edit carries NO --local flag. If the placement's flag
+# were ignored, the note would reach the clip and sound in all three choruses; if scope were being
+# inferred from occupancy rather than from the flag, it would depend on whether the cell was
+# empty. Only honouring the placement gives exactly one.
+cli do placement-scope --track 0 --placement 13 >/dev/null 2>&1 || true
+sleep 1
+LOCALFLAG="$({ cli get extents 2>/dev/null | tr '{' '\n' | grep '"placement": 13,' \
+  | sed -n 's/.*"local_edits": \([a-z]*\).*/\1/p' | head -1; } || true)"
+[ "$LOCALFLAG" = "true" ] || \
+  fail "after marking placement 13 the published extent says local_edits=$LOCALFLAG — a toggle
+        whose state cannot be read is one the interface has to guess at, and the extents rebuild
+        on the clip version so the command must bump it"
+
+# Chorus 3 is placement 13 (bar 17). Type WITHOUT --local.
+cli do note --track 0 --nanotick $((17 * BAR)) --pitch 44 --duration 240000 >/dev/null 2>&1 || true
+sleep 1.2
+SCOPED="$(count_pitch 0 44)"
+[ "$SCOPED" = "1" ] || \
+  fail "a note typed into a placement marked for local edits, with NO --local flag, sounded
+        $SCOPED times — 3 means the placement's flag was ignored and the edit went to the clip,
+        which is the whole feature failing"
+echo "  placement scope: an edit with no --local flag stayed local because the placement says so"
+
+# And clearing it puts the behaviour back — otherwise the toggle is one-way and the state is a
+# trap rather than a control.
+cli do placement-scope --track 0 --placement 13 --on 0 >/dev/null 2>&1 || true
+sleep 1
+cli do note --track 0 --nanotick $((17 * BAR + 1 * Q)) --pitch 45 --duration 240000 \
+  >/dev/null 2>&1 || true
+sleep 1.2
+UNSCOPED="$(count_pitch 0 45)"
+[ "$UNSCOPED" = "3" ] || \
+  fail "after clearing the placement's scope a normal edit reached $UNSCOPED choruses, not 3 —
+        the toggle must be reversible or it is a trap, not a control"
+echo "  and clearing it restores clip scope (the next edit reaches all 3)"
+
 # ---- A LOCAL EDIT IS ON THE UNDO STACK.
 #
 # Undo here is a whole-store SWAP, not a per-edit inverse — and applyLocalNoteEdit pushed

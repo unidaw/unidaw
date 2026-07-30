@@ -180,12 +180,41 @@ int main() {
   {
     SectionList list;
     list.setSections({sec(1, "a", 4), sec(7, "b", 4)});
-    checkEq(list.nextId(), 8, "next id is past the highest");
+    checkEq(list.peekNextId(), 8, "next id is past the highest");
     checkEq(list.indexOfId(7).value_or(99), 1, "id lookup");
     if (list.indexOfId(4).has_value()) {
       std::printf("FAIL an unknown id resolved\n");
       ++g_fail;
     }
+  }
+
+  // --- AND NEVER REUSED, which max(existing) + 1 does not give you. Take the highest id,
+  // remove it, and the next allocation must NOT hand the same number out again: a reference
+  // held across those two edits would then address a different section with nothing wrong
+  // showing anywhere.
+  {
+    SectionList list;
+    list.setSections({sec(1, "a", 4), sec(2, "b", 4), sec(3, "c", 4)});
+    checkEq(list.nextId(), 4, "first allocation is past the highest");
+    list.setSections({sec(1, "a", 4), sec(2, "b", 4)});  // section 3 removed
+    checkEq(list.nextId(), 5, "an allocation after a removal does not reuse the freed id");
+  }
+
+  // --- A FILE with duplicate or zero ids is repaired, because indexOfId returns the FIRST
+  // match: the second section sharing an id was unaddressable, and renaming it renamed the
+  // other one.
+  {
+    SectionList list;
+    list.setSections({sec(1, "a", 4), sec(1, "b", 4), sec(0, "c", 4)});
+    checkEq(list.repaired(), 2, "two unaddressable ids were reassigned");
+    const auto& out = list.sections();
+    if (out.size() == 3 && (out[0].id == out[1].id || out[1].id == out[2].id ||
+                            out[0].id == out[2].id || out[2].id == 0)) {
+      std::printf("FAIL section ids are still not unique after repair\n");
+      ++g_fail;
+    }
+    checkEq(list.indexOfId(out[1].id).value_or(99), 1,
+            "the repaired section is addressable at its own index");
   }
 
   // --- THE RIPPLE. Inserting bars into a section must carry everything after it, or the

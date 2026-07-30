@@ -206,7 +206,9 @@ The tracker is the only finished thing in the repo and the only thing that can b
 *Ends with: fix the bass in chorus 1, all three choruses change, and the hat you added to chorus 3 survives. Both halves of that sentence are true in no shipping DAW.*
 
 ### Movement 4 — Only if there is an audience beyond you
-Audio file I/O, recording, PDC, buses and sends, sidechain (currently structurally impossible — `numChannelsIn/Out` are fixed at 2 and all VST3 buses are flattened into one contiguous array with no `setBusesLayout` negotiation), multi-out instruments, offline render. Each is months. Do not start any of them until §7 question 1 is answered.
+Audio file I/O, recording, PDC, buses and sends, sidechain, multi-out instruments, offline render. Each is months, and the gate was §7 question 1.
+
+**That question was answered ("me, and I will use it every day") and this Movement was then greenlit and built.** All six phases are done and covered end to end: VST3 bus-layout negotiation (the sidechain above was called structurally impossible because `numChannelsIn/Out` were fixed at 2 and every VST3 bus was flattened into one contiguous array with no `setBusesLayout` negotiation — that is what phase 1 undid), PDC, sidechain, multi-out child tracks, MIDI-per-bus, surround master with generalized pan, and offline render (§7 Q4). Audio file I/O and waveform peaks landed with it. RECORDING is the one item here still untouched.
 
 ---
 
@@ -214,11 +216,15 @@ Audio file I/O, recording, PDC, buses and sends, sidechain (currently structural
 
 **1. Who is this for?** If the answer is "me, and I will use it every day," then Movements 0–2 are the whole roadmap and Movement 4 may never happen — and that is a completely respectable outcome that most of this document is optimized for. If the answer is "a product with users," then audio recording is not optional, the timeline is 3–5 years, and you need to decide that now, because the clip model must have a slot for an audio region *before* the format freezes. Freezing a symbolic-only document and adding audio later is exactly the retrofit that killed everyone else.
 
-**2. Is process-per-track viable at 32+ tracks?** `kUiMaxTracks = 8` today and one OS process per track. Nobody has measured 40 JUCE processes with real plugins loaded. If it does not hold, the model becomes process-per-*group* or process-per-vendor, and that decision reshapes the IPC layer. Measure it before the arrangement makes 40 tracks normal.
+**2. Is process-per-track viable at 32+ tracks?** *(The premise has moved: `kUiMaxTracks` is 64 now, not 8. The question stands — nobody has measured 40 loaded hosts.)* One OS process per track. Nobody has measured 40 JUCE processes with real plugins loaded. If it does not hold, the model becomes process-per-*group* or process-per-vendor, and that decision reshapes the IPC layer. Measure it before the arrangement makes 40 tracks normal.
 
 **3. Global chord timeline, or per-track?** Global is simpler, covers song-form music, and makes chord-degrees actually mean something. Per-track is needed for polytonal and modal-interchange writing. This is the decision that determines whether chord-relative degrees are worth building at all, and it must be made before they ship.
 
-**4. Does the engine ever run faster than realtime?** Reference renders, null tests, "render 20 variations," and CI over audio all need offline render. The current architecture — per-track host processes pulled by a realtime audio callback — cannot do it. Adding an offline mode is a significant architectural change and it is the single largest lever on how testable this project ever becomes.
+**4. Does the engine ever run faster than realtime? ANSWERED YES, AND DONE.** `daw_engine --project P --render OUT` writes a WAV with no audio device, faster than realtime and glitch-free by construction.
+
+The architecture was supposed to make this impossible, and the reason it did not is worth keeping: the producer already paces to `audioPlaybackBlockId` — the block the CONSUMER has played — rather than to a clock, which fell out of fixing the "everything 4x too fast" bug. So the pump just has to BE the consumer. It inverts three policies that are right for a device and wrong for a file: never skip a block to stay current, never prime with silence, and never starve — WAIT instead. A render therefore cannot have a dropout, where a realtime capture can and does.
+
+It was the largest lever on testability, as the question predicted. Seven checks now render instead of capturing (about 119 seconds of wall time down to about 11), and three of them got STRONGER because the render removed an excuse each had been carrying: `audio_loop` asserts pass 1 instead of writing it off as a startup transient, `pdc_alignment` measures exactly 512 samples instead of approximately, and `patcher_device_migration` dropped the pipeline-depth workaround it needed because a starved realtime producer emits silence that looks exactly like a dead generator. `tools/offline_render_check.sh` pins the equivalence those seven rest on (deterministic, faster, and matching a device capture of the same fixture) and records which checks deliberately stay on hardware.
 
 **5. Piano roll: build it, or accept the contour gutter?** The tracker's rhythm legibility is genuinely superior to any piano roll and its pitch blindness is genuinely disqualifying for melodic writing. The gutter is a cheap partial fix. A real piano roll is a second selection model, second tool set, second edit semantics — the most expensive item on `PLAN.md`. My recommendation is to ship the gutter, use the tool for six months, and let the answer become obvious.
 
@@ -241,6 +247,55 @@ because it predicts where to look next: not at the new feature, but at every oth
 new feature's rule should have reached.
 
 ### Fixed
+
+*The nine "lower severity, unverified" claims were worked by hand on 2026-07-30. All nine were
+real, all nine are fixed, each with a negative control. Four were data loss.*
+
+- **A local add on an AUDIO placement was dropped by flatten.** The audio skip was a `continue`
+  over the whole placement, so a note typed into an audio region's cell was accepted, saved and
+  badged — and scheduled nowhere. The clip's kind has nothing to do with the placement's `adds`.
+  Emitted rather than refused, on failure asymmetry: a mistake that SOUNDS is one delete away.
+
+- **A mute outlived its base note, leaving the override badge lit over nothing.** Pruned in
+  `rebuildFlatAndPublish`, the one funnel every structural change goes through — only when the
+  referenced clip exists, since an absent clip makes a dead mute indistinguishable from one whose
+  clip is not installed yet. The badge itself (`overrideCount`, published since M3.24) was
+  readable from nowhere, which is why a stale one could not be observed; `get extents` now prints
+  it.
+
+- **The edit target was arbitrary under overlapping placements — and scope and target could
+  disagree.** `editIsLocalScope` scanned for ANY placement under the tick with `localEdits` set
+  while the target loop took the FIRST containing one, so a gesture could be ruled local and then
+  applied to the appearance the user never marked. One lookup now, with the tie-break stated
+  (latest start — "topmost wins"), and an `local_edit.ambiguous_tick` event when the tick was
+  ambiguous at all.
+
+- **Section ids were reused, and `nextId`'s own comment claimed they were not.** `max + 1` hands
+  out the id of a section you just deleted, so a reference held across those edits silently
+  addresses a different section. Now a monotonic watermark. The same fix repairs a FILE carrying
+  duplicate or zero ids — `indexOfId` returns the first match, so the second section sharing an id
+  was unaddressable and renaming it renamed the other one — and the load says so rather than
+  quietly editing the document.
+
+- **A shrink into bars holding AUTOMATION was allowed**, and a grow **left a straddling placement
+  behind**. Both are the refusal's own argument applied consistently: material inside the removed
+  bars does not move, the boundaries slide over it, and for automation a point at the boundary
+  collapses onto the one at the new end because `addPoint` replaces (measured: two points became
+  one). The grow case has no correct answer to pick silently — split, stretch or overlap are three
+  different intentions the command does not carry — so it refuses, naming the placement.
+
+- **`section move` with no `--index` moved the section to the END**, `--param` longer than the wire
+  field was silently truncated into a DIFFERENT lane, and `mod-link` reported the AUTO sentinel
+  (4294967295) as the assigned id. All three now refuse or report honestly; the engine emits
+  `modlink.added` with the id it actually assigned.
+
+- **Two vacuous test controls.** `lint_check`'s valid-patcher check grepped `"0 error"`, which also
+  matches 10, 20 and 30 errors — the one assertion that a valid graph is CLEAN would have passed
+  while the linter screamed. And `op_registry_check` only parsed opcodes with an explicit `= N`, so
+  an enumerator declared bare was invisible to the check whose whole job is to notice a missing CLI
+  path or name; a bare enumerator is now a failure in its own right, because this enum is a wire
+  contract shared with the frontend and an implicit value renumbers everything after it on both
+  sides.
 
 - **No note could ever be entered on a multi-out stem.** A child track's PUBLISHED clip
   version and the version the engine ACCEPTS against disagreed — the clip-all region rebuilds
@@ -300,7 +355,16 @@ new feature's rule should have reached.
 
 ### Open, and worth knowing about
 
-- **The patcher's EDIT commands still address the global pool, not a device.** Items 1-3
+- **RESOLVED: the patcher's edit commands now address a DEVICE.** `--device D` on
+  `patcher-node`/`patcher-unnode`/`patcher-connect`, carried in the payload's `flags` (bit 15
+  marks the id present — device ids start at 0, so a bare 0 cannot mean "unspecified"). The edit
+  goes into that device's own authored graph, is therefore saved, and the POOL IS RE-DERIVED
+  immediately: assembly used to happen only at load, so even a correctly-addressed edit was inert
+  until the next open. A pool that will not build is reported and the previous one keeps running.
+  Covered by `tools/patcher_device_edit_check.sh` (lands, isolated from the other device, saved
+  across a fresh-engine reload, executing).
+
+  *The gap it closed, kept because the shape recurs:* items 1-3
   migrated the data model and the read-back to per-device graphs; `AddPatcherNode` /
   `RemovePatcherNode` / `ConnectPatcherNodes` were never migrated. Their payload has a
   `trackId` used only to label the emitted error, and no `deviceId`. For any project carrying
@@ -334,18 +398,60 @@ new feature's rule should have reached.
   currently pins the second reading. Picking one silently is how a song ends up off its own bar
   grid, so nothing moves until you decide.
 
-- **The extent caps still truncate silently.** `kUiMaxClipExtents` went 64 → 256 and the
-  overflow is still a bare `break` with no count and no event, while the arrange region in the
-  same change *does* publish truncation counts. And `kUiMaxAudioClips = 64; // ==
-  kUiMaxClipExtents` is now a false comment: a project with more than 64 audio placements
-  publishes up to 256 extents and only 64 audio clips, so the rails draw boxes with no waveform
-  and the header asserts the two are equal. Raising it changes the region size, so it wants
-  batching with the next contract bump.
+- **DECISION NEEDED: the four section ops disagree about re-sectioning.** `SetSectionLength`
+  RIPPLES — it moves every placement at or after the boundary — and refuses a shrink whose
+  removed bars hold anything, on the argument written out on `planRipple`: material inside those
+  bars would not move, the later boundaries would slide over it, and a placement that was in the
+  intro would silently be in the verse. `AddSection`, `RemoveSection` and `MoveSection` cause
+  exactly that outcome and allow it. Inserting a 4-bar section at index 0 moves every later
+  boundary while the material stays at its ticks.
 
-- **Nothing publishes what automation actually PLAYED.** The engine keeps a `paramMirror` of
-  the last emitted value per param but does not publish it, which is why the ripple/playback
-  divergence above could only be found by reading code — every automation test asserts on the
-  saved file. Publishing it would also serve the UI.
+  Two readings, and they are both defensible:
+
+  1. *Add/Remove/Move are LABEL operations.* The spine names spans; naming a new one does not
+     move music. Then `SetSectionLength` is the odd one out for rippling at all, and its refusal
+     is protecting against something the other three do freely.
+  2. *A section's bar count is a length of arrangement.* Then adding a section INSERTS that many
+     bars and the music after it moves, exactly as lengthening one does — and Remove should
+     refuse when its bars are occupied, for the same reason a shrink does.
+
+  My reading is (2) for Add and Remove, because the model already says a position is derived from
+  the lengths before it, and inserting a length is the same geometric act as extending one.
+  `MoveSection` is genuinely harder — reordering sections of unequal length would have to permute
+  the material, which is a much larger feature than a label reorder — so it may want to refuse
+  outright when anything follows it.
+
+  Nothing has been changed behaviourally, because picking silently is the failure mode this
+  whole section is about. What HAS changed: the re-sectioning is now COUNTED and reported
+  (`section.changed` carries `resectioned`, plus a stderr line), so the behaviour is visible
+  while the question is open. Verified: a rename reports 0, an append past the end reports 0, and
+  inserting a section at index 0 of a two-placement project reports 2.
+
+- **RESOLVED: the extent caps report their truncation, and the false comment is now true.**
+  `UiClipExtentRegion` carries a `truncated` count and the audio region a `clipsTruncated`, both
+  surfaced by `daw-cli get extents`; `kUiMaxAudioClips` really is `kUiMaxClipExtents` (256) as
+  its comment always claimed. *The gap it closed:* the overflow was a bare `break` with no count
+  and no event while the arrange region in the same change did publish counts, and a project with
+  more than 64 audio placements published up to 256 extents and only 64 audio clips — so the
+  rails drew boxes with no waveform in the tail and nothing said why. Covered by
+  `tools/extent_truncation_check.sh`.
+
+- **RESOLVED: automation has a read-back, and it publishes what PLAYS.** v28 adds
+  `UiAutomationLaneRegion` (the standing, version-gated lane list) and four seqlock slots that
+  answer per-lane point queries the CALLER addresses. Both are filled from the RT track
+  SNAPSHOT, not from `rt->track` — which is the whole point, and was measured both ways: break
+  the ripple's snapshot republish and `tools/automation_readback_check.sh` fails with the old
+  ticks; leave that bug in place but publish from the model and all its properties pass over a
+  broken engine. A model-sourced read-back would have agreed with the saved file and certified
+  the bug.
+
+  *Deliberately not published:* the resolved value at the playhead. Interpolation belongs to
+  whoever draws the curve; a published resolved value is a second implementation of it that can
+  disagree with what plays, which is the class of bug this read-back exists to expose.
+
+  It immediately paid for itself: the shrink refusal guarding placements but not automation
+  (a point at the boundary collapsing onto the one at the new end, two points becoming one) was
+  found and fixed with it, and could not have been asserted from a test before it existed.
 
 ### Fixed after the first pass
 

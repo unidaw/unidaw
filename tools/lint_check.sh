@@ -113,9 +113,6 @@ expect quantize-inert          's/"strength_milli": 500/"strength_milli": 0/'
 expect tempo-map-no-origin     's/"nanotick": 0, "bpm": 120/"nanotick": 480000, "bpm": 120/'
 expect clip-unplaced           's/"clip_id": 2, "id": 2/"clip_id": 1, "id": 2/'
 # An LFO (a CV source) wired into an EVENT input is invalid, and the engine's assembler
-# refuses the WHOLE TRACK for it — so none of that track's patchers run. Uses the engine's
-# own assemblePatcherPool + buildPatcherGraph, so the linter cannot disagree with it.
-# An LFO (a CV source) wired into an EVENT input is invalid, and the engine's assembler
 # refuses the WHOLE TRACK for it — so none of that track's patchers run, silently. This
 # rule uses the engine's own assemblePatcherPool + buildPatcherGraph, so the linter and
 # the engine cannot disagree about whether a graph will execute.
@@ -147,7 +144,11 @@ fi
 # project that has a patcher at all.
 sed 's/"type": "lfo", "lfo": { "frequency_hz": 1.0, "depth": 1.0, "bias": 0.0, "phase_offset": 0.0 }/"type": "euclidean", "euclidean": { "steps": 16, "hits": 5, "offset": 0, "duration_ticks": 0, "degree": 1, "octave_offset": 0, "velocity": 100, "base_octave": 4 }/' \
   "$TMP/badpatcher.uniproj.json" > "$TMP/goodpatcher.uniproj.json"
-"$LINT" "$TMP/goodpatcher.uniproj.json" 2>&1 | grep -q "0 error" \
+# ANCHORED on the summary line. `grep -q "0 error"` was a vacuous control: the linter prints
+# "daw_lint: N error(s), M warning(s)", so the substring "0 error" also matches 10, 20 and 30
+# errors — the one assertion here that a valid graph is CLEAN would have passed while the linter
+# screamed about it.
+"$LINT" "$TMP/goodpatcher.uniproj.json" 2>&1 | grep -q "daw_lint: 0 error" \
   && echo "  silent: a valid patcher graph" \
   || { echo "  FAIL: a VALID patcher graph was reported as unassemblable"; fails=$((fails + 1)); }
 

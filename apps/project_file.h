@@ -91,6 +91,22 @@ struct ProjectPlacement {
   uint64_t lengthNanoticks = 0;
   std::vector<MusicalEvent> adds;
   std::vector<EventId> mutes;
+  // EDIT SCOPE FOR THIS APPEARANCE (Jaakko's call). When set, a note edit landing in this
+  // placement is recorded as an override on IT rather than written to the clip — without the
+  // caller having to say so each time.
+  //
+  // Chosen over a global "local edit mode" because of failure asymmetry, which is the whole
+  // argument. Forget to set this and your hat appears in all three choruses: LOUD, visible
+  // instantly, one undo away. Be in the wrong global mode and "fix the bass in chorus 1"
+  // silently does NOT propagate: QUIET, nothing looks wrong, and you may not notice for an hour.
+  // A loud failure beats a quiet one. It also puts the state on the thing it affects, next to
+  // the override badge already on that placement, rather than in a mode you have to remember.
+  //
+  // The explicit per-command bit (kUiEditScopeLocal) still wins on its own — it is what daw-cli
+  // uses and what makes scope testable without any UI state. Scope is never INFERRED from
+  // whether the cell is occupied: that breaks the promise in one direction or the other
+  // depending on the rule you pick, which is why an explicit signal exists at all.
+  bool localEdits = false;
 };
 
 struct ProjectTrack {

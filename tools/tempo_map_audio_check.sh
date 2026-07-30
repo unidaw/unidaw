@@ -26,13 +26,26 @@
 # the first version of this check measured 2.29 s and then 1.94 s for the same correct
 # computation — a coin flip either side of its own tolerance.
 #
-# DAW_CAPTURE_SECONDS is set LONGER than the run on purpose. The capture is a RING that
-# keeps the LAST N seconds, so a 14-second capture of a 19-second run silently drops the
-# beginning — which is where the first click is. That cost an hour: the second click was
-# sounding correctly all along and the capture was throwing away the first one, so it
-# read as "the clip at bar 2 never plays".
+# RENDERED OFFLINE, not captured from the device. This check's subject is arithmetic — where
+# in the timeline a clip lands — and none of it needs a sound card. What that changes:
 #
-# Needs a real audio device (non-test mode) + the C++ and daw-cli targets built.
+#   * 39 s -> about 3. Two 19-second realtime runs became two renders of 8 s of audio at host
+#     speed, and this was the slowest check in the suite.
+#   * The capture-ring trap is GONE, not documented. The old comment here recorded an hour lost
+#     to a 14-second ring silently dropping the beginning of a 19-second run — which is where
+#     the first click was, so it read as "the clip at bar 2 never plays". A render writes the
+#     whole span from tick 0 because there is no ring and no start transient.
+#   * No dropouts BY CONSTRUCTION. The pump never skips a block to stay current, so a missing
+#     click is a missing click rather than an underrun that might not repeat.
+#   * Deterministic. Two renders are byte-identical, so a failure here reproduces.
+#
+# What is NOT covered any more, said out loud: the realtime pull path — device clock, host
+# completion under a deadline, and the startup transient. offline_render_check pins the render
+# against a realtime capture of the same fixture, which is where that coverage now lives; and
+# audio_stability_check, sidechain_check, master_fx_check and the interactive checks (panic,
+# preview_note) deliberately stay on real hardware.
+#
+# Needs the C++ and daw-cli targets built. No audio device required.
 #   tools/tempo_map_audio_check.sh
 #
 set -euo pipefail
@@ -79,21 +92,20 @@ EOF
 make_project steady '[ { "nanotick": 0, "bpm": 120 } ]'
 make_project slowed  "[ { \"nanotick\": 0, \"bpm\": 120 }, { \"nanotick\": $BAR, \"bpm\": 60 } ]"
 
+# 8 seconds of audio covers the later click in both projects (steady 4.0 s, slowed 6.0 s) with
+# room to spare. The render loads the project itself and plays from tick 0, so there is no load
+# race and no `do play` to time.
 run() {  # run <name>
-  local shm="/tmchk_${1}_$$"
-  ( cd "$BUILD" && env DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" \
-      DAW_ENGINE_NUM_BLOCKS=8 \
-      DAW_CAPTURE_WAV="$TMP/$1.wav" DAW_CAPTURE_SECONDS=25 \
-      ./daw_engine --run-seconds 19 >"$TMP/$1.log" 2>&1 ) &
-  local eng=$!
-  sleep 2.5
-  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do load "$1" >/dev/null 2>&1 || true
-  sleep 1.5
-  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do play >/dev/null 2>&1 || true
-  wait "$eng" 2>/dev/null || true
+  ( cd "$BUILD" && env DAW_UI_SHM_NAME="/tmchk_${1}_$$" DAW_PROJECT_DIR="$TMP" \
+      ./daw_engine --project "$1" --render "$1" --run-seconds 8 \
+      >"$TMP/$1.log" 2>&1 ) \
+    || { echo "  FAIL: the '$1' render exited non-zero — see $TMP/$1.log"; exit 1; }
+  [ -s "$TMP/$1.wav" ] || { echo "  FAIL: the '$1' render wrote no output"; exit 1; }
 }
+START=$SECONDS
 run steady
 run slowed
+echo "  rendered 2 x 8 s of audio in ~$((SECONDS - START)) s of wall time, no audio device"
 
 cat > "$TMP/analyse.py" <<'PY'
 import sys, wave, numpy as np

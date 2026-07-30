@@ -46,15 +46,15 @@ cat > "$TMP/audioplay.uniproj.json" <<EOF
                       "notes": [], "chords": [], "mutes": [] } ] } ] }
 EOF
 
-( cd "$BUILD" && DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
-    DAW_CAPTURE_WAV="$TAKE" DAW_CAPTURE_SECONDS=6 \
-    ./daw_engine --run-seconds 6 >"$TMP/engine.log" 2>&1 ) &
-ENGINE=$!
-sleep 2
-DAW_UI_SHM_NAME="$SHM" "$CLI" do load audioplay --force >/dev/null
-sleep 1
-DAW_UI_SHM_NAME="$SHM" "$CLI" do play --force >/dev/null
-wait "$ENGINE"
+# RENDERED OFFLINE. "Does an audio region reach the mix" is arithmetic plus a decode; no sound
+# card is involved in the answer, and a render has no start transient and no capture ring to
+# drop the beginning. The realtime pull path is covered by offline_render_check (which pins a
+# render against a device capture of the same fixture) and by the checks that stay on hardware.
+( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
+    ./daw_engine --project audioplay --render take --run-seconds 6 \
+    >"$TMP/engine.log" 2>&1 ) \
+  || { echo "FAIL: the render exited non-zero — see $TMP/engine.log"; exit 1; }
+[ -s "$TAKE" ] || { echo "FAIL: the render wrote no output"; exit 1; }
 
 echo "--- perceptual ---"
 python3 "$ROOT/tools/perceptual.py" --expect-audio "$TAKE"

@@ -82,18 +82,18 @@ cat > "$TMP/al.uniproj.json" <<EOF
                         "notes": [], "chords": [], "mutes": [] } ] } ] }
 EOF
 
-# The capture is a RING keeping the LAST N seconds, so it is set longer than the run:
-# a shorter one silently drops the beginning and the onsets stop being comparable.
+# RENDERED OFFLINE. What this check is about — where a clip retriggers when the transport wraps
+# — is timeline arithmetic, and it is measured from onset POSITIONS, which a render gives exactly
+# instead of approximately. The capture ring is gone with it: the old comment above had to warn
+# that a ring shorter than the run silently drops the beginning, which is where the first onset
+# is. A render has no ring, no start transient, and no dropouts to mistake for a missed retrigger.
+START=$SECONDS
 ( cd "$BUILD" && env DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" \
-    DAW_ENGINE_NUM_BLOCKS=${DAW_ENGINE_NUM_BLOCKS:-8} \
-    DAW_CAPTURE_WAV="$TMP/out.wav" DAW_CAPTURE_SECONDS=30 \
-    ./daw_engine --run-seconds 24 >"$TMP/engine.log" 2>&1 ) &
-ENG=$!
-sleep 2.5
-DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" do load al >/dev/null 2>&1 || true
-sleep 1.5
-DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" do play >/dev/null 2>&1 || true
-wait "$ENG" 2>/dev/null || true
+    ./daw_engine --project al --render out --run-seconds 24 \
+    >"$TMP/engine.log" 2>&1 ) \
+  || { echo "  FAIL: the render exited non-zero — see $TMP/engine.log"; exit 1; }
+[ -s "$TMP/out.wav" ] || { echo "  FAIL: the render wrote no output"; exit 1; }
+echo "  rendered 24 s of audio in ~$((SECONDS - START)) s of wall time, no audio device"
 
 cat > "$TMP/analyse.py" <<'PYA'
 import sys, wave, numpy as np
@@ -155,13 +155,19 @@ if ok:
     print("  audio-note separation per pass: %s"
           % ", ".join("%+.4f" % x for x in seps))
 
-    # PASS 1 IS A STARTUP TRANSIENT and is reported, not asserted. Audio can begin
-    # before the MIDI side has primed its pipeline (no host is "active" yet, so the
-    # priming gate does not engage), which puts the first pass out by the priming depth.
-    # That is a real remaining defect, stated here rather than hidden: it is bounded, it
-    # is only the first pass after Play, and it is a different mechanism from the one
-    # this check exists for.
-    print("  pass 1 (startup transient, reported not asserted): %+.4f s" % seps[0])
+    # PASS 1 IS NOW ASSERTED, and that is a consequence of rendering offline rather than
+    # capturing. It used to be reported and excused: in realtime, audio can begin before the
+    # MIDI side has primed its pipeline (no host is "active" yet, so the priming gate does not
+    # engage), which put the first pass out by the priming depth. The render pump never primes
+    # with silence and never skips a block, so there is no transient to excuse — measured
+    # +0.0000 exactly. Asserting it is what keeps that property from quietly regressing, since
+    # the excuse would otherwise absorb a real first-pass bug forever.
+    print("  pass 1: %+.4f s" % seps[0])
+    if abs(seps[0]) > 0.020:
+        print("  FAIL: the first pass is %.1f ms out." % (seps[0] * 1000.0))
+        print("        A render has no startup transient to blame: it never primes with")
+        print("        silence and never skips a block, so pass 1 is aligned or it is a bug.")
+        ok = False
 
     steady = seps[1:]
     if len(steady) < 3:
@@ -188,9 +194,9 @@ if ok:
 
     gaps = [audio[k + 1] - audio[k] for k in range(len(audio) - 1)]
     print("  audio gaps: %s" % ", ".join("%.3f" % g for g in gaps))
-    # The FIRST gap spans the startup transient (pass 1 can begin early), so it is
-    # reported and not asserted, for the same reason the first separation is.
-    for g in gaps[1:]:
+    # Every gap, including the first: offline there is no startup transient for pass 1 to
+    # begin early inside, so the first loop period is as assertable as the rest.
+    for g in gaps:
         if abs(g - loop_seconds) > 0.08:
             print("  FAIL: a loop pass measured %.3f s, expected %.1f" % (g, loop_seconds))
             ok = False

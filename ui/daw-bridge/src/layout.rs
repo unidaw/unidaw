@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 27;
+pub const K_SHM_VERSION: u16 = 28;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -35,7 +35,10 @@ pub const K_UI_MAX_SCALE_STEPS: usize = 48;
 pub const K_UI_MAX_DEVICE_PARAMS: usize = 256;
 // v18 waveform region sizes — mirror shared_memory.h kUi* constants.
 pub const K_UI_MAX_AUDIO_SOURCES: usize = 32;
-pub const K_UI_MAX_AUDIO_CLIPS: usize = 64;
+/// == K_UI_MAX_CLIP_EXTENTS, and now actually equal. It fell out of step when the extents
+/// went 64 -> 256, which left a project with more than 64 audio placements publishing
+/// complete rails with waveform data missing from the tail. Raised in v28.
+pub const K_UI_MAX_AUDIO_CLIPS: usize = K_UI_MAX_CLIP_EXTENTS;
 pub const K_UI_WAVEFORM_SLOTS: usize = 4;
 pub const K_UI_WAVEFORM_MAX_PAIRS: usize = 24576;
 pub const K_UI_EDIT_BATCH_MAX_OPS: usize = 32;
@@ -165,6 +168,12 @@ pub struct ShmHeader {
     /// one read and cannot see a mismatched pair.
     pub ui_arrange_offset: u64,
     pub ui_arrange_bytes: u64,
+    /// v28: automation read-back. The lane LIST is standing and version-gated; the SLOTS answer
+    /// per-request point queries.
+    pub ui_automation_offset: u64,
+    pub ui_automation_bytes: u64,
+    pub ui_automation_slot_offset: u64,
+    pub ui_automation_slot_bytes: u64,
 }
 
 /// uiTrackFlags bits (Movement 4).
@@ -351,6 +360,23 @@ pub const UI_CLIP_GRID_LPB_MASK: u32 = 0x1f;
 pub const UI_CLIP_GRID_NUM_MASK: u32 = 0x1f;
 pub const UI_CLIP_GRID_DEN_EXP_MASK: u32 = 0x7;
 
+/// `UiClipExtent.flags` bits 14-21: how many overrides this appearance carries (adds + mutes),
+/// SATURATING at 255. Bit 22 is set whenever the count is non-zero. This is THE BADGE a UI draws
+/// to say "this appearance is customised", and until now it was published and unreadable from
+/// anywhere outside the engine — so a stale one (a mute whose base note a later clip edit
+/// removed) lit the badge over nothing with no way to observe it.
+pub const UI_CLIP_OVERRIDE_COUNT_SHIFT: u32 = 14;
+pub const UI_CLIP_OVERRIDE_COUNT_MASK: u32 = 0xff;
+
+/// Overrides on this appearance: (count, has_overrides). The count saturates at 255, so
+/// `has_overrides` with a count of 255 means "at least 255".
+pub fn unpack_clip_overrides(flags: u32) -> (u32, bool) {
+    (
+        (flags >> UI_CLIP_OVERRIDE_COUNT_SHIFT) & UI_CLIP_OVERRIDE_COUNT_MASK,
+        flags & UI_CLIP_EXTENT_HAS_OVERRIDES != 0,
+    )
+}
+
 /// Decode the per-clip grid from `UiClipExtent.flags`. Returns
 /// `Some((lines_per_beat, numerator, denominator))`, or `None` when no grid is
 /// published (the caller uses the song meter).
@@ -382,6 +408,34 @@ pub struct UiClipExtent {
 /// constant moved first the two disagreed and every test still passed — the exact silent
 /// divergence the const_asserts exist to prevent. There is one on the region size now.
 pub const K_UI_MAX_CLIP_EXTENTS: usize = 256;
+
+/// v28: AUTOMATION READ-BACK. Automation could be written and never read — nothing in the header
+/// mentioned it — so the only lane a UI could offer was one you draw into and never see.
+///
+/// Two shapes for two questions. The LANE LIST is standing and version-gated, so lanes are
+/// discoverable without asking. The POINTS are answered per request into a seqlock slot, because a
+/// song can hold far more automation than a fixed region could carry and a UI only draws the lanes
+/// that are open.
+///
+/// NOT published: the resolved value at the playhead. Interpolation belongs to whoever draws — it
+/// is a picture, not a scheduling decision — and a published resolved value would be a second
+/// implementation that can disagree with what plays.
+pub const K_UI_MAX_AUTOMATION_LANES: usize = 64;
+pub const K_UI_MAX_AUTOMATION_POINTS: usize = 512;
+pub const K_UI_AUTOMATION_SLOTS: usize = 4;
+pub const UI_AUTOMATION_FLAG_DISCRETE: u32 = 1 << 0;
+
+// v28 automation read-back regions, generated from shared_memory.h. Hand-mirrored structs are
+// how the extents capacity diverged unnoticed; bindgen's layout_tests + the C++ static_asserts
+// pin these, and the const_asserts below tie each hand constant to a generated region size, so a
+// wrong count fails to COMPILE rather than publishing a short list at runtime.
+pub use crate::sys::{
+    daw_UiAutomationLane as UiAutomationLane,
+    daw_UiAutomationLaneRegion as UiAutomationLaneRegion,
+    daw_UiAutomationPointEntry as UiAutomationPointEntry,
+    daw_UiAutomationSlot as UiAutomationSlot,
+    daw_UiAutomationSlotRegion as UiAutomationSlotRegion,
+};
 
 #[repr(C)]
 pub struct UiClipExtentRegion {
@@ -687,6 +741,19 @@ pub enum UiCommandType {
     MoveSection = 58,
     RevertPlacementOverrides = 59,
     WriteAutomationPoint = 60,
+    /// Set (or clear) ONE placement's edit scope. trackId, value0 = placementId,
+    /// flags bit0 = on. Not version-gated: it changes no note, so it cannot invalidate
+    /// anyone's in-flight edit.
+    SetPlacementEditScope = 61,
+    /// v28: ask for ONE automation lane's points (UiAutomationLaneRequestPayload); answered
+    /// into a UiAutomationSlot seqlock slot the CALLER picked. The lane LIST is standing in
+    /// UiAutomationLaneRegion and needs no request.
+    RequestAutomationLane = 62,
+    /// v28: change an existing mod link's depth/bias/enabled IN PLACE, by linkId
+    /// (UiModLinkCommandPayload; device/kind fields ignored). Remove+add was the only way, and it
+    /// changed the id, dropped the uid16 and was not atomic — so a depth SLIDER was impossible.
+    /// AddModLink still refuses an existing id rather than replacing.
+    SetModLinkDepth = 63,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -707,6 +774,32 @@ pub const PLACEMENT_SAME_TRACK: u32 = u32::MAX;
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
 pub const MIXER_FLAG_SOLO: u16 = 1 << 1;
+/// `UiClipExtent.flags` bit 23: this appearance takes edits LOCALLY — a note typed into it
+/// becomes an override on it rather than a change to the clip every appearance shares.
+///
+/// Chosen over a global "local edit mode" on failure asymmetry: forget the toggle and the note
+/// appears in every appearance (loud, one undo away), whereas being in the wrong global mode
+/// makes a fix silently fail to propagate (quiet, and you may not notice for an hour).
+pub const UI_CLIP_EXTENT_LOCAL_EDITS: u32 = 1 << 23;
+
+/// Per-device addressing for the patcher graph commands, carried in the payload's `flags`
+/// because the payload is exactly 40 bytes and full. Bit 15 marks the id PRESENT; bits 0-14 are
+/// the id. The presence bit matters: device ids start at 0, so a bare 0 cannot mean
+/// "unspecified", and without the bit every caller sending flags=0 would silently start
+/// addressing device 0 instead of the legacy shared pool.
+pub const UI_PATCHER_FLAG_HAS_DEVICE_ID: u16 = 1 << 15;
+pub const UI_PATCHER_DEVICE_ID_MASK: u16 = 0x7FFF;
+
+/// `ui_track_mix_flags` bit 2: does this track quantize its notes to the harmony timeline?
+///
+/// SetTrackHarmonyQuantize (10) had no read-back at all, so the only control that could be built
+/// was a WRITE-ONLY TOGGLE — press it and the interface can never say which way it is set. After
+/// a load it would have to guess or show nothing, and a control drawing a state it invented is
+/// worse than no control.
+///
+/// Bits 0-1 of that byte are the mute/solo COMMAND flags above; this is the first read-back-only
+/// bit in it, so the byte is a union of two enumerations. Do not add a command flag at 1 << 2.
+pub const MIX_FLAG_HARMONY_QUANTIZE: u8 = 1 << 2;
 /// PreviewNote flags: bit0 set = note-on, clear = note-off.
 pub const PREVIEW_NOTE_FLAG_ON: u16 = 1 << 0;
 
@@ -735,6 +828,10 @@ pub enum UiDiffType {
     /// symptom was "the app does nothing". Payload: `UiClipRejectPayload`.
     /// ResyncNeeded (4) is still emitted alongside, unchanged.
     ClipRejected = 15,
+    /// SavePatcherPreset's outcome. Without it a "save this graph as a preset" button could
+    /// only lie about half the time — daw-cli read the path off the engine's stderr, which a
+    /// browser cannot.
+    PresetSaved = 16,
 }
 
 /// Why a clip edit was refused. The distinction matters because the fix differs: a
@@ -751,6 +848,19 @@ pub enum UiClipRejectReason {
 /// Rides the same 40-byte diff slot as every other payload. `diff_type` is FIRST —
 /// dispatch on it, never on the payload's size (UiChainDiffPayload and
 /// UiChainErrorPayload are both 40 bytes).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiPresetSavedPayload {
+    pub diff_type: u16,
+    /// 1 = written, 0 = failed. The reason is on the engine's event stream, not here.
+    pub ok: u16,
+    /// The name the caller SENT, echoed so it can be matched exactly. Not the path: the engine
+    /// owns the preset directory, and a 28-byte path could truncate — a caller matching a
+    /// truncated path against its request could conclude the wrong save succeeded.
+    pub name: [u8; 28],
+    pub reserved: [u32; 2],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UiClipRejectPayload {
@@ -1077,6 +1187,40 @@ impl Default for UiAutomationPointPayload {
 }
 
 pub const UI_AUTOMATION_DISCRETE: u16 = 1 << 0;
+
+/// v28: ASK for one automation lane's points (`UiCommandType::RequestAutomationLane`). Its own
+/// struct rather than a reuse of `UiAutomationPointPayload`, for one reason: the CLIENT owns
+/// `request_seq`, exactly as `RequestWaveform` does. That is what lets a caller know which slot
+/// its answer will land in before it asks, and match the echo without racing on a counter it
+/// never wrote.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct UiAutomationLaneRequestPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    /// Answered into `slots[request_seq % K_UI_AUTOMATION_SLOTS]`.
+    pub request_seq: u32,
+    pub track_id: u32,
+    pub target_plugin_index: u32,
+    pub param_id: [u8; 16],
+    pub reserved0: u32,
+    pub reserved1: u32,
+}
+
+impl Default for UiAutomationLaneRequestPayload {
+    fn default() -> Self {
+        Self {
+            command_type: UiCommandType::RequestAutomationLane as u16,
+            flags: 0,
+            request_seq: 0,
+            track_id: 0,
+            target_plugin_index: 0,
+            param_id: [0u8; 16],
+            reserved0: 0,
+            reserved1: 0,
+        }
+    }
+}
 
 /// M3.23 section commands (54-58). A section stores a name and a length in BARS; its
 /// POSITION is derived from the lengths before it, so there is deliberately no
@@ -1413,6 +1557,12 @@ mod tests {
     #[test]
     fn ui_edit_batch_entry_layout_matches_cpp() {
         const_assert_eq!(size_of::<EventEntry>(), 64);
+        // Every payload that rides the 40-byte diff slot needs its size PINNED on both sides.
+        // Neither of these had an assert, and the last time a shared constant went unasserted
+        // (kUiMaxClipExtents) it diverged 256 vs 64 across the two languages with every test
+        // green, because nothing was comparing them.
+        const_assert_eq!(size_of::<UiClipRejectPayload>(), 40);
+        const_assert_eq!(size_of::<UiPresetSavedPayload>(), 40);
         // M2.18: `ready` must sit in the old tail padding, or every ring offset moves.
         assert_eq!(offset_of!(EventEntry, ready), 60);
         const_assert_eq!(size_of::<UiEditBatchEntry>(), 2112);
@@ -1500,6 +1650,7 @@ mod tests {
         const_assert_eq!(size_of::<UiPatcherNodeConfigPayload>(), 40);
         const_assert_eq!(size_of::<UiSectionCommandPayload>(), 40);
         const_assert_eq!(size_of::<UiAutomationPointPayload>(), 40);
+        const_assert_eq!(size_of::<UiAutomationLaneRequestPayload>(), 40);
         const_assert_eq!(size_of::<UiArrangeSection>(), 56);
         const_assert_eq!(size_of::<UiTimeSigPoint>(), 16);
         const_assert_eq!(size_of::<UiArrangeSummaryRegion>(), 4128);
@@ -1522,6 +1673,21 @@ mod tests {
         const_assert_eq!(
             size_of::<UiWaveformRegion>(),
             64 + K_UI_WAVEFORM_SLOTS * size_of::<UiWaveformSlot>()
+        );
+        // v28 automation. Same discipline: the counts are tied to the generated region sizes.
+        const_assert_eq!(size_of::<UiAutomationLane>(), 32);
+        const_assert_eq!(size_of::<UiAutomationPointEntry>(), 16);
+        const_assert_eq!(
+            size_of::<UiAutomationLaneRegion>(),
+            64 + K_UI_MAX_AUTOMATION_LANES * 32
+        );
+        const_assert_eq!(
+            size_of::<UiAutomationSlot>(),
+            64 + K_UI_MAX_AUTOMATION_POINTS * 16
+        );
+        const_assert_eq!(
+            size_of::<UiAutomationSlotRegion>(),
+            64 + K_UI_AUTOMATION_SLOTS * size_of::<UiAutomationSlot>()
         );
     }
 }

@@ -758,6 +758,16 @@ std::string serializeProject(const ProjectDocument& document) {
         writer.key("at", *placement.at);  // omit when null = a session cell
       }
       writer.key("length", placement.lengthNanoticks);
+
+      // Written only when SET, so a project whose placements all take clip-scope edits
+
+      // stays byte-identical to what it was before this field existed.
+
+      if (placement.localEdits) {
+
+        writer.key("local_edits", true);
+
+      }
       writeEvents(writer, placement.adds);
       writer.beginArray("mutes");
       for (const EventId id : placement.mutes) {
@@ -1091,6 +1101,7 @@ bool deserializeProject(const std::string& json,
             placement.at = *at;  // omitted key => a loose session cell
           }
           placement.lengthNanoticks = pTree.get<uint64_t>("length", 0);
+          placement.localEdits = pTree.get<bool>("local_edits", false);
           readEvents(pTree, placement.adds);
           if (const auto mutes = pTree.get_child_optional("mutes")) {
             for (const auto& m : *mutes) {

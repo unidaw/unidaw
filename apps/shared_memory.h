@@ -83,6 +83,19 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    (uiTrackQuantizeGrid/Strength/Swing + uiQuantizeVersion), appended at the end.
 //    The UI draws each note at its authored t_on and a deviation bar from these; no
 //    note field changed, and the engine's stored/saved clip is untouched by quantize.
+// 28: AUTOMATION READ-BACK (uiAutomationOffset/Bytes -> UiAutomationLaneRegion, and
+//     uiAutomationSlotOffset/Bytes -> UiAutomationSlotRegion). Automation could be WRITTEN and
+//     never READ: SetAutomationTarget and WriteAutomationPoint both worked and nothing in this
+//     header mentioned automation at all, so the only lane a UI could offer was one you draw into
+//     and never see — blank while the song plays the sweep you authored, and blank again after
+//     reopening. Unreadable, not unreachable. Two parts, because they answer different questions:
+//     the LANE LIST (which params are automated, with a point count) is small and standing, so
+//     lanes are discoverable without asking; the POINTS are answered per request into a seqlock
+//     slot, because a song can hold far more automation than a fixed region could carry and a UI
+//     only draws the lanes that are open. Also raises kUiMaxAudioClips 64 -> 256 to match
+//     kUiMaxClipExtents, which its own comment had claimed for a while and which was leaving
+//     rails with no waveform past 64 audio placements — batched here so it costs one rebuild
+//     rather than two.
 // 27 (M3.25): the ARRANGEMENT SUMMARY (uiArrangeOffset/Bytes -> UiArrangeSummaryRegion):
 //    the section spine published RESOLVED (startBar and startTick already prefix-summed
 //    through the meter), plus the song's time-signature points and the song end, in one
@@ -91,7 +104,7 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    section in the wrong place with nothing reporting it.
 //    Also in this bump: kUiMaxClipExtents 64 -> 256 (64 was reached by a six-track
 //    project and the overflow was a silent `break`).
-constexpr uint16_t kShmVersion = 27;
+constexpr uint16_t kShmVersion = 28;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -184,6 +197,14 @@ struct alignas(64) ShmHeader {
   // the next cache lines.
   int32_t uiTrackGainMillibels[kUiMaxTracks]{};
   int32_t uiTrackPanThousandths[kUiMaxTracks]{};
+  // PER-TRACK BOOLEANS. Bits 0-1 are kMixerFlagMute / kMixerFlagSolo, whose values are
+  // borrowed from the COMMAND payload enumeration in event_payloads.h; bit 2 onward are
+  // read-back-only flags declared below. This byte is therefore the UNION of two flag
+  // enumerations, which is worth stating plainly because it is exactly how a future collision
+  // gets written: someone adds a command flag at 1<<2 without knowing this byte reuses them.
+  //
+  // The name says "mix" for history rather than accuracy — it is where per-track booleans
+  // live, and a fourth parallel array for one bit would be worse than a slightly wrong name.
   uint8_t uiTrackMixFlags[kUiMaxTracks]{};
   uint32_t uiMixerVersion = 0;
   // v13: per-track names, nul-padded. Published alongside the track count so all
@@ -264,6 +285,12 @@ struct alignas(64) ShmHeader {
   // reader takes both under one read; this is only where to find it.
   uint64_t uiArrangeOffset = 0;
   uint64_t uiArrangeBytes = 0;
+  // v28: automation read-back. The LANE LIST is standing and version-gated; the SLOTS answer
+  // per-request point queries. See UiAutomationLaneRegion for why it is two regions.
+  uint64_t uiAutomationOffset = 0;
+  uint64_t uiAutomationBytes = 0;
+  uint64_t uiAutomationSlotOffset = 0;
+  uint64_t uiAutomationSlotBytes = 0;
 };
 
 // uiTrackFlags bits.
@@ -279,6 +306,18 @@ constexpr uint32_t kUiTrackFlagAbsent = 1u << 2;
 // chain + mixer whose output is the master bus, but no arrangement rail and no
 // clips. The UI renders it as the master strip and never as a tracker lane.
 constexpr uint32_t kUiTrackFlagMaster = 1u << 3;
+
+// uiTrackMixFlags bit 2: does this track quantize its notes to the harmony timeline?
+//
+// SetTrackHarmonyQuantize (opcode 10) has worked for a long time and nothing published whether
+// it was ON. It is in the project file and in the runtime and was in no published region — so
+// the only thing a UI could offer was a WRITE-ONLY TOGGLE: press it, something changes
+// somewhere, and the interface can never say which way it is set. After a load it would have to
+// guess or show nothing, and a control drawing a state it invented is worse than no control.
+//
+// Bits 0-1 of that byte are the mute/solo command flags; this is the first read-back-only bit
+// in it. See the field's comment for why the two enumerations share a byte.
+constexpr uint8_t kUiMixFlagHarmonyQuantize = 1u << 2;
 
 struct alignas(64) RingHeader {
   uint32_t capacity = 0;
@@ -599,12 +638,13 @@ enum class UiBusLayoutId : uint16_t {
 // (RequestWaveform) into UiWaveformRegion's seqlock slots. Peaks are pre-gain,
 // pre-fade, in SOURCE frames, anchored to frame 0 — gain/fades/tempo are draw-time.
 constexpr uint32_t kUiMaxAudioSources = 32;
-// NOT equal to kUiMaxClipExtents (256) — it used to be, and the comment saying so outlived the
-// change. A project with more than 64 audio placements therefore publishes up to 256 extents and
-// only 64 audio clips, so the rails draw boxes with no waveform for the rest. Raising this grows
-// the region, so it waits for the next contract bump; until then the shortfall is REPORTED
-// (clipsTruncated below) rather than silently dropped.
-constexpr uint32_t kUiMaxAudioClips = 64;
+// == kUiMaxClipExtents, and now actually equal rather than asserted to be. It fell out of step
+// when the extents went 64 -> 256, which left a project with more than 64 audio placements
+// publishing complete rails with waveform data missing from the tail — boxes with nothing in them,
+// while this comment claimed the two matched. Raising it grows the region, so it waited for a
+// contract bump rather than costing a rebuild on its own; v28 is that bump. The truncation count
+// stays: equal caps today is not a reason to make the shortfall silent again tomorrow.
+constexpr uint32_t kUiMaxAudioClips = kUiMaxClipExtents;
 constexpr uint32_t kUiWaveformSlots = 4;
 constexpr uint32_t kUiWaveformMaxPairs = 24576;  // per slot, all channels
 constexpr uint32_t kWaveformBaseDecim = 64;      // smallest stored pyramid level
@@ -653,6 +693,83 @@ struct alignas(64) UiAudioSourceRegion {   // metadata table, version-gated
   uint32_t reserved[10] = {};
   UiAudioSource sources[kUiMaxAudioSources]{};
   UiAudioClip clips[kUiMaxAudioClips]{};
+};
+
+// v28: AUTOMATION READ-BACK. Two regions, because the UI has two different questions and they
+// want different shapes.
+//
+// WHICH PARAMS ARE AUTOMATED is small, bounded by the number of lanes a song plausibly has, and
+// needed all the time — so it is a standing, version-gated LIST. That alone turns automation from
+// invisible into discoverable: a lane header can say "cutoff is automated, 12 points" without
+// anyone asking for the curve.
+//
+// THE POINTS are answered PER REQUEST into a seqlock slot, the same shape as the windowed waveform
+// queries. A song can hold far more automation than a fixed region could carry, and a UI only ever
+// draws the lanes that are open, so a standing region would be simultaneously too small for a
+// dense song and mostly wasted on a sparse one.
+//
+// WHAT IS DELIBERATELY NOT HERE: the resolved value at the playhead. Interpolation between points
+// belongs to whoever is drawing — it is a picture, not a scheduling decision — and publishing a
+// resolved value would create a second implementation of the interpolation that can disagree with
+// what actually plays. Two answers to "what is the cutoff at bar 9" is the failure class this
+// codebase keeps finding.
+constexpr uint32_t kUiMaxAutomationLanes = 64;
+constexpr uint32_t kUiMaxAutomationPoints = 512;   // per answered lane
+constexpr uint32_t kUiAutomationSlots = 4;
+constexpr uint32_t kUiAutomationFlagDiscrete = 1u << 0;
+
+// One automated parameter. paramId is the STRING the AutomationClip is keyed on (the engine hashes
+// it to the uid16 the wire uses), so a client can name a lane without resolving the hash.
+struct UiAutomationLane {                  // 32 B
+  uint32_t trackId = 0;
+  uint32_t targetPluginIndex = 0;          // kParamTargetAll = every plugin on the track
+  uint32_t pointCount = 0;
+  uint32_t flags = 0;                      // kUiAutomationFlagDiscrete
+  char paramId[16]{};
+};
+static_assert(sizeof(UiAutomationLane) == 32, "UiAutomationLane must be 32 bytes");
+
+struct alignas(64) UiAutomationLaneRegion {
+  uint32_t version = 0;        // moves when ANY automation changes; cache-key on it
+  uint32_t laneCount = 0;
+  // Lanes that did not fit. A truncated list nobody notices reads as a complete one, which is how
+  // "the automation lanes are missing" becomes a bug report about the lanes.
+  uint32_t lanesTruncated = 0;
+  uint32_t reserved[13]{};
+  UiAutomationLane lanes[kUiMaxAutomationLanes]{};
+};
+
+struct UiAutomationPointEntry {            // 16 B
+  uint64_t nanotick = 0;
+  float value = 0.0f;                      // the plugin's normalised 0..1
+  uint32_t reserved = 0;
+};
+static_assert(sizeof(UiAutomationPointEntry) == 16,
+              "UiAutomationPointEntry must be 16 bytes");
+
+// One answered lane, under a seqlock (seq ODD while writing). The request fields are echoed so a
+// caller can tell WHICH question this is the answer to — without that, a slot reused for a
+// different lane looks like an answer to the one you asked.
+struct alignas(64) UiAutomationSlot {
+  ShmAtomicU32 seq{0};
+  uint32_t requestSeq = 0;    // echo
+  uint32_t trackId = 0;       // echo
+  uint32_t pointCount = 0;
+  uint32_t pointsTruncated = 0;
+  uint32_t flags = 0;
+  uint32_t found = 0;         // 1 = the lane exists; 0 = no such (track, paramId)
+  uint32_t reserved = 0;
+  char paramId[16]{};         // echo
+  UiAutomationPointEntry points[kUiMaxAutomationPoints]{};
+};
+
+struct alignas(64) UiAutomationSlotRegion {
+  // The last sequence the ENGINE has answered. The client owns the sequence itself (it goes out
+  // in the request payload and picks the slot); this is only "answers are complete through here",
+  // so a caller can wait on progress without polling four slots.
+  ShmAtomicU32 requestSeq{0};
+  uint32_t reserved[15]{};
+  UiAutomationSlot slots[kUiAutomationSlots]{};
 };
 
 // One answer slot. A windowed min/max reply for one RequestWaveform, published under
@@ -721,6 +838,11 @@ constexpr uint32_t kUiClipExtentAudio = 1u << 0;
 constexpr uint32_t kUiClipExtentOverrideShift = 14;
 constexpr uint32_t kUiClipExtentOverrideMask = 0xFFu << kUiClipExtentOverrideShift;
 constexpr uint32_t kUiClipExtentHasOverrides = 1u << 22;
+// This appearance takes edits LOCALLY: a note typed into it becomes an override on it rather
+// than a change to the clip every appearance shares. Published so the UI can show WHICH
+// placement is in that state — the same reason harmony quantize had to be published. A toggle
+// whose state cannot be read is a toggle the interface has to guess at.
+constexpr uint32_t kUiClipExtentLocalEdits = 1u << 23;
 
 inline uint32_t packClipExtentOverrides(uint32_t count) {
   if (count == 0) {
@@ -753,6 +875,7 @@ inline uint32_t unpackClipExtentOverrides(uint32_t flags) {
 //   bits 11-13 timeSigDenominator  3 bits  exponent 0..7 => denominator 1..128
 //   bits 14-21 overrideCount       8 bits  M3.24, SATURATING at 255 (see below)
 //   bit  22    hasOverrides        M3.24, set whenever the count is non-zero
+//   bit  23    localEdits          the placement's own edit scope (see below)
 constexpr uint32_t kUiClipGridLpbShift = 1;
 constexpr uint32_t kUiClipGridNumShift = 6;
 constexpr uint32_t kUiClipGridDenExpShift = 11;

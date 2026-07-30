@@ -48,20 +48,16 @@ scenario() {
   local tmp take shm
   tmp="$(mktemp -d)"; take="$tmp/$name.wav"; shm="/patmig_${name}_$$"
   printf '%s\n' "$json" > "$tmp/$name.uniproj.json"
-  # A deeper pipeline than the 3-block default: Zebra2 on a wireless output device
-  # cannot keep 3 blocks fed here, and a starved producer emits silence that looks
-  # exactly like a broken generator. This test is about whether the graph GENERATES,
-  # so buy the producer enough slack that scheduling is not the variable under test.
-  ( cd "$BUILD" && DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$tmp" \
-      DAW_ENGINE_NUM_BLOCKS=8 \
-      DAW_CAPTURE_WAV="$take" DAW_CAPTURE_SECONDS=12 \
-      ./daw_engine --run-seconds 14 >"$tmp/engine.log" 2>&1 ) &
-  local eng=$!
-  sleep 2.5
-  DAW_UI_SHM_NAME="$shm" "$CLI" do load "$name" --force >/dev/null 2>&1 || true
-  sleep 1
-  DAW_UI_SHM_NAME="$shm" "$CLI" do play --force >/dev/null 2>&1 || true
-  wait "$eng" 2>/dev/null || true
+  # RENDERED OFFLINE, which also RETIRES a workaround. This used to run at 8 pipeline blocks
+  # instead of the 3-block default because a starved producer emits silence that looks exactly
+  # like a broken generator — and this check is about whether the graph GENERATES, so scheduling
+  # had to be bought out of the way. The render pump never starves: it WAITS rather than
+  # emitting silence to stay current, so there is no depth to tune and no starvation to mistake
+  # for a dead generator.
+  ( cd "$BUILD" && env DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$tmp" \
+      ./daw_engine --project "$name" --render "$(basename "$take" .wav)" --run-seconds 12 \
+      >"$tmp/engine.log" 2>&1 ) \
+    || { echo "  FAIL: the '$name' render exited non-zero — see $tmp/engine.log"; return 1; }
   local ok=1
   # Two independent halves, reported distinctly so a failure says WHICH broke: the
   # engine never running the graph (a real migration/setup bug) is not the same as the

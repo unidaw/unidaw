@@ -88,15 +88,17 @@ PY
 run_capture() {  # $1=label  $2=take.wav  $3=extra engine env ("" or "DAW_DISABLE_PDC=1")
   local label="$1" take="$2" extra="$3"
   local log="$TMP/engine_$label.log"
+  # RENDERED OFFLINE. No sound card is involved in the answer this check asks, and the render
+  # pump never skips a block or primes with silence, so a missing signal is a missing signal
+  # rather than an underrun that may not repeat. The realtime pull path is pinned by
+  # offline_render_check (a render against a device capture of the same fixture) and by the
+  # checks that deliberately stay on hardware: audio_stability, sidechain, master_fx, panic,
+  # preview_note, level_match_bypass.
   ( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" \
-      DAW_PROJECT_DIR="$TMP" DAW_CAPTURE_WAV="$take" DAW_CAPTURE_SECONDS=6 $extra \
-      ./daw_engine --run-seconds 6 >"$log" 2>&1 ) &
-  local engine=$!
-  sleep 2
-  DAW_UI_SHM_NAME="$SHM" "$CLI" do load pdc --force >/dev/null 2>&1 || true
-  sleep 1
-  DAW_UI_SHM_NAME="$SHM" "$CLI" do play --force >/dev/null 2>&1 || true
-  wait "$engine"
+      DAW_PROJECT_DIR="$TMP" $extra \
+      ./daw_engine --project pdc --render "$(basename "$take" .wav)" --run-seconds 6 \
+      >"$log" 2>&1 ) \
+    || { echo "  FAIL: the '$label' render exited non-zero — see $log"; exit 1; }
   grep -o 'pdc.chain_latency[^)]*samples[^ )]*[0-9]*' "$log" | head -4 || true
 }
 
