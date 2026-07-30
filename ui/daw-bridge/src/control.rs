@@ -1198,6 +1198,42 @@ impl EngineHandle {
         )
     }
 
+    /// Send an arbitrarily long payload as BulkChunk (83) entries for the engine to reassemble.
+    ///
+    /// `payload` must already begin with the real commandType as its first u16 — the assembled
+    /// buffer IS a payload, which is what keeps one dispatch rule instead of two.
+    ///
+    /// The last chunk is ZERO-PADDED to 32 bytes rather than short, so every entry on the ring is
+    /// the same size and the reader never needs a length field it could disagree with. The
+    /// message's own header carries the real length; trailing zeroes are the payload's business.
+    pub fn send_bulk(&self, stream_id: u16, payload: &[u8]) -> Result<(), String> {
+        if payload.len() < 2 {
+            return Err("bulk payload must carry a commandType".to_string());
+        }
+        let chunks = payload.len().div_ceil(crate::layout::BULK_CHUNK_BYTES);
+        if chunks == 0 || chunks > 512 {
+            return Err(format!("bulk payload needs {chunks} chunks, max 512"));
+        }
+        for seq in 0..chunks {
+            let start = seq * crate::layout::BULK_CHUNK_BYTES;
+            let end = usize::min(start + crate::layout::BULK_CHUNK_BYTES, payload.len());
+            let mut bytes = [0u8; 32];
+            bytes[..end - start].copy_from_slice(&payload[start..end]);
+            let chunk = crate::layout::UiBulkChunkPayload {
+                command_type: crate::layout::UiCommandType::BulkChunk as u16,
+                stream_id,
+                seq: seq as u16,
+                total: chunks as u16,
+                bytes,
+            };
+            self.write_entry(
+                &chunk as *const crate::layout::UiBulkChunkPayload as *const u8,
+                std::mem::size_of::<crate::layout::UiBulkChunkPayload>(),
+            )?;
+        }
+        Ok(())
+    }
+
     /// Set a sampler modulator's ADSR (SamplerSetEnvelope).
     pub fn send_sampler_envelope(
         &self,

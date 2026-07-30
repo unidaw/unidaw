@@ -561,6 +561,13 @@ add_test(NAME producer_load
 )
 set_tests_properties(producer_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# The inward bulk carrier, verified by something AUDIBLE that came across it — a byte count
+# proves the transport, a drawn shape you can hear proves the whole path.
+add_test(NAME bulk_carrier
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/bulk_carrier_check.sh
+)
+set_tests_properties(bulk_carrier PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A live engine sets the envelope, then the saved project is rendered OFFLINE and the audio is
 # measured — a check that read the numbers back would pass with the envelope never reaching a voice.
 add_test(NAME sampler_envelope_write

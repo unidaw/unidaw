@@ -43,6 +43,7 @@ daw-cli — control surface for a running engine
   daw-cli do sampler-marker --track N --source 1 --op add|move|remove [--marker ID] [--frame F]
   daw-cli do set-row-ops --track N --note ID [--clip ID] [--ret N] [--prob N] [--sound N] [--offset N] [--delay TICKS] [--clear ret,prob,sound,offset,delay]
   daw-cli do sampler-env --track N [--device ID] [--mod-set ID] [--amp|--modulator ID] --attack US --decay US --sustain MILLI --release US [--sync] [--rate MILLI]
+  daw-cli do sampler-env-draw --track N --points t,v[,tension[,step]];... [--sustain-loop A,B] [--release-loop A,B] [--release-fade US] [--sync] [--rate MILLI]
                                    nudge one boundary — ids are stable, so no row moves
   daw-cli do sampler-emit-rows --track N --source 1 [--at TICK] [--step TICKS] [--column C]
                                    write the pattern that reproduces the chop
@@ -2300,6 +2301,117 @@ fn main() {
                                     eprintln!("daw-cli: {err}");
                                     1
                                 }
+                            }
+                        }
+                    }
+                }
+                Some(&"sampler-env-draw") => {
+                    use daw_bridge::layout as L;
+                    // The PENCIL. Goes over the bulk carrier because N points do not fit in the
+                    // ring's 40-byte payload — the reason opcode 83 exists.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let mod_set = flag_u64(&args, "--mod-set", Some(0)).unwrap_or(0) as u32;
+                    let rate = flag_u64(&args, "--rate", Some(1000)).unwrap_or(1000) as u16;
+                    let release_fade = flag_u64(&args, "--release-fade", Some(0)).unwrap_or(0) as u32;
+                    let sync = args.iter().any(|a| a == "--sync");
+                    let pair = |key: &str| -> (u8, u8) {
+                        match flag(&args, key) {
+                            Some(raw) => {
+                                let mut it = raw.split(',');
+                                let a = it.next().and_then(|x| x.trim().parse::<u8>().ok());
+                                let b = it.next().and_then(|x| x.trim().parse::<u8>().ok());
+                                match (a, b) {
+                                    (Some(a), Some(b)) => (a, b),
+                                    _ => (255, 255),
+                                }
+                            }
+                            None => (255, 255),
+                        }
+                    };
+                    let (sus_a, sus_b) = pair("--sustain-loop");
+                    let (rel_a, rel_b) = pair("--release-loop");
+                    let points_raw = flag(&args, "--points").unwrap_or_default();
+                    let mut pts: Vec<L::UiEnvPointWire> = Vec::new();
+                    let mut bad: Option<String> = None;
+                    for spec in points_raw.split(';').filter(|x| !x.trim().is_empty()) {
+                        let f: Vec<&str> = spec.split(',').map(|x| x.trim()).collect();
+                        if f.len() < 2 {
+                            bad = Some(format!("point {spec:?} needs at least time,value"));
+                            break;
+                        }
+                        let t = f[0].parse::<u32>();
+                        let v = f[1].parse::<i16>();
+                        let tension = if f.len() > 2 { f[2].parse::<i8>().unwrap_or(0) } else { 0 };
+                        let step = if f.len() > 3 { f[3].parse::<u8>().unwrap_or(0) } else { 0 };
+                        match (t, v) {
+                            (Ok(t), Ok(v)) => pts.push(L::UiEnvPointWire {
+                                time: t,
+                                value_milli: v,
+                                tension,
+                                flags: if step != 0 { 1 } else { 0 },
+                            }),
+                            _ => {
+                                bad = Some(format!("point {spec:?} is not time,value"));
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(err) = bad {
+                        eprintln!("daw-cli: {err}");
+                        2
+                    } else if pts.len() < 2 {
+                        // Refused, not padded: one point is not a shape, and inventing a second
+                        // would be the tool deciding what the envelope means.
+                        eprintln!("daw-cli: --points needs at least two points, e.g. --points 0,0;300000,1000");
+                        2
+                    } else {
+                        let header = L::UiSamplerEnvPointsHeader {
+                            command_type: UiCommandType::SamplerSetEnvelopePoints as u16,
+                            flags: SAMPLER_ENV_AMP,
+                            track_id: track,
+                            device_id: device,
+                            mod_set_id: mod_set,
+                            modulator_id: 0,
+                            time_base: if sync { 1 } else { 0 },
+                            reserved: 0,
+                            rate_milli: rate,
+                            point_count: pts.len() as u16,
+                            sustain_loop_start: sus_a,
+                            sustain_loop_end: sus_b,
+                            release_loop_start: rel_a,
+                            release_loop_end: rel_b,
+                            release_fade,
+                        };
+                        let mut buf = Vec::with_capacity(32 + pts.len() * 8);
+                        buf.extend_from_slice(unsafe {
+                            std::slice::from_raw_parts(
+                                &header as *const L::UiSamplerEnvPointsHeader as *const u8,
+                                std::mem::size_of::<L::UiSamplerEnvPointsHeader>(),
+                            )
+                        });
+                        for p in &pts {
+                            buf.extend_from_slice(unsafe {
+                                std::slice::from_raw_parts(
+                                    p as *const L::UiEnvPointWire as *const u8,
+                                    std::mem::size_of::<L::UiEnvPointWire>(),
+                                )
+                            });
+                        }
+                        // A stream id distinct per invocation, so two agents drawing at once do
+                        // not interleave into one buffer. The pid is enough: the engine only
+                        // needs them to differ, not to mean anything.
+                        let stream = (std::process::id() as u16) | 1;
+                        match handle.send_bulk(stream, &buf) {
+                            Ok(()) => {
+                                let n = pts.len();
+                                let bytes = buf.len();
+                                println!("{{ \"sent\": \"sampler-env-draw\", \"track\": {track}, \"points\": {n}, \"bytes\": {bytes} }}");
+                                0
+                            }
+                            Err(err) => {
+                                eprintln!("daw-cli: {err}");
+                                1
                             }
                         }
                     }

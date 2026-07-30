@@ -480,6 +480,10 @@ The extension is **`.uni`**, not `.uniproj` (owner, 2026-07-30). It is the modul
 
 **Also flag:** `apps/event_payloads.h:212` says `ClearPlacementAlternate = 72, // next free 63`. That trailing comment is stale — 63 is `SetModLinkDepth`. **Next free is 73.** Sampler verbs take 73–80; announce the range on the bus when claimed. Every one needs a `daw-cli` path or `tools/op_registry_check.sh` fails, which is correct and is the reason the whole thing will be agent-drivable on day one.
 
+**Opcodes since, both announced on the bus before landing.** `SetRowOps = 81` — the WRITE half of the per-note ops. The engine had published `retrigger`, `probability`, `devNanoticks`, `sound` and `soundOffset` since v23/v32 and no command could set one, so every op was readable and none writable; the editor could draw an ops cell it had no way to commit. Addressed by note id, with a mask where a bit clear means "leave this op alone" and a bit set with a zero value means "clear it" — without the distinction there is no way to remove one op without resending the other four. `SamplerSetEnvelope = 82` — the ADSR, which `sampler-slot` could only *choose* (`mod-set`) and never edit, so the most-used control on any sampler was reachable solely by hand-editing JSON. Times carry their own `timeBase` in the same payload, and the amp envelope is minted if the mod set has none, because that is the state every project starts in. **Next free is 83.**
+
+**Still missing, and it is the pencil editor's blocker:** a hand-drawn multi-point envelope does not fit in 40 bytes, and there is no inward bulk carrier (task #85) — the outbound direction has SHM regions, the inbound direction has only the 40-byte ring payload. `SamplerSetEnvelope` deliberately ships ADSR alone rather than "ADSR plus a truncated point list", which would be a worse contract than the complete half.
+
 ---
 
 ## 7. RULINGS — 2026-07-30

@@ -8601,6 +8601,177 @@ struct TrackRuntime {
     return false;
   };
 
+  // ---- THE INWARD BULK CARRIER (opcode 83).
+  //
+  // Reassembly state for messages too long for one 40-byte ring payload. Lives here, in the UI
+  // command thread's scope, because that thread is the only one that drains the ring — the same
+  // reason every other handler below keeps its state here rather than behind a lock.
+  struct BulkStream {
+    uint16_t streamId = 0;
+    uint16_t total = 0;
+    uint32_t received = 0;
+    uint64_t lastTouched = 0;  // for eviction; a counter, not a clock
+    std::vector<bool> seen;
+    std::vector<uint8_t> data;
+  };
+  std::vector<BulkStream> bulkStreams;
+  uint64_t bulkTick = 0;
+
+  // Dispatch an ASSEMBLED bulk payload. Its first uint16 is the real commandType, so a bulk
+  // command looks exactly like a small one at this point and there is one dispatch rule rather
+  // than two — the carrier is a transport detail and nothing downstream needs to know a message
+  // arrived in pieces.
+  auto handleAssembledBulk = [&](const std::vector<uint8_t>& buf) {
+    if (buf.size() < sizeof(uint16_t)) {
+      return;
+    }
+    uint16_t inner = 0;
+    std::memcpy(&inner, buf.data(), sizeof(inner));
+    const auto innerType = static_cast<daw::UiCommandType>(inner);
+
+    // ---- SAMPLER SET ENVELOPE POINTS (84). The pencil, where 82 is the sliders.
+    if (innerType == daw::UiCommandType::SamplerSetEnvelopePoints) {
+      if (buf.size() < sizeof(daw::UiSamplerEnvPointsHeader)) {
+        DAW_EVENT("bulk.rejected")
+            .field("op", static_cast<uint32_t>(inner))
+            .field("bytes", static_cast<uint64_t>(buf.size()))
+            .field("reason", "short_header");
+        return;
+      }
+      daw::UiSamplerEnvPointsHeader h{};
+      std::memcpy(&h, buf.data(), sizeof(h));
+      const size_t need =
+          sizeof(h) + static_cast<size_t>(h.pointCount) * sizeof(daw::UiEnvPointWire);
+      // REFUSED, not truncated. An envelope with half its points is a VALID envelope, so a
+      // carrier that delivered what arrived would produce a wrong sound rather than an error —
+      // which is the whole reason seq/total exist.
+      if (h.pointCount < 2 || buf.size() < need) {
+        DAW_EVENT("bulk.rejected")
+            .field("op", static_cast<uint32_t>(inner))
+            .field("points", static_cast<uint32_t>(h.pointCount))
+            .field("bytes", static_cast<uint64_t>(buf.size()))
+            .field("need", static_cast<uint64_t>(need))
+            .field("reason", h.pointCount < 2 ? "too_few_points" : "short_payload");
+        return;
+      }
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (h.trackId < tracks.size()) {
+          runtime = tracks[h.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.envelope_rejected")
+            .field("track", h.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      daw::EnvShape shape;
+      shape.points.reserve(h.pointCount);
+      for (uint16_t i = 0; i < h.pointCount; ++i) {
+        daw::UiEnvPointWire w{};
+        std::memcpy(&w, buf.data() + sizeof(h) + static_cast<size_t>(i) * sizeof(w), sizeof(w));
+        daw::EnvPoint pt;
+        pt.time = w.time;
+        pt.valueMilli = std::clamp<int16_t>(w.valueMilli, -1000, 1000);
+        pt.tension = w.tension;
+        pt.flags = w.flags;
+        shape.points.push_back(pt);
+      }
+      shape.sustainLoopStart = h.sustainLoopStart;
+      shape.sustainLoopEnd = h.sustainLoopEnd;
+      shape.releaseLoopStart = h.releaseLoopStart;
+      shape.releaseLoopEnd = h.releaseLoopEnd;
+      shape.releaseFade = h.releaseFade;
+
+      bool applied = false;
+      uint16_t targetId = 0;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (h.deviceId != 0 && d.id != h.deviceId)) {
+            continue;
+          }
+          for (auto& ms : d.sampler.modSets) {
+            if (h.modSetId != 0 && ms.id != h.modSetId) {
+              continue;
+            }
+            daw::SamplerModulator* mod = nullptr;
+            if ((h.flags & daw::kSamplerEnvAmp) != 0) {
+              for (auto& m : ms.modulators) {
+                if (m.kind == daw::ModKind::Envelope &&
+                    m.target == daw::ModTarget::Volume) {
+                  mod = &m;
+                  break;
+                }
+              }
+              if (mod == nullptr) {
+                daw::SamplerModulator fresh;
+                fresh.id = ms.nextModulatorId++;
+                fresh.kind = daw::ModKind::Envelope;
+                fresh.target = daw::ModTarget::Volume;
+                fresh.apply = 1;
+                fresh.depthMilli = 1000;
+                ms.modulators.push_back(fresh);
+                mod = &ms.modulators.back();
+              }
+            } else {
+              for (auto& m : ms.modulators) {
+                if (m.id == h.modulatorId) {
+                  mod = &m;
+                  break;
+                }
+              }
+            }
+            if (mod == nullptr) {
+              break;
+            }
+            mod->kind = daw::ModKind::Envelope;
+            mod->env = shape;
+            mod->timeBase = h.timeBase != 0 ? 1 : 0;
+            mod->rateMilli = static_cast<uint16_t>(
+                std::clamp<int32_t>(h.rateMilli == 0 ? 1000 : h.rateMilli, 250, 4000));
+            // THE PENCIL, explicitly — and it never flips back to the sliders on its own.
+            mod->editor = 1;
+            // Enforces the one invariant that is not the caller's job to remember: a release
+            // loop must have a non-zero releaseFade, or the envelope never finishes, the voice
+            // never frees, and the leak is silent.
+            daw::repairEnvShape(mod->env);
+            targetId = mod->id;
+            applied = true;
+            break;
+          }
+          if (applied) {
+            break;
+          }
+        }
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        DAW_EVENT("sampler.envelope_rejected")
+            .field("track", h.trackId)
+            .field("mod_set", h.modSetId)
+            .field("reason", "no_such_mod_set_or_modulator");
+        return;
+      }
+      DAW_EVENT("sampler.envelope_points_set")
+          .field("track", h.trackId)
+          .field("modulator", static_cast<uint32_t>(targetId))
+          .field("points", static_cast<uint32_t>(h.pointCount))
+          .field("bytes", static_cast<uint64_t>(buf.size()));
+      return;
+    }
+
+    DAW_EVENT("bulk.rejected")
+        .field("op", static_cast<uint32_t>(inner))
+        .field("bytes", static_cast<uint64_t>(buf.size()))
+        .field("reason", "unknown_inner_op");
+  };
+
   auto handleUiEntry = [&](const daw::EventEntry& entry) {
     if (entry.type != static_cast<uint16_t>(daw::EventType::UiCommand)) {
       return;
@@ -8612,6 +8783,77 @@ struct TrackRuntime {
     std::memcpy(&header, entry.payload, sizeof(header));
     const auto commandType =
         static_cast<daw::UiCommandType>(header.commandType);
+
+    // ---- BULK CHUNK (83). Intercepted BEFORE the journal: a 17-chunk envelope would otherwise
+    // write 17 indistinguishable lines and bury the command it spells. The ASSEMBLED command
+    // journals itself.
+    if (entry.size == sizeof(daw::UiBulkChunkPayload) &&
+        commandType == daw::UiCommandType::BulkChunk) {
+      daw::UiBulkChunkPayload c{};
+      std::memcpy(&c, entry.payload, sizeof(c));
+      if (c.total == 0 || c.total > daw::kBulkMaxChunks || c.seq >= c.total) {
+        DAW_EVENT("bulk.rejected")
+            .field("stream", static_cast<uint32_t>(c.streamId))
+            .field("seq", static_cast<uint32_t>(c.seq))
+            .field("total", static_cast<uint32_t>(c.total))
+            .field("reason", "bad_chunk_header");
+        return;
+      }
+      ++bulkTick;
+      BulkStream* stream = nullptr;
+      for (auto& s : bulkStreams) {
+        if (s.streamId == c.streamId && s.total == c.total) {
+          stream = &s;
+          break;
+        }
+      }
+      if (stream == nullptr) {
+        // BOUNDED. A sender that dies mid-message costs a buffer until it is evicted, not a
+        // leak — so the oldest partial stream goes rather than the newest being refused, which
+        // would let one abandoned stream block the carrier for everyone.
+        if (bulkStreams.size() >= daw::kBulkMaxStreams) {
+          size_t oldest = 0;
+          for (size_t i = 1; i < bulkStreams.size(); ++i) {
+            if (bulkStreams[i].lastTouched < bulkStreams[oldest].lastTouched) {
+              oldest = i;
+            }
+          }
+          DAW_EVENT("bulk.evicted")
+              .field("stream", static_cast<uint32_t>(bulkStreams[oldest].streamId))
+              .field("received", bulkStreams[oldest].received)
+              .field("total", static_cast<uint32_t>(bulkStreams[oldest].total));
+          bulkStreams.erase(bulkStreams.begin() + static_cast<long>(oldest));
+        }
+        BulkStream fresh;
+        fresh.streamId = c.streamId;
+        fresh.total = c.total;
+        fresh.seen.assign(c.total, false);
+        fresh.data.assign(static_cast<size_t>(c.total) * daw::kBulkChunkBytes, 0);
+        bulkStreams.push_back(std::move(fresh));
+        stream = &bulkStreams.back();
+      }
+      stream->lastTouched = bulkTick;
+      // A REPEATED chunk is not a second chunk. Counting it would complete a stream that is
+      // still missing a piece, and deliver a message with a hole in it.
+      if (!stream->seen[c.seq]) {
+        stream->seen[c.seq] = true;
+        ++stream->received;
+        std::memcpy(stream->data.data() + static_cast<size_t>(c.seq) * daw::kBulkChunkBytes,
+                    c.bytes, daw::kBulkChunkBytes);
+      }
+      if (stream->received == stream->total) {
+        std::vector<uint8_t> assembled = std::move(stream->data);
+        const uint16_t doneId = stream->streamId;
+        bulkStreams.erase(bulkStreams.begin() +
+                          static_cast<long>(stream - bulkStreams.data()));
+        DAW_EVENT("bulk.assembled")
+            .field("stream", static_cast<uint32_t>(doneId))
+            .field("chunks", static_cast<uint32_t>(c.total))
+            .field("bytes", static_cast<uint64_t>(assembled.size()));
+        handleAssembledBulk(assembled);
+      }
+      return;
+    }
     // Journal every command the engine acts on, in order. Recorded here — the one point
     // every command passes through — rather than at ~20 handlers, so a new opcode cannot
     // silently escape the journal. Outcome is "received"; a command later refused by the
