@@ -105,7 +105,7 @@ import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch,
          notesInRect, noteKey, transposedKey } from './src/pianomodel.js';
 import { Browser, KIND_PLUGIN } from './src/browser.js';
-import { Dock, quantizeGridName } from './src/dock.js';
+import { Dock, quantizeGridName, quantizeGridTicks, QUANTIZE_CYCLE } from './src/dock.js';
 import { createPanes } from './src/panes.js';
 import { createHelp, GLOBAL_KEYS, SURFACE_KEYS } from './src/help.js';
 import { Patcher } from './src/patcher.js';
@@ -2387,6 +2387,8 @@ let bi = 0;
 // Track headers: built once, then only transformed. They scroll horizontally
 // with the strip and never vertically.
 let headRow = null;
+/** A quantize scrub in flight: which lane, where it started, what it was. */
+let quantDrag = null;
 function buildHead() {
   head.textContent = '';
   headRow = document.createElement('div'); headRow.className = 'hrow';
@@ -2457,6 +2459,71 @@ function buildHead() {
   // per track per frame; `.children` is a live HTMLCollection and indexing it is
   // a binding call, for a list that cannot change without this function running
   // again. Same reasoning as the tracker rows' `_cells`.
+  /*
+   * THE QUANTIZE BADGE IS THE CONTROL.
+   *
+   * Lane quantize was console-only: the badge SHOWED the setting and the deviation bars
+   * showed its effect, and the only way to change it was typing a command. Which is the
+   * complaint this app keeps producing, inverted — not a control you can see and cannot
+   * change, but a setting you can see and can only reach by typing.
+   *
+   * CLICK CYCLES THE GRID, DRAG SCRUBS STRENGTH. The drag is the half that matters: a
+   * setting you can turn while watching the bars shorten is the only version of this
+   * control that can be EVALUATED, which is the whole argument for non-destructive
+   * quantize in the first place. A number you type and then squint at is a slower
+   * destructive quantize.
+   *
+   * SCRUBBING AT FRAME RATE IS SAFE HERE, and it is not safe for most things: quantize
+   * is unversioned and moves no authored note, so a stream of these cannot collide with
+   * anyone's edit and cannot be refused by a stale base. That is precisely why this is
+   * the one per-lane control that can be dragged live.
+   *
+   * Delegated on the header row, because the heads are rebuilt whenever a width changes
+   * and a listener per head would be rebound with them.
+   */
+  headRow.addEventListener('pointerdown', (e) => {
+    const badge = e.target.closest('.hquant');
+    if (!badge) return;
+    const track = Number(badge.parentElement.dataset.track);
+    if (!Number.isFinite(track)) return;
+    e.preventDefault();
+    const q = quantizeOf(track);
+    headRow.setPointerCapture(e.pointerId);
+    quantDrag = { track, x0: e.clientX, grid: q.grid, strength: q.strength,
+                  swing: q.swing, moved: false };
+  });
+  headRow.addEventListener('pointermove', (e) => {
+    if (!quantDrag) return;
+    // No button, no drag — the same guard the arrangement needs, for the same reason:
+    // a release the element never saw would otherwise leave this armed.
+    if (e.buttons === 0) { quantDrag = null; return; }
+    const dx = e.clientX - quantDrag.x0;
+    if (!quantDrag.moved && Math.abs(dx) < 3) return;   // a click is still a click
+    quantDrag.moved = true;
+    if (!quantDrag.grid) return;                        // nothing to scrub on an off lane
+    // 200px for the full range, so the whole sweep is one comfortable gesture and a
+    // pixel is half a percent. Shift is finer, as everywhere else here.
+    const scale = e.shiftKey ? 1000 : 200;
+    const want = Math.max(0, Math.min(1000,
+      Math.round(quantDrag.strength + (dx / scale) * 1000)));
+    setQuantize(quantDrag.track, quantDrag.grid, want, quantDrag.swing);
+  });
+  headRow.addEventListener('pointerup', (e) => {
+    if (!quantDrag) return;
+    const d = quantDrag;
+    quantDrag = null;
+    if (d.moved) return;
+    /*
+     * A CLICK CYCLES THE GRID, and off is in the cycle rather than being a separate
+     * gesture — turning it off is as ordinary as changing it, and hunting for a
+     * different control to do that is how a setting becomes one you never turn off.
+     * Shift-click goes backwards, so a cycle of eight is not a one-way street.
+     */
+    const next = nextQuantizeGrid(d.grid, e.shiftKey ? -1 : 1);
+    setQuantize(d.track, next, d.strength || 1000, d.swing);
+  });
+  headRow.addEventListener('pointercancel', () => { quantDrag = null; });
+
   headRow._heads = heads;
   // What this header was built FOR. draw() used to ask
   // `headRow.children.length !== state.tracks + 1`, and the harmony column's
@@ -2518,6 +2585,42 @@ function paintHeadLpb() {
  * is non-zero, and always with its sign: -33 and +33 are different grooves and an
  * unsigned 33 could be either.
  */
+/**
+ * A lane's quantize as the engine last published it, or an all-zero stand-in.
+ *
+ * A lane with no entry is not quantized, which is the same thing grid 0 means — so one
+ * shape covers both and no caller has to check for absence.
+ */
+function quantizeOf(track) {
+  if (engine) {
+    for (let i = 0; i < engine.quantizeCount; i++) {
+      const q = engine.quantize[i];
+      if (q.track === track) return { grid: q.grid, strength: q.strength, swing: q.swing };
+    }
+  }
+  return { grid: 0, strength: 1000, swing: 0 };
+}
+
+/**
+ * The next grid in the cycle, by name order, wrapping — with OFF in the cycle.
+ *
+ * Off is a member rather than a separate gesture: turning quantize off is as ordinary
+ * as changing it, and making that a different control is how a setting becomes one
+ * nobody ever turns off. `dir` -1 goes back, so eight steps is not a one-way street.
+ *
+ * By NAME order rather than by tick value, because the musical order and the numeric
+ * order disagree: 1/4t is 640000, which sits between 1/8 and 1/4 numerically and after
+ * all the straight grids musically. Cycling by ticks would jump from 1/32 back up to a
+ * triplet, which reads as a bug.
+ */
+function nextQuantizeGrid(grid, dir) {
+  const names = QUANTIZE_CYCLE;
+  let at = names.findIndex((n) => quantizeGridTicks(n) === grid);
+  if (at < 0) at = 0;
+  const to = (at + dir + names.length) % names.length;
+  return quantizeGridTicks(names[to]);
+}
+
 const _qLabels = new Map();
 let _qLabelVersion = -1;
 function quantizeLabel(track) {

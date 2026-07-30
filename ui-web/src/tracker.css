@@ -419,14 +419,38 @@
 
    No padding and no border until there is something to say — `.on` is set only for
    a lane with a grid, which is nearly none of them. */
-.hquant { color: var(--base-neutral-600); }
-.hquant.on {
-  margin-left: 6px;
-  padding: 0 4px;
-  border: 1px solid var(--uni-rule-column);
+/* THE BADGE IS THE CONTROL, and it costs no layout.
+   ABSOLUTE, at the right edge. Inline it reserved a hit target's worth of width on
+   every lane and pushed all sixteen centred track names off-centre — a layout change
+   across fifteen goldens to make one control clickable. The header text is centred, so
+   the right edge is free space on any lane wide enough to read. */
+.hquant {
+  position: absolute;
+  right: 3px; top: 50%;
+  transform: translateY(-50%);
+  min-width: 12px;
+  padding: 0 3px;
+  border: 1px solid transparent;
   border-radius: 2px;
   color: var(--base-accent-ramp-300, var(--base-accent));
+  /* It has to LOOK pressable. A label that turns out to be a control is worse than a
+     control that turns out to be a label — you find the second by trying. */
+  cursor: ew-resize;
+  touch-action: none;
 }
+/* A LANE WITH NO QUANTIZE SHOWS NOTHING UNTIL YOU GO LOOKING. Sixteen dots across the
+   header row would compete with the track names for a setting almost no lane has — but
+   an element with no size cannot be clicked, so it keeps its box and loses its ink, and
+   hovering the header reveals it. That is the compromise: discoverable by moving the
+   pointer where the control is, invisible until then. */
+.hquant:not(.on) { opacity: 0; }
+.hquant:not(.on)::after { content: '·'; color: var(--base-neutral-600); }
+#head .htrack:hover .hquant:not(.on) { opacity: 1; border-color: var(--uni-rule-column); }
+/* SET, it is always visible, because a lane being quantized is a fact about the song
+   and not a hover state. */
+.hquant.on { opacity: 1; border-color: var(--uni-rule-column); }
+.hquant.on::after { content: none; }
+.hquant.on:hover, .hquant:not(.on):hover { border-color: var(--base-accent); }
 
 /* THE NOTE SOUNDS OUTSIDE THIS ROW — quantize made this reachable.
    A grid coarser than the row pulls a note to a line that can be well before its

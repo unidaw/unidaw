@@ -96,6 +96,23 @@ const QUANTIZE_GRIDS = Object.freeze({
 });
 const GRID_NAMES = Object.freeze(Object.keys(QUANTIZE_GRIDS));
 
+/**
+ * The order a click cycles through, which is the MUSICAL order and not the numeric one.
+ *
+ * They disagree: 1/4t is 640000 ticks, which sits between 1/8 and 1/4 by value and after
+ * every straight grid by feel. Cycling by tick value would step from 1/32 straight to a
+ * triplet, which reads as a bug rather than as a groove.
+ *
+ * `off` is first, so the cycle passes through it: turning quantize off has to be as
+ * ordinary as changing it.
+ */
+export const QUANTIZE_CYCLE = GRID_NAMES;
+
+/** The nanoticks a grid name means, or 0. The inverse of quantizeGridName. */
+export function quantizeGridTicks(name) {
+  return QUANTIZE_GRIDS[name] || 0;
+}
+
 /** The name for a grid in nanoticks, for reading a lane's setting back. */
 export function quantizeGridName(nanoticks) {
   for (const k of GRID_NAMES) if (QUANTIZE_GRIDS[k] === nanoticks) return k;

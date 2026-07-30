@@ -141,6 +141,11 @@
   border-right: var(--uni-rule-track-width) solid var(--uni-rule-track);
 }
 #head .htrack {
+  /* A positioning context for the quantize badge, which is absolute — see
+     tracker.css. Inline it reserved width on all sixteen lanes and shifted every
+     centred track name, which is fifteen golden screenshots' worth of layout change
+     to make one control hittable. */
+  position: relative;
   display: flex; align-items: center; justify-content: center;
   box-sizing: border-box; font-family: var(--font-mono);
   font-size: var(--font-size-inst); letter-spacing: var(--font-tracking-fx);
