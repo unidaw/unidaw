@@ -311,6 +311,48 @@ class SamplerRuntime {
 
     const SamplerModSet* mod = st.findModSet(slot->modSetId);
     const SamplerModulator* amp = mod ? mod->ampEnvelope() : nullptr;
+    // THE FILTER AND THE OTHER MODULATION TARGETS. The first ENVELOPE aimed at each target wins;
+    // a second one aimed at the same target is ignored for now rather than summed, and that is
+    // stated here rather than left to be discovered — summing two envelopes is a real feature
+    // with real questions (before or after depth? clipped how?) and inventing an answer silently
+    // is worse than not having it.
+    if (mod) {
+      spec.filterType = mod->filterType;
+      // cutoffMilli is 0..1000 across the audible range, logarithmically: a linear hertz control
+      // spends nine tenths of its travel above 2 kHz where almost nothing musical happens.
+      const float norm = static_cast<float>(mod->cutoffMilli) / 1000.0f;
+      spec.cutoffHz = 20.0f * std::pow(1000.0f, std::clamp(norm, 0.0f, 1.0f));
+      spec.resonance = 0.7f + static_cast<float>(mod->resonanceMilli) / 1000.0f * 9.3f;
+      spec.sampleRate = snap_->sampleRate;
+      for (const auto& m : mod->modulators) {
+        if (m.kind != ModKind::Envelope || m.env.empty()) {
+          continue;
+        }
+        const float depth = static_cast<float>(m.depthMilli) / 1000.0f;
+        switch (m.target) {
+          case ModTarget::Cutoff:
+            if (!spec.cutoffEnv) {
+              spec.cutoffEnv = &m.env;
+              spec.cutoffDepth = depth * 6.0f;  // +-6 octaves at full depth
+            }
+            break;
+          case ModTarget::Pitch:
+            if (!spec.pitchEnv) {
+              spec.pitchEnv = &m.env;
+              spec.pitchDepthCents = depth * 4800.0f;  // +-4 octaves
+            }
+            break;
+          case ModTarget::Panning:
+            if (!spec.panEnv) {
+              spec.panEnv = &m.env;
+              spec.panDepth = depth;
+            }
+            break;
+          default:
+            break;
+        }
+      }
+    }
     if (amp) {
       spec.ampEnv = &amp->env;
       // timeBase 0 = microseconds. Nanoticks (1) needs this block's tempo, which the caller

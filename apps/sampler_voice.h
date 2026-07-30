@@ -72,6 +72,19 @@ struct SamplerVoiceSpec {
   uint8_t sustainLoop = 0;
   const EnvShape* ampEnv = nullptr;  // borrowed from the snapshot; null = no envelope
   double envUnitsPerFrame = 0.0;
+
+  // FILTER, and the modulators that move it. All envelopes are borrowed from the snapshot, so a
+  // voice never owns one and never frees one.
+  uint8_t filterType = 0;      // 0 off, 1 LP12, 2 LP24, 3 HP, 4 BP
+  float cutoffHz = 20000.0f;
+  float resonance = 0.7f;
+  const EnvShape* cutoffEnv = nullptr;
+  float cutoffDepth = 0.0f;    // in octaves at full envelope
+  const EnvShape* pitchEnv = nullptr;
+  float pitchDepthCents = 0.0f;
+  const EnvShape* panEnv = nullptr;
+  float panDepth = 0.0f;
+  double sampleRate = 48000.0;
 };
 
 // -120 dBFS. An amp envelope below this is inaudible, and a voice that stays there is two bugs at
@@ -141,6 +154,37 @@ inline const SincTable& sincTable() {
   static const SincTable t;
   return t;
 }
+
+// A TPT (topology-preserving-transform) state-variable filter. One structure yields low-pass,
+// high-pass and band-pass from the same two integrators, and — unlike a biquad with recomputed
+// coefficients — it stays stable when the cutoff is swept FAST, which is exactly what a filter
+// envelope does. A biquad modulated per sample can and does blow up; this cannot.
+//
+// LP24 is two of these in series rather than a different filter, so "steeper" means what it says.
+struct SvfFilter {
+  float ic1 = 0.0f, ic2 = 0.0f;
+
+  void reset() { ic1 = ic2 = 0.0f; }
+
+  // `cutoffHz` and `q` are per SAMPLE: the whole point is that they can move.
+  float process(float x, float cutoffHz, float q, uint8_t type, double sampleRate) {
+    const float fc = std::clamp(cutoffHz, 20.0f, static_cast<float>(sampleRate * 0.45));
+    const float g = std::tan(static_cast<float>(M_PI) * fc / static_cast<float>(sampleRate));
+    const float k = 1.0f / std::max(0.05f, q);
+    const float a1 = 1.0f / (1.0f + g * (g + k));
+    const float a2 = g * a1;
+    const float v3 = x - ic2;
+    const float v1 = a1 * ic1 + a2 * v3;
+    const float v2 = ic2 + g * v1;
+    ic1 = 2.0f * v1 - ic1;
+    ic2 = 2.0f * v2 - ic2;
+    switch (type) {
+      case 3: return x - k * v1 - v2;  // high-pass
+      case 4: return v1;               // band-pass
+      default: return v2;              // low-pass (12 and the first stage of 24)
+    }
+  }
+};
 
 class SamplerVoice {
  public:
@@ -213,6 +257,23 @@ class SamplerVoice {
     } else {
       envValue_ = 1.0f;
     }
+    // The other modulators share the amp envelope's clock. They are separate RUNNERS rather than
+    // one runner read at three depths, because they are separate SHAPES — a filter that opens
+    // while the amp decays is the ordinary case, not the exotic one.
+    if (spec_.cutoffEnv && !spec_.cutoffEnv->empty()) {
+      cutoffEnv_.start(spec_.cutoffEnv, spec_.envUnitsPerFrame);
+    }
+    if (spec_.pitchEnv && !spec_.pitchEnv->empty()) {
+      pitchEnv_.start(spec_.pitchEnv, spec_.envUnitsPerFrame);
+    }
+    if (spec_.panEnv && !spec_.panEnv->empty()) {
+      panEnv_.start(spec_.panEnv, spec_.envUnitsPerFrame);
+    }
+    filtL_.reset();
+    filtR_.reset();
+    filtL2_.reset();
+    filtR2_.reset();
+    baseStep_ = step_;
     released_ = false;
   }
 
@@ -234,6 +295,9 @@ class SamplerVoice {
       // release wherever the last block ended — making the tail's length depend on the buffer
       // size. The end-to-end determinism check found this after the unit tests were green.
       env_.releaseAt(age_);
+      cutoffEnv_.releaseAt(age_);
+      pitchEnv_.releaseAt(age_);
+      panEnv_.releaseAt(age_);
     } else {
       // No envelope means no release stage to run, so a gated note ends at note-off. A one-shot
       // slot never calls this at all — that decision belongs to the caller, not here.
@@ -327,6 +391,28 @@ class SamplerVoice {
       }
       const float g = amp * gainSmoothed_;
 
+      // ---- PITCH MODULATION, per sample, and the MIP LEVEL FOLLOWS IT.
+      //
+      // The level is re-chosen from the CURRENT ratio rather than fixed at note-on, because a
+      // pitch envelope sweeping an octave is exactly what the mip-map exists for. It is done
+      // per SAMPLE, not per block: choosing it per block would make the output depend on where
+      // the block boundaries fall, which is the determinism failure this whole design is built
+      // to avoid. It costs comparisons rather than a log2 — the thresholds are powers of two.
+      if (spec_.pitchEnv && !spec_.pitchEnv->empty() && spec_.pitchDepthCents != 0.0f) {
+        const float cents = pitchEnv_.valueAt(age_) * spec_.pitchDepthCents;
+        const double mul = std::pow(2.0, static_cast<double>(cents) / 1200.0);
+        step_ = static_cast<uint64_t>(static_cast<double>(baseStep_) * mul);
+        if (spec_.quality != 0 && spec_.source.mipCount > 0) {
+          const double ratio = spec_.ratio * mul;
+          uint32_t lvl = 0;
+          while (lvl < spec_.source.mipCount && ratio >= std::pow(2.0, lvl + 1.0)) {
+            ++lvl;
+          }
+          mipLevel_ = lvl;
+          mipBlend_ = mipBlend(ratio, lvl);
+        }
+      }
+
       const uint32_t dst = offsetInBlock + i;
       for (uint32_t ch = 0; ch < outChannels && ch < 2; ++ch) {
         const uint32_t srcCh =
@@ -357,6 +443,23 @@ class SamplerVoice {
             const float a = std::cos(u * 0.5f * static_cast<float>(M_PI));
             const float b = std::sin(u * 0.5f * static_cast<float>(M_PI));
             s = s * a + other * b;
+          }
+        }
+        // ---- THE FILTER, per sample so its envelope can actually move it. Off by default:
+        // filtering a drum kit that asked for none is a sound nobody chose.
+        if (spec_.filterType != 0) {
+          float fc = spec_.cutoffHz;
+          if (spec_.cutoffEnv && !spec_.cutoffEnv->empty() && spec_.cutoffDepth != 0.0f) {
+            // Depth is in OCTAVES, not hertz. A filter envelope that moved a fixed number of
+            // hertz would be a different musical gesture at every cutoff setting — barely
+            // audible when open, a slam when closed.
+            fc *= std::pow(2.0f, cutoffEnv_.valueAt(age_) * spec_.cutoffDepth);
+          }
+          SvfFilter& f1 = (ch == 0) ? filtL_ : filtR_;
+          s = f1.process(s, fc, spec_.resonance, spec_.filterType, spec_.sampleRate);
+          if (spec_.filterType == 2) {  // LP24 is two LP12s, so "steeper" means what it says
+            SvfFilter& f2 = (ch == 0) ? filtL2_ : filtR2_;
+            s = f2.process(s, fc, spec_.resonance, 1, spec_.sampleRate);
           }
         }
         out[ch][dst] += s * g * (ch == 0 ? gl : gr);
@@ -549,9 +652,12 @@ class SamplerVoice {
 
   SamplerVoiceSpec spec_{};
   EnvRunner env_{};
+  EnvRunner cutoffEnv_{}, pitchEnv_{}, panEnv_{};
+  SvfFilter filtL_{}, filtR_{}, filtL2_{}, filtR2_{};
   uint64_t pos_ = 0;  // 32.32 fixed point, in level-0 source frames
   uint64_t step_ = 0;
   uint64_t startFrame_ = 0, endFrame_ = 0;
+  uint64_t baseStep_ = 0;  // the unmodulated increment; the pitch envelope scales this
   uint64_t loopEndClamped_ = 0, loopLen_ = 0;
   bool looping_ = false;      // are we INSIDE the loop right now?
   bool loopForward_ = true;   // ping-pong direction

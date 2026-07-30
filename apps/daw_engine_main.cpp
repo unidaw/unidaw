@@ -12062,6 +12062,10 @@ struct TrackRuntime {
     // The producer renders/dispatches each block ahead of the device and paces to it;
     // any preemption here directly starves the ring. Raise it above background/UI work.
     daw::elevateToAudioPriority();
+    // DENORMALS FLUSH TO ZERO on the producer, which is where the sampler renders. Set once per
+    // thread rather than per block: it is a control-register write, and doing it in the render
+    // loop would cost more than the denormals it prevents.
+    daw::enableFlushToZero();
     const auto blockDuration =
         std::chrono::duration<double>(
             static_cast<double>(engineConfig.blockSize) / engineConfig.sampleRate);

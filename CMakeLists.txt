@@ -306,13 +306,13 @@ target_include_directories(sampler_voice_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-# Sampler S3: the octave mip-map. The headline assertion is ACOUSTIC — inharmonic fold-back at
-# +24 semitones, with and without it — because every structural test passes against a mip-map
-# that is built and never read.
-add_executable(sampler_mipmap_tests
-  apps/sampler_mipmap_tests_main.cpp
+# Sampler S3: the DSP — mip-map, the three interpolators, and the filter. Every assertion here is
+# ACOUSTIC, because the structural versions all pass against a feature that is built and never
+# read: the levels exist, the setting is stored, the filter is constructed.
+add_executable(sampler_dsp_tests
+  apps/sampler_dsp_tests_main.cpp
 )
-target_include_directories(sampler_mipmap_tests PRIVATE
+target_include_directories(sampler_dsp_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -518,10 +518,10 @@ add_test(NAME sampler_voice
 )
 set_tests_properties(sampler_voice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
-add_test(NAME sampler_mipmap
-  COMMAND sampler_mipmap_tests
+add_test(NAME sampler_dsp
+  COMMAND sampler_dsp_tests
 )
-set_tests_properties(sampler_mipmap PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+set_tests_properties(sampler_dsp PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME sampler_engine
   COMMAND sampler_engine_tests
@@ -779,7 +779,7 @@ foreach(daw_test_target
     sampler_state_tests
     sampler_voice_tests
     sampler_engine_tests
-    sampler_mipmap_tests
+    sampler_dsp_tests
     event_ring_mpsc_tests
     audio_io_tests
     device_chain_tests

@@ -1,4 +1,8 @@
-// THE MIP-MAP, AND THE ONE MEASUREMENT THAT MATTERS: FOLD-BACK ENERGY.
+// THE SAMPLER'S DSP: THE MIP-MAP, THE THREE INTERPOLATORS, AND THE FILTER.
+//
+// EVERY ASSERTION IN THIS FILE IS ACOUSTIC, and that is the point of it. The structural versions
+// — the levels exist, the quality is stored, the filter is constructed — all pass perfectly
+// against a feature that is built and never read.
 //
 // docs/SAMPLER_DESIGN.md S3 requires a negative control here, in those words, because this is the
 // feature most likely to ship as a green suite that passes with the thing bypassed. Every
@@ -309,8 +313,106 @@ int main() {
           "which no normal session would ever reveal");
   }
 
+  // ---- THE FILTER. Four types, each doing what its name says, measured on a two-tone fixture.
+  //
+  // OFF BY DEFAULT is asserted first, because filtering a drum kit that asked for none is a
+  // sound nobody chose — and a filter that is silently always on reads as "the sampler is dull".
+  {
+    const uint64_t frames = 48000;
+    std::vector<std::vector<float>> src(1, std::vector<float>(frames));
+    for (uint64_t i = 0; i < frames; ++i) {
+      const double t = static_cast<double>(i) / kRate;
+      src[0][i] = static_cast<float>(0.35 * std::sin(2.0 * M_PI * 200.0 * t) +
+                                     0.35 * std::sin(2.0 * M_PI * 6000.0 * t));
+    }
+    std::vector<const float*> planes{src[0].data()};
+    daw::SamplerVoiceSpec spec;
+    spec.source.planes = planes.data();
+    spec.source.channels = 1;
+    spec.source.frames = frames;
+    spec.source.sampleRate = kRate;
+    spec.ratio = 1.0;
+    spec.pan = -1.0f;
+    spec.quality = 1;
+    spec.sampleRate = kRate;
+    spec.resonance = 0.7f;
+    spec.cutoffHz = 1000.0f;  // between the two tones
+
+    spec.filterType = 0;
+    const std::vector<float> dry = renderVoice(spec, 16000);
+    const double dryLow = energyAt(dry, 200.0), dryHigh = energyAt(dry, 6000.0);
+    check(dryLow > 1e3 && dryHigh > 1e3,
+          "with the filter OFF both tones pass — a filter that is silently always on reads as "
+          "'the sampler is dull' and is very hard to find");
+
+    spec.filterType = 1;  // LP12
+    const std::vector<float> lp = renderVoice(spec, 16000);
+    const double lpLow = energyAt(lp, 200.0), lpHigh = energyAt(lp, 6000.0);
+    check(lpLow > dryLow * 0.25, "a LOW-pass keeps the low tone");
+    check(lpHigh < dryHigh * 0.05, "and removes the high one");
+
+    spec.filterType = 3;  // HP
+    const std::vector<float> hp = renderVoice(spec, 16000);
+    check(energyAt(hp, 6000.0) > dryHigh * 0.25, "a HIGH-pass keeps the high tone");
+    check(energyAt(hp, 200.0) < dryLow * 0.05, "and removes the low one");
+
+    spec.filterType = 4;  // BP
+    spec.cutoffHz = 200.0f;
+    const std::vector<float> bp = renderVoice(spec, 16000);
+    check(energyAt(bp, 6000.0) < dryHigh * 0.1,
+          "a BAND-pass centred low rejects the high tone");
+
+    // LP24 is TWO LP12s, so it must be measurably steeper. If it were aliased to LP12 nothing in
+    // a normal session would show it — both are "a low-pass" and both sound plausible.
+    spec.cutoffHz = 1000.0f;
+    spec.filterType = 2;
+    const std::vector<float> lp24 = renderVoice(spec, 16000);
+    const double h12 = energyAt(lp, 6000.0), h24 = energyAt(lp24, 6000.0);
+    const double steeper = 10.0 * std::log10((h12 + 1e-30) / (h24 + 1e-30));
+    std::printf("  filter: LP24 is %.1f dB steeper than LP12 at 6 kHz\n", steeper);
+    check(steeper > 10.0, "LP24 is genuinely steeper than LP12 rather than aliased to it");
+  }
+
+  // ---- THE FILTER ENVELOPE ACTUALLY MOVES IT, and its depth is in OCTAVES. A depth in hertz
+  // would be a different musical gesture at every cutoff setting — inaudible when open, a slam
+  // when closed.
+  {
+    const uint64_t frames = 48000;
+    std::vector<std::vector<float>> src(1, std::vector<float>(frames));
+    for (uint64_t i = 0; i < frames; ++i) {
+      src[0][i] = static_cast<float>(
+          0.4 * std::sin(2.0 * M_PI * 4000.0 * static_cast<double>(i) / kRate));
+    }
+    std::vector<const float*> planes{src[0].data()};
+    // A slow rise: closed at the start, open by the end.
+    daw::EnvShape env;
+    env.points = {{0, 0, 0, 0}, {400000, 1000, 0, 0}};  // 0.4 s
+    daw::SamplerVoiceSpec spec;
+    spec.source.planes = planes.data();
+    spec.source.channels = 1;
+    spec.source.frames = frames;
+    spec.source.sampleRate = kRate;
+    spec.ratio = 1.0;
+    spec.pan = -1.0f;
+    spec.quality = 1;
+    spec.sampleRate = kRate;
+    spec.filterType = 1;
+    spec.cutoffHz = 300.0f;   // well below the tone
+    spec.resonance = 0.7f;
+    spec.cutoffEnv = &env;
+    spec.cutoffDepth = 6.0f;  // six octaves: 300 Hz -> ~19 kHz
+    spec.envUnitsPerFrame = 1000000.0 / kRate;
+    const std::vector<float> out = renderVoice(spec, 24000);
+    std::vector<float> early(out.begin(), out.begin() + 4000);
+    std::vector<float> late(out.begin() + 16000, out.end());
+    const double e = energyAt(early, 4000.0), l = energyAt(late, 4000.0);
+    check(l > e * 10.0,
+          "the filter envelope OPENS the filter over time — closed at the start, passing the "
+          "tone by the end. If these are equal the envelope is wired but never read");
+  }
+
   if (g_fail == 0) {
-    std::printf("sampler_mipmap_tests: PASS\n");
+    std::printf("sampler_dsp_tests: PASS\n");
   }
   return g_fail == 0 ? 0 : 1;
 }
