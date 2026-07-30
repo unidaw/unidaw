@@ -34,6 +34,7 @@
 #include "apps/event_payloads.h"
 #include "apps/event_ring.h"
 #include "apps/rt_thread.h"
+#include "apps/render_pool.h"
 #include "apps/host_controller.h"
 #include "apps/plugin_cache.h"
 #include "apps/patcher_abi.h"
@@ -2591,6 +2592,26 @@ struct TrackRuntime {
   std::atomic<uint64_t> producerSamplerUsTotal{0};
   std::atomic<uint64_t> producerSamplerUsMax{0};
   std::atomic<uint64_t> producerBlocksOverBudget{0};
+
+  // The pool the per-track work runs on. Sized to leave the audio callback, the master render
+  // thread and the OS room to breathe rather than claiming every core — a producer that
+  // finishes a block fractionally sooner by starving the thread that PLAYS it has made things
+  // worse. DAW_ENGINE_RENDER_THREADS overrides; 0 or 1 keeps everything on the producer thread,
+  // which is also the reference the parallel path is checked for bit-identical output against.
+  daw::RenderPool renderPool;
+  {
+    const unsigned hw = std::thread::hardware_concurrency();
+    unsigned want = hw > 3 ? hw - 2 : 1;
+    if (const char* env = std::getenv("DAW_ENGINE_RENDER_THREADS")) {
+      const int n = std::atoi(env);
+      want = n > 0 ? static_cast<unsigned>(n) : 1;
+    }
+    if (want > 1) {
+      renderPool.start(want - 1);  // the producer thread is the other worker
+    }
+    std::cout << "Render pool: " << (renderPool.workerCount() + 1)
+              << " thread(s) for per-track production" << std::endl;
+  }
 
   std::unique_ptr<daw::IRuntime> audioRuntime;
   std::unique_ptr<EngineAudioCallback> audioCallback;
@@ -12895,7 +12916,11 @@ struct TrackRuntime {
       // yet is the pipeline working, not the producer struggling, and folding that idle time in
       // would report a healthy engine as loaded.
       const auto blockWorkStart = std::chrono::steady_clock::now();
-      uint64_t blockSamplerUs = 0;
+      // Summed across every track, and once the pool is running that means across threads —
+      // so this is sampler CPU time, which can exceed the block's wall clock. That is the
+      // number worth having: it says how much sampler work the block contained, independently
+      // of how many threads it was spread over.
+      std::atomic<uint64_t> blockSamplerUs{0};
       const uint64_t sampleStart =
           static_cast<uint64_t>(engineConfig.blockSize) *
           static_cast<uint64_t>(blockId - 1);
@@ -14825,9 +14850,12 @@ struct TrackRuntime {
       // cleared inside the loop would only reach whichever track happened to be first.
       const bool doPanic = panicPending.exchange(false, std::memory_order_acq_rel);
 
-      for (auto* runtime : trackSnapshot) {
+      // ONE TRACK'S WHOLE BLOCK. Lifted out of the `for` it used to be so it can run on the
+      // render pool; the body below is otherwise unchanged, and the four guard clauses that
+      // were `continue` are now `return` because "skip this track" is what they always meant.
+      auto processTrack = [&](TrackRuntime* runtime) {
         if (!runtime->hostReady.load(std::memory_order_acquire)) {
-          continue;
+          return;
         }
         auto trackStatePtr = std::atomic_load_explicit(&runtime->trackSnapshot,
                                                        std::memory_order_acquire);
@@ -14850,15 +14878,15 @@ struct TrackRuntime {
                           : std::unique_lock<std::mutex>(runtime->controllerMutex,
                                                          std::try_to_lock);
         if (!lock.owns_lock()) {
-          continue;
+          return;
         }
         if (!runtime->controller.shmHeader()) {
-          continue;
+          return;
         }
         auto ringCtrl = getRingCtrl(*runtime);
         auto ringStd = getRingStd(*runtime);
         if (ringCtrl.mask == 0 || ringStd.mask == 0) {
-          continue;
+          return;
         }
 
         // Keystroke forwarding (kControlVersion 10): drain any keys this track's plugin
@@ -15252,10 +15280,12 @@ struct TrackRuntime {
               runtime->samplerEvents.empty() ? nullptr : runtime->samplerEvents.data(),
               static_cast<uint32_t>(runtime->samplerEvents.size()),
               stemPlanes.empty() ? nullptr : stemPlanes.data(), stems);
-          blockSamplerUs += static_cast<uint64_t>(
-              std::chrono::duration_cast<std::chrono::microseconds>(
-                  std::chrono::steady_clock::now() - samplerStart)
-                  .count());
+          blockSamplerUs.fetch_add(
+              static_cast<uint64_t>(
+                  std::chrono::duration_cast<std::chrono::microseconds>(
+                      std::chrono::steady_clock::now() - samplerStart)
+                      .count()),
+              std::memory_order_relaxed);
           runtime->samplerStemCount = stems;
           runtime->samplerAudioValid = true;
         }
@@ -15608,7 +15638,73 @@ struct TrackRuntime {
             enqueueInboundMidi(*dst, routedMidi, sampleStart, nextBlockSampleStart);
           }
         }
+      };
+
+      // WHICH TRACKS MAY RUN TOGETHER.
+      //
+      // Almost everything processTrack touches belongs to its own track: its SHM, its rings,
+      // its buffers, its sampler. Two things do not, and they decide this partition.
+      //
+      // The first is track-to-track ROUTING. A track whose audioOut or midiOut names another
+      // track pushes into that track's inbound buffers at the end of its block, and the
+      // destination swaps those buffers in at the start of its own. Whether the destination
+      // sees this block's audio or next block's therefore depends on which of the two runs
+      // first — and the audio accumulates with `+=`, which is not associative in floating
+      // point, so even the order of two sources into one destination is audible. Both ENDS of
+      // every such route go in the serial group, in exactly the order they have today.
+      //
+      // The second is the keyjazz PREVIEW path, which allocates note ids from one shared
+      // counter. Ids do not change what is heard, but they do change what is logged and
+      // matched, and a block with previews is a block where a human just pressed a key — there
+      // is nothing to parallelise for. Those blocks run entirely serially.
+      //
+      // Everything left is isolated by construction: no route reaches it, so no other track's
+      // work is observable to it and its own work is observable to no one. Running those
+      // together cannot change the result, which is why the parallel and serial paths are
+      // checked for BIT-IDENTICAL output rather than merely similar output.
+      //
+      // (The plugin-editor keystroke drain also writes shared transport state. Only one editor
+      // can hold keyboard focus, so only one track's key ring is ever non-empty in a block.)
+      std::vector<TrackRuntime*> serialTracks;
+      std::vector<TrackRuntime*> parallelTracks;
+      {
+        std::vector<uint32_t> routeEndpoints;
+        for (auto* runtime : trackSnapshot) {
+          auto tsPtr = std::atomic_load_explicit(&runtime->trackSnapshot,
+                                                 std::memory_order_acquire);
+          if (!tsPtr) {
+            continue;
+          }
+          const auto& r = tsPtr->routing;
+          if (r.audioOut.kind == daw::TrackRouteKind::Track) {
+            routeEndpoints.push_back(runtime->trackId);
+            routeEndpoints.push_back(r.audioOut.trackId);
+          }
+          if (r.midiOut.kind == daw::TrackRouteKind::Track) {
+            routeEndpoints.push_back(runtime->trackId);
+            routeEndpoints.push_back(r.midiOut.trackId);
+          }
+        }
+        const bool allSerial = !previewThisBlock.empty();
+        for (auto* runtime : trackSnapshot) {
+          const bool routed =
+              std::find(routeEndpoints.begin(), routeEndpoints.end(), runtime->trackId) !=
+              routeEndpoints.end();
+          if (allSerial || routed) {
+            serialTracks.push_back(runtime);
+          } else {
+            parallelTracks.push_back(runtime);
+          }
+        }
       }
+      // Serial group first, in track order — the order it has always run in. No route touches
+      // a parallel-group track, so nothing in the parallel group can observe this.
+      for (auto* runtime : serialTracks) {
+        processTrack(runtime);
+      }
+      renderPool.parallelFor(parallelTracks.size(), [&](std::size_t i) {
+        processTrack(parallelTracks[i]);
+      });
 
       if (isPlaying) {
         uint64_t nextTicks = blockStartTicks + blockTicks;
@@ -15628,12 +15724,13 @@ struct TrackRuntime {
                 .count());
         producerBlocksTimed.fetch_add(1, std::memory_order_relaxed);
         producerBlockUsTotal.fetch_add(blockUs, std::memory_order_relaxed);
-        producerSamplerUsTotal.fetch_add(blockSamplerUs, std::memory_order_relaxed);
+        const uint64_t samplerUs = blockSamplerUs.load(std::memory_order_relaxed);
+        producerSamplerUsTotal.fetch_add(samplerUs, std::memory_order_relaxed);
         if (blockUs > producerBlockUsMax.load(std::memory_order_relaxed)) {
           producerBlockUsMax.store(blockUs, std::memory_order_relaxed);
         }
-        if (blockSamplerUs > producerSamplerUsMax.load(std::memory_order_relaxed)) {
-          producerSamplerUsMax.store(blockSamplerUs, std::memory_order_relaxed);
+        if (samplerUs > producerSamplerUsMax.load(std::memory_order_relaxed)) {
+          producerSamplerUsMax.store(samplerUs, std::memory_order_relaxed);
         }
         if (blockUs > producerBlockBudgetUs) {
           producerBlocksOverBudget.fetch_add(1, std::memory_order_relaxed);
@@ -15649,7 +15746,7 @@ struct TrackRuntime {
             DAW_EVENT("producer.over_budget")
                 .field("block", static_cast<uint64_t>(blockId))
                 .field("us", blockUs)
-                .field("sampler_us", blockSamplerUs)
+                .field("sampler_us", samplerUs)
                 .field("budget_us", producerBlockBudgetUs);
           }
         }

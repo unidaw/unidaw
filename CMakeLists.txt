@@ -561,6 +561,12 @@ add_test(NAME producer_load
 )
 set_tests_properties(producer_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# The thread count must not be observable in the output. Byte-for-byte, not a tolerance.
+add_test(NAME render_pool
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/render_pool_check.sh
+)
+set_tests_properties(render_pool PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_state
   COMMAND sampler_state_tests
 )
