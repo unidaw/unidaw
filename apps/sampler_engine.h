@@ -20,6 +20,7 @@
 #include <memory>
 #include <vector>
 
+#include "apps/sampler_slice.h"
 #include "apps/sampler_state.h"
 #include "apps/sampler_voice.h"
 
@@ -287,6 +288,28 @@ class SamplerRuntime {
     spec.source = audio->view();
     spec.startFrame = slot->startFrame;
     spec.endFrame = slot->endFrame;
+    // A SLOT THAT NAMES A SLICE READS THE SLICE'S DERIVED EXTENT, not a stored copy of it. That
+    // is what makes a chop re-cuttable while it plays: dragging a marker changes what this slot
+    // sounds on its NEXT note, and no note anywhere had to be rewritten. A cached extent would
+    // be a second fact about one boundary, and the two would disagree the moment a marker moved.
+    if (slot->sliceId != 0) {
+      for (const auto& ss : st.sliceSets) {
+        if (ss.sourceLocalId != slot->sourceLocalId) {
+          continue;
+        }
+        const SliceExtent ext = sliceExtentById(ss, slot->sliceId, audio->frames);
+        if (ext.valid) {
+          spec.startFrame = ext.begin;
+          spec.endFrame = ext.end;
+        } else {
+          // The slice was REMOVED. The slot is silent rather than falling back to the whole
+          // sample — a chop whose slice is gone should not suddenly play the entire break.
+          ++unmapped_;
+          return;
+        }
+        break;
+      }
+    }
     // THE 9xx SEEK, as a fraction of the slot's extent rather than in absolute frames. Absolute
     // breaks the moment the slot's sample is swapped, and here a slot can name a SLICE, so it
     // breaks on a re-chop too. A fraction survives both.

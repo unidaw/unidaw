@@ -306,6 +306,16 @@ target_include_directories(sampler_voice_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# Sampler S5: slicing. The assertions are about IDENTITY, not audio — "slice 5 still plays the
+# same frames after an insert at slice 2" is not a detail, it is the feature that lets a chop be
+# re-cut while it plays.
+add_executable(sampler_slice_tests
+  apps/sampler_slice_tests_main.cpp
+)
+target_include_directories(sampler_slice_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 # Sampler S3: the DSP — mip-map, the three interpolators, and the filter. Every assertion here is
 # ACOUSTIC, because the structural versions all pass against a feature that is built and never
 # read: the levels exist, the setting is stored, the filter is constructed.
@@ -498,6 +508,11 @@ add_test(NAME sampler_load
 )
 set_tests_properties(sampler_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_test(NAME sampler_slice_stability
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_slice_stability_check.sh
+)
+set_tests_properties(sampler_slice_stability PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_sound_address
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_sound_address_check.sh
 )
@@ -522,6 +537,11 @@ add_test(NAME sampler_voice
   COMMAND sampler_voice_tests
 )
 set_tests_properties(sampler_voice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+add_test(NAME sampler_slice
+  COMMAND sampler_slice_tests
+)
+set_tests_properties(sampler_slice PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
 add_test(NAME sampler_dsp
   COMMAND sampler_dsp_tests
@@ -785,6 +805,7 @@ foreach(daw_test_target
     sampler_voice_tests
     sampler_engine_tests
     sampler_dsp_tests
+    sampler_slice_tests
     event_ring_mpsc_tests
     audio_io_tests
     device_chain_tests
