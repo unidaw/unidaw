@@ -413,36 +413,36 @@ const arrange = new Arrange(arrangeHost, metrics, {
     if (laneRefused) state.reject = 'moving a clip between tracks is not supported yet';
   },
   /**
-   * THE SPINE's three gestures, each landing on the SAME function the console calls.
+   * THE SPINE's gestures, each landing on the SAME function the console calls.
    *
-   * Select is local — nothing about which section you are looking at is the engine's
-   * business — but the id it stores is the id the console names, so `seclength` with no
-   * argument and a click on the strip are talking about one thing. Length and rename go
-   * through `secLength` and `nameSection`, which is what `seclength` and `namesection`
-   * call: two surfaces, one meaning.
+   * Select is local — which marker you are looking at is nobody else's business — but the id it
+   * stores is the id the console names, so `delmarker` with no argument and a click on the strip
+   * are talking about one thing.
+   *
+   * THE BOUNDARY DRAG IS NOT A MARKER OP. It sends `insertTime`, which moves music: everything
+   * at or after the next marker's tick, in one transaction the engine refuses whole and undoes
+   * whole. The four marker ops move nothing at all. Keeping those two apart is the whole point
+   * of the v29 contract — editing a label used to ripple the song as a side effect.
    */
-  onSectionSelect: (id) => {
+  onMarkerSelect: (id) => {
     // Clicking the selected one again clears it. A selection you cannot drop is a mode.
-    state.selectedSection = state.selectedSection === id ? 0 : id;
+    state.selectedMarker = state.selectedMarker === id ? 0 : id;
     schedule();
   },
-  onSectionLength: (id, bars) => secLength(id, bars),
-  onSectionAdd: (bars) => addSection(bars, 'Section'),
-  onSectionDelete: (id) => {
-    // With nothing selected this says which action is missing rather than guessing at
-    // a section — a `−` that quietly removes the last one is a destructive button
-    // firing on an ambiguous intent.
-    if (!id) { state.reject = 'select a section first'; schedule(); return false; }
-    return delSection(id);
+  onTimeEdit: ({ tick, bars }) => insertTime(tick, bars),
+  onMarkerAdd: () => addMarker(engine ? engine.playheadTick : 0, 'Marker'),
+  onMarkerDelete: (id) => {
+    // With nothing selected this says which action is missing rather than guessing at a marker.
+    if (!id) { state.reject = 'select a marker first'; schedule(); return false; }
+    return delMarker(id);
   },
-  onSectionRename: (id, was) => {
-    // `prompt` rather than an inline editor, deliberately and for now: the strip is 17px
-    // tall and an in-place field there would be a second text-entry implementation to
-    // keep in step with the mixer's rename for the sake of one row. It is named here so
-    // the shortcut is visible rather than looking like the intended end state.
-    const next = window.prompt('Section name', was || '');
+  onMarkerRename: (id, was) => {
+    // `prompt` rather than an inline editor, deliberately and for now: the strip is 17px tall
+    // and an in-place field there would be a second text-entry implementation to keep in step
+    // with the mixer's rename for the sake of one row.
+    const next = window.prompt('Marker name', was || '');
     if (next === null) return;                       // cancelled is not a rename
-    nameSection(id, next);
+    nameMarker(id, next);
   },
   onNav: (zoomIndex, startTick, laneScroll, why) => {
     state.arrangeZoom = clampZoom(zoomIndex);
@@ -705,7 +705,7 @@ function sendGraph(msg) {
 }
 
 /**
- * A SPINE edit, to the engine.
+ * A SPINE edit — a marker op, or a time edit — to the engine.
  *
  * Nothing optimistic here either, and this one has the strongest reason of the three:
  * a section length change RIPPLES — every later section, every placement at or after
@@ -716,58 +716,167 @@ function sendGraph(msg) {
  * things are.
  *
  * The refusal reaches the reject line through the ack channel, like every other
- * sidecar refusal — see `onAck`. The engine's own refusals (no such section, zero
- * bars, a blocking placement) currently reach only its log, which is a reporting gap
- * on that side and is recorded as one.
+ * sidecar refusal — see `onAck`. The engine's own refusals (no such marker, a removal
+ * whose bars hold material) reach only its log, which is a reporting gap on that side and is
+ * recorded as one.
  */
-function sendSection(msg) {
+function sendMarker(msg) {
   if (!conn || !conn.send(msg)) { state.reject = 'no engine'; return false; }
   state.reject = null;
   schedule();
   return true;
 }
 
+
 /**
- * The spine as the engine published it, or null before the first frame.
+ * Requests waiting for the engine to name their modulation link.
  *
- * `slice(0, sectionCount)` and not the whole array: `store.sections` is a POOL that
- * grows and is never shrunk, so its tail after a removal is the section that was just
- * deleted, name and position intact. The decoder blanks that tail now precisely so
- * this mistake shows as an id-0 nameless span rather than as a convincing ghost — but
- * respecting the count is still the reader's job, and this is the reader.
+ * Small and short-lived: one entry per MAP click, drained on the next chain snapshot for that
+ * track. Not persisted and not drawn — the badge follows the published links, and a request in
+ * here has not happened yet.
  */
-function sectionsOf() {
-  if (!engine) return null;
-  const list = [];
-  const n = Math.min(engine.sectionCount, engine.sections.length);
-  for (let i = 0; i < n; i++) {
-    const s = engine.sections[i];
-    list.push({ id: s.id, name: s.name, startBar: s.startBar, bars: s.bars,
-                startTick: s.startTick, endTick: s.endTick, color: s.color });
+const pendingMaps = [];
+
+/**
+ * Name the parameter for any link the engine has just published that we asked for.
+ *
+ * Called from `onChains`, which is where the engine's answer arrives. `SetModLinkUid16` matches
+ * a link id EXACTLY and the engine assigns the id, so the uid cannot ride along with the add —
+ * naming it needs the id back first. Matches on (track, targetDevice, targetId) and only takes a
+ * link that has NO uid16 yet, so a re-published set cannot make this fire twice.
+ */
+function namePendingMaps() {
+  for (let i = pendingMaps.length - 1; i >= 0; i--) {
+    const want = pendingMaps[i];
+    const c = chains[want.track];
+    const links = (c && c.modLinks) || [];
+    const hit = links.find((l) => l.targetDevice === want.device
+                                  && l.targetId === want.param && !l.uid16);
+    if (!hit) continue;
+    conn.send({ type: 'moduid', track: want.track, link: hit.id, uid16: want.uid });
+    pendingMaps.splice(i, 1);
   }
-  return { version: engine.arrangeVersion, count: n,
-           truncated: engine.sectionsTruncated | 0, songEnd: engine.songEnd, list };
 }
 
 /**
- * Is there a section with this id RIGHT NOW?
+ * Is there a marker with this id RIGHT NOW?
  *
- * Every op but `add` addresses an existing section, and the engine refuses an unknown
- * id — as `no_such_section`, on its own log, where the browser cannot read it. So a
- * rename aimed at a section that had just been removed came back as "section 2: VERSE"
- * and nothing had happened: the dock printed the optimistic sentence, the engine
- * refused in silence, and the two together said the opposite of the truth.
- *
- * Checked HERE because the published spine is the same list the user is looking at. It
- * does not make the engine's refusal reachable — that is a reporting gap on that side
- * and is recorded as one — it means the common case answers itself, by name, before
- * anything is sent.
+ * Every op but `add` addresses an existing marker, and the engine refuses an unknown id on its
+ * own log where the browser cannot read it. Checked HERE because the published list is the same
+ * one the user is looking at: the common case answers itself, by name, before anything is sent.
  */
-function sectionExists(id) {
-  const s = sectionsOf();
-  if (!s) return false;
-  for (const x of s.list) if (x.id === id) return true;
+function markerExists(id) {
+  const m = markersOf();
+  if (!m) return false;
+  for (const x of m.list) if (x.id === id) return true;
   return false;
+}
+
+/**
+ * THE SONG'S MARKERS, as the engine published them, with the span each one begins.
+ *
+ * `bars` and `endTick` were DERIVED by the decoder from the next marker — a marker stores no
+ * length. `bar` and `beat` were resolved by the ENGINE through the meter map and are not
+ * recomputed here: bar numbering across a meter change is a prefix sum, not a division, and a
+ * second implementation would be right until the first 7/8 passage.
+ */
+function markersOf() {
+  if (!engine || !Array.isArray(engine.markers)) return null;
+  const list = [];
+  // `slice(0, count)` — the pool grows and is never shrunk, so its tail after a removal is the
+  // marker that was just deleted.
+  const n = Math.min(engine.markerCount || 0, engine.markers.length);
+  for (let i = 0; i < n; i++) {
+    const m = engine.markers[i];
+    list.push({ id: m.id, name: m.name, bar: m.bar, beat: m.beat, tick: m.tick,
+                endTick: m.endTick, bars: m.bars, color: m.color });
+  }
+  return { version: engine.arrangeVersion, count: n,
+           truncated: engine.markersTruncated | 0, songEnd: engine.songEnd, list };
+}
+
+/** A marker at a tick. No length to choose — that is the whole simplification. */
+function addMarker(tick, name) {
+  const t = Math.max(0, Math.round(Number(tick) || 0));
+  return sendMarker({ type: 'marker', op: 'add', tick: t, name: name || 'Marker' });
+}
+
+/**
+ * Remove a marker. NOT destructive: the music stays exactly where it is and simply stops being
+ * named. Said here as well as in the help, because "remove" reads as destructive and a confirm
+ * on this would be asking about the wrong thing.
+ */
+function delMarker(id) {
+  const n = Number(id) || 0;
+  if (n <= 0) { state.reject = 'which marker?'; schedule(); return false; }
+  if (!markerExists(n)) { state.reject = `no marker ${n}`; schedule(); return false; }
+  if (state.selectedMarker === n) state.selectedMarker = 0;
+  return sendMarker({ type: 'marker', op: 'remove', id: n });
+}
+
+function nameMarker(id, name) {
+  const n = Number(id) || 0;
+  const t = String(name === undefined ? '' : name).trim();
+  if (n <= 0) { state.reject = 'which marker?'; schedule(); return false; }
+  if (!markerExists(n)) { state.reject = `no marker ${n}`; schedule(); return false; }
+  // Refused HERE, with a reason, rather than sent as an empty name for the engine to drop in
+  // silence — the same rule the sidecar applies.
+  if (!t) { state.reject = 'a marker needs a name'; schedule(); return false; }
+  return sendMarker({ type: 'marker', op: 'rename', id: n, name: t });
+}
+
+/** Move a marker to a tick. It moves ALONE — no music follows it. */
+function moveMarker(id, tick) {
+  const n = Number(id) || 0;
+  if (n <= 0) { state.reject = 'which marker?'; schedule(); return false; }
+  if (!markerExists(n)) { state.reject = `no marker ${n}`; schedule(); return false; }
+  const t = Number(tick);
+  if (!Number.isFinite(t) || t < 0) { state.reject = 'move it to which tick?'; schedule(); return false; }
+  return sendMarker({ type: 'marker', op: 'move', id: n, tick: Math.round(t) });
+}
+
+/**
+ * INSERT OR REMOVE ARRANGEMENT TIME. The one command that moves music.
+ *
+ * Everything at or after `tick` moves: every placement on every track, the tempo points, the key
+ * changes, the automation points, the meter points and the later markers — in ONE transaction
+ * the engine refuses whole and undoes whole. This is what the spine strip's boundary drag sends,
+ * and it is what `SetSectionLength` used to do as a side effect of editing a label, without an
+ * undo entry that could hold it.
+ *
+ * BARS, NOT TICKS. A bar's length depends on the meter in force at that point, and the engine
+ * holds the authoritative map — converting here would re-implement the prefix sum and be wrong
+ * on the first mid-song meter change.
+ */
+function insertTime(tick, bars) {
+  const b = Math.round(Number(bars) || 0);
+  if (!b) { state.reject = 'how many bars?'; schedule(); return false; }
+  const t = Math.max(0, Math.round(Number(tick) || 0));
+  return sendMarker({ type: 'time', op: b > 0 ? 'insert' : 'remove', tick: t, bars: Math.abs(b) });
+}
+
+/** A meter point. Mid-song signatures are authorable from v29. */
+function setTimeSig(sig, tick, flatten) {
+  const t = String(sig || '').trim();
+  const m = /^(\d+)\/(\d+)$/.exec(t);
+  /*
+   * REFUSED HERE, not just in the sidecar.
+   *
+   * The sidecar refuses a bad signature too, but its error arrives on the ack channel — after
+   * `run` has returned and the console has already printed its optimistic reply. A refusal the
+   * user reads a beat later, under a line that said it worked, is worse than none.
+   *
+   * A zero denominator divides by zero in every bar computation downstream, and one that is not
+   * a power of two is not a signature music uses.
+   */
+  const den = m ? Number(m[2]) : 0;
+  if (!m || Number(m[1]) < 1 || den < 1 || (den & (den - 1)) !== 0) {
+    state.reject = 'a time signature is beats/note-value, like 4/4 or 7/8';
+    schedule(); return false;
+  }
+  return sendMarker({ type: 'timesig', sig: t,
+                      tick: Math.max(0, Math.round(Number(tick) || 0)),
+                      flatten: flatten ? 1 : 0 });
 }
 
 /**
@@ -846,35 +955,6 @@ function mapParam(track, device, param, uid) {
   state.reject = null;
   schedule();
   return true;
-}
-
-/**
- * Requests waiting for the engine to name their link.
- *
- * Small and short-lived: one entry per MAP click, drained on the next chain snapshot for
- * that track. Not persisted and not drawn — the badge follows the published links, and a
- * request in here has not happened yet.
- */
-const pendingMaps = [];
-
-/**
- * Name the parameter for any link the engine has just published that we asked for.
- *
- * Called from `onChains`, which is where the engine's answer arrives. Matches on
- * (track, targetDevice, targetId) — the three things the request named — and only takes a
- * link that has NO uid16 yet, so a re-published set cannot make this fire twice.
- */
-function namePendingMaps() {
-  for (let i = pendingMaps.length - 1; i >= 0; i--) {
-    const want = pendingMaps[i];
-    const c = chains[want.track];
-    const links = (c && c.modLinks) || [];
-    const hit = links.find((l) => l.targetDevice === want.device
-                                  && l.targetId === want.param && !l.uid16);
-    if (!hit) continue;
-    conn.send({ type: 'moduid', track: want.track, link: hit.id, uid16: want.uid });
-    pendingMaps.splice(i, 1);
-  }
 }
 
 /**
@@ -1046,6 +1126,7 @@ function modDepth(track, link, depth) {
   return true;
 }
 
+
 /**
  * The engine's source and target kinds, by name.
  *
@@ -1186,67 +1267,6 @@ function requestAutomation(track, param) {
   return hit || null;
 }
 
-/** A new section at the end of the song. No `at`, so the sidecar appends. */
-function addSection(bars, name) {
-  const b = Math.max(1, Math.round(Number(bars) || 0));
-  return sendSection({ type: 'section', op: 'add', bars: b, name: name || 'Section' });
-}
-
-/**
- * Unname a span. NOT destructive: the engine leaves the material where it is and it
- * simply stops being named — deleting the bars is a different operation and is not
- * what removing a label means. Said here as well as in the help, because "delete"
- * reads as destructive and a confirm on this would be asking about the wrong thing.
- */
-function delSection(id) {
-  const n = Number(id) || 0;
-  if (n <= 0) { state.reject = 'which section?'; schedule(); return false; }
-  if (!sectionExists(n)) { state.reject = `no section ${n}`; schedule(); return false; }
-  if (state.selectedSection === n) state.selectedSection = 0;
-  return sendSection({ type: 'section', op: 'remove', id: n });
-}
-
-function nameSection(id, name) {
-  const n = Number(id) || 0;
-  const t = String(name === undefined ? '' : name).trim();
-  if (n <= 0) { state.reject = 'which section?'; schedule(); return false; }
-  if (!sectionExists(n)) { state.reject = `no section ${n}`; schedule(); return false; }
-  // Refused HERE, with a reason, rather than sent as an empty name for the engine to
-  // drop in silence — the same rule the sidecar applies to `rename` with no name.
-  if (!t) { state.reject = 'a section needs a name'; schedule(); return false; }
-  return sendSection({ type: 'section', op: 'rename', id: n, name: t });
-}
-
-/**
- * Change one section's length, and everything after it moves.
- *
- * This is the only spine op that touches material: the engine plans the ripple across
- * every track in one transaction and refuses it whole if it would shrink into occupied
- * bars, because a half-applied ripple is a corrupted arrangement with no undo entry to
- * restore. So nothing is drawn here until the answer comes back.
- */
-function secLength(id, bars) {
-  const n = Number(id) || 0;
-  const b = Math.round(Number(bars) || 0);
-  if (n <= 0) { state.reject = 'which section?'; schedule(); return false; }
-  if (!sectionExists(n)) { state.reject = `no section ${n}`; schedule(); return false; }
-  // A zero-bar section is not a short section, it is a section with no bars in it.
-  if (b < 1) { state.reject = 'a section needs at least one bar'; schedule(); return false; }
-  return sendSection({ type: 'section', op: 'length', id: n, bars: b });
-}
-
-/**
- * Reorder the spine. `place` counts from 1 where a person says it, because the first
- * section is section 1 the way the first bar is bar 1; the wire index is 0-based
- * because it indexes an array, and the sidecar converts.
- */
-function moveSection(id, place) {
-  const n = Number(id) || 0;
-  const p = Math.max(1, Math.round(Number(place) || 1));
-  if (n <= 0) { state.reject = 'which section?'; schedule(); return false; }
-  if (!sectionExists(n)) { state.reject = `no section ${n}`; schedule(); return false; }
-  return sendSection({ type: 'section', op: 'move', id: n, to: p });
-}
 
 /**
  * Remove a device from a track.
@@ -2326,12 +2346,13 @@ const dockApi = {
   writeAutomation: (track, param, tick, value, discrete) =>
     writeAutomation(track, param, tick, value, discrete),
   automationPoints: (track, param) => requestAutomation(track, param),
-  sections: () => sectionsOf(),
-  addSection: (bars, name) => addSection(bars, name),
-  delSection: (id) => delSection(id),
-  nameSection: (id, name) => nameSection(id, name),
-  secLength: (id, bars) => secLength(id, bars),
-  moveSection: (id, place) => moveSection(id, place),
+  markers: () => markersOf(),
+  addMarker: (tick, name) => addMarker(tick, name),
+  delMarker: (id) => delMarker(id),
+  nameMarker: (id, name) => nameMarker(id, name),
+  moveMarker: (id, tick) => moveMarker(id, tick),
+  insertTime: (tick, bars) => insertTime(tick, bars),
+  setTimeSig: (sig, tick, flatten) => setTimeSig(sig, tick, flatten),
   // ...and `deldevice`, which has been calling a method dockApi never had since
   // the day it shipped. The button and the key work; typing the command threw.
   delDevice,
@@ -2644,7 +2665,7 @@ const dockApi = {
                    * on the chrome. `dock.js`'s `refusal()` reads it from here.
                    */
                   reject: state.reject,
-                  selectedSection: state.selectedSection }),
+                  selectedMarker: state.selectedMarker }),
   engine: () => (engine ? { transport: engine.transport, tick: engine.playheadTick,
                             notes: engine.noteCount, tracks: engine.trackCount,
                             clipVersion: engine.clipVersion, stale: engine.stale } : null),
@@ -3010,7 +3031,7 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: FIELDS_PER_NOTE,
    * same thing by "this section" — `delsection` with no argument would otherwise be
    * asking a surface that does not know what the console has been talking to.
    */
-  selectedSection: 0,
+  selectedMarker: 0,
   // The roll shares the stage with the arrangement when a clip is open.
   /**
    * The SECOND centre pane's view, or null for one pane.
@@ -3963,7 +3984,7 @@ function drawMixer() {
 /** Arrange draws from the same store; only the projection differs. */
 const _arrangeOpts = { loop: null, startTick: 0, width: 0, zoomIndex: 0, tracks: 0,
                        engine: null, laneHeight: 0, cursor: { track: 0, tick: 0 },
-                       selectedPlacement: -1, audio: null, selectedSection: 0,
+                       selectedPlacement: -1, audio: null, selectedMarker: 0,
                        clipMarginPx: ARRANGE_CLIP_MARGIN_PX, meter: null };
 let arrangeBufLanes = -1;
 function drawArrange() {
@@ -3988,7 +4009,7 @@ function drawArrange() {
   o.cursor.track = state.cursor.track;
   o.cursor.tick = tickOfCursorRow();
   o.selectedPlacement = state.selectedPlacement;
-  o.selectedSection = state.selectedSection;
+  o.selectedMarker = state.selectedMarker;
   // How far the lane strip is scrolled. The model has always accepted this and
   // always received the default 0, so the arrangement could not be scrolled
   // vertically no matter how many tracks a song had.
@@ -6898,13 +6919,14 @@ window.__uni = {
   unmapParam: (track, link) => dockApi.unmapParam(track, link),
   modDepth: (track, link, depth) => dockApi.modDepth(track, link, depth),
   macro: (track, device, value) => dockApi.macro(track, device, value),
-  // The SAME reader the console's `sections` uses, not a second one — see `dockApi`.
-  sections: () => dockApi.sections(),
-  addSection: (bars, name) => dockApi.addSection(bars, name),
-  delSection: (id) => dockApi.delSection(id),
-  nameSection: (id, name) => dockApi.nameSection(id, name),
-  secLength: (id, bars) => dockApi.secLength(id, bars),
-  moveSection: (id, place) => dockApi.moveSection(id, place),
+  // The SAME reader the console's `markers` uses, not a second one — see `dockApi`.
+  markers: () => dockApi.markers(),
+  addMarker: (tick, name) => dockApi.addMarker(tick, name),
+  delMarker: (id) => dockApi.delMarker(id),
+  nameMarker: (id, name) => dockApi.nameMarker(id, name),
+  moveMarker: (id, tick) => dockApi.moveMarker(id, tick),
+  insertTime: (tick, bars) => dockApi.insertTime(tick, bars),
+  setTimeSig: (sig, tick, flatten) => dockApi.setTimeSig(sig, tick, flatten),
   /**
    * The audio device's block and rate, as the engine published them.
    *
@@ -6920,9 +6942,9 @@ window.__uni = {
   ticksPerBar: () => dockApi.ticksPerBar(),
   deviceAudio: () => (engine ? { blockSize: engine.blockSize || 0,
                                  sampleRateHz: engine.sampleRateHz || 0 } : null),
-  /** Which section the strip has selected. The console names ids; this is the click. */
-  selectSection: (id) => { state.selectedSection = Number(id) || 0; schedule();
-                           return state.selectedSection; },
+  /** Which marker the strip has selected. The console names ids; this is the click. */
+  selectMarker: (id) => { state.selectedMarker = Number(id) || 0; schedule();
+                          return state.selectedMarker; },
   loop: () => (engine ? { start: engine.loopStart, end: engine.loopEnd } : null),
   // What the RULER is showing, which during a drag is not what the engine has.
   loopShown: () => loopOverride() || (engine ? { start: engine.loopStart, end: engine.loopEnd } : null),

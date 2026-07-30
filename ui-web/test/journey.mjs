@@ -275,56 +275,60 @@ const inArrange = (await st()).view;
 ok(inArrange === 'arrange', 'F2 switches to the arrangement', inArrange);
 
 /*
- * ...AND NAME A SPAN OF IT. Sections have their own suite; this is here because the spine is
- * part of what a person does in an arrangement, and the journey is the one suite that runs
+ * ...AND NAME A POINT IN IT. Markers have their own suite; this is here because naming the parts
+ * of an arrangement is part of what a person does in one, and the journey is the suite that runs
  * things in the order a session runs them. A feature that only works in the middle of its own
  * suite is a feature that works in a laboratory.
  *
- * By POINTER, through the strip's own gutter button, because that is the path a person takes —
- * the console path is covered where the console is covered.
+ * By POINTER, through the strip's own gutter button — the console path is covered where the
+ * console is.
  */
 {
   await page.locator('.ar-spine-btn').nth(0).click();
   await settle(900);
-  const spine = await page.evaluate(() => window.__uni.sections());
-  ok(spine && spine.count === 1, 'the + in the sections gutter names the first four bars',
-     JSON.stringify(spine && spine.list));
-  // Double-click renames it. The prompt is the page's; the harness's dialog handler answers it,
-  // and `dialogText` is what makes that a rename rather than an accept-the-default.
+  const m = await page.evaluate(() => window.__uni.markers());
+  ok(m && m.count === 1, 'the + in the markers gutter names a point in the song',
+     JSON.stringify(m && m.list));
+  // Double-click renames it. `dialogText` is what makes the harness TYPE rather than accept the
+  // prompt's default, which for a rename is the name it already has.
   dialogText = 'verse one';
-  const box = await page.locator('.ar-section').first().boundingBox();
-  await page.mouse.dblclick(box.x + 20, box.y + box.height / 2);
+  /*
+   * THE ELEMENT'S OWN CENTRE, not `x + 20`.
+   *
+   * A marker with nothing after it has an empty span, so its block is drawn at the 9px floor —
+   * and a click 20px in lands past its right edge, on nothing. The first version of this missed
+   * every time and reported the RENAME as broken, which is a test measuring its own arithmetic.
+   */
+  const box = await page.locator('.ar-span').first().boundingBox();
+  await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
   await settle(900);
   dialogText = null;
-  const named = await page.evaluate(() => window.__uni.sections());
+  const named = await page.evaluate(() => window.__uni.markers());
   ok(named && named.list[0] && named.list[0].name === 'verse one',
-     'and double-clicking it renames the section',
+     'and double-clicking it renames the marker',
      JSON.stringify(named && named.list[0]));
   /*
-   * DRAG ITS BOUNDARY, which is the gesture the whole feature is for — and check the RIPPLE,
-   * because a length change is not a local edit: every later section starts later, since a
-   * start is the sum of the lengths before it.
+   * DRAG THE BOUNDARY, which is the gesture the whole strip is for — and it does NOT resize a
+   * label. It inserts time at the next marker's tick, so that marker and everything after it
+   * moves. A second marker is needed for there to be a boundary at all.
    */
-  await page.locator('.ar-spine-btn').nth(0).click();      // a second section to be moved
+  await page.evaluate(() => window.__uni.addMarker(3840000 * 4, 'chorus'));
   await settle(900);
-  const before = await page.evaluate(() => window.__uni.sections());
+  const before = await page.evaluate(() => window.__uni.markers());
   const first = before.list[0];
-  const el = page.locator(`.ar-section[data-section="${first.id}"]`);
+  const el = page.locator(`.ar-span[data-marker="${first.id}"]`);
   const b2 = await el.boundingBox();
-  const barPx = b2.width / first.bars;
+  const barPx = b2.width / Math.max(1, first.bars);
   const y = b2.y + b2.height / 2;
   await page.mouse.move(b2.x + b2.width - 3, y);
   await page.mouse.down();
   await page.mouse.move(b2.x + b2.width - 3 + 2 * barPx, y, { steps: 8 });
   await page.mouse.up();
   await settle(1200);
-  const after = await page.evaluate(() => window.__uni.sections());
-  ok(after.list[0].bars === first.bars + 2,
-     'dragging its right edge makes the section longer',
-     `${first.bars} -> ${after.list[0].bars}`);
-  ok(after.list[1] && after.list[1].startBar === before.list[1].startBar + 2,
-     'and the section after it moves — the spine is a prefix sum',
-     `${before.list[1] && before.list[1].startBar} -> ${after.list[1] && after.list[1].startBar}`);
+  const after = await page.evaluate(() => window.__uni.markers());
+  ok(after.list[1] && after.list[1].tick === before.list[1].tick + 2 * 3840000,
+     'and dragging the boundary inserts time — the NEXT marker moves with the music',
+     `${before.list[1] && before.list[1].tick} -> ${after.list[1] && after.list[1].tick}`);
 }
 
 // ---------------------------------------------------------------------------

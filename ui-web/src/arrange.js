@@ -92,15 +92,12 @@ const WAVE_OVERSCAN_PX = 384;
 export const ARRANGE_CLIP_MARGIN_PX = WAVE_OVERSCAN_PX * 2;
 
 /**
- * How long a section the `+` button makes.
+ * A marker stores no length, so the `+` button has nothing to ask for.
  *
- * Four bars, which is a phrase — and it is a DEFAULT rather than the only answer: the
- * boundary drag changes it immediately and `section <bars> [name]` says it outright. A
- * button that has to ask how many bars before it can do anything is a button that is
- * slower than typing, and the length is the easiest thing about a section to change
- * after the fact.
+ * It puts one at the playhead, which is where "here" is, and the span it begins runs to whatever
+ * comes next. That is the simplification markers brought: adding one is a single unambiguous
+ * act, where adding a section had to choose a length before it could exist.
  */
-export const SECTION_ADD_BARS = 4;
 
 /**
  * Columns per requested window.
@@ -179,8 +176,8 @@ export class Arrange {
    */
   constructor(host, metrics,
               { onLoop, onNav, onClipSelect, onClipOpen, onClipEdit,
-                onSectionSelect, onSectionLength, onSectionRename,
-                onSectionAdd, onSectionDelete } = {}) {
+                onMarkerSelect, onTimeEdit, onMarkerRename,
+                onMarkerAdd, onMarkerDelete } = {}) {
     this.host = host;
     this.metrics = metrics;
     this.host.className = 'ar';
@@ -197,15 +194,15 @@ export class Arrange {
     this.onClipEdit = onClipEdit;
     /*
      * THE SPINE's three gestures. Absent, the strip still DRAWS — a read-only spine is
-     * a useful spine, and it is what this surface was before the engine had section
-     * ops — so each is guarded independently rather than the strip being conditional on
-     * having a controller.
+     * a useful spine, and it is what this surface was before the engine had marker ops — so
+     * each is guarded independently rather than the strip being conditional on having a
+     * controller.
      */
-    this.onSectionSelect = onSectionSelect;
-    this.onSectionLength = onSectionLength;
-    this.onSectionRename = onSectionRename;
-    this.onSectionAdd = onSectionAdd;
-    this.onSectionDelete = onSectionDelete;
+    this.onMarkerSelect = onMarkerSelect;
+    this.onTimeEdit = onTimeEdit;
+    this.onMarkerRename = onMarkerRename;
+    this.onMarkerAdd = onMarkerAdd;
+    this.onMarkerDelete = onMarkerDelete;
 
     this.gutter = div('ar-gutter', host);
     // Two boxes, not one: the outer clips at the lane strip's top edge so a head
@@ -217,30 +214,30 @@ export class Arrange {
      * In the GUTTER at the spine's own y, so it lines up with the strip it controls and
      * scrolls with neither axis. Add and remove were the two things the spine could
      * only be given from the console — a drag can change a length and a double-click a
-     * name, but neither can bring a section into existence — and console-only is not
-     * done.
+     * name, but neither can bring a marker into existence — and console-only is not done.
      */
     this.spineHead = div('ar-spine-head', this.gutter);
     this.spineHeadLabel = div('ar-spine-label', this.spineHead);
-    this.spineHeadLabel.appendChild(document.createTextNode('SECTIONS'));
+    this.spineHeadLabel.appendChild(document.createTextNode('MARKERS'));
     this.spineAdd = div('ar-spine-btn', this.spineHead);
     this.spineAdd.appendChild(document.createTextNode('+'));
-    this.spineAdd.title = `add a ${SECTION_ADD_BARS}-bar section at the end of the song`;
+    this.spineAdd.title = 'add a marker at the playhead';
     this.spineDel = div('ar-spine-btn', this.spineHead);
     this.spineDel.appendChild(document.createTextNode('−'));
-    this.spineDel.title = 'unname the selected section — the material stays put';
+    this.spineDel.title = 'remove the selected marker — the music stays put';
     // pointerdown, not click: `element.click()` never fires pointerdown, so a handler
     // bound to the latter is unreachable from a driver that clicks — which is how a
     // bypass test once passed having never toggled anything (GUIDELINES 2.15).
     this.spineAdd.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      if (this.onSectionAdd) this.onSectionAdd(SECTION_ADD_BARS);
+      if (this.onMarkerAdd) this.onMarkerAdd();
     });
     this.spineDel.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      // Which section: the SELECTED one, from the model — the same id the console
+      // Which marker: the SELECTED one, from the model — the same id the console
       // names. With none selected this says so rather than guessing at the last.
-      if (this.onSectionDelete) this.onSectionDelete(this.vm ? this.vm.selectedSection : 0);
+      // Which marker: the SELECTED one, from the model — the same id the console names.
+      if (this.onMarkerDelete) this.onMarkerDelete(this.vm ? this.vm.selectedMarker : 0);
     });
 
     this.headsClip = div('ar-heads', this.gutter);
@@ -263,19 +260,19 @@ export class Arrange {
      * THE SPINE STRIP, between the bar numbers and the lanes.
      *
      * Its own strip rather than a row inside the ruler, because the ruler owns the
-     * loop drag across its whole height and a section is a different target with a
+     * loop drag across its whole height and a marker is a different target with a
      * different gesture on it — a boundary drag that ripples the song. Sharing one
      * box would mean one pointerdown deciding between two edits by y, which is the
      * shape of every "the click did the other thing" report in this file's history.
      *
      * Above the lanes and below the numbers, because that is where the structure is:
-     * a section names a span of TIME, so it belongs on the time axis, not in the
+     * a marker names a point in TIME, so it belongs on the time axis, not in the
      * gutter where the tracks are named.
      */
     this.spine = div('ar-spine', this.band);
     this.spineIn = div('ar-scroll', this.spine);
     /**
-     * The "there are more sections than I could publish" marker. Pinned to the right
+     * The "there are more markers than I could publish" note. Pinned to the right
      * of the strip and OUTSIDE the scrolled wrapper: it is a statement about the list,
      * not about a position on the timeline, so it must not pan away.
      */
@@ -283,7 +280,7 @@ export class Arrange {
      * The unnamed tail: material the spine does not reach. Inside the SCROLLED wrapper,
      * because unlike the truncation marker it IS a position on the timeline.
      */
-    this.spineTail = div('ar-section-tail', this.spineIn);
+    this.spineTail = div('ar-span-tail', this.spineIn);
     this.spineMore = div('ar-spine-more', this.spine);
     this.spineMore.appendChild(document.createTextNode(''));
     this.lanesEl = div('ar-lanes', this.band);
@@ -365,7 +362,7 @@ export class Arrange {
      * by being `pointer-events: none`. A boundary handle has to be grabbable, so a grip
      * living in the ruler would force a `closest()` early-out into an existing gesture
      * whose failure is silent in both directions: either the edge drag also sets a loop,
-     * or the ruler stops setting loops wherever a section happens to be. Two boxes
+     * or the ruler stops setting loops wherever a marker happens to be. Two boxes
      * cannot alias.
      */
     this.spine.addEventListener('pointerdown', (e) => this._spineDown(e));
@@ -451,21 +448,21 @@ export class Arrange {
   }
 
   /**
-   * The section under the pointer, as the MODEL has it — not as the DOM does.
+   * The marker under the pointer, as the MODEL has it — not as the DOM does.
    *
    * From the model because the element is a pooled slot and its identity is the ring's
-   * phase, so `e.target` alone answers "which element" and not "which section". The id
+   * phase, so `e.target` alone answers "which element" and not "which marker". The id
    * is on the element for exactly this hop, and the model row is what carries the span
    * the drag needs.
    */
-  _sectionAt(e) {
+  _markerAt(e) {
     if (!this.vm) return null;
-    const el = e.target && e.target.closest && e.target.closest('.ar-section');
+    const el = e.target && e.target.closest && e.target.closest('.ar-span');
     if (!el) return null;
-    const id = Number(el.dataset.section || 0);
+    const id = Number(el.dataset.marker || 0);
     if (!id) return null;
-    for (let i = 0; i < this.vm.sectionCount; i++) {
-      if (this.vm.sections[i].id === id) return { el, sec: this.vm.sections[i] };
+    for (let i = 0; i < this.vm.markerCount; i++) {
+      if (this.vm.markers[i].id === id) return { el, sec: this.vm.markers[i] };
     }
     return null;
   }
@@ -479,53 +476,62 @@ export class Arrange {
    * the handle's width changes in only one of them.
    */
   _spineDown(e) {
-    const hit = this._sectionAt(e);
+    const hit = this._markerAt(e);
     if (!hit) return;
     const isGrip = !!(e.target && e.target.dataset && e.target.dataset.grip);
-    if (isGrip && this.onSectionLength) {
+    if (isGrip && this.onTimeEdit) {
       /*
-       * THE SECTION'S OWN BAR LENGTH, from its published resolved span.
+       * THE GRIP IS THE BOUNDARY, AND THE BOUNDARY IS THE NEXT MARKER.
        *
-       * `(endTick - startTick) / bars`, and NOT `ticksPerBar(songMeter())`. The meter
-       * belongs to the section now, so a 7/8 section inside a 4/4 song has bars this
-       * file cannot compute from the song — and the resolved span is the engine's own
-       * answer for that section, already divided by the count it was resolved with.
-       * Using the song's bar would make the drag land on lengths the section cannot
+       * Dragging it does not resize anything — nothing stores a length any more. It INSERTS OR
+       * REMOVES ARRANGEMENT TIME at the next marker's tick, which moves that marker and
+       * everything at or after it: every placement on every track, the tempo points, the key
+       * changes, the automation points, the meter points and the later markers, in one
+       * transaction the engine can refuse whole and undo whole.
+       *
+       * So the gesture is unchanged and its meaning is now literal: the thing you grab is the
+       * thing that moves.
+       */
+      if (!(hit.sec.bars > 0)) return;   // the last marker has no boundary to its right
+      /*
+       * THE SPAN'S OWN BAR LENGTH, from the ticks the engine resolved: `w * tpp / bars`. Not
+       * `ticksPerBar(songMeter())` — a span that crosses a meter change has bars this file
+       * cannot compute from one signature, and the drag would land on lengths the song cannot
        * have, which reads as the boundary sticking rather than as a wrong unit.
        */
-      const barTicks = hit.sec.bars > 0
-        ? (hit.sec.w * this.vm.view.ticksPerPixel) / hit.sec.bars
-        : 0;
+      const tpp = this.vm.view.ticksPerPixel;
+      const barTicks = (hit.sec.w * tpp) / hit.sec.bars;
       if (!(barTicks > 0)) return;
-      this._secDrag = { id: hit.sec.id, bars: hit.sec.bars, barTicks,
-                        x0: e.clientX, el: hit.el, w0: hit.sec.w, shown: hit.sec.bars };
+      this._secDrag = {
+        // WHERE the time is inserted: the next marker's tick, which is this span's end.
+        atTick: Math.round(hit.sec.x * tpp + hit.sec.w * tpp),
+        barTicks, x0: e.clientX, el: hit.el, w0: hit.sec.w, bars: 0,
+      };
       this.spine.setPointerCapture(e.pointerId);
       e.preventDefault();
       return;
     }
-    if (this.onSectionSelect) this.onSectionSelect(hit.sec.id);
+    if (this.onMarkerSelect) this.onMarkerSelect(hit.sec.id);
   }
 
   /**
-   * The boundary, following the pointer — as a PREVIEW on the element's width only.
+   * The boundary, following the pointer — as a PREVIEW on this element's width only.
    *
-   * Nothing is sent while dragging and nothing else moves: the engine plans the ripple
-   * across every track and refuses it whole if it would shrink into occupied bars, so
-   * the later sections and the clips must not slide until that answer comes back. What
-   * the strip shows meanwhile is a width, which is honest — it is where the boundary
-   * WOULD go — and the model overwrites it on the next frame after the engine speaks.
+   * Nothing is sent while dragging and nothing else moves: the engine plans the ripple across
+   * the whole song and refuses it whole if a removal would take bars that hold material, so the
+   * later markers and the clips must not slide until that answer comes back. What the strip
+   * shows meanwhile is a width, which is honest — it is where the boundary WOULD go — and the
+   * model overwrites it on the next frame after the engine speaks.
    */
   _spineMove(e) {
     const d = this._secDrag;
     if (!d) return;
-    const dBars = Math.round((e.clientX - d.x0) * this.vm.view.ticksPerPixel / d.barTicks);
-    // At least one bar: a zero-bar section is not a short section, it is a section with
-    // no bars in it, and the engine refuses it as `zero_bars`. Clamped here so the drag
-    // stops at 1 instead of asking for something that will be refused.
-    const bars = Math.max(1, d.bars + dBars);
-    if (bars === d.shown) return;
-    d.shown = bars;
-    const w = bars * d.barTicks / this.vm.view.ticksPerPixel;
+    const bars = Math.round((e.clientX - d.x0) * this.vm.view.ticksPerPixel / d.barTicks);
+    if (bars === d.bars) return;
+    d.bars = bars;
+    // At least a sliver: a span dragged to nothing would vanish under the pointer, and there is
+    // no width at which the grip stops being grabbable.
+    const w = Math.max(2, d.w0 + bars * d.barTicks / this.vm.view.ticksPerPixel);
     d.el._w = w;                       // keep the render guard in step with the preview
     d.el.style.width = `${w}px`;
   }
@@ -535,13 +541,13 @@ export class Arrange {
     if (!d) return;
     this._secDrag = null;
     this.spine.releasePointerCapture(e.pointerId);
-    // Unchanged is not an edit. Sending it would spend a ripple plan and a version bump
-    // on a click that landed back where it started.
-    if (d.shown === d.bars) { d.el._w = d.w0; d.el.style.width = `${d.w0}px`; return; }
-    this.onSectionLength(d.id, d.shown);
+    // Unchanged is not an edit. Sending it would spend a whole-song transaction and an undo
+    // entry on a click that landed back where it started.
+    if (d.bars === 0) { d.el._w = d.w0; d.el.style.width = `${d.w0}px`; return; }
+    this.onTimeEdit({ tick: d.atTick, bars: d.bars });
   }
 
-  /** A cancelled drag reverts the preview. It must not commit a length nobody chose. */
+  /** A cancelled drag reverts the preview. It must not commit an edit nobody chose. */
   _spineCancel() {
     const d = this._secDrag;
     if (!d) return;
@@ -552,9 +558,9 @@ export class Arrange {
 
   /** Double-click renames. The page owns the prompt: this file knows about pixels. */
   _spineDbl(e) {
-    const hit = this._sectionAt(e);
-    if (!hit || !this.onSectionRename) return;
-    this.onSectionRename(hit.sec.id, hit.sec.name);
+    const hit = this._markerAt(e);
+    if (!hit || !this.onMarkerRename) return;
+    this.onMarkerRename(hit.sec.id, hit.sec.name);
   }
 
   _loopDown(e) {
@@ -903,16 +909,16 @@ export class Arrange {
   }
 
   /**
-   * The spine's element pool. One block per section, each with a name and a boundary
+   * The spine's element pool. One block per marker, each with a name and a boundary
    * grip at its right edge — the grip is a child rather than a pseudo-element because
    * it is a TARGET, and a pseudo-element cannot be hit.
    */
   _spine(n) {
     while (this.spinePool.length < n) {
-      const el = div('ar-section', this.spineIn);
-      const label = div('ar-section-name', el);
+      const el = div('ar-span', this.spineIn);
+      const label = div('ar-span-name', el);
       label.appendChild(document.createTextNode(''));
-      const grip = div('ar-section-grip', el);
+      const grip = div('ar-span-grip', el);
       grip.dataset.grip = '1';
       el._nm = label.firstChild;
       el._x = -1; el._w = -1; el._name = null; el._color = -1; el._id = 0;
@@ -1417,24 +1423,24 @@ export class Arrange {
     }
 
     /*
-     * The spine. Ring-slotted by the section's index in the SONG, like the ruler above
-     * — `vm.sectionFirst` is that index for the first visible one.
+     * The spine. Ring-slotted by the marker's index in the SONG, like the ruler above
+     * — `vm.markerFirst` is that index for the first visible one.
      *
-     * The selected section gets the class rather than an inline colour, so a theme
-     * change repaints it without this file knowing a single colour value. The section's
+     * The selected marker gets the class rather than an inline colour, so a theme
+     * change repaints it without this file knowing a single colour value. The marker's
      * OWN colour is inline, because it is data the engine published and not a theme
      * decision — and it is written as a custom property so the CSS decides how much of
      * it to use for the fill, the border and the label.
      */
-    const spine = this._spine(vm.sectionCount);
-    const sn = spine.length, sShown = Math.min(vm.sectionCount, sn);
-    const sBase = sn ? (((vm.sectionFirst % sn) + sn) % sn) : 0;
+    const spine = this._spine(vm.markerCount);
+    const sn = spine.length, sShown = Math.min(vm.markerCount, sn);
+    const sBase = sn ? (((vm.markerFirst % sn) + sn) % sn) : 0;
     for (let i = 0; i < sShown; i++) {
-      const el = spine[(sBase + i) % sn], sec = vm.sections[i];
+      const el = spine[(sBase + i) % sn], sec = vm.markers[i];
       if (el.style.display === 'none') el.style.display = '';
       if (el._x !== sec.x) { el._x = sec.x; el.style.transform = `translateX(${sec.x}px)`; }
       /*
-       * THE DRAGGED SECTION KEEPS ITS PREVIEW WIDTH.
+       * THE DRAGGED SPAN KEEPS ITS PREVIEW WIDTH.
        *
        * Without this exclusion the next frame — and there is always a next frame, the
        * playhead alone schedules one — rebinds the width from the model, which is still
@@ -1444,16 +1450,17 @@ export class Arrange {
        * it, which is the worse way round.
        *
        * Only the width, and only this one element. Its x is still the model's, because
-       * a section's start is the sum of what precedes it and dragging its END cannot
+       * a marker's position is its own and dragging the boundary to its right cannot
        * move that.
        */
-      const dragging = this._secDrag && this._secDrag.id === sec.id;
+      // The element being dragged keeps its preview width; see `_spineMove`.
+      const dragging = this._secDrag && this._secDrag.el === el;
       if (!dragging && el._w !== sec.w) { el._w = sec.w; el.style.width = `${sec.w}px`; }
       if (el._name !== sec.name) { el._name = sec.name; el._nm.nodeValue = sec.name; }
       if (el._color !== sec.color) {
         el._color = sec.color;
         // 0 means "the engine gave this one no colour", which is not black — it is
-        // "use the theme's". Writing #000000 for it would paint an invisible section.
+        // "use the theme's". Writing #000000 for it would paint an invisible marker.
         el.style.removeProperty('--sec');
         if (sec.color) {
           el.style.setProperty('--sec',
@@ -1461,13 +1468,13 @@ export class Arrange {
         }
       }
       // The id lives on the element because the pointer handlers read it from the
-      // event target: a boundary drag has to know WHICH section it is resizing, and
+      // event target: a boundary drag has to know WHICH boundary it is moving, and
       // recovering that from x would re-derive what the model already bound.
       if (el._id !== sec.id) {
         el._id = sec.id;
-        el.dataset.section = String(sec.id);
+        el.dataset.marker = String(sec.id);
       }
-      const sel = sec.id !== 0 && sec.id === vm.selectedSection;
+      const sel = sec.id !== 0 && sec.id === vm.selectedMarker;
       if (el._sel !== sel) { el._sel = sel; el.classList.toggle('sel', sel); }
     }
     for (let i = sShown; i < sn; i++) {
@@ -1491,11 +1498,11 @@ export class Arrange {
       }
     }
     // TRUNCATION IS DRAWN. A short list that says nothing reads as the end of the song.
-    if (this._spineMoreN !== vm.sectionsTruncated) {
-      this._spineMoreN = vm.sectionsTruncated;
+    if (this._spineMoreN !== vm.markersTruncated) {
+      this._spineMoreN = vm.markersTruncated;
       this.spineMore.firstChild.nodeValue =
-        vm.sectionsTruncated ? `+${vm.sectionsTruncated} not shown` : '';
-      this.spineMore.style.display = vm.sectionsTruncated ? '' : 'none';
+        vm.markersTruncated ? `+${vm.markersTruncated} not shown` : '';
+      this.spineMore.style.display = vm.markersTruncated ? '' : 'none';
     }
 
     const grid = this._grid(vm.gridCount);
@@ -1756,17 +1763,17 @@ export class Arrange {
       /**
        * The SPINE as the strip drew it, read back from the DOM and not from the model.
        *
-       * From the DOM on purpose: the model having a section in it proves the decode,
+       * From the DOM on purpose: the model having a marker in it proves the decode,
        * and the whole failure this feature can have is a span the engine published and
        * the strip did not draw. `visible` walks the pool and reports what is actually
        * on screen, in the ring's own order resolved back to reading order, so a test
        * can compare it against the engine's list directly.
        */
       spine: {
-        count: vm.sectionCount,
-        truncated: vm.sectionsTruncated,
+        count: vm.markerCount,
+        truncated: vm.markersTruncated,
         endTick: vm.spineEndTick,
-        selected: vm.selectedSection,
+        selected: vm.selectedMarker,
         pool: this.spinePool.length,
         // Only the shown slots, in reading order — the ring's phase is an internal
         // detail and a test comparing against the engine must not have to undo it.
@@ -1774,8 +1781,8 @@ export class Arrange {
           const out = [];
           const sn = this.spinePool.length;
           if (!sn) return out;
-          const base = ((vm.sectionFirst % sn) + sn) % sn;
-          for (let i = 0; i < Math.min(vm.sectionCount, sn); i++) {
+          const base = ((vm.markerFirst % sn) + sn) % sn;
+          for (let i = 0; i < Math.min(vm.markerCount, sn); i++) {
             const el = this.spinePool[(base + i) % sn];
             out.push({ id: el._id, name: el._nm.nodeValue,
                        x: Math.round(el._x), w: Math.round(el._w),

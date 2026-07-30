@@ -33,7 +33,8 @@ use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{EventEntry, UiChainCommandPayload, UiChordCommandPayload,
-                         UiSectionCommandPayload, UiModLinkCommandPayload,
+                         UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
+                         UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
                          UiAutomationLaneRequestPayload, UiAutomationPointPayload,
                          MOD_SOURCE_MACRO, MOD_SOURCE_LFO, MOD_SOURCE_ENVELOPE,
@@ -63,7 +64,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 const WIRE_LANES: usize = 16;
 
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 21;
+const WIRE_VERSION: u16 = 22;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -350,15 +351,20 @@ struct Frame {
     /// it must not invalidate anyone's in-flight edit. The page caches on it.
     quantize_version: u32,
     /// v27 arrangement SECTIONS, already resolved by the engine: (id, start_bar,
-    /// bar_count, color, start_tick, end_tick, name).
+    /// The song's MARKERS: (id, bar, beat, color, nanotick, name).
     ///
-    /// RESOLVED IS THE POINT. A Section stores only a bar COUNT and never a position, so
-    /// start_bar and start_tick are prefix-summed through the meter map by the engine.
-    /// Deriving them here would be a second implementation of SectionList::resolve, and
-    /// the first time the two disagreed the arrangement would draw chorus 2 in the wrong
-    /// place with nothing reporting an error. Same argument as note rows and as
-    /// dev_nanoticks: one derivation, in the engine.
-    sections: Vec<(u32, u32, u32, u32, u64, u64, [u8; 24])>,
+    /// A SPAN IS TWO ADJACENT MARKERS. There is no stored length any more — sections were
+    /// retired in v29 and a marker is a named tick — so a strip's width comes from the NEXT
+    /// marker's position, or from `song_end_tick` for the last one. That derivation is
+    /// subtraction and belongs wherever it is drawn; what would NOT belong there is deriving
+    /// the bar number.
+    ///
+    /// `bar` and `beat` ARE RESOLVED BY THE ENGINE, and now it matters. Bar numbering across a
+    /// meter change is a prefix sum through the map, not `tick / barLength` — so a client that
+    /// computed it would be right until the first 7/8 passage and then quietly wrong, with
+    /// markers sitting between ruler numbers that do not match them. One derivation, in the
+    /// engine.
+    markers: Vec<(u32, u32, u32, u32, u64, [u8; 24])>,
     /// The arrange region's OWN generation. Moves on a spine or meter change and NEVER on
     /// a note edit, so the page can cache the spine on it and keep the cache through
     /// typing. Forwarded so the client can do exactly that.
@@ -369,7 +375,7 @@ struct Frame {
     /// reads as a complete one — which turns "the arrangement is missing sections" into a
     /// bug report about the view. `song_end` is NOT the end of the last section: material
     /// can sit past the spine, and it plays and is unnamed.
-    sections_truncated: u32,
+    markers_truncated: u32,
     song_end_tick: u64,
     /// The audio device's block size in frames and its rate in Hz — the two facts the
     /// latency readout is made of. Zero until the engine has opened a device, which is
@@ -563,8 +569,8 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
      * TRUNCATION travels too. A short list that says nothing reads as a complete one,
      * which turns "the arrangement is missing sections" into a bug report about the view.
      */
-    out.extend_from_slice(&(f.sections.len() as u16).to_le_bytes()); // 148
-    out.extend_from_slice(&(f.sections_truncated.min(0xffff) as u16).to_le_bytes()); // 150
+    out.extend_from_slice(&(f.markers.len() as u16).to_le_bytes()); // 148
+    out.extend_from_slice(&(f.markers_truncated.min(0xffff) as u16).to_le_bytes()); // 150
     out.extend_from_slice(&f.arrange_version.to_le_bytes());         // 152
     out.extend_from_slice(&f.song_end_tick.to_le_bytes());           // 156, to 164
     /*
@@ -769,13 +775,13 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
      * section's position is a tick count, and both are ALREADY RESOLVED by the engine —
      * the bar number too. Nothing here derives a position.
      */
-    for &(id, start_bar, bar_count, color, start_tick, end_tick, name) in &f.sections {
+    for &(id, bar, beat, color, nanotick, name) in &f.markers {
         out.extend_from_slice(&id.to_le_bytes());          // 0
-        out.extend_from_slice(&start_bar.to_le_bytes());   // 4
-        out.extend_from_slice(&bar_count.to_le_bytes());   // 8
+        out.extend_from_slice(&bar.to_le_bytes());         // 4
+        out.extend_from_slice(&beat.to_le_bytes());        // 8
         out.extend_from_slice(&color.to_le_bytes());       // 12
-        out.extend_from_slice(&start_tick.to_le_bytes());  // 16
-        out.extend_from_slice(&end_tick.to_le_bytes());    // 24
+        out.extend_from_slice(&nanotick.to_le_bytes());    // 16
+        out.extend_from_slice(&0u64.to_le_bytes());        // 24  reserved
         out.extend_from_slice(&name);                      // 32, to 56
     }
 
@@ -887,15 +893,17 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
      * on a note edit, so this costs one integer compare per frame while somebody is typing.
      */
     if let Some(sum) = h.read_arrange_summary() {
+        // `version == 0` means A WRITE IS IN FLIGHT. Retry — never "empty": the counter only
+        // moves after the body is written, so version-body-version equality is not torn-safe on
+        // its own, and holding the previous list for a frame is exactly right.
         if sum.version != 0 && sum.version != out.arrange_version {
             out.arrange_version = sum.version;
-            out.sections_truncated = sum.sections_truncated;
+            out.markers_truncated = sum.markers_truncated;
             out.song_end_tick = sum.song_end_tick;
-            out.sections.clear();
-            let n = (sum.section_count as usize).min(sum.sections.len());
-            for sec in &sum.sections[..n] {
-                out.sections.push((sec.id, sec.start_bar, sec.bar_count, sec.color_rgb,
-                                   sec.start_tick, sec.end_tick, sec.name));
+            out.markers.clear();
+            let n = (sum.marker_count as usize).min(sum.markers.len());
+            for m in &sum.markers[..n] {
+                out.markers.push((m.id, m.bar, m.beat, m.color_rgb, m.nanotick, m.name));
             }
         }
     }
@@ -2412,78 +2420,131 @@ fn build_automation_point(body: &str) -> Option<Result<UiAutomationPointPayload,
     }))
 }
 
-/// One of the five SECTION commands, or None if this message is not one.
+/// One of the four MARKER commands, or None if this message is not one.
 ///
-///   {"type":"section","op":"add","name":"chorus","bars":8,"at":2}
-///   {"type":"section","op":"remove","id":3}
-///   {"type":"section","op":"rename","id":3,"name":"chorus 2"}
-///   {"type":"section","op":"length","id":3,"bars":16}
-///   {"type":"section","op":"move","id":3,"to":0}
+///   {"type":"marker","op":"add","tick":0,"name":"chorus","color":0}
+///   {"type":"marker","op":"remove","id":3}
+///   {"type":"marker","op":"rename","id":3,"name":"chorus 2"}
+///   {"type":"marker","op":"move","id":3,"tick":15360000}
 ///
-/// A SECTION STORES A NAME AND A LENGTH IN BARS AND NEVER A START POSITION. That is the
-/// whole shape of the feature: there is no "move this section to bar 9", because where a
-/// section begins is the sum of the lengths before it. So the only ways to move one are to
-/// change a length or to change the ORDER, and everything after it follows — which is why
-/// `length` RIPPLES every placement at or after the boundary and can be refused as a unit.
-///
-/// `name` is 20 bytes here and 24 in the read-back, which is not a mistake of mine: the
-/// command payload has 20 left of its 40-byte slot. A longer name is truncated by the
-/// engine, so it is truncated HERE too, at the same length, rather than being sent whole
-/// and coming back shorter than what was typed.
-fn build_section(body: &str) -> Option<Result<UiSectionCommandPayload, &'static str>> {
-    if !is_type(body, "section") { return None; }
+/// A MARKER IS A NAMED TICK AND NOTHING ELSE. It stores no length, so these four ops are TOTAL:
+/// they move no material and can be refused only for a bad id. That is the whole difference from
+/// the sections they replace, where changing a "length" rippled the song — and it is why the
+/// ripple is now its own command with its own name (`build_arrange_time`, below) rather than a
+/// side effect of editing a label.
+fn build_marker(body: &str) -> Option<Result<UiMarkerCommandPayload, &'static str>> {
+    if !is_type(body, "marker") { return None; }
     let Some(op) = parse_str(body, "\"op\"") else {
-        return Some(Err("section needs an op: add, remove, rename, length or move"));
+        return Some(Err("marker needs an op: add, remove, rename or move"));
     };
     let (command_type, addressed) = match op {
-        // The bool is "this op names an EXISTING section", which everything but add does.
-        "add" => (UiCommandType::AddSection, false),
-        "remove" => (UiCommandType::RemoveSection, true),
-        "rename" => (UiCommandType::RenameSection, true),
-        "length" => (UiCommandType::SetSectionLength, true),
-        "move" => (UiCommandType::MoveSection, true),
-        _ => return Some(Err("section op must be add, remove, rename, length or move")),
+        // The bool is "this op names an EXISTING marker", which everything but add does.
+        "add" => (UiCommandType::AddMarker, false),
+        "remove" => (UiCommandType::RemoveMarker, true),
+        "rename" => (UiCommandType::RenameMarker, true),
+        "move" => (UiCommandType::MoveMarker, true),
+        _ => return Some(Err("marker op must be add, remove, rename or move")),
     };
     let id = parse_num(body, "\"id\"").unwrap_or(0).max(0) as u32;
-    // Every op but `add` addresses an EXISTING section, and 0 is the append sentinel — so a
-    // missing id would silently become "append" on a remove or a rename.
+    // 0 is the "let the engine assign" sentinel for an add, so a missing id would silently
+    // become a NEW marker on a remove or a rename.
     if id == 0 && addressed {
-        return Some(Err("that section op needs the id of an existing section"));
+        return Some(Err("that marker op needs the id of an existing marker"));
     }
-    let bars = parse_num(body, "\"bars\"");
-    let is_length = command_type as u16 == UiCommandType::SetSectionLength as u16;
-    if is_length && !matches!(bars, Some(b) if b > 0) {
-        // A length of zero is not a short section, it is a section with no bars in it —
-        // refused here rather than sent for the engine to interpret.
-        return Some(Err("a section length needs a positive number of bars"));
+    let tick = parse_num(body, "\"tick\"").unwrap_or(0).max(0) as u64;
+    if command_type as u16 == UiCommandType::MoveMarker as u16
+        && parse_num(body, "\"tick\"").is_none() {
+        // A move with no destination would move it to tick 0 — the start of the song, which is
+        // the one place nobody means.
+        return Some(Err("a marker move needs the tick to move it to"));
     }
     let mut name = [0u8; 20];
     if let Some(n) = parse_str(body, "\"name\"") {
         let b = n.as_bytes();
         let take = b.len().min(name.len());
         name[..take].copy_from_slice(&b[..take]);
-    } else if command_type as u16 == UiCommandType::RenameSection as u16 {
+    } else if command_type as u16 == UiCommandType::RenameMarker as u16 {
         return Some(Err("a rename needs a name"));
     }
-    Some(Ok(UiSectionCommandPayload {
+    Some(Ok(UiMarkerCommandPayload {
         command_type: command_type as u16,
         flags: 0,
-        section_id: id,
-        bar_count: bars.unwrap_or(0).clamp(0, u32::MAX as i64) as u32,
-        // NO `at` MEANS APPEND, AND THAT IS NOT INDEX 0.
-        //
-        // The engine clamps toIndex to the end, so u32::MAX appends — and 0 inserts at
-        // the FRONT. Defaulting the missing case to 0 made `section add` build the song
-        // backwards: two adds and the second one was bar 1. `at` is 1-based where a person
-        // says it (the first section is section 1, as bars are), so it converts here; the
-        // wire index is 0-based because it indexes an array.
-        to_index: match parse_num(body, "\"to\"").or_else(|| parse_num(body, "\"at\"")) {
-            Some(n) => (n.max(1) - 1).clamp(0, u32::MAX as i64) as u32,
-            None if addressed => 0,       // move without a `to` means "to the front"
-            None => u32::MAX,             // add without an `at` means "at the end"
-        },
+        marker_id: id,
+        nanotick_lo: (tick & 0xffff_ffff) as u32,
+        nanotick_hi: (tick >> 32) as u32,
         color_rgb: parse_num(body, "\"color\"").unwrap_or(0).clamp(0, 0xffffff) as u32,
         name,
+    }))
+}
+
+/// A TIMELINE command: insert or remove arrangement time, or set a meter point.
+///
+///   {"type":"time","op":"insert","tick":15360000,"bars":2}
+///   {"type":"time","op":"remove","tick":15360000,"bars":2}
+///   {"type":"timesig","sig":"7/8","tick":0,"flatten":1}
+///
+/// INSERT/REMOVE IS THE RIPPLE, and it is what the boundary drag on the spine strip sends. Two
+/// bars inserted at a marker's tick moves that marker and everything at or after it — every
+/// placement on every track, the tempo points, the key changes, the automation points, the meter
+/// points and the other markers — in ONE transaction that can be refused whole and undone whole.
+/// SetSectionLength did the same moving and pushed no undo entry, because the undo entry held at
+/// most two tracks.
+///
+/// BARS, NOT TICKS. A bar's length depends on the meter in force where the edit happens, and the
+/// engine holds the authoritative map — a client converting would have to re-implement the prefix
+/// sum, and would be wrong on the first mid-song meter change. `UI_TIME_EDIT_DELTA_IS_TICKS` is
+/// there for a caller that genuinely means ticks; nothing here does.
+fn build_arrange_time(body: &str) -> Option<Result<UiArrangeTimeCommandPayload, &'static str>> {
+    let is_time = is_type(body, "time");
+    let is_sig = is_type(body, "timesig");
+    if !is_time && !is_sig { return None; }
+    let tick = parse_num(body, "\"tick\"").unwrap_or(0).max(0) as u64;
+    if is_sig {
+        // "7/8" as one token, because that is how a person writes a time signature and splitting
+        // it into two arguments invites the pair to be sent half-updated.
+        let Some(sig) = parse_str(body, "\"sig\"") else {
+            return Some(Err("timesig needs a signature like 7/8"));
+        };
+        let mut parts = sig.split('/');
+        let num: u32 = parts.next().and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+        let den: u32 = parts.next().and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+        if num == 0 || den == 0 || !den.is_power_of_two() {
+            // A zero denominator divides by zero in every bar computation downstream, and a
+            // denominator that is not a power of two is not a time signature music uses.
+            return Some(Err("a time signature is beats/note-value, like 4/4 or 7/8"));
+        }
+        return Some(Ok(UiArrangeTimeCommandPayload {
+            command_type: UiCommandType::SetTimeSignature as u16,
+            flags: if parse_num(body, "\"flatten\"").unwrap_or(0) != 0 { UI_TIME_SIG_FLATTEN } else { 0 },
+            nanotick_lo: (tick & 0xffff_ffff) as u32,
+            nanotick_hi: (tick >> 32) as u32,
+            delta: 0,
+            numerator: num,
+            denominator: den,
+            reserved0: 0, reserved1: 0, reserved2: 0, reserved3: 0,
+        }));
+    }
+    let Some(op) = parse_str(body, "\"op\"") else {
+        return Some(Err("time needs an op: insert or remove"));
+    };
+    let Some(bars) = parse_num(body, "\"bars\"").filter(|b| *b > 0) else {
+        return Some(Err("time insert/remove needs a positive number of bars"));
+    };
+    let delta = match op {
+        "insert" => bars,
+        // Removal is a NEGATIVE delta on the same command, so one refusal path covers both and
+        // the undo entry is the same shape either way.
+        "remove" => -bars,
+        _ => return Some(Err("time op must be insert or remove")),
+    };
+    Some(Ok(UiArrangeTimeCommandPayload {
+        command_type: UiCommandType::InsertRemoveTime as u16,
+        flags: 0,
+        nanotick_lo: (tick & 0xffff_ffff) as u32,
+        nanotick_hi: (tick >> 32) as u32,
+        delta: delta.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        numerator: 0, denominator: 0,
+        reserved0: 0, reserved1: 0, reserved2: 0, reserved3: 0,
     }))
 }
 
@@ -3406,14 +3467,35 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             continue;
                         }
 
-                        // The arrangement's SPINE. Own 40-byte payload again.
-                        if let Some(r) = build_section(&t) {
+                        // A MARKER: a named tick. Own 40-byte payload again.
+                        if let Some(r) = build_marker(&t) {
                             let reply = match r {
                                 Err(why) => format!("{{\"error\":\"{why}\"}}"),
-                                Ok(p) => match handle.send_section_command(p) {
+                                Ok(p) => match handle.send_marker_command(p) {
                                     Ok(()) => format!(
-                                        "{{\"ok\":true,\"section\":{},\"type\":{},\"bars\":{}}}",
-                                        p.section_id, p.command_type, p.bar_count),
+                                        "{{\"ok\":true,\"marker\":{},\"type\":{}}}",
+                                        p.marker_id, p.command_type),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+                        /*
+                         * TIME ITSELF — the ripple, and the meter map.
+                         *
+                         * This is what the spine strip's boundary drag sends. It is checked after
+                         * `build_marker` and before everything else because `is_type(&t, "time")`
+                         * would otherwise be claimed by nothing at all: no earlier branch matches
+                         * it, and a message that falls through every branch is dropped in silence.
+                         */
+                        if let Some(r) = build_arrange_time(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_arrange_time_command(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"time\":{},\"delta\":{}}}",
+                                        p.command_type, p.delta),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };

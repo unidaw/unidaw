@@ -143,7 +143,7 @@
 /* `--sec` is the engine's own colour for this section, written inline by the
    renderer. It is ABSENT when the engine gave none — not black — so every use goes
    through a fallback rather than through a zero. */
-.ar-section {
+.ar-span {
   position: absolute; top: 0; left: 0; height: 100%;
   box-sizing: border-box;
   /* The accent when the engine gave no colour, not the dim rule colour: this border
@@ -156,11 +156,11 @@
   cursor: pointer;
   display: flex; align-items: center;
 }
-.ar-section.sel {
+.ar-span.sel {
   background: var(--uni-surface-selection);
   border-left-color: var(--base-accent);
 }
-.ar-section-name {
+.ar-span-name {
   padding-left: 5px;
   font-family: var(--font-mono); font-size: var(--font-size-fx);
   letter-spacing: var(--font-tracking-fx);
@@ -171,18 +171,18 @@
 /* The boundary. A CHILD and not a pseudo-element, because it is a drag target and a
    pseudo-element cannot be hit — and wide enough to grab: the boundary is a 1px line
    and nobody can hit a 1px line. */
-.ar-section-grip {
+.ar-span-grip {
   position: absolute; top: 0; bottom: 0; right: 0;
   width: 7px;
   cursor: ew-resize;
 }
-.ar-section-grip:hover { background: var(--base-accent); opacity: 0.45; }
+.ar-span-grip:hover { background: var(--base-accent); opacity: 0.45; }
 
 /* Material the spine does not reach: outlined and hatched rather than filled, because
    it is a span that EXISTS and is not named — a solid block would read as a section
    whose label failed to draw. No cursor and no pointer events: there is nothing here to
    grab, since the thing it describes is the absence of a section. */
-.ar-section-tail {
+.ar-span-tail {
   position: absolute; top: 0; left: 0; height: 100%;
   box-sizing: border-box;
   border-left: 1px dashed var(--uni-rule-track);

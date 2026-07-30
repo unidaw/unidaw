@@ -7,7 +7,7 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 21;
+export const WIRE_VERSION = 22;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
@@ -185,20 +185,27 @@ export function createStore() {
      */
     quantize: [], quantizeCount: 0,
     /**
-     * v27 the arrangement's SECTION SPINE, pooled. Already resolved by the engine —
-     * `startTick`, `endTick` and `startBar` are prefix-summed through the meter map there,
-     * so nothing here derives a position from a bar count.
+     * THE SONG’S MARKERS. A marker is a NAMED TICK and stores no length.
      *
-     * `sectionsTruncated` non-zero means the list is INCOMPLETE. Forwarded rather than
-     * dropped, because a short list that says nothing reads as a complete one.
+     * `bars` and `endTick` are DERIVED below, from the NEXT marker — or from `songEnd` for the
+     * last one — because a span is two adjacent markers and nothing stores a span. That
+     * derivation is subtraction and is safe to do anywhere.
+     *
+     * `bar` and `beat` are NOT derived and must not be: bar numbering across a meter change is
+     * a prefix sum through the meter map, not `tick / barLength`. The engine resolves them, and
+     * a client that computed them would be right until the first 7/8 passage and then quietly
+     * wrong — markers sitting between ruler numbers that do not match them.
+     *
+     * `markersTruncated` non-zero means the list is INCOMPLETE. Forwarded rather than dropped,
+     * because a short list that says nothing reads as a complete one.
      */
-    sections: [], sectionCount: 0, sectionsTruncated: 0,
+    markers: [], markerCount: 0, markersTruncated: 0, markersEnd: 0,
     /**
-     * The arrange region's own generation, and the furthest placement end.
+     * The arrange region’s own generation, and the furthest placement end.
      *
-     * The generation moves on a spine or meter change and NEVER on a note edit, so the
-     * spine can be cached on it and survive typing. `songEnd` is not the end of the last
-     * section: material can sit past the spine, and it plays and is unnamed.
+     * The generation moves on a MARKER or a METER change and never on a note edit, so the
+     * markers can be cached on it and survive typing. `songEnd` is not the last marker:
+     * material can sit past every marker, and it plays and is unnamed.
      */
     arrangeVersion: 0, songEnd: 0,
     /**
@@ -704,60 +711,64 @@ export function decode(buf, store) {
     const at = store.quantizeEnd;
     const want = v.getUint16(148, true);
     const generation = v.getUint32(152, true);
-    const have = Math.max(0, Math.min(want, (buf.byteLength - at) / SECTION_BYTES | 0));
+    const have = Math.max(0, Math.min(want, (buf.byteLength - at) / MARKER_BYTES | 0));
     store.songEnd = Number(v.getBigUint64(156, true));
-    store.blockSize = v.getUint32(164, true);
-    store.sampleRateHz = v.getUint32(168, true);
-    store.sectionsTruncated = v.getUint16(150, true);
-    if (generation !== store.arrangeVersion || have !== store.sectionCount) {
+    store.markersTruncated = v.getUint16(150, true);
+    if (generation !== store.arrangeVersion || have !== store.markerCount) {
       store.arrangeVersion = generation;
-      while (store.sections.length < have) {
-        store.sections.push({ id: 0, startBar: 1, bars: 0, color: 0,
-                              startTick: 0, endTick: 0, name: '' });
+      while (store.markers.length < have) {
+        store.markers.push({ id: 0, bar: 1, beat: 1, color: 0, tick: 0, name: '',
+                             endTick: 0, bars: 0 });
       }
       for (let i = 0; i < have; i++) {
-        const o = at + i * SECTION_BYTES;
-        const sec = store.sections[i];
-        sec.id = v.getUint32(o, true);
-        sec.startBar = v.getUint32(o + 4, true);
-        sec.bars = v.getUint32(o + 8, true);
-        sec.color = v.getUint32(o + 12, true);
-        sec.startTick = Number(v.getBigUint64(o + 16, true));
-        sec.endTick = Number(v.getBigUint64(o + 24, true));
-        // Nul-PADDED, not nul-terminated: a 24-character name carries no terminator, so
-        // the scan is bounded by the field and stops at the first nul. Scanning for a
-        // terminator instead walks into whatever follows.
+        const o = at + i * MARKER_BYTES;
+        const m = store.markers[i];
+        m.id = v.getUint32(o, true);
+        m.bar = v.getUint32(o + 4, true);
+        m.beat = v.getUint32(o + 8, true);
+        m.color = v.getUint32(o + 12, true);
+        m.tick = Number(v.getBigUint64(o + 16, true));
+        // 24..32 is reserved by the engine.
+        // Nul-PADDED, not nul-terminated: a 24-character name carries no terminator, so the
+        // scan is bounded by the field and stops at the first nul.
         let name = '';
         for (let k = 0; k < 24; k++) {
           const c = v.getUint8(o + 32 + k);
           if (c === 0) break;
           name += String.fromCharCode(c);
         }
-        sec.name = name;
+        m.name = name;
       }
       /*
-       * AND BLANK THE TAIL. `sections` is a POOL — it grows and is never shrunk, because
-       * shrinking it would allocate in the frame loop — so after a removal the array is
-       * longer than the count and the last entry is the section that was just deleted,
-       * still carrying its name and its position.
+       * THE SPAN EACH MARKER BEGINS, in a second pass because it needs the NEXT marker.
        *
-       * Every reader is supposed to stop at `sectionCount`, and this is the third time
-       * this week a count-versus-extent read has drawn something that does not exist: a
-       * phantom track in a tombstoned slot, an extent mistaken for a live count, and my
-       * own accessor here returning a removed section. Documentation did not prevent any
-       * of them. So the pool is left in a state where forgetting is VISIBLE rather than
-       * plausible: a reader that ignores the count now sees id 0 with no name, which is
-       * obviously nothing, instead of a ghost that looks exactly like a real section.
+       * The last one runs to `songEnd` — the furthest placement — which is not marker-derived
+       * and can sit BEFORE the marker if somebody put a marker past the music. Clamped, so a
+       * span is never negative: a negative width draws as nothing, which reads as a missing
+       * marker rather than as one past the end.
        */
-      for (let i = have; i < store.sections.length; i++) {
-        const sec = store.sections[i];
-        sec.id = 0; sec.startBar = 1; sec.bars = 0; sec.color = 0;
-        sec.startTick = 0; sec.endTick = 0; sec.name = '';
+      for (let i = 0; i < have; i++) {
+        const m = store.markers[i];
+        const end = i + 1 < have ? store.markers[i + 1].tick : store.songEnd;
+        m.endTick = Math.max(m.tick, end);
+        m.bars = i + 1 < have ? Math.max(0, store.markers[i + 1].bar - m.bar) : 0;
       }
-      store.sectionCount = have;
+      /*
+       * ...AND BLANK THE TAIL. `markers` is a POOL: it grows and is never shrunk, because
+       * shrinking allocates in the frame loop — so after a removal the array is longer than the
+       * count and its last entry is the marker just deleted, name and position intact. Readers
+       * must stop at `markerCount`; blanking makes forgetting VISIBLE (id 0, no name) rather
+       * than plausible.
+       */
+      for (let i = have; i < store.markers.length; i++) {
+        const m = store.markers[i];
+        m.id = 0; m.bar = 1; m.beat = 1; m.color = 0; m.tick = 0; m.name = '';
+        m.endTick = 0; m.bars = 0;
+      }
+      store.markerCount = have;
     }
-    // Where the sections END, so the automation block after them needs no second scan.
-    store.sectionsEnd = at + have * SECTION_BYTES;
+    // Where the markers END, so the automation block after them needs no second scan.
+    store.markersEnd = at + have * MARKER_BYTES;
   }
 
   /*
@@ -767,7 +778,7 @@ export function decode(buf, store) {
    * stale one.
    */
   {
-    const at = store.sectionsEnd;
+    const at = store.markersEnd;
     const want = v.getUint16(172, true);
     const version = v.getUint32(176, true);
     const have = Math.max(0, Math.min(want, (buf.byteLength - at) / AUTOMATION_BYTES | 0));
@@ -813,7 +824,8 @@ const METER_BYTES = 16;
 /** 24 bytes each; see the sidecar's encode. */
 const QUANTIZE_BYTES = 24;
 /** 56 bytes each; see the sidecar's encode. */
-const SECTION_BYTES = 56;
+/** UiMarker on the wire: id, bar, beat, color, nanotick, reserved, name[24]. */
+const MARKER_BYTES = 56;
 /** UiAutomationLane on the wire: track, target, points, flags, paramId[16]. */
 const AUTOMATION_BYTES = 32;
 /** kUiMeterSilent — silent or below the floor, NOT "no reading". */

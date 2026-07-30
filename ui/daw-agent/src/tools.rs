@@ -10,7 +10,8 @@ use daw_bridge::grid::NANOTICKS_PER_QUARTER;
 use daw_bridge::layout::{UiChainCommandPayload, UiCommandPayload, UiCommandType,
                          UiModLinkCommandPayload, UiModLinkUid16Payload,
                          UiModSourceValuePayload, UiPatcherPresetCommandPayload,
-                         UiSectionCommandPayload, MOD_LINK_ID_AUTO, MOD_RATE_BLOCK,
+                         UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
+                         MOD_LINK_ID_AUTO, MOD_RATE_BLOCK,
                          MOD_SOURCE_MACRO, MOD_TARGET_VST_PARAM};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -325,33 +326,63 @@ pub fn tool_manifest() -> Vec<ToolSpec> {
          * to "make the chorus longer" has to see the order before it can change anything.
          */
         ToolSpec {
-            name: "sections",
-            description: "The song's sections, in order, each with its id, name, start bar \
-                          and length in bars. A section has a LENGTH and no position: where \
-                          it begins is the sum of the lengths before it.",
+            name: "markers",
+            description: "The song's markers, in order: id, name, the bar and beat they fall on, \
+                          and the tick. A marker is a NAMED TICK and stores no length — two \
+                          adjacent markers are a span, so a section's length is the next \
+                          marker's tick minus this one's, and the last one runs to song_end.",
             params: json!({ "type": "object", "properties": {} }),
         },
         ToolSpec {
-            name: "edit_section",
-            description: "Add, remove, rename, resize or reorder a section. \
-                          op=add needs bars (and takes name, at); \
-                          op=remove/rename/length/move need id; \
-                          op=rename needs name; op=length needs bars; op=move needs to. \
-                          `at` and `to` count from 1. CHANGING A LENGTH RIPPLES: every \
-                          placement at or after the boundary moves, on every track, and the \
-                          engine refuses the whole edit rather than shrinking into occupied \
-                          bars. Removing a section does NOT delete its music — the bars stay \
-                          and stop being named.",
+            name: "edit_marker",
+            description: "Add, remove, rename or move a marker. op=add needs tick (and takes \
+                          name, color); op=remove/rename/move need id; op=rename needs name; \
+                          op=move needs tick. These ops are TOTAL: they move no music and \
+                          cannot fail except on a bad id. To move MUSIC, use insert_time.",
             params: json!({
                 "type": "object",
                 "required": ["op"],
                 "properties": {
-                    "op": { "type": "string", "enum": ["add", "remove", "rename", "length", "move"] },
+                    "op": { "type": "string", "enum": ["add", "remove", "rename", "move"] },
                     "id": { "type": "integer", "minimum": 1 },
-                    "bars": { "type": "integer", "minimum": 1, "maximum": 9999 },
+                    "tick": { "type": "integer", "minimum": 0 },
                     "name": { "type": "string" },
-                    "at": { "type": "integer", "minimum": 1 },
-                    "to": { "type": "integer", "minimum": 1 },
+                    "color": { "type": "integer", "minimum": 0 },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "insert_time",
+            description: "Insert or remove BARS of arrangement time at a tick, moving everything \
+                          at or after it: every placement on every track, the tempo points, the \
+                          key changes, the automation points, the meter points and the markers \
+                          — in ONE transaction that is refused whole and undone whole. \
+                          Positive bars insert, negative remove. \
+                          Removing bars that hold material is REFUSED, naming what is in the way. \
+                          Bars and not ticks, because a bar's length depends on the meter in \
+                          force there and the engine holds that map.",
+            params: json!({
+                "type": "object",
+                "required": ["tick", "bars"],
+                "properties": {
+                    "tick": { "type": "integer", "minimum": 0 },
+                    "bars": { "type": "integer" },
+                },
+            }),
+        },
+        ToolSpec {
+            name: "set_time_signature",
+            description: "Set the meter at a tick, like 7/8 — mid-song meter changes are \
+                          authorable. `flatten` replaces the whole map with this one signature. \
+                          Bar NUMBERING is a prefix sum through this map, which is why markers \
+                          carry a resolved bar and beat rather than a tick to divide.",
+            params: json!({
+                "type": "object",
+                "required": ["signature"],
+                "properties": {
+                    "signature": { "type": "string" },
+                    "tick": { "type": "integer", "minimum": 0 },
+                    "flatten": { "type": "boolean" },
                 },
             }),
         },
@@ -585,54 +616,60 @@ fn arg_str<'a>(args: &'a Value, key: &str) -> Option<&'a str> {
     args.get(key).and_then(|v| v.as_str())
 }
 
-/// The song's SPINE, resolved. Read from the arrange summary region, which the engine
-/// prefix-sums through the meter — nothing here recomputes a start bar.
-fn sections(handle: &EngineHandle) -> ToolResult {
+/// The song's MARKERS, with the span each one begins.
+///
+/// `span_end` is DERIVED here — the next marker's tick, or the song's end for the last — and it
+/// is derived rather than stored because a marker has no length. Given to the caller anyway, so
+/// a model asked to "make the chorus longer" does not have to do subtraction to find out where
+/// the chorus ends.
+fn markers(handle: &EngineHandle) -> ToolResult {
     let Some(sum) = handle.read_arrange_summary() else {
         return ToolResult::err("the engine publishes no arrangement summary");
     };
-    let n = (sum.section_count as usize).min(sum.sections.len());
-    let list: Vec<Value> = sum.sections[..n].iter().map(|s| json!({
-        "id": s.id,
-        "name": String::from_utf8_lossy(&s.name).trim_end_matches('\0').to_string(),
-        "start_bar": s.start_bar,
-        "bars": s.bar_count,
-        "start_tick": s.start_tick,
-        "end_tick": s.end_tick,
-    })).collect();
+    let n = (sum.marker_count as usize).min(sum.markers.len());
+    let list: Vec<Value> = sum.markers[..n].iter().enumerate().map(|(i, m)| {
+        let end = if i + 1 < n { sum.markers[i + 1].nanotick } else { sum.song_end_tick };
+        json!({
+            "id": m.id,
+            "name": String::from_utf8_lossy(&m.name).trim_end_matches('\0').to_string(),
+            "bar": m.bar,
+            "beat": m.beat,
+            "nanotick": m.nanotick,
+            // The span this marker begins. Derived, not stored — see the doc.
+            "span_end": end,
+        })
+    }).collect();
     ToolResult::ok(json!({
-        "sections": list,
-        // Truncation is REPORTED. A short list that says nothing reads as the whole song,
-        // which is the one thing a spine must never imply.
-        "truncated": sum.sections_truncated,
-        // The furthest PLACEMENT, which is not the end of the last section: material can sit
-        // past the spine, where it plays and is unnamed.
+        "markers": list,
+        // Truncation is REPORTED. A short list that says nothing reads as the whole song.
+        "truncated": sum.markers_truncated,
+        // The furthest PLACEMENT, which is not the last marker: material can sit past every
+        // marker, where it plays and is unnamed.
         "song_end_tick": sum.song_end_tick,
     }))
 }
 
-/// One of the five section ops.
-fn edit_section(handle: &EngineHandle, args: &Value) -> ToolResult {
+/// One of the four marker ops. All TOTAL: no material moves, and only a bad id can refuse them.
+fn edit_marker(handle: &EngineHandle, args: &Value) -> ToolResult {
     let Some(op) = arg_str(args, "op") else {
-        return ToolResult::err("edit_section needs \"op\": add, remove, rename, length or move");
+        return ToolResult::err("edit_marker needs \"op\": add, remove, rename or move");
     };
     let (cmd, addressed) = match op {
-        "add" => (UiCommandType::AddSection, false),
-        "remove" => (UiCommandType::RemoveSection, true),
-        "rename" => (UiCommandType::RenameSection, true),
-        "length" => (UiCommandType::SetSectionLength, true),
-        "move" => (UiCommandType::MoveSection, true),
-        _ => return ToolResult::err("op must be add, remove, rename, length or move"),
+        "add" => (UiCommandType::AddMarker, false),
+        "remove" => (UiCommandType::RemoveMarker, true),
+        "rename" => (UiCommandType::RenameMarker, true),
+        "move" => (UiCommandType::MoveMarker, true),
+        _ => return ToolResult::err("op must be add, remove, rename or move"),
     };
     let id = arg_u64(args, "id").unwrap_or(0) as u32;
     if addressed && id == 0 {
-        return ToolResult::err(format!("edit_section op {op:?} needs the \"id\" of an existing section"));
+        return ToolResult::err(format!("edit_marker op {op:?} needs the \"id\" of an existing marker"));
     }
-    let bars = arg_u64(args, "bars").unwrap_or(0) as u32;
-    if matches!(op, "add" | "length") && bars == 0 {
-        // A zero-bar section is not a short section, it is a section with no bars in it.
-        return ToolResult::err(format!("edit_section op {op:?} needs \"bars\" of at least 1"));
+    // A move with no destination would put the marker at tick 0 — the one place nobody means.
+    if op == "move" && arg_u64(args, "tick").is_none() {
+        return ToolResult::err("a marker move needs the \"tick\" to move it to");
     }
+    let tick = arg_u64(args, "tick").unwrap_or(0);
     let mut name = [0u8; 20];
     if let Some(t) = arg_str(args, "name") {
         let b = t.as_bytes();
@@ -641,30 +678,75 @@ fn edit_section(handle: &EngineHandle, args: &Value) -> ToolResult {
     } else if op == "rename" {
         return ToolResult::err("a rename needs a \"name\"");
     }
-    /*
-     * NO POSITION MEANS APPEND, and that is not index 0.
-     *
-     * The engine clamps the insert index to the end, so u32::MAX appends and 0 inserts at the
-     * FRONT — an add with an unstated position built the song backwards. `at` and `to` count
-     * from 1 where a person says them, because the first section is section 1 the way the
-     * first bar is bar 1; the wire index is 0-based because it indexes an array.
-     */
-    let to_index = match arg_u64(args, "to").or_else(|| arg_u64(args, "at")) {
-        Some(n) => (n.max(1) - 1) as u32,
-        None if addressed => 0,
-        None => u32::MAX,
-    };
-    let p = UiSectionCommandPayload {
+    let p = UiMarkerCommandPayload {
         command_type: cmd as u16,
         flags: 0,
-        section_id: id,
-        bar_count: bars,
-        to_index,
+        marker_id: id,
+        nanotick_lo: (tick & 0xffff_ffff) as u32,
+        nanotick_hi: (tick >> 32) as u32,
         color_rgb: arg_u64(args, "color").unwrap_or(0) as u32,
         name,
     };
-    match handle.send_section_command(p) {
-        Ok(()) => ToolResult::ok(json!({ "sent": true, "op": op, "id": id, "bars": bars })),
+    match handle.send_marker_command(p) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "op": op, "id": id, "tick": tick })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// Insert or remove bars of arrangement time. The one op that moves music.
+fn insert_time(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(tick) = arg_u64(args, "tick") else {
+        return ToolResult::err("insert_time needs \"tick\" — where the time is inserted or removed");
+    };
+    let bars = args.get("bars").and_then(|v| v.as_i64()).unwrap_or(0);
+    if bars == 0 {
+        // Zero bars is not a small edit, it is no edit — and sending it would spend a whole
+        // transaction and an undo entry on nothing.
+        return ToolResult::err("insert_time needs \"bars\": positive to insert, negative to remove");
+    }
+    let p = UiArrangeTimeCommandPayload {
+        command_type: UiCommandType::InsertRemoveTime as u16,
+        flags: 0,
+        nanotick_lo: (tick & 0xffff_ffff) as u32,
+        nanotick_hi: (tick >> 32) as u32,
+        delta: bars.clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        numerator: 0, denominator: 0,
+        reserved0: 0, reserved1: 0, reserved2: 0, reserved3: 0,
+    };
+    match handle.send_arrange_time_command(p) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "tick": tick, "bars": bars })),
+        Err(e) => ToolResult::err(e),
+    }
+}
+
+/// A meter point. Mid-song signatures are authorable from v29.
+fn set_time_signature(handle: &EngineHandle, args: &Value) -> ToolResult {
+    let Some(sig) = arg_str(args, "signature") else {
+        return ToolResult::err("set_time_signature needs \"signature\", like \"7/8\"");
+    };
+    let mut parts = sig.split('/');
+    let num: u32 = parts.next().and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+    let den: u32 = parts.next().and_then(|x| x.trim().parse().ok()).unwrap_or(0);
+    // A zero denominator divides by zero in every bar computation downstream, and one that is
+    // not a power of two is not a signature music uses.
+    if num == 0 || den == 0 || !den.is_power_of_two() {
+        return ToolResult::err("a time signature is beats/note-value, like 4/4 or 7/8");
+    }
+    let tick = arg_u64(args, "tick").unwrap_or(0);
+    let p = UiArrangeTimeCommandPayload {
+        command_type: UiCommandType::SetTimeSignature as u16,
+        flags: if args.get("flatten").and_then(|v| v.as_bool()).unwrap_or(false) {
+            daw_bridge::layout::UI_TIME_SIG_FLATTEN
+        } else { 0 },
+        nanotick_lo: (tick & 0xffff_ffff) as u32,
+        nanotick_hi: (tick >> 32) as u32,
+        delta: 0,
+        numerator: num,
+        denominator: den,
+        reserved0: 0, reserved1: 0, reserved2: 0, reserved3: 0,
+    };
+    match handle.send_arrange_time_command(p) {
+        Ok(()) => ToolResult::ok(json!({ "sent": true, "signature": sig, "tick": tick })),
         Err(e) => ToolResult::err(e),
     }
 }
@@ -1157,8 +1239,10 @@ pub fn execute(handle: &EngineHandle, call: &ToolCall) -> ToolResult {
         "set_mixer" => set_mixer(handle, &call.args),
         "set_loop" => set_loop(handle, &call.args),
         "preview_note" => preview_note(handle, &call.args),
-        "sections" => sections(handle),
-        "edit_section" => edit_section(handle, &call.args),
+        "markers" => markers(handle),
+        "edit_marker" => edit_marker(handle, &call.args),
+        "insert_time" => insert_time(handle, &call.args),
+        "set_time_signature" => set_time_signature(handle, &call.args),
         "device_params" => device_params(handle, &call.args),
         "add_device" => add_device(handle, &call.args),
         "remove_device" => chain_edit(handle, &call.args, UiCommandType::RemoveDevice),

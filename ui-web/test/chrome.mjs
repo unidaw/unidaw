@@ -333,9 +333,9 @@ await page.waitForTimeout(400);
 // and an edit that is silently dropped is indistinguishable from one that was accepted.
 // ---------------------------------------------------------------------------
 {
-  await type('delsection 4242');
+  await type('delmarker 4242');
   const shown = await text('.ch-reject');
-  check(/no section/i.test(String(shown)), 'a refused command lands on the reject line',
+  check(/no marker/i.test(String(shown)), 'a refused command lands on the reject line',
         String(shown));
 }
 

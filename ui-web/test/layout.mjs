@@ -177,7 +177,7 @@ for (const { w, h, why } of SIZES) {
    * so if the band is short it is the thing that gets clipped.
    */
   check(ar && ar.spine && typeof ar.spine.count === 'number',
-        `at ${w}x${h} the sections strip is still there`,
+        `at ${w}x${h} the markers strip is still there`,
         JSON.stringify(ar && ar.spine && { count: ar.spine.count, pool: ar.spine.pool }));
 
   await page.evaluate(() => window.__uni.setView('mixer'));

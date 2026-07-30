@@ -815,8 +815,8 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      // The spine. Six, because a section has six things you can do to it
                      // and every one is reachable from both surfaces — the strip's click,
                      // drag and double-click all come through these same methods.
-                     'sections', 'addSection', 'delSection', 'nameSection', 'secLength',
-                     'moveSection',
+                     'markers', 'addMarker', 'delMarker', 'nameMarker', 'moveMarker',
+                     'insertTime', 'setTimeSig',
                      // Modulation. `mapParam` takes a parameter INDEX and resolves the
                      // uid16 itself — the console should not have to type a 32-character
                      // hex string to map a knob.
@@ -2121,15 +2121,19 @@ const OP_REGISTRY = {
    * Recorded as a gap on their side rather than left looking covered.
    */
   macro:       { cli: null, agent: 'set_macro', why: 'gap' },
-  sections:    { cli: 'arrangement', agent: 'sections' },
-  // All five section edits are one agent tool with an `op`, because their arguments differ and
-  // a model calls one tool with a named op more reliably than it picks between five near
-  // synonyms. The CLI made the same choice — `do section <sub>`.
-  section:     { cli: 'section', agent: 'edit_section' },
-  delsection:  { cli: 'section', agent: 'edit_section' },
-  namesection: { cli: 'section', agent: 'edit_section' },
-  seclength:   { cli: 'section', agent: 'edit_section' },
-  movesection: { cli: 'section', agent: 'edit_section' },
+  markers:     { cli: 'arrangement', agent: 'markers' },
+  /*
+   * All four marker edits are one agent tool with an `op`, because their arguments differ and a
+   * model calls one named op more reliably than it picks between four near synonyms. The CLI
+   * made the same choice — `do marker <sub>`.
+   */
+  marker:      { cli: 'marker', agent: 'edit_marker' },
+  delmarker:   { cli: 'marker', agent: 'edit_marker' },
+  namemarker:  { cli: 'marker', agent: 'edit_marker' },
+  movemarker:  { cli: 'marker', agent: 'edit_marker' },
+  // The two that change TIME rather than a label, and they are deliberately not marker ops.
+  time:        { cli: 'time', agent: 'insert_time' },
+  timesig:     { cli: 'time-sig', agent: 'set_time_signature' },
   editor:    { cli: null, agent: null, why: 'gap' },
   // v22 (AddTrack=46/RemoveTrack=47). daw-cli shipped its verbs in the same
   // commit the engine did, so these are covered on the CLI from day one; the

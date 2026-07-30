@@ -1169,100 +1169,137 @@ fn every_tool_in_the_manifest_is_dispatched() {
     assert!(undispatched.is_empty(), "tools in the manifest with no dispatch arm: {undispatched:?}");
 }
 
-/// The SPINE: added, renamed, resized with its ripple, reordered, removed — and read back from
-/// the engine's own arrangement summary each time.
+/// THE SPINE, v29: markers are added, renamed, moved and removed, and TIME is a separate op.
+///
+/// The distinction is the whole point of the contract change. The four marker ops are TOTAL —
+/// they move no music and can fail only on a bad id — and `insert_time` is the one that ripples.
+/// A span is two adjacent markers, so a "length" is derived, and the test derives it the same
+/// way the renderer does.
 #[test]
-fn section_tools_drive_the_spine() {
+fn marker_tools_drive_the_spine() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let (_engine, session) = start_engine("sect");
+    let (_engine, session) = start_engine("mark");
 
-    let sections = |s: &AgentSession| -> Vec<Value> {
-        let out = s.execute(&ToolCall { tool: "sections".into(), args: json!({}) });
-        assert!(out.ok, "sections failed: {out:?}");
-        out.output["sections"].as_array().cloned().unwrap_or_default()
+    let markers = |s: &AgentSession| -> Vec<Value> {
+        let out = s.execute(&ToolCall { tool: "markers".into(), args: json!({}) });
+        assert!(out.ok, "markers failed: {out:?}");
+        out.output["markers"].as_array().cloned().unwrap_or_default()
     };
     let settle = || std::thread::sleep(Duration::from_millis(400));
+    let bar = 4 * Q;
 
-    assert!(sections(&session).is_empty(), "a new project has no sections");
+    assert!(markers(&session).is_empty(), "a new project has no markers");
 
-    for (bars, name) in [(4u64, "intro"), (8, "verse")] {
+    for (tick, name) in [(0u64, "intro"), (4 * bar, "verse"), (12 * bar, "chorus")] {
         let out = session.execute(&ToolCall {
-            tool: "edit_section".into(),
-            args: json!({"op":"add","bars":bars,"name":name}),
+            tool: "edit_marker".into(),
+            args: json!({"op":"add","tick":tick,"name":name}),
         });
         assert!(out.ok, "add {name} failed: {out:?}");
         settle();
     }
-    let list = sections(&session);
-    assert_eq!(list.len(), 2, "two sections: {list:?}");
-    /*
-     * IN ORDER, AND AT THE RIGHT BARS. Not a count — the engine clamps an insert index to the
-     * end, so an add with no stated position inserts at the FRONT unless the append sentinel
-     * goes out, and two adds built the song backwards when it did not. `verse` at bar 5 is the
-     * assertion that catches it; two-of-two passes either way round.
-     */
-    assert_eq!(list[0]["name"].as_str(), Some("intro"), "{list:?}");
-    assert_eq!(list[0]["start_bar"].as_u64(), Some(1), "{list:?}");
-    assert_eq!(list[1]["name"].as_str(), Some("verse"), "{list:?}");
-    assert_eq!(list[1]["start_bar"].as_u64(), Some(5), "{list:?}");
+    let list = markers(&session);
+    assert_eq!(list.len(), 3, "three markers: {list:?}");
+    // IN TICK ORDER, whatever order they were added in — the engine keeps the spine sorted, and
+    // a strip that derived a span from an unsorted list would draw negative widths.
+    let ticks: Vec<u64> = list.iter().map(|m| m["nanotick"].as_u64().unwrap()).collect();
+    assert_eq!(ticks, vec![0, 4 * bar, 12 * bar], "{list:?}");
+    // BARS ARE RESOLVED BY THE ENGINE. 4/4 here, so bar 1, 5 and 13 — but the point is that this
+    // reads them rather than dividing ticks, because across a meter change division is wrong.
+    let bars: Vec<u64> = list.iter().map(|m| m["bar"].as_u64().unwrap()).collect();
+    assert_eq!(bars, vec![1, 5, 13], "{list:?}");
+    // The span each marker BEGINS, derived from the next one. The last runs to the song's end.
+    assert_eq!(list[0]["span_end"].as_u64(), Some(4 * bar), "{list:?}");
+    assert_eq!(list[1]["span_end"].as_u64(), Some(12 * bar), "{list:?}");
 
-    let id = list[0]["id"].as_u64().unwrap();
+    let id = list[1]["id"].as_u64().unwrap();
     let out = session.execute(&ToolCall {
-        tool: "edit_section".into(), args: json!({"op":"rename","id":id,"name":"THE TOP"}),
+        tool: "edit_marker".into(), args: json!({"op":"rename","id":id,"name":"VERSE ONE"}),
     });
     assert!(out.ok, "rename failed: {out:?}");
     settle();
-    assert_eq!(sections(&session)[0]["name"].as_str(), Some("THE TOP"));
+    assert_eq!(markers(&session)[1]["name"].as_str(), Some("VERSE ONE"));
 
+    /*
+     * MOVING A MARKER MOVES THE MARKER, AND NOTHING ELSE.
+     *
+     * This is the difference from the sections it replaces, where changing a "length" rippled
+     * the song. The later marker must NOT move.
+     */
+    let before = markers(&session);
     let out = session.execute(&ToolCall {
-        tool: "edit_section".into(), args: json!({"op":"length","id":id,"bars":6}),
-    });
-    assert!(out.ok, "length failed: {out:?}");
-    settle();
-    let rippled = sections(&session);
-    assert_eq!(rippled[0]["bars"].as_u64(), Some(6), "{rippled:?}");
-    // ...AND EVERYTHING AFTER IT MOVED. A length change is not a local edit: a start is the sum
-    // of what precedes it, and the sum has changed.
-    assert_eq!(rippled[1]["start_bar"].as_u64(), Some(7),
-               "the section after a lengthened one must move: {rippled:?}");
-    assert_eq!(rippled[1]["bars"].as_u64(), Some(8), "while keeping its own length");
-
-    let out = session.execute(&ToolCall {
-        tool: "edit_section".into(), args: json!({"op":"move","id":id,"to":2}),
+        tool: "edit_marker".into(), args: json!({"op":"move","id":id,"tick":6 * bar}),
     });
     assert!(out.ok, "move failed: {out:?}");
     settle();
-    assert_eq!(sections(&session)[1]["id"].as_u64(), Some(id), "moved to second place");
+    let after = markers(&session);
+    assert_eq!(after[1]["nanotick"].as_u64(), Some(6 * bar), "the marker moved: {after:?}");
+    assert_eq!(after[2]["nanotick"].as_u64(), before[2]["nanotick"].as_u64(),
+               "and NOTHING else did: {after:?}");
+
+    /*
+     * INSERTING TIME MOVES EVERYTHING AT OR AFTER IT — which is the capability the drag needed
+     * and the reason sections were worth replacing rather than deleting.
+     */
+    let before = markers(&session);
+    let out = session.execute(&ToolCall {
+        tool: "insert_time".into(), args: json!({"tick": 6 * bar, "bars": 2}),
+    });
+    assert!(out.ok, "insert_time failed: {out:?}");
+    settle();
+    let after = markers(&session);
+    assert_eq!(after[0]["nanotick"].as_u64(), before[0]["nanotick"].as_u64(),
+               "a marker BEFORE the point stays: {after:?}");
+    assert_eq!(after[1]["nanotick"].as_u64(), Some(8 * bar),
+               "the marker AT the point moves with the music: {after:?}");
+    assert_eq!(after[2]["nanotick"].as_u64(),
+               Some(before[2]["nanotick"].as_u64().unwrap() + 2 * bar),
+               "and so does every later one: {after:?}");
+
+    // ...AND IT IS UNDOABLE, which SetSectionLength never was: it moved every placement on every
+    // track plus three song timelines and pushed no undo entry big enough to hold it.
+    let out = session.execute(&ToolCall { tool: "undo".into(), args: json!({}) });
+    assert!(out.ok, "undo failed: {out:?}");
+    settle();
+    let undone = markers(&session);
+    assert_eq!(undone[1]["nanotick"].as_u64(), before[1]["nanotick"].as_u64(),
+               "undo puts the time back: {undone:?}");
 
     let out = session.execute(&ToolCall {
-        tool: "edit_section".into(), args: json!({"op":"remove","id":id}),
+        tool: "edit_marker".into(), args: json!({"op":"remove","id":id}),
     });
     assert!(out.ok, "remove failed: {out:?}");
     settle();
-    let left = sections(&session);
-    assert_eq!(left.len(), 1, "{left:?}");
-    assert!(left.iter().all(|s| s["id"].as_u64() != Some(id)), "the right one went: {left:?}");
+    let left = markers(&session);
+    assert_eq!(left.len(), 2, "{left:?}");
+    assert!(left.iter().all(|m| m["id"].as_u64() != Some(id)), "the right one went: {left:?}");
 }
 
-/// Every section refusal NAMES the argument it is about.
+/// Every marker and time refusal NAMES the argument it is about.
 ///
 /// The model reads these. An `ok: false` with an empty body teaches it nothing and it will make
-/// the same call again — which is a loop that costs money and never converges.
+/// the same call again — a loop that costs money and never converges.
 #[test]
-fn section_refusals_say_what_is_missing() {
+fn marker_refusals_say_what_is_missing() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let (_engine, session) = start_engine("sectref");
-    for (args, want) in [
-        (json!({"op":"wat"}), "add, remove, rename"),
-        (json!({"op":"remove"}), "id"),
-        (json!({"op":"length","id":1}), "bars"),
-        (json!({"op":"rename","id":1}), "name"),
-        (json!({}), "op"),
+    let (_engine, session) = start_engine("markref");
+    for (tool, args, want) in [
+        ("edit_marker", json!({"op":"wat"}), "add, remove, rename"),
+        ("edit_marker", json!({"op":"remove"}), "id"),
+        ("edit_marker", json!({"op":"rename","id":1}), "name"),
+        ("edit_marker", json!({"op":"move","id":1}), "tick"),
+        ("edit_marker", json!({}), "op"),
+        // Zero bars is not a small edit, it is no edit — and it would spend a whole-song
+        // transaction and an undo entry on nothing.
+        ("insert_time", json!({"tick":0,"bars":0}), "bars"),
+        ("insert_time", json!({"bars":4}), "tick"),
+        ("set_time_signature", json!({"signature":"7/0"}), "beats/note-value"),
+        ("set_time_signature", json!({}), "signature"),
     ] {
-        let out = session.execute(&ToolCall { tool: "edit_section".into(), args: args.clone() });
-        assert!(!out.ok, "{args} should be refused: {out:?}");
+        let out = session.execute(&ToolCall { tool: tool.into(), args: args.clone() });
+        assert!(!out.ok, "{tool} {args} should be refused: {out:?}");
         let why = out.error.clone().unwrap_or_default();
-        assert!(why.contains(want), "{args} refused without naming {want:?}: {why:?}");
+        assert!(why.contains(want), "{tool} {args} refused without naming {want:?}: {why:?}");
     }
 }
 

@@ -50,6 +50,14 @@ import { DEFAULT_METER, NANOTICKS_PER_QUARTER, ticksPerBar, ticksPerBeat } from 
 export const TICKS_PER_BAR = ticksPerBar(DEFAULT_METER);
 
 /**
+ * The narrowest a marker's block is drawn, in pixels.
+ *
+ * Wide enough to hold its grip and be hit — the grip is 7px — and no wider, because this floor
+ * only applies where the real span is smaller, which is a marker with nothing after it.
+ */
+const MARKER_MIN_PX = 9;
+
+/**
  * Horizontal zoom, in nanoticks per pixel. Coarser than the tracker's because
  * arrange is for seeing structure — at the finest level a bar is 512px, at the
  * coarsest it is 16px and eighty bars fit on a screen.
@@ -373,41 +381,41 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
     ruler: new Float64Array(128), rulerBar: new Int32Array(128), rulerCount: 0,
     rulerFirst: 0,
     /**
-     * THE SPINE — the named spans the song is built out of.
+     * THE SPINE — the named ticks the song is divided by, and the span each one begins.
      *
-     * Objects rather than parallel typed arrays, unlike the ruler above, because a
-     * section carries a NAME and a name cannot live in a Float64Array. Allocated once
-     * at the engine's cap: 64 spans is the whole song's structure, not a per-frame
-     * quantity, and the pool never resizes.
+     * Objects rather than parallel typed arrays, unlike the ruler above, because a marker
+     * carries a NAME and a name cannot live in a Float64Array. Allocated once at the engine's
+     * cap: 64 markers is the whole song's structure, not a per-frame quantity, and the pool
+     * never resizes.
      *
      * `x` and `w` are ABSOLUTE pixels — `tick / tpp` with no `startTick` in them, the
      * same rule as the clips and the ruler, so a pan is one transform.
      *
-     * `startBar` and the ticks come from the ENGINE already resolved. Nothing here
-     * prefix-sums the lengths: the sum runs through the meter at every boundary, and a
-     * second implementation of it would drift the first time a meter changed mid-song
-     * — silently, and only in the picture.
+     * `bar` and `beat` come from the ENGINE already resolved, and `w` from a span the DECODER
+     * derived by subtracting adjacent ticks. Nothing here prefix-sums anything: bar numbering
+     * runs through the meter map, and a second implementation would drift the first time a
+     * meter changed mid-song — silently, and only in the picture.
      */
-    sections: Array.from({ length: 64 }, () => ({
-      id: 0, x: 0, w: 0, name: '', color: 0, startBar: 1, bars: 0, index: 0,
+    markers: Array.from({ length: 64 }, () => ({
+      id: 0, x: 0, w: 0, name: '', color: 0, bar: 1, beat: 1, bars: 0, index: 0,
     })),
-    sectionCount: 0, sectionFirst: 0,
+    markerCount: 0, markerFirst: 0,
     /**
-     * Which section is selected, by id. 0 is none — section ids start at 1.
+     * Which marker is selected, by id. 0 is none — marker ids start at 1.
      *
      * The PAGE's, passed in like `selectedPlacement`, not the renderer's own. A surface
      * that keeps its own idea of what is selected is a surface the console cannot
-     * agree with, and both of them have to mean the same thing by "this section".
+     * agree with, and both of them have to mean the same thing by "this marker".
      */
-    selectedSection: 0,
+    selectedMarker: 0,
     /**
-     * Non-zero means the engine had MORE sections than it could publish. Carried so
+     * Non-zero means the engine had MORE markers than it could publish. Carried so
      * the strip can say so: a spine that stops without a word reads as the end of the
      * song, which is the one thing it must never say by accident.
      */
-    sectionsTruncated: 0,
+    markersTruncated: 0,
     /**
-     * The end of the last section, which is NOT `songEnd`. The engine's song end is
+     * The end of the last span, which is NOT `songEnd`. The engine's song end is
      * the furthest PLACEMENT — material can sit past the spine, and it plays and is
      * unnamed. Both are published and neither is derivable from the other.
      */
@@ -416,12 +424,12 @@ export function createArrangeBuffer(laneCount, clipCapacity = 128) {
      * MATERIAL PAST THE SPINE, as a span with no name and no handle.
      *
      * `songEnd` is the furthest PLACEMENT and `spineEndTick` is the end of the last
-     * section, and neither is derivable from the other: material can sit past the spine,
+     * marker, and neither is derivable from the other: material can sit past the spine,
      * where it plays and is simply unnamed. Drawn because the alternative is a strip that
-     * stops at the last section while clips carry on to the right of it, which reads as
+     * stops at the last marker while clips carry on to the right of it, which reads as
      * the song ending there.
      *
-     * With NO sections at all the tail is the whole song, which is what an unsectioned
+     * With NO markers at all the tail is the whole song, which is what an unmarked
      * project honestly looks like — not an empty strip.
      */
     tailOn: false, tailX: 0, tailW: 0,
@@ -488,7 +496,7 @@ export function buildArrangeModel(opts, buf) {
     startTick = 0, width = 1200, zoomIndex = 3, tracks: laneCount = 8, loop = null,
     engine = null, laneHeight = 44, cursor = NO_CURSOR,
     selectedPlacement = -1, laneScroll = 0, audio = null, clipMarginPx = 0,
-    selectedSection = 0,
+    selectedMarker = 0,
     // The SONG's meter — what the ruler numbers and where the bar lines go. A clip
     // in another meter draws its own accents inside those bars; that grid rides on
     // the clip and is not this.
@@ -571,42 +579,57 @@ export function buildArrangeModel(opts, buf) {
   buf.rulerCount = r;
 
   /*
-   * The spine. Bound for the sections IN VIEW, and slotted by the section's index in
+   * The spine. Bound for the markers IN VIEW, and slotted by the marker's index in
    * the song rather than by its position in the visible list — the ruler's rule
    * (GUIDELINES 3.4) and for the ruler's reason: by position, panning past one
-   * boundary would shift every later section into a different element and rebind its
+   * boundary would shift every later marker into a different element and rebind its
    * name, its width and its colour on a frame that moved nothing.
    *
-   * `sectionCount` and not `sections.length`: the store's array is a POOL whose tail
+   * `markerCount` and not `markers.length`: the store's array is a POOL whose tail
    * is whatever was there before a removal. Reading past the count is how a deleted
-   * section keeps being drawn, and this is the third place this week that mistake was
+   * marker keeps being drawn, and this is the third place this week that mistake was
    * available.
    */
   let s = 0, sFirst = 0, spineEnd = 0;
-  buf.sectionsTruncated = engine ? (engine.sectionsTruncated | 0) : 0;
-  if (engine && engine.sectionCount > 0) {
-    const n = Math.min(engine.sectionCount, engine.sections.length);
+  buf.markersTruncated = engine ? (engine.markersTruncated | 0) : 0;
+  if (engine && engine.markerCount > 0) {
+    const n = Math.min(engine.markerCount, engine.markers.length);
     for (let i = 0; i < n; i++) {
-      const sec = engine.sections[i];
-      // Every section, not just the visible ones: the spine's end is a fact about the
-      // song and the last section is usually off screen to the right.
-      if (sec.endTick > spineEnd) spineEnd = sec.endTick;
-      if (sec.endTick <= startTick || sec.startTick >= endTick) continue;
-      if (s < buf.sections.length) {
+      const m = engine.markers[i];
+      // Every marker, not just the visible ones: where the last span ENDS is a fact about the
+      // song and the last marker is usually off screen to the right.
+      if (m.endTick > spineEnd) spineEnd = m.endTick;
+      /*
+       * `<`, NOT `<=`. A marker whose span is EMPTY — two markers on the same tick, or the last
+       * one in a song with no material after it — has `endTick === tick`, and with `<=` a marker
+       * sitting exactly at the view's start was culled: the strip drew the one after it and the
+       * named one vanished. An empty span is still a marker, and it is still where it says.
+       */
+      if (m.endTick < startTick || m.tick >= endTick) continue;
+      if (s < buf.markers.length) {
         if (s === 0) sFirst = i;
-        const o = buf.sections[s];
-        o.id = sec.id; o.index = i;
-        o.name = sec.name; o.color = sec.color;
-        o.startBar = sec.startBar; o.bars = sec.bars;
-        o.x = sec.startTick / tpp;                 // absolute; see `scrollX`
-        o.w = (sec.endTick - sec.startTick) / tpp;
+        const o = buf.markers[s];
+        o.id = m.id; o.index = i;
+        o.name = m.name; o.color = m.color;
+        o.bar = m.bar; o.beat = m.beat; o.bars = m.bars;
+        o.x = m.tick / tpp;                       // absolute; see `scrollX`
+        /*
+         * A FLOOR, because a marker with no span is still a marker.
+         *
+         * The last marker's span runs to `songEnd`, and in a song with no material — or one
+         * whose last marker sits past everything — that is the marker's own tick, so the width
+         * is zero. A zero-width block draws as nothing and reads as a MISSING marker, when what
+         * it means is "nothing comes after this". It stays clickable, nameable and removable at
+         * the floor; the alternative is a marker you can only reach from the console.
+         */
+        o.w = Math.max(MARKER_MIN_PX, (m.endTick - m.tick) / tpp);
         s++;
       }
     }
   }
-  buf.selectedSection = selectedSection;
-  buf.sectionCount = s;
-  buf.sectionFirst = sFirst;
+  buf.selectedMarker = selectedMarker;
+  buf.markerCount = s;
+  buf.markerFirst = sFirst;
   buf.spineEndTick = spineEnd;
   const songEnd = engine ? (engine.songEnd || 0) : 0;
   // Only when it is actually longer, and only the part in view. `songEnd` is 0 before the
