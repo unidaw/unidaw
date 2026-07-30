@@ -170,7 +170,14 @@ enum class UiCommandType : uint16_t {
   // UiAutomationPointPayload (trackId + paramId identify the lane; nanotick/value ignored).
   // Request/answer rather than a standing region because a song can hold far more automation than
   // a fixed region could carry, and a UI only draws the lanes that are open.
-  RequestAutomationLane = 62,  // next free 63
+  RequestAutomationLane = 62,
+  /// v28: change an existing mod link's depth/bias/enabled IN PLACE, addressed by linkId
+  /// (UiModLinkCommandPayload; the device/kind fields are ignored). Add-then-remove was the only
+  /// way to do this, and it changed the id, dropped the uid16 and was not atomic — so a depth
+  /// SLIDER was out of reach: a continuous gesture would tear the link down and rebuild it every
+  /// frame. AddModLink deliberately still REFUSES an existing id rather than replacing, so a
+  /// colliding add cannot silently overwrite a link.
+  SetModLinkDepth = 63,  // next free 63
 };
 
 // M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
@@ -296,6 +303,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";
     case UiCommandType::RequestAutomationLane: return "request_automation_lane";
+    case UiCommandType::SetModLinkDepth: return "set_mod_link_depth";
   }
   return "op:unknown";
 }
@@ -348,6 +356,7 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
     case UiCommandType::SetAutomationTarget:
     case UiCommandType::WriteAutomationPoint:
     case UiCommandType::RequestAutomationLane:
+    case UiCommandType::SetModLinkDepth:
       return false;
     default:
       return true;

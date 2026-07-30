@@ -667,6 +667,11 @@ pub enum UiCommandType {
     /// into a UiAutomationSlot seqlock slot the CALLER picked. The lane LIST is standing in
     /// UiAutomationLaneRegion and needs no request.
     RequestAutomationLane = 62,
+    /// v28: change an existing mod link's depth/bias/enabled IN PLACE, by linkId
+    /// (UiModLinkCommandPayload; device/kind fields ignored). Remove+add was the only way, and it
+    /// changed the id, dropped the uid16 and was not atomic — so a depth SLIDER was impossible.
+    /// AddModLink still refuses an existing id rather than replacing.
+    SetModLinkDepth = 63,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;

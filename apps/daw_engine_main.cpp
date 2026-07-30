@@ -4542,6 +4542,10 @@ struct TrackRuntime {
     }
     const uint32_t version =
         modVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
+    // Counted and reported. The diffs go out on the UI ring, which a shell test cannot read, so
+    // "did the load publish this project's modulation" had no observable answer — which is part of
+    // why it went unnoticed that the answer was NO.
+    uint32_t published = 0;
     auto encodeFlags = [&](const daw::ModLink& link) -> uint16_t {
       uint16_t flags = 0;
       flags |= static_cast<uint16_t>(link.source.kind) & 0x0Fu;
@@ -4550,6 +4554,32 @@ struct TrackRuntime {
       flags |= (link.enabled ? 1u : 0u) << 10;
       return flags;
     };
+    // AN EMPTY REGISTRY MUST STILL PUBLISH. This loop over the links meant a track with no links
+    // emitted NOTHING, so removing a track's LAST link was invisible: removing one of several is
+    // fine (the rest republish under a new version) but the last one left a lit badge for a link
+    // that no longer exists. The chain snapshot already solved this — a one-entry sentinel so the
+    // VERSION still travels — and kModLinkIdAuto does the same job here. Reported by the frontend
+    // agent, who was dropping the last link client-side to work around it.
+    if (registry.links.empty()) {
+      daw::UiModLinkDiffPayload payload{};
+      payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ModSnapshot);
+      payload.trackId = runtime.trackId;
+      payload.modVersion = version;
+      payload.linkId = daw::kModLinkIdAuto;  // "this track has no links", not "link 4294967295"
+      DAW_EVENT("modsnapshot.published")
+          .field("track", runtime.trackId)
+          .field("links", 0)
+          .field("version", version)
+          .field("empty_sentinel", true);
+      daw::EventEntry entry{};
+      entry.sampleTime = 0;
+      entry.blockId = 0;
+      entry.type = static_cast<uint16_t>(daw::EventType::UiDiff);
+      entry.size = sizeof(payload);
+      std::memcpy(entry.payload, &payload, sizeof(payload));
+      daw::ringWrite(ringUiOut, entry);
+      return;
+    }
     for (const auto& link : registry.links) {
       daw::UiModLinkDiffPayload payload{};
       payload.diffType = static_cast<uint16_t>(daw::UiDiffType::ModSnapshot);
@@ -4570,6 +4600,7 @@ struct TrackRuntime {
       entry.size = sizeof(payload);
       std::memcpy(entry.payload, &payload, sizeof(payload));
       daw::ringWrite(ringUiOut, entry);
+      ++published;
       if (link.target.kind == daw::ModTargetKind::VstParam) {
         daw::UiModLinkUid16DiffPayload uidPayload{};
         uidPayload.diffType = static_cast<uint16_t>(daw::UiDiffType::ModLinkUid16);
@@ -4586,6 +4617,11 @@ struct TrackRuntime {
         daw::ringWrite(ringUiOut, uidEntry);
       }
     }
+    DAW_EVENT("modsnapshot.published")
+        .field("track", runtime.trackId)
+        .field("links", published)
+        .field("version", version)
+        .field("empty_sentinel", false);
   };
 
   auto emitModError = [&](uint16_t errorCode, uint32_t trackId, uint32_t linkId) {
@@ -6469,6 +6505,21 @@ struct TrackRuntime {
               device.vstRef.vendor, device.vstRef.name);
           if (resolution.match != daw::VstMatch::None) {
             device.hostSlotIndex = static_cast<uint32_t>(resolution.index);
+          } else {
+            // A NAMED PLUGIN THAT IS NOT HERE LOADS NOTHING. The file's own host_slot_index is an
+            // index into the machine it was SAVED on, so using it when the ref fails to resolve
+            // loads whatever now sits at that number: rack.uniproj.json asks for Identity and got
+            // an Analog Heat. The device stays in the chain and stays inert, which is visible;
+            // project.plugin_missing above already says which one and why.
+            //
+            // Except when the path is right there on disk — a plugin loaded by path need not
+            // appear in the scan at all, which is the same exemption the report above makes.
+            std::error_code pathEc;
+            const bool onDisk = !device.vstRef.path.empty() &&
+                                std::filesystem::exists(device.vstRef.path, pathEc);
+            if (!onDisk) {
+              device.hostSlotIndex = daw::kHostSlotIndexUnresolved;
+            }
           }
         }
         runtime->track.chain = std::move(loadedChain);
@@ -6529,7 +6580,18 @@ struct TrackRuntime {
       // Re-publish the rack now that it holds the project's devices. The
       // all-tracks snapshot above ran before this loop restored them, so on its
       // own it would leave a UI showing the pre-load chain.
+      //
+      // ROUTING AND MOD LINKS NEED THE SAME REPUBLISH, and did not have it. The reasoning in the
+      // comment above applies to all three identically — the all-tracks emit runs 150 lines
+      // before `modRegistry.links = source.modLinks` — and only the chain was fixed. For
+      // modulation it was worse than a stale value: emitModSnapshot iterated the links, so an
+      // EMPTY registry emitted nothing at all. Net effect, reported by the frontend agent: open a
+      // project with modulation in it and the UI is told NOTHING, forever, with no way to ask.
+      // There is no RequestModSnapshot, so it was absent rather than late. presets/projects/
+      // rack.uniproj.json ships a link and a fresh load published zero.
       emitChainSnapshot(*runtime);
+      emitRoutingSnapshot(*runtime);
+      emitModSnapshot(*runtime);
     }
 
     // Restore the MASTER track's chain/mixer lifted out above (patcher-is-a-device 4a).
@@ -8578,13 +8640,15 @@ struct TrackRuntime {
     }
     if (entry.size == sizeof(daw::UiModLinkCommandPayload) &&
         (commandType == daw::UiCommandType::AddModLink ||
-         commandType == daw::UiCommandType::RemoveModLink)) {
+         commandType == daw::UiCommandType::RemoveModLink ||
+         commandType == daw::UiCommandType::SetModLinkDepth)) {
       daw::UiModLinkCommandPayload modPayload{};
       std::memcpy(&modPayload, entry.payload, sizeof(modPayload));
       const auto commandType =
           static_cast<daw::UiCommandType>(modPayload.commandType);
       if (commandType != daw::UiCommandType::AddModLink &&
-          commandType != daw::UiCommandType::RemoveModLink) {
+          commandType != daw::UiCommandType::RemoveModLink &&
+          commandType != daw::UiCommandType::SetModLinkDepth) {
         return;
       }
       constexpr uint16_t kModErrTrackMissing = 1;
@@ -8604,6 +8668,72 @@ struct TrackRuntime {
         emitModError(kModErrTrackMissing, modPayload.trackId, modPayload.linkId);
         return;
       }
+      // A REMOVE NEEDS ONLY (track, link), AND A DEPTH CHANGE ONLY (track, link, depth). Both
+      // used to fall through the ADD's validation below — kind decoding, findDevicePos on both
+      // device ids, and the forward-order test — so a caller that knew a link's id still had to
+      // send the devices it happens to connect. Unstated ids default to 0, so on a project whose
+      // device ids start higher EVERY removal was refused as kModErrInvalidDevice while the
+      // caller was told it succeeded, and the links piled up. It looked correct only because
+      // rack.uniproj.json has a device 0, so the default resolved there.
+      //
+      // Reported by the frontend agent, who worked around it by looking each link up and sending
+      // its devices. Validating what a command does not use is how a command acquires arguments
+      // that have nothing to do with it.
+      if (commandType == daw::UiCommandType::RemoveModLink ||
+          commandType == daw::UiCommandType::SetModLinkDepth) {
+        const bool removing = commandType == daw::UiCommandType::RemoveModLink;
+        bool touched = false;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          auto& links = runtime->track.modRegistry.links;
+          if (removing) {
+            const auto before = links.size();
+            links.erase(std::remove_if(links.begin(), links.end(),
+                                       [&](const daw::ModLink& link) {
+                                         return link.linkId == modPayload.linkId;
+                                       }),
+                        links.end());
+            touched = links.size() != before;
+          } else {
+            // IN PLACE, so the id, the uid16 and the source/target survive. Remove+add was the
+            // only way to change a depth, and it changed the id, dropped the uid16 (which
+            // silently disables the modulation) and was not atomic — which put a depth SLIDER
+            // out of reach, since a continuous gesture would tear the link down and rebuild it
+            // every frame. That was a UI limitation caused by the opcode set.
+            for (auto& link : links) {
+              if (link.linkId != modPayload.linkId) {
+                continue;
+              }
+              link.depth = modPayload.depth;
+              link.bias = modPayload.bias;
+              link.enabled = ((modPayload.flags >> 10) & 0x1u) != 0;
+              touched = true;
+              break;
+            }
+          }
+        }
+        if (!touched) {
+          emitModError(kModErrLinkMissing, modPayload.trackId, modPayload.linkId);
+          return;
+        }
+        std::shared_ptr<const TrackStateSnapshot> snapshot;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          snapshot = buildTrackSnapshot(runtime->track);
+        }
+        std::atomic_store_explicit(&runtime->trackSnapshot, snapshot,
+                                   std::memory_order_release);
+        emitModSnapshot(*runtime);
+        DAW_EVENT(removing ? "modlink.removed" : "modlink.depth_set")
+            .field("track", modPayload.trackId)
+            .field("link", modPayload.linkId)
+            .field("depth", static_cast<double>(modPayload.depth))
+            .field("bias", static_cast<double>(modPayload.bias));
+        historyAppend(daw::uiCommandTypeName(commandType), "received",
+                      modPayload.trackId, 0, "");
+        return;
+      }
+
       auto decodeSourceKind = [&](uint16_t flags) -> std::optional<daw::ModSourceKind> {
         const uint8_t raw = static_cast<uint8_t>(flags & 0x0Fu);
         if (raw > static_cast<uint8_t>(daw::ModSourceKind::PatcherNodeOutput)) {
@@ -8667,20 +8797,11 @@ struct TrackRuntime {
         emitModError(kModErrOrderViolation, modPayload.trackId, modPayload.linkId);
         return;
       }
+      // ADD ONLY from here — remove and depth returned above.
       bool updated = false;
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
-        if (commandType == daw::UiCommandType::RemoveModLink) {
-          auto& links = runtime->track.modRegistry.links;
-          const auto before = links.size();
-          links.erase(std::remove_if(links.begin(),
-                                     links.end(),
-                                     [&](const daw::ModLink& link) {
-                                       return link.linkId == modPayload.linkId;
-                                     }),
-                      links.end());
-          updated = links.size() != before;
-        } else {
+        {
           auto& links = runtime->track.modRegistry.links;
           if (modPayload.linkId == daw::kModLinkIdAuto) {
             uint32_t nextId = 1;
@@ -8735,8 +8856,6 @@ struct TrackRuntime {
                                    snapshot,
                                    std::memory_order_release);
         emitModSnapshot(*runtime);
-      } else if (commandType == daw::UiCommandType::RemoveModLink) {
-        emitModError(kModErrLinkMissing, modPayload.trackId, modPayload.linkId);
       }
       return;
     }

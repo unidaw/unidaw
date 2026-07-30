@@ -2110,6 +2110,40 @@ fn main() {
                     }
                     code
                 }
+                // Change an existing link's depth/bias/enabled IN PLACE. Remove+add was the
+                // only way, and it changed the id, dropped the uid16 (which silently disables
+                // the modulation) and was not atomic — so a depth SLIDER was impossible: a
+                // continuous gesture would tear the link down and rebuild it every frame.
+                Some(&"mod-depth") => {
+                    use daw_bridge::layout as L;
+                    let link = match flag_u64(&args, "--link", None) {
+                        Ok(v) => v as u32,
+                        Err(e) => { eprintln!("daw-cli: {e} (--link is required — this addresses an EXISTING link)"); std::process::exit(2) }
+                    };
+                    let depth = match flag_f64(&args, "--depth", f64::NAN) {
+                        Ok(v) if !v.is_nan() => v as f32,
+                        _ => { eprintln!("daw-cli: --depth is required"); std::process::exit(2) }
+                    };
+                    let enabled = flag_u64(&args, "--enabled", Some(1)).unwrap_or(1) != 0;
+                    let payload = L::UiModLinkCommandPayload {
+                        command_type: UiCommandType::SetModLinkDepth as u16,
+                        // Only bit 10 (enabled) is read for a depth change; the kind bits are
+                        // ignored, which is the whole point of the opcode existing.
+                        flags: if enabled { 1u16 << 10 } else { 0 },
+                        track_id: flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32,
+                        link_id: link,
+                        depth,
+                        bias: flag_f64(&args, "--bias", 0.0).unwrap_or(0.0) as f32,
+                        ..Default::default()
+                    };
+                    match handle.send_mod_link_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"mod-depth\", \"track\": {}, \"link\": {link}, \"depth\": {depth} }}", payload.track_id);
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
                 Some(&"mod-link") | Some(&"unmod-link") => {
                     let removing = rest.first() == Some(&"unmod-link");
                     match mod_link_command(&args, removing) {
