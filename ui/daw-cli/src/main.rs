@@ -788,6 +788,26 @@ fn flag_i64(args: &[String], key: &str, default: i64) -> Result<i64, String> {
     }
 }
 
+/// A param id packed into the 16-byte wire field, REFUSING anything that would not survive it.
+///
+/// 15 bytes, not 16: the read-back slot nul-terminates within its own 16-byte array, so a name
+/// that filled all 16 would be written in full and read back one byte short — the write and the
+/// answer would name different lanes forever, with nothing reporting it. Truncating silently is
+/// worse than refusing, because the caller is told the lane it asked for was the lane it got.
+fn param_id_bytes(param: &str) -> Result<[u8; 16], String> {
+    let b = param.as_bytes();
+    if b.len() > 15 {
+        return Err(format!(
+            "--param {param:?} is {} bytes; the wire field holds 15. Truncating it would write \
+to a different lane than the one you named, so this is refused rather than guessed.",
+            b.len()
+        ));
+    }
+    let mut out = [0u8; 16];
+    out[..b.len()].copy_from_slice(b);
+    Ok(out)
+}
+
 fn flag_f64(args: &[String], key: &str, default: f64) -> Result<f64, String> {
     match flag(args, key) {
         Some(raw) => raw
@@ -1168,10 +1188,10 @@ fn get_automation_points(handle: &EngineHandle, args: &[String]) -> i32 {
             return 2;
         }
     };
-    let mut param_id = [0u8; 16];
-    let b = param.as_bytes();
-    let len = b.len().min(param_id.len());
-    param_id[..len].copy_from_slice(&b[..len]);
+    let param_id = match param_id_bytes(&param) {
+        Ok(v) => v,
+        Err(e) => { eprintln!("daw-cli: {e}"); return 2 }
+    };
     // UNIQUE PER INVOCATION, for the reason spelled out in get_clip: a constant request id makes
     // every call after the first match the PREVIOUS call's answer the instant it is read, so
     // asking about lane B returns lane A and the caller concludes its write was lost.
@@ -2091,10 +2111,20 @@ fn main() {
                     match mod_link_command(&args, removing) {
                         Ok(payload) => match handle.send_mod_link_command(payload) {
                             Ok(()) => {
+                                // NEVER print the AUTO sentinel as if it were the id. It read
+                                // back as 4294967295, which a caller would then pass to
+                                // `unmod-link --link` and match nothing. The engine now names the
+                                // id it assigned on the event stream (modlink.added).
+                                let auto = payload.link_id == daw_bridge::layout::MOD_LINK_ID_AUTO;
                                 println!(
                                     "{{ \"sent\": {:?}, \"track\": {}, \"link\": {} }}",
                                     if removing { "unmod-link" } else { "mod-link" },
-                                    payload.track_id, payload.link_id
+                                    payload.track_id,
+                                    if auto {
+                                        "\"auto — see modlink.added on the event stream\"".to_string()
+                                    } else {
+                                        payload.link_id.to_string()
+                                    }
                                 );
                                 0
                             }
@@ -2167,10 +2197,14 @@ fn main() {
                         Ok(v) if !v.is_nan() => v as f32,
                         _ => { eprintln!("daw-cli: --value is required (normalised 0..1)"); std::process::exit(2) }
                     };
-                    let mut param_id = [0u8; 16];
-                    let b = param.as_bytes();
-                    let len = b.len().min(param_id.len());
-                    param_id[..len].copy_from_slice(&b[..len]);
+                    // REFUSED, not truncated. The wire field is 16 bytes and the read-back
+                    // nul-terminates within it, so 15 is the real limit. Silently cutting a
+                    // longer id writes to a DIFFERENT lane than the one named — and then reads
+                    // back a third thing — with the caller told it succeeded.
+                    let param_id = match param_id_bytes(&param) {
+                        Ok(v) => v,
+                        Err(e) => { eprintln!("daw-cli: {e}"); std::process::exit(2) }
+                    };
                     let discrete = args.iter().any(|a| a == "--discrete");
                     let payload = L::UiAutomationPointPayload {
                         command_type: UiCommandType::WriteAutomationPoint as u16,
@@ -2256,6 +2290,17 @@ fn main() {
                     }
                     if matches!(cmd, UiCommandType::RenameSection) && flag(&args, "--name").is_none() {
                         eprintln!("daw-cli: --name is required for section rename");
+                        std::process::exit(2);
+                    }
+                    // `--index` is REQUIRED for a move. Its default is u32::MAX, which the engine
+                    // clamps to the last position — so `section move --id 1` with no index
+                    // silently reordered the arrangement to put that section at the END. A
+                    // destructive default that looks like a no-op is the worst kind: the caller
+                    // gets `{"sent": "section move"}` and the song is rearranged.
+                    if matches!(cmd, UiCommandType::MoveSection) && flag(&args, "--index").is_none()
+                    {
+                        eprintln!("daw-cli: --index is required for section move (0 = first). \
+Without it the section moves to the END, which is not a sensible default for a reorder.");
                         std::process::exit(2);
                     }
                     let payload = L::UiSectionCommandPayload {

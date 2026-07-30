@@ -4663,7 +4663,10 @@ struct TrackRuntime {
     daw::ringWrite(ringUiOut, entry);
     DAW_EVENT("modlink.rejected")
         .field("track", trackId)
+        // A refusal that arrives BEFORE the auto-assign reports the sentinel, because there is no
+        // id yet. Flag it rather than let 4294967295 read as a link that exists.
         .field("link", linkId)
+        .field("auto", linkId == daw::kModLinkIdAuto)
         .field("reason", errorScopeName("mod", errorCode));
     historyAppend("mod_link", ("rejected:" + errorScopeName("mod", errorCode)).c_str(),
                   trackId, 0, "");
@@ -7932,6 +7935,17 @@ struct TrackRuntime {
             .field("reason", "empty_param_id");
         return;
       }
+      // A name that FILLS the field with no terminator cannot be answered. The read-back slot
+      // nul-terminates inside its own 16 bytes, so a 16-byte id would be stored in full and read
+      // back one byte short: the write and the answer would name different lanes forever, and
+      // nothing would report it. Refuse the write rather than create a lane nobody can query.
+      if (paramId.size() >= sizeof(ap.paramId)) {
+        DAW_EVENT("automation.rejected")
+            .field("track", ap.trackId)
+            .field("param", paramId)
+            .field("reason", "param_id_not_representable");
+        return;
+      }
       TrackRuntime* runtime = nullptr;
       bool wouldNotPersist = false;
       {
@@ -8513,6 +8527,14 @@ struct TrackRuntime {
               nextId = std::max(nextId, link.linkId + 1);
             }
             modPayload.linkId = nextId;
+            // SAY WHICH ID. The caller sent the AUTO sentinel, so until this event existed the
+            // only thing it could report was the sentinel itself — and a caller that then passed
+            // 4294967295 to RemoveModLink matched nothing. Same shape as addPatcherNode's
+            // UINT32_MAX-on-failure being reported as a new node id.
+            DAW_EVENT("modlink.added")
+                .field("track", modPayload.trackId)
+                .field("link", nextId)
+                .field("auto", true);
           } else {
             const bool exists =
                 std::any_of(links.begin(),

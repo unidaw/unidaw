@@ -32,7 +32,25 @@ m = re.search(r"enum class UiCommandType : uint16_t \{(.*?)\n\};", payloads, re.
 if not m:
     print("  FAIL (setup): could not find the UiCommandType enum")
     raise SystemExit(1)
-ops = re.findall(r"^\s*([A-Za-z][A-Za-z0-9]*)\s*=\s*(\d+)", m.group(1), re.M)
+# EVERY enumerator, not only the ones with an explicit value. The old pattern required
+# `= N`, so an opcode declared bare was invisible here: its missing CLI path and its
+# missing name both went unreported by the check whose whole job is to notice them.
+#
+# A bare enumerator is now a FAILURE in its own right rather than something to tolerate and
+# number implicitly. This enum is a WIRE CONTRACT shared with the frontend's UI on its own
+# branch — an implicit value means inserting a line silently renumbers every opcode after
+# it, on both sides, and the two only find out when a command starts doing something else.
+enumerators = re.findall(r"^\s*([A-Za-z][A-Za-z0-9]*)\s*(=\s*(\d+))?\s*,",
+                         m.group(1), re.M)
+bare = [name for name, eq, _ in enumerators if not eq]
+if bare:
+    print("  FAIL: these opcodes are declared with no explicit value: %s"
+          % ", ".join(bare))
+    print("        The enum is a wire contract shared with the frontend. An implicit value")
+    print("        means inserting a line renumbers every opcode after it on both sides,")
+    print("        and nothing says so until a command starts doing something else.")
+    raise SystemExit(1)
+ops = [(name, value) for name, _, value in enumerators]
 if len(ops) < 20:
     print("  FAIL (setup): parsed only %d opcodes; the enum shape must have changed"
           % len(ops))
