@@ -83,7 +83,16 @@ export const ROW_OPS = [
      * worse than a rounded one. Raised with backend; if the notation gains the resolution the
      * storage already has, only this function changes.
      */
-    text: (v) => Math.round((v / 65536) * 256).toString(16).padStart(2, '0') },
+    /*
+     * DECIMAL, 0..255, and the stored value is `n * 256`.
+     *
+     * An earlier version rendered this as HEX, on the assumption that `o80` was 9xx muscle
+     * memory all the way down. It is not: `parse_row_ops` reads it with `rest.parse::<u32>()`,
+     * which is decimal, so `o80` is eighty two-hundred-fifty-sixths and not half. Rendering it
+     * as hex produced a token that parsed back to a DIFFERENT offset — the one failure a text
+     * form must not have.
+     */
+    text: (v) => String(Math.round(v / 256)) },
 ];
 
 /** The mark for one op. Explicit `glyph` wins; otherwise the token's first character. */
@@ -207,4 +216,90 @@ export function opsCellText(cell, note, chars, beatTicks) {
   const full = opsText(note, beatTicks);
   cell._opsStr = full.length <= chars ? full : run;
   return cell._opsStr;
+}
+
+/*
+ * The mask bits SetRowOps takes — `ROW_OP_MASK_*` in ui/daw-bridge/src/layout.rs.
+ *
+ * A bit CLEAR leaves that op alone; a bit SET with a zero value CLEARS it. That rule is the
+ * whole reason the command has a mask: without it, "set the probability" is a read-modify-write
+ * that silently drops whatever retrigger arrived between the read and the write.
+ *
+ * Which means DELETING an op is a bit SET and a value of zero, never an omission — the single
+ * easiest thing to get backwards here, and it fails by leaving the old value in place, which
+ * looks like the edit not landing rather than like the mask being wrong.
+ */
+export const OP_MASK = { retrigger: 1 << 0, probability: 1 << 1, sound: 1 << 2,
+                         soundOffset: 1 << 3, delay: 1 << 4 };
+
+/**
+ * Parse a canonical op string, mirroring `parse_row_ops` in ui/daw-bridge/src/rowop.rs.
+ *
+ * Returns `{ ops }` or `{ error }`. An unknown or malformed token is an ERROR and never a
+ * silent no-op — a red cell, not a dropped op, is the tracker rule and it is stated in that
+ * file. The refusals are worded the same way for the same reason: a person who types `p0` in
+ * one surface and the console in another should be told the same thing.
+ *
+ * ORDER MATTERS: the multi-letter prefixes are tested before the single-letter ones, or `ret3`
+ * parses as a malformed probability.
+ */
+export function parseOps(text) {
+  const ops = { retrigger: 0, probability: 0, sound: 0, soundOffset: 0, delayNum: 0, delayDen: 0 };
+  const seen = new Set();
+  for (const token of String(text || '').trim().split(/\s+/)) {
+    if (!token) continue;
+    let field = null;
+    if (token.startsWith('ret')) {
+      const n = int(token.slice(3));
+      if (n === null) return { error: `bad retrigger count in "${token}"` };
+      if (n < 1) return { error: `retrigger count must be >= 1 in "${token}"` };
+      ops.retrigger = n; field = 'retrigger';
+    } else if (token[0] === 's') {
+      const n = int(token.slice(1));
+      if (n === null) return { error: `bad sound slot in "${token}"` };
+      if (n === 0 || n > 65535) {
+        return { error: `sound slot must be 1..65535 in "${token}" (blank means the keymap picks)` };
+      }
+      ops.sound = n; field = 'sound';
+    } else if (token[0] === 'o') {
+      const n = int(token.slice(1));
+      if (n === null) return { error: `bad sample offset in "${token}"` };
+      if (n > 255) return { error: `sample offset is 0..255 (in 1/256ths) in "${token}"` };
+      // Written in 1/256ths, stored at full u16 resolution — the coarse notation is for muscle
+      // memory, not a limit on what can be expressed.
+      ops.soundOffset = n * 256; field = 'soundOffset';
+    } else if (token[0] === 'p') {
+      const n = int(token.slice(1));
+      if (n === null) return { error: `bad probability in "${token}"` };
+      if (n < 1 || n > 100) return { error: `probability must be 1..=100 in "${token}"` };
+      ops.probability = n; field = 'probability';
+    } else if (token[0] === 'd') {
+      const rest = token.slice(1);
+      const slash = rest.indexOf('/');
+      if (slash < 0) return { error: `delay needs a fraction like d1/6, got "${token}"` };
+      const num = int(rest.slice(0, slash)), den = int(rest.slice(slash + 1));
+      if (num === null) return { error: `bad delay numerator in "${token}"` };
+      if (den === null) return { error: `bad delay denominator in "${token}"` };
+      if (den === 0) return { error: `delay denominator must be nonzero in "${token}"` };
+      ops.delayNum = num; ops.delayDen = den; field = 'delay';
+    } else {
+      return { error: `unknown row op "${token}"` };
+    }
+    /*
+     * A repeated family is an ERROR, not last-wins.
+     *
+     * `ret3 ret5` is a person who meant one of them and cannot be asked which. Rust's parser
+     * takes the last silently; saying so is strictly better and costs a Set.
+     */
+    if (seen.has(field)) return { error: `"${field}" given twice` };
+    seen.add(field);
+  }
+  return { ops };
+}
+
+/** A non-negative decimal integer, or null. Rust's `parse::<u32>()` rejects everything else. */
+function int(s) {
+  if (!/^\d+$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
 }

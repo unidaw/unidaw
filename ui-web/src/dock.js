@@ -390,6 +390,28 @@ export function createCommands(api) {
      * Answered asynchronously, like `curve`: this prints a receipt and the answer prints itself
      * into the log when it lands. A receipt is not an outcome, so it says which it is.
      */
+    /*
+     * THE OPS ON THE NOTE AT THE CURSOR, as the canonical string.
+     *
+     * `rest: true` so the whole line is one argument — `ops ret3 p60 d1/6` is three tokens of
+     * ONE value, and splitting them would make the grammar's own separator into an argument
+     * separator.
+     *
+     * With no argument it CLEARS, because the mask is always full: what the cell shows is what
+     * the note has, so emptying it empties the note. An accumulate-only field you can add to and
+     * never subtract from is the other design, and it is worse.
+     */
+    ops: { help: 'ops [tokens] — set the row ops on the note at the cursor; empty clears',
+      args: [{ name: 'tokens', type: 'text', rest: true, optional: true }],
+      run: (a) => {
+        // `a.join(' ')`, not `a[0]`: a rest argument arrives as SEPARATE tokens and the command
+        // joins them — the convention `marker` and `rename` already use. Reading a[0] alone
+        // took the first token and silently dropped the others, so `ops ret3 p60` set the
+        // retrigger and cleared the probability it was in the middle of setting.
+        const text = a.join(' ').trim();
+        if (!api.opsAtCursor(text)) return refusal(api);
+        return text ? `ops: ${text}` : 'ops cleared';
+      } },
     kit: { help: 'kit <track> <device> — what is in that sampler, slot by slot',
       args: [A_TRACK, { name: 'device', type: 'int', min: 0 }],
       run: (a) => {

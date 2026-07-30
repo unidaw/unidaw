@@ -806,6 +806,7 @@ test('a project row leaves its meta line to the renderer', () => {
  * notice, because it checks that a command is DECLARED, not that it can run.
  */
 const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'samplerKitCached',
+                     'rowOps', 'opsAtCursor', 'opsTextAtCursor', 'noteIdAtCursor',
                      'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
@@ -2199,6 +2200,9 @@ const OP_REGISTRY = {
   // The sampler read-back. Reaches the engine from this app; daw-cli has no verb for it and the
   // agent manifest still owes it a tool, so both are recorded rather than waved through.
   kit:       { cli: null, agent: null, why: 'gap' },
+  // Row ops. daw-cli reached the engine FIRST here — `do set-row-ops` shipped with the opcode —
+  // so the CLI path is real from day one and only the agent manifest owes it a tool.
+  ops:       { cli: 'set-row-ops', agent: null, why: 'gap' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },
@@ -2295,7 +2299,7 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
 const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'del', 'delchord', 'delharmony', 'delnode', 'editor',
                    'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
-                   'seek', 'solo', 'tempo', 'transpose', 'mods',
+                   'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 
@@ -2504,6 +2508,20 @@ const ENGINE_UNUSED = {
    * plan stated when these were first recorded — the read-back is what makes a kit drawable, so
    * it goes first and the commands follow the surface rather than leading it.
    */
+  /*
+   * MODULES (SaveModule / LoadModule) and the sampler's envelope and bulk carrier, all landed
+   * engine-side while this app was elsewhere. Recorded together because they share a reason:
+   * each wants a surface before it wants a verb, and half of each is worse than none.
+   *
+   * `BulkChunk` in particular is a CARRIER, not a feature — it is what lifts the 40-byte inbound
+   * cap so a command can send a string. Wiring it with nothing to send would be plumbing with
+   * no water.
+   */
+  SaveModule: 'gap — a module is a saved chain; it wants a browser entry before a verb',
+  LoadModule: 'gap — with SaveModule',
+  SamplerSetEnvelope: 'gap — an ADSR wants the drawable envelope, not four numbers on a line',
+  BulkChunk: 'gap — a carrier for payloads over 40 bytes; nothing here needs one yet',
+  SamplerSetEnvelopePoints: 'gap — with SamplerSetEnvelope, and rides BulkChunk',
   SamplerLoad: 'gap — the sampler wants its kit drawn before its commands are reachable',
   SamplerSetSlot: 'gap — with SamplerLoad',
   SamplerSlice: 'gap — with SamplerLoad; slicing wants markers on a waveform, not a verb',
@@ -2633,7 +2651,15 @@ test('the canonical text form round-trips what the engine published', () => {
   assert.equal(opsText({ retrigger: 3, probability: 60 }), 'ret3 p60');
   // ORDER is the schema's, not the object's — the text form is generated from the
   // same list the run is, so the two cannot drift apart.
-  assert.equal(opsText({ soundOffset: 32768, retrigger: 3, sound: 5 }), 'ret3 s5 o80');
+  /*
+   * `o` is DECIMAL 1/256ths, stored as `n * 256` — so 32768 is 128, not 0x80.
+   *
+   * This line asserted `o80` while `opsText` rendered hex, and the two agreed with each other
+   * and with nothing else: `parse_row_ops` reads the token with a decimal `parse::<u32>()`, so
+   * the hex form round-tripped to a DIFFERENT offset. A text form whose only contract is that
+   * it parses back had exactly one job.
+   */
+  assert.equal(opsText({ soundOffset: 32768, retrigger: 3, sound: 5 }), 'ret3 s5 o128');
   // The delay is published in TICKS and authored as a fraction of a beat, so it
   // needs the beat length to be spelled back. 160000 of 960000 is a sixth.
   assert.equal(opsText({ delayTicks: 160000 }, 960000), 'd1/6');

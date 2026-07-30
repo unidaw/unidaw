@@ -80,7 +80,7 @@
 <script type="module">
 import { Tracker } from './src/tracker.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
-import { opsText } from './src/rowops.js';
+import { opsText, parseOps, OP_MASK, ROW_OPS } from './src/rowops.js';
 /*
  * `ticksPerBar` WAS NEVER IMPORTED, and `dockApi.ticksPerBar()` has been throwing
  * "ticksPerBar is not defined" since it shipped — a console method nobody had called. Found
@@ -1464,6 +1464,69 @@ const samplerKits = new Map();
 let samplerKitAsked = null;
 
 /**
+ * WRITE the ops on one note, from a canonical op string.
+ *
+ * THE MASK IS ALWAYS FULL. Every op family is named on every commit, so a family the string
+ * omits is sent with its bit SET and a value of ZERO — which is how SetRowOps spells "clear
+ * this". Sending a partial mask would make deleting an op impossible to express: the command
+ * cannot tell "leave the retrigger alone" from "remove it" except by that bit.
+ *
+ * It also makes the cell's contract the obvious one — what you see in it is what the note has,
+ * so emptying it empties the note — rather than an accumulate-only field you can add to and
+ * never subtract from.
+ */
+function writeRowOps(track, clipId, noteId, text) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  /*
+   * A NOTE THIS COMMAND CANNOT ADDRESS.
+   *
+   * `UiSetRowOpsPayload::noteId` is u32; an authored EventId is u64 with the AUTHOR in its top
+   * 16 bits, so anything an agent or an import wrote is >= 2^48. Truncating would drop the
+   * author and land the edit on whichever human-authored note shares the counter — a silent
+   * edit of the wrong note, which is far worse than a refusal. Reported to backend; the fix is
+   * one field width. Until then this says no.
+   */
+  if (!Number.isSafeInteger(noteId) || noteId <= 0 || noteId > 0xFFFFFFFF) {
+    state.reject = 'that note was written by an agent or an import and cannot be addressed yet';
+    schedule();
+    return false;
+  }
+  const r = parseOps(text);
+  if (r.error) { state.reject = r.error; schedule(); return false; }
+  const o = r.ops;
+  let mask = 0;
+  for (const k of Object.keys(OP_MASK)) mask |= OP_MASK[k];
+  conn.send({
+    type: 'setrowops', track: Number(track) || 0, clip: Number(clipId) || 0, note: noteId,
+    mask,
+    ret: o.retrigger, prob: o.probability, sound: o.sound, offset: o.soundOffset,
+    // The engine stores the delay in NANOTICKS; the notation is a fraction of a beat, so it is
+    // resolved here against the song's beat rather than sent as a fraction the payload has no
+    // room for. `d1/6` at a 960000 beat is 160000.
+    delay: o.delayDen ? Math.round((ticksPerBeat(songMeter()) * o.delayNum) / o.delayDen) : 0,
+  });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
+ * The ops on the note under the cursor, written from a canonical string.
+ *
+ * CLIP 0, which is the engine's own sentinel: `applySetRowOps` skips the clip filter when the id
+ * is zero and searches every owned clip for the note. That is the right call here because a
+ * note on the wire carries its PLACEMENT, not its clip, and resolving one to the other means
+ * finding the placement's extent — which is only published for the part of the arrangement
+ * being drawn. Addressing by note id alone has no such window, and the id is unique by
+ * construction.
+ */
+function writeOpsAtCursor(text) {
+  const n = noteAtCursor();
+  if (!n) { state.reject = 'no note at the cursor to put ops on'; schedule(); return false; }
+  return writeRowOps(state.cursor.track, 0, n.id, text);
+}
+
+/**
  * Ask what is in the sampler on (track, device). Answered on the ack channel; see `onAck`.
  *
  * Returns the last answer if there is one, or null while the question is out. Null means "not
@@ -2581,6 +2644,12 @@ const dockApi = {
   writeAutomation: (track, param, tick, value, discrete) =>
     writeAutomation(track, param, tick, value, discrete),
   automationPoints: (track, param) => requestAutomation(track, param),
+  rowOps: (track, note, text) => writeRowOps(track, 0, note, text),
+  opsAtCursor: (text) => writeOpsAtCursor(text),
+  opsTextAtCursor: () => opsAtCursorText(),
+  /** The engine's id for the note under the cursor, or 0. A test editing a note has to know
+   *  WHICH note it is editing, and "the one at the cursor" is not an id. */
+  noteIdAtCursor: () => { const n = noteAtCursor(); return n ? n.id : 0; },
   samplerKit: (track, device) => requestSamplerKit(track, device),
   samplerKitCached: (track, device) => samplerKitOf(track, device),
   automationEdit: (on) => setAutomationEdit(on),
@@ -7344,6 +7413,10 @@ window.__uni = {
   automation: (track) => dockApi.automation(track),
   writeAutomation: (t, p, k, v, d) => dockApi.writeAutomation(t, p, k, v, d),
   automationPoints: (track, param) => dockApi.automationPoints(track, param),
+  rowOps: (t, n, x) => dockApi.rowOps(t, n, x),
+  opsAtCursor: (x) => dockApi.opsAtCursor(x),
+  opsTextAtCursor: () => dockApi.opsTextAtCursor(),
+  noteIdAtCursor: () => dockApi.noteIdAtCursor(),
   samplerKit: (t, d) => dockApi.samplerKit(t, d),
   samplerKitCached: (t, d) => dockApi.samplerKitCached(t, d),
   automationEdit: (on) => dockApi.automationEdit(on),

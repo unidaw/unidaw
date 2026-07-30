@@ -180,6 +180,110 @@ const cells = await opsCells();
         JSON.stringify(ops.mode));
 }
 
+// ---------------------------------------------------------------------------
+// THE GAP, ASSERTED. A note LOADED from a project cannot have its ops set.
+//
+// Recorded as a check rather than left out, so it fails the day it is fixed and this file stops
+// claiming a limitation that no longer exists. The reason it matters: editing a project you
+// opened is the ordinary case, and this is exactly backwards from it.
+// ---------------------------------------------------------------------------
+{
+  await page.evaluate(() => window.__uni.run('goto 0 0'));
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(400);
+  const before = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(before === 'ret3 p60 d1/6', 'the loaded note still reads its authored ops', before);
+  await page.evaluate(() => window.__uni.run('ops ret9'));
+  await page.waitForTimeout(2000);
+  const after = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(after === before,
+        'KNOWN GAP: a note loaded from a project is rejected with no_such_note — '
+        + '`applySetRowOps` searches ownedClips and a loaded note is in a SOURCE clip. '
+        + 'Reported. This check inverts the day it is fixed.', after);
+  /*
+   * AND THE REFUSAL IS INVISIBLE, which is the half that is mine. `rowops.rejected` is a LOG
+   * event, so the sidecar acks ok, the engine rejects into its own log, the cell does not
+   * change, and the person is told nothing. Asked backend to put it on the UiDiff event ring
+   * the way `clip-rejected` already is; until then this asserts the silence rather than
+   * pretending it is not there.
+   */
+  check(await page.evaluate(() => window.__uni.state().reject) === null,
+        'and nothing on screen says why — the rejection never leaves the engine log');
+}
+
+// ---------------------------------------------------------------------------
+// AND NOW WRITING THEM, on a note this session created.
+//
+// SetRowOps (81) exists as of tonight; before it, row ops could be DRAWN and authored by
+// nothing — not the tracker, not the console, not daw-cli — a display onto data only a text
+// editor could produce.
+//
+// A NOTE TYPED HERE, not the fixture's. `applySetRowOps` searches `ownedClips` only, and a
+// project's notes live in SOURCE clips until something forks them, so a loaded note is
+// rejected with `no_such_note`. That is an engine gap, it is reported, and it is asserted as a
+// gap further down rather than papered over by only ever testing the path that works.
+// ---------------------------------------------------------------------------
+{
+  /*
+   * A FRESH SONG for the write half.
+   *
+   * Typing into the loaded project's placement is not enough: that placement is a SOURCE clip
+   * and a note typed into it stays there, so the write is rejected exactly as a loaded note is.
+   * An empty song has no placements, so the first note creates an OWNED clip — which is the
+   * only kind `applySetRowOps` can currently reach.
+   *
+   * That the write half needs a brand-new song to work at all IS the gap, stated as setup.
+   */
+  await page.evaluate(() => window.__uni.run('new opswrite'));
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.__uni.run('zoom 1'));
+  await page.evaluate(() => window.__uni.run('goto 32 0'));
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.__uni.run('note 67'));
+  await page.waitForTimeout(1800);
+  await page.evaluate(() => window.__uni.run('goto 32 0'));
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(400);
+
+  const id = await page.evaluate(() => window.__uni.noteIdAtCursor());
+  check(id > 0, 'the note this session wrote has an id to address', String(id));
+  check(await page.evaluate(() => window.__uni.opsTextAtCursor()) === '',
+        'and starts with no ops');
+
+  await page.evaluate(() => window.__uni.run('ops ret5 p25'));
+  await page.waitForTimeout(2000);
+  check(await page.evaluate(() => window.__uni.opsTextAtCursor()) === 'ret5 p25',
+        'the ops the console wrote come back from the ENGINE, not from what was typed');
+
+  /*
+   * AN OP LEFT OUT IS CLEARED. The mask is always full: a bit CLEAR leaves an op alone and a bit
+   * SET with zero clears it, so a partial mask could not express a deletion at all. This is what
+   * makes the cell's contract the obvious one — what it shows is what the note has.
+   */
+  await page.evaluate(() => window.__uni.run('ops p40'));
+  await page.waitForTimeout(2000);
+  const only = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(only === 'p40', 'an op left out of the string is CLEARED, not left behind', only);
+
+  await page.evaluate(() => window.__uni.run('ops'));
+  await page.waitForTimeout(2000);
+  check(await page.evaluate(() => window.__uni.opsTextAtCursor()) === '',
+        'an empty string clears every op on the note');
+
+  // A MALFORMED TOKEN IS REFUSED BY NAME, in the engine parser's own words, and changes nothing.
+  await page.evaluate(() => window.__uni.run('ops ret3'));
+  await page.waitForTimeout(1800);
+  const bad = await page.evaluate(() => window.__uni.run('ops p0'));
+  await page.waitForTimeout(600);
+  check(/probability must be 1/.test((bad || []).join(' ')),
+        'a bad token is refused in the same words the engine parser uses',
+        (bad || []).join(' ').slice(-120));
+  check(await page.evaluate(() => window.__uni.opsTextAtCursor()) === 'ret3',
+        'and the refused edit changed nothing');
+}
+
 /*
  * NOTHING THREW. Load-bearing: the readout shipped throwing a missing-import ReferenceError on
  * every frame, and every other suite passed through it — the unit tests never run the draw

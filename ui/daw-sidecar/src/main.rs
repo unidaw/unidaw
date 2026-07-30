@@ -32,7 +32,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
-use daw_bridge::layout::{EventEntry, UiChainCommandPayload, UiChordCommandPayload,
+use daw_bridge::layout::{UiSetRowOpsPayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
                          UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
@@ -3204,6 +3204,43 @@ fn last_client_gone(shm: &str, clients: Arc<AtomicU64>) {
     });
 }
 
+/// SET ROW OPS on one existing note (opcode 81).
+///
+///   {"type":"setrowops","track":0,"clip":1,"note":7,"mask":3,"ret":3,"prob":60,
+///    "sound":0,"offset":0,"delay":160000}
+///
+/// THE MASK IS THE POINT and it is carried through verbatim from the client. A bit CLEAR leaves
+/// that op alone; a bit SET with a zero value CLEARS it. Deciding the mask HERE — say, from
+/// which fields the JSON happens to carry — would make deleting an op impossible to express,
+/// because "probability: 0" and "no probability given" would look identical on the wire.
+///
+/// `note` is the authored EventId. The payload field is u32 while the id is u64, so the caller
+/// is responsible for refusing an id that does not fit; see the guard in the page. Truncating
+/// here would drop the AUTHOR field and land the edit on a different note.
+fn build_set_row_ops(body: &str) -> Option<Result<UiSetRowOpsPayload, &'static str>> {
+    if !is_type(body, "setrowops") { return None; }
+    let Some(mask) = parse_num(body, "\"mask\"") else {
+        return Some(Err("setrowops needs a mask — which ops it means"));
+    };
+    if mask <= 0 { return Some(Err("setrowops with an empty mask would change nothing")); }
+    let note = parse_num(body, "\"note\"").unwrap_or(0).max(0) as u64;
+    if note == 0 { return Some(Err("setrowops needs the note it edits")); }
+    if note > u32::MAX as u64 { return Some(Err("that note id does not fit the command")); }
+    Some(Ok(UiSetRowOpsPayload {
+        command_type: UiCommandType::SetRowOps as u16,
+        mask: mask as u16,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        clip_id: parse_num(body, "\"clip\"").unwrap_or(0).max(0) as u32,
+        note_id: note as u32,
+        delay_nanoticks: parse_num(body, "\"delay\"").unwrap_or(0).max(0) as u32,
+        sound: parse_num(body, "\"sound\"").unwrap_or(0).clamp(0, 65535) as u16,
+        sound_offset: parse_num(body, "\"offset\"").unwrap_or(0).clamp(0, 65535) as u16,
+        retrigger: parse_num(body, "\"ret\"").unwrap_or(0).clamp(0, 255) as u8,
+        probability: parse_num(body, "\"prob\"").unwrap_or(0).clamp(0, 255) as u8,
+        reserved: [0u8; 14],
+    }))
+}
+
 /// One line of agent progress, as JSON the page can render.
 ///
 /// Hand-built rather than serde-derived: this is four fields and the escaping is
@@ -3633,6 +3670,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"autopoint\":{},\"value\":{}}}",
                                         p.track_id, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // ROW OPS on one note. Own 40-byte payload again.
+                        if let Some(r) = build_set_row_ops(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_set_row_ops(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"setrowops\":{},\"mask\":{}}}",
+                                        p.note_id, p.mask),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };
