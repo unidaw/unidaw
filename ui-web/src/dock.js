@@ -320,6 +320,68 @@ export function createCommands(api) {
       run: (a) => (api.moveDevice(Number(a[0]), Number(a[1]), Number(a[2]))
         ? `device ${a[1]} to ${a[2]}` : 'no engine') },
     /*
+     * MODULATION: what moves what.
+     *
+     * A LINK THE ENGINE ACCEPTS CAN STILL MOVE NOTHING, three separate ways, and every one
+     * of them is silent — the link needs a parameter NAME (the engine addresses a VST
+     * parameter by uid16 and never by index), the source needs a VALUE (a macro nobody has
+     * turned is not in the source table and the link is skipped), and the source must sit
+     * STRICTLY EARLIER in the chain than its target (the applier requires it; the command
+     * validator does not). `map` does all three, which is why it takes a track and a
+     * parameter and not a link's worth of arguments.
+     */
+    mods: { help: 'mods [track] — what modulates what', args: [A_TRACK_OPT],
+      run: (a) => {
+        const t = a[0] === undefined ? undefined : Number(a[0]);
+        const m = api.mods(t);
+        if (!m) return 'no engine';
+        if (!m.links.length) {
+          /*
+           * "Nothing" and "not published yet" ARE THE SAME ANSWER HERE, and saying so is
+           * more use than picking one. The engine publishes a track's modulation only when
+           * it changes, and its load-time publish runs BEFORE the links are installed — so
+           * a project that has modulation shows none until the first edit. Reported to
+           * backend; until it is fixed, a bare "nothing" would be a confident lie half the
+           * time.
+           */
+          return `nothing modulates anything on track ${m.track}`
+               + '\n(the engine publishes a track\u2019s modulation only when it changes,'
+               + ' so a just-loaded project may not have said yet)';
+        }
+        return m.links.map((l) => {
+          // A link that CANNOT WORK is reported as such, with which of the three reasons.
+          // Listing it as ordinary is the same lie the badge would tell by lighting for it.
+          const why = l.unnamed ? '  NOT WORKING (names no parameter)'
+                    : l.orphan ? '  NOT WORKING (this device has no such parameter)'
+                    : l.notForward ? '  NOT WORKING (source is not before its target)'
+                    : '';
+          return `${l.id}  dev${l.sourceDevice}:${l.sourceKindName}${l.sourceId}`
+               + ` -> dev${l.targetDevice}:${l.targetId}`
+               + `  depth ${l.depth.toFixed(2)}  ${l.enabled ? l.rateName : 'off'}${why}`;
+        }).join('\n');
+      } },
+    map: { help: 'map <track> <device> <param> — modulate a parameter from the macro',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             { name: 'param', type: 'int', min: 0 }],
+      run: (a) => (api.mapParam(Number(a[0]), Number(a[1]), Number(a[2]))
+        ? `mapped dev${a[1]} param ${a[2]}` : refusal(api)) },
+    unmap: { help: 'unmap <track> <link> — stop modulating',
+      args: [A_TRACK, { name: 'link', type: 'int', min: 1 }],
+      run: (a) => (api.unmapParam(Number(a[0]), Number(a[1]))
+        ? `link ${a[1]} removed` : refusal(api)) },
+    depth: { help: 'depth <track> <link> <amount> — how far the source sweeps it, 0 to 1',
+      args: [A_TRACK, { name: 'link', type: 'int', min: 1 },
+             { name: 'amount', type: 'num', min: 0, max: 1 }],
+      run: (a) => (api.modDepth(Number(a[0]), Number(a[1]), Number(a[2]))
+        ? `link ${a[1]} depth ${a[2]}` : refusal(api)) },
+    macro: { help: 'macro <track> <device> <value> — turn a macro knob, 0 to 1',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             { name: 'value', type: 'num', min: 0, max: 1 }],
+      // The knob itself. Separate from `map` because turning it is the ORDINARY action —
+      // mapping happens once and turning happens all afternoon.
+      run: (a) => (api.macro(Number(a[0]), Number(a[1]), Number(a[2]))
+        ? `macro ${a[2]}` : refusal(api)) },
+    /*
      * THE SPINE: the named spans the song is built out of.
      *
      * A SECTION HAS A LENGTH AND NO POSITION, and every one of these commands is that

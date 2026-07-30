@@ -208,6 +208,9 @@ function describeCaps(mask) {
   return s;
 }
 
+/** The empty link list, shared. A track with no modulation must not allocate one. */
+const NO_MODS = Object.freeze([]);
+
 /** One pooled parameter row's worth of view-model. Mutated, never replaced. */
 function createParamSlot() {
   return {
@@ -218,6 +221,28 @@ function createParamSlot() {
     frac: 0,        // 0..1, already normalised by the bridge
     milli: 0,       // the same value in the engine's own unit, for comparison
     _dv: NaN,       // what `display` was derived from, when we had to derive it
+    /**
+     * THE MODULATION LINK THAT MOVES THIS PARAMETER, by link id, or 0 for none.
+     *
+     * The id and not a boolean, because unmapping needs it: `RemoveModLink` addresses a
+     * link, and a row that knew only "something modulates me" would have to search for
+     * which one at click time — from a renderer, against a list the model already walked.
+     *
+     * Matched on (targetDevice, uid16) and NEVER on the target id alone. `targetId` is the
+     * plugin's own parameter index and the rows are in the plugin's order, so they look
+     * interchangeable — until a plugin publishes a sparse or reordered set, and then the
+     * badge lights on the wrong row. The uid16 is the identity; the index is the ordering.
+     */
+    mod: 0,
+    /** How far the source sweeps it, 0..1 of the parameter's range. */
+    modDepth: 0,
+    /**
+     * The link exists and CANNOT WORK: it has no uid16, and the engine addresses a VST
+     * parameter by uid16 alone. Drawn differently from a working link, because a badge
+     * that lit the same way for both would be the exact lie this whole feature risks —
+     * an interface reporting a modulation that moves nothing.
+     */
+    modInert: false,
   };
 }
 
@@ -342,6 +367,19 @@ export function buildChainModel(opts, buf) {
   buf.track = track;
   buf.trackName = trackName;
   buf.version = entry ? entry.version : -1;
+  /*
+   * WHAT MODULATES WHAT on this track, as the engine published it.
+   *
+   * The array by REFERENCE, not a copy: the sidecar replaces the whole chain entry per
+   * track when anything changes, so the same array is the same links, and copying it here
+   * would be an allocation per frame for a list nobody mutates.
+   *
+   * `modVersion` is the engine's own counter for this track's registry, and it is what the
+   * parameter memo below keys on — without it a new link would not repaint the rows,
+   * because the parameter VALUES had not moved.
+   */
+  buf.modLinks = (entry && entry.modLinks) || NO_MODS;
+  buf.modVersion = (entry && entry.modVersion) || 0;
   buf.known = !!entry;
   buf.cardCount = 0;
 
@@ -454,8 +492,9 @@ export function buildChainModel(opts, buf) {
     //
     // Eight Zebra2s is 2,048 of these, sixty times a second, to write back the
     // numbers already there.
-    if (c._pSrc !== src || c._pId !== d.id || c._pCount !== shown) {
-      c._pSrc = src; c._pId = d.id; c._pCount = shown;
+    if (c._pSrc !== src || c._pId !== d.id || c._pCount !== shown
+        || c._pMod !== buf.modVersion) {
+      c._pSrc = src; c._pId = d.id; c._pCount = shown; c._pMod = buf.modVersion;
       for (let k = 0; k < shown; k++) {
         const q = src[k];
         const p = slots[k];
@@ -483,6 +522,43 @@ export function buildChainModel(opts, buf) {
         } else if (p._dv !== q.value) {
           p._dv = q.value;
           p.display = q.value.toFixed(2);
+        }
+        /*
+         * ...and whether anything MOVES it.
+         *
+         * A linear scan, inside a block that only runs when the values, the device or the
+         * mod version changed — so it is not per frame. A Map would be the reflex and
+         * would be wrong here: building one allocates, and a track carries a handful of
+         * links, not hundreds.
+         *
+         * Only VST-param targets match. A link whose target is a patcher parameter has a
+         * uid16 of nothing, and `p.uid` for a plugin without a stable id is also empty —
+         * so an empty-equals-empty comparison would light every unnamed row for every
+         * patcher link. Both sides must be non-empty to match.
+         */
+        p.mod = 0; p.modDepth = 0; p.modInert = false;
+        for (let m = 0; m < buf.modLinks.length; m++) {
+          const L = buf.modLinks[m];
+          if (L.targetDevice !== d.id) continue;
+          if (p.uid && L.uid16 && L.uid16 === p.uid) {
+            p.mod = L.id; p.modDepth = L.depth; break;
+          }
+          /*
+           * A LINK WITH NO uid16 IS INERT, and it is shown as such rather than as working.
+           *
+           * The engine's block-rate applier builds its ParamPayload from `uid16` and never
+           * reads `targetId`, so a VstParam link without one is accepted, published,
+           * drawable — and moves nothing. Projects can hold these, and so can a session
+           * whose naming command was lost.
+           *
+           * Matched on `targetId` only for THIS case, because it is the only thing such a
+           * link carries that says which row it meant. Not used as the general match: the
+           * uid is the identity and the index is the ordering, and a plugin that publishes
+           * a sparse set would light the wrong row.
+           */
+          if (!L.uid16 && L.targetId === p.index) {
+            p.mod = L.id; p.modDepth = L.depth; p.modInert = true; break;
+          }
         }
       }
     }

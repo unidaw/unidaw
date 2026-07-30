@@ -167,6 +167,38 @@
 .dv-p-v { flex: 0 0 58px; text-align: right; color: var(--base-accent-ramp-300);
           overflow: hidden; white-space: nowrap; }
 
+/* MAP — the modulation badge, at the right end of a parameter row.
+   Dim and outlined when nothing moves this parameter, LIT in the accent when
+   something does. Both states are clickable and it never changes size between them:
+   a badge that grew when it lit would reflow the value beside it on every link. */
+.dv-p-map {
+  flex: 0 0 auto;
+  margin-left: 5px;
+  padding: 0 3px;
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  line-height: 11px;
+  color: var(--uni-text-empty);
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 2px;
+  cursor: pointer;
+  user-select: none; -webkit-user-select: none;
+}
+.dv-p-map:hover { color: var(--uni-text-instrument); border-color: var(--uni-rule-track); }
+/* Linked and NOT WORKING: the link names no parameter, so the engine moves nothing. The
+   warm colour rather than the accent, because this is the same class of statement as a
+   failed audio source — something is here and it is not doing what it looks like. */
+.dv-p-map.inert {
+  color: var(--uni-text-fx);
+  border-color: var(--uni-text-fx);
+  border-style: dashed;
+}
+.dv-p-map.on {
+  color: var(--base-accent-ramp-300);
+  border-color: var(--base-accent);
+  background: var(--uni-surface-cursor-cell);
+}
+
 /* An edit that has been sent and not yet confirmed. The number under a pending
    row is what this side ASKED for, and until the plugin's host says otherwise
    the only honest thing to call it is a request — so it is marked, in the same

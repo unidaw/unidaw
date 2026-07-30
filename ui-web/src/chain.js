@@ -64,7 +64,7 @@ export class Chain {
    * on the strip, rather than showing a value nobody has accepted.
    */
   constructor(host, { onSelect, onAdd, onParam, onOpenEditor, onDelete,
-                      onOpenPatcher, onBypass } = {}) {
+                      onOpenPatcher, onBypass, onMap } = {}) {
     this.host = host;
     this.host.className = 'dv';
     this.onSelect = onSelect;
@@ -84,6 +84,13 @@ export class Chain {
     // Destructured, for the reason onDelete's comment gives — that failure looks
     // exactly like a working button and is only found by pressing it.
     this.onBypass = onBypass;
+    /*
+     * MAP. Destructured and assigned here for the same reason `onBypass` is, one line up:
+     * a callback the constructor accepts and never stores gives a badge that looks live,
+     * responds to a hover, and does nothing — and nothing throws, because a listener
+     * nobody reaches is not a fault (GUIDELINES 2.15).
+     */
+    this.onMap = onMap;
 
     const head = div('dv-head', host);
     this.label = text(div('dv-label', head));
@@ -405,6 +412,32 @@ export class Chain {
   }
 
   _down(e) {
+    /*
+     * MAP, before the parameter bar. The badge sits inside the row, so a click on it is
+     * also a click on the row — and the row's bar is a DRAG that writes a value, so
+     * without this order pressing MAP would also move the parameter it was mapping.
+     */
+    const mapper = e.target.closest('.dv-p-map');
+    if (mapper) {
+      const card = mapper.closest('.dv-card');
+      const row = mapper.closest('.dv-p');
+      if (card && row && this.onMap) {
+        const link = Number(mapper.dataset.link || 0);
+        this.onMap({
+          track: this.vm ? this.vm.track : -1,
+          device: card._devId,
+          param: row._pi,
+          uid: row._uid,
+          // The link that is already there, or 0. Which direction this is: an id means
+          // unmap THAT link, and 0 means make one.
+          link,
+        });
+      }
+      // Consumed, so the bar drag below never starts. Otherwise the parameter jumps to
+      // wherever in its range the badge happens to sit.
+      e.preventDefault();
+      return;
+    }
     if (e.target.closest('.dv-add')) {
       if (this.onAdd) this.onAdd(this.vm ? this.vm.track : -1);
       return;
@@ -666,6 +699,15 @@ export class Chain {
       // position had not changed. The attribute itself still has to be there:
       // `_down` reads it to turn a click into a chain position.
       if (el._pos !== c.pos) { el._pos = c.pos; el.dataset.pos = c.pos; }
+      /*
+       * ...and its DEVICE ID, as an attribute.
+       *
+       * `_devId` is already on the element for the handlers, but a selector cannot read a
+       * property. Every command names a device by ID and positions shift under a reorder,
+       * so a test — or anything else selecting a card — must be able to ask for the card
+       * that is device 3 rather than for the third card.
+       */
+      if (el.dataset.dev !== String(c.id)) el.dataset.dev = String(c.id);
     }
     // An edit in flight ages, and nothing else on this page is going to redraw
     // for that. Keep our own frame coming until the last one has settled.
@@ -729,9 +771,25 @@ export class Chain {
       const bar = div('dv-p-bar', r);
       const fill = div('dv-p-fill', bar);
       const v = div('dv-p-v', r); v.appendChild(document.createTextNode(''));
-      r._n = nm.firstChild; r._f = fill; r._v = v.firstChild;
+      /*
+       * MAP — the modulation badge, and the only control on a parameter row.
+       *
+       * Lit when something moves this parameter, dim when nothing does, and clickable
+       * either way: dim maps it to the track's macro, lit unmaps it. One target for both
+       * directions, because "map this" and "stop mapping this" are the same question
+       * asked of the same thing, and a separate unmap affordance would appear and
+       * disappear under the pointer as links come and go.
+       *
+       * `data-map` so the delegated handler can find it, and the LINK ID on the element
+       * so unmapping does not have to search the model for which link this row meant.
+       */
+      const map = div('dv-p-map', r);
+      map.appendChild(document.createTextNode('MAP'));
+      map.dataset.map = '1';
+      r._n = nm.firstChild; r._f = fill; r._v = v.firstChild; r._map = map;
       r._nv = null; r._fv = -1; r._vv = null; r._top = -1; r._pi = -1;
       r._uid = ''; r._pend = null; r._pendMilli = -1; r._pendText = '';
+      r._mod = -1; r._modInert = null;
       rows.push(r);
     }
   }
@@ -780,6 +838,31 @@ export class Chain {
     if (r._fv !== w) { r._fv = w; r._f.style.width = w + '%'; }
     const pend = !!ed;
     if (r._pend !== pend) { r._pend = pend; r.classList.toggle('pend', pend); }
+
+    /*
+     * The MAP badge. Guarded on the LINK ID, not on a boolean, so re-mapping a row to a
+     * different link still repaints — and so the id on the element is always the id the
+     * badge is showing, which is what the click handler reads.
+     */
+    if (r._mod !== q.mod || r._modInert !== q.modInert) {
+      r._mod = q.mod; r._modInert = q.modInert;
+      r._map.classList.toggle('on', q.mod !== 0 && !q.modInert);
+      // A THIRD state, because there are three: nothing here, something that works, and
+      // something that exists and cannot work. Folding the last into either of the others
+      // is the lie — into `on` it claims a modulation that moves nothing, into `off` it
+      // hides a link you cannot remove because you cannot see it.
+      r._map.classList.toggle('inert', q.mod !== 0 && q.modInert);
+      if (q.mod) r._map.dataset.link = String(q.mod);
+      else delete r._map.dataset.link;
+      // The depth, in the title rather than on the row: at this size there is no room for
+      // a second number, and "how much" is a thing you ask about one parameter at a time.
+      r._map.title = !q.mod
+        ? 'click to modulate this from the macro'
+        : q.modInert
+          ? 'linked but NOT WORKING — the link names no parameter, so it moves nothing. '
+            + 'Click to remove it.'
+          : `modulated · depth ${q.modDepth.toFixed(2)} — click to unmap`;
+    }
   }
 
   probe() {

@@ -33,7 +33,12 @@ use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{EventEntry, UiChainCommandPayload, UiChordCommandPayload,
-                         UiSectionCommandPayload,
+                         UiSectionCommandPayload, UiModLinkCommandPayload,
+                         UiModLinkUid16Payload, UiModSourceValuePayload,
+                         MOD_SOURCE_MACRO, MOD_SOURCE_LFO, MOD_SOURCE_ENVELOPE,
+                         MOD_SOURCE_PATCHER_NODE_OUTPUT, MOD_TARGET_VST_PARAM,
+                         MOD_TARGET_PATCHER_PARAM, MOD_TARGET_PATCHER_MACRO,
+                         MOD_RATE_BLOCK, MOD_RATE_SAMPLE, MOD_LINK_ID_AUTO,
                         UiCommandPayload, UiCommandType,
                         UiDiffType, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
                         UiPatcherPresetCommandPayload, UiSetParamPayload,
@@ -1072,6 +1077,39 @@ fn parse_num(body: &str, key: &str) -> Option<i64> {
     rest[start..start + end].parse().ok()
 }
 
+/// The same, for a FRACTION. `parse_num` stops at the decimal point and returns the whole
+/// part, so a depth of 0.5 read as 0 — a modulation link that does nothing, sent by a
+/// caller who asked for half range, with no error anywhere.
+///
+/// The scan accepts one leading sign, digits, at most one point, and an exponent, then
+/// hands the slice to Rust's own parser rather than doing the arithmetic here. Refused
+/// (None) rather than clamped when the text is not a number: a depth of NaN would reach
+/// the audio thread.
+fn parse_f32(body: &str, key: &str) -> Option<f32> {
+    let i = body.find(key)? + key.len();
+    let rest = &body[i..];
+    let start = rest.find(|c: char| c.is_ascii_digit() || c == '-' || c == '.')?;
+    let tail = &rest[start..];
+    let mut end = 0;
+    let mut seen_point = false;
+    for (n, c) in tail.char_indices() {
+        let ok = c.is_ascii_digit()
+            || (c == '-' && n == 0)
+            || (c == '.' && !seen_point)
+            // An exponent, and the sign that may follow it. Rare in hand-written JSON and
+            // ordinary in anything a program generated.
+            || (c == 'e' || c == 'E')
+            || ((c == '-' || c == '+') && matches!(tail.as_bytes().get(n - 1), Some(b'e') | Some(b'E')));
+        if !ok { break; }
+        if c == '.' { seen_point = true; }
+        end = n + c.len_utf8();
+    }
+    let v: f32 = tail[..end].parse().ok()?;
+    // A non-finite value is refused, not passed on. This number ends up multiplying a
+    // parameter on the audio thread.
+    v.is_finite().then_some(v)
+}
+
 /// The projects on disk, newest first, as a JSON array of names.
 ///
 /// Names only — the engine resolves them against its own project directory, and
@@ -1940,6 +1978,157 @@ fn resolve_base(handle: &EngineHandle, track_id: u32, sent: u32, command_type: u
     // the same failure this function exists to fix, one counter over.
     if is_global_scope(command_type) { return handle.clip_version(); }
     handle.clip_version_for_track(track_id)
+}
+
+/// A MODULATION link command, or None if this message is not one.
+///
+///   {"type":"mod","op":"add","track":0,"srcDevice":3,"srcId":0,"dstDevice":3,
+///    "dstParam":7,"depth":0.5,"bias":0,"source":"macro","rate":"block"}
+///   {"type":"mod","op":"remove","track":0,"link":4}
+///   {"type":"mod","op":"depth","track":0,"link":4,"depth":0.25}
+///
+/// MODULATION FLOWS FORWARD: the engine refuses a source LATER in the chain than its
+/// target, because a value computed after the parameter was read is a value from the
+/// previous block. Same device is legal and is the common case with per-device patchers.
+/// Not checked here — the chain order is the engine's and this side does not hold it — so
+/// that refusal must reach the person, and it arrives as ModError.
+///
+/// `depth` and `bias` are the plugin's NORMALISED units (0..1 across the parameter's whole
+/// range), which is what the engine's mod path works in. A depth of 1 means the source
+/// sweeps the parameter end to end.
+///
+/// `op: "depth"` is an ADD with the same link id, which is how the engine expresses an
+/// update: `AddModLink` with an existing id replaces that link rather than making a
+/// second one. Named separately here because "change how much" is a different intention
+/// from "make a link", and a caller should not have to know they are the same command.
+fn build_mod(body: &str) -> Option<Result<UiModLinkCommandPayload, &'static str>> {
+    if !is_type(body, "mod") { return None; }
+    let Some(op) = parse_str(body, "\"op\"") else {
+        return Some(Err("mod needs an op: add, remove or depth"));
+    };
+    let removing = op == "remove";
+    let command_type = match op {
+        "add" | "depth" => UiCommandType::AddModLink,
+        "remove" => UiCommandType::RemoveModLink,
+        _ => return Some(Err("mod op must be add, remove or depth")),
+    };
+    let link = parse_num(body, "\"link\"").unwrap_or(-1);
+    if (removing || op == "depth") && link < 0 {
+        return Some(Err("that mod op needs the id of an existing link"));
+    }
+    // The four small enums, by NAME. A caller typing `"source":"lfo"` should not have to
+    // know it is 1, and a number that means something else in the next version of the
+    // engine is exactly the kind of literal that outlives its meaning.
+    let source_kind = match parse_str(body, "\"source\"").unwrap_or("macro") {
+        "macro" => MOD_SOURCE_MACRO,
+        "lfo" => MOD_SOURCE_LFO,
+        "env" | "envelope" => MOD_SOURCE_ENVELOPE,
+        "node" | "patcher" => MOD_SOURCE_PATCHER_NODE_OUTPUT,
+        _ => return Some(Err("mod source must be macro, lfo, env or node")),
+    };
+    let target_kind = match parse_str(body, "\"target\"").unwrap_or("param") {
+        "param" | "vst" => MOD_TARGET_VST_PARAM,
+        "patcher" => MOD_TARGET_PATCHER_PARAM,
+        "macro" => MOD_TARGET_PATCHER_MACRO,
+        _ => return Some(Err("mod target must be param, patcher or macro")),
+    };
+    let rate = match parse_str(body, "\"rate\"").unwrap_or("block") {
+        "block" => MOD_RATE_BLOCK,
+        "sample" => MOD_RATE_SAMPLE,
+        _ => return Some(Err("mod rate must be block or sample")),
+    };
+    // Bits 0-3 source kind, 4-7 target kind, 8-9 rate, bit 10 enabled. Packed ONCE, here,
+    // so the bit layout lives on this side of the wire and no caller learns it.
+    let mut flags = (source_kind & 0x0f) | ((target_kind & 0x0f) << 4) | ((rate & 0x03) << 8);
+    // Enabled unless explicitly disabled: a link nobody asked to switch off is on.
+    if parse_num(body, "\"enabled\"").unwrap_or(1) != 0 { flags |= 1 << 10; }
+    Some(Ok(UiModLinkCommandPayload {
+        command_type: command_type as u16,
+        flags,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        // The engine arbitrates mod edits on its own version, and 0 means "whatever you
+        // hold" — the same convention the chain edits use for an unstated base.
+        base_version: parse_num(body, "\"base\"").unwrap_or(0).max(0) as u32,
+        link_id: if link < 0 { MOD_LINK_ID_AUTO } else { link as u32 },
+        source_device_id: parse_num(body, "\"srcDevice\"").unwrap_or(0).max(0) as u32,
+        source_id: parse_num(body, "\"srcId\"").unwrap_or(0).max(0) as u32,
+        target_device_id: parse_num(body, "\"dstDevice\"").unwrap_or(0).max(0) as u32,
+        target_id: parse_num(body, "\"dstParam\"").unwrap_or(0).max(0) as u32,
+        depth: parse_f32(body, "\"depth\"").unwrap_or(1.0),
+        bias: parse_f32(body, "\"bias\"").unwrap_or(0.0),
+    }))
+}
+
+/// SetModLinkUid16 (22): name the plugin parameter a link targets.
+///
+///   {"type":"moduid","track":0,"link":4,"uid16":"0a1b…"}
+///
+/// THIS IS NOT OPTIONAL DECORATION. The engine's block-rate modulation addresses a VST
+/// parameter by `uid16` and never reads `targetId` — see the ParamPayload it builds — so a
+/// link without one moves NOTHING, while still being accepted, published and drawable. It
+/// is the single sharpest edge in this feature: a lit badge over a link that does nothing.
+///
+/// The uid is 32 hex characters (16 bytes). Anything else is refused rather than padded:
+/// a half-parsed uid names a different parameter, and "the wrong knob moved" is harder to
+/// diagnose than "that was not a uid".
+fn build_mod_uid(body: &str) -> Option<Result<UiModLinkUid16Payload, &'static str>> {
+    if !is_type(body, "moduid") { return None; }
+    let Some(hex) = parse_str(body, "\"uid16\"") else {
+        return Some(Err("moduid needs the parameter's uid16"));
+    };
+    if hex.len() != 32 || !hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Some(Err("a uid16 is 32 hex characters"));
+    }
+    let mut uid16 = [0u8; 16];
+    for i in 0..16 {
+        uid16[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap_or(0);
+    }
+    let link = parse_num(body, "\"link\"").unwrap_or(-1);
+    if link < 0 { return Some(Err("moduid needs the id of an existing link")); }
+    Some(Ok(UiModLinkUid16Payload {
+        command_type: UiCommandType::SetModLinkUid16 as u16,
+        flags: 0,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        base_version: 0,
+        link_id: link as u32,
+        uid16,
+        reserved: [0u8; 8],
+    }))
+}
+
+/// SetModSourceValue (23): turn a macro knob.
+///
+///   {"type":"modsource","track":0,"device":3,"source":0,"value":0.5}
+///
+/// ALSO NOT OPTIONAL. The engine resolves a link's source by looking it up in the track's
+/// source STATES, and a macro that has never been given a value is not in that table — so
+/// the link is skipped and, again, moves nothing. A macro is a knob with nothing behind it
+/// until somebody turns it, and "nobody has turned it yet" and "this does not work" look
+/// identical from outside.
+fn build_mod_source(body: &str) -> Option<Result<UiModSourceValuePayload, &'static str>> {
+    if !is_type(body, "modsource") { return None; }
+    let Some(v) = parse_f32(body, "\"value\"") else {
+        return Some(Err("modsource needs a value from 0 to 1"));
+    };
+    Some(Ok(UiModSourceValuePayload {
+        command_type: UiCommandType::SetModSourceValue as u16,
+        // The source KIND, in the same bits AddModLink packs it into. Macro unless told
+        // otherwise, because a macro is the only source that exists without something
+        // else being made first.
+        flags: match parse_str(body, "\"kind\"").unwrap_or("macro") {
+            "macro" => MOD_SOURCE_MACRO,
+            "lfo" => MOD_SOURCE_LFO,
+            "env" | "envelope" => MOD_SOURCE_ENVELOPE,
+            "node" | "patcher" => MOD_SOURCE_PATCHER_NODE_OUTPUT,
+            _ => return Some(Err("mod source must be macro, lfo, env or node")),
+        },
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        base_version: 0,
+        source_device_id: parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32,
+        source_id: parse_num(body, "\"source\"").unwrap_or(0).max(0) as u32,
+        value: v.clamp(0.0, 1.0),
+        reserved: [0u8; 16],
+    }))
 }
 
 /// One of the five SECTION commands, or None if this message is not one.
@@ -2837,6 +3026,49 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             continue;
                         }
 
+                        // The parameter a link NAMES, and the knob that drives it. Two
+                        // more 40-byte payloads, and both are load-bearing: without them
+                        // a link is accepted, published, drawn and inert.
+                        if let Some(r) = build_mod_uid(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_mod_link_uid16(p) {
+                                    Ok(()) => format!("{{\"ok\":true,\"moduid\":{}}}", p.link_id),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+                        if let Some(r) = build_mod_source(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_mod_source_value(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"modsource\":{},\"value\":{}}}",
+                                        p.source_id, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // WHAT MODULATES WHAT. Own 40-byte payload again.
+                        if let Some(r) = build_mod(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_mod_link_command(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"mod\":{},\"type\":{},\"depth\":{}}}",
+                                        p.link_id, p.command_type, p.depth),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
                         // The arrangement's SPINE. Own 40-byte payload again.
                         if let Some(r) = build_section(&t) {
                             let reply = match r {
@@ -3397,6 +3629,14 @@ struct TrackChain {
     /// is the engine's counter's business, not ours, and a store that silently
     /// depends on it breaks the day the counter starts somewhere else.
     seen: bool,
+    /// WHAT MODULATES WHAT on this track. Here rather than in a parallel store for the
+    /// reason `routing` gives: it is per-track state arriving on the same ring, and a
+    /// modulation link is a fact about this track's RACK — the page gets what the chain
+    /// is, where it goes and what moves what in one message.
+    mod_links: Vec<ModLink>,
+    /// The engine's mod version this set was published at. A snapshot is a REPLACEMENT
+    /// keyed on it, exactly as the device list is keyed on `version`.
+    mod_version: u32,
 }
 
 /// Per-track device chains, accumulated from the engine's ChainSnapshot diffs.
@@ -3406,6 +3646,36 @@ struct TrackChain {
 /// A per-client drain would hand each browser tab a different subset of the SAME
 /// snapshot's entries, and every tab would render a chain that is short by a
 /// device or two — plausible, silent, and different in each window.
+/// ONE MODULATION LINK, as the engine published it.
+///
+/// A link is "this source moves that parameter": a macro knob, an LFO, an envelope or a
+/// patcher node's output, driving a VST parameter or a patcher one. `flags` packs the four
+/// small enums the payload had no room for — bits 0-3 source kind, 4-7 target kind, 8-9
+/// rate, bit 10 enabled — and is forwarded UNPACKED so the page never learns the bit
+/// layout.
+///
+/// `uid16` arrives as its OWN diff, right after the link, and only for a VST target. It is
+/// the 16-byte plugin parameter id, which is what the rack's parameter rows are keyed on —
+/// without it a link knows it targets "parameter 7 of device 3" and the rack cannot tell
+/// which row that is, because the row order is the plugin's and the target id is not an
+/// index into it.
+#[derive(Clone, Debug, Default)]
+struct ModLink {
+    link_id: u32,
+    source_device: u32,
+    source_id: u32,
+    target_device: u32,
+    target_id: u32,
+    depth: f32,
+    bias: f32,
+    source_kind: u16,
+    target_kind: u16,
+    rate: u16,
+    enabled: bool,
+    /// Empty until the ModLinkUid16 diff for this link arrives; non-VST targets have none.
+    uid16: String,
+}
+
 #[derive(Default)]
 struct ChainStore {
     tracks: Mutex<Vec<TrackChain>>,
@@ -3424,6 +3694,59 @@ impl ChainStore {
     /// after the first edit — the content changed while the key the consumer
     /// watches (the track, its version) stood still, which is GUIDELINES 2.1
     /// exactly, and it renders a perfectly believable chain while doing it.
+    /// Fold one MOD SNAPSHOT entry in. A replacement keyed on (track, mod_version).
+    ///
+    /// The engine emits one entry per link and stamps them all with one version, so the
+    /// first entry of a NEW version has to throw the previous version's set away —
+    /// appending would show every link twice after the first edit, which is the exact
+    /// mistake `apply` above documents for devices and renders just as plausibly.
+    ///
+    /// ONE CASE THIS CANNOT SEE, and it is the engine's to fix: a track whose registry is
+    /// now EMPTY publishes nothing at all. `emitModSnapshot` iterates the links, so zero
+    /// links means zero entries — the version moves and nothing carries it here. Removing
+    /// one link of several is therefore correct (the rest republish under a new version),
+    /// and removing the LAST one is invisible. Asked for the same sentinel entry chains
+    /// already use for an empty chain; until then the page drops the last link locally
+    /// and says why it is allowed to.
+    fn apply_mod(&self, track: u32, version: u32, link: ModLink) {
+        let mut tracks = self.tracks.lock().unwrap();
+        let at = match tracks.iter().position(|t| t.track == track) {
+            Some(i) => i,
+            None => { tracks.push(TrackChain { track, ..Default::default() }); tracks.len() - 1 }
+        };
+        let t = &mut tracks[at];
+        if t.mod_version != version {
+            t.mod_version = version;
+            t.mod_links.clear();
+        }
+        // Keyed on link_id within the version, because a snapshot run can be interleaved
+        // with the uid16 diffs that belong to it and a re-published link must replace
+        // rather than duplicate.
+        match t.mod_links.iter().position(|l| l.link_id == link.link_id) {
+            Some(i) => t.mod_links[i] = link,
+            None => t.mod_links.push(link),
+        }
+        self.revision.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Name the VST parameter a link targets. Its own diff, so its own fold.
+    ///
+    /// Ignored when the link is unknown, and COUNTED as not-forwarded by the caller: the
+    /// ring is ordered and the link comes first, so a uid16 for a link we never saw can
+    /// only mean the link entry was lost — worth seeing in the histogram rather than
+    /// quietly attaching to nothing.
+    fn apply_mod_uid16(&self, track: u32, version: u32, link_id: u32, uid16: String) -> bool {
+        let mut tracks = self.tracks.lock().unwrap();
+        let Some(at) = tracks.iter().position(|t| t.track == track) else { return false; };
+        let t = &mut tracks[at];
+        if t.mod_version != version { return false; }
+        let Some(i) = t.mod_links.iter().position(|l| l.link_id == link_id) else { return false; };
+        if t.mod_links[i].uid16 == uid16 { return true; }
+        t.mod_links[i].uid16 = uid16;
+        self.revision.fetch_add(1, Ordering::AcqRel);
+        true
+    }
+
     /// Fold one routing snapshot in, and say whether it changed anything.
     ///
     /// Guarded on equality so a track that republishes identical routing does
@@ -3549,6 +3872,35 @@ impl ChainStore {
                         b.channel_count, b.layout_id, b.channel_offset, name));
                 }
                 out.push_str("]}");
+            }
+            out.push_str("],\"modVersion\":");
+            out.push_str(&t.mod_version.to_string());
+            out.push_str(",\"modLinks\":[");
+            for (j, l) in t.mod_links.iter().enumerate() {
+                if j > 0 { out.push(','); }
+                /*
+                 * Unpacked. The page is told `sourceKind`, `targetKind`, `rate` and
+                 * `enabled` as named fields rather than a flags word, so the bit layout
+                 * stays on this side of the wire — it is the engine's packing decision,
+                 * made because the payload was full, and nothing in a renderer should
+                 * have to know that the rate lives in bits 8 and 9.
+                 *
+                 * `uid16` is hex and may be empty: a non-VST target has none, and a VST
+                 * one has none YET until its own diff arrives. Empty and absent are the
+                 * same thing here and both mean "do not try to match a parameter row".
+                 */
+                out.push_str(&format!(
+                    "{{\"id\":{},\"sourceDevice\":{},\"sourceId\":{},\
+                     \"targetDevice\":{},\"targetId\":{},\"depth\":{},\"bias\":{},\
+                     \"sourceKind\":{},\"targetKind\":{},\"rate\":{},\"enabled\":{},\
+                     \"uid16\":\"{}\"}}",
+                    l.link_id, l.source_device, l.source_id, l.target_device, l.target_id,
+                    // Finite or 0: a NaN depth from a corrupt payload would produce JSON
+                    // the page cannot parse, and the failure would be the whole rack
+                    // going blank rather than one number looking wrong.
+                    if l.depth.is_finite() { l.depth } else { 0.0 },
+                    if l.bias.is_finite() { l.bias } else { 0.0 },
+                    l.source_kind, l.target_kind, l.rate, l.enabled, l.uid16));
             }
             out.push_str("]}");
         }
@@ -3750,6 +4102,74 @@ fn decode_engine_event(e: &EventEntry) -> Option<String> {
 /// Its own thread with its own writable handle, at a slower cadence than the
 /// publish loop: these are rare, and an error the user reads 50 ms late is not
 /// a worse error.
+/// Read a ModSnapshot diff, or None if this entry is not one.
+///
+/// Offsets, not a struct, like every other reader here: `UiModLinkDiffPayload` is
+/// diff_type u16@0, flags u16@2, track_id u32@4, mod_version u32@8, link_id u32@12,
+/// source_device u32@16, source_id u32@20, target_device u32@24, target_id u32@28,
+/// depth f32@32, bias f32@36 — 40 bytes, the whole payload. A short entry is refused
+/// rather than read past.
+fn decode_mod_snapshot(e: &EventEntry) -> Option<(u32, u32, ModLink)> {
+    if (e.size as usize) < 40 { return None; }
+    let p = &e.payload;
+    let u16at = |i: usize| u16::from_le_bytes([p[i], p[i + 1]]);
+    let u32at = |i: usize| u32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+    let f32at = |i: usize| f32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+    if u16at(0) != UiDiffType::ModSnapshot as u16 { return None; }
+    // The engine's own packing, unpacked ONCE, here. See UiModLinkCommandPayload's doc:
+    // bits 0-3 source kind, 4-7 target kind, 8-9 rate, bit 10 enabled.
+    let flags = u16at(2);
+    Some((u32at(4), u32at(8), ModLink {
+        link_id: u32at(12),
+        source_device: u32at(16),
+        source_id: u32at(20),
+        target_device: u32at(24),
+        target_id: u32at(28),
+        depth: f32at(32),
+        bias: f32at(36),
+        source_kind: flags & 0x0f,
+        target_kind: (flags >> 4) & 0x0f,
+        rate: (flags >> 8) & 0x03,
+        enabled: (flags & (1 << 10)) != 0,
+        uid16: String::new(),
+    }))
+}
+
+/// Read a ModLinkUid16 diff: the plugin parameter id a link targets.
+///
+/// `UiModLinkUid16DiffPayload` is diff_type u16@0, _pad u16@2, track_id u32@4,
+/// mod_version u32@8, link_id u32@12, uid16 [u8;16]@16.
+///
+/// Hex, not the raw bytes: this is an OPAQUE plugin identifier, not text — some hosts put
+/// a printable name in it and some put a hash, so decoding it as UTF-8 would work on one
+/// plugin and produce replacement characters on the next. Hex is what the param mirror
+/// already keys rows on, so the two match without either side guessing.
+fn decode_mod_uid16(e: &EventEntry) -> Option<(u32, u32, u32, String)> {
+    if (e.size as usize) < 32 { return None; }
+    let p = &e.payload;
+    let u16at = |i: usize| u16::from_le_bytes([p[i], p[i + 1]]);
+    let u32at = |i: usize| u32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+    if u16at(0) != UiDiffType::ModLinkUid16 as u16 { return None; }
+    /*
+     * SIXTEEN ZERO BYTES MEANS UNSET, and it is forwarded as the EMPTY STRING.
+     *
+     * The engine's ModTargetRef initialises uid16 to zeros, so a link that has never been
+     * named carries them — and hexed naively that is 32 characters of "0", which is a
+     * perfectly truthy string. Every consumer that asks "does this link name a parameter?"
+     * would answer yes, and the answer decides whether the link WORKS: the block-rate
+     * applier addresses a VST parameter by uid16 alone, so an unnamed link moves nothing.
+     *
+     * Collapsed here, at the one place that knows the sentinel, rather than in every reader
+     * that would otherwise have to know that zeros mean absent.
+     */
+    if p[16..32].iter().all(|b| *b == 0) {
+        return Some((u32at(4), u32at(8), u32at(12), String::new()));
+    }
+    let mut hex = String::with_capacity(32);
+    for b in &p[16..32] { hex.push_str(&format!("{b:02x}")); }
+    Some((u32at(4), u32at(8), u32at(12), hex))
+}
+
 /// UiDiffType by number, for the log. Names, because "type 5 = 12" is not a
 /// report anyone can act on.
 /// One RoutingSnapshot diff, if this entry is one.
@@ -3862,6 +4282,23 @@ fn drain_engine_events(shm: String, events: Arc<EngineEvents>, chains: Arc<Chain
             // notification every time anything republished.
             if let Some((track, routing)) = decode_routing_snapshot(e) {
                 chains.apply_routing(track, routing);
+                continue;
+            }
+            // Modulation is STATE about a track's RACK, and it goes in the same store as
+            // the chain and the routing for the same reason: replaying "the LFO moves
+            // cutoff" as a notification on every republish would bury the errors the
+            // event queue exists for.
+            if let Some((track, version, link)) = decode_mod_snapshot(e) {
+                chains.apply_mod(track, version, link);
+                continue;
+            }
+            // ...and the parameter it names. Counted as not-forwarded when the link is
+            // unknown: the ring is ordered and the link comes first, so that can only
+            // mean the link entry was lost, which is worth seeing rather than attaching
+            // silently to nothing.
+            if let Some((track, version, link_id, uid16)) = decode_mod_uid16(e) {
+                if chains.apply_mod_uid16(track, version, link_id, uid16) { continue; }
+                dropped += 1;
                 continue;
             }
             match decode_engine_event(e) {

@@ -758,6 +758,324 @@ function sectionExists(id) {
   return false;
 }
 
+/**
+ * THE MODULATION LINKS on a track, as the engine published them, or null.
+ *
+ * From the chain store rather than a second one: the sidecar puts them in the chain
+ * message because a modulation link is a fact about a track's RACK, and the page gets
+ * what the chain is, where it goes and what moves what in one breath.
+ */
+function modsOf(track) {
+  const c = chains[track];
+  if (!c) return null;
+  return { track, version: c.modVersion || 0, links: (c.modLinks || []).map((l) => ({ ...l })) };
+}
+
+/**
+ * MODULATE a parameter from the track's macro. THREE commands, and all three are needed.
+ *
+ * This looks like it should be one message and it is not, because a modulation link the
+ * engine ACCEPTS can still move nothing at all — three separate ways, each of them silent:
+ *
+ *  1. AddModLink makes the link. On its own it is inert.
+ *  2. SetModLinkUid16 names the PARAMETER. The block-rate applier builds its ParamPayload
+ *     from `link.target.uid16` and never reads `targetId`, so a link without a uid16
+ *     modulates nothing while being accepted, published and perfectly drawable.
+ *  3. SetModSourceValue turns the KNOB. The applier resolves a source by looking it up in
+ *     the track's source states, and a macro nobody has turned is not in that table — so
+ *     the link is skipped. "Nobody has turned it yet" and "this does not work" are
+ *     indistinguishable from outside, so the macro starts at half.
+ *
+ * The uid16 goes out AFTER the engine has told us the link's id: `AddModLink` with
+ * MOD_LINK_ID_AUTO lets the engine assign, and SetModLinkUid16 matches an id exactly —
+ * there is no "the one you just made" sentinel, which I assumed there was and checked. So
+ * the request is remembered in `pendingMaps` and named when the snapshot arrives. That is a
+ * two-step protocol, not optimism: nothing is drawn until the engine says so.
+ *
+ * MODULATION FLOWS FORWARD, and STRICTLY. The command validator refuses a source LATER
+ * than its target (`sourcePos > targetPos`), but the block-rate applier skips a link whose
+ * source is not strictly EARLIER (`srcPos >= dstPos`) — so a same-device link is accepted
+ * and then ignored. That gap is the engine's and is reported; here it means the source must
+ * come from a device genuinely before the target, and if the target is the FIRST device
+ * there is no legal source and this refuses with that reason rather than making a link
+ * that cannot work.
+ */
+function mapParam(track, device, param, uid) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  /*
+   * THE SOURCE FIRST, then the parameter — the order decides which reason gets reported,
+   * and for a device at position 0 "nothing can come before this" is the truer statement.
+   * Checking the uid first told a first-position device it had no stable parameter ids,
+   * which was accurate about the parameter and misleading about the problem.
+   */
+  const src = sourceDeviceBefore(track, device);
+  if (src < 0) {
+    state.reject = 'nothing before this device to modulate from — modulation flows forward';
+    schedule(); return false;
+  }
+  /*
+   * A parameter with no stable id CANNOT be modulated, and saying so is the whole point.
+   * The engine addresses the target by uid16; a row whose plugin publishes none would get
+   * a link that is accepted and inert, which is the failure this function exists to avoid.
+   */
+  if (!uid) {
+    state.reject = 'this parameter has no stable id — the engine addresses modulation by it';
+    schedule(); return false;
+  }
+  conn.send({ type: 'mod', op: 'add', track, srcDevice: src, srcId: 0,
+              dstDevice: device, dstParam: param, depth: 1, bias: 0,
+              source: 'macro', target: 'param', rate: 'block' });
+  // The knob, at half. See (3) above — a macro nobody has turned is not in the source
+  // table and the link is skipped, so this is what makes the mapping audible at all.
+  conn.send({ type: 'modsource', track, device: src, source: 0, value: 0.5 });
+  // Remembered, so the uid16 can be sent once the engine has named the link. Keyed on what
+  // was asked for, not on a guess at the id.
+  pendingMaps.push({ track, device, param, uid });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
+ * Requests waiting for the engine to name their link.
+ *
+ * Small and short-lived: one entry per MAP click, drained on the next chain snapshot for
+ * that track. Not persisted and not drawn — the badge follows the published links, and a
+ * request in here has not happened yet.
+ */
+const pendingMaps = [];
+
+/**
+ * Name the parameter for any link the engine has just published that we asked for.
+ *
+ * Called from `onChains`, which is where the engine's answer arrives. Matches on
+ * (track, targetDevice, targetId) — the three things the request named — and only takes a
+ * link that has NO uid16 yet, so a re-published set cannot make this fire twice.
+ */
+function namePendingMaps() {
+  for (let i = pendingMaps.length - 1; i >= 0; i--) {
+    const want = pendingMaps[i];
+    const c = chains[want.track];
+    const links = (c && c.modLinks) || [];
+    const hit = links.find((l) => l.targetDevice === want.device
+                                  && l.targetId === want.param && !l.uid16);
+    if (!hit) continue;
+    conn.send({ type: 'moduid', track: want.track, link: hit.id, uid16: want.uid });
+    pendingMaps.splice(i, 1);
+  }
+}
+
+/**
+ * The uid16 of one parameter, from the published mirror, or ''.
+ *
+ * The mirror is the only thing that knows both the plugin's index and its stable id, and
+ * the engine needs the id — see `mapParam`. Returning '' rather than throwing when the
+ * parameter is unknown, because `mapParam` refuses on an empty uid with a sentence that
+ * says why, and that is a better answer than a stack trace.
+ */
+function paramUidOf(track, device, index) {
+  /*
+   * KEYED ON (TRACK, DEVICE), not on the device alone.
+   *
+   * Device ids are PER TRACK, so `deviceParams[3]` is not "device 3" — it is whichever
+   * track's device 3 answered last. The mirror is keyed with `paramKey` for exactly that
+   * reason and there is a comment on the intake saying so, which I did not read before
+   * writing this: the first version indexed by the device id and by an ARRAY, and the
+   * value is `{track, device, name, params}`. So it found nothing, every time, and `map`
+   * would have refused every parameter in the app with "no stable id" — a confident,
+   * plausible refusal from a lookup that was never going to succeed.
+   */
+  const dp = deviceParams[paramKey(track, device)];
+  const list = dp && dp.params;
+  if (!Array.isArray(list)) return '';
+  for (const p of list) if (p.index === index) return p.uid || '';
+  return '';
+}
+
+/**
+ * Does the device publish a parameter with this uid? Returns the row's index, or 0/false.
+ *
+ * Used to tell a link that targets a real parameter from one that targets a uid this
+ * plugin has no row for — the second is indistinguishable from the first on the wire, and
+ * is what a project authored against another version of the same plugin leaves behind.
+ */
+function paramIndexOfUid(track, device, uid) {
+  const dp = deviceParams[paramKey(track, device)];
+  const list = dp && dp.params;
+  if (!Array.isArray(list) || !uid) return 0;
+  for (const p of list) if (p.uid === uid) return (p.index || 0) + 1;
+  return 0;
+}
+
+/**
+ * Is `src` strictly earlier in `track`'s chain than `dst`?
+ *
+ * STRICTLY, because that is the block-rate applier's own test (`srcPos >= dstPos` skips).
+ * The command validator is looser — it only refuses a source LATER than its target — so
+ * the engine accepts same-device links and then never applies them. Both devices must be
+ * present: an unknown one is not "before".
+ */
+function isStrictlyBefore(track, src, dst) {
+  const c = chains[track];
+  const devs = (c && c.devices) || [];
+  let sp = -1, dp = -1;
+  for (const d of devs) { if (d.id === src) sp = d.pos; if (d.id === dst) dp = d.pos; }
+  return sp >= 0 && dp >= 0 && sp < dp;
+}
+
+/** Turn a macro knob. The ordinary action: mapping happens once, turning happens all day. */
+function setMacro(track, device, value) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  const v = Number(value);
+  if (!Number.isFinite(v)) { state.reject = 'a macro value is a number from 0 to 1'; schedule(); return false; }
+  conn.send({ type: 'modsource', track, device, source: 0,
+              value: Math.max(0, Math.min(1, v)), kind: 'macro' });
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
+ * Stop modulating: remove one link by id.
+ *
+ * A REMOVE HAS TO CARRY THE LINK'S DEVICES, which is not obvious and is not the engine's
+ * documented shape. `RemoveModLink` is handled AFTER the same validation as an add — the
+ * source and target device ids are resolved to chain positions and the forward-order rule is
+ * applied — so a message naming only the link is refused as `invalid_device`, on the engine's
+ * own log, where a browser cannot read it.
+ *
+ * It looked like it worked for a while because the default of 0 happened to be a real device
+ * id in the fixture I was using. On a project whose ids start higher, every removal was
+ * silently refused: the badge stayed lit, `unmap` reported success, and three links piled up
+ * where there should have been one. Reported to backend — a removal should need an id and
+ * nothing else.
+ */
+function unmapParam(track, link) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  const n = Number(link) || 0;
+  if (n <= 0) { state.reject = 'which link?'; schedule(); return false; }
+  const found = (modsOf(track) || { links: [] }).links.find((l) => l.id === n);
+  if (!found) { state.reject = `no link ${n} on track ${track}`; schedule(); return false; }
+  conn.send({ type: 'mod', op: 'remove', track, link: n,
+              srcDevice: found.sourceDevice, srcId: found.sourceId,
+              dstDevice: found.targetDevice, dstParam: found.targetId });
+  /*
+   * AND DROP IT LOCALLY — the one place in this file that edits published state.
+   *
+   * The engine's `emitModSnapshot` iterates the registry's links, so a track whose LAST
+   * link was just removed publishes nothing at all: the version moves and nothing carries
+   * it here. Removing one of several is fine (the rest republish under a new version); it
+   * is only the last one that would leave a lit badge for a link that no longer exists.
+   *
+   * Bounded deliberately: only when this was the last link, and only for the track it was
+   * on. Asked backend for the same sentinel entry an empty CHAIN already publishes, and
+   * this goes when that arrives.
+   */
+  const c = chains[track];
+  if (c && Array.isArray(c.modLinks) && c.modLinks.length === 1
+      && c.modLinks[0].id === n) {
+    c.modLinks = [];
+    chainRevision++;
+  }
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
+ * A device on `track` that sits STRICTLY BEFORE `device` in the chain, or -1.
+ *
+ * The nearest one, not the first: an LFO or a macro on the device immediately before the
+ * target is the shortest legal hop, and picking the very first would put a source behind
+ * every plugin in a long rack whether that made sense or not.
+ *
+ * Strictly before, because the applier's own test is `srcPos >= dstPos -> skip`. The
+ * command validator is looser (it only refuses LATER), so choosing the target's own device
+ * would produce a link the engine accepts and then ignores.
+ */
+function sourceDeviceBefore(track, device) {
+  const c = chains[track];
+  const devs = (c && c.devices) || [];
+  let targetPos = -1;
+  for (const d of devs) if (d.id === device) targetPos = d.pos;
+  if (targetPos <= 0) return -1;         // nothing can precede position 0
+  let best = -1, bestPos = -1;
+  for (const d of devs) if (d.pos < targetPos && d.pos > bestPos) { bestPos = d.pos; best = d.id; }
+  return best;
+}
+
+/**
+ * Change how far a source sweeps its target: REMOVE, then ADD.
+ *
+ * I assumed `AddModLink` with an existing id replaced that link — the comment saying so is
+ * gone, because it does not: the engine refuses it as `kModErrLinkExists`. There is no
+ * update opcode, so the only way to change a depth is to destroy the link and make it
+ * again, which is what this does.
+ *
+ * TWO CONSEQUENCES, both real and neither hidden:
+ *
+ *  - THE LINK GETS A NEW ID. The engine assigns `max + 1`, so nothing that remembered the
+ *    old one is still right. Nothing here does: the badge reads its id from the published
+ *    snapshot every frame, which is why that is where it lives rather than in a variable.
+ *  - IT IS NOT ATOMIC. For the moment between the two commands the parameter is unmodulated.
+ *    On the same ring and in order, so it is one block at most — acceptable for a depth
+ *    change, and the reason this is not offered as a drag: a continuous gesture would tear
+ *    the link down and rebuild it per frame.
+ *
+ * Asked backend for an update path. Until then this is the operation the engine offers,
+ * described accurately rather than wrapped in a name that implies less work.
+ */
+function modDepth(track, link, depth) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  const n = Number(link) || 0;
+  if (n <= 0) { state.reject = 'which link?'; schedule(); return false; }
+  const d = Number(depth);
+  if (!Number.isFinite(d)) { state.reject = 'a depth is a number from 0 to 1'; schedule(); return false; }
+  const found = (modsOf(track) || { links: [] }).links.find((l) => l.id === n);
+  if (!found) { state.reject = `no link ${n} on track ${track}`; schedule(); return false; }
+  // The devices go on the REMOVE too. See `unmapParam`: the engine validates them before it
+  // will remove anything, so a remove naming only the link is refused.
+  conn.send({ type: 'mod', op: 'remove', track, link: n,
+              srcDevice: found.sourceDevice, srcId: found.sourceId,
+              dstDevice: found.targetDevice, dstParam: found.targetId });
+  /*
+   * Every field of the original goes back out, not just the depth. The remade link has to
+   * be the same link in every other respect — a message carrying only the new depth would
+   * take the builder's defaults for the source, the target and the rate, which for a link
+   * on the last plugin means an illegal forward order and a refusal, from a command that
+   * said "change the depth".
+   */
+  conn.send({ type: 'mod', op: 'add', track,
+              srcDevice: found.sourceDevice, srcId: found.sourceId,
+              dstDevice: found.targetDevice, dstParam: found.targetId,
+              depth: Math.max(0, Math.min(1, d)), bias: found.bias,
+              source: MOD_SOURCE_NAMES[found.sourceKind] || 'macro',
+              target: MOD_TARGET_NAMES[found.targetKind] || 'param',
+              rate: found.rate === 1 ? 'sample' : 'block',
+              enabled: found.enabled ? 1 : 0 });
+  // ...and NAME it again. The uid16 belongs to the link, not to the parameter, so the new
+  // link starts unnamed — and an unnamed link moves nothing. Queued like the map click's,
+  // and drained by `namePendingMaps` when the engine reports the new id.
+  if (found.uid16) {
+    pendingMaps.push({ track, device: found.targetDevice, param: found.targetId,
+                       uid: found.uid16 });
+  }
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
+ * The engine's source and target kinds, by name.
+ *
+ * Here rather than as numbers at the call site because a `2` that means "envelope" today
+ * and something else after the next enum change is exactly the literal that outlives its
+ * meaning — and because `modDepth` has to send the kind BACK, so a wrong name silently
+ * re-sources a link it was only meant to re-scale.
+ */
+const MOD_SOURCE_NAMES = ['macro', 'lfo', 'env', 'node'];
+const MOD_TARGET_NAMES = ['param', 'patcher', 'macro'];
+
 /** A new section at the end of the song. No `at`, so the sidecar appends. */
 function addSection(bars, name) {
   const b = Math.max(1, Math.round(Number(bars) || 0));
@@ -1425,6 +1743,20 @@ const chain = new Chain(chainHost, {
   // No confirmation, unlike remove: it is the one thing you do to a device that
   // undoes itself by being done again.
   onBypass: ({ track, device, on }) => bypassDevice(track, device, on),
+  /**
+   * MAP — the badge on a parameter row, in both directions.
+   *
+   * `link` is the id of the link already there, or 0. An id means unmap THAT link; 0 means
+   * make one. One target for both, because "map this" and "stop mapping this" are the same
+   * question asked of the same thing.
+   *
+   * Both go through `mapParam` and `unmapParam`, which is what `map` and `unmap` call, so
+   * the badge and the console cannot drift into meaning different things by "modulate the
+   * cutoff".
+   */
+  onMap: ({ track, device, param, uid, link }) => (link
+    ? unmapParam(track, link)
+    : mapParam(track, device, param, uid)),
   onSelect: (pos) => {
     state.chainSelected = pos;
     // Selecting a card takes the keyboard. It did not, and that is the whole bug:
@@ -1826,6 +2158,55 @@ const dockApi = {
    * is text: without it the spine would be a thing you could edit from the console and
    * only inspect by looking at the picture.
    */
+  /*
+   * MODULATION, on the same five functions the MAP badge uses. `mods` is the read, and it
+   * resolves the engine's kind and rate NUMBERS into names here rather than in the dock —
+   * one place knows that 1 means LFO, and it is the place that already knows the enum.
+   */
+  mods: (track) => {
+    const t = track === undefined ? state.cursor.track : Number(track);
+    const m = modsOf(t);
+    if (!m) return null;
+    for (const l of m.links) {
+      l.sourceKindName = MOD_SOURCE_NAMES[l.sourceKind] || `kind${l.sourceKind}`;
+      l.targetKindName = MOD_TARGET_NAMES[l.targetKind] || `kind${l.targetKind}`;
+      l.rateName = l.rate === 1 ? 'per-sample' : 'per-block';
+      /*
+       * THREE WAYS A PUBLISHED LINK CAN BE UNABLE TO WORK, and the list says which.
+       *
+       * Naming them here rather than leaving the reader to work it out, because all three
+       * are silent in the engine: the link is accepted, published and drawable, and the
+       * sound does not change. A list that showed them as ordinary links would be an
+       * interface reporting a modulation that moves nothing.
+       */
+      // (a) No parameter named. A VstParam link is addressed by uid16 ALONE.
+      l.unnamed = l.targetKind === 0 && !l.uid16;
+      // (b) A parameter this device does not publish — a uid the plugin has no row for.
+      //     Happens with a project authored against a different plugin version, and it is
+      //     the one case that looks exactly like a working link from the wire alone.
+      l.orphan = !l.unnamed && l.targetKind === 0 && !!l.uid16
+                 && !paramIndexOfUid(t, l.targetDevice, l.uid16);
+      // (c) A source that is not strictly EARLIER in the chain. The command validator
+      //     allows same-device; the block-rate applier skips it. So the engine accepts a
+      //     link it will never apply — reported, because nothing else says so.
+      l.notForward = !isStrictlyBefore(t, l.sourceDevice, l.targetDevice);
+    }
+    return m;
+  },
+  mapParam: (track, device, param) => {
+    /*
+     * The console names a parameter by INDEX and the engine needs its UID16, so this is
+     * where the index is resolved — from the published parameter mirror, which is the only
+     * thing that knows both. A caller typing `map 0 3 7` should not have to look up a
+     * 32-character hex string first, and the badge already has the uid because it is
+     * drawing the row.
+     */
+    const uid = paramUidOf(track, device, param);
+    return mapParam(track, device, param, uid);
+  },
+  unmapParam: (track, link) => unmapParam(track, link),
+  modDepth: (track, link, depth) => modDepth(track, link, depth),
+  macro: (track, device, value) => setMacro(track, device, value),
   sections: () => sectionsOf(),
   addSection: (bars, name) => addSection(bars, name),
   delSection: (id) => delSection(id),
@@ -5385,6 +5766,10 @@ conn = WANTS_ENGINE ? connectEngine({
     // An insert is answered by the rack republishing, so this is where the answer
     // can be checked against what was asked for.
     checkPendingInsert();
+    // ...and NAME any modulation link the engine has just assigned an id to. Here because
+    // this is where the engine's answer arrives, and the uid16 cannot be sent before it —
+    // SetModLinkUid16 matches an id exactly and there is no "the one you just made".
+    namePendingMaps();
     schedule();
   },
   onEngineEvent: (list, missed) => {
@@ -6107,6 +6492,20 @@ window.__uni = {
    * quietly short list reads as "the song ends here", which is the one thing a spine
    * must never lie about.
    */
+  /*
+   * MODULATION and the SPINE, both delegating to `dockApi` rather than reimplementing.
+   *
+   * This is the fifth time a method has been added to `__uni` and not to `dockApi`, or the
+   * reverse: the ratchet in unit.mjs checks that every `api.X` the console calls exists,
+   * and nothing checks the other direction — so a `__uni` hook that a test needs and the
+   * console cannot reach fails only when a test reaches for it, which is what just
+   * happened. Delegating means there is one implementation and both names find it.
+   */
+  mods: (track) => dockApi.mods(track),
+  mapParam: (track, device, param) => dockApi.mapParam(track, device, param),
+  unmapParam: (track, link) => dockApi.unmapParam(track, link),
+  modDepth: (track, link, depth) => dockApi.modDepth(track, link, depth),
+  macro: (track, device, value) => dockApi.macro(track, device, value),
   // The SAME reader the console's `sections` uses, not a second one — see `dockApi`.
   sections: () => dockApi.sections(),
   addSection: (bars, name) => dockApi.addSection(bars, name),

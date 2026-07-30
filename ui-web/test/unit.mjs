@@ -816,7 +816,11 @@ const API_METHODS = ['setView', 'load', 'save', 'listProjects', 'transport', 'se
                      // and every one is reachable from both surfaces — the strip's click,
                      // drag and double-click all come through these same methods.
                      'sections', 'addSection', 'delSection', 'nameSection', 'secLength',
-                     'moveSection'];
+                     'moveSection',
+                     // Modulation. `mapParam` takes a parameter INDEX and resolves the
+                     // uid16 itself — the console should not have to type a 32-character
+                     // hex string to map a knob.
+                     'mods', 'mapParam', 'unmapParam', 'modDepth', 'macro'];
 
 function stubApi() {
   const calls = [];
@@ -2033,6 +2037,24 @@ const OP_REGISTRY = {
    * `get arrangement` for the read, so all six point at a real path there. The agent
    * still owes a tool — recorded as a gap with the rest of that list, not waved through.
    */
+  /*
+   * MODULATION. daw-cli has `do mod` for the links; the READ has no CLI verb, which is
+   * recorded rather than papered over — `mods` is this app's only way to see what moves
+   * what, and that is a real gap in the CLI's coverage rather than an omission here.
+   */
+  mods:        { cli: null, agent: null, why: 'gap' },
+  map:         { cli: 'mod-link', agent: null, why: 'gap' },
+  unmap:       { cli: 'unmod-link', agent: null, why: 'gap' },
+  // `depth` is `mod-link` again: the engine expresses "change the depth" as an add with the
+  // same link id, so there is no separate verb on either side.
+  depth:       { cli: 'mod-link', agent: null, why: 'gap' },
+  /*
+   * NO CLI VERB FOR THE MACRO KNOB. `mod-target` names a parameter and `mod-link` makes a
+   * link, and nothing there turns a source — which means a link made from daw-cli cannot be
+   * heard from daw-cli, because a macro nobody has turned is skipped by the applier.
+   * Recorded as a gap on their side rather than left looking covered.
+   */
+  macro:       { cli: null, agent: null, why: 'gap' },
   sections:    { cli: 'arrangement', agent: null, why: 'gap' },
   section:     { cli: 'section', agent: null, why: 'gap' },
   delsection:  { cli: 'section', agent: null, why: 'gap' },
@@ -2128,7 +2150,15 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                  // than the app owing the CLI one.
                  'delchord', 'delharmony', 'move-clip', 'movedevice', 'new', 'paste',
                  'patch', 'redo', 'rename', 'seek', 'stop', 'transpose', 'trim-clip',
-                 'undo'];
+                 'undo',
+                 /*
+                  * `mods` — reading what modulates what — and `macro` — turning the knob —
+                  * have no CLI verb at all. The second is the one that matters: daw-cli can
+                  * MAKE a modulation link and cannot make it audible, because a macro
+                  * nobody has turned is skipped by the applier. Recorded rather than left
+                  * looking covered.
+                  */
+                 'mods', 'macro'];
 /** Ops with no agent tool today. Same rule. */
 // `bypass` joins the list rather than being smuggled past it: the engine takes
 // the command and daw-cli sends it, but the agent's manifest has no tool for it,
@@ -2140,7 +2170,7 @@ const AGENT_GAP = ['addnode', 'bypass', 'chord', 'clear', 'columns', 'copy', 'cu
                    'gain', 'link', 'loop', 'movedevice', 'mute', 'new', 'paste', 'patch',
                    'quantize', 'seek', 'solo', 'tempo', 'transpose',
                    'delsection', 'movesection', 'namesection', 'seclength', 'section',
-                   'sections'];
+                   'sections', 'map', 'unmap', 'depth', 'macro', 'mods'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether
@@ -2246,8 +2276,6 @@ test('the parameter key names the track as well as the device', () => {
 
 /** Engine commands with no frontend caller, and why. This list may SHRINK. */
 const ENGINE_UNUSED = {
-  AddModLink: 'gap — modulation cannot be wired from the UI',
-  RemoveModLink: 'gap — nor unwired',
   /*
    * A STALE REASON, corrected rather than left. Euclidean nodes CAN be configured —
    * that is SetPatcherNodeConfig (41), which the patcher's knobs send and which is
@@ -2291,17 +2319,6 @@ const ENGINE_UNUSED = {
   // recorded gap that outlives the gap is a lie with a comment on it.
   LoadPluginOnTrack: 'gap — the rack inserts with AddDevice; this older path is unused',
   SetAutomationTarget: 'gap — automation has no UI at all',
-  SetModSourceValue: 'gap — macro/mod values are unreachable',
-  /*
-   * INVISIBLE TO THIS AUDIT UNTIL NOW. The name-matching pattern was
-   * `[A-Z][A-Za-z]+`, which silently skips anything with a DIGIT in it — so this
-   * command was neither reported as unwired nor recorded as a gap. The audit had a
-   * hole the exact shape of the thing it exists to find.
-   *
-   * The gap itself is with AddModLink and RemoveModLink above: modulation has no
-   * surface here at all, so there is nothing to give a durable id to yet.
-   */
-  SetModLinkUid16: 'gap — modulation has no UI, so nothing has a uid to set',
   /*
    * ARRANGEMENT SECTIONS (54-58), landed engine-side and not yet a surface here.
    *
