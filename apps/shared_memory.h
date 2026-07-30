@@ -184,6 +184,14 @@ struct alignas(64) ShmHeader {
   // the next cache lines.
   int32_t uiTrackGainMillibels[kUiMaxTracks]{};
   int32_t uiTrackPanThousandths[kUiMaxTracks]{};
+  // PER-TRACK BOOLEANS. Bits 0-1 are kMixerFlagMute / kMixerFlagSolo, whose values are
+  // borrowed from the COMMAND payload enumeration in event_payloads.h; bit 2 onward are
+  // read-back-only flags declared below. This byte is therefore the UNION of two flag
+  // enumerations, which is worth stating plainly because it is exactly how a future collision
+  // gets written: someone adds a command flag at 1<<2 without knowing this byte reuses them.
+  //
+  // The name says "mix" for history rather than accuracy — it is where per-track booleans
+  // live, and a fourth parallel array for one bit would be worse than a slightly wrong name.
   uint8_t uiTrackMixFlags[kUiMaxTracks]{};
   uint32_t uiMixerVersion = 0;
   // v13: per-track names, nul-padded. Published alongside the track count so all
@@ -279,6 +287,18 @@ constexpr uint32_t kUiTrackFlagAbsent = 1u << 2;
 // chain + mixer whose output is the master bus, but no arrangement rail and no
 // clips. The UI renders it as the master strip and never as a tracker lane.
 constexpr uint32_t kUiTrackFlagMaster = 1u << 3;
+
+// uiTrackMixFlags bit 2: does this track quantize its notes to the harmony timeline?
+//
+// SetTrackHarmonyQuantize (opcode 10) has worked for a long time and nothing published whether
+// it was ON. It is in the project file and in the runtime and was in no published region — so
+// the only thing a UI could offer was a WRITE-ONLY TOGGLE: press it, something changes
+// somewhere, and the interface can never say which way it is set. After a load it would have to
+// guess or show nothing, and a control drawing a state it invented is worse than no control.
+//
+// Bits 0-1 of that byte are the mute/solo command flags; this is the first read-back-only bit
+// in it. See the field's comment for why the two enumerations share a byte.
+constexpr uint8_t kUiMixFlagHarmonyQuantize = 1u << 2;
 
 struct alignas(64) RingHeader {
   uint32_t capacity = 0;

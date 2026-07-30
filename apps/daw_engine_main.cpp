@@ -8621,8 +8621,28 @@ struct TrackRuntime {
       std::memcpy(&presetPayload, entry.payload, sizeof(presetPayload));
       std::string name(presetPayload.name,
                        strnlen(presetPayload.name, sizeof(presetPayload.name)));
+      // Every exit from here reports the OUTCOME, including the early refusals. A caller that
+      // gets nothing back cannot tell "refused" from "still working" from "written", and the
+      // one thing it must not do is tell the user it saved.
+      auto reportPreset = [&](bool ok, const std::string& why) {
+        daw::UiPresetSavedPayload result{};
+        result.diffType = static_cast<uint16_t>(daw::UiDiffType::PresetSaved);
+        result.ok = ok ? 1u : 0u;
+        const size_t n = std::min(name.size(), sizeof(result.name) - 1);
+        std::memcpy(result.name, name.data(), n);
+        daw::UiDiffPayload asDiff{};
+        static_assert(sizeof(result) <= sizeof(asDiff),
+                      "the preset result must fit the diff slot it rides");
+        std::memcpy(&asDiff, &result, sizeof(result));
+        emitUiDiff(asDiff);
+        DAW_EVENT("patcher_preset.saved")
+            .field("name", name)
+            .field("ok", ok)
+            .field("error", why);
+      };
       if (name.empty()) {
         std::cerr << "UI: SavePatcherPreset failed - empty name" << std::endl;
+        reportPreset(false, "empty_name");
         return;
       }
       const std::string dir = daw::defaultPatcherPresetDir();
@@ -8631,6 +8651,7 @@ struct TrackRuntime {
       if (ec) {
         std::cerr << "UI: SavePatcherPreset failed - cannot create dir "
                   << dir << std::endl;
+        reportPreset(false, "cannot_create_dir");
         return;
       }
       const std::filesystem::path path =
@@ -8640,8 +8661,10 @@ struct TrackRuntime {
                                   path.string(),
                                   &error)) {
         std::cerr << "UI: SavePatcherPreset failed - " << error << std::endl;
+        reportPreset(false, error);
       } else {
         std::cerr << "UI: Saved patcher preset " << path.string() << std::endl;
+        reportPreset(true, std::string());
       }
       return;
     }
@@ -13453,6 +13476,15 @@ struct TrackRuntime {
                 1000.0));
             if (rt->mixMute.load(std::memory_order_relaxed)) flags |= daw::kMixerFlagMute;
             if (rt->mixSolo.load(std::memory_order_relaxed)) flags |= daw::kMixerFlagSolo;
+            // Harmony quantize is a per-track boolean the UI has to be able to READ, or the
+            // toggle for it can only ever be write-only. Read under trackMutex like the name,
+            // since it lives in the track struct rather than in an atomic.
+            {
+              std::lock_guard<std::mutex> tlock(rt->trackMutex);
+              if (rt->track.harmonyQuantize) {
+                flags |= daw::kUiMixFlagHarmonyQuantize;
+              }
+            }
           }
           if (gainMb != lastGainMillibels[i] || panTh != lastPanThousandths[i] ||
               flags != lastMixFlags[i]) {

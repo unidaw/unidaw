@@ -388,6 +388,12 @@ enum class UiDiffType : uint16_t {
   // diffType and ignores unknown values is unaffected, which is why it needs no
   // kShmVersion bump.
   ClipRejected = 15,
+  // The OUTCOME of a SavePatcherPreset (29). The command has always worked and nothing said
+  // whether the file was written — daw-cli learned the path from the engine's stderr, which a
+  // browser cannot read. So a "save this graph as a preset" button could only ever lie about
+  // half the time. Additive like ClipRejected: a reader that switches on diffType and ignores
+  // unknown values is unaffected, so no kShmVersion bump.
+  PresetSaved = 16,
 };
 
 // Why a clip edit was refused. Distinct codes rather than one "rejected", because the
@@ -398,6 +404,23 @@ enum class UiClipRejectReason : uint16_t {
   StaleBase = 1,      // baseVersion != the engine's current version for this scope
   UnknownTrack = 2,   // no such track
 };
+
+// SavePatcherPreset's result. Rides the same 40-byte diff slot; diffType FIRST for the same
+// reason as everything else here.
+//
+// The NAME is echoed rather than the full path: the path is the engine's business (it owns the
+// preset directory) and a 28-byte field could truncate one, which is worse than useless — a
+// caller matching a truncated path against what it asked for could conclude the wrong save
+// succeeded. The name is what the caller sent, so it can be matched exactly.
+struct UiPresetSavedPayload {
+  uint16_t diffType = static_cast<uint16_t>(UiDiffType::PresetSaved);
+  uint16_t ok = 0;  // 1 = written, 0 = failed (the reason is on the event stream)
+  char name[28]{};
+  uint32_t reserved[2]{};
+};
+
+static_assert(sizeof(UiPresetSavedPayload) == 40,
+              "UiPresetSavedPayload must fit EventEntry payload");
 
 // Rides the same 40-byte diff slot as every other payload; diffType is FIRST, so a
 // reader dispatches on it and never on the payload's size (UiChainDiffPayload and

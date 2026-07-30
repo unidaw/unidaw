@@ -609,6 +609,16 @@ pub enum UiCommandType {
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
 pub const MIXER_FLAG_SOLO: u16 = 1 << 1;
+/// `ui_track_mix_flags` bit 2: does this track quantize its notes to the harmony timeline?
+///
+/// SetTrackHarmonyQuantize (10) had no read-back at all, so the only control that could be built
+/// was a WRITE-ONLY TOGGLE — press it and the interface can never say which way it is set. After
+/// a load it would have to guess or show nothing, and a control drawing a state it invented is
+/// worse than no control.
+///
+/// Bits 0-1 of that byte are the mute/solo COMMAND flags above; this is the first read-back-only
+/// bit in it, so the byte is a union of two enumerations. Do not add a command flag at 1 << 2.
+pub const MIX_FLAG_HARMONY_QUANTIZE: u8 = 1 << 2;
 /// PreviewNote flags: bit0 set = note-on, clear = note-off.
 pub const PREVIEW_NOTE_FLAG_ON: u16 = 1 << 0;
 
@@ -637,6 +647,10 @@ pub enum UiDiffType {
     /// symptom was "the app does nothing". Payload: `UiClipRejectPayload`.
     /// ResyncNeeded (4) is still emitted alongside, unchanged.
     ClipRejected = 15,
+    /// SavePatcherPreset's outcome. Without it a "save this graph as a preset" button could
+    /// only lie about half the time — daw-cli read the path off the engine's stderr, which a
+    /// browser cannot.
+    PresetSaved = 16,
 }
 
 /// Why a clip edit was refused. The distinction matters because the fix differs: a
@@ -653,6 +667,19 @@ pub enum UiClipRejectReason {
 /// Rides the same 40-byte diff slot as every other payload. `diff_type` is FIRST —
 /// dispatch on it, never on the payload's size (UiChainDiffPayload and
 /// UiChainErrorPayload are both 40 bytes).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiPresetSavedPayload {
+    pub diff_type: u16,
+    /// 1 = written, 0 = failed. The reason is on the engine's event stream, not here.
+    pub ok: u16,
+    /// The name the caller SENT, echoed so it can be matched exactly. Not the path: the engine
+    /// owns the preset directory, and a 28-byte path could truncate — a caller matching a
+    /// truncated path against its request could conclude the wrong save succeeded.
+    pub name: [u8; 28],
+    pub reserved: [u32; 2],
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct UiClipRejectPayload {
@@ -1295,6 +1322,12 @@ mod tests {
     #[test]
     fn ui_edit_batch_entry_layout_matches_cpp() {
         const_assert_eq!(size_of::<EventEntry>(), 64);
+        // Every payload that rides the 40-byte diff slot needs its size PINNED on both sides.
+        // Neither of these had an assert, and the last time a shared constant went unasserted
+        // (kUiMaxClipExtents) it diverged 256 vs 64 across the two languages with every test
+        // green, because nothing was comparing them.
+        const_assert_eq!(size_of::<UiClipRejectPayload>(), 40);
+        const_assert_eq!(size_of::<UiPresetSavedPayload>(), 40);
         // M2.18: `ready` must sit in the old tail padding, or every ring offset moves.
         assert_eq!(offset_of!(EventEntry, ready), 60);
         const_assert_eq!(size_of::<UiEditBatchEntry>(), 2112);
