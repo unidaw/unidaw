@@ -508,6 +508,11 @@ add_test(NAME sampler_load
 )
 set_tests_properties(sampler_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+add_test(NAME sampler_chop
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_chop_check.sh
+)
+set_tests_properties(sampler_chop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_slice_stability
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_slice_stability_check.sh
 )

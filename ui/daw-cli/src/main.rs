@@ -12,8 +12,10 @@ use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{
     UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
     UiCommandType, UiPatcherPresetCommandPayload, UiSamplerKitRequestPayload,
-    UiSamplerLoadPayload, UiSamplerSetSlotPayload, UiWaveformRequestPayload, MASTER_TRACK_ID,
-    SAMPLER_LOAD_FIXED_PITCH, SAMPLER_SLOT_FIELDS, UI_SAMPLER_KIT_SLOTS,
+    UiSamplerLoadPayload, UiSamplerMarkerPayload, UiSamplerSetSlotPayload, UiSamplerSlicePayload,
+    UiWaveformRequestPayload, MASTER_TRACK_ID, SAMPLER_LOAD_FIXED_PITCH, SAMPLER_MARKER_ADD,
+    SAMPLER_MARKER_MOVE, SAMPLER_MARKER_REMOVE, SAMPLER_SLICE_CLEAR, SAMPLER_SLICE_EQUAL,
+    SAMPLER_SLICE_TRANSIENT, SAMPLER_SLOT_FIELDS, UI_SAMPLER_KIT_SLOTS,
     UI_SAMPLER_SLOT_SOURCE_MISSING,
 };
 
@@ -32,6 +34,11 @@ daw-cli — control surface for a running engine
                                    edit one slot field (--field with no match lists them all)
   daw-cli get sampler-kit --track N [--device D]
                                    the device's slots, as the ENGINE has them
+  daw-cli do sampler-slice --track N --source 1 [--mode transient|equal|clear]
+                          [--sensitivity 0-1000] [--count 16] [--snap TICKS] [--slots]
+                                   chop a source; --slots makes one playable slot per slice
+  daw-cli do sampler-marker --track N --source 1 --op add|move|remove [--marker ID] [--frame F]
+                                   nudge one boundary — ids are stable, so no row moves
   daw-cli get arrangement          the markers (bar AND tick, resolved) + the meter map,
                                    the meter map, and the song end
   daw-cli get notes --track N      that track's notes from the published region
@@ -1183,13 +1190,13 @@ fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
                 println!("  \"slots_truncated\": {},", v.slots_truncated);
                 let body: Vec<String> = v.slots.iter().map(|e| {
                     format!(
-                        "    {{ \"slot\": {}, \"source\": {}, \"key_low\": {}, \"key_high\": {}, \"root\": {}, \"vel_low\": {}, \"vel_high\": {}, \"voice_group\": {}, \"nna\": {}, \"gate\": {}, \"reverse\": {}, \"source_missing\": {}, \"gain_mb\": {}, \"pan\": {}, \"mod_set\": {}, \"stem\": {}, \"quality\": {}, \"length_frames\": {} }}",
+                        "    {{ \"slot\": {}, \"source\": {}, \"key_low\": {}, \"key_high\": {}, \"root\": {}, \"vel_low\": {}, \"vel_high\": {}, \"voice_group\": {}, \"nna\": {}, \"gate\": {}, \"reverse\": {}, \"source_missing\": {}, \"gain_mb\": {}, \"pan\": {}, \"mod_set\": {}, \"stem\": {}, \"quality\": {}, \"slice\": {}, \"length_frames\": {} }}",
                         e.slotId, e.sourceLocalId, e.keyLow, e.keyHigh, e.rootKey,
                         e.velLow, e.velHigh, e.voiceGroup, e.nna,
                         (e.flags & 1) != 0, (e.flags & 2) != 0,
                         (e.flags & UI_SAMPLER_SLOT_SOURCE_MISSING) != 0,
                         e.gainMillibels, e.panThousandths, e.modSetId, e.outputStem,
-                        e.quality, e.lengthFrames)
+                        e.quality, e.sliceId, e.lengthFrames)
                 }).collect();
                 println!("  \"slots\": [\n{}\n  ]", body.join(",\n"));
                 println!("}}");
@@ -2205,6 +2212,112 @@ fn main() {
                             match handle.send_sampler_set_slot(payload) {
                                 Ok(()) => {
                                     println!("{{ \"sent\": \"sampler-slot\", \"track\": {track}, \"device\": {device}, \"slot\": {slot}, \"field\": {field_arg:?}, \"value\": {value} }}");
+                                    0
+                                }
+                                Err(err) => {
+                                    eprintln!("daw-cli: {err}");
+                                    1
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(&"sampler-slice") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let source = flag_u64(&args, "--source", Some(1)).unwrap_or(1) as u32;
+                    let sensitivity = flag_u64(&args, "--sensitivity", Some(500)).unwrap_or(500) as u32;
+                    let count = flag_u64(&args, "--count", Some(16)).unwrap_or(16) as u32;
+                    let max = flag_u64(&args, "--max", Some(64)).unwrap_or(64) as u32;
+                    let snap = flag_u64(&args, "--snap", Some(0)).unwrap_or(0) as u32;
+                    let base = flag_u64(&args, "--base-key", Some(36)).unwrap_or(36) as u8;
+                    let make_slots = args.iter().any(|a| a == "--slots");
+                    let mode_arg = args
+                        .iter()
+                        .position(|a| a == "--mode")
+                        .and_then(|i| args.get(i + 1))
+                        .map(String::as_str)
+                        .unwrap_or("transient");
+                    let mode = match mode_arg {
+                        "transient" => Some(SAMPLER_SLICE_TRANSIENT),
+                        "equal" => Some(SAMPLER_SLICE_EQUAL),
+                        "clear" => Some(SAMPLER_SLICE_CLEAR),
+                        _ => None,
+                    };
+                    match mode {
+                        None => {
+                            eprintln!("daw-cli: --mode must be transient, equal or clear");
+                            2
+                        }
+                        Some(mode) => {
+                            let payload = UiSamplerSlicePayload {
+                                command_type: UiCommandType::SamplerSlice as u16,
+                                mode,
+                                track_id: track,
+                                device_id: device,
+                                source_local_id: source,
+                                sensitivity,
+                                count,
+                                max_slices: max,
+                                snap_nanoticks: snap,
+                                make_slots: if make_slots { 1 } else { 0 },
+                                slot_base_key: base,
+                                reserved: [0; 6],
+                            };
+                            match handle.send_sampler_slice(payload) {
+                                Ok(()) => {
+                                    println!("{{ \"sent\": \"sampler-slice\", \"track\": {track}, \"source\": {source}, \"mode\": {mode_arg:?}, \"slots\": {make_slots} }}");
+                                    0
+                                }
+                                Err(err) => {
+                                    eprintln!("daw-cli: {err}");
+                                    1
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(&"sampler-marker") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let source = flag_u64(&args, "--source", Some(1)).unwrap_or(1) as u32;
+                    let marker = flag_u64(&args, "--marker", Some(0)).unwrap_or(0) as u32;
+                    let frame = flag_u64(&args, "--frame", Some(0)).unwrap_or(0);
+                    let op_arg = args
+                        .iter()
+                        .position(|a| a == "--op")
+                        .and_then(|i| args.get(i + 1))
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    let op = match op_arg {
+                        "add" => Some(SAMPLER_MARKER_ADD),
+                        "move" => Some(SAMPLER_MARKER_MOVE),
+                        "remove" => Some(SAMPLER_MARKER_REMOVE),
+                        _ => None,
+                    };
+                    match op {
+                        None => {
+                            eprintln!("daw-cli: --op must be add, move or remove");
+                            2
+                        }
+                        Some(op) if op != SAMPLER_MARKER_ADD && marker == 0 => {
+                            eprintln!("daw-cli: --op {op_arg} needs --marker <id>");
+                            2
+                        }
+                        Some(op) => {
+                            let payload = UiSamplerMarkerPayload {
+                                command_type: UiCommandType::SamplerMarker as u16,
+                                op,
+                                track_id: track,
+                                device_id: device,
+                                source_local_id: source,
+                                marker_id: marker,
+                                frame,
+                                reserved: [0; 8],
+                            };
+                            match handle.send_sampler_marker(payload) {
+                                Ok(()) => {
+                                    println!("{{ \"sent\": \"sampler-marker\", \"track\": {track}, \"source\": {source}, \"op\": {op_arg:?}, \"marker\": {marker}, \"frame\": {frame} }}");
                                     0
                                 }
                                 Err(err) => {

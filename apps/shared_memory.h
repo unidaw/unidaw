@@ -875,7 +875,12 @@ struct UiSamplerSlotEntry {          // 32 B
   uint8_t outputStem = 0;
   uint8_t quality = 0;
   uint32_t lengthFrames = 0;         // 0 = the source did not resolve, so the slot is silent
-  uint32_t reserved[2]{};
+  // Which SLICE this slot plays, or 0 for the whole source. Published because without it nothing
+  // can tell a chop's slot from a whole-sample slot — they differ in no other visible field, and
+  // a kit grid that cannot distinguish them cannot draw a chop at all.
+  uint16_t sliceId = 0;
+  uint16_t reserved0 = 0;
+  uint32_t reserved1 = 0;
 };
 static_assert(sizeof(UiSamplerSlotEntry) == 32, "UiSamplerSlotEntry must be 32 bytes");
 

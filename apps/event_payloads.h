@@ -236,7 +236,17 @@ enum class UiCommandType : uint16_t {
   /// `requestSeq` and it picks the slot, so a caller knows where its answer will land BEFORE it
   /// asks — the same shape as RequestAutomationLane and RequestWaveform, and the reason that
   /// shape exists rather than scanning for a reply that looks like yours.
-  RequestSamplerKit = 75,  // next free 76
+  RequestSamplerKit = 75,
+
+  /// Slices a source: transient detection, equal division, or one marker at a time. Mints STABLE
+  /// marker ids — an insert never renumbers an existing one, which is what lets a chop be re-cut
+  /// while it plays (docs/SAMPLER_DESIGN.md §5.1).
+  SamplerSlice = 76,
+
+  /// Adds, moves or removes ONE slice marker. The fine-grained companion to SamplerSlice, and
+  /// the one that matters live: dragging a boundary changes what a slice PLAYS without touching
+  /// what any row SAYS.
+  SamplerMarker = 77,  // next free 78
 };
 
 // SAMPLER LOAD (opcode 73). Exactly 40 bytes, which is the whole command payload — so `name`
@@ -273,6 +283,48 @@ struct UiSamplerKitRequestPayload {
 };
 static_assert(sizeof(UiSamplerKitRequestPayload) == 40,
               "UiSamplerKitRequestPayload must fit the command payload exactly");
+
+// How SamplerSlice cuts. Named rather than numbered by position, so adding a mode never changes
+// what an existing saved macro or agent script means.
+enum class SamplerSliceMode : uint16_t {
+  Transient = 0,  // detection, driven by `sensitivity`
+  Equal = 1,      // `count` equal divisions — for material with no transients to find
+  Clear = 2,      // remove every marker, back to one whole-source slice
+};
+
+struct UiSamplerSlicePayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSlice);
+  uint16_t mode = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t sourceLocalId = 0;
+  uint32_t sensitivity = 500;   // 0..1000, Transient mode
+  uint32_t count = 16;          // Equal mode
+  uint32_t maxSlices = 64;
+  uint32_t snapNanoticks = 0;   // 0 = no snap; else the row grid, so the chop is tempo-adaptive
+  // Non-zero MAKES A SLOT PER SLICE from `slotBaseKey` upward, which is the gesture that turns a
+  // chop into something playable in one command rather than N.
+  uint8_t makeSlots = 0;
+  uint8_t slotBaseKey = 36;
+  uint8_t reserved[6]{};
+};
+static_assert(sizeof(UiSamplerSlicePayload) == 40,
+              "UiSamplerSlicePayload must fit the command payload exactly");
+
+enum class SamplerMarkerOp : uint16_t { Add = 0, Move = 1, Remove = 2 };
+
+struct UiSamplerMarkerPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerMarker);
+  uint16_t op = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t sourceLocalId = 0;
+  uint32_t markerId = 0;   // Move/Remove
+  uint64_t frame = 0;      // Add/Move
+  uint8_t reserved[8]{};
+};
+static_assert(sizeof(UiSamplerMarkerPayload) == 40,
+              "UiSamplerMarkerPayload must fit the command payload exactly");
 
 // WHICH slot field SamplerSetSlot writes. Named rather than an index into the struct, so adding
 // a field never renumbers an existing one — a renumbered selector would silently write the wrong
@@ -471,6 +523,8 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SamplerLoad: return "sampler_load";
     case UiCommandType::SamplerSetSlot: return "sampler_set_slot";
     case UiCommandType::RequestSamplerKit: return "request_sampler_kit";
+    case UiCommandType::SamplerSlice: return "sampler_slice";
+    case UiCommandType::SamplerMarker: return "sampler_marker";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";

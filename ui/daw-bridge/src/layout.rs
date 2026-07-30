@@ -192,6 +192,50 @@ pub const UI_SAMPLER_KIT_SLOTS: usize = 2;
 /// sample is empty" are different problems and a UI should be able to say which.
 pub const UI_SAMPLER_SLOT_SOURCE_MISSING: u8 = 1 << 2;
 
+/// SamplerSlice (76) modes. NAMED rather than numbered by position, so adding a mode never
+/// changes what an existing saved macro or agent script means.
+pub const SAMPLER_SLICE_TRANSIENT: u16 = 0;
+pub const SAMPLER_SLICE_EQUAL: u16 = 1;
+pub const SAMPLER_SLICE_CLEAR: u16 = 2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerSlicePayload {
+    pub command_type: u16,
+    pub mode: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub source_local_id: u32,
+    pub sensitivity: u32,
+    pub count: u32,
+    pub max_slices: u32,
+    /// 0 = no snap; else the row grid in nanoticks, which makes the chop tempo-adaptive from the
+    /// moment it is made rather than tied to the rate the file was recorded at.
+    pub snap_nanoticks: u32,
+    /// Non-zero makes a SLOT PER SLICE from `slot_base_key` upward — the gesture that turns a
+    /// chop into something playable in one command rather than N.
+    pub make_slots: u8,
+    pub slot_base_key: u8,
+    pub reserved: [u8; 6],
+}
+
+pub const SAMPLER_MARKER_ADD: u16 = 0;
+pub const SAMPLER_MARKER_MOVE: u16 = 1;
+pub const SAMPLER_MARKER_REMOVE: u16 = 2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerMarkerPayload {
+    pub command_type: u16,
+    pub op: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub source_local_id: u32,
+    pub marker_id: u32,
+    pub frame: u64,
+    pub reserved: [u8; 8],
+}
+
 /// RequestSamplerKit (75).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -769,6 +813,15 @@ pub enum UiCommandType {
 
     /// Asks the engine to publish one sampler device's kit into a `UiSamplerKitSlot`.
     RequestSamplerKit = 75,
+
+    /// Slices a source: transient detection, equal division, or clear. Mints STABLE marker ids —
+    /// an insert never renumbers an existing one, which is what lets a chop be re-cut while it
+    /// plays (SAMPLER_DESIGN §5.1).
+    SamplerSlice = 76,
+
+    /// Adds, moves or removes ONE slice marker. The one that matters live: dragging a boundary
+    /// changes what a slice PLAYS without touching what any row SAYS.
+    SamplerMarker = 77,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -1828,6 +1881,8 @@ mod wire_layout {
             UiSamplerLoadPayload,
             UiSamplerSetSlotPayload,
             UiSamplerKitRequestPayload,
+            UiSamplerSlicePayload,
+            UiSamplerMarkerPayload,
         );
     }
 
@@ -1840,6 +1895,8 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSamplerLoadPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerSetSlotPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerKitRequestPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerSlicePayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerMarkerPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 32);
     }
 }

@@ -1176,6 +1176,28 @@ impl EngineHandle {
         None
     }
 
+    /// Slice a source (transient / equal / clear).
+    pub fn send_sampler_slice(
+        &self,
+        payload: crate::layout::UiSamplerSlicePayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerSlicePayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerSlicePayload>(),
+        )
+    }
+
+    /// Add, move or remove one slice marker.
+    pub fn send_sampler_marker(
+        &self,
+        payload: crate::layout::UiSamplerMarkerPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerMarkerPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerMarkerPayload>(),
+        )
+    }
+
     /// Send a track-routing replace (SetTrackRouting). Same ring as send_command; a
     /// distinct payload shape.
     pub fn send_routing_command(

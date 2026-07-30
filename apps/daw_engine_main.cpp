@@ -56,6 +56,7 @@
 #include "apps/markers.h"
 #include "apps/ripple.h"
 #include "apps/sampler_engine.h"
+#include "apps/sampler_slice.h"
 #include "apps/musical_structures.h"
 #include "apps/placement_schedule.h"
 #include "apps/note_entry.h"
@@ -9921,6 +9922,189 @@ struct TrackRuntime {
           .field("name", name);
       return;
     }
+    // ---- SAMPLER SLICE (76) and SAMPLER MARKER (77).
+    //
+    // Both edit the SliceSet and then refresh the snapshot, so a re-chop takes effect on the NEXT
+    // note without touching a single row. That is §5.1: the extent is derived from marker order,
+    // so nothing downstream had to be rewritten.
+    if ((entry.size == sizeof(daw::UiSamplerSlicePayload) &&
+         commandType == daw::UiCommandType::SamplerSlice) ||
+        (entry.size == sizeof(daw::UiSamplerMarkerPayload) &&
+         commandType == daw::UiCommandType::SamplerMarker)) {
+      const bool isSlice = commandType == daw::UiCommandType::SamplerSlice;
+      daw::UiSamplerSlicePayload sp{};
+      daw::UiSamplerMarkerPayload mp{};
+      if (isSlice) {
+        std::memcpy(&sp, entry.payload, sizeof(sp));
+      } else {
+        std::memcpy(&mp, entry.payload, sizeof(mp));
+      }
+      const uint32_t trackId = isSlice ? sp.trackId : mp.trackId;
+      const uint32_t deviceId = isSlice ? sp.deviceId : mp.deviceId;
+      const uint32_t sourceId = isSlice ? sp.sourceLocalId : mp.sourceLocalId;
+
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (trackId < tracks.size()) {
+          runtime = tracks[trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.slice_rejected").field("track", trackId).field("reason", "no_such_track");
+        return;
+      }
+
+      // The DECODED source is needed for both: detection reads its audio, and every marker op
+      // needs its length to validate a frame against. Read from the SNAPSHOT, which is the same
+      // audio the producer plays — resolving the file again here could disagree with it.
+      std::shared_ptr<const daw::SamplerRender> snap;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        snap = runtime->samplerSnapshot;
+      }
+      const daw::SamplerSourceAudio* audio = snap ? snap->audioFor(static_cast<uint16_t>(sourceId))
+                                                  : nullptr;
+      if (!audio || audio->frames == 0) {
+        DAW_EVENT("sampler.slice_rejected")
+            .field("track", trackId)
+            .field("source", sourceId)
+            .field("reason", "no_such_source");
+        return;
+      }
+
+      uint32_t made = 0, removed = 0, slotsMade = 0;
+      bool ok = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler || (deviceId != 0 && d.id != deviceId)) {
+            continue;
+          }
+          daw::SliceSet* set = nullptr;
+          for (auto& ss : d.sampler.sliceSets) {
+            if (ss.sourceLocalId == static_cast<uint16_t>(sourceId)) {
+              set = &ss;
+            }
+          }
+          if (!set) {
+            daw::SliceSet fresh;
+            fresh.sourceLocalId = static_cast<uint16_t>(sourceId);
+            fresh.nextMarkerId = 1;
+            d.sampler.sliceSets.push_back(fresh);
+            set = &d.sampler.sliceSets.back();
+          }
+          if (isSlice) {
+            std::vector<uint64_t> frames;
+            switch (static_cast<daw::SamplerSliceMode>(sp.mode)) {
+              case daw::SamplerSliceMode::Clear:
+                removed = static_cast<uint32_t>(set->markers.size());
+                set->markers.clear();
+                // nextMarkerId is NOT reset. Clearing removes boundaries; it does not make the
+                // retired ids safe to hand out again, and a note still naming one must stay
+                // silent rather than acquiring different audio.
+                break;
+              case daw::SamplerSliceMode::Equal:
+                frames = daw::divideEqually(audio->frames, sp.count);
+                break;
+              case daw::SamplerSliceMode::Transient:
+              default: {
+                // Detection wants ONE channel. The left is the convention here rather than a
+                // downmix: a downmix can cancel a transient that is hard-panned, and losing a hit
+                // to phase is a worse failure than ignoring the right channel.
+                daw::SliceDetectOptions opt;
+                opt.sensitivity = sp.sensitivity;
+                opt.maxSlices = sp.maxSlices ? sp.maxSlices : 64;
+                frames = daw::detectTransients(audio->channels[0], audio->frames, opt);
+                break;
+              }
+            }
+            if (sp.snapNanoticks > 0 && !frames.empty()) {
+              // The grid arrives in NANOTICKS and the markers are in FRAMES, so it converts here
+              // against this project's tempo — which is what makes the chop tempo-adaptive rather
+              // than tied to the rate the file happened to be recorded at.
+              const double bpm = tempoProvider.bpmAtNanotick(0);
+              const double framesPerTick =
+                  (bpm > 0.0 ? bpm : 120.0) /
+                  (60.0 * static_cast<double>(daw::NanotickConverter::kNanoticksPerQuarter)) *
+                  audio->sampleRate;
+              const uint64_t gridFrames =
+                  static_cast<uint64_t>(sp.snapNanoticks * framesPerTick);
+              if (gridFrames > 0) {
+                daw::snapToGrid(frames, gridFrames);
+              }
+            }
+            made = daw::applySliceFrames(*set, frames, audio->frames);
+            if (sp.makeSlots) {
+              // ONE SLOT PER SLICE, on consecutive keys. This is the gesture that turns a chop
+              // into something playable in one command rather than N — and every slot names its
+              // slice by ID, so a later re-cut moves what they play without moving any row.
+              uint8_t key = sp.slotBaseKey;
+              for (const auto& m : set->markers) {
+                bool exists = false;
+                for (const auto& sl : d.sampler.slots) {
+                  if (sl.sliceId == m.id) {
+                    exists = true;
+                  }
+                }
+                if (exists || key > 127) {
+                  ++key;
+                  continue;
+                }
+                daw::SamplerSlot sl;
+                sl.id = d.sampler.nextSlotId++;
+                sl.sourceLocalId = static_cast<uint16_t>(sourceId);
+                sl.sliceId = m.id;
+                sl.keyLow = sl.keyHigh = sl.rootKey = key++;
+                // FIXED PITCH: a slice played from its own key should sound as recorded, not
+                // transposed by where it happens to sit on the keyboard.
+                sl.pitchTrackMilli = 0;
+                sl.modSetId = d.sampler.modSets.empty() ? 1 : d.sampler.modSets.front().id;
+                d.sampler.slots.push_back(sl);
+                ++slotsMade;
+              }
+            }
+            ok = true;
+          } else {
+            switch (static_cast<daw::SamplerMarkerOp>(mp.op)) {
+              case daw::SamplerMarkerOp::Add:
+                ok = daw::insertSliceMarker(*set, mp.frame, audio->frames) != 0;
+                made = ok ? 1 : 0;
+                break;
+              case daw::SamplerMarkerOp::Move:
+                ok = daw::moveSliceMarker(*set, static_cast<uint16_t>(mp.markerId), mp.frame,
+                                          audio->frames);
+                break;
+              case daw::SamplerMarkerOp::Remove:
+                ok = daw::removeSliceMarker(*set, static_cast<uint16_t>(mp.markerId));
+                removed = ok ? 1 : 0;
+                break;
+            }
+          }
+          break;
+        }
+        if (ok) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!ok) {
+        DAW_EVENT("sampler.slice_rejected")
+            .field("track", trackId)
+            .field("device", deviceId)
+            .field("source", sourceId)
+            .field("reason", isSlice ? "no_sampler_device" : "marker_op_refused");
+        return;
+      }
+      DAW_EVENT(isSlice ? "sampler.sliced" : "sampler.marker")
+          .field("track", trackId)
+          .field("device", deviceId)
+          .field("source", sourceId)
+          .field("made", made)
+          .field("removed", removed)
+          .field("slots", slotsMade);
+      return;
+    }
+
     // ---- REQUEST SAMPLER KIT (75). Publishes one device's kit into a seqlock slot.
     if (entry.size == sizeof(daw::UiSamplerKitRequestPayload) &&
         commandType == daw::UiCommandType::RequestSamplerKit) {
@@ -10003,6 +10187,7 @@ struct TrackRuntime {
             e.modSetId = sl.modSetId;
             e.outputStem = sl.outputStem;
             e.quality = sl.quality;
+            e.sliceId = sl.sliceId;
             const daw::SamplerSourceAudio* audio = snap->audioFor(sl.sourceLocalId);
             e.lengthFrames = audio ? static_cast<uint32_t>(audio->frames) : 0;
             // "Silent because the file is missing" and "silent because the sample is empty" are
