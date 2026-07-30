@@ -1448,6 +1448,44 @@ function automationOf(track) {
  * request that is already in flight is not sent twice — the engine answers into a slot the
  * sidecar picked, and asking again would spend a slot on a question already asked.
  */
+/*
+ * WHAT IS IN A SAMPLER, cached per (track, device).
+ *
+ * Same shape as the automation cache below it and for the same reasons: the answer arrives on
+ * the ack channel, a question already in flight is not asked twice, and `found: false` is an
+ * ANSWER — "there is no sampler on that device" — rather than silence to spin on.
+ *
+ * NOT cached against a version, unlike a curve. The kit is published from the snapshot the
+ * AUDIO PRODUCER reads, so it changes when a voice starts or a slot is re-cut, and there is no
+ * counter that moves with it. So an answer is kept until it is asked for again, and asking is
+ * the refresh — which is honest about what it is rather than pretending to be live.
+ */
+const samplerKits = new Map();
+let samplerKitAsked = null;
+
+/**
+ * Ask what is in the sampler on (track, device). Answered on the ack channel; see `onAck`.
+ *
+ * Returns the last answer if there is one, or null while the question is out. Null means "not
+ * yet" and is different from an answer with no slots — the first draws nothing, the second draws
+ * an empty kit, and conflating them is how a UI shows "no samples" for a sampler it has simply
+ * not heard back from.
+ */
+function requestSamplerKit(track, device) {
+  const key = `${track}:${device}`;
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return null; }
+  if (samplerKitAsked !== key) {
+    samplerKitAsked = key;
+    conn.send({ type: 'samplerkit', track: Number(track) || 0, device: Number(device) || 0 });
+  }
+  return samplerKits.get(key) || null;
+}
+
+/** The last answer about (track, device), without asking again. */
+function samplerKitOf(track, device) {
+  return samplerKits.get(`${track}:${device}`) || null;
+}
+
 const automationCurves = new Map();
 let automationAsked = null;
 function requestAutomation(track, param) {
@@ -2543,6 +2581,8 @@ const dockApi = {
   writeAutomation: (track, param, tick, value, discrete) =>
     writeAutomation(track, param, tick, value, discrete),
   automationPoints: (track, param) => requestAutomation(track, param),
+  samplerKit: (track, device) => requestSamplerKit(track, device),
+  samplerKitCached: (track, device) => samplerKitOf(track, device),
   automationEdit: (on) => setAutomationEdit(on),
   /** Is the curve layer taking the pointer? Read separately from setting it, so a test and a
    *  chip can both ask without either of them toggling anything. */
@@ -6489,6 +6529,31 @@ conn = WANTS_ENGINE ? connectEngine({
      * the reason that branch's comment gives: this channel is shared and matching on a
      * substring is how one shape starts eating another's.
      */
+    if (typeof msg === 'string' && msg.indexOf('"samplerKit"') >= 0) {
+      let parsed = null;
+      try { parsed = JSON.parse(msg); } catch (e) { /* not ours after all */ }
+      if (parsed && parsed.samplerKit) {
+        const k = parsed.samplerKit;
+        const key = `${k.track}:${k.device}`;
+        if (samplerKitAsked === key) samplerKitAsked = null;
+        if (k.timeout) {
+          // Reported, not cached — "the engine did not answer" is not "the kit is empty", and
+          // filing one as the other would leave a wrong answer in the cache for ever.
+          state.reject = `the engine did not answer about the sampler on t${k.track} dev${k.device}`;
+          dock.log('err', state.reject);
+        } else {
+          samplerKits.set(key, k);
+          dock.log('out', k.found
+            ? `sampler t${k.track} dev${k.device}: ${k.slots.length} slot(s), `
+              + `${k.activeVoices}/${k.voiceCap} voices`
+              + (k.unmapped ? `, ${k.unmapped} note(s) hit no slot` : '')
+              + (k.truncated ? `, ${k.truncated} slot(s) not published` : '')
+            : `no sampler on t${k.track} dev${k.device}`);
+        }
+        schedule();
+        return;
+      }
+    }
     if (typeof msg === 'string' && msg.indexOf('"automation"') >= 0) {
       let parsed = null;
       try { parsed = JSON.parse(msg); } catch (e) { /* not ours after all */ }
@@ -7279,6 +7344,8 @@ window.__uni = {
   automation: (track) => dockApi.automation(track),
   writeAutomation: (t, p, k, v, d) => dockApi.writeAutomation(t, p, k, v, d),
   automationPoints: (track, param) => dockApi.automationPoints(track, param),
+  samplerKit: (t, d) => dockApi.samplerKit(t, d),
+  samplerKitCached: (t, d) => dockApi.samplerKitCached(t, d),
   automationEdit: (on) => dockApi.automationEdit(on),
   automationEditing: () => dockApi.automationEditing(),
   mods: (track) => dockApi.mods(track),

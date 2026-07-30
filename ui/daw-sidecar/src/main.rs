@@ -1394,6 +1394,69 @@ fn request_automation(handle: &EngineHandle, track: u32, target: u32, param: &st
     }
 }
 
+/// Ask the engine what is in a sampler, and wait briefly for the answer.
+///
+/// Same shape as `request_automation` and for the same reasons: the request carries a
+/// `request_seq` the caller chooses, the answer lands in `seq % UI_SAMPLER_KIT_SLOTS`, and every
+/// echoed field is checked rather than just the sequence — two slots are reused, and a kit
+/// question about track 3 must not be answered by a stale reply about track 1.
+///
+/// PUBLISHED FROM THE SNAPSHOT THE PRODUCER READS, not from the document — backend's own note on
+/// the region. That is what gives this teeth: reading the model back would say what was
+/// configured while the audio thread plays something else, and catching exactly that divergence
+/// is the point of a read-back.
+///
+/// `found: false` is an ANSWER — "there is no sampler on that device" — and is forwarded as one.
+fn request_sampler_kit(handle: &EngineHandle, track: u32, device: u32) -> String {
+    // Its own counter, like `request_automation`'s. They index DIFFERENT slot arrays, so sharing
+    // one would only couple two unrelated questions — and a counter per read-back is what keeps
+    // `seq % SLOTS` meaning "the slot this answer lands in" rather than "whatever is free".
+    static NEXT_KIT_SEQ: AtomicU64 = AtomicU64::new(1);
+    let seq = NEXT_KIT_SEQ.fetch_add(1, Ordering::AcqRel) as u32;
+    let payload = daw_bridge::layout::UiSamplerKitRequestPayload {
+        command_type: daw_bridge::layout::UiCommandType::RequestSamplerKit as u16,
+        flags: 0,
+        track_id: track,
+        device_id: device,
+        request_seq: seq,
+        reserved: [0u8; 24],
+    };
+    if let Err(e) = handle.send_sampler_kit_request(payload) {
+        return format!("{{\"error\":\"{}\"}}", e.replace('"', "'"));
+    }
+    let slot = (seq as usize) % daw_bridge::layout::UI_SAMPLER_KIT_SLOTS;
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    loop {
+        if let Some(k) = handle.read_sampler_kit_slot(slot) {
+            if k.request_seq == seq && k.track_id == track && k.device_id == device {
+                let slots: Vec<String> = k.slots.iter().map(|e| format!(
+                    "{{\"slot\":{},\"source\":{},\"keyLow\":{},\"keyHigh\":{},\"root\":{},\
+                      \"velLow\":{},\"velHigh\":{},\"group\":{},\"nna\":{},\"flags\":{},\
+                      \"gainMb\":{},\"panTh\":{},\"modSet\":{},\"stem\":{},\"quality\":{},\
+                      \"frames\":{},\"slice\":{}}}",
+                    e.slotId, e.sourceLocalId, e.keyLow, e.keyHigh, e.rootKey,
+                    e.velLow, e.velHigh, e.voiceGroup, e.nna, e.flags,
+                    e.gainMillibels, e.panThousandths, e.modSetId, e.outputStem,
+                    e.quality, e.lengthFrames, e.sliceId)).collect();
+                return format!(
+                    "{{\"samplerKit\":{{\"track\":{},\"device\":{},\"found\":{},\
+                     \"voiceCap\":{},\"activeVoices\":{},\"steals\":{},\"unmapped\":{},\
+                     \"truncated\":{},\"slots\":[{}]}}}}",
+                    track, device, k.found, k.voice_cap, k.active_voices, k.steals,
+                    k.unmapped, k.slots_truncated, slots.join(","));
+            }
+        }
+        if Instant::now() >= deadline {
+            // Said out loud. An empty slot list here would read as "that sampler is empty",
+            // which is a different answer and one the engine can give perfectly well.
+            return format!(
+                "{{\"samplerKit\":{{\"track\":{},\"device\":{},\"timeout\":true}}}}",
+                track, device);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// The projects on disk, newest first, as a JSON array of names.
 ///
 /// Names only — the engine resolves them against its own project directory, and
@@ -3347,6 +3410,13 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                             let target = parse_num(&t, "\"target\"")
                                 .unwrap_or(u32::MAX as i64) as u32;
                             let reply = request_automation(&handle, track, target, &param);
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+                        if is_type(&t, "samplerkit") {
+                            let track = parse_num(&t, "\"track\"").unwrap_or(0).max(0) as u32;
+                            let device = parse_num(&t, "\"device\"").unwrap_or(0).max(0) as u32;
+                            let reply = request_sampler_kit(&handle, track, device);
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;
                         }

@@ -382,6 +382,37 @@ export function createCommands(api) {
           ? 'drawing — click the curve to add a point, drag it to change its value'
           : 'not drawing — the lane belongs to the clips again';
       } },
+    /*
+     * WHAT IS IN A SAMPLER. The read-back, wired before any sampler COMMAND — a sampler you can
+     * only configure by verb is one you can only verify by saving the file and reading it, and
+     * this is the thing that makes a kit drawable at all.
+     *
+     * Answered asynchronously, like `curve`: this prints a receipt and the answer prints itself
+     * into the log when it lands. A receipt is not an outcome, so it says which it is.
+     */
+    kit: { help: 'kit <track> <device> — what is in that sampler, slot by slot',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 }],
+      run: (a) => {
+        const t = Number(a[0]), d = Number(a[1]);
+        const k = api.samplerKit(t, d);
+        if (!k) return `asking the engine about the sampler on t${t} dev${d}`;
+        if (!k.found) return `no sampler on t${t} dev${d}`;
+        if (!k.slots.length) return `that sampler has no slots`;
+        const rows = k.slots.map((e) => {
+          const keys = e.keyLow === e.keyHigh ? `key ${e.keyLow}`
+                                              : `keys ${e.keyLow}-${e.keyHigh}`;
+          // A slot whose source did not resolve is SILENT, and says so rather than looking
+          // like an ordinary slot that happens to be zero frames long.
+          const missing = (e.flags & 4) !== 0 ? '  SOURCE MISSING' : '';
+          return `  ${String(e.slot).padStart(2)}  ${keys}  root ${e.root}`
+               + `  ${e.frames} frames` + (e.slice ? `  slice ${e.slice}` : '') + missing;
+        });
+        return [`sampler t${t} dev${d}: ${k.slots.length} slot(s), `
+                + `${k.activeVoices}/${k.voiceCap} voices`
+                + (k.unmapped ? `, ${k.unmapped} note(s) hit no slot` : '')
+                + (k.truncated ? `, ${k.truncated} not published` : ''),
+                ...rows].join('\n');
+      } },
     curve: { help: 'curve <track> <param> — one automation lane, point by point',
       args: [A_TRACK, { name: 'param', type: 'text' }],
       run: (a) => {

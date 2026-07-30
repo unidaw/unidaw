@@ -804,7 +804,7 @@ test('a project row leaves its meta line to the renderer', () => {
  * not a function" the moment anyone typed it. The op-registry test did not
  * notice, because it checks that a command is DECLARED, not that it can run.
  */
-const API_METHODS = ['automationEdit', 'automationEditing',
+const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'samplerKitCached',
                      'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
@@ -2195,6 +2195,9 @@ const OP_REGISTRY = {
    * does have a programmatic path, which is `write_automation_point`.
    */
   draw:      { cli: null, agent: null, why: 'view' },
+  // The sampler read-back. Reaches the engine from this app; daw-cli has no verb for it and the
+  // agent manifest still owes it a tool, so both are recorded rather than waved through.
+  kit:       { cli: null, agent: null, why: 'gap' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },
@@ -2242,6 +2245,9 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                  'delchord', 'delharmony', 'move-clip', 'movedevice', 'new', 'paste',
                  'patch', 'redo', 'rename', 'seek', 'stop', 'transpose', 'trim-clip',
                  'undo',
+                 // The sampler read-back. Reached the engine from this app first; daw-cli has
+                 // no verb for it, which is the usual direction reversed and worth recording.
+                 'kit',
                  /*
                   * `mods` — reading what modulates what — and `macro` — turning the knob —
                   * have no CLI verb at all. The second is the one that matters: daw-cli can
@@ -2288,7 +2294,9 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
 const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'del', 'delchord', 'delharmony', 'delnode', 'editor',
                    'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
-                   'seek', 'solo', 'tempo', 'transpose', 'mods'];
+                   'seek', 'solo', 'tempo', 'transpose', 'mods',
+                   // With `mods`: a read-back this app has and the agent manifest does not.
+                   'kit'];
 
 test('every dock command is in the op registry', () => {
   // The forcing function: a new command cannot be added without deciding whether
@@ -2490,9 +2498,13 @@ const ENGINE_UNUSED = {
    * `s` (sound slot) and `o` (offset) are row ops on UiClipNote, not sampler commands — they
    * ride the clip-edit path that already exists, which is why they land before the kit does.
    */
+  /*
+   * `RequestSamplerKit` is NOT in this list any more: the `kit` verb calls it. That was the
+   * plan stated when these were first recorded — the read-back is what makes a kit drawable, so
+   * it goes first and the commands follow the surface rather than leading it.
+   */
   SamplerLoad: 'gap — the sampler wants its kit drawn before its commands are reachable',
   SamplerSetSlot: 'gap — with SamplerLoad',
-  RequestSamplerKit: 'gap — the read-back to wire FIRST; it is what makes a kit drawable',
   SamplerSlice: 'gap — with SamplerLoad; slicing wants markers on a waveform, not a verb',
   SamplerMarker: 'gap — with SamplerSlice',
   SamplerEmitRows: 'gap — with SamplerSlice; emits a chop into the pattern',
