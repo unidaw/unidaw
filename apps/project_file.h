@@ -10,7 +10,7 @@
 #include "apps/modulation.h"
 #include "apps/automation_clip.h"
 #include "apps/lane_quantize.h"
-#include "apps/section_list.h"
+#include "apps/markers.h"
 #include "apps/time_signature_map.h"
 #include "apps/musical_structures.h"
 #include "apps/patcher_graph.h"
@@ -190,12 +190,22 @@ struct ProjectDocument {
   // kept as its own field so every existing reader and every file written before this
   // still means what it meant — a project with one signature writes an empty map and
   // reads back identically. A non-empty map supersedes it.
-  // M3.23: the section spine — the ORDERED list of named spans that is the arrangement.
-  // Each entry stores a bar COUNT, never a start position: "chorus 1 is at bar 9" is a
-  // consequence of the intro being 8 bars, so lengthening the intro moves everything
-  // after it and no two facts about the same position can disagree. Empty = a song with
-  // no named structure, which is every project written before this field.
-  std::vector<Section> sections;
+  // M3.28: NAMED POSITIONS. A flat list of (tick, name, colour) — "here is the chorus".
+  // Replaces the section spine; apps/markers.h records why in full. Empty = a song with no
+  // named structure, which is every project that has ever been written.
+  std::vector<Marker> markers;
+  // M3.28: THE SONG'S TIME-SIGNATURE MAP, and it is now AUTHORITATIVE rather than a derived
+  // read-back of the spine. This is where mid-song meter lives: a 7/8 passage is a point in
+  // this map, and TimeSignatureMap prefix-sums bars across it so "bar 9" means one thing.
+  //
+  // It was demoted to derived output when the meter moved onto the Section, for a stated reason
+  // — "lengthening an earlier section moved every section and left the meter points behind." That
+  // reason is void: a time edit now carries these points the same way it already carried the
+  // tempo map, the harmony timeline, every placement and every automation point.
+  //
+  // Distinct from a CLIP's own meter (ProjectClip::timeSig*): a 7/8 clip draws its own accents
+  // inside bars the song still numbers in the song's meter. Written only when it says something
+  // a single signature could not, so a one-meter project stays byte-identical.
   std::vector<TimeSignaturePoint> timeSigMap;
   uint32_t songTimeSigNumerator = 4;
   uint32_t songTimeSigDenominator = 4;

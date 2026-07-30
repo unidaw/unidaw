@@ -156,18 +156,14 @@ enum class UiCommandType : uint16_t {
   // BIASED BY +500 so it survives the unsigned field (0 = -500, 500 = straight,
   // 1000 = +500). Changes what SOUNDS; never touches a stored note.
   SetLaneQuantize = 53,
-  // M3.23 SECTION ops. A section stores a name and a length in BARS; its position is
-  // DERIVED, so there is no "move a section to bar N" — you change a length or the order,
-  // and everything after follows. SetSectionLength RIPPLES: it carries every placement at
-  // or after the boundary, in one transaction, and REFUSES a shrink into occupied bars
-  // rather than stacking them on one tick.
+  // 54-58 RETIRED with the Section spine (v29). They were AddSection / RemoveSection /
+  // RenameSection / SetSectionLength / MoveSection.
   //
-  // All five ride UiSectionCommandPayload. AddSection and RenameSection carry a name.
-  AddSection = 54,
-  RemoveSection = 55,
-  RenameSection = 56,
-  SetSectionLength = 57,
-  MoveSection = 58,
+  // DELIBERATELY NOT REUSED. The replacements below have different semantics, and a client still
+  // sending 57 for "set this section's length" would get an in-place marker rename or nothing at
+  // all — a command that quietly does something else is the failure mode this codebase spends most
+  // of its time removing. A retired number returns "op:unknown" and is refused, which is loud.
+  // Same reason 37-39 and 42 are reserved rather than recycled.
   // M3.24: clear BOTH override vectors on one placement, in one undoable step. That is
   // the "one-click revert" the item asks for, and it is only possible because the
   // overrides are additive-only — reverting is deleting two lists, not replaying 32
@@ -196,7 +192,32 @@ enum class UiCommandType : uint16_t {
   /// SLIDER was out of reach: a continuous gesture would tear the link down and rebuild it every
   /// frame. AddModLink deliberately still REFUSES an existing id rather than replacing, so a
   /// colliding add cannot silently overwrite a link.
-  SetModLinkDepth = 63,  // next free 63
+  SetModLinkDepth = 63,
+  // v29 ARRANGEMENT ops, replacing the retired section family. Two payloads, split by what the
+  // command needs rather than by what it is called:
+  //
+  //   UiMarkerCommandPayload      Add / Remove / Rename / MoveMarker — a named tick
+  //   UiArrangeTimeCommandPayload SetTimeSignature / InsertRemoveTime — the timeline itself
+  //
+  // Marker ops are TOTAL: they name a position, they move no material, and they cannot be
+  // refused for anything but a bad id. That separation is the point — every section op used to
+  // have two possible meanings (re-partition the labels, or insert and remove arrangement time)
+  // and implemented one of each.
+  AddMarker = 64,
+  RemoveMarker = 65,
+  RenameMarker = 66,
+  /// Move an existing marker to a tick. A marker's position is stored, so this is a plain edit —
+  /// unlike the spine, where "move" meant reorder and the position was derived.
+  MoveMarker = 67,
+  /// Insert or replace a time-signature point (flags bit0 = flatten the map to this one signature).
+  /// THIS is where mid-song meter is authored; a Section's meter was reachable from no command at
+  /// all, which is why the capability was a stub.
+  SetTimeSignature = 68,
+  /// THE RIPPLE, as its own command over a tick range: insert or remove arrangement time at a
+  /// tick, carrying every placement, tempo point, harmony event, automation point, meter point and
+  /// marker at or after it — in ONE refusable, undoable transaction. Refuses a removal whose bars
+  /// hold anything, and an insertion whose boundary falls inside a placement.
+  InsertRemoveTime = 69,  // next free 63
 };
 
 // M3.27: one automation point. `paramId` is the STRING the AutomationClip is keyed on
@@ -240,21 +261,51 @@ struct UiAutomationLaneRequestPayload {
 static_assert(sizeof(UiAutomationLaneRequestPayload) == 40,
               "UiAutomationLaneRequestPayload must fit an EventEntry payload");
 
-// M3.23: one section command. `sectionId` addresses an existing section (0 = append, for
-// AddSection); `barCount` is the length for Add/SetSectionLength; `toIndex` is the
-// destination for MoveSection. The name is a fixed inline array, not a pointer — the
-// ring carries values.
-struct UiSectionCommandPayload {
+// v29: one MARKER command. `markerId` addresses an existing marker (0 = let the engine assign, for
+// AddMarker); `nanotick` is the position for Add and MoveMarker. The name is a fixed inline array,
+// not a pointer — the ring carries values.
+struct UiMarkerCommandPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
   uint16_t flags = 0;
-  uint32_t sectionId = 0;
-  uint32_t barCount = 0;
-  uint32_t toIndex = 0;
+  uint32_t markerId = 0;
+  uint32_t nanotickLo = 0;
+  uint32_t nanotickHi = 0;
   uint32_t colorRgb = 0;
   char name[20]{};
 };
-static_assert(sizeof(UiSectionCommandPayload) == 40,
-              "UiSectionCommandPayload must fit an EventEntry payload");
+static_assert(sizeof(UiMarkerCommandPayload) == 40,
+              "UiMarkerCommandPayload must fit an EventEntry payload");
+
+// v29: the two commands that change THE TIMELINE rather than a label.
+//
+//   SetTimeSignature   insert-or-replace a meter point at `nanotick`. flags bit0 flattens the map
+//                      to this one signature, which is how you get back to a single meter without
+//                      deleting points one at a time.
+//   InsertRemoveTime   `deltaBars` bars of arrangement time inserted (positive) or removed
+//                      (negative) AT `nanotick`. BARS, not ticks, because a bar is the musical
+//                      unit and its length depends on the meter in force there — which the engine
+//                      knows authoritatively and a caller would have to re-derive. flags bit1
+//                      switches `deltaBars` to raw ticks for a caller that means exactly that.
+struct UiArrangeTimeCommandPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::None);
+  uint16_t flags = 0;
+  uint32_t nanotickLo = 0;
+  uint32_t nanotickHi = 0;
+  int32_t delta = 0;          // bars, or ticks when kUiTimeEditDeltaIsTicks
+  uint32_t numerator = 0;     // SetTimeSignature only
+  uint32_t denominator = 0;   // SetTimeSignature only
+  uint32_t reserved0 = 0;
+  uint32_t reserved1 = 0;
+  uint32_t reserved2 = 0;
+  uint32_t reserved3 = 0;
+};
+static_assert(sizeof(UiArrangeTimeCommandPayload) == 40,
+              "UiArrangeTimeCommandPayload must fit an EventEntry payload");
+
+// SetTimeSignature: replace the whole map with this one signature.
+constexpr uint16_t kUiTimeSigFlatten = 1u << 0;
+// InsertRemoveTime: `delta` is raw nanoticks rather than bars.
+constexpr uint16_t kUiTimeEditDeltaIsTicks = 1u << 1;
 
 // SetLaneQuantize carries swing through an unsigned field; this is the bias.
 constexpr uint32_t kLaneQuantizeSwingBias = 500;
@@ -313,11 +364,12 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::AddPlacement: return "add_placement";
     case UiCommandType::Panic: return "panic";
     case UiCommandType::SetLaneQuantize: return "set_lane_quantize";
-    case UiCommandType::AddSection: return "add_section";
-    case UiCommandType::RemoveSection: return "remove_section";
-    case UiCommandType::RenameSection: return "rename_section";
-    case UiCommandType::SetSectionLength: return "set_section_length";
-    case UiCommandType::MoveSection: return "move_section";
+    case UiCommandType::AddMarker: return "add_marker";
+    case UiCommandType::RemoveMarker: return "remove_marker";
+    case UiCommandType::RenameMarker: return "rename_marker";
+    case UiCommandType::MoveMarker: return "move_marker";
+    case UiCommandType::SetTimeSignature: return "set_time_signature";
+    case UiCommandType::InsertRemoveTime: return "insert_remove_time";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";
@@ -364,12 +416,14 @@ inline bool uiCommandUsesGenericPayload(UiCommandType t) {
     case UiCommandType::ConnectPatcherNodes:
     case UiCommandType::SetPatcherNodeConfig:
     case UiCommandType::SetDeviceEuclideanConfig:
-    // UiSectionCommandPayload — packs name[20]
-    case UiCommandType::AddSection:
-    case UiCommandType::RemoveSection:
-    case UiCommandType::RenameSection:
-    case UiCommandType::SetSectionLength:
-    case UiCommandType::MoveSection:
+    // UiMarkerCommandPayload — packs name[20]
+    case UiCommandType::AddMarker:
+    case UiCommandType::RemoveMarker:
+    case UiCommandType::RenameMarker:
+    case UiCommandType::MoveMarker:
+    // UiArrangeTimeCommandPayload
+    case UiCommandType::SetTimeSignature:
+    case UiCommandType::InsertRemoveTime:
     // UiAutomationCommandPayload packs uid16[16]; UiAutomationPointPayload packs
     // paramId[16]
     case UiCommandType::SetAutomationTarget:
@@ -399,13 +453,14 @@ inline bool uiCommandIsGlobalScope(UiCommandType t) {
     case UiCommandType::WriteHarmony:
     case UiCommandType::DeleteHarmony:
     case UiCommandType::AddTrack:
-    // Section ops are SONG-scoped: they change the arrangement's spine, which belongs to
-    // no single track, and SetSectionLength moves placements on every track at once.
-    case UiCommandType::AddSection:
-    case UiCommandType::RemoveSection:
-    case UiCommandType::RenameSection:
-    case UiCommandType::SetSectionLength:
-    case UiCommandType::MoveSection:
+    // Arrangement ops are SONG-scoped: a marker, the meter and the timeline belong to no single
+    // track, and InsertRemoveTime moves placements on every track at once.
+    case UiCommandType::AddMarker:
+    case UiCommandType::RemoveMarker:
+    case UiCommandType::RenameMarker:
+    case UiCommandType::MoveMarker:
+    case UiCommandType::SetTimeSignature:
+    case UiCommandType::InsertRemoveTime:
       return true;
     default:
       return false;

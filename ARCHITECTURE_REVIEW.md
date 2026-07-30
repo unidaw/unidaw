@@ -163,7 +163,11 @@ Everything here is a bug fix. None of it requires agreeing with anything else in
 
 1. Serialize `ModLink::source` / `::target`. **DONE** — `src`/`dst` objects in project_file.cpp, and the load INSTALLS them (that omission was a data-loss bug: parsed, dropped, then deleted by the next save).
 2. Replace `host_slot_index` with `vst_ref{vendor,name,path,uid16}`; match on the tuple, report unresolved plugins by name and track. **DONE (M0.2/M0.7)** — `vst_ref{vendor,name,path,uid16}` is the durable identity, stamped at save on devices added live too, and `rebuildHostForChain` prefers the path when the slot is still the Direct sentinel. A saved Zebra2 used to reload as ZEBRIFY.
-3. Add `GetState`/`SetState` to `ControlMessageType`; write `vst_state/<deviceId>.bin` into a real `.uniproj`; restore on load. Persist the VST3 parameter name/unit/range projection alongside the blob while you are in there. **PARTIAL.** `GetState`/`SetState` exist and one blob per device is written, keyed by durable device id — but to a sibling `.state/` directory, NOT a real `.uniproj` container, and VST3 param name/unit/range are still not persisted. Both remain open.
+3. Add `GetState`/`SetState` to `ControlMessageType`; write `vst_state/<deviceId>.bin` into a real `.uniproj`; restore on load. Persist the VST3 parameter name/unit/range projection alongside the blob while you are in there. **THE PARAM PROJECTION IS DONE (M0.3b); the container is deliberately deferred.**
+
+   *The projection:* `HostParamWire` and `UiDeviceParam` now carry what a parameter IS — unit, default, the plugin's range, the ENDPOINT TEXTS, step count, and discrete/automatable flags. Every one of those fields was collected by the JUCE wrapper (`ParamInfo`) from the first day and thrown away at the IPC boundary, so a rack could show a knob's name and its current value text and nothing else: setting a value in real units meant binary-searching the normalised value and reading the display back after each guess. The endpoint texts are the ones that matter — a VST3 hosted through JUCE reports a 0..1 normalisable range, so `minValue`/`maxValue` say nothing and the real range exists only as `getText(0)` / `getText(1)` ("20.0 Hz" .. "20000 Hz"). A manifest is written beside each state blob, so a project opened WITHOUT the plugin installed, or read with nothing running, still says what the knobs were. `daw-cli get device-params`; `tools/param_metadata_check.sh`, whose fixture has two parameters unlike each other on purpose — a continuous dB knob and a three-position switch — because a fixture with one trivial parameter passes an implementation that hardcodes empty strings.
+
+   *The container, deferred with a reason:* plugin state goes to a sibling `<name>.uniproj.state/` directory rather than a zip. Making it a real container is packaging — it buys "a project is one file you can move" and no capability — and the blast radius is every test fixture in `tools/`, all of which write `.uniproj.json` directly. Worth doing when a project leaves this machine; not before.
 4. Install an `AudioPlayHead` on hosted instances (tempo, PPQ, bar, playing). One day of work; today every tempo-synced plugin in every project you load is silently wrong. **DONE** — `EnginePlayHead` in platform_juce/juce_wrapper.cpp, installed via `setPlayHead` on every instance, so a tempo-synced plugin follows the transport.
 5. Default `harmonyQuantize` to `false`. Demote `quantizeToScale` to an explicit command. **DONE** — `project_file.h`, so typed pitch is what sounds.
 6. Reseed `random_degree` from `hash(seed, clipId, nodeId, musicalTick)`. **DONE (M0.6)** — seeded from the project seed folded with the node id and the MUSICAL position, so the same music renders the same notes at any buffer size (the old seed mixed the block tick with the event index inside the block).
@@ -394,9 +398,13 @@ real, all nine are fixed, each with a negative control. Four were data loss.*
   change measures the two new bars AS 3/4; if the change then moved with the verse those bars
   would be 4/4 and the material would have moved by the wrong amount. Which is right depends on
   whether a meter change means *"the verse is in 3/4"* (belongs to the section, should move) or
-  *"from bar 5 we are in 3/4"* (belongs to the timeline, should not). `arrange_summary_check`
-  currently pins the second reading. Picking one silently is how a song ends up off its own bar
-  grid, so nothing moves until you decide.
+  *"from bar 5 we are in 3/4"* (belongs to the timeline, should not). Picking one silently is how
+  a song ends up off its own bar grid, so nothing moves until you decide.
+
+  *(Resolved by v29 in the second direction, and by deletion rather than decision: the meter is a
+  tick-keyed map again and a time edit CARRIES its points, the same way it carries the tempo map.
+  The reason the map was deleted — "lengthening a section left the meter points behind" — was a
+  missing line in the ripple, not a property of the model.)*
 
 - **DECISION NEEDED: the four section ops disagree about re-sectioning.** `SetSectionLength`
   RIPPLES — it moves every placement at or after the boundary — and refuses a shrink whose

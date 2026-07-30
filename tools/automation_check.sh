@@ -38,7 +38,6 @@ trap 'rm -rf "$TMP"' EXIT
 cat > "$TMP/auto.uniproj.json" <<EOF
 { "schema_version": 4, "meta": { "name": "auto" }, "nanoticks_per_quarter": $Q,
   "tempo_map": [ { "nanotick": 0, "bpm": 120 } ], "harmony_timeline": [],
-  "sections": [ { "id": 1, "name": "intro", "bars": 4 } ],
   "clips": [ { "id": 1, "name": "c", "length": $BAR, "kind": "symbolic", "notes": [] } ],
   "tracks": [ { "track_id": 0, "name": "T",
     "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
@@ -136,7 +135,9 @@ echo "  reload (fresh engine): load -> save is faithful, so the load installed i
 
 # RIPPLE: lengthen the intro by 2 bars. The point at bar 5 moves; the three inside the
 # intro do not.
-cli do section length --id 1 --bars 6 >/dev/null 2>&1 || true
+# v29: the ripple is its own command now. "grow the intro from 4 bars to 6" is
+# "insert 2 bars at bar 5" — the same edit, named for what it does.
+cli do time insert --nanotick 15360000 --bars 2 >/dev/null 2>&1 || true
 sleep 1.3
 cli do save autorip >/dev/null 2>&1 || true
 sleep 1.4

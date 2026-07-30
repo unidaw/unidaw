@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # THE BIGGEST DESTRUCTIVE EDIT IN THE PROGRAM WAS THE ONE YOU COULD NOT TAKE BACK.
 #
-# A section-length ripple moves every placement on EVERY track, plus the tempo map, the harmony
-# timeline and every automation clip, in one transaction — and it pushed no undo entry at all.
+# InsertRemoveTime moves every placement on EVERY track, plus the tempo map, the harmony timeline,
+# every automation clip, the meter map and every marker, in one transaction — and when it was
+# SetSectionLength it pushed no undo entry at all.
 # EngineUndoEntry carries at most two tracks (`hasSecond`, added for a cross-track placement move),
 # so there was nothing it could have pushed. Nor was a successful ripple recorded in history.jsonl:
 # only the REFUSALS were, which is the opposite of what a "what changed since Tuesday" artifact is
 # for. The refusal messages say "empty those bars first", which is thin comfort when the mistake was
 # pressing the wrong thing.
 #
-# FIVE THINGS MOVE AND ALL FIVE MUST COME BACK. Asserting on placements alone would pass a restore
+# SIX THINGS MOVE AND ALL SIX MUST COME BACK. Asserting on placements alone would pass a restore
 # that put the notes back and left the filter sweep at its new position — and a PARTIAL restore of a
 # ripple is worse than no undo at all, because the song looks recovered and is not. So this fixture
 # is built so that every one of the five is in the path of the edit:
@@ -18,7 +19,9 @@
 #   automation   a lane that straddles the boundary: one point before it, one after
 #   tempo map    a point at the boundary (moves) and one before it (must not)
 #   harmony      the same, so "carried everything" and "carried nothing" both fail
-#   the spine    the bar count itself
+#   markers      one at the boundary and one before it
+#   the METER    a 7/8 point at the boundary — the capability the spine could not author at all,
+#                and the one whose restore a placements-only assertion would never notice
 #
 # THE MODEL, stated because it surprises people: undo here is a whole-store SWAP, not a per-edit
 # inverse. It restores the song to a captured state, so an edit made after the ripple and undone by
@@ -58,7 +61,7 @@ def routing():
 clip = {"id": 1, "name": "c", "length": BAR, "kind": "symbolic",
         "notes": [{"nanotick": 0, "duration": Q, "pitch": 60, "velocity": 100,
                    "column": 0, "note_id": 1}]}
-# Section 1 is 4 bars, so its end is at 4*BAR. Everything at or after that moves by the delta;
+# The edit point is 4*BAR (bar 5). Everything at or after that moves by the delta;
 # everything before it must not. Both sides are populated deliberately — a check with only
 # later-side entries would pass an engine that moved everything, which is equally wrong.
 def track(tid, at_before, at_after):
@@ -81,8 +84,10 @@ json.dump({"schema_version": 4, "meta": {"name": "ru"}, "nanoticks_per_quarter":
                          {"nanotick": 4 * BAR, "bpm": 140.0}],   # at the boundary: must move
            "harmony_timeline": [{"nanotick": 1 * BAR, "root": 0, "scale_id": 0},
                                 {"nanotick": 4 * BAR, "root": 7, "scale_id": 0}],
-           "sections": [{"id": 1, "name": "intro", "bars": 4},
-                        {"id": 2, "name": "verse", "bars": 8}],
+           "markers": [{"id": 1, "nanotick": 0, "name": "intro", "color_rgb": 0},
+                       {"id": 2, "nanotick": 4 * BAR, "name": "verse", "color_rgb": 0}],
+           "time_sig_map": [{"nanotick": 0, "numerator": 4, "denominator": 4},
+                            {"nanotick": 4 * BAR, "numerator": 7, "denominator": 8}],
            "clips": [clip],
            # Track 0 has material either side of the boundary; track 1 too, at different
            # ticks, so a restore that only handles one track is caught.
@@ -126,8 +131,10 @@ for t in doc.get("tracks", []):
                              ",".join(str(q["nanotick"]) for q in a["points"])))
 tempo = ",".join("%d@%g" % (p["nanotick"], p["bpm"]) for p in doc.get("tempo_map", []))
 harm = ",".join("%d@%d" % (e["nanotick"], e["root"]) for e in doc.get("harmony_timeline", []))
-sec = ",".join("%d:%d" % (s["id"], s["bars"]) for s in doc.get("sections", []))
-print("PL[%s] AUTO[%s] TEMPO[%s] HARM[%s] SEC[%s]"
+sec = ",".join("%d@%d" % (m["id"], m["nanotick"]) for m in doc.get("markers", []))
+sec += " METER[" + ",".join("%d:%d/%d" % (p["nanotick"], p["numerator"], p["denominator"])
+                            for p in doc.get("time_sig_map", [])) + "]"
+print("PL[%s] AUTO[%s] TEMPO[%s] HARM[%s] MARK[%s]"
       % (" ".join(sorted(pl)), " ".join(sorted(au)), tempo, harm, sec))
 PYS
 }
@@ -151,23 +158,43 @@ case "$BEFORE" in
 esac
 echo "  loaded: $BEFORE"
 
-# ---- RIPPLE. Grow the intro 4 -> 8 bars: everything at or after bar 5 moves by 4 bars.
-cli do section length --id 1 --bars 8 >/dev/null 2>&1 || true
+# ---- RIPPLE. Insert 4 bars at bar 5: everything at or after it moves by 4 bars.
+cli do time insert --nanotick 15360000 --bars 4 >/dev/null 2>&1 || true
 sleep 1.5
-grep -q '"event":"section.length_set"' "$TMP/eng.log" || \
-  fail "the ripple was not applied: $(grep -o '"event":"section[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
-grep '"event":"section.length_set"' "$TMP/eng.log" | tail -1 | grep -q '"undoable":true' || \
+grep -q '"event":"time.edited"' "$TMP/eng.log" || \
+  fail "the ripple was not applied: $(grep -o '"event":"time[a-z._]*"[^}]*' "$TMP/eng.log" | tail -1)"
+grep '"event":"time.edited"' "$TMP/eng.log" | tail -1 | grep -q '"undoable":true' || \
   fail "the ripple did not report itself as undoable"
 # JOURNALLED. Only refusals were recorded before, so history.jsonl held every ripple that did
 # nothing and none that did something.
 if [ -f "$TMP/history.jsonl" ]; then
-  grep '"op":"set_section_length"' "$TMP/history.jsonl" | grep -q '"outcome":"received"' || \
+  grep '"op":"insert_remove_time"' "$TMP/history.jsonl" | grep -q '"outcome":"received"' || \
     fail "the applied ripple is not in history.jsonl — only its refusals ever were"
   echo "  journalled: the applied ripple is in history.jsonl, not just its refusals"
 fi
 AFTER="$(state after)"
 [ "$AFTER" != "$BEFORE" ] || fail "the ripple changed nothing, so the undo proves nothing"
 echo "  rippled: $AFTER"
+
+# ---- AND THE SONG IS STILL ON ITS OWN BAR GRID. The insert point is where a 7/8 change begins,
+# and that point MOVES with the edit — so the bars being inserted are in the PRECEDING meter, not
+# the one that used to start there. Taking the meter AT the point instead moved everything by
+# 4 * 3.5 quarters while the inserted span was still 4/4, landing the 7/8 change at 7.5 bars;
+# TimeSignatureMap then snapped it forward to bar 8, silently parting it from the marker that had
+# moved with it. Measured, not theorised.
+GRID="$(python3 - "$TMP/after.uniproj.json" "$BAR" <<'PYG'
+import json, sys
+doc = json.load(open(sys.argv[1])); BAR = int(sys.argv[2])
+pts = doc.get("time_sig_map", [])
+late = [p for p in pts if p["nanotick"] > 0]
+print("NOPOINT" if not late else ("ON" if late[0]["nanotick"] % BAR == 0 else
+      "OFF:%d" % late[0]["nanotick"]))
+PYG
+)"
+[ "$GRID" = "ON" ] ||   fail "after inserting 4 bars, the meter change is not on a bar line ($GRID). The inserted span
+        must be whole bars of the meter PRECEDING the edit point — the meter at the point is the
+        one that moves away"
+echo "  on the grid: the 7/8 change still lands on a bar line after the insert"
 
 # ---- UNDO. Every one of the five back.
 cli do undo >/dev/null 2>&1 || true
@@ -183,7 +210,7 @@ UNDONE="$(state undone)"
         got      $UNDONE
         A PARTIAL restore is worse than none: the song looks recovered and is not. Compare the
         five groups — PL (both tracks), AUTO, TEMPO, HARM, SEC — to see which one was left behind"
-echo "  undone: all five restored (placements, automation, tempo, harmony, spine)"
+echo "  undone: all six restored (placements, automation, tempo, harmony, markers, meter)"
 
 # ---- AND THE RUNTIME AGREES, not just the file. The RT scheduler reads automation from the track
 # SNAPSHOT, so a restore that puts the points back in the model and not in the snapshot is right on
@@ -207,4 +234,4 @@ REDONE="$(state redone)"
 echo "  redone: the ripple is re-applied exactly"
 
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
-echo "ripple_undo_check: PASS — a section ripple is one undoable, journalled transaction"
+echo "ripple_undo_check: PASS — a time edit is one undoable, journalled transaction"

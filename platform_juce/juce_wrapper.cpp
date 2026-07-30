@@ -921,6 +921,11 @@ class JucePluginInstance final : public IPluginInstance {
       info.defaultNormalized = param->getDefaultValue();
       info.isDiscrete = param->isDiscrete();
       info.isAutomatable = param->isAutomatable();
+      // getNumSteps returns a huge sentinel for a continuous parameter; only a real step count
+      // is meaningful, and only when the parameter says it is discrete.
+      const int steps = param->getNumSteps();
+      info.stepCount =
+          (info.isDiscrete && steps > 0 && steps < 4096) ? steps : 0;
 
       if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*>(param)) {
         const auto& range = ranged->getNormalisableRange();
@@ -1099,11 +1104,28 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
     gainInfo.stableId = "index:0";
     gainInfo.index = 0;
     gainInfo.name = "Gain";
+    gainInfo.label = "dB";
     gainInfo.defaultNormalized = 1.0f;
     gainInfo.minValue = 0.0f;
     gainInfo.maxValue = 1.0f;
     gainInfo.isAutomatable = true;
     params_.push_back(std::move(gainInfo));
+    // A SECOND PARAMETER THAT IS UNLIKE THE FIRST, so a check against this fixture can tell a
+    // working implementation from one that returns the same thing for everything. Gain is
+    // continuous, automatable and in dB; Mode is a THREE-POSITION SWITCH with no unit and no
+    // automation. A fixture with one trivial parameter would have passed an implementation that
+    // hardcoded empty strings and zero — which is exactly the shape of test that proves nothing.
+    ParamInfo modeInfo;
+    modeInfo.stableId = "index:1";
+    modeInfo.index = 1;
+    modeInfo.name = "Mode";
+    modeInfo.defaultNormalized = 0.0f;
+    modeInfo.minValue = 0.0f;
+    modeInfo.maxValue = 1.0f;
+    modeInfo.isDiscrete = true;
+    modeInfo.isAutomatable = false;
+    modeInfo.stepCount = 3;
+    params_.push_back(std::move(modeInfo));
   }
 
   void prepare(double sampleRate, int blockSize, int numOutputs,
@@ -1403,7 +1425,21 @@ class FakeIdentityPluginInstance final : public IPluginInstance {
   std::string getParameterTextById(const std::string& stableId,
                                    float normalized) const override {
     if (stableId == params_[0].stableId) {
-      return std::to_string(normalized);
+      // Rendered in the unit the parameter declares, so getText(0) and getText(1) give a range a
+      // caller can read: "-60.0 dB" .. "0.0 dB". A real plugin does exactly this, and it is the
+      // only way a VST3's true range is legible through JUCE (the normalisable range is 0..1).
+      const float db = -60.0f + std::clamp(normalized, 0.0f, 1.0f) * 60.0f;
+      char buf[24];
+      std::snprintf(buf, sizeof(buf), "%.1f dB", db);
+      return std::string(buf);
+    }
+    if (params_.size() > 1 && stableId == params_[1].stableId) {
+      // A switch renders POSITION NAMES, not numbers — which is the other half of why a caller
+      // needs to know a parameter is discrete before writing to it.
+      static const char* kModes[] = {"Off", "Soft", "Hard"};
+      const int idx = std::clamp(
+          static_cast<int>(std::lround(std::clamp(normalized, 0.0f, 1.0f) * 2.0f)), 0, 2);
+      return kModes[idx];
     }
     return {};
   }

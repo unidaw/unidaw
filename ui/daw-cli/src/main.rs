@@ -20,7 +20,7 @@ daw-cli — control surface for a running engine
   daw-cli watch                    stream transport state (default)
   daw-cli get transport            transport + versions as JSON
   daw-cli get tracks               per-track state as JSON
-  daw-cli get arrangement          the section spine (resolved to bars AND ticks),
+  daw-cli get arrangement          the markers (bar AND tick, resolved) + the meter map,
                                    the meter map, and the song end
   daw-cli get notes --track N      that track's notes from the published region
                                    (read-only: reads the published region)
@@ -64,16 +64,23 @@ daw-cli — control surface for a running engine
                                    clears every add and mute on one appearance, in one
                                    step — possible only because overrides are
                                    additive-only, so reverting is dropping two lists
-  daw-cli do section add --bars N [--name X] [--index I] [--color RGB]
-  daw-cli do section remove --id ID
-  daw-cli do section rename --id ID --name X
-  daw-cli do section length --id ID --bars N
-                                   RIPPLES: carries every placement at or after the
-                                   section's end. Refuses a shrink into occupied bars
-                                   rather than stacking them onto one tick.
-  daw-cli do section move --id ID --index I
-                                   a section's POSITION is derived from the lengths
-                                   before it, so reordering is how you move one
+  daw-cli do marker add --nanotick T [--name X] [--color RGB]
+  daw-cli do marker remove --id ID
+  daw-cli do marker rename --id ID --name X
+  daw-cli do marker move --id ID --nanotick T
+                                   a marker NAMES a tick. Total: moves no material,
+                                   refuses nothing but a bad id. The span between two
+                                   markers is implicit — see `get arrangement`.
+  daw-cli do time-sig --sig 7/8 [--nanotick T] [--flatten]
+                                   the SONG's meter. A point at T changes it from there;
+                                   --flatten replaces the whole map with one signature.
+  daw-cli do time insert|remove --nanotick T --bars N
+                                   THE RIPPLE: inserts or removes N bars of arrangement
+                                   time at T, carrying every placement, tempo point, key
+                                   change, automation point, meter point and marker at or
+                                   after it — one refusable, undoable transaction.
+                                   Refuses a removal whose bars hold anything, and an
+                                   insertion whose point falls inside a placement.
   daw-cli do add-placement --track N --clip C --at T --length L
                                    --at and --length are REQUIRED; the engine refuses
                                    the leave-unchanged sentinel as a position
@@ -1007,18 +1014,27 @@ fn get_device_params(handle: &EngineHandle, args: &[&str]) -> i32 {
         thread::sleep(Duration::from_millis(250));
         let v = handle.read_device_params();
         if (v.version > 0 && !v.params.is_empty()) || Instant::now() >= deadline {
-            let (first, uid, val) = v
-                .params
-                .first()
-                .map(|p| {
-                    let hex: String = p.uid16.iter().map(|b| format!("{b:02x}")).collect();
-                    (p.name.clone(), hex, p.value)
-                })
-                .unwrap_or_default();
+            // EVERY parameter, with what it IS — not just the first one's name. A rack that
+            // can only report "param 0 is called Gain and reads 0.62" is the state this
+            // replaces: no unit, no range, no default, no way to know a 5-way switch from a
+            // continuous knob, so setting a value in real units was a binary search against the
+            // display text.
             println!(
-                "{{ \"track\": {}, \"device\": {}, \"name\": {:?}, \"version\": {}, \"count\": {}, \"first\": {:?}, \"first_uid16\": {:?}, \"first_value\": {:.3} }}",
-                v.track_id, v.device_id, v.device_name, v.version, v.params.len(), first, uid, val
+                "{{ \"track\": {}, \"device\": {}, \"name\": {:?}, \"version\": {}, \"count\": {},",
+                v.track_id, v.device_id, v.device_name, v.version, v.params.len()
             );
+            println!("  \"params\": [");
+            for (i, p) in v.params.iter().enumerate() {
+                let hex: String = p.uid16.iter().map(|b| format!("{b:02x}")).collect();
+                let comma = if i + 1 == v.params.len() { "" } else { "," };
+                println!(
+                    "    {{ \"index\": {}, \"name\": {:?}, \"uid16\": {:?}, \"value\": {:.3}, \"display\": {:?}, \"unit\": {:?}, \"range\": [{:?}, {:?}], \"default\": {:.3}, \"steps\": {}, \"discrete\": {}, \"automatable\": {} }}{comma}",
+                    p.index, p.name, hex, p.value, p.display, p.unit, p.min_text, p.max_text,
+                    p.default_value, p.step_count, p.discrete, p.automatable
+                );
+            }
+            println!("  ]");
+            println!("}}");
             return 0;
         }
     }
@@ -1520,18 +1536,27 @@ fn main() {
                             println!("  \"song_end_tick\": {},", r.song_end_tick);
                             // Truncation is reported, not hidden: an incomplete list that
                             // says nothing reads as a complete one.
-                            println!("  \"sections_truncated\": {},", r.sections_truncated);
+                            println!("  \"markers_truncated\": {},", r.markers_truncated);
                             println!("  \"time_sig_truncated\": {},", r.time_sig_truncated);
-                            println!("  \"sections\": [");
-                            let n = (r.section_count as usize).min(r.sections.len());
+                            println!("  \"markers\": [");
+                            let n = (r.marker_count as usize).min(r.markers.len());
                             for i in 0..n {
-                                let s = r.sections[i];
-                                let name = String::from_utf8_lossy(&s.name);
+                                let m = r.markers[i];
+                                let name = String::from_utf8_lossy(&m.name);
                                 let name = name.trim_end_matches('\0');
                                 let comma = if i + 1 == n { "" } else { "," };
+                                // `span_end` is the NEXT marker's tick, or the song end for the
+                                // last one — the implicit span a marker list gives you for free.
+                                // Published as a convenience, not as a second source of truth: it
+                                // is derived here from two numbers that are already in the list.
+                                let span_end = if i + 1 < n {
+                                    r.markers[i + 1].nanotick
+                                } else {
+                                    r.song_end_tick
+                                };
                                 println!(
-                                    "    {{ \"id\": {}, \"name\": {:?}, \"start_bar\": {}, \"bars\": {}, \"start_tick\": {}, \"end_tick\": {} }}{comma}",
-                                    s.id, name, s.start_bar, s.bar_count, s.start_tick, s.end_tick
+                                    "    {{ \"id\": {}, \"name\": {:?}, \"bar\": {}, \"beat\": {}, \"nanotick\": {}, \"span_end\": {} }}{comma}",
+                                    m.id, name, m.bar, m.beat, m.nanotick, span_end
                                 );
                             }
                             println!("  ],");
@@ -2282,7 +2307,9 @@ fn main() {
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
-                Some(&"section") => {
+                // v29: MARKER ops. A marker names a tick and moves no material, so these are
+                // total — nothing to plan, refuse or undo beyond the list.
+                Some(&"marker") => {
                     use daw_bridge::layout as L;
                     let sub = rest.get(1).copied().unwrap_or("");
                     let mut name = [0u8; 20];
@@ -2292,52 +2319,136 @@ fn main() {
                         name[..len].copy_from_slice(&b[..len]);
                     }
                     let cmd = match sub {
-                        "add" => UiCommandType::AddSection,
-                        "remove" => UiCommandType::RemoveSection,
-                        "rename" => UiCommandType::RenameSection,
-                        "length" => UiCommandType::SetSectionLength,
-                        "move" => UiCommandType::MoveSection,
+                        "add" => UiCommandType::AddMarker,
+                        "remove" => UiCommandType::RemoveMarker,
+                        "rename" => UiCommandType::RenameMarker,
+                        "move" => UiCommandType::MoveMarker,
                         other => {
-                            eprintln!("daw-cli: section {other:?}: expected add|remove|rename|length|move");
+                            eprintln!("daw-cli: marker {other:?}: expected add|remove|rename|move");
                             std::process::exit(2)
                         }
                     };
-                    // `--bars` is required where it is the whole point of the command; a
-                    // zero would be a section with no span, which the engine refuses.
-                    let bars = flag_u64(&args, "--bars", Some(0)).unwrap_or(0) as u32;
-                    if matches!(cmd, UiCommandType::AddSection | UiCommandType::SetSectionLength)
-                        && bars == 0
+                    // Required where it is the whole point of the command. A default here would
+                    // silently put the marker at tick 0, which looks like a no-op and is not.
+                    if matches!(cmd, UiCommandType::AddMarker | UiCommandType::MoveMarker)
+                        && flag(&args, "--nanotick").is_none()
                     {
-                        eprintln!("daw-cli: --bars is required for section {sub} and must be > 0");
+                        eprintln!("daw-cli: --nanotick is required for marker {sub}");
                         std::process::exit(2);
                     }
-                    if matches!(cmd, UiCommandType::RenameSection) && flag(&args, "--name").is_none() {
-                        eprintln!("daw-cli: --name is required for section rename");
-                        std::process::exit(2);
-                    }
-                    // `--index` is REQUIRED for a move. Its default is u32::MAX, which the engine
-                    // clamps to the last position — so `section move --id 1` with no index
-                    // silently reordered the arrangement to put that section at the END. A
-                    // destructive default that looks like a no-op is the worst kind: the caller
-                    // gets `{"sent": "section move"}` and the song is rearranged.
-                    if matches!(cmd, UiCommandType::MoveSection) && flag(&args, "--index").is_none()
+                    if matches!(cmd, UiCommandType::RenameMarker) && flag(&args, "--name").is_none()
                     {
-                        eprintln!("daw-cli: --index is required for section move (0 = first). \
-Without it the section moves to the END, which is not a sensible default for a reorder.");
+                        eprintln!("daw-cli: --name is required for marker rename");
                         std::process::exit(2);
                     }
-                    let payload = L::UiSectionCommandPayload {
+                    if matches!(cmd,
+                                UiCommandType::RemoveMarker | UiCommandType::RenameMarker
+                                    | UiCommandType::MoveMarker)
+                        && flag(&args, "--id").is_none()
+                    {
+                        eprintln!("daw-cli: --id is required for marker {sub}");
+                        std::process::exit(2);
+                    }
+                    let tick = flag_u64(&args, "--nanotick", Some(0)).unwrap_or(0);
+                    let payload = L::UiMarkerCommandPayload {
                         command_type: cmd as u16,
                         flags: 0,
-                        section_id: flag_u64(&args, "--id", Some(0)).unwrap_or(0) as u32,
-                        bar_count: bars,
-                        to_index: flag_u64(&args, "--index", Some(u32::MAX as u64))
-                            .unwrap_or(u32::MAX as u64) as u32,
+                        marker_id: flag_u64(&args, "--id", Some(0)).unwrap_or(0) as u32,
+                        nanotick_lo: (tick & 0xffff_ffff) as u32,
+                        nanotick_hi: (tick >> 32) as u32,
                         color_rgb: flag_u64(&args, "--color", Some(0)).unwrap_or(0) as u32,
                         name,
                     };
-                    match handle.send_section_command(payload) {
-                        Ok(()) => { println!("{{ \"sent\": \"section {sub}\" }}"); 0 }
+                    match handle.send_marker_command(payload) {
+                        Ok(()) => {
+                            // The engine names the id it assigned on the event stream
+                            // (marker.changed); an auto-id add has none to report here.
+                            println!("{{ \"sent\": \"marker {sub}\" }}");
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                // v29: the song's METER. This is where a mid-song time signature is authored — a
+                // Section's meter was reachable from no command at all.
+                Some(&"time-sig") => {
+                    use daw_bridge::layout as L;
+                    let sig = match flag(&args, "--sig") {
+                        Some(v) => v,
+                        None => {
+                            eprintln!("daw-cli: --sig is required, e.g. --sig 7/8");
+                            std::process::exit(2)
+                        }
+                    };
+                    let (num, den) = match sig.split_once('/') {
+                        Some((n, d)) => match (n.trim().parse::<u32>(), d.trim().parse::<u32>()) {
+                            (Ok(n), Ok(d)) => (n, d),
+                            _ => {
+                                eprintln!("daw-cli: --sig {sig:?}: expected N/D, e.g. 7/8");
+                                std::process::exit(2)
+                            }
+                        },
+                        None => {
+                            eprintln!("daw-cli: --sig {sig:?}: expected N/D, e.g. 7/8");
+                            std::process::exit(2)
+                        }
+                    };
+                    let flatten = args.iter().any(|a| a == "--flatten");
+                    let tick = flag_u64(&args, "--nanotick", Some(0)).unwrap_or(0);
+                    let payload = L::UiArrangeTimeCommandPayload {
+                        command_type: UiCommandType::SetTimeSignature as u16,
+                        flags: if flatten { L::UI_TIME_SIG_FLATTEN } else { 0 },
+                        nanotick_lo: (tick & 0xffff_ffff) as u32,
+                        nanotick_hi: (tick >> 32) as u32,
+                        numerator: num,
+                        denominator: den,
+                        ..Default::default()
+                    };
+                    match handle.send_arrange_time_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"time-sig\", \"nanotick\": {tick}, \"sig\": \"{num}/{den}\", \"flatten\": {flatten} }}");
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                // v29: THE RIPPLE, as its own command. `--bars` is signed: positive inserts,
+                // negative removes. It replaces `section length`, whose gesture ("drag the
+                // boundary") this is the honest name for.
+                Some(&"time") => {
+                    use daw_bridge::layout as L;
+                    let sub = rest.get(1).copied().unwrap_or("");
+                    if sub != "insert" && sub != "remove" {
+                        eprintln!("daw-cli: time {sub:?}: expected insert|remove");
+                        std::process::exit(2);
+                    }
+                    let bars = match flag_u64(&args, "--bars", None) {
+                        Ok(v) if v > 0 => v as i32,
+                        _ => {
+                            eprintln!("daw-cli: --bars is required and must be > 0 (the direction \
+comes from insert|remove, so a negative here would be ambiguous)");
+                            std::process::exit(2)
+                        }
+                    };
+                    if flag(&args, "--nanotick").is_none() {
+                        eprintln!("daw-cli: --nanotick is required — WHERE the time is inserted or \
+removed is the whole command");
+                        std::process::exit(2);
+                    }
+                    let tick = flag_u64(&args, "--nanotick", Some(0)).unwrap_or(0);
+                    let payload = L::UiArrangeTimeCommandPayload {
+                        command_type: UiCommandType::InsertRemoveTime as u16,
+                        flags: 0,  // delta is in BARS; the engine knows the meter there
+                        nanotick_lo: (tick & 0xffff_ffff) as u32,
+                        nanotick_hi: (tick >> 32) as u32,
+                        delta: if sub == "insert" { bars } else { -bars },
+                        ..Default::default()
+                    };
+                    match handle.send_arrange_time_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"time {sub}\", \"nanotick\": {tick}, \"bars\": {bars} }}");
+                            0
+                        }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }

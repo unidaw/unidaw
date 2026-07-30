@@ -45,7 +45,9 @@ constexpr uint32_t kControlMagic = 0x30485744;  // 'DWH0'
 //    into transport/keyjazz. The ring sits right after the mailbox at a computed offset
 //    (hostKeyRingOffset), so it needs no ShmHeader field — host↔engine only, kShmVersion
 //    stands. Gated here because an old host wouldn't allocate/init the ring.
-constexpr uint16_t kControlVersion = 12;  // v12: EventEntry::ready (MPSC rings)
+// v13: HostParamWire carries what a parameter IS — unit, default, range, the endpoint TEXTS,
+// step count and flags. The wrapper already collected all of it; the wire dropped it.
+constexpr uint16_t kControlVersion = 13;
 
 enum class ControlMessageType : uint16_t {
   Hello = 1,
@@ -111,7 +113,26 @@ struct HostParamWire {
   char stableId[48]{};       // plugin-stable id (JUCE param id), nul-padded
   char name[48]{};           // display name
   char display[24]{};        // current value text ("0.62", "440 Hz")
+  // WHAT THE PARAMETER IS, not just where it is right now. All of this was already collected by
+  // the wrapper (ParamInfo) and thrown away here, so a caller could read "Cutoff is 0.62,
+  // displays 440 Hz" and had no way to know what 0.0 and 1.0 mean, whether it is a switch, or
+  // what to reset it to. Setting a value in real units meant binary-searching `normalized` and
+  // reading `display` back — which is the hallucination surface, not a workflow.
+  char label[16]{};          // unit: "Hz", "dB", "%", "ms"
+  float defaultNormalized = 0.0f;
+  float minValue = 0.0f;     // the plugin's own range, when it exposes one
+  float maxValue = 1.0f;
+  // THE ENDPOINT TEXTS, and they are the ones that actually make a VST3 legible. A VST3 hosted
+  // through JUCE usually reports a 0..1 normalisable range, so minValue/maxValue say nothing —
+  // the real range only exists as TEXT. getText(0) and getText(1) give "20.0 Hz" and "20000 Hz",
+  // which is what lets a caller (or an agent) reason in the units a musician uses.
+  char minText[24]{};
+  char maxText[24]{};
+  uint32_t stepCount = 0;    // 0 = continuous; else the number of switch positions
+  uint32_t flags = 0;        // kHostParamDiscrete | kHostParamAutomatable
 };
+constexpr uint32_t kHostParamDiscrete = 1u << 0;
+constexpr uint32_t kHostParamAutomatable = 1u << 1;
 
 // Cap on buses returned per GetBusLayout query (Movement 4). Matches
 // kMaxBusesPerDevice in shared_memory.h; bounds the IPC reply.
