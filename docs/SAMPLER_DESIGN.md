@@ -249,6 +249,69 @@ Note-off ends a `gate = 1` voice (release) and is **ignored** by a one-shot slot
 
 ---
 
+## 3.5 THE REAL-TIME ARCHITECTURE
+
+The rules this code lives under. Most are the repo's already; the ones that are **new** are marked, because a rule nobody can point at is a rule nobody follows. Numbered 3.5 rather than 4 so the §-references elsewhere in this document keep pointing where they say.
+
+### Ownership and threads
+
+Three threads touch sampler state, and only one of them owns it.
+
+| thread | may do |
+|---|---|
+| **command** | edit `SamplerState` — the document. Owns it outright. |
+| **producer** | schedule notes, run the patcher, fill host input planes. |
+| **audio callback** | read a published snapshot. Nothing else. |
+
+`SamplerState` is **never read by the audio thread**. What the audio thread reads is a `SamplerRender` snapshot: immutable, flattened, pointer-stable, built on the command thread and published with `std::atomic_store_explicit` exactly as `runtime->trackSnapshot` and `runtime->audioRender` already are (`apps/daw_engine_main.cpp:5700,5739`). The same pattern, not a second one — a codebase with two ways to hand state to the audio thread has two ways to get it wrong.
+
+The snapshot **owns the sample audio by `shared_ptr`**, which buys two things at once:
+
+- the audio thread holding a snapshot keeps its buffers alive *by construction*, so there is no separate lifetime rule that could be forgotten;
+- replacing a sample drops the old buffer's last reference **on the command thread**, where calling `operator delete` is legal.
+
+The second is the one that bites. A `shared_ptr` released from the audio callback can free memory, and "the audio thread never frees" is not a property you can bolt on afterwards — it has to be where the last reference lives. Publishing the new snapshot and letting the old one die on the command thread makes it impossible rather than merely unlikely.
+
+> **Flagged, pre-existing, deliberately not fixed here.** `std::atomic_load_explicit(&shared_ptr)` is *not* lock-free in libc++ — it takes a spinlock from a global pool keyed on the address. The engine already does this on the RT path (`:3336`), so the sampler follows the established pattern rather than inventing a second one for itself. But it is a spinlock on the audio thread, which is a priority inversion waiting for an unlucky scheduler decision, and it deserves its own look across the whole engine rather than a local workaround in one device.
+
+### What the audio thread may not do
+
+No allocation, no locks, no syscalls, no `std::function`, no file I/O, no logging. The voice pool is `voiceCap` voices allocated at instantiation and never resized while running; changing `voiceCap` or `stemCount` is a snapshot swap, which is the chain-renegotiation event the contract already defines and readers already handle.
+
+### Sample-accurate voice starts — where the built-in beats the plugin path
+
+`EventEntry.sample_time` is an absolute sample position (`patcher_rust/src/lib.rs:83`), so a note's exact frame is already known by the time anything schedules it. Voices start at their **intra-block offset**, not at the block boundary.
+
+This is worth stating because the alternative is free and wrong. `MidiEvent.sampleOffset` exists (`platform_juce/juce_wrapper.h:13`) and **the engine never populates it** — grep for it across `daw_engine_main.cpp` returns nothing. Notes reaching a *hosted plugin* are therefore quantised to the block boundary: 2.7 ms of jitter at 128 frames, 11 ms at 512. That is a pre-existing limitation of the out-of-process path and not S1's to fix, but it means the `d1/6` delay row op, swing, and humanised timing land **more precisely on the built-in sampler than on any VST**, and the sampler must not throw that away by rendering block-aligned for symmetry with a path that is less accurate than it is.
+
+### Determinism is a testable property, not an aspiration
+
+Two renders of one project must agree, and both senses are checkable:
+
+- **Across block sizes.** 64, 256 and 1024 frames must produce **bit-identical** output. Sample-accurate starts are what make this true; block-aligned starts make it false by construction, which is the honest reason the previous section is not merely nice. The repo has the precedent — `random_degree` is seeded from a musical tick snapped to a 1/64-quarter grid precisely so it is buffer-size independent, and that is locked by a test (`patcher_rust/src/lib.rs:407-421`).
+- **Offline versus realtime.** The offline render already inverts three policies (never skip a block, never prime with silence, never starve — wait instead). Voice stealing must therefore be keyed on note order and musical position, never on wall-clock or on arrival time, or a bounce steals different voices than the audition did.
+
+`tools/sampler_determinism_check.sh` renders one project at three block sizes and diffs the WAVs. Most shipping DAWs do not clear that bar; it is nearly free here because every piece it needs already exists.
+
+### Denormals — NEW, and nothing in the repo handles this today
+
+An envelope tail decaying toward zero enters denormal range and *stays* there for as long as the voice lives. On x86 a denormal multiply costs roughly 100× a normal one, so a sustained pad's tail can push a comfortable render into underruns for no audible reason at all. Grep across `apps/` and `platform_juce/` finds no FTZ, no DAZ, no flush, no `ScopedNoDenormals`.
+
+Two defences, both cheap, and the first is a correctness win independently:
+
+- **Flush the envelope.** Below ~1e-6 (−120 dBFS, inaudible) the amp envelope snaps to zero and the voice **ends**. That also stops inaudible voices occupying the pool forever, which is a voice-allocation bug in its own right.
+- **FTZ/DAZ on the audio thread** for the arithmetic that remains — filters especially. Set once at thread start, not per block.
+
+### Smoothing — everything audible ramps
+
+`EnvRunner::advance()` returns the value at the **end** of the span precisely so the caller can ramp linearly across the block; that is why it is block-rate rather than per-sample. Per-voice gain and pan are one-pole smoothed. A parameter that jumps is a click, and a click in a sampler is indistinguishable from a bug in the loop points — so the smoothing is not polish, it is what keeps the real defects legible.
+
+### Testability: the DSP knows nothing about the engine
+
+`apps/sampler_envelope.h` has no engine, no device, no audio and no I/O dependency, which is why its tests run in milliseconds against no fixture. `apps/sampler_voice.h` takes planar `const float*` in and writes planar out, and is testable the same way. The engine wiring stays thin on purpose: **if a sampler bug can only be reproduced through a running engine, the split is in the wrong place** — and this repo has spent enough time on green suites that pass with the bug present to take that seriously.
+
+---
+
 ## 4. THE WORKFLOW
 
 ### A. Amen break → playing pattern, snare at five pitches
@@ -334,7 +397,7 @@ Rejected as "just a feature list": velocity layers, round-robin, filter types, r
 
 ## 6. BUILD ORDER
 
-**S1 — the sampler exists and plays. No contract bump.** `DeviceKind::Sampler`, `SamplerState` with one slot, `project.json` round-trip (`save_roundtrip_check.sh` + an *edited* fixture per `edited_roundtrip_check.sh`), channel-preserving decode, one voice class with Hermite, note-on/off through the existing dispatch, `add-device --kind sampler` and `sampler-load`. **This is the useful line**: load a sample, play it from the tracker. Verified with `DAW_CAPTURE_WAV` + `tools/perceptual.py`, not by ear.
+**S1 — the sampler exists and plays. No contract bump.** `DeviceKind::Sampler`, `SamplerState` with one slot, `project.json` round-trip (`save_roundtrip_check.sh` + an *edited* fixture per `edited_roundtrip_check.sh`), channel-preserving decode, one voice class with Hermite, note-on/off through the existing dispatch, `add-device --kind sampler` and `sampler-load`. **This is the useful line**: load a sample, play it from the tracker. Verified with `DAW_CAPTURE_WAV` + `tools/perceptual.py`, not by ear — plus `tools/sampler_determinism_check.sh` (§3.5): one project rendered at 64, 256 and 1024 frames must come out **bit-identical**. That check belongs in S1 and not later, because it is the one that fails loudly the moment a voice starts on a block boundary instead of its own sample, and retrofitting sample-accurate starts after the rest is built is exactly the kind of rework this ordering exists to avoid.
 
 **Where it renders, decided by looking rather than assuming (2026-07-30).** The sampler generates into the **host input plane's main channels**, the way `runtime->patcherAudioChannels` already does (`apps/daw_engine_main.cpp:2172`, written at `:14280`) — *not* straight into the master sum the way placed audio clips do (`:868`). The difference is whether a VST effect can follow the sampler on the same track: audio mixed into master has already passed every plugin, so the easy path would have made "sampler → reverb" structurally impossible and would not have shown up until S3.
 
