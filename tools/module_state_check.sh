@@ -115,7 +115,6 @@ python3 -c "raise SystemExit(0 if abs(float('$DEFAULT') - float('$WANT')) > 0.01
         cannot fail. Pick a different value"
 
 cli do set-param 0 0 "$UID16" "$SET_MILLI" >/dev/null 2>&1 || true
-sleep 1.0
 readvalue() {  # readvalue <cli-fn>
   $1 get device-params 0 0 2>/dev/null | python3 -c "
 import json, sys
@@ -130,15 +129,30 @@ else:
     print('NONE')
 "
 }
-GOT="$(readvalue cli)"
-python3 -c "raise SystemExit(0 if abs(float('$GOT') - float('$WANT')) < 0.02 else 1)" || \
-  fail "set-param did not take: Gain reads $GOT, wanted $WANT. Nothing below can mean anything
-        if the value was never set in the first place"
+# WAITS FOR THE VALUE rather than sleeping a fixed second before reading it. The parameter is
+# published on the engine's own cycle, so a fixed sleep asserts something about the machine's load
+# and fails as "set-param did not take" — a statement about the command.
+GOT=""
+for _ in $(seq 1 60); do
+  GOT="$(readvalue cli)"
+  [ "$GOT" != "NONE" ] && \
+    python3 -c "raise SystemExit(0 if abs(float('$GOT') - float('$WANT')) < 0.02 else 1)" && break
+  sleep 0.25
+done
+python3 -c "raise SystemExit(0 if abs(float('${GOT:-9}') - float('$WANT')) < 0.02 else 1)" || \
+  fail "set-param did not take: Gain reads $GOT, wanted $WANT after 15s. Nothing below can mean
+        anything if the value was never set in the first place"
 echo "  set: Gain is $GOT, and its default is $DEFAULT — the two differ, so this check can fail"
 
 # ---- PACKS.
 cli do save-module song >/dev/null 2>&1 || true
-sleep 2.5
+# WAITS FOR THE EVENT. A fixed sleep here asserts the engine finishes a zip write within N
+# seconds, which under a parallel ctest is a claim about the machine and fails as "the save
+# reported failure" — a statement about the product.
+for _ in $(seq 1 80); do
+  grep -q '"event":"project.module_saved"' "$HOME_DIR/eng.log" && break
+  sleep 0.25
+done
 grep '"event":"project.module_saved"' "$HOME_DIR/eng.log" | tail -1 | grep -q '"ok":true' || \
   fail "the module save reported failure:
         $(grep -o '\"event\":\"project.module_saved\"[^}]*' "$HOME_DIR/eng.log" | tail -1)"
@@ -183,7 +197,10 @@ for _ in $(seq 1 120); do
 done
 cli2() { DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$AWAY_DIR" "$CLI" "$@"; }
 cli2 do load-module song >/dev/null 2>&1 || true
-sleep 3.0
+for _ in $(seq 1 80); do
+  grep -q '"event":"project.module_loaded"' "$AWAY_DIR/eng.log" && break
+  sleep 0.25
+done
 grep '"event":"project.module_loaded"' "$AWAY_DIR/eng.log" | tail -1 | grep -q '"ok":true' || \
   fail "the module did not load on the other machine:
         $(grep -o '\"event\":\"project.module_loaded\"[^}]*' "$AWAY_DIR/eng.log" | tail -1)"

@@ -133,7 +133,15 @@ echo "  0 and 32 are refused, and the refusal left the value alone"
 # The ENGINE's own guard, not the CLI's: a track that does not exist is reachable through the
 # CLI's validation and must be refused on the other side, into the log.
 cli do lines-per-beat --track 99 --lines 5 >/dev/null 2>&1 || true
-sleep 1.0
+# WAITS FOR THE LINE rather than sleeping a fixed second. A bare sleep here asserts that the
+# engine logs within one second, which under a parallel ctest is a claim about the machine's load
+# and not about the guard — and it fails as "the engine did not refuse", which is a statement
+# about the product. note_overlap_check shipped with exactly this shape and failed one run in
+# four before it was found.
+for _ in $(seq 1 60); do
+  grep -q '"event":"track.lines_per_beat_rejected"' "$TMP/eng.log" && break
+  sleep 0.25
+done
 grep -q '"event":"track.lines_per_beat_rejected"' "$TMP/eng.log" || \
   fail "opcode 92 for a nonexistent track was not refused by the ENGINE — no
         track.lines_per_beat_rejected in the log. The CLI's own bounds check cannot cover this
