@@ -19,6 +19,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { statSync } from 'node:fs';
 import { mkdtempSync, cpSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -147,6 +148,42 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
   const sidecarBin = bin('ui/target/release/daw-sidecar');
   for (const [p, what] of [[engineBin, 'daw_engine'], [sidecarBin, 'daw-sidecar']]) {
     if (!existsSync(p)) throw new Error(`stack: ${what} not built at ${p}`);
+  }
+
+  /*
+   * A BINARY OLDER THAN THE CONTRACT IT SPEAKS.
+   *
+   * The C++ engine and the Rust sidecar are separate builds over a SHARED contract — the headers
+   * in apps/ and the wire in ui/. Merging touches both, and rebuilding one is a mistake with no
+   * symptom of its own: the stale side simply does not know about a field, so the feature that
+   * needs it looks broken and every test around it passes. That happened three times in one
+   * night — a missing SetRowOps, a kit version reading 0, a command the engine ignored — and
+   * each cost a debugging round that started by suspecting the new code.
+   *
+   * So the stack says so. A WARNING and not a throw: a stale binary is usually a mistake and
+   * occasionally deliberate (bisecting an old engine against new tests is a real thing to do),
+   * and a suite that refuses to run is worse than one that tells you what it is running.
+   */
+  const contract = ['apps/shared_memory.h', 'apps/event_payloads.h',
+                    'ui/daw-bridge/src/layout.rs', 'ui/daw-sidecar/src/main.rs'];
+  let newestSrc = 0, newestName = '';
+  for (const f of contract) {
+    const p2 = bin(f);
+    if (!existsSync(p2)) continue;
+    const t = statSync(p2).mtimeMs;
+    if (t > newestSrc) { newestSrc = t; newestName = f; }
+  }
+  for (const [p2, what] of [[engineBin, 'daw_engine'], [hostBin, 'juce_host_process'],
+                            [sidecarBin, 'daw-sidecar']]) {
+    if (!existsSync(p2)) continue;
+    const age = statSync(p2).mtimeMs;
+    if (newestSrc > age) {
+      const mins = Math.round((newestSrc - age) / 60000);
+      console.warn(`stack: ${what} is ${mins} min older than ${newestName} — `
+                   + 'it may not know about a field the other side is sending. '
+                   + 'Rebuild BOTH: cmake --build build --target daw_engine juce_host_process '
+                   + '&& cargo build --release --manifest-path ui/Cargo.toml');
+    }
   }
 
   await demandFree([base, base + 1, base + 2]);
