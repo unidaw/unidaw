@@ -162,7 +162,7 @@ export class Mixer {
       solo.dataset.act = 'solo';
       fader.dataset.act = 'fader';
       pan.dataset.act = 'pan';
-      el._out = out; el._outV = null; el._outOpts = '';
+      el._out = out; el._outV = null; el._outOpts = ''; el._outStub = -2;
       el._name = name.firstChild; el._gain = gain.firstChild; el._pan = pan.firstChild;
       el._fader = fader; el._faderFill = faderFill; el._meterFill = meterFill;
       el._mute = mute; el._solo = solo;
@@ -309,11 +309,23 @@ export class Mixer {
        * set changes; a stub is rebuilt when its own destination or that destination's NAME moves,
        * which is what `routeKey` and `outTo` between them say.
        */
-      const stubKey = `${vm.routeKey}|${s.outTo}`;
+      /*
+       * TWO COMPARES, NOT A KEY STRING.
+       *
+       * This built `${vm.routeKey}|${s.outTo}` per strip per draw — eight strings a frame to
+       * discover, on almost every frame, that neither half had moved. alloc.mjs put the mixer at
+       * 1288 B/draw against a 900 limit and named this site; it had been in since the lazy route
+       * options landed, and the suites I ran then (e2e, shot, tracks64) cannot see an allocation.
+       * The whole battery, not the reflex three.
+       *
+       * The two halves are stored separately and compared as a number and a number. A composite
+       * key is only worth building when the parts cannot be held apart, and here they can.
+       */
       if (el._out._filled) {
         if (el._outOpts !== vm.routeKey) { this._fillRoute(el._out, vm); el._outV = null; }
-      } else if (el._outOpts !== stubKey) {
-        el._outOpts = stubKey;
+      } else if (el._outOpts !== vm.routeKey || el._outStub !== s.outTo) {
+        el._outOpts = vm.routeKey;
+        el._outStub = s.outTo;
         el._out.textContent = '';
         const only = document.createElement('option');
         only.value = String(s.outTo);

@@ -655,6 +655,9 @@ export function buildChainModel(opts, buf) {
      * that does not work rather than as a value being cleared underneath it.
      */
     c.filterType = kit && kit.slots && kit.slots.length ? (kit.slots[0].filterType | 0) : -1;
+    // The DEVICE is a sampler — distinct from `isKit` below, which asks whether the ROWS being
+    // drawn came from a kit answer. A sampler whose kit has not arrived yet is still a sampler.
+    const isKitDevice = d.kind === KIND_SAMPLER;
     /*
      * THE BANK'S OWN GATE DEFAULT, from the kit answer rather than from a slot.
      *
@@ -666,6 +669,40 @@ export function buildChainModel(opts, buf) {
      * state a card has to be able to show, so it cannot double as "there is nothing here".
      */
     c.defaultGate = kit ? (kit.defaultGate | 0) : -1;
+    /*
+     * WHICH VIEW THIS SAMPLER REMEMBERS: 0 the pad grid, 1 the sample and its slices.
+     *
+     * A REMEMBERED VIEW rather than a mode — it is persisted per device, so a kit you set up as
+     * a chopped break opens as the break rather than as a list of pads every time.
+     *
+     * -1 when there is no kit, like the two above and for the same reason: 0 is a real state.
+     */
+    c.defaultView = kit ? (kit.defaultView | 0) : -1;
+    /*
+     * ...AND WHAT THE SAMPLE VIEW NEEDS TO DRAW ITSELF: which source to show, how long it is,
+     * and where every slice of it begins and ends.
+     *
+     * The SOURCE of the first slot that has one, because a sampler holds several and a card
+     * shows one picture. Every slot pointing at THAT source contributes a boundary; slots on
+     * other sources are not drawn, which is honest — they are a different waveform.
+     *
+     * Built only when the sample view is actually on. It is a fresh array per kit answer, and a
+     * kit answer arrives when somebody chops or loads, not per frame — but the guard matters
+     * anyway, because a rack of eight samplers would otherwise build eight of these to draw one.
+     */
+    if (isKitDevice && c.defaultView === 1 && kit && kit.slots && kit.slots.length) {
+      const first = kit.slots.find((x) => x.source > 0) || kit.slots[0];
+      const sourceId = first ? (first.source | 0) : 0;
+      const cuts = [];
+      for (const x of kit.slots) {
+        if ((x.source | 0) !== sourceId) continue;
+        if (x.end > x.begin) cuts.push([x.begin | 0, x.end | 0, x.slot | 0]);
+      }
+      cuts.sort((a, b) => a[0] - b[0]);
+      c.sample = { source: sourceId, frames: first ? (first.frames | 0) : 0, cuts };
+    } else {
+      c.sample = null;
+    }
     const src = kit && kit.found && kit.slots ? kit.slots
               : ((dp && dp.params) ? dp.params : null);
     const isKit = !!(kit && kit.found && kit.slots && src === kit.slots);

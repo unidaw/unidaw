@@ -622,6 +622,75 @@ const ask = async (track, device) => {
   }
 
   /*
+   * THE SAMPLE VIEW: the chop, drawn.
+   *
+   * The extents were published so a chop could be SEEN, and until this the card could only
+   * LIST it — "slice 3 of a 352800-frame source" is a fact, not a picture. `bank <t> <d>
+   * default-view 1` swaps the pad list for the source's waveform with a boundary at every
+   * slice, and the setting is persisted per device, so a kit set up as a break opens as the
+   * break.
+   *
+   * Asserted on the CANVAS's box rather than on the model, and on the LIST being gone: a
+   * card that drew both would be two things in one space, and a canvas with no size is
+   * indistinguishable from one that has not painted.
+   */
+  {
+    await page.evaluate((t) => window.__uni.run(`goto 0 ${t}`), ct);
+    await page.waitForTimeout(600);
+    const before = await page.evaluate(() => {
+      const c = document.querySelector('.dv-card .dv-wave');
+      const l = document.querySelector('.dv-card .dv-plist');
+      return { wave: c ? c.getBoundingClientRect().width : -1,
+               list: l ? l.getBoundingClientRect().width : -1 };
+    });
+    check(before.wave === 0 && before.list > 0,
+          'a sampler shows its pad list by default, and no waveform', JSON.stringify(before));
+
+    await page.evaluate((t) => window.__uni.run(`bank ${t} 0 default-view 1`), ct);
+    await page.waitForTimeout(2500);
+    const model = await page.evaluate(() => {
+      const p = window.__uni.chainProbe();
+      return p ? { views: p.views, painted: p.painted, samples: p.samples } : null;
+    });
+    /*
+     * THE MODEL IS READY AND THE PICTURE IS NOT, and the reason is an engine contract rather
+     * than anything here.
+     *
+     * The card knows which view the device remembers, which source to draw, how long it is and
+     * where all nine slices begin and end. What it cannot get is the AUDIO: the engine's
+     * waveform store is keyed BY PATH (`sourceIdForPath`) and interned for audio-CLIP sources
+     * only, so a sampler's `sourceLocalId` — a per-device counter — addresses nothing in it.
+     * Every window request answers no window, forever.
+     *
+     * So the swap deliberately does not happen: `_paintWave` returns false when it has drawn
+     * nothing, and the pad list stays up. A canvas with no audio on it is indistinguishable from
+     * a file that decoded to silence, and this app does not ship that distinction unresolved.
+     *
+     * Asserted as the CURRENT state so it goes red the day backend gives sampler sources a
+     * waveform id — which is asked for on the channel. Both halves matter: the model must be
+     * complete (or the fix would land on nothing) and the paint must be absent (or this is
+     * already working and the note is a lie).
+     */
+    check(model && model.views[0] === 1 && model.samples[0]
+          && model.samples[0].cuts === 9 && model.samples[0].frames > 0,
+          // NINE, not eight: the load left a whole-file slot behind and the chop added eight, and
+          // every one of them has an extent on this source. The number is asserted exactly for
+          // the reason the chop count above is — `>= 8` would pass on the wrong picture.
+          'the sample view knows what to draw — the source, its length and every slice boundary',
+          JSON.stringify(model && model.samples));
+    check(model && model.painted[0] === false,
+          'KNOWN: and cannot draw it. The engine\'s waveform store is keyed by PATH and '
+          + 'interned for audio-clip sources only, so a sampler source id addresses nothing in '
+          + 'it and no window ever arrives. The pad list stays up rather than swapping to an '
+          + 'empty canvas. Asked backend for a waveform id for sampler sources; this check '
+          + 'moves the day it lands.', JSON.stringify(model && model.painted));
+
+    // Back to the kit, because the rest of this file reads slot rows.
+    await page.evaluate((t) => window.__uni.run(`bank ${t} 0 default-view 0`), ct);
+    await page.waitForTimeout(900);
+  }
+
+  /*
    * THE BANK'S NOTE-OFF DEFAULT, FROM THE POINTER.
    *
    * Jaakko asked for "ignore note-offs" as a per-bank setting and it is one — engine-side as

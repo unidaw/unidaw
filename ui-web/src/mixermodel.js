@@ -28,6 +28,15 @@ export const FLAG_SOLO = 2;
  * keeps finding; `dockApi.harmonyQuantize` is the way to set it.
  */
 export const FLAG_HARMONY_QUANTIZE = 4;
+/**
+ * Bit 4: does note entry LEAVE the sounding note alone, or truncate it?
+ *
+ * Off — truncate — is today's behaviour and the default. It is the only setting in the tracker
+ * that decides whether an edit loses data: `addNoteToClip` shortens the sounding note in the
+ * same column IN THE DOCUMENT, so the duration you typed is gone at entry and no later view can
+ * get it back. Read from here, written by SetTrackAllowNoteOverlap, same as the bit above.
+ */
+export const FLAG_ALLOW_OVERLAP = 8;
 
 /**
  * Optimistic local edits, one entry per track. `pendingUntil` is the mixer
@@ -194,6 +203,7 @@ export function buildMixerModel(opts, buf) {
     s.mute = (flags & FLAG_MUTE) !== 0;
     s.solo = (flags & FLAG_SOLO) !== 0;
     s.harmonyQuantize = (flags & FLAG_HARMONY_QUANTIZE) !== 0;
+    s.allowOverlap = (flags & FLAG_ALLOW_OVERLAP) !== 0;
     s.pending = mixer.strips[t].pendingUntil >= 0;
     s.dimmed = anySolo && !s.solo;
     s.faderPct = faderPosition(gain);

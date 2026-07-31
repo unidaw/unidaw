@@ -1047,6 +1047,23 @@ export function createCommands(api) {
         const n = a.slice(0).join(' ');
         return api.savePatch(n) ? `saving "${n}"…` : (api.state().reject || 'refused');
       } },
+    /*
+     * WHETHER TYPING A NOTE CUTS THE ONE STILL SOUNDING.
+     *
+     * Off — cut — is the default and what every tracker does. On leaves it ringing, which is
+     * what you want for a pad or a held bass under a moving line. Worth a command rather than a
+     * preference because it is the only setting here that decides whether an edit LOSES DATA:
+     * the truncation happens in the document at entry, so the duration you typed is gone.
+     */
+    'note-overlap': { help: 'note-overlap <track> [on|off] — let a note ring under the next one '
+                          + 'instead of being cut short by it',
+      args: [A_TRACK, ON_OFF],
+      run: (a) => {
+        const t = Number(a[0]);
+        const want = a[1] === undefined ? undefined : a[1] === 'on';
+        if (!api.allowOverlap(t, want)) return api.state().reject || 'refused';
+        return `note-overlap t${t}`;
+      } },
     'harmony-quantize': { help: 'harmony-quantize <track> [on|off] — snap this track\'s notes '
                                + 'to the harmony timeline',
       args: [A_TRACK, ON_OFF],
