@@ -91,6 +91,9 @@ daw-cli — control surface for a running engine
   daw-cli do position --nanotick T move the playhead
   daw-cli do loop --start T --end T set the loop range
   daw-cli do harmony-quantize --track N [--on 0|1]
+  daw-cli do lines-per-beat --track N --lines M
+                                   a lane's SUBDIVISION: tracker rows per beat, 1..31. Out of
+                                   range is refused — the clip grid packs it in five bits
   daw-cli do sound-addressed --track N [--on 0|1]
   daw-cli do collapse --track N [--on 0|1]
   daw-cli do automation --track N --param ID --nanotick T --value V
@@ -471,13 +474,22 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
             .get(index)
             .map(|m| m.flags & daw_bridge::layout::MIX_FLAG_SOUND_ADDRESSED != 0)
             .unwrap_or(false);
+        // Published since v10 and honoured by the tracker's per-lane grid — and until opcode 92
+        // nothing could SET it, so it was read-only state nobody could reach. Printed here for
+        // the same reason harmony_quantize is: a control that cannot read its own value has to
+        // invent one, and for a subdivision that means drawing the lane on the wrong grid.
+        let lines_per_beat = snapshot
+            .ui_lines_per_beat
+            .get(index)
+            .copied()
+            .unwrap_or(0);
         let comma = if index + 1 == count { "" } else { "," };
         // M2.17: this track's OWN clip version — the base an edit to this track must
         // present. The global `clip_version` in `get transport` moves whenever ANY
         // track changes and is no longer the right base for a track-scoped edit.
         let clip_version = handle.clip_version_for_track(id);
         println!(
-            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"sound_addressed\": {sound_addressed}, \"collapsed\": {collapsed}, \"ops_width\": {ops_width}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
+            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"sound_addressed\": {sound_addressed}, \"collapsed\": {collapsed}, \"lines_per_beat\": {lines_per_beat}, \"ops_width\": {ops_width}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
         );
     }
     println!("  ]");
@@ -3796,6 +3808,37 @@ removed is the whole command");
                     payload.value0 = if on != 0 { 1 } else { 0 };
                     match handle.send_command(payload) {
                         Ok(()) => { println!("{{ \"sent\": \"collapse\", \"track\": {track}, \"on\": {on} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"lines-per-beat") => {
+                    // The last piece of per-lane grids. `lines_per_beat` was persisted, published
+                    // and honoured by the tracker's grid, and settable by nothing — a project
+                    // could CARRY a 3-rows-per-beat lane and no surface could MAKE one.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let lines = match flag_u64(&args, "--lines", None) {
+                        Ok(v) => v,
+                        Err(_) => {
+                            eprintln!("daw-cli: lines-per-beat needs --lines N (1..31)");
+                            std::process::exit(2);
+                        }
+                    };
+                    // REFUSED HERE TOO, not only in the engine. The packer gives linesPerBeat
+                    // five bits, so 32 packs as 0 and 0 means "no grid on this extent" — a
+                    // caller who typed 32 gets told, rather than getting a lane with no grid.
+                    if lines == 0 || lines > 31 {
+                        eprintln!("daw-cli: --lines is 1..31 (the clip grid packs it in five \
+                                   bits, and 0 is its 'no grid' sentinel), got {lines}");
+                        std::process::exit(2);
+                    }
+                    let mut payload = track_structure_command(
+                        UiCommandType::SetTrackLinesPerBeat, track);
+                    payload.value0 = lines as u32;
+                    match handle.send_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"lines-per-beat\", \"track\": {track}, \"lines\": {lines} }}");
+                            0
+                        }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }

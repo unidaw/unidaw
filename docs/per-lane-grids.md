@@ -82,8 +82,26 @@ re-deriving it:
 1. **Render Mock B** — a shared beat band; each lane fills its band with
    `lines_per_beat` rows; a note draws in the cell for its `(beat, sub)`.
    Reference image: the mockups in this change's discussion.
-2. **A "set lane subdivision" command** — the one new command needed, per
-   track; the engine already persists the value.
+2. ~~**A "set lane subdivision" command**~~ — ✅ **SHIPPED 2026-07-31** as
+   `SetTrackLinesPerBeat = 92`. It rides `UiCommandPayload` (`trackId` +
+   `value0`) rather than getting a struct of its own, because
+   `SetTrackCollapsed`, `SetLaneQuantize` and `SetTrackSoundAddressed` are the
+   same shape — "set one per-track scalar" — and a fourth struct saying that
+   would be the divergence, not the saving. `daw-cli do lines-per-beat --track N
+   --lines M`, and the value is now published in `get tracks` as
+   `lines_per_beat` so a control can show its own state.
+
+   **Range is 1..31 and out of range is REFUSED, not clamped.** Not a taste: the
+   clip-grid packer gives `linesPerBeat` five bits, so a 32 packs as a 0 — and 0
+   is that packer's sentinel for "no grid on this extent", so the lane would come
+   back with no grid at all. Clamping to 31 would hand back a subdivision nobody
+   asked for with nothing to notice it by.
+
+   Verified by `tools/lines_per_beat_check.sh` (ctest `lines_per_beat`). Its
+   load-bearing property is **per track**: the fixture has two lanes starting at
+   the same subdivision, because a one-track fixture cannot tell "set the track I
+   asked for" from "set all of them" — and a command that wrote every track would
+   pass every other assertion in the file.
 3. **Cursor and selection in ticks** — down/up move by the focused lane's row
    duration; range selection produces a `TimeSpan` × lanes; paste calls
    `remap_ticks`.

@@ -675,6 +675,13 @@ add_test(NAME sampler_loop
 )
 set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A lane's subdivision is settable at last, and it is the LANE's — a one-track fixture cannot
+# tell "set the track I asked for" from "set all of them".
+add_test(NAME lines_per_beat
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/lines_per_beat_check.sh
+)
+set_tests_properties(lines_per_beat PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A generated note chooses its slice, and chooses the same one at any buffer size.
 add_test(NAME slice_select
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slice_select_check.sh

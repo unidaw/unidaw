@@ -14405,6 +14405,43 @@ struct TrackRuntime {
           .field("track", payload.trackId)
           .field("collapsed", folded);
     } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetTrackLinesPerBeat)) {
+      // THE LAST PIECE OF PER-LANE GRIDS. lines_per_beat has been per track in the project
+      // format, published in uiLinesPerBeat and honoured by the tracker's grid since v10, and
+      // nothing could set it: a project could CARRY a 3-rows-per-beat lane and no surface could
+      // MAKE one.
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("track.lines_per_beat_rejected")
+            .field("track", payload.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      // REFUSED, NOT CLAMPED, at both ends. 0 is the clip-grid packer's sentinel for "no grid on
+      // this extent", and anything past 31 does not fit the five bits it gets — a 32 packs as a 0
+      // and the lane comes back with no grid at all. Clamping either end hands back a subdivision
+      // nobody asked for, with nothing to notice it by.
+      if (payload.value0 == 0 || payload.value0 > 31) {
+        DAW_EVENT("track.lines_per_beat_rejected")
+            .field("track", payload.trackId)
+            .field("lines", payload.value0)
+            .field("reason", "out_of_range");
+        return;
+      }
+      // AN ATOMIC, like `collapsed` beside it: the publisher reads it every frame and the save
+      // copies it out from there. No snapshot rebuild — the grid is how notes are DRAWN and
+      // entered, not how they are dispatched, so nothing the RT plays changes.
+      runtime->linesPerBeat.store(payload.value0, std::memory_order_relaxed);
+      DAW_EVENT("track.lines_per_beat")
+          .field("track", payload.trackId)
+          .field("lines", payload.value0);
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetLaneQuantize)) {
       TrackRuntime* runtime = nullptr;
       {

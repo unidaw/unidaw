@@ -413,8 +413,32 @@ enum class UiCommandType : uint16_t {
   ///
   /// NOT FOLDED INTO SamplerSetFilter (86), which also addresses a mod set — adding fields to
   /// that payload would change a struct clients already encode, and this is additive instead.
-  SamplerSetVintage = 91,  // next free 92
+  SamplerSetVintage = 91,
+
+  /// A LANE'S SUBDIVISION — how many tracker rows one beat is divided into on this track.
+  ///
+  /// `lines_per_beat` has been per track in the project format, published in `uiLinesPerBeat`,
+  /// and honoured by the tracker's per-lane grid since v10, and NOTHING could set it. A project
+  /// could carry a 3-rows-per-beat lane against a 4 elsewhere and the app drew both correctly —
+  /// while no surface could make one. The last piece of per-lane grids, and it is one command.
+  SetTrackLinesPerBeat = 92,  // next free 93
 };
+
+// SET TRACK LINES PER BEAT (opcode 92) RIDES UiCommandPayload — `trackId`, and the subdivision in
+// `value0`. No bespoke struct, because SetTrackCollapsed (89), SetLaneQuantize and
+// SetTrackSoundAddressed are the same shape ("set one per-track scalar") and already use it; a
+// fourth struct saying the same thing is the divergence, not the saving.
+//
+// RANGE IS 1..31, AND OUT OF RANGE IS REFUSED RATHER THAN CLAMPED.
+//
+// The cap is not a taste: `packClipGrid` gives linesPerBeat FIVE BITS (shared_memory.h, "bits 1-5
+// linesPerBeat 5 bits 1..31"), so a 32 would silently pack as a 0 and the lane would come back
+// with no grid at all. Clamping to 31 would be worse than refusing — it hands back a subdivision
+// nobody asked for and the caller has no way to notice.
+//
+// ZERO IS REFUSED FOR A DIFFERENT REASON, worth saying separately: 0 is the packer's SENTINEL for
+// "no grid on this extent". Accepting it here as a subdivision would make one value mean two
+// things in the same field.
 
 // SAMPLER SET FILTER (opcode 86). 40 bytes.
 //
@@ -1000,6 +1024,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SetTrackCollapsed: return "set_track_collapsed";
     case UiCommandType::SamplerSetSlotName: return "sampler_set_slot_name";
     case UiCommandType::SamplerSetVintage: return "sampler_set_vintage";
+    case UiCommandType::SetTrackLinesPerBeat: return "set_track_lines_per_beat";
     case UiCommandType::Redo: return "redo";
     case UiCommandType::SetLoopRange: return "set_loop_range";
     case UiCommandType::SetAutomationTarget: return "set_automation_target";

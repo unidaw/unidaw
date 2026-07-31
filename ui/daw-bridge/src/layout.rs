@@ -1226,6 +1226,12 @@ pub enum UiCommandType {
     /// Bit depth and sample-rate reduction on a sampler MOD SET — the SP-1200 character.
     /// Applied BEFORE the filter, which is the order the machines it imitates had.
     SamplerSetVintage = 91,
+    /// A lane's SUBDIVISION — rows per beat on this track. Rides UiCommandPayload (trackId +
+    /// value0), like SetTrackCollapsed. `lines_per_beat` was persisted, published in
+    /// uiLinesPerBeat and honoured by the per-lane grid, and settable by nothing. Range is
+    /// 1..=31 — the clip-grid packer gives it five bits — and out of range is REFUSED, since a
+    /// 32 packs as a 0 and 0 is the packer's "no grid here" sentinel.
+    SetTrackLinesPerBeat = 92,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
