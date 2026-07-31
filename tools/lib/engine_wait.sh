@@ -168,9 +168,26 @@ capture_diagnosis() {
         Nothing under test can cause or fix this — the machine's default output device is not
         actually playing. Select a real local output and re-run"
   elif [ -n "$callbacks" ]; then
-    echo "the device ${dev:-(unnamed)} ran $callbacks playback callbacks, so it WAS pulling audio
-        — an empty capture with a live device is not the device's fault and is worth reading the
-        engine log for directly"
+    # THE DEVICE PULLED, SO LOOK UPSTREAM. The underrun summary counts DEVICE dropouts; a
+    # PRODUCER starved before the device ever asked logs nothing there at all, so "0 underruns"
+    # and "the audio was never generated" read identically. project.load carries over_budget and
+    # peak_load_milli, which is where that shows up — the web-UI agent hit the same blind spot
+    # from the browser side (three meter checks failing together at load average 91 with zero
+    # underruns logged) and it is the same distinction.
+    local over peak
+    over="$(grep -o '"over_budget":[0-9]*' "$log" 2>/dev/null | tail -1 | grep -oE '[0-9]+')"
+    peak="$(grep -o '"peak_load_milli":[0-9]*' "$log" 2>/dev/null | tail -1 | grep -oE '[0-9]+')"
+    if [ "${over:-0}" -gt 0 ] 2>/dev/null; then
+      echo "the device ${dev:-(unnamed)} ran $callbacks playback callbacks, so it WAS pulling —
+        but the PRODUCER missed its budget on ${over} block(s) (peak load ${peak:-?}/1000). The
+        underrun summary counts device dropouts and says nothing about a producer starved
+        upstream, so treat this as INCONCLUSIVE rather than as a failure of whatever is under
+        test: on a loaded machine the audio may simply never have been generated in time"
+    else
+      echo "the device ${dev:-(unnamed)} ran $callbacks playback callbacks and the producer met
+        its budget, so both ends were working — an empty capture here is not the device's fault
+        and is worth reading $log directly"
+    fi
   else
     echo "the engine log has no underrun summary, so it did not reach a clean shutdown — read
         $log directly rather than trusting the capture"
