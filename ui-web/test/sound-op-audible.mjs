@@ -342,7 +342,14 @@ if (chopped && chopped.length === 8) {
     await page.waitForTimeout(250);
     opsText.push(await page.evaluate(() => window.__uni.opsTextAtCursor()));
   }
-  check(opsText[0] === '' && opsText[1] === `s${slots[7]}`,
+  /*
+   * `s09`, not `s9`. The canonical spelling zero-pads the sound address to two — the engine's
+   * `format_row_ops` does it and this side mirrors it, because which characters mean slot 9 is
+   * not a display choice. Padded here rather than compared loosely so the check still fails if
+   * the two sides ever disagree about the spelling.
+   */
+  const spelt = `s${String(slots[7]).padStart(2, '0')}`;
+  check(opsText[0] === '' && opsText[1] === spelt,
         'both notes are on the SAME key; only the second carries an `s` op',
         `${JSON.stringify(wrote)} ops ${JSON.stringify(opsText)} (${op1} / ${op2})`);
 

@@ -2747,7 +2747,12 @@ test('the JS row-op mirror matches the Rust schema exactly', async () => {
    */
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(
-    new URL('../../../daw/ui/daw-bridge/src/rowop.rs', import.meta.url), 'utf8');
+    // THIS REPO'S COPY, not the sibling checkout's. It read ../../../daw/... — backend's
+    // working tree — so the check failed whenever they were mid-edit on ops this side had never
+    // been told about, which punishes someone else's work in progress rather than finding drift.
+    // The copy here is what the sidecar actually compiles against, which is what has to agree
+    // with the mirror.
+    new URL('../../ui/daw-bridge/src/rowop.rs', import.meta.url), 'utf8');
   const block = src.slice(src.indexOf('OP_SCHEMA'), src.indexOf('];', src.indexOf('OP_SCHEMA')));
   const rust = [...block.matchAll(/prefix:\s*"([^"]+)"/g)].map((m) => m[1]);
   assert.ok(rust.length > 0, `parsed OP_SCHEMA prefixes: ${JSON.stringify(rust)}`);
@@ -2823,7 +2828,10 @@ test('the canonical text form round-trips what the engine published', () => {
    * the hex form round-tripped to a DIFFERENT offset. A text form whose only contract is that
    * it parses back had exactly one job.
    */
-  assert.equal(opsText({ soundOffset: 32768, retrigger: 3, sound: 5 }), 'ret3 s5 o128');
+  // `s05`, not `s5`: the sound address is zero-padded to two by owner ruling, mirroring
+  // `format_row_ops`. A tracker cell lives in a fixed-width grid and ragged s7/s13 breaks the
+  // vertical rhythm — and which characters mean slot 5 is the engine's call, not this side's.
+  assert.equal(opsText({ soundOffset: 32768, retrigger: 3, sound: 5 }), 'ret3 s05 o128');
   // The delay is published in TICKS and authored as a fraction of a beat, so it
   // needs the beat length to be spelled back. 160000 of 960000 is a sixth.
   assert.equal(opsText({ delayTicks: 160000 }, 960000), 'd1/6');
