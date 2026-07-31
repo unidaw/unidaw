@@ -1024,6 +1024,29 @@ export function createCommands(api) {
      * unreachable because "the flag is not published". It is published — `uiTrackMixFlags` bit 2
      * — so the toggle can show its own state, which was the only thing missing.
      */
+    /*
+     * SAVE THE PATCHER GRAPH AS A PRESET. The answer — whether the file was written — comes
+     * back on the diff channel and lands in this transcript, which is what makes the verb
+     * honest rather than a receipt for a message.
+     */
+    /*
+     * A LANE'S SUBDIVISION. The tracker has drawn per-lane grids since v10 and nothing could
+     * make one — a polyrhythmic project could be loaded and never authored. `lpb 1 3` gives
+     * track 1 triplet rows against everyone else's four.
+     */
+    lpb: { help: 'lpb <track> <lines> — how many tracker rows one beat is divided into (1-31)',
+      args: [A_TRACK, { name: 'lines', type: 'int', min: 1, max: 31 }],
+      run: (a) => {
+        const t = Number(a[0]), n = Number(a[1]);
+        if (!api.linesPerBeat(t, n)) return api.state().reject || 'refused';
+        return `t${t} at ${n}/beat`;
+      } },
+    'save-patch': { help: 'save-patch <name> — save the patcher graph as a preset',
+      args: [{ name: 'name', type: 'text', rest: true }],
+      run: (a) => {
+        const n = a.slice(0).join(' ');
+        return api.savePatch(n) ? `saving "${n}"…` : (api.state().reject || 'refused');
+      } },
     'harmony-quantize': { help: 'harmony-quantize <track> [on|off] — snap this track\'s notes '
                                + 'to the harmony timeline',
       args: [A_TRACK, ON_OFF],
