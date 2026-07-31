@@ -186,6 +186,25 @@ export const ENV_TARGETS = ['volume', 'pan', 'pitch', 'cutoff', 'resonance'];
  * drum, wrong for anything a person expects to be able to cut — and 1 releases the voice when
  * the note ends. The engine has had both since the sampler shipped and no UI could reach either.
  */
+/**
+ * The DEVICE-level sampler fields `SamplerSetDevice` (88) can set, indexed by their wire value —
+ * `SamplerDeviceField`, DefaultGate 1 through DefaultView 3. Index 0 is unused on the wire, so
+ * the list carries a hole rather than an off-by-one waiting to happen.
+ *
+ * `defaultGate` SEEDS a slot at mint and then stops mattering: `load-sample` and `slice` stamp
+ * it onto slots they create, and the slot's own gate is the authority from that moment. It is
+ * not a live override — a device flag the voice consulted on every note would be two facts about
+ * one thing, which is the shape that produced the kit read-back disagreeing with the model.
+ *
+ * `defaultView` is a REMEMBERED VIEW rather than a mode: 0 = kit (the pad grid, one slot per
+ * pad), 1 = sample (one sample filling the view with its waveform and slice markers). Seeded
+ * from how many files were dropped and user-owned after that.
+ */
+export const DEVICE_FIELDS = ['', 'default-gate', 'voice-cap', 'default-view'];
+
+/** What `defaultView`'s two states are called on a card. The engine has no opinion past these. */
+export const DEVICE_VIEWS = ['kit', 'sample'];
+
 export const SLOT_FIELDS = ['voicegroup', 'nna', 'gate', 'reverse', 'gain', 'pan', 'tune', 'pitchtrack', 'root', 'keylow', 'keyhigh', 'vellow', 'velhigh', 'selectmode', 'polyphony', 'chokefade', 'modset', 'stem', 'quality', 'layergroup', 'loopmode', 'sustainloop', 'loopstart', 'loopend', 'loopxfade', 'startframe', 'endframe'];
 
 export function modSummary(modMask, filterType) {

@@ -189,6 +189,21 @@ await page.waitForTimeout(1500);
  * On 60 the keymap has exactly one answer, and the only thing that can make the second note
  * differ is its `s` op.
  */
+/*
+ * THE BANK DEFAULT GOES FIRST, because it SEEDS A SLOT AT MINT and does nothing afterwards.
+ *
+ * This is the gesture Jaakko asked for — "could that be a setting per bank, ignore note-offs" —
+ * and setting it before the load is not a trick to make the test pass, it is the only order in
+ * which it means anything: `load-sample` stamps the slot it creates, and a default set later
+ * leaves that slot exactly as it was. Which is the property that keeps this ONE fact rather than
+ * a device flag the voice re-consults on every note.
+ *
+ * The alternative — a loop setting `gate` on every slot the kit happens to have — is what this
+ * replaces. It is also racy in a way a default is not: the kit can change between reading the
+ * ids and writing them.
+ */
+await run(`bank ${T} 0 default-gate ${process.env.UNI_GATE === '0' ? 0 : 1}`);
+await page.waitForTimeout(1200);
 await page.evaluate((t) => window.__uni.loadSample(t, 0, 'break.wav', 60, true), T);
 await page.waitForTimeout(2000);
 await run(`slice ${T} 0 8`);
@@ -261,13 +276,13 @@ if (chopped && chopped.length === 8) {
    * and the sound ran the full eight seconds. deviceId and modSetId ARE wildcards at 0 on the
    * neighbouring commands, which is exactly why assuming it here was easy.
    */
-  const gateOn = process.env.UNI_GATE === '0' ? 0 : 1;
-  const ids = await page.evaluate((t) => ((window.__uni.samplerKitCached(t, 0) || {}).slots || [])
-    .map((x) => x.slot), T);
-  check(ids.length > 0, 'the kit names its slots', JSON.stringify(ids));
-  for (const id of ids) await run(`slot ${T} 0 ${id} gate ${gateOn}`);
-  await page.waitForTimeout(1500);
-
+  /*
+   * NOTHING IS SET PER SLOT HERE. The bank default above did it at mint, and that is the whole
+   * claim: a person says "this kit ignores note-offs" once and every slot it makes obeys.
+   *
+   * So a failure below is the SEED failing, not a slot command failing — there is no slot
+   * command in this run.
+   */
   const DUR = 960000;                        // one quarter: half a second at 120bpm
   await run(`goto 0 ${T}`);
   await page.waitForTimeout(300);

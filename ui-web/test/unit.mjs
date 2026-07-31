@@ -808,7 +808,7 @@ test('a project row leaves its meta line to the renderer', () => {
  */
 const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'samplerKitCached',
                      'rowOps', 'opsAtCursor', 'opAtCursor', 'opsTextAtCursor', 'noteIdAtCursor',
-                     'loadSample', 'addDevice', 'sliceSample', 'samplerFilter', 'samplerEnvelope', 'samplerSlot', 'soundAddressed',
+                     'loadSample', 'addDevice', 'sliceSample', 'samplerFilter', 'samplerEnvelope', 'samplerSlot', 'samplerDevice', 'soundAddressed',
                      'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
@@ -2239,6 +2239,11 @@ const OP_REGISTRY = {
    * not caught up, and the agent has no sampler tooling at all.
    */
   soundaddr: { cli: null, agent: null, why: 'gap' },
+  /*
+   * The kit's own settings (SamplerSetDevice, 88). daw-cli has `sampler-device`, so the CLI path
+   * is real; the agent has no sampler tooling at all.
+   */
+  bank:      { cli: 'sampler-device', agent: null, why: 'gap' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },
@@ -2340,7 +2345,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
                    'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
-                   'filter', 'env', 'slot', 'soundaddr',
+                   'filter', 'env', 'slot', 'soundaddr', 'bank',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
                    'sampler', 'load-sample', 'slice',
@@ -2764,22 +2769,21 @@ test("rowop.rs's own two orders agree — the schema's and the emitter's", async
   assert.ok(schema.length > 4 && emitted.length > 4,
             `parsed both orders: schema ${JSON.stringify(schema)}, emitter ${JSON.stringify(emitted)}`);
   /*
-   * INVERTED, AND IT MOVES THE DAY IT IS FIXED.
+   * THEY AGREE NOW, so this asserts it rather than the gap.
    *
-   * The orders DISAGREE today — schema `ret p d s o rv c`, emitter `ret p d s rv c o` — so a row
-   * carrying an offset and a ramp spells `ret4 o80 rv-60 c1:2` here and `ret4 rv-60 c1:2 o80`
-   * there. Reported to backend, who owns both.
+   * It was an INVERTED check for a few hours — asserting the orders differed, so that it would
+   * fail the day they were aligned and make me change the mirror. It did exactly that on the
+   * merge, which is the whole argument for writing a known limitation as a check rather than a
+   * comment: a comment would still be sitting there describing a world that had moved.
    *
-   * Asserted as the CURRENT state rather than the correct one, for the reason this repo records
-   * every cross-side gap that way: a permanently red suite is one nobody reads, and a comment is
-   * something nobody runs. This fails the moment the two orders agree, which is exactly when I
-   * want to hear about it — the mirror follows OP_SCHEMA, so aligning them is a one-line change
-   * here that must not be forgotten.
+   * The order both sides now use is `ret rv p d s o c`, and it is neither of the two that
+   * existed: ops that modify each other are adjacent — a ramp is meaningless without a retrigger
+   * and an offset addresses the same sample as the slot — and `c` is last because it is the only
+   * op about WHEN the row fires rather than what it plays.
    */
-  assert.notDeepEqual(emitted, schema,
-    'KNOWN: format_row_ops and OP_SCHEMA order their ops differently, so the canonical text and '
-    + 'the glyph run disagree for a row carrying both an offset and a ramp. Reported; this check '
-    + 'INVERTS the day they are aligned, and the mirror here follows OP_SCHEMA.');
+  assert.deepEqual(emitted, schema,
+    'format_row_ops emits its ops in a different order from OP_SCHEMA, so the canonical text '
+    + 'and the collapsed glyph run would disagree about one note');
 });
 
 test('the JS row-op mirror matches the Rust schema exactly', async () => {

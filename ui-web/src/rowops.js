@@ -46,6 +46,24 @@ export const ROW_OPS = [
   { prefix: 'ret', field: 'retrigger', bit: 'Retrigger',
     summary: 'retrigger N even strikes over the note',
     example: 'ret3', text: (v) => String(v) },
+  /*
+   * v33. RETRIGGER VOLUME RAMP — signed TOTAL percent across a retrigger's strikes.
+   *
+   * `rv-60` over four strikes gives 100%, 80%, 60%, 40% of the authored velocity: the first is
+   * always at full level and the last lands at 40%. Stated as a TOTAL rather than a per-strike
+   * drop because that is what the ear judges and what the hand wants to set — per-strike would
+   * make the same number mean something different at every retrigger count.
+   *
+   * Signed, so a crescendo is the same op with the other sign. It means nothing without `ret`,
+   * and a ramp on a row with no retrigger is a no-op rather than a silence.
+   *
+   * GLYPH 'v', not 'r': `ret` already owns 'r', and two ops sharing a glyph makes a collapsed
+   * run ambiguous to read — the glyph is the only thing saying which op it is, since position
+   * cannot.
+   */
+  { prefix: 'rv', field: 'retrigRamp', bit: 'RetrigRamp', glyph: 'v',
+    summary: 'retrigger volume ramp, signed total percent across the strikes',
+    example: 'rv-60', text: (v) => String(v) },
   { prefix: 'p', field: 'probability', bit: 'Probability',
     summary: 'probability percent to sound (1-100)',
     example: 'p60', text: (v) => String(v) },
@@ -108,24 +126,6 @@ export const ROW_OPS = [
       const [n, d] = reduce(v, 65535);
       return `${n}/${d}`;
     } },
-  /*
-   * v33. RETRIGGER VOLUME RAMP — signed TOTAL percent across a retrigger's strikes.
-   *
-   * `rv-60` over four strikes gives 100%, 80%, 60%, 40% of the authored velocity: the first is
-   * always at full level and the last lands at 40%. Stated as a TOTAL rather than a per-strike
-   * drop because that is what the ear judges and what the hand wants to set — per-strike would
-   * make the same number mean something different at every retrigger count.
-   *
-   * Signed, so a crescendo is the same op with the other sign. It means nothing without `ret`,
-   * and a ramp on a row with no retrigger is a no-op rather than a silence.
-   *
-   * GLYPH 'v', not 'r': `ret` already owns 'r', and two ops sharing a glyph makes a collapsed
-   * run ambiguous to read — the glyph is the only thing saying which op it is, since position
-   * cannot.
-   */
-  { prefix: 'rv', field: 'retrigRamp', bit: 'RetrigRamp', glyph: 'v',
-    summary: 'retrigger volume ramp, signed total percent across the strikes',
-    example: 'rv-60', text: (v) => String(v) },
   /*
    * v33. CONDITIONAL TRIG — fire on pass A of every B.
    *

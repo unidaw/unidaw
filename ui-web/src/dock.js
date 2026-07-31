@@ -13,7 +13,8 @@
 import { ZOOM_LEVELS } from './viewmodel.js';
 import { EDGE_KINDS } from './patchermodel.js';
 // The filter names, from the file that already decides whether a cutoff modulator is live.
-import { FILTER_TYPES, ENV_TARGETS, SLOT_FIELDS } from './chainmodel.js';
+import { FILTER_TYPES, ENV_TARGETS, SLOT_FIELDS, DEVICE_FIELDS,
+         DEVICE_VIEWS } from './chainmodel.js';
 
 const MAX_LINES = 300;
 
@@ -491,6 +492,30 @@ export function createCommands(api) {
         const on = a[1] === undefined ? true : String(a[1]) === 'on';
         if (!api.soundAddressed(num(a[0]), on)) return refusal(api);
         return `track ${a[0]} ${on ? 'is sound-addressed' : 'uses the keymap'}`;
+      } },
+    /*
+     * THE BANK'S OWN SETTINGS — the per-kit defaults, not a slot's.
+     *
+     * `bank <track> <device> default-gate 1` is Jaakko's "ignore note-offs" as a per-bank
+     * setting: it SEEDS every slot `load-sample` and `slice` mint from then on, and leaves the
+     * slots already there alone. A chop made after it respects note-off without anything
+     * consulting a second fact on every note.
+     *
+     * `voice-cap` and `default-view` came with it because the engine has always read and saved
+     * both and nothing could write either — the seventh instance of that shape this pairing has
+     * turned up.
+     */
+    bank: { help: `bank <track> <device> <${DEVICE_FIELDS.filter(Boolean).join('|')}> <value> `
+                + '— a sampler kit\'s own settings; default-gate seeds new slots',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             oneOf(DEVICE_FIELDS.filter(Boolean)),
+             { name: 'value', type: 'int' }],
+      run: (a) => {
+        const field = DEVICE_FIELDS.indexOf(String(a[2]));
+        if (field < 1) return `field is ${DEVICE_FIELDS.filter(Boolean).join('|')}`;
+        if (!api.samplerDevice(num(a[0]), num(a[1]), field, num(a[3]))) return refusal(api);
+        const v = String(a[2]) === 'default-view' ? (DEVICE_VIEWS[num(a[3])] || a[3]) : a[3];
+        return `${a[2]} = ${v}`;
       } },
     /*
      * ONE FIELD OF ONE SLOT, by name.

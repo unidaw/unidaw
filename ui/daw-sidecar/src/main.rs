@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlicePayload,
                          UiSamplerFilterPayload, UiSamplerEnvelopePayload,
-                         UiSamplerSetSlotPayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
+                         UiSamplerSetSlotPayload, UiSamplerSetDevicePayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
                          UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
@@ -3427,6 +3427,30 @@ fn build_sampler_load(body: &str) -> Option<Result<UiSamplerLoadPayload, &'stati
 /// tempo-adaptive from the moment it is made rather than tied to the rate the file was recorded
 /// at — which is the difference between a break that follows the song and one the song has to
 /// follow.
+/// SamplerSetDevice (88). ONE device-level field of a sampler, by its wire id.
+///
+/// Three fields that the engine has always read and saved and nothing could write: the default
+/// gate a new slot is minted with, the voice cap, and the remembered view. Field-addressed like
+/// SamplerSetSlot so all three arrived on one opcode.
+///
+/// The field id is not validated against a list here — the engine owns which ids exist and
+/// refuses an unknown one on the SamplerRejected channel, where a caller can see it. A second
+/// copy of that list in the sidecar would be a third place for it to drift.
+fn build_sampler_device(body: &str) -> Option<Result<UiSamplerSetDevicePayload, &'static str>> {
+    if !is_type(body, "samplerdevice") { return None; }
+    let Some(field) = parse_num(body, "\"field\"") else {
+        return Some(Err("samplerdevice needs a field id"));
+    };
+    Some(Ok(UiSamplerSetDevicePayload {
+        command_type: UiCommandType::SamplerSetDevice as u16,
+        field: field.clamp(0, 65535) as u16,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        device_id: parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32,
+        value: parse_num(body, "\"value\"").unwrap_or(0).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        reserved: [0u8; 24],
+    }))
+}
+
 /// SamplerSetSlot (opcode 84's neighbour). ONE field of one slot, by its wire id.
 ///
 /// `value` is SIGNED and stays signed all the way down: gain, pan, tune and pitch-track are all
@@ -4004,6 +4028,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"autopoint\":{},\"value\":{}}}",
                                         p.track_id, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // ONE DEVICE-LEVEL FIELD. Own 40-byte payload.
+                        if let Some(r) = build_sampler_device(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_sampler_set_device(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"samplerdevice\":{},\"field\":{},\"value\":{}}}",
+                                        p.device_id, p.field, p.value),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };

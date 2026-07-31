@@ -2902,6 +2902,26 @@ const dockApi = {
     }
     state.reject = null; schedule(); return true;
   },
+  /**
+   * ONE DEVICE-LEVEL FIELD of a sampler — `SamplerSetDevice` (88).
+   *
+   * `default-gate` is the per-bank answer to "should this kit respect note-off": it SEEDS a slot
+   * when `load-sample` or `slice` mints it and then stops mattering, so a chop comes out gated
+   * without anything consulting a second fact on every note. The slot's own gate is the
+   * authority from the moment it exists.
+   *
+   * Before this the field was reachable by nothing — `sampler-load` does `SamplerSlot slot;` and
+   * never touches gate, so every slot inherited the struct's 0 and one-shot was right for drums
+   * BY ACCIDENT rather than by anyone's decision.
+   */
+  samplerDevice: (track, device, field, value) => {
+    if (!conn || !conn.send({ type: 'samplerdevice', track: Number(track) || 0,
+                              device: Number(device) || 0,
+                              field: Number(field), value: Number(value) || 0 })) {
+      state.reject = 'no engine'; schedule(); return false;
+    }
+    state.reject = null; schedule(); return true;
+  },
   samplerSlot: (track, device, slot, field, value) => {
     if (!conn || !conn.send({ type: 'samplerslot', track: Number(track) || 0,
                               device: Number(device) || 0, slot: Number(slot) || 0,
@@ -7871,6 +7891,7 @@ window.__uni = {
   samplerFilter: (t, d, ty, c, r, m) => dockApi.samplerFilter(t, d, ty, c, r, m),
   samplerEnvelope: (t, d, e) => dockApi.samplerEnvelope(t, d, e),
   samplerSlot: (t, d, sl, f, v) => dockApi.samplerSlot(t, d, sl, f, v),
+  samplerDevice: (t, d, f, v) => dockApi.samplerDevice(t, d, f, v),
   soundAddressed: (t, on) => dockApi.soundAddressed(t, on),
   opsTextAtCursor: () => dockApi.opsTextAtCursor(),
   noteIdAtCursor: () => dockApi.noteIdAtCursor(),
