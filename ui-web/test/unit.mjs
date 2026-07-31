@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 
 import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
 import { ROW_OPS, opGlyph, opsRun, opsText, parseOps } from '../src/rowops.js';
-import { DEVICE_KINDS } from '../src/chainmodel.js';
+import { DEVICE_KINDS, modSummary } from '../src/chainmodel.js';
 import {
   parseToken, parseChord, pitchOf, pitchToToken, hexValue, shiftDigit, NOTE_KEYS,
 } from '../src/entry.js';
@@ -2761,4 +2761,44 @@ test('the JS op parser agrees with the Rust one on every case Rust tests', async
   }
   assert.ok(n >= 15, `ran a meaningful number of their cases: ${n}`);
   assert.ok(checkedValues >= 3, `and checked real values, not just accept/reject: ${checkedValues}`);
+});
+
+test('a modulator that cannot move anything reads as inert, not as absent', () => {
+  /*
+   * `modMask` has a bit per (target, kind) — `target * 2 + kind`, targets being volume,
+   * panning, pitch, cutoff, resonance and kinds envelope, LFO.
+   *
+   * THE FILTER IS THE TRAP, and backend flagged it before I could fall in: a cutoff or
+   * resonance modulator on a filter that is OFF is silent, and the mask does not know that
+   * because the filter is a property of the mod set rather than of the modulator. A row that
+   * drew a cutoff envelope without checking `filterType` would show a live control over a dead
+   * one — the same lie this rack already refuses for an inert modulation link and for a
+   * parameter the plugin ignores.
+   *
+   * SHOWN, NOT HIDDEN. A configured modulator that cannot move anything is worth seeing,
+   * because the reason it does nothing is fixable and otherwise invisible.
+   */
+  assert.deepEqual(modSummary(0, 0), { mark: '', title: '' }, 'no bits, nothing drawn');
+
+  // bit0 = volume envelope. Nothing to do with the filter, so live whatever the filter is.
+  assert.equal(modSummary(1 << 0, 0).mark, '~', 'an amp envelope moves with the filter off');
+  assert.match(modSummary(1 << 0, 0).title, /volume envelope/);
+
+  // bit6 = cutoff envelope (target 3, kind 0). Silent while the filter is off...
+  const off = modSummary(1 << 6, 0);
+  assert.equal(off.mark, '!', 'a cutoff envelope with the filter OFF cannot move anything');
+  assert.match(off.title, /cutoff envelope \(filter is off\)/,
+    'and says why, because the reason is the fixable part');
+  // ...and live once it is on.
+  assert.equal(modSummary(1 << 6, 1).mark, '~', 'and moves once the filter is on');
+  assert.doesNotMatch(modSummary(1 << 6, 1).title, /filter is off/);
+
+  // bit7 = cutoff LFO, bit9 = resonance LFO — both filter-dependent, both inert with it off.
+  assert.equal(modSummary(1 << 7, 0).mark, '!', 'so is a cutoff LFO');
+  assert.equal(modSummary(1 << 9, 0).mark, '!', 'and a resonance LFO');
+  assert.equal(modSummary(1 << 5, 0).mark, '~', 'while a pitch LFO is unaffected by the filter');
+
+  // BOTH at once is the state worth distinguishing: something moves AND something cannot.
+  const both = modSummary((1 << 0) | (1 << 6), 0);
+  assert.equal(both.mark, '~!', 'a slot with one working and one dead modulator says both');
 });

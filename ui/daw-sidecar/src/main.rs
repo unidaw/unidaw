@@ -1457,11 +1457,17 @@ fn request_sampler_kit(handle: &EngineHandle, track: u32, device: u32) -> String
                     "{{\"slot\":{},\"source\":{},\"keyLow\":{},\"keyHigh\":{},\"root\":{},\
                       \"velLow\":{},\"velHigh\":{},\"group\":{},\"nna\":{},\"flags\":{},\
                       \"gainMb\":{},\"panTh\":{},\"modSet\":{},\"stem\":{},\"quality\":{},\
-                      \"frames\":{},\"slice\":{}}}",
+                      \"frames\":{},\"slice\":{},\"modMask\":{},\"filterType\":{}}}",
                     e.slotId, e.sourceLocalId, e.keyLow, e.keyHigh, e.rootKey,
                     e.velLow, e.velHigh, e.voiceGroup, e.nna, e.flags,
                     e.gainMillibels, e.panThousandths, e.modSetId, e.outputStem,
-                    e.quality, e.lengthFrames, e.sliceId)).collect();
+                    e.quality, e.lengthFrames, e.sliceId,
+                    // A bit means "WOULD move something", not "is stored" — an envelope with no
+                    // points and an LFO with zero swing both save and both do nothing. And the
+                    // filter type comes with it because the two are only useful together: a
+                    // cutoff envelope on a filter that is OFF is silent, so a UI drawing one
+                    // without the other shows a live control over a dead one.
+                    e.modMask, e.filterType)).collect();
                 return format!(
                     "{{\"samplerKit\":{{\"track\":{},\"device\":{},\"found\":{},\
                      \"voiceCap\":{},\"activeVoices\":{},\"steals\":{},\"unmapped\":{},\

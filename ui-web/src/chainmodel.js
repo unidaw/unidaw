@@ -131,6 +131,48 @@ export const CAP_AUDIO = 4;
 
 /** DeviceKind. Only the instrument is named here; the rest read from `caps`. */
 const KIND_VST_INSTRUMENT = 3;
+/**
+ * WHAT MODULATES A SLOT, and whether any of it can actually move.
+ *
+ * `modMask` has a bit per (target, kind): `target * 2 + kind`, targets 0..4 being volume,
+ * panning, pitch, cutoff and resonance, kinds 0 envelope and 1 LFO. A bit means the modulator
+ * WOULD move something — an envelope with no points and an LFO with zero swing are both stored,
+ * both round-trip, and both do nothing, and neither sets its bit.
+ *
+ * THE FILTER IS THE CATCH, and backend flagged it before I could fall in: a cutoff or resonance
+ * modulator on a filter that is OFF is silent. The mask does not know that — it is a property of
+ * the mod set, not of the modulator — so a row that drew a cutoff envelope without checking
+ * `filterType` would show a live control over a dead one.
+ *
+ * That is the same lie this rack already refuses twice: the modulation badge's inert third
+ * state, and the MAP badge hidden on a parameter the plugin ignores. So it is not hidden — a
+ * configured modulator that cannot move anything is worth SEEING, because the reason it does
+ * nothing is fixable and invisible.
+ */
+const MOD_TARGETS = ['volume', 'panning', 'pitch', 'cutoff', 'resonance'];
+/** Targets whose modulators are silent while the mod set's filter is off. */
+const FILTER_TARGETS = 3;   // cutoff and resonance, i.e. indices 3 and 4
+
+export function modSummary(modMask, filterType) {
+  if (!modMask) return { mark: '', title: '' };
+  let live = 0, inert = 0;
+  const names = [];
+  for (let t = 0; t < MOD_TARGETS.length; t++) {
+    for (let kind = 0; kind < 2; kind++) {
+      if (!(modMask & (1 << (t * 2 + kind)))) continue;
+      const dead = t >= FILTER_TARGETS && !filterType;
+      if (dead) inert++; else live++;
+      names.push(`${MOD_TARGETS[t]} ${kind ? 'LFO' : 'envelope'}${dead ? ' (filter is off)' : ''}`);
+    }
+  }
+  return {
+    // `~` is movement; `!` is movement that cannot happen. One character each, so a row says
+    // which it has without spending width on which targets — the title carries that.
+    mark: (live ? '~' : '') + (inert ? '!' : ''),
+    title: names.join(', '),
+  };
+}
+
 /** The built-in sampler. Named because its card draws its KIT where a plugin's params go. */
 const KIND_SAMPLER = 5;
 
@@ -596,10 +638,12 @@ export function buildChainModel(opts, buf) {
            */
           p.isSlot = true;
           p.defaultValue = 0;
+          const mod = modSummary(q.modMask | 0, q.filterType | 0);
           p.range = missing ? 'the source file did not resolve — this slot is silent'
-                  : q.slice ? `slice ${q.slice}, ${q.frames} frames`
-                  : `${q.frames} frames`;
-          p.display = missing ? 'MISSING' : q.slice ? `sl${q.slice}` : frameText(q.frames);
+                  : [q.slice ? `slice ${q.slice}, ${q.frames} frames` : `${q.frames} frames`,
+                     mod.title].filter(Boolean).join(' · ');
+          p.display = missing ? 'MISSING'
+                    : (q.slice ? `sl${q.slice}` : frameText(q.frames)) + mod.mark;
           p.value = 0;
           p.mod = -1;
           p.modDepth = 0;

@@ -260,6 +260,50 @@ const ask = async (track, device) => {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THE MODULATOR FIELDS REACH THE WIRE.
+//
+// `modMask` reports what WOULD move — an envelope with no points and an LFO with zero swing
+// both save and both do nothing, and neither sets a bit. `filterType` comes with it because the
+// two are only useful together: a cutoff or resonance modulator on a filter that is OFF is
+// silent, so a row drawing one without the other shows a live control over a dead one.
+//
+// WHAT THIS CHECKS AND WHAT IT DOES NOT. It asserts the two fields arrive, are numeric, and
+// that a kit with no modulators claims none — the plumbing, end to end, through a real engine.
+// It does NOT drive a modulator into existence: reaching a modulated slot through daw-cli means
+// steering the engine's mod-set system by guesswork (`--mod-set`, `--modulator`, `--amp` and
+// `--target` interact, and a chop mints slots whose mod set I did not choose), and a test built
+// on a guessed invocation proves less than it appears to.
+//
+// The DECODING — live, inert, both at once, every target and kind, and the filter-off trap — is
+// covered exhaustively in unit.mjs against `modSummary`, which is the part that is mine.
+// ---------------------------------------------------------------------------
+{
+  const slots = await page.evaluate(() => {
+    const k = window.__uni.samplerKitCached(0, 9);
+    return k && k.slots ? k.slots.map((s) => ({ mm: s.modMask, ft: s.filterType })) : null;
+  });
+  check(Array.isArray(slots) && slots.length > 0, 'the kit has slots to ask about',
+        JSON.stringify(slots));
+  check(slots.every((s) => typeof s.mm === 'number'),
+        'every slot publishes a modMask — undefined would mean the wire dropped it',
+        JSON.stringify(slots.map((s) => s.mm)));
+  check(slots.every((s) => typeof s.ft === 'number'),
+        'and a filterType, without which a cutoff modulator cannot be judged',
+        JSON.stringify(slots.map((s) => s.ft)));
+  // This fixture configures no modulators, so every mask must be empty. A non-zero one here
+  // would mean the field is being read from the wrong offset — the failure a numeric check
+  // alone cannot see.
+  check(slots.every((s) => s.mm === 0),
+        'a kit with no modulators claims none — a stray bit would mean a bad offset',
+        JSON.stringify(slots.map((s) => s.mm)));
+  const marks = await page.evaluate(() =>
+    [...document.querySelectorAll('.dv-p')].filter((r) => r.style.display !== 'none')
+      .map((r) => r.querySelector('.dv-p-v') ? r.querySelector('.dv-p-v').textContent : ''));
+  check(marks.every((m) => !/[~!]/.test(m)),
+        'and no row draws a modulator mark it has no modulator for', JSON.stringify(marks));
+}
+
 check(errors.length === 0, 'and nothing threw', errors.slice(0, 3).join(' | '));
 
 await browser.close();
