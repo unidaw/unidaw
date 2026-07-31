@@ -607,6 +607,12 @@ add_test(NAME track_collapse
 )
 set_tests_properties(track_collapse PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Nothing the project format remembers is unwritable without a reason recorded.
+add_test(NAME persisted_field_reach
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/persisted_field_reach_check.sh
+)
+set_tests_properties(persisted_field_reach PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A note's default length follows the SONG's meter, not a hardcoded 4/4 bar.
 add_test(NAME meter_bar
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/meter_bar_check.sh
