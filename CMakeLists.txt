@@ -565,6 +565,12 @@ add_test(NAME sampler_kit
 )
 set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A sampler built entirely by commands sounds, with no envelope sent.
+add_test(NAME sampler_default_sound
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_default_sound_check.sh
+)
+set_tests_properties(sampler_default_sound PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # Every published patcher node names the device it came from.
 add_test(NAME patcher_node_owner
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_node_owner_check.sh
