@@ -879,8 +879,27 @@ struct UiSamplerSlotEntry {          // 32 B
   // can tell a chop's slot from a whole-sample slot — they differ in no other visible field, and
   // a kit grid that cannot distinguish them cannot draw a chop at all.
   uint16_t sliceId = 0;
-  uint16_t reserved0 = 0;
-  uint32_t reserved1 = 0;
+  // WHAT THIS SLOT'S MOD SET ACTUALLY DOES, one bit per (target, kind): bit (target * 2 + kind),
+  // with target 0..4 = Volume, Panning, Pitch, Cutoff, Resonance and kind 0 = envelope,
+  // 1 = LFO. So bit0 is an amp envelope, bit7 is a cutoff LFO.
+  //
+  // Published because a slot carries a modSetId and a UI has NOTHING to resolve it against — the
+  // card can say "mod set 1" and not what mod set 1 does. Ten bits answers the question a
+  // modulator row actually asks without shipping the whole mod set.
+  //
+  // A BIT MEANS "CONFIGURED AND CAPABLE OF MOVING SOMETHING", not merely present. An envelope
+  // with no points and an LFO with zero depth are both stored, both round-trip, and both do
+  // nothing — and publishing those as modulators would repeat exactly the failure that made this
+  // field worth having: for a long time pan envelopes, resonance envelopes and every LFO were
+  // stored, loaded and rendered by nothing at all.
+  uint16_t modMask = 0;
+  // The mod set's FILTER TYPE: 0 off, 1 LP12, 2 LP24, 3 HP, 4 BP. Published next to modMask
+  // because a cutoff envelope on a filter that is OFF is silent, and the two facts are only
+  // useful together — a UI drawing a filter envelope over a disabled filter is showing a control
+  // that does nothing, which is the exact trap the engine's own check fell into.
+  uint8_t filterType = 0;
+  uint8_t reserved0 = 0;
+  uint16_t reserved1 = 0;
 };
 static_assert(sizeof(UiSamplerSlotEntry) == 32, "UiSamplerSlotEntry must be 32 bytes");
 
