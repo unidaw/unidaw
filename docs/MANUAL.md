@@ -1669,8 +1669,17 @@ Everything below is stated in place in the relevant chapter too. This is the lis
 - **Recording.** No engine command arms a take. The button is drawn disabled.
 - **Metronome.** Same. The `CLICK` chip is drawn unavailable.
 - **A master mixer strip, sends, returns, aux, pre/post.** Grouping is track-to-track routing.
-- **Setting a track's lines-per-beat.** Read, drawn and honoured; not writable.
-- **Harmony quantize.** Exists in the engine and the file format; unreachable from this UI.
+- **Setting a track's lines-per-beat *with the pointer*.** No longer unwritable — `SetTrackLinesPerBeat`
+  (opcode 92) landed 2026-07-31 and `daw-cli do lines-per-beat --track N --lines M` sets it, with
+  the value published (as `lines_per_beat` in `get tracks`) so a control could show its own state.
+  No console verb and no header control in this UI yet, and the second is deliberate:
+  two documents in this tree disagree about whether the per-track field is being replaced by the
+  per-extent grid, and building the UI twice is worse than waiting for the answer. See
+  `docs/SAMPLER_DESIGN.md` "Still open — owner only".
+- ~~**Harmony quantize.**~~ **Wired 2026-07-31.** It was never unreachable — the flag is
+  `uiTrackMixFlags` bit 2 and always was published. What kept it out of the UI was a recorded
+  reason nobody re-checked, which is indistinguishable from a real limitation until someone tests
+  it live.
 - **Selecting or editing a tuning.** The scale registry is a fixed built-in list. The harmony
   card's TET chip is a readout by construction.
 - **The scale roll's scale features** — degree gutter, in-key shading, cents column. The
