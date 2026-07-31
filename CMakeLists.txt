@@ -545,6 +545,14 @@ add_test(NAME module
 )
 set_tests_properties(module PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A module carries the SOUND of its plugins, not just their names. `module` cannot see this: its
+# fixture is a sampler, which has no opaque state, so every property it asserts passed while
+# `.uni` packed no plugin state at all.
+add_test(NAME module_state
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/module_state_check.sh
+)
+set_tests_properties(module_state PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_chop
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_chop_check.sh
 )

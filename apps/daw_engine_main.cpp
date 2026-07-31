@@ -5602,9 +5602,12 @@ struct TrackRuntime {
   // blobs are opaque and often large, and keeping them out keeps the document
   // diffable. The container shape (this, or the zip PROJECT_PERSISTENCE.md
   // describes) is still an open decision.
+  // The rule now lives in project_file.cpp as daw::pluginStateDirFor, because saveProjectModule
+  // needs it too: a lambda in here could be seen by the save that writes the blobs and the load
+  // that restores them, and NOT by the packer that has to find them, which is exactly why a
+  // `.uni` carried every sample and no plugin state at all.
   auto pluginStateDir = [](const std::string& projectPath) -> std::filesystem::path {
-    std::filesystem::path p(projectPath);
-    return p.parent_path() / (p.stem().string() + ".state");
+    return daw::pluginStateDirFor(projectPath);
   };
   auto pluginStateFileName = [](uint32_t trackId, uint32_t deviceId) -> std::string {
     return "t" + std::to_string(trackId) + "_d" + std::to_string(deviceId) + ".bin";
@@ -12527,8 +12530,14 @@ struct TrackRuntime {
             // Assets resolve against the directory the project was LOADED from, which is where
             // the sampler's project-relative names point. Using the SAVE directory instead would
             // work only when the two happen to coincide, and fail silently when they do not.
+            //
+            // PLUGIN STATE COMES FROM THE LOOSE SAVE JUST WRITTEN, not from wherever the project
+            // was loaded from. saveProjectToPath above wrote every plugin's blob beside
+            // `loosePath` moments ago, so that directory holds the CURRENT sound of every device;
+            // the load directory may hold a stale copy or none at all.
             ok = daw::saveProjectModule(
-                doc, modulePath, loadedProjectDir.empty() ? dir : loadedProjectDir, &err);
+                doc, modulePath, loadedProjectDir.empty() ? dir : loadedProjectDir,
+                daw::pluginStateDirFor(loosePath), &err);
           }
         }
         DAW_EVENT("project.module_saved")

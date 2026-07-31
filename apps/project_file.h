@@ -257,6 +257,18 @@ bool deserializeProject(const std::string& json,
 
 // Writes atomically: a temp file beside the target, then rename, so an
 // interrupted save can never truncate an existing project.
+
+// WHERE OPAQUE PLUGIN STATE LIVES, derived from the document's own path: `<dir>/<stem>.state/`,
+// holding one `t<track>_d<device>.bin` blob per device plus its `.params.json` manifest.
+//
+// ONE DEFINITION, because THREE places have to agree on it and until now only two could see it.
+// It was a lambda inside daw_engine_main.cpp, so the save that writes the blobs and the load that
+// restores them agreed — and saveProjectModule, which has to FIND those blobs in order to pack
+// them, could not name the directory at all. That is the whole reason a `.uni` travelled with
+// every sample and not one plugin's sound: the packer was not ignoring plugin state, it had no
+// way to ask where it was.
+std::string pluginStateDirFor(const std::string& projectPath);
+
 // ---------------------------------------------------------------------------------------------
 // THE `.uni` MODULE (docs/SAMPLER_DESIGN.md R3).
 //
@@ -271,9 +283,16 @@ bool deserializeProject(const std::string& json,
 //
 // `assetBaseDir` resolves the document's relative asset paths when packing. `unpackDir` is where
 // unpacking puts them.
+//
+// `stateBaseDir` is the loose project's plugin-state directory — pluginStateDirFor(loosePath).
+// Empty, or a directory that does not exist, means the project has no plugin state, which is not
+// an error: a project with no hosted plugins has none. An UNREADABLE file IS refused, for the
+// same reason a missing sample is — a module that quietly drops a plugin's state is only found
+// out after it has been sent.
 bool saveProjectModule(const ProjectDocument& document,
                        const std::string& modulePath,
                        const std::string& assetBaseDir,
+                       const std::string& stateBaseDir,
                        std::string* error = nullptr);
 
 bool loadProjectModule(ProjectDocument& document,

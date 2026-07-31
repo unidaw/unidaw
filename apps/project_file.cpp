@@ -3,10 +3,13 @@
 #include "apps/sampler_serialize.h"
 #include "apps/zip_container.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
@@ -1300,11 +1303,34 @@ std::vector<uint8_t> readWholeFile(const std::string& path, bool* ok) {
   return bytes;
 }
 
+// THE MODULE'S NAME FOR THE DOCUMENT, used by the packer AND the unpacker. The plugin-state
+// prefix below is derived from it, so the directory the packer writes into the archive and the
+// directory the unpacked project will be searched for state cannot drift apart.
+constexpr const char* kModuleDocName = "project.json";
+
+}  // namespace
+
+std::string pluginStateDirFor(const std::string& projectPath) {
+  const std::filesystem::path p(projectPath);
+  return (p.parent_path() / (p.stem().string() + ".state")).string();
+}
+
+namespace {
+
+// WHERE PLUGIN STATE GOES INSIDE THE ARCHIVE, and it is not an arbitrary name: it is exactly
+// where the UNPACKED document will look for it. loadProjectModule writes the document to
+// `<unpackDir>/project.json`, so the engine will search `<unpackDir>/project.state/` — asking
+// pluginStateDirFor for that answer here means the unpacker needs no special case at all. Its
+// generic "write every entry to its own name" loop lands the blobs in the right place by
+// construction, escape guard and all.
+std::string moduleStatePrefix() { return pluginStateDirFor(kModuleDocName) + "/"; }
+
 }  // namespace
 
 bool saveProjectModule(const ProjectDocument& document,
                        const std::string& modulePath,
                        const std::string& assetBaseDir,
+                       const std::string& stateBaseDir,
                        std::string* error) {
   auto fail = [&](const std::string& why) {
     if (error) {
@@ -1357,7 +1383,7 @@ bool saveProjectModule(const ProjectDocument& document,
   {
     const std::string json = serializeProject(packed);
     ZipEntry e;
-    e.name = "project.json";
+    e.name = kModuleDocName;
     e.data.assign(json.begin(), json.end());
     entries.push_back(std::move(e));
   }
@@ -1373,6 +1399,44 @@ bool saveProjectModule(const ProjectDocument& document,
     e.name = a.inModule;
     e.data = std::move(bytes);
     entries.push_back(std::move(e));
+  }
+
+  // ---- PLUGIN STATE, which a module carried none of until now. Every sample travelled and not
+  // one synth sound did: open a received module and each hosted plugin comes up at its DEFAULTS,
+  // with the document's device chain intact and correct, so nothing looks broken — the patches
+  // are simply gone. That is the worst shape a data-loss bug can have, because the module opens.
+  //
+  // The blobs are opaque and belong to the plugin; the `.params.json` manifests beside them are
+  // readable without it. Both are packed: the manifest is what makes a received module tell you
+  // what the knobs WERE even when you do not own the plugin.
+  if (!stateBaseDir.empty()) {
+    std::error_code ec;
+    if (std::filesystem::is_directory(stateBaseDir, ec)) {
+      // SORTED, because two saves of one project must be byte-identical — the property
+      // module_check.sh asserts and the reason the zip timestamp is pinned to the format epoch.
+      // directory_iterator order is unspecified and in practice is inode order, so packing in
+      // whatever order the filesystem offers would make a re-save a spurious diff.
+      std::vector<std::string> names;
+      for (const auto& entry : std::filesystem::directory_iterator(stateBaseDir, ec)) {
+        if (entry.is_regular_file(ec)) {
+          names.push_back(entry.path().filename().string());
+        }
+      }
+      std::sort(names.begin(), names.end());
+      const std::string prefix = moduleStatePrefix();
+      for (const auto& name : names) {
+        bool ok = false;
+        std::vector<uint8_t> bytes = readWholeFile(joinDir(stateBaseDir, name), &ok);
+        if (!ok) {
+          // REFUSED, not skipped — the same rule as a missing sample, and for the same reason.
+          return fail("cannot read plugin state " + joinDir(stateBaseDir, name));
+        }
+        ZipEntry e;
+        e.name = prefix + name;
+        e.data = std::move(bytes);
+        entries.push_back(std::move(e));
+      }
+    }
   }
 
   // ATOMIC: build beside the target and rename. A half-written module is a lost song and this
@@ -1412,7 +1476,7 @@ bool loadProjectModule(ProjectDocument& document,
 
   const ZipEntry* doc = nullptr;
   for (const auto& e : entries) {
-    if (e.name == "project.json") {
+    if (e.name == kModuleDocName) {
       doc = &e;
     }
   }
@@ -1424,7 +1488,7 @@ bool loadProjectModule(ProjectDocument& document,
   // already there. Parsing first and unpacking lazily would make "the sample is missing" depend
   // on when it happened to be needed.
   for (const auto& e : entries) {
-    if (e.name == "project.json") {
+    if (e.name == kModuleDocName) {
       continue;
     }
     // Reject anything that would escape the unpack directory. A module is a file you were SENT,
@@ -1450,7 +1514,7 @@ bool loadProjectModule(ProjectDocument& document,
     }
   }
 
-  const std::string docPath = joinDir(unpackDir, "project.json");
+  const std::string docPath = joinDir(unpackDir, kModuleDocName);
   {
     std::ofstream f(docPath, std::ios::binary | std::ios::trunc);
     if (!f) {
