@@ -721,7 +721,23 @@ export function buildChainModel(opts, buf) {
           const key = q.keyLow === q.keyHigh
             ? pitchName(q.root)
             : `${pitchName(q.keyLow)}-${pitchName(q.keyHigh)}`;
-          p.name = q.name ? `${q.slot}  ${q.name}  ${key}` : `${q.slot}  ${key}`;
+          /*
+           * A PATH IS DRAWN AS ITS BASENAME.
+           *
+           * `sampler-load` used to store the full source path as the slot's name, and names have
+           * only just become readable — so every kit saved before today has pads called
+           * `/Users/.../kicks/BD_808.wav`. Backend seeds the STEM now and deliberately does NOT
+           * migrate old projects, because it is a field a user may have set by hand and a
+           * load-time rewrite would destroy that silently. Right call, and it makes the display
+           * this side's problem.
+           *
+           * Shortened for DRAWING only — the name is untouched on the engine and in the file, so
+           * `slot-name` still reports and edits the real string. A row 300px wide showing the
+           * last 30 characters of a path is not a label.
+           */
+          const label = q.name && q.name.includes('/')
+            ? q.name.slice(q.name.lastIndexOf('/') + 1) : q.name;
+          p.name = label ? `${q.slot}  ${label}  ${key}` : `${q.slot}  ${key}`;
           p.unit = '';
           p.steps = 0;
           // A slot is not a parameter: nothing modulates it, so the row must not offer a badge

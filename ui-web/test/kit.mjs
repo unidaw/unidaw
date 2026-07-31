@@ -522,22 +522,60 @@ const ask = async (track, device) => {
     check(cut.every((x, i) => x.slice === i + 1), 'each naming the slice it plays, in order',
           JSON.stringify(cut.map((x) => x.slice)));
     /*
-     * AND EVERY SLOT REPORTS THE SAME LENGTH — the SOURCE's, not its own.
+     * EVERY SLOT STILL REPORTS THE SOURCE'S LENGTH IN `frames`, and that is now correct rather
+     * than a limitation.
      *
-     * `e.lengthFrames = audio->frames` at the publish site, so eight slices of one break all say
-     * 352800. The slice extent is derived at note-on from the marker and is never published, so
-     * a kit view cannot say how long a slice is or draw where it starts.
-     *
-     * Asserted because it is a limitation worth failing on the day it changes, and because the
-     * shape of the lie matters: every slot agreeing with every other looks exactly like a
-     * correct answer. The card says "slice 3 of a 352800-frame source" rather than presenting
-     * that number as the slice's length.
+     * This was an inverted gap check — "the extent is derived at note-on and never published" —
+     * and kShmVersion 35 published it. `frames` was deliberately left alone in that change: a
+     * waveform needs the source's scale even while drawing a slice inside it, so a slot carries
+     * two facts rather than one field that means different things depending on whether a slice
+     * is set. So the assertion stays and its reason inverts.
      */
     check(cut.every((x) => x.frames === cut[0].frames),
-          'KNOWN: every slot reports the SOURCE length, not the slice extent — the extent is '
-          + 'derived at note-on and never published, so a kit view cannot draw slice bounds. '
-          + 'Reported. This check moves the day it is.',
+          'every slot reports the SOURCE length in `frames` — one scale for the whole kit, with '
+          + 'the slice bounds carried separately',
           JSON.stringify(cut.map((x) => x.frames)));
+
+    /*
+     * THE SLICES TILE THE SOURCE — the assertion this suite asked backend for, run here from the
+     * UI's own read-back.
+     *
+     * Four claims, separately, so a failure says WHICH: the first slice starts at frame 0, the
+     * last ends at the source's length, every slice's end is the next one's begin, and none is
+     * empty. It knows nothing about the implementation, which is why it caught a bug the sound
+     * checks could not: "slice 1 sounds different from slice 8" proves the chop works and says
+     * nothing about whether it is CONTIGUOUS, and both of the bugs this found lived there.
+     *
+     * It found the frame-0 gap in the transient detector on its first run engine-side (#111), on
+     * a file whose first hit is at frame 0 — the most common thing anyone chops.
+     */
+    const begins = cut.map((x) => x.begin), ends = cut.map((x) => x.end);
+    check(begins[0] === 0, 'the first slice starts at frame 0 — nothing before the downbeat is '
+          + 'left unreachable', String(begins[0]));
+    check(ends[ends.length - 1] === cut[0].frames,
+          'and the last one ends at the source length — nothing after the final hit is dropped',
+          `${ends[ends.length - 1]} vs ${cut[0].frames}`);
+    check(cut.every((x, i) => i === 0 || x.begin === ends[i - 1]),
+          'and each slice begins exactly where the previous one ended — no gaps, no overlaps',
+          JSON.stringify(cut.map((x) => [x.begin, x.end])));
+    check(cut.every((x) => x.end > x.begin), 'and none of them is empty',
+          JSON.stringify(cut.map((x) => x.end - x.begin)));
+
+    /*
+     * AND THE SLOTS ARE NAMED, which they were not until kShmVersion 36.
+     *
+     * `sampler-slice` seeds `<stem> NN` so a chop is readable before anybody renames anything,
+     * and the stem rather than a bare "slice NN" so two breaks chopped into one kit stay apart.
+     * Distinctness is the half worth asserting: eight pads all called the same thing would be a
+     * seed that ran once instead of per slot, and it would look perfectly reasonable.
+     */
+    const names = cut.map((x) => x.name);
+    check(names.every((n) => /^break\s+\d+$/.test(n)),
+          'each slice is seeded with its source stem and its number, so a fresh chop is readable',
+          JSON.stringify(names.slice(0, 3)));
+    check(new Set(names).size === names.length,
+          'and no two share a name — a seed that ran once rather than per slot would look fine '
+          + 'and be useless', JSON.stringify(names));
   }
 
   /*

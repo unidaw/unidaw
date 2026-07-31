@@ -145,8 +145,16 @@ export const ROW_OPS = [
     text: (v) => {
       if (v === TRIG_CONDITION_PRE) return 'pre';
       if (v === TRIG_CONDITION_NOT_PRE) return 'npre';
+      // Reserved codes are named rather than blanked. A note carrying one ALWAYS SOUNDS on this
+      // engine (the unknown-code rule), so `fill?` says "this is here and it is doing nothing"
+      // where '' would have drawn a bare `c` and read as a rendering failure.
+      if (v === TRIG_CONDITION_FILL) return 'fill?';
+      if (v === TRIG_CONDITION_NOT_FILL) return 'nfill?';
       const [a, b] = splitTrigCondition(v);
-      return a ? `${a}:${b}` : '';
+      // Any other out-of-range code is the same situation and gets the same treatment: shown,
+      // marked unresolved, never silently dropped. A row op the app cannot name is still a row
+      // op the engine is acting on.
+      return a ? `${a}:${b}` : (v ? `?${v}` : '');
     } },
 ];
 
@@ -180,6 +188,21 @@ export function splitTrigCondition(code) {
  */
 export const TRIG_CONDITION_PRE = 130;
 export const TRIG_CONDITION_NOT_PRE = 131;
+/**
+ * FILL and NOT FILL. RESERVED, NOT IMPLEMENTED, and drawn as such.
+ *
+ * The engine's rule for an unknown condition code is that the note ALWAYS SOUNDS, so a row
+ * carrying 128 plays unconditionally today. Named here only so the cell can SAY that: without
+ * these the `c` op's text builder answered '' for them and the cell drew a bare `c`, which reads
+ * as a conditional whose value failed to render rather than as a code that does nothing.
+ *
+ * Not parseable — backend refuses the token too, deliberately, because a token that round-trips
+ * through the editor and then always sounds is worse than one the editor rejects. The decision
+ * blocking them is the owner's: a fill trig makes the render depend on a live input, so a bounce
+ * has to define what fill state it renders under.
+ */
+export const TRIG_CONDITION_FILL = 128;
+export const TRIG_CONDITION_NOT_FILL = 129;
 
 /** The mark for one op. Explicit `glyph` wins; otherwise the token's first character. */
 export function opGlyph(op) {
