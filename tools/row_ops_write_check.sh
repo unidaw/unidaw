@@ -113,6 +113,23 @@ print("MISSING")
 PY
 }
 
+# The trig condition on its own. Not folded into ops() above, because that string is asserted
+# character for character in six places and widening it would have meant editing all of them to
+# say nothing new.
+cond() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+want = int(sys.argv[2])
+for clip in doc.get("clips", []):
+    for n in clip.get("notes", []):
+        if n.get("note_id") == want:
+            print(n.get("trig_condition", 0))
+            raise SystemExit(0)
+print("MISSING")
+PY
+}
+
 SHM="/rowops_$$"
 start_engine "$SHM" "$TMP/eng.log"
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
@@ -143,6 +160,24 @@ sleep 0.6
 # ---- OVERRIDES. A note that lives on the PLACEMENT, not in the clip.
 cli do set-row-ops --track 0 --note 200 --ret 6 >/dev/null 2>&1 || \
   fail "editing a placement-local note was refused"
+sleep 0.6
+
+# ---- THE STATEFUL CONDITIONS ARE SETTABLE. PRE (130) and NOT PRE (131) shipped able to parse,
+# format, resolve and round-trip through a project file while this command refused every value
+# above 64 — so `cpre` worked everywhere except the one path that writes it, from every surface,
+# and was found by the web-UI agent within an hour. Written onto notes that already carry ops, so
+# the masked write is tested at the same time: the condition must land and the existing ops must
+# survive it.
+#
+# THE ASSERTION IS ON THE SAVED VALUE BELOW, NOT ON THIS EXIT CODE. daw-cli returns 0 as soon as
+# the command is QUEUED — the engine's refusal happens later and on the other side of the ring, so
+# an edit the engine throws away looks like a success here. That is the same silent no-op the
+# refusal itself is, one layer out, and it is why `|| fail` on a `do` is never the real check.
+cli do set-row-ops --track 0 --note 102 --condition pre >/dev/null 2>&1 || \
+  fail "daw-cli could not even parse --condition pre"
+sleep 0.6
+cli do set-row-ops --track 0 --note 101 --condition npre >/dev/null 2>&1 || \
+  fail "daw-cli could not even parse --condition npre"
 sleep 0.6
 
 cli do save afterA --force >/dev/null 2>&1 || true
@@ -194,6 +229,21 @@ echo "  agent note (author 1, counter 100) = [$AAGENT]; placement note 200 = [$A
 [ "$A103" = "0,0,0,0,0" ] || \
   fail "note 103 was never addressed and came back as [$A103]. A row-op write reached a note the
         command did not name"
+
+C101="$(cond "$TMP/afterA.uniproj.json" 101)"
+C102="$(cond "$TMP/afterA.uniproj.json" 102)"
+C103="$(cond "$TMP/afterA.uniproj.json" 103)"
+echo "  trig conditions: 101=$C101 (npre=131) 102=$C102 (pre=130) 103=$C103 (untouched)"
+[ "$C102" = "130" ] || \
+  fail "note 102 was given --condition pre and saved trig_condition $C102. 0 is what an ENGINE-SIDE
+        refusal looks like from here — the command was queued, daw-cli reported success, and
+        applyRowOpEdit dropped it. That is how PRE shipped able to parse, format, resolve and
+        round-trip while no command could set it: a range test written as '> 64' rejects every
+        stateful code, and nothing on the sending side can tell"
+[ "$C101" = "131" ] || \
+  fail "note 101 was given --condition npre and saved trig_condition $C101"
+[ "$C103" = "0" ] || \
+  fail "note 103 was never given a condition and saved $C103"
 
 # ---- PERSISTS. Reload the saved file in a FRESH engine and read it back out again. This is the
 # assertion that catches a serializer that writes an op it cannot read, which is invisible to any

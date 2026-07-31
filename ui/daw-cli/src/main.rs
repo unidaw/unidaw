@@ -23,6 +23,7 @@ use daw_bridge::layout::{
     SAMPLER_MARKER_MOVE, SAMPLER_MARKER_REMOVE, SAMPLER_SLICE_CLEAR, SAMPLER_SLICE_EQUAL,
     SAMPLER_DEVICE_FIELDS, SAMPLER_SLICE_TRANSIENT, SAMPLER_SLOT_FIELDS, UI_SAMPLER_KIT_SLOTS,
     UI_SAMPLER_SLOT_SOURCE_MISSING,
+    UI_SAMPLER_SLOT_SLICE_MISSING,
 };
 
 const USAGE: &str = "\
@@ -1247,11 +1248,12 @@ fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
                     let name = String::from_utf8_lossy(&raw)
                         .replace('\\', "\\\\").replace('"', "\\\"");
                     format!(
-                        "    {{ \"slot\": {}, \"name\": \"{}\", \"source\": {}, \"key_low\": {}, \"key_high\": {}, \"root\": {}, \"vel_low\": {}, \"vel_high\": {}, \"voice_group\": {}, \"nna\": {}, \"gate\": {}, \"reverse\": {}, \"source_missing\": {}, \"gain_mb\": {}, \"pan\": {}, \"mod_set\": {}, \"stem\": {}, \"quality\": {}, \"slice\": {}, \"length_frames\": {}, \"slice_begin\": {}, \"slice_end\": {}, \"mod_mask\": {}, \"filter_type\": {} }}",
+                        "    {{ \"slot\": {}, \"name\": \"{}\", \"source\": {}, \"key_low\": {}, \"key_high\": {}, \"root\": {}, \"vel_low\": {}, \"vel_high\": {}, \"voice_group\": {}, \"nna\": {}, \"gate\": {}, \"reverse\": {}, \"source_missing\": {}, \"slice_missing\": {}, \"gain_mb\": {}, \"pan\": {}, \"mod_set\": {}, \"stem\": {}, \"quality\": {}, \"slice\": {}, \"length_frames\": {}, \"slice_begin\": {}, \"slice_end\": {}, \"mod_mask\": {}, \"filter_type\": {} }}",
                         e.slotId, name, e.sourceLocalId, e.keyLow, e.keyHigh, e.rootKey,
                         e.velLow, e.velHigh, e.voiceGroup, e.nna,
                         (e.flags & 1) != 0, (e.flags & 2) != 0,
                         (e.flags & UI_SAMPLER_SLOT_SOURCE_MISSING) != 0,
+                        (e.flags & UI_SAMPLER_SLOT_SLICE_MISSING) != 0,
                         e.gainMillibels, e.panThousandths, e.modSetId, e.outputStem,
                         e.quality, e.sliceId, e.lengthFrames, e.sliceBeginFrame,
                         e.sliceEndFrame, e.modMask, e.filterType)

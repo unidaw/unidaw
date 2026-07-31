@@ -116,8 +116,14 @@ bool applyRowOpEdit(NotePayload& note, const RowOpEdit& edit) {
   // continuous control: 200 is not "a bit past 8:8", it is a caller with the wrong idea of the
   // packing. Clamping would hand them a condition they did not ask for and no way to notice —
   // and a note that fires on the wrong pass is a note nobody can find the reason for.
+  //
+  // THE TEST IS isSettableTrigCondition, NOT `<= kTrigConditionMaxAB`. This read `> 64` and so
+  // refused every PRE edit (130/131) from every surface, while `cpre` parsed, formatted,
+  // resolved and round-tripped — found by the web-UI agent within an hour of PRE landing. The
+  // bound now lives beside the codes it is about, so adding a code and forgetting the writer is
+  // one edit rather than two.
   if ((edit.mask & kRowOpMaskTrigCondition) != 0) {
-    if (edit.trigCondition > kTrigConditionMaxAB) {
+    if (!isSettableTrigCondition(edit.trigCondition)) {
       return false;
     }
     note.trigCondition = edit.trigCondition;

@@ -224,6 +224,64 @@ if sliced[-1].get("slice_end") != frames:
 print("  the transient slices tile 0..%d too" % frames)
 PYC
 
+# ---- ORPHANED BY A CLEAR, and SAID SO. `--mode clear` removes the markers and leaves the slots
+# that named them; such a slot falls back to playing the whole source. That is a reasonable thing
+# to play and an unreasonable thing to DRAW as a chop, and it cannot be inferred from the extents:
+# a one-slice chop legitimately gives sliceId != 0 with begin 0 and end frames, which is
+# byte-for-byte what an orphan gives. So the engine publishes a bit for it.
+#
+# Requested by the web-UI agent, who was told the two states were distinguishable and correctly
+# pointed out that they are not.
+python3 - "$TMP/trans.json" <<'PYC' || exit 1
+import json, sys
+d = json.load(open(sys.argv[1]))
+sliced = [s for s in d.get("slots", []) if s.get("slice", 0) != 0]
+bad = [s for s in sliced if s.get("slice_missing")]
+if bad:
+    print("  FAIL: %d slot(s) report slice_missing while their slices EXIST. A bit that is on"
+          " before the clear says nothing after it." % len(bad))
+    raise SystemExit(1)
+print("  before the clear: %d sliced slots, none reporting slice_missing" % len(sliced))
+PYC
+
+xcli do sampler-slice --track 0 --device 1 --source 1 --mode clear >/dev/null 2>&1
+sleep 1.2
+xcli get sampler-kit --track 0 --device 1 >"$TMP/cleared.json" 2>/dev/null
+
+python3 - "$TMP/cleared.json" "$FRAMES" <<'PYC' || exit 1
+import json, sys
+d = json.load(open(sys.argv[1])); frames = int(sys.argv[2])
+sliced = [s for s in d.get("slots", []) if s.get("slice", 0) != 0]
+if not sliced:
+    print("  FAIL: after --mode clear there are no slots naming a slice at all, so there is"
+          " nothing for this phase to be about. Clear is supposed to remove the MARKERS and"
+          " leave the slots — if it now removes the slots too, this check needs rewriting and"
+          " the bit may not be needed.")
+    raise SystemExit(1)
+missing = [s for s in sliced if s.get("slice_missing")]
+print("  after the clear:  %d slots still name a slice, %d report slice_missing"
+      % (len(sliced), len(missing)))
+if len(missing) != len(sliced):
+    print("  FAIL: %d of %d orphaned slots do not report slice_missing. Their slice ids resolve"
+          " to nothing, so they play the whole source — and a UI cannot tell that from a"
+          " one-slice chop by any published number except this bit."
+          % (len(sliced) - len(missing), len(sliced)))
+    raise SystemExit(1)
+# AND THE AMBIGUITY IS REAL, which is the argument for the bit existing at all. If an orphan did
+# NOT look like a whole-source slot, it could have been inferred and no bit would be needed.
+amb = [s for s in sliced
+       if s.get("slice_begin") == 0 and s.get("slice_end") == frames]
+if len(amb) != len(sliced):
+    print("  FAIL: %d orphaned slots do NOT cover the whole source (0..%d), so the state this"
+          " bit exists to disambiguate is not the state the engine produces. Either the fallback"
+          " changed or the bit is solving a problem nobody has."
+          % (len(sliced) - len(amb), frames))
+    raise SystemExit(1)
+print("  and every one of them covers 0..%d — indistinguishable from a one-slice chop without"
+      " the bit" % frames)
+PYC
+
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
-echo "slice_extent_check: PASS — the chop's slices tile the source, and an unsliced slot covers"
-echo "                    all of it"
+echo "slice_extent_check: PASS — the chop's slices tile the source, an unsliced slot covers all"
+echo "                    of it, and a slot orphaned by --mode clear says so instead of looking"
+echo "                    exactly like a one-slice chop"

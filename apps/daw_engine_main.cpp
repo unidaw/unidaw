@@ -1606,14 +1606,25 @@ inline std::shared_ptr<const ClipSnapshot> buildClipSnapshot(const daw::MusicalC
         e.payload.note.trigCondition == daw::kTrigConditionNone) {
       continue;
     }
-    snapshot->conditionals.push_back(
-        daw::TrigConditionSite{e.nanotickOffset, e.payload.note.trigCondition});
+    snapshot->conditionals.push_back(daw::TrigConditionSite{
+        e.nanotickOffset, e.payload.note.column, e.payload.note.trigCondition});
     if (daw::isPreTrigCondition(e.payload.note.trigCondition)) {
       sawPre = true;
     } else {
       sawAnchor = true;
     }
   }
+  // BY (TICK, COLUMN). The events arrive tick-ordered, and within one tick their order is the
+  // flat clip's insertion order — arbitrary to the reader. Sorting by column gives the tie a
+  // stated answer (column 0 first) instead of one nobody can predict, and makes the (tick,
+  // column) lookup at the dispatch unique.
+  std::stable_sort(snapshot->conditionals.begin(), snapshot->conditionals.end(),
+                   [](const daw::TrigConditionSite& a, const daw::TrigConditionSite& b) {
+                     if (a.tick != b.tick) {
+                       return a.tick < b.tick;
+                     }
+                     return a.column < b.column;
+                   });
   // A PRE chain with no A:B anywhere to ground it. Recorded for the caller to report ONCE.
   snapshot->unanchoredPre = sawPre && !sawAnchor;
   return snapshot;
@@ -11630,6 +11641,7 @@ struct TrackRuntime {
             e.sliceBeginFrame = 0;
             e.sliceEndFrame = e.lengthFrames;
             if (sl.sliceId != 0 && audio != nullptr) {
+              bool resolved = false;
               for (const auto& ss : snap->state.sliceSets) {
                 if (ss.sourceLocalId != sl.sourceLocalId) {
                   continue;
@@ -11639,8 +11651,17 @@ struct TrackRuntime {
                 if (ext.valid) {
                   e.sliceBeginFrame = static_cast<uint32_t>(ext.begin);
                   e.sliceEndFrame = static_cast<uint32_t>(ext.end);
+                  resolved = true;
                 }
                 break;
+              }
+              // The slot names a slice and nothing answers to that id — `--mode clear` wiped the
+              // set out from under it. The whole source is what it will play; the bit is what
+              // says that was not the intention. Reaching the end of the loop without a match
+              // covers both shapes: the set is gone entirely, and the set is there but the id
+              // is not in it.
+              if (!resolved) {
+                e.flags |= daw::kUiSamplerSlotSliceMissing;
               }
             }
             // "Silent because the file is missing" and "silent because the sample is empty" are
@@ -16135,9 +16156,10 @@ struct TrackRuntime {
               // in that list is a binary search on a vector that holds only conditional trigs —
               // typically a handful — and it happens only for notes that carry a condition.
               //
-              // The list is looked up by TICK, not by identity: two conditionals at the same tick
-              // in different columns are interchangeable as predecessors, and matching the code
-              // as well pins the common case without needing a note id in the site.
+              // Looked up by (TICK, COLUMN), which is unique — one note per column per row. It
+              // used to match on (tick, code), and two PRE notes on one row therefore both found
+              // the FIRST entry and resolved against the same predecessor. A chord of two
+              // conditional notes is one keypress here, so that was not a corner case.
               bool fires = true;
               if (daw::isPreTrigCondition(event->payload.note.trigCondition)) {
                 const auto& sites = snapshot->conditionals;
@@ -16146,7 +16168,7 @@ struct TrackRuntime {
                     sites.begin(), sites.end(), event->nanotickOffset,
                     [](const daw::TrigConditionSite& s, uint64_t t) { return s.tick < t; });
                 for (; it != sites.end() && it->tick == event->nanotickOffset; ++it) {
-                  if (it->code == event->payload.note.trigCondition) {
+                  if (it->column == event->payload.note.column) {
                     idx = static_cast<size_t>(it - sites.begin());
                     break;
                   }
