@@ -79,6 +79,28 @@ export class Mixer {
       const strip = sel.closest('.mx-strip');
       if (strip) this.onRoute(Number(strip.dataset.track), Number(sel.value));
     });
+    /*
+     * FILL THE DESTINATION LIST WHEN SOMEBODY REACHES FOR IT, and not before.
+     *
+     * A full list is one `<option>` per track per strip, which is O(tracks squared): at the
+     * engine's 64-track limit that is 4,096 option elements out of the mixer's 4,931 — 83% of
+     * the surface, for a control most people touch twice a session and which shows only its
+     * selected item until it is opened.
+     *
+     * `pointerdown` AND `focusin`, because the two ways in are different: a pointer opens the
+     * popup, and a keyboard user tabs to the closed select and then types. Filling on `change`
+     * would be too late for both. `focusin` rather than `focus` because focus does not bubble
+     * and this is one delegated listener for the whole surface.
+     *
+     * Filled STAYS filled — one select with 64 options costs nothing, and re-stubbing it while
+     * the popup is open would be a list that changes under the pointer.
+     */
+    const reach = (e) => {
+      const sel = e.target.closest && e.target.closest('.mx-out');
+      if (sel && !sel._filled) this._fillRoute(sel, this.vm);
+    };
+    this.host.addEventListener('pointerdown', reach, true);
+    this.host.addEventListener('focusin', reach);
     this.host.addEventListener('pointerdown', (e) => this._down(e));
     this.host.addEventListener('pointermove', (e) => this._move(e));
     this.host.addEventListener('pointerup', () => this._up());
@@ -153,6 +175,40 @@ export class Mixer {
       this.pool.push(el);
     }
     return this.pool[i];
+  }
+
+  /**
+   * Every destination this strip can route to. Built on demand.
+   *
+   * A track cannot feed itself, so it is not in its own list. Everything else the engine
+   * validates: it refuses a route that would make a cycle, and duplicating that rule here would
+   * be a second place for it to be wrong.
+   *
+   * `_filled` on the element rather than in a set: the pool re-binds strips to tracks, and a
+   * flag beside the thing it describes cannot come apart from it.
+   */
+  _fillRoute(sel, vm) {
+    if (!vm) return;
+    const strip = sel.closest('.mx-strip');
+    const track = strip ? Number(strip.dataset.track) : -1;
+    const want = sel.value;
+    sel.textContent = '';
+    const main = document.createElement('option');
+    main.value = '-1';
+    main.textContent = 'Main';
+    sel.appendChild(main);
+    for (let d = 0; d < vm.stripCount; d++) {
+      if (vm.strips[d].track === track) continue;
+      const o = document.createElement('option');
+      o.value = String(vm.strips[d].track);
+      o.textContent = vm.strips[d].name;
+      sel.appendChild(o);
+    }
+    sel._filled = true;
+    strip._outOpts = vm.routeKey;
+    // The selection survives the rebuild. Without this, opening the list would reset the control
+    // to Main — the first option — and a `change` fired on close would ROUTE it there.
+    sel.value = want;
   }
 
   _down(e) {
@@ -244,20 +300,26 @@ export class Mixer {
        * and duplicating that rule here would be a second place for it to be
        * wrong.
        */
-      if (el._outOpts !== vm.routeKey) {
-        el._outOpts = vm.routeKey;
+      /*
+       * A CLOSED SELECT ONLY HAS TO SHOW ITS OWN VALUE, so that is all it gets until somebody
+       * reaches for it — see the `focusin`/`pointerdown` listener above. One option instead of
+       * one per track takes the mixer from 4,931 nodes to about 900 at 64 tracks.
+       *
+       * A select that has ALREADY been opened keeps its full list and is rebuilt when the track
+       * set changes; a stub is rebuilt when its own destination or that destination's NAME moves,
+       * which is what `routeKey` and `outTo` between them say.
+       */
+      const stubKey = `${vm.routeKey}|${s.outTo}`;
+      if (el._out._filled) {
+        if (el._outOpts !== vm.routeKey) { this._fillRoute(el._out, vm); el._outV = null; }
+      } else if (el._outOpts !== stubKey) {
+        el._outOpts = stubKey;
         el._out.textContent = '';
-        const main = document.createElement('option');
-        main.value = '-1';
-        main.textContent = 'Main';
-        el._out.appendChild(main);
-        for (let d = 0; d < vm.stripCount; d++) {
-          if (d === s.track) continue;
-          const o = document.createElement('option');
-          o.value = String(vm.strips[d].track);
-          o.textContent = vm.strips[d].name;
-          el._out.appendChild(o);
-        }
+        const only = document.createElement('option');
+        only.value = String(s.outTo);
+        only.textContent = s.outTo < 0 ? 'Main'
+          : (vm.strips[s.outTo] ? vm.strips[s.outTo].name : String(s.outTo));
+        el._out.appendChild(only);
         el._outV = null;                 // the value has to be re-applied
       }
       if (el._outV !== s.outTo) { el._outV = s.outTo; el._out.value = String(s.outTo); }

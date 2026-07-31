@@ -2870,6 +2870,30 @@ section('a track can be routed away from Main');
     return strip ? [...strip.querySelectorAll('option')].map((o) => o.textContent) : null;
   }, t);
 
+  /*
+   * A CLOSED SELECT CARRIES ONE OPTION, and that is the point rather than a defect.
+   *
+   * A full destination list is one option per track per strip — O(tracks squared), and at the
+   * engine's 64-track limit it was 4,096 of the mixer's 4,931 nodes, 83% of the surface, for a
+   * control that shows only its selected item until somebody opens it. The list is built when a
+   * pointer or a focus reaches the select.
+   *
+   * Asserted here so the saving cannot silently regress into eagerness, and so the next person
+   * to read the "one option" below knows it is deliberate.
+   */
+  const closed = await opts(0);
+  ok(closed && closed.length === 1,
+     'a closed route select carries only its own value — the list is built when reached for',
+     JSON.stringify(closed));
+
+  /*
+   * NOW REACH FOR IT, the way a person does. `focus` is the honest trigger: it is what a
+   * keyboard user does before typing and what the pointer path ends up doing anyway — Playwright's
+   * own `selectOption` below focuses first, which is why that call kept working while this read
+   * did not.
+   */
+  await page.focus('.mx-strip[data-track="0"] .mx-out');
+  await page.waitForTimeout(300);
   const list = await opts(0);
   ok(list && list[0] === 'Main', 'every strip offers Main first', JSON.stringify(list));
   /*
