@@ -957,7 +957,16 @@ struct alignas(64) UiSamplerKitSlot {
   // Taken from the reserved words, so nothing a reader already reads moves and kShmVersion does
   // not change. ZERO means "this engine does not stamp one" — the counter starts at 1.
   uint32_t contentVersion = 0;
-  uint32_t reserved[4]{};
+  // THE DEVICE'S OWN DEFAULTS, so a UI can say "this bank ignores note-offs" instead of guessing
+  // it from the slots — which it could not do anyway, since a bank legitimately mixes one-shot
+  // and gated slots and the default is what a NEW one gets.
+  //
+  // defaultGate seeds a slot at mint and stops mattering; defaultView is the kit/sample view.
+  // Both taken from the reserved words, so no offset moves and kShmVersion does not change — the
+  // same call made for contentVersion above and for the mix-flag bits.
+  uint32_t defaultGate = 0;
+  uint32_t defaultView = 0;
+  uint32_t reserved[2]{};
   UiSamplerSlotEntry slots[kUiMaxSamplerSlots]{};
 };
 

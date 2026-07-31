@@ -611,13 +611,18 @@ above are written to the revisions rather than to the originals.
 
 Two decisions were raised BY the work rather than by this list and are still the owner's:
 
-  - **`gate 0` is the default for every slot `sampler-load` and `sampler-slice` create**, so a
-    fresh chop ignores note-off. Nobody chose it: neither path sets `gate` at all, so the slot
-    keeps `SamplerSlot`'s `uint8_t gate = 0` and zero happens to mean one-shot. Right for drums by
-    accident. The proposal is a per-device `defaultGate` that SEEDS a new slot and stops mattering
-    afterwards — the shape `defaultView` already uses ("seeded at load by drop arity, then
-    user-owned") — rather than a device flag that overrides slots live, which would be two facts
-    about one thing for the voice to arbitrate on every note. Worth deciding separately whether
-    `sampler-load` should seed gated regardless, since a whole loaded file is often minutes long
-    and one-shot makes a half-second row play all of it.
+  - ~~**`gate 0` is the default for every slot `sampler-load` and `sampler-slice` create**~~
+    **ANSWERED and built (ecbb1d0).** Owner: *"could that be a setting per bank? 'ignore
+    note-offs'"*. Nobody had chosen gate 0 — neither path set `gate` at all, so a slot kept
+    `SamplerSlot`'s `uint8_t gate = 0` and zero happens to mean one-shot; right for drums by
+    accident. `SamplerState::defaultGate` now SEEDS a slot at mint and stops mattering, the shape
+    `defaultView` already uses, rather than overriding slots live — which would be two facts about
+    one thing for the voice to arbitrate on every note. Reachable by opcode 88, which is
+    field-addressed and so also made `voiceCap` and `defaultView` settable; both had been
+    persisted and rendered and reachable by nothing.
+
+    *Still worth deciding separately: whether `sampler-load` should seed GATED regardless of the
+    bank default, since a whole loaded file is often minutes long and one-shot makes a
+    half-second row play all of it. A slice is short and one-shot is genuinely right for it; a
+    loaded file is a different gesture wearing the same command.*
   - **What fill state an offline bounce renders under**, once FILL exists (task #107).

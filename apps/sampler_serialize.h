@@ -81,6 +81,7 @@ void writeSamplerState(Writer& writer, const SamplerState& st) {
   writer.key("stem_count", static_cast<uint32_t>(st.stemCount));
   writer.key("voice_cap", static_cast<uint32_t>(st.voiceCap));
   writer.key("default_view", static_cast<uint32_t>(st.defaultView));
+  writer.key("default_gate", static_cast<uint32_t>(st.defaultGate));
 
   writer.beginArray("sources");
   for (const auto& s : st.sources) {
@@ -210,6 +211,8 @@ SamplerState readSamplerState(const Node& node, SamplerLoadReport* report = null
   st.stemCount = static_cast<uint8_t>(node.template get<uint32_t>("stem_count", 0));
   st.voiceCap = static_cast<uint8_t>(node.template get<uint32_t>("voice_cap", 64));
   st.defaultView = static_cast<uint8_t>(node.template get<uint32_t>("default_view", 0));
+  // Absent reads 0 — one-shot, which is what every project written before this field had.
+  st.defaultGate = static_cast<uint8_t>(node.template get<uint32_t>("default_gate", 0));
 
   if (auto sources = node.get_child_optional("sources")) {
     for (const auto& item : *sources) {

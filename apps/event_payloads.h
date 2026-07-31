@@ -367,7 +367,16 @@ enum class UiCommandType : uint16_t {
   //
   // Carries nothing new: trackId plus value0 as the boolean, the same shape
   // SetTrackHarmonyQuantize (10) uses, because it is the same kind of thing.
-  SetTrackSoundAddressed = 87,  // next free 88
+  SetTrackSoundAddressed = 87,
+  // DEVICE-LEVEL SAMPLER FIELDS, addressed by field id like SamplerSetSlot (74).
+  //
+  // FIELD-ADDRESSED RATHER THAN ONE OPCODE PER SETTING, because there were three of them and a
+  // command for none. `defaultGate` is the one that was asked for; `voiceCap` and `defaultView`
+  // were already persisted and already rendered and reachable by nothing — the same "the engine
+  // reads a field it has no path to write" defect this suite has found six times, sitting one
+  // field id away from the thing being added. One opcode closes all three instead of needing 89
+  // and 90 later.
+  SamplerSetDevice = 88,  // next free 89
 };
 
 // SAMPLER SET FILTER (opcode 86). 40 bytes.
@@ -752,6 +761,31 @@ enum class SamplerSlotField : uint16_t {
 // One slot field. `value` is SIGNED: four of the fields above are, and a negative gain, tune or
 // pan is a normal setting rather than an error — the euclidean octave_offset bug was exactly a
 // signed value pushed through an unsigned path.
+// Which device-level sampler field SamplerSetDevice is speaking about.
+enum class SamplerDeviceField : uint16_t {
+  None = 0,
+  // What `gate` a newly minted slot gets. Seeds, never overrides — see SamplerState::defaultGate.
+  DefaultGate = 1,
+  // The device's polyphony ceiling. Persisted and rendered since S1; no command could set it.
+  VoiceCap = 2,
+  // 0 kit, 1 sample. Published since S2; no command could set it.
+  DefaultView = 3,
+};
+
+// SamplerSetDevice (88). The same shape as UiSamplerSetSlotPayload minus the slot id — these are
+// properties of the DEVICE, and adding a slot field to say "not a slot" would be a sentinel
+// nobody needs.
+struct UiSamplerSetDevicePayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetDevice);
+  uint16_t field = 0;  // SamplerDeviceField
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  int32_t value = 0;
+  uint8_t reserved[24]{};
+};
+static_assert(sizeof(UiSamplerSetDevicePayload) == 40,
+              "UiSamplerSetDevicePayload must fit the command payload exactly");
+
 struct UiSamplerSetSlotPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetSlot);
   uint16_t field = 0;
@@ -870,6 +904,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::DeleteChord: return "delete_chord";
     case UiCommandType::SetTrackHarmonyQuantize: return "set_track_harmony_quantize";
     case UiCommandType::SetTrackSoundAddressed: return "set_track_sound_addressed";
+    case UiCommandType::SamplerSetDevice: return "sampler_set_device";
     case UiCommandType::Redo: return "redo";
     case UiCommandType::SetLoopRange: return "set_loop_range";
     case UiCommandType::SetAutomationTarget: return "set_automation_target";

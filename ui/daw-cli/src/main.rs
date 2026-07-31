@@ -21,7 +21,7 @@ use daw_bridge::layout::{
     ROW_OP_MASK_PROBABILITY, ROW_OP_MASK_RETRIGGER, ROW_OP_MASK_SOUND, ROW_OP_MASK_SOUND_OFFSET,
     SAMPLER_LOAD_FIXED_PITCH, SAMPLER_MARKER_ADD,
     SAMPLER_MARKER_MOVE, SAMPLER_MARKER_REMOVE, SAMPLER_SLICE_CLEAR, SAMPLER_SLICE_EQUAL,
-    SAMPLER_SLICE_TRANSIENT, SAMPLER_SLOT_FIELDS, UI_SAMPLER_KIT_SLOTS,
+    SAMPLER_DEVICE_FIELDS, SAMPLER_SLICE_TRANSIENT, SAMPLER_SLOT_FIELDS, UI_SAMPLER_KIT_SLOTS,
     UI_SAMPLER_SLOT_SOURCE_MISSING,
 };
 
@@ -1224,6 +1224,8 @@ fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
                 println!("  \"track\": {},", v.track_id);
                 println!("  \"device\": {},", v.device_id);
                 println!("  \"voice_cap\": {},", v.voice_cap);
+                println!("  \"default_gate\": {},", v.default_gate);
+                println!("  \"default_view\": {},", v.default_view);
                 println!("  \"active_voices\": {},", v.active_voices);
                 println!("  \"steals\": {},", v.steals);
                 println!("  \"unmapped\": {},", v.unmapped);
@@ -2275,6 +2277,62 @@ fn main() {
                             Err(err) => {
                                 eprintln!("daw-cli: {err}");
                                 1
+                            }
+                        }
+                    }
+                }
+                Some(&"sampler-device") => {
+                    // The DEVICE's own fields, not a slot's. `default-gate` is the per-bank
+                    // "ignore note-offs" default — it seeds a slot when one is MINTED and stops
+                    // mattering, so setting it changes what the NEXT load or slice produces and
+                    // leaves every existing slot alone. That is deliberate; see
+                    // SamplerState::defaultGate.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let field_arg = args
+                        .iter()
+                        .position(|a| a == "--field")
+                        .and_then(|i| args.get(i + 1))
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    let value = args
+                        .iter()
+                        .position(|a| a == "--value")
+                        .and_then(|i| args.get(i + 1))
+                        .and_then(|v| v.parse::<i32>().ok());
+                    let field = SAMPLER_DEVICE_FIELDS
+                        .iter()
+                        .find(|(n, _)| *n == field_arg)
+                        .map(|(_, id)| *id);
+                    match (field, value) {
+                        // An unknown field LISTS the set rather than doing nothing, the same rule
+                        // sampler-slot follows: a caller who mistypes should not have to read the
+                        // source to find out what is available.
+                        (None, _) => {
+                            let names: Vec<&str> =
+                                SAMPLER_DEVICE_FIELDS.iter().map(|(n, _)| *n).collect();
+                            eprintln!("daw-cli: --field must be one of: {}", names.join(", "));
+                            2
+                        }
+                        (_, None) => {
+                            eprintln!("daw-cli: sampler-device needs --value <int>");
+                            2
+                        }
+                        (Some(f), Some(v)) => {
+                            let payload = daw_bridge::layout::UiSamplerSetDevicePayload {
+                                command_type: UiCommandType::SamplerSetDevice as u16,
+                                field: f,
+                                track_id: track,
+                                device_id: device,
+                                value: v,
+                                reserved: [0; 24],
+                            };
+                            match handle.send_sampler_set_device(payload) {
+                                Ok(()) => {
+                                    println!("{{ \"sent\": \"sampler-device\", \"track\": {track}, \"device\": {device}, \"field\": {field_arg:?}, \"value\": {v} }}");
+                                    0
+                                }
+                                Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                             }
                         }
                     }

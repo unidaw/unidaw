@@ -589,6 +589,12 @@ add_test(NAME elektron_ops
 )
 set_tests_properties(elektron_ops PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# The bank's gate default seeds a NEW slot and leaves the existing ones alone (opcode 88).
+add_test(NAME sampler_default_gate
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_default_gate_check.sh
+)
+set_tests_properties(sampler_default_gate PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A note's default length follows the SONG's meter, not a hardcoded 4/4 bar.
 add_test(NAME meter_bar
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/meter_bar_check.sh
