@@ -73,7 +73,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 const WIRE_LANES: usize = 64;
 
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 26;
+const WIRE_VERSION: u16 = 27;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -87,7 +87,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 232;
+const FULL_HEADER_BYTES: usize = 296;
 /// Bytes per note on the BROWSER wire — `NOTE_BYTES` in ui-web/src/wire.js.
 ///
 /// NOT the engine's `UiClipNote` stride, which is 48 at kShmVersion 32 and comes from the typed
@@ -338,6 +338,10 @@ struct Frame {
     /// below, which defaults it by function instead.
     #[allow(dead_code)]
     lpb: [u8; WIRE_LANES],
+    /// v34 / wire 27: per-track op-column width in GLYPHS, 0 = the track uses no ops.
+    /// Same defaulting problem as `lpb` above — 64 is past Rust's `Default` for arrays.
+    #[allow(dead_code)]
+    ops_width: [u8; WIRE_LANES],
     /// A track's CHORDS, which the engine has always published and this side has
     /// never forwarded.
     ///
@@ -529,6 +533,7 @@ impl Default for Frame {
       agg_rows: Default::default(),
       agg_tracks: Default::default(),
       lpb: [0; WIRE_LANES],
+      ops_width: [0; WIRE_LANES],
       chords: Default::default(),
       meters: Default::default(),
       quantize: Default::default(),
@@ -705,7 +710,15 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     // 180..184. Same bargain as every field before it: both sides move together and
     // WIRE_VERSION goes with them, so a page reading 180 where this writes 184 rejects the
     // frame rather than decoding a harmony tick out of the middle of a counter.
-    out.extend_from_slice(&f.sampler_kit_version.to_le_bytes());      // 180, to 184
+    out.extend_from_slice(&f.sampler_kit_version.to_le_bytes());      // 228, to 232
+    /*
+     * 232..296 — the per-track op-column width, one byte per lane, appended at the END of the
+     * header rather than parked next to `lpb` where it belongs by kind. Inserting it there
+     * would have moved sixteen downstream offsets, and the offsets in these comments have
+     * already drifted once (they read 180 where the writer is at 228), so the smallest edit
+     * that cannot go wrong wins over the tidiest one.
+     */
+    out.extend_from_slice(&f.ops_width);
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
     // variable section and nothing here noticed.
@@ -1058,6 +1071,8 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
     // client never has to guess.
     // The first 16 of the engine's 64, which is what the page can draw.
     out.lpb.copy_from_slice(&snap.ui_lines_per_beat[..WIRE_LANES]);
+    out.ops_width
+      .copy_from_slice(&snap.ui_track_ops_width[..WIRE_LANES]);
 
     // Cheap: read_mixer is a seqlock read of a fixed-size row. Guarded on the
     // engine's own version so an unchanged mixer costs one atomic load.
@@ -1880,6 +1895,29 @@ fn build_sound_addressed(body: &str) -> Option<Result<UiCommandPayload, &'static
     if !is_type(body, "soundaddressed") { return None; }
     Some(Ok(UiCommandPayload {
         command_type: UiCommandType::SetTrackSoundAddressed as u16,
+        flags: 0,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        plugin_index: 0,
+        note_pitch: 0,
+        value0: if parse_num(body, "\"on\"").unwrap_or(1) != 0 { 1 } else { 0 },
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    }))
+}
+
+/// FOLD A TRACK (opcode 89). The generic payload's shape, same as 87 — the engine reads
+/// `trackId` and `value0` and nothing else.
+///
+/// `on` defaults to 1 because the verb is `collapse`; `collapse 3` should fold track 3, not
+/// silently unfold it. The uncollapse is `collapse 3 0`, and the page draws the state either
+/// way from `kUiTrackFlagCollapsed`, which the engine has published all along.
+fn build_track_collapsed(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
+    if !is_type(body, "trackcollapsed") { return None; }
+    Some(Ok(UiCommandPayload {
+        command_type: UiCommandType::SetTrackCollapsed as u16,
         flags: 0,
         track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
         plugin_index: 0,
@@ -3059,6 +3097,7 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_placement(body) { return r; }
     if let Some(r) = build_quantize(body) { return r; }
     if let Some(r) = build_sound_addressed(body) { return r; }
+    if let Some(r) = build_track_collapsed(body) { return r; }
 
     let mut p = UiCommandPayload {
         command_type: UiCommandType::None as u16,

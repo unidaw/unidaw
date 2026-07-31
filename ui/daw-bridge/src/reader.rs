@@ -34,6 +34,15 @@ pub struct UiSnapshot {
     /// what exists — so a reader that ignores both still renders every track.
     pub ui_track_parent_id: [u32; K_UI_MAX_TRACKS],
     pub ui_track_flags: [u8; K_UI_MAX_TRACKS],
+    /// v34: how wide a track's per-note op run gets, in GLYPHS — 0 means no note in
+    /// the track carries an op at all, so the column can be hidden rather than drawn
+    /// empty on every track that never uses one.
+    ///
+    /// It is read HERE, under the seqlock, and not off `TrackMixer` (which also carries
+    /// it) because the mixer read is gated on the engine's mixer version and this
+    /// changes when NOTES change. A mixer-gated read would hold yesterday's width for
+    /// as long as nobody touched a fader.
+    pub ui_track_ops_width: [u8; K_UI_MAX_TRACKS],
 }
 
 pub struct SeqlockReader {
@@ -74,6 +83,7 @@ impl SeqlockReader {
             let ui_song_time_sig_den = unsafe { (*self.header).ui_song_time_sig_den };
             let ui_track_parent_id = unsafe { (*self.header).ui_track_parent_id };
             let ui_track_flags = unsafe { (*self.header).ui_track_flags };
+            let ui_track_ops_width = unsafe { (*self.header).ui_track_ops_width };
 
             fence(Ordering::Acquire);
             let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
@@ -98,6 +108,7 @@ impl SeqlockReader {
                     ui_song_time_sig_den,
                     ui_track_parent_id,
                     ui_track_flags,
+                    ui_track_ops_width,
                 });
             }
         }

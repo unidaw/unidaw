@@ -205,7 +205,12 @@ export const DEVICE_FIELDS = ['', 'default-gate', 'voice-cap', 'default-view'];
 /** What `defaultView`'s two states are called on a card. The engine has no opinion past these. */
 export const DEVICE_VIEWS = ['kit', 'sample'];
 
-export const SLOT_FIELDS = ['voicegroup', 'nna', 'gate', 'reverse', 'gain', 'pan', 'tune', 'pitchtrack', 'root', 'keylow', 'keyhigh', 'vellow', 'velhigh', 'selectmode', 'polyphony', 'chokefade', 'modset', 'stem', 'quality', 'layergroup', 'loopmode', 'sustainloop', 'loopstart', 'loopend', 'loopxfade', 'startframe', 'endframe'];
+export const SLOT_FIELDS = ['voicegroup', 'nna', 'gate', 'reverse', 'gain', 'pan', 'tune', 'pitchtrack', 'root', 'keylow', 'keyhigh', 'vellow', 'velhigh', 'selectmode', 'polyphony', 'chokefade', 'modset', 'stem', 'quality', 'layergroup', 'loopmode', 'sustainloop', 'loopstart', 'loopend', 'loopxfade', 'startframe', 'endframe',
+  // 27/28, the repoint pair. `source` moves a slot onto a different loaded sample and `slice`
+  // moves it onto a different slice of one — REFUSED, not clamped, when the id does not exist,
+  // because a slot pointing at a source that is not there is silent and silence is not a
+  // near-miss. `slice 0` is legal and means the whole sample.
+  'source', 'slice'];
 
 export function modSummary(modMask, filterType) {
   if (!modMask) return { mark: '', title: '' };

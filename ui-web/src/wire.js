@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 26;
+export const WIRE_VERSION = 27;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 232;  // ...+ lpb 64 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
+const HEADER_BYTES = 296;  // ...+ lpb 64 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8 + ops width 64
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -242,6 +242,11 @@ export function createStore() {
     /** Per-track lines_per_beat. Needed to render a lane on its own grid AND to
      *  compute the tick a write targets — both halves of the projection. */
     lpb: new Uint8Array(64),
+    /** Per-track op-column width in GLYPHS (SHM v34), 0 = no note in that track carries
+     *  an op. The tracker sizes the ops cell from it and hides the column entirely at 0,
+     *  which is the difference between an empty column on every drum track forever and a
+     *  column that appears the moment one is needed. */
+    opsWidth: new Uint8Array(64),
     /** The lines-per-beat the incoming rows are projected in. Part of the note
      *  cache key: zoom moves every row without touching clipVersion or
      *  noteCount, so a cache keyed only on those serves rows from the old grid. */
@@ -313,6 +318,8 @@ export function decode(buf, store) {
   // everything after it. Only this side spells offsets out, which is why only this side can
   // get them wrong.
   for (let i = 0; i < 64; i++) store.lpb[i] = v.getUint8(60 + i);
+  // 232..296, appended after the last scalar rather than beside lpb — see the writer's note.
+  for (let i = 0; i < 64; i++) store.opsWidth[i] = v.getUint8(232 + i);
   const mixerVersion = v.getUint32(124, true);
   const mixCount = v.getUint16(128, true);
   const harmonyCount = v.getUint16(130, true);

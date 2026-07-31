@@ -3271,6 +3271,14 @@ const dockApi = {
     }
     if (!kids) return false;
     collapsed[t] = collapsed[t] ? 0 : 1;
+    /*
+     * TELL THE ENGINE (opcode 89). `collapsed` was persisted, published as bit0, and restored
+     * on load — and nothing could WRITE it, so every fold made here died with the tab. The
+     * local array stays as the drawing source because it is instant and because the child-track
+     * shot fixture fabricates its own flags over a closed connection, but the engine is now the
+     * one that remembers.
+     */
+    if (conn) conn.send({ type: 'trackcollapsed', track: t, on: collapsed[t] });
     collapsedAny = false;
     for (let k = 0; k < collapsed.length; k++) if (collapsed[k]) { collapsedAny = true; break; }
     // The cursor comes out with the fold. Left inside, it sits on a lane that is
@@ -3663,6 +3671,38 @@ let lastLoadSeq = -1;
  */
 const collapsed = new Uint8Array(64);
 let collapsedAny = false;
+/**
+ * ADOPT THE ENGINE'S FOLD WHEN IT MOVES, and only then.
+ *
+ * The local array is an override, and an override that never yields is just a second source of
+ * truth — a project saved with track 1 folded would load, publish bit0, and draw open, because
+ * the array said 0 and the array always won.
+ *
+ * Keyed on the engine's own bits CHANGING rather than copied every frame: a fold made here is
+ * visible immediately and the echo arrives a frame or two later, and a frame-by-frame copy
+ * would undo it in between. It also leaves the child-track shot fixture alone — that one
+ * fabricates its flags over a closed connection, so its signature never moves and nothing is
+ * ever adopted over the fold the shot is there to photograph.
+ *
+ * -1 rather than 0 so the first frame adopts: a signature seeded to its own initial value is a
+ * guard that never fires on the state it exists to catch.
+ */
+let lastEngineFoldSig = -1;
+function adoptEngineFold() {
+  const flags = engine && engine.trackFlags;
+  if (!flags) return;
+  const n = Math.min(state.tracks, collapsed.length, 32);
+  let sig = 0;
+  for (let t = 0; t < n; t++) sig |= (flags[t] & 1) << t;
+  if (sig === lastEngineFoldSig) return;
+  lastEngineFoldSig = sig;
+  collapsedAny = false;
+  for (let t = 0; t < collapsed.length; t++) {
+    const v = t < n && (flags[t] & 1) !== 0 ? 1 : 0;
+    collapsed[t] = v;
+    if (v) collapsedAny = true;
+  }
+}
 
 const state = { start: 0, scrollX: 0, tracks: 16, columns: FIELDS_PER_NOTE,
   noteColumns: 1, noteColumnsWanted: 1, link: 'connecting', selection: null,
@@ -5384,6 +5424,7 @@ function draw() {
   // would make the view-model prefer an all-zero override to the engine's own
   // flags, so a project that loaded with a parent already collapsed would draw it
   // open — the override silently becoming the only source rather than an override.
+  adoptEngineFold();
   o.collapsedOverride = collapsedAny ? collapsed : null;
   const vm = bufs[bi] = buildViewModel(o, bufs[bi]);
   vm.scrollX = state.scrollX;
