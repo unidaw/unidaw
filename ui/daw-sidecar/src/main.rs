@@ -2045,6 +2045,7 @@ fn build_chord(body: &str) -> Option<UiChordCommandPayload> {
 ///   Lfo(4)          freqMilliHz i32@0, depthMilli i32@4, biasMilli i32@8,
 ///                   phaseMilli i32@12
 ///   RandomDegree(5) degree u8@0, velocity u8@1, pad u16@2, durationTicks u32@4
+///   SliceSelect(7)  base u16@0, count u16@2
 fn build_patcher_config(body: &str) -> Option<Result<UiPatcherNodeConfigPayload, &'static str>> {
     // is_type: a project named `patchcfg` was claimed by this and refused with "no
     // config layout for that node type". Third of three raw-substring dispatches the
@@ -2076,6 +2077,16 @@ fn build_patcher_config(body: &str) -> Option<Result<UiPatcherNodeConfigPayload,
             cfg[0] = c[0].clamp(0, 255) as u8;
             cfg[1] = c[1].clamp(0, 255) as u8;
             cfg[4..8].copy_from_slice(&(c[2].clamp(0, u32::MAX as i64) as u32).to_le_bytes());
+        }
+        // SliceSelect(7): base u16@0, count u16@2 — `PatcherSliceSelectConfig` in patcher_abi.h.
+        //
+        // Two SLOT ADDRESSES, so they are packed as they are and not scaled. A count of 0 would
+        // be an empty range for a node whose whole job is to pick from one, so the low bound is
+        // 1; a base of 0 is legal and means the sampler's own "let the keymap pick from the
+        // pitch" sentinel, which is a setting rather than an unset value.
+        7 => {
+            cfg[0..2].copy_from_slice(&(c[0].clamp(0, 65535) as u16).to_le_bytes());
+            cfg[2..4].copy_from_slice(&(c[1].clamp(1, 65535) as u16).to_le_bytes());
         }
         // A type with no layout is refused rather than sent as zeros, which the
         // engine would apply.

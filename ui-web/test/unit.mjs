@@ -2805,6 +2805,34 @@ test('the canonical text form round-trips what the engine published', () => {
 
 
 
+test('every node type this UI can edit has a config layout in the sidecar', async () => {
+  /*
+   * THE GAP THIS CLOSES, hit for real: SliceSelect arrived with `{base, count}`, the patcher
+   * view grew rows for them, and `build_patcher_config` had no arm for type 7 — so every nudge
+   * came back "no config layout for that node type". Refused rather than sent as zeros, which is
+   * the right refusal and still a control the UI offers and cannot deliver.
+   *
+   * Both sides are read from source. The sidecar's arms are `N => {` inside the function, and
+   * this side's are the types with CONFIG_FIELDS entries — a type with no fields has nothing to
+   * send and is correctly absent from both.
+   */
+  const { readFileSync } = await import('node:fs');
+  const rs = readFileSync(new URL('../../ui/daw-sidecar/src/main.rs', import.meta.url), 'utf8');
+  const fn = rs.slice(rs.indexOf('fn build_patcher_config'));
+  const body = fn.slice(0, fn.indexOf('\n}\n'));
+  const arms = new Set([...body.matchAll(/^\s{8}(\d+) => \{/gm)].map((m) => Number(m[1])));
+  assert.ok(arms.size >= 3, `parsed the sidecar's config layouts: ${[...arms]}`);
+
+  // The types this UI draws editable fields for, by their index in NODE_TYPES.
+  // `configFields(type)` takes the type INDEX and returns [{name, index}], empty for a type
+  // with nothing to edit — which is the same question, asked of the module that owns it.
+  const editable = NODE_TYPES.map((_, i) => i).filter((i) => configFields(i).length > 0);
+  for (const t of editable) {
+    assert.ok(arms.has(t),
+      `node type ${t} (${NODE_TYPES[t]}) has editable fields here and no layout in the sidecar`);
+  }
+});
+
 test('the patcher node-type table matches the engine enum', async () => {
   /*
    * `NODE_TYPES` mirrors `enum class PatcherNodeType` in the engine, and nothing forced them to
