@@ -68,6 +68,30 @@ The design call in the original note still stands and is worth more than the imp
 ~~**The tax:**~~ **PAID, 2026-07-31 — this paragraph is stale.** It said ops enter only via `project.json` and that *setting* one needs a new `UiCommandType`, "next free is 73". That command shipped as **`SetRowOps = 81`**, addressed by note id with a mask, so one op can be cleared without resending the other four — and the opcode space has moved a long way since: **next free is 93** (81 SetRowOps, 82/84 sampler envelope + points, 83 BulkChunk, 86 filter, 90 slot name, 91 sampler vintage, 92 set track lines-per-beat). Check `apps/event_payloads.h` rather than this line, which will go stale again.
 
 So the ramp and rate-based retrigger no longer pay a tax — the carrier they were waiting for is there, and every later op is free as predicted.
+
+**THE RAMP IS ALSO BUILT** (checked 2026-08-01): `NoteStrike.velocityScaleMilli`, `expandNoteOps`
+takes `retrigRampPercent`, the render path applies it via `rampedVelocity`, `SetRowOps` carries
+`retrigRamp`, and the token is `rv`. Only **rate-based** remains of this item.
+
+**AND IT NEEDS ONE ANSWER BEFORE IT CAN BE BUILT — what `1/32` MEANS.** Everything else about it
+is settled and cheap: `NotePayload` has exactly one spare byte (`reserved`) and `UiClipNote` has
+two (`reserved32`), so a rate denominator costs no struct growth and **no `kShmVersion` bump**;
+fraction parsing already exists for `d1/6`; and the two forms are one op, so `ret8` and `ret1/32`
+are mutually exclusive by construction rather than by a rule someone has to remember.
+
+The ambiguity is real and it is a factor of four:
+
+- **A fraction of a BEAT**, which is what `d1/6` already means in this same ops string — its doc
+  comment says so in as many words. Then `ret1/32` is 32 strikes per quarter, a buzz roll, and the
+  musically ordinary tokens become `ret1/4` (sixteenths) and `ret1/8` (thirty-seconds).
+- **A note value**, which is what `1/32` means to anyone who has used a tracker or an Elektron —
+  `ret1/32` is thirty-seconds, i.e. 8 strikes per quarter.
+
+Consistency argues for the first: two fractions in one ops string meaning different units is
+exactly the "one value, two meanings" trap this codebase refuses elsewhere. Musical convention
+argues for the second, and this is a notation people type from muscle memory. Getting it wrong
+makes every roll four times too fast or too slow, and the notation is not something to migrate
+later. **Owner's call**; the implementation is an afternoon once it is made.
 **[CORRECTION]** The musician list says row-op *display* is pending. It is not. `UiClipNote` carries `retrigger`, `probability` and `delayNanoticks` (`apps/shared_memory.h:867-877`) and `apps/ui_snapshot.cpp:57-64` populates all three. `docs/row-ops.md` §"Display and setting ops (pending)" is stale, and `SAMPLER_DESIGN.md` §6 S4's "batch the long-deferred row-op display fields into the same bump" is stale. Only *setting* is missing, and it needs no `kShmVersion` bump.
 
 ### 4. Finish the envelope — the runner already ships
