@@ -3435,6 +3435,42 @@ setInterval(() => {
 const entry = createEntry();
 
 /**
+ * THE TWO GRAMMARS THE CELL BUFFER TYPES, and what the field has to be for each.
+ *
+ * One buffer, not two: the overlay, the key routing and the caret already exist for it, and a
+ * second instance would be a second thing to keep in step for the sake of four settings.
+ *
+ * The rule that makes a shared instance safe is that EVERY opener sets EVERY field — none of
+ * them may inherit whatever the last one left. That is what this table is for; adding a mode
+ * without adding a row is a missing-property error rather than a silent inheritance.
+ *
+ *   `token` — a pitch, a chord or a number. Short, and no spaces.
+ *   `ops`   — a row-op string. Spaces are the grammar's OWN separator, so they have to be
+ *             typable, and it is long. Backspacing to empty must not cancel either: an empty
+ *             commit is how the cell is cleared, and cancelling instead would leave the only
+ *             way to clear an op being the console.
+ *
+ * THE SEED IS ALWAYS EDITABLE, and this table does not decide that — `begin` in entry.js
+ * already clears `fresh` after seeding, for its own reason ("`@` then `3` must give `@3`, not
+ * `3`"). I wrote a `selectSeed` flag here before checking, and it was dead: setting it either
+ * way changed nothing, which a negative control caught by PASSING when it should have failed.
+ * A knob that does nothing is its own kind of lie, so it is gone rather than left decorative.
+ */
+const ENTRY_MODES = {
+  token: { charset: /[0-9a-zA-Z#\-.^~@/]/, max: 12, cancelWhenEmpty: true },
+  ops: { charset: /[0-9a-zA-Z /]/, max: 48, cancelWhenEmpty: false },
+};
+
+/** Open the cell buffer in one of the modes above. Never call `begin` directly. */
+function beginEntry(mode, cursor, seed) {
+  const m = ENTRY_MODES[mode];
+  entry.charset = m.charset;
+  entry.max = m.max;
+  entry.cancelWhenEmpty = m.cancelWhenEmpty;
+  begin(entry, cursor, seed);
+}
+
+/**
  * Optimistic edits: drawn immediately, dropped when the engine's clip version
  * moves past the version they were composed against.
  *
@@ -3820,6 +3856,20 @@ function tickOfCursorRow() {
  * value digits commit on their own keystroke and never come through here.
  */
 function commitToken(text) {
+  /*
+   * THE OPS FIELD PARSES ITS OWN GRAMMAR.
+   *
+   * `parseToken` reads a pitch, a chord or a bare number; the op string is none of those, and
+   * putting `ret3 p60` through it would give `invalid` and paint a red cell over a perfectly
+   * good edit. Split here rather than teaching parseToken a fourth language, because the two
+   * grammars share nothing — one names a note, the other modifies one.
+   */
+  if (fieldOfCol(state.cursor.col) === 2) {
+    // An empty commit CLEARS, which is what an empty commit does in every other cell here and
+    // also what the full mask means: the cell shows what the note has.
+    writeOpsAtCursor(text.trim());
+    return;
+  }
   const r = parseToken(text, fieldOfCol(state.cursor.col));
   if (r.kind === 'note') {
     if (!writePitch(r.pitch)) return;
@@ -6193,7 +6243,31 @@ addEventListener('keydown', (e) => {
     state.cursor.row += state.editStep; follow();
     return done();
   }
-  if (k === TOKEN_KEY) { begin(entry, state.cursor, '@'); return done(); }
+  /*
+   * `@` OPENS THE CELL'S TEXT BUFFER, in whichever grammar the field speaks.
+   *
+   * On a note field that is a chord or a degree, seeded with the `@` itself. On the OPS field it
+   * is the row-op string, seeded WITH WHAT THE NOTE HAS — `ret3 p60 d1/6` — so editing one op
+   * means changing one word rather than retyping the set. That is the gesture Jaakko described:
+   * "I can edit the cell to edit an individual op."
+   *
+   * One key rather than two, because it already means exactly this: open the text buffer for
+   * this cell. Specialising it by field costs nothing and adds no keymap to learn.
+   *
+   * NOT Enter, which auditions the row here and is worth more than the two characters it would
+   * save. A gesture that takes an existing binding away has to be worth more than the binding.
+   *
+   * The string it commits is the canonical one — the same text `parse_row_ops` takes and an
+   * agent writes — so what you read in the cell teaches what you can type into it.
+   */
+  if (k === TOKEN_KEY) {
+    if (fieldOfCol(state.cursor.col) === 2) {
+      beginEntry('ops', state.cursor, opsAtCursorText());
+    } else {
+      beginEntry('token', state.cursor, '@');
+    }
+    return done();
+  }
 
   // Open the piano roll at the cursor. A tracker cell can hold one note per
   // column, so simultaneous notes on a track render as `**` — visible, which is

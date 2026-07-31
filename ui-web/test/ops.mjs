@@ -284,6 +284,60 @@ const cells = await opsCells();
         'and the refused edit changed nothing');
 }
 
+// ---------------------------------------------------------------------------
+// TYPED INTO THE CELL, with real keystrokes. The console verb is one surface; the standing rule
+// here is that both reach everything, and "edit the cell to edit an individual op" is the
+// gesture this whole design was drawn around.
+//
+// The buffer opens SEEDED and the seed is EDITABLE, not selected — the point is to change one
+// op out of several, and a selected seed would make the first keystroke wipe the rest.
+// ---------------------------------------------------------------------------
+{
+  // Back to the note this session wrote, which currently reads `ret3`.
+  await page.evaluate(() => window.__uni.run('goto 32 0'));
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(400);
+  check(await page.evaluate(() => window.__uni.opsTextAtCursor()) === 'ret3',
+        'standing on a note whose ops are known');
+
+  await page.keyboard.press('@');
+  await page.waitForTimeout(300);
+  // `data-kind="editing"` is what the view-model marks the cell being typed into — see the
+  // entryOverlay branch in viewmodel.js. It holds the buffer's raw text, with no caret glyph
+  // unless the buffer is empty, which is why looking for one found nothing.
+  const seeded = await page.evaluate(() => {
+    const c = document.querySelector('.tk-cell[data-kind="editing"]');
+    return c ? c.textContent : null;
+  });
+  check(seeded && seeded.startsWith('ret3'),
+        '@ opens the buffer SEEDED with what the note has', JSON.stringify(seeded));
+
+  /*
+   * TYPE ONE MORE OP ONTO THE END, which is the whole gesture: change one op without retyping
+   * the rest. If the seed were selected the space would wipe `ret3` and this would commit `p55`
+   * alone. `begin` in entry.js guarantees it is not, for its own reason — this check is what
+   * proves that guarantee reaches here rather than assuming it.
+   */
+  for (const ch of ' p55') await page.keyboard.press(ch === ' ' ? 'Space' : ch);
+  await page.waitForTimeout(200);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(2000);
+  const after = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(after === 'ret3 p55',
+        'the typed edit lands, with the seeded op kept and the new one added', after);
+
+  // ESCAPE ABANDONS. A buffer with no way out is a trap, and the ops cell is the one place a
+  // person is most likely to open one by accident — Enter is not a rare key.
+  await page.keyboard.press('@');
+  await page.waitForTimeout(200);
+  for (const ch of ' d1') await page.keyboard.press(ch === ' ' ? 'Space' : ch);
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(800);
+  check(await page.evaluate(() => window.__uni.opsTextAtCursor()) === 'ret3 p55',
+        'Escape abandons the edit and the note is untouched');
+}
+
 /*
  * NOTHING THREW. Load-bearing: the readout shipped throwing a missing-import ReferenceError on
  * every frame, and every other suite passed through it — the unit tests never run the draw
