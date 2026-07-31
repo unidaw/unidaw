@@ -98,13 +98,23 @@ pub struct OpSpec {
     pub example: &'static str,
 }
 
+// THE CANONICAL ORDER, and it is ONE order — this table fixes both the draw order of a collapsed
+// glyph run and the order `format_row_ops` emits. They disagreed once (`o` fifth here, last there)
+// and nothing broke, because the parser is order-free and both strings meant the same row; but
+// "canonical" means one form, and a person reading a cell and then opening it should not find the
+// ops rearranged. `op_schema_and_emitter_agree_on_order` is what keeps them one fact.
+//
+// The order groups ops that MODIFY EACH OTHER: `ret` and `rv` adjacent because a ramp is
+// meaningless without a retrigger, `s` and `o` adjacent because both address the sample. `c` is
+// last because it is the only op about WHEN the row fires rather than about what it plays.
+// (Proposed by the web-UI agent, who has to draw the run and is the one it reads badly for.)
 pub const OP_SCHEMA: &[OpSpec] = &[
     OpSpec { prefix: "ret", summary: "retrigger N even strikes over the note", example: "ret3" },
+    OpSpec { prefix: "rv", summary: "retrigger volume ramp, signed total percent across the strikes", example: "rv-60" },
     OpSpec { prefix: "p", summary: "probability percent to sound (1-100)", example: "p60" },
     OpSpec { prefix: "d", summary: "delay onset by a fraction of a beat", example: "d1/6" },
     OpSpec { prefix: "s", summary: "play sampler slot N (blank = pitch picks it)", example: "s7" },
     OpSpec { prefix: "o", summary: "start N/256 into the sample, or a fraction like o1/3 (the 9xx seek)", example: "o80" },
-    OpSpec { prefix: "rv", summary: "retrigger volume ramp, signed total percent across the strikes", example: "rv-60" },
     OpSpec { prefix: "c", summary: "conditional trig: fire on pass A of every B", example: "c1:2" },
 ];
 
@@ -128,8 +138,13 @@ pub const OP_SCHEMA: &[OpSpec] = &[
 /// the frontend's call, but "which characters mean slot 7" is not, or the two sides drift.
 pub fn format_row_ops(ops: &RowOps) -> String {
     let mut out: Vec<String> = Vec::new();
+    // IN OP_SCHEMA'S ORDER. Keep the two together — see the table's comment, and the test that
+    // fails if they drift apart again.
     if ops.retrigger > 1 {
         out.push(format!("ret{}", ops.retrigger));
+    }
+    if ops.retrig_ramp != 0 {
+        out.push(format!("rv{}", ops.retrig_ramp));
     }
     if ops.probability > 0 {
         out.push(format!("p{}", ops.probability));
@@ -141,15 +156,6 @@ pub fn format_row_ops(ops: &RowOps) -> String {
     }
     if ops.sound != 0 {
         out.push(format!("s{}", ops.sound));
-    }
-    if ops.retrig_ramp != 0 {
-        out.push(format!("rv{}", ops.retrig_ramp));
-    }
-    if ops.trig_condition != 0 {
-        let (a, b) = split_trig_condition(ops.trig_condition);
-        if a != 0 {
-            out.push(format!("c{a}:{b}"));
-        }
     }
     if ops.sound_offset != 0 {
         // COARSE WHEN IT IS EXACTLY COARSE, a fraction otherwise. `o80` is the tracker muscle
@@ -164,6 +170,12 @@ pub fn format_row_ops(ops: &RowOps) -> String {
             }
             let g = gcd(ops.sound_offset as u32, 65535);
             out.push(format!("o{}/{}", ops.sound_offset as u32 / g, 65535 / g));
+        }
+    }
+    if ops.trig_condition != 0 {
+        let (a, b) = split_trig_condition(ops.trig_condition);
+        if a != 0 {
+            out.push(format!("c{a}:{b}"));
         }
     }
     out.join(" ")
@@ -454,6 +466,45 @@ mod tests {
         // an emitter that prints two ops in an order the parser cannot read back.
         let all = parse_row_ops("ret4 p60 d1/6 rv-60 c1:2 s07 o80").unwrap();
         assert_eq!(parse_row_ops(&format_row_ops(&all)).unwrap(), all);
+    }
+
+    #[test]
+    fn op_schema_and_emitter_agree_on_order() {
+        // ONE CANONICAL ORDER, ASSERTED — not two that happen to match.
+        //
+        // OP_SCHEMA and format_row_ops each fixed an order independently and they disagreed: the
+        // table said `o` fifth, the emitter put it last. Nothing broke, because the parser is
+        // order-free and both strings mean the same row — which is exactly why it survived. But
+        // OP_SCHEMA is what fixes the draw order of a collapsed glyph run, so a person read
+        // `r v p d s o c` in the cell and then opened it to find the ops rearranged. Same note,
+        // two orders, one file.
+        //
+        // Found by the web-UI agent, whose mirror ratchet held their table equal to OP_SCHEMA and
+        // was blind to the emitter entirely — a mirror cannot be right about both when the source
+        // disagrees with itself. So the comparison that matters is this one, inside the source.
+        let all = parse_row_ops("ret4 rv-60 p60 d1/6 s7 o80 c1:2").unwrap();
+        let printed = format_row_ops(&all);
+
+        // Which prefix each emitted token starts with, LONGEST FIRST — "ret" and "rv" share an
+        // 'r', so a shortest-match scan would call `ret4` an `r`-something and prove nothing.
+        let mut by_len: Vec<&str> = OP_SCHEMA.iter().map(|s| s.prefix).collect();
+        by_len.sort_by_key(|p| std::cmp::Reverse(p.len()));
+        let emitted: Vec<&str> = printed
+            .split_whitespace()
+            .map(|tok| {
+                *by_len
+                    .iter()
+                    .find(|p| tok.starts_with(**p))
+                    .unwrap_or_else(|| panic!("emitted token {tok:?} matches no OP_SCHEMA prefix"))
+            })
+            .collect();
+        let schema: Vec<&str> = OP_SCHEMA.iter().map(|s| s.prefix).collect();
+        assert_eq!(
+            emitted, schema,
+            "format_row_ops emits its ops in a different order from OP_SCHEMA. Both are \
+             canonical and there can only be one — fix whichever is wrong, and remember the \
+             table also fixes the draw order of a collapsed cell."
+        );
     }
 
     #[test]

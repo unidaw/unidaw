@@ -116,6 +116,8 @@ wait_for_boot "$TMP/eng.log" "$ENG" 40
 gcli() { env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" "$CLI" "$@"; }
 
 # ---- Set the bank's default, THEN mint a slot with it.
+KV_BEFORE="$(gcli get sampler-kit --track 0 --device 1 2>/dev/null \
+             | python3 -c "import json,sys; print(json.load(sys.stdin).get('kit_version'))")"
 gcli do sampler-device --track 0 --device 1 --field default-gate --value 1 >/dev/null 2>&1
 sleep 0.6
 grep -q '"event":"sampler.device_set"' "$TMP/eng.log" 2>/dev/null || \
@@ -125,10 +127,30 @@ grep -q '"event":"sampler.device_set"' "$TMP/eng.log" 2>/dev/null || \
 # READ IT BACK, because a toggle whose state cannot be read is one a UI has to invent — and a
 # bank's default cannot be inferred from its slots, since a bank legitimately mixes one-shot and
 # gated ones.
-DG="$(gcli get sampler-kit --track 0 --device 1 2>/dev/null \
-      | python3 -c "import json,sys; print(json.load(sys.stdin).get('default_gate'))")"
+kitfield() {  # kitfield <key>
+  gcli get sampler-kit --track 0 --device 1 2>/dev/null \
+    | python3 -c "import json,sys; print(json.load(sys.stdin).get('$1'))"
+}
+DG="$(kitfield default_gate)"
 [ "$DG" = "1" ] || fail "the kit read-back reports default_gate '$DG' after setting it to 1"
-echo "  read-back: default_gate 1"
+echo "  read-back: default_gate $DG, kit_version $KV_BEFORE -> $(kitfield kit_version)"
+
+# ---- THE VERSION MUST MOVE, and this is the web-UI agent's requirement rather than my idea.
+# Their cache holds a kit answer until kit_version changes, so a device field that becomes part of
+# the answer without moving the version updates NOTHING on screen until something else happens to
+# change the kit — the card shows the old value while the engine has the new one. That is the same
+# shape as the voice count they could not read live: 72 polls produced four publications because
+# the version had not moved.
+#
+# It passes because refreshSamplerForTrack is the one funnel that bumps it, and the handler calls
+# it — but that call was ADDED after a first version deliberately skipped it, so this is the
+# assertion that stops the next optimisation from quietly reintroducing the problem.
+KV_AFTER="$(kitfield kit_version)"
+python3 -c "
+raise SystemExit(0 if int('$KV_AFTER') > int('$KV_BEFORE') else 1)" || \
+  fail "setting a device field did not move kit_version ($KV_BEFORE -> $KV_AFTER). A client that
+        caches the kit answer until the version changes will never see this field update — it
+        will show the old value while the engine holds the new one"
 
 gcli do sampler-load --track 0 --device 1 --file tone.wav --root 72 --fixed >/dev/null 2>&1
 sleep 1.2
