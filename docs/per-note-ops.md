@@ -386,6 +386,22 @@ way, the custom subset is strictly better and about the same work to wire in.
 **The ratchet, either way:** every glyph in `OP_SCHEMA` must measure the reference ASCII advance,
 asserted in CI against the EMBEDDED face — not by eye, and not on one developer's machine.
 
+### PAN IS OUT
+
+It was in the tables above and it is gone, so they read as history rather than as a plan.
+
+`NotePayload` is pinned at 32 bytes by a static_assert and copied per note per block, so adding
+a field is a real cost. Backend asked whether to spend it on per-note pan. No:
+
+- A sampler SLOT already carries `panThousandths`, so "this snare sits left" has a home that
+  costs nothing. What per-note pan adds is the same slot at different pans on different hits —
+  genuinely nice, and nobody has asked to type it.
+- It was the ONLY family in my list with no engine field behind it. Every other one came from
+  `OP_SCHEMA` or from the sampler; pan came from me wanting a fourth glyph state so I could show
+  off `<` `=` `>`. A table that looks complete is not evidence that it is right.
+
+Revisit when somebody types it and it refuses. That is a better trigger than a table.
+
 ### What we must do that Renoise does not
 
 The survey found Renoise's own documented failures, and both are direct consequences of a
