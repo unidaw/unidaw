@@ -43,6 +43,7 @@ bool nodeAcceptsEventInput(PatcherNodeType type) {
     case PatcherNodeType::RustKernel:
     case PatcherNodeType::Passthrough:
     case PatcherNodeType::RandomDegree:
+    case PatcherNodeType::SliceSelect:
     case PatcherNodeType::EventOut:
       return true;
     case PatcherNodeType::Euclidean:
@@ -59,6 +60,7 @@ bool nodeProvidesEventOutput(PatcherNodeType type) {
     case PatcherNodeType::Euclidean:
     case PatcherNodeType::Passthrough:
     case PatcherNodeType::RandomDegree:
+    case PatcherNodeType::SliceSelect:
       return true;
     case PatcherNodeType::AudioPassthrough:
     case PatcherNodeType::Lfo:
@@ -121,6 +123,9 @@ const std::vector<PatcherPortDesc>& portsForNode(PatcherNodeType type) {
     case PatcherNodeType::Lfo:
       return kLfoPorts;
     case PatcherNodeType::RandomDegree:
+    case PatcherNodeType::SliceSelect:
+      // The same shape: one event in, one event out. Both rewrite a field on an event they were
+      // handed rather than synthesising or consuming one.
       return kRandomDegreePorts;
     case PatcherNodeType::EventOut:
       return kEventOutPorts;
@@ -387,6 +392,26 @@ bool setLfoConfig(PatcherGraphState& state,
   }
   node.hasLfoConfig = true;
   node.lfoConfig = config;
+  state.version.fetch_add(1, std::memory_order_acq_rel);
+  return true;
+}
+
+bool setSliceSelectConfig(PatcherGraphState& state,
+                          uint32_t nodeId,
+                          const PatcherSliceSelectConfig& config) {
+  std::lock_guard<std::mutex> lock(state.mutex);
+  const auto nodeIndex = findNodeIndex(state.graph.nodes, nodeId);
+  if (!nodeIndex) {
+    return false;
+  }
+  auto& node = state.graph.nodes[*nodeIndex];
+  if (node.type != PatcherNodeType::SliceSelect) {
+    return false;
+  }
+  node.hasSliceSelectConfig = true;
+  node.sliceSelectConfig = config;
+  // The version bump is what makes the audio thread pick the edit up. Omitting it leaves the
+  // graph correct in the model and unchanged in the render — the config edit lands nowhere.
   state.version.fetch_add(1, std::memory_order_acq_rel);
   return true;
 }

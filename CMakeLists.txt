@@ -565,6 +565,42 @@ add_test(NAME sampler_kit
 )
 set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A generated note chooses its slice, and chooses the same one at any buffer size.
+add_test(NAME slice_select
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slice_select_check.sh
+)
+set_tests_properties(slice_select PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# Zero is not a device id: a sampler that is the FIRST device on its track must be played.
+add_test(NAME device_id_zero
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/device_id_zero_check.sh
+)
+set_tests_properties(device_id_zero PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# The version on a kit answer describes that answer, and a reader gets the track it asked for.
+add_test(NAME kit_readback_version
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/kit_readback_version_check.sh
+)
+set_tests_properties(kit_readback_version PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# Every part of a chopped file is reachable, and a new sampler exists before it is loaded into.
+add_test(NAME sampler_chop_reach
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_chop_reach_check.sh
+)
+set_tests_properties(sampler_chop_reach PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# A sampler edit must not free the snapshot its sounding voices are reading.
+add_test(NAME sampler_edit_while_playing
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_edit_while_playing_check.sh
+)
+set_tests_properties(sampler_edit_while_playing PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# The filter can be turned on at all — the field nothing could write — and it is audible.
+add_test(NAME sampler_filter
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_filter_check.sh
+)
+set_tests_properties(sampler_filter PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_determinism
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_determinism_check.sh
 )

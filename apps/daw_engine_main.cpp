@@ -254,6 +254,15 @@ inline void dispatchRustKernel(daw::PatcherNodeType type, daw::PatcherContext& c
         daw::patcher_process(&ctx);
       }
       break;
+    case daw::PatcherNodeType::SliceSelect:
+      if (daw::patcher_process_slice_select) {
+        daw::patcher_process_slice_select(&ctx);
+      }
+      // NO FALLBACK to the generic kernel, unlike RandomDegree above. The generic kernel does
+      // something else entirely; for a node whose whole job is to write one field, running the
+      // wrong kernel would silently produce notes with no slice rather than nothing at all —
+      // and "the wrong sound plays" is harder to notice than "no sound plays".
+      break;
     case daw::PatcherNodeType::EventOut:
       if (daw::patcher_process_event_out) {
         daw::patcher_process_event_out(&ctx);
@@ -2935,6 +2944,9 @@ struct TrackRuntime {
   // Bumped whenever any track's sampler state changes, so a UI can poll one number instead of
   // re-requesting a kit to find out whether the one it drew is still current.
   std::atomic<uint32_t> samplerKitVersion{0};
+  // One-shot: a generated event whose converted sample fell outside the block its TICK window
+  // owns. Should be impossible; see the clamp that sets it.
+  std::atomic<bool> warnedEventOutsideBlock{false};
   std::atomic<uint32_t> chainVersion{0};
   std::atomic<uint32_t> routingVersion{0};
   std::atomic<uint32_t> modVersion{0};
@@ -3836,6 +3848,11 @@ struct TrackRuntime {
         out.config[0] = static_cast<int32_t>(r.degree);
         out.config[1] = static_cast<int32_t>(r.velocity);
         out.config[2] = static_cast<int32_t>(r.duration_ticks & 0xffffffffu);
+      } else if (n.hasSliceSelectConfig) {
+        out.hasConfig = 1;
+        const auto& sel = n.sliceSelectConfig;
+        out.config[0] = static_cast<int32_t>(sel.base);
+        out.config[1] = static_cast<int32_t>(sel.count);
       } else if (n.hasLfoConfig) {
         out.hasConfig = 1;
         const auto& l = n.lfoConfig;
@@ -5524,6 +5541,32 @@ struct TrackRuntime {
     std::filesystem::path base = sp.is_absolute() || loadedProjectDir.empty()
                                      ? sp
                                      : std::filesystem::path(loadedProjectDir) / sp;
+    // A BARE NAME ALSO LOOKS IN THE PROJECT'S SIBLING audio/ DIRECTORY, which is where samples
+    // actually live: projects sit in presets/projects/ and every one references its audio as
+    // "../audio/<name>".
+    //
+    // That prefix is NINE of the load command's TWENTY-FOUR name bytes, leaving fifteen for a
+    // filename — so "../audio/waveform_probe.wav" is twenty-seven and the repo's own sample could
+    // not be named by the command at all. The web-UI agent hit it building a load verb and worked
+    // around it by copying a wav next to the project, saying in a comment that it was a
+    // workaround rather than a test.
+    //
+    // A PURE FALLBACK, tried only when the primary does not exist, so nothing that resolves today
+    // resolves anywhere else tomorrow. It is a search path and not a claim that two directories
+    // are equivalent: ambiguity is settled by ORDER, project directory first.
+    //
+    // This does not remove the 24-byte cap, it moves it off the common case. A long enough
+    // filename still will not fit, and the general answer is to carry the path over the bulk
+    // carrier (opcode 83) the way SamplerSetEnvelopePoints does.
+    std::error_code exists_ec;
+    if (!sp.is_absolute() && !loadedProjectDir.empty() &&
+        !std::filesystem::exists(base, exists_ec)) {
+      const std::filesystem::path alt =
+          std::filesystem::path(loadedProjectDir) / ".." / "audio" / sp;
+      if (std::filesystem::exists(alt, exists_ec)) {
+        base = alt;
+      }
+    }
     std::error_code rec;
     std::filesystem::path canon = std::filesystem::weakly_canonical(base, rec);
     return rec ? base.lexically_normal().string() : canon.string();
@@ -5614,7 +5657,8 @@ struct TrackRuntime {
     // THE ONE FUNNEL every sampler edit passes through — load, set-slot, slice, marker, envelope,
     // LFO — which is why the kit version is bumped here rather than at each of them. A counter
     // maintained at N call sites is a counter that is wrong at the site someone forgets.
-    samplerKitVersion.fetch_add(1, std::memory_order_acq_rel);
+    const uint32_t newVersion =
+        samplerKitVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
     const daw::Device* found = nullptr;
     for (const auto& d : rt.track.chain.devices) {
       if (d.kind == daw::DeviceKind::Sampler && d.hasSampler) {
@@ -5629,7 +5673,11 @@ struct TrackRuntime {
       return;
     }
     rt.samplerDeviceId = found->id;
-    rt.samplerSnapshot = rebuildSamplerRender(found->sampler, rt.trackId, found->id);
+    auto built = rebuildSamplerRender(found->sampler, rt.trackId, found->id);
+    // Stamped before it is shared, which is the only moment it can be: everything downstream
+    // holds it as const, which is what makes a snapshot safe to read from the audio thread.
+    const_cast<daw::SamplerRender*>(built.get())->version = newVersion;
+    rt.samplerSnapshot = std::move(built);
     rt.samplerRuntime.configure(found->sampler.voiceCap, engineConfig.sampleRate);
     rt.samplerRuntime.setSnapshot(rt.samplerSnapshot);
   };
@@ -8774,6 +8822,29 @@ struct TrackRuntime {
     return &ms.modulators.back();
   };
 
+  // THE SAME ARGUMENT ONE LEVEL UP: a mod set to mint the modulator IN.
+  //
+  // A sampler can legitimately hold no mod sets — a device added to a chain and not yet loaded,
+  // or a project that saved none — and every envelope and LFO command iterates `modSets` looking
+  // for one. Over an empty vector that loop body never runs, so the command applies to nothing
+  // and reports "no_such_mod_set" to the engine's event log. A caller driving through daw-cli
+  // sees `{"sent": ...}` and a kit whose modMask stays 0, with no indication anywhere it looks
+  // that the command was refused. The web-UI agent hit exactly this, three ways, and stopped
+  // rather than guess — which is how it got reported instead of being worked around.
+  //
+  // MINTING IS ONLY RIGHT WHEN THE CALLER DID NOT NAME ONE. `--mod-set 0` means "the default",
+  // which is a request that can always be satisfied, so satisfying it is better than refusing on
+  // a bookkeeping detail the caller cannot see. `--mod-set 7` when there is no 7 is a caller
+  // naming something that does not exist, and that must still be refused — substituting a
+  // different mod set would silently edit the wrong thing, which is worse than doing nothing.
+  auto ensureDefaultModSet = [](daw::SamplerState& sampler, uint32_t requestedId) {
+    if (requestedId != 0 || !sampler.modSets.empty()) {
+      return;
+    }
+    sampler.modSets.push_back(daw::defaultModSet(1));
+    sampler.nextModSetId = 2;
+  };
+
   // ---- THE INWARD BULK CARRIER (opcode 83).
   //
   // Reassembly state for messages too long for one 40-byte ring payload. Lives here, in the UI
@@ -8868,6 +8939,7 @@ struct TrackRuntime {
               (h.deviceId != 0 && d.id != h.deviceId)) {
             continue;
           }
+          ensureDefaultModSet(d.sampler, h.modSetId);
           for (auto& ms : d.sampler.modSets) {
             if (h.modSetId != 0 && ms.id != h.modSetId) {
               continue;
@@ -10948,6 +11020,11 @@ struct TrackRuntime {
           slot.activeVoices = runtime->samplerRuntime.activeVoices();
           slot.steals = static_cast<uint32_t>(runtime->samplerRuntime.stealCount());
           slot.unmapped = static_cast<uint32_t>(runtime->samplerRuntime.unmappedCount());
+          // THE VERSION OF WHAT IS IN THIS ANSWER, not of what the model has reached. A reader
+          // comparing this against the region's poll counter can tell "you are looking at the
+          // current kit" from "the kit has moved since this was built" — which the region's
+          // counter alone cannot say, because it is written on a different clock.
+          slot.contentVersion = snap->version;
           uint32_t n = 0;
           for (const auto& sl : snap->state.slots) {
             if (n >= daw::kUiMaxSamplerSlots) {
@@ -11154,6 +11231,98 @@ struct TrackRuntime {
       return;
     }
 
+    // ---- SAMPLER SET FILTER (86). The field nothing could write.
+    //
+    // Before this, modSet.filterType was read at the kit publish site and written NOWHERE — the
+    // only way to turn a sampler's filter on was to hand-edit the project JSON. So every cutoff
+    // and resonance modulator reachable from the CLI or the UI modulated a filter that was off:
+    // the modulator existed, saved, reloaded and published its bit, and moved nothing.
+    //
+    // Note this is a MOD SET property and not a slot property. Slots share mod sets, so turning
+    // the filter on is one edit for every slot that points at it, which is the behaviour a kit
+    // wants — a chop's twenty slices are one instrument, not twenty.
+    if (entry.size == sizeof(daw::UiSamplerFilterPayload) &&
+        commandType == daw::UiCommandType::SamplerSetFilter) {
+      daw::UiSamplerFilterPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.filter_rejected")
+            .field("track", p.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      // OUT OF RANGE IS REFUSED, NOT CLAMPED. A filter type is an enumeration, not a continuous
+      // control someone sweeps — 7 is not "a bit past BP", it is a caller with the wrong idea of
+      // the encoding, and clamping it to BP would hand them a filter they did not ask for and no
+      // way to discover the mistake.
+      if (p.filterType > 4) {
+        DAW_EVENT("sampler.filter_rejected")
+            .field("track", p.trackId)
+            .field("type", static_cast<uint32_t>(p.filterType))
+            .field("reason", "no_such_filter_type");
+        return;
+      }
+      bool applied = false;
+      uint32_t touched = 0;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          ensureDefaultModSet(d.sampler, p.modSetId);
+          for (auto& ms : d.sampler.modSets) {
+            if (p.modSetId != 0 && ms.id != p.modSetId) {
+              continue;
+            }
+            ms.filterType = p.filterType;
+            // The two flags are what makes "set the type, leave the cutoff" expressible. Zero is
+            // a legal cutoff, so absence cannot be encoded as a zero value.
+            if ((p.flags & daw::kSamplerFilterSetCutoff) != 0) {
+              ms.cutoffMilli = static_cast<uint16_t>(std::min<uint32_t>(p.cutoffMilli, 1000));
+            }
+            if ((p.flags & daw::kSamplerFilterSetResonance) != 0) {
+              ms.resonanceMilli =
+                  static_cast<uint16_t>(std::min<uint32_t>(p.resonanceMilli, 1000));
+            }
+            applied = true;
+            ++touched;
+          }
+          if (applied) {
+            break;
+          }
+        }
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        DAW_EVENT("sampler.filter_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("mod_set", p.modSetId)
+            .field("reason", "no_such_mod_set");
+        return;
+      }
+      DAW_EVENT("sampler.filter_set")
+          .field("track", p.trackId)
+          .field("device", p.deviceId)
+          .field("mod_set", p.modSetId)
+          .field("mod_sets_touched", touched)
+          .field("type", static_cast<uint32_t>(p.filterType))
+          .field("cutoff_milli", static_cast<uint32_t>(p.cutoffMilli))
+          .field("resonance_milli", static_cast<uint32_t>(p.resonanceMilli));
+      return;
+    }
+
     // ---- SAMPLER SET LFO (85). The modulator kind that saved, loaded and made no sound.
     if (entry.size == sizeof(daw::UiSamplerLfoPayload) &&
         commandType == daw::UiCommandType::SamplerSetLfo) {
@@ -11181,6 +11350,7 @@ struct TrackRuntime {
               (p.deviceId != 0 && d.id != p.deviceId)) {
             continue;
           }
+          ensureDefaultModSet(d.sampler, p.modSetId);
           for (auto& ms : d.sampler.modSets) {
             if (p.modSetId != 0 && ms.id != p.modSetId) {
               continue;
@@ -11283,6 +11453,7 @@ struct TrackRuntime {
               (p.deviceId != 0 && d.id != p.deviceId)) {
             continue;
           }
+          ensureDefaultModSet(d.sampler, p.modSetId);
           for (auto& ms : d.sampler.modSets) {
             if (p.modSetId != 0 && ms.id != p.modSetId) {
               continue;
@@ -11731,7 +11902,13 @@ struct TrackRuntime {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         if (commandType == daw::UiCommandType::AddDevice) {
           daw::Device device;
-          device.id = chainPayload.deviceId;
+          // ZERO MEANS "PICK ONE", not "call it zero". Everywhere else on this wire a deviceId of
+          // 0 means unspecified — the sampler commands all read it as "the first sampler on the
+          // track, whichever that is" — and callers send 0 when they do not care. This took it
+          // literally, so `add-device --kind sampler` on a fresh track created a device whose id
+          // WAS 0, which is the same value the engine uses for "this track has no sampler".
+          // Nine guards then skipped it and the instrument was never sent a note.
+          device.id = chainPayload.deviceId != 0 ? chainPayload.deviceId : daw::kDeviceIdAuto;
           device.kind = static_cast<daw::DeviceKind>(chainPayload.deviceKind);
           device.patcherNodeId = chainPayload.patcherNodeId;
           device.hostSlotIndex = chainPayload.hostSlotIndex;
@@ -11812,6 +11989,23 @@ struct TrackRuntime {
         std::shared_ptr<const TrackStateSnapshot> snapshot;
         {
           std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          // ADD, REMOVE AND MOVE ALL CHANGE WHETHER A TRACK HAS A SAMPLER, and none of them said
+          // so. refreshSamplerForTrack's own comment claims it is "called from EVERY site that
+          // changes a chain, so 'did you remember to rebuild the sampler' is not a question
+          // anyone has to answer twice" — and this, the site that adds and removes devices, was
+          // not one of them. The comment was the assertion, and comments do not run.
+          //
+          // A sampler added through AddDevice therefore had no snapshot: not installed on the
+          // audio thread, and its kit read-back answering found:false, which is the same answer
+          // as "there is no sampler on that device". That is exactly the interval — created but
+          // not yet loaded — when a UI most wants to say "here it is, put something in it", and
+          // it could say nothing. Reported by the web-UI agent from the outside, as the only
+          // symptom visible from there.
+          //
+          // Removing a sampler matters just as much in the other direction: without this the
+          // snapshot outlives the device and the track keeps playing an instrument that is no
+          // longer in its chain.
+          refreshSamplerForTrack(*runtime);
           snapshot = buildTrackSnapshot(runtime->track);
         }
         std::atomic_store_explicit(&runtime->trackSnapshot,
@@ -13903,12 +14097,46 @@ struct TrackRuntime {
                 entry.sampleTime >= blockSampleEnd) {
               continue;
             }
-            const int64_t offsetSamples =
+            int64_t offsetSamples =
                 static_cast<int64_t>(entry.sampleTime) -
                 static_cast<int64_t>(blockSampleStart);
+            // CLAMPED INTO THE BLOCK, NOT DROPPED.
+            //
+            // Everything in this scratchpad was generated FOR this block's TICK window, so it
+            // belongs to this block by construction. Its sample time is a CONVERSION of that
+            // tick, and a conversion can land a sample outside: at 120 bpm and 44.1 kHz the
+            // sixteenth at 1.875 s sits at sample 82687.5, so a block covering [82432, 82688)
+            // converts it to 82688 — the first sample of the NEXT block. This test dropped it
+            // there, and the next block never emitted it either, because its TICK window starts
+            // after that step. The note simply vanished.
+            //
+            // It bites only when a step lands almost exactly on a block boundary, so WHICH notes
+            // vanish depends on the buffer size: at 256 frames that sixteenth is on a boundary
+            // and is lost, at 1024 it is not and it plays. One missing note in an eight-second
+            // render at one buffer size — which is why it survived until a check demanded that
+            // two renders be BIT-IDENTICAL rather than merely similar.
+            //
+            // Half a sample early is inaudible; a missing note is not. Widening the window
+            // instead would let the same event be emitted by two consecutive blocks, which is a
+            // doubled note rather than a missing one — no better.
             if (offsetSamples < 0 ||
                 offsetSamples >= static_cast<int64_t>(engineConfig.blockSize)) {
-              continue;
+              // SAID OUT LOUD, ONCE. With the generator's floor conversion in place this cannot
+              // fire — its own negative control passes, which is the honest way to describe a
+              // guard that no longer has a reproducer. It is kept because the CLIP path converts
+              // ticks to samples by a different route that has not been audited for the same
+              // property, and because the alternative behaviour here was to DELETE the note.
+              //
+              // If it ever does fire, this line is the difference between a diagnosable report
+              // and another year of "a note goes missing sometimes".
+              if (!warnedEventOutsideBlock.exchange(true, std::memory_order_relaxed)) {
+                DAW_EVENT("patcher.event_outside_block")
+                    .field("offset", offsetSamples)
+                    .field("block_size", static_cast<uint32_t>(engineConfig.blockSize));
+              }
+              offsetSamples = offsetSamples < 0
+                                  ? 0
+                                  : static_cast<int64_t>(engineConfig.blockSize) - 1;
             }
             const uint64_t tickDelta = static_cast<uint64_t>(std::llround(
                 static_cast<long double>(offsetSamples) / samplesPerTick));
@@ -14249,6 +14477,11 @@ struct TrackRuntime {
             if (node.hasRandomDegreeConfig) {
               ctx.node_config = &node.randomDegreeConfig;
               ctx.node_config_size = sizeof(node.randomDegreeConfig);
+            }
+          } else if (node.type == daw::PatcherNodeType::SliceSelect) {
+            if (node.hasSliceSelectConfig) {
+              ctx.node_config = &node.sliceSelectConfig;
+              ctx.node_config_size = sizeof(node.sliceSelectConfig);
             }
           } else if (node.type == daw::PatcherNodeType::Lfo) {
             if (node.hasLfoConfig) {
@@ -15343,12 +15576,46 @@ struct TrackRuntime {
             if (logic.metadata[0] == daw::kMusicalLogicKindGate) {
               continue;
             }
-            const int64_t offsetSamples =
+            int64_t offsetSamples =
                 static_cast<int64_t>(entry.sampleTime) -
                 static_cast<int64_t>(blockSampleStart);
+            // CLAMPED INTO THE BLOCK, NOT DROPPED.
+            //
+            // Everything in this scratchpad was generated FOR this block's TICK window, so it
+            // belongs to this block by construction. Its sample time is a CONVERSION of that
+            // tick, and a conversion can land a sample outside: at 120 bpm and 44.1 kHz the
+            // sixteenth at 1.875 s sits at sample 82687.5, so a block covering [82432, 82688)
+            // converts it to 82688 — the first sample of the NEXT block. This test dropped it
+            // there, and the next block never emitted it either, because its TICK window starts
+            // after that step. The note simply vanished.
+            //
+            // It bites only when a step lands almost exactly on a block boundary, so WHICH notes
+            // vanish depends on the buffer size: at 256 frames that sixteenth is on a boundary
+            // and is lost, at 1024 it is not and it plays. One missing note in an eight-second
+            // render at one buffer size — which is why it survived until a check demanded that
+            // two renders be BIT-IDENTICAL rather than merely similar.
+            //
+            // Half a sample early is inaudible; a missing note is not. Widening the window
+            // instead would let the same event be emitted by two consecutive blocks, which is a
+            // doubled note rather than a missing one — no better.
             if (offsetSamples < 0 ||
                 offsetSamples >= static_cast<int64_t>(engineConfig.blockSize)) {
-              continue;
+              // SAID OUT LOUD, ONCE. With the generator's floor conversion in place this cannot
+              // fire — its own negative control passes, which is the honest way to describe a
+              // guard that no longer has a reproducer. It is kept because the CLIP path converts
+              // ticks to samples by a different route that has not been audited for the same
+              // property, and because the alternative behaviour here was to DELETE the note.
+              //
+              // If it ever does fire, this line is the difference between a diagnosable report
+              // and another year of "a note goes missing sometimes".
+              if (!warnedEventOutsideBlock.exchange(true, std::memory_order_relaxed)) {
+                DAW_EVENT("patcher.event_outside_block")
+                    .field("offset", offsetSamples)
+                    .field("block_size", static_cast<uint32_t>(engineConfig.blockSize));
+              }
+              offsetSamples = offsetSamples < 0
+                                  ? 0
+                                  : static_cast<int64_t>(engineConfig.blockSize) - 1;
             }
             const uint64_t tickDelta = static_cast<uint64_t>(std::llround(
                 static_cast<long double>(offsetSamples) / samplesPerTick));
@@ -15412,7 +15679,13 @@ struct TrackRuntime {
               se.pitch = pitch;
               se.velocity = velocity;
               se.column = 0;
-              se.sound = 0;
+              // THE SOUND ADDRESS THE GRAPH CHOSE, if it chose one. This was hardcoded 0 —
+              // "no address, let the keymap pick from the pitch" — because nothing upstream
+              // could supply one. SliceSelect now can, which is the whole point of the node:
+              // a generated note that names its slice rather than inheriting whatever the
+              // resolved pitch happens to map to. Still 0 for every other graph, which is
+              // still the right default and what every drum kit relies on.
+              se.sound = logic.sound;
               se.offsetFrac = 0;
               se.noteId = noteId;
               runtime.samplerEvents.push_back(se);

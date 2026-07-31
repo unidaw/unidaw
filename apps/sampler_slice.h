@@ -67,12 +67,21 @@ inline SliceExtent sliceExtentById(const SliceSet& set, uint16_t id, uint64_t so
 // frame changes, so every note already pointing at a slice still points at the same audio — which
 // is the property that makes re-chopping while playing safe.
 inline uint16_t insertSliceMarker(SliceSet& set, uint64_t frame, uint64_t sourceFrames) {
-  if (frame == 0 || frame >= sourceFrames) {
-    // Frame 0 is the first slice's implicit start, not a boundary you can add; a marker AT the
-    // end would create a zero-length slice. Refused rather than clamped: a marker silently moved
-    // somewhere else is a cut nobody made.
+  if (frame >= sourceFrames) {
+    // A marker AT the end would create a zero-length slice. Refused rather than clamped: a marker
+    // silently moved somewhere else is a cut nobody made.
     return 0;
   }
+  // FRAME 0 IS ALLOWED, and used to be refused on the grounds that it was "the first slice's
+  // implicit start". It was not implicit — it was UNREACHABLE. sliceExtentAt begins every slice
+  // AT a marker, so with markers at f1..fN the audio in [0, f1) had no index, no id, and no way
+  // to be played. For a transient chop that region is the pre-roll before the first hit and
+  // losing it is correct. For an equal division it is the FIRST PART: `--count 8` cut a break
+  // into eight and made seven of them playable, silently dropping the downbeat.
+  //
+  // The web-UI agent reported this as an off-by-one in the count. It is not — the count was
+  // right and the head of the file was being thrown away, which is why it looked like one fewer
+  // slice than asked for.
   for (const auto& m : set.markers) {
     if (m.frame == frame) {
       return 0;  // already a boundary here
@@ -93,7 +102,10 @@ inline uint16_t insertSliceMarker(SliceSet& set, uint64_t frame, uint64_t source
 // which is the point: dragging a marker adjusts what that slice PLAYS without touching what any
 // row SAYS.
 inline bool moveSliceMarker(SliceSet& set, uint16_t id, uint64_t frame, uint64_t sourceFrames) {
-  if (frame == 0 || frame >= sourceFrames) {
+  // Frame 0 is a legal position for the same reason it is legal to insert one there: a slice
+  // that starts at the head of the file is an ordinary slice, and refusing to DRAG a marker
+  // somewhere it can be CREATED would be the two halves of one feature disagreeing.
+  if (frame >= sourceFrames) {
     return false;
   }
   SliceMarker* target = nullptr;
@@ -221,7 +233,11 @@ inline std::vector<uint64_t> divideEqually(uint64_t frames, uint32_t parts) {
   if (parts < 2 || frames == 0) {
     return out;
   }
-  for (uint32_t i = 1; i < parts; ++i) {
+  // FROM ZERO, so `parts` parts means `parts` slices. This used to start at 1 and return the
+  // INTERIOR boundaries only, which is the right answer to a different question: with slices
+  // that begin at a marker, N-1 interior boundaries describe N-1 playable regions plus a head
+  // of the file nobody can reach. Asking for eight got seven, and the missing one was the first.
+  for (uint32_t i = 0; i < parts; ++i) {
     out.push_back(frames * i / parts);
   }
   return out;

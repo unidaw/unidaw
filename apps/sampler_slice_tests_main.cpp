@@ -160,8 +160,12 @@ int main() {
   {
     daw::SliceSet set;
     set.nextMarkerId = 1;
-    checkEq(daw::insertSliceMarker(set, 0, 10000), 0,
-            "frame 0 is refused — it is the first slice's implicit start, not a boundary");
+    // FRAME 0 IS NOT A REFUSAL. It was, on the grounds that it was "the first slice's implicit
+    // start" — but sliceExtentAt begins every slice AT a marker, so the audio before the first
+    // one was not implicit, it was unreachable. A slice starting at the head of the file is an
+    // ordinary slice and the ordinary way to ask for one is to mark zero.
+    check(daw::insertSliceMarker(set, 0, 10000) != 0, "frame 0 is a legitimate boundary");
+    checkEq(daw::insertSliceMarker(set, 0, 10000), 0, "and marking it twice is still a duplicate");
     checkEq(daw::insertSliceMarker(set, 10000, 10000), 0,
             "a marker AT the end is refused — it would make a zero-length slice");
     checkEq(daw::insertSliceMarker(set, 99999, 10000), 0, "and past the end is refused");
@@ -169,7 +173,7 @@ int main() {
     checkEq(daw::insertSliceMarker(set, 5000, 10000), 0, "a duplicate boundary is refused");
     check(!daw::moveSliceMarker(set, 999, 6000, 10000), "moving an id that does not exist fails");
     check(!daw::removeSliceMarker(set, 999), "removing an id that does not exist fails");
-    checkEq(set.markers.size(), 1, "and none of the refusals changed the set");
+    checkEq(set.markers.size(), 2, "and none of the refusals changed the set (0 and 5000 stand)");
   }
 
   // ---- TRANSIENT DETECTION finds the hits, at roughly the right frames.
@@ -252,10 +256,17 @@ int main() {
   // sixteenths is a legitimate thing to want, and asking a transient detector for it is asking
   // the wrong question.
   {
+    // FOUR PARTS MEANS FOUR SLICES, AND THE FIRST ONE STARTS AT ZERO.
+    //
+    // This asserted three boundaries and said "the first starts at 0" — which was true of the
+    // audio and false of the product, because a slice begins AT a marker and nothing marked
+    // zero. The head of the file had no index, no id, and no way to be played: `--count 8` cut
+    // a break into eight and made seven of them playable, dropping the downbeat.
     const auto d = daw::divideEqually(16000, 4);
-    checkEq(d.size(), 3, "four parts need three boundaries, not four — the first starts at 0");
-    checkEq(d[0], 4000, "evenly spaced");
-    checkEq(d[2], 12000, "to the last boundary before the end");
+    checkEq(d.size(), 4, "four parts need four boundaries — the first slice starts at 0");
+    checkEq(d[0], 0, "and the first one IS zero, so the head of the file is playable");
+    checkEq(d[1], 4000, "evenly spaced");
+    checkEq(d[3], 12000, "to the last boundary before the end");
     check(daw::divideEqually(16000, 1).empty(), "one part needs no boundary at all");
     check(daw::divideEqually(0, 4).empty(), "an empty source divides into nothing");
   }
@@ -288,10 +299,14 @@ int main() {
   {
     daw::SliceSet set;
     set.nextMarkerId = 1;
+    // ZERO IS A BOUNDARY NOW; the duplicate and the out-of-range one are still refused. This
+    // used to assert that zero was rejected alongside them, which put a real slice and two
+    // genuine mistakes in the same category.
     const uint32_t made = daw::applySliceFrames(set, {1000, 2000, 0, 2000, 3000}, 10000);
-    checkEq(made, 3, "the zero and the duplicate are refused; the rest are made");
-    checkEq(set.markers.size(), 3, "and the set holds exactly those");
-    checkEq(set.nextMarkerId, 4, "ids advanced only for the ones actually minted");
+    checkEq(made, 4, "the duplicate is refused; zero is a legitimate boundary");
+    checkEq(set.markers.size(), 4, "and the set holds exactly those");
+    checkEq(set.markers[0].frame, 0, "sorted by frame, so the zero marker leads");
+    checkEq(set.nextMarkerId, 5, "ids advanced only for the ones actually minted");
   }
 
   if (g_fail == 0) {

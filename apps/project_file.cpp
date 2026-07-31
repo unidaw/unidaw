@@ -494,6 +494,12 @@ void writePatcherGraph(JsonWriter& writer, const PatcherGraph& graph) {
                  static_cast<uint64_t>(node.randomDegreeConfig.duration_ticks));
       writer.endChildObject();
     }
+    if (node.hasSliceSelectConfig) {
+      writer.beginChildObject("slice_select");
+      writer.key("base", static_cast<uint32_t>(node.sliceSelectConfig.base));
+      writer.key("count", static_cast<uint32_t>(node.sliceSelectConfig.count));
+      writer.endChildObject();
+    }
     writer.endArrayElement();
   }
   writer.endArray();
@@ -1008,6 +1014,12 @@ bool deserializeProject(const std::string& json,
       }
 
       if (const auto chain = tree.get_child_optional("device_chain")) {
+        // Highest id already seen in this chain, so a repaired id cannot collide with a real one.
+        uint32_t nextLoadedDeviceId = 1;
+        for (const auto& deviceEntry : *chain) {
+          nextLoadedDeviceId = std::max(
+              nextLoadedDeviceId, deviceEntry.second.get<uint32_t>("device_id", 0) + 1);
+        }
         for (const auto& deviceEntry : *chain) {
           const auto& deviceTree = deviceEntry.second;
           Device device;
@@ -1016,6 +1028,21 @@ bool deserializeProject(const std::string& json,
                                     device.kind)) {
             setError(error, "unknown device kind in project");
             return false;
+          }
+          // A SAMPLER SAVED WITH ID 0 IS REPAIRED, and ONLY a sampler.
+          //
+          // Zero means "no device" throughout the engine: TrackRuntime::samplerDeviceId is
+          // documented "0 = this track has no sampler" and guarded that way at nine sites, so a
+          // sampler with that id was never sent a note. Renumbering it is safe precisely BECAUSE
+          // it was silent — nothing can have come to depend on it.
+          //
+          // NOT done for other kinds, and the asymmetry is deliberate. A VST at id 0 worked fine,
+          // because nothing overloads its id as a sentinel; and mod_links reference devices BY
+          // ID, so renumbering a working device would break links pointing at it. Repairing what
+          // was broken and leaving alone what was not is the smaller claim, and the one that
+          // cannot lose data.
+          if (device.id == 0 && device.kind == DeviceKind::Sampler) {
+            device.id = nextLoadedDeviceId++;
           }
           device.capabilityMask = static_cast<uint8_t>(
               deviceTree.get<uint32_t>("capability_mask", 0));

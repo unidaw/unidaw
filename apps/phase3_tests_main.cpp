@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <unistd.h>  // getpid, for the per-process socket and shm names
 #include <thread>
 #include <vector>
 
@@ -71,7 +72,17 @@ bool setupHost(TestHost& host,
   ::setenv("DAW_HOST_FORCE_DIRECT_LOAD", "1", 1);
 
   daw::HostConfig config;
-  config.socketPath = "/tmp/daw_phase3.sock";
+  // ONE SOCKET AND ONE SHM NAME PER PROCESS. These were the literals "/tmp/daw_phase3.sock" and
+  // the host's default "/daw_engine_shared", shared by every phase3 test — so two running at
+  // once mapped the same shared memory and read each other's audio.
+  //
+  // WHAT THAT LOOKED LIKE is the reason it went unfixed for so long: not "the socket is busy"
+  // but "Composition sample mismatch at 96000 expected=1 actual=2". A fixture collision wearing
+  // the costume of a DSP bug, in a test that passes every time you run it alone. That is
+  // task #91 — one 'module' failure in a full-suite run that never reproduced.
+  const std::string tag = std::to_string(::getpid());
+  config.socketPath = "/tmp/daw_phase3_" + tag + ".sock";
+  config.shmName = "/daw_phase3_" + tag;
   if (!pluginPath.empty()) {
     config.pluginPaths = {pluginPath};
   }

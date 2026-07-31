@@ -35,3 +35,8 @@ ui/daw-app/tests/snapshots/*.svg
 # Per-project command journal (roadmap 19). Written beside the project it describes.
 history.jsonl
 build-tsan/
+# Sanitizer build trees, same reason as build-tsan. build-asan was NOT here, so a `git add -A`
+# swept 34 MB of instrumented binaries into a commit — the ignore list has to name every build
+# tree, not the two that happened to exist when it was written.
+build-asan/
+build-*/

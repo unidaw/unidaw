@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 
 #include "apps/sampler_envelope.h"
 #include "apps/sampler_mipmap.h"
@@ -228,11 +229,16 @@ class SamplerVoice {
   // wall-clock, so a bounce steals the same voice the audition did (§3.5 determinism).
   uint64_t age() const { return age_; }
 
+  // `pin` is the snapshot spec's pointers refer into. Passed as shared_ptr<const void> so this
+  // header does not need SamplerRender's definition — the voice never dereferences it, it only
+  // keeps it alive.
   void start(const SamplerVoiceSpec& spec,
              uint32_t noteId,
              uint16_t slotId,
-             uint8_t column) {
+             uint8_t column,
+             std::shared_ptr<const void> pin = nullptr) {
     spec_ = spec;
+    snapshotPin_ = std::move(pin);
     noteId_ = noteId;
     slotId_ = slotId;
     column_ = column;
@@ -781,6 +787,17 @@ class SamplerVoice {
   uint32_t fadeInTotal_ = 1;
   bool active_ = false;
   bool released_ = false;
+  // THE SNAPSHOT THIS VOICE IS READING, held for as long as it sounds.
+  //
+  // Every pointer in spec_ — the envelopes, the decoded planes, the mip-map — points INTO a
+  // SamplerRender this voice does not own. Holding a reference is what stops that render being
+  // freed underneath a sounding note when an edit lands (see SamplerEngine::setSnapshot). It is
+  // a shared_ptr and not a raw copy because the data is large and shared by every voice.
+  //
+  // Assigned on the audio thread, which is safe: copying a shared_ptr is an atomic increment,
+  // and the DEcrement here never reaches zero because the engine's retire list holds one until
+  // it can see that no voice does. Nothing is allocated and nothing is freed on this thread.
+  std::shared_ptr<const void> snapshotPin_;
 };
 
 }  // namespace daw

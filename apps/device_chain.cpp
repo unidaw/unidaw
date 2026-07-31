@@ -21,8 +21,23 @@ bool hasInstrument(const TrackChain& chain) {
   return false;
 }
 
+// DEVICE IDS START AT 1. Zero is not an id, it is the ABSENCE of one.
+//
+// This started at 0, so the first device added to an empty chain got id 0 — and 0 is what
+// "there is no device" means everywhere else. TrackRuntime::samplerDeviceId is documented "0 =
+// this track has no sampler" and guarded that way at nine sites, so a sampler that was the FIRST
+// device on its track was never sent a note: the guards all read "no sampler here". The wire
+// protocol overloads it the same way — deviceId 0 on a command means "the first sampler on the
+// track, whichever that is" — so a device genuinely numbered 0 was unaddressable by every
+// command as well.
+//
+// That is the normal case, not a corner. `add-device --kind sampler` on a fresh track produces
+// exactly it, and so does the whole chop workflow. Every structural fact stayed correct
+// throughout — the kit published, the slots resolved, the notes emitted — and the instrument was
+// simply never played, which is why nothing here caught it and the web-UI agent found it from
+// the outside with a three-track differential.
 uint32_t nextDeviceId(const TrackChain& chain) {
-  uint32_t nextId = 0;
+  uint32_t nextId = 1;
   for (const auto& device : chain.devices) {
     nextId = std::max(nextId, device.id + 1);
   }

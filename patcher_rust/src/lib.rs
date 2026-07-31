@@ -41,7 +41,9 @@ const _: () = {
 pub struct MusicalLogicPayload {
     pub degree: u8,
     pub octave_offset: i8,
-    pub _pad0: [u8; 2],
+    /// The sound address this note plays, or 0 for "let the keymap pick from the pitch".
+    /// Was `_pad0[2]`: same offset, same size, zeroed and never read. See apps/patcher_abi.h.
+    pub sound: u16,
     pub chord_id: u32,
     pub duration_ticks: u64,
     pub priority_hint: u8,
@@ -69,6 +71,19 @@ pub struct PatcherLfoConfig {
     pub depth: f32,
     pub bias: f32,
     pub phase_offset: f32,
+}
+
+/// SliceSelect: which SOUND a generated note plays, chosen reproducibly.
+///
+/// `count` is the SIZE of the range, so 0 and 1 both mean "always `base`" — a range being
+/// empty, not a sentinel being decoded, exactly as PatcherRandomDegreeConfig::degree works.
+/// `base` is the first sound address in the range, so a chop laid down from slot 1 is
+/// base=1, count=8.
+#[repr(C)]
+pub struct PatcherSliceSelectConfig {
+    pub base: u16,
+    pub count: u16,
+    pub _pad0: [u8; 4],
 }
 
 #[repr(C)]
@@ -246,6 +261,22 @@ pub extern "C" fn patcher_process_passthrough(_ctx: *mut PatcherContext) {}
 #[no_mangle]
 pub extern "C" fn patcher_process_event_out(_ctx: *mut PatcherContext) {}
 
+/// The musical tick an upstream generator stamped into the payload, or `None` if it did not.
+///
+/// Stamped as tick+1 so zero means "absent" and tick 0 is still expressible. Events that arrive
+/// from somewhere with no stamp — a clip note routed through a graph, say — fall back to
+/// recovering the tick from the sample time, which is what every node did before.
+fn stamped_tick(metadata: &[u8; 21]) -> Option<u64> {
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&metadata[1..9]);
+    let raw = u64::from_le_bytes(bytes);
+    if raw == 0 {
+        None
+    } else {
+        Some(raw - 1)
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn patcher_process_euclidean(ctx: *mut PatcherContext) {
     if ctx.is_null() {
@@ -338,10 +369,56 @@ pub extern "C" fn patcher_process_euclidean(ctx: *mut PatcherContext) {
                 euclidean_hit(step_index as u32, hits, steps)
             };
             if hit {
+                // ROUNDED FROM THE ABSOLUTE TICK, NOT FROM A DELTA OFF THE BLOCK BASE.
+                //
+                // This was `round((tick - block_start_tick) * samples_per_tick)`, which makes an
+                // onset's rounding depend on where the block boundary happened to fall: the same
+                // absolute tick lands one sample apart at 64 frames and at 256, and a bounce
+                // stops equalling the previous bounce. It is the same defect the CLIP path had
+                // (task #84) on its own code path — a position derived from a per-block base
+                // rather than from the music.
+                //
+                // Both terms below are functions of ABSOLUTE ticks, so the difference is too,
+                // and the block grid drops out. The base is still block_start_sample rather than
+                // a global conversion because this node only knows ONE tempo: under a tempo map
+                // the engine's base is right locally and a from-zero conversion would not be.
+                // ROUNDED FROM THE ABSOLUTE TICK, NOT FROM A DELTA OFF THE BLOCK BASE.
+                //
+                // `round((tick - block_start_tick) * samples_per_tick)` makes an onset's
+                // rounding depend on where the block boundary happened to fall, so the same
+                // absolute tick lands one sample apart at 256 frames and at 1024. It is the same
+                // defect the CLIP path had (task #84) on its own code path: a position derived
+                // from a per-block base rather than from the music.
+                //
+                // Both terms below are functions of ABSOLUTE ticks, so their difference is too
+                // and the block grid drops out. The base stays block_start_sample rather than a
+                // conversion from zero because this node knows only ONE tempo — under a tempo
+                // map the engine's base is right locally and a from-zero conversion would not be.
+                //
+                // Worth recording how this was established, because it was reverted once first:
+                // changing it alone moved nothing, because a dropped note and a mis-seeded draw
+                // were both louder. It was restored only after those two were fixed and a
+                // one-sample difference was what remained.
+                // FLOOR, NOT ROUND — and measured from the block's own base, not reconstructed.
+                //
+                // A tick inside [block_start_tick, block_end_tick) must convert to a sample
+                // inside that block. `round` breaks that on a half: the sixteenth at 1.875 s is
+                // sample 82687.5, which rounds to 82688 — the first sample of the NEXT block,
+                // outside the block whose tick window owns it. The engine then dropped it, and
+                // the next block never emitted it either because its tick window starts later,
+                // so the note vanished at some buffer sizes and not others.
+                //
+                // AND THE BASE IS block_start_sample, NOT A CONVERSION OF block_start_tick. An
+                // attempt at "round the absolute tick, both terms from zero" is one line away and
+                // is WRONG here, which took a measurement to establish: floor(bst * spt) is
+                // 82431 where the block's real base sample is 82432, so reconstructing the base
+                // introduces exactly the one-sample error it was meant to remove. The base the
+                // engine hands us is ground truth; the delta from it is the only thing worth
+                // computing, and floor keeps that delta inside the block.
                 let tick_delta = tick - ctx_ref.block_start_tick;
-                let sample_delta = (tick_delta as f64 * samples_per_tick).round() as u64;
+                let sample_delta = (tick_delta as f64 * samples_per_tick).floor() as i64;
                 let mut entry = EventEntry {
-                    sample_time: block_start_sample + sample_delta,
+                    sample_time: (block_start_sample as i64 + sample_delta) as u64,
                     block_id: 0,
                     type_: 9,
                     size: core::mem::size_of::<MusicalLogicPayload>() as u16,
@@ -357,7 +434,7 @@ pub extern "C" fn patcher_process_euclidean(ctx: *mut PatcherContext) {
                     // every graph.
                     degree,
                     octave_offset,
-                    _pad0: [0u8; 2],
+                    sound: 0,
                     chord_id: 0,
                     duration_ticks: if duration_ticks == 0 {
                         step_ticks / 2
@@ -370,6 +447,22 @@ pub extern "C" fn patcher_process_euclidean(ctx: *mut PatcherContext) {
                     metadata: {
                         let mut data = [0u8; 21];
                         data[0] = MUSICAL_LOGIC_KIND_GATE;
+                        // THE EXACT TICK THIS EVENT WAS EMITTED AT, stamped as tick+1 so that 0
+                        // still means "not stamped" and tick 0 is expressible.
+                        //
+                        // Downstream nodes seed themselves from the event's musical position and
+                        // had to RECOVER it by dividing (sample_time - block_start_sample) by
+                        // samples_per_tick — accurate to about a sample, which at 120bpm is 43
+                        // nanoticks. That is far below the 1/64-quarter seed grid and would be
+                        // harmless if onsets fell anywhere. They do not: a 16-step bar is 240000
+                        // ticks per step and the grid is 15000, so EVERY euclidean onset lands
+                        // exactly on a grid boundary, where a one-sample recovery error flips the
+                        // cell and reseeds. That is why the same bar drew different notes at 64
+                        // and 256 frames while random_degree's own unit test passed — the test
+                        // feeds it a tick, and only the end-to-end render goes through the
+                        // recovery.
+                        let stamped = tick.wrapping_add(1).to_le_bytes();
+                        data[1..9].copy_from_slice(&stamped);
                         data
                     },
                 };
@@ -438,7 +531,7 @@ pub extern "C" fn patcher_process_random_degree(ctx: *mut PatcherContext) {
             let mut payload = MusicalLogicPayload {
                 degree: 0,
                 octave_offset: 0,
-                _pad0: [0u8; 2],
+                sound: 0,
                 chord_id: 0,
                 duration_ticks: 0,
                 priority_hint: 0,
@@ -459,12 +552,19 @@ pub extern "C" fn patcher_process_random_degree(ctx: *mut PatcherContext) {
             // so snap to a grid far finer than any musical subdivision but far
             // coarser than that jitter — otherwise a one-tick wobble would
             // reseed and defeat the whole point.
-            let tick = if samples_per_tick > 0.0 {
-                let sample_delta =
-                    entry.sample_time as f64 - ctx_ref.block_start_sample as f64;
-                ctx_ref.block_start_tick as i64 + (sample_delta / samples_per_tick).round() as i64
-            } else {
-                ctx_ref.block_start_tick as i64
+            // THE STAMP FIRST, the recovery only as a fallback. Recovering the tick from the
+            // sample time is accurate to about a sample — 43 nanoticks at 120bpm — and the seed
+            // grid is 15000, so it would be harmless if onsets fell anywhere. A 16-step bar puts
+            // every onset exactly ON a grid boundary, where that jitter flips the cell.
+            let tick = match stamped_tick(&payload.metadata) {
+                Some(t) => t as i64,
+                None if samples_per_tick > 0.0 => {
+                    let sample_delta =
+                        entry.sample_time as f64 - ctx_ref.block_start_sample as f64;
+                    ctx_ref.block_start_tick as i64
+                        + (sample_delta / samples_per_tick).round() as i64
+                }
+                None => ctx_ref.block_start_tick as i64,
             };
             const SEED_GRID: i64 = (NANOTICKS_PER_QUARTER / 64) as i64;
             // Reproducible AND decorrelated: fold the project seed and this node's id into
@@ -492,6 +592,145 @@ pub extern "C" fn patcher_process_random_degree(ctx: *mut PatcherContext) {
                 payload.duration_ticks = NANOTICKS_PER_QUARTER / 8;
             }
             payload.metadata[0] = MUSICAL_LOGIC_KIND_DEGREE;
+            entry.size = core::mem::size_of::<MusicalLogicPayload>() as u16;
+            core::ptr::copy_nonoverlapping(
+                &payload as *const MusicalLogicPayload as *const u8,
+                entry.payload.as_mut_ptr(),
+                core::mem::size_of::<MusicalLogicPayload>(),
+            );
+        }
+    }
+}
+
+/// SLICE SELECT: the same node as random_degree, writing `sound` instead of `pitch`.
+///
+/// The sampler's sound address has been a per-NOTE field since v32, so a CLIP could always say
+/// which slice to play and a GENERATED note could not — it fell back to the keymap whatever the
+/// graph did. This fills that field, which makes "euclidean rhythm x weighted-random slice over
+/// an amen break, identical on every render" three nodes and a save.
+///
+/// SEEDED FROM THE MUSICAL POSITION, not the audio one, and this is the whole reason the node is
+/// worth having rather than an easy `rand()`. The seed is the event's absolute tick snapped to a
+/// 1/64-quarter grid — far finer than any subdivision anyone writes, far coarser than the
+/// sub-sample jitter of recovering a tick from a sample time — folded with the project seed and
+/// this node's id through mix64. So the same bar picks the same slices at 64, 256 or 1024 frames,
+/// and two SliceSelect nodes in one song do not move in lockstep.
+///
+/// GATES ONLY, like random_degree: a note that was written with a pitch is the user's, and
+/// rewriting what it plays would make the tracker lie about its own rows.
+#[no_mangle]
+pub extern "C" fn patcher_process_slice_select(ctx: *mut PatcherContext) {
+    if ctx.is_null() {
+        return;
+    }
+    unsafe {
+        let ctx_ref = &mut *ctx;
+        if ctx_ref.abi_version != PATCHER_ABI_VERSION {
+            return;
+        }
+        if ctx_ref.event_buffer.is_null() || ctx_ref.event_count.is_null() {
+            return;
+        }
+        let mut config = PatcherSliceSelectConfig {
+            base: 1,
+            count: 8,
+            _pad0: [0u8; 4],
+        };
+        if !ctx_ref.node_config.is_null()
+            && ctx_ref.node_config_size as usize >= core::mem::size_of::<PatcherSliceSelectConfig>()
+        {
+            let cfg = &*(ctx_ref.node_config as *const PatcherSliceSelectConfig);
+            config.base = cfg.base;
+            config.count = cfg.count;
+        }
+        // A base of 0 would emit sound 0, which MEANS "no address, use the keymap" — so the node
+        // would silently do nothing at all while looking configured. Clamped to 1, which is the
+        // first real slot id, rather than refused: there is nowhere here to report a refusal to,
+        // and every slot id in this engine starts at 1.
+        let base = config.base.max(1);
+        let count_max = config.count.max(1) as u64;
+        let tempo_bpm = if ctx_ref.tempo_bpm > 0.0 {
+            ctx_ref.tempo_bpm as f64
+        } else {
+            DEFAULT_BPM
+        };
+        let samples_per_tick =
+            (ctx_ref.sample_rate as f64 * 60.0) / (tempo_bpm * NANOTICKS_PER_QUARTER as f64);
+        let count = *ctx_ref.event_count;
+        let events = core::slice::from_raw_parts_mut(ctx_ref.event_buffer, count as usize);
+        for entry in events.iter_mut() {
+            if entry.type_ != 9 {
+                continue;
+            }
+            let mut payload = MusicalLogicPayload {
+                degree: 0,
+                octave_offset: 0,
+                sound: 0,
+                chord_id: 0,
+                duration_ticks: 0,
+                priority_hint: 0,
+                velocity: 0,
+                base_octave: 0,
+                metadata: [0u8; 21],
+            };
+            core::ptr::copy_nonoverlapping(
+                entry.payload.as_ptr(),
+                &mut payload as *mut MusicalLogicPayload as *mut u8,
+                core::mem::size_of::<MusicalLogicPayload>(),
+            );
+            // EITHER KIND. `sound` is ORTHOGONAL to pitch — it names which slot plays, not
+            // which note — so this node has no business refusing an event that already has a
+            // pitch. random_degree takes gates only because it SUPPLIES the pitch and would
+            // otherwise overwrite one the user typed; that argument does not transfer.
+            let was_gate = payload.metadata[0] == MUSICAL_LOGIC_KIND_GATE;
+            if !was_gate && payload.metadata[0] != MUSICAL_LOGIC_KIND_DEGREE {
+                continue;
+            }
+            // THE STAMP FIRST, the recovery only as a fallback. Recovering the tick from the
+            // sample time is accurate to about a sample — 43 nanoticks at 120bpm — and the seed
+            // grid is 15000, so it would be harmless if onsets fell anywhere. A 16-step bar puts
+            // every onset exactly ON a grid boundary, where that jitter flips the cell.
+            let tick = match stamped_tick(&payload.metadata) {
+                Some(t) => t as i64,
+                None if samples_per_tick > 0.0 => {
+                    let sample_delta =
+                        entry.sample_time as f64 - ctx_ref.block_start_sample as f64;
+                    ctx_ref.block_start_tick as i64
+                        + (sample_delta / samples_per_tick).round() as i64
+                }
+                None => ctx_ref.block_start_tick as i64,
+            };
+            const SEED_GRID: i64 = (NANOTICKS_PER_QUARTER / 64) as i64;
+            // A DIFFERENT DECORRELATING CONSTANT FROM random_degree'S, so that a graph running
+            // both nodes does not have them agree: with the same constant, the same tick and the
+            // same node id would give the same draw, and "slice N always plays with degree N"
+            // is a correlation nobody asked for and nobody would find.
+            let grid = tick.div_euclid(SEED_GRID) as u64;
+            let seed = mix64(ctx_ref.seed ^ 0xbf58_476d_1ce4_e5b9u64
+                                 .wrapping_mul(ctx_ref.node_id as u64 + 1))
+                ^ grid;
+            let pick = (mix64(seed) % count_max) as u16;
+            payload.sound = base.saturating_add(pick);
+            // A BARE GATE IS PROMOTED TO A NOTE, because otherwise this node is unusable alone.
+            // The resolution path turns DEGREES into pitches and skips GATES by design, so
+            // euclidean -> slice_select -> event_out would emit a rhythm that resolves to
+            // nothing and renders silence — which looks exactly like the node not working.
+            //
+            // Degree 1 is the tonic, and for a chop that is the right answer rather than a
+            // placeholder: the slot is chosen by `sound`, so the pitch is only there to make the
+            // event a note at all, and a slice plays at its recorded speed when its slot has
+            // pitch tracking off (which is what the chop mints). Anyone wanting the pitch to
+            // move as well puts a random_degree BEFORE this node, where it still sees a gate.
+            if was_gate {
+                payload.degree = 1;
+                payload.metadata[0] = MUSICAL_LOGIC_KIND_DEGREE;
+                if payload.velocity == 0 {
+                    payload.velocity = 100;
+                }
+                if payload.duration_ticks == 0 {
+                    payload.duration_ticks = NANOTICKS_PER_QUARTER / 8;
+                }
+            }
             entry.size = core::mem::size_of::<MusicalLogicPayload>() as u16;
             core::ptr::copy_nonoverlapping(
                 &payload as *const MusicalLogicPayload as *const u8,
@@ -680,7 +919,7 @@ mod tests {
                 let payload = MusicalLogicPayload {
                     degree: 0,
                     octave_offset: 0,
-                    _pad0: [0u8; 2],
+                    sound: 0,
                     chord_id: 0,
                     duration_ticks: 0,
                     priority_hint: 0,

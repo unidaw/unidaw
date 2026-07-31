@@ -7,6 +7,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <unistd.h>  // getpid, for the per-process socket path below
 #include <thread>
 #include <vector>
 
@@ -62,7 +63,23 @@ bool setupHostMulti(TestHost& host,
   ::setenv("DAW_HOST_FORCE_DIRECT_LOAD", "1", 1);
 
   daw::HostConfig config;
-  config.socketPath = "/tmp/daw_test.sock";
+  // ONE SOCKET PATH PER PROCESS. This was the literal "/tmp/daw_test.sock", shared by every
+  // phase2 test binary — so two of them running at once meant the second could not create the
+  // server socket, and every connect after that was refused. Serially they all pass; under
+  // `ctest -j4` three of the five fail together.
+  //
+  // That is the shape of a flake nobody can reproduce: it depends on the scheduler, it looks
+  // like whichever test happened to lose, and running the accused test alone always passes.
+  // It is also the same fix the ENGINE already got for its own socket and SHM names — derived
+  // per instance rather than fixed — and this harness was simply never brought along.
+  //
+  // BOTH NAMES, because fixing only the socket moved the collision rather than removing it: the
+  // sockets became unique, the hosts launched, and then two of them mapped the SAME shared
+  // memory and the run died on "failed to map shared memory" instead. A shared resource that is
+  // half-partitioned is still shared.
+  const std::string tag = std::to_string(::getpid());
+  config.socketPath = "/tmp/daw_test_" + tag + ".sock";
+  config.shmName = "/daw_test_" + tag;
   if (!pluginPaths.empty()) {
     config.pluginPaths = pluginPaths;
   }

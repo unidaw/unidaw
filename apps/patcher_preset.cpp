@@ -35,6 +35,8 @@ const char* nodeTypeToString(PatcherNodeType type) {
       return "random_degree";
     case PatcherNodeType::EventOut:
       return "event_out";
+    case PatcherNodeType::SliceSelect:
+      return "slice_select";
   }
   return "unknown";
 }
@@ -66,6 +68,10 @@ bool stringToNodeType(const std::string& value, PatcherNodeType& out) {
   }
   if (value == "event_out") {
     out = PatcherNodeType::EventOut;
+    return true;
+  }
+  if (value == "slice_select") {
+    out = PatcherNodeType::SliceSelect;
     return true;
   }
   return false;
@@ -127,6 +133,19 @@ boost::property_tree::ptree serializeRandomDegree(const PatcherRandomDegreeConfi
   node.put("velocity", config.velocity);
   node.put("duration_ticks", config.duration_ticks);
   return node;
+}
+
+boost::property_tree::ptree serializeSliceSelect(const PatcherSliceSelectConfig& config) {
+  boost::property_tree::ptree node;
+  node.put("base", config.base);
+  node.put("count", config.count);
+  return node;
+}
+
+void deserializeSliceSelect(const boost::property_tree::ptree& node,
+                            PatcherSliceSelectConfig& config) {
+  config.base = node.get<uint16_t>("base", config.base);
+  config.count = node.get<uint16_t>("count", config.count);
 }
 
 void deserializeEuclidean(const boost::property_tree::ptree& node,
@@ -227,6 +246,10 @@ bool readPatcherGraphTree(const boost::property_tree::ptree& root,
       node.hasRandomDegreeConfig = true;
       deserializeRandomDegree(*randomTree, node.randomDegreeConfig);
     }
+    if (auto sliceTree = nodeTree.get_child_optional("slice_select")) {
+      node.hasSliceSelectConfig = true;
+      deserializeSliceSelect(*sliceTree, node.sliceSelectConfig);
+    }
 
     pendingNodes.push_back(PendingNode{node, std::move(inputs)});
   }
@@ -288,6 +311,9 @@ bool savePatcherPreset(const PatcherGraph& graph,
     }
     if (node.hasRandomDegreeConfig) {
       nodeTree.add_child("random_degree", serializeRandomDegree(node.randomDegreeConfig));
+    }
+    if (node.hasSliceSelectConfig) {
+      nodeTree.add_child("slice_select", serializeSliceSelect(node.sliceSelectConfig));
     }
 
     nodesTree.push_back(std::make_pair("", nodeTree));

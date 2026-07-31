@@ -58,6 +58,11 @@ struct SamplerSourceAudio {
 struct SamplerRender {
   SamplerState state;  // a COPY, so an edit to the document cannot be seen half-applied
   SamplerKeymap keymap;
+  // WHICH EDIT THIS SNAPSHOT IS. Stamped when it is built, so a read-back published FROM this
+  // snapshot can say which version of the document it is showing — rather than being labelled
+  // with whatever the model's counter happens to read at publish time, which is a different
+  // fact and can be newer.
+  uint32_t version = 0;
   std::vector<std::shared_ptr<const SamplerSourceAudio>> audio;  // parallel to state.sources
   double sampleRate = 48000.0;
 
@@ -103,8 +108,41 @@ class SamplerRuntime {
     cap_ = voiceCap;
   }
 
-  void setSnapshot(std::shared_ptr<const SamplerRender> snap) { snap_ = std::move(snap); }
+  // A RETIRED SNAPSHOT IS NOT FREED WHILE A VOICE IS STILL READING IT.
+  //
+  // This used to be `snap_ = std::move(snap)`, which dropped the last reference to the outgoing
+  // SamplerRender and freed it — while sounding voices held RAW pointers into its envelopes,
+  // its decoded sample planes and its mip-map. SamplerVoice says so in as many words: "All
+  // envelopes are borrowed from the snapshot, so a voice never owns one and never frees one."
+  // Every sampler edit goes through refreshSamplerForTrack, so ANY edit during playback — a
+  // filter change, an envelope tweak, a slice drag — could take the engine down. AddressSanitizer
+  // called it: heap-use-after-free, READ of size 8, on a render-pool worker. About one run in ten
+  // from a single edit and 3/3 under a hammer, which is why it survived this long.
+  //
+  // WHY use_count() IS SOUND HERE, since it usually is not. Only this thread ever ADDS a
+  // reference to a retired snapshot: a new voice always pins snap_, never a retired one, so a
+  // retired entry's count can only fall. `1` therefore means "the retire list is the last
+  // holder" and cannot become 2 behind our back. Voices decrement from the audio thread, which
+  // is a refcount atomic and frees nothing, because this list is still holding one.
+  //
+  // Collected here rather than on a timer: a sustained note can hold its snapshot for as long as
+  // it sounds, so any grace period short enough to bound memory is short enough to be wrong.
+  void setSnapshot(std::shared_ptr<const SamplerRender> snap) {
+    if (snap_ && snap_ != snap) {
+      retired_.push_back(std::move(snap_));
+    }
+    snap_ = std::move(snap);
+    for (size_t i = retired_.size(); i-- > 0;) {
+      if (retired_[i].use_count() == 1) {
+        retired_[i] = std::move(retired_.back());
+        retired_.pop_back();
+      }
+    }
+  }
   const SamplerRender* snapshot() const { return snap_.get(); }
+  // Snapshots kept alive only because a voice is still sounding from them. Telemetry: a number
+  // that climbs and never falls means the collection rule above has stopped working.
+  size_t retiredSnapshots() const { return retired_.size(); }
 
   uint32_t activeVoices() const {
     uint32_t n = 0;
@@ -455,7 +493,10 @@ class SamplerRuntime {
       }
       spec.envUnitsPerFrame = u;
     }
-    target->start(spec, e.noteId, slotId, e.column);
+    // THE VOICE PINS THE SNAPSHOT ITS spec POINTS INTO. Without this the retire list in
+    // setSnapshot has nothing to observe — every retired snapshot would look unreferenced and be
+    // freed immediately, which is exactly the use-after-free it exists to prevent.
+    target->start(spec, e.noteId, slotId, e.column, snap_);
     if (stolen) {
       target->fadeIn(fadeFrames(kStealFadeMs));
     }
@@ -483,6 +524,9 @@ class SamplerRuntime {
  private:
   std::vector<SamplerVoice> voices_;
   std::shared_ptr<const SamplerRender> snap_;
+  // Snapshots replaced by an edit while voices were still sounding from them. Held until no
+  // voice references them; see setSnapshot for why use_count() is a sound test here.
+  std::vector<std::shared_ptr<const SamplerRender>> retired_;
   double sampleRate_ = 48000.0;
   double nanotickPerFrame_ = 0.0;
   uint8_t cap_ = 64;

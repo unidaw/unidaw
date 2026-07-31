@@ -23,7 +23,18 @@ constexpr uint8_t kMusicalLogicKindDegree = 2;
 struct MusicalLogicPayload {
   uint8_t degree = 0;
   int8_t octave_offset = 0;
-  uint8_t _pad0[2]{};
+  // WHICH SOUND THIS NOTE PLAYS, or 0 for "no address — let the keymap pick from the pitch".
+  //
+  // This was `uint8_t _pad0[2]`, at the same offset and the same size, zeroed on both sides and
+  // read by neither. Naming it costs no layout change and no PATCHER_ABI_VERSION bump: an old
+  // patcher_rust writes 0 and a new engine reads 0, which is today's behaviour, and a new
+  // patcher_rust writing a value into an old engine is ignored, which is also today's behaviour.
+  // A version gate here would only refuse combinations that work.
+  //
+  // The sampler's sound address has been a per-NOTE field since v32 (UiClipNote.sound), so a
+  // clip could always say which slice to play and a GENERATED note could not — it fell back to
+  // the keymap whatever the graph did. This is the field SliceSelect writes.
+  uint16_t sound = 0;
   uint32_t chord_id = 0;
   uint64_t duration_ticks = 0;
   uint8_t priority_hint = 0;
@@ -42,6 +53,19 @@ struct PatcherEuclideanConfig {
   uint8_t velocity = 100;
   uint8_t base_octave = 4;
   uint8_t _pad0[2]{};
+};
+
+// SliceSelect: which SOUND a generated note plays.
+//
+// `count` is the SIZE of the range, so 0 and 1 both mean "always `base`" — a range being empty
+// rather than a sentinel being decoded, exactly as PatcherRandomDegreeConfig::degree works.
+// `base` is the first sound address in the range: a chop laid down from slot 1 is base=1,
+// count=8. A base of 0 is clamped to 1, because 0 is the sound address that MEANS "no address,
+// let the keymap pick" — a node configured with it would look set up and do nothing.
+struct PatcherSliceSelectConfig {
+  uint16_t base = 1;
+  uint16_t count = 8;
+  uint8_t reserved[4]{};
 };
 
 struct PatcherRandomDegreeConfig {
@@ -110,6 +134,7 @@ extern "C" void atomic_store_u64(uint64_t* ptr, uint64_t value);
 extern "C" void patcher_process(PatcherContext* ctx) DAW_WEAK;
 extern "C" void patcher_process_euclidean(PatcherContext* ctx) DAW_WEAK;
 extern "C" void patcher_process_random_degree(PatcherContext* ctx) DAW_WEAK;
+extern "C" void patcher_process_slice_select(PatcherContext* ctx) DAW_WEAK;
 extern "C" void patcher_process_event_out(PatcherContext* ctx) DAW_WEAK;
 extern "C" void patcher_process_lfo(PatcherContext* ctx) DAW_WEAK;
 extern "C" void patcher_process_passthrough(PatcherContext* ctx) DAW_WEAK;
