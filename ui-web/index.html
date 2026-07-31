@@ -1461,6 +1461,12 @@ function automationOf(track) {
  * the refresh — which is honest about what it is rather than pretending to be live.
  */
 const samplerKits = new Map();
+/*
+ * The kits the RACK is drawing, keyed like `deviceParams` so the chain model can look one up the
+ * same way it looks up a parameter list. A plain object rather than a second Map because that is
+ * what `params` is and the model indexes both identically.
+ */
+const samplerKitsForChain = {};
 let samplerKitAsked = null;
 
 /**
@@ -4625,6 +4631,7 @@ function placeSurface(el, name, v, v2) {
 // One reused object, with every field the model reads declared here — a shape
 // that gains a property mid-run is a hidden-class transition on the hot path.
 const _chainOpts = { track: 0, chains: null, selected: -1, trackName: '', params: null,
+                     kits: null,
                      patcherDevice: -1,
                      patcherNodes: null, patcherEdges: null, patcherVersion: -1,
                      meters: null, meterCount: 0, meterTrack: -1 };
@@ -4820,6 +4827,27 @@ function draw() {
     o.selected = state.chainSelected;
     o.trackName = rackOn === MASTER_TRACK_ID ? 'Master' : trackName(engine, rackOn);
     o.params = deviceParams;
+    /*
+     * ASK ABOUT EVERY SAMPLER ON THIS TRACK, so its card can draw its kit.
+     *
+     * `requestSamplerKit` caches and will not ask twice for the same question, so calling it
+     * per frame costs a Map lookup — the same bargain `automationReader.forTrack` makes, and for
+     * the same reason: the surface asks for what it wants to draw and the answer arrives when it
+     * arrives, rather than a second gesture existing to fetch it.
+     *
+     * A kit is NOT versioned, so a cached answer is a snapshot rather than a subscription: it is
+     * refreshed by asking again, which the `kit` verb does. Drawing a stale kit is honest as
+     * long as nothing claims it is live, and nothing does.
+     */
+    const ch = chains[state.cursor.track];
+    if (ch && ch.devices) {
+      for (const d of ch.devices) {
+        if (d.kind !== 5) continue;
+        const k = samplerKitOf(state.cursor.track, d.id) || requestSamplerKit(state.cursor.track, d.id);
+        if (k) samplerKitsForChain[paramKey(state.cursor.track, d.id)] = k;
+      }
+    }
+    o.kits = samplerKitsForChain;
     // Which device the published graph belongs to, and what that graph MAKES.
     // Without this the rack can show a plugin sitting quietly while a euclidean
     // node inside it plays a part nobody wrote.

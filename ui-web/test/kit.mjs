@@ -32,6 +32,11 @@ const WAV = resolve('presets/audio/waveform_probe.wav');
 /*
  * A SAMPLER DEVICE, authored in the project file. `DeviceKind::Sampler = 5`.
  *
+ * The slot key is `id`, not `slot_id` — `sampler_serialize.h:294` reads `get<uint32_t>("id")`.
+ * The first version used `slot_id`, both slots silently defaulted to 0, and the card drew two
+ * rows both labelled 0. That is the third fixture-key error of the night, all the same shape:
+ * an unread key does not error, it defaults.
+ *
  * Hand-written because there is no other way in yet — `add-device --kind sampler` exists in
  * daw-cli, and daw-cli cannot talk to this stack's engine (it maps a different segment). The
  * kit's contents come from the device's own document, which is what the read-back then reports
@@ -51,8 +56,8 @@ writeFileSync(`${stack.dir}/kitfix.uniproj.json`, JSON.stringify({
       sampler: {
         sources: [{ local_id: 1, path: WAV }],
         slots: [
-          { slot_id: 1, source_local_id: 1, key_low: 36, key_high: 36, root_key: 36 },
-          { slot_id: 2, source_local_id: 1, key_low: 38, key_high: 40, root_key: 38 },
+          { id: 1, source_local_id: 1, key_low: 36, key_high: 36, root_key: 36 },
+          { id: 2, source_local_id: 1, key_low: 38, key_high: 40, root_key: 38 },
         ],
       },
     }],
@@ -155,6 +160,52 @@ const ask = async (track, device) => {
         'the sampler card is named, not "kind 5"', JSON.stringify(card));
   check(card.badge === 'UNI',
         'and badged UNI — it runs IN the engine, not in a host process', JSON.stringify(card));
+}
+
+// ---------------------------------------------------------------------------
+// AND THE RACK DRAWS IT. A sampler has no plugin parameters at all, so its card was a title
+// over an empty body — the engine had a whole instrument in it and the rack said nothing.
+//
+// The slots ride the parameter rows: same virtualized ring, same name-and-value shape, no bar.
+// A kit grid is a list of slots, and the rack already knows how to draw a list.
+// ---------------------------------------------------------------------------
+{
+  await page.evaluate(() => window.__uni.run('view tracker'));
+  await page.waitForTimeout(1200);
+  const rows = await page.evaluate(() =>
+    [...document.querySelectorAll('.dv-p')].filter((r) => r.style.display !== 'none').map((r) => ({
+      name: r.querySelector('.dv-p-n') && r.querySelector('.dv-p-n').textContent,
+      val: r.querySelector('.dv-p-v') && r.querySelector('.dv-p-v').textContent,
+      title: r.title,
+      map: !!r.querySelector('.dv-p-map') &&
+           r.querySelector('.dv-p-map').style.display !== 'none',
+    })));
+  check(rows.length === 2, 'the card lists both slots', JSON.stringify(rows));
+  const one = rows.find((r) => r.name && r.name.startsWith('1'));
+  const zone = rows.find((r) => r.name && r.name.startsWith('2'));
+  /*
+   * THE KEY IS THE NAME, because that is how a person finds a pad — and a one-key slot names
+   * its key while a zone names its span, which is the difference between a drum pad and a
+   * sampled instrument and the one thing a kit grid must not blur.
+   */
+  // The app's own tracker notation — `C-2`, note then octave — not the `C1` spelling I assumed.
+  // Asserted as a SHAPE rather than an exact octave, so this checks the naming and not the
+  // middle-C convention, which is a different argument and not this suite's.
+  check(one && /^1\s+[A-G]#?-?\d$/.test(one.name), 'a one-key slot is named by its key',
+        one && JSON.stringify(one.name));
+  check(zone && zone.name.includes('-'), 'and a zone by its span',
+        zone && JSON.stringify(zone.name));
+  check(one && /f$/.test(one.val || ''), 'the value is its length in FRAMES — the sample rate '
+        + 'is not on this side of the wire, and a wrong duration is worse than an honest count',
+        one && JSON.stringify(one.val));
+  check(one && /frames/.test(one.title || ''), 'with the detail in the title', one && one.title);
+  /*
+   * AND NO MAP BADGE. Nothing modulates a slot, so offering one would put a badge over a link
+   * that could never move anything — the same lie the rack already refuses for a plugin
+   * parameter whose `automatable` is false.
+   */
+  check(rows.every((r) => !r.map), 'and no modulation badge — nothing modulates a slot',
+        JSON.stringify(rows.map((r) => r.map)));
 }
 
 check(errors.length === 0, 'and nothing threw', errors.slice(0, 3).join(' | '));

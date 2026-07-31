@@ -827,9 +827,13 @@ export class Chain {
      * an anonymous 0..1 bar, so setting a value in real units meant dragging and reading the
      * display string until it said the right thing — a binary search rather than an interface.
      */
-    const meta = q.range || q.steps || !q.automatable
+    const meta = q.range || q.steps || (!q.automatable && !q.isSlot)
       ? [q.range, q.steps ? `${q.steps} positions` : '',
-         q.automatable ? '' : 'not automatable'].filter(Boolean).join(' · ')
+         // A SLOT is not an un-automatable parameter, it is not a parameter. Saying "not
+         // automatable" about one reads as a limitation of this slot rather than a category
+         // error — see `isSlot` in chainmodel.js, which exists because one flag had two
+         // consumers wanting different things.
+         (q.automatable || q.isSlot) ? '' : 'not automatable'].filter(Boolean).join(' · ')
       : '';
     if (r._meta !== meta) { r._meta = meta; r.title = meta; }
     /*

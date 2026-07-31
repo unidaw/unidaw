@@ -23,6 +23,7 @@
 // the values it concatenated from, and it is rebuilt only when one of them moves.
 
 import { generatorsFrom } from './patchermodel.js';
+import { pitchName } from './wire.js';
 
 /**
  * One shared empty edge list, and one reused subgraph mask.
@@ -130,6 +131,26 @@ export const CAP_AUDIO = 4;
 
 /** DeviceKind. Only the instrument is named here; the rest read from `caps`. */
 const KIND_VST_INSTRUMENT = 3;
+/** The built-in sampler. Named because its card draws its KIT where a plugin's params go. */
+const KIND_SAMPLER = 5;
+
+/**
+ * A slot's length, in the unit a person reads it in.
+ *
+ * Frames are what the engine publishes and seconds are what anyone thinks in, but the sample
+ * rate is not on this side of the wire — so this says frames, briefly, rather than inventing a
+ * rate to divide by. A wrong duration is worse than an honest count.
+ */
+const FRAME_TEXT = new Map();
+function frameText(n) {
+  let s = FRAME_TEXT.get(n);
+  if (s === undefined) {
+    s = n >= 1000000 ? `${Math.round(n / 100000) / 10}Mf`
+      : n >= 1000 ? `${Math.round(n / 100) / 10}kf` : `${n}f`;
+    FRAME_TEXT.set(n, s);
+  }
+  return s;
+}
 /** kUiMeterSilent: silent or below the floor, and a real reading, not a hole. */
 export const METER_SILENT = -32768;
 /**
@@ -260,7 +281,7 @@ function createParamSlot() {
      * rack must not offer one — a control that accepts a curve nothing reads is the same class of
      * lie as a modulation badge over a link that moves nothing.
      */
-    unit: '', range: '', steps: 0, automatable: true, defaultValue: 0,
+    unit: '', range: '', steps: 0, automatable: true, defaultValue: 0, isSlot: false,
     /**
      * The link exists and CANNOT WORK: it has no uid16, and the engine addresses a VST
      * parameter by uid16 alone. Drawn differently from a working link, because a badge
@@ -375,6 +396,16 @@ export function createChainBuffer(cap = 16) {
  */
 export function buildChainModel(opts, buf) {
   const { track = 0, chains = null, selected = -1, trackName = '', params = null,
+          /*
+           * The sampler kits, keyed like `params` — see `paramKey`.
+           *
+           * A sampler has no plugin parameters at all, so its card was a title and an empty
+           * body: the engine had a whole instrument in it and the rack said nothing. Its SLOTS
+           * are what a kit grid is, and they fit the parameter rows exactly — a name, a value
+           * and no bar — so they ride the same virtualized ring rather than needing a surface
+           * of their own.
+           */
+          kits = null,
           // Which device the published patcher graph belongs to, and what is in
           // it. A generator node emits notes of its own, and until now nothing
           // anywhere said so — see `generators` below.
@@ -496,7 +527,18 @@ export function buildChainModel(opts, buf) {
       c.title = nm || ((DEVICE_KINDS[d.kind] || ('kind ' + d.kind)) + ' #' + d.id);
     }
 
-    const src = (dp && dp.params) ? dp.params : null;
+    /*
+     * A SAMPLER'S ROWS ARE ITS SLOTS.
+     *
+     * `src` is normally the host's parameter list. For a sampler there is no host and no
+     * parameters, so the kit's slots stand in — same shape, same rows, same ring. The identity
+     * guard below keys on this array, and a kit answer is replaced wholesale when a new one
+     * arrives, so the same array is the same slots and nothing is rebuilt per frame.
+     */
+    const kit = (kits && d.kind === KIND_SAMPLER) ? kits[paramKey(track, d.id)] : null;
+    const src = kit && kit.found && kit.slots ? kit.slots
+              : ((dp && dp.params) ? dp.params : null);
+    const isKit = !!(kit && kit.found && kit.slots && src === kit.slots);
     const total = src ? src.length : 0;
     const shown = Math.min(total, MAX_PARAMS);
     // Grow the pool to what this card needs and never shrink it: the count moves
@@ -520,9 +562,49 @@ export function buildChainModel(opts, buf) {
     if (c._pSrc !== src || c._pId !== d.id || c._pCount !== shown
         || c._pMod !== buf.modVersion) {
       c._pSrc = src; c._pId = d.id; c._pCount = shown; c._pMod = buf.modVersion;
+    if (isKit) c._pSrc = src;   // keyed on the kit array, same as a parameter list
       for (let k = 0; k < shown; k++) {
         const q = src[k];
         const p = slots[k];
+        if (isKit) {
+          /*
+           * ONE SLOT, AS A ROW. Built once per kit answer, not per frame — the guard above is
+           * what makes that true, and it is the same guard the parameter path uses.
+           *
+           * The NAME is the slot number and the key it answers to, because that is how a person
+           * finds a pad. `lengthFrames === 0` means the source did not resolve, and the region
+           * publishes a source-missing flag precisely so a UI can say WHICH kind of silent it
+           * is — so it says.
+           */
+          const missing = (q.flags & 4) !== 0;
+          p.index = q.slot;
+          p.uid = '';
+          p.name = q.keyLow === q.keyHigh
+            ? `${q.slot}  ${pitchName(q.root)}`
+            : `${q.slot}  ${pitchName(q.keyLow)}-${pitchName(q.keyHigh)}`;
+          p.unit = '';
+          p.steps = 0;
+          // A slot is not a parameter: nothing modulates it, so the row must not offer a badge
+          // that would sit over an inert link.
+          p.automatable = false;
+          /*
+           * `isSlot` so the row is not annotated as a PARAMETER. Marking it un-automatable is
+           * what hides the modulation badge — correct, nothing modulates a slot — but the title
+           * builder turns that same flag into the words "not automatable", which reads as a
+           * limitation of this slot rather than as a category error. It is the second consumer
+           * of one flag wanting different things, so it gets its own.
+           */
+          p.isSlot = true;
+          p.defaultValue = 0;
+          p.range = missing ? 'the source file did not resolve — this slot is silent'
+                  : q.slice ? `slice ${q.slice}, ${q.frames} frames`
+                  : `${q.frames} frames`;
+          p.display = missing ? 'MISSING' : q.slice ? `sl${q.slice}` : frameText(q.frames);
+          p.value = 0;
+          p.mod = -1;
+          p.modDepth = 0;
+          continue;
+        }
         // The engine's index, kept because the wire orders by it — but the
         // command that eventually writes a value should carry `uid` too; the
         // region's own comment says the index is for ordering and the uid is
@@ -535,6 +617,7 @@ export function buildChainModel(opts, buf) {
         // Absent means TRUE. A plugin that publishes nothing about automatability is not saying
         // "no" — and defaulting to no would hide the lane on every plugin that predates the field.
         p.automatable = q.automatable !== false;
+        p.isSlot = false;
         p.defaultValue = typeof q.default === 'number' ? q.default : 0;
         /*
          * The range, built ONCE per parameter rather than per frame, and only when both ends have
