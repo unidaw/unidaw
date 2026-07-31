@@ -333,6 +333,17 @@ class SamplerVoice {
     filtR_.reset();
     filtL2_.reset();
     filtR2_.reset();
+    // AND THE VINTAGE HOLD, for the same reason and in the same place. These are per-voice DSP
+    // state and voices are POOLED: without this a voice that played a note with rate reduction on
+    // begins the NEXT note mid-hold, outputting the previous note's last latched sample and
+    // running its whole staircase offset by the leftover frames. The member initialisers only run
+    // at construction, which is exactly once per pool slot and not once per note.
+    //
+    // The failure it caused is history-dependent — the same note sounds different depending on
+    // what the voice played before it — so a render stops being a function of the project. That
+    // is the one property §3.5 says this subsystem must not break.
+    holdCount_[0] = holdCount_[1] = 0;
+    held_[0] = held_[1] = 0.0f;
     baseStep_ = step_;
     released_ = false;
   }

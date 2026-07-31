@@ -510,6 +510,38 @@ assertion is the **move**: the module is copied to another directory, the origin
 and it still plays. `unzip -t` accepts the archives, and two saves of one project are
 byte-identical (the timestamp is fixed at the format's epoch, so a save is not a diff).
 
+**AND IT CARRIED NO PLUGIN STATE AT ALL — found and fixed 2026-07-31, after the above was
+written.** A `.uni` packed `project.json` and every sample, and not one byte of any plugin's
+patch. Open a received module and the device chain is intact, every plugin is present, every
+sample plays, and each plugin comes up at its **defaults**. Nothing looks broken; the sounds are
+simply gone. That is the worst shape a data-loss bug can take, because the module *opens* — and
+`module_check.sh` could not see it, because its fixture is a **sampler**, which has no opaque
+state, so all five of its properties passed with plugin state missing entirely.
+
+**The root cause was a lambda's scope, not a forgotten feature.** `pluginStateDir` lived inside
+`daw_engine_main.cpp`, so the save that *writes* the blobs and the load that *restores* them
+agreed with each other — and `saveProjectModule`, which has to *find* those blobs in order to
+pack them, could not name the directory at all. The packer was not ignoring plugin state; it had
+no way to ask where it was. It is now `daw::pluginStateDirFor` in `project_file.cpp`, one
+definition, and the engine's lambda delegates to it.
+
+**The archive prefix is derived rather than chosen**, which is what makes the unpacker need no
+change: entries go under `pluginStateDirFor("project.json")` — i.e. `project.state/` — and
+`loadProjectModule` already writes every entry to its own name, escape guard and all, so the
+blobs land exactly where the unpacked document will be searched for them **by construction**. A
+literal `vst_state/` would have needed a relocation step on load and a second place to keep in
+sync. Entries are **sorted** before packing: `directory_iterator` order is unspecified, and
+without the sort the byte-identical-resave property above would break.
+
+Verified by `tools/module_state_check.sh` (ctest `module_state`), whose load-bearing assertion is
+that the plugin comes back **at the value that was set and not at its default** — with an explicit
+guard that the test value differs from the default, because otherwise "the patch survived" and
+"the plugin came up at defaults" are the same observation and the check cannot fail. Two negative
+controls: not packing the state (the module then contains only `project.json`), and packing it but
+never handing it back on load — the second is the instructive one, because *packs* and *travels*
+both still pass, the blob is in the file and unpacks byte-identical, and only the last assertion
+fails. The earlier properties on their own would have shipped the bug.
+
 STORED, not deflated, and that is a decision: the payload is mostly WAV, which deflates by
 10–20%; a stored entry stays byte-identical inside the archive so a content key computed on the
 file matches one computed on the extracted copy; and MOD and XM are not compressed either. A
@@ -519,7 +551,7 @@ Original plan, for the record: **`.uni`** — a zip holding `project.json` plus 
 
 The extension is **`.uni`**, not `.uniproj` (owner, 2026-07-30). It is the module's name, and it should read like one: `.mod`, `.xm`, `.it`, `.uni`. The loose working directory keeps `.uniproj.json` as it is now, so the two forms stay visibly distinct — a zip you send and a directory you edit — rather than one extension meaning two different things on disk.
 
-**Optional, in preference order:** ~~the `SliceSelect` patcher node~~ ✅ **built 2026-07-31** — `MusicalLogicPayload._pad0` became `uint16_t sound` at the same offset (no ABI bump: 0 already meant "use the keymap", so both mixed-version directions are prior behaviour), the node takes either gate or degree because `sound` is orthogonal to pitch, and it promotes a bare gate so the three-node graph works as claimed; ~~vintage bit/rate-reduction~~ ✅ **built 2026-07-31** — opcode 91 `SamplerSetVintage`, on the **mod set** for the reason auto-slicing is (a chopped break wants one character, not sixteen copies of it), rate-then-bits and both **before the filter**, which is the order the hardware had and the reason 12-bit sounds like 12-bit rather than like noise over a filtered signal. The hold counter is per voice and starts at zero on note-on, so a bounce cannot depend on where the transport was. Read-back took `UiSamplerSlotEntry`'s two reserved words, so **no `kShmVersion` bump** — they were always zero and zero is exactly what OFF means. The payload carries a flag per field because zero is a *legal* value for both, so absence cannot be encoded as a zero and a rate-only call would otherwise silently clear the bit depth. `tools/sampler_vintage_check.sh` (ctest `sampler_vintage`) identifies each control by the fingerprint only it leaves — bits collapse the **distinct-value** count (2111 → 3) while rate collapses the **transition** count (35183 → 2519) and *keeps* the distinct count high (313). Asserting merely that vintage "sounds different" would pass on an engine that applied one where the other was asked for; a destructive sample editor (trim/normalise/fade/reverse/DC — genuinely wanted, genuinely a separate surface, do it last); MIDI-per-bus for the kit.
+**Optional, in preference order:** ~~the `SliceSelect` patcher node~~ ✅ **built 2026-07-31** — `MusicalLogicPayload._pad0` became `uint16_t sound` at the same offset (no ABI bump: 0 already meant "use the keymap", so both mixed-version directions are prior behaviour), the node takes either gate or degree because `sound` is orthogonal to pitch, and it promotes a bare gate so the three-node graph works as claimed; ~~vintage bit/rate-reduction~~ ✅ **built 2026-07-31** — opcode 91 `SamplerSetVintage`, on the **mod set** for the reason auto-slicing is (a chopped break wants one character, not sixteen copies of it), rate-then-bits and both **before the filter**, which is the order the hardware had and the reason 12-bit sounds like 12-bit rather than like noise over a filtered signal. The hold counter is per voice and starts at zero on note-on, so a bounce cannot depend on where the transport was. Read-back took `UiSamplerSlotEntry`'s two reserved words, so **no `kShmVersion` bump** — they were always zero and zero is exactly what OFF means. The payload carries a flag per field because zero is a *legal* value for both, so absence cannot be encoded as a zero and a rate-only call would otherwise silently clear the bit depth. `tools/sampler_vintage_check.sh` (ctest `sampler_vintage`) identifies each control by the fingerprint only it leaves — bits collapse the **distinct-value** count (2111 → 3) while rate collapses the **transition** count (35183 → 2519) and *keeps* the distinct count high (313). Asserting merely that vintage "sounds different" would pass on an engine that applied one where the other was asked for. **One defect fell out of checking that claim, hours after it shipped:** `start()` resets `filtL_`/`filtR_` because voices are **pooled**, and the new `holdCount_`/`held_` were not reset with them — member initialisers run once per pool slot, not once per note. A voice that had played with rate reduction on began the next note *mid-hold*, emitting the previous note's last latched sample and running its staircase offset by the leftover frames: 39573 of 39690 samples differed between two identical notes. History-dependent, so a render stopped being a function of the project — the one property §3.5 says this subsystem must not break, asserted in the code comment and not checked. The seventh property (two identical notes, the second reusing the first's voice, must render identically, with vintage-off as the alignment control) now checks it; a destructive sample editor (trim/normalise/fade/reverse/DC — genuinely wanted, genuinely a separate surface, do it last); MIDI-per-bus for the kit.
 
 **Also flag:** `apps/event_payloads.h:212` says `ClearPlacementAlternate = 72, // next free 63`. That trailing comment is stale — 63 is `SetModLinkDepth`. **Next free is 73.** Sampler verbs take 73–80; announce the range on the bus when claimed. Every one needs a `daw-cli` path or `tools/op_registry_check.sh` fails, which is correct and is the reason the whole thing will be agent-drivable on day one.
 

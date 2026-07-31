@@ -21,7 +21,7 @@
 # Those two go in OPPOSITE directions on the two statistics, so neither can be mistaken for the
 # other and neither can be faked by a gain change.
 #
-# SIX PROPERTIES:
+# SEVEN PROPERTIES:
 #   REACHES     vintage_bits / vintage_rate_hz read back as what was sent
 #   INDEPENDENT setting the rate does not clear the bits — the flags in the payload are real.
 #               Zero is a LEGAL value for both (it means off), so "leave it alone" cannot be
@@ -33,6 +33,8 @@
 #               distinct values
 #   NOT A REDUCTION  a target rate at or above the engine's own holds for one frame, which is no
 #               reduction at all, and must render identically to vintage off
+#   NO LEAK     voices are pooled, so the hold state must be cleared at note-on: two identical
+#               notes, the second reusing the first's voice, must render identically
 #
 # Rendered OFFLINE for the audible half. No audio device needed.
 #   tools/sampler_vintage_check.sh
@@ -180,11 +182,12 @@ kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 # and the take comes out clean while the check reports that vintage does nothing. The
 # interactive half above proves the COMMAND reaches the model; this proves the MODEL reaches the
 # voice. A timing-dependent test of both at once proves neither.
-render() {  # render <name> <bitDepth> <rateHz>
-  python3 - "$TMP/projects/$1.uniproj.json" "$Q" "$2" "$3" "$1" <<'PYP'
+render() {  # render <name> <bitDepth> <rateHz> [noteCount]
+  python3 - "$TMP/projects/$1.uniproj.json" "$Q" "$2" "$3" "$1" "${4:-1}" <<'PYP'
 import json, sys
 out, Q, bits, rate, nm = (sys.argv[1], int(sys.argv[2]), int(sys.argv[3]),
                           int(sys.argv[4]), sys.argv[5])
+COUNT = int(sys.argv[6])
 BAR = Q * 4
 r = lambda k="none": {"kind": k, "track_id": 0, "input_id": 0}
 slot = {"id": 1, "name": "sine", "source_local_id": 1, "slice_id": 0,
@@ -208,18 +211,20 @@ dev = {"device_id": 1, "kind": "sampler", "capability_mask": 5, "patcher_node_id
                                  "bit_depth": bits, "rate_hz": rate,
                                  "next_modulator_id": 1, "modulators": []}],
                    "slots": [slot]}}
-notes = [{"nanotick": 0, "duration": Q * 3, "pitch": 60, "velocity": 110,
-          "column": 0, "note_id": 1}]
+# ONE BAR APART, so the first note's voice has ENDED and gone back to the pool before the second
+# starts. That is what makes the second note a test of voice REUSE rather than of polyphony.
+notes = [{"nanotick": i * BAR, "duration": Q * 3, "pitch": 60, "velocity": 110,
+          "column": 0, "note_id": i + 1} for i in range(COUNT)]
 tr = {"track_id": 0, "name": "S", "harmony_quantize": False, "lines_per_beat": 4,
       "mixer": {"gain_db": 0.0, "pan": 0.0, "mute": False, "solo": False},
       "routing": {"midi_in": r(), "midi_out": r(), "audio_in": r(),
                   "audio_out": r("master"), "pre_fader_send": True},
       "device_chain": [dev], "mod_links": [],
-      "placements": [{"clip_id": 1, "id": 1, "at": 0, "length": BAR,
+      "placements": [{"clip_id": 1, "id": 1, "at": 0, "length": BAR * COUNT,
                       "notes": [], "chords": [], "mutes": []}]}
 json.dump({"schema_version": 4, "meta": {"name": nm}, "nanoticks_per_quarter": Q,
            "tempo_map": [{"nanotick": 0, "bpm": 120.0}], "harmony_timeline": [],
-           "clips": [{"id": 1, "name": "p", "length": BAR, "kind": "symbolic",
+           "clips": [{"id": 1, "name": "p", "length": BAR * COUNT, "kind": "symbolic",
                       "notes": notes}],
            "tracks": [tr]}, open(out, "w"))
 PYP
@@ -304,5 +309,66 @@ python3 -c "raise SystemExit(0 if $R_D > 20 * $B_D else 1)" || \
         $M_D/$M_T against $C_D/$C_T clean. The guard is 'rateHz > 0 && rateHz < sampleRate', so
         this must take the no-reduction branch — a hold of one frame is not a reduction"
 
-echo "sampler_vintage_check: PASS — bits and rate each reach the voice, and they are two
-  different effects: bits collapses distinct values, rate collapses transitions"
+# ---- THE HOLD DOES NOT LEAK BETWEEN NOTES. Voices are POOLED and reused, so the per-voice hold
+# counter and its latched sample must be cleared at note-on exactly as the filter states are
+# (start() calls filtL_.reset() for precisely this reason). If they are not, a voice that played
+# a note with rate reduction on begins the NEXT note MID-HOLD: its first output is the previous
+# note's last latched sample, and its whole staircase is offset by however many frames were left
+# over.
+#
+# WHY THIS DESERVES ITS OWN PROPERTY. The failure is HISTORY-DEPENDENT — the same note sounds
+# different depending on what the voice played before it — so a bounce stops being a function of
+# the project. Every other assertion in this file renders ONE note and cannot see it. The
+# determinism check cannot see it either: its fixture has vintage off.
+render twice 0 3000 2
+render twiceoff 0 0 2
+
+# The two notes are one BAR apart — 2s at 120bpm — and each is compared to the other over the
+# same window inside it. Identical notes through identical processing must produce identical
+# samples; anything else is state carried across the note boundary.
+notepair() {  # notepair <name> -> "<differing> <compared> <peak>"
+  python3 - "$TMP/projects/$1.wav" <<'PY'
+import sys, wave, struct
+w = wave.open(sys.argv[1], 'rb')
+ch, nf, sr = w.getnchannels(), w.getnframes(), w.getframerate()
+s = struct.unpack('<' + 'h' * (nf * ch), w.readframes(nf)); w.close()
+bar = int(2.0 * sr)                       # one bar at 120bpm
+lo, hi = int(0.05 * sr), int(0.95 * sr)   # inside the note, clear of its edges
+a, b = [], []
+for i in range(lo, hi):
+    j = bar + i
+    if j >= nf:
+        break
+    a.append(s[i * ch]); b.append(s[j * ch])
+diff = sum(1 for i in range(len(a)) if a[i] != b[i])
+print(f"{diff} {len(a)} {max((abs(v) for v in a), default=0)}")
+PY
+}
+read -r L_DIFF L_N L_PEAK <<<"$(notepair twice)"
+read -r O_DIFF O_N O_PEAK <<<"$(notepair twiceoff)"
+echo "  two identical notes, second reusing the first's voice:"
+echo "    rate 3 kHz  : $L_DIFF of $L_N samples differ (peak $L_PEAK)"
+echo "    vintage off : $O_DIFF of $O_N samples differ (peak $O_PEAK)"
+
+[ "${L_N:-0}" -gt 10000 ] || fail "only $L_N samples were compared between the two notes, so this
+        assertion is vacuous — the render is shorter than the window this check reads"
+[ "${L_PEAK:-0}" -gt 0 ] || fail "the first note is silent in the compared window, so two silences
+        are being compared and the assertion cannot fail"
+# THE CONTROL FIRST, and it is a harness check rather than a claim about vintage: with vintage
+# OFF the two notes are trivially identical, so a non-zero count here means the two windows are
+# not aligned on the notes and the real assertion below would be failing for the wrong reason.
+[ "${O_DIFF:-1}" = "0" ] || \
+  fail "with vintage OFF the two identical notes already differ in $O_DIFF of $O_N samples. That
+        is not a vintage defect — the comparison windows are not landing on the same offset within
+        each note, so the assertion below would be measuring misalignment"
+[ "${L_DIFF:-1}" = "0" ] || \
+  fail "the second note differs from the first in $L_DIFF of $L_N samples with only rate
+        reduction on. The voice was reused and its hold state was NOT cleared at note-on, so the
+        second note starts mid-hold holding the FIRST note's last latched sample and runs its
+        staircase offset by the leftover frames. start() resets filtL_/filtR_ for exactly this
+        reason; holdCount_/held_ must be reset with them, or the same note sounds different
+        depending on what played before it and a bounce is no longer a function of the project"
+echo "  the hold does not leak: two identical notes render identically"
+
+echo "sampler_vintage_check: PASS — bits and rate each reach the voice, they are two different
+  effects, and neither leaks across a reused voice"
