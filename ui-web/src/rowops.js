@@ -139,9 +139,15 @@ export const ROW_OPS = [
    * is not something anyone types on purpose.
    */
   { prefix: 'c', field: 'trigCondition', bit: 'TrigCondition',
-    summary: 'conditional trig: fire on pass A of every B',
+    summary: 'conditional trig: fire on pass A of every B, or cpre/cnpre for the previous '
+           + "conditional's result",
     example: 'c1:2',
-    text: (v) => { const [a, b] = splitTrigCondition(v); return a ? `${a}:${b}` : ''; } },
+    text: (v) => {
+      if (v === TRIG_CONDITION_PRE) return 'pre';
+      if (v === TRIG_CONDITION_NOT_PRE) return 'npre';
+      const [a, b] = splitTrigCondition(v);
+      return a ? `${a}:${b}` : '';
+    } },
 ];
 
 /**
@@ -159,6 +165,21 @@ export function splitTrigCondition(code) {
   const packed = code - 1;
   return [(packed >> 3) + 1, (packed & 7) + 1];
 }
+
+/**
+ * PRE and NOT PRE: fire when the PREVIOUS conditional trig on the same track fired, or when it
+ * did not. Mirrors TRIG_CONDITION_PRE / TRIG_CONDITION_NOT_PRE in rowop.rs.
+ *
+ * Outside the A:B space on purpose — 1..64 is the packed A:B range, so these sit above it and
+ * `splitTrigCondition` already answers [0, 0] for them rather than decoding a nonsense pass.
+ *
+ * 128 and 129 are FILL and NOT FILL, RESERVED AND NOT PARSEABLE on either side: a fill trig makes
+ * the render depend on a live performance input, so a bounce would need to define what fill state
+ * it renders under, and that is the owner's decision to make. A token that round-trips through
+ * the editor and then always sounds is worse than one the editor refuses.
+ */
+export const TRIG_CONDITION_PRE = 130;
+export const TRIG_CONDITION_NOT_PRE = 131;
 
 /** The mark for one op. Explicit `glyph` wins; otherwise the token's first character. */
 export function opGlyph(op) {
@@ -371,19 +392,33 @@ export function parseOps(text) {
        * A:B, both 1..8, A <= B. A > B is REFUSED rather than normalised — it could never fire,
        * and a note that never sounds is not something anyone types on purpose.
        */
-      const parts = token.slice(1).split(':');
-      if (parts.length !== 2) {
-        return { error: `a conditional is A:B, like c1:2, in "${token}"` };
+      /*
+       * PRE AND NOT PRE ARE NOT A:B FORMS, so they are taken first — the split below would call
+       * `cpre` malformed. `cpre` fires when the previous conditional trig on the same track
+       * fired and `cnpre` when it did not, which is how a call and its response are written as
+       * two rows that cannot both sound.
+       */
+      const rest = token.slice(1);
+      field = 'trigCondition';
+      if (rest === 'pre') {
+        ops.trigCondition = TRIG_CONDITION_PRE;
+      } else if (rest === 'npre') {
+        ops.trigCondition = TRIG_CONDITION_NOT_PRE;
+      } else {
+        const parts = rest.split(':');
+        if (parts.length !== 2) {
+          return { error: `a conditional is A:B, like c1:2, or cpre/cnpre, in "${token}"` };
+        }
+        const a = int(parts[0]), b = int(parts[1]);
+        if (a === null || b === null) return { error: `bad conditional in "${token}"` };
+        if (a < 1 || b < 1 || a > 8 || b > 8) {
+          return { error: `conditional A and B must be 1..8 in "${token}"` };
+        }
+        if (a > b) {
+          return { error: `conditional A must not exceed B in "${token}" — it could never fire` };
+        }
+        ops.trigCondition = makeTrigCondition(a, b);
       }
-      const a = int(parts[0]), b = int(parts[1]);
-      if (a === null || b === null) return { error: `bad conditional in "${token}"` };
-      if (a < 1 || b < 1 || a > 8 || b > 8) {
-        return { error: `conditional A and B must be 1..8 in "${token}"` };
-      }
-      if (a > b) {
-        return { error: `conditional A must not exceed B in "${token}" — it could never fire` };
-      }
-      ops.trigCondition = makeTrigCondition(a, b); field = 'trigCondition';
     } else if (token[0] === 's') {
       const n = int(token.slice(1));
       if (n === null) return { error: `bad sound slot in "${token}"` };

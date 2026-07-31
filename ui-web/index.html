@@ -675,9 +675,30 @@ function describeEngineEvent(e) {
    * about them differs — a stale base is worth retrying and a missing track never
    * will be.
    */
+  /*
+   * FIVE REASONS, AND THIS WORDED TWO OF THEM.
+   *
+   * `UiClipRejectReason` has StaleBase 1, UnknownTrack 2, UnknownNote 3 and ValueOutOfRange 4,
+   * and everything that was not 2 came out as "refused an edit composed against version N" —
+   * so a value the engine considered out of range was reported as a concurrency problem, with
+   * two version numbers that were EQUAL sitting in the message to prove it was not one. I spent
+   * a while reading those numbers before looking at the value.
+   *
+   * The recovery differs per reason, which is the whole point of the codes being distinct: a
+   * stale base is worth retrying, an unknown note means the client is holding an id from before
+   * a reload, and an out-of-range value will never work however many times it is sent.
+   */
   if (e.kind === 'clip-rejected') {
     const where = e.track === MASTER_TRACK_ID ? 'the master' : `track ${e.track}`;
     if (e.reason === 2) return `${where} does not exist — that edit went nowhere`;
+    if (e.reason === 3) {
+      return `${where} has no note with that id — the edit was composed against a note that is `
+           + 'gone, usually an id held across a reload';
+    }
+    if (e.reason === 4) {
+      return `${where} refused a value as out of range — retrying will not help, the number is `
+           + 'wrong for the field';
+    }
     return `${where} refused an edit composed against version ${e.sentBase}` +
            ` (it is at ${e.currentBase} now)`;
   }

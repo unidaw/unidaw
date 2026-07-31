@@ -520,6 +520,47 @@ const cells = await opsCells();
         JSON.stringify(after));
 
   /*
+   * PRE AND NOT PRE, which are conditionals that are NOT an A:B form at all — `cpre` fires when
+   * the previous conditional trig on the same track fired, `cnpre` when it did not. They are
+   * round-tripped here rather than only unit-tested, because the parser agreeing with its Rust
+   * twin says nothing about whether 130 survives the wire: the code lives in the same byte as
+   * every packed A:B, and a client that clamped it to the 1..64 range would spell `c` back with
+   * an empty value and lose the op silently.
+   */
+  /*
+   * AN INVERTED CHECK, because this does not work yet and the reason is not on this side.
+   *
+   * `applyRowOpEdit` (clip_edit.cpp) refuses any trig condition above kTrigConditionMaxAB — 64 —
+   * and PRE is 130. So `cpre` parses on both sides, formats on both sides, resolves correctly in
+   * `trigConditionFires`, round-trips through a project file, and CANNOT BE SET BY A COMMAND:
+   * the engine answers ValueOutOfRange and the row keeps whatever it had.
+   *
+   * Written to assert the CURRENT, BROKEN behaviour so it FAILS the day backend widens the
+   * range. A comment would rot; a passing check that says "this is refused" turns into a red
+   * line the moment it stops being true, and then it gets flipped. Reported to backend.
+   *
+   * The value half is asserted too: after the refusal the row must be UNCHANGED. An edit that
+   * refused the conditional and applied the retrigger anyway would be the worse outcome, and
+   * "unchanged" is the only part of this that will still be true after the fix.
+   */
+  const preResults = [];
+  for (const form of ['cpre', 'cnpre']) {
+    await page.evaluate((f) => window.__uni.run(`op ${f}`), form);
+    await page.waitForTimeout(1500);
+    preResults.push(await page.evaluate(() => window.__uni.opsTextAtCursor()));
+  }
+  check(preResults.every((x) => x === 'ret4 rv-60 c2:4'),
+        'cpre/cnpre are still REFUSED by the engine (clip_edit.cpp caps a trig condition at 64 '
+        + 'and PRE is 130) — flip this check when that range widens',
+        JSON.stringify(preResults));
+  // ...and an A:B still works, so the refusal above is about the VALUE and not about the op
+  // having stopped working — the control that makes the inverted check a finding.
+  await page.evaluate(() => window.__uni.run('op c3:4'));
+  await page.waitForTimeout(1500);
+  check(await page.evaluate(() => window.__uni.opsTextAtCursor()) === 'ret4 rv-60 c3:4',
+        'while an A:B conditional in range still lands — the refusal is the value, not the op');
+
+  /*
    * A CONDITIONAL THAT COULD NEVER FIRE IS REFUSED, not normalised. A > B names a pass that
    * does not exist in the cycle, so a note carrying it would simply never sound — which is not
    * something anyone types on purpose, and silently turning it into c1:2 would be inventing an
@@ -528,7 +569,9 @@ const cells = await opsCells();
   const bad = await page.evaluate(() => window.__uni.run('op c3:2'));
   await page.waitForTimeout(800);
   const kept = await page.evaluate(() => window.__uni.opsTextAtCursor());
-  check(/never fire/.test(String(bad)) && kept === 'ret4 rv-60 c2:4',
+  // c3:4 now, not c2:4 — the pre block above leaves the row on the last A:B it set. Named
+  // rather than recomputed, so a check that depends on a previous block's end state says so.
+  check(/never fire/.test(String(bad)) && kept === 'ret4 rv-60 c3:4',
         'a conditional whose A exceeds B is refused, and the row is untouched',
         `${String(bad).slice(-60)} / ${kept}`);
 }
