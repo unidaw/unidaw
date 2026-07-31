@@ -816,6 +816,7 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice', 'bypass',
                      'quantize', 'moveDevice', 'chord', 'delChord', 'deleteHarmony',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'opsColumn', 'opsShown',
+                     'harmonyQuantize', 'harmonyQuantized',
                      'samplerSlotName',
                      'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
@@ -2258,6 +2259,8 @@ const OP_REGISTRY = {
   emit:      { cli: 'sampler-emit-rows', agent: null, why: 'gap' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
+  // The engine has taken this since before the web UI existed; the CLI verb is `harmony-quantize`.
+  'harmony-quantize': { cli: 'harmony-quantize', agent: null, why: 'gap' },
   // Which columns this window draws. Genuinely a view decision — the engine already remembers
   // the only half that outlives the tab, which is whether the ops are THERE.
   'ops-column': { cli: null, agent: null, why: 'view' },
@@ -2364,6 +2367,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
                    'sampler', 'load-sample', 'slice', 'slot-name', 'vintage',
+                   'harmony-quantize',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 
@@ -2502,7 +2506,10 @@ const ENGINE_UNUSED = {
    * spent removing, so it waits for the read-back rather than shipping as a keystroke with
    * a rumour attached. Asked backend for a bit in ui_track_mix_flags.
    */
-  SetTrackHarmonyQuantize: 'gap — the flag is writable but NOT published, so no control can show its state',
+  // WAS: 'the flag is writable but NOT published, so no control can show its state'. Wrong, and
+  // it kept a working feature out of the UI for as long as it stood — the flag is
+  // `uiTrackMixFlags` bit 2 and always has been. Backend caught it by checking live rather than
+  // by reading the code. Now wired, so it is off this list entirely.
   RequestClipWindow: 'the sidecar owns the viewport and asks on the client\'s behalf',
   // These three are referenced by NAME elsewhere but never sent as a command from
   // a frontend path, which is the distinction this test draws: a struct that

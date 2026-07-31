@@ -2003,6 +2003,30 @@ fn build_sound_addressed(body: &str) -> Option<Result<UiCommandPayload, &'static
 /// `on` defaults to 1 because the verb is `collapse`; `collapse 3` should fold track 3, not
 /// silently unfold it. The uncollapse is `collapse 3 0`, and the page draws the state either
 /// way from `kUiTrackFlagCollapsed`, which the engine has published all along.
+/// QUANTIZE A TRACK'S NOTES TO THE HARMONY TIMELINE (opcode 10). The generic payload's shape.
+///
+/// The flag has been PUBLISHED all along — `uiTrackMixFlags` bit 2 — and the browser simply
+/// never sent the command, so this was recorded on my side as "writable but not published, so
+/// no control can show its state". That was wrong about the engine and it kept a working feature
+/// out of the UI for as long as the note stood. Backend checked it live rather than reading the
+/// code, which is why it was caught.
+fn build_harmony_quantize(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
+    if !is_type(body, "harmonyquantize") { return None; }
+    Some(Ok(UiCommandPayload {
+        command_type: UiCommandType::SetTrackHarmonyQuantize as u16,
+        flags: 0,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        plugin_index: 0,
+        note_pitch: 0,
+        value0: if parse_num(body, "\"on\"").unwrap_or(1) != 0 { 1 } else { 0 },
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    }))
+}
+
 fn build_track_collapsed(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
     if !is_type(body, "trackcollapsed") { return None; }
     Some(Ok(UiCommandPayload {
@@ -3208,6 +3232,7 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_quantize(body) { return r; }
     if let Some(r) = build_sound_addressed(body) { return r; }
     if let Some(r) = build_track_collapsed(body) { return r; }
+    if let Some(r) = build_harmony_quantize(body) { return r; }
 
     let mut p = UiCommandPayload {
         command_type: UiCommandType::None as u16,

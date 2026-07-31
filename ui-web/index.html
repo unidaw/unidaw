@@ -110,7 +110,8 @@ import { buildArrangeModel, createArrangeBuffer, ARRANGE_ZOOM, trackName,
 import { Mixer } from './src/mixer.js';
 import { Scope } from './src/scope.js';
 import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
-         gainAtPosition, FLAG_MUTE, FLAG_SOLO } from './src/mixermodel.js';
+         gainAtPosition, FLAG_MUTE, FLAG_SOLO,
+         FLAG_HARMONY_QUANTIZE } from './src/mixermodel.js';
 import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch,
          notesInRect, noteKey, transposedKey } from './src/pianomodel.js';
@@ -3363,6 +3364,26 @@ const dockApi = {
     schedule();
     return true;
   },
+  /**
+   * QUANTIZE A TRACK'S NOTES TO THE HARMONY TIMELINE (opcode 10).
+   *
+   * The flag is published as `uiTrackMixFlags` bit 2 and has been all along; my own notes
+   * recorded it as unpublished, which kept a working feature out of the UI for as long as the
+   * note stood. Backend checked it live rather than reading the code.
+   *
+   * NOT sent through `sendMixer`, even though the flag rides the mixer's byte: the write path is
+   * this opcode, and toggling the bit in a mixer command would be a control that appears to work
+   * and changes nothing.
+   */
+  harmonyQuantize: (t, on) => {
+    if (t < 0 || t >= state.tracks) { state.reject = 'no such track'; schedule(); return false; }
+    const now = harmonyQuantizeOf(t);
+    const want = on === undefined ? !now : !!on;
+    if (!conn || !conn.send({ type: 'harmonyquantize', track: Number(t), on: want ? 1 : 0 })) {
+      state.reject = 'no engine'; schedule(); return false;
+    }
+    state.reject = null; schedule(); return true;
+  },
   fold: (t) => {
     if (!engine || t < 0 || t >= collapsed.length) return false;
     const parent = engine.trackParent;
@@ -3805,6 +3826,19 @@ let collapsedAny = false;
  * which is whether the ops are THERE.
  */
 const opsForced = new Uint8Array(64);
+
+/**
+ * Whether track `t` quantizes its notes to the harmony timeline, from the engine's own flags.
+ *
+ * Read rather than remembered: it is engine state, it survives a reload, and a local copy would
+ * be one more thing to get out of step with a project someone else saved.
+ */
+function harmonyQuantizeOf(t) {
+  // `mixFlags`, the engine's own per-track byte — not `mixerState`, which is this window's
+  // optimistic copy of gain/pan/mute/solo and knows nothing about this bit.
+  const f = engine && engine.mixFlags;
+  return !!(f && t < f.length && (f[t] & FLAG_HARMONY_QUANTIZE) !== 0);
+}
 /**
  * ADOPT THE ENGINE'S FOLD WHEN IT MOVES, and only then.
  *
@@ -4144,6 +4178,24 @@ function buildHead() {
      * a thing is visible when it is not is a control that lies the moment you click it off and
      * nothing happens.
      */
+    /*
+     * QUANTIZE THIS TRACK TO THE HARMONY TIMELINE, on the track's own header.
+     *
+     * A per-track property of what the NOTES MEAN — a degree resolved against the field rather
+     * than a fixed pitch — so it belongs beside the lane it changes rather than in the mixer,
+     * whose byte it merely rides.
+     *
+     * Drawn `~` when on and hidden until hover when off, like the other header controls. It
+     * shows its own state, which is the entire reason this could be built: the flag has been
+     * published all along and my own note said it was not.
+     */
+    const hqBtn = document.createElement('span');
+    hqBtn.className = 'hhq';
+    hqBtn.appendChild(document.createTextNode('~'));
+    hqBtn.title = 'Quantize this track’s notes to the harmony timeline';
+    el.appendChild(hqBtn);
+    el._hqBtn = hqBtn; el._hqV = null;
+
     const opsBtn = document.createElement('span');
     opsBtn.className = 'hops';
     opsBtn.appendChild(document.createTextNode('\u00b7'));
@@ -4206,6 +4258,15 @@ function buildHead() {
      * — and then open a confirm on top of it.
      */
     if (e.target.closest('.hadd')) { e.preventDefault(); addTrack(); return; }
+    const hq = e.target.closest('.hhq');
+    if (hq) {
+      e.preventDefault();
+      const t = Number(hq.parentElement.dataset.track);
+      // Toggles through the SAME function the console verb calls, so the pointer and the
+      // command cannot come to mean different things.
+      if (Number.isFinite(t)) dockApi.harmonyQuantize(t);
+      return;
+    }
     const opsBtn = e.target.closest('.hops');
     if (opsBtn) {
       e.preventDefault();
@@ -4323,6 +4384,13 @@ function paintHeadLpb() {
      * 'on'  — the column is showing because this window asked for it.
      * 'off' — the column is hidden and this is how it comes back.
      */
+    // The harmony-quantize state, straight from the engine's flags — never a local guess, so a
+    // project someone else saved draws correctly the moment it loads.
+    const hqOn = harmonyQuantizeOf(t);
+    if (el._hqV !== hqOn && el._hqBtn) {
+      el._hqV = hqOn;
+      el._hqBtn.classList.toggle('on', hqOn);
+    }
     const w = engine && engine.opsWidth;
     const byEngine = !!(w && t < w.length && w[t] > 0);
     const st = byEngine ? 'engine' : (opsForced[t] ? 'on' : 'off');
@@ -8395,6 +8463,13 @@ window.__uni = {
   goto: (row, track) => dockApi.goto(row, track),
   /** Collapse/expand a parent's children, and what is folded right now. */
   fold: (t) => dockApi.fold(t),
+  harmonyQuantize: (t, on) => dockApi.harmonyQuantize(t, on),
+  /** Per track, whether it quantizes to the harmony timeline — so a control can show its state. */
+  harmonyQuantized: () => {
+    const out = [];
+    for (let t = 0; t < state.tracks; t++) out.push(harmonyQuantizeOf(t) ? 1 : 0);
+    return out;
+  },
   /** Show/hide a track's ops column, and what each track's published op width is —
    *  which is the only way to tell "hidden because empty" from "hidden by mistake". */
   opsColumn: (t, on) => dockApi.opsColumn(t, on),

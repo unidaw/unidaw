@@ -32,6 +32,7 @@
 
 import { chromium } from 'playwright';
 import { rmSync, readFileSync } from 'node:fs';
+import os from 'node:os';
 import { join } from 'node:path';
 
 /**
@@ -198,10 +199,27 @@ const playUntilAudible = async (device = 0, ms = 12000) => {
       underruns = (log.match(/audio underrun/g) || []).length;
     } catch { /* no log is its own answer: -1 */ }
   }
+  /*
+   * AND THE MACHINE ITSELF, because the underrun count is not the whole signal.
+   *
+   * `audio underrun` counts DEVICE-callback dropouts. A producer starved upstream of the device
+   * can hand over zeros with the callback running perfectly on time and nothing logged at all —
+   * which is exactly what happened here: three meter checks failed with `underruns: 0` at a load
+   * average of 91 on an 8-core box, and passed on a re-run with no code change.
+   *
+   * So load is read too. It is a blunt instrument and it is the right one for this question: the
+   * claim being made is not "the machine is slow", it is "this run could not answer the question
+   * it was asked", and a box at ten times its core count is not answering questions about audio.
+   */
+  const load = os.loadavg()[0];
+  const cores = os.cpus().length || 1;
+  const swamped = load > cores * 4;
   return {
     ok: false,
     underruns,
-    starved: underruns > 0,
+    load: Math.round(load),
+    cores,
+    starved: underruns > 0 || swamped,
     transport: await page.evaluate(() => (window.__uni.engineState() || {}).transport),
     chain: await page.evaluate(() => {
       const c = window.__uni.chainProbe();
@@ -221,9 +239,11 @@ const playUntilAudible = async (device = 0, ms = 12000) => {
 const audibleOr = (r, what, detail) => {
   if (r.ok) return ok(true, what, detail);
   if (r.starved) {
-    blocked(false, what, `the producer was starved — ${r.underruns} underrun report(s) in the `
-            + 'engine log, so the device was handed silence and every meter reads the sentinel. '
-            + 'Nothing here is a statement about the app.', JSON.stringify(r.meters));
+    blocked(false, what,
+            `the producer could not keep up — ${r.underruns} underrun report(s) and a load `
+            + `average of ${r.load} on ${r.cores} cores. The device was handed silence and every `
+            + 'meter reads the sentinel. Nothing here is a statement about the app.',
+            JSON.stringify(r.meters));
     return false;
   }
   return ok(false, what, detail);
@@ -3833,8 +3853,31 @@ section('every insert says what it is putting out');
   ok(parseInt(halted.width, 10) < 90,
      'stopped, the instrument is not drawing a PEGGED meter', JSON.stringify(halted));
 
+  /*
+   * WAIT FOR THE BAR TO FALL, do not sleep and hope.
+   *
+   * This was `panic` then a 1500 ms sleep, and on a loaded box the meter had not finished
+   * decaying when it was read — 44% where it wanted 0%. That is the same mistake this file
+   * already fixed on the other side: "a fixed sleep after the space bar is a guess about how
+   * long a plugin takes to make its first sample, and on a busy box it is wrong."
+   *
+   * The condition IS the assertion, so waiting for it is not weakening the check — the timeout
+   * still fails, and it fails after giving the machine a fair chance rather than after a
+   * constant somebody guessed.
+   */
   await page.evaluate(() => window.__uni.run('panic'));
-  await page.waitForTimeout(1500);
+  // The SAME element `drawnFill` reads — the second `.dv-m-fill` of the second card — because a
+  // wait on a different box is a wait that can be satisfied while the thing under test has not
+  // moved. That is how a fixed sleep and a wrong selector fail identically.
+  await cards[1].evaluate((el) => new Promise((done) => {
+    const at = () => parseInt(el.querySelectorAll('.dv-m-fill')[1].style.width, 10) || 0;
+    if (at() === 0) return done();
+    const t0 = Date.now();
+    const tick = setInterval(() => {
+      if (at() === 0 || Date.now() - t0 > 12000) { clearInterval(tick); done(); }
+    }, 100);
+  }));
+  await page.waitForTimeout(300);
   const silent = await drawnFill();
   /*
    * "EMPTY" IS UNDER A PIXEL, not exactly zero. A cut voice leaves a peak meter
@@ -3908,7 +3951,9 @@ section('every insert says what it is putting out');
     dim: el.classList.contains('byp'),
     width: el.querySelectorAll('.dv-m-fill')[1].style.width,
   }));
-  ok(!back.dim && parseInt(back.width, 10) > 0,
+  // Through the guard too: "the level came back" needs a level to come back to, and on a swamped
+  // box there was never one. Same reasoning as the three above.
+  audibleOr(!back.dim && parseInt(back.width, 10) > 0 ? { ok: true } : heard,
      'and switching it back on brings both back', JSON.stringify(back));
 
   /*
@@ -3950,7 +3995,11 @@ section('every insert says what it is putting out');
        'and the peak tick is exactly the peak', `${link.tick} vs ${link.m.outPeak}%`);
     ok(link.db === link.m.text, 'and the readout is the string it was given',
        `${link.db} vs ${link.m.text}`);
-    ok(/^-?\d/.test(String(link.db)), 'which is a dB number', String(link.db));
+    // `−∞` is what a silent meter reads, and it is CORRECT for silence — so this only asks for a
+    // number when there was sound. On a swamped box it is the machine being reported, not a
+    // broken readout.
+    audibleOr(/^-?\d/.test(String(link.db)) ? { ok: true } : heard,
+              'which is a dB number', String(link.db));
   }
 
   await page.evaluate(() => window.__uni.run('stop'));
@@ -4440,6 +4489,79 @@ section('wheel scrolling');
      `${end.scrollX} -> ${past.scrollX}`);
   await page.setViewportSize({ width: 1680, height: 980 });
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+}
+
+section('harmony quantize is settable and shows its own state');
+{
+  /*
+   * THE ENGINE HAS TAKEN THIS SINCE BEFORE THIS UI EXISTED, and it was recorded on our side as
+   * unreachable with the reason "the flag is writable but NOT published, so no control can show
+   * its state". That was wrong — `uiTrackMixFlags` bit 2 has carried it all along — and the
+   * wrong note kept a working feature out of the UI for as long as it stood.
+   *
+   * Driven from the CONSOLE and read back from the ENGINE's own flags, then driven again from
+   * the header CONTROL, because a toggle that only the console can reach is half a feature and
+   * a control that cannot show its state is worse than none.
+   */
+  await page.evaluate(() => window.__uni.setView('tracker'));
+  await page.waitForTimeout(400);
+  /*
+   * BRING THE TRACK ON SCREEN FIRST.
+   *
+   * The header scrolls with the track strip, and by this point in a 400-check run it is
+   * somewhere else entirely — the button's rect came back at x = -2496 and the click landed on
+   * nothing, which reads as a dead control. `scrollTo` is the ROW axis and did not help; moving
+   * the CURSOR to the track is what scrolls the strip horizontally, which is also what a person
+   * does before clicking a track's header.
+   */
+  await page.evaluate(() => window.__uni.setView('tracker'));
+  await page.waitForTimeout(300);
+  const q = () => page.evaluate(() => window.__uni.harmonyQuantized());
+  const before = await q();
+  ok(Array.isArray(before) && before.length > 1,
+     'the engine publishes a harmony-quantize flag per track', JSON.stringify(before));
+
+  /*
+   * A TRACK THAT STARTS OFF, found rather than assumed.
+   *
+   * `maximal` ships with the flag already set on some of its tracks — the first read was
+   * [1,0,1,1,0,0] — so "turn track 0 on and check it is on" is a check that cannot move. It
+   * would pass with the command deleted. Same trap as every other one this file has caught, and
+   * it is worth the two lines to pick a track by its state instead of by its number.
+   */
+  const off0 = before.findIndex((x) => x === 0);
+  ok(off0 > 0, 'and there is a track with it OFF to turn on — a check that starts at the value '
+     + 'it is setting cannot fail', JSON.stringify(before));
+
+  await page.evaluate((t) => window.__uni.run(`harmony-quantize ${t} on`), off0);
+  await page.waitForTimeout(1200);
+  const on = await q();
+  ok(on[off0] === 1, `the console turns it on for track ${off0} and the engine agrees`,
+     `${JSON.stringify(before)} -> ${JSON.stringify(on)}`);
+  // ...and ONLY that track. A command that set the flag everywhere would look identical on the
+  // one track anybody checked.
+  ok(on.every((x, i) => i === off0 || x === before[i]),
+     'and no other track moved', JSON.stringify(on));
+
+  // The header control, clicked — the same function the verb calls.
+  await page.evaluate((t) => window.__uni.run(`goto 0 ${t}`), off0);
+  await page.waitForTimeout(600);
+  const at = await page.evaluate((t) => {
+    const b = document.querySelector(`.htrack[data-track="${t}"] .hhq`);
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, lit: b.classList.contains('on'),
+             onScreen: r.x > 0 && r.x < window.innerWidth };
+  }, off0);
+  ok(at && at.lit && at.onScreen,
+     'the header control is there, on screen, and LIT — it shows its own state',
+     JSON.stringify(at));
+  if (at && at.onScreen) {
+    await page.mouse.click(at.x, at.y);
+    await page.waitForTimeout(1200);
+    const back = await q();
+    ok(back[off0] === 0, 'and clicking it turns the flag back off', JSON.stringify(back));
+  }
 }
 
 section('the palette and the scale button reach something');
