@@ -10974,6 +10974,36 @@ struct TrackRuntime {
             e.outputStem = sl.outputStem;
             e.quality = sl.quality;
             e.sliceId = sl.sliceId;
+            // WHAT THE SLOT'S MOD SET DOES, resolved here so a UI does not have to hold the mod
+            // sets to interpret a modSetId. A bit is set only when the modulator would actually
+            // MOVE something: an envelope needs points, an LFO needs a non-zero swing, and both
+            // need a depth. Reporting an inert modulator as a modulator is how a surface ends up
+            // drawing a control that does nothing — which is what the engine itself did with pan,
+            // resonance and every LFO until they were made to work.
+            for (const auto& ms : snap->state.modSets) {
+              if (ms.id != sl.modSetId) {
+                continue;
+              }
+              e.filterType = ms.filterType;
+              for (const auto& m : ms.modulators) {
+                if (m.depthMilli == 0) {
+                  continue;
+                }
+                const bool moves = m.kind == daw::ModKind::Envelope
+                                       ? !m.env.empty()
+                                       : (m.lfo.depth != 0.0f || m.lfo.bias != 0.0f);
+                if (!moves) {
+                  continue;
+                }
+                const uint32_t bit =
+                    static_cast<uint32_t>(m.target) * 2u +
+                    (m.kind == daw::ModKind::Lfo ? 1u : 0u);
+                if (bit < 16) {
+                  e.modMask |= static_cast<uint16_t>(1u << bit);
+                }
+              }
+              break;
+            }
             const daw::SamplerSourceAudio* audio = snap->audioFor(sl.sourceLocalId);
             e.lengthFrames = audio ? static_cast<uint32_t>(audio->frames) : 0;
             // "Silent because the file is missing" and "silent because the sample is empty" are

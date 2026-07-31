@@ -11,7 +11,7 @@
 # the envelope never reaching a voice, which is the failure that matters. So this renders the
 # same note three ways and listens to the shape.
 #
-# SEVEN PROPERTIES:
+# EIGHT PROPERTIES:
 #   ATTACK    a long attack makes the note START QUIET and arrive later. Measured as the ratio of
 #             early energy to late energy, which is the shape rather than the level
 #   SUSTAIN   a low sustain holds the note QUIETER after the decay than a full one does
@@ -20,6 +20,8 @@
 #             PERIOD wandering — which amplitude, filter and pan modulation cannot fake
 #   PANNING   a pan envelope MOVES the sound across the stereo field, which neither a
 #             volume nor a filter envelope can imitate
+#   READ-BACK the kit says what a slot's mod set DOES — one bit per (target, kind), plus
+#             the filter type, and only for modulators that would actually move something
 #   TARGETS   an envelope can drive CUTOFF, not only volume. Asserted on BRIGHTNESS (the
 #             high-band share of the energy) rather than level, because a level change is
 #             what a volume envelope on the wrong target would look like
@@ -360,6 +362,68 @@ raise SystemExit(0 if $VIB > max(4, $STEADY * 3) else 1)" || \
   fail "a PITCH LFO produced no vibrato: the zero-crossing count varied by $VIB across the note,
         against $STEADY for a steady tone. ModKind::Lfo has been in the file format from the
         start; if this does not move, nothing is rendering it"
+
+# ---- THE READ-BACK SAYS WHAT THE MOD SET DOES. A slot publishes a modSetId and, until now,
+# nothing to resolve it against: a card could say "mod set 1" and not what mod set 1 does. modMask
+# answers it in ten bits — bit (target * 2 + kind), so bit0 is an amp envelope and bit7 a cutoff
+# LFO — and filterType goes beside it because a cutoff envelope on a filter that is OFF is silent,
+# and a surface drawing that control would be drawing something that does nothing.
+#
+# A BIT MEANS "WOULD MOVE SOMETHING", not "is stored". That distinction is the whole reason this
+# field is worth having: pan envelopes, resonance envelopes and every LFO were stored, loaded and
+# rendered by nothing for a long time, and a read-back that reported them as modulators would
+# have made the surface agree with the bug.
+CLI="$ROOT/ui/target/debug/daw-cli"
+[ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
+if [ -x "$CLI" ]; then
+  MSHM="/envmask_$$"
+  start_engine "$MSHM" "$TMP/mask.eng.log"
+  kit() { DAW_UI_SHM_NAME="$MSHM" DAW_PROJECT_DIR="$TMP" "$CLI" get sampler-kit --track 0 --device 1 --seq "$1" 2>&1; }
+  mcli() { DAW_UI_SHM_NAME="$MSHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
+  mcli do load env --force >/dev/null 2>&1 || true
+  sleep 1.2
+  M0="$(kit 31 | grep -o '"mod_mask": [0-9]*' | head -1 | grep -o '[0-9]*')"
+  FT="$(kit 32 | grep -o '"filter_type": [0-9]*' | head -1 | grep -o '[0-9]*')"
+  mcli do sampler-env --track 0 --amp --target cutoff --depth 700 \
+      --attack 100000 --decay 0 --sustain 1000 --release 0 >/dev/null 2>&1 || true
+  sleep 0.6
+  M1="$(kit 33 | grep -o '"mod_mask": [0-9]*' | head -1 | grep -o '[0-9]*')"
+  mcli do sampler-lfo --track 0 --target pitch --hz 5 --depth 1 --amount 200 >/dev/null 2>&1 || true
+  sleep 0.6
+  M2="$(kit 34 | grep -o '"mod_mask": [0-9]*' | head -1 | grep -o '[0-9]*')"
+  # AND AN INERT ONE MUST DROP OUT. Setting the LFO's swing to zero leaves the modulator stored
+  # and round-tripping and doing nothing — which is exactly the state pan, resonance and every
+  # LFO were in for months. If the mask still claimed it, a surface would draw a live control
+  # over a dead one, and the read-back would be agreeing with the bug rather than exposing it.
+  mcli do sampler-lfo --track 0 --target pitch --hz 5 --depth 0 --amount 200 >/dev/null 2>&1 || true
+  sleep 0.6
+  M3="$(kit 35 | grep -o '"mod_mask": [0-9]*' | head -1 | grep -o '[0-9]*')"
+  kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
+  echo "  mod mask:     $M0 (none) -> $M1 (+cutoff env) -> $M2 (+pitch LFO) -> $M3 (LFO zeroed), filter type $FT"
+  # The fixture's mod set starts with NO modulators, so an empty mask is the honest answer.
+  [ "${M0:-x}" = "0" ] || \
+    fail "a mod set with no modulators reported mod_mask $M0. An inert or absent modulator must
+          not be published as one — that is how a surface ends up drawing a control that does
+          nothing"
+  # bit (3*2+0) = 64 is a cutoff ENVELOPE.
+  python3 -c "
+raise SystemExit(0 if ($M1 & 64) != 0 else 1)" || \
+    fail "after adding a cutoff envelope the mask was $M1, without bit 64 (target 3, kind 0) set"
+  # bit (2*2+1) = 32 is a pitch LFO, and the cutoff envelope must still be there.
+  python3 -c "
+raise SystemExit(0 if ($M2 & 32) != 0 and ($M2 & 64) != 0 else 1)" || \
+    fail "after adding a pitch LFO the mask was $M2 — expected both bit 32 (pitch LFO) and
+          bit 64 (the cutoff envelope that was already there). A mask that loses what it had is
+          worse than no mask"
+  python3 -c "
+raise SystemExit(0 if ($M3 & 32) == 0 and ($M3 & 64) != 0 else 1)" || \
+    fail "an LFO with ZERO swing is still reported in the mask ($M3): bit 32 should have cleared
+          and bit 64 stayed. A stored modulator that cannot move anything is not a modulator, and
+          publishing it as one makes the surface agree with the bug instead of showing it"
+  [ "${FT:-0}" = "1" ] || \
+    fail "the read-back reported filter type ${FT} for a mod set configured as LP12 (1). A cutoff
+          envelope means nothing without knowing whether the filter is even on"
+fi
 
 echo "sampler_envelope_write_check: PASS — the ADSR is reachable, and it is audible in all three"
 echo "                              stages, on a mod set that started with no modulators at all"

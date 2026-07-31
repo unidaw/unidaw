@@ -1189,13 +1189,13 @@ fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
                 println!("  \"slots_truncated\": {},", v.slots_truncated);
                 let body: Vec<String> = v.slots.iter().map(|e| {
                     format!(
-                        "    {{ \"slot\": {}, \"source\": {}, \"key_low\": {}, \"key_high\": {}, \"root\": {}, \"vel_low\": {}, \"vel_high\": {}, \"voice_group\": {}, \"nna\": {}, \"gate\": {}, \"reverse\": {}, \"source_missing\": {}, \"gain_mb\": {}, \"pan\": {}, \"mod_set\": {}, \"stem\": {}, \"quality\": {}, \"slice\": {}, \"length_frames\": {} }}",
+                        "    {{ \"slot\": {}, \"source\": {}, \"key_low\": {}, \"key_high\": {}, \"root\": {}, \"vel_low\": {}, \"vel_high\": {}, \"voice_group\": {}, \"nna\": {}, \"gate\": {}, \"reverse\": {}, \"source_missing\": {}, \"gain_mb\": {}, \"pan\": {}, \"mod_set\": {}, \"stem\": {}, \"quality\": {}, \"slice\": {}, \"length_frames\": {}, \"mod_mask\": {}, \"filter_type\": {} }}",
                         e.slotId, e.sourceLocalId, e.keyLow, e.keyHigh, e.rootKey,
                         e.velLow, e.velHigh, e.voiceGroup, e.nna,
                         (e.flags & 1) != 0, (e.flags & 2) != 0,
                         (e.flags & UI_SAMPLER_SLOT_SOURCE_MISSING) != 0,
                         e.gainMillibels, e.panThousandths, e.modSetId, e.outputStem,
-                        e.quality, e.sliceId, e.lengthFrames)
+                        e.quality, e.sliceId, e.lengthFrames, e.modMask, e.filterType)
                 }).collect();
                 println!("  \"slots\": [\n{}\n  ]", body.join(",\n"));
                 println!("}}");

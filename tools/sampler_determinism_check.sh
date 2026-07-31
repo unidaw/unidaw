@@ -35,8 +35,16 @@
 #                  The fix is to stop keeping the position as two facts that disagree: either
 #                  carry the fractional remainder when advancing the transport, or derive
 #                  blockSampleStart from the tick rather than counting it. Both touch the
-#                  engine's master clock, so neither is a drive-by. Tracked as task #84; when it
-#                  lands, restore the bit-identical assertion below and delete this paragraph.
+#                  engine's master clock, so neither is a drive-by. Tracked as task #84.
+#
+#                  AND THE LIMITATION IS ASSERTED, not merely described. The paragraph above is
+#                  a comment, and a comment goes stale in silence — it would still be here,
+#                  confidently wrong, a year after someone fixed the clock. So the check below
+#                  asserts that the renders are NOT bit-identical: the day that stops being true
+#                  the check fails and says so, which is the only way a known limitation ever
+#                  gets its documentation updated. Borrowed from the web-UI agent, who wrote
+#                  their side of three gaps as failing-when-fixed checks and had all three fire
+#                  on the merge that fixed them.
 #
 # THE SAMPLER'S OWN INVARIANCE IS ALREADY PROVEN BIT-EXACTLY, in sampler_voice_tests: one voice
 # rendered at 64/256/1024 is byte-for-byte equal. That test failed on its first run against a
@@ -184,6 +192,27 @@ if len(a) != len(b) or a != b:
     raise SystemExit(1)
 print("  reproducible: two renders at 256 frames are bit-identical (%d bytes)" % len(a))
 PYR
+
+# ---- THE LIMITATION ITSELF, asserted so it cannot go stale. See the header: block sizes do not
+# render bit-identically because the transport tick and the sample counter drift apart. If this
+# assertion ever FAILS, that is good news and the work is: delete this block, delete the
+# paragraph in the header, and restore the bit-identical comparison the energy curves below
+# stand in for.
+python3 - "$TMP/b256.wav" "$TMP/b1024.wav" <<'PYL'
+import sys, wave
+def data(p):
+    w = wave.open(p, 'rb'); d = w.readframes(w.getnframes()); w.close(); return d
+a, b = data(sys.argv[1]), data(sys.argv[2])
+n = min(len(a), len(b))
+raise SystemExit(0 if a[:n] != b[:n] else 1)
+PYL
+if [ $? -ne 0 ]; then
+  echo "  NOTE: renders at 256 and 1024 frames are now BIT-IDENTICAL over their common length."
+  echo "        Task #84 is fixed. Delete this block and the header paragraph about it, and"
+  echo "        replace the energy-curve comparison below with a byte-for-byte one."
+  exit 1
+fi
+echo "  known limitation still present: 256 and 1024 frames differ (task #84)"
 
 # ---- NO DRIFT, NO DROPOUTS across block sizes.
 #
