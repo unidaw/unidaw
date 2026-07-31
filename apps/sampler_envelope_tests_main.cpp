@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "apps/sampler_envelope.h"
+#include "apps/sampler_state.h"
 
 namespace {
 
@@ -343,6 +344,49 @@ int main() {
     const daw::EnvRepair r = daw::repairEnvShape(s);
     check(!r.addedReleaseFade, "an envelope that already terminates gets no fade added");
     check(s.releaseFade == 0, "and its releaseFade stays zero");
+  }
+
+  // ---- THE DEFAULT MOD SET SOUNDS WITHOUT BEING REPAIRED FIRST.
+  //
+  // makeAdsr(0, 0, 1000, 5000) — what defaultModSet mints — puts THREE of its four points at
+  // t=0: the zero, the attack peak and the sustain. Only repairEnvShape nudges them apart, and
+  // it is called on the LOAD path and on the SetEnvelope command path. It is NOT called when the
+  // default is minted, so a sampler built by commands runs an envelope whose first three points
+  // share a time, the runner holds the first of them (v=0), and the kit is mute.
+  //
+  // WHY THIS SURVIVED, and it is the more useful half: tools/sampler_default_sound_check.sh
+  // asserts exactly this property at the audio level and PASSES — because it saves the project
+  // and renders the SAVED file, so deserialization repairs the envelope before anything is
+  // heard. The check could only ever see the repaired shape. The web-UI agent, playing live
+  // without a save, heard silence and was right; "it works on mine" was an artifact of my
+  // fixture round-tripping through the one function that fixes it.
+  //
+  // Asserted here at the unit level because that is the layer that can tell the two apart: no
+  // save, no load, no engine — just the shape the mint produces, run.
+  {
+    const daw::SamplerModSet m = daw::defaultModSet(1);
+    check(m.modulators.size() == 1, "the default mod set has its amp modulator");
+    const daw::EnvShape& env = m.modulators.at(0).env;
+
+    // The times must already be usable. A shape whose points share a time is not a shape the
+    // runner can walk, and depending on a repair pass to make a CONSTRUCTOR's output valid is
+    // the invariant being someone else's job.
+    for (size_t i = 1; i < env.points.size(); ++i) {
+      check(env.points[i].time > env.points[i - 1].time,
+            "the default envelope's point times are strictly increasing as minted, without a "
+            "repair pass — three points at t=0 is what makes a command-built kit silent");
+    }
+
+    daw::EnvRunner r;
+    r.start(&env, kUnit);
+    const float held = r.advance(64);
+    check(held > 0.9f,
+          "the default amp envelope is at full level while the key is held. It is instant-attack "
+          "with full sustain, so anything less than full here means the runner landed on a point "
+          "that is not the sustain — and every sampler made by commands renders silence");
+    for (int i = 0; i < 20; ++i) {
+      checkNear(r.advance(64), 1.0f, 1e-3f, "and it HOLDS there rather than decaying away");
+    }
   }
 
   // ---- REPAIR IS LOUD. Every one of these was a silent clamp somewhere before it was a rule.

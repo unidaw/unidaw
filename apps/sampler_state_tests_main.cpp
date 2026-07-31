@@ -223,9 +223,24 @@ int main() {
       check(amp->env.points.size() == 4, "it is an ADSR, which is four points (R4)");
       check(amp->env.sustainLoopStart == 2 && amp->env.sustainLoopEnd == 2,
             "with the one-point sustain loop that IS the sustain stage");
-      check(amp->env.points[1].time == 0,
+      // INSTANT ATTACK, and instant now means 1 microsecond rather than 0 — because a shape
+      // whose points share a time is not a shape the runner can walk. makeAdsr nudges its
+      // points to strictly increasing times, which for a zero attack and zero decay puts the
+      // peak at 1us and the sustain at 2us. Both are inaudible; three points at t=0 were not,
+      // because the runner held the FIRST of them at level 0 and the whole kit was silent.
+      //
+      // Asserted as a bound rather than an equality so it states the property — "you cannot
+      // hear this attack" — instead of a constant that has now been wrong twice.
+      check(amp->env.points[1].time <= 1,
             "and an INSTANT attack — the first thing anyone drops on a sampler is a drum, and a "
             "10 ms attack on a kick is a defect you have to go and find");
+      // And the invariant that makes it playable at all, next to it, so the two cannot drift.
+      for (size_t i = 1; i < amp->env.points.size(); ++i) {
+        check(amp->env.points[i].time > amp->env.points[i - 1].time,
+              "the default envelope's points have strictly increasing times AS MINTED — without "
+              "that the runner holds the first of several points sharing t=0, at level 0, and a "
+              "sampler built by commands is silent until a save and reload repairs it");
+      }
     }
   }
 

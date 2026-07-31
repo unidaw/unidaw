@@ -120,6 +120,24 @@ inline EnvShape makeAdsr(uint32_t attack,
   s.points.push_back({attack, 1000, 0, 0});
   s.points.push_back({attack + decay, sustainMilli, 0, 0});
   s.points.push_back({attack + decay + release, 0, 0, 0});
+  // STRICTLY INCREASING, HERE, because a zero attack and a zero decay are not an error — they
+  // are the most common ADSR anyone asks for, and they put points 0, 1 and 2 all at t=0.
+  //
+  // This used to be left to repairEnvShape, and that is the whole defect: repair runs on the
+  // LOAD path and on the SetEnvelope command path, and NOT where defaultModSet mints its amp
+  // envelope. So a sampler built by commands — add a device, load a sample, play a note — ran an
+  // envelope whose first three points shared a time, the runner held the first of them at v=0,
+  // and the kit was silent with every structural fact about it correct: the mod set existed, the
+  // read-back reported the amp bit set, a voice started.
+  //
+  // A constructor that emits a shape only a later pass makes valid is the invariant being
+  // somebody else's job. The nudge is repairEnvShape's own rule (pin to the neighbour + 1, do
+  // not sort) so the two can never disagree about what a valid shape is.
+  for (size_t i = 1; i < s.points.size(); ++i) {
+    if (s.points[i].time <= s.points[i - 1].time) {
+      s.points[i].time = s.points[i - 1].time + 1;
+    }
+  }
   s.sustainLoopStart = 2;
   s.sustainLoopEnd = 2;
   return s;

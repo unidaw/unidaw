@@ -202,5 +202,96 @@ raise SystemExit(0 if r > 0 and d * 2 >= r else 1)" || \
         $REF_LATE — audible, and at a fraction of the level. A default that is quiet is a
         different defect from a default that is silent and needs saying separately"
 
+# =================================================================================================
+# THE LIVE PATH — and this is the half that could not fail before.
+#
+# Everything above renders the SAVED project. That round-trips the envelope through
+# deserialization, which calls repairEnvShape... and repairEnvShape is what makes the default
+# envelope playable at all. makeAdsr(0, 0, 1000, 5000) puts three of its four points at t=0, and
+# for a long time only the LOAD path and the SetEnvelope command path nudged them apart. The mint
+# did not. So a sampler built by commands and played WITHOUT a save ran an envelope whose runner
+# held the first of three coincident points, at v=0, and was silent.
+#
+# This check asserted "a sampler made only by commands sounds" and PASSED throughout, because
+# saving and rendering was the one thing that repaired the shape before anything was heard. The
+# web-UI agent, playing live, heard silence and was right; "it works on mine" was an artifact of
+# this fixture, not a fact about the engine.
+#
+# So the property is measured where the user is: a live engine, captured off the device, with no
+# save between the load and the sound.
+#
+# WITH A POSITIVE CONTROL, because a silent capture is far more often the harness than the engine
+# — capture starts at device-start rather than engine-start, and a mistimed play is indistinguish-
+# able from a mute kit. The SAME live path with an explicit envelope must be loud. If both are
+# silent the harness is broken and this says so instead of blaming the default.
+# =================================================================================================
+
+live_run() {  # live_run <name> <sendEnv 0|1>
+  local name="$1" sendenv="$2"
+  local shm="/defsnd_live_${$}_$name"
+  # THE ENGINE MUST EXIT ON ITS OWN. The capture wav is written during clean shutdown, after the
+  # audio device is stopped and the buffer is quiescent (see audio.capture_written) — so killing
+  # the engine produces no file at all, which reads as "silent" and is not.
+  #
+  # LIFETIME COMFORTABLY EXCEEDS EVERYTHING. Boot wait is 10 s against a 22 s life; a wait budget
+  # longer than --run-seconds means the script can be waiting for an engine that already exited
+  # and then reports "never loaded", which is a statement about the harness. See task #106.
+  ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$shm" \
+      DAW_CAPTURE_WAV="$TMP/$name.wav" DAW_CAPTURE_SECONDS=6 \
+      ./daw_engine --project d --run-seconds 22 >"$TMP/$name.log" 2>&1 ) &
+  ENG=$!
+  for _ in $(seq 1 40); do
+    grep -q '"event":"project.load"' "$TMP/$name.log" 2>/dev/null && break
+    sleep 0.25
+  done
+  grep -q '"event":"project.load"' "$TMP/$name.log" 2>/dev/null || \
+    fail "the '$name' engine never loaded — see $TMP/$name.log"
+  lcli() { env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$shm" "$CLI" "$@"; }
+  lcli do sampler-load --track 0 --file s.wav --root 60 >/dev/null 2>&1
+  sleep 1.5
+  if [ "$sendenv" = "1" ]; then
+    lcli do sampler-env --track 0 --device 1 --amp \
+      --attack 0 --decay 0 --sustain 1000 --release 5000 >/dev/null 2>&1
+    sleep 0.5
+  fi
+  lcli do play --force >/dev/null 2>&1 || true
+  wait "$ENG" 2>/dev/null; ENG=""
+  grep -q '"event":"audio.capture_written"' "$TMP/$name.log" 2>/dev/null || \
+    fail "the '$name' run never wrote its capture — see $TMP/$name.log. The engine did not shut
+        down cleanly, so this says nothing about the kit"
+  [ -s "$TMP/$name.wav" ] || fail "the '$name' live run captured no audio file — see
+        $TMP/$name.log. That is the harness, not the kit"
+}
+
+live_run livedef 0
+live_run liveref 1
+LIVE_DEF="$(peak livedef 0.0 6.0)"
+LIVE_REF="$(peak liveref 0.0 6.0)"
+echo "  live, no envelope sent:   peak $LIVE_DEF"
+echo "  live, explicit envelope:  peak $LIVE_REF"
+
+# ---- THE POSITIVE CONTROL FIRST. If this is silent nothing below means anything.
+[ "${LIVE_REF:-0}" -gt 2000 ] || \
+  fail "the live capture with an EXPLICIT envelope is silent (peak ${LIVE_REF:-0}). The harness
+        did not capture the transport at all — wrong capture window, the play never landed, or
+        the device never started — so it cannot say anything about the default either way"
+
+# ---- LIVE SOUNDS. The property the whole check is named for, finally measured where it lives.
+[ "${LIVE_DEF:-0}" -gt 2000 ] || \
+  fail "a sampler built entirely by commands is SILENT WHEN PLAYED LIVE (peak ${LIVE_DEF:-0}),
+        while the same path with an explicit envelope gives $LIVE_REF. No envelope was sent, so
+        the slot uses the mod set sampler-load mints — and makeAdsr(0, 0, ...) puts three points
+        at t=0, so unless the mint produces strictly increasing times the runner holds the first
+        of them at level 0. Saving and reloading hides this, because deserialization repairs the
+        shape; this is the live path, where nobody repairs anything"
+
+# ---- AND AT FULL LEVEL, not merely audible.
+python3 -c "
+d, r = ${LIVE_DEF:-0}, ${LIVE_REF:-0}
+raise SystemExit(0 if r > 0 and d * 2 >= r else 1)" || \
+  fail "live, the default envelope peaks at $LIVE_DEF where an explicit full-level one gives
+        $LIVE_REF — audible, and at a fraction of the level"
+
 echo "sampler_default_sound_check: PASS — a sampler made only by commands sounds, sustains, and"
-echo "                             is at full level with no envelope sent"
+echo "                             is at full level with no envelope sent, both rendered from a"
+echo "                             save AND played live with no save in between"
