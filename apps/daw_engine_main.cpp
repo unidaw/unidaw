@@ -14033,6 +14033,39 @@ struct TrackRuntime {
         }
       } else {
         throttlePlayback = true;
+        // THE RING IS STILL FINITE BEFORE THE PUMP HAS TAKEN ANYTHING.
+        //
+        // The gate above only engages once currentPlayback > 0. Until then production is
+        // completely unthrottled — and the ring is numBlocks deep whether or not anyone has
+        // read from it yet. With the default numBlocks of 3 the producer can reach block 3
+        // before the pump takes block 0, and 3 % 3 == 0, so block 3's audio lands in block 0's
+        // slot. The pump then writes block 3's audio to the file as the first block.
+        //
+        // MEASURED, not deduced. tools/slice_select_check.sh compares the same project rendered
+        // at 64, 256 and 1024 frames; under a parallel ctest the 64-frame render differed from
+        // the other two in exactly frames 0..63 and nowhere else, twice, in evidence kept by
+        // the check's failure trap. Those 64 frames are byte-for-byte the correct signal's
+        // frames 192..255 — block 3 of 64. Not a corruption, not a phase error: a whole block,
+        // displaced by exactly the ring depth.
+        //
+        // It is load-dependent because whether the producer gets three blocks ahead before the
+        // pump's first wake-up is a scheduler question, which is why the same bounce differed
+        // run to run on a busy machine and never on an idle one.
+        //
+        // OFFLINE ONLY. Live, the device consumes at a fixed rate and a block lost before the
+        // first callback is inaudible; the consumer's catch-up corrections handle it and are
+        // deliberately disabled offline, because there a skipped block is a hole in the file.
+        // Offline the requirement is absolute — every produced block must reach the file — and
+        // there is no deadline, so the honest response to a full ring is to stop producing.
+        //
+        // Deadlock is not reachable: the pump publishes its cursor after consuming, so a pump
+        // that is running always leaves the producer room, and a pump that never starts has
+        // nothing to be starved of.
+        if (offlineRender && nextBlockId.load(std::memory_order_relaxed) >=
+                                 engineConfig.numBlocks) {
+          std::this_thread::sleep_for(std::chrono::microseconds(200));
+          continue;
+        }
       }
 
       const uint32_t blockId = nextBlockId.fetch_add(1);
