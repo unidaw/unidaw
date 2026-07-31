@@ -5608,7 +5608,8 @@ struct TrackRuntime {
     // THE ONE FUNNEL every sampler edit passes through — load, set-slot, slice, marker, envelope,
     // LFO — which is why the kit version is bumped here rather than at each of them. A counter
     // maintained at N call sites is a counter that is wrong at the site someone forgets.
-    samplerKitVersion.fetch_add(1, std::memory_order_acq_rel);
+    const uint32_t newVersion =
+        samplerKitVersion.fetch_add(1, std::memory_order_acq_rel) + 1;
     const daw::Device* found = nullptr;
     for (const auto& d : rt.track.chain.devices) {
       if (d.kind == daw::DeviceKind::Sampler && d.hasSampler) {
@@ -5623,7 +5624,11 @@ struct TrackRuntime {
       return;
     }
     rt.samplerDeviceId = found->id;
-    rt.samplerSnapshot = rebuildSamplerRender(found->sampler, rt.trackId, found->id);
+    auto built = rebuildSamplerRender(found->sampler, rt.trackId, found->id);
+    // Stamped before it is shared, which is the only moment it can be: everything downstream
+    // holds it as const, which is what makes a snapshot safe to read from the audio thread.
+    const_cast<daw::SamplerRender*>(built.get())->version = newVersion;
+    rt.samplerSnapshot = std::move(built);
     rt.samplerRuntime.configure(found->sampler.voiceCap, engineConfig.sampleRate);
     rt.samplerRuntime.setSnapshot(rt.samplerSnapshot);
   };
@@ -10966,6 +10971,11 @@ struct TrackRuntime {
           slot.activeVoices = runtime->samplerRuntime.activeVoices();
           slot.steals = static_cast<uint32_t>(runtime->samplerRuntime.stealCount());
           slot.unmapped = static_cast<uint32_t>(runtime->samplerRuntime.unmappedCount());
+          // THE VERSION OF WHAT IS IN THIS ANSWER, not of what the model has reached. A reader
+          // comparing this against the region's poll counter can tell "you are looking at the
+          // current kit" from "the kit has moved since this was built" — which the region's
+          // counter alone cannot say, because it is written on a different clock.
+          slot.contentVersion = snap->version;
           uint32_t n = 0;
           for (const auto& sl : snap->state.slots) {
             if (n >= daw::kUiMaxSamplerSlots) {

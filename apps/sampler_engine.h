@@ -58,6 +58,11 @@ struct SamplerSourceAudio {
 struct SamplerRender {
   SamplerState state;  // a COPY, so an edit to the document cannot be seen half-applied
   SamplerKeymap keymap;
+  // WHICH EDIT THIS SNAPSHOT IS. Stamped when it is built, so a read-back published FROM this
+  // snapshot can say which version of the document it is showing — rather than being labelled
+  // with whatever the model's counter happens to read at publish time, which is a different
+  // fact and can be newer.
+  uint32_t version = 0;
   std::vector<std::shared_ptr<const SamplerSourceAudio>> audio;  // parallel to state.sources
   double sampleRate = 48000.0;
 

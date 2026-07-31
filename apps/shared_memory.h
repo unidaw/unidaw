@@ -920,7 +920,20 @@ struct alignas(64) UiSamplerKitSlot {
   uint32_t activeVoices = 0;  // from the RUNTIME, so "is it playing" is answerable
   uint32_t steals = 0;        // telemetry: a pool running out is a musical fact, not a secret
   uint32_t unmapped = 0;      // notes that hit no slot — a kit silent everywhere is diagnosable
-  uint32_t reserved[5]{};
+  // THE VERSION OF THE STATE THIS ANSWER WAS BUILT FROM, stamped inside the seqlock so it
+  // travels WITH the bytes it describes.
+  //
+  // UiSamplerKitRegion::version is a different fact: it is written every publish cycle from the
+  // model counter and means "the kit has moved since you last looked". The answer here is filled
+  // at request-service time from the RT snapshot. Two facts, two clocks — and a reader that took
+  // the region's version as describing the answer it just received could get the NEW version
+  // alongside the OLD content, redraw the stale kit, and never poll again because the version
+  // already matched.
+  //
+  // Taken from the reserved words, so nothing a reader already reads moves and kShmVersion does
+  // not change. ZERO means "this engine does not stamp one" — the counter starts at 1.
+  uint32_t contentVersion = 0;
+  uint32_t reserved[4]{};
   UiSamplerSlotEntry slots[kUiMaxSamplerSlots]{};
 };
 

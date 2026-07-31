@@ -154,6 +154,13 @@ pub struct SamplerKitView {
     pub steals: u32,
     /// Notes that hit no slot — a kit that is silent everywhere is diagnosable from this.
     pub unmapped: u32,
+    /// The version of the state THIS ANSWER was built from, stamped inside the seqlock.
+    ///
+    /// Not the same fact as `sampler_kit_version()`, which is the model's poll counter written
+    /// on a different clock: an answer can arrive carrying older content than that counter
+    /// reports. Compare the two to tell "you are looking at the current kit" from "the kit has
+    /// moved since this was built".
+    pub content_version: u32,
     pub slots_truncated: u32,
     pub slots: Vec<crate::layout::UiSamplerSlotEntry>,
 }
@@ -1183,6 +1190,7 @@ impl EngineHandle {
                     active_voices: snap.activeVoices,
                     steals: snap.steals,
                     unmapped: snap.unmapped,
+                    content_version: snap.contentVersion,
                     slots_truncated: snap.slotsTruncated,
                     slots: snap.slots[..n].to_vec(),
                 });

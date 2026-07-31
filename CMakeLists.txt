@@ -565,6 +565,12 @@ add_test(NAME sampler_kit
 )
 set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# The version on a kit answer describes that answer, and a reader gets the track it asked for.
+add_test(NAME kit_readback_version
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/kit_readback_version_check.sh
+)
+set_tests_properties(kit_readback_version PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # Every part of a chopped file is reachable, and a new sampler exists before it is loaded into.
 add_test(NAME sampler_chop_reach
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_chop_reach_check.sh

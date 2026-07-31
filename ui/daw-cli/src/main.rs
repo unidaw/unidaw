@@ -1167,9 +1167,20 @@ fn get_audio_sources(handle: &EngineHandle) -> i32 {
 fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
     let track = flag_u64(args, "--track", Some(0)).unwrap_or(0) as u32;
     let device = flag_u64(args, "--device", Some(0)).unwrap_or(0) as u32;
-    // Any non-zero sequence works; a caller polling repeatedly should vary it so a stale answer
-    // from a previous question is distinguishable from this one's.
-    let seq = flag_u64(args, "--seq", Some(1)).unwrap_or(1) as u32;
+    // UNIQUE PER INVOCATION, from the pid. This defaulted to the constant 1, and the comment
+    // right here said what that costs — "a caller polling repeatedly should vary it so a stale
+    // answer from a previous question is distinguishable from this one's" — and then did not.
+    //
+    // With every request carrying seq 1, the echo check below (`v.request_seq == seq`) matched
+    // the slot's EXISTING contents immediately, so each invocation printed the PREVIOUS one's
+    // answer. Asking for track 1 returned a kit stamped "track": 0. A UI reading two tracks'
+    // kits in turn would show each one the other's, and with a single sampler track — which is
+    // every test in this repo until today — nothing looks wrong at all.
+    //
+    // The pid also picks the answer slot (index = seq % slots), which spreads concurrent readers
+    // across slots instead of piling them on slot 1. Forced non-zero: zero means "no answer here".
+    let seq = flag_u64(args, "--seq", None)
+        .unwrap_or_else(|_| u64::from(std::process::id()) | 1) as u32;
     let payload = UiSamplerKitRequestPayload {
         command_type: UiCommandType::RequestSamplerKit as u16,
         flags: 0,
@@ -1197,6 +1208,11 @@ fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
                 // The poll counter, so a caller can cache this answer and re-ask only when it
                 // moves rather than re-requesting a 2 KB kit on a timer.
                 println!("  \"kit_version\": {},", handle.sampler_kit_version());
+                // WHAT THIS ANSWER ACTUALLY SHOWS, which is not always kit_version. The poll
+                // counter is written every publish cycle from the model; this is stamped into
+                // the answer when it is built. When they differ, the kit moved after this was
+                // made and re-asking will get something newer.
+                println!("  \"content_version\": {},", v.content_version);
                 println!("  \"track\": {},", v.track_id);
                 println!("  \"device\": {},", v.device_id);
                 println!("  \"voice_cap\": {},", v.voice_cap);
