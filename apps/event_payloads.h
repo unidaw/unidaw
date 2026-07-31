@@ -381,7 +381,7 @@ inline constexpr uint16_t kSamplerFilterSetResonance = 1u << 1;
 // to use, which is the same separation the envelopes already have.
 struct UiSamplerLfoPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetLfo);
-  uint16_t flags = 0;  // kSamplerEnvAmp: address by TARGET rather than by modulator id
+  uint16_t flags = 0;  // kSamplerEnvByTarget: address by TARGET rather than by modulator id
   uint32_t trackId = 0;
   uint32_t deviceId = 0;
   uint32_t modSetId = 0;
@@ -426,7 +426,7 @@ inline constexpr std::size_t kBulkMaxStreams = 8;
 // the voice never frees, and the leak is silent.
 struct UiSamplerEnvPointsHeader {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetEnvelopePoints);
-  uint16_t flags = 0;  // kSamplerEnvAmp
+  uint16_t flags = 0;  // kSamplerEnvByTarget
   uint32_t trackId = 0;
   uint32_t deviceId = 0;
   uint32_t modSetId = 0;
@@ -462,11 +462,23 @@ enum : uint16_t {
   // requiring an id first would make the common case a two-step round trip against state the
   // caller has not read yet.
   //
-  // Named kSamplerEnvAmp because it began as "the amp envelope" and `target` defaults to 0
-  // (Volume), so a sender written before `target` existed still means exactly what it meant.
-  // The engine renders envelopes on Cutoff, Pitch and Panning too (sampler_engine.h:372) and
-  // for a while nothing could create one — the same gap the ADSR itself had.
-  kSamplerEnvAmp = 1u << 0,
+  // NAMED FOR WHAT IT SELECTS, not for what it usually finds. It was kSamplerEnvByTarget, because it
+  // began as "the amp envelope" and `target` defaults to 0 (Volume) — and that name cost the
+  // web-UI agent two debugging rounds: they read "amp", did not set the flag, addressed modulator
+  // 0, and got `no_such_modulator` on a fresh kit where there is no modulator 0 to address. Then
+  // they made the flag conditional on the caller naming a modulator, but their message still
+  // always carried `modulator: 0` "for completeness", so the flag was never set and the verb
+  // reported success twice while doing nothing.
+  //
+  // AN OMITTED FIELD AND A ZERO ONE ARE NOT THE SAME REQUEST. UiSamplerFilterPayload gets this
+  // right with two explicit flags and says so — "zero is a legal cutoff, not a missing one" —
+  // and the same reasoning belongs here. A name that describes the mechanism makes both of those
+  // mistakes hard to make.
+  //
+  // Same bit and same value, so nothing on the wire moved; a sender written before `target`
+  // existed still means exactly what it meant. The engine renders envelopes on Cutoff, Pitch and
+  // Panning too (sampler_engine.h:372).
+  kSamplerEnvByTarget = 1u << 0,
 };
 
 // Which modulation domain an envelope drives. Mirrors ModTarget in sampler_state.h.

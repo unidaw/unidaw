@@ -9019,7 +9019,7 @@ struct TrackRuntime {
               continue;
             }
             daw::SamplerModulator* mod = nullptr;
-            if ((h.flags & daw::kSamplerEnvAmp) != 0) {
+            if ((h.flags & daw::kSamplerEnvByTarget) != 0) {
               mod = findOrMintEnvelope(
                   ms, static_cast<daw::ModTarget>(std::min<uint8_t>(h.target, 4)));
             } else {
@@ -11470,7 +11470,7 @@ struct TrackRuntime {
             daw::SamplerModulator* mod = nullptr;
             const auto target =
                 static_cast<daw::ModTarget>(std::min<uint8_t>(p.target, 4));
-            if ((p.flags & daw::kSamplerEnvAmp) != 0) {
+            if ((p.flags & daw::kSamplerEnvByTarget) != 0) {
               for (auto& m : ms.modulators) {
                 if (m.kind == daw::ModKind::Lfo && m.target == target) {
                   mod = &m;
@@ -11571,7 +11571,7 @@ struct TrackRuntime {
               continue;
             }
             daw::SamplerModulator* mod = nullptr;
-            if ((p.flags & daw::kSamplerEnvAmp) != 0) {
+            if ((p.flags & daw::kSamplerEnvByTarget) != 0) {
               mod = findOrMintEnvelope(
                   ms, static_cast<daw::ModTarget>(std::min<uint8_t>(p.target, 4)));
             } else {

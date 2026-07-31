@@ -363,7 +363,7 @@ pub struct UiSamplerEnvelopePayload {
 }
 
 /// Target the AMP envelope whatever its id, minting one if the mod set has none.
-pub const SAMPLER_ENV_AMP: u16 = 1 << 0;
+pub const SAMPLER_ENV_BY_TARGET: u16 = 1 << 0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
