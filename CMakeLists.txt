@@ -565,6 +565,12 @@ add_test(NAME sampler_kit
 )
 set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Zero is not a device id: a sampler that is the FIRST device on its track must be played.
+add_test(NAME device_id_zero
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/device_id_zero_check.sh
+)
+set_tests_properties(device_id_zero PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # The version on a kit answer describes that answer, and a reader gets the track it asked for.
 add_test(NAME kit_readback_version
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/kit_readback_version_check.sh

@@ -11853,7 +11853,13 @@ struct TrackRuntime {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         if (commandType == daw::UiCommandType::AddDevice) {
           daw::Device device;
-          device.id = chainPayload.deviceId;
+          // ZERO MEANS "PICK ONE", not "call it zero". Everywhere else on this wire a deviceId of
+          // 0 means unspecified — the sampler commands all read it as "the first sampler on the
+          // track, whichever that is" — and callers send 0 when they do not care. This took it
+          // literally, so `add-device --kind sampler` on a fresh track created a device whose id
+          // WAS 0, which is the same value the engine uses for "this track has no sampler".
+          // Nine guards then skipped it and the instrument was never sent a note.
+          device.id = chainPayload.deviceId != 0 ? chainPayload.deviceId : daw::kDeviceIdAuto;
           device.kind = static_cast<daw::DeviceKind>(chainPayload.deviceKind);
           device.patcherNodeId = chainPayload.patcherNodeId;
           device.hostSlotIndex = chainPayload.hostSlotIndex;

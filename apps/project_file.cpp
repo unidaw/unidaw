@@ -1008,10 +1008,23 @@ bool deserializeProject(const std::string& json,
       }
 
       if (const auto chain = tree.get_child_optional("device_chain")) {
+        // Highest id already seen in this chain, so a repaired id cannot collide with a real one.
+        uint32_t nextLoadedDeviceId = 1;
+        for (const auto& deviceEntry : *chain) {
+          nextLoadedDeviceId = std::max(
+              nextLoadedDeviceId, deviceEntry.second.get<uint32_t>("device_id", 0) + 1);
+        }
         for (const auto& deviceEntry : *chain) {
           const auto& deviceTree = deviceEntry.second;
           Device device;
+          // A SAVED ID OF 0 IS REPAIRED, not trusted. Zero means "no device" throughout the
+          // engine and on the wire, so a project written before ids started at 1 — or one
+          // hand-authored — carries a device that no guard will see and no command can address.
+          // Renumbering it here is safe because nothing outside this document refers to it yet.
           device.id = deviceTree.get<uint32_t>("device_id", 0);
+          if (device.id == 0) {
+            device.id = nextLoadedDeviceId++;
+          }
           if (!deviceKindFromString(deviceTree.get<std::string>("kind", ""),
                                     device.kind)) {
             setError(error, "unknown device kind in project");
