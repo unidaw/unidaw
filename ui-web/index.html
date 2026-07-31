@@ -7804,7 +7804,20 @@ window.__uni = {
                              draw(); return pendingCard.probe(); },
   scales: () => scales,
   paletteProbe: () => palette.probe(),
-  paletteMove: (d) => { palette.move(d); draw(); return palette.probe().selected; },
+  /*
+   * THE INDEX, NOT A WHOLE PROBE.
+   *
+   * This returned `palette.probe().selected`, and `probe()` builds an array of every matching
+   * command's name plus the object around it — so moving the selection allocated a full probe
+   * per move, on the exact path alloc.mjs measures. That is the probe measuring itself, which
+   * this project has now done four times; alloc.mjs's own comment records three of them.
+   *
+   * It showed up as one added command nearly DOUBLING the palette's per-draw allocation
+   * (786 -> 1340 B against a 900 limit) — a step, not a slope, because the names array crossed a
+   * capacity boundary and V8 reallocated a backing store twice the size. The app's draw path
+   * never called probe() at all; only this accessor did.
+   */
+  paletteMove: (d) => { palette.move(d); draw(); return palette.selected; },
   chainSelect: (pos) => { state.chainSelected = pos; draw(); return state.chainSelected; },
   /**
    * v24 per-insert meters, as the engine published them this frame.

@@ -419,6 +419,9 @@ export class Palette {
 
     if (this._shown !== n || this._total !== this.entries.length) {
       this._shown = n;
+      // The list box grows and shrinks with the match count, so the cached height stops being
+      // true exactly here and nowhere else.
+      this._viewH = 0;
       this._total = this.entries.length;
       this.countEl.firstChild.nodeValue = n + '/' + this.entries.length;
       this.emptyEl.style.display = n ? 'none' : '';
@@ -440,10 +443,28 @@ export class Palette {
       const h = this._rowH;
       if (h) {
         const top = this.selected * h;
-        const view = this.listEl.clientHeight;
+        /*
+         * THE LIST'S HEIGHT IS MEASURED ONCE PER OPENING, NOT PER KEYSTROKE.
+         *
+         * `clientHeight` is a layout read, and it sat on the path that runs every time the
+         * selection moves — so arrowing down a list cost a forced layout per row. It only
+         * matters once the list is long enough to SCROLL, which is why it went unnoticed: the
+         * registry fitted in the box, the branch below never ran, and adding one command tipped
+         * it over and nearly doubled the per-draw allocation (786 -> 1340 B against a 900 limit).
+         * A step, not a slope, which is the signature of a threshold rather than a cost per item.
+         *
+         * The box does not resize while the palette is open, so this is invalidated when the
+         * match count changes (see `_shown` above) and nowhere else.
+         */
+        if (!this._viewH) this._viewH = this.listEl.clientHeight;
+        const view = this._viewH;
         const at = this.listEl.scrollTop;
-        if (top < at) this.listEl.scrollTop = top;
-        else if (top + h > at + view) this.listEl.scrollTop = top + h - view;
+        const want = top < at ? top
+                   : top + h > at + view ? top + h - view
+                   : at;
+        // Only when it actually moves: assigning the value it already has still invalidates
+        // layout and still fires a scroll event.
+        if (want !== at) this.listEl.scrollTop = want;
       }
     }
   }
