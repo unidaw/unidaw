@@ -565,6 +565,12 @@ add_test(NAME sampler_kit
 )
 set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A sampler edit must not free the snapshot its sounding voices are reading.
+add_test(NAME sampler_edit_while_playing
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_edit_while_playing_check.sh
+)
+set_tests_properties(sampler_edit_while_playing PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # The filter can be turned on at all — the field nothing could write — and it is audible.
 add_test(NAME sampler_filter
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_filter_check.sh
