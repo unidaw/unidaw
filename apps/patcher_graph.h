@@ -90,6 +90,13 @@ struct PatcherNode {
   uint32_t id = 0;
   PatcherNodeType type = PatcherNodeType::RustKernel;
   uint16_t depth = 0;
+  // WHICH DEVICE THIS NODE BELONGS TO, or 0 for a node in the shared pool with no owner.
+  //
+  // Set when the pool is ASSEMBLED from the device graphs; a device's own authored graph leaves
+  // it 0, because there the question does not arise. Published so a UI drawing the pool can name
+  // the graph an edit should reach: without it every patcher command is pool-scoped, and since
+  // patcher-is-a-device the pool is not what a project renders. Derived, so it is not persisted.
+  uint32_t ownerDeviceId = 0;
   bool hasEuclideanConfig = false;
   PatcherEuclideanConfig euclideanConfig{};
   bool hasLfoConfig = false;

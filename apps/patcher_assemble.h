@@ -103,6 +103,14 @@ inline AssembledPatcher assemblePatcherPool(const std::vector<Device>& devices) 
     for (const auto& n : device.patcher.nodes) {
       PatcherNode copy = n;
       copy.id = mapId(n.id);
+      // WHICH DEVICE THIS NODE CAME FROM, carried ON the node rather than in a vector beside it.
+      //
+      // The pool is a UNION with re-id'd nodes, so "which device is this GRAPH" has no single
+      // answer — but "which device is this NODE" always does, and that is the question a UI has
+      // to answer before it can name the graph an edit should reach. A parallel array would be
+      // a second fact about the same node, and would desync the first time anything reordered
+      // or filtered them; on the node it cannot.
+      copy.ownerDeviceId = device.id;
       out.pool.nodes.push_back(copy);
     }
     for (const auto& e : device.patcher.edges) {

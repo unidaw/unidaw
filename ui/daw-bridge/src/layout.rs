@@ -477,7 +477,16 @@ pub struct UiPatcherNode {
     pub id: u32,
     pub node_type: u8, // PatcherNodeType
     pub has_config: u8,
-    pub reserved: u16,
+    /// Which device this node belongs to, or 0 for a pool node with no owning device.
+    ///
+    /// Was `reserved`, at the same offset and width. The region publishes the ASSEMBLED pool —
+    /// a union of every device's graph with re-id'd nodes — so `UiPatcherRegion::deviceId` has
+    /// no answer to give, while "which device is this NODE" always does. This is the fact a UI
+    /// needs before it can set `UI_PATCHER_FLAG_HAS_DEVICE_ID` on an edit; without it every
+    /// patcher command is pool-scoped, and the pool is not what a project renders.
+    ///
+    /// Capped at 65535 by the half-word; the engine reports once rather than truncating.
+    pub owner_device_id: u16,
     pub config: [i32; 8],
 }
 
