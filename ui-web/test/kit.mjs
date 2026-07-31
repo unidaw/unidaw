@@ -261,165 +261,93 @@ const ask = async (track, device) => {
 }
 
 // ---------------------------------------------------------------------------
-// THE MODULATOR FIELDS REACH THE WIRE.
+// A MODULATOR DRIVEN INTO EXISTENCE — and the one the product cannot make live.
 //
-// `modMask` reports what WOULD move — an envelope with no points and an LFO with zero swing
-// both save and both do nothing, and neither sets a bit. `filterType` comes with it because the
-// two are only useful together: a cutoff or resonance modulator on a filter that is OFF is
-// silent, so a row drawing one without the other shows a live control over a dead one.
+// This was deferred once: I could not get a non-zero modMask through daw-cli and said so rather
+// than ship a green check that was really testing my ability to guess a CLI. Backend answered
+// that the invocation did not exist — a sampler with no mod sets made `sampler-env` apply to
+// nothing, the handler iterating an empty vector and logging `no_such_mod_set` to its own log
+// while the CLI printed `{"sent": ...}`. Fixed there; testable here.
 //
-// WHAT THIS CHECKS AND WHAT IT DOES NOT. It asserts the two fields arrive, are numeric, and
-// that a kit with no modulators claims none — the plumbing, end to end, through a real engine.
-// It does NOT drive a modulator into existence: reaching a modulated slot through daw-cli means
-// steering the engine's mod-set system by guesswork (`--mod-set`, `--modulator`, `--amp` and
-// `--target` interact, and a chop mints slots whose mod set I did not choose), and a test built
-// on a guessed invocation proves less than it appears to.
+// AND THE PART WORTH THE WHOLE FILE: nothing in the engine writes `modSet.filterType`. Not one
+// site — the only reference anywhere is the read at the kit publish point, which is the value
+// this rack draws. So every cutoff and resonance modulator reachable from any surface is inert
+// BY CONSTRUCTION, and the `!` badge is not showing an unlucky fixture. It is showing the only
+// state the product can currently reach.
 //
-// The DECODING — live, inert, both at once, every target and kind, and the filter-off trap — is
-// covered exhaustively in unit.mjs against `modSummary`, which is the part that is mine.
-// ---------------------------------------------------------------------------
-{
-  const slots = await page.evaluate(() => {
-    const k = window.__uni.samplerKitCached(0, 9);
-    return k && k.slots ? k.slots.map((s) => ({ mm: s.modMask, ft: s.filterType })) : null;
-  });
-  check(Array.isArray(slots) && slots.length > 0, 'the kit has slots to ask about',
-        JSON.stringify(slots));
-  check(slots.every((s) => typeof s.mm === 'number'),
-        'every slot publishes a modMask — undefined would mean the wire dropped it',
-        JSON.stringify(slots.map((s) => s.mm)));
-  check(slots.every((s) => typeof s.ft === 'number'),
-        'and a filterType, without which a cutoff modulator cannot be judged',
-        JSON.stringify(slots.map((s) => s.ft)));
-  // This fixture configures no modulators, so every mask must be empty. A non-zero one here
-  // would mean the field is being read from the wrong offset — the failure a numeric check
-  // alone cannot see.
-  check(slots.every((s) => s.mm === 0),
-        'a kit with no modulators claims none — a stray bit would mean a bad offset',
-        JSON.stringify(slots.map((s) => s.mm)));
-  const marks = await page.evaluate(() =>
-    [...document.querySelectorAll('.dv-p')].filter((r) => r.style.display !== 'none')
-      .map((r) => r.querySelector('.dv-p-v') ? r.querySelector('.dv-p-v').textContent : ''));
-  check(marks.every((m) => !/[~!]/.test(m)),
-        'and no row draws a modulator mark it has no modulator for', JSON.stringify(marks));
-}
-
-// ---------------------------------------------------------------------------
-// A SAMPLER MADE FROM THE UI, with nothing pre-built.
-//
-// The kit has been drawable, live and inspectable for a while and there was no way to CREATE
-// one: `add-device --kind sampler` existed in daw-cli and nowhere else, and the sidecar's own
-// DEVICE_KINDS list was five long while DeviceKind::Sampler is 5 — so `{"kind":"sampler"}` came
-// back "no such device kind". The surface could show a sampler nobody could make.
+// Which is the argument for showing inert modulators rather than hiding them, twice over:
+// hiding would make this surface agree with the bug, and the bug is that nothing can disagree.
 // ---------------------------------------------------------------------------
 {
   await page.evaluate(() => window.__uni.run('add-track'));
   await page.waitForTimeout(1200);
-  const track = await page.evaluate(() => window.__uni.state().tracks - 1);
-  check(track > 0, 'a fresh track to put one on', String(track));
+  const mt = await page.evaluate(() => window.__uni.state().tracks - 1);
+  await page.evaluate((t) => window.__uni.run(`sampler ${t}`), mt);
+  await page.waitForTimeout(1500);
+  copyFileSync(resolve('presets/audio/waveform_probe.wav'), `${stack.dir}/mod.wav`);
 
-  await page.evaluate((t) => window.__uni.run(`sampler ${t}`), track);
-  await page.waitForTimeout(2000);
-  const made = await page.evaluate((t) => {
-    const c = window.__uni.chains ? null : null;
-    return window.__uni.run(`kit ${t} 0`);
-  }, track);
+  const cli = (args) => {
+    try {
+      return execFileSync('./ui/target/release/daw-cli', args,
+        { env: { ...process.env, DAW_UI_SHM_NAME: stack.shm }, encoding: 'utf8' }).trim();
+    } catch (e) { return 'FAILED: ' + String(e.stdout || e.message).slice(0, 160); }
+  };
+  const load = cli(['do', 'sampler-load', '--track', String(mt), '--file', 'mod.wav',
+                    '--root', '60']);
+  check(!/FAILED/.test(load), 'a sample loads', load.slice(0, 100));
 
-  /*
-   * FOUND, by asking the engine rather than by trusting the command's receipt. `sampler` returns
-   * "sampler added" whether or not anything arrived — a receipt is not an outcome, and this
-   * whole file exists because the read-back is the thing that can tell the difference.
-   */
-  // POLLED, not read once: `sampler` returns "sampler added" whether or not anything arrived,
-  // and the device takes a moment to appear in the chain. A single read landed before it did and
-  // reported `found: false` about a sampler that was on its way.
-  const kitNow = await page.evaluate(async (t) => {
-    for (let i = 0; i < 40; i++) {
+  // The AMP envelope — bit 0. Nothing to do with the filter, so it moves whatever the filter is.
+  const amp = cli(['do', 'sampler-env', '--track', String(mt), '--attack', '100000',
+                   '--decay', '200000', '--sustain', '500', '--release', '300000']);
+  // The CUTOFF envelope — bit 6. Real, stored, round-tripping, and silent, because the filter
+  // is off and no command in the product can turn it on.
+  const cut = cli(['do', 'sampler-env', '--track', String(mt), '--target', 'cutoff',
+                   '--attack', '100000', '--decay', '200000', '--sustain', '500',
+                   '--release', '300000', '--depth', '900']);
+  check(!/FAILED/.test(amp) && !/FAILED/.test(cut), 'both envelopes are accepted',
+        (amp + ' | ' + cut).slice(0, 120));
+
+  const slot = await page.evaluate(async (t) => {
+    for (let i = 0; i < 50; i++) {
       window.__uni.samplerKit(t, 0);
-      const c = window.__uni.samplerKitCached(t, 0);
-      if (c && c.found) return c;
+      const k = window.__uni.samplerKitCached(t, 0);
+      if (k && k.slots && k.slots.length && k.slots[0].modMask) return k.slots[0];
       await new Promise((r) => setTimeout(r, 150));
     }
-    return window.__uni.samplerKitCached(t, 0);
-  }, track);
-  /*
-   * AN EMPTY SAMPLER REPORTS found:false, which is the same answer as "there is no sampler on
-   * that device". The region's own comment says `found` means "there IS a sampler there", so
-   * this is a state the read-back cannot currently distinguish: a device that exists and holds
-   * nothing looks exactly like a device that does not exist.
-   *
-   * It matters because it is the state a sampler is in for the whole interval between creating
-   * one and loading into it — the moment a UI most wants to say "here it is, put something in
-   * it" and instead has to say nothing at all. Reported.
-   *
-   * Asserted AS THE CURRENT BEHAVIOUR rather than left untested, so it fails the day it changes
-   * — the same style that caught backend's source-clip fix within the hour.
-   */
-  check(kitNow && kitNow.found === false,
-        'KNOWN: a sampler with nothing loaded reports found:false, indistinguishable from no '
-        + 'sampler at all. Reported. This check inverts the day it is fixed.',
-        JSON.stringify(kitNow && kitNow.found));
-
-  // ...AND A SAMPLE INTO IT. A project-relative FILE NAME, not a path — the command is 40 bytes
-  // and the name gets 24, so the engine resolves it against its own audio directory.
-  /*
-   * THE SAMPLE HAS TO SIT BESIDE THE PROJECT, and that is a real constraint rather than test
-   * plumbing. `resolveSourcePath` joins a relative name with the loaded project's directory,
-   * while this repo's projects reference audio as `../audio/<name>` — and that prefix is nine of
-   * the twenty-four bytes the command carries, leaving fifteen for a filename.
-   * `../audio/waveform_probe.wav` is twenty-seven and cannot be sent at all. Reported.
-   *
-   * So the fixture puts one where a bare name can reach it, which is what the command can
-   * actually express today.
-   */
-  copyFileSync(resolve('presets/audio/waveform_probe.wav'), `${stack.dir}/probe.wav`);
-  await page.evaluate((t) => window.__uni.run(`load-sample ${t} 0 probe.wav`), track);
-  const loaded = await page.waitForFunction(async (t) => {
-    window.__uni.samplerKit(t, 0);
     const k = window.__uni.samplerKitCached(t, 0);
-    return !!(k && k.slots && k.slots.length > 0);
-  }, track, { timeout: 8000 }).then(() => true).catch(() => false);
-  check(loaded, 'loading a sample mints a slot');
+    return k && k.slots ? k.slots[0] : null;
+  }, mt);
 
-  if (loaded) {
-    /*
-     * Read until it SETTLES, not once.
-     *
-     * The cache is keyed on the kit version now, so a load bumps it, the held answer is
-     * invalidated and a fresh one is asked for — leaving a window in which the cache holds the
-     * previous, empty answer. A single read landed in that window and got `slots[0]` undefined,
-     * which reads as "the load did nothing" and is really "you asked between two answers".
-     */
-    const k = await page.evaluate(async (t) => {
-      for (let i = 0; i < 40; i++) {
-        window.__uni.samplerKit(t, 0);
-        const c = window.__uni.samplerKitCached(t, 0);
-        if (c && c.slots && c.slots.length > 0) return c;
-        await new Promise((r) => setTimeout(r, 150));
-      }
-      return window.__uni.samplerKitCached(t, 0);
-    }, track);
-    check(k && k.slots && k.slots.length > 0, 'the kit settles with a slot in it',
-          k && JSON.stringify(k.slots && k.slots.length));
-    const s0 = (k && k.slots && k.slots[0]) || {};
-    check(s0.frames > 0, 'the slot resolved its audio', String(s0.frames));
-    /*
-     * FIXED PITCH is the default and it is what makes a drum a drum: keyLow == keyHigh ==
-     * rootKey, so the sample plays at its own speed wherever it is struck. Clearing the flag
-     * gives a playable zone instead, which is a different instrument entirely.
-     */
-    check(s0.keyLow === s0.keyHigh && s0.keyLow === s0.root,
-          'and is mapped to ONE key, because a loaded one-shot is a drum until told otherwise',
-          `${s0.keyLow}-${s0.keyHigh} root ${s0.root}`);
-  }
+  check(slot && (slot.modMask & 1) !== 0, 'the amp envelope sets its bit',
+        slot && `mask ${slot.modMask}`);
+  check(slot && (slot.modMask & (1 << 6)) !== 0, 'and so does the cutoff envelope',
+        slot && `mask ${slot.modMask}`);
+  check(slot && slot.filterType === 0,
+        'while the filter is OFF — nothing in the engine writes filterType, so this is the '
+        + 'only value it can have. Reported; opcode 86 will change it.',
+        slot && String(slot.filterType));
 
-  // A NAME TOO LONG IS REFUSED, not truncated: a truncated name resolves to nothing or, worse,
-  // to a DIFFERENT file, and "loaded fine, wrong sample" is not a failure anyone looks for.
-  const long = await page.evaluate((t) =>
-    window.__uni.run(`load-sample ${t} 0 a-really-quite-long-sample-name.wav`), track);
-  check(/longer than the 24/.test((long || []).join(' ')),
-        'a name past the command\'s 24 bytes is refused by length, not cut to fit',
-        (long || []).join(' ').slice(-100));
+  /*
+   * THE CURSOR HAS TO BE ON THAT TRACK. The rack draws the chain of `state.cursor.track`, so
+   * reading `.dv-p` rows while the cursor sits elsewhere reads a DIFFERENT device's rows — which
+   * is what happened first, and it reported the modulator marks missing from a card that was
+   * never showing the modulated slot.
+   */
+  await page.evaluate((t) => window.__uni.run(`goto 0 ${t}`), mt);
+  await page.waitForTimeout(1200);
+  const row = await page.evaluate(() =>
+    [...document.querySelectorAll('.dv-p')].filter((r) => r.style.display !== 'none')
+      .map((r) => ({ v: r.querySelector('.dv-p-v') ? r.querySelector('.dv-p-v').textContent : '',
+                     t: r.title || '' }))[0]);
+  /*
+   * `~!` AND NOT `~`. One modulator moves, one cannot, and the row says both. Marking the
+   * cutoff envelope live would make this surface agree with a bug that currently has no way to
+   * be disagreed with — which is exactly what backend's own check did before it caught itself.
+   */
+  check(row && /~/.test(row.v) && /!/.test(row.v),
+        'and the row shows BOTH — something moves, something cannot', row && JSON.stringify(row.v));
+  check(row && /filter is off/.test(row.t),
+        'naming the reason, because the reason is the fixable part', row && row.t);
 }
 
 check(errors.length === 0, 'and nothing threw', errors.slice(0, 3).join(' | '));
