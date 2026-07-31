@@ -133,3 +133,46 @@ wait_for_loads() {
         $(python3 -c "print($tries * 0.25)")s, and the engine is still ALIVE — so the load was
         refused or never arrived rather than the engine dying. Grep the log for *_rejected."
 }
+
+# WHY A LIVE CAPTURE CAME BACK EMPTY — the same argument as wait_for_boot, one layer along.
+#
+# Several checks arm DAW_CAPTURE_WAV and assert on the file. When it is empty they each say some
+# version of "captured no audio — that is the harness, not the kit". True, and it stops exactly
+# where the useful part starts, because "the harness" covers a dozen unrelated causes.
+#
+# On 2026-07-31 that message cost an hour and produced a wrong conclusion twice: first that the
+# tests were flaky, then that the capture window was too short. Neither. The machine's default
+# output was an AirPlay speaker (TP-Link_Music) that ACCEPTS being opened and then never runs a
+# playback callback. The engine's own log said so plainly — "Audio output started", then
+# "0 of 0 playback callbacks", and a pipeline depth that grew with runtime because nothing was
+# pulling — and no check read any of it.
+#
+# THE DISCRIMINATOR IS THE CALLBACK COUNT, not the captured frames. Zero callbacks means the
+# DEVICE never asked for audio, which is indistinguishable from silence at every layer above and
+# cannot be caused by anything under test. Frames captured but wrong is a different failure and
+# stays the caller's to describe.
+#
+#   capture_diagnosis <logfile>   -> one line naming the cause it can actually prove
+capture_diagnosis() {
+  local log="$1"
+  [ -f "$log" ] || { echo "(no engine log at $log to diagnose from)"; return; }
+  local dev callbacks
+  dev="$(grep -m1 '^Audio device: ' "$log" 2>/dev/null | sed 's/^Audio device: //')"
+  # "N of M playback callbacks dropped a track" — M is how many times the device asked for audio.
+  callbacks="$(grep -o 'of [0-9]* playback callbacks' "$log" 2>/dev/null | tail -1 |
+               grep -oE '[0-9]+' | head -1)"
+  if [ "${callbacks:-unknown}" = "0" ]; then
+    echo "the audio device ${dev:-(unnamed)} NEVER RAN A PLAYBACK CALLBACK (0 of 0): it opened,
+        reported 'Audio output started', and then pulled nothing at all. No audio can reach the
+        capture tap, which lives in that callback, and the producer queue grows without bound.
+        Nothing under test can cause or fix this — the machine's default output device is not
+        actually playing. Select a real local output and re-run"
+  elif [ -n "$callbacks" ]; then
+    echo "the device ${dev:-(unnamed)} ran $callbacks playback callbacks, so it WAS pulling audio
+        — an empty capture with a live device is not the device's fault and is worth reading the
+        engine log for directly"
+  else
+    echo "the engine log has no underrun summary, so it did not reach a clean shutdown — read
+        $log directly rather than trusting the capture"
+  fi
+}

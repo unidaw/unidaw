@@ -247,6 +247,17 @@ raise SystemExit(1)
 PYC
 echo "  commanded: persisted in the save"
 
+# IS THERE A CAPTURE TO MEASURE AT ALL? Asked BEFORE measuring, because the alternative is what
+# this check used to do: read a file that does not exist, print a Python traceback, and then
+# accuse the engine of updating the model and not the RT snapshot. That is a confident, specific
+# and WRONG product diagnosis produced by a dead audio device — the worst possible output, because
+# it sends the reader into the dispatch looking for a bug that is not there.
+[ -s "$TMP/cmd.wav" ] || \
+  fail "the live run captured no audio, so the tone below cannot be measured and this check can
+        say nothing about opcode 87. That is the harness, not the engine — specifically:
+        $(capture_diagnosis "$TMP/cmd.log")
+        Full log: $TMP/cmd.log"
+
 CMD="$(which_tone cmd)"
 echo "  flag on by command:     $CMD Hz"
 [ "$CMD" = "800" ] || \

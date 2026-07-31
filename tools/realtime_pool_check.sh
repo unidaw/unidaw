@@ -34,6 +34,7 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
+. "$ROOT/tools/lib/engine_wait.sh"   # for capture_diagnosis
 TRACKS="${1:-24}"
 
 [ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
@@ -155,7 +156,9 @@ raise SystemExit(0 if float('${PL:-9}') < 0.8 else 1)" || \
 
 # ---- PLAYS. Captured, not assumed: an engine that reported no underruns because it produced
 # silence would satisfy everything above.
-[ -s "$TMP/pool.wav" ] || fail "the capture tap wrote no file"
+[ -s "$TMP/pool.wav" ] || fail "the capture tap wrote no file. Specifically:
+        $(capture_diagnosis "$TMP/pool.log")
+        Full log: $TMP/pool.log"
 python3 "$ROOT/tools/perceptual.py" "$TMP/pool.wav" --expect-audio >/dev/null || \
   fail "the take is silent. No underruns and no sound is not a pass — it is the pipeline keeping
         up perfectly with nothing"

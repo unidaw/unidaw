@@ -254,8 +254,10 @@ live_run() {  # live_run <name> <sendEnv 0|1>
   grep -q '"event":"audio.capture_written"' "$TMP/$name.log" 2>/dev/null || \
     fail "the '$name' run never wrote its capture — see $TMP/$name.log. The engine did not shut
         down cleanly, so this says nothing about the kit"
-  [ -s "$TMP/$name.wav" ] || fail "the '$name' live run captured no audio file — see
-        $TMP/$name.log. That is the harness, not the kit"
+  [ -s "$TMP/$name.wav" ] || fail "the '$name' live run captured no audio file. That is the
+        harness, not the kit — and specifically:
+        $(capture_diagnosis "$TMP/$name.log")
+        Full log: $TMP/$name.log"
 }
 
 live_run livedef 0
