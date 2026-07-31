@@ -1017,18 +1017,26 @@ bool deserializeProject(const std::string& json,
         for (const auto& deviceEntry : *chain) {
           const auto& deviceTree = deviceEntry.second;
           Device device;
-          // A SAVED ID OF 0 IS REPAIRED, not trusted. Zero means "no device" throughout the
-          // engine and on the wire, so a project written before ids started at 1 — or one
-          // hand-authored — carries a device that no guard will see and no command can address.
-          // Renumbering it here is safe because nothing outside this document refers to it yet.
           device.id = deviceTree.get<uint32_t>("device_id", 0);
-          if (device.id == 0) {
-            device.id = nextLoadedDeviceId++;
-          }
           if (!deviceKindFromString(deviceTree.get<std::string>("kind", ""),
                                     device.kind)) {
             setError(error, "unknown device kind in project");
             return false;
+          }
+          // A SAMPLER SAVED WITH ID 0 IS REPAIRED, and ONLY a sampler.
+          //
+          // Zero means "no device" throughout the engine: TrackRuntime::samplerDeviceId is
+          // documented "0 = this track has no sampler" and guarded that way at nine sites, so a
+          // sampler with that id was never sent a note. Renumbering it is safe precisely BECAUSE
+          // it was silent — nothing can have come to depend on it.
+          //
+          // NOT done for other kinds, and the asymmetry is deliberate. A VST at id 0 worked fine,
+          // because nothing overloads its id as a sentinel; and mod_links reference devices BY
+          // ID, so renumbering a working device would break links pointing at it. Repairing what
+          // was broken and leaving alone what was not is the smaller claim, and the one that
+          // cannot lose data.
+          if (device.id == 0 && device.kind == DeviceKind::Sampler) {
+            device.id = nextLoadedDeviceId++;
           }
           device.capabilityMask = static_cast<uint8_t>(
               deviceTree.get<uint32_t>("capability_mask", 0));
