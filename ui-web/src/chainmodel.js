@@ -709,9 +709,19 @@ export function buildChainModel(opts, buf) {
           const missing = (q.flags & 4) !== 0;
           p.index = q.slot;
           p.uid = '';
-          p.name = q.keyLow === q.keyHigh
-            ? `${q.slot}  ${pitchName(q.root)}`
-            : `${q.slot}  ${pitchName(q.keyLow)}-${pitchName(q.keyHigh)}`;
+          /*
+           * THE SLOT'S OWN NAME WHEN IT HAS ONE (kShmVersion 36), and the key it answers to
+           * otherwise.
+           *
+           * The key stays even when the name is there, because the name is what a person calls
+           * the sound and the key is how they PLAY it — dropping the key would make a named kit
+           * unplayable from the tracker without opening something else. The number stays for the
+           * same reason: `slot <t> <d> <n> ...` addresses by it.
+           */
+          const key = q.keyLow === q.keyHigh
+            ? pitchName(q.root)
+            : `${pitchName(q.keyLow)}-${pitchName(q.keyHigh)}`;
+          p.name = q.name ? `${q.slot}  ${q.name}  ${key}` : `${q.slot}  ${key}`;
           p.unit = '';
           p.steps = 0;
           // A slot is not a parameter: nothing modulates it, so the row must not offer a badge
@@ -739,9 +749,27 @@ export function buildChainModel(opts, buf) {
            * lie would be invisible: every slot of a chop would agree with every other, which
            * looks exactly like a correct answer.
            */
+          /*
+           * ...AND WHERE THE SLICE ACTUALLY IS (kShmVersion 35).
+           *
+           * The comment above is now half history: `frames` is still the SOURCE's length and
+           * every slot of a chop still reports the whole file, but `begin`/`end` say which part
+           * of it this slot plays. So a sliced slot can state its own length instead of naming
+           * a number that belongs to the file.
+           *
+           * A slot with no slice gets the whole source from the engine — (0, frames), not
+           * zeroes — so the subtraction needs no special case. `end` is only distrusted when it
+           * is ZERO AND a slice is set, which is what a pre-v35 engine would send; then the
+           * source length is the honest fallback and the row says so rather than drawing a
+           * zero-length slice over a sample that plays.
+           */
+          const extent = q.end > q.begin ? q.end - q.begin : 0;
           p.range = missing ? 'the source file did not resolve — this slot is silent'
-                  : [q.slice ? `slice ${q.slice} of a ${q.frames}-frame source`
-                             : `${q.frames} frames`,
+                  : [q.slice
+                       ? (extent
+                            ? `slice ${q.slice}: frames ${q.begin}-${q.end} of ${q.frames}`
+                            : `slice ${q.slice} of a ${q.frames}-frame source`)
+                       : `${q.frames} frames`,
                      mod.title].filter(Boolean).join(' · ');
           p.display = missing ? 'MISSING'
                     : (q.slice ? `sl${q.slice}` : frameText(q.frames)) + mod.mark;

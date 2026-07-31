@@ -816,6 +816,7 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice', 'bypass',
                      'quantize', 'moveDevice', 'chord', 'delChord', 'deleteHarmony',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'opsColumn', 'opsShown',
+                     'samplerSlotName',
                      'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
                      'selectedClip', 'ticksPerBar', 'master',
@@ -2235,6 +2236,9 @@ const OP_REGISTRY = {
    * agent has no sampler tooling at all.
    */
   slot:      { cli: 'sampler-slot', agent: null, why: 'gap' },
+  // Naming a pad. The CLI shipped with opcode 90; the agent has no sampler tooling at all, which
+  // is the same recorded gap every other sampler verb carries.
+  'slot-name': { cli: 'sampler-slot-name', agent: null, why: 'gap' },
   /*
    * Chromatic mode (SetTrackSoundAddressed, 87). Landed engine-side this morning; daw-cli has
    * not caught up, and the agent has no sampler tooling at all.
@@ -2357,7 +2361,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'filter', 'env', 'slot', 'soundaddr', 'bank', 'emit',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
-                   'sampler', 'load-sample', 'slice',
+                   'sampler', 'load-sample', 'slice', 'slot-name',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 
@@ -3301,4 +3305,26 @@ test('no console command shadows another', () => {
   for (const k of keys) { if (seen.has(k)) dupes.push(k); seen.add(k); }
   assert.deepEqual(dupes, [],
     'a command name declared twice — the later one silently deletes the earlier');
+});
+
+test("the sidecar's slot-name length matches the engine's array", async () => {
+  /*
+   * A SECOND COPY OF SOMEONE ELSE'S RULE, which is normally the wrong instinct and earns its
+   * place here: the engine REFUSES an over-long slot name rather than shortening it, and its
+   * refusal is a log event. From a browser that is a command that reports success and does
+   * nothing — the failure mode this repo keeps finding, most recently when the sidecar's slot
+   * FIELD bound went stale at 26 and killed two commands outright.
+   *
+   * So the sidecar checks the length too, and this holds its copy equal to the C++ constant.
+   * Same shape as the field-id bound above and for the same reason.
+   */
+  const hdr = readFileSync(new URL('../../apps/shared_memory.h', import.meta.url), 'utf8');
+  const cpp = hdr.match(/kUiSamplerSlotNameBytes\s*=\s*(\d+)/);
+  assert.ok(cpp, 'the engine declares kUiSamplerSlotNameBytes');
+  const rust = readFileSync(new URL('../../ui/daw-sidecar/src/main.rs', import.meta.url), 'utf8');
+  const mine = rust.match(/const SAMPLER_SLOT_NAME_BYTES: usize = (\d+);/);
+  assert.ok(mine, 'the sidecar declares SAMPLER_SLOT_NAME_BYTES');
+  assert.equal(Number(mine[1]), Number(cpp[1]),
+    `the sidecar allows ${mine[1]} bytes and the engine's array is ${cpp[1]} — a name between `
+    + 'the two would be sent, refused into the log, and reported as success');
 });

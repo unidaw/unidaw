@@ -2968,6 +2968,26 @@ const dockApi = {
     }
     state.reject = null; schedule(); return true;
   },
+  /**
+   * NAME ONE SLOT (opcode 90).
+   *
+   * The project format has persisted `name` since the sampler shipped and nothing published it,
+   * so a name survived save and reload perfectly and was invisible to every reader — this
+   * codebase's most-repeated defect wearing its other face. kShmVersion 36 publishes it and this
+   * is the write half.
+   *
+   * The engine REFUSES a name that does not fit rather than storing a shortened one, so what
+   * comes back is byte-for-byte what was sent or the write did not happen. A truncated name is
+   * the worst of the three outcomes because it looks like it worked.
+   */
+  samplerSlotName: (track, device, slot, name) => {
+    if (!conn || !conn.send({ type: 'samplerslotname', track: Number(track) || 0,
+                              device: Number(device) || 0, slot: Number(slot) || 0,
+                              name: String(name === undefined ? '' : name) })) {
+      state.reject = 'no engine'; schedule(); return false;
+    }
+    state.reject = null; schedule(); return true;
+  },
   samplerSlot: (track, device, slot, field, value) => {
     if (!conn || !conn.send({ type: 'samplerslot', track: Number(track) || 0,
                               device: Number(device) || 0, slot: Number(slot) || 0,
@@ -8130,6 +8150,7 @@ window.__uni = {
   samplerEnvelope: (t, d, e) => dockApi.samplerEnvelope(t, d, e),
   samplerSlot: (t, d, sl, f, v) => dockApi.samplerSlot(t, d, sl, f, v),
   samplerDevice: (t, d, f, v) => dockApi.samplerDevice(t, d, f, v),
+  samplerSlotName: (t, d, sl, n) => dockApi.samplerSlotName(t, d, sl, n),
   samplerEmit: (t, d, o) => dockApi.samplerEmit(t, d, o),
   soundAddressed: (t, on) => dockApi.soundAddressed(t, on),
   opsTextAtCursor: () => dockApi.opsTextAtCursor(),

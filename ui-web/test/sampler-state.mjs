@@ -410,6 +410,79 @@ const unmoved = [];
         s && `slot ${SLOT} gate ${s.flags & 1}`);
 }
 
+// ---------------------------------------------------------------------------
+// A SLOT'S NAME (kShmVersion 36 / opcode 90) — persisted since the sampler shipped, published
+// by nothing until now, so it survived save and reload perfectly and was invisible to every
+// reader. This repo's most-repeated defect wearing its other face: usually a persisted field
+// cannot be WRITTEN, this one could not be READ.
+// ---------------------------------------------------------------------------
+{
+  const before = (await ask()).slots.find((s) => s.slot === SLOT);
+  check(before && before.name === '', 'a slot starts with no name', JSON.stringify(before && before.name));
+
+  await run(`slot-name ${TRACK} ${DEVICE} ${SLOT} kick 01`);
+  await page.waitForTimeout(700);
+  const named = (await ask()).slots.find((s) => s.slot === SLOT);
+  check(named && named.name === 'kick 01',
+        'naming a slot reaches the engine and reads back — including the space, so the verb '
+        + 'takes the rest of the line rather than one word', JSON.stringify(named && named.name));
+
+  /*
+   * NEVER TRUNCATED, ALWAYS REFUSED. A name that does not fit is rejected rather than stored
+   * short, so what reads back is byte-for-byte what was sent or the write did not happen — a
+   * truncated name is the worst of the three outcomes because it LOOKS like it worked.
+   *
+   * Checked at 60 bytes against a 40-byte array, and the claim is not "it was refused" but "the
+   * old name is still there": a refusal that had already written half of itself would leave a
+   * name nobody chose.
+   */
+  const said = await run(`slot-name ${TRACK} ${DEVICE} ${SLOT} ${'x'.repeat(60)}`);
+  await page.waitForTimeout(700);
+  const kept = (await ask()).slots.find((s) => s.slot === SLOT);
+  check(kept && kept.name === 'kick 01',
+        'a name too long to fit is refused and the old one is untouched — not shortened',
+        `${JSON.stringify(kept && kept.name)} :: ${JSON.stringify(said).slice(-120)}`);
+
+  // An empty name clears it, which is the only way back to an unnamed pad.
+  await run(`slot-name ${TRACK} ${DEVICE} ${SLOT}`);
+  await page.waitForTimeout(700);
+  const cleared = (await ask()).slots.find((s) => s.slot === SLOT);
+  check(cleared && cleared.name === '', 'and an empty name clears it',
+        JSON.stringify(cleared && cleared.name));
+}
+
+// ---------------------------------------------------------------------------
+// WHERE A SLICE ACTUALLY IS (kShmVersion 35). The chop played and could not be SEEN: every slot
+// reported the SOURCE's length, so nothing could draw where a slice begins or how long it is.
+// ---------------------------------------------------------------------------
+{
+  const k = await ask();
+  const s1 = k.slots.find((s) => s.slot === SLOT);
+  const s2 = k.slots.find((s) => s.slot === SLOT2);
+  check(s1 && typeof s1.begin === 'number' && typeof s1.end === 'number',
+        'the read-back carries a slice extent per slot', JSON.stringify(s1 && [s1.begin, s1.end]));
+  /*
+   * A SLOT WITH NO SLICE GETS THE WHOLE SOURCE — (0, frames), not zeroes. Backend's rule, and
+   * worth pinning rather than assuming: "0,0 means the whole thing" would be a sentinel that
+   * reads as a bug at the exact moment somebody is looking for one.
+   *
+   * Slot 2 has no slice in this fixture, so it is the one that can make that claim.
+   */
+  check(s2 && s2.slice === 0 && s2.begin === 0 && s2.end === s2.frames,
+        'and a slot with NO slice reports the whole source, not zeroes',
+        JSON.stringify(s2 && { slice: s2.slice, begin: s2.begin, end: s2.end, frames: s2.frames }));
+  /*
+   * ...AND A SLICED SLOT REPORTS SOMETHING SMALLER. Slot 1 was pointed at slice 2 far above,
+   * whose marker sits at frame 1000 of a source thousands of frames long — so its extent must
+   * be a PROPER SUBSET of the source. Without this the check above passes on an engine that
+   * writes (0, frames) for everything, which is exactly what a stubbed field looks like.
+   */
+  check(s1 && s1.slice > 0 && s1.begin > 0 && s1.end <= s1.frames && s1.end > s1.begin,
+        'while a SLICED slot reports a proper region inside it — the control that says the '
+        + 'extent is computed and not stubbed',
+        JSON.stringify(s1 && { slice: s1.slice, begin: s1.begin, end: s1.end, frames: s1.frames }));
+}
+
 check(errors.length === 0, 'and nothing threw', errors.slice(0, 3).join(' | '));
 
 await browser.close();

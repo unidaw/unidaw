@@ -35,7 +35,8 @@ use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlicePayload,
                          UiSamplerFilterPayload, UiSamplerEnvelopePayload,
                          UiSamplerSetSlotPayload, UiSamplerSetDevicePayload,
-                         UiSamplerEmitRowsPayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
+                         UiSamplerEmitRowsPayload, UiSamplerSlotNameHeader,
+                         EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
                          UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
@@ -74,6 +75,14 @@ const WIRE_LANES: usize = 64;
 
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
 const WIRE_VERSION: u16 = 27;
+
+/// `kUiSamplerSlotNameBytes` (shared_memory.h). The array a slot name has to fit INCLUDING its
+/// nul, so a name of exactly this length does not fit — hence `>=` at the check.
+///
+/// Copied rather than derived because the sidecar has no view of the header, and ratcheted in
+/// unit.mjs against the C++ constant. The copy earns its place: the engine refuses an over-long
+/// name into its LOG, which from a browser is a command that reports success and does nothing.
+const SAMPLER_SLOT_NAME_BYTES: usize = 40;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -1501,7 +1510,8 @@ fn request_sampler_kit(handle: &EngineHandle, track: u32, device: u32) -> String
                     "{{\"slot\":{},\"source\":{},\"keyLow\":{},\"keyHigh\":{},\"root\":{},\
                       \"velLow\":{},\"velHigh\":{},\"group\":{},\"nna\":{},\"flags\":{},\
                       \"gainMb\":{},\"panTh\":{},\"modSet\":{},\"stem\":{},\"quality\":{},\
-                      \"frames\":{},\"slice\":{},\"modMask\":{},\"filterType\":{}}}",
+                      \"frames\":{},\"slice\":{},\"modMask\":{},\"filterType\":{},\
+                      \"begin\":{},\"end\":{},\"name\":\"{}\"}}",
                     e.slotId, e.sourceLocalId, e.keyLow, e.keyHigh, e.rootKey,
                     e.velLow, e.velHigh, e.voiceGroup, e.nna, e.flags,
                     e.gainMillibels, e.panThousandths, e.modSetId, e.outputStem,
@@ -1511,7 +1521,29 @@ fn request_sampler_kit(handle: &EngineHandle, track: u32, device: u32) -> String
                     // filter type comes with it because the two are only useful together: a
                     // cutoff envelope on a filter that is OFF is silent, so a UI drawing one
                     // without the other shows a live control over a dead one.
-                    e.modMask, e.filterType)).collect();
+                    e.modMask, e.filterType,
+                    /*
+                     * v35: WHERE THIS SLOT'S SLICE IS IN ITS SOURCE, in frames. `frames` above is
+                     * still the SOURCE's length and is deliberately unchanged — a waveform needs
+                     * the source's scale even while drawing a slice inside it, so these are two
+                     * facts about one slot rather than one field that means different things.
+                     *
+                     * A slot with no slice gets the WHOLE source (0, frames), not zeroes: one
+                     * rule for "the region this pad plays", and no sentinel that reads as a bug
+                     * at the moment somebody is looking for one.
+                     */
+                    e.sliceBeginFrame, e.sliceEndFrame,
+                    /*
+                     * v36: THE SLOT'S NAME, nul-terminated inside its 40 bytes. Persisted since
+                     * the sampler shipped and published by nothing, so it survived save and
+                     * reload perfectly and was invisible to every reader.
+                     *
+                     * ESCAPED, because this reply is hand-built JSON and a name is the first
+                     * field in it a person types. A quote or a backslash would produce a message
+                     * the page cannot parse — which is not a broken name, it is a frame that
+                     * silently never arrives.
+                     */
+                    json_escape(&cstr_to_string(&e.name)))).collect();
                 return format!(
                     "{{\"samplerKit\":{{\"track\":{},\"device\":{},\"resolvedDevice\":{},\
                      \"found\":{},\
@@ -1725,6 +1757,43 @@ fn list_projects(dir: &str) -> String {
     }
     out.push_str("]}");
 
+    out
+}
+
+/// A nul-padded C string out of a fixed byte array.
+///
+/// `from_utf8_lossy` rather than a strict decode: the array is whatever the engine put there, and
+/// a name that arrived with a broken byte should draw as a replacement character rather than
+/// make the whole kit reply disappear. Truncated at the first nul, not at the array's end —
+/// trailing zeroes in a JSON string are not padding to a reader, they are content.
+fn cstr_to_string(bytes: &[i8]) -> String {
+    let raw: Vec<u8> = bytes.iter().map(|&b| b as u8).collect();
+    let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+    String::from_utf8_lossy(&raw[..end]).into_owned()
+}
+
+/// Escape a string for the hand-built JSON in this file.
+///
+/// The kit reply is assembled with `format!` rather than by a serialiser, which is fine for
+/// numbers and was fine for as long as no field held text a person typed. A slot name is the
+/// first one that does: an unescaped quote or backslash produces a message the page cannot
+/// parse, and the failure is not a wrong name, it is a frame that silently never arrives.
+///
+/// Control bytes are escaped as \u00XX rather than dropped, because dropping is a silent
+/// content change and this whole family of bugs is about silence.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
     out
 }
 
@@ -4158,6 +4227,55 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                         p.slot_id, p.field, p.value),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        /*
+                         * NAME ONE SLOT (opcode 90). A BULK command, not a fixed payload: the
+                         * header is 12 bytes and the name follows it raw, length-prefixed and
+                         * NOT nul-terminated — a terminator would be a second statement of the
+                         * same fact, and the two disagree the first time one is wrong.
+                         *
+                         * The length is checked HERE as well as in the engine, which is normally
+                         * the wrong instinct — a second copy of someone else's rule. It earns its
+                         * place because the engine REFUSES an over-long name rather than
+                         * shortening it, and its refusal is a log event: from a browser the
+                         * command would report success and do nothing. Ratcheted against
+                         * kUiSamplerSlotNameBytes in unit.mjs so the copy cannot drift.
+                         */
+                        if is_type(&t, "samplerslotname") {
+                            let name = parse_str_value(&t, "\"name\"").unwrap_or("");
+                            let bytes = name.as_bytes();
+                            let reply = if bytes.len() >= SAMPLER_SLOT_NAME_BYTES {
+                                format!(
+                                    "{{\"error\":\"a slot name must be under {SAMPLER_SLOT_NAME_BYTES} \
+                                      bytes and this is {} — the engine refuses rather than \
+                                      shortening, so a longer one would change nothing\"}}",
+                                    bytes.len())
+                            } else {
+                                let header = UiSamplerSlotNameHeader {
+                                    command_type: UiCommandType::SamplerSetSlotName as u16,
+                                    device_id: parse_num(&t, "\"device\"").unwrap_or(0).max(0) as u16,
+                                    track_id: parse_num(&t, "\"track\"").unwrap_or(0).max(0) as u32,
+                                    slot_id: parse_num(&t, "\"slot\"").unwrap_or(0).max(0) as u16,
+                                    name_bytes: bytes.len() as u16,
+                                };
+                                let mut buf = Vec::with_capacity(12 + bytes.len());
+                                buf.extend_from_slice(unsafe {
+                                    std::slice::from_raw_parts(
+                                        &header as *const UiSamplerSlotNameHeader as *const u8,
+                                        std::mem::size_of::<UiSamplerSlotNameHeader>(),
+                                    )
+                                });
+                                buf.extend_from_slice(bytes);
+                                match handle.send_bulk(&buf) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"samplerslotname\":{},\"bytes\":{}}}",
+                                        header.slot_id, bytes.len()),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                }
                             };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
                             continue;

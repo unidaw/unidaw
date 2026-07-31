@@ -560,6 +560,23 @@ export function createCommands(api) {
     // prose ratchet holds the two equal by NAME — and a hand-typed copy of twenty-seven names is
     // a copy that will disagree.
     /*
+     * NAME A SLOT (opcode 90). Its own verb rather than a `slot` field, because every other
+     * slot field is an int and this is text — `slot <t> <d> <s> name kick` would have to say
+     * where the number stops being a number.
+     *
+     * `rest: true` so a name with spaces arrives whole. An empty name is legal and clears it.
+     */
+    'slot-name': { help: 'slot-name <track> <device> <slot> [name] — name one sampler slot; '
+                       + 'empty clears it',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             { name: 'slot', type: 'int', min: 1 },
+             { name: 'name', type: 'text', rest: true, optional: true }],
+      run: (a) => {
+        const name = a.slice(3).join(' ');
+        if (!api.samplerSlotName(num(a[0]), num(a[1]), num(a[2]), name)) return refusal(api);
+        return name ? `slot ${a[2]} is "${name}"` : `slot ${a[2]} name cleared`;
+      } },
+    /*
      * `slot 0` IS NOT A WILDCARD, and this help said it was.
      *
      * The engine matches `slot.id != p.slotId → continue`, so 0 addresses a slot whose id is 0
