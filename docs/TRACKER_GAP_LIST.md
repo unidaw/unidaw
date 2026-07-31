@@ -15,6 +15,26 @@ Ordered by value-per-cost. Costs are what it costs *here*, in this tree.
 **Cost here: trivial for the half that matters.** `addNoteToClip` calls `MusicalClip::truncateEventTo` unconditionally, four lines commented *"Cut-on-next, at edit time"* (`apps/clip_edit.cpp:33-36`). It shortens the stored note **in the document**, so the decision is destroyed at entry and cannot be revisited. Overlapping notes in one column already play correctly — the scheduler honours explicit durations and `runtime.activeNotes` is keyed on the voice id, not the column — so `NNA=Continue` is almost entirely *a decision not to destroy data*: a per-lane policy that skips the truncate. Past-note reach already exists as a lambda (`cutActiveNoteInColumn`, `apps/daw_engine_main.cpp:12618`); it is simply not reachable from a row. `NoteFade` and background-voice stealing priority need the voice pool and wait for S1.
 **Do this first.** It is the only item on the list that is currently *losing work*.
 
+**[MEASURED 2026-07-31 — the claim above is CONFIRMED, and there is a trap in testing it.]** Two
+notes authored overlapping in one column (written straight into `project.json`, bypassing
+`addNoteToClip`) were rendered three ways and measured over the overlap window:
+
+| render | RMS |
+|---|---|
+| note 1 alone | 3674 |
+| both, sampler slot `nna: 0` (Cut) | **3521** — identical to note 2 alone: note 1 is gone |
+| both, sampler slot `nna: 2` (Continue) | **5098** — √(3674² + 3521²) = 5088, i.e. both ringing |
+
+So the scheduler does honour explicit overlapping durations, exactly as this item assumes — the
+edit-time truncate really is the only thing preventing the gesture.
+
+**THE TRAP: a `nna: 0` slot is the default, and it cuts the previous voice itself.** Anyone who
+implements the per-lane edit policy and tests it on a default kit will hear *no difference at all*
+and conclude the change did not work — the note is no longer truncated in the document, and the
+sampler cuts it anyway one layer down. The two settings are independent and BOTH have to say
+"continue": the lane must stop destroying the duration, and the slot must be willing to let the
+voice ring. Test with `nna: 2` or the result is a silent false negative.
+
 ### 2. Deterministic per-note humanise (velocity / micro-timing jitter)
 **Gesture:** programmed hats that are not stamped out — two percent of per-hit variation, on every drum lane, forever.
 **Cost here: trivial, and it is one consumer away.** `daw::noteProbabilityPasses` (`apps/musical_structures.h:80-93`) is already a deterministic per-note roll seeded on EventId with position/pitch/column folded in. The same three lines with a different output range give you humanise, with the reproducibility doctrine already settled and written down in `docs/row-ops.md`. **[CORRECTION, 2026-07-31]** This said `ChordPayload.humanizeTiming` / `humanizeVelocity` were "read by nothing in the render path — a fully plumbed dead field." **That is no longer true.** Both are read and applied for chords: the render path takes `event->payload.chord.humanizeTiming` / `humanizeVelocity` and runs each through `daw::deterministicJitter`, the first shifting the onset tick and the second offsetting `midiPayload.data2`. Verified by reading the render path rather than the model, which is the only way this row could have been checked.
