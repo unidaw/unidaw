@@ -64,7 +64,7 @@ export class Chain {
    * on the strip, rather than showing a value nobody has accepted.
    */
   constructor(host, { onSelect, onAdd, onParam, onOpenEditor, onDelete,
-                      onOpenPatcher, onBypass, onFilter, onMap } = {}) {
+                      onOpenPatcher, onBypass, onFilter, onDefaultGate, onMap } = {}) {
     this.host = host;
     this.host.className = 'dv';
     this.onSelect = onSelect;
@@ -87,6 +87,8 @@ export class Chain {
     // The sampler's filter, cycled from the card. Same shape as bypass: the handler names the
     // state it wants rather than asking for the next one.
     this.onFilter = onFilter;
+    // The bank's note-off default. Same shape as onFilter: names the state it wants.
+    this.onDefaultGate = onDefaultGate;
     /*
      * MAP. Destructured and assigned here for the same reason `onBypass` is, one line up:
      * a callback the constructor accepts and never stores gives a badge that looks live,
@@ -178,7 +180,7 @@ export class Chain {
      * button is two deletes, not a delete and an open.
      */
     this.cardsEl.addEventListener('dblclick', (e) => {
-      if (e.target.closest('.dv-add, .dv-open, .dv-del, .dv-byp, .dv-flt, .dv-p-bar')) return;
+      if (e.target.closest('.dv-add, .dv-open, .dv-del, .dv-byp, .dv-flt, .dv-gat, .dv-p-bar')) return;
       const card = e.target.closest('.dv-card');
       if (!card || !this.vm) return;
       const pos = Number(card.dataset.pos);
@@ -414,7 +416,20 @@ export class Chain {
       flt.appendChild(document.createTextNode(''));
       el._fltEl = flt;
       el._flt = -2;                      // not -1: -1 is "no filter here", a value it can hold
-      el.append(open, flt, byp, del);
+      /*
+       * THE BANK'S NOTE-OFF DEFAULT, as a two-state button beside the filter.
+       *
+       * Jaakko asked for this as "a setting per bank: ignore note-offs", and it is the setting
+       * rather than the mechanism — it SEEDS every slot the kit mints from then on and leaves
+       * the ones already there alone. So the label says what NEW pads will do, which is why it
+       * reads "1shot"/"gate" rather than describing the kit as a whole.
+       */
+      const gat = document.createElement('button');
+      gat.className = 'dv-gat';
+      gat.appendChild(document.createTextNode(''));
+      el._gatEl = gat;
+      el._gat = -2;                      // not -1: -1 is "no sampler here", a value it can hold
+      el.append(open, gat, flt, byp, del);
       const bus = div('dv-bus', el);
       el._busEl = bus;
       el._badge = text(badge);
@@ -473,6 +488,22 @@ export class Chain {
       const c = opener.closest('.dv-card');
       if (c && this.onOpenEditor) {
         this.onOpenEditor({ track: this.vm ? this.vm.track : -1, device: c._devId });
+      }
+      return;
+    }
+    const gate = e.target.closest('.dv-gat');
+    if (gate) {
+      const c = gate.closest('.dv-card');
+      if (c && this.onDefaultGate) {
+        const pos = Number(c.dataset.pos);
+        const card = this.vm && this.vm.cards && this.vm.cards[pos];
+        if (card && card.defaultGate >= 0) {
+          if (this.onSelect) this.onSelect(pos);
+          // The state we WANT, from the one being drawn — never "toggle". Two presses racing on
+          // the ring both meaning "the other one" cancel out; two that name a state settle.
+          this.onDefaultGate({ track: this.vm ? this.vm.track : -1, device: c._devId,
+                               on: card.defaultGate === 0 });
+        }
       }
       return;
     }
@@ -656,6 +687,21 @@ export class Chain {
        * card per frame, and an unguarded nodeValue write is a string assignment sixty times a
        * second for every card in the rack.
        */
+      if (el._gat !== c.defaultGate) {
+        el._gat = c.defaultGate;
+        const off = c.defaultGate < 0;
+        el._gatEl.style.display = off ? 'none' : '';
+        if (!off) {
+          const on = c.defaultGate !== 0;
+          el._gatEl.firstChild.nodeValue = on ? 'gate' : '1shot';
+          el._gatEl.title = on
+            ? 'New pads respect note-off — click for one-shot (plays the whole sample)'
+            : 'New pads are one-shot and ignore note-off — click to gate them';
+          // Marked when it is the accidental default rather than a choice: a slot minted at
+          // one-shot plays its whole sample however short the note is.
+          el._gatEl.classList.toggle('off', !on);
+        }
+      }
       if (el._flt !== c.filterType) {
         el._flt = c.filterType;
         const off = c.filterType < 0;

@@ -650,6 +650,17 @@ export function buildChainModel(opts, buf) {
      * that does not work rather than as a value being cleared underneath it.
      */
     c.filterType = kit && kit.slots && kit.slots.length ? (kit.slots[0].filterType | 0) : -1;
+    /*
+     * THE BANK'S OWN GATE DEFAULT, from the kit answer rather than from a slot.
+     *
+     * It cannot be inferred from the slots: it SEEDS a slot at mint and then stops mattering, so
+     * a bank whose default is "gated" can legitimately hold one-shot slots minted before it was
+     * set. Reading slot 0 would report the past rather than the setting.
+     *
+     * -1 when there is no kit, for the same reason filterType uses -1: 0 is the real "one-shot"
+     * state a card has to be able to show, so it cannot double as "there is nothing here".
+     */
+    c.defaultGate = kit ? (kit.defaultGate | 0) : -1;
     const src = kit && kit.found && kit.slots ? kit.slots
               : ((dp && dp.params) ? dp.params : null);
     const isKit = !!(kit && kit.found && kit.slots && src === kit.slots);

@@ -289,6 +289,32 @@
    and in decreasing order of how often you reach for one, which is the same
    order. A/B-ing an insert is a per-second gesture; deleting it is a per-week
    one. */
+/* THE BANK'S NOTE-OFF DEFAULT, left of the filter — the two per-second sampler controls sit
+   together, in increasing order of how often you reach for one.
+
+   Text, and two states rather than a cycle: it says what a NEW pad will do, because that is what
+   the setting actually controls. It seeds a slot at mint and leaves the ones already there
+   alone, so describing the kit as a whole would be a lie the moment one pad differs. */
+.dv-gat {
+  position: absolute; top: 6px; right: 100px;
+  display: flex; align-items: center; justify-content: center;
+  min-width: 38px; height: 20px;
+  padding: 0 4px;
+  font: inherit; font-size: 10px; letter-spacing: .02em;
+  color: var(--uni-text-fx);
+  background: transparent;
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: .5;
+}
+.dv-gat:hover { opacity: 1; border-color: var(--base-accent); color: var(--base-accent); }
+/* ONE-SHOT IS THE ACCIDENTAL DEFAULT, not a neutral setting: nobody chose it — `sampler-load`
+   never touched the field, so every slot inherited the struct's zero. Dimmed like the filter's
+   off state, because both mean "a control above this is doing nothing". */
+.dv-gat.off { opacity: .32; font-style: italic; }
+.dv-card.byp .dv-gat { opacity: .8; }
+
 /* THE SAMPLER'S FILTER, left of bypass — same row, same reasoning about order: it is a thing
    you reach for while listening, so it sits with the other per-second controls rather than with
    the ones that change what the card IS.

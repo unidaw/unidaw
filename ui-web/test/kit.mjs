@@ -541,6 +541,70 @@ const ask = async (track, device) => {
   }
 
   /*
+   * THE BANK'S NOTE-OFF DEFAULT, FROM THE POINTER.
+   *
+   * Jaakko asked for "ignore note-offs" as a per-bank setting and it is one — engine-side as
+   * SamplerSetDevice field 1, and on the console as `bank <track> <device> default-gate 1`. This
+   * is the other half of the rule that a console verb alone does not count: the card carries a
+   * two-state button and it calls the SAME function the verb calls.
+   *
+   * The label says what a NEW pad will do rather than describing the kit, because that is what
+   * the setting controls — it seeds a slot at mint and leaves the ones already there alone, so
+   * "this kit is gated" would be a lie the moment one pad differs.
+   */
+  /*
+   * THE RACK DRAWS THE CURSOR'S TRACK, so put the cursor on the one being tested.
+   *
+   * Without this the first visible card belongs to whichever track the cursor was left on by an
+   * earlier block, and the click sets that sampler's default while the poll asks about this one
+   * — the button said `gate` and the read-back said 0, which reads as the command not landing
+   * when both were working on different devices. The same lesson as the two cache keys above,
+   * one layer up: name the thing you mean.
+   */
+  await page.evaluate((t) => window.__uni.run(`goto 0 ${t}`), ct);
+  await page.waitForTimeout(1200);
+
+  const gateBtn = () => page.evaluate(() => {
+    const b = [...document.querySelectorAll('.dv-card .dv-gat')].find((x) => x.style.display !== 'none');
+    return b ? b.textContent : null;
+  });
+  check(await gateBtn() === '1shot',
+        'the sampler card shows the bank default, and it starts at one-shot',
+        JSON.stringify(await gateBtn()));
+
+  await page.evaluate(() => {
+    [...document.querySelectorAll('.dv-card .dv-gat')].find((x) => x.style.display !== 'none')
+      .dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(1500);
+  /*
+   * ASK ABOUT THE DEVICE THE CARD ASKED ABOUT.
+   *
+   * The cache is keyed on the QUESTION — `track:device` — and the rack asks by the sampler's
+   * real device id while `0` is the "first sampler" wildcard. Those are two entries, so polling
+   * device 0 read a stale answer while the card, keyed on the real id, was already showing the
+   * new value: the button said `gate` and the poll said 0. Not a race, two caches.
+   */
+  const devId = await page.evaluate((t) => {
+    const ch = Object.values(window.__uni.chains()).find((c) => c && c.track === t);
+    const d = ch && ch.devices ? ch.devices.find((x) => x.kind === 5) : null;
+    return d ? d.id : 0;
+  }, ct);
+  const flipped = await page.evaluate(async ([t, d]) => {
+    for (let i = 0; i < 40; i++) {
+      window.__uni.send({ type: 'samplerkit', track: t, device: d });
+      await new Promise((r) => setTimeout(r, 200));
+      const k = window.__uni.samplerKitCached(t, d);
+      if (k && k.defaultGate) return k.defaultGate;
+    }
+    const k = window.__uni.samplerKitCached(t, d);
+    return k ? k.defaultGate : null;
+  }, [ct, devId]);
+  check(flipped === 1, 'clicking it sets the bank default, and the engine agrees',
+        `defaultGate ${flipped}`);
+  check(await gateBtn() === 'gate', 'and the button says so', JSON.stringify(await gateBtn()));
+
+  /*
    * A REFUSED SAMPLER COMMAND SAYS SO — UiDiffType::SamplerRejected (17).
    *
    * Twenty sites across seven sampler verbs used to refuse into the engine's log and nowhere

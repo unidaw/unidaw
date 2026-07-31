@@ -1499,7 +1499,8 @@ fn request_sampler_kit(handle: &EngineHandle, track: u32, device: u32) -> String
                 return format!(
                     "{{\"samplerKit\":{{\"track\":{},\"device\":{},\"resolvedDevice\":{},\
                      \"found\":{},\
-                     \"voiceCap\":{},\"activeVoices\":{},\"steals\":{},\"unmapped\":{},\
+                     \"voiceCap\":{},\"defaultGate\":{},\"defaultView\":{},\
+                     \"activeVoices\":{},\"steals\":{},\"unmapped\":{},\
                      \"truncated\":{},\"slots\":[{}]}}}}",
                     /*
                      * THREE IDS, AND THEY ANSWER DIFFERENT QUESTIONS.
@@ -1516,7 +1517,12 @@ fn request_sampler_kit(handle: &EngineHandle, track: u32, device: u32) -> String
                      * the guard written this morning against being handed another track's kit
                      * was actually doing.
                      */
-                    k.track_id, device, k.device_id, k.found, k.voice_cap, k.active_voices, k.steals,
+                    k.track_id, device, k.device_id, k.found, k.voice_cap,
+                    // v33: the BANK's own defaults. `default_gate` cannot be inferred from the
+                    // slots — it seeds a slot at mint and stops mattering, and a bank
+                    // legitimately mixes one-shot and gated ones — so it has to be published or
+                    // a card showing "this kit ignores note-offs" would be guessing.
+                    k.default_gate, k.default_view, k.active_voices, k.steals,
                     k.unmapped, k.slots_truncated, slots.join(","));
             }
         }
