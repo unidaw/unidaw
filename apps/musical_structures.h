@@ -134,10 +134,33 @@ inline void splitTrigCondition(uint8_t code, uint8_t& a, uint8_t& b) {
   b = static_cast<uint8_t>((packed & 7) + 1);
 }
 
+// THE CODES THAT NEED MORE THAN A PASS INDEX (task #107).
+//
+// FILL is RESERVED AND NOT IMPLEMENTED. It makes the render depend on a LIVE performance input,
+// so an offline bounce has to define what fill state it renders under, and that is an owner
+// decision rather than a coding one. Until it is made, 128/129 fall through to the unknown-code
+// rule below and always sound — visible and harmless, where guessing would bake a wrong answer
+// into everybody's bounces.
+constexpr uint8_t kTrigConditionFill = 128;
+constexpr uint8_t kTrigConditionNotFill = 129;
+// PRE fires when the PREVIOUS conditional trig on the same track fired; NOT PRE is its negation.
+// Resolved by conditionalTrigFires below, which needs the track's other conditionals and so
+// cannot live in the pure per-note function.
+constexpr uint8_t kTrigConditionPre = 130;
+constexpr uint8_t kTrigConditionNotPre = 131;
+
+inline bool isPreTrigCondition(uint8_t code) {
+  return code == kTrigConditionPre || code == kTrigConditionNotPre;
+}
+
 inline bool trigConditionFires(uint8_t code, uint64_t passIndex) {
   if (code == kTrigConditionNone) {
     return true;
   }
+  // PRE CANNOT BE ANSWERED HERE and must not pretend to be. This function sees one note and a
+  // pass number; PRE is about a DIFFERENT note. Returning true keeps a PRE trig audible for any
+  // caller that has not been taught to resolve it — the same recoverable-failure rule as below —
+  // and conditionalTrigFires is the one that actually knows.
   uint8_t a = 0;
   uint8_t b = 0;
   splitTrigCondition(code, a, b);
@@ -148,6 +171,70 @@ inline bool trigConditionFires(uint8_t code, uint64_t passIndex) {
     return true;
   }
   return (passIndex % b) == static_cast<uint64_t>(a - 1);
+}
+
+// One conditional trig in a track's flat clip, in sounding order. Only notes that CARRY a
+// condition appear, so the list is short and the backward walk below is cheap.
+struct TrigConditionSite {
+  uint64_t tick = 0;
+  uint8_t code = kTrigConditionNone;
+};
+
+// How far a chain of PRE trigs is followed back before giving up. A run of PRE with no A:B
+// anchor anywhere is a cycle; this bounds it.
+constexpr int kMaxPreChainDepth = 64;
+
+// DOES THE CONDITIONAL AT `index` FIRE ON `passIndex`?
+//
+// This is the whole of PRE, and the reason it is shaped this way is determinism. The obvious
+// implementation carries a "did the last conditional fire" flag forward as notes are dispatched;
+// that flag depends on how many blocks have run and on emitNotes being called TWICE when a
+// window straddles the loop end, so two bounces of one project would differ while every
+// structural test still passed. #105 was arranged specifically to avoid that and this must not
+// reintroduce it.
+//
+// So PRE is resolved BACKWARD and statelessly: look up the previous conditional in the track's
+// own list and evaluate IT at ITS pass. The result is a pure function of (index, passIndex) —
+// nothing about block boundaries can reach it.
+//
+// THE PREDECESSOR IS CYCLIC. The conditional before the first one in the loop is the LAST one,
+// in the PREVIOUS pass — which is what makes a PRE at the top of the bar answer "did the end of
+// the last bar fire", the thing a musician actually means. On pass 0 there is no previous pass,
+// so there is genuinely no predecessor.
+//
+// NO PREDECESSOR DOES NOT FIRE. "The previous conditional fired" is false when there was none.
+// That is the honest reading, and a caller that can see this statically should SAY so — a row
+// that is silent forever with no explanation is the failure mode this codebase keeps paying for.
+inline bool conditionalTrigFires(const TrigConditionSite* sites,
+                                 size_t count,
+                                 size_t index,
+                                 uint64_t passIndex,
+                                 int depth = 0) {
+  if (sites == nullptr || index >= count) {
+    return true;
+  }
+  const uint8_t code = sites[index].code;
+  if (!isPreTrigCondition(code)) {
+    return trigConditionFires(code, passIndex);
+  }
+  // A cycle of PRE with no anchor SOUNDS rather than going silent, matching the unknown-code
+  // rule: an unexplainable silence is the failure you cannot debug from the outside.
+  if (depth >= kMaxPreChainDepth) {
+    return true;
+  }
+  // The only conditional on the track is this one, so it is its own predecessor and there is
+  // nothing to resolve against.
+  if (count < 2) {
+    return code == kTrigConditionNotPre;
+  }
+  const bool wrapped = index == 0;
+  if (wrapped && passIndex == 0) {
+    return code == kTrigConditionNotPre;
+  }
+  const size_t prev = wrapped ? count - 1 : index - 1;
+  const uint64_t prevPass = wrapped ? passIndex - 1 : passIndex;
+  const bool prevFired = conditionalTrigFires(sites, count, prev, prevPass, depth + 1);
+  return code == kTrigConditionNotPre ? !prevFired : prevFired;
 }
 
 // Decides whether a note sounds under its probability row op (item 12).

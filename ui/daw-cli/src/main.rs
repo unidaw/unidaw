@@ -2922,6 +2922,16 @@ fn main() {
                     // wire's business and a caller that had to compute it would be a second
                     // implementation of make_trig_condition waiting to disagree with the first.
                     if let Some(raw) = flag(&args, "--condition") {
+                        // The stateful forms have no colon. Checked first so the A:B branch's
+                        // error message stays about A:B.
+                        if raw == "pre" || raw == "npre" {
+                            mask |= ROW_OP_MASK_TRIG_CONDITION;
+                            trig_condition = if raw == "pre" {
+                                daw_bridge::rowop::TRIG_CONDITION_PRE
+                            } else {
+                                daw_bridge::rowop::TRIG_CONDITION_NOT_PRE
+                            };
+                        } else {
                         match raw.split_once(':') {
                             Some((a_text, b_text)) => {
                                 match (a_text.parse::<u8>(), b_text.parse::<u8>()) {
@@ -2943,8 +2953,9 @@ fn main() {
                             }
                             None => {
                                 parse_error = Some(format!(
-                                    "--condition needs A:B, e.g. 1:2 — got {raw:?}"));
+                                    "--condition needs A:B (e.g. 1:2), or pre/npre — got {raw:?}"));
                             }
+                        }
                         }
                     }
                     // --clear names ops to REMOVE: the mask bit is set and the value stays zero.

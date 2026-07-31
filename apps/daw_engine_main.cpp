@@ -1563,6 +1563,19 @@ private:
 
 struct ClipSnapshot {
   std::vector<daw::MusicalEvent> events;
+  // EVERY CONDITIONAL TRIG ON THIS TRACK, in sounding order. PRE resolves against this list
+  // rather than against a flag carried forward as notes dispatch — see conditionalTrigFires in
+  // musical_structures.h for why a forward flag would break bounce reproducibility.
+  //
+  // Built here, off the audio path, because it is a pure function of the clip: the list changes
+  // when the notes change and never because of where a block boundary fell.
+  std::vector<daw::TrigConditionSite> conditionals;
+  // True when a note carries PRE and NO A:B conditional exists anywhere on the track to ground
+  // the chain against. Such a PRE does not resolve by meaning: a lone one never fires, and a run
+  // of them unwinds to the recursion cap and then sounds. Either way the row is doing something
+  // nobody asked for, so it is recorded at build time and reported ONCE rather than left to be
+  // discovered by ear.
+  bool unanchoredPre = false;
 };
 
 struct TrackStateSnapshot {
@@ -1584,6 +1597,25 @@ const TrackStateSnapshot kEmptyTrackState{};
 inline std::shared_ptr<const ClipSnapshot> buildClipSnapshot(const daw::MusicalClip& clip) {
   auto snapshot = std::make_shared<ClipSnapshot>();
   snapshot->events = clip.events();
+  // The conditional index, in the order the events already are — which is sounding order, so the
+  // "previous conditional" a PRE trig asks about is simply the entry before it.
+  bool sawPre = false;
+  bool sawAnchor = false;
+  for (const auto& e : snapshot->events) {
+    if (e.type != daw::MusicalEventType::Note ||
+        e.payload.note.trigCondition == daw::kTrigConditionNone) {
+      continue;
+    }
+    snapshot->conditionals.push_back(
+        daw::TrigConditionSite{e.nanotickOffset, e.payload.note.trigCondition});
+    if (daw::isPreTrigCondition(e.payload.note.trigCondition)) {
+      sawPre = true;
+    } else {
+      sawAnchor = true;
+    }
+  }
+  // A PRE chain with no A:B anywhere to ground it. Recorded for the caller to report ONCE.
+  snapshot->unanchoredPre = sawPre && !sawAnchor;
   return snapshot;
 }
 
@@ -5754,8 +5786,20 @@ struct TrackRuntime {
     // emission time matters: moving a note's start changes which block it belongs to,
     // and the scheduler windows on the tick it reads, so a note nudged earlier at
     // emission time would already have missed its block.
-    return buildClipSnapshot(
+    auto built = buildClipSnapshot(
         daw::quantizeClipForSchedule(rt.track.clip, laneQuantizeOf(rt)));
+    // A PRE trig with no A:B anywhere on the track to ground it. Said out loud, once per
+    // rebuild, because the alternative is a row whose behaviour nobody can account for: a lone
+    // one is silent forever and a run of them unwinds to the recursion cap and sounds. Neither
+    // is what was typed, and neither leaves a trace anywhere else.
+    if (built && built->unanchoredPre) {
+      DAW_EVENT("trig.unanchored_pre")
+          .field("track", rt.trackId)
+          .field("conditionals", static_cast<uint64_t>(built->conditionals.size()))
+          .field("detail",
+                 "a PRE trig has no A:B conditional on this track to resolve against");
+    }
+    return built;
   };
 
   // Resolve a clip's sourcePath the one way both the decode funnel and the clip-
@@ -15743,10 +15787,18 @@ struct TrackRuntime {
             }
           }
 
-          // Now process new notes starting in this range
+          // Now process new notes starting in this range.
+          //
+          // THE SNAPSHOT IS HELD FOR THE WHOLE LOOP, not just for the range query. `events` is a
+          // vector of RAW POINTERS into it, so the owning shared_ptr has to outlive their last
+          // use — it used to be scoped to the `if`, leaving the only other owner as
+          // runtime.clipSnapshot, which another thread replaces whenever the notes change. A
+          // rebuild landing mid-window would then free the events being dispatched. Same family
+          // as the use-after-free in #97, and PRE needs the snapshot down here anyway.
           std::vector<const daw::MusicalEvent*> events;
-          if (auto snapshot = std::atomic_load_explicit(&runtime.clipSnapshot,
-                                                        std::memory_order_acquire)) {
+          auto snapshot = std::atomic_load_explicit(&runtime.clipSnapshot,
+                                                    std::memory_order_acquire);
+          if (snapshot) {
             getClipEventsInRange(*snapshot, rangeStart, rangeEnd, events);
           }
           for (const auto* event : events) {
@@ -15997,7 +16049,32 @@ struct TrackRuntime {
                   elapsed + baseTickDelta +
                   (event->nanotickOffset >= rangeStart ? event->nanotickOffset - rangeStart : 0);
               const uint64_t passIndex = loopLen > 0 ? (absoluteTick / loopLen) : 0;
-              if (!daw::trigConditionFires(event->payload.note.trigCondition, passIndex)) {
+              // PRE (#107) asks about a DIFFERENT note, so it is resolved against the track's
+              // conditional list rather than by the per-note function. Finding this note's place
+              // in that list is a binary search on a vector that holds only conditional trigs —
+              // typically a handful — and it happens only for notes that carry a condition.
+              //
+              // The list is looked up by TICK, not by identity: two conditionals at the same tick
+              // in different columns are interchangeable as predecessors, and matching the code
+              // as well pins the common case without needing a note id in the site.
+              bool fires = true;
+              if (daw::isPreTrigCondition(event->payload.note.trigCondition)) {
+                const auto& sites = snapshot->conditionals;
+                size_t idx = sites.size();
+                auto it = std::lower_bound(
+                    sites.begin(), sites.end(), event->nanotickOffset,
+                    [](const daw::TrigConditionSite& s, uint64_t t) { return s.tick < t; });
+                for (; it != sites.end() && it->tick == event->nanotickOffset; ++it) {
+                  if (it->code == event->payload.note.trigCondition) {
+                    idx = static_cast<size_t>(it - sites.begin());
+                    break;
+                  }
+                }
+                fires = daw::conditionalTrigFires(sites.data(), sites.size(), idx, passIndex);
+              } else {
+                fires = daw::trigConditionFires(event->payload.note.trigCondition, passIndex);
+              }
+              if (!fires) {
                 continue;
               }
             }

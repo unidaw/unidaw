@@ -52,6 +52,16 @@ pub fn make_trig_condition(a: u8, b: u8) -> u8 {
     ((a - 1) << 3 | (b - 1)) + 1
 }
 
+/// PRE fires when the previous conditional trig ON THE SAME TRACK fired; NOT PRE is its
+/// negation. Mirrors kTrigConditionPre / kTrigConditionNotPre in apps/musical_structures.h.
+///
+/// 128/129 are FILL and NOT FILL, RESERVED AND NOT IMPLEMENTED: a fill trig makes the render
+/// depend on a live performance input, so a bounce has to define what fill state it renders
+/// under, and that is an owner decision. They are deliberately not parseable here — a token that
+/// round-trips through the editor and then always sounds is worse than one the editor refuses.
+pub const TRIG_CONDITION_PRE: u8 = 130;
+pub const TRIG_CONDITION_NOT_PRE: u8 = 131;
+
 /// Unpacks a condition code to (a, b), or (0, 0) if it is not an A:B form.
 pub fn split_trig_condition(code: u8) -> (u8, u8) {
     if code == 0 || code > 64 {
@@ -115,7 +125,7 @@ pub const OP_SCHEMA: &[OpSpec] = &[
     OpSpec { prefix: "d", summary: "delay onset by a fraction of a beat", example: "d1/6" },
     OpSpec { prefix: "s", summary: "play sampler slot N (blank = pitch picks it)", example: "s7" },
     OpSpec { prefix: "o", summary: "start N/256 into the sample, or a fraction like o1/3 (the 9xx seek)", example: "o80" },
-    OpSpec { prefix: "c", summary: "conditional trig: fire on pass A of every B", example: "c1:2" },
+    OpSpec { prefix: "c", summary: "conditional trig: fire on pass A of every B, or cpre/cnpre for the previous conditional's result", example: "c1:2" },
 ];
 
 /// The canonical text for a set of ops — the inverse of `parse_row_ops`.
@@ -173,9 +183,15 @@ pub fn format_row_ops(ops: &RowOps) -> String {
         }
     }
     if ops.trig_condition != 0 {
-        let (a, b) = split_trig_condition(ops.trig_condition);
-        if a != 0 {
-            out.push(format!("c{a}:{b}"));
+        if ops.trig_condition == TRIG_CONDITION_PRE {
+            out.push("cpre".to_string());
+        } else if ops.trig_condition == TRIG_CONDITION_NOT_PRE {
+            out.push("cnpre".to_string());
+        } else {
+            let (a, b) = split_trig_condition(ops.trig_condition);
+            if a != 0 {
+                out.push(format!("c{a}:{b}"));
+            }
         }
     }
     out.join(" ")
@@ -209,9 +225,20 @@ pub fn parse_row_ops(input: &str) -> Result<RowOps, String> {
             }
             ops.retrigger = n;
         } else if let Some(rest) = token.strip_prefix('c') {
+            // The stateful forms come first: they have no colon, so the A:B split below would
+            // reject them with a message about A:B that is true and unhelpful.
+            if rest == "pre" {
+                ops.trig_condition = TRIG_CONDITION_PRE;
+                continue;
+            }
+            if rest == "npre" {
+                ops.trig_condition = TRIG_CONDITION_NOT_PRE;
+                continue;
+            }
             let (a_text, b_text) = rest
                 .split_once(':')
-                .ok_or_else(|| format!("conditional trig needs A:B in {token:?}, e.g. c1:2"))?;
+                .ok_or_else(|| format!(
+                    "conditional trig needs A:B in {token:?}, e.g. c1:2 — or cpre/cnpre"))?;
             let a: u8 = a_text.parse().map_err(|_| format!("bad A in {token:?}"))?;
             let b: u8 = b_text.parse().map_err(|_| format!("bad B in {token:?}"))?;
             let code = make_trig_condition(a, b);
@@ -460,6 +487,23 @@ mod tests {
         assert!(parse_row_ops("c0:4").is_err(), "A = 0 must be refused");
         assert!(parse_row_ops("c1:9").is_err(), "B > 8 must be refused");
         assert!(parse_row_ops("c2").is_err(), "a condition without a colon must be refused");
+
+        // PRE AND NOT PRE round-trip as their own tokens (#107). They carry no A:B, so
+        // split_trig_condition must report them as NOT an A:B form rather than unpacking the
+        // code into a pair — 130 would otherwise decode to a plausible-looking (a, b) and print
+        // as a c-form, which is the quiet way a stateful condition becomes a wrong pass filter.
+        let pre = parse_row_ops("cpre").unwrap();
+        assert_eq!(pre.trig_condition, TRIG_CONDITION_PRE);
+        assert_eq!(format_row_ops(&pre), "cpre");
+        assert_eq!(split_trig_condition(pre.trig_condition), (0, 0));
+        let npre = parse_row_ops("cnpre").unwrap();
+        assert_eq!(npre.trig_condition, TRIG_CONDITION_NOT_PRE);
+        assert_eq!(format_row_ops(&npre), "cnpre");
+        assert!(!pre.is_empty(), "a PRE trig is an op, so the ops column must appear for it");
+
+        // FILL IS NOT PARSEABLE. It is reserved (128/129) and unimplemented, and a token that
+        // round-trips through the editor and then always sounds is worse than a refusal.
+        assert!(parse_row_ops("cfill").is_err(), "FILL must be refused until it is implemented");
         assert!(parse_row_ops("rv200").is_err(), "a ramp past +-100% must be refused");
 
         // AND THE WHOLE SET SURVIVES A ROUND TRIP TOGETHER, which is the property that catches
