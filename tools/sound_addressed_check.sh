@@ -194,12 +194,42 @@ done
 grep -q '"event":"project.load"' "$TMP/cmd.log" 2>/dev/null || \
   fail "the engine never loaded — see $TMP/cmd.log"
 ccli() { env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" "$CLI" "$@"; }
+
+# ---- THE READ-BACK, BOTH WAYS. A toggle whose state cannot be read is one the interface has to
+# invent, and for this flag inventing it means drawing the kit's mapping backwards. Asserted
+# BEFORE and AFTER, because a bit that is always set reads exactly like a bit that is correct —
+# the same blind spot as a one-device owner check.
+read_addressed() {
+  ccli get tracks 2>/dev/null > "$TMP/tracks.json"
+  python3 - "$TMP/tracks.json" <<'PYR'
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print("unreadable"); raise SystemExit(0)
+t = d.get("tracks", [])
+print(str(t[0].get("sound_addressed")).lower() if t else "notracks")
+PYR
+}
+BEFORE="$(read_addressed)"
+[ "$BEFORE" = "false" ] || \
+  fail "before the command, the published sound_addressed bit reads '$BEFORE' and the project
+        has the flag off. If it is already true the bit is stuck on and the assertion after the
+        command would pass no matter what the command did"
+
 ccli do sound-addressed --track 0 --on 1 >/dev/null 2>&1
 sleep 0.8
 grep -q '"event":"track.sound_addressed"' "$TMP/cmd.log" 2>/dev/null || \
   fail "opcode 87 never reached the engine — no track.sound_addressed event in $TMP/cmd.log.
         The command was not dispatched, so the audio below would be measuring the project's
         setting rather than the command's"
+AFTER="$(read_addressed)"
+[ "$AFTER" = "true" ] || \
+  fail "after opcode 87 the published sound_addressed bit still reads '$AFTER'. The engine acted
+        on the command — the audio below proves it — and did not publish it, so a UI reloading
+        this project would draw the toggle off while the kit plays addressed"
+echo "  read-back: false before the command, true after"
+
 ccli do save cmdsaved >/dev/null 2>&1
 sleep 1.0
 ccli do play --force >/dev/null 2>&1 || true

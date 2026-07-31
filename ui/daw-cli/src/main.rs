@@ -449,13 +449,20 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
             .get(index)
             .map(|m| m.flags & daw_bridge::layout::MIX_FLAG_HARMONY_QUANTIZE != 0)
             .unwrap_or(false);
+        // Published for the same reason harmony_quantize is, and it matters more: this flag
+        // decides which SLOT a note plays, so a UI that had to guess would draw the kit's
+        // mapping backwards.
+        let sound_addressed = mixers
+            .get(index)
+            .map(|m| m.flags & daw_bridge::layout::MIX_FLAG_SOUND_ADDRESSED != 0)
+            .unwrap_or(false);
         let comma = if index + 1 == count { "" } else { "," };
         // M2.17: this track's OWN clip version — the base an edit to this track must
         // present. The global `clip_version` in `get transport` moves whenever ANY
         // track changes and is no longer the right base for a track-scoped edit.
         let clip_version = handle.clip_version_for_track(id);
         println!(
-            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
+            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"sound_addressed\": {sound_addressed}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
         );
     }
     println!("  ]");

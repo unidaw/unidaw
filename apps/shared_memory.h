@@ -350,6 +350,18 @@ constexpr uint32_t kUiTrackFlagMaster = 1u << 3;
 // in it. See the field's comment for why the two enumerations share a byte.
 constexpr uint8_t kUiMixFlagHarmonyQuantize = 1u << 2;
 
+// uiTrackMixFlags bit 3: does this track address its sampler by SOUND rather than by pitch?
+//
+// The same reasoning as bit 2, one ruling later. SetTrackSoundAddressed (opcode 87) is in the
+// project file and in the runtime, and a toggle whose state cannot be read is one the interface
+// has to invent — which for this one is worse than for most, because the flag changes which SLOT
+// a note plays. A UI that guessed wrong would draw the kit's mapping backwards.
+//
+// NO kShmVersion BUMP. This is a read-back bit in a byte that already exists, so a reader that
+// does not know it masks it off and is unaffected — the same call made when bit 2 was added
+// (ea6b7e7), which also did not bump.
+constexpr uint8_t kUiMixFlagSoundAddressed = 1u << 3;
+
 struct alignas(64) RingHeader {
   uint32_t capacity = 0;
   uint32_t entrySize = 0;

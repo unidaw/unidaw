@@ -1100,6 +1100,9 @@ pub const UI_PATCHER_DEVICE_ID_MASK: u16 = 0x7FFF;
 /// Bits 0-1 of that byte are the mute/solo COMMAND flags above; this is the first read-back-only
 /// bit in it, so the byte is a union of two enumerations. Do not add a command flag at 1 << 2.
 pub const MIX_FLAG_HARMONY_QUANTIZE: u8 = 1 << 2;
+/// Bit 3: this track addresses its sampler by SOUND, not by pitch (opcode 87, section 8 Q2).
+/// Read-back only, like bit 2, and added without a kShmVersion bump for the same reason.
+pub const MIX_FLAG_SOUND_ADDRESSED: u8 = 1 << 3;
 /// PreviewNote flags: bit0 set = note-on, clear = note-off.
 pub const PREVIEW_NOTE_FLAG_ON: u16 = 1 << 0;
 

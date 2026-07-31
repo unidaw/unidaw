@@ -17641,6 +17641,11 @@ struct TrackRuntime {
               if (rt->track.harmonyQuantize) {
                 flags |= daw::kUiMixFlagHarmonyQuantize;
               }
+              // Same lock, same reason: read from the track struct, publish so the toggle can
+              // show its state instead of guessing it after a load.
+              if (rt->track.soundAddressedOnly) {
+                flags |= daw::kUiMixFlagSoundAddressed;
+              }
             }
           }
           if (gainMb != lastGainMillibels[i] || panTh != lastPanThousandths[i] ||
