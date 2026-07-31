@@ -573,6 +573,16 @@ export class Chain {
     // is cheaper than sending index -1 and reading the sidecar's answer to a
     // question nobody meant to ask.
     if (!row || !(row._pi >= 0)) return;
+    /*
+     * A SLOT ROW IS NOT A FADER.
+     *
+     * `_pi` is the parameter index for a plugin and the SLOT ID for a sampler pad — both
+     * non-negative, so the guard above passed and dragging a pad's bar sent SetParam for
+     * parameter 1 of a sampler. It moved nothing (the sampler has no such parameter) and it
+     * reported nothing, which is why it survived: the bar was empty, so there was no reason to
+     * drag it. Now that the bar draws the slice extent there is every reason.
+     */
+    if (row.classList.contains('slot')) return;
     // The rect is taken once and reused for the whole gesture, exactly as the
     // mixer's fader does: the fill inside the bar changes width as you drag, and
     // re-measuring would move the reference frame under the pointer.
@@ -894,7 +904,7 @@ export class Chain {
       map.appendChild(document.createTextNode('MAP'));
       map.dataset.map = '1';
       r._n = nm.firstChild; r._f = fill; r._v = v.firstChild; r._map = map;
-      r._nv = null; r._fv = -1; r._vv = null; r._top = -1; r._pi = -1;
+      r._nv = null; r._fv = -1; r._flv = -1; r._vv = null; r._top = -1; r._pi = -1;
       r._uid = ''; r._pend = null; r._pendMilli = -1; r._pendText = '';
       r._mod = -1; r._modInert = null; r._meta = null; r._stepped = null;
       r._mappable = null;
@@ -949,6 +959,9 @@ export class Chain {
      * they are not. The class puts notches on the fill; the bar still drags, because a switch you
      * can only set from the console is a switch nobody sets.
      */
+    // Marks the row as a pad rather than a parameter — read by the drag guard, and by the
+    // stylesheet so a slice span can be drawn differently from a value.
+    if (r._isSlot !== !!q.isSlot) { r._isSlot = !!q.isSlot; r.classList.toggle('slot', !!q.isSlot); }
     const stepped = q.steps > 0 && q.steps <= 16;
     if (r._stepped !== stepped) {
       r._stepped = stepped;
@@ -977,6 +990,15 @@ export class Chain {
     if (r._vv !== shown) { r._vv = shown; r._v.nodeValue = shown; }
     const w = Math.round(milli / 10);
     if (r._fv !== w) { r._fv = w; r._f.style.width = w + '%'; }
+    /*
+     * WHERE THE FILL STARTS. Zero for a parameter, the slice's offset for a slot.
+     *
+     * `margin-left` rather than absolute positioning: both percentages then resolve against the
+     * same box, so the pair is a span in one coordinate system and the stylesheet keeps owning
+     * the bar's geometry. Guarded like everything else here — this runs per row per draw.
+     */
+    const left = Math.round((q.spanLeft || 0) / 10);
+    if (r._flv !== left) { r._flv = left; r._f.style.marginLeft = left + '%'; }
     const pend = !!ed;
     if (r._pend !== pend) { r._pend = pend; r.classList.toggle('pend', pend); }
 

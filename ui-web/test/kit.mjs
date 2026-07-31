@@ -569,6 +569,49 @@ const ask = async (track, device) => {
      * Distinctness is the half worth asserting: eight pads all called the same thing would be a
      * seed that ran once instead of per slot, and it would look perfectly reasonable.
      */
+    /*
+     * ...AND THE CARD DRAWS THE EXTENTS AS A ROW OF SPANS.
+     *
+     * The read-back checks above prove the engine publishes the tiling. This proves the RACK
+     * shows it, which is the whole reason the extents were asked for: "slice 3 is twice slice 4"
+     * has to be visible without opening anything.
+     *
+     * Measured off the rendered boxes, not off the model — the model could be perfect while the
+     * fill draws at the wrong offset, and a bar that is always full-width looks like a correct
+     * bar rather than a missing feature. The offsets must ASCEND with the slices, which is the
+     * one property a stubbed or always-zero `margin-left` cannot fake.
+     */
+    /*
+     * THE RACK DRAWS THE CURSOR'S TRACK, and the chop is on a track this suite ADDED — so
+     * without this the measurement is taken against track 0's two-slot kit and reports one
+     * full-width span, which reads as the feature not working. The same trap the gate block
+     * below already carries a comment about; it is the second time in this file.
+     */
+    await page.evaluate((t) => window.__uni.run(`goto 0 ${t}`), ct);
+    await page.waitForTimeout(900);
+    const spans = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('.dv-p.slot')];
+      return rows.map((r) => {
+        const bar = r.querySelector('.dv-p-bar'), fill = r.querySelector('.dv-p-fill');
+        if (!bar || !fill) return null;
+        const b = bar.getBoundingClientRect(), f = fill.getBoundingClientRect();
+        return b.width > 0
+          ? { left: Math.round(((f.left - b.left) / b.width) * 100),
+              w: Math.round((f.width / b.width) * 100) }
+          : null;
+      }).filter(Boolean);
+    });
+    check(spans.length >= 8, 'the card draws a span per pad', JSON.stringify(spans.slice(0, 3)));
+    const sliced = spans.filter((x) => x.w < 95);
+    check(sliced.length >= 7,
+          'and a sliced pad is drawn NARROWER than the bar — an always-full fill looks like a '
+          + 'correct bar rather than a missing feature',
+          JSON.stringify(spans.map((x) => x.w)));
+    const lefts = sliced.map((x) => x.left);
+    check(lefts.some((v, i) => i > 0 && v > lefts[i - 1]),
+          'and the spans STEP ACROSS the bar — the one property a stubbed offset cannot fake',
+          JSON.stringify(lefts));
+
     const names = cut.map((x) => x.name);
     check(names.every((n) => /^break\s+\d+$/.test(n)),
           'each slice is seeded with its source stem and its number, so a fresh chop is readable',

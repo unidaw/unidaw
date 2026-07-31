@@ -792,6 +792,27 @@ export function buildChainModel(opts, buf) {
           p.value = 0;
           p.mod = -1;
           p.modDepth = 0;
+          /*
+           * THE ROW'S BAR BECOMES THE SLICE'S POSITION IN THE SOURCE.
+           *
+           * A slot row had a bar and nothing to put in it — `milli` stayed 0, so every pad drew
+           * an empty track. With the extents published (kShmVersion 35) that same 3px bar can
+           * say the thing the extents were added for: where this slice sits and how long it is
+           * relative to the others. "Slice 3 is twice slice 4" becomes visible without opening
+           * anything, and a chop reads as a row of staggered bars rather than a list.
+           *
+           * Two numbers, both in thousandths of the SOURCE, because a width alone cannot say
+           * position — eight equal slices would draw eight identical bars whichever one you were
+           * looking at.
+           *
+           * A slot with no slice gets the whole source from the engine, so it fills the bar, and
+           * that is honest: it plays the whole file. A source that did not resolve has 0 frames
+           * and gets nothing rather than a divide by zero.
+           */
+          const span = q.frames > 0 ? q.frames : 0;
+          p.spanLeft = span ? Math.round((q.begin / span) * 1000) : 0;
+          p.milli = span ? Math.max(1, Math.round(((q.end - q.begin) / span) * 1000)) : 0;
+          p.frac = p.milli / 1000;
           continue;
         }
         // The engine's index, kept because the wire orders by it — but the
@@ -822,6 +843,10 @@ export function buildChainModel(opts, buf) {
         const frac = q.value < 0 ? 0 : (q.value > 1 ? 1 : q.value);
         p.frac = frac;
         p.milli = Math.round(frac * 1000);
+        // A parameter's bar starts at the left. Written rather than left alone because these
+        // objects are POOLED — a row that held a slice a moment ago would keep its offset and
+        // draw a plugin's parameter starting a third of the way across.
+        p.spanLeft = 0;
         // The host's own display string when it has one — it knows whether a
         // value is dB, Hz or a note name, and this side does not. Only the
         // fallback formats, and only when the number it formats has moved.

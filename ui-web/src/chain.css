@@ -222,6 +222,13 @@
    to be able to tell a request from a fact without comparing two purples. The
    name goes from the dimmest colour on the row to the brightest. */
 .dv-p.pend .dv-p-n { color: var(--uni-text-pending); }
+/* A PAD'S BAR IS A REGION, NOT A LEVEL.
+   Same box, different meaning: `margin-left` places it and `width` sizes it, so a chop reads
+   as a row of staggered spans. Squared off rather than rounded — a rounded 1% span is a dot,
+   and the point is being able to compare lengths. */
+.dv-p.slot .dv-p-fill { border-radius: 0; background: var(--base-accent-ramp-400); }
+.dv-p.slot .dv-p-bar { cursor: default; }
+
 .dv-p.pend .dv-p-fill { background: var(--uni-text-pending); }
 .dv-p.pend .dv-p-v { color: var(--uni-text-pending); }
 
