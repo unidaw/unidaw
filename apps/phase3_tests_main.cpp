@@ -1049,6 +1049,11 @@ bool runNoteEntryTest() {
     std::cerr << "note_entry: " << m << std::endl;
     return false;
   };
+  // A UNIFORM 4/4 grid, which is what these cases are about — the meter-change behaviour has
+  // its own end-to-end check (tools/clip_anchor_meter_check.sh), because it needs a song with a
+  // signature change in it and these are pure-function cases.
+  const daw::BarGrid GRID = daw::BarGrid::uniform(BAR);
+
   auto span = [](uint64_t at, uint64_t length, uint64_t clipLength,
                  std::size_t index) {
     daw::PlacementSpan s;
@@ -1061,32 +1066,32 @@ bool runNoteEntryTest() {
 
   // No placements: start a new clip anchored to the bar containing the tick.
   {
-    auto d = daw::resolveNoteEntry({}, 2 * BAR + 2 * Q, THRESH, BAR);
+    auto d = daw::resolveNoteEntry({}, 2 * BAR + 2 * Q, THRESH, GRID);
     if (d.kind != NoteEntryKind::CreateNew) return fail("empty -> create");
     if (d.at != 2 * BAR || d.clipRelativeTick != 2 * Q) return fail("empty snap");
   }
   // Inside a 1-bar placement: edit that clip in place.
   {
-    auto d = daw::resolveNoteEntry({span(0, BAR, BAR, 0)}, 2 * Q, THRESH, BAR);
+    auto d = daw::resolveNoteEntry({span(0, BAR, BAR, 0)}, 2 * Q, THRESH, GRID);
     if (d.kind != NoteEntryKind::InsidePlacement) return fail("inside kind");
     if (d.placementIndex != 0 || d.clipRelativeTick != 2 * Q) return fail("inside rel");
   }
   // Inside a looped placement: the tick folds back into the clip length.
   {
     auto d = daw::resolveNoteEntry({span(0, 4 * BAR, BAR, 0)},
-                                   2 * BAR + 2 * Q, THRESH, BAR);
+                                   2 * BAR + 2 * Q, THRESH, GRID);
     if (d.kind != NoteEntryKind::InsidePlacement) return fail("loop inside kind");
     if (d.clipRelativeTick != 2 * Q) return fail("loop fold");
   }
   // Just past the end within threshold: stretch that placement.
   {
-    auto d = daw::resolveNoteEntry({span(0, BAR, BAR, 0)}, BAR + Q, THRESH, BAR);
+    auto d = daw::resolveNoteEntry({span(0, BAR, BAR, 0)}, BAR + Q, THRESH, GRID);
     if (d.kind != NoteEntryKind::StretchPlacement) return fail("stretch kind");
     if (d.placementIndex != 0 || d.clipRelativeTick != BAR + Q) return fail("stretch rel");
   }
   // Past the end beyond threshold: a new clip instead.
   {
-    auto d = daw::resolveNoteEntry({span(0, BAR, BAR, 0)}, 3 * BAR, THRESH, BAR);
+    auto d = daw::resolveNoteEntry({span(0, BAR, BAR, 0)}, 3 * BAR, THRESH, GRID);
     if (d.kind != NoteEntryKind::CreateNew) return fail("far -> create");
     if (d.at != 3 * BAR) return fail("far create snap");
   }
@@ -1094,7 +1099,7 @@ bool runNoteEntryTest() {
   {
     auto d = daw::resolveNoteEntry(
         {span(0, 2 * BAR, 2 * BAR, 0), span(BAR, 2 * BAR, 2 * BAR, 1)},
-        BAR + Q, THRESH, BAR);
+        BAR + Q, THRESH, GRID);
     if (d.kind != NoteEntryKind::InsidePlacement) return fail("overlap kind");
     if (d.placementIndex != 1 || d.clipRelativeTick != Q) return fail("overlap latest");
   }
@@ -1102,13 +1107,13 @@ bool runNoteEntryTest() {
   {
     auto d = daw::resolveNoteEntry(
         {span(0, BAR, BAR, 0), span(2 * BAR, BAR, BAR, 1)},
-        3 * BAR + Q, THRESH, BAR);
+        3 * BAR + Q, THRESH, GRID);
     if (d.kind != NoteEntryKind::StretchPlacement) return fail("nearest end kind");
     if (d.placementIndex != 1) return fail("nearest end index");
   }
   // Before the first placement: no backward stretch — a new clip.
   {
-    auto d = daw::resolveNoteEntry({span(2 * BAR, BAR, BAR, 0)}, Q, THRESH, BAR);
+    auto d = daw::resolveNoteEntry({span(2 * BAR, BAR, BAR, 0)}, Q, THRESH, GRID);
     if (d.kind != NoteEntryKind::CreateNew) return fail("before -> create");
     if (d.at != 0 || d.clipRelativeTick != Q) return fail("before snap");
   }
@@ -1125,7 +1130,7 @@ bool runNoteEntryTest() {
   // Notes within a bar of each other collapse into one clip.
   {
     auto segs = daw::segmentEventsIntoClips(
-        {note(0, 60, Q), note(Q, 62, Q), note(2 * Q, 64, Q)}, THRESH, BAR);
+        {note(0, 60, Q), note(Q, 62, Q), note(2 * Q, 64, Q)}, THRESH, GRID);
     if (segs.size() != 1) return fail("clustered -> one clip");
     if (segs[0].at != 0 || segs[0].events.size() != 3) return fail("cluster contents");
     if (segs[0].length != 3 * Q) return fail("cluster length past last note");
@@ -1133,7 +1138,7 @@ bool runNoteEntryTest() {
   // A gap wider than the threshold splits into two clips, each bar-anchored.
   {
     auto segs = daw::segmentEventsIntoClips(
-        {note(0, 60, Q), note(4 * BAR, 72, Q)}, THRESH, BAR);
+        {note(0, 60, Q), note(4 * BAR, 72, Q)}, THRESH, GRID);
     if (segs.size() != 2) return fail("gap -> two clips");
     if (segs[0].at != 0 || segs[1].at != 4 * BAR) return fail("segment anchors");
     if (segs[1].events.size() != 1 || segs[1].events[0].nanotickOffset != 0)
@@ -1141,15 +1146,41 @@ bool runNoteEntryTest() {
   }
   // A lone note far in anchors its clip to the containing bar, rebased.
   {
-    auto segs = daw::segmentEventsIntoClips({note(2 * BAR + 2 * Q, 60, Q)}, THRESH, BAR);
+    auto segs = daw::segmentEventsIntoClips({note(2 * BAR + 2 * Q, 60, Q)}, THRESH, GRID);
     if (segs.size() != 1 || segs[0].at != 2 * BAR) return fail("lone anchor");
     if (segs[0].events[0].nanotickOffset != 2 * Q) return fail("lone rebase");
   }
   // Unsorted input still segments in time order.
   {
     auto segs = daw::segmentEventsIntoClips(
-        {note(4 * BAR, 72, Q), note(0, 60, Q)}, THRESH, BAR);
+        {note(4 * BAR, 72, Q), note(0, 60, Q)}, THRESH, GRID);
     if (segs.size() != 2 || segs[0].at != 0) return fail("unsorted");
+  }
+  // A NON-UNIFORM GRID: 4/4 until 2 bars in, then 3/4. This is the case a bar LENGTH cannot
+  // express — past the change, bars sit at 8Q, 11Q, 14Q, and no single multiple hits them.
+  // Everything above passes with either computation because a uniform grid makes them identical.
+  //
+  // 3/4 rather than the 7/8 the end-to-end check uses, purely so every number here is a whole
+  // quarter and the expected values can be read rather than derived.
+  {
+    const uint64_t CHANGE = 2 * BAR;         // 8Q
+    const uint64_t THREE = 3 * Q;            // a 3/4 bar
+    const daw::BarGrid meter{[BAR, CHANGE, THREE](uint64_t t) -> uint64_t {
+      if (t < CHANGE) return (t / BAR) * BAR;
+      return CHANGE + ((t - CHANGE) / THREE) * THREE;
+    }};
+    // A note at 15Q is in the bar starting at 14Q. The old form gives (15Q / 4Q) * 4Q = 12Q,
+    // which is not a bar start on either side of the change.
+    auto d = daw::resolveNoteEntry({}, 15 * Q, THRESH, meter);
+    if (d.kind != NoteEntryKind::CreateNew) return fail("meter change kind");
+    if (d.at != 14 * Q) return fail("meter change anchor is not the bar the grid names");
+    if (d.clipRelativeTick != Q) return fail("meter change rebase follows the anchor");
+    // And the batch view agrees with the single-note view, which is the whole point of them
+    // sharing one rule — a save that segments differently from the way entry placed things
+    // rewrites the user's clip boundaries on load.
+    auto segs = daw::segmentEventsIntoClips({note(15 * Q, 60, Q)}, THRESH, meter);
+    if (segs.size() != 1 || segs[0].at != 14 * Q) return fail("segment under a meter change");
+    if (segs[0].events[0].nanotickOffset != Q) return fail("segment rebase under a meter change");
   }
   return true;
 }

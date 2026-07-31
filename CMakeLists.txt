@@ -619,6 +619,12 @@ add_test(NAME ops_width
 )
 set_tests_properties(ops_width PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A new clip lands on the bar the RULER draws, including after the meter changes.
+add_test(NAME clip_anchor_meter
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/clip_anchor_meter_check.sh
+)
+set_tests_properties(clip_anchor_meter PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A pad has a name, you can read it, and you can change it.
 add_test(NAME slot_rename
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slot_rename_check.sh

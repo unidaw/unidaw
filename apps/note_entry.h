@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "apps/musical_structures.h"
@@ -19,6 +20,32 @@ struct PlacementSpan {
   uint64_t length = 0;
   uint64_t clipLength = 0;
   std::size_t index = 0;
+};
+
+// WHERE THE BAR CONTAINING A TICK STARTS.
+//
+// This replaced a bar LENGTH, and the difference is invisible until the song changes meter. With
+// one signature every bar sits at a multiple of one number and `(tick / barLength) * barLength`
+// is exactly right. Add a 7/8 bridge and the bar containing a tick is at a multiple of NOTHING,
+// so no single length can express it — and the naive form silently anchors new clips to a grid
+// the ruler does not draw. Passing a different length cannot fix that; the question has to change
+// from "how long is a bar" to "where does THIS bar start".
+//
+// A callback rather than the meter map itself so this header stays free of the map's type and
+// the unit tests can express a grid in one line. Not on the audio path — note entry and save.
+struct BarGrid {
+  std::function<uint64_t(uint64_t)> barStartAt;
+
+  // The constant-meter case: every project without a meter change, and every test that does not
+  // care about one.
+  static BarGrid uniform(uint64_t barLength) {
+    return BarGrid{[barLength](uint64_t tick) -> uint64_t {
+      return barLength > 0 ? (tick / barLength) * barLength : tick;
+    }};
+  }
+
+  // An unset grid anchors to the tick itself, which is the same thing barLength == 0 used to do.
+  uint64_t startFor(uint64_t tick) const { return barStartAt ? barStartAt(tick) : tick; }
 };
 
 enum class NoteEntryKind {
@@ -46,8 +73,8 @@ struct NoteEntryDecision {
 // Decides how to place a note entered at `entryTick` on a track whose placed
 // clips are `spans`. A note inside a placement edits that clip; a note within
 // `stretchThreshold` past a placement's end extends it (the "keep typing after
-// the last note" case); anything else starts a new clip anchored to the bar
-// (`barLength`) containing the tick. Pure and deterministic so the decision can
+// the last note" case); anything else starts a new clip anchored to the START of
+// the bar containing the tick, which `bars` answers. Pure and deterministic so the decision can
 // be unit-tested off the audio thread, mirroring placementEventsInWindow.
 //
 // Only forward stretch is considered — a note before a placement's start starts a
@@ -56,7 +83,7 @@ struct NoteEntryDecision {
 inline NoteEntryDecision resolveNoteEntry(std::vector<PlacementSpan> spans,
                                           uint64_t entryTick,
                                           uint64_t stretchThreshold,
-                                          uint64_t barLength) {
+                                          const BarGrid& bars) {
   // Sort by anchor so "latest covering" and "nearest preceding end" are simple
   // scans. stable_sort (not sort) so the order is deterministic under ties, which
   // the decision below relies on — an unstable sort here made the pick depend on the
@@ -117,7 +144,7 @@ inline NoteEntryDecision resolveNoteEntry(std::vector<PlacementSpan> spans,
   // new clips align to the grid rather than to arbitrary entry offsets.
   NoteEntryDecision d;
   d.kind = NoteEntryKind::CreateNew;
-  d.at = barLength > 0 ? (entryTick / barLength) * barLength : entryTick;
+  d.at = bars.startFor(entryTick);
   d.clipRelativeTick = entryTick - d.at;
   return d;
 }
@@ -146,12 +173,13 @@ inline uint64_t eventEndTick(const MusicalEvent& e) {
 // Segments a track's flat events into clips by the same rule resolveNoteEntry
 // applies one note at a time: walking the events in time order, each either
 // joins the clip it lands in / just past (within `stretchThreshold`) or starts a
-// new clip anchored to its bar. This is the batch view of "no notes outside
+// new clip anchored to the START of its bar, which `bars` answers — so a segmented
+// track lands on the bars the ruler draws even across a meter change. This is the batch view of "no notes outside
 // clips" — the rails a UI draws and the clips a save emits for a track whose
 // notes aren't already an authored placement layout. Pure and deterministic.
 inline std::vector<ClipSegment> segmentEventsIntoClips(
     std::vector<MusicalEvent> events, uint64_t stretchThreshold,
-    uint64_t barLength) {
+    const BarGrid& bars) {
   std::vector<ClipSegment> segments;
   // stable_sort so notes sharing a nanotick keep their incoming order across a
   // load->save round-trip. std::sort is unstable, so re-saving a loaded project
@@ -169,7 +197,7 @@ inline std::vector<ClipSegment> segmentEventsIntoClips(
           PlacementSpan{segments[i].at, segments[i].length, segments[i].length, i});
     }
     const auto d =
-        resolveNoteEntry(spans, e.nanotickOffset, stretchThreshold, barLength);
+        resolveNoteEntry(spans, e.nanotickOffset, stretchThreshold, bars);
     std::size_t seg = 0;
     if (d.kind == NoteEntryKind::CreateNew) {
       segments.push_back(ClipSegment{d.at, 0, {}});
