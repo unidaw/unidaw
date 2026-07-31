@@ -1673,6 +1673,16 @@ pub const SAMPLER_SLOT_FIELDS: &[(&str, u16)] = &[
     ("stem", 17),
     ("quality", 18),
     ("layer-group", 19),
+    // The loop and the trim, rendered by the voice since S3 and unsettable until 2026-07-31.
+    // A frame position is capped by the payload's int32 value at 2147483647 — about 12.4 hours
+    // at 48 kHz.
+    ("loop-mode", 20),
+    ("sustain-loop", 21),
+    ("loop-start", 22),
+    ("loop-end", 23),
+    ("loop-xfade", 24),
+    ("start-frame", 25),
+    ("end-frame", 26),
 ];
 
 #[repr(C)]

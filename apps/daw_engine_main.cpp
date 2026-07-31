@@ -11235,6 +11235,29 @@ struct TrackRuntime {
                 slot.selectMode = static_cast<uint8_t>(std::clamp(v, 0, 3));
                 break;
               case daw::SamplerSlotField::Polyphony: slot.polyphony = u8c(v); break;
+              // THE LOOP AND THE TRIM. Frames are clamped at 0 rather than refused: a negative
+              // frame is not a position, and the int32 wire cannot express one that is too big.
+              case daw::SamplerSlotField::LoopMode:
+                slot.loopMode = static_cast<uint8_t>(std::clamp(v, 0, 3));
+                break;
+              case daw::SamplerSlotField::SustainLoop:
+                slot.sustainLoop = v ? 1 : 0;
+                break;
+              case daw::SamplerSlotField::LoopStartFrame:
+                slot.loopStartFrame = static_cast<uint64_t>(std::max(v, 0));
+                break;
+              case daw::SamplerSlotField::LoopEndFrame:
+                slot.loopEndFrame = static_cast<uint64_t>(std::max(v, 0));
+                break;
+              case daw::SamplerSlotField::LoopXfadeFrames:
+                slot.loopXfadeFrames = static_cast<uint64_t>(std::max(v, 0));
+                break;
+              case daw::SamplerSlotField::StartFrame:
+                slot.startFrame = static_cast<uint64_t>(std::max(v, 0));
+                break;
+              case daw::SamplerSlotField::EndFrame:
+                slot.endFrame = static_cast<uint64_t>(std::max(v, 0));
+                break;
               case daw::SamplerSlotField::ChokeFadeUs:
                 slot.chokeFadeUs = static_cast<uint32_t>(std::clamp(v, 0, 1000000));
                 break;

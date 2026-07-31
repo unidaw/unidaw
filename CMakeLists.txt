@@ -565,6 +565,12 @@ add_test(NAME sampler_kit
 )
 set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# The sample loop is settable by command and audible when it is.
+add_test(NAME sampler_loop
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_loop_check.sh
+)
+set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A generated note chooses its slice, and chooses the same one at any buffer size.
 add_test(NAME slice_select
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slice_select_check.sh
