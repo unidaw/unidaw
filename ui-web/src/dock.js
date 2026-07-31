@@ -1017,6 +1017,22 @@ export function createCommands(api) {
     // cannot ask about, and Escape is not a discoverable place to look for it.
     edit: { help: 'edit [on|off] — whether note keys write', args: [ON_OFF],
       run: (a) => (api.edit(a[0] === undefined ? undefined : a[0] === 'on') ? 'edit on' : 'edit off') },
+    /*
+     * QUANTIZE A TRACK TO THE HARMONY TIMELINE.
+     *
+     * The engine has taken this since before this UI existed and it was recorded on our side as
+     * unreachable because "the flag is not published". It is published — `uiTrackMixFlags` bit 2
+     * — so the toggle can show its own state, which was the only thing missing.
+     */
+    'harmony-quantize': { help: 'harmony-quantize <track> [on|off] — snap this track\'s notes '
+                               + 'to the harmony timeline',
+      args: [A_TRACK, ON_OFF],
+      run: (a) => {
+        const t = Number(a[0]);
+        const want = a[1] === undefined ? undefined : a[1] === 'on';
+        if (!api.harmonyQuantize(t, want)) return api.state().reject || 'refused';
+        return `harmony-quantize t${t}`;
+      } },
     fold: { help: 'fold <track> — hide a parent\'s child tracks', args: [A_TRACK],
       run: (a) => { const t = Number(a[0]); return api.fold(t) ? 'fold ' + t : 'not a parent'; } },
     /*

@@ -18,6 +18,16 @@ export const GAIN_UNITY = 0;
 
 export const FLAG_MUTE = 1;
 export const FLAG_SOLO = 2;
+/**
+ * Bit 2: does this track quantize its notes to the harmony timeline?
+ *
+ * READ FROM HERE, WRITTEN BY ITS OWN OPCODE. It rides the mixer flags because that is the
+ * per-track byte the engine already publishes, and it is NOT part of a mixer command — the
+ * write path is SetTrackHarmonyQuantize (10). Toggling this bit and calling `sendMixer` would
+ * be a control that appears to work and changes nothing, which is the exact shape this app
+ * keeps finding; `dockApi.harmonyQuantize` is the way to set it.
+ */
+export const FLAG_HARMONY_QUANTIZE = 4;
 
 /**
  * Optimistic local edits, one entry per track. `pendingUntil` is the mixer
@@ -183,6 +193,7 @@ export function buildMixerModel(opts, buf) {
     if (s.pan !== pan) { s.pan = pan; s.panLabel = panLabel(pan); }
     s.mute = (flags & FLAG_MUTE) !== 0;
     s.solo = (flags & FLAG_SOLO) !== 0;
+    s.harmonyQuantize = (flags & FLAG_HARMONY_QUANTIZE) !== 0;
     s.pending = mixer.strips[t].pendingUntil >= 0;
     s.dimmed = anySolo && !s.solo;
     s.faderPct = faderPosition(gain);

@@ -454,6 +454,24 @@
 .hops.on { opacity: 1; color: var(--uni-text-fx); }
 .hops:hover { color: var(--uni-text-fx); }
 .hops.hidden { display: none; }
+
+/* HARMONY QUANTIZE, on the track header beside the ops toggle. `~` because it is the same mark
+   the rack uses for "something is modulating this" — a value that is not simply what was typed.
+   Persistently visible when ON, because it changes what every note on the lane MEANS and a
+   reader has to be able to see that without hovering. */
+.hhq {
+  position: absolute; left: 26px; top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px; line-height: 10px;
+  color: var(--uni-text-empty);
+  cursor: pointer;
+  opacity: 0;
+  padding: 0 2px;
+}
+.htrack:hover .hhq { opacity: 1; }
+.hhq.on { opacity: 1; color: var(--base-accent); }
+.hhq:hover { color: var(--uni-text-fx); }
+.htrack.folded .hhq { display: none; }
 .htrack.folded .hops { display: none; }
 
 /* ADD A TRACK, at the end of the row — the position the new lane will occupy. */
