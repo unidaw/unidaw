@@ -705,6 +705,23 @@ enum class SamplerSlotField : uint16_t {
   OutputStem = 17,
   Quality = 18,
   LayerGroup = 19,
+  // THE LOOP AND THE TRIM, which the voice has rendered since S3 and no command could set.
+  //
+  // sampler_voice.h reads loopMode and sustainLoop on every note; the design doc lists
+  // "forward / ping-pong / backward + seam-crossing interpolation + loop crossfade" as a
+  // headline of S3. All of it worked and none of it could be switched on, because these seven
+  // fields were simply absent from an enum covering their twenty neighbours — the same shape as
+  // modSet.filterType, which was READ at the publish site and written nowhere.
+  //
+  // FRAME POSITIONS ARE CAPPED BY THE PAYLOAD'S int32 `value` at 2147483647, about 12.4 hours at
+  // 48 kHz. Said here rather than left to be discovered as a silent truncation.
+  LoopMode = 20,        // 0 off, 1 forward, 2 ping-pong, 3 backward
+  SustainLoop = 21,     // 1 = the loop releases at note-off and plays out
+  LoopStartFrame = 22,
+  LoopEndFrame = 23,
+  LoopXfadeFrames = 24,
+  StartFrame = 25,      // sample trim; 0 is the head of the file
+  EndFrame = 26,        // 0 means "to the end", which is what the slot struct already means by it
 };
 
 // One slot field. `value` is SIGNED: four of the fields above are, and a negative gain, tune or
@@ -1509,13 +1526,14 @@ static_assert(sizeof(UiPatcherGraphCommandPayload) == 40,
               "UiPatcherGraphCommandPayload must fit EventEntry payload");
 
 // Set one patcher node's config. `configType` is the PatcherNodeType of the node
-// (Euclidean=1, Lfo=4, RandomDegree=5). `config` is an explicit little-endian
+// (Euclidean=1, Lfo=4, RandomDegree=5, SliceSelect=7). `config` is an explicit little-endian
 // layout per type (NOT a raw struct) whose values match the published read-back
 // (UiPatcherNode.config in shared_memory.h):
 //   Euclidean:    [steps u16 @0][hits u16 @2][offset u16 @4][degree u8 @6]
 //                 [octaveOffset i8 @7][velocity u8 @8][baseOctave u8 @9]
 //                 [pad u16 @10][durationTicks u32 @12]
 //   RandomDegree: [degree u8 @0][velocity u8 @1][pad u16 @2][durationTicks u32 @4]
+//   SliceSelect:  [base u16 @0][count u16 @2]
 //   Lfo:          [freqMilliHz i32 @0][depthMilli i32 @4][biasMilli i32 @8]
 //                 [phaseMilli i32 @12]   (milli-units; engine stores float Hz)
 struct UiPatcherNodeConfigPayload {
