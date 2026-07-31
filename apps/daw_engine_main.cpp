@@ -1560,6 +1560,80 @@ inline void getClipEventsInRange(const ClipSnapshot& snapshot,
   }
 }
 
+// Decode a SetPatcherNodeConfig payload's config block and apply it to ONE graph state.
+//
+// Extracted so the shared-pool path and the per-device path share a single decoder. They had to:
+// the block is an explicit little-endian layout per node type rather than a struct memcpy, and
+// two copies of a hand-written layout is the same "two facts about one thing" that makes a
+// mirror go stale — the second copy would be correct on the day it was written and wrong the
+// first time a field moved.
+//
+// Returns false and sets `failure` when the node does not exist or the type carries no config.
+bool applyNodeConfigTo(daw::PatcherGraphState& state,
+                       const daw::UiPatcherNodeConfigPayload& p,
+                       const char** failure) {
+  const uint8_t* cfg = p.config;
+  auto rdU16 = [&](int i) -> uint32_t {
+    return static_cast<uint32_t>(cfg[i]) | (static_cast<uint32_t>(cfg[i + 1]) << 8);
+  };
+  auto rdU32 = [&](int i) -> uint32_t {
+    return static_cast<uint32_t>(cfg[i]) |
+           (static_cast<uint32_t>(cfg[i + 1]) << 8) |
+           (static_cast<uint32_t>(cfg[i + 2]) << 16) |
+           (static_cast<uint32_t>(cfg[i + 3]) << 24);
+  };
+  const auto type = static_cast<daw::PatcherNodeType>(p.configType);
+  bool updated = false;
+  switch (type) {
+    case daw::PatcherNodeType::Euclidean: {
+      daw::PatcherEuclideanConfig c{};
+      c.steps = rdU16(0);
+      c.hits = rdU16(2);
+      c.offset = rdU16(4);
+      c.degree = cfg[6];
+      c.octave_offset = static_cast<int8_t>(cfg[7]);
+      c.velocity = cfg[8];
+      c.base_octave = cfg[9];
+      c.duration_ticks = rdU32(12);
+      updated = daw::setEuclideanConfig(state, p.nodeId, c);
+      break;
+    }
+    case daw::PatcherNodeType::RandomDegree: {
+      daw::PatcherRandomDegreeConfig c{};
+      c.degree = cfg[0];
+      c.velocity = cfg[1];
+      c.duration_ticks = rdU32(4);
+      updated = daw::setRandomDegreeConfig(state, p.nodeId, c);
+      break;
+    }
+    case daw::PatcherNodeType::SliceSelect: {
+      daw::PatcherSliceSelectConfig c{};
+      c.base = static_cast<uint16_t>(rdU16(0));
+      c.count = static_cast<uint16_t>(rdU16(2));
+      updated = daw::setSliceSelectConfig(state, p.nodeId, c);
+      break;
+    }
+    case daw::PatcherNodeType::Lfo: {
+      daw::PatcherLfoConfig c{};
+      c.frequency_hz = static_cast<int32_t>(rdU32(0)) / 1000.0f;
+      c.depth = static_cast<int32_t>(rdU32(4)) / 1000.0f;
+      c.bias = static_cast<int32_t>(rdU32(8)) / 1000.0f;
+      c.phase_offset = static_cast<int32_t>(rdU32(12)) / 1000.0f;
+      updated = daw::setLfoConfig(state, p.nodeId, c);
+      break;
+    }
+    default:
+      if (failure) {
+        *failure = "invalid_type";
+      }
+      return false;
+  }
+  if (!updated && failure) {
+    *failure = "invalid_node";
+  }
+  return updated;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -10264,7 +10338,7 @@ struct TrackRuntime {
             scratch.nextNodeId = next;
             if (commandType == daw::UiCommandType::AddPatcherNode) {
               if (probe.nodeType >
-                  static_cast<uint32_t>(daw::PatcherNodeType::EventOut)) {
+                  static_cast<uint32_t>(daw::kPatcherNodeTypeMax)) {
                 failure = "invalid_node_type";
               } else {
                 newNodeId = daw::addPatcherNode(
@@ -10330,7 +10404,7 @@ struct TrackRuntime {
       constexpr uint16_t kGraphErrInvalidPort = 6;
       if (commandType == daw::UiCommandType::AddPatcherNode) {
         if (graphPayload.nodeType >
-            static_cast<uint32_t>(daw::PatcherNodeType::EventOut)) {
+            static_cast<uint32_t>(daw::kPatcherNodeTypeMax)) {
           emitPatcherGraphError(kGraphErrInvalidType,
                                 graphPayload.trackId,
                                 graphPayload.nodeId,
@@ -10461,74 +10535,89 @@ struct TrackRuntime {
         commandType == daw::UiCommandType::SetPatcherNodeConfig) {
       daw::UiPatcherNodeConfigPayload configPayload{};
       std::memcpy(&configPayload, entry.payload, sizeof(configPayload));
-      constexpr uint16_t kGraphErrInvalidType = 1;
-      constexpr uint16_t kGraphErrInvalidNode = 2;
-      bool updated = false;
-      // config[16] is an explicit little-endian layout per configType (NOT a raw
-      // struct memcpy — that truncated Euclidean's 26-byte struct and coupled the
-      // wire to C++ padding). See UiPatcherNodeConfigPayload for the documented
-      // layouts; the values match the published read-back (UiPatcherNode.config).
-      const uint8_t* cfg = configPayload.config;
-      auto rdU16 = [&](int i) -> uint32_t {
-        return static_cast<uint32_t>(cfg[i]) | (static_cast<uint32_t>(cfg[i + 1]) << 8);
-      };
-      auto rdU32 = [&](int i) -> uint32_t {
-        return static_cast<uint32_t>(cfg[i]) |
-               (static_cast<uint32_t>(cfg[i + 1]) << 8) |
-               (static_cast<uint32_t>(cfg[i + 2]) << 16) |
-               (static_cast<uint32_t>(cfg[i + 3]) << 24);
-      };
-      if (configPayload.configType ==
-          static_cast<uint32_t>(daw::PatcherNodeType::Euclidean)) {
-        // [steps u16][hits u16][offset u16][degree u8][octaveOffset i8]
-        // [velocity u8][baseOctave u8][pad u16][durationTicks u32]
-        daw::PatcherEuclideanConfig config{};
-        config.steps = rdU16(0);
-        config.hits = rdU16(2);
-        config.offset = rdU16(4);
-        config.degree = cfg[6];
-        config.octave_offset = static_cast<int8_t>(cfg[7]);
-        config.velocity = cfg[8];
-        config.base_octave = cfg[9];
-        config.duration_ticks = rdU32(12);
-        updated = setEuclideanConfig(patcherGraphState,
-                                     configPayload.nodeId,
-                                     config);
-      } else if (configPayload.configType ==
-                 static_cast<uint32_t>(daw::PatcherNodeType::RandomDegree)) {
-        // [degree u8][velocity u8][pad u16][durationTicks u32]
-        daw::PatcherRandomDegreeConfig config{};
-        config.degree = cfg[0];
-        config.velocity = cfg[1];
-        config.duration_ticks = rdU32(4);
-        updated = setRandomDegreeConfig(patcherGraphState,
-                                        configPayload.nodeId,
-                                        config);
-      } else if (configPayload.configType ==
-                 static_cast<uint32_t>(daw::PatcherNodeType::Lfo)) {
-        // [freqMilliHz i32][depthMilli i32][biasMilli i32][phaseMilli i32]
-        // (milli-units mirror the read-back; the engine stores float Hz).
-        daw::PatcherLfoConfig config{};
-        config.frequency_hz = static_cast<int32_t>(rdU32(0)) / 1000.0f;
-        config.depth = static_cast<int32_t>(rdU32(4)) / 1000.0f;
-        config.bias = static_cast<int32_t>(rdU32(8)) / 1000.0f;
-        config.phase_offset = static_cast<int32_t>(rdU32(12)) / 1000.0f;
-        updated = setLfoConfig(patcherGraphState,
-                               configPayload.nodeId,
-                               config);
-      } else {
-        emitPatcherGraphError(kGraphErrInvalidType,
-                              configPayload.trackId,
-                              configPayload.nodeId,
-                              0,
-                              0,
-                              0,
-                              0,
-                              0);
+      // A DEVICE'S OWN GRAPH, if the caller named one — same flag encoding the graph commands
+      // already use (bit 15 set, deviceId in bits 0-14).
+      //
+      // Without this the handler below edits `patcherGraphState`, the SHARED POOL, and since
+      // patcher-is-a-device the pool is not what a project renders. So NO node's config was
+      // editable by command on a per-device graph: not the new SliceSelect, and not euclidean's
+      // hits or the LFO's rate either — verified with a pre-existing node type before assuming
+      // it was the new one's wiring. Task #73 fixed exactly this for AddPatcherNode /
+      // RemovePatcherNode / ConnectPatcherNodes, which share a different payload; this command
+      // was never brought along.
+      //
+      // It reported SUCCESS the whole time: the pool has no node with that id, `updated` stays
+      // false, and the refusal goes into an SHM diff no CLI surfaces.
+      if ((configPayload.flags & daw::kUiPatcherFlagHasDeviceId) != 0) {
+        const uint32_t deviceId =
+            static_cast<uint32_t>(configPayload.flags & daw::kUiPatcherDeviceIdMask);
+        TrackRuntime* runtime = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(tracksMutex);
+          if (configPayload.trackId < tracks.size()) {
+            runtime = tracks[configPayload.trackId].get();
+          }
+        }
+        auto refuseCfg = [&](const char* why) {
+          DAW_EVENT("patcher_device_edit.rejected")
+              .field("track", configPayload.trackId)
+              .field("device", deviceId)
+              .field("op", daw::uiCommandTypeName(commandType))
+              .field("reason", why);
+        };
+        if (!runtime) {
+          refuseCfg("no_such_track");
+          return;
+        }
+        bool applied = false;
+        const char* failure = nullptr;
+        {
+          std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          daw::Device* device = nullptr;
+          for (auto& d : runtime->track.chain.devices) {
+            if (d.id == deviceId) {
+              device = &d;
+              break;
+            }
+          }
+          if (!device) {
+            failure = "no_such_device";
+          } else {
+            daw::PatcherGraphState scratch;
+            scratch.graph = device->patcher;
+            applied = applyNodeConfigTo(scratch, configPayload, &failure);
+            if (applied) {
+              device->patcher = scratch.graph;
+              runtime->trackSnapshot = buildTrackSnapshot(runtime->track);
+            }
+          }
+        }
+        if (!applied) {
+          refuseCfg(failure ? failure : "failed");
+          return;
+        }
+        // The pool is DERIVED from the device graphs, so re-derive it — otherwise the edit is
+        // saved and does nothing until the next load.
+        const bool executing = reassemblePatcherFromDevices();
+        DAW_EVENT("patcher_device_edit.applied")
+            .field("track", configPayload.trackId)
+            .field("device", deviceId)
+            .field("op", daw::uiCommandTypeName(commandType))
+            .field("node", configPayload.nodeId)
+            .field("executing", executing);
         return;
       }
+      constexpr uint16_t kGraphErrInvalidType = 1;
+      constexpr uint16_t kGraphErrInvalidNode = 2;
+      // THE SHARED POOL. Reached only when the caller did NOT name a device; the device branch
+      // above returns. Same decoder either way — see applyNodeConfigTo.
+      const char* cfgFailure = nullptr;
+      const bool updated =
+          applyNodeConfigTo(patcherGraphState, configPayload, &cfgFailure);
       if (!updated) {
-        emitPatcherGraphError(kGraphErrInvalidNode,
+        const bool badType =
+            cfgFailure != nullptr && std::strcmp(cfgFailure, "invalid_type") == 0;
+        emitPatcherGraphError(badType ? kGraphErrInvalidType : kGraphErrInvalidNode,
                               configPayload.trackId,
                               configPayload.nodeId,
                               0,

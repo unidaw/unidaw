@@ -123,7 +123,7 @@ daw-cli — control surface for a running engine
                                    named goes to its DEFAULT (audio-out master, the
                                    rest none) — the engine has no partial form and no
                                    routing read-back to merge against.
-  daw-cli do patcher-node --track N --type euclidean|lfo|random-degree|
+  daw-cli do patcher-node --track N --type euclidean|lfo|random-degree|slice-select|
                           passthrough|audio-passthrough|event-out
                                    --device D edits THAT DEVICE's own graph, which is the
                                    only form that is saved for a project with per-device
@@ -136,6 +136,7 @@ daw-cli — control surface for a running engine
                                        --octave-offset --velocity --base-octave
                                        --duration
                             random-degree: --degree --velocity --duration
+                            slice-select: --base --count
                             lfo: --freq --depth --bias --phase
   daw-cli do patcher-save [name]
   daw-cli do mod-link --track N --source-device D --target-device D2
@@ -515,12 +516,13 @@ fn parse_node_type(raw: &str) -> Result<u32, String> {
         "euclidean" => L::PATCHER_NODE_EUCLIDEAN,
         "lfo" => L::PATCHER_NODE_LFO,
         "random-degree" => L::PATCHER_NODE_RANDOM_DEGREE,
+        "slice-select" => L::PATCHER_NODE_SLICE_SELECT,
         "passthrough" => L::PATCHER_NODE_PASSTHROUGH,
         "audio-passthrough" => L::PATCHER_NODE_AUDIO_PASSTHROUGH,
         "event-out" => L::PATCHER_NODE_EVENT_OUT,
         "rust-kernel" => L::PATCHER_NODE_RUST_KERNEL,
         other => return Err(format!(
-            "--type: expected euclidean|lfo|random-degree|passthrough|\
+            "--type: expected euclidean|lfo|random-degree|slice-select|passthrough|\
              audio-passthrough|event-out|rust-kernel, got {other:?}"
         )),
     })
@@ -558,6 +560,13 @@ fn build_node_config(args: &[String], node_type: u32) -> Result<[u8; 16], String
         cfg[0] = flag_u64(args, "--degree", Some(8))? as u8;
         cfg[1] = flag_u64(args, "--velocity", Some(100))? as u8;
         put_u32(&mut cfg, 4, flag_u64(args, "--duration", Some(0))? as u32);
+    } else if node_type == L::PATCHER_NODE_SLICE_SELECT {
+        // [base u16][count u16]. `count` is the SIZE of the range, so 0 and 1 both mean
+        // "always base" — a range being empty, not a sentinel. `base` of 0 is clamped to 1 by
+        // the node, because sound address 0 MEANS "no address, use the keymap" and a node
+        // configured with it would look set up and do nothing.
+        put_u16(&mut cfg, 0, flag_u64(args, "--base", Some(1))? as u16);
+        put_u16(&mut cfg, 2, flag_u64(args, "--count", Some(8))? as u16);
     } else if node_type == L::PATCHER_NODE_LFO {
         // Milli-units on the wire, mirroring the read-back; the engine stores floats.
         let milli = |v: f64| ((v * 1000.0).round() as i32) as u32;
@@ -567,7 +576,8 @@ fn build_node_config(args: &[String], node_type: u32) -> Result<[u8; 16], String
         put_u32(&mut cfg, 12, milli(flag_f64(args, "--phase", 0.0)?));
     } else {
         return Err(
-            "--type: only euclidean, random-degree and lfo carry a config".to_string(),
+            "--type: only euclidean, random-degree, slice-select and lfo carry a config"
+                .to_string(),
         );
     }
     Ok(cfg)
@@ -3004,6 +3014,12 @@ fn main() {
                     };
                     let payload = daw_bridge::layout::UiPatcherNodeConfigPayload {
                         command_type: UiCommandType::SetPatcherNodeConfig as u16,
+                        // --device WAS ACCEPTED AND DROPPED. flags stayed 0 through
+                        // ..Default::default(), so every config edit went to the shared pool —
+                        // which, since patcher-is-a-device, is not the graph anything renders.
+                        // The other patcher verbs have carried this flag since #73; this one was
+                        // never brought along, and it reported success the whole time.
+                        flags: patcher_device_flags(&args),
                         track_id: track,
                         node_id: node,
                         config_type: node_type,

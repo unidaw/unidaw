@@ -1584,6 +1584,8 @@ pub const PATCHER_NODE_PASSTHROUGH: u32 = 2;
 pub const PATCHER_NODE_AUDIO_PASSTHROUGH: u32 = 3;
 pub const PATCHER_NODE_LFO: u32 = 4;
 pub const PATCHER_NODE_RANDOM_DEGREE: u32 = 5;
+/// SliceSelect: chooses WHICH SOUND a note plays, leaving the pitch alone.
+pub const PATCHER_NODE_SLICE_SELECT: u32 = 7;
 pub const PATCHER_NODE_EVENT_OUT: u32 = 6;
 
 /// PatcherPortKind.

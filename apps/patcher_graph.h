@@ -25,6 +25,13 @@ enum class PatcherNodeType : uint8_t {
   SliceSelect = 7,
 };
 
+// THE HIGHEST VALID NODE TYPE. Every "is this a real node type" bound must be written against
+// this and not against whichever member happens to be last: AddPatcherNode refused
+// `nodeType > EventOut`, so adding SliceSelect=7 to the enum made it a type the graph could hold,
+// the project could save, and the ADD COMMAND WOULD NOT CREATE — reachable only by hand-editing
+// JSON. A bound that names a member is a bound that goes stale the next time the enum grows.
+inline constexpr PatcherNodeType kPatcherNodeTypeMax = PatcherNodeType::SliceSelect;
+
 // True for a node that puts events into the stream the user did not author:
 // Euclidean synthesises a rhythm from nothing; RandomDegree rewrites a gate's
 // pitch, so its output is not the note that was typed. Both make "notes I didn't
