@@ -543,12 +543,49 @@ Answered by the owner. These are decisions, not proposals; the sections above ar
 
 **R5 — no permanent ops column; it appears where it is used.** Both families are sparse in the common case: ops (retrigger/probability/delay) are occasional by nature, and `sound` is blank on an ordinary kit track because **blank means "pitch picks the slot"** — it only fills in when you deliberately want the same slot at another pitch. So the column is drawn per track when something in that track uses one, with a marker in the note cell so you can see a row carries ops without the column being open. **Exact display is the frontend's call** (asked 2026-07-30); the engine side is publishing `sound` in `UiClipNote` and, if they want it, a per-track "uses ops" flag so the editor need not scan every note per draw.
 
+## 8. RULINGS — 2026-07-31
+
+The §7 "still open" list, answered by the owner. Decisions, not proposals.
+
+**Q1 — the sound address notates a zero-padded number: `s07`.** Not `s:snare`. The id is what
+`NotePayload.sound` stores and the id is what the cell shows, so a rename rewrites nothing and a
+row means the same thing after any amount of kit editing. Zero-padded because a tracker cell lives
+in a fixed-width grid and ragged `s7` / `s13` breaks the vertical rhythm that makes a tracker
+readable at a glance. Field width is per track, the same rule R5 already set for whether the ops
+column appears at all: two digits normally, three for a track that references an id >= 100. Ids
+come from `next_slot_id`, which never reuses, so a long-edited 64-pad kit can carry three-digit
+ids without having 100 pads.
+
+**Q2 — a track is SETTABLE to sound-addressed-only.** Blank `sound` means "keymap" by default (R5
+stands), and a track can be switched so that pitch never selects a slot. Then a 64-slot kit stays
+fully chromatic and the keyboard plays pitch rather than picking pads. Engine work: a per-track
+flag, published and persisted, consulted where a blank `sound` is resolved.
+
+**Q3 — the kit grid is FIXED, 8x8 with pages.** Spatial memory is Battery's real win and a growing
+grid trades it away for a ceiling nobody hits.
+
+**Q4 — the voice cap is per DEVICE, 64.** Confirmed as specced.
+
+**Q5 — contentKey mismatch is LOAD-AND-BADGE.** Silence is worse than a warned difference. Note
+that R3 has landed (S7, the `.uni` module), so an embedded sample cannot change under you and this
+only ever bites a project still living as a loose working directory — which is the normal form
+while you work, so it is not a dead path.
+
+**Q6 — default slice snap: TRANSIENT.** *(Explained on request: this is about where slice
+boundaries land when you chop a sample. TRANSIENT puts them on detected onsets, so a breakbeat is
+cut on its actual hits and the slices are musically real but unevenly spaced. ROW GRID divides by
+the tracker's rows — sixteen equal slices to the bar — so every slice is the same length, snaps to
+the pattern, and re-fits when the tempo changes, but a boundary can land in the middle of a snare.
+Transient is faithful to the source; row grid is faithful to the pattern.)* Awaiting the owner's
+pick between the two once the trade-off is stated; both are already built.
+
+**Q7 — the Elektron gap is QUEUED.** Retrigger volume ramp and conditional trigs (`1:2`, `FILL`,
+`PRE`) beyond the existing `retN` / `pN`. Row-op work, not sampler work; S4 is complete (task #88),
+so nothing blocks it.
+
+---
+
 ### Still open — owner only
 
-1. **Notation for the sound address.** `s:snare` (legible, breaks visually on rename) or `s#7` (stable, opaque)? My proposal: store the id, notate the name, renaming rewrites nothing.
-2. **Does a blank `sound` always mean "keymap"?** R5 assumes yes. Should a track be settable to sound-addressed-only, so pitch never selects and a 64-slot kit stays fully chromatic? Affects whether a keyboard can play the kit at all — and, now, how often the ops column appears.
-3. **Kit grid: fixed page or growing?** Fixed 8×8 with pages buys spatial memory (Battery's real win); growing removes the ceiling and loses the muscle memory. I would take fixed.
-4. **Voice cap scope** — per device (my default, 64), per track, or global? Sets the CPU ceiling and whether a 16-slot kit at 1/32 ever steals.
-5. **Changed source file (contentKey mismatch): load-and-badge, or refuse-and-report?** The `kHostSlotIndexUnresolved` precedent says refuse. I specced load-and-badge because silence is worse than a warned difference for audio. Note R3 shrinks this: an embedded sample cannot change under you, so this now only bites a project still living as a loose directory.
-6. **Default slice snap: row grid (tempo-adaptive, free re-fit) or transient (faithful to the source)?** Both exist; which one is the un-thinking gesture.
-9. **Out of scope but named:** the Elektron gap this repo half-has — retrigger *volume ramp* and *conditional* trigs (`1:2`, `FILL`, `PRE`) beyond the existing `retN`/`pN`. That is row-op work, not sampler work. Want it queued behind S4's bump, or separately?
+(Only Q6 remains: transient or row grid as the default chop. Both are built; this is which one
+is the un-thinking gesture.)
