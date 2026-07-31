@@ -10,7 +10,7 @@
 # control, and this one costs about a second because none of it needs a real engine: a `sleep` is
 # a perfectly good corpse and a text file is a perfectly good log.
 #
-# FOUR PROPERTIES:
+# SIX PROPERTIES:
 #   DEAD     a pid that is gone with no load in the log fails FAST and says the engine exited.
 #            Fast is half the point — the old loop's sin was burning the budget before lying
 #   RACED    a pid that is gone but WHOSE LOAD IS IN THE LOG returns success. An engine can load
@@ -146,6 +146,84 @@ case "$COUNT_OUT" in
   *) fail "the caller's description of what it was waiting for did not reach the message: $COUNT_OUT" ;;
 esac
 
+# The library is sourced by the sub-scripts above, not by this one — the new helpers are used
+# HERE, so source it.
+. "$LIB"
+
+# The shell prints "Terminated: 15" and "Killed: 9" for the jobs below as it reaps them. Those
+# lines are the EVIDENCE, not noise: they are this shell reporting that the signals actually
+# reached the process rather than a subshell wrapper.
+#
+# ---- REAPS. start_engine's pid is the PROCESS, not a subshell around it — and the control shows
+# what the pattern it replaces does instead.
+#
+# This is the bug that was copied into most of tools/: `( cd "$BUILD" && cmd ) & PID=$!` captures
+# the SUBSHELL, so `kill "$PID"` reaps a shell and leaves the real process running. Four
+# `ctest -j8` runs left 0, 11, 7 and 11 engines alive that way.
+#
+# Asserted on the COMMAND NAME of the pid rather than by hunting for orphans, because that is the
+# mechanism itself: with `exec` the pid IS the command, without it the pid is a shell.
+BUILD="$TMP" start_engine "$TMP/reap.log" sleep 60
+REAPED_NAME="$(ps -o comm= -p "$ENGINE_PID" 2>/dev/null | tr -d ' ')"
+( cd "$TMP" && sleep 60 >"$TMP/old.log" 2>&1 ) &
+OLD_PID=$!
+OLD_NAME="$(ps -o comm= -p "$OLD_PID" 2>/dev/null | tr -d ' ')"
+echo "  start_engine pid is '$REAPED_NAME'; the old pattern's pid is '$OLD_NAME'"
+case "$REAPED_NAME" in
+  *sleep*) : ;;
+  *) fail "start_engine's ENGINE_PID names '$REAPED_NAME', not the command it was asked to run.
+        Without exec the pid is a subshell and killing it leaves the engine alive — which is the
+        entire bug this helper exists to prevent" ;;
+esac
+case "$OLD_NAME" in
+  *sleep*) fail "the CONTROL did not reproduce the old pattern: its pid names '$OLD_NAME', which
+        is the command itself, so this shell optimised the subshell away and the comparison below
+        proves nothing. The assertion above would pass either way" ;;
+  *) : ;;
+esac
+kill "$OLD_PID" 2>/dev/null; wait "$OLD_PID" 2>/dev/null
+pkill -P $$ -x sleep 2>/dev/null   # the control's orphan, which is the point being made
+stop_engine "$ENGINE_PID"
+if kill -0 "$ENGINE_PID" 2>/dev/null; then
+  fail "stop_engine did not reap the process it was given"
+fi
+echo "  reaps: start_engine's pid is the command, and stop_engine ends it"
+
+# ---- ESCALATES, AND SAYS SO. A process that ignores SIGTERM is a defect somewhere even when the
+# harness recovers, and a recovered leak nobody mentions is how the NEXT one gets attributed to
+# whatever was under test.
+cat >"$TMP/stubborn.sh" <<'EOS'
+trap '' TERM
+: >"$1"          # SAYS IT IS READY, and the wait below is why
+while true; do sleep 0.2; done
+EOS
+BUILD="$TMP" start_engine "$TMP/stub.log" bash "$TMP/stubborn.sh" "$TMP/stub.ready"
+STUB_PID="$ENGINE_PID"
+# WAITS FOR THE TRAP TO EXIST. Signalling immediately after start_engine races bash's own startup:
+# the TERM can land before the script has been read and `trap` has run, and then the process dies
+# of the signal it was written to ignore — which looks exactly like stop_engine failing to report.
+# I wrote that race into this check first, and it took a standalone repro to see it, so the
+# readiness file stays.
+for _ in $(seq 1 80); do
+  [ -f "$TMP/stub.ready" ] && break
+  sleep 0.25
+done
+[ -f "$TMP/stub.ready" ] || fail "the SIGTERM-ignoring fixture never started, so the escalation
+        path below would not be exercised and this property would pass vacuously"
+STUB_OUT="$(stop_engine "$STUB_PID" 2>&1)"
+case "$STUB_OUT" in
+  *"ignored SIGTERM"*) : ;;
+  *) fail "stop_engine recovered from a process that ignored SIGTERM and said NOTHING. It printed:
+        '$STUB_OUT'. Silence about a recovered leak is how the next one is blamed on the sampler" ;;
+esac
+if kill -0 "$STUB_PID" 2>/dev/null; then
+  kill -9 "$STUB_PID" 2>/dev/null
+  fail "stop_engine reported the escalation and then did not actually kill the process"
+fi
+echo "  escalates: a SIGTERM-ignoring process is killed, and the escalation is reported"
+
 echo "engine_wait_selftest: PASS — a corpse is diagnosed at once, a load-then-exit is not"
 echo "                      mistaken for a death, a hang reads differently from a death, and"
-echo "                      wait_for_loads counts"
+echo "                      wait_for_loads counts,
+                      start_engine's pid is the command itself, and stop_engine says when it
+                      had to escalate"

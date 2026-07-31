@@ -193,3 +193,47 @@ capture_diagnosis() {
         $log directly rather than trusting the capture"
   fi
 }
+
+# LAUNCHING AND REAPING AN ENGINE, so the next check cannot repeat the bug the last forty have.
+#
+# THE BUG: `( cd "$BUILD" && env ... ./daw_engine ... ) &` followed by `ENG=$!` captures the
+# SUBSHELL, not the engine. `kill "$ENG"` then reaps the subshell and leaves the engine running.
+# It is invisible almost always, because the engine exits by itself when --run-seconds elapses —
+# so the pattern survived being copied into most of tools/. It stops being invisible when an
+# engine BLOCKS before its run clock starts (a contended or dead audio device), because then it
+# never exits at all: one such pair turned a 10-second check into a 935-second one, and four
+# `ctest -j8` runs left 0, 11, 7 and 11 of them alive.
+#
+# `exec` is the whole fix — the subshell replaces itself with the engine, so $! IS the engine.
+# It is one word, and it is one word that has to be remembered in forty places, which is why it
+# is a function here instead.
+#
+#   start_engine <logfile> <argv...>     runs argv in $BUILD, sets ENGINE_PID to the ENGINE
+#   stop_engine  [pid]                   TERM, wait, KILL if it ignored TERM, and SAY so
+#
+start_engine() {
+  local log="$1"; shift
+  ( cd "${BUILD:?start_engine needs BUILD set}" && exec "$@" >"$log" 2>&1 ) &
+  ENGINE_PID=$!
+}
+
+# REPORTS WHEN IT HAD TO ESCALATE, rather than recovering in silence. A process that ignored
+# SIGTERM is a defect somewhere even when the harness cleans up after it, and a recovered leak
+# nobody mentions is how the NEXT one gets attributed to whatever was under test. (The web-UI
+# agent reached the same conclusion from the other side and made their stack.mjs say it too.)
+stop_engine() {
+  local pid="${1:-${ENGINE_PID:-}}"
+  [ -n "$pid" ] || return 0
+  kill "$pid" 2>/dev/null || return 0
+  local i=0
+  while [ "$i" -lt 40 ]; do
+    kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null; return 0; }
+    sleep 0.25
+    i=$((i + 1))
+  done
+  echo "  note: engine $pid ignored SIGTERM for 10s and had to be killed — the run above is"
+  echo "        still valid, but something in it did not shut down when asked"
+  kill -9 "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  return 0
+}
