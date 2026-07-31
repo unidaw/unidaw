@@ -2900,6 +2900,9 @@ struct TrackRuntime {
     clipVersion.fetch_add(1, std::memory_order_acq_rel);
   };
 
+  // Bumped whenever any track's sampler state changes, so a UI can poll one number instead of
+  // re-requesting a kit to find out whether the one it drew is still current.
+  std::atomic<uint32_t> samplerKitVersion{0};
   std::atomic<uint32_t> chainVersion{0};
   std::atomic<uint32_t> routingVersion{0};
   std::atomic<uint32_t> modVersion{0};
@@ -5576,6 +5579,10 @@ struct TrackRuntime {
   // changes a chain, so "did you remember to rebuild the sampler" is not a question anyone has to
   // answer twice. Caller holds trackMutex.
   auto refreshSamplerForTrack = [&](TrackRuntime& rt) {
+    // THE ONE FUNNEL every sampler edit passes through — load, set-slot, slice, marker, envelope,
+    // LFO — which is why the kit version is bumped here rather than at each of them. A counter
+    // maintained at N call sites is a counter that is wrong at the site someone forgets.
+    samplerKitVersion.fetch_add(1, std::memory_order_acq_rel);
     const daw::Device* found = nullptr;
     for (const auto& d : rt.track.chain.devices) {
       if (d.kind == daw::DeviceKind::Sampler && d.hasSampler) {
@@ -17235,6 +17242,14 @@ struct TrackRuntime {
         writeUiArrangeSummary(false);
         writeUiAutomationLanes(false);
         writeUiPatcher(false);
+        // The kit's poll counter, written every cycle so a UI can read it without asking for a
+        // kit first. The kit REGION is only filled on request; this word is not.
+        if (uiShm.header->uiSamplerKitOffset != 0) {
+          auto* kitRegion = reinterpret_cast<daw::UiSamplerKitRegion*>(
+              reinterpret_cast<uint8_t*>(uiShm.base) + uiShm.header->uiSamplerKitOffset);
+          kitRegion->version.store(
+              samplerKitVersion.load(std::memory_order_acquire), std::memory_order_release);
+        }
         uiShm.header->uiHarmonyVersion =
             harmonyVersion.load(std::memory_order_acquire);
         uiShm.header->uiQuantizeVersion =

@@ -159,6 +159,32 @@ print("  reads back: 8 slots, choke group and NNA as the ENGINE has them (not as
 
 # ---- AND A DEVICE THAT IS NOT THERE ANSWERS "not found" rather than an empty kit. An empty
 # answer and a missing device look identical to a caller, and only one of them is a bug.
+# ---- THE POLL COUNTER. The kit publishes on REQUEST, so a drawn kit is a snapshot with no way
+# to learn it has gone stale. Without something to poll, a UI either re-requests a 2 KB answer on
+# a timer or shows a kit that quietly stopped being true — and the second is what actually
+# happens, because the timer feels wasteful and gets turned down.
+#
+# BUMPED ON CHANGE, NOT ON PUBLISH. "Did anyone ask recently" is not the question; "is what I
+# drew still right" is. So an edit must move it and a re-read must not.
+V1="$(cli get sampler-kit --track 0 --device 1 --seq 21 2>&1 | grep -o '"kit_version": [0-9]*' | grep -o '[0-9]*')"
+[ -n "${V1:-}" ] && [ "${V1:-0}" -gt 0 ] || \
+  fail "the kit read-back reported no kit_version (got ${V1:-empty}). Zero means an engine that
+        does not publish one; the counter starts at 1 precisely so those are distinguishable"
+V2="$(cli get sampler-kit --track 0 --device 1 --seq 22 2>&1 | grep -o '"kit_version": [0-9]*' | grep -o '[0-9]*')"
+[ "$V1" = "$V2" ] || \
+  fail "the kit version changed from $V1 to $V2 without the kit changing — only a REQUEST
+        happened in between. A counter that moves when someone asks answers the wrong question
+        and makes a polling UI re-fetch forever"
+cli do sampler-slot --track 0 --device 1 --slot 1 --field gain-mb --value -300 >/dev/null 2>&1 || true
+sleep 0.6
+V3="$(cli get sampler-kit --track 0 --device 1 --seq 23 2>&1 | grep -o '"kit_version": [0-9]*' | grep -o '[0-9]*')"
+echo "  kit version: $V1 -> $V2 after a re-read -> $V3 after an edit"
+python3 -c "
+raise SystemExit(0 if $V3 > $V2 else 1)" || \
+  fail "editing a slot did not move the kit version ($V2 -> $V3). Then a UI polling it would
+        keep drawing the kit it fetched before the edit, which is exactly the staleness the
+        counter exists to end"
+
 MISSING="$(cli get sampler-kit --track 0 --device 99 --seq 9 2>&1)"
 echo "$MISSING" | grep -q '"found": false' || \
   fail "asking for a device that does not exist should answer found:false, got: $MISSING"

@@ -1192,6 +1192,9 @@ fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
                 }
                 println!("{{");
                 println!("  \"found\": true,");
+                // The poll counter, so a caller can cache this answer and re-ask only when it
+                // moves rather than re-requesting a 2 KB kit on a timer.
+                println!("  \"kit_version\": {},", handle.sampler_kit_version());
                 println!("  \"track\": {},", v.track_id);
                 println!("  \"device\": {},", v.device_id);
                 println!("  \"voice_cap\": {},", v.voice_cap);

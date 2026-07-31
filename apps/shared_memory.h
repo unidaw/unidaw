@@ -907,7 +907,20 @@ struct alignas(64) UiSamplerKitSlot {
 
 struct alignas(64) UiSamplerKitRegion {
   ShmAtomicU32 requestSeq{0};
-  uint32_t reserved[15]{};
+  // WHAT A UI POLLS TO KNOW THE KIT MOVED. The kit publishes on REQUEST, so without this a drawn
+  // kit is a snapshot with no way to learn it is stale — fine for a list, not fine for watching
+  // slice extents move while a marker is dragged, which the audio path makes true at note-on
+  // (sampler_engine.h, "A SLOT THAT NAMES A SLICE READS THE SLICE'S DERIVED EXTENT").
+  //
+  // Bumped when any track's sampler state CHANGES, not when the kit is published, so it answers
+  // "is what I drew still right" rather than "did someone ask recently". Written every publish
+  // cycle so it can be read without issuing a request.
+  //
+  // Taken from the reserved words rather than added to the header, so nothing a reader already
+  // reads moves and kShmVersion does not change. ZERO means "this engine does not publish one" —
+  // the counter starts at 1 — so an older engine is distinguishable from an unchanged kit.
+  ShmAtomicU32 version{0};
+  uint32_t reserved[14]{};
   UiSamplerKitSlot slots[kUiSamplerKitSlots]{};
 };
 
