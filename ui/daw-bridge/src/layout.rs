@@ -236,6 +236,31 @@ pub const SAMPLER_MARKER_REMOVE: u16 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+/// SamplerSetLfo (85). ModKind::Lfo has been in the saved project since the sampler shipped and
+/// nothing rendered it — a modulator kind that round-tripped perfectly and made no sound.
+///
+/// Two depths, meaning different things: `depth` is the LFO's OWN amplitude and `depth_milli` is
+/// how much of it reaches the target. The LFO is note-retriggered, so its phase is a pure
+/// function of the voice's age and a render does not depend on when playback started.
+pub struct UiSamplerLfoPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub mod_set_id: u32,
+    pub modulator_id: u16,
+    pub target: u8,
+    pub reserved: u8,
+    pub frequency_hz: f32,
+    pub depth: f32,
+    pub bias: f32,
+    pub phase_offset: f32,
+    pub depth_milli: i16,
+    pub reserved2: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 /// BulkChunk (83) — one chunk of a longer command. The inward bulk carrier.
 ///
 /// Outbound has SHM regions; inbound had only the ring's 40-byte payload, so any variable-length
@@ -267,7 +292,7 @@ pub struct UiSamplerEnvPointsHeader {
     pub mod_set_id: u32,
     pub modulator_id: u16,
     pub time_base: u8,
-    pub reserved: u8,
+    pub target: u8,
     pub rate_milli: u16,
     pub point_count: u16,
     pub sustain_loop_start: u8,
@@ -310,7 +335,12 @@ pub struct UiSamplerEnvelopePayload {
     pub release: u32,
     pub sustain_milli: i16,
     pub rate_milli: u16,
-    pub reserved2: u32,
+    /// Which modulation domain: 0 Volume, 1 Panning, 2 Pitch, 3 Cutoff, 4 Resonance. The engine
+    /// renders envelopes on all of them; for a while nothing could create any but Volume.
+    pub target: u8,
+    pub reserved2: u8,
+    /// Signed. What FULL envelope travel is worth on the target — on Cutoff, 1000 is +-6 octaves.
+    pub depth_milli: i16,
 }
 
 /// Target the AMP envelope whatever its id, minting one if the mod set has none.
@@ -333,13 +363,19 @@ pub struct UiSetRowOpsPayload {
     pub mask: u16,
     pub track_id: u32,
     pub clip_id: u32,
-    pub note_id: u32,
+    /// LOW half of the note's EventId. It is 64 bits because EventId packs the AUTHOR into bits
+    /// 48+ and each author has its own independent counter — a 32-bit id drops the author, and
+    /// agent note (1, 5) then collides with human note (0, 5) and edits the wrong one. Split
+    /// lo/hi rather than moved so every other field keeps the offset it already had.
+    pub note_id_lo: u32,
     pub delay_nanoticks: u32,
     pub sound: u16,
     pub sound_offset: u16,
     pub retrigger: u8,
     pub probability: u8,
-    pub reserved: [u8; 14],
+    pub pad0: [u8; 2],
+    pub note_id_hi: u32,
+    pub reserved: [u8; 8],
 }
 
 /// SetRowOps mask bits — which ops the payload means.
@@ -1064,6 +1100,9 @@ pub enum UiCommandType {
     BulkChunk = 83,
     /// A hand-drawn multi-point envelope, carried over BulkChunk.
     SamplerSetEnvelopePoints = 84,
+
+    /// Sets a sampler modulator's LFO — note-retriggered, on any modulation target.
+    SamplerSetLfo = 85,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -2168,6 +2207,7 @@ mod wire_layout {
             UiSetRowOpsPayload,
             UiSamplerEnvelopePayload,
             UiBulkChunkPayload,
+            UiSamplerLfoPayload,
         );
     }
 
@@ -2186,6 +2226,7 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSetRowOpsPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerEnvelopePayload>(), 40);
         assert_eq!(std::mem::size_of::<UiBulkChunkPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerLfoPayload>(), 40);
         // Not a ring payload — the ASSEMBLED shapes, which the engine memcpys.
         assert_eq!(std::mem::size_of::<UiSamplerEnvPointsHeader>(), 32);
         assert_eq!(std::mem::size_of::<UiEnvPointWire>(), 8);

@@ -2203,6 +2203,12 @@ struct TrackRuntime {
     // clips they reference, both owned per-track (copy-on-write from the loaded
     // project). track.clip is DERIVED from these by flattenPlacements after every
     // edit; edits mutate the store, not track.clip. Both guarded by trackMutex.
+    // Set when another track routed audio INTO this one, so the input-plane write can tell
+    // whether it is about to discard something. Cleared as the inbound buffer is swapped in.
+    std::atomic<bool> inboundAudioArrived{false};
+    // One warning per track, not one per block: a routed sampler track would otherwise log at
+    // the block rate forever, and the log becomes the thing you have to fix.
+    std::atomic<bool> warnedSamplerAteInput{false};
     std::vector<daw::ProjectPlacement> sourcePlacements;
     std::vector<daw::ProjectClip> ownedClips;
     // Clip ids this track created or copy-on-write-forked (i.e. owns exclusively
@@ -2227,8 +2233,17 @@ struct TrackRuntime {
     // Movement 4: the sidechain / aux-output masks last sent on SetChain, so toggling
     // either with an otherwise-unchanged chain still re-reconciles. Guarded by
     // controllerMutex like config. 0 = none, matching a freshly launched host.
-    uint32_t lastSidechainMask = 0;
-    uint32_t lastAuxOutMask = 0;
+    // ATOMIC because the consumer's aux-plane diagnostic reads lastAuxOutMask WITHOUT taking
+    // controllerMutex (it try_locks only for shmView_, after this test), while the chain-reconcile
+    // path writes both under it. ThreadSanitizer caught it on an 8-track sampler render: a plain
+    // uint32_t written under a lock and read without one is a data race however naturally aligned
+    // it is, and "it will not tear on ARM64" is an argument about this compiler on this day.
+    //
+    // Relaxed on both sides is the right ordering: neither value guards other memory. They say
+    // which aux buses a host last reported, and a reader one cycle stale simply runs its
+    // diagnostic a block later.
+    std::atomic<uint32_t> lastSidechainMask{0};
+    std::atomic<uint32_t> lastAuxOutMask{0};
     std::atomic<bool> needsRestart{false};
     std::atomic<bool> restartInFlight{false};
     std::atomic<bool> hostReady{false};
@@ -2647,6 +2662,20 @@ struct TrackRuntime {
 
   std::unique_ptr<daw::IRuntime> audioRuntime;
   std::unique_ptr<EngineAudioCallback> audioCallback;
+  // PUBLISHED SEPARATELY, because the producer and consumer threads are created LONG before this
+  // is assigned — the callback needs the device's sample rate and block size, and the device is
+  // opened later. Both threads tested `if (audioCallback)` while main was writing it, which
+  // ThreadSanitizer reported as a data race and which is not the harmless kind: a reader can see
+  // the pointer before the constructor's stores are visible and then dereference it.
+  //
+  // The unique_ptr keeps OWNERSHIP on the main thread and never leaves it. This is the
+  // PUBLICATION: stored with release once the callback is fully constructed AND configured, read
+  // with acquire by the threads, so seeing a non-null pointer means seeing a finished object.
+  // Null until then, which every reader already handles — that was never the bug.
+  std::atomic<EngineAudioCallback*> audioCallbackPublished{nullptr};
+  auto publishedCallback = [&]() -> EngineAudioCallback* {
+    return audioCallbackPublished.load(std::memory_order_acquire);
+  };
   // 4b: drives the master host one block behind the callback. Started once the callback
   // exists (below), joined at shutdown.
   std::thread masterRenderThread;
@@ -4096,15 +4125,15 @@ struct TrackRuntime {
     // path but changes the name, and that still needs a reconcile.
     if (runtime.config.pluginPaths != pluginPaths ||
         runtime.config.pluginNames != pluginNames ||
-        runtime.lastSidechainMask != sidechainMask ||
-        runtime.lastAuxOutMask != auxOutMask) {
+        runtime.lastSidechainMask.load(std::memory_order_relaxed) != sidechainMask ||
+        runtime.lastAuxOutMask.load(std::memory_order_relaxed) != auxOutMask) {
       const bool hostRunning = runtime.hostReady.load(std::memory_order_acquire);
       {
         std::lock_guard<std::mutex> lock(runtime.controllerMutex);
         runtime.config.pluginPaths = pluginPaths;
         runtime.config.pluginNames = pluginNames;
-        runtime.lastSidechainMask = sidechainMask;
-        runtime.lastAuxOutMask = auxOutMask;
+        runtime.lastSidechainMask.store(sidechainMask, std::memory_order_relaxed);
+        runtime.lastAuxOutMask.store(auxOutMask, std::memory_order_relaxed);
       }
       // The chain changed: re-derive children from the new bus layout once the host is
       // ready again (the consumer picks this up).
@@ -4199,7 +4228,7 @@ struct TrackRuntime {
     uint32_t mask = 0;
     {
       std::lock_guard<std::mutex> lock(parent.controllerMutex);
-      mask = parent.lastAuxOutMask;
+      mask = parent.lastAuxOutMask.load(std::memory_order_relaxed);
     }
     // A SAMPLER'S STEMS ARE A SECOND SOURCE OF BUSES, and the first one this function ever had
     // that is not a plugin.
@@ -7369,8 +7398,8 @@ struct TrackRuntime {
           runtime->controller.disconnect();
           runtime->config.pluginPaths.clear();
           runtime->config.pluginNames.clear();
-          runtime->lastAuxOutMask = 0;
-          runtime->lastSidechainMask = 0;
+          runtime->lastAuxOutMask.store(0, std::memory_order_relaxed);
+          runtime->lastSidechainMask.store(0, std::memory_order_relaxed);
         }
         std::shared_ptr<const ClipSnapshot> snapshot;
         {
@@ -7825,7 +7854,8 @@ struct TrackRuntime {
                             uint32_t clipId,
                             daw::EventId noteId,
                             const daw::RowOpEdit& edit,
-                            bool recordUndo) -> bool {
+                            bool recordUndo,
+                            daw::UiClipRejectReason& rejectReason) -> bool {
     TrackRuntime* runtime = nullptr;
     {
       std::lock_guard<std::mutex> lock(tracksMutex);
@@ -7838,12 +7868,17 @@ struct TrackRuntime {
           .field("track", trackId)
           .field("note", static_cast<uint64_t>(noteId))
           .field("reason", "no_such_track");
+      rejectReason = daw::UiClipRejectReason::UnknownTrack;
       return false;
     }
 
     std::optional<daw::ClipEditResult> result;
     std::shared_ptr<const ClipSnapshot> snapshot;
     uint64_t placementAt = 0;
+    // Whether the note was found as a PLACEMENT OVERRIDE rather than in a clip. Declared out here
+    // because the commit tail below has to know: an override edit produces no ClipEditResult, so
+    // "no result" alone cannot distinguish success from refusal.
+    bool editedOverride = false;
     {
       std::lock_guard<std::mutex> lock(runtime->trackMutex);
       TrackStoreState before = snapshotTrackStore(*runtime);
@@ -7858,15 +7893,58 @@ struct TrackRuntime {
         }
       }
       if (ownedIndex >= runtime->ownedClips.size()) {
-        DAW_EVENT("rowops.rejected")
-            .field("track", trackId)
-            .field("clip", clipId)
-            .field("note", static_cast<uint64_t>(noteId))
-            .field("reason", "no_such_note");
-        return false;
+        // NOT IN A CLIP — TRY THE PLACEMENT OVERRIDES.
+        //
+        // A note does not only live in a clip. A placement can carry LOCAL edits
+        // (ProjectPlacement::adds, serialised as "notes"), and flattenPlacements publishes them
+        // to the UI exactly like clip notes — same rail, same ids, indistinguishable on the wire.
+        // Searching only ownedClips meant an editor could SEE a note it could not edit, and be
+        // told "no_such_note" about a note plainly on screen. Reported by the web-UI agent as
+        // "SetRowOps only reaches notes created this session"; the real boundary was not session
+        // or ownership but WHICH CONTAINER the note ended up in.
+        for (auto& pl : runtime->sourcePlacements) {
+          if (clipId != 0 && pl.clipId != clipId) {
+            continue;
+          }
+          for (auto& ev : pl.adds) {
+            if (ev.type != daw::MusicalEventType::Note ||
+                ev.payload.note.noteId != noteId) {
+              continue;
+            }
+            if (!daw::applyRowOpEdit(ev.payload.note, edit)) {
+              DAW_EVENT("rowops.rejected")
+                  .field("track", trackId)
+                  .field("note", static_cast<uint64_t>(noteId))
+                  .field("reason", "out_of_range");
+              rejectReason = daw::UiClipRejectReason::ValueOutOfRange;
+              return false;
+            }
+            placementAt = pl.at ? *pl.at : 0;
+            runtime->arrangementDirty.store(true, std::memory_order_relaxed);
+            snapshot = rebuildFlatAndPublish(*runtime);
+            if (recordUndo) {
+              pushStructuralUndo(trackId, std::move(before), snapshotTrackStore(*runtime));
+            }
+            editedOverride = true;
+            break;
+          }
+          if (editedOverride) {
+            break;
+          }
+        }
+        if (!editedOverride) {
+          DAW_EVENT("rowops.rejected")
+              .field("track", trackId)
+              .field("clip", clipId)
+              .field("note", static_cast<uint64_t>(noteId))
+              .field("reason", "no_such_note");
+          rejectReason = daw::UiClipRejectReason::UnknownNote;
+          return false;
+        }
       }
       // Where this clip sits, so the diff's tick is on the timeline rather than clip-relative —
       // the same shiftDiffTick a note edit does.
+      if (!editedOverride) {
       for (const auto& pl : runtime->sourcePlacements) {
         if (pl.clipId == runtime->ownedClips[ownedIndex].id && pl.at) {
           placementAt = *pl.at;
@@ -7875,6 +7953,7 @@ struct TrackRuntime {
       }
       result = daw::setNoteRowOps(runtime->ownedClips[ownedIndex].clip, trackId, noteId,
                                   edit, runtime->trackClipVersion, recordUndo);
+      }
       if (result) {
         forkOwnedClip(*runtime, ownedIndex);
         runtime->arrangementDirty.store(true, std::memory_order_relaxed);
@@ -7884,18 +7963,29 @@ struct TrackRuntime {
         }
       }
     }
-    if (!result) {
+    if (!result && !editedOverride) {
       DAW_EVENT("rowops.rejected")
           .field("track", trackId)
           .field("note", static_cast<uint64_t>(noteId))
           .field("reason", "out_of_range");
+      rejectReason = daw::UiClipRejectReason::ValueOutOfRange;
       return false;
     }
-    shiftDiffTick(result->diff, placementAt);
+    if (result) {
+      shiftDiffTick(result->diff, placementAt);
+    }
     std::atomic_store_explicit(&runtime->clipSnapshot, snapshot, std::memory_order_release);
     clipVersion.fetch_add(1, std::memory_order_acq_rel);  // see applyAddNote for the order
     clipDirty.store(true, std::memory_order_release);
-    emitUiDiff(result->diff);
+    if (result) {
+      emitUiDiff(result->diff);
+    } else {
+      // An override edit produces no ClipEditResult (the store helpers take a MusicalClip), so
+      // the version bump that a clip edit gets from setNoteRowOps is done here instead. Without
+      // it the flat clip is republished with a version the UI has already seen and the edit
+      // never reaches the screen.
+      bumpClipVersionFor(runtime);
+    }
     DAW_EVENT("rowops.set")
         .field("track", trackId)
         .field("note", static_cast<uint64_t>(noteId))
@@ -8633,6 +8723,33 @@ struct TrackRuntime {
     return false;
   };
 
+  // FIND OR MINT the envelope modulating `target` in this mod set.
+  //
+  // The APPLY MODE follows from the target and is never the caller's to choose: Volume
+  // MULTIPLIES (an amp envelope that added would never reach silence, however deep it went) and
+  // everything else ADDS to a base value. Putting that on the wire would let a caller build a
+  // modulator that cannot do anything musical, and then wonder why.
+  //
+  // Minting rather than refusing is the same argument as the amp envelope's: every mod set
+  // starts with no modulators at all, so "edit the cutoff envelope" would otherwise depend on a
+  // command that creates one, which does not exist.
+  auto findOrMintEnvelope = [](daw::SamplerModSet& ms,
+                               daw::ModTarget target) -> daw::SamplerModulator* {
+    for (auto& m : ms.modulators) {
+      if (m.kind == daw::ModKind::Envelope && m.target == target) {
+        return &m;
+      }
+    }
+    daw::SamplerModulator fresh;
+    fresh.id = ms.nextModulatorId++;
+    fresh.kind = daw::ModKind::Envelope;
+    fresh.target = target;
+    fresh.apply = target == daw::ModTarget::Volume ? 1 : 0;
+    fresh.depthMilli = 1000;
+    ms.modulators.push_back(fresh);
+    return &ms.modulators.back();
+  };
+
   // ---- THE INWARD BULK CARRIER (opcode 83).
   //
   // Reassembly state for messages too long for one 40-byte ring payload. Lives here, in the UI
@@ -8733,23 +8850,8 @@ struct TrackRuntime {
             }
             daw::SamplerModulator* mod = nullptr;
             if ((h.flags & daw::kSamplerEnvAmp) != 0) {
-              for (auto& m : ms.modulators) {
-                if (m.kind == daw::ModKind::Envelope &&
-                    m.target == daw::ModTarget::Volume) {
-                  mod = &m;
-                  break;
-                }
-              }
-              if (mod == nullptr) {
-                daw::SamplerModulator fresh;
-                fresh.id = ms.nextModulatorId++;
-                fresh.kind = daw::ModKind::Envelope;
-                fresh.target = daw::ModTarget::Volume;
-                fresh.apply = 1;
-                fresh.depthMilli = 1000;
-                ms.modulators.push_back(fresh);
-                mod = &ms.modulators.back();
-              }
+              mod = findOrMintEnvelope(
+                  ms, static_cast<daw::ModTarget>(std::min<uint8_t>(h.target, 4)));
             } else {
               for (auto& m : ms.modulators) {
                 if (m.id == h.modulatorId) {
@@ -10561,8 +10663,24 @@ struct TrackRuntime {
       edit.sound = p.sound;
       edit.soundOffset = p.soundOffset;
       edit.delayNanoticks = p.delayNanoticks;
-      applySetRowOps(p.trackId, p.clipId, static_cast<daw::EventId>(p.noteId), edit,
-                     /*recordUndo=*/true);
+      // REASSEMBLED IN ONE PLACE. The id is 64 bits carried as two 32-bit halves — see the
+      // payload's comment for why it is split rather than moved — and this is the only site
+      // that puts them back together, so there is no second reading of the same value to
+      // disagree with this one.
+      const daw::EventId noteId =
+          (static_cast<uint64_t>(p.noteIdHi) << 32) | static_cast<uint64_t>(p.noteIdLo);
+      // A REFUSAL THE UI CAN SEE. rowops.rejected was a log line and nothing else, so from the
+      // page the sequence was: the sidecar replies ok, the engine refuses into its own log, the
+      // cell does not change, and the person is told nothing. That is the same silence the
+      // stale-base clip edit had before ClipRejected existed — so this rides the same diff,
+      // which already carries the refused commandType.
+      daw::UiClipRejectReason rejectReason = daw::UiClipRejectReason::None;
+      if (!applySetRowOps(p.trackId, p.clipId, noteId, edit, /*recordUndo=*/true,
+                          rejectReason) &&
+          rejectReason != daw::UiClipRejectReason::None) {
+        emitClipReject(rejectReason, p.trackId, /*sentBase=*/0, /*currentBase=*/0,
+                       daw::UiCommandType::SetRowOps);
+      }
       return;
     }
 
@@ -10982,6 +11100,106 @@ struct TrackRuntime {
       return;
     }
 
+    // ---- SAMPLER SET LFO (85). The modulator kind that saved, loaded and made no sound.
+    if (entry.size == sizeof(daw::UiSamplerLfoPayload) &&
+        commandType == daw::UiCommandType::SamplerSetLfo) {
+      daw::UiSamplerLfoPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.lfo_rejected")
+            .field("track", p.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      uint16_t targetId = 0;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          for (auto& ms : d.sampler.modSets) {
+            if (p.modSetId != 0 && ms.id != p.modSetId) {
+              continue;
+            }
+            daw::SamplerModulator* mod = nullptr;
+            const auto target =
+                static_cast<daw::ModTarget>(std::min<uint8_t>(p.target, 4));
+            if ((p.flags & daw::kSamplerEnvAmp) != 0) {
+              for (auto& m : ms.modulators) {
+                if (m.kind == daw::ModKind::Lfo && m.target == target) {
+                  mod = &m;
+                  break;
+                }
+              }
+              if (mod == nullptr) {
+                daw::SamplerModulator fresh;
+                fresh.id = ms.nextModulatorId++;
+                fresh.kind = daw::ModKind::Lfo;
+                fresh.target = target;
+                fresh.apply = target == daw::ModTarget::Volume ? 1 : 0;
+                ms.modulators.push_back(fresh);
+                mod = &ms.modulators.back();
+              }
+            } else {
+              for (auto& m : ms.modulators) {
+                if (m.id == p.modulatorId) {
+                  mod = &m;
+                  break;
+                }
+              }
+            }
+            if (mod == nullptr) {
+              break;
+            }
+            mod->kind = daw::ModKind::Lfo;
+            mod->target = target;
+            // NEGATIVE OR ABSURD RATES ARE REFUSED BY CLAMP, not by rejection: a frequency is a
+            // continuous control someone will sweep, and refusing mid-sweep is worse than
+            // stopping at the end of the range. 0.01..200 Hz spans a bar-long swell to an
+            // audible-rate buzz, which is the whole musical range of the thing.
+            mod->lfo.frequency_hz = std::clamp(p.frequencyHz, 0.01f, 200.0f);
+            mod->lfo.depth = std::clamp(p.depth, -4.0f, 4.0f);
+            mod->lfo.bias = std::clamp(p.bias, -4.0f, 4.0f);
+            mod->lfo.phase_offset = p.phaseOffset;
+            mod->depthMilli = std::clamp<int16_t>(p.depthMilli, -1000, 1000);
+            targetId = mod->id;
+            applied = true;
+            break;
+          }
+          if (applied) {
+            break;
+          }
+        }
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        DAW_EVENT("sampler.lfo_rejected")
+            .field("track", p.trackId)
+            .field("mod_set", p.modSetId)
+            .field("reason", "no_such_mod_set_or_modulator");
+        return;
+      }
+      DAW_EVENT("sampler.lfo_set")
+          .field("track", p.trackId)
+          .field("modulator", static_cast<uint32_t>(targetId))
+          .field("target", static_cast<uint32_t>(p.target))
+          .field("hz_milli", static_cast<uint64_t>(p.frequencyHz * 1000.0f))
+          .field("depth_milli", static_cast<int64_t>(p.depthMilli));
+      return;
+    }
+
     // ---- SAMPLER SET ENVELOPE (82). The ADSR, which nothing could reach before.
     if (entry.size == sizeof(daw::UiSamplerEnvelopePayload) &&
         commandType == daw::UiCommandType::SamplerSetEnvelope) {
@@ -11017,26 +11235,8 @@ struct TrackRuntime {
             }
             daw::SamplerModulator* mod = nullptr;
             if ((p.flags & daw::kSamplerEnvAmp) != 0) {
-              // The amp envelope, whatever its id — and MINTED if the mod set has none, which is
-              // the state every project starts in. Refusing here would mean a caller had to
-              // create a modulator through some other command that does not exist.
-              for (auto& m : ms.modulators) {
-                if (m.kind == daw::ModKind::Envelope &&
-                    m.target == daw::ModTarget::Volume) {
-                  mod = &m;
-                  break;
-                }
-              }
-              if (mod == nullptr) {
-                daw::SamplerModulator fresh;
-                fresh.id = ms.nextModulatorId++;
-                fresh.kind = daw::ModKind::Envelope;
-                fresh.target = daw::ModTarget::Volume;
-                fresh.apply = 1;  // multiply — the right combination for Volume
-                fresh.depthMilli = 1000;
-                ms.modulators.push_back(fresh);
-                mod = &ms.modulators.back();
-              }
+              mod = findOrMintEnvelope(
+                  ms, static_cast<daw::ModTarget>(std::min<uint8_t>(p.target, 4)));
             } else {
               for (auto& m : ms.modulators) {
                 if (m.id == p.modulatorId) {
@@ -11058,6 +11258,10 @@ struct TrackRuntime {
             // runner's unit conversion, so it is not merely out of range but unusable.
             mod->rateMilli = static_cast<uint16_t>(
                 std::clamp<int32_t>(p.rateMilli == 0 ? 1000 : p.rateMilli, 250, 4000));
+            // DEPTH IS WHAT THE TARGET NEEDS. On Volume the shape is the whole story and full
+            // depth is right; on Cutoff a depth of 1000 is +-6 octaves and a shallower sweep is
+            // usually what is wanted, so the caller says. Signed: a negative depth inverts.
+            mod->depthMilli = std::clamp<int16_t>(p.depthMilli, -1000, 1000);
             // The ADSR editor, explicitly. Never inferred from the shape — see the field's
             // comment: sniffing "four points with a sustain loop?" would flip the editor out
             // from under someone who hand-drew a four-point curve.
@@ -12110,8 +12314,8 @@ struct TrackRuntime {
             rt->controller.disconnect();
             rt->config.pluginPaths.clear();
             rt->config.pluginNames.clear();
-            rt->lastAuxOutMask = 0;
-            rt->lastSidechainMask = 0;
+            rt->lastAuxOutMask.store(0, std::memory_order_relaxed);
+            rt->lastSidechainMask.store(0, std::memory_order_relaxed);
           }
           std::shared_ptr<const ClipSnapshot> snapshot;
           {
@@ -13528,8 +13732,8 @@ struct TrackRuntime {
       // Stamp where this block sits on the timeline so the callback can place audio
       // regions at the same instant as this block's MIDI. Absolute, so it is correct
       // across tempo changes.
-      if (audioCallback) {
-        audioCallback->setBlockStartSample(
+      if (auto* cb = publishedCallback()) {
+        cb->setBlockStartSample(
             blockId, static_cast<uint64_t>(
                          tickConverter.nanoticksToSamplesAbsolute(blockStartTicks)));
       }
@@ -15431,6 +15635,9 @@ struct TrackRuntime {
         auto trackStatePtr = std::atomic_load_explicit(&runtime->trackSnapshot,
                                                        std::memory_order_acquire);
         const auto& trackState = trackStatePtr ? *trackStatePtr : kEmptyTrackState;
+        // Did another track route audio into this one this block? Read where the inbound
+        // buffer is swapped in, used where the sampler decides whether to overwrite it.
+        bool routedAudioArrived = false;
         // TRY-LOCK IN REALTIME, BLOCKING WAIT OFFLINE.
         //
         // Skipping a track's whole block when this mutex is contended is the right realtime
@@ -15589,6 +15796,7 @@ struct TrackRuntime {
               static_cast<size_t>(engineConfig.blockSize) *
               static_cast<size_t>(engineConfig.numChannelsOut);
           std::lock_guard<std::mutex> lock(dst.inboundMutex);
+          dst.inboundAudioArrived.store(true, std::memory_order_relaxed);
           if (dst.inboundAudioBuffer.size() != expectedSamples) {
             dst.inboundAudioBuffer.assign(expectedSamples, 0.0f);
           }
@@ -15642,6 +15850,8 @@ struct TrackRuntime {
                   static_cast<size_t>(ch) * engineConfig.blockSize;
             }
           }
+          routedAudioArrived = runtime->inboundAudioArrived.exchange(
+              false, std::memory_order_relaxed);
           if (runtime->inboundAudioBuffer.size() == expectedSamples) {
             std::copy(runtime->inboundAudioBuffer.begin(),
                       runtime->inboundAudioBuffer.end(),
@@ -16061,6 +16271,20 @@ struct TrackRuntime {
               // way, adding a patcher audio node would silently mute the sampler.
               if (runtime->samplerAudioValid && ch < runtime->samplerAudioChannels.size() &&
                   runtime->samplerAudioChannels[ch]) {
+                // THE SAMPLER REPLACES THE INPUT, so a track that is both an instrument and a
+                // bus destination silently loses everything routed into it. Whether that should
+                // MIX instead is a real decision about what a track is (Live and Renoise mix),
+                // and it is not one to make silently — so until it is made, say so out loud
+                // rather than letting the audio disappear with nothing to look at. Task #92.
+                if (routedAudioArrived &&
+                    !runtime->warnedSamplerAteInput.exchange(true,
+                                                             std::memory_order_relaxed)) {
+                  DAW_EVENT("sampler.discarded_routed_input")
+                      .field("track", runtime->trackId)
+                      .field("note",
+                             "a sampler feeds the head of the chain and REPLACES the track's "
+                             "input, so audio routed into this track is not heard");
+                }
                 std::memcpy(input, runtime->samplerAudioChannels[ch],
                             static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
               } else if (patcherAudioValid && ch < runtime->patcherAudioChannels.size() &&
@@ -16460,7 +16684,7 @@ struct TrackRuntime {
       }
 
       // Update audio callback with current track info
-      if (audioCallback) {
+      if (auto* cb = publishedCallback()) {
         std::vector<EngineAudioCallback::TrackInfo> trackInfos;
         for (auto* runtime : trackSnapshot) {
           const uint32_t trackId = runtime->trackId;
@@ -16565,14 +16789,14 @@ struct TrackRuntime {
               runtime->auxBusChannelCount.load(std::memory_order_relaxed);
           trackInfos.push_back(std::move(child));
         }
-        audioCallback->updateTracks(trackInfos);
+        cb->updateTracks(trackInfos);
 
         // Movement 4 multi-out: for a track whose plugin splits its outputs, read the aux
         // OUTPUT plane's per-channel peak from the latest completed block and log each
         // channel once as it first produces sound. This proves each stem reaches the
         // engine on its own channel — the foundation the child tracks route to master.
         for (auto* runtime : trackSnapshot) {
-          if (runtime->lastAuxOutMask == 0 ||
+          if (runtime->lastAuxOutMask.load(std::memory_order_relaxed) == 0 ||
               !runtime->hostReady.load(std::memory_order_acquire)) {
             continue;
           }
@@ -16663,9 +16887,9 @@ struct TrackRuntime {
           }
         }
         for (uint32_t s = 0; s < daw::kUiMaxTracks; ++s) {
-          audioCallback->setPdcCompensation(s, compForSlot[s]);
+          cb->setPdcCompensation(s, compForSlot[s]);
         }
-        audioCallback->setPdcMaxLatency(maxLatency);
+        cb->setPdcMaxLatency(maxLatency);
       }
       for (auto* runtime : trackSnapshot) {
         if (runtime->needsRestart.load(std::memory_order_acquire)) {
@@ -16764,9 +16988,13 @@ struct TrackRuntime {
               i < trackSnapshot.size() ? trackSnapshot[i]->trackId : i;
           // Per-track output peak the audio thread measured this block (0 for
           // absent/silent tracks). Slot i == track i, matching the mixer fields.
+          // Its own acquire load: this is the UI publish block, outside the scope of the `cb`
+          // above. Cheap enough at once per track per publish, and reading through the
+          // accessor is the point — no thread here touches the unique_ptr directly.
+          auto* peakCb = publishedCallback();
           uiShm.header->uiTrackPeakRms[i] =
-              (audioCallback && i < trackSnapshot.size())
-                  ? audioCallback->trackPeak(i)
+              (peakCb && i < trackSnapshot.size())
+                  ? peakCb->trackPeak(i)
                   : 0.0f;
         }
         uiShm.header->uiTransportState =
@@ -17089,6 +17317,11 @@ struct TrackRuntime {
         // output plane, hand it back for the callback to emit next block. This is the ONLY
         // thing that blocks on the master host; the RT callback never does. Idle (a short
         // sleep) whenever there is no master effect or the host isn't ready.
+        // PUBLISH. Everything above has finished touching the callback, so a thread that sees
+        // this pointer sees a callback that is ready to be used. Release pairs with the acquire
+        // in publishedCallback().
+        audioCallbackPublished.store(audioCallback.get(), std::memory_order_release);
+
         if (!masterRenderThread.joinable()) {
           masterRenderThread = std::thread([&] {
             const uint32_t chn = masterTrack->config.numChannelsOut;

@@ -327,8 +327,43 @@ enum class UiCommandType : uint16_t {
 
   /// A hand-drawn multi-point envelope: the pencil, where SamplerSetEnvelope (82) is the sliders.
   /// Arrives over BulkChunk because N points do not fit in 40 bytes.
-  SamplerSetEnvelopePoints = 84,  // next free 85
+  SamplerSetEnvelopePoints = 84,
+
+  /// Sets a sampler modulator's LFO. ModKind::Lfo has been in SamplerModulator and in the saved
+  /// project since the sampler shipped, and nothing in the engine or the voice ever looked at
+  /// it — a modulator kind that saved, loaded, round-tripped perfectly and made no sound.
+  ///
+  /// The LFO is NOTE-RETRIGGERED: its phase is a pure function of the voice's age, exactly like
+  /// the envelope runner. Two notes at the same tick therefore sound identical whatever the
+  /// transport did beforehand, and the value at a frame does not depend on where the block
+  /// boundaries fell. A timeline-locked LFO is right for a patcher control signal and wrong
+  /// inside a voice; `phaseOffset` is how you move it deliberately.
+  SamplerSetLfo = 85,  // next free 86
 };
+
+// SAMPLER SET LFO (opcode 85). 40 bytes.
+//
+// Two depths, and they mean different things: `depth` is the LFO's OWN amplitude (the shape it
+// makes) and `depthMilli` is how much of that reaches the target (how far it moves it). Keeping
+// them apart is what lets a preset carry "a gentle 6 Hz wobble" and a slot decide how much of it
+// to use, which is the same separation the envelopes already have.
+struct UiSamplerLfoPayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetLfo);
+  uint16_t flags = 0;  // kSamplerEnvAmp: address by TARGET rather than by modulator id
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t modSetId = 0;
+  uint16_t modulatorId = 0;
+  uint8_t target = 0;  // kSamplerEnvTarget*
+  uint8_t reserved = 0;
+  float frequencyHz = 1.0f;
+  float depth = 1.0f;
+  float bias = 0.0f;
+  float phaseOffset = 0.0f;  // in turns
+  int16_t depthMilli = 1000;
+  uint16_t reserved2 = 0;
+};
+static_assert(sizeof(UiSamplerLfoPayload) == 40, "UiSamplerLfoPayload must be 40 bytes");
 
 // BULK CHUNK (opcode 83). 40 bytes like every other ring payload; 32 of them are cargo.
 //
@@ -365,7 +400,7 @@ struct UiSamplerEnvPointsHeader {
   uint32_t modSetId = 0;
   uint16_t modulatorId = 0;
   uint8_t timeBase = 0;
-  uint8_t reserved = 0;
+  uint8_t target = 0;  // kSamplerEnvTarget*; 0 = Volume
   uint16_t rateMilli = 1000;
   uint16_t pointCount = 0;
   uint8_t sustainLoopStart = 255;
@@ -390,10 +425,29 @@ static_assert(sizeof(UiEnvPointWire) == 8, "UiEnvPointWire must be 8 bytes");
 
 // SamplerSetEnvelope flags.
 enum : uint16_t {
-  // Target the AMP envelope — the one modulating Volume — whatever its id, creating it if the
-  // mod set has none. Almost every caller means this, and requiring an id first would make the
-  // common case a two-step round trip against state the caller has not read yet.
+  // Address the envelope BY TARGET rather than by modulator id — the one modulating `target`,
+  // whatever its id, created if the mod set has none. Almost every caller means this, and
+  // requiring an id first would make the common case a two-step round trip against state the
+  // caller has not read yet.
+  //
+  // Named kSamplerEnvAmp because it began as "the amp envelope" and `target` defaults to 0
+  // (Volume), so a sender written before `target` existed still means exactly what it meant.
+  // The engine renders envelopes on Cutoff, Pitch and Panning too (sampler_engine.h:372) and
+  // for a while nothing could create one — the same gap the ADSR itself had.
   kSamplerEnvAmp = 1u << 0,
+};
+
+// Which modulation domain an envelope drives. Mirrors ModTarget in sampler_state.h.
+//
+// The APPLY MODE follows from the target and is not the caller's to choose: Volume multiplies
+// (an amp envelope that ADDED would never reach silence), everything else adds. Making it a
+// wire field would let a caller build a modulator that cannot do anything musical.
+enum : uint8_t {
+  kSamplerEnvTargetVolume = 0,
+  kSamplerEnvTargetPanning = 1,
+  kSamplerEnvTargetPitch = 2,
+  kSamplerEnvTargetCutoff = 3,
+  kSamplerEnvTargetResonance = 4,
 };
 
 // SAMPLER SET ENVELOPE (opcode 82). 40 bytes.
@@ -418,7 +472,9 @@ struct UiSamplerEnvelopePayload {
   uint32_t release = 0;
   int16_t sustainMilli = 1000;
   uint16_t rateMilli = 1000;
-  uint32_t reserved2 = 0;
+  uint8_t target = 0;   // kSamplerEnvTarget*; 0 = Volume, which is what this used to assume
+  uint8_t reserved2 = 0;      // alignment for depthMilli, not spare
+  int16_t depthMilli = 1000;  // signed; what full envelope travel is worth on the target
 };
 static_assert(sizeof(UiSamplerEnvelopePayload) == 40,
               "UiSamplerEnvelopePayload must be 40 bytes");
@@ -442,20 +498,45 @@ enum : uint16_t {
 // There is deliberately no PAN field, though the notation has one: pan is not on NotePayload,
 // which is pinned at 32 bytes by static_assert, so adding it is a real decision about growing
 // the per-note-per-block copy and not something to slip in beside four fields that already fit.
+// THE NOTE ID IS 64 BITS, IN TWO HALVES, and it was 32 for exactly one commit. EventId packs the
+// AUTHOR into bits 48+ (event_id.h: makeEventId(author, counter)), and each author has its own
+// independent 48-bit counter. A uint32 field drops the author silently — and the failure is not
+// "an agent-authored note cannot be addressed", which would be merely limiting. Agent note
+// (author 1, counter 5) truncates to 5, and findNoteById(5) then matches HUMAN note
+// (author 0, counter 5): an edit aimed at one note lands on another, with nothing said.
+//
+// Caught by the web-UI agent reading the payload against event_id.h. Every test passed because
+// every test used human-authored notes, where author == 0 and the id IS the counter.
+//
+// Split lo/hi rather than moved, following noteNanotickLo/Hi in UiDiffPayload: it keeps every
+// other field at the offset it already had, so a sender written against the 32-bit version still
+// addresses human notes correctly rather than silently scrambling its whole payload. The two
+// bytes before `noteIdHi` are alignment, not spare.
 struct UiSetRowOpsPayload {
   uint16_t commandType = static_cast<uint16_t>(UiCommandType::SetRowOps);
   uint16_t mask = 0;
   uint32_t trackId = 0;
   uint32_t clipId = 0;
-  uint32_t noteId = 0;
+  uint32_t noteIdLo = 0;
   uint32_t delayNanoticks = 0;
   uint16_t sound = 0;
   uint16_t soundOffset = 0;
   uint8_t retrigger = 0;
   uint8_t probability = 0;
-  uint8_t reserved[14]{};
+  uint8_t pad0[2]{};
+  uint32_t noteIdHi = 0;
+  uint8_t reserved[8]{};
 };
 static_assert(sizeof(UiSetRowOpsPayload) == 40, "UiSetRowOpsPayload must be 40 bytes");
+// THE WIRE ID MUST HOLD A WHOLE EventId. This is the guard the 32-bit version needed and did not
+// have: a size assertion on the STRUCT says nothing about whether a field is wide enough for the
+// quantity it carries, and the payload was a perfectly valid 40 bytes while silently addressing
+// the wrong note. Tying the halves to sizeof(EventId) means the next narrowing breaks the build
+// instead of the music.
+static_assert(sizeof(UiSetRowOpsPayload::noteIdLo) + sizeof(UiSetRowOpsPayload::noteIdHi) ==
+                  sizeof(EventId),
+              "SetRowOps must carry a whole EventId — the author lives in its top bits, and "
+              "dropping them makes an edit land on whichever note shares the counter");
 
 // SAMPLER LOAD (opcode 73). Exactly 40 bytes, which is the whole command payload — so `name`
 // gets 24 of them and is a project-relative FILE NAME rather than a path. See the opcode's
@@ -755,6 +836,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SamplerSetEnvelope: return "sampler_set_envelope";
     case UiCommandType::BulkChunk: return "bulk_chunk";
     case UiCommandType::SamplerSetEnvelopePoints: return "sampler_set_envelope_points";
+    case UiCommandType::SamplerSetLfo: return "sampler_set_lfo";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";
@@ -909,6 +991,14 @@ enum class UiClipRejectReason : uint16_t {
   None = 0,
   StaleBase = 1,      // baseVersion != the engine's current version for this scope
   UnknownTrack = 2,   // no such track
+  // SetRowOps addressed a note that is not in this track's store. Distinct from UnknownTrack
+  // because the caller's recovery differs: an unknown track means the address was wrong, an
+  // unknown note usually means the client is holding an id from before a reload.
+  UnknownNote = 3,
+  // A value was outside its range and the edit was refused rather than clamped — see
+  // setNoteRowOps. The caller sent nonsense and needs to know, because a clamped op gives the
+  // musician a row that says something the note does not do.
+  ValueOutOfRange = 4,
 };
 
 // SavePatcherPreset's result. Rides the same 40-byte diff slot; diffType FIRST for the same

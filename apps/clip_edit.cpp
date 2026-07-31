@@ -86,25 +86,14 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
   return result;
 }
 
-std::optional<ClipEditResult> setNoteRowOps(MusicalClip& clip,
-                                            uint32_t trackId,
-                                            EventId noteId,
-                                            const RowOpEdit& edit,
-                                            std::atomic<uint32_t>& clipVersion,
-                                            bool recordUndo) {
-  MusicalEvent* event = clip.findNoteById(noteId);
-  if (event == nullptr) {
-    return std::nullopt;
-  }
+bool applyRowOpEdit(NotePayload& note, const RowOpEdit& edit) {
   // REFUSED, NOT CLAMPED. probability is a percentage and 1..=100 is its whole range; retrigger
   // is a strike count. A value outside those does not have an obvious right answer, and quietly
   // substituting one gives the musician a row that says something the note does not do. Better
   // the command fails loudly and the caller finds out it sent nonsense.
   if ((edit.mask & kRowOpMaskProbability) != 0 && edit.probability > 100) {
-    return std::nullopt;
+    return false;
   }
-
-  NotePayload& note = event->payload.note;
   if ((edit.mask & kRowOpMaskRetrigger) != 0) {
     note.retrigger = edit.retrigger;
   }
@@ -119,6 +108,23 @@ std::optional<ClipEditResult> setNoteRowOps(MusicalClip& clip,
   }
   if ((edit.mask & kRowOpMaskDelay) != 0) {
     note.delayNanoticks = edit.delayNanoticks;
+  }
+  return true;
+}
+
+std::optional<ClipEditResult> setNoteRowOps(MusicalClip& clip,
+                                            uint32_t trackId,
+                                            EventId noteId,
+                                            const RowOpEdit& edit,
+                                            std::atomic<uint32_t>& clipVersion,
+                                            bool recordUndo) {
+  MusicalEvent* event = clip.findNoteById(noteId);
+  if (event == nullptr) {
+    return std::nullopt;
+  }
+  NotePayload& note = event->payload.note;
+  if (!applyRowOpEdit(note, edit)) {
+    return std::nullopt;
   }
 
   ClipEditResult result;

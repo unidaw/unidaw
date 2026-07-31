@@ -71,7 +71,19 @@ struct SamplerVoiceSpec {
   // voice ends some other way. This is the difference between a sustained pad and a drone.
   uint8_t sustainLoop = 0;
   const EnvShape* ampEnv = nullptr;  // borrowed from the snapshot; null = no envelope
+  // ENVELOPE CLOCKS, ONE PER ENVELOPE. Not one shared value: every modulator carries its own
+  // timeBase (microseconds or nanoticks) and its own rate multiplier, so a tempo-synced filter
+  // sweep under a millisecond-timed amp envelope is an ordinary thing to ask for.
+  //
+  // This WAS one field, set only inside the `if (amp)` branch — so a cutoff, pitch or pan
+  // envelope on a mod set with no amp envelope ran with a clock of ZERO, sat at its value at
+  // time 0 forever, and modulated nothing. The command that created it worked, the modulator
+  // persisted correctly, and the sound was identical to having no envelope at all.
   double envUnitsPerFrame = 0.0;
+  double cutoffUnitsPerFrame = 0.0;
+  double pitchUnitsPerFrame = 0.0;
+  double panUnitsPerFrame = 0.0;
+  double resonanceUnitsPerFrame = 0.0;
 
   // FILTER, and the modulators that move it. All envelopes are borrowed from the snapshot, so a
   // voice never owns one and never frees one.
@@ -84,6 +96,26 @@ struct SamplerVoiceSpec {
   float pitchDepthCents = 0.0f;
   const EnvShape* panEnv = nullptr;
   float panDepth = 0.0f;
+  const EnvShape* resonanceEnv = nullptr;
+  float resonanceDepth = 0.0f;  // in Q units at full envelope; the filter's range is 0.7..10
+
+  // ---- LFOs. ModKind::Lfo was in the model and in the file format from the start, and NOTHING
+  // rendered it: a modulator kind that saved, loaded, and made no sound. This is it.
+  //
+  // NOTE-RETRIGGERED, not free-running, and that is a decision. The phase is a pure function of
+  // the voice's age, exactly like EnvRunner — so two notes at the same tick sound identical
+  // whatever the transport did before them, and the value at frame f does not depend on where
+  // the block boundaries fell. A timeline-locked LFO is the right thing for a patcher control
+  // signal and the wrong thing inside a voice, where it would make a render depend on when
+  // playback started. `phaseOffset` is how you move it deliberately.
+  struct VoiceLfo {
+    float cyclesPerFrame = 0.0f;
+    float phase0 = 0.0f;  // in turns
+    float amp = 0.0f;     // the LFO's own depth, already scaled into TARGET units
+    float bias = 0.0f;    // likewise, so the voice does no unit conversion at all
+    bool active = false;
+  };
+  VoiceLfo volLfo, panLfo, pitchLfo, cutoffLfo, resLfo;
   double sampleRate = 48000.0;
 };
 
@@ -261,13 +293,16 @@ class SamplerVoice {
     // one runner read at three depths, because they are separate SHAPES — a filter that opens
     // while the amp decays is the ordinary case, not the exotic one.
     if (spec_.cutoffEnv && !spec_.cutoffEnv->empty()) {
-      cutoffEnv_.start(spec_.cutoffEnv, spec_.envUnitsPerFrame);
+      cutoffEnv_.start(spec_.cutoffEnv, spec_.cutoffUnitsPerFrame);
     }
     if (spec_.pitchEnv && !spec_.pitchEnv->empty()) {
-      pitchEnv_.start(spec_.pitchEnv, spec_.envUnitsPerFrame);
+      pitchEnv_.start(spec_.pitchEnv, spec_.pitchUnitsPerFrame);
     }
     if (spec_.panEnv && !spec_.panEnv->empty()) {
-      panEnv_.start(spec_.panEnv, spec_.envUnitsPerFrame);
+      panEnv_.start(spec_.panEnv, spec_.panUnitsPerFrame);
+    }
+    if (spec_.resonanceEnv && !spec_.resonanceEnv->empty()) {
+      resonanceEnv_.start(spec_.resonanceEnv, spec_.resonanceUnitsPerFrame);
     }
     filtL_.reset();
     filtR_.reset();
@@ -298,6 +333,7 @@ class SamplerVoice {
       cutoffEnv_.releaseAt(age_);
       pitchEnv_.releaseAt(age_);
       panEnv_.releaseAt(age_);
+      resonanceEnv_.releaseAt(age_);
     } else {
       // No envelope means no release stage to run, so a gated note ends at note-off. A one-shot
       // slot never calls this at all — that decision belongs to the caller, not here.
@@ -354,15 +390,28 @@ class SamplerVoice {
     // shape, everywhere in the program.
     const float p = std::clamp(panSmoothed_, -1.0f, 1.0f);
     const bool stereoSource = spec_.source.channels >= 2;
+    auto panGains = [stereoSource](float pan, float& l, float& r) {
+      if (stereoSource) {
+        l = std::min(1.0f, 1.0f - pan);  // BALANCE: attenuate a side, never reposition
+        r = std::min(1.0f, 1.0f + pan);
+      } else {
+        const float angle = (pan + 1.0f) * 0.25f * static_cast<float>(M_PI);
+        l = std::cos(angle);  // CONSTANT POWER: place a point source
+        r = std::sin(angle);
+      }
+    };
     float gl, gr;
-    if (stereoSource) {
-      gl = std::min(1.0f, 1.0f - p);  // BALANCE: attenuate a side, never reposition
-      gr = std::min(1.0f, 1.0f + p);
-    } else {
-      const float angle = (p + 1.0f) * 0.25f * static_cast<float>(M_PI);
-      gl = std::cos(angle);  // CONSTANT POWER: place a point source
-      gr = std::sin(angle);
-    }
+    panGains(p, gl, gr);
+    // A PAN ENVELOPE MOVES THE SOUND, so when one is running the gains are recomputed PER
+    // SAMPLE. They used to be computed once per block and the envelope was started, released
+    // and never evaluated at all — spec.panDepth was set and never read, so a Panning envelope
+    // was a modulator the document promised and the sound never had.
+    //
+    // Per block would also make the output depend on where the block boundaries fall, which is
+    // the determinism failure the pitch envelope's comment already argues against.
+    const bool panMoving =
+        (spec_.panEnv && !spec_.panEnv->empty() && spec_.panDepth != 0.0f) ||
+        spec_.panLfo.active;
 
     const uint64_t stopFrame = spec_.reverse ? startFrame_ : endFrame_;
     for (uint32_t i = 0; i < numFrames; ++i) {
@@ -389,7 +438,12 @@ class SamplerVoice {
           active_ = false;
         }
       }
-      const float g = amp * gainSmoothed_;
+      float g = amp * gainSmoothed_;
+      if (spec_.volLfo.active) {
+        // TREMOLO. Multiplies, like every other Volume modulator: 1 + v, so a depth of 1 swings
+        // between silence and double and a depth of 0.3 is the gentle thing people actually use.
+        g *= std::clamp(1.0f + lfoAt(spec_.volLfo, age_), 0.0f, 2.0f);
+      }
 
       // ---- PITCH MODULATION, per sample, and the MIP LEVEL FOLLOWS IT.
       //
@@ -398,8 +452,12 @@ class SamplerVoice {
       // per SAMPLE, not per block: choosing it per block would make the output depend on where
       // the block boundaries fall, which is the determinism failure this whole design is built
       // to avoid. It costs comparisons rather than a log2 — the thresholds are powers of two.
-      if (spec_.pitchEnv && !spec_.pitchEnv->empty() && spec_.pitchDepthCents != 0.0f) {
-        const float cents = pitchEnv_.valueAt(age_) * spec_.pitchDepthCents;
+      if ((spec_.pitchEnv && !spec_.pitchEnv->empty() && spec_.pitchDepthCents != 0.0f) ||
+          spec_.pitchLfo.active) {
+        float cents = spec_.pitchLfo.active ? lfoAt(spec_.pitchLfo, age_) : 0.0f;
+        if (spec_.pitchEnv && !spec_.pitchEnv->empty() && spec_.pitchDepthCents != 0.0f) {
+          cents += pitchEnv_.valueAt(age_) * spec_.pitchDepthCents;
+        }
         const double mul = std::pow(2.0, static_cast<double>(cents) / 1200.0);
         step_ = static_cast<uint64_t>(static_cast<double>(baseStep_) * mul);
         if (spec_.quality != 0 && spec_.source.mipCount > 0) {
@@ -411,6 +469,15 @@ class SamplerVoice {
           mipLevel_ = lvl;
           mipBlend_ = mipBlend(ratio, lvl);
         }
+      }
+
+      float glNow = gl, grNow = gr;
+      if (panMoving) {
+        float pan = p + lfoAt(spec_.panLfo, age_);
+        if (spec_.panEnv && !spec_.panEnv->empty()) {
+          pan += panEnv_.valueAt(age_) * spec_.panDepth;
+        }
+        panGains(std::clamp(pan, -1.0f, 1.0f), glNow, grNow);
       }
 
       const uint32_t dst = offsetInBlock + i;
@@ -449,20 +516,34 @@ class SamplerVoice {
         // filtering a drum kit that asked for none is a sound nobody chose.
         if (spec_.filterType != 0) {
           float fc = spec_.cutoffHz;
+          if (spec_.cutoffLfo.active) {
+            fc *= std::pow(2.0f, lfoAt(spec_.cutoffLfo, age_));  // the wobble
+          }
           if (spec_.cutoffEnv && !spec_.cutoffEnv->empty() && spec_.cutoffDepth != 0.0f) {
             // Depth is in OCTAVES, not hertz. A filter envelope that moved a fixed number of
             // hertz would be a different musical gesture at every cutoff setting — barely
             // audible when open, a slam when closed.
             fc *= std::pow(2.0f, cutoffEnv_.valueAt(age_) * spec_.cutoffDepth);
           }
+          // RESONANCE MODULATION. ModTarget::Resonance was in the enum and fell through the
+          // engine's switch, so it was a target you could name and nothing would happen.
+          float q = spec_.resonance;
+          if (spec_.resonanceEnv && !spec_.resonanceEnv->empty() &&
+              spec_.resonanceDepth != 0.0f) {
+            q += resonanceEnv_.valueAt(age_) * spec_.resonanceDepth;
+          }
+          if (spec_.resLfo.active) {
+            q += lfoAt(spec_.resLfo, age_);
+          }
+          q = std::clamp(q, 0.7f, 10.0f);
           SvfFilter& f1 = (ch == 0) ? filtL_ : filtR_;
-          s = f1.process(s, fc, spec_.resonance, spec_.filterType, spec_.sampleRate);
+          s = f1.process(s, fc, q, spec_.filterType, spec_.sampleRate);
           if (spec_.filterType == 2) {  // LP24 is two LP12s, so "steeper" means what it says
             SvfFilter& f2 = (ch == 0) ? filtL2_ : filtR2_;
-            s = f2.process(s, fc, spec_.resonance, 1, spec_.sampleRate);
+            s = f2.process(s, fc, q, 1, spec_.sampleRate);
           }
         }
-        out[ch][dst] += s * g * (ch == 0 ? gl : gr);
+        out[ch][dst] += s * g * (ch == 0 ? glNow : grNow);
       }
 
       // ---- ADVANCE, AND THE THREE LOOP MODES ARE HERE AND NOWHERE ELSE.
@@ -652,7 +733,16 @@ class SamplerVoice {
 
   SamplerVoiceSpec spec_{};
   EnvRunner env_{};
-  EnvRunner cutoffEnv_{}, pitchEnv_{}, panEnv_{};
+  EnvRunner cutoffEnv_{}, pitchEnv_{}, panEnv_{}, resonanceEnv_{};
+
+  // sin over TURNS, so the phase arithmetic stays in the same units the config uses.
+  static float lfoAt(const SamplerVoiceSpec::VoiceLfo& l, uint64_t frame) {
+    if (!l.active) {
+      return 0.0f;
+    }
+    const float turns = l.phase0 + l.cyclesPerFrame * static_cast<float>(frame);
+    return std::sin(turns * 2.0f * static_cast<float>(M_PI)) * l.amp + l.bias;
+  }
   SvfFilter filtL_{}, filtR_{}, filtL2_{}, filtR2_{};
   uint64_t pos_ = 0;  // 32.32 fixed point, in level-0 source frames
   uint64_t step_ = 0;

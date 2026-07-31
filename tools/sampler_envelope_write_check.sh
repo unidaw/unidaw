@@ -11,11 +11,18 @@
 # the envelope never reaching a voice, which is the failure that matters. So this renders the
 # same note three ways and listens to the shape.
 #
-# FOUR PROPERTIES:
+# SEVEN PROPERTIES:
 #   ATTACK    a long attack makes the note START QUIET and arrive later. Measured as the ratio of
 #             early energy to late energy, which is the shape rather than the level
 #   SUSTAIN   a low sustain holds the note QUIETER after the decay than a full one does
 #   RELEASE   a long release makes the sound OUTLAST its note-off
+#   LFOs      ModKind::Lfo renders at all. A pitch LFO is vibrato, measured as the note's
+#             PERIOD wandering — which amplitude, filter and pan modulation cannot fake
+#   PANNING   a pan envelope MOVES the sound across the stereo field, which neither a
+#             volume nor a filter envelope can imitate
+#   TARGETS   an envelope can drive CUTOFF, not only volume. Asserted on BRIGHTNESS (the
+#             high-band share of the energy) rather than level, because a level change is
+#             what a volume envelope on the wrong target would look like
 #   MINTS     it works on a mod set with NO modulators at all — the state every project starts
 #             in. If it required an existing envelope, the common case would need a command that
 #             does not exist
@@ -41,16 +48,25 @@ cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
 
-# A steady two-second tone. Steady on purpose: any change in the rendered ENVELOPE is then the
+# A steady two-second SAW. Steady on purpose: any change in the rendered ENVELOPE is then the
 # envelope's doing and not the sample's, so the measurement needs no reference to what the source
 # was doing at that instant.
+#
+# A SAW AND NOT A SINE, and this cost a failing run to notice. The TARGETS property below measures
+# a filter opening, and a sine has ONE partial — a low-pass sweep over it changes its amplitude
+# and nothing else, so "brightness" is not a thing a sine can express. The check duly reported
+# that the cutoff envelope did nothing. It was right about the measurement and wrong about the
+# cause: there was no timbre to move.
 python3 - "$TMP" <<'PY'
 import sys, wave, struct, math, os
 sr = 48000
 w = wave.open(os.path.join(sys.argv[1], "tone.wav"), 'wb')
 w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
-w.writeframes(b''.join(struct.pack('<h', int(16000 * math.sin(2 * math.pi * 220.0 * i / sr)))
-                       for i in range(sr * 2)))
+frames = []
+for i in range(sr * 2):
+    phase = (220.0 * i / sr) % 1.0
+    frames.append(struct.pack('<h', int(11000 * (2.0 * phase - 1.0))))
+w.writeframes(b''.join(frames))
 w.close()
 PY
 
@@ -82,7 +98,11 @@ sampler = {"next_slot_id": 2, "next_source_id": 2, "next_mod_set_id": 2, "stem_c
            "sources": [{"local_id": 1, "path": os.path.join(dirname, "tone.wav"),
                         "content_key": 0}],
            "slice_sets": [],
-           "mod_sets": [{"id": 1, "name": "d", "filter_type": 0, "cutoff_milli": 1000,
+           # FILTER ON, AND NEARLY CLOSED. filter_type 0 means OFF (sampler_voice.h:78), so the
+           # first version of this fixture asked a switched-off filter to sweep. cutoff_milli is
+           # logarithmic over the audible range: 400 is about 317 Hz, just above the saw's 220 Hz
+           # fundamental, so the harmonics are gone until an envelope opens it.
+           "mod_sets": [{"id": 1, "name": "d", "filter_type": 1, "cutoff_milli": 400,
                          "resonance_milli": 0, "next_modulator_id": 1, "modulators": []}],
            "slots": [slot]}
 dev = {"device_id": 1, "kind": "sampler", "capability_mask": 5, "patcher_node_id": 0,
@@ -190,6 +210,156 @@ python3 -c "
 raise SystemExit(0 if $R_TAIL > max(50.0, $F_TAIL * 2.0) else 1)" || \
   fail "with a 400 ms release the sound after note-off measured $R_TAIL, against $F_TAIL with no
         envelope. A release that does not outlast its note-off is not a release"
+
+# ---- TARGETS. The engine renders envelopes on Cutoff, Pitch and Panning too, and for a while
+# nothing could create one — the same gap the ADSR itself had, one level in. A cutoff envelope
+# with a slow attack opens the filter over time, so the note gets BRIGHTER: high-frequency energy
+# arrives late even though the source is steady. Measured as the ratio of high-band to total,
+# which is timbre rather than level — a gain change moves both and leaves the ratio alone.
+#
+# BOTH WINDOWS SIT INSIDE THE NOTE (which runs 0.5 s to 1.0 s). The first version measured the
+# late window at 0.95-1.03, straddling note-off, so it was reading the release rather than the
+# filter — and reported a brightness rise for a project with NO envelope at all.
+shape cutoff --track 0 --amp --target cutoff --depth 1000 \
+    --attack 400000 --decay 0 --sustain 1000 --release 0
+BRIGHT_EARLY="$(python3 - "$TMP/cutoff.wav" 0.52 0.60 <<'PYB'
+import sys, wave, struct, math
+w = wave.open(sys.argv[1], 'rb')
+ch, n, sr = w.getnchannels(), w.getnframes(), w.getframerate()
+s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
+a, b = int(float(sys.argv[2]) * sr), min(n, int(float(sys.argv[3]) * sr))
+# First difference is a crude high-pass: it is the derivative, so it rises with brightness.
+tot = hi = 0.0
+prev = 0.0
+for i in range(a, b):
+    v = float(s[i * ch])
+    tot += v * v
+    hi += (v - prev) ** 2
+    prev = v
+print(int(1000 * math.sqrt(hi / max(1e-9, tot))))
+PYB
+)"
+BRIGHT_LATE="$(python3 - "$TMP/cutoff.wav" 0.86 0.96 <<'PYB'
+import sys, wave, struct, math
+w = wave.open(sys.argv[1], 'rb')
+ch, n, sr = w.getnchannels(), w.getnframes(), w.getframerate()
+s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
+a, b = int(float(sys.argv[2]) * sr), min(n, int(float(sys.argv[3]) * sr))
+tot = hi = 0.0
+prev = 0.0
+for i in range(a, b):
+    v = float(s[i * ch])
+    tot += v * v
+    hi += (v - prev) ** 2
+    prev = v
+print(int(1000 * math.sqrt(hi / max(1e-9, tot))))
+PYB
+)"
+echo "  cutoff env:   brightness early=$BRIGHT_EARLY late=$BRIGHT_LATE"
+python3 -c "
+raise SystemExit(0 if $BRIGHT_LATE > $BRIGHT_EARLY * 1.3 else 1)" || \
+  fail "a CUTOFF envelope with a 400 ms attack did not open the filter: brightness went
+        $BRIGHT_EARLY -> $BRIGHT_LATE. The engine renders cutoff envelopes; if this does not
+        move, the command created an envelope on the wrong target — most likely Volume, which
+        is what it did before --target existed"
+
+# ---- PANNING. The pan envelope was STARTED, RELEASED, and never evaluated: spec.panDepth was
+# set and never read, so a Panning envelope was a modulator the document promised and the sound
+# never had. A slow pan envelope moves the source across the stereo field, so the LEFT/RIGHT
+# BALANCE changes across the note — which is a thing neither a volume nor a filter envelope can
+# do, so the measurement cannot be satisfied by the wrong target.
+shape panning --track 0 --amp --target pan --depth 1000 \
+    --attack 400000 --decay 0 --sustain 1000 --release 0
+balance() {  # balance <wav> <startSec> <endSec>  -> right share of the energy, in thousandths
+  python3 - "$1" "$2" "$3" <<'PYP'
+import sys, wave, struct, math
+w = wave.open(sys.argv[1], 'rb')
+ch, n, sr = w.getnchannels(), w.getnframes(), w.getframerate()
+s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
+a, b = int(float(sys.argv[2]) * sr), min(n, int(float(sys.argv[3]) * sr))
+l = r = 0.0
+for i in range(a, b):
+    l += float(s[i * ch]) ** 2
+    r += float(s[i * ch + (1 if ch > 1 else 0)]) ** 2
+print(int(1000 * math.sqrt(r) / max(1e-9, math.sqrt(l) + math.sqrt(r))))
+PYP
+}
+PAN_EARLY="$(balance "$TMP/panning.wav" 0.52 0.60)"
+PAN_LATE="$(balance "$TMP/panning.wav" 0.86 0.96)"
+FLAT_EARLY="$(balance "$TMP/flat.wav" 0.52 0.60)"
+FLAT_LATE="$(balance "$TMP/flat.wav" 0.86 0.96)"
+echo "  pan env:      right share $PAN_EARLY -> $PAN_LATE (no envelope: $FLAT_EARLY -> $FLAT_LATE)"
+python3 -c "
+moved = abs($PAN_LATE - $PAN_EARLY)
+still = abs($FLAT_LATE - $FLAT_EARLY)
+raise SystemExit(0 if moved > 100 and moved > still * 4 else 1)" || \
+  fail "a PAN envelope did not move the sound across the stereo field: the right channel's share
+        went $PAN_EARLY -> $PAN_LATE, against $FLAT_EARLY -> $FLAT_LATE with no envelope at all.
+        The pan envelope used to be started, released, and never evaluated"
+
+# ---- LFOs. ModKind::Lfo was in SamplerModulator and in the saved project from the day the
+# sampler shipped, and nothing in the engine or the voice ever looked at it: a modulator kind
+# that saved, loaded, round-tripped perfectly and made no sound.
+#
+# A PITCH LFO is vibrato, and vibrato is measurable as something no other modulator can fake:
+# the note's period WANDERS. Measured by counting zero crossings in successive 50 ms windows — a
+# steady tone gives the same count every time, a vibrato'd one does not. Amplitude, filter and
+# pan modulation all leave the crossing count alone.
+#
+# 50 ms windows and a deep swing on purpose. The first version used 20 ms at 220 Hz, which is
+# about nine crossings — too few for an integer count to resolve a modest wobble, so a vibrato
+# that was plainly working measured a spread of 3 and failed. The measurement has to be able to
+# SEE the thing before its threshold means anything.
+lfoShape() {  # like shape(), but sends sampler-lfo
+  local name="$1"; shift
+  local shm="/lfochk_$$_$name"
+  start_engine "$shm" "$TMP/$name.eng.log"
+  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do load env --force >/dev/null 2>&1 || true
+  sleep 1.2
+  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do sampler-lfo "$@" \
+    >/dev/null 2>&1 || fail "sampler-lfo was refused for '$name'"
+  sleep 0.6
+  DAW_UI_SHM_NAME="$shm" DAW_PROJECT_DIR="$TMP" "$CLI" do save "$name" --force >/dev/null 2>&1 || true
+  sleep 1.5
+  kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
+  ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/lforn_$$_$name" \
+      ./daw_engine --project "$name" --render "$name" --run-seconds 6 --block-size 256 \
+      >"$TMP/$name.render.log" 2>&1 ) || fail "the '$name' render exited non-zero"
+  [ -s "$TMP/$name.wav" ] || fail "the '$name' render wrote no output"
+}
+wobble() {  # wobble <wav> — spread of the zero-crossing count across 20 ms windows, in the note
+  python3 - "$1" <<'PYW'
+import sys, wave, struct
+w = wave.open(sys.argv[1], 'rb')
+ch, n, sr = w.getnchannels(), w.getnframes(), w.getframerate()
+s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
+win = int(0.05 * sr)
+counts = []
+start = int(0.55 * sr)
+while start + win < int(0.98 * sr):
+    c = 0
+    prev = s[start * ch]
+    for i in range(start + 1, start + win):
+        v = s[i * ch]
+        if (prev < 0) != (v < 0):
+            c += 1
+        prev = v
+    counts.append(c)
+    start += win
+if not counts:
+    print(0); raise SystemExit(0)
+print(max(counts) - min(counts))
+PYW
+}
+lfoShape vibrato --track 0 --target pitch --hz 6 --depth 1 --amount 300
+VIB="$(wobble "$TMP/vibrato.wav")"
+STEADY="$(wobble "$TMP/flat.wav")"
+echo "  pitch LFO:    crossing spread $VIB (steady tone: $STEADY)"
+python3 -c "
+raise SystemExit(0 if $VIB > max(4, $STEADY * 3) else 1)" || \
+  fail "a PITCH LFO produced no vibrato: the zero-crossing count varied by $VIB across the note,
+        against $STEADY for a steady tone. ModKind::Lfo has been in the file format from the
+        start; if this does not move, nothing is rendering it"
 
 echo "sampler_envelope_write_check: PASS — the ADSR is reachable, and it is audible in all three"
 echo "                              stages, on a mod set that started with no modulators at all"

@@ -561,6 +561,13 @@ add_test(NAME producer_load
 )
 set_tests_properties(producer_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# The pool through a REAL DEVICE in real time — the one place a late thread actually costs
+# something. Skips cleanly (exit 0, with a reason) on a machine with no audio device.
+add_test(NAME realtime_pool
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/realtime_pool_check.sh 8
+)
+set_tests_properties(realtime_pool PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # The inward bulk carrier, verified by something AUDIBLE that came across it — a byte count
 # proves the transport, a drawn shape you can hear proves the whole path.
 add_test(NAME bulk_carrier

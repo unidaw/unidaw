@@ -425,7 +425,46 @@ The envelope ships in its **final shape** here — `SamplerModulator` with `poin
 
 **S2 — the kit. No contract bump.** Multi-slot, keymap table, `--files`/`--base-key`, `voiceGroup`, `nna`, modSets by reference, velocity layers and round-robin. Playable by pitch through the keymap. UI reads the kit via a CLI/JSON path until S4.
 
-**S3 — the DSP that makes it not sound cheap. No contract bump.** The octave mip-map, level crossfade, sinc16, the three quality settings, sample loop modes (forward / ping-pong / **backward**) + seam-crossing interpolation + loop crossfade, reverse, the filter, and the rest of the modulator targets (Pitch, Cutoff, Resonance, Panning) now that Volume runs. Negative control required: render a slot pitched +24 with `quality=Studio` and with the mip-map *disabled*, and assert the fold-back energy differs by ≥ 40 dB. A green suite that passes with the mip-map bypassed is the recurring trap here.
+**S3 — the DSP that makes it not sound cheap. No contract bump.** ⚠️ *Three corrections below, found 2026-07-31.* The octave mip-map, level crossfade, sinc16, the three quality settings, sample loop modes (forward / ping-pong / **backward**) + seam-crossing interpolation + loop crossfade, reverse, the filter, and the rest of the modulator targets (Pitch, Cutoff, Resonance, Panning) now that Volume runs. Negative control required: render a slot pitched +24 with `quality=Studio` and with the mip-map *disabled*, and assert the fold-back energy differs by ≥ 40 dB. A green suite that passes with the mip-map bypassed is the recurring trap here.
+
+**CORRECTION 1 — "the rest of the modulator targets" rendered but could not be REACHED.** The
+engine has resolved Cutoff, Pitch and Panning envelopes since S3 (`sampler_engine.h:372`), and
+until 2026-07-31 no command could create one: `sampler-slot` chose a slot's mod set and nothing
+edited what was in it, so only a hand-written project file could put an envelope on a filter.
+`SamplerSetEnvelope` (82) and `SamplerSetEnvelopePoints` (84) now carry a `target` byte. The
+apply mode is DERIVED from the target rather than sent — Volume multiplies, everything else adds
+— because a wire field there lets a caller build a modulator that cannot do anything musical.
+
+**CORRECTION 2 — and this one was a real defect, not a gap.** `SamplerVoiceSpec` had ONE
+`envUnitsPerFrame`, set only inside `if (amp)`, and the cutoff, pitch and pan runners all started
+with it. On a mod set with no amp envelope the clock was **zero**: the envelope sat at its value
+at time 0 forever and modulated nothing, while the command reported success and the modulator
+persisted with the right target and depth. The rendered audio was byte-identical to having no
+envelope at all. Where an amp envelope did exist, a modulator with a different `timeBase` or
+`rateMilli` silently ran at the amp's clock instead of its own. Every envelope now carries its
+own, from one helper, so they cannot disagree about what a unit is.
+
+**CORRECTION 3 — and the same shape again, twice more.** A **Panning** envelope was *started*,
+*released*, and never evaluated: `panEnv_.valueAt()` appeared nowhere and `spec.panDepth` was set
+and never read, with the pan gains computed once per block outside the sample loop so there was
+nowhere to apply one even in principle. **Resonance** was in the `ModTarget` enum and fell through
+the engine's `default:`. And **`ModKind::Lfo`** — in `SamplerModulator` and in the file format
+since the sampler shipped, `lfo_frequency_hz` and the rest round-tripping perfectly — was rendered
+by nothing at all. Of the model's five targets and two kinds, only Volume and Pitch envelopes
+actually reached the audio.
+
+All of it works now, each verified by a measurement the wrong target cannot satisfy: pan by the
+stereo balance moving (559 → 972 against 500 → 500), cutoff by brightness (48 → 209 against a
+source saw of 230), the LFO by **vibrato** — a pitch LFO makes the note's period wander, so the
+zero-crossing count varies window to window (34 against 0 for a steady tone), which amplitude,
+filter and pan modulation all leave alone. LFOs are **note-retriggered**: the phase is a pure
+function of the voice's age, like `EnvRunner`, so a render cannot depend on when playback started.
+
+The check that found it was wrong three times first, each time in a way that let it pass while
+seeing nothing: a **sine** source (a low-pass over one partial changes amplitude, not timbre),
+`filter_type: 0` (which means OFF), and a measurement window straddling note-off so it read the
+release rather than the filter — that last one reported a brightness *rise* for a project with no
+envelope at all, which is how the contamination gave itself away.
 
 A second negative control, for the envelope, because a loop that does not loop is inaudible in a short render: draw a 3-point sawtooth on Volume with a sustain loop, hold a note for 8 loop periods, and assert the captured envelope has **8 peaks**. Disable the loop and it must find 1. `tools/perceptual.py` already extracts an amplitude contour.
 

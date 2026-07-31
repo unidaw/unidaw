@@ -1375,6 +1375,17 @@ impl EngineHandle {
         Ok(())
     }
 
+    /// Set a sampler modulator's LFO (SamplerSetLfo).
+    pub fn send_sampler_lfo(
+        &self,
+        payload: crate::layout::UiSamplerLfoPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerLfoPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerLfoPayload>(),
+        )
+    }
+
     /// Set a sampler modulator's ADSR (SamplerSetEnvelope).
     pub fn send_sampler_envelope(
         &self,

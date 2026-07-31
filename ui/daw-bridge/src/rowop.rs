@@ -60,7 +60,7 @@ pub const OP_SCHEMA: &[OpSpec] = &[
     OpSpec { prefix: "p", summary: "probability percent to sound (1-100)", example: "p60" },
     OpSpec { prefix: "d", summary: "delay onset by a fraction of a beat", example: "d1/6" },
     OpSpec { prefix: "s", summary: "play sampler slot N (blank = pitch picks it)", example: "s5" },
-    OpSpec { prefix: "o", summary: "start N/256 into the sample (the 9xx seek)", example: "o80" },
+    OpSpec { prefix: "o", summary: "start N/256 into the sample, or a fraction like o1/3 (the 9xx seek)", example: "o80" },
 ];
 
 /// Parses space-separated row-op tokens (`"ret3 p60 d1/6"`) into `RowOps`.
@@ -89,13 +89,52 @@ pub fn parse_row_ops(input: &str) -> Result<RowOps, String> {
             }
             ops.sound = n as u16;
         } else if let Some(rest) = token.strip_prefix('o') {
-            let n: u32 = rest.parse().map_err(|_| format!("bad sample offset in {token:?}"))?;
-            if n > 255 {
-                return Err(format!("sample offset is 0..255 (in 1/256ths) in {token:?}"));
+            // TWO FORMS, ONE FIELD. `o80` is 1/256ths — tracker muscle memory, and what 9xx
+            // taught everyone's hands. `o<N>/<M>` is a plain fraction reaching the full u16, so
+            // the notation can say what the storage can already hold.
+            //
+            // The storage was NEVER the narrow part: sound_offset has always been a u16 fraction
+            // of the slot's extent, which is 0.076 ms on a five-second break. Only the parser
+            // was coarse, so the format was surgical and the grammar could not reach it — the
+            // exact complaint 9xx's 256-frame granularity earned, arriving one layer up. Asked
+            // for by the web-UI agent, whose own doc had specified the fraction form while their
+            // parser mirrored this one and refused it.
+            //
+            // The fraction form is `d1/6`'s, deliberately: not a new idea in the grammar, just
+            // the one that is already there applied to a second op.
+            if let Some((num, den)) = rest.split_once('/') {
+                let num: u32 = num
+                    .parse()
+                    .map_err(|_| format!("bad offset numerator in {token:?}"))?;
+                let den: u32 = den
+                    .parse()
+                    .map_err(|_| format!("bad offset denominator in {token:?}"))?;
+                if den == 0 {
+                    return Err(format!("offset denominator must not be zero in {token:?}"));
+                }
+                if den > 65535 {
+                    return Err(format!("offset denominator is at most 65535 in {token:?}"));
+                }
+                if num >= den {
+                    // An offset of the WHOLE extent starts at the end and plays nothing, and
+                    // past it is not a position at all. Refused rather than clamped: a row that
+                    // says o5/4 is a typo, and silently playing from the end would be a note
+                    // that vanishes for a reason nothing states.
+                    return Err(format!(
+                        "offset must be less than the whole extent in {token:?} (N < M)"
+                    ));
+                }
+                // Rounded, not truncated: o1/3 should land as close to a third as u16 allows.
+                ops.sound_offset = ((num as u64 * 65535 + den as u64 / 2) / den as u64) as u16;
+            } else {
+                let n: u32 = rest.parse().map_err(|_| format!("bad sample offset in {token:?}"))?;
+                if n > 255 {
+                    return Err(format!(
+                        "sample offset is 0..255 in 1/256ths, or a fraction like o1/3, in {token:?}"
+                    ));
+                }
+                ops.sound_offset = (n * 256) as u16;
             }
-            // Written in 1/256ths, stored at full u16 resolution — the coarse notation is for
-            // muscle memory, not a limit on what can be expressed.
-            ops.sound_offset = (n * 256) as u16;
         } else if let Some(rest) = token.strip_prefix('p') {
             let n: u32 = rest.parse().map_err(|_| format!("bad probability in {token:?}"))?;
             if !(1..=100).contains(&n) {
@@ -163,6 +202,21 @@ mod tests {
         // resolution — the coarse notation is for the hands, not a limit on what is expressible.
         assert_eq!(parse_row_ops("o128").unwrap().sound_offset, 128 * 256);
         assert_eq!(parse_row_ops("o0").unwrap().sound_offset, 0);
+        // THE FRACTION FORM reaches resolutions 1/256ths cannot express. o1/3 is not
+        // representable as N/256 at all, which is the point of having it.
+        assert_eq!(parse_row_ops("o1/2").unwrap().sound_offset, 32768);
+        assert_eq!(parse_row_ops("o1/3").unwrap().sound_offset, 21845);
+        assert_eq!(parse_row_ops("o1/65535").unwrap().sound_offset, 1);
+        // The two forms agree where they overlap: 128/256 and 1/2 are the same place.
+        assert_eq!(
+            parse_row_ops("o128").unwrap().sound_offset,
+            parse_row_ops("o1/2").unwrap().sound_offset
+        );
+        // Refused, not clamped.
+        assert!(parse_row_ops("o5/4").is_err());
+        assert!(parse_row_ops("o1/0").is_err());
+        assert!(parse_row_ops("o1/70000").is_err());
+        assert!(parse_row_ops("o256").is_err());
         assert!(parse_row_ops("o256").is_err());
         assert!(parse_row_ops("oz").is_err());
     }

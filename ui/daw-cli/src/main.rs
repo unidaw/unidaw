@@ -42,8 +42,9 @@ daw-cli — control surface for a running engine
                                    chop a source; --slots makes one playable slot per slice
   daw-cli do sampler-marker --track N --source 1 --op add|move|remove [--marker ID] [--frame F]
   daw-cli do set-row-ops --track N --note ID [--clip ID] [--ret N] [--prob N] [--sound N] [--offset N] [--delay TICKS] [--clear ret,prob,sound,offset,delay]
-  daw-cli do sampler-env --track N [--device ID] [--mod-set ID] [--amp|--modulator ID] --attack US --decay US --sustain MILLI --release US [--sync] [--rate MILLI]
-  daw-cli do sampler-env-draw --track N --points t,v[,tension[,step]];... [--sustain-loop A,B] [--release-loop A,B] [--release-fade US] [--sync] [--rate MILLI]
+  daw-cli do sampler-env --track N [--device ID] [--mod-set ID] [--amp|--modulator ID] --attack US --decay US --sustain MILLI --release US [--sync] [--rate MILLI] [--target amp|pan|pitch|cutoff|res] [--depth MILLI]
+  daw-cli do sampler-env-draw --track N [--target amp|pan|pitch|cutoff|res] --points t,v[,tension[,step]];...
+  daw-cli do sampler-lfo --track N [--target amp|pan|pitch|cutoff|res] --hz F [--depth F] [--bias F] [--phase F] [--amount MILLI] [--sustain-loop A,B] [--release-loop A,B] [--release-fade US] [--sync] [--rate MILLI]
                                    nudge one boundary — ids are stable, so no row moves
   daw-cli do sampler-emit-rows --track N --source 1 [--at TICK] [--step TICKS] [--column C]
                                    write the pattern that reproduces the chop
@@ -2299,6 +2300,19 @@ fn main() {
                     let mod_set = flag_u64(&args, "--mod-set", Some(0)).unwrap_or(0) as u32;
                     let rate = flag_u64(&args, "--rate", Some(1000)).unwrap_or(1000) as u16;
                     let release_fade = flag_u64(&args, "--release-fade", Some(0)).unwrap_or(0) as u32;
+                    // WHICH DOMAIN. Defaults to the amp envelope, which is what every caller
+                    // meant before other targets were reachable.
+                    let target = match flag(&args, "--target").as_deref() {
+                        None | Some("amp") | Some("volume") | Some("vol") => 0u8,
+                        Some("pan") | Some("panning") => 1u8,
+                        Some("pitch") => 2u8,
+                        Some("cutoff") | Some("filter") => 3u8,
+                        Some("res") | Some("resonance") => 4u8,
+                        Some(other) => {
+                            eprintln!("daw-cli: --target expects amp|pan|pitch|cutoff|res, got {other:?}");
+                            return;
+                        }
+                    };
                     let sync = args.iter().any(|a| a == "--sync");
                     let pair = |key: &str| -> (u8, u8) {
                         match flag(&args, key) {
@@ -2359,7 +2373,7 @@ fn main() {
                             mod_set_id: mod_set,
                             modulator_id: 0,
                             time_base: if sync { 1 } else { 0 },
-                            reserved: 0,
+                            target,
                             rate_milli: rate,
                             point_count: pts.len() as u16,
                             sustain_loop_start: sus_a,
@@ -2400,6 +2414,53 @@ fn main() {
                         }
                     }
                 }
+                Some(&"sampler-lfo") => {
+                    use daw_bridge::layout as L;
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let mod_set = flag_u64(&args, "--mod-set", Some(0)).unwrap_or(0) as u32;
+                    let amount = flag_u64(&args, "--amount", Some(1000)).unwrap_or(1000) as i16;
+                    let fl = |key: &str, dflt: f32| -> f32 {
+                        flag(&args, key).and_then(|r| r.parse::<f32>().ok()).unwrap_or(dflt)
+                    };
+                    let target = match flag(&args, "--target").as_deref() {
+                        None | Some("amp") | Some("volume") | Some("vol") => 0u8,
+                        Some("pan") | Some("panning") => 1u8,
+                        Some("pitch") => 2u8,
+                        Some("cutoff") | Some("filter") => 3u8,
+                        Some("res") | Some("resonance") => 4u8,
+                        Some(other) => {
+                            eprintln!("daw-cli: --target expects amp|pan|pitch|cutoff|res, got {other:?}");
+                            return;
+                        }
+                    };
+                    let payload = L::UiSamplerLfoPayload {
+                        command_type: UiCommandType::SamplerSetLfo as u16,
+                        flags: SAMPLER_ENV_AMP,
+                        track_id: track,
+                        device_id: device,
+                        mod_set_id: mod_set,
+                        modulator_id: 0,
+                        target,
+                        reserved: 0,
+                        frequency_hz: fl("--hz", 1.0),
+                        depth: fl("--depth", 1.0),
+                        bias: fl("--bias", 0.0),
+                        phase_offset: fl("--phase", 0.0),
+                        depth_milli: amount,
+                        reserved2: 0,
+                    };
+                    match handle.send_sampler_lfo(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"sampler-lfo\", \"track\": {track}, \"target\": {target} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
                 Some(&"sampler-env") => {
                     // Times are in the modulator's own unit: microseconds by default, nanoticks
                     // with --sync. The unit travels WITH the numbers, so "300 ms attack" cannot
@@ -2413,6 +2474,20 @@ fn main() {
                     let release = flag_u64(&args, "--release", Some(0)).unwrap_or(0) as u32;
                     let sustain = flag_u64(&args, "--sustain", Some(1000)).unwrap_or(1000) as i16;
                     let rate = flag_u64(&args, "--rate", Some(1000)).unwrap_or(1000) as u16;
+                    let depth = flag_u64(&args, "--depth", Some(1000)).unwrap_or(1000) as i16;
+                    // WHICH DOMAIN. Defaults to the amp envelope, which is what every caller
+                    // meant before other targets were reachable.
+                    let target = match flag(&args, "--target").as_deref() {
+                        None | Some("amp") | Some("volume") | Some("vol") => 0u8,
+                        Some("pan") | Some("panning") => 1u8,
+                        Some("pitch") => 2u8,
+                        Some("cutoff") | Some("filter") => 3u8,
+                        Some("res") | Some("resonance") => 4u8,
+                        Some(other) => {
+                            eprintln!("daw-cli: --target expects amp|pan|pitch|cutoff|res, got {other:?}");
+                            return;
+                        }
+                    };
                     let sync = args.iter().any(|a| a == "--sync");
                     // --amp is the default: naming a modulator by id is the exception, and a
                     // caller who has not read the mod set has no id to name.
@@ -2431,7 +2506,9 @@ fn main() {
                         release,
                         sustain_milli: sustain,
                         rate_milli: rate,
+                        target,
                         reserved2: 0,
+                        depth_milli: depth,
                     };
                     match handle.send_sampler_envelope(payload) {
                         Ok(()) => {
@@ -2451,7 +2528,7 @@ fn main() {
                     // one op from a note without restating the other four.
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
                     let clip = flag_u64(&args, "--clip", Some(0)).unwrap_or(0) as u32;
-                    let note = flag_u64(&args, "--note", Some(0)).unwrap_or(0) as u32;
+                    let note = flag_u64(&args, "--note", Some(0)).unwrap_or(0);
                     let clear_arg = args
                         .iter()
                         .position(|a| a == "--clear")
@@ -2533,13 +2610,15 @@ fn main() {
                             mask,
                             track_id: track,
                             clip_id: clip,
-                            note_id: note,
+                            note_id_lo: note as u32,
+                            note_id_hi: (note >> 32) as u32,
+                            pad0: [0; 2],
                             delay_nanoticks,
                             sound,
                             sound_offset,
                             retrigger,
                             probability,
-                            reserved: [0; 14],
+                            reserved: [0; 8],
                         };
                         match handle.send_set_row_ops(payload) {
                             Ok(()) => {
