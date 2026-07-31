@@ -2239,6 +2239,8 @@ const OP_REGISTRY = {
   // Naming a pad. The CLI shipped with opcode 90; the agent has no sampler tooling at all, which
   // is the same recorded gap every other sampler verb carries.
   'slot-name': { cli: 'sampler-slot-name', agent: null, why: 'gap' },
+  // Vintage (opcode 91). With the other sampler verbs: the agent has no sampler tooling.
+  vintage:   { cli: 'sampler-vintage', agent: null, why: 'gap' },
   /*
    * Chromatic mode (SetTrackSoundAddressed, 87). Landed engine-side this morning; daw-cli has
    * not caught up, and the agent has no sampler tooling at all.
@@ -2361,7 +2363,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'filter', 'env', 'slot', 'soundaddr', 'bank', 'emit',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
-                   'sampler', 'load-sample', 'slice', 'slot-name',
+                   'sampler', 'load-sample', 'slice', 'slot-name', 'vintage',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 
@@ -3350,4 +3352,31 @@ test("the sidecar's slot-name length matches the engine's array", async () => {
   assert.equal(Number(mine[1]), Number(cpp[1]),
     `the sidecar allows ${mine[1]} bytes and the engine's array is ${cpp[1]} — a name between `
     + 'the two would be sent, refused into the log, and reported as success');
+});
+
+test('the optimistic velocity and the settled one are formatted the same way', async () => {
+  /*
+   * A TYPED VELOCITY FLASHED THE WRONG NUMBER FOR ONE ROUND TRIP.
+   *
+   * The settled cell draws hex — `velocityText` — and the optimistic overlay built its own
+   * string with `('0' + v).slice(-2)`, the last two DECIMAL digits. That is verbatim the formula
+   * viewmodel.js's own comment records as the bug it fixed: 127 reads as "27", 100 as "00", both
+   * plausible velocities and neither the one you typed. It settled to the right value when the
+   * engine answered, which is what made it survive — a wrong number that corrects itself is
+   * harder to notice than one that stays.
+   *
+   * Read out of the SOURCE rather than exercised, because the overlay is a draw-path detail with
+   * no accessor: the claim is that index.html calls the shared formatter instead of repeating
+   * its logic, and that is a claim about the text.
+   */
+  const src = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.ok(/addPending\([^)]*velocityText\(/.test(src),
+    'the pending velocity is formatted by velocityText, not by a second copy of the rule');
+  assert.ok(!/addPending\([^)]*'0' \+ v\)/.test(src),
+    'and the decimal two-digit formula is gone from the pending write');
+
+  // ...and the shared formatter really is hex, so the check above is worth passing. (The full
+  // table is asserted further up; these are the two the decimal formula got wrong.)
+  assert.equal(velocityText(127), '7f', '127 is 7f, not "27"');
+  assert.equal(velocityText(100), '64', '100 is 64, not "00"');
 });

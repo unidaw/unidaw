@@ -483,6 +483,95 @@ const unmoved = [];
         JSON.stringify(s1 && { slice: s1.slice, begin: s1.begin, end: s1.end, frames: s1.frames }));
 }
 
+// ---------------------------------------------------------------------------
+// VINTAGE (opcode 91) — bit depth and sample-rate reduction on a MOD SET, not a slot, because
+// a chopped break wants one character and sixteen copies would be sixteen edits.
+//
+// TWO WITNESSES, like every other field here: the SAVED FILE says the edit will still be there
+// tomorrow, and the KIT READ-BACK says the audio thread agrees. Backend publishes the pair per
+// SLOT, resolved from its mod set — riding the entry's two reserved words, so no offset moved
+// and kShmVersion did not change. A slot is what a kit grid draws, and "which mod set is this
+// pad on" should not be a question the grid has to answer to say whether the pad is crushed.
+// ---------------------------------------------------------------------------
+{
+  const path = `${stack.dir}/slotfix.uniproj.json`;
+  const modSets = () => {
+    const doc = JSON.parse(readFileSync(path, 'utf8'));
+    const dev = (doc.tracks || []).flatMap((t) => t.device_chain || [])
+      .find((d) => d.device_id === DEVICE);
+    return (dev && dev.sampler && dev.sampler.mod_sets) || [];
+  };
+
+  /*
+   * ON THE SET THE SLOT IS ACTUALLY ON, read back rather than assumed.
+   *
+   * I wrote `1` here — the loader points a slot with no `mod_set_id` at the first set, so slot 1
+   * starts there. It does not stay: the field sweep far above sets `modset` to 2 as one of its
+   * twenty-nine, so by the time this runs slot 1 is on set 2. Setting vintage on set 1 stored it
+   * perfectly and the slot saw nothing, which read as the read-back not carrying the field.
+   *
+   * Asking the kit is both correct and durable — a check that hardcodes a relationship another
+   * block is free to change is a check that will break again for a different reason.
+   */
+  const onSet = (await ask()).slots.find((x) => x.slot === SLOT).modSet;
+  await run(`vintage ${TRACK} ${DEVICE} 12 22050 ${onSet}`);
+  await page.waitForTimeout(600);
+  await run('save slotfix');
+  await page.waitForTimeout(2500);
+  const one = modSets().find((m) => m.id === onSet);
+  check(one && Number(one.bit_depth) === 12 && Number(one.rate_hz) === 22050,
+        `vintage sets bit depth and rate on one mod set (${onSet})`,
+        JSON.stringify(one && { bits: one.bit_depth, rate: one.rate_hz }));
+  /*
+   * ...AND THE SLOT ON THAT SET SEES IT. The file proves it was stored; this proves the RUNTIME
+   * resolved it onto the slot the producer plays, which is the half a saved file cannot say.
+   */
+  const vslot = (await ask()).slots.find((x) => x.slot === SLOT);
+  check(vslot && vslot.bits === 12 && vslot.rate === 22050,
+        'and the read-back carries it per slot, resolved from that slot\'s mod set',
+        JSON.stringify(vslot && { bits: vslot.bits, rate: vslot.rate }));
+
+  /*
+   * ONE HALF AT A TIME, which is the whole reason the payload carries flags.
+   *
+   * 0 is a LEGAL value for both — it means off — so "crush the bits and leave the rate" cannot
+   * be said with a value, and a caller who filled the other field in for completeness would
+   * silently turn it off. This sets only the bits and asserts the RATE SURVIVED, which is the
+   * assertion that fails if the flags are ever dropped or defaulted.
+   */
+  /*
+   * NO `modset` ARGUMENT, so it defaults to 0 — every mod set on the sampler. A positional
+   * optional cannot be SKIPPED in the middle: `vintage 0 9 8 2` reads the 2 as the RATE, which
+   * is exactly what my first version did and it set the rate to 2 Hz while claiming to test that
+   * the rate was left alone. The wildcard is the honest way to say "bits only", and it makes
+   * this check prove the flags AND the wildcard at once.
+   */
+  await run(`vintage ${TRACK} ${DEVICE} 8`);
+  await page.waitForTimeout(600);
+  await run('save slotfix');
+  await page.waitForTimeout(2500);
+  const two = modSets().find((m) => m.id === onSet);
+  check(two && Number(two.bit_depth) === 8 && Number(two.rate_hz) === 22050,
+        'naming only `bits` leaves the rate alone — the flags say which half the call is about',
+        JSON.stringify(two && { bits: two.bit_depth, rate: two.rate_hz }));
+
+  // ...and mod set 0 IS a wildcard here, unlike a slot id. Set 2 was untouched above.
+  await run(`vintage ${TRACK} ${DEVICE} 4 0 0`);
+  await page.waitForTimeout(600);
+  await run('save slotfix');
+  await page.waitForTimeout(2500);
+  const all = modSets();
+  check(all.length >= 2 && all.every((m) => Number(m.bit_depth) === 4),
+        'and mod set 0 reaches every mod set on the sampler — a real wildcard, unlike slot 0',
+        JSON.stringify(all.map((m) => [m.id, m.bit_depth])));
+
+  // A call naming NEITHER is refused rather than accepted as a no-op.
+  const neither = await run(`vintage ${TRACK} ${DEVICE}`);
+  check(/bits, rate, or both/.test(String(neither)),
+        'and a call naming neither is refused, not accepted as a command that does nothing',
+        JSON.stringify(neither).slice(-90));
+}
+
 check(errors.length === 0, 'and nothing threw', errors.slice(0, 3).join(' | '));
 
 await browser.close();

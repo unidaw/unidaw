@@ -468,8 +468,16 @@ export function createCommands(api) {
      * is the same argument the engine makes about a slot name that does not fit: never
      * truncated, always refused, because the truncated outcome LOOKS like it worked.
      */
-    'load-sample': { help: 'load-sample <track> <device> <file>[,<file>…] [root] — load samples, '
-                         + 'one slot each, on consecutive keys from root (default 36)',
+    /*
+     * The signature before the em-dash is what the prose ratchet counts against the schema, so
+     * the comma list and the trailing root are described AFTER it — `<file>[,<file>…] [root]`
+     * read as five arguments against a schema of three and failed the check that exists to keep
+     * the two honest. The description carries the same information without pretending it is
+     * separately typed, which it is not: `rest: true` swallows the line and this verb parses it.
+     */
+    'load-sample': { help: 'load-sample <track> <device> <file> — one or more files, '
+                         + 'comma-separated, onto consecutive keys; a trailing number is the '
+                         + 'root key (default 36)',
       args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
              { name: 'file', type: 'text', rest: true }],
       run: (a) => {
@@ -600,6 +608,29 @@ export function createCommands(api) {
     // The field list is spelled into the help from the same array the schema uses, because the
     // prose ratchet holds the two equal by NAME — and a hand-typed copy of twenty-seven names is
     // a copy that will disagree.
+    /*
+     * VINTAGE: the SP-1200 / MPC60 character, on a mod set.
+     *
+     * `bits` and `rate` are separately optional and at least one is required — a call naming
+     * neither would be a command that changes nothing and reports success, which is the failure
+     * this whole codebase is organised against. `0` for either means OFF, which is why they
+     * cannot be defaulted: the sidecar sends a flag per named field.
+     */
+    vintage: { help: 'vintage <track> <device> [bits] [rate] [modset] — bit depth 1-16 and '
+                   + 'sample rate in Hz on a sampler mod set; 0 turns either off',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             { name: 'bits', type: 'int', min: 0, max: 16, optional: true },
+             { name: 'rate', type: 'int', min: 0, max: 65535, optional: true },
+             { name: 'modset', type: 'int', min: 0, optional: true }],
+      run: (a) => {
+        if (a[2] === undefined && a[3] === undefined) return 'vintage needs bits, rate, or both';
+        if (!api.samplerVintage(num(a[0]), num(a[1]),
+                                a[2] === undefined ? undefined : num(a[2]),
+                                a[3] === undefined ? undefined : num(a[3]),
+                                a[4] === undefined ? 0 : num(a[4]))) return refusal(api);
+        return [a[2] === undefined ? '' : `${a[2]} bits`,
+                a[3] === undefined ? '' : `${a[3]} Hz`].filter(Boolean).join(', ');
+      } },
     /*
      * NAME A SLOT (opcode 90). Its own verb rather than a `slot` field, because every other
      * slot field is an int and this is text — `slot <t> <d> <s> name kick` would have to say
