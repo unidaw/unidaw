@@ -121,11 +121,32 @@ flag() {
     sed 's/.*: //'
 }
 
+# How many notes the engine has published for this track. The pair below is entered in ORDER and
+# each entry is waited for, which is the whole correctness argument: the second note truncates
+# "whatever is sounding here", so if it arrives while the first has not landed there is nothing
+# to truncate and the take is silently wrong rather than late.
+notecount() {
+  cli get notes --track 0 2>/dev/null | grep -oE '"note_count": [0-9]+' | grep -oE '[0-9]+$'
+}
+wait_notes() {  # wait_notes <want> <what>
+  for _ in $(seq 1 80); do
+    [ "$(notecount)" = "$1" ] && return 0
+    sleep 0.25
+  done
+  fail "$2: the engine published $(notecount) notes, waited 20s for $1. Under a parallel ctest an
+        edit can take far longer than any fixed sleep, which is why this waits for the VALUE"
+}
+
 enter_pair() {  # a 4-quarter note at 0, then a note one quarter in — the gesture under test
+  # WAITS FOR EACH ENTRY, rather than sleeping a fixed time. This check failed once in four runs
+  # under `ctest -j8` with two 0.6s sleeps here: the machine was loaded enough that an edit had
+  # not landed before the next command was sent, and the second note then truncated nothing. A
+  # check that is right three times in four is worse than no check, because the one failure reads
+  # as a real defect in note entry.
   cli do note --track 0 --nanotick 0 --pitch 60 --duration $((Q*4)) --column 0 >/dev/null 2>&1
-  sleep 0.6
+  wait_notes 1 "after entering the first note"
   cli do note --track 0 --nanotick $Q --pitch 67 --duration $((Q*3)) --column 0 >/dev/null 2>&1
-  sleep 0.6
+  wait_notes 2 "after entering the second note"
 }
 
 # ---- DEFAULT OFF. The old behaviour is the default, and that is checked rather than assumed: a
@@ -151,7 +172,9 @@ echo "  reads back as true"
 # ---- KEEPS. Same gesture, same track, flag flipped.
 cli do delete-note --track 0 --nanotick 0 --pitch 60 --column 0 >/dev/null 2>&1
 cli do delete-note --track 0 --nanotick $Q --pitch 67 --column 0 >/dev/null 2>&1
-sleep 0.8
+# Waited for, for the same reason: re-entering onto a clip that still holds the old pair measures
+# the wrong thing entirely.
+wait_notes 0 "after deleting both notes"
 enter_pair
 D_ON="$(dur0)"
 [ "$D_ON" = "$((Q*4))" ] || \
