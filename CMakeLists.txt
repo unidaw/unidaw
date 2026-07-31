@@ -461,6 +461,21 @@ add_test(NAME contract_freshness
 )
 set_tests_properties(contract_freshness PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Every hand-written Rust mirror is pinned to the C++ struct bindgen generates from the header.
+add_test(NAME contract_layout
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/contract_layout_check.sh
+)
+set_tests_properties(contract_layout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# THE RUST SIDE'S OWN TESTS, which had never run here. contract_layout proves every mirror is
+# LISTED in bindgen_matches_hand_written; that test is what actually compares the bytes, and it
+# only ever ran under `cargo test`. So the byte-level guard was absent from the suite that gates
+# every commit — the list was checked and the thing the list points at was not.
+add_test(NAME bridge_layout
+  COMMAND cargo test --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/ui/Cargo.toml -p daw-bridge
+)
+set_tests_properties(bridge_layout PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME patcher_resolution
   COMMAND patcher_tests
 )

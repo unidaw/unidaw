@@ -1853,6 +1853,53 @@ mod tests {
         // UiScale/UiScaleRegion/UiDeviceParam/UiDeviceParamsRegion are now aliases
         // OF the generated structs, so a parity check on them is vacuous.
         same!(UiClipNote, sys::daw_UiClipNote);
+        same!(BlockMailbox, sys::daw_BlockMailbox);
+        same!(UiArrangeSummaryRegion, sys::daw_UiArrangeSummaryRegion);
+        same!(UiArrangeTimeCommandPayload, sys::daw_UiArrangeTimeCommandPayload);
+        same!(UiAutomationLaneRequestPayload, sys::daw_UiAutomationLaneRequestPayload);
+        same!(UiAutomationPointPayload, sys::daw_UiAutomationPointPayload);
+        same!(UiBusDiffPayload, sys::daw_UiBusDiffPayload);
+        same!(UiChainCommandPayload, sys::daw_UiChainCommandPayload);
+        same!(UiChainDiffPayload, sys::daw_UiChainDiffPayload);
+        same!(UiChainErrorPayload, sys::daw_UiChainErrorPayload);
+        same!(UiChordCommandPayload, sys::daw_UiChordCommandPayload);
+        same!(UiChordDiffPayload, sys::daw_UiChordDiffPayload);
+        same!(UiClipChord, sys::daw_UiClipChord);
+        same!(UiClipExtent, sys::daw_UiClipExtent);
+        same!(UiClipExtentRegion, sys::daw_UiClipExtentRegion);
+        same!(UiClipRejectPayload, sys::daw_UiClipRejectPayload);
+        same!(UiClipTrack, sys::daw_UiClipTrack);
+        same!(UiClipWindowCommandPayload, sys::daw_UiClipWindowCommandPayload);
+        same!(UiClipWindowSnapshot, sys::daw_UiClipWindowSnapshot);
+        same!(UiCommandPayload, sys::daw_UiCommandPayload);
+        same!(UiDeviceMeter, sys::daw_UiDeviceMeter);
+        same!(UiDeviceMeterRegion, sys::daw_UiDeviceMeterRegion);
+        same!(UiDiffPayload, sys::daw_UiDiffPayload);
+        same!(UiHarmonyDiffPayload, sys::daw_UiHarmonyDiffPayload);
+        same!(UiHarmonyEvent, sys::daw_UiHarmonyEvent);
+        same!(UiHarmonySnapshot, sys::daw_UiHarmonySnapshot);
+        same!(UiMarker, sys::daw_UiMarker);
+        same!(UiMarkerCommandPayload, sys::daw_UiMarkerCommandPayload);
+        same!(UiModLinkCommandPayload, sys::daw_UiModLinkCommandPayload);
+        same!(UiModLinkUid16Payload, sys::daw_UiModLinkUid16Payload);
+        same!(UiModSourceValuePayload, sys::daw_UiModSourceValuePayload);
+        same!(UiPatcherGraphCommandPayload, sys::daw_UiPatcherGraphCommandPayload);
+        same!(UiPatcherGraphDiffPayload, sys::daw_UiPatcherGraphDiffPayload);
+        same!(UiPatcherGraphErrorPayload, sys::daw_UiPatcherGraphErrorPayload);
+        same!(UiPatcherNodeConfigPayload, sys::daw_UiPatcherNodeConfigPayload);
+        same!(UiPatcherPresetCommandPayload, sys::daw_UiPatcherPresetCommandPayload);
+        same!(UiPresetSavedPayload, sys::daw_UiPresetSavedPayload);
+        same!(UiSamplerEmitRowsPayload, sys::daw_UiSamplerEmitRowsPayload);
+        same!(UiSamplerEnvPointsHeader, sys::daw_UiSamplerEnvPointsHeader);
+        same!(UiSamplerKitRequestPayload, sys::daw_UiSamplerKitRequestPayload);
+        same!(UiSamplerLoadPayload, sys::daw_UiSamplerLoadPayload);
+        same!(UiSamplerMarkerPayload, sys::daw_UiSamplerMarkerPayload);
+        same!(UiSamplerSetSlotPayload, sys::daw_UiSamplerSetSlotPayload);
+        same!(UiSamplerSlicePayload, sys::daw_UiSamplerSlicePayload);
+        same!(UiSetParamPayload, sys::daw_UiSetParamPayload);
+        same!(UiTimeSigPoint, sys::daw_UiTimeSigPoint);
+        same!(UiTrackRoutingPayload, sys::daw_UiTrackRoutingPayload);
+        same!(UiWaveformRequestPayload, sys::daw_UiWaveformRequestPayload);
     }
 
     #[test]
