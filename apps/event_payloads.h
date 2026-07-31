@@ -359,7 +359,15 @@ enum class UiCommandType : uint16_t {
   ///
   /// CUTOFF AND RESONANCE ARE THE BASE VALUES the modulators move AROUND, not the modulated
   /// result. A cutoff envelope's depth is in octaves either side of this.
-  SamplerSetFilter = 86,  // next free 87
+  SamplerSetFilter = 86,
+  // SOUND-ADDRESSED-ONLY, per track (owner ruling, docs/SAMPLER_DESIGN.md section 8 Q2). Off by
+  // default: a blank `sound` means the keymap picks the slot from pitch (R5). On, pitch never
+  // selects — the note's `sound` names the slot, pitch is varispeed, and a 64-slot kit stays
+  // fully chromatic instead of one slot per key.
+  //
+  // Carries nothing new: trackId plus value0 as the boolean, the same shape
+  // SetTrackHarmonyQuantize (10) uses, because it is the same kind of thing.
+  SetTrackSoundAddressed = 87,  // next free 88
 };
 
 // SAMPLER SET FILTER (opcode 86). 40 bytes.
@@ -856,6 +864,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::WriteChord: return "write_chord";
     case UiCommandType::DeleteChord: return "delete_chord";
     case UiCommandType::SetTrackHarmonyQuantize: return "set_track_harmony_quantize";
+    case UiCommandType::SetTrackSoundAddressed: return "set_track_sound_addressed";
     case UiCommandType::Redo: return "redo";
     case UiCommandType::SetLoopRange: return "set_loop_range";
     case UiCommandType::SetAutomationTarget: return "set_automation_target";
@@ -1063,7 +1072,55 @@ enum class UiDiffType : uint16_t {
   // half the time. Additive like ClipRejected: a reader that switches on diffType and ignores
   // unknown values is unaffected, so no kShmVersion bump.
   PresetSaved = 16,
+  // A SAMPLER COMMAND WAS REFUSED, and why. Every sampler verb refused into the engine's log and
+  // nowhere else — 20 sites across seven commands — and daw-cli can read stderr while a browser
+  // cannot. So from a UI every one of them was a silent no-op that reported success: the web-UI
+  // agent sent SamplerSetSlot with slot 0, got `no_such_slot` in a log they never see, and watched
+  // the command succeed while the sound ran the full eight seconds.
+  //
+  // The rule is the one PresetSaved was built on: every exit reports, including the early
+  // refusals, because a caller that gets nothing back cannot tell "refused" from "still working"
+  // from "done", and the one thing it must not do is tell the user it worked.
+  //
+  // Additive like ClipRejected and PresetSaved: a reader that switches on diffType and ignores
+  // unknown values is unaffected, so no kShmVersion bump.
+  SamplerRejected = 17,
 };
+
+// Why a sampler command was refused. DISTINCT CODES rather than one "rejected", for the reason
+// UiClipRejectReason gives: the fix differs. "No such slot" means stop and re-read the kit; "bad
+// value" means the caller clamped wrong and retrying identically will never help; "not a sampler"
+// means the device id names something else entirely and no retry helps either.
+enum class UiSamplerRejectReason : uint16_t {
+  None = 0,
+  NoSuchTrack = 1,
+  NoSuchDevice = 2,
+  NoSuchSlot = 3,
+  NoSuchModSet = 4,
+  NoSuchModulator = 5,
+  NoSuchSource = 6,
+  NoSuchSliceSet = 7,
+  BadValue = 8,
+  NotASampler = 9,
+  LoadFailed = 10,
+};
+
+struct UiSamplerRejectPayload {
+  uint16_t diffType = 0;     // UiDiffType::SamplerRejected
+  uint16_t reason = 0;       // UiSamplerRejectReason
+  uint16_t commandType = 0;  // the UiCommandType refused, so a caller can match it to what it sent
+  // The id that could not be found — slot, mod set, modulator, source or slice set, according to
+  // `reason`. One field rather than five, because exactly one of them is ever the answer and five
+  // parallel ids would be four opportunities to disagree.
+  uint16_t targetId = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t reserved[6]{};
+};
+static_assert(sizeof(UiSamplerRejectPayload) <= 40,
+              "UiSamplerRejectPayload must fit an EventEntry payload");
+static_assert(offsetof(UiSamplerRejectPayload, diffType) == 0,
+              "diffType must be first: readers dispatch on it");
 
 // Why a clip edit was refused. Distinct codes rather than one "rejected", because the
 // fix differs: a stale base means re-read and retry, an unknown track means the caller

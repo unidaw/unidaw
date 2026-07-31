@@ -32,8 +32,19 @@ pub struct RowOps {
 }
 
 impl RowOps {
+    /// True when the note carries no ops at all.
+    ///
+    /// `sound` and `sound_offset` COUNT. They were missing, which meant a row whose only op is a
+    /// sound address reported itself as empty — and R5's rule is that the ops column appears per
+    /// track when something in that track uses one, with a marker in the note cell. A row that
+    /// says "play slot 7" would have shown no marker and no column, so the one op you cannot see
+    /// from the pitch would have been the one op the editor hid.
     pub fn is_empty(&self) -> bool {
-        self.retrigger == 0 && self.probability == 0 && self.delay.is_none()
+        self.retrigger == 0
+            && self.probability == 0
+            && self.delay.is_none()
+            && self.sound == 0
+            && self.sound_offset == 0
     }
 
     /// The onset delay in absolute nanoticks for a given beat length.
@@ -59,9 +70,60 @@ pub const OP_SCHEMA: &[OpSpec] = &[
     OpSpec { prefix: "ret", summary: "retrigger N even strikes over the note", example: "ret3" },
     OpSpec { prefix: "p", summary: "probability percent to sound (1-100)", example: "p60" },
     OpSpec { prefix: "d", summary: "delay onset by a fraction of a beat", example: "d1/6" },
-    OpSpec { prefix: "s", summary: "play sampler slot N (blank = pitch picks it)", example: "s5" },
+    OpSpec { prefix: "s", summary: "play sampler slot N, zero-padded (blank = pitch picks it)", example: "s07" },
     OpSpec { prefix: "o", summary: "start N/256 into the sample, or a fraction like o1/3 (the 9xx seek)", example: "o80" },
 ];
+
+/// The canonical text for a set of ops — the inverse of `parse_row_ops`.
+///
+/// THE SOUND ADDRESS IS ZERO-PADDED (`s07`), by owner ruling (docs/SAMPLER_DESIGN.md section 8
+/// Q1). It is the id, not a name, so a rename rewrites nothing and a row means the same thing
+/// after any amount of kit editing. Padded because a tracker cell lives in a fixed-width grid and
+/// ragged `s7` / `s13` breaks the vertical rhythm that makes a tracker readable at a glance.
+///
+/// `sound_width` is the track's field width — two digits normally, three for a track that
+/// references an id >= 100, which a long-edited 64-pad kit can reach because `next_slot_id` never
+/// reuses. It is per track for the same reason R5 makes the ops column per track. A width smaller
+/// than the number needs is widened rather than truncated: a truncated id is a DIFFERENT slot,
+/// and silently playing the wrong sound to keep a column narrow is not a trade worth making.
+///
+/// This lives beside the parser so there is exactly one definition of the spelling. Display is
+/// the frontend's call (R5), but "which characters mean slot 7" is not, or the two sides drift.
+pub fn format_row_ops(ops: &RowOps, sound_width: usize) -> String {
+    let mut out: Vec<String> = Vec::new();
+    if ops.retrigger > 1 {
+        out.push(format!("ret{}", ops.retrigger));
+    }
+    if ops.probability > 0 {
+        out.push(format!("p{}", ops.probability));
+    }
+    if let Some((num, den)) = ops.delay {
+        if den != 0 && num != 0 {
+            out.push(format!("d{num}/{den}"));
+        }
+    }
+    if ops.sound != 0 {
+        let digits = ops.sound.to_string().len();
+        let width = sound_width.max(digits);
+        out.push(format!("s{:0width$}", ops.sound, width = width));
+    }
+    if ops.sound_offset != 0 {
+        // COARSE WHEN IT IS EXACTLY COARSE, a fraction otherwise. `o80` is the tracker muscle
+        // memory and covers everything typed by hand; a value that did not come from a whole
+        // 1/256th came from a fraction, and emitting the reduced fraction is the only form that
+        // survives a round trip. Rounding it to the nearest 1/256th would move the seek.
+        if ops.sound_offset % 256 == 0 {
+            out.push(format!("o{}", ops.sound_offset / 256));
+        } else {
+            fn gcd(a: u32, b: u32) -> u32 {
+                if b == 0 { a } else { gcd(b, a % b) }
+            }
+            let g = gcd(ops.sound_offset as u32, 65535);
+            out.push(format!("o{}/{}", ops.sound_offset as u32 / g, 65535 / g));
+        }
+    }
+    out.join(" ")
+}
 
 /// Parses space-separated row-op tokens (`"ret3 p60 d1/6"`) into `RowOps`.
 /// Unknown or malformed tokens are an error, never a silent no-op — a red cell,
@@ -248,6 +310,53 @@ mod tests {
         assert_eq!(ops.delay_nanoticks(QPB), (QPB / 6) as u32);
         let half = parse_row_ops("d1/2").unwrap();
         assert_eq!(half.delay_nanoticks(QPB), (QPB / 2) as u32);
+    }
+
+    #[test]
+    fn the_sound_address_formats_zero_padded_and_round_trips() {
+        // THE RULED SPELLING (section 8 Q1): the id, zero-padded, so a tracker column stays
+        // aligned and a rename rewrites nothing.
+        let ops = parse_row_ops("s7").unwrap();
+        assert_eq!(format_row_ops(&ops, 2), "s07");
+        assert_eq!(format_row_ops(&ops, 3), "s007");
+
+        // WIDENED, NEVER TRUNCATED. A truncated id is a different slot, and playing the wrong
+        // sound to keep a column narrow is not a trade worth making.
+        let big = parse_row_ops("s137").unwrap();
+        assert_eq!(format_row_ops(&big, 2), "s137");
+
+        // And the padding must not change what it parses back to, which is the whole point of
+        // choosing the id over the name.
+        assert_eq!(parse_row_ops("s07").unwrap().sound, 7);
+        assert_eq!(parse_row_ops("s007").unwrap().sound, 7);
+        assert_eq!(parse_row_ops(&format_row_ops(&ops, 2)).unwrap(), ops);
+    }
+
+    #[test]
+    fn formatting_round_trips_every_op_including_the_awkward_offsets() {
+        // The emitter is only worth having if it is the parser's inverse. A coarse offset comes
+        // back coarse; one that never was a whole 1/256th comes back as the reduced fraction,
+        // because rounding it to the nearest 1/256th would MOVE THE SEEK.
+        for text in ["ret3", "p60", "d1/6", "s07", "o80", "o1/3",
+                     "ret4 p25 d1/8 s12 o128", "ret2 s99 o1/7"] {
+            let parsed = parse_row_ops(text).unwrap();
+            let printed = format_row_ops(&parsed, 2);
+            let reparsed = parse_row_ops(&printed)
+                .unwrap_or_else(|e| panic!("{text:?} printed as {printed:?} which will not parse: {e}"));
+            assert_eq!(parsed, reparsed, "{text:?} printed as {printed:?}");
+        }
+        assert_eq!(format_row_ops(&RowOps::default(), 2), "");
+    }
+
+    #[test]
+    fn a_row_carrying_only_a_sound_address_is_not_empty() {
+        // R5 draws the ops column per track and marks the note cell when a row carries an op. A
+        // sound address IS an op — and the one you cannot infer from the pitch — so a row with
+        // nothing but `s07` reporting itself empty would have hidden exactly the op that most
+        // needs showing.
+        assert!(!parse_row_ops("s7").unwrap().is_empty());
+        assert!(!parse_row_ops("o80").unwrap().is_empty());
+        assert!(parse_row_ops("").unwrap().is_empty());
     }
 
     #[test]

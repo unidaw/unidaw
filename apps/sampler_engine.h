@@ -84,7 +84,11 @@ struct SamplerEvent {
   uint8_t pitch = 0;
   uint8_t velocity = 0;
   uint8_t column = 0;
-  uint16_t sound = 0;   // 0 = resolve through the keymap (R2)
+  uint16_t sound = 0;   // 0 = resolve through the keymap (R2), unless soundAddressedOnly
+  // The track's ruling on what a blank `sound` means. Carried on the EVENT rather than read from
+  // the sampler, because it is a property of the track whose notes these are — the same kit on a
+  // second track can be played the other way without copying the device.
+  bool soundAddressedOnly = false;
   uint32_t noteId = 0;  // the engine's voice id; identifies this note for note-off
   uint16_t offsetFrac = 0;  // the 9xx seek, as a fraction of the slot's extent (0 = from the start)
 };
@@ -265,7 +269,16 @@ class SamplerRuntime {
     //   sound == 0 -> the keymap, and pitch means exactly the same thing
     uint16_t slotId = e.sound;
     if (slotId == 0) {
-      slotId = resolveSlot(st, snap_->keymap, e.pitch, e.velocity, rrCounter_[e.pitch & 127]++);
+      if (e.soundAddressedOnly) {
+        // PITCH NEVER SELECTS on this track, so the keymap is not consulted at all and the whole
+        // keyboard plays one slot chromatically — which is the point of the mode. A blank sound
+        // still has to play SOMETHING or the keyboard goes silent, and "the keyboard can no
+        // longer play the kit" is the very thing the ruling was weighing.
+        slotId = st.lowestSlotId();
+      } else {
+        slotId = resolveSlot(st, snap_->keymap, e.pitch, e.velocity,
+                             rrCounter_[e.pitch & 127]++);
+      }
     }
     const SamplerSlot* slot = st.findSlot(slotId);
     if (!slot) {

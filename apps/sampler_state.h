@@ -177,6 +177,22 @@ struct SamplerState {
     }
     return nullptr;
   }
+  // THE LOWEST SLOT ID. What a blank `sound` plays on a sound-addressed-only track, where
+  // pitch may not select one (owner ruling, docs/SAMPLER_DESIGN.md section 8 Q2).
+  //
+  // Lowest id rather than first-in-vector, because the vector order is an editing artifact and
+  // this has to be the same slot after a reorder. Deterministic and derived, so there is no
+  // per-track "selected slot" to keep in sync — a second fact about the same thing is how the
+  // read-back and the model came to disagree before.
+  uint16_t lowestSlotId() const {
+    uint16_t best = 0;
+    for (const auto& s : slots) {
+      if (s.id != 0 && (best == 0 || s.id < best)) {
+        best = s.id;
+      }
+    }
+    return best;
+  }
   const SamplerModSet* findModSet(uint16_t id) const {
     for (const auto& m : modSets) {
       if (m.id == id) {

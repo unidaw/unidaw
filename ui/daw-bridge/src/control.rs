@@ -275,9 +275,7 @@ pub struct EngineHandle {
     _mmap: Mapping,
     header: *const ShmHeader,
     ring_ui: Option<RingView>,
-    /// The engine's OUT ring, which this side consumes. Only present on a
-    /// writable handle: a consumer advances read_index, so draining is a write.
-    ring_out: Option<RingView>,
+    ring_ui_out: Option<RingView>,
 }
 
 impl EngineHandle {
@@ -349,17 +347,50 @@ impl EngineHandle {
         } else {
             None
         };
-        let ring_out = if writable {
-            ring_view(mmap.as_ptr() as *mut u8, unsafe { (*header).ring_ui_out_offset })
-        } else {
-            None
-        };
+        // THE OUTBOUND RING, mapped even on a read-only attach. It is the engine's diff channel
+        // and this side only ever PEEKS it — see peek_ui_diffs for why it must never drain.
+        let ring_ui_out = ring_view(mmap.as_ptr() as *mut u8, unsafe {
+            (*header).ring_ui_out_offset
+        });
         Ok(Self {
             _mmap: mmap,
             header,
             ring_ui,
-            ring_out,
+            ring_ui_out,
         })
+    }
+
+    /// The diffs currently sitting in the engine's outbound ring, NEWEST LAST.
+    ///
+    /// PEEK, NEVER DRAIN. The outbound ring is single-consumer: the real UI advances
+    /// `read_index`, and a tool that drained here would silently steal diffs from the app it is
+    /// supposed to be observing — a debugging aid that breaks the thing being debugged. So this
+    /// reads the slots between `read_index` and `write_index` and advances nothing.
+    ///
+    /// That makes it a SAMPLE rather than a stream: a diff already consumed by a running UI is
+    /// gone before this can see it, and a slow caller can miss one to wrap-around. It is enough
+    /// to answer "did the engine report this refusal", which is what it exists for, and a caller
+    /// that needs every diff has to be the consumer rather than a bystander.
+    pub fn peek_ui_diffs(&self) -> Vec<(u16, [u8; 40])> {
+        let Some(ring) = self.ring_ui_out.as_ref() else {
+            return Vec::new();
+        };
+        let read = unsafe { (*ring.header).read_index.load(Ordering::Acquire) };
+        let write = unsafe { (*ring.header).write_index.load(Ordering::Acquire) };
+        let mut out = Vec::new();
+        let mut index = read;
+        while index != write {
+            let slot = (index & ring.mask) as usize;
+            let entry = unsafe { std::ptr::read_volatile(ring.entries.add(slot)) };
+            // `ready` is the multi-producer publication flag: a reserved-but-unfilled slot must
+            // not be read as data. Same rule the engine follows.
+            if entry.ready != 0 && entry.event_type == EventType::UiDiff as u16 {
+                let diff_type = u16::from_le_bytes([entry.payload[0], entry.payload[1]]);
+                out.push((diff_type, entry.payload));
+            }
+            index = index.wrapping_add(1);
+        }
+        out
     }
 
     pub fn snapshot(&self) -> Option<UiSnapshot> {
@@ -1192,7 +1223,7 @@ impl EngineHandle {
     /// Returns the number drained. An empty ring is the normal case and costs
     /// two atomic loads.
     pub fn drain_ui_out(&self, out: &mut Vec<EventEntry>, max: usize) -> usize {
-        let Some(ring) = self.ring_out.as_ref() else { return 0 };
+        let Some(ring) = self.ring_ui_out.as_ref() else { return 0 };
         let mut read = unsafe { (*ring.header).read_index.load(Ordering::Relaxed) };
         let write = unsafe { (*ring.header).write_index.load(Ordering::Acquire) };
         let mut n = 0;

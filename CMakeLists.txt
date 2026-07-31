@@ -571,6 +571,18 @@ add_test(NAME sampler_default_sound
 )
 set_tests_properties(sampler_default_sound PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A sound-addressed-only track plays a DIFFERENT slot for the same note (section 8 Q2).
+add_test(NAME sound_addressed
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sound_addressed_check.sh
+)
+set_tests_properties(sound_addressed PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
+# A refused sampler command tells the CALLER, not just the engine's log.
+add_test(NAME sampler_reject
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_reject_check.sh
+)
+set_tests_properties(sampler_reject PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # Every published patcher node names the device it came from.
 add_test(NAME patcher_node_owner
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_node_owner_check.sh

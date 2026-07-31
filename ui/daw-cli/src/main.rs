@@ -29,6 +29,7 @@ daw-cli — control surface for a running engine
   daw-cli watch                    stream transport state (default)
   daw-cli get transport            transport + versions as JSON
   daw-cli get tracks               per-track state as JSON
+  daw-cli get diffs                what the engine has reported on its outbound ring (peek, not drain)
   daw-cli do add-device --track N --kind sampler
   daw-cli do sampler-load --track N --device D --file NAME [--root 60] [--fixed-pitch]
                                    load a sample (project-relative name) and mint a slot
@@ -81,6 +82,7 @@ daw-cli — control surface for a running engine
   daw-cli do position --nanotick T move the playhead
   daw-cli do loop --start T --end T set the loop range
   daw-cli do harmony-quantize --track N [--on 0|1]
+  daw-cli do sound-addressed --track N [--on 0|1]
   daw-cli do automation --track N --param ID --nanotick T --value V
                         [--discrete] [--device D]
                                    writes one automation point. --discrete makes the
@@ -448,13 +450,20 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
             .get(index)
             .map(|m| m.flags & daw_bridge::layout::MIX_FLAG_HARMONY_QUANTIZE != 0)
             .unwrap_or(false);
+        // Published for the same reason harmony_quantize is, and it matters more: this flag
+        // decides which SLOT a note plays, so a UI that had to guess would draw the kit's
+        // mapping backwards.
+        let sound_addressed = mixers
+            .get(index)
+            .map(|m| m.flags & daw_bridge::layout::MIX_FLAG_SOUND_ADDRESSED != 0)
+            .unwrap_or(false);
         let comma = if index + 1 == count { "" } else { "," };
         // M2.17: this track's OWN clip version — the base an edit to this track must
         // present. The global `clip_version` in `get transport` moves whenever ANY
         // track changes and is no longer the right base for a track-scoped edit.
         let clip_version = handle.clip_version_for_track(id);
         println!(
-            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
+            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"sound_addressed\": {sound_addressed}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
         );
     }
     println!("  ]");
@@ -1650,6 +1659,39 @@ fn main() {
             match rest.first() {
                 Some(&"transport") => get_transport(&handle),
                 Some(&"tracks") => get_tracks(&handle),
+                // WHAT THE ENGINE HAS REPORTED ON ITS OUTBOUND DIFF RING, sampled.
+                //
+                // Added because sampler refusals became reportable (UiDiffType::SamplerRejected)
+                // and nothing on this side could see one — a channel with no reader is a claim,
+                // not a feature, and the check for it would have had to read the engine's log,
+                // which is the very thing the channel exists to replace.
+                //
+                // PEEK, NOT DRAIN: the ring is single-consumer and the real UI advances it, so a
+                // tool that consumed here would steal diffs from the app it is observing.
+                Some(&"diffs") => {
+                    let diffs = handle.peek_ui_diffs();
+                    println!("{{");
+                    println!("  \"count\": {},", diffs.len());
+                    println!("  \"diffs\": [");
+                    for (i, (diff_type, payload)) in diffs.iter().enumerate() {
+                        let comma = if i + 1 == diffs.len() { "" } else { "," };
+                        let u16at = |o: usize| u16::from_le_bytes([payload[o], payload[o + 1]]);
+                        let u32at = |o: usize| u32::from_le_bytes([
+                            payload[o], payload[o + 1], payload[o + 2], payload[o + 3]]);
+                        if *diff_type == daw_bridge::layout::UiDiffType::SamplerRejected as u16 {
+                            println!(
+                                "    {{ \"type\": \"sampler_rejected\", \"reason\": {}, \
+                                 \"command\": {}, \"target\": {}, \"track\": {}, \
+                                 \"device\": {} }}{comma}",
+                                u16at(2), u16at(4), u16at(6), u32at(8), u32at(12));
+                        } else {
+                            println!("    {{ \"type\": {diff_type} }}{comma}");
+                        }
+                    }
+                    println!("  ]");
+                    println!("}}");
+                    0
+                }
                 // THE PATCHER POOL AS THE ENGINE HAS IT, including each node's OWNING DEVICE.
                 //
                 // Added because the owner was the one fact a UI could not get: the region
@@ -3466,6 +3508,19 @@ removed is the whole command");
                     payload.note_duration_hi = (end >> 32) as u32;
                     match handle.send_command(payload) {
                         Ok(()) => { println!("{{ \"sent\": \"loop\", \"start\": {start}, \"end\": {end} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"sound-addressed") => {
+                    // The same shape as harmony-quantize, because it is the same kind of thing:
+                    // a per-track rule about how this track's notes are read.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let on = flag_u64(&args, "--on", Some(1)).unwrap_or(1);
+                    let mut payload = track_structure_command(
+                        UiCommandType::SetTrackSoundAddressed, track);
+                    payload.value0 = if on != 0 { 1 } else { 0 };
+                    match handle.send_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"sound-addressed\", \"track\": {track}, \"on\": {on} }}"); 0 }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
