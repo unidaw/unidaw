@@ -1275,6 +1275,21 @@ impl EngineHandle {
         )
     }
 
+    /// Set a sampler mod set's filter (SamplerSetFilter).
+    ///
+    /// The field that nothing could write: `filterType` was read at the kit publish site and
+    /// written nowhere, so every cutoff and resonance modulator reachable from a UI modulated a
+    /// filter that was off.
+    pub fn send_sampler_filter(
+        &self,
+        payload: crate::layout::UiSamplerFilterPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerFilterPayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerFilterPayload>(),
+        )
+    }
+
     /// Set a sampler modulator's ADSR (SamplerSetEnvelope).
     pub fn send_sampler_envelope(
         &self,

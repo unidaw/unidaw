@@ -8742,6 +8742,29 @@ struct TrackRuntime {
     return &ms.modulators.back();
   };
 
+  // THE SAME ARGUMENT ONE LEVEL UP: a mod set to mint the modulator IN.
+  //
+  // A sampler can legitimately hold no mod sets — a device added to a chain and not yet loaded,
+  // or a project that saved none — and every envelope and LFO command iterates `modSets` looking
+  // for one. Over an empty vector that loop body never runs, so the command applies to nothing
+  // and reports "no_such_mod_set" to the engine's event log. A caller driving through daw-cli
+  // sees `{"sent": ...}` and a kit whose modMask stays 0, with no indication anywhere it looks
+  // that the command was refused. The web-UI agent hit exactly this, three ways, and stopped
+  // rather than guess — which is how it got reported instead of being worked around.
+  //
+  // MINTING IS ONLY RIGHT WHEN THE CALLER DID NOT NAME ONE. `--mod-set 0` means "the default",
+  // which is a request that can always be satisfied, so satisfying it is better than refusing on
+  // a bookkeeping detail the caller cannot see. `--mod-set 7` when there is no 7 is a caller
+  // naming something that does not exist, and that must still be refused — substituting a
+  // different mod set would silently edit the wrong thing, which is worse than doing nothing.
+  auto ensureDefaultModSet = [](daw::SamplerState& sampler, uint32_t requestedId) {
+    if (requestedId != 0 || !sampler.modSets.empty()) {
+      return;
+    }
+    sampler.modSets.push_back(daw::defaultModSet(1));
+    sampler.nextModSetId = 2;
+  };
+
   // ---- THE INWARD BULK CARRIER (opcode 83).
   //
   // Reassembly state for messages too long for one 40-byte ring payload. Lives here, in the UI
@@ -8836,6 +8859,7 @@ struct TrackRuntime {
               (h.deviceId != 0 && d.id != h.deviceId)) {
             continue;
           }
+          ensureDefaultModSet(d.sampler, h.modSetId);
           for (auto& ms : d.sampler.modSets) {
             if (h.modSetId != 0 && ms.id != h.modSetId) {
               continue;
@@ -11122,6 +11146,98 @@ struct TrackRuntime {
       return;
     }
 
+    // ---- SAMPLER SET FILTER (86). The field nothing could write.
+    //
+    // Before this, modSet.filterType was read at the kit publish site and written NOWHERE — the
+    // only way to turn a sampler's filter on was to hand-edit the project JSON. So every cutoff
+    // and resonance modulator reachable from the CLI or the UI modulated a filter that was off:
+    // the modulator existed, saved, reloaded and published its bit, and moved nothing.
+    //
+    // Note this is a MOD SET property and not a slot property. Slots share mod sets, so turning
+    // the filter on is one edit for every slot that points at it, which is the behaviour a kit
+    // wants — a chop's twenty slices are one instrument, not twenty.
+    if (entry.size == sizeof(daw::UiSamplerFilterPayload) &&
+        commandType == daw::UiCommandType::SamplerSetFilter) {
+      daw::UiSamplerFilterPayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("sampler.filter_rejected")
+            .field("track", p.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      // OUT OF RANGE IS REFUSED, NOT CLAMPED. A filter type is an enumeration, not a continuous
+      // control someone sweeps — 7 is not "a bit past BP", it is a caller with the wrong idea of
+      // the encoding, and clamping it to BP would hand them a filter they did not ask for and no
+      // way to discover the mistake.
+      if (p.filterType > 4) {
+        DAW_EVENT("sampler.filter_rejected")
+            .field("track", p.trackId)
+            .field("type", static_cast<uint32_t>(p.filterType))
+            .field("reason", "no_such_filter_type");
+        return;
+      }
+      bool applied = false;
+      uint32_t touched = 0;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          ensureDefaultModSet(d.sampler, p.modSetId);
+          for (auto& ms : d.sampler.modSets) {
+            if (p.modSetId != 0 && ms.id != p.modSetId) {
+              continue;
+            }
+            ms.filterType = p.filterType;
+            // The two flags are what makes "set the type, leave the cutoff" expressible. Zero is
+            // a legal cutoff, so absence cannot be encoded as a zero value.
+            if ((p.flags & daw::kSamplerFilterSetCutoff) != 0) {
+              ms.cutoffMilli = static_cast<uint16_t>(std::min<uint32_t>(p.cutoffMilli, 1000));
+            }
+            if ((p.flags & daw::kSamplerFilterSetResonance) != 0) {
+              ms.resonanceMilli =
+                  static_cast<uint16_t>(std::min<uint32_t>(p.resonanceMilli, 1000));
+            }
+            applied = true;
+            ++touched;
+          }
+          if (applied) {
+            break;
+          }
+        }
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        DAW_EVENT("sampler.filter_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("mod_set", p.modSetId)
+            .field("reason", "no_such_mod_set");
+        return;
+      }
+      DAW_EVENT("sampler.filter_set")
+          .field("track", p.trackId)
+          .field("device", p.deviceId)
+          .field("mod_set", p.modSetId)
+          .field("mod_sets_touched", touched)
+          .field("type", static_cast<uint32_t>(p.filterType))
+          .field("cutoff_milli", static_cast<uint32_t>(p.cutoffMilli))
+          .field("resonance_milli", static_cast<uint32_t>(p.resonanceMilli));
+      return;
+    }
+
     // ---- SAMPLER SET LFO (85). The modulator kind that saved, loaded and made no sound.
     if (entry.size == sizeof(daw::UiSamplerLfoPayload) &&
         commandType == daw::UiCommandType::SamplerSetLfo) {
@@ -11149,6 +11265,7 @@ struct TrackRuntime {
               (p.deviceId != 0 && d.id != p.deviceId)) {
             continue;
           }
+          ensureDefaultModSet(d.sampler, p.modSetId);
           for (auto& ms : d.sampler.modSets) {
             if (p.modSetId != 0 && ms.id != p.modSetId) {
               continue;
@@ -11251,6 +11368,7 @@ struct TrackRuntime {
               (p.deviceId != 0 && d.id != p.deviceId)) {
             continue;
           }
+          ensureDefaultModSet(d.sampler, p.modSetId);
           for (auto& ms : d.sampler.modSets) {
             if (p.modSetId != 0 && ms.id != p.modSetId) {
               continue;

@@ -225,6 +225,36 @@ pub const SAMPLER_MARKER_REMOVE: u16 = 2;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+/// SamplerSetFilter (86). The mod set's filter: type, base cutoff, base resonance.
+///
+/// Nothing in the engine wrote `filterType` before this — the only reference to it anywhere was
+/// the read at the kit publish site, so the filter could be turned on by hand-editing project
+/// JSON and by nothing else. Every cutoff and resonance modulator reachable from a UI was
+/// therefore inert by construction: created, saved, reloaded, publishing its bit, moving nothing.
+///
+/// `cutoff_milli` is 0..1000 across the audible range logarithmically; `resonance_milli` is
+/// 0..1000 onto Q 0.7..10. The two flags exist because zero is a legal cutoff, so "leave it
+/// alone" cannot be encoded as a zero value.
+pub struct UiSamplerFilterPayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub mod_set_id: u32,
+    pub filter_type: u8,
+    pub reserved0: u8,
+    pub cutoff_milli: u16,
+    pub resonance_milli: u16,
+    pub reserved1: u16,
+    pub reserved2: [u32; 4],
+}
+
+/// Which fields SamplerSetFilter is actually setting.
+pub const SAMPLER_FILTER_SET_CUTOFF: u16 = 1 << 0;
+pub const SAMPLER_FILTER_SET_RESONANCE: u16 = 1 << 1;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 /// SamplerSetLfo (85). ModKind::Lfo has been in the saved project since the sampler shipped and
 /// nothing rendered it — a modulator kind that round-tripped perfectly and made no sound.
 ///
@@ -1021,6 +1051,7 @@ pub enum UiCommandType {
 
     /// Sets a sampler modulator's LFO — note-retriggered, on any modulation target.
     SamplerSetLfo = 85,
+    SamplerSetFilter = 86,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
@@ -1896,6 +1927,7 @@ mod tests {
         same!(UiSamplerMarkerPayload, sys::daw_UiSamplerMarkerPayload);
         same!(UiSamplerSetSlotPayload, sys::daw_UiSamplerSetSlotPayload);
         same!(UiSamplerSlicePayload, sys::daw_UiSamplerSlicePayload);
+        same!(UiSamplerFilterPayload, sys::daw_UiSamplerFilterPayload);
         same!(UiSetParamPayload, sys::daw_UiSetParamPayload);
         same!(UiTimeSigPoint, sys::daw_UiTimeSigPoint);
         same!(UiTrackRoutingPayload, sys::daw_UiTrackRoutingPayload);
@@ -2153,6 +2185,7 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiSamplerEnvelopePayload>(), 40);
         assert_eq!(std::mem::size_of::<UiBulkChunkPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerLfoPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerFilterPayload>(), 40);
         // Not a ring payload — the ASSEMBLED shapes, which the engine memcpys.
         assert_eq!(std::mem::size_of::<UiSamplerEnvPointsHeader>(), 32);
         assert_eq!(std::mem::size_of::<UiEnvPointWire>(), 8);

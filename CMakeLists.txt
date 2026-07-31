@@ -565,6 +565,12 @@ add_test(NAME sampler_kit
 )
 set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# The filter can be turned on at all — the field nothing could write — and it is audible.
+add_test(NAME sampler_filter
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_filter_check.sh
+)
+set_tests_properties(sampler_filter PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_determinism
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_determinism_check.sh
 )

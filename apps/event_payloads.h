@@ -325,8 +325,53 @@ enum class UiCommandType : uint16_t {
   /// transport did beforehand, and the value at a frame does not depend on where the block
   /// boundaries fell. A timeline-locked LFO is right for a patcher control signal and wrong
   /// inside a voice; `phaseOffset` is how you move it deliberately.
-  SamplerSetLfo = 85,  // next free 86
+  SamplerSetLfo = 85,
+
+  /// Sets a sampler mod set's FILTER: type, base cutoff, base resonance.
+  ///
+  /// Until this existed, nothing in the engine wrote modSet.filterType. The only reference to it
+  /// anywhere was the read at the kit publish site, so the filter could be turned on by exactly
+  /// one thing — hand-editing the project JSON. Every cutoff and resonance envelope reachable
+  /// from the CLI or the UI was therefore INERT BY CONSTRUCTION: you could create the modulator,
+  /// it saved, it reloaded, it published its bit, and it modulated a filter that was off.
+  ///
+  /// The web-UI agent found this from the outside, having drawn the inert state honestly rather
+  /// than hiding it — the badge was reporting the only condition the product could reach.
+  ///
+  /// CUTOFF AND RESONANCE ARE THE BASE VALUES the modulators move AROUND, not the modulated
+  /// result. A cutoff envelope's depth is in octaves either side of this.
+  SamplerSetFilter = 86,  // next free 87
 };
+
+// SAMPLER SET FILTER (opcode 86). 40 bytes.
+//
+// cutoffMilli is 0..1000 across the audible range LOGARITHMICALLY, the same unit
+// SamplerModSet::cutoffMilli has always been — a linear hertz control spends most of its travel
+// where nothing musical happens. resonanceMilli is 0..1000 and maps onto Q 0.7..10.
+//
+// The two flags exist because the common edit is changing the TYPE on a mod set whose cutoff
+// someone already dialled in. Without them a caller cannot say "type only" distinctly from
+// "type, and set the cutoff to zero" — and zero is a legal cutoff, not a missing one.
+struct UiSamplerFilterPayload {
+  uint16_t commandType;  // UiCommandType::SamplerSetFilter
+  uint16_t flags;        // kSamplerFilterSetCutoff / kSamplerFilterSetResonance
+  uint32_t trackId;
+  uint32_t deviceId;   // 0 = the first sampler on the track
+  uint32_t modSetId;   // 0 = all mod sets on that sampler
+  uint8_t filterType;  // 0 off, 1 LP12, 2 LP24, 3 HP, 4 BP
+  uint8_t reserved0;
+  uint16_t cutoffMilli;
+  uint16_t resonanceMilli;
+  uint16_t reserved1;
+  uint32_t reserved2[4];
+};
+static_assert(sizeof(UiSamplerFilterPayload) == 40,
+              "UiSamplerFilterPayload must be 40 bytes");
+
+// WHICH FIELDS THIS COMMAND IS ACTUALLY SETTING. Without these a caller cannot say "type only"
+// distinctly from "type, and set the cutoff to zero" — and zero is a legal cutoff.
+inline constexpr uint16_t kSamplerFilterSetCutoff = 1u << 0;
+inline constexpr uint16_t kSamplerFilterSetResonance = 1u << 1;
 
 // SAMPLER SET LFO (opcode 85). 40 bytes.
 //
@@ -824,6 +869,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::BulkChunk: return "bulk_chunk";
     case UiCommandType::SamplerSetEnvelopePoints: return "sampler_set_envelope_points";
     case UiCommandType::SamplerSetLfo: return "sampler_set_lfo";
+    case UiCommandType::SamplerSetFilter: return "sampler_set_filter";
     case UiCommandType::RevertPlacementOverrides: return "revert_placement_overrides";
     case UiCommandType::WriteAutomationPoint: return "write_automation_point";
     case UiCommandType::SetPlacementEditScope: return "set_placement_edit_scope";

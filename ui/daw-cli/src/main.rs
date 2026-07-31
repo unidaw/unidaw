@@ -13,8 +13,9 @@ use daw_bridge::layout::{
     UiChainCommandPayload, UiChordCommandPayload, UiClipWindowCommandPayload, UiCommandPayload,
     UiCommandType, UiPatcherPresetCommandPayload, UiSamplerKitRequestPayload,
     UiSamplerEmitRowsPayload, UiSamplerLoadPayload, UiSamplerMarkerPayload, UiSamplerSetSlotPayload, UiSamplerSlicePayload,
-    UiSamplerEnvelopePayload, UiSetRowOpsPayload, UiWaveformRequestPayload,
-    MASTER_TRACK_ID, SAMPLER_ENV_AMP, ROW_OP_MASK_DELAY,
+    UiSamplerEnvelopePayload, UiSamplerFilterPayload, UiSetRowOpsPayload, UiWaveformRequestPayload,
+    MASTER_TRACK_ID, SAMPLER_ENV_AMP, SAMPLER_FILTER_SET_CUTOFF, SAMPLER_FILTER_SET_RESONANCE,
+    ROW_OP_MASK_DELAY,
     ROW_OP_MASK_PROBABILITY, ROW_OP_MASK_RETRIGGER, ROW_OP_MASK_SOUND, ROW_OP_MASK_SOUND_OFFSET,
     SAMPLER_LOAD_FIXED_PITCH, SAMPLER_MARKER_ADD,
     SAMPLER_MARKER_MOVE, SAMPLER_MARKER_REMOVE, SAMPLER_SLICE_CLEAR, SAMPLER_SLICE_EQUAL,
@@ -44,6 +45,7 @@ daw-cli — control surface for a running engine
   daw-cli do set-row-ops --track N --note ID [--clip ID] [--ret N] [--prob N] [--sound N] [--offset N] [--delay TICKS] [--clear ret,prob,sound,offset,delay]
   daw-cli do sampler-env --track N [--device ID] [--mod-set ID] [--amp|--modulator ID] --attack US --decay US --sustain MILLI --release US [--sync] [--rate MILLI] [--target amp|pan|pitch|cutoff|res] [--depth MILLI]
   daw-cli do sampler-env-draw --track N [--target amp|pan|pitch|cutoff|res] --points t,v[,tension[,step]];...
+  daw-cli do sampler-filter --track N [--device D] [--mod-set ID] --type off|lp12|lp24|hp|bp [--cutoff 0..1000] [--resonance 0..1000]
   daw-cli do sampler-lfo --track N [--target amp|pan|pitch|cutoff|res] --hz F [--depth F] [--bias F] [--phase F] [--amount MILLI] [--sustain-loop A,B] [--release-loop A,B] [--release-fade US] [--sync] [--rate MILLI]
                                    nudge one boundary — ids are stable, so no row moves
   daw-cli do sampler-emit-rows --track N --source 1 [--at TICK] [--step TICKS] [--column C]
@@ -2328,7 +2330,7 @@ fn main() {
                         Some("res") | Some("resonance") => 4u8,
                         Some(other) => {
                             eprintln!("daw-cli: --target expects amp|pan|pitch|cutoff|res, got {other:?}");
-                            return;
+                            std::process::exit(2);
                         }
                     };
                     let sync = args.iter().any(|a| a == "--sync");
@@ -2432,6 +2434,60 @@ fn main() {
                         }
                     }
                 }
+                Some(&"sampler-filter") => {
+                    // THE FIELD NOTHING COULD WRITE. modSet.filterType was read at the kit
+                    // publish site and written nowhere, so a cutoff or resonance envelope built
+                    // through this CLI always modulated a filter that was off.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let mod_set = flag_u64(&args, "--mod-set", Some(0)).unwrap_or(0) as u32;
+                    let filter_type = match flag(&args, "--type").as_deref() {
+                        Some("off") | Some("none") | None => 0u8,
+                        Some("lp12") | Some("lp") => 1u8,
+                        Some("lp24") => 2u8,
+                        Some("hp") | Some("hp12") => 3u8,
+                        Some("bp") | Some("bp12") => 4u8,
+                        Some(other) => {
+                            eprintln!("daw-cli: --type expects off|lp12|lp24|hp|bp, got {other:?}");
+                            std::process::exit(2);
+                        }
+                    };
+                    // ABSENT IS NOT ZERO. Zero is a legal cutoff, so "leave it alone" has to be
+                    // carried by a flag rather than inferred from the value — otherwise changing
+                    // the filter TYPE would silently slam the cutoff shut.
+                    let mut flags = 0u16;
+                    let cutoff = match flag_u64(&args, "--cutoff", None).ok() {
+                        Some(v) => { flags |= SAMPLER_FILTER_SET_CUTOFF; v.min(1000) as u16 }
+                        None => 0,
+                    };
+                    let resonance = match flag_u64(&args, "--resonance", None).ok() {
+                        Some(v) => { flags |= SAMPLER_FILTER_SET_RESONANCE; v.min(1000) as u16 }
+                        None => 0,
+                    };
+                    let payload = UiSamplerFilterPayload {
+                        command_type: UiCommandType::SamplerSetFilter as u16,
+                        flags,
+                        track_id: track,
+                        device_id: device,
+                        mod_set_id: mod_set,
+                        filter_type,
+                        reserved0: 0,
+                        cutoff_milli: cutoff,
+                        resonance_milli: resonance,
+                        reserved1: 0,
+                        reserved2: [0; 4],
+                    };
+                    match handle.send_sampler_filter(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"sampler-filter\", \"track\": {track}, \"mod_set\": {mod_set}, \"type\": {filter_type}, \"cutoff\": {cutoff}, \"resonance\": {resonance} }}");
+                            0
+                        }
+                        Err(err) => {
+                            eprintln!("daw-cli: {err}");
+                            1
+                        }
+                    }
+                }
                 Some(&"sampler-lfo") => {
                     use daw_bridge::layout as L;
                     let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
@@ -2449,7 +2505,7 @@ fn main() {
                         Some("res") | Some("resonance") => 4u8,
                         Some(other) => {
                             eprintln!("daw-cli: --target expects amp|pan|pitch|cutoff|res, got {other:?}");
-                            return;
+                            std::process::exit(2);
                         }
                     };
                     let payload = L::UiSamplerLfoPayload {
@@ -2503,7 +2559,7 @@ fn main() {
                         Some("res") | Some("resonance") => 4u8,
                         Some(other) => {
                             eprintln!("daw-cli: --target expects amp|pan|pitch|cutoff|res, got {other:?}");
-                            return;
+                            std::process::exit(2);
                         }
                     };
                     let sync = args.iter().any(|a| a == "--sync");
