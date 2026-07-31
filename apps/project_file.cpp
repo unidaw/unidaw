@@ -494,6 +494,12 @@ void writePatcherGraph(JsonWriter& writer, const PatcherGraph& graph) {
                  static_cast<uint64_t>(node.randomDegreeConfig.duration_ticks));
       writer.endChildObject();
     }
+    if (node.hasSliceSelectConfig) {
+      writer.beginChildObject("slice_select");
+      writer.key("base", static_cast<uint32_t>(node.sliceSelectConfig.base));
+      writer.key("count", static_cast<uint32_t>(node.sliceSelectConfig.count));
+      writer.endChildObject();
+    }
     writer.endArrayElement();
   }
   writer.endArray();

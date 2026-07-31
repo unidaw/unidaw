@@ -565,6 +565,12 @@ add_test(NAME sampler_kit
 )
 set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A generated note chooses its slice, and chooses the same one at any buffer size.
+add_test(NAME slice_select
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slice_select_check.sh
+)
+set_tests_properties(slice_select PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # Zero is not a device id: a sampler that is the FIRST device on its track must be played.
 add_test(NAME device_id_zero
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/device_id_zero_check.sh

@@ -20,6 +20,9 @@ enum class PatcherNodeType : uint8_t {
   Lfo = 4,
   RandomDegree = 5,
   EventOut = 6,
+  // Chooses WHICH SOUND a note plays — the sampler slot or slice — leaving the pitch alone.
+  // random_degree writing `sound` instead of `pitch`; see docs/SAMPLER_DESIGN.md §5.3.
+  SliceSelect = 7,
 };
 
 // True for a node that puts events into the stream the user did not author:
@@ -30,7 +33,11 @@ enum class PatcherNodeType : uint8_t {
 // added (arp, ...). LFO is a control/modulation source, not an event generator.
 inline bool isEventGeneratorNode(PatcherNodeType type) {
   return type == PatcherNodeType::Euclidean ||
-         type == PatcherNodeType::RandomDegree;
+         type == PatcherNodeType::RandomDegree ||
+         // SliceSelect rewrites what a note PLAYS, so a note that sounds is not the one that was
+         // written — the same reason RandomDegree is here. It also promotes a bare gate into a
+         // note, which is generation in the plainest sense.
+         type == PatcherNodeType::SliceSelect;
 }
 
 struct PatcherGraph;  // defined below
@@ -82,6 +89,8 @@ struct PatcherNode {
   PatcherLfoConfig lfoConfig{};
   bool hasRandomDegreeConfig = false;
   PatcherRandomDegreeConfig randomDegreeConfig{};
+  bool hasSliceSelectConfig = false;
+  PatcherSliceSelectConfig sliceSelectConfig{};
 };
 
 struct PatcherGraph {
@@ -137,6 +146,10 @@ bool setEuclideanConfig(PatcherGraphState& state,
 bool setLfoConfig(PatcherGraphState& state,
                   uint32_t nodeId,
                   const PatcherLfoConfig& config);
+bool setSliceSelectConfig(PatcherGraphState& state,
+                          uint32_t nodeId,
+                          const PatcherSliceSelectConfig& config);
+
 bool setRandomDegreeConfig(PatcherGraphState& state,
                            uint32_t nodeId,
                            const PatcherRandomDegreeConfig& config);

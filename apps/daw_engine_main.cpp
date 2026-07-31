@@ -254,6 +254,15 @@ inline void dispatchRustKernel(daw::PatcherNodeType type, daw::PatcherContext& c
         daw::patcher_process(&ctx);
       }
       break;
+    case daw::PatcherNodeType::SliceSelect:
+      if (daw::patcher_process_slice_select) {
+        daw::patcher_process_slice_select(&ctx);
+      }
+      // NO FALLBACK to the generic kernel, unlike RandomDegree above. The generic kernel does
+      // something else entirely; for a node whose whole job is to write one field, running the
+      // wrong kernel would silently produce notes with no slice rather than nothing at all —
+      // and "the wrong sound plays" is harder to notice than "no sound plays".
+      break;
     case daw::PatcherNodeType::EventOut:
       if (daw::patcher_process_event_out) {
         daw::patcher_process_event_out(&ctx);
@@ -2903,6 +2912,9 @@ struct TrackRuntime {
   // Bumped whenever any track's sampler state changes, so a UI can poll one number instead of
   // re-requesting a kit to find out whether the one it drew is still current.
   std::atomic<uint32_t> samplerKitVersion{0};
+  // One-shot: a generated event whose converted sample fell outside the block its TICK window
+  // owns. Should be impossible; see the clamp that sets it.
+  std::atomic<bool> warnedEventOutsideBlock{false};
   std::atomic<uint32_t> chainVersion{0};
   std::atomic<uint32_t> routingVersion{0};
   std::atomic<uint32_t> modVersion{0};
@@ -3804,6 +3816,11 @@ struct TrackRuntime {
         out.config[0] = static_cast<int32_t>(r.degree);
         out.config[1] = static_cast<int32_t>(r.velocity);
         out.config[2] = static_cast<int32_t>(r.duration_ticks & 0xffffffffu);
+      } else if (n.hasSliceSelectConfig) {
+        out.hasConfig = 1;
+        const auto& sel = n.sliceSelectConfig;
+        out.config[0] = static_cast<int32_t>(sel.base);
+        out.config[1] = static_cast<int32_t>(sel.count);
       } else if (n.hasLfoConfig) {
         out.hasConfig = 1;
         const auto& l = n.lfoConfig;
@@ -14015,12 +14032,46 @@ struct TrackRuntime {
                 entry.sampleTime >= blockSampleEnd) {
               continue;
             }
-            const int64_t offsetSamples =
+            int64_t offsetSamples =
                 static_cast<int64_t>(entry.sampleTime) -
                 static_cast<int64_t>(blockSampleStart);
+            // CLAMPED INTO THE BLOCK, NOT DROPPED.
+            //
+            // Everything in this scratchpad was generated FOR this block's TICK window, so it
+            // belongs to this block by construction. Its sample time is a CONVERSION of that
+            // tick, and a conversion can land a sample outside: at 120 bpm and 44.1 kHz the
+            // sixteenth at 1.875 s sits at sample 82687.5, so a block covering [82432, 82688)
+            // converts it to 82688 — the first sample of the NEXT block. This test dropped it
+            // there, and the next block never emitted it either, because its TICK window starts
+            // after that step. The note simply vanished.
+            //
+            // It bites only when a step lands almost exactly on a block boundary, so WHICH notes
+            // vanish depends on the buffer size: at 256 frames that sixteenth is on a boundary
+            // and is lost, at 1024 it is not and it plays. One missing note in an eight-second
+            // render at one buffer size — which is why it survived until a check demanded that
+            // two renders be BIT-IDENTICAL rather than merely similar.
+            //
+            // Half a sample early is inaudible; a missing note is not. Widening the window
+            // instead would let the same event be emitted by two consecutive blocks, which is a
+            // doubled note rather than a missing one — no better.
             if (offsetSamples < 0 ||
                 offsetSamples >= static_cast<int64_t>(engineConfig.blockSize)) {
-              continue;
+              // SAID OUT LOUD, ONCE. With the generator's floor conversion in place this cannot
+              // fire — its own negative control passes, which is the honest way to describe a
+              // guard that no longer has a reproducer. It is kept because the CLIP path converts
+              // ticks to samples by a different route that has not been audited for the same
+              // property, and because the alternative behaviour here was to DELETE the note.
+              //
+              // If it ever does fire, this line is the difference between a diagnosable report
+              // and another year of "a note goes missing sometimes".
+              if (!warnedEventOutsideBlock.exchange(true, std::memory_order_relaxed)) {
+                DAW_EVENT("patcher.event_outside_block")
+                    .field("offset", offsetSamples)
+                    .field("block_size", static_cast<uint32_t>(engineConfig.blockSize));
+              }
+              offsetSamples = offsetSamples < 0
+                                  ? 0
+                                  : static_cast<int64_t>(engineConfig.blockSize) - 1;
             }
             const uint64_t tickDelta = static_cast<uint64_t>(std::llround(
                 static_cast<long double>(offsetSamples) / samplesPerTick));
@@ -14361,6 +14412,11 @@ struct TrackRuntime {
             if (node.hasRandomDegreeConfig) {
               ctx.node_config = &node.randomDegreeConfig;
               ctx.node_config_size = sizeof(node.randomDegreeConfig);
+            }
+          } else if (node.type == daw::PatcherNodeType::SliceSelect) {
+            if (node.hasSliceSelectConfig) {
+              ctx.node_config = &node.sliceSelectConfig;
+              ctx.node_config_size = sizeof(node.sliceSelectConfig);
             }
           } else if (node.type == daw::PatcherNodeType::Lfo) {
             if (node.hasLfoConfig) {
@@ -15455,12 +15511,46 @@ struct TrackRuntime {
             if (logic.metadata[0] == daw::kMusicalLogicKindGate) {
               continue;
             }
-            const int64_t offsetSamples =
+            int64_t offsetSamples =
                 static_cast<int64_t>(entry.sampleTime) -
                 static_cast<int64_t>(blockSampleStart);
+            // CLAMPED INTO THE BLOCK, NOT DROPPED.
+            //
+            // Everything in this scratchpad was generated FOR this block's TICK window, so it
+            // belongs to this block by construction. Its sample time is a CONVERSION of that
+            // tick, and a conversion can land a sample outside: at 120 bpm and 44.1 kHz the
+            // sixteenth at 1.875 s sits at sample 82687.5, so a block covering [82432, 82688)
+            // converts it to 82688 — the first sample of the NEXT block. This test dropped it
+            // there, and the next block never emitted it either, because its TICK window starts
+            // after that step. The note simply vanished.
+            //
+            // It bites only when a step lands almost exactly on a block boundary, so WHICH notes
+            // vanish depends on the buffer size: at 256 frames that sixteenth is on a boundary
+            // and is lost, at 1024 it is not and it plays. One missing note in an eight-second
+            // render at one buffer size — which is why it survived until a check demanded that
+            // two renders be BIT-IDENTICAL rather than merely similar.
+            //
+            // Half a sample early is inaudible; a missing note is not. Widening the window
+            // instead would let the same event be emitted by two consecutive blocks, which is a
+            // doubled note rather than a missing one — no better.
             if (offsetSamples < 0 ||
                 offsetSamples >= static_cast<int64_t>(engineConfig.blockSize)) {
-              continue;
+              // SAID OUT LOUD, ONCE. With the generator's floor conversion in place this cannot
+              // fire — its own negative control passes, which is the honest way to describe a
+              // guard that no longer has a reproducer. It is kept because the CLIP path converts
+              // ticks to samples by a different route that has not been audited for the same
+              // property, and because the alternative behaviour here was to DELETE the note.
+              //
+              // If it ever does fire, this line is the difference between a diagnosable report
+              // and another year of "a note goes missing sometimes".
+              if (!warnedEventOutsideBlock.exchange(true, std::memory_order_relaxed)) {
+                DAW_EVENT("patcher.event_outside_block")
+                    .field("offset", offsetSamples)
+                    .field("block_size", static_cast<uint32_t>(engineConfig.blockSize));
+              }
+              offsetSamples = offsetSamples < 0
+                                  ? 0
+                                  : static_cast<int64_t>(engineConfig.blockSize) - 1;
             }
             const uint64_t tickDelta = static_cast<uint64_t>(std::llround(
                 static_cast<long double>(offsetSamples) / samplesPerTick));
@@ -15524,7 +15614,13 @@ struct TrackRuntime {
               se.pitch = pitch;
               se.velocity = velocity;
               se.column = 0;
-              se.sound = 0;
+              // THE SOUND ADDRESS THE GRAPH CHOSE, if it chose one. This was hardcoded 0 —
+              // "no address, let the keymap pick from the pitch" — because nothing upstream
+              // could supply one. SliceSelect now can, which is the whole point of the node:
+              // a generated note that names its slice rather than inheriting whatever the
+              // resolved pitch happens to map to. Still 0 for every other graph, which is
+              // still the right default and what every drum kit relies on.
+              se.sound = logic.sound;
               se.offsetFrac = 0;
               se.noteId = noteId;
               runtime.samplerEvents.push_back(se);
