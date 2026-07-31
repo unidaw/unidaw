@@ -153,6 +153,15 @@ struct ProjectTrack {
   bool isAuxChild = false;
   uint32_t auxBusIndex = 0;
   bool harmonyQuantize = false;
+  // SOUND-ADDRESSED ONLY (owner ruling, docs/SAMPLER_DESIGN.md section 8 Q2). Off by default, so
+  // a blank `sound` means "the keymap picks the slot from pitch" — R5 stands. On, pitch NEVER
+  // selects: the note's `sound` names the slot and pitch is varispeed relative to that slot's
+  // rootKey, so a 64-slot kit stays fully chromatic instead of one slot per key.
+  //
+  // Per track rather than per device because it describes how THIS TRACK'S NOTES are read, not
+  // what the sampler contains — the same kit dragged onto a second track can be played the other
+  // way without copying anything.
+  bool soundAddressedOnly = false;
   // M3.27: this track's automation. Playback existed since Movement 3 phase 1 and this
   // did NOT, so automation could be heard and never saved — record a sweep, hear it,
   // reload, and it was gone. Written only when non-empty, so a project without automation

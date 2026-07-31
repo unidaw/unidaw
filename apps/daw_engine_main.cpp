@@ -1534,6 +1534,9 @@ struct TrackStateSnapshot {
   // dispatch while the tracker still renders the pitch you typed, so the
   // editor shows a note you do not hear. Opt in per track if you want it.
   bool harmonyQuantize = false;
+  // See Track::soundAddressedOnly. Read on the dispatch path, so it lives in the snapshot
+  // rather than being fetched from the model under a lock.
+  bool soundAddressedOnly = false;
 };
 
 const TrackStateSnapshot kEmptyTrackState{};
@@ -2159,6 +2162,7 @@ struct Track {
   // See TrackStateSnapshot::harmonyQuantize — off by default so typed pitch
   // is what sounds.
   bool harmonyQuantize = false;
+  bool soundAddressedOnly = false;
   daw::TrackChain chain;
   daw::TrackRouting routing;
   daw::ModRegistry modRegistry;
@@ -2172,6 +2176,7 @@ struct Track {
   snapshot->routing = track.routing;
   snapshot->automationClips = track.automationClips;
   snapshot->harmonyQuantize = track.harmonyQuantize;
+  snapshot->soundAddressedOnly = track.soundAddressedOnly;
   return snapshot;
 };
 
@@ -2565,6 +2570,7 @@ struct TrackRuntime {
     rt.track.modRegistry.links.clear();
     rt.track.automationClips.clear();
     rt.track.harmonyQuantize = false;
+    rt.track.soundAddressedOnly = false;
     rt.sourcePlacements.clear();
     rt.ownedClips.clear();
     rt.editableClipIds.clear();
@@ -6311,6 +6317,7 @@ struct TrackRuntime {
       {
         std::lock_guard<std::mutex> lock(runtime->trackMutex);
         track.harmonyQuantize = runtime->track.harmonyQuantize;
+        track.soundAddressedOnly = runtime->track.soundAddressedOnly;
         track.automationClips = runtime->track.automationClips;
         track.quantize.gridNanoticks =
             runtime->quantizeGrid.load(std::memory_order_acquire);
@@ -7267,6 +7274,7 @@ struct TrackRuntime {
                                    rebuildAudioRender(*runtime),
                                    std::memory_order_release);
         runtime->track.harmonyQuantize = source.harmonyQuantize;
+        runtime->track.soundAddressedOnly = source.soundAddressedOnly;
         // M3.27: adopt the automation. Parsed at load and never installed would be the
         // mod-link data loss all over again — the next save would write an empty list and
         // delete it from disk.
@@ -13564,6 +13572,34 @@ struct TrackRuntime {
       std::cout << "UI: Track " << payload.trackId
                 << " harmony quantize " << (enable ? "on" : "off") << std::endl;
     } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetTrackSoundAddressed)) {
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        daw::LogLine() << "UI: SetTrackSoundAddressed failed - track "
+                       << payload.trackId << " not found" << std::endl;
+        return;
+      }
+      const bool enable = payload.value0 != 0;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        runtime->track.soundAddressedOnly = enable;
+      }
+      // PUBLISH THE SNAPSHOT, or the RT keeps dispatching under the old rule. The model and the
+      // snapshot are two facts about one thing and the dispatch path reads only the second.
+      std::atomic_store_explicit(
+          &runtime->trackSnapshot,
+          buildTrackSnapshot(runtime->track),
+          std::memory_order_release);
+      DAW_EVENT("track.sound_addressed")
+          .field("track", payload.trackId)
+          .field("enabled", enable);
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetLaneQuantize)) {
       TrackRuntime* runtime = nullptr;
       {
@@ -14956,8 +14992,11 @@ struct TrackRuntime {
               se.velocity = velocity;
               se.column = noteColumn;
               // R2's per-note sound address, straight through. 0 means the keymap picks the slot
-              // from pitch, which is the common case and costs nothing.
+              // from pitch, which is the common case and costs nothing — unless the track is
+              // sound-addressed-only, where pitch never selects and a blank sound plays the
+              // lowest slot chromatically instead (section 8 Q2).
               se.sound = sound;
+              se.soundAddressedOnly = trackState.soundAddressedOnly;
               se.offsetFrac = soundOffset;
               se.noteId = noteId;
               runtime.samplerEvents.push_back(se);
@@ -15830,6 +15869,10 @@ struct TrackRuntime {
               // resolved pitch happens to map to. Still 0 for every other graph, which is
               // still the right default and what every drum kit relies on.
               se.sound = logic.sound;
+              // A GENERATED note obeys the track's rule too. A graph that names no slice on a
+              // sound-addressed-only track should not silently fall back to pitch selection,
+              // which is the behaviour the track was explicitly switched out of.
+              se.soundAddressedOnly = trackState.soundAddressedOnly;
               se.offsetFrac = 0;
               se.noteId = noteId;
               runtime.samplerEvents.push_back(se);

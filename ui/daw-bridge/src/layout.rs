@@ -1061,6 +1061,10 @@ pub enum UiCommandType {
     /// Sets a sampler modulator's LFO — note-retriggered, on any modulation target.
     SamplerSetLfo = 85,
     SamplerSetFilter = 86,
+    /// Per track: pitch never selects a slot, the note's `sound` names it, and a blank `sound`
+    /// plays the lowest slot chromatically. Off by default — a blank `sound` still means "the
+    /// keymap picks from pitch" (R5). Owner ruling, docs/SAMPLER_DESIGN.md section 8 Q2.
+    SetTrackSoundAddressed = 87,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;

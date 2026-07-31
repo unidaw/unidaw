@@ -81,6 +81,7 @@ daw-cli — control surface for a running engine
   daw-cli do position --nanotick T move the playhead
   daw-cli do loop --start T --end T set the loop range
   daw-cli do harmony-quantize --track N [--on 0|1]
+  daw-cli do sound-addressed --track N [--on 0|1]
   daw-cli do automation --track N --param ID --nanotick T --value V
                         [--discrete] [--device D]
                                    writes one automation point. --discrete makes the
@@ -3481,6 +3482,19 @@ removed is the whole command");
                     payload.note_duration_hi = (end >> 32) as u32;
                     match handle.send_command(payload) {
                         Ok(()) => { println!("{{ \"sent\": \"loop\", \"start\": {start}, \"end\": {end} }}"); 0 }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"sound-addressed") => {
+                    // The same shape as harmony-quantize, because it is the same kind of thing:
+                    // a per-track rule about how this track's notes are read.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let on = flag_u64(&args, "--on", Some(1)).unwrap_or(1);
+                    let mut payload = track_structure_command(
+                        UiCommandType::SetTrackSoundAddressed, track);
+                    payload.value0 = if on != 0 { 1 } else { 0 };
+                    match handle.send_command(payload) {
+                        Ok(()) => { println!("{{ \"sent\": \"sound-addressed\", \"track\": {track}, \"on\": {on} }}"); 0 }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }

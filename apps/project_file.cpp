@@ -655,6 +655,7 @@ std::string serializeProject(const ProjectDocument& document) {
     writer.key("parent_id", track.parentId);
     writer.key("collapsed", track.collapsed);
     writer.key("harmony_quantize", track.harmonyQuantize);
+    writer.key("sound_addressed_only", track.soundAddressedOnly);
     writer.key("lines_per_beat", track.linesPerBeat);
     // M1.13 lane quantize. Written unconditionally, including when it is off, so a
     // file always states what the lane does rather than leaving it to a default the
@@ -974,6 +975,7 @@ bool deserializeProject(const std::string& json,
       track.parentId = tree.get<uint32_t>("parent_id", 0);
       track.collapsed = tree.get<bool>("collapsed", false);
       track.harmonyQuantize = tree.get<bool>("harmony_quantize", false);
+      track.soundAddressedOnly = tree.get<bool>("sound_addressed_only", false);
       track.linesPerBeat = tree.get<uint32_t>("lines_per_beat", 4);
       if (track.linesPerBeat == 0) {
         track.linesPerBeat = 4;

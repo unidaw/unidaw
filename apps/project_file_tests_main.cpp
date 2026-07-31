@@ -63,6 +63,11 @@ daw::ProjectDocument makeDocument() {
   track.trackId = 0;
   track.name = "Lead";
   track.harmonyQuantize = false;
+  // SET TRUE, deliberately. `harmonyQuantize` above is false, which is the default — so that
+  // assertion passes whether the field round-trips or is never written at all. A fixture whose
+  // value equals the default cannot tell configured from unconfigured, and this suite has been
+  // caught by exactly that before.
+  track.soundAddressedOnly = true;
   track.linesPerBeat = 3;  // triplets — a value the old power-of-two zoom could not express
   track.mixer.gainDb = -6.5;
   track.mixer.pan = -0.75;
@@ -264,6 +269,8 @@ int main(int argc, char** argv) {
   const auto& track = roundTripped.tracks[0];
   require(track.name == "Lead", "track name lost");
   require(!track.harmonyQuantize, "harmony_quantize lost");
+  require(track.soundAddressedOnly, "sound_addressed_only lost — set true in the fixture, so "
+                                    "false here means the field was not written or not read");
   require(track.linesPerBeat == 3, "per-lane subdivision lost");
   require(track.mixer.gainDb == -6.5, "mixer gain lost");
   require(track.mixer.pan == -0.75, "mixer pan lost");

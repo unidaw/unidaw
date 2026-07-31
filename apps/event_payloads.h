@@ -340,7 +340,15 @@ enum class UiCommandType : uint16_t {
   ///
   /// CUTOFF AND RESONANCE ARE THE BASE VALUES the modulators move AROUND, not the modulated
   /// result. A cutoff envelope's depth is in octaves either side of this.
-  SamplerSetFilter = 86,  // next free 87
+  SamplerSetFilter = 86,
+  // SOUND-ADDRESSED-ONLY, per track (owner ruling, docs/SAMPLER_DESIGN.md section 8 Q2). Off by
+  // default: a blank `sound` means the keymap picks the slot from pitch (R5). On, pitch never
+  // selects — the note's `sound` names the slot, pitch is varispeed, and a 64-slot kit stays
+  // fully chromatic instead of one slot per key.
+  //
+  // Carries nothing new: trackId plus value0 as the boolean, the same shape
+  // SetTrackHarmonyQuantize (10) uses, because it is the same kind of thing.
+  SetTrackSoundAddressed = 87,  // next free 88
 };
 
 // SAMPLER SET FILTER (opcode 86). 40 bytes.
@@ -837,6 +845,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::WriteChord: return "write_chord";
     case UiCommandType::DeleteChord: return "delete_chord";
     case UiCommandType::SetTrackHarmonyQuantize: return "set_track_harmony_quantize";
+    case UiCommandType::SetTrackSoundAddressed: return "set_track_sound_addressed";
     case UiCommandType::Redo: return "redo";
     case UiCommandType::SetLoopRange: return "set_loop_range";
     case UiCommandType::SetAutomationTarget: return "set_automation_target";
