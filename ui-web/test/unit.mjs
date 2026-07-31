@@ -808,7 +808,7 @@ test('a project row leaves its meta line to the renderer', () => {
  */
 const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'samplerKitCached',
                      'rowOps', 'opsAtCursor', 'opAtCursor', 'opsTextAtCursor', 'noteIdAtCursor',
-                     'loadSample', 'addDevice', 'sliceSample', 'samplerFilter',
+                     'loadSample', 'addDevice', 'sliceSample', 'samplerFilter', 'samplerEnvelope',
                      'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
@@ -2224,6 +2224,11 @@ const OP_REGISTRY = {
    * covered would be worse than recording it as missing.
    */
   filter:    { cli: null, agent: null, why: 'gap' },
+  /*
+   * The envelope (opcode 82). daw-cli has `sampler-env` — it is what proved a loaded slot is
+   * silent without one — so the CLI path is real; the agent has no sampler tooling at all.
+   */
+  env:       { cli: 'sampler-env', agent: null, why: 'gap' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },
@@ -2325,7 +2330,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
                    'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
-                   'filter',
+                   'filter', 'env',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
                    'sampler', 'load-sample', 'slice',
@@ -2548,7 +2553,15 @@ const ENGINE_UNUSED = {
    */
   SaveModule: 'gap — a module is a saved chain; it wants a browser entry before a verb',
   LoadModule: 'gap — with SaveModule',
-  SamplerSetEnvelope: 'gap — an ADSR wants the drawable envelope, not four numbers on a line',
+  /*
+   * SamplerSetEnvelope WAS listed here — "an ADSR wants the drawable envelope, not four numbers
+   * on a line" — and that reasoning was right about the surface and wrong about the priority.
+   * A freshly loaded slot's default envelope produces NO LEVEL, so a sampler that has loaded a
+   * file and been sent a note starts a voice and renders silence; four numbers on a line is what
+   * stands between a chop and a sound, and waiting for the drawable version left the whole
+   * workflow mute. The drawable envelope is still wanted, and is now an addition rather than a
+   * precondition.
+   */
   /*
    * The sampler's LFOs. With the envelope, and for the same reason: a modulator wants to be seen
    * moving, and four numbers on a command line is the half of it that is not worth having alone.

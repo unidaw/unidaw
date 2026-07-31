@@ -2801,6 +2801,45 @@ const dockApi = {
    * reporting the only state the product could reach. This is the command that gives it
    * something else to report.
    */
+  /**
+   * One envelope on one target of a sampler's mod set.
+   *
+   * TIMES CARRY THEIR UNIT — `timeBase` 0 microseconds, 1 nanoticks — because a duration without
+   * one means different things depending on state this client never saw: "a 300 ms attack"
+   * becomes a 300-nanotick one against a mod set someone else switched to tempo-sync.
+   *
+   * This exists because a freshly loaded slot's default envelope produces no level, so a sampler
+   * that has loaded a file and been sent a note starts a voice and renders SILENCE. Proving that
+   * meant shelling out to daw-cli, which is the definition of a gap in this surface.
+   */
+  samplerEnvelope: (track, device, env = {}) => {
+    const msg = { type: 'samplerenv', track: Number(track) || 0, device: Number(device) || 0,
+                  modSet: Number(env.modSet) || 0,
+                  target: Number(env.target) || 0, timeBase: Number(env.timeBase) || 0,
+                  attack: Number(env.attack) || 0, decay: Number(env.decay) || 0,
+                  release: Number(env.release) || 0,
+                  // 1000 is FULL, and the default rather than 0: an envelope whose sustain
+                  // defaults to nothing is one that silences the slot it was meant to shape.
+                  sustain: env.sustain === undefined ? 1000 : Number(env.sustain),
+                  depth: env.depth === undefined ? 1000 : Number(env.depth),
+                  rate: env.rate === undefined ? 1000 : Number(env.rate) };
+    /*
+     * `modulator` IS OMITTED UNLESS NAMED, and that is not tidiness.
+     *
+     * Its PRESENCE is what tells the sidecar to address the modulator by ID rather than by
+     * TARGET, and on a freshly loaded kit there is no modulator 0 to address — the engine
+     * answers `sampler.envelope_rejected ... no_such_modulator` and the slot stays silent.
+     * Sending `modulator: 0` "for completeness" is therefore a different command, and it was:
+     * the first version of this always sent it, always addressed by id, and always did nothing
+     * while reporting success. Same distinction as `cutoff` on the filter — an omitted field and
+     * a zero one are not the same request.
+     */
+    if (env.modulator !== undefined && env.modulator !== null) {
+      msg.modulator = Number(env.modulator);
+    }
+    if (!conn || !conn.send(msg)) { state.reject = 'no engine'; schedule(); return false; }
+    state.reject = null; schedule(); return true;
+  },
   samplerFilter: (track, device, type, cutoff, resonance, modSet) => {
     const msg = { type: 'samplerfilter', track: Number(track) || 0, device: Number(device) || 0,
                   modSet: Number(modSet) || 0, filterType: Number(type) || 0 };
@@ -7746,6 +7785,7 @@ window.__uni = {
   opAtCursor: (x) => dockApi.opAtCursor(x),
   // On both surfaces, like every other pair here.
   samplerFilter: (t, d, ty, c, r, m) => dockApi.samplerFilter(t, d, ty, c, r, m),
+  samplerEnvelope: (t, d, e) => dockApi.samplerEnvelope(t, d, e),
   opsTextAtCursor: () => dockApi.opsTextAtCursor(),
   noteIdAtCursor: () => dockApi.noteIdAtCursor(),
   samplerKit: (t, d) => dockApi.samplerKit(t, d),

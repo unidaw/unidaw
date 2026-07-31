@@ -26,7 +26,6 @@
 import { chromium } from 'playwright';
 import { join, resolve } from 'node:path';
 import { copyFileSync, existsSync, statSync, unlinkSync, writeFileSync, readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { startStack } from './stack.mjs';
 import { readWav, envelope, summarise } from './wav.mjs';
 
@@ -169,22 +168,17 @@ check(Array.isArray(chopped) && chopped.length === 8, 'the chop is built from th
  * right keys, right slice ids, every source resolved, voices running — is mute. Measured in
  * sampler-device-id.mjs: 0.0000 across three tracks without this, 0.28-0.40 with it.
  *
- * Through daw-cli because this side has no envelope verb yet, and marked clearly because it does
- * not belong here: loading a sample should produce something audible. Reported; when the engine's
- * default becomes audible this block goes and the test should still pass.
+ * Through the app's OWN verb — proving that shelling out to daw-cli to establish this, which is
+ * how it was found, is no longer necessary. Marked clearly because the command still does not
+ * belong here: loading a sample should produce something audible without one. Reported; when the
+ * engine's default becomes audible this block goes and the test should still pass.
  */
 {
-  const cli = (args) => {
-    try {
-      return execFileSync('./ui/target/release/daw-cli', args,
-        { env: { ...process.env, DAW_UI_SHM_NAME: stack.shm }, encoding: 'utf8' }).trim();
-    } catch (e) { return 'FAILED: ' + String(e.stdout || e.message).slice(0, 120); }
-  };
-  const said = cli(['do', 'sampler-env', '--track', String(T), '--attack', '1000',
-                    '--decay', '200000', '--sustain', '1000', '--release', '200000']);
-  check(!/FAILED/.test(said), 'the chop gets an amp envelope, which it needs to sound at all',
-        said.slice(0, 90));
-  await page.waitForTimeout(1200);
+  const said = await run(`env ${T} 0 1000 200000 1000 200000`);
+  check(!/refus|not |error/i.test(String(said).split('out:').pop() || ''),
+        'the chop gets an amp envelope, which it needs to sound at all',
+        String(said).slice(-70));
+  await page.waitForTimeout(1500);
 }
 
 /*

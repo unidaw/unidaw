@@ -13,7 +13,7 @@
 import { ZOOM_LEVELS } from './viewmodel.js';
 import { EDGE_KINDS } from './patchermodel.js';
 // The filter names, from the file that already decides whether a cutoff modulator is live.
-import { FILTER_TYPES } from './chainmodel.js';
+import { FILTER_TYPES, ENV_TARGETS } from './chainmodel.js';
 
 const MAX_LINES = 300;
 
@@ -476,6 +476,35 @@ export function createCommands(api) {
         const mode = a[3] === undefined ? 'equal' : String(a[3]);
         return api.sliceSample(Number(a[0]), Number(a[1]), { count, mode })
           ? `chopping into ${count} ${mode} slices` : refusal(api);
+      } },
+    /*
+     * THE AMP ENVELOPE — and every other target's.
+     *
+     * A freshly loaded slot's default produces NO LEVEL, so a sampler that has loaded a file and
+     * been sent a note starts a voice and renders silence: the whole chop workflow is
+     * structurally perfect and mute. Proving that meant shelling out to daw-cli, because this
+     * surface had no way to shape an envelope at all — which is the gap this closes whatever the
+     * engine's default becomes.
+     *
+     * Times are MICROSECONDS here. The wire carries the unit alongside them (`timeBase`), and a
+     * console that made a person choose one before they could set an attack would be asking a
+     * question that only matters for tempo-synced sweeps.
+     */
+    env: { help: 'env <track> <device> <attack> <decay> <sustain> <release> [target] — a '
+               + 'sampler envelope in microseconds; sustain is 0-1000, target is '
+               + 'volume|pan|pitch|cutoff|resonance',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             { name: 'attack', type: 'int', min: 0 }, { name: 'decay', type: 'int', min: 0 },
+             { name: 'sustain', type: 'int', min: 0, max: 1000 },
+             { name: 'release', type: 'int', min: 0 },
+             { name: 'target', type: 'text', optional: true }],
+      run: (a) => {
+        const target = a[6] === undefined ? 0 : ENV_TARGETS.indexOf(String(a[6]));
+        if (target < 0) return `target is ${ENV_TARGETS.join('|')}`;
+        if (!api.samplerEnvelope(num(a[0]), num(a[1]), {
+          attack: num(a[2]), decay: num(a[3]), sustain: num(a[4]), release: num(a[5]), target,
+        })) return refusal(api);
+        return `env ${ENV_TARGETS[target]} a${a[2]} d${a[3]} s${a[4]} r${a[5]}`;
       } },
     /*
      * THE FILTER, which until opcode 86 landed could not be set at all.

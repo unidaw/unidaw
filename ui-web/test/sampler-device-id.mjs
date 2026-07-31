@@ -26,7 +26,6 @@
 import { chromium } from 'playwright';
 import { join, resolve } from 'node:path';
 import { copyFileSync, existsSync, statSync, unlinkSync, writeFileSync, readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { startStack } from './stack.mjs';
 import { readWav, envelope } from './wav.mjs';
 
@@ -387,19 +386,13 @@ const devs = askedDevs;
  * Through daw-cli because there is no envelope verb on this side yet; if the answer is that a
  * UI must set one, that verb is the fix and it belongs here.
  */
-const cli = (args) => {
-  try {
-    return execFileSync('./ui/target/release/daw-cli', args,
-      { env: { ...process.env, DAW_UI_SHM_NAME: stack.shm }, encoding: 'utf8' }).trim();
-  } catch (e) { return 'FAILED: ' + String(e.stdout || e.message).slice(0, 120); }
-};
-const envOn = (t) => cli(['do', 'sampler-env', '--track', String(t), '--attack', '1000',
-                          '--decay', '200000', '--sustain', '1000', '--release', '200000']);
-// EVERY sampler track, so a track that stays silent is silent for its own reason and not for
-// want of an envelope. Track 0 was the one left out first, and it was the one that stayed at 0.
-const envSaid = [0, 1, 2].map(envOn).join(' | ');
-check(!/FAILED/.test(envSaid), 'an explicit amp envelope is accepted on every sampler track',
-      envSaid.slice(0, 90));
+// Through the app's OWN verb now. Establishing this took shelling out to daw-cli, because this
+// surface had no way to shape an envelope at all; that gap is closed, and a test that reaches
+// past the app to set up the app is a test that stops describing it.
+const envOn = (t) => page.evaluate((tr) => window.__uni.run(`env ${tr} 0 1000 200000 1000 200000`), t);
+const envSaid = (await Promise.all([0, 1, 2].map(envOn))).join(' | ');
+check(!/refus|no engine/i.test(envSaid), 'an explicit amp envelope is accepted on every sampler track',
+      envSaid.slice(-80));
 await page.waitForTimeout(1500);
 
 const meterPeak = {};

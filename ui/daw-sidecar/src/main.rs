@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlicePayload,
-                         UiSamplerFilterPayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
+                         UiSamplerFilterPayload, UiSamplerEnvelopePayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
                          UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
@@ -3373,6 +3373,62 @@ fn build_sampler_load(body: &str) -> Option<Result<UiSamplerLoadPayload, &'stati
 /// tempo-adaptive from the moment it is made rather than tied to the rate the file was recorded
 /// at — which is the difference between a break that follows the song and one the song has to
 /// follow.
+/// SamplerSetEnvelope (82). One modulator's shape on one target.
+///
+/// TIMES CARRY THEIR UNIT. `timeBase` names it in the same payload — 0 microseconds, 1 nanoticks
+/// — because a payload of bare durations means different things depending on state the sender
+/// never saw: "a 300 ms attack" silently becomes a 300-nanotick one against a mod set someone
+/// else had switched to tempo-sync. Defaulted to microseconds here, which is what a drum kit
+/// wants and what a caller who does not say is asking for.
+///
+/// `sustain` and `depth` are milli-units (1000 = full), and depth is SIGNED: an inverted
+/// envelope is a normal thing to want on pitch or panning, and refusing negatives would make
+/// this the one place that cannot express it.
+fn build_sampler_envelope(body: &str) -> Option<Result<UiSamplerEnvelopePayload, &'static str>> {
+    if !is_type(body, "samplerenv") { return None; }
+    let target = parse_num(body, "\"target\"").unwrap_or(0);
+    if !(0..=4).contains(&target) {
+        return Some(Err("envelope target is 0 volume, 1 pan, 2 pitch, 3 cutoff, 4 resonance"));
+    }
+    let time_base = parse_num(body, "\"timeBase\"").unwrap_or(0);
+    if !(0..=1).contains(&time_base) {
+        return Some(Err("timeBase is 0 microseconds or 1 nanoticks"));
+    }
+    /*
+     * ADDRESS BY TARGET, NOT BY MODULATOR ID.
+     *
+     * `kSamplerEnvAmp` (bit 0) is misleadingly named — it means "find the modulator by its
+     * TARGET" rather than "this is the amp envelope". Without it the payload addresses
+     * `modulatorId`, and on a freshly loaded kit there is no modulator 0 to address: the command
+     * is accepted, applies to nothing, and the slot stays silent. That is exactly how this
+     * verb's first version reported success and changed nothing.
+     *
+     * So it is set unless the caller NAMES a modulator, which is the only case where an id is
+     * the thing they meant.
+     */
+    let by_id = parse_num(body, "\"modulator\"").is_some();
+    Some(Ok(UiSamplerEnvelopePayload {
+        command_type: UiCommandType::SamplerSetEnvelope as u16,
+        flags: if by_id { 0 } else { daw_bridge::layout::SAMPLER_ENV_AMP },
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        device_id: parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32,
+        // 0 = every mod set on that sampler, the engine's own sentinel and the sane default for
+        // a kit meant to share one envelope.
+        mod_set_id: parse_num(body, "\"modSet\"").unwrap_or(0).max(0) as u32,
+        modulator_id: parse_num(body, "\"modulator\"").unwrap_or(0).max(0) as u16,
+        time_base: time_base as u8,
+        reserved1: 0,
+        attack: parse_num(body, "\"attack\"").unwrap_or(0).max(0) as u32,
+        decay: parse_num(body, "\"decay\"").unwrap_or(0).max(0) as u32,
+        release: parse_num(body, "\"release\"").unwrap_or(0).max(0) as u32,
+        sustain_milli: parse_num(body, "\"sustain\"").unwrap_or(1000).clamp(-32768, 32767) as i16,
+        rate_milli: parse_num(body, "\"rate\"").unwrap_or(1000).clamp(0, 65535) as u16,
+        target: target as u8,
+        reserved2: 0,
+        depth_milli: parse_num(body, "\"depth\"").unwrap_or(1000).clamp(-32768, 32767) as i16,
+    }))
+}
+
 /// SamplerSetFilter (86). The mod set's filter: type, and optionally the base cutoff and
 /// resonance the modulators move AROUND.
 ///
@@ -3861,6 +3917,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"autopoint\":{},\"value\":{}}}",
                                         p.track_id, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // AN ENVELOPE ON A MOD SET. Own 40-byte payload.
+                        if let Some(r) = build_sampler_envelope(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_sampler_envelope(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"samplerenv\":{},\"target\":{}}}",
+                                        p.device_id, p.target),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };

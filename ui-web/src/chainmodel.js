@@ -164,6 +164,16 @@ const FILTER_TARGETS = 3;   // cutoff and resonance, i.e. indices 3 and 4
  */
 export const FILTER_TYPES = ['off', 'lp12', 'lp24', 'hp', 'bp'];
 
+/**
+ * What an envelope can move, by its wire value — `kSamplerEnvTarget*`: 0 volume, 1 panning,
+ * 2 pitch, 3 cutoff, 4 resonance.
+ *
+ * Beside FILTER_TYPES because the two are read together: a cutoff or resonance envelope over a
+ * filter that is OFF is a live control on a dead one, which is the whole reason `modSummary`
+ * takes both.
+ */
+export const ENV_TARGETS = ['volume', 'pan', 'pitch', 'cutoff', 'resonance'];
+
 export function modSummary(modMask, filterType) {
   if (!modMask) return { mark: '', title: '' };
   let live = 0, inert = 0;
