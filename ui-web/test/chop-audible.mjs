@@ -25,7 +25,7 @@
 
 import { chromium } from 'playwright';
 import { join, resolve } from 'node:path';
-import { copyFileSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, statSync, unlinkSync, writeFileSync, readFileSync } from 'node:fs';
 import { startStack } from './stack.mjs';
 import { readWav, envelope, summarise } from './wav.mjs';
 
@@ -52,6 +52,18 @@ const WAV = join(process.cwd(), 'ui-web/test/out/chop-audible.wav');
 // The engine must EXIT for the capture to be written, so it gets a bounded run rather than a
 // kill — the first version of the audio test killed the engine and then looked for a file that
 // was never going to exist.
+/*
+ * DELETE LAST RUN'S CAPTURE FIRST.
+ *
+ * The wait below is "poll until the file exists", and a file left behind by an earlier run
+ * satisfies that instantly. Every run then analysed the PREVIOUS run's audio — which is how a
+ * 34-second capture came to be read by a test configured for 50, and why a control track running
+ * a known-good plugin looked silent: the silence was real, and it was three runs old.
+ *
+ * A guard that is satisfied by its own leftovers is not a guard.
+ */
+try { unlinkSync(WAV); } catch { /* nothing to remove is the normal case */ }
+
 const stack = await startStack({ keepDir: true, capture: WAV, captureSeconds: CAPTURE_SECONDS,
                                  runSeconds: CAPTURE_SECONDS + 12, numBlocks: 8 });
 copyFileSync(resolve('presets/audio/waveform_probe.wav'), `${stack.dir}/break.wav`);
@@ -203,6 +215,30 @@ if (chopped && chopped.length === 7) {
         'the two keys fall inside slot key ranges',
         kit.map((x) => `${x.keyLow}-${x.keyHigh}`).join(' '));
 
+  /*
+   * REWIND FIRST. THE TRANSPORT STARTS WHERE THE CURSOR IS.
+   *
+   * The notes are written by moving the cursor to each row, so when the last one is written the
+   * cursor is sitting on the LAST row of the song — and play from there skips every note before it.
+   * The capture proved it: one note sounded, 0.25s after play, for exactly the 2 seconds of the
+   * note that happened to be under the cursor, and the other three never played at all. Read as
+   * "the sampler makes no sound" for hours.
+   */
+  /*
+   * REWIND, THEN LET THE CAPTURE ACTUALLY START.
+   *
+   * Two separate things, both learned the hard way. `goto` moves the CURSOR; the playhead is a
+   * different thing and stop is what rewinds it — play from the last row written skips the whole
+   * song. And the tap does not begin recording when the engine starts, it begins when the AUDIO
+   * DEVICE does, after the plugin hosts have launched: playing before that records nothing, and
+   * the run that finally sounded differed from the silent one by this wait alone.
+   */
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('.ch-btn')].find((e) => /stop/i.test(e.title || ''));
+    if (b) b.click();
+  });
+  await page.waitForTimeout(8000);
+
   const playedAt = (Date.now() - captureT0) / 1000;
   await page.evaluate(() => window.__uni.transport('play'));
   await page.waitForTimeout(6000);
@@ -245,8 +281,24 @@ await new Promise((r) => setTimeout(r, Math.max(0, (CAPTURE_SECONDS + 3) * 1000 
  * So do not stop the engine — let `--run-seconds` expire and wait for the file it writes on the
  * way out. Poll rather than sleep a guessed interval, and only tear the stack down afterwards.
  */
-for (let i = 0; i < 240 && !existsSync(WAV); i++) {
+/*
+ * WAIT FOR THE FILE TO STOP GROWING, NOT FOR IT TO APPEAR.
+ *
+ * The engine creates the WAV and then writes it, so "the file exists" is true from the first
+ * byte. Stopping the stack there kills the engine mid-write and leaves a valid, TRUNCATED
+ * capture — one run held 4.7 seconds of a 50-second take, and the missing 45 seconds were where
+ * all the playback was. It reads exactly like an app that made no sound, and nothing about the
+ * file says it is short: the header is fine, the samples are real, there are just not many.
+ *
+ * So poll the SIZE until it holds still, then stop.
+ */
+let lastSize = -1, stable = 0;
+for (let i = 0; i < 400 && stable < 3; i++) {
   await new Promise((r) => setTimeout(r, 250));
+  let size = -1;
+  try { size = statSync(WAV).size; } catch { size = -1; }
+  if (size > 0 && size === lastSize) stable++; else stable = 0;
+  lastSize = size;
 }
 stack.stop();
 

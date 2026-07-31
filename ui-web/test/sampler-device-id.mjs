@@ -25,7 +25,7 @@
 
 import { chromium } from 'playwright';
 import { join, resolve } from 'node:path';
-import { copyFileSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, statSync, unlinkSync, writeFileSync, readFileSync } from 'node:fs';
 import { startStack } from './stack.mjs';
 import { readWav, envelope } from './wav.mjs';
 
@@ -37,6 +37,18 @@ const check = (ok, what, detail) => {
 
 const CAPTURE_SECONDS = 50;
 const WAV = join(process.cwd(), 'ui-web/test/out/sampler-device-id.wav');
+
+/*
+ * DELETE LAST RUN'S CAPTURE FIRST.
+ *
+ * The wait below is "poll until the file exists", and a file left behind by an earlier run
+ * satisfies that instantly. Every run then analysed the PREVIOUS run's audio — which is how a
+ * 34-second capture came to be read by a test configured for 50, and why a control track running
+ * a known-good plugin looked silent: the silence was real, and it was three runs old.
+ *
+ * A guard that is satisfied by its own leftovers is not a guard.
+ */
+try { unlinkSync(WAV); } catch { /* nothing to remove is the normal case */ }
 
 const stack = await startStack({ keepDir: true, capture: WAV, captureSeconds: CAPTURE_SECONDS,
                                  runSeconds: CAPTURE_SECONDS + 12,
@@ -51,7 +63,7 @@ const stack = await startStack({ keepDir: true, capture: WAV, captureSeconds: CA
                                   * Every reading in that run said "the sampler makes no sound"
                                   * about a machine that made no sound about anything.
                                   */
-                                 numBlocks: 16 });
+                                 numBlocks: 32 });
 copyFileSync(resolve('presets/audio/waveform_probe.wav'), `${stack.dir}/break.wav`);
 
 /*
@@ -208,14 +220,27 @@ const KEY = loaded.root0 || 36;
 // fall between two 500ms polls, so a zero voice count would be luck rather than a reading.
 const DUR = 3840000;
 await run('zoom 1');
-await run('goto 0 0');
-await run(`note ${KEY} ${DUR}`);
-await run('goto 32 1');
-await run(`note ${KEY} ${DUR}`);
-await run('goto 64 2');
-await run(`note ${KEY} ${DUR}`);
-await run('goto 96 3');
+/*
+ * THE CONTROL PLAYS FIRST, AT SONG ZERO, AND IT IS THE CLOCK.
+ *
+ * The capture does not begin when the engine process does — it begins when the AUDIO DEVICE
+ * does, several seconds later, after the plugin hosts have launched. So wall-clock time since
+ * startStack says nothing about where a moment lands in the file, and every window this test used
+ * to compute from it was in the wrong place. Twice that meant reporting silence about audio that
+ * was in the capture, and once it meant playing entirely BEFORE the recording started.
+ *
+ * A note that is known to sound, at song position 0, fixes that: whatever the offset turns out to
+ * be, the first loud window IS the downbeat, and everything else is measured from it. The control
+ * earns its place twice — it proves the master carries audio, and it tells the test where zero is.
+ */
+await run('goto 0 3');
 await run(`note 60 ${DUR}`);
+await run('goto 32 0');
+await run(`note ${KEY} ${DUR}`);
+await run('goto 64 1');
+await run(`note ${KEY} ${DUR}`);
+await run('goto 96 2');
+await run(`note ${KEY} ${DUR}`);
 await page.waitForTimeout(1200);
 
 const placed = await page.evaluate(() => {
@@ -223,6 +248,28 @@ const placed = await page.evaluate(() => {
   return all.map((n) => `t${n.tr}@${n.t}:${n.p}`).join(' ');
 });
 check(placed.split(' ').length === 4, 'one note on each track', placed);
+
+/*
+ * REWIND FIRST. THE TRANSPORT STARTS WHERE THE CURSOR IS.
+ *
+ * The notes are written by moving the cursor to each row, so when the last one is written the
+ * cursor is sitting on the LAST row of the song — and play from there skips every note before it.
+ * The capture proved it: one note sounded, 0.25s after play, for exactly the 2 seconds of the
+ * note that happened to be under the cursor, and the other three never played at all. Read as
+ * "the sampler makes no sound" for hours.
+ */
+/*
+ * LET THE CAPTURE START BEFORE PLAYING.
+ *
+ * The engine arms the tap when the audio device comes up, which is after four plugin hosts have
+ * launched. Pressing play before that records nothing at all — the run that finally sounded
+ * differed from the silent one by this wait and nothing else.
+ */
+await page.evaluate(() => {
+  const b = [...document.querySelectorAll('.ch-btn')].find((e) => /stop/i.test(e.title || ''));
+  if (b) b.click();                       // stop halts AND rewinds; `goto` only moves the cursor
+});
+await page.waitForTimeout(8000);
 
 const playedAt = (Date.now() - captureT0) / 1000;
 await page.evaluate(() => window.__uni.transport('play'));
@@ -235,48 +282,53 @@ await page.evaluate(() => window.__uni.transport('play'));
  * means the audio is not reaching the master. Polled during playback because the count is live —
  * every kit read taken before or after shows the zero it is supposed to show.
  */
-const seen = { 0: 0, 1: 0, 2: 0 }, miss = { 0: 0, 1: 0, 2: 0 };
+/*
+ * ONE REQUEST PER TRACK, TIMED INTO ITS OWN NOTE — and read the answer from the ENGINE'S LOG.
+ *
+ * The first version polled all three tracks every 500ms and read `activeVoices` back through the
+ * UI. Both halves were wrong. The reading was wrong because `requestSamplerKit` holds its answer
+ * until `samplerKitVersion` moves, and that version moves when the KIT CHANGES, never when a
+ * voice starts — 72 polls produced four engine publications, all from before playback, so the
+ * "0 voices" was a cached fact about a stopped transport. The LOAD was wrong because 48 raw
+ * requests and the 101 kit publications they caused are themselves work on the machine whose
+ * spare capacity is the thing being measured.
+ *
+ * So: three requests, each one second into the note it is asking about, and the truth taken from
+ * `sampler.kit_published` in engine.log afterwards. The engine's own number, costing three
+ * messages.
+ */
 const devs = [dev0, dev1, dev2];
-for (let i = 0; i < 16; i++) {
-  const v = await page.evaluate(async (ds) => {
-    /*
-     * ASK RAW, BECAUSE THE CACHE CANNOT ANSWER THIS.
-     *
-     * `requestSamplerKit` holds an answer until `samplerKitVersion` moves, and that version is
-     * bumped when the KIT CHANGES — never when a voice starts. So 72 polls through the normal
-     * path produced FOUR engine publications, all from before playback, and the "0 voices" they
-     * reported was a cached fact about a stopped transport. A reading that cannot change is not
-     * a reading. `send` goes straight out, past the cache.
-     */
-    for (let t = 0; t < ds.length; t++) {
-      window.__uni.send({ type: 'samplerkit', track: t, device: ds[t] });
-    }
-    await new Promise((r) => setTimeout(r, 120));
-    const out = {};
-    for (let t = 0; t < ds.length; t++) {
-      const k = window.__uni.samplerKitCached(t, ds[t]);
-      // `activeVoices` and `unmapped`, the names the read-back actually uses. `k.voices` reads
-      // undefined and `|| 0` turns that into a confident zero — a reading that cannot fail is
-      // not a reading. `unmapped` is the engine's own count of notes that hit no slot.
-      out[t] = { v: (k && k.activeVoices) || 0, u: (k && k.unmapped) || 0 };
-    }
-    return out;
-  }, devs);
-  for (const t of [0, 1, 2]) {
-    seen[t] = Math.max(seen[t], v[t].v); miss[t] = Math.max(miss[t], v[t].u);
-  }
-  await page.waitForTimeout(1000);
+await page.waitForTimeout(5000);          // the control's note is at 0s; the samplers start at 4s
+for (let t = 0; t < 3; t++) {
+  await page.evaluate(([tr, d]) => window.__uni.send({ type: 'samplerkit', track: tr, device: d }),
+                      [t, devs[t]]);
+  await page.waitForTimeout(4000);        // ...then one request a second into each sampler note
 }
-console.log(`  peak live voices: t0=${seen[0]} t1=${seen[1]} t2=${seen[2]}` +
-            `   notes that hit no slot: t0=${miss[0]} t1=${miss[1]} t2=${miss[2]}`);
+await page.waitForTimeout(2000);
 await page.evaluate(() => window.__uni.transport('stop'));
 check(playedAt + 16 < CAPTURE_SECONDS, 'the playback happens inside the capture window',
       `played at ${playedAt.toFixed(1)}s of ${CAPTURE_SECONDS}s`);
 await page.waitForTimeout(1000);
 await browser.close();
 
-for (let i = 0; i < 240 && !existsSync(WAV); i++) {
+/*
+ * WAIT FOR THE FILE TO STOP GROWING, NOT FOR IT TO APPEAR.
+ *
+ * The engine creates the WAV and then writes it, so "the file exists" is true from the first
+ * byte. Stopping the stack there kills the engine mid-write and leaves a valid, TRUNCATED
+ * capture — one run held 4.7 seconds of a 50-second take, and the missing 45 seconds were where
+ * all the playback was. It reads exactly like an app that made no sound, and nothing about the
+ * file says it is short: the header is fine, the samples are real, there are just not many.
+ *
+ * So poll the SIZE until it holds still, then stop.
+ */
+let lastSize = -1, stable = 0;
+for (let i = 0; i < 400 && stable < 3; i++) {
   await new Promise((r) => setTimeout(r, 250));
+  let size = -1;
+  try { size = statSync(WAV).size; } catch { size = -1; }
+  if (size > 0 && size === lastSize) stable++; else stable = 0;
+  lastSize = size;
 }
 stack.stop();
 
@@ -292,6 +344,24 @@ stack.stop();
 const engineLog = (() => { try { return readFileSync(join(stack.root, 'engine.log'), 'utf8'); }
                            catch { return ''; } })();
 const underruns = (engineLog.match(/audio underrun/g) || []).length;
+/*
+ * THE ENGINE'S OWN VOICE COUNTS, taken from what it published while the notes were sounding.
+ * `found` and `slots` are structure and were always right; `voices` is the one number that says
+ * whether a note actually reached the instrument.
+ */
+const voicesByTrack = {};
+for (const m of engineLog.matchAll(/"event":"sampler\.kit_published","track":(\d+),[^}]*"voices":(\d+)/g)) {
+  const t = Number(m[1]), v = Number(m[2]);
+  voicesByTrack[t] = Math.max(voicesByTrack[t] || 0, v);
+}
+console.log(`  voices the ENGINE published while the notes sounded: ` +
+            `t0=${voicesByTrack[0] || 0} t1=${voicesByTrack[1] || 0} t2=${voicesByTrack[2] || 0}`);
+check((voicesByTrack[1] || 0) > 0,
+      'a sampler with a non-zero device id starts a voice', JSON.stringify(voicesByTrack));
+check((voicesByTrack[0] || 0) > 0,
+      'a sampler whose device id is 0 starts a voice too',
+      `t0=${voicesByTrack[0] || 0} against t1=${voicesByTrack[1] || 0} on an identical track — ` +
+      `samplerDeviceId 0 doubles as "this track has no sampler" (daw_engine_main.cpp:2273)`);
 const worst = (engineLog.match(/\((\d+) total/g) || []).pop() || '';
 check(underruns === 0, 'the producer kept up (no underruns)',
       `${underruns} underrun report(s) ${worst} — a starved producer outputs silence, so every ` +
@@ -301,36 +371,56 @@ if (!existsSync(WAV)) {
   check(false, 'the engine wrote a capture', WAV);
 } else {
   const { rate, mono } = readWav(WAV);
-  const env = envelope(mono, rate, 0.05);
   const per = 0.05;
-  // Window A is the first track's note, window B the second's, located from when playback began.
-  const at = (t) => Math.round((playedAt + t) / per);
-  const peakBetween = (t0, t1) => {
-    let m = 0;
-    for (let i = Math.max(0, at(t0)); i < Math.min(env.length, at(t1)); i++) m = Math.max(m, env[i]);
-    return m;
-  };
-  const first = peakBetween(0.2, 3.5);     // t0: sampler alone, device id 0
-  const behind = peakBetween(4.2, 7.5);    // t1: sampler alone, device id non-0
-  const hosted = peakBetween(8.2, 11.5);   // t2: sampler on a track that also has a VST
-  const control = peakBetween(12.2, 15.5); // t3: a plain VST instrument, no sampler involved
-  console.log(`  t0 sampler-only(dev ${dev0}) ${first.toFixed(4)}   ` +
-              `t1 sampler-only(dev ${dev1}) ${behind.toFixed(4)}   ` +
-              `t2 with a VST(dev ${dev2}) ${hosted.toFixed(4)}   ` +
-              `t3 CONTROL (a VST instrument) ${control.toFixed(4)}`);
-  check(control > 0.01, "this project's master carries audio at all (control track)",
-        `peak ${control.toFixed(4)} — if this is 0 the readings above say nothing about the sampler`);
-  check(hosted > 0.01, 'a sampler on a track that ALSO has a VST sounds',
-        `peak ${hosted.toFixed(4)}`);
+  const env = envelope(mono, rate, per);
+
   /*
-   * THE CLAIM. Both notes are the same sample at the same key through the same master bus, so
-   * they must both sound. If only the one behind a filler device sounds, the device id is what
-   * decided — which is the bug, stated as the check that fails while it is present.
+   * FIND THE DOWNBEAT IN THE FILE, DO NOT COMPUTE IT.
+   *
+   * The control's note is at song position 0 and is known to sound, so the first window above the
+   * floor is the downbeat — whatever the offset between "the engine started" and "the tap started
+   * recording" turned out to be on this run. Every other note is then a fixed number of seconds
+   * after it, from the song, not from the wall clock.
    */
-  check(behind > 0.01, 'a sampler with no VST on the track sounds (non-zero device id)',
-        `peak ${behind.toFixed(4)} vs ${hosted.toFixed(4)} for the same sample on a hosted track`);
-  check(first > 0.01, 'a sampler with no VST on the track sounds (device id 0)',
-        `peak ${first.toFixed(4)} vs ${hosted.toFixed(4)} for the same sample on a hosted track`);
+  let gpeak = 0, gat = -1;
+  for (let i = 0; i < env.length; i++) if (env[i] > gpeak) { gpeak = env[i]; gat = i * per; }
+  const FLOOR = 0.004;
+  const firstLoud = env.findIndex((v) => v > FLOOR);
+  console.log(`  capture ${(mono.length / rate).toFixed(1)}s, global peak ${gpeak.toFixed(4)}` +
+              (gat >= 0 ? ` at t=${gat.toFixed(1)}s` : '') +
+              (firstLoud >= 0 ? `, first sound at t=${(firstLoud * per).toFixed(2)}s` : ', SILENT'));
+
+  check(firstLoud >= 0, "this project's master carries audio at all (control track)",
+        `the whole ${(mono.length / rate).toFixed(1)}s capture is below ${FLOOR} — if this fails, ` +
+        `nothing below says anything about the sampler`);
+
+  if (firstLoud >= 0) {
+    const zero = firstLoud * per;                 // song 0s, located in the file
+    const peakBetween = (t0, t1) => {
+      let m = 0;
+      const lo = Math.max(0, Math.round((zero + t0) / per));
+      const hi = Math.min(env.length, Math.round((zero + t1) / per));
+      for (let i = lo; i < hi; i++) m = Math.max(m, env[i]);
+      return m;
+    };
+    // The song: control at 0s, then the three samplers at 4s, 8s and 12s.
+    const control = peakBetween(-0.1, 2.5);
+    const first   = peakBetween(3.9, 6.4);   // t0: sampler alone, device id 0
+    const behind  = peakBetween(7.9, 10.4);  // t1: sampler alone, device id non-0
+    const hosted  = peakBetween(11.9, 14.4); // t2: sampler on a track that also has a VST
+    console.log(`  control(VST) ${control.toFixed(4)}   t0 sampler-only(dev ${dev0}) ` +
+                `${first.toFixed(4)}   t1 sampler-only(dev ${dev1}) ${behind.toFixed(4)}   ` +
+                `t2 with a VST(dev ${dev2}) ${hosted.toFixed(4)}`);
+
+    check(hosted > FLOOR, 'a sampler on a track that ALSO has a VST sounds',
+          `peak ${hosted.toFixed(4)} against ${control.toFixed(4)} for the control`);
+    check(behind > FLOOR, 'a sampler alone on its track sounds (non-zero device id)',
+          `peak ${behind.toFixed(4)} against ${control.toFixed(4)} for the control — the sampler ` +
+          `renders into the host input plane, which is only read inside the segment loop, and ` +
+          `segments are built only from VST devices (daw_engine_main.cpp:16109)`);
+    check(first > FLOOR, 'a sampler alone on its track sounds (device id 0)',
+          `peak ${first.toFixed(4)} against ${behind.toFixed(4)} one track over`);
+  }
 }
 
 check(errors.length === 0, 'nothing threw', errors.join(' | '));
