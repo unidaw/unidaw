@@ -357,7 +357,15 @@ enum class UiCommandType : uint16_t {
   // reads a field it has no path to write" defect this suite has found six times, sitting one
   // field id away from the thing being added. One opcode closes all three instead of needing 89
   // and 90 later.
-  SamplerSetDevice = 88,  // next free 89
+  SamplerSetDevice = 88,
+  // FOLD A TRACK. `collapsed` was persisted, published as kUiTrackFlagCollapsed, and restored on
+  // load — so a hand-edited project round-tripped and the UI could DRAW the fold — and no command
+  // could set it. A field the format claims to remember and nothing can write.
+  //
+  // Its own opcode rather than a field-addressed track one, matching SetTrackHarmonyQuantize (10)
+  // and SetTrackSoundAddressed (87): the track-level pattern here is one opcode per boolean, and
+  // consistency with the neighbours beats importing 88's shape for a set of one.
+  SetTrackCollapsed = 89,  // next free 90
 };
 
 // SAMPLER SET FILTER (opcode 86). 40 bytes.
@@ -900,6 +908,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SetTrackHarmonyQuantize: return "set_track_harmony_quantize";
     case UiCommandType::SetTrackSoundAddressed: return "set_track_sound_addressed";
     case UiCommandType::SamplerSetDevice: return "sampler_set_device";
+    case UiCommandType::SetTrackCollapsed: return "set_track_collapsed";
     case UiCommandType::Redo: return "redo";
     case UiCommandType::SetLoopRange: return "set_loop_range";
     case UiCommandType::SetAutomationTarget: return "set_automation_target";

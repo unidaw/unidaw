@@ -1085,6 +1085,9 @@ pub enum UiCommandType {
     /// `defaultGate` is the per-bank "ignore note-offs" default; `voiceCap` and `defaultView`
     /// were persisted and rendered and reachable by nothing until this existed.
     SamplerSetDevice = 88,
+    /// Fold a track. `collapsed` was persisted, published and restored on load, and settable by
+    /// nothing — the fold could be drawn and never set.
+    SetTrackCollapsed = 89,
 }
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;

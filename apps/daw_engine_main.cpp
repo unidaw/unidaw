@@ -13915,6 +13915,28 @@ struct TrackRuntime {
           .field("track", payload.trackId)
           .field("enabled", enable);
     } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetTrackCollapsed)) {
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        daw::LogLine() << "UI: SetTrackCollapsed failed - track "
+                       << payload.trackId << " not found" << std::endl;
+        return;
+      }
+      // AN ATOMIC, not the track struct under its mutex: `collapsed` lives beside the other
+      // per-track atomics the publisher reads every frame, and the save copies it out from there.
+      // No snapshot rebuild — it changes nothing the RT plays.
+      const bool folded = payload.value0 != 0;
+      runtime->collapsed.store(folded, std::memory_order_relaxed);
+      DAW_EVENT("track.collapsed")
+          .field("track", payload.trackId)
+          .field("collapsed", folded);
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetLaneQuantize)) {
       TrackRuntime* runtime = nullptr;
       {
