@@ -36,7 +36,23 @@ PARTS=8
 [ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# KEEP THE EVIDENCE ON FAILURE. This check compares whole renders byte for byte, and task #102 —
+# an offline render whose first block or two depends on machine load — is OPEN and INTERMITTENT.
+# When it fires, this check is one of the three things that notices. A trap that deletes the wavs
+# on the way out turns the one occurrence anybody caught into "it failed once, and it passed when
+# I ran it again", which is exactly how #102 stayed unexplained through two investigations.
+KEEPDIR="${DAW_CHECK_EVIDENCE:-/tmp/daw-check-evidence}"
+keep_evidence() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    local dest="$KEEPDIR/$(basename "$0" .sh).$$"
+    mkdir -p "$dest" && cp -R "$TMP"/. "$dest"/ 2>/dev/null
+    echo "  evidence kept in $dest (renders, projects and engine logs)"
+  fi
+  rm -rf "$TMP"
+  exit $rc
+}
+trap keep_evidence EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
 
 # EIGHT EIGHTHS, EIGHT FREQUENCIES, well separated so a zero-crossing count tells them apart
@@ -243,41 +259,23 @@ done
 render b64 64
 render b1024 1024
 
-# COMPARED FROM ONE SECOND IN, and the skipped second is not a fudge — it is a DIFFERENT defect,
-# filed as task #102 and pointed at here so this check cannot be read as tolerating it.
-#
-# An offline render's first ~512 frames depend on machine load. Under eight CPU-burning
-# processes this check failed 2 runs in 3, always at byte 0, always with exactly 512 frames
-# differing and the remaining 352320 byte-identical. The engine says why in its own summary: the
-# 64-frame run reports "Pipeline depth 3 blocks" where the 256-frame run reports 0, because
-# awaitNextBlock returns immediately while no tracks are registered, so the render consumes some
-# unproduced blocks at the start and how many depends on timing.
-#
-# That is a real bug about the RENDER, not about slice selection, and reporting it as "the slices
-# chosen at 64 frames differ from those at 256" would be a confident claim about seeding made
-# from a run whose seeding was fine. Seven of the eight seconds are still compared bit-exactly,
-# which is a strong enough statement about the node.
+# COMPARED FROM BYTE 0. It briefly skipped a one-second lead-in, because an offline render's
+# first block or two depended on machine LOAD — the producer lapped the ring and overwrote a
+# block the pump had not consumed. That was task #102 and it is FIXED (offline back-pressure in
+# the producer), so the workaround is gone and the whole file is compared again. A check that
+# skips the beginning cannot see a defect that lives there.
 identical() {  # identical <a> <b>
   python3 - "$TMP/$1.wav" "$TMP/$2.wav" "$1" "$2" <<'PYI'
 import sys, wave
 def data(p):
-    w = wave.open(p, 'rb')
-    sr, ch, sw = w.getframerate(), w.getnchannels(), w.getsampwidth()
-    d = w.readframes(w.getnframes()); w.close()
-    return d, sr * ch * sw          # bytes per second
-a, bps = data(sys.argv[1])
-b, _ = data(sys.argv[2])
-skip = bps                          # one second of lead-in; see task #102
+    w = wave.open(p, 'rb'); d = w.readframes(w.getnframes()); w.close(); return d
+a, b = data(sys.argv[1]), data(sys.argv[2])
 n = min(len(a), len(b))
-if n <= skip:
-    print("  too short to compare past the lead-in: %d bytes" % n)
-    raise SystemExit(1)
-if a[skip:n] != b[skip:n]:
-    first = next(i for i in range(skip, n) if a[i] != b[i])
+if a[:n] != b[:n]:
+    first = next(i for i in range(n) if a[i] != b[i])
     print("  DIFFER: %s vs %s at byte %d of %d" % (sys.argv[3], sys.argv[4], first, n))
     raise SystemExit(1)
-print("  %s vs %s: identical over %d bytes (past the 1s lead-in)" % (
-    sys.argv[3], sys.argv[4], n - skip))
+print("  %s vs %s: identical over %d bytes" % (sys.argv[3], sys.argv[4], n))
 PYI
 }
 identical b64 b256 || fail "the slices chosen at 64 frames differ from those at 256. The seed is

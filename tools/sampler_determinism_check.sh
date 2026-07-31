@@ -50,7 +50,23 @@ Q=960000
 [ -x "$BUILD/daw_engine" ] || { echo "build daw_engine first"; exit 2; }
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+# KEEP THE EVIDENCE ON FAILURE. This check compares whole renders byte for byte, and task #102 —
+# an offline render whose first block or two depends on machine load — is OPEN and INTERMITTENT.
+# When it fires, this check is one of the three things that notices. A trap that deletes the wavs
+# on the way out turns the one occurrence anybody caught into "it failed once, and it passed when
+# I ran it again", which is exactly how #102 stayed unexplained through two investigations.
+KEEPDIR="${DAW_CHECK_EVIDENCE:-/tmp/daw-check-evidence}"
+keep_evidence() {
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    local dest="$KEEPDIR/$(basename "$0" .sh).$$"
+    mkdir -p "$dest" && cp -R "$TMP"/. "$dest"/ 2>/dev/null
+    echo "  evidence kept in $dest (renders, projects and engine logs)"
+  fi
+  rm -rf "$TMP"
+  exit $rc
+}
+trap keep_evidence EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
 
 # A CHIRP, not a tone. Every sample is distinct, so a read position that is off by one is visible
@@ -191,27 +207,16 @@ identical() {  # identical <a> <b>
   python3 - "$TMP/$1.wav" "$TMP/$2.wav" "$1" "$2" <<'PYI'
 import sys, wave
 def data(p):
-    w = wave.open(p, 'rb')
-    bps = w.getframerate() * w.getnchannels() * w.getsampwidth()
-    d = w.readframes(w.getnframes()); w.close(); return d, bps
-a, bps = data(sys.argv[1])
-b, _ = data(sys.argv[2])
-# COMPARED PAST A ONE-SECOND LEAD-IN. Task #102: an offline render's first ~512 frames depend on
-# machine LOAD, so under a parallel ctest this comparison failed for a reason that has nothing to
-# do with block sizes — and reporting it as "renders at 64 and 256 frames differ" would be a
-# confident claim about the sampler made from a run whose sampler was fine. The skipped second is
-# a filed defect, not a tolerance: everything after it is still compared byte for byte.
-skip = bps
+    w = wave.open(p, 'rb'); d = w.readframes(w.getnframes()); w.close(); return d
+a, b = data(sys.argv[1]), data(sys.argv[2])
+# COMPARED FROM BYTE 0. This skipped a one-second lead-in while task #102 was open — an offline
+# render's first blocks depended on machine load. Fixed at the source, so the whole file counts.
 n = min(len(a), len(b))
-if n <= skip:
-    print("  too short to compare past the lead-in: %d bytes" % n)
-    raise SystemExit(1)
-if a[skip:n] != b[skip:n]:
-    first = next(i for i in range(skip, n) if a[i] != b[i])
+if a[:n] != b[:n]:
+    first = next(i for i in range(n) if a[i] != b[i])
     print("  DIFFER: %s vs %s at byte %d of %d" % (sys.argv[3], sys.argv[4], first, n))
     raise SystemExit(1)
-print("  %s vs %s: identical over %d bytes (past the 1s lead-in)" % (
-    sys.argv[3], sys.argv[4], n - skip))
+print("  %s vs %s: identical over %d bytes" % (sys.argv[3], sys.argv[4], n))
 PYI
 }
 identical b64 b256 || fail "renders at 64 and 256 frames differ. The block grid belongs to the
