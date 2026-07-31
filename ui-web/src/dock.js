@@ -412,6 +412,33 @@ export function createCommands(api) {
         if (!api.opsAtCursor(text)) return refusal(api);
         return text ? `ops: ${text}` : 'ops cleared';
       } },
+    /*
+     * MAKE A SAMPLER. The kit has been drawable, live and inspectable for a while and there was
+     * no way to CREATE one — `add-device --kind sampler` existed in daw-cli and nowhere else,
+     * so the surface could show a sampler nobody could make.
+     *
+     * Same function the rack's "+" card calls, so the console and the pointer cannot come to
+     * mean different things by "add a device".
+     */
+    sampler: { help: 'sampler [track] — put a sampler on the track',
+      args: [A_TRACK_OPT],
+      run: (a) => {
+        const t = a[0] === undefined ? undefined : Number(a[0]);
+        return api.addDevice(t, 'sampler') ? 'sampler added' : refusal(api);
+      } },
+    /*
+     * LOAD ONE INTO IT. A project-relative FILE NAME and not a path: the command is 40 bytes and
+     * the name gets 24, so the engine resolves it against its own audio directory — which is
+     * also what stops a client naming a path of its choosing.
+     */
+    'load-sample': { help: 'load-sample <track> <device> <file> — load a sample, one slot',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             { name: 'file', type: 'text', rest: true }],
+      run: (a) => {
+        const name = a.slice(2).join(' ');
+        return api.loadSample(Number(a[0]), Number(a[1]), name)
+          ? `loading ${name}` : refusal(api);
+      } },
     kit: { help: 'kit <track> <device> — what is in that sampler, slot by slot',
       args: [A_TRACK, { name: 'device', type: 'int', min: 0 }],
       run: (a) => {

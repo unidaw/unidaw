@@ -32,7 +32,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
-use daw_bridge::layout::{UiSetRowOpsPayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
+use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
                          UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
@@ -2187,16 +2187,21 @@ fn build_patcher_graph(body: &str) -> Option<Result<UiPatcherGraphCommandPayload
 
 /// DeviceKind, from apps/device_chain.h, in the enum's own order.
 ///
-/// The same five ui-web's `DEVICE_KINDS` lists, because both are that enum. This
+/// The same six ui-web's `DEVICE_KINDS` lists, because both are that enum. This
 /// copy is here rather than only there for the reason the port table above is:
 /// engine vocabulary belongs as close to the engine as the wire allows, and a
 /// name the engine does not have must be refused before it becomes an integer.
-const DEVICE_KINDS: [&str; 5] = [
+const DEVICE_KINDS: [&str; 6] = [
     "patcher event",
     "patcher instrument",
     "patcher audio",
     "vst instrument",
     "vst effect",
+    // The built-in sampler. This list was FIVE long while DeviceKind::Sampler was 5, so
+    // `{"kind":"sampler"}` came back "no such device kind" and the UI could not make one at all
+    // — the same one-entry-short drift the page's own table had, in a second place. Both are
+    // that enum and both now say so.
+    "sampler",
 ];
 
 /// The kind a chain command names, as the engine's DeviceKind number.
@@ -2209,7 +2214,8 @@ const DEVICE_KINDS: [&str; 5] = [
 /// nothing, produces nothing, and looks like a device.
 fn device_kind(body: &str) -> Result<u32, &'static str> {
     const UNKNOWN: &str = "no such device kind - it is one of patcher event, \
-                           patcher instrument, patcher audio, vst instrument, vst effect";
+                           patcher instrument, patcher audio, vst instrument, vst effect, \
+                           sampler";
     if let Some(name) = parse_str_value(body, "\"kind\"") {
         return DEVICE_KINDS
             .iter()
@@ -3276,6 +3282,43 @@ fn build_set_row_ops(body: &str) -> Option<Result<UiSetRowOpsPayload, &'static s
     }))
 }
 
+/// LOAD A SAMPLE into a sampler device, minting a source and a slot (opcode 73).
+///
+///   {"type":"samplerload","track":0,"device":9,"name":"kick.wav","root":36,"fixed":1}
+///
+/// `name` is a project-relative FILE NAME and not a path, because the whole payload is 40 bytes
+/// and the name gets 24 of them. The engine resolves it against its own audio directory, which
+/// is also what stops a client handing the engine a path of its choosing.
+///
+/// `fixed` sets SAMPLER_LOAD_FIXED_PITCH: keyLow == keyHigh == rootKey, which is how a drum
+/// stays a drum across the keyboard. Clear it for a playable zone. There is no mapping MODE
+/// stored anywhere — the flag chooses which keys get written at load time and nothing reads it
+/// afterwards.
+fn build_sampler_load(body: &str) -> Option<Result<UiSamplerLoadPayload, &'static str>> {
+    if !is_type(body, "samplerload") { return None; }
+    let Some(name) = parse_str(body, "\"name\"").filter(|n| !n.is_empty()) else {
+        return Some(Err("samplerload needs a file name"));
+    };
+    if name.len() > 24 {
+        // Refused rather than truncated: a truncated name resolves to nothing or, worse, to a
+        // DIFFERENT file, and "load succeeded, wrong sample" is not a failure anyone would
+        // think to look for.
+        return Some(Err("that file name is longer than the 24 bytes the command carries"));
+    }
+    let mut buf = [0u8; 24];
+    buf[..name.len()].copy_from_slice(name.as_bytes());
+    let fixed = parse_num(body, "\"fixed\"").unwrap_or(1) != 0;
+    Some(Ok(UiSamplerLoadPayload {
+        command_type: UiCommandType::SamplerLoad as u16,
+        flags: if fixed { daw_bridge::layout::SAMPLER_LOAD_FIXED_PITCH } else { 0 },
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        device_id: parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32,
+        root_key: parse_num(body, "\"root\"").unwrap_or(36).clamp(0, 127) as u8,
+        reserved: [0u8; 3],
+        name: buf,
+    }))
+}
+
 /// One line of agent progress, as JSON the page can render.
 ///
 /// Hand-built rather than serde-derived: this is four fields and the escaping is
@@ -3705,6 +3748,20 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"autopoint\":{},\"value\":{}}}",
                                         p.track_id, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // LOAD A SAMPLE. Own 40-byte payload again.
+                        if let Some(r) = build_sampler_load(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_sampler_load(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"samplerload\":{}}}", p.device_id),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };

@@ -1481,6 +1481,39 @@ const samplerKitsForChain = {};
 let samplerKitAsked = null;
 
 /**
+ * Load a sample into a sampler, minting a source and a slot.
+ *
+ * The name is a project-relative FILE NAME, not a path: the whole command is 40 bytes and the
+ * name gets 24 of them, so the engine resolves it against its own audio directory. That is also
+ * what keeps a client from handing the engine a path of its choosing.
+ *
+ * `fixedPitch` — keyLow == keyHigh == rootKey — is how a drum stays a drum across the keyboard,
+ * and is the default because loading a one-shot is what anyone does first. Clear it for a
+ * playable zone.
+ */
+function loadSample(track, device, name, rootKey, fixedPitch) {
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
+  const n = String(name || '').trim();
+  if (!n) { state.reject = 'which sample?'; schedule(); return false; }
+  if (n.length > 24) {
+    // Refused here as well as in the sidecar, so the reason arrives before the round trip: a
+    // truncated name resolves to nothing or, worse, to a DIFFERENT file, and "loaded fine, wrong
+    // sample" is not a failure anyone would think to look for.
+    state.reject = `"${n}" is longer than the 24 characters the load command carries`;
+    schedule();
+    return false;
+  }
+  conn.send({ type: 'samplerload', track: Number(track) || 0, device: Number(device) || 0,
+              name: n, root: rootKey === undefined ? 36 : Number(rootKey),
+              fixed: fixedPitch === false ? 0 : 1 });
+  // The kit is answered from the engine's own snapshot, so nothing is assumed here — the card
+  // redraws when the version moves, which is what the version is for.
+  state.reject = null;
+  schedule();
+  return true;
+}
+
+/**
  * WRITE the ops on one note, from a canonical op string.
  *
  * THE MASK IS ALWAYS FULL. Every op family is named on every commit, so a family the string
@@ -2671,6 +2704,18 @@ const dockApi = {
   writeAutomation: (track, param, tick, value, discrete) =>
     writeAutomation(track, param, tick, value, discrete),
   automationPoints: (track, param) => requestAutomation(track, param),
+  /*
+   * Adding a device lived on `__uni` and NOT on `dockApi`, so the `sampler` console verb called
+   * a method that was not there. That is the seventh time this exact divergence has cost
+   * something, and it is why the ratchet holding dockApi as a subset of __uni exists — it
+   * caught this one before it ever ran.
+   *
+   * Defined HERE and delegated below, never copied: one implementation, so the two names cannot
+   * come to mean different things.
+   */
+  addDevice: (track, kind) => !!(conn && conn.send({ type: 'adddevice',
+    track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' })),
+  loadSample: (t, d, name, root, fixed) => loadSample(t, d, name, root, fixed),
   rowOps: (track, note, text) => writeRowOps(track, 0, note, text),
   opsAtCursor: (text) => writeOpsAtCursor(text),
   opsTextAtCursor: () => opsAtCursorText(),
@@ -7513,6 +7558,7 @@ window.__uni = {
   automation: (track) => dockApi.automation(track),
   writeAutomation: (t, p, k, v, d) => dockApi.writeAutomation(t, p, k, v, d),
   automationPoints: (track, param) => dockApi.automationPoints(track, param),
+  loadSample: (t, d, n, r, f) => dockApi.loadSample(t, d, n, r, f),
   rowOps: (t, n, x) => dockApi.rowOps(t, n, x),
   opsAtCursor: (x) => dockApi.opsAtCursor(x),
   opsTextAtCursor: () => dockApi.opsTextAtCursor(),
@@ -7579,8 +7625,7 @@ window.__uni = {
   pianoProbe: () => piano.probe(),
   patcherProbe: () => patcher.probe(),
   chainProbe: () => chain.probe(),
-  addDevice: (track, kind) => conn && conn.send({ type: 'adddevice',
-    track: track === undefined ? state.cursor.track : track, kind: kind || 'patcher event' }),
+  addDevice: (track, kind) => dockApi.addDevice(track, kind),
   delDevice,                          // the same function the button and the key call
   addTrack, removeTrack,
   setHarmony, deleteHarmony, scaleIdNamed,
