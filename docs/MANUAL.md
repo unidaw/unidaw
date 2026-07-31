@@ -395,9 +395,14 @@ narrow **lane bar readout** showing the clip-local `bar:beat`, and its clip's ba
 lines are drawn as accents on the lane itself. It is a readout — there is nothing to type
 into it, and it never appears or disappears as you scroll.
 
-**There is no command to change a subdivision.** The engine stores and persists
-`lines_per_beat`, the UI reads it, draws the badge, honours it for note length and off-grid
-rows — and nothing in the web UI can set it. Edit the project JSON, for now.
+**Click the badge to change it.** `1 2 3 4 6 8 12 16` in a cycle — shift goes back — because
+nobody wants eleven presses to get from 4 to 16, and a lane already carrying an unlisted value
+(any of 1..31 is legal) steps to the nearest listed one above it. `lpb <track> <lines>` reaches
+the rest.
+
+Out of range is **refused, not clamped**, and the two ends are refused for different reasons: 32
+would pack as 0 in the grid's five-bit field, and 0 is that packer's sentinel for "no grid on
+this extent". A clamp would hand you back a subdivision you did not ask for.
 
 ### Moving and selecting
 
@@ -849,6 +854,27 @@ slot-name <track> <device> <slot> [name]     empty clears it
 39 usable bytes. The engine **refuses** a name that does not fit rather than storing a
 shortened one, so what comes back is byte-for-byte what you sent or the write did not happen.
 
+### Vintage — bit depth and rate reduction
+
+```
+vintage <track> <device> [bits] [rate] [modset]
+```
+
+The SP-1200 / MPC60 character: play the sample back at fewer bits and a lower rate than the
+engine runs at. `bits` is 1–16 and `rate` a target in Hz; **0 turns either off**. It sits
+*before* the filter, which is what makes 12-bit sound like 12-bit rather than like noise added
+to a filtered signal.
+
+**On the MOD SET, not the slot** — a chopped break wants one character, not sixteen edits — so
+`modset` 0 means every mod set on the sampler, and that zero really is a wildcard here.
+
+`bits` and `rate` are **separately optional and at least one is required.** Zero is a legal
+value for both, so absence cannot be encoded as a zero: naming only `bits` leaves the rate
+exactly as it was. A call naming neither is refused rather than accepted as a command that
+changes nothing.
+
+Both are published per slot in `kit`, resolved from that slot's mod set.
+
 ### When a sampler command is refused
 
 Sampler refusals reach the reject line in words, keyed on the engine's own reason code:
@@ -1233,15 +1259,30 @@ the F major bar should not leave the card saying A minor.
 
 ### Editing it
 
-**Console only.** Nothing on the harmony card or the tracker's harmony lane responds to the
-pointer: the collapse caret is hidden because nothing is wired to it, the rows are not
-clickable, and the TET chip is deliberately styled as an inactive readout because the engine
-publishes no tuning to choose.
+**Console only, but not unreachable** — the chrome's scale button opens the palette seeded with
+`harmony `, so the list of scales is browsable with the pointer even though the timeline itself
+is not editable by one. On the card and the tracker's harmony lane nothing responds to a click:
+the collapse caret is hidden because nothing is wired to it, the rows are not clickable, and the
+TET chip is deliberately styled as an inactive readout because the engine publishes no tuning
+to choose.
 
 ```
 harmony <root> <scale> [tick]      set the key from here on
 delharmony [tick]                  remove the key change at a tick (default 0)
 ```
+
+### Quantizing a track to it
+
+```
+harmony-quantize <track> [on|off]
+```
+
+Snaps that track's notes to the harmony timeline. It is per track, and the `~` on the track's
+own header is the same control — lit when on, because it changes what every note on the lane
+MEANS and a reader has to see that without hovering.
+
+The flag rides the mixer's per-track byte and is **written by its own command**: it is not part
+of a mixer message, so setting it through one would change nothing.
 
 `scale` is a name from the engine's own table — `Major`, `Minor`, `Dorian`, `Mixolydian` —
 case-insensitively, or its numeric id.
@@ -1253,16 +1294,8 @@ Card notices, which are the honest answers rather than a blank:
 - `the playhead is before the first harmony event`
 - `read-only: the engine publishes its scales but has no command to select or edit a tuning`
 
-### Harmony quantize
-
-The engine has a per-track flag that snaps a written pitch to the harmony timeline's scale at
-playback, off by default so typed pitch is what sounds. It is persisted in the project format
-as `harmony_quantize` and there is an engine command for it.
-
-**There is no way to reach it from the web UI.** No console verb, no key, no control. Edit
-the project JSON if you want it.
-
-(The `quantize` command is unrelated — it is per-lane *timing* quantize. See §5.)
+(The `quantize` command is unrelated to harmony quantize above — it is per-lane *timing*
+quantize. See §5.)
 
 ---
 
@@ -1409,7 +1442,12 @@ Refusals: `select a node first`, `a node cannot connect to itself`,
 which`, `that would make a cycle`, `that connection is not allowed`, `those ports do not fit`.
 
 Console: `nodes` (list with editable fields), `addnode <type>`, `delnode <node>`,
-`link <src> <dst> [kind]`, `patch <node> <field> <steps>`.
+`link <src> <dst> [kind]`, `patch <node> <field> <steps>`, `save-patch <name>`.
+
+`save-patch` writes the graph to the engine's preset directory. The reply says whether the
+FILE was written rather than that the message was sent — the engine reports the outcome on its
+own channel, which is the only reason this verb exists at all: without it the button could
+report a success it had no way to know about.
 
 The master's chain is where a patcher that is not per-part belongs; reach it with
 `master on`.
@@ -1666,20 +1704,15 @@ Everything below is stated in place in the relevant chapter too. This is the lis
 
 ### Not built at all
 
+Several entries left this list on 2026-07-31 and 08-01 — harmony quantize, a lane's
+subdivision, saving a patcher preset, the slice patcher node — and every one of them had been
+reachable by the engine for a while behind a recorded reason nobody re-checked. A written-down
+limitation is indistinguishable from a real one until somebody tests it live, which is worth
+knowing before you trust anything below.
+
 - **Recording.** No engine command arms a take. The button is drawn disabled.
 - **Metronome.** Same. The `CLICK` chip is drawn unavailable.
 - **A master mixer strip, sends, returns, aux, pre/post.** Grouping is track-to-track routing.
-- **Setting a track's lines-per-beat *with the pointer*.** No longer unwritable — `SetTrackLinesPerBeat`
-  (opcode 92) landed 2026-07-31 and `daw-cli do lines-per-beat --track N --lines M` sets it, with
-  the value published (as `lines_per_beat` in `get tracks`) so a control could show its own state.
-  No console verb and no header control in this UI yet, and the second is deliberate:
-  two documents in this tree disagree about whether the per-track field is being replaced by the
-  per-extent grid, and building the UI twice is worse than waiting for the answer. See
-  `docs/SAMPLER_DESIGN.md` "Still open — owner only".
-- ~~**Harmony quantize.**~~ **Wired 2026-07-31.** It was never unreachable — the flag is
-  `uiTrackMixFlags` bit 2 and always was published. What kept it out of the UI was a recorded
-  reason nobody re-checked, which is indistinguishable from a real limitation until someone tests
-  it live.
 - **Selecting or editing a tuning.** The scale registry is a fixed built-in list. The harmony
   card's TET chip is a readout by construction.
 - **The scale roll's scale features** — degree gutter, in-key shading, cents column. The
@@ -1705,8 +1738,8 @@ Everything below is stated in place in the relevant chapter too. This is the lis
   the render depend on a live input, so a bounce would have to define what fill state it renders
   under, and that is an owner decision. A token that round-trips through the editor and then
   sounds on every pass is worse than one the editor rejects.
-- **The `slice` patcher node.** Renders and executes; cannot be created or wired from the UI.
-- **Harmony quantize**, `lines_per_beat`, the sampler's kit/sample views. See above.
+- **The sampler's kit and sample views.** `default-view` is a persisted number the web UI
+  implements neither of.
 
 ### Wired to nothing
 
@@ -1795,6 +1828,7 @@ searchable, with argument checking.
 
 **Views and layout** — `view <tracker|arrange|piano|mixer|patcher>`, `zoom <index>`,
 `columns <n>`, `edit [on|off]`, `fold <track>`, `ops-column <track> [on|off]`,
+`lpb <track> <lines>`, `harmony-quantize <track> [on|off]`, `save-patch <name>`,
 `master [on|off]`.
 
 **Tracks** — `add-track`, `remove-track <track>`, `rename <track> <name>`,
@@ -1825,7 +1859,8 @@ searchable, with argument checking.
 `slot-name <track> <device> <slot> [name]`,
 `bank <track> <device> <field> <value>`,
 `env <track> <device> <attack> <decay> <sustain> <release> [target]`,
-`filter <track> <device> <type> [cutoff] [resonance]`, `soundaddr <track> [on|off]`.
+`filter <track> <device> <type> [cutoff] [resonance]`, `soundaddr <track> [on|off]`,
+`vintage <track> <device> [bits] [rate] [modset]`.
 
 **Automation and modulation** — `automation [track]`, `curve <track> <param>`,
 `autopoint <track> <param> <tick> <value>`, `draw [on|off]`, `mods [track]`,
@@ -1833,6 +1868,7 @@ searchable, with argument checking.
 `macro <track> <device> <value>`.
 
 **Patcher** — `nodes`, `addnode <type>`, `delnode <node>`, `link <src> <dst> [kind]`,
+`save-patch <name>`,
 `patch <node> <field> <steps>`.
 
 **Help** — `help`.
