@@ -8691,6 +8691,33 @@ struct TrackRuntime {
     return false;
   };
 
+  // FIND OR MINT the envelope modulating `target` in this mod set.
+  //
+  // The APPLY MODE follows from the target and is never the caller's to choose: Volume
+  // MULTIPLIES (an amp envelope that added would never reach silence, however deep it went) and
+  // everything else ADDS to a base value. Putting that on the wire would let a caller build a
+  // modulator that cannot do anything musical, and then wonder why.
+  //
+  // Minting rather than refusing is the same argument as the amp envelope's: every mod set
+  // starts with no modulators at all, so "edit the cutoff envelope" would otherwise depend on a
+  // command that creates one, which does not exist.
+  auto findOrMintEnvelope = [](daw::SamplerModSet& ms,
+                               daw::ModTarget target) -> daw::SamplerModulator* {
+    for (auto& m : ms.modulators) {
+      if (m.kind == daw::ModKind::Envelope && m.target == target) {
+        return &m;
+      }
+    }
+    daw::SamplerModulator fresh;
+    fresh.id = ms.nextModulatorId++;
+    fresh.kind = daw::ModKind::Envelope;
+    fresh.target = target;
+    fresh.apply = target == daw::ModTarget::Volume ? 1 : 0;
+    fresh.depthMilli = 1000;
+    ms.modulators.push_back(fresh);
+    return &ms.modulators.back();
+  };
+
   // ---- THE INWARD BULK CARRIER (opcode 83).
   //
   // Reassembly state for messages too long for one 40-byte ring payload. Lives here, in the UI
@@ -8791,23 +8818,8 @@ struct TrackRuntime {
             }
             daw::SamplerModulator* mod = nullptr;
             if ((h.flags & daw::kSamplerEnvAmp) != 0) {
-              for (auto& m : ms.modulators) {
-                if (m.kind == daw::ModKind::Envelope &&
-                    m.target == daw::ModTarget::Volume) {
-                  mod = &m;
-                  break;
-                }
-              }
-              if (mod == nullptr) {
-                daw::SamplerModulator fresh;
-                fresh.id = ms.nextModulatorId++;
-                fresh.kind = daw::ModKind::Envelope;
-                fresh.target = daw::ModTarget::Volume;
-                fresh.apply = 1;
-                fresh.depthMilli = 1000;
-                ms.modulators.push_back(fresh);
-                mod = &ms.modulators.back();
-              }
+              mod = findOrMintEnvelope(
+                  ms, static_cast<daw::ModTarget>(std::min<uint8_t>(h.target, 4)));
             } else {
               for (auto& m : ms.modulators) {
                 if (m.id == h.modulatorId) {
@@ -11091,26 +11103,8 @@ struct TrackRuntime {
             }
             daw::SamplerModulator* mod = nullptr;
             if ((p.flags & daw::kSamplerEnvAmp) != 0) {
-              // The amp envelope, whatever its id — and MINTED if the mod set has none, which is
-              // the state every project starts in. Refusing here would mean a caller had to
-              // create a modulator through some other command that does not exist.
-              for (auto& m : ms.modulators) {
-                if (m.kind == daw::ModKind::Envelope &&
-                    m.target == daw::ModTarget::Volume) {
-                  mod = &m;
-                  break;
-                }
-              }
-              if (mod == nullptr) {
-                daw::SamplerModulator fresh;
-                fresh.id = ms.nextModulatorId++;
-                fresh.kind = daw::ModKind::Envelope;
-                fresh.target = daw::ModTarget::Volume;
-                fresh.apply = 1;  // multiply — the right combination for Volume
-                fresh.depthMilli = 1000;
-                ms.modulators.push_back(fresh);
-                mod = &ms.modulators.back();
-              }
+              mod = findOrMintEnvelope(
+                  ms, static_cast<daw::ModTarget>(std::min<uint8_t>(p.target, 4)));
             } else {
               for (auto& m : ms.modulators) {
                 if (m.id == p.modulatorId) {
@@ -11132,6 +11126,10 @@ struct TrackRuntime {
             // runner's unit conversion, so it is not merely out of range but unusable.
             mod->rateMilli = static_cast<uint16_t>(
                 std::clamp<int32_t>(p.rateMilli == 0 ? 1000 : p.rateMilli, 250, 4000));
+            // DEPTH IS WHAT THE TARGET NEEDS. On Volume the shape is the whole story and full
+            // depth is right; on Cutoff a depth of 1000 is +-6 octaves and a shallower sweep is
+            // usually what is wanted, so the caller says. Signed: a negative depth inverts.
+            mod->depthMilli = std::clamp<int16_t>(p.depthMilli, -1000, 1000);
             // The ADSR editor, explicitly. Never inferred from the shape — see the field's
             // comment: sniffing "four points with a sustain loop?" would flip the editor out
             // from under someone who hand-drew a four-point curve.

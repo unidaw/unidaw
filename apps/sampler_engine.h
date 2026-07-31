@@ -363,6 +363,17 @@ class SamplerRuntime {
       spec.cutoffHz = 20.0f * std::pow(1000.0f, std::clamp(norm, 0.0f, 1.0f));
       spec.resonance = 0.7f + static_cast<float>(mod->resonanceMilli) / 1000.0f * 9.3f;
       spec.sampleRate = snap_->sampleRate;
+      // EVERY ENVELOPE GETS ITS OWN CLOCK, from its OWN modulator. Sharing the amp envelope's
+      // was wrong twice over: a mod set with no amp envelope left the clock at zero, so a
+      // cutoff sweep never moved at all; and where an amp envelope did exist, a modulator with
+      // a different timeBase or rate silently ran at the amp's instead of its own.
+      auto unitsPerFrame = [&](const SamplerModulator& m) -> double {
+        double u = m.timeBase == 0 ? 1000000.0 / snap_->sampleRate : nanotickPerFrame_;
+        if (m.rateMilli != 0) {
+          u *= 1000.0 / static_cast<double>(m.rateMilli);
+        }
+        return u;
+      };
       for (const auto& m : mod->modulators) {
         if (m.kind != ModKind::Envelope || m.env.empty()) {
           continue;
@@ -373,18 +384,21 @@ class SamplerRuntime {
             if (!spec.cutoffEnv) {
               spec.cutoffEnv = &m.env;
               spec.cutoffDepth = depth * 6.0f;  // +-6 octaves at full depth
+              spec.cutoffUnitsPerFrame = unitsPerFrame(m);
             }
             break;
           case ModTarget::Pitch:
             if (!spec.pitchEnv) {
               spec.pitchEnv = &m.env;
               spec.pitchDepthCents = depth * 4800.0f;  // +-4 octaves
+              spec.pitchUnitsPerFrame = unitsPerFrame(m);
             }
             break;
           case ModTarget::Panning:
             if (!spec.panEnv) {
               spec.panEnv = &m.env;
               spec.panDepth = depth;
+              spec.panUnitsPerFrame = unitsPerFrame(m);
             }
             break;
           default:
@@ -396,13 +410,13 @@ class SamplerRuntime {
       spec.ampEnv = &amp->env;
       // timeBase 0 = microseconds. Nanoticks (1) needs this block's tempo, which the caller
       // supplies via setTempo(); a cached ratio would detune the envelope across a tempo ramp.
-      spec.envUnitsPerFrame =
-          amp->timeBase == 0 ? 1000000.0 / snap_->sampleRate : nanotickPerFrame_;
-      // `rate` scales the envelope's clock. Applied here rather than inside the runner so the
-      // runner stays a pure function of frames and its unit conversion stays at one boundary.
+      // `rate` scales the clock. Both live in one helper above so the amp envelope and every
+      // other envelope cannot disagree about what a unit is.
+      double u = amp->timeBase == 0 ? 1000000.0 / snap_->sampleRate : nanotickPerFrame_;
       if (amp->rateMilli != 0) {
-        spec.envUnitsPerFrame *= 1000.0 / static_cast<double>(amp->rateMilli);
+        u *= 1000.0 / static_cast<double>(amp->rateMilli);
       }
+      spec.envUnitsPerFrame = u;
     }
     target->start(spec, e.noteId, slotId, e.column);
     if (stolen) {

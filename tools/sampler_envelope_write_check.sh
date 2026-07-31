@@ -11,11 +11,14 @@
 # the envelope never reaching a voice, which is the failure that matters. So this renders the
 # same note three ways and listens to the shape.
 #
-# FOUR PROPERTIES:
+# FIVE PROPERTIES:
 #   ATTACK    a long attack makes the note START QUIET and arrive later. Measured as the ratio of
 #             early energy to late energy, which is the shape rather than the level
 #   SUSTAIN   a low sustain holds the note QUIETER after the decay than a full one does
 #   RELEASE   a long release makes the sound OUTLAST its note-off
+#   TARGETS   an envelope can drive CUTOFF, not only volume. Asserted on BRIGHTNESS (the
+#             high-band share of the energy) rather than level, because a level change is
+#             what a volume envelope on the wrong target would look like
 #   MINTS     it works on a mod set with NO modulators at all — the state every project starts
 #             in. If it required an existing envelope, the common case would need a command that
 #             does not exist
@@ -41,16 +44,25 @@ cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
 
-# A steady two-second tone. Steady on purpose: any change in the rendered ENVELOPE is then the
+# A steady two-second SAW. Steady on purpose: any change in the rendered ENVELOPE is then the
 # envelope's doing and not the sample's, so the measurement needs no reference to what the source
 # was doing at that instant.
+#
+# A SAW AND NOT A SINE, and this cost a failing run to notice. The TARGETS property below measures
+# a filter opening, and a sine has ONE partial — a low-pass sweep over it changes its amplitude
+# and nothing else, so "brightness" is not a thing a sine can express. The check duly reported
+# that the cutoff envelope did nothing. It was right about the measurement and wrong about the
+# cause: there was no timbre to move.
 python3 - "$TMP" <<'PY'
 import sys, wave, struct, math, os
 sr = 48000
 w = wave.open(os.path.join(sys.argv[1], "tone.wav"), 'wb')
 w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
-w.writeframes(b''.join(struct.pack('<h', int(16000 * math.sin(2 * math.pi * 220.0 * i / sr)))
-                       for i in range(sr * 2)))
+frames = []
+for i in range(sr * 2):
+    phase = (220.0 * i / sr) % 1.0
+    frames.append(struct.pack('<h', int(11000 * (2.0 * phase - 1.0))))
+w.writeframes(b''.join(frames))
 w.close()
 PY
 
@@ -82,7 +94,11 @@ sampler = {"next_slot_id": 2, "next_source_id": 2, "next_mod_set_id": 2, "stem_c
            "sources": [{"local_id": 1, "path": os.path.join(dirname, "tone.wav"),
                         "content_key": 0}],
            "slice_sets": [],
-           "mod_sets": [{"id": 1, "name": "d", "filter_type": 0, "cutoff_milli": 1000,
+           # FILTER ON, AND NEARLY CLOSED. filter_type 0 means OFF (sampler_voice.h:78), so the
+           # first version of this fixture asked a switched-off filter to sweep. cutoff_milli is
+           # logarithmic over the audible range: 400 is about 317 Hz, just above the saw's 220 Hz
+           # fundamental, so the harmonics are gone until an envelope opens it.
+           "mod_sets": [{"id": 1, "name": "d", "filter_type": 1, "cutoff_milli": 400,
                          "resonance_milli": 0, "next_modulator_id": 1, "modulators": []}],
            "slots": [slot]}
 dev = {"device_id": 1, "kind": "sampler", "capability_mask": 5, "patcher_node_id": 0,
@@ -190,6 +206,58 @@ python3 -c "
 raise SystemExit(0 if $R_TAIL > max(50.0, $F_TAIL * 2.0) else 1)" || \
   fail "with a 400 ms release the sound after note-off measured $R_TAIL, against $F_TAIL with no
         envelope. A release that does not outlast its note-off is not a release"
+
+# ---- TARGETS. The engine renders envelopes on Cutoff, Pitch and Panning too, and for a while
+# nothing could create one — the same gap the ADSR itself had, one level in. A cutoff envelope
+# with a slow attack opens the filter over time, so the note gets BRIGHTER: high-frequency energy
+# arrives late even though the source is steady. Measured as the ratio of high-band to total,
+# which is timbre rather than level — a gain change moves both and leaves the ratio alone.
+#
+# BOTH WINDOWS SIT INSIDE THE NOTE (which runs 0.5 s to 1.0 s). The first version measured the
+# late window at 0.95-1.03, straddling note-off, so it was reading the release rather than the
+# filter — and reported a brightness rise for a project with NO envelope at all.
+shape cutoff --track 0 --amp --target cutoff --depth 1000 \
+    --attack 400000 --decay 0 --sustain 1000 --release 0
+BRIGHT_EARLY="$(python3 - "$TMP/cutoff.wav" 0.52 0.60 <<'PYB'
+import sys, wave, struct, math
+w = wave.open(sys.argv[1], 'rb')
+ch, n, sr = w.getnchannels(), w.getnframes(), w.getframerate()
+s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
+a, b = int(float(sys.argv[2]) * sr), min(n, int(float(sys.argv[3]) * sr))
+# First difference is a crude high-pass: it is the derivative, so it rises with brightness.
+tot = hi = 0.0
+prev = 0.0
+for i in range(a, b):
+    v = float(s[i * ch])
+    tot += v * v
+    hi += (v - prev) ** 2
+    prev = v
+print(int(1000 * math.sqrt(hi / max(1e-9, tot))))
+PYB
+)"
+BRIGHT_LATE="$(python3 - "$TMP/cutoff.wav" 0.86 0.96 <<'PYB'
+import sys, wave, struct, math
+w = wave.open(sys.argv[1], 'rb')
+ch, n, sr = w.getnchannels(), w.getnframes(), w.getframerate()
+s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
+a, b = int(float(sys.argv[2]) * sr), min(n, int(float(sys.argv[3]) * sr))
+tot = hi = 0.0
+prev = 0.0
+for i in range(a, b):
+    v = float(s[i * ch])
+    tot += v * v
+    hi += (v - prev) ** 2
+    prev = v
+print(int(1000 * math.sqrt(hi / max(1e-9, tot))))
+PYB
+)"
+echo "  cutoff env:   brightness early=$BRIGHT_EARLY late=$BRIGHT_LATE"
+python3 -c "
+raise SystemExit(0 if $BRIGHT_LATE > $BRIGHT_EARLY * 1.3 else 1)" || \
+  fail "a CUTOFF envelope with a 400 ms attack did not open the filter: brightness went
+        $BRIGHT_EARLY -> $BRIGHT_LATE. The engine renders cutoff envelopes; if this does not
+        move, the command created an envelope on the wrong target — most likely Volume, which
+        is what it did before --target existed"
 
 echo "sampler_envelope_write_check: PASS — the ADSR is reachable, and it is audible in all three"
 echo "                              stages, on a mod set that started with no modulators at all"

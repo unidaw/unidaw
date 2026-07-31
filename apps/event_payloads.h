@@ -346,7 +346,7 @@ struct UiSamplerEnvPointsHeader {
   uint32_t modSetId = 0;
   uint16_t modulatorId = 0;
   uint8_t timeBase = 0;
-  uint8_t reserved = 0;
+  uint8_t target = 0;  // kSamplerEnvTarget*; 0 = Volume
   uint16_t rateMilli = 1000;
   uint16_t pointCount = 0;
   uint8_t sustainLoopStart = 255;
@@ -371,10 +371,29 @@ static_assert(sizeof(UiEnvPointWire) == 8, "UiEnvPointWire must be 8 bytes");
 
 // SamplerSetEnvelope flags.
 enum : uint16_t {
-  // Target the AMP envelope — the one modulating Volume — whatever its id, creating it if the
-  // mod set has none. Almost every caller means this, and requiring an id first would make the
-  // common case a two-step round trip against state the caller has not read yet.
+  // Address the envelope BY TARGET rather than by modulator id — the one modulating `target`,
+  // whatever its id, created if the mod set has none. Almost every caller means this, and
+  // requiring an id first would make the common case a two-step round trip against state the
+  // caller has not read yet.
+  //
+  // Named kSamplerEnvAmp because it began as "the amp envelope" and `target` defaults to 0
+  // (Volume), so a sender written before `target` existed still means exactly what it meant.
+  // The engine renders envelopes on Cutoff, Pitch and Panning too (sampler_engine.h:372) and
+  // for a while nothing could create one — the same gap the ADSR itself had.
   kSamplerEnvAmp = 1u << 0,
+};
+
+// Which modulation domain an envelope drives. Mirrors ModTarget in sampler_state.h.
+//
+// The APPLY MODE follows from the target and is not the caller's to choose: Volume multiplies
+// (an amp envelope that ADDED would never reach silence), everything else adds. Making it a
+// wire field would let a caller build a modulator that cannot do anything musical.
+enum : uint8_t {
+  kSamplerEnvTargetVolume = 0,
+  kSamplerEnvTargetPanning = 1,
+  kSamplerEnvTargetPitch = 2,
+  kSamplerEnvTargetCutoff = 3,
+  kSamplerEnvTargetResonance = 4,
 };
 
 // SAMPLER SET ENVELOPE (opcode 82). 40 bytes.
@@ -399,7 +418,9 @@ struct UiSamplerEnvelopePayload {
   uint32_t release = 0;
   int16_t sustainMilli = 1000;
   uint16_t rateMilli = 1000;
-  uint32_t reserved2 = 0;
+  uint8_t target = 0;   // kSamplerEnvTarget*; 0 = Volume, which is what this used to assume
+  uint8_t reserved2 = 0;      // alignment for depthMilli, not spare
+  int16_t depthMilli = 1000;  // signed; what full envelope travel is worth on the target
 };
 static_assert(sizeof(UiSamplerEnvelopePayload) == 40,
               "UiSamplerEnvelopePayload must be 40 bytes");

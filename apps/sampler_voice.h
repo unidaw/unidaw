@@ -71,7 +71,18 @@ struct SamplerVoiceSpec {
   // voice ends some other way. This is the difference between a sustained pad and a drone.
   uint8_t sustainLoop = 0;
   const EnvShape* ampEnv = nullptr;  // borrowed from the snapshot; null = no envelope
+  // ENVELOPE CLOCKS, ONE PER ENVELOPE. Not one shared value: every modulator carries its own
+  // timeBase (microseconds or nanoticks) and its own rate multiplier, so a tempo-synced filter
+  // sweep under a millisecond-timed amp envelope is an ordinary thing to ask for.
+  //
+  // This WAS one field, set only inside the `if (amp)` branch — so a cutoff, pitch or pan
+  // envelope on a mod set with no amp envelope ran with a clock of ZERO, sat at its value at
+  // time 0 forever, and modulated nothing. The command that created it worked, the modulator
+  // persisted correctly, and the sound was identical to having no envelope at all.
   double envUnitsPerFrame = 0.0;
+  double cutoffUnitsPerFrame = 0.0;
+  double pitchUnitsPerFrame = 0.0;
+  double panUnitsPerFrame = 0.0;
 
   // FILTER, and the modulators that move it. All envelopes are borrowed from the snapshot, so a
   // voice never owns one and never frees one.
@@ -261,13 +272,13 @@ class SamplerVoice {
     // one runner read at three depths, because they are separate SHAPES — a filter that opens
     // while the amp decays is the ordinary case, not the exotic one.
     if (spec_.cutoffEnv && !spec_.cutoffEnv->empty()) {
-      cutoffEnv_.start(spec_.cutoffEnv, spec_.envUnitsPerFrame);
+      cutoffEnv_.start(spec_.cutoffEnv, spec_.cutoffUnitsPerFrame);
     }
     if (spec_.pitchEnv && !spec_.pitchEnv->empty()) {
-      pitchEnv_.start(spec_.pitchEnv, spec_.envUnitsPerFrame);
+      pitchEnv_.start(spec_.pitchEnv, spec_.pitchUnitsPerFrame);
     }
     if (spec_.panEnv && !spec_.panEnv->empty()) {
-      panEnv_.start(spec_.panEnv, spec_.envUnitsPerFrame);
+      panEnv_.start(spec_.panEnv, spec_.panUnitsPerFrame);
     }
     filtL_.reset();
     filtR_.reset();

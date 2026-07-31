@@ -256,7 +256,7 @@ pub struct UiSamplerEnvPointsHeader {
     pub mod_set_id: u32,
     pub modulator_id: u16,
     pub time_base: u8,
-    pub reserved: u8,
+    pub target: u8,
     pub rate_milli: u16,
     pub point_count: u16,
     pub sustain_loop_start: u8,
@@ -299,7 +299,12 @@ pub struct UiSamplerEnvelopePayload {
     pub release: u32,
     pub sustain_milli: i16,
     pub rate_milli: u16,
-    pub reserved2: u32,
+    /// Which modulation domain: 0 Volume, 1 Panning, 2 Pitch, 3 Cutoff, 4 Resonance. The engine
+    /// renders envelopes on all of them; for a while nothing could create any but Volume.
+    pub target: u8,
+    pub reserved2: u8,
+    /// Signed. What FULL envelope travel is worth on the target — on Cutoff, 1000 is +-6 octaves.
+    pub depth_milli: i16,
 }
 
 /// Target the AMP envelope whatever its id, minting one if the mod set has none.
