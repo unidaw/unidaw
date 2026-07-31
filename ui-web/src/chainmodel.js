@@ -707,6 +707,21 @@ export function buildChainModel(opts, buf) {
            * is — so it says.
            */
           const missing = (q.flags & 4) !== 0;
+          /*
+           * BIT 3: THE SLICE THIS SLOT NAMES IS GONE (kUiSamplerSlotSliceMissing).
+           *
+           * `slice --mode clear` removes the markers and leaves the slots that named them. Such
+           * a slot keeps a non-zero sliceId and falls back to reporting the whole source — which
+           * is byte for byte what a legitimate ONE-SLICE chop reports, so the two states cannot
+           * be told apart from the extents. Backend added the bit at my asking for exactly that
+           * reason; it is set only when the SOURCE resolved, because with no audio there is no
+           * slice list to check against and lighting both bits would say "the slice is gone"
+           * about a file that is merely missing.
+           *
+           * Said, not hidden: an orphaned pad still plays — the whole file, loudly, where a
+           * slice used to be — so it is a thing you want to see rather than a thing to suppress.
+           */
+          const sliceGone = (q.flags & 8) !== 0;
           p.index = q.slot;
           p.uid = '';
           /*
@@ -781,6 +796,9 @@ export function buildChainModel(opts, buf) {
            */
           const extent = q.end > q.begin ? q.end - q.begin : 0;
           p.range = missing ? 'the source file did not resolve — this slot is silent'
+                  : sliceGone
+                    ? `slice ${q.slice} was cleared — this pad plays the WHOLE source now, `
+                      + 'not the region it names'
                   : [q.slice
                        ? (extent
                             ? `slice ${q.slice}: frames ${q.begin}-${q.end} of ${q.frames}`
@@ -788,6 +806,7 @@ export function buildChainModel(opts, buf) {
                        : `${q.frames} frames`,
                      mod.title].filter(Boolean).join(' · ');
           p.display = missing ? 'MISSING'
+                    : sliceGone ? `sl${q.slice}?`
                     : (q.slice ? `sl${q.slice}` : frameText(q.frames)) + mod.mark;
           p.value = 0;
           p.mod = -1;

@@ -15,6 +15,15 @@ make one socket duplex broke it twice — a non-blocking socket reports `WouldBl
 under ordinary backpressure, and a read timeout that fires mid-frame corrupts the
 stream.
 
+## The manual
+
+**[docs/MANUAL.md](../docs/MANUAL.md)** — how to use the thing, for someone who already knows
+trackers and DAWs. Written against the source rather than against intent, so it names what
+refuses as well as what works. Read it before this file if you want to make a noise rather than
+change the code.
+
+This README is the frontend's *architecture*: what talks to what, and why it is shaped this way.
+
 ## Running it
 
     tools/webstack.sh            # engine + sidecar + page server, or says why not
