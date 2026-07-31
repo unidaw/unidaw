@@ -153,6 +153,21 @@ inline bool isPreTrigCondition(uint8_t code) {
   return code == kTrigConditionPre || code == kTrigConditionNotPre;
 }
 
+// CAN A COMMAND WRITE THIS CODE? The one place that answers, so the write path cannot drift from
+// the code space again — it already did once: PRE (130) shipped able to parse, format, resolve
+// and round-trip through a project file, while SetRowOps refused every value above 64. The
+// feature was complete except for the path that writes it, which is the defect this codebase
+// produces more than any other.
+//
+// FILL (128/129) IS DELIBERATELY NOT SETTABLE. It is reserved and unimplemented, so a note
+// carrying it would sound on every pass under the unknown-code rule. The row-op parser already
+// refuses `cfill` for that reason and the command layer has to agree — a client that does not go
+// through the parser must not be able to create a trig that looks conditional and is not. When
+// FILL lands, this function is what changes.
+inline bool isSettableTrigCondition(uint8_t code) {
+  return code <= kTrigConditionMaxAB || isPreTrigCondition(code);
+}
+
 inline bool trigConditionFires(uint8_t code, uint64_t passIndex) {
   if (code == kTrigConditionNone) {
     return true;
@@ -175,8 +190,22 @@ inline bool trigConditionFires(uint8_t code, uint64_t passIndex) {
 
 // One conditional trig in a track's flat clip, in sounding order. Only notes that CARRY a
 // condition appear, so the list is short and the backward walk below is cheap.
+//
+// THE COLUMN IS THE TIE-BREAK, and it is load-bearing rather than decorative. Two conditional
+// notes on the SAME ROW in different columns is one keypress in this tracker — a chord of two
+// conditional notes — and "the previous conditional in sounding order" has no answer for a tie.
+// Ordering by (tick, column) gives one: column 0 resolves before column 1, which is the order a
+// person reads the row in.
+//
+// Left to the flat clip's own event order it would have been INSERTION order: stable for a given
+// file, so bounces would have matched, but arbitrary to the user and different for two files
+// describing the same music. Worse, the lookup that finds a note's own place in this list matched
+// on (tick, code) — so two PRE notes on one row both found the FIRST entry and resolved against
+// the same predecessor, one of them wrong. Raised by the web-UI agent, who asked what the
+// tie-break was so they could draw it; there was not one.
 struct TrigConditionSite {
   uint64_t tick = 0;
+  uint8_t column = 0;
   uint8_t code = kTrigConditionNone;
 };
 

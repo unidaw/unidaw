@@ -1008,6 +1008,20 @@ static_assert(sizeof(UiSamplerSlotEntry) == 80, "UiSamplerSlotEntry must be 80 b
 // be inferred from lengthFrames == 0, because "silent because the file is missing" and "silent
 // because the sample is empty" are different problems and a UI should be able to say which.
 inline constexpr uint8_t kUiSamplerSlotSourceMissing = 1u << 2;
+// THE SLOT NAMES A SLICE THAT NO LONGER EXISTS — the state `sampler-slice --mode clear` leaves
+// behind when it wipes a slice set while slots still point into it. Such a slot plays the WHOLE
+// SOURCE, which is a reasonable thing to do and an unreasonable thing to draw as a chop.
+//
+// IT CANNOT BE INFERRED, which is why it is a bit. The obvious test — sliceId != 0 with an extent
+// covering 0..lengthFrames — is ambiguous: a one-slice chop legitimately produces exactly that,
+// and a UI cannot tell the pad whose slice was deleted from the pad whose slice IS the whole
+// file. Raised by the web-UI agent, who was told the two were distinguishable and correctly said
+// they were not.
+//
+// Set only when the source itself RESOLVED. With no audio there is no slice list to check
+// against, and lighting both bits would say "the slice is gone" about a file that is merely
+// missing.
+inline constexpr uint8_t kUiSamplerSlotSliceMissing = 1u << 3;
 
 struct alignas(64) UiSamplerKitSlot {
   ShmAtomicU32 seq{0};        // ODD while writing (seqlock)

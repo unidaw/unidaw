@@ -203,6 +203,10 @@ pub const UI_SAMPLER_KIT_SLOTS: usize = 2;
 /// from `length_frames == 0`, because "silent because the file is missing" and "silent because the
 /// sample is empty" are different problems and a UI should be able to say which.
 pub const UI_SAMPLER_SLOT_SOURCE_MISSING: u8 = 1 << 2;
+/// The slot names a SLICE that no longer exists — what `sampler-slice --mode clear` leaves
+/// behind. Such a slot plays the whole source, which is indistinguishable from a one-slice chop
+/// by extent alone, so it has to be published rather than inferred.
+pub const UI_SAMPLER_SLOT_SLICE_MISSING: u8 = 1 << 3;
 
 /// SamplerSlice (76) modes. NAMED rather than numbered by position, so adding a mode never
 /// changes what an existing saved macro or agent script means.
