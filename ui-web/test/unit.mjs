@@ -15,7 +15,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
-import { ROW_OPS, OP_MASK, opGlyph, opsRun, opsText, parseOps } from '../src/rowops.js';
+import { ROW_OPS, OP_MASK, opGlyph, opsRun, opsText, opsPresent, opTokenAt,
+         parseOps } from '../src/rowops.js';
 import { DEVICE_KINDS, modSummary } from '../src/chainmodel.js';
 import {
   parseToken, parseChord, pitchOf, pitchToToken, hexValue, shiftDigit, NOTE_KEYS,
@@ -2552,6 +2553,70 @@ const ENGINE_UNUSED = {
   SamplerMarker: 'gap — with SamplerSlice',
   SamplerEmitRows: 'gap — with SamplerSlice; emits a chop into the pattern',
 };
+
+test('the ops cell expands the SELECTED op and collapses the rest', () => {
+  /*
+   * The collapsed cell is one glyph per op; `cursor.op` selects one of them and that one draws
+   * in full. Tested here rather than only in the browser because the condition is four
+   * comparisons — track, row, column, and "is anything selected" — and getting any of them wrong
+   * shows up as a cell that simply never expands, which looks like a dead keybinding.
+   */
+  const engine = gridEngine([4]);
+  engine.notes = [{ tOn: 0, tOff: 240000, pitch: 60, velocity: 100, column: 0, track: 0, row: 0,
+                    retrigger: 3, probability: 20, soundOffset: 20480, id: 1 }];
+  engine.noteCount = 1;
+  const opsCell = (cursor) => {
+    const vm = buildViewModel({ startRow: 0, rowCount: 4, tracks: 1, columns: 3,
+                                zoomIndex: 2, engine, cursor }, createBuffer(4, 1, 3));
+    return vm.rows[0].cells[2].text;
+  };
+  assert.equal(opsCell({ row: 0, track: 0, col: 2, op: -1 }), 'rpo',
+               'nothing selected: one glyph per op');
+  assert.equal(opsCell({ row: 0, track: 0, col: 2, op: 0 }), 'ret3', 'the first op, in full');
+  assert.equal(opsCell({ row: 0, track: 0, col: 2, op: 1 }), 'p20', 'the second');
+  assert.equal(opsCell({ row: 0, track: 0, col: 2, op: 2 }), 'o80', 'the third');
+  // A selection belongs to ONE cell: the same index with the cursor elsewhere expands nothing.
+  assert.equal(opsCell({ row: 1, track: 0, col: 2, op: 0 }), 'rpo', 'another row is untouched');
+  assert.equal(opsCell({ row: 0, track: 0, col: 0, op: 0 }), 'rpo', 'another field is untouched');
+  // An out-of-range index draws the run rather than an empty cell — the ops are still there.
+  assert.equal(opsCell({ row: 0, track: 0, col: 2, op: 9 }), 'rpo', 'a stale index still draws');
+  // A cursor with no `op` at all (every caller that predates this) behaves as before.
+  assert.equal(opsCell({ row: 0, track: 0, col: 2 }), 'rpo', 'a cursor without `op` is unchanged');
+});
+
+test('the glyph run, the present-op list and the canonical text are the same sequence', () => {
+  /*
+   * THE INVARIANT A SUB-CELL CURSOR RIDES ON.
+   *
+   * The run draws one glyph per op and `opsPresent` lists the ops behind them, so an index into
+   * the run addresses an op. They agree because both walk ROW_OPS skipping falsy values — and
+   * two walks that agreed by coincidence would put the caret on one glyph and edit another, with
+   * the note coming back with the wrong op changed and nothing anywhere reporting an error.
+   *
+   * Checked over every SUBSET rather than one example, because the orders only diverge when some
+   * ops are absent: any two present ops must appear in the same relative order in both walks no
+   * matter which of the others are missing.
+   */
+  const VALUES = { retrigger: 3, probability: 55, delayTicks: 160000, sound: 5, soundOffset: 20480 };
+  const fields = ROW_OPS.map((o) => o.field);
+  for (let bits = 0; bits < (1 << fields.length); bits++) {
+    const note = {};
+    fields.forEach((f, i) => { if (bits & (1 << i)) note[f] = VALUES[f]; });
+    const run = opsRun(note);
+    const present = opsPresent(note);
+    assert.equal(run.length, present.length,
+                 `one glyph per present op for ${JSON.stringify(note)}`);
+    assert.equal(run, present.map(opGlyph).join(''),
+                 `the run is the present ops' glyphs, in order, for ${JSON.stringify(note)}`);
+    // ...and the token at each index is the word the canonical text has in that position.
+    const words = opsText(note, 960000).split(' ').filter(Boolean);
+    assert.equal(words.length, present.length, 'the text has one word per present op');
+    for (let i = 0; i < present.length; i++) {
+      assert.equal(opTokenAt(note, i, 960000), words[i],
+                   `token ${i} of ${JSON.stringify(note)} matches the canonical text`);
+    }
+  }
+});
 
 test("the row-op mask bits are the engine's, not this table's order", async () => {
   const { readFileSync } = await import('node:fs');

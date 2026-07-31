@@ -2,7 +2,7 @@ import { pitchName } from './wire.js';
 import { nameChord } from './harmonymodel.js';
 import { DEFAULT_METER, createPosition, positionOf, sameMeter,
          ticksPerBar, ticksPerBeat, NANOTICKS_PER_QUARTER } from './meter.js';
-import { opsRun } from './rowops.js';
+import { opsRun, opTokenAt } from './rowops.js';
 // The view-model: plain data describing exactly what is on screen right now.
 //
 // This is the boundary the whole frontend is built around. The renderer consumes
@@ -426,6 +426,9 @@ function contentAt(tick, track, col) {
  */
 const SIG = { zoomIndex: -1, pendingCount: -1, overlayLen: -1, badKey: -2,
               notesRevision: -2, aggRevision: -2, rowGrid: -2,
+              // -2, not -1: -1 is the real 'nothing selected' value, and a guard seeded
+              // to a value it can legitimately hold never fires on the first frame.
+              opSel: -2, opRow: -2, opTrack: -2, opCol: -2,
               // The RAILS, which are not decoration: a clip's own lines-per-beat
               // and meter are packed into UiClipExtent.flags, and `extentsRevision`
               // is what moves when they do (wire.js). Without it here, changing a
@@ -1284,7 +1287,22 @@ export function buildViewModel(opts, buf) {
            * which is a better answer than squeezing it in where it happens to fit, and it is
            * what "collapsed is one character for every op" meant in the first place.
            */
-          const run = opsRun(n);
+          /*
+           * THE SELECTED OP IS SHOWN IN FULL; the rest of the cell stays collapsed.
+           *
+           * `cursor.op` is an index into the run, so the cell under the cursor draws that op's
+           * TOKEN — `p60` rather than `p` — which is the expansion the collapsed form implies
+           * and the only feedback that says which of forty glyphs `@` is about to open. One
+           * text swap, no extra nodes: a caret per glyph would be a DOM node per op on every
+           * row that has them.
+           */
+          const onCursor = cursor.op >= 0 && n.track === cursor.track
+                           && scaled === cursor.row
+                           && (nc * FIELDS_PER_NOTE + 2) === cursor.col;
+          // `ticksPerBeat(meter)` rather than a constant: the delay is stored in ticks and
+          // spelled as a fraction of a BEAT, so the token depends on the meter the row is in.
+          const token = onCursor ? opTokenAt(n, cursor.op, ticksPerBeat(meter)) : '';
+          const run = token || opsRun(n);
           if (run) { c2.text = run; c2.kind = 'fx'; }
         }
       }
@@ -1440,14 +1458,32 @@ export function buildViewModel(opts, buf) {
     const badKey = badToken
       ? badToken.row * 1e6 + badToken.track * 1e3 + badToken.col + badToken.text.length
       : -1;
+    /*
+     * THE SELECTED OP IS AN INPUT TO CELL TEXT, so it belongs here.
+     *
+     * Left out at first, and the symptom was exactly what this comment warns about: the cursor
+     * state updated, the draw ran, and the cell kept its old text because nothing rebound it. It
+     * read as a dead keybinding. Kept as four separate fields rather than one packed number for
+     * the reason above — the packed version aliased and cancelled changes out.
+     *
+     * -1 when nothing is selected, so ordinary cursor movement does NOT rebind every visible
+     * cell. Only stepping between ops does, which is the one case where a cell's text changed.
+     */
+    const opSel = cursor && cursor.op >= 0 ? cursor.op : -1;
+    const opRow = opSel < 0 ? -1 : cursor.row;
+    const opTrack = opSel < 0 ? -1 : cursor.track;
+    const opCol = opSel < 0 ? -1 : cursor.col;
     if (s.zoomIndex !== zoomIndex || s.pendingCount !== pendingCount
         || s.overlayLen !== overlayLen || s.badKey !== badKey
+        || s.opSel !== opSel || s.opRow !== opRow
+        || s.opTrack !== opTrack || s.opCol !== opCol
         || s.notesRevision !== (engine ? engine.notesRevision : -1)
         || s.aggRevision !== (engine ? engine.aggRevision : -1)
         || s.rowGrid !== (engine ? engine.rowGrid : -1)
         || s.extentsRevision !== (engine ? engine.extentsRevision : -1)) {
       s.zoomIndex = zoomIndex; s.pendingCount = pendingCount; s.overlayLen = overlayLen;
       s.badKey = badKey;
+      s.opSel = opSel; s.opRow = opRow; s.opTrack = opTrack; s.opCol = opCol;
       s.notesRevision = engine ? engine.notesRevision : -1;
       s.aggRevision = engine ? engine.aggRevision : -1;
       s.rowGrid = engine ? engine.rowGrid : -1;

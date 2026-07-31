@@ -166,6 +166,35 @@ export function opsText(note, beatTicks) {
   return out;
 }
 
+/**
+ * The ops actually PRESENT on a note, in the order the glyph run draws them.
+ *
+ * The run and this list are the same sequence by construction — both walk ROW_OPS and skip a
+ * falsy value — which is what lets a cursor index into the run address an op. Two walks that
+ * agreed by coincidence would put the caret on one glyph and edit another, and the note would
+ * come back with the wrong op changed and no error anywhere.
+ */
+export function opsPresent(note) {
+  const out = [];
+  if (!note) return out;
+  for (const op of ROW_OPS) if (note[op.field]) out.push(op);
+  return out;
+}
+
+/**
+ * The canonical token for ONE of a note's ops, by its index in the run — `p60`, `d1/6`.
+ *
+ * This is what the cell shows when a single op is selected and what the edit buffer is seeded
+ * with. It is the same spelling `opsText` would produce for that op, from the same table, so a
+ * token read out of a cell can be typed back into it.
+ */
+export function opTokenAt(note, index, beatTicks) {
+  const present = opsPresent(note);
+  const op = present[index];
+  if (!op) return '';
+  return op.prefix + op.text(note[op.field], beatTicks);
+}
+
 function reduce(n, d) {
   let a = n, b = d;
   while (b) { const t = a % b; a = b; b = t; }

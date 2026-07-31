@@ -407,6 +407,65 @@ const cells = await opsCells();
 }
 
 /*
+ * STEPPING THROUGH THE OPS INSIDE ONE CELL.
+ *
+ * The collapsed cell is one glyph per op, so it is a row of things to point at — and pointing is
+ * the only way to reach a dense row, because the edit buffer holds 48 characters and the user's
+ * own case (forty-odd ops on one row) spells to several hundred. Left/Right walks them before
+ * leaving the cell, the selected one draws in FULL, and `@` then opens that op alone.
+ *
+ * The arrival state is deliberately "none selected": stepping into the ops field must still mean
+ * the field, and `@` there must still open the whole row, or every existing habit changes.
+ */
+{
+  // The cursor is on the note the block above left at `ret3 p20 o80` — three ops, three glyphs.
+  const cellText = () => page.evaluate(() => {
+    const c = document.querySelector('.tk-cell.cursor');
+    return c ? c.textContent : '';
+  });
+  check(await cellText() === 'rpo', 'the cell collapses to one glyph per op', await cellText());
+
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(300);
+  check(await cellText() === 'ret3',
+        'stepping right inside the cell selects the first op and shows it in full',
+        await cellText());
+
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(300);
+  check(await cellText() === 'p20', 'and again selects the next one', await cellText());
+
+  // `@` on a selected op opens THAT op, not the row.
+  await page.keyboard.press('@');
+  await page.waitForTimeout(300);
+  // `data-kind="editing"` is the cell being typed into, same as the whole-row case above.
+  const seeded = await page.evaluate(() => {
+    const c = document.querySelector('.tk-cell[data-kind="editing"]');
+    return c ? c.textContent : null;
+  });
+  check(seeded === 'p20', 'the buffer opens seeded with just that op', JSON.stringify(seeded));
+
+  // Replace it, and the other two must survive — the half that fails on a full mask.
+  // TWO backspaces, not three: `p20` back to `p`, then `99`. Three leaves `99` with no prefix,
+  // which names no op and is refused — correctly, and it looked like the edit not landing.
+  for (const ch of ['Backspace', 'Backspace', '9', '9']) await page.keyboard.press(ch);
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(1800);
+  const after = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(after === 'ret3 p99 o80',
+        'the single-op edit lands and the other two ops are untouched', after);
+
+  // Leaving the cell drops the selection, so the cell collapses again and `@` means the row.
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await page.waitForTimeout(400);
+  await page.evaluate(() => window.__uni.run('goto 0 0'));
+  await page.waitForTimeout(400);
+}
+
+/*
  * NOTHING THREW. Load-bearing: the readout shipped throwing a missing-import ReferenceError on
  * every frame, and every other suite passed through it — the unit tests never run the draw
  * path, and journey never parks on the ops field of a note that has ops.

@@ -80,7 +80,8 @@
 <script type="module">
 import { Tracker } from './src/tracker.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
-import { opsText, parseOps, OP_MASK, opMaskOf, oneOpEdit, ROW_OPS, opsHint, opHelpFor } from './src/rowops.js';
+import { opsText, parseOps, OP_MASK, opMaskOf, oneOpEdit, opsPresent, opTokenAt,
+         ROW_OPS, opsHint, opHelpFor } from './src/rowops.js';
 /*
  * `ticksPerBar` WAS NEVER IMPORTED, and `dockApi.ticksPerBar()` has been throwing
  * "ticksPerBar is not defined" since it shipped — a console method nobody had called. Found
@@ -3561,7 +3562,16 @@ const state = { start: 0, scrollX: 0, tracks: 16, columns: FIELDS_PER_NOTE,
   // opts below — the master has no lane, so it needs a pointer of its own.
   chainTrack: null,
   chainSelected: -1,
-  currentProject: '', cursor: { row: 0, track: 0, col: 0 }, playhead: 0 };
+  /*
+   * `cursor.op` is WHICH OP inside the ops cell, or -1 for none.
+   *
+   * -1 on arrival, deliberately: stepping into the cell must still mean "the ops field" the way
+   * every other field means itself, and `@` there must still open the whole row. An op is
+   * selected only by stepping onto it with Left/Right INSIDE the cell, and then `@` edits that
+   * one alone — which is the only way to reach a dense row at all, because the edit buffer holds
+   * 48 characters and a row of forty ops is several times that.
+   */
+  currentProject: '', cursor: { row: 0, track: 0, col: 0, op: -1 }, playhead: 0 };
 
 // The HUD is a diagnostic, so it lives entirely on a timer — never in draw().
 // It was allocating several strings and a Text node every frame, which is
@@ -3619,6 +3629,13 @@ function beginEntry(mode, cursor, seed) {
   entry.charset = m.charset;
   entry.max = m.max;
   entry.cancelWhenEmpty = m.cancelWhenEmpty;
+  /*
+   * CLEARED HERE, SET BY THE CALLER. `opField` says the buffer was opened on ONE op, and a stale
+   * one would make the next whole-row edit write a single bit instead — four ops silently kept
+   * when the person meant to replace them. A flag that is only ever set is the shape of that
+   * bug; this is the only place that can guarantee it starts empty.
+   */
+  entry.opField = '';
   begin(entry, cursor, seed);
 }
 
@@ -4017,6 +4034,25 @@ function commitToken(text) {
    * grammars share nothing — one names a note, the other modifies one.
    */
   if (fieldOfCol(state.cursor.col) === 2) {
+    /*
+     * ONE OP OR THE ROW, decided by what the buffer was OPENED on rather than by what is in it.
+     *
+     * A buffer seeded from a selected op is an edit to that op: emptying it clears that one, and
+     * typing a different op's token there moves the cell to that op — both single-bit writes
+     * that leave the rest of the row alone. A buffer opened on the cell as a whole is the row.
+     *
+     * Recorded at open time because the text cannot tell you: `p60` is a valid whole-row string
+     * (a row whose only op is a probability) and a valid single-op edit, and guessing from the
+     * content would silently clear four ops the moment someone edited a row down to one.
+     */
+    if (entry.opField) {
+      const t = text.trim();
+      // An empty buffer clears the op it was opened on — the bare prefix, which is how the mask
+      // says "write this field as nothing" rather than "do not touch it".
+      writeOneOpAtCursor(t || entry.opField);
+      state.cursor.op = -1;
+      return;
+    }
     // An empty commit CLEARS, which is what an empty commit does in every other cell here and
     // also what the full mask means: the cell shows what the note has.
     writeOpsAtCursor(text.trim());
@@ -5732,6 +5768,17 @@ function moveCursor(fn) {
   // An unshifted move drops the selection. Keeping it would leave a range
   // highlighted that the next operation silently acts on.
   state.selection = null;
+  /*
+   * ...and drops the OP selection with it, for the same reason one step up.
+   *
+   * An op is selected by index within one note's ops, so the same index on the next row is a
+   * different op — or none. Carried across a move it would leave a caret pointing at something
+   * that is not there, and `@` would edit whatever now occupies that position.
+   *
+   * Cleared here rather than in each caller so a move added later cannot forget: the within-cell
+   * step is the one path that deliberately does NOT go through this function.
+   */
+  state.cursor.op = -1;
   fn();
 }
 
@@ -6335,10 +6382,30 @@ addEventListener('keydown', (e) => {
   if (k === 'ArrowUp') { moveCursor(() => { state.cursor.row = Math.max(0, state.cursor.row - 1); }); follow(); return done(); }
   if (k === 'ArrowRight' || k === 'ArrowLeft') {
     const d = k === 'ArrowRight' ? 1 : -1;
+    /*
+     * INSIDE THE OPS CELL FIRST. A cell drawing one glyph per op is a row of things to point at,
+     * and Left/Right walks them before leaving — the same shape Renoise's effect columns have,
+     * and the reason the collapsed cell is editable at all when it holds more ops than the edit
+     * buffer can spell.
+     *
+     * Costs one keypress per op when crossing a track that has them, which is the price of the
+     * ops being addressable; a cell with no ops steps straight through as before.
+     */
+    const ops = fieldOfCol(state.cursor.col) === 2 ? opsPresent(noteAtCursor()).length : 0;
+    if (ops) {
+      const next = state.cursor.op + d;
+      if (next >= 0 && next < ops) { state.cursor.op = next; draw(); return done(); }
+      // Entering from the side the arrow came from lands on the near end, not past it.
+      if (state.cursor.op < 0 && d > 0) { state.cursor.op = 0; draw(); return done(); }
+      if (state.cursor.op < 0 && d < 0) { state.cursor.op = ops - 1; draw(); return done(); }
+    }
     moveCursor(() => {
       let f = state.cursor.track * state.columns + state.cursor.col + d;
       f = Math.max(0, Math.min(f, state.tracks * state.columns - 1));
       state.cursor.track = Math.floor(f / state.columns); state.cursor.col = f % state.columns;
+      // A selection belongs to the cell it was made in. Carrying it to the next one would put
+      // the caret on an op of a different note, and `@` would edit that.
+      state.cursor.op = -1;
     });
     follow(); return done();
   }
@@ -6406,7 +6473,21 @@ addEventListener('keydown', (e) => {
    */
   if (k === TOKEN_KEY) {
     if (fieldOfCol(state.cursor.col) === 2) {
-      beginEntry('ops', state.cursor, opsAtCursorText());
+      /*
+       * THE SELECTED OP, IF ONE IS. Stepping onto a glyph with Left/Right is what makes `@` mean
+       * that op instead of the row — and it is the only way to edit a dense row, because the
+       * buffer holds 48 characters and forty ops spell to several hundred.
+       */
+      const present = opsPresent(noteAtCursor());
+      const one = state.cursor.op >= 0 ? present[state.cursor.op] : null;
+      if (one) {
+        beginEntry('ops', state.cursor, opTokenAt(noteAtCursor(), state.cursor.op,
+                                                  ticksPerBeat(songMeter())));
+        entry.opField = one.prefix;
+      } else {
+        beginEntry('ops', state.cursor, opsAtCursorText());
+        entry.opField = '';
+      }
     } else {
       beginEntry('token', state.cursor, '@');
     }
