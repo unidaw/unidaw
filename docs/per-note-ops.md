@@ -12,46 +12,72 @@ the places where the refutation won are marked as such.
 
 ## STATUS — what of this is built
 
-Written after the fact, so the document stops reading as a plan for work that is done.
+Written after the fact, so the document stops reading as a plan for work that is done. Kept
+honest: every claim below is either a test name in this repo or a line of code, and the parts
+that turned out wrong are marked rather than quietly deleted.
 
 **SHIPPED, end to end, against a real engine:**
 
 - **Every op is drawn.** The cell resolved them by priority and dropped the losers silently; it
-  now shows one glyph per op, or the full canonical text when it fits. `ui-web/src/rowops.js`
-  mirrors `OP_SCHEMA` with a ratchet that parses `rowop.rs` — it caught backend's `s` and `o` on
-  its first ever run.
+  now shows ONE GLYPH PER OP, always. `ui-web/src/rowops.js` mirrors `OP_SCHEMA` with a ratchet
+  driven by `rowop.rs`'s own test literals — a prefix-only ratchet was blind to a rule change and
+  said so on the day backend added `o<N>/<M>`.
 - **The cell is readable.** Standing on it prints the canonical string, so the collapsed form is
   not a dead end.
-- **The cell is writable.** `SetRowOps` (81), full mask, so what the cell shows is what the note
-  has and emptying it empties the note. `ops [tokens]` at the console, `@` to type into the cell
-  with the buffer seeded from the note.
+- **The cell is writable, two ways, and the difference is the wire's.** `ops [tokens]` replaces
+  the ROW — a full mask, so what the cell shows is what the note has and emptying it empties the
+  note. `op <token>` changes ONE op and leaves the others alone; a bare prefix (`op s`) clears
+  just that one. That is a real distinction rather than a convenience: a full-mask write carries
+  this client's copy of all five fields, so two edits to different ops on one row overwrite each
+  other with stale copies.
+- **One op at a time is reachable from the keyboard.** Left/Right steps between the glyphs INSIDE
+  the ops cell, the selected one draws in full (`p60` where the run shows `p`), and `@` there
+  opens that op alone. Without it a dense row is not editable at all: the edit buffer holds 48
+  characters and the case this design was drawn around — "say I used 43 ops in a row" — spells to
+  several hundred.
 - **It explains itself.** The readout becomes the grammar while the buffer is open, narrowing to
-  one op's meaning as the token identifies it. Built from `ROW_OPS`, so a new op needs no
-  mention.
+  one op's meaning as the token identifies it. Built from `ROW_OPS`, so a new op needs no mention.
 - **`s` and `o` decode off the v32 wire**, and the sampler kit read-back (`kit <track> <device>`)
   answers what is actually in a sampler, from the snapshot the audio producer reads.
+
+**WHAT WE TRIED AND REMOVED** — kept here because the reasoning still applies:
+
+- **"The fullest form that fits."** The cell drew `p100` where there was room and `rpd` where
+  there was not. Two things killed it. It ALLOCATED — a canonical string per cell per frame,
+  because during a scroll every cell holds a different note and no per-cell cache helps;
+  `alloc.mjs` measured +200 B/draw. And it was INCONSISTENT: one op showed a value and three
+  showed glyphs, so scanning a column meant reading a mixture. The value is one keypress away,
+  which is what "collapsed is one character for every op" meant in the first place.
 
 **DESIGNED, NOT BUILT** — the parts of this document that are still argument:
 
 - The per-track derived slot set, the N op columns as groups, and the per-family widths. What
-  ships today is one ops cell that shows the fullest form that fits and falls back to one glyph
-  per op. The design above is where it goes when a track needs more than that; nothing has yet.
+  ships is one ops cell, one glyph per op, with the selected op expanded. The design above is
+  where it goes when a track needs more than that; nothing has yet.
 - The purpose-built op-glyph font. The glyphs are still ASCII — the token's first character —
   which needs no font at all and no learning. The font matters at the vocabulary sizes discussed
-  above, not at five ops.
+  above, not at five ops. (And measure before trusting one: the shipped file is
+  `ibm-plex-mono-latin`, so every "safe" geometric glyph tried was a macOS system fallback. The
+  tell is that ASCII measured 6.600 and the shapes 6.623 — a monospace font has ONE advance.)
 
-**KNOWN GAPS, reported to backend, asserted in `ui-web/test/ops.mjs` so they fail the day they
-are fixed:**
+**GAPS THAT WERE OPEN AND ARE NOW CLOSED**, listed because the checks that found them are still
+in `ui-web/test/ops.mjs` and are what will catch a regression:
 
-- `SetRowOps::noteId` is u32 over a u64 authored EventId whose top 16 bits are the AUTHOR. An
-  agent-authored note truncates to a counter that can match a different human note — a silent
-  edit of the wrong note. The write path refuses ids that do not fit rather than sending one.
-- It reaches only notes created in the same session. `applySetRowOps` searches `ownedClips`; a
-  loaded project's notes are in SOURCE clips, so they answer `no_such_note`. Editing a project
-  you opened is the ordinary case and this is backwards from it.
-- That rejection is INVISIBLE: `rowops.rejected` is a log event, so the sidecar acks, the engine
-  refuses, the cell does not change, and nobody is told. Asked for it on the event ring, where
-  `clip-rejected` already is.
+- `SetRowOps::noteId` was u32 over a u64 authored EventId whose top bits are the AUTHOR, so an
+  agent-authored note truncated onto a different human note — a silent edit of the wrong one. The
+  write path refused rather than sending; backend split the field lo/hi and the refusal is gone.
+  It is still guarded on `Number.isSafeInteger`, because JSON carries the id as a double and past
+  2^53 it arrives already wrong, which no amount of splitting downstream can fix.
+- It reached only notes created in the same session — a loaded project's notes live in SOURCE
+  clips and answered `no_such_note`, which is backwards from the ordinary case. Fixed engine-side;
+  the check that had been written as an INVERTED gap assertion caught the fix within the hour,
+  which is the argument for writing a known limitation as a check rather than a comment.
+
+**STILL OPEN:**
+
+- The engine's refusal is INVISIBLE: `rowops.rejected` is a log event, so the sidecar acks, the
+  engine refuses, the cell does not change, and nobody is told. Asked for it on the event ring,
+  where `clip-rejected` already is.
 
 ---
 
