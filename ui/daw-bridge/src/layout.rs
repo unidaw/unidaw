@@ -1791,6 +1791,10 @@ pub const SAMPLER_SLOT_FIELDS: &[(&str, u16)] = &[
     ("loop-xfade", 24),
     ("start-frame", 25),
     ("end-frame", 26),
+    // Repointing a pad. Set at mint by sampler-load / sampler-slice and, until these existed,
+    // never again — so "this pad should play that other file" meant rebuilding the slot.
+    ("source", 27),
+    ("slice", 28),
 ];
 
 #[repr(C)]

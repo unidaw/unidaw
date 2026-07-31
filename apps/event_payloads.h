@@ -737,6 +737,20 @@ enum class SamplerSlotField : uint16_t {
   LoopXfadeFrames = 24,
   StartFrame = 25,      // sample trim; 0 is the head of the file
   EndFrame = 26,        // 0 means "to the end", which is what the slot struct already means by it
+  // WHICH SAMPLE AND WHICH SLICE THIS PAD PLAYS. Both were set at MINT by sampler-load and
+  // sampler-slice and never again, so a pad could not be REPOINTED — "this pad should play that
+  // other file", or "this pad should be slice 12 instead of 11", meant deleting the slot and
+  // rebuilding it. Found by diffing every persisted per-slot key against this enum: 27 of 31 were
+  // reachable, and of the four that were not, `id` is correctly absent (you address BY it) and
+  // `name` does not fit an int32 value.
+  //
+  // REFUSED, NOT CLAMPED, when the id does not exist — the rule ModSetId already follows. A slot
+  // pointing at a source that is not there is SILENT, and silence is not a near-miss of anything
+  // a caller asked for.
+  SourceLocalId = 27,
+  // 0 is legal and means "the whole sample, no slice" — which is what the slot struct already
+  // means by it, so there is no sentinel being invented here.
+  SliceId = 28,
 };
 
 // One slot field. `value` is SIGNED: four of the fields above are, and a negative gain, tune or

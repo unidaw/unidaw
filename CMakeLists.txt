@@ -595,6 +595,12 @@ add_test(NAME sampler_default_gate
 )
 set_tests_properties(sampler_default_gate PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A pad can be repointed at another sample, and you hear the other sample.
+add_test(NAME slot_repoint
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slot_repoint_check.sh
+)
+set_tests_properties(slot_repoint PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A note's default length follows the SONG's meter, not a hardcoded 4/4 bar.
 add_test(NAME meter_bar
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/meter_bar_check.sh

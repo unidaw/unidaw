@@ -4814,6 +4814,8 @@ struct TrackRuntime {
     if (std::strcmp(why, "no_such_slot") == 0) return R::NoSuchSlot;
     if (std::strcmp(why, "no_such_mod_set") == 0) return R::NoSuchModSet;
     if (std::strcmp(why, "no_such_modulator") == 0) return R::NoSuchModulator;
+    if (std::strcmp(why, "no_such_source") == 0) return R::NoSuchSource;
+    if (std::strcmp(why, "no_such_slice") == 0) return R::NoSuchSliceSet;
     return R::BadValue;  // unknown_field, and anything added later that nobody mapped
   };
 
@@ -11465,6 +11467,43 @@ struct TrackRuntime {
                   goto done;
                 }
                 slot.modSetId = want;
+                break;
+              }
+              case daw::SamplerSlotField::SourceLocalId: {
+                // A source that is not there would make the slot silent — refused, like ModSetId.
+                const uint16_t want = static_cast<uint16_t>(std::max(0, v));
+                if (want == 0 || !d.sampler.findSource(want)) {
+                  why = "no_such_source";
+                  goto done;
+                }
+                slot.sourceLocalId = want;
+                break;
+              }
+              case daw::SamplerSlotField::SliceId: {
+                const uint16_t want = static_cast<uint16_t>(std::max(0, v));
+                if (want != 0) {
+                  // The marker must exist in THIS SLOT'S source's slice set. A slice id is only
+                  // meaningful against the sample it was cut from, so validating it globally
+                  // would accept slice 7 of another file and play the wrong region.
+                  bool found = false;
+                  for (const auto& ss : d.sampler.sliceSets) {
+                    if (ss.sourceLocalId != slot.sourceLocalId) {
+                      continue;
+                    }
+                    for (const auto& m : ss.markers) {
+                      if (m.id == want) {
+                        found = true;
+                        break;
+                      }
+                    }
+                    break;
+                  }
+                  if (!found) {
+                    why = "no_such_slice";
+                    goto done;
+                  }
+                }
+                slot.sliceId = want;
                 break;
               }
               case daw::SamplerSlotField::OutputStem: slot.outputStem = u8c(v); break;
