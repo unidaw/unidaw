@@ -2977,6 +2977,26 @@ test('the sampler slot-field table matches the engine enum', async () => {
   assert.equal(SLOT_FIELDS.length, ids.length,
     `every slot field is nameable: the engine has ${ids.length} `
     + `(${ids[ids.length - 1][0]} is the last), this side names ${SLOT_FIELDS.length}`);
+
+  /*
+   * ...AND THE SIDECAR LETS THEM THROUGH, which is a second gate nobody was watching.
+   *
+   * `build_sampler_slot` range-checks the field id before putting it on the ring. That bound was
+   * `0..=26` when 27 and 28 landed, so `slot ... source|slice` was refused in the sidecar while
+   * the page reported success — `samplerSlot` returns true as soon as the message is queued.
+   * Every mirror above was correct and the commands still reached nothing.
+   *
+   * Read as a LITERAL out of the Rust source rather than exercised, because exercising it needs
+   * a running stack; ui-web/test/sampler-state.mjs does that end to end. This is the cheap check
+   * that fails first.
+   */
+  const rust = readFileSync(new URL('../../ui/daw-sidecar/src/main.rs', import.meta.url), 'utf8');
+  const bound = rust.match(/if !\(0\.\.=(\d+)\)\.contains\(&field\)/);
+  assert.ok(bound, "the sidecar's slot-field range check was found");
+  assert.equal(Number(bound[1]), ids[ids.length - 1][1],
+    `the sidecar accepts field ids 0..${bound[1]} and the engine's last field is `
+    + `${ids[ids.length - 1][0]} = ${ids[ids.length - 1][1]} — anything above the bound is `
+    + 'refused on the way out and reported as success');
 });
 
 test('the patcher node-type table matches the engine enum', async () => {

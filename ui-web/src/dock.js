@@ -545,7 +545,10 @@ export function createCommands(api) {
      * mode, reverse, tuning, key and velocity ranges, trim points. The one that prompted this is
      * `gate`: 0 is a one-shot that IGNORES note-off, so a sampled note plays its whole extent
      * however short it is written, and Jaakko's ruling is that a note-off has to be able to cut
-     * it. `slot <track> <device> 0 gate 1` makes every slot on the sampler respect note-off.
+     * it. `slot <track> <device> <slot> gate 1` makes THAT slot respect note-off, one slot at a
+     * time — this line used to say `0` and "every slot on the sampler", which is not a thing the
+     * engine does; `bank <track> <device> default-gate 1` is the kit-wide half, and it seeds new
+     * slots rather than reaching back into existing ones.
      *
      * Slot 0 means EVERY slot, which is what a kit-wide setting means and the only way to say it
      * without knowing how many there are.
@@ -556,8 +559,16 @@ export function createCommands(api) {
     // The field list is spelled into the help from the same array the schema uses, because the
     // prose ratchet holds the two equal by NAME — and a hand-typed copy of twenty-seven names is
     // a copy that will disagree.
+    /*
+     * `slot 0` IS NOT A WILDCARD, and this help said it was.
+     *
+     * The engine matches `slot.id != p.slotId → continue`, so 0 addresses a slot whose id is 0
+     * — which no kit mints — and the command is refused with `no_such_slot` on the log path
+     * while the caller is told nothing. deviceId 0 and modSetId 0 ARE wildcards, which is
+     * exactly what makes this one worth stating: the sentinel is per field, not per wire.
+     */
     slot: { help: `slot <track> <device> <slot> <${SLOT_FIELDS.join('|')}> <value> — one `
-                + 'sampler slot field; slot 0 means all of them',
+                + 'sampler slot field; slot ids start at 1 and 0 matches nothing',
       args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
              { name: 'slot', type: 'int', min: 0 },
              oneOf(SLOT_FIELDS),

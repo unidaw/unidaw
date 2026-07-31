@@ -3536,8 +3536,20 @@ fn build_sampler_slot(body: &str) -> Option<Result<UiSamplerSetSlotPayload, &'st
     let Some(field) = parse_num(body, "\"field\"") else {
         return Some(Err("samplerslot needs a field id"));
     };
-    if !(0..=26).contains(&field) {
-        return Some(Err("slot field id is 0..26 — see UiSamplerSlotField"));
+    /*
+     * THE UPPER BOUND IS THE ENGINE'S LAST FIELD, and it went stale the moment backend added
+     * two.
+     *
+     * `SourceLocalId = 27` and `SliceId = 28` landed, both mirrors on the browser side were
+     * updated, the console offered both tokens — and every `slot ... source|slice` died HERE,
+     * with the page reporting success because `samplerSlot` returns true as soon as the message
+     * is queued. Two fields that looked wired from every surface and reached nothing.
+     *
+     * unit.mjs now reads this literal and holds it equal to the engine enum's last value, so
+     * the next field to land fails a check instead of failing silently.
+     */
+    if !(0..=28).contains(&field) {
+        return Some(Err("slot field id is 0..28 — see UiSamplerSlotField"));
     }
     Some(Ok(UiSamplerSetSlotPayload {
         command_type: UiCommandType::SamplerSetSlot as u16,
