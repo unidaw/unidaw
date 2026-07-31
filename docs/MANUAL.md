@@ -395,6 +395,19 @@ narrow **lane bar readout** showing the clip-local `bar:beat`, and its clip's ba
 lines are drawn as accents on the lane itself. It is a readout — there is nothing to type
 into it, and it never appears or disappears as you scroll.
 
+**The badge is the TRACK's setting, and a clip can override it.** The renderer resolves a
+lane's grid clip-first: the extent's own lines-per-beat if it carries one, then the track's,
+then the zoom's. That is what lets a verse in 4 and a bridge in 3 live on one track, which a
+per-track number cannot express — and it means that on a lane whose clip carries a grid, this
+badge shows the track's value while the rows are drawn on the clip's.
+
+Whether the per-track field is the authority or a fallback on its way out is **an open question
+in this tree**: `docs/per-lane-grids.md` calls a set-subdivision command "the one new command
+needed", and `persisted_field_reach_check` calls the same field "legacy, superseded by the
+per-extent grid". Opcode 92 was built on the first. Until that is settled, expect the badge and
+the rows to agree on a lane whose clips carry no grid of their own, and to differ on one whose
+clips do.
+
 **Click the badge to change it.** `1 2 3 4 6 8 12 16` in a cycle — shift goes back — because
 nobody wants eleven presses to get from 4 to 16, and a lane already carrying an unlisted value
 (any of 1..31 is legal) steps to the nearest listed one above it. `lpb <track> <lines>` reaches
