@@ -589,6 +589,12 @@ add_test(NAME elektron_ops
 )
 set_tests_properties(elektron_ops PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A note's default length follows the SONG's meter, not a hardcoded 4/4 bar.
+add_test(NAME meter_bar
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/meter_bar_check.sh
+)
+set_tests_properties(meter_bar PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # Every published patcher node names the device it came from.
 add_test(NAME patcher_node_owner
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_node_owner_check.sh

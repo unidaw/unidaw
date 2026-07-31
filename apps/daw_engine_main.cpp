@@ -2933,6 +2933,42 @@ struct TrackRuntime {
   // trackSnapshot. Never null after startup.
   std::shared_ptr<const daw::TimeSignatureMap> meterSnapshot =
       std::make_shared<const daw::TimeSignatureMap>();
+  // WHERE THE BAR CONTAINING `tick` ENDS, according to the song's meter.
+  //
+  // Four note-entry sites computed this as (tick / (4 * quarter) + 1) * (4 * quarter): a bar
+  // hardcoded to 4/4, ignoring the meter map entirely. In any project that is not 4/4 — or that
+  // changes meter anywhere — note entry then disagreed with the ruler about where a bar is, so a
+  // new clip was created on the wrong boundary, a note with no duration ran to the wrong place,
+  // and writing past the end grew the song to the wrong tick. time_signature_map.h's own opening
+  // comment warns about exactly this: "the bar a tick falls in is NOT (tick / barLength)".
+  //
+  // WHICH METER: the SONG's. #76 put the meter on the song and kept the grid on the clip, and
+  // #79 flattened it to markers — so "song or clip meter" is not open, it was answered by those
+  // two rulings after this TODO was written.
+  //
+  // READ FROM THE SNAPSHOT, NOT songMeter, and that is not merely convenient. songMeter is under
+  // arrangeMutex and these callers hold trackMutex; taking the pair nested is the AB/BA deadlock
+  // the comment above says was deleted when the section went away. The snapshot is swapped
+  // atomically and needs no lock, which is why it exists.
+  auto barEndTick = [&](uint64_t tick) -> uint64_t {
+    const auto meter =
+        std::atomic_load_explicit(&meterSnapshot, std::memory_order_acquire);
+    const uint64_t fallback =
+        4 * daw::NanotickConverter::kNanoticksPerQuarter;
+    if (!meter) {
+      return (tick / fallback + 1) * fallback;
+    }
+    const uint64_t bar = meter->barBeatAt(tick).bar;
+    const uint64_t end = meter->tickAtBar(bar + 1);
+    // A map that cannot answer (an empty or degenerate signature) must not return a boundary at
+    // or before the tick — that would give a zero-length default duration and a span that does
+    // not grow, which reads as "the note did nothing" rather than as a bad meter.
+    if (end > tick) {
+      return end;
+    }
+    const uint64_t barLen = meter->signatureAt(tick).barNanoticks();
+    return tick + (barLen > 0 ? barLen : fallback);
+  };
   // v28: moves whenever ANY automation changes — a point written, a lane created, a ripple that
   // moved points, a load, a slot reused. Deliberately NOT the clip version: automation is not
   // notes, and a client caching lanes on the clip version would re-read them on every keystroke.
@@ -5965,6 +6001,17 @@ struct TrackRuntime {
   // is held.
   auto locateEditTarget = [&](TrackRuntime& rt, uint64_t absTick,
                               bool createIfMissing) -> EditTarget {
+    // STILL A HARDCODED 4/4 BAR, and deliberately, unlike the three sites that now read the
+    // meter. This one is not "where does this bar end" — it is the ANCHOR a new clip gets, and
+    // resolveNoteEntry computes it as (tick / barLength) * barLength, which is the naive form
+    // time_signature_map.h warns about and cannot be made meter-correct by passing a different
+    // length: under a meter change the bar containing a tick is not at a multiple of anything.
+    //
+    // Fixing it means giving resolveNoteEntry the bar START rather than a length, and
+    // segmentEventsIntoClips needs a different start per event, so the pure function would have
+    // to take the map or a callback. That is the coordinated refactor task #43 names, and it
+    // MOVES WHERE CLIPS LAND in existing projects — a behaviour change that wants its own
+    // decision and its own check, not a drive-by in a commit about bar ends.
     const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
     std::vector<daw::PlacementSpan> spans;
     for (size_t i = 0; i < rt.sourcePlacements.size(); ++i) {
@@ -7955,9 +8002,7 @@ struct TrackRuntime {
       spanEnd = patternTicks;
     }
     {
-      const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
-      const uint64_t barAfter = (nanotick / bar + 1) * bar;
-      spanEnd = std::max(spanEnd, barAfter);
+      spanEnd = std::max(spanEnd, barEndTick(nanotick));
     }
 
     std::optional<daw::ClipEditResult> result;
@@ -8437,9 +8482,10 @@ struct TrackRuntime {
         // placement and must not sound past it.
         uint64_t addDuration = duration;
         if (addDuration == 0) {
-          const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
-          const uint64_t barAfter = (nanotick / bar + 1) * bar;
-          addDuration = barAfter > nanotick ? barAfter - nanotick : bar;
+          const uint64_t barAfter = barEndTick(nanotick);
+          addDuration = barAfter > nanotick
+                            ? barAfter - nanotick
+                            : 4 * daw::NanotickConverter::kNanoticksPerQuarter;
           if (targetEnd > nanotick && nanotick + addDuration > targetEnd) {
             addDuration = targetEnd - nanotick;
           }
@@ -8708,8 +8754,7 @@ struct TrackRuntime {
         }
         // A chord entered past the current span still needs room to sound; reach
         // at least the end of its bar so writing past the end grows the song.
-        const uint64_t barTicks = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
-        spanEnd = std::max(spanEnd, (nanotick / barTicks + 1) * barTicks);
+        spanEnd = std::max(spanEnd, barEndTick(nanotick));
         const uint64_t relSpanEnd =
             spanEnd > placementAt ? spanEnd - placementAt : 0;
         const auto next = clip.nextEventTickInColumn(relTick, column);
