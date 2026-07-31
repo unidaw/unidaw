@@ -18,6 +18,7 @@ import { chromium } from 'playwright';
 import { startStack } from './stack.mjs';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 let pass = 0, fail = 0;
 const check = (ok, what, detail) => {
@@ -206,6 +207,57 @@ const ask = async (track, device) => {
    */
   check(rows.every((r) => !r.map), 'and no modulation badge — nothing modulates a slot',
         JSON.stringify(rows.map((r) => r.map)));
+}
+
+// ---------------------------------------------------------------------------
+// A DRAWN KIT IS A SUBSCRIPTION, NOT A SNAPSHOT.
+//
+// The region carries a version now, bumped when a kit CHANGES rather than when one is
+// REQUESTED. That distinction is the whole value: "did anyone ask recently" is not the question
+// a drawn kit has, and a counter that ticked on request would make a polling reader re-fetch
+// for ever while looking perfectly correct.
+//
+// Driven through daw-cli against THIS stack's segment, because nothing in the UI can mutate a
+// sampler yet — the commands are recorded as gaps on purpose, since a sampler you can only
+// configure by verb is one you can only verify by saving the file. So the mutation comes from
+// outside and the UI's job is to notice, which is exactly the claim under test.
+// ---------------------------------------------------------------------------
+{
+  const version = () => page.evaluate(() => window.__uni.engine().samplerKitVersion | 0);
+  const before = await version();
+  check(before > 0, 'the engine publishes a kit version — 0 would mean it does not', String(before));
+
+  const slotCount = () => page.evaluate(() =>
+    document.querySelectorAll('.dv-p:not([style*="display: none"])').length);
+  check(await slotCount() === 2, 'the card is drawing two slots to begin with');
+
+  let cli = null;
+  try {
+    cli = execFileSync('./ui/target/release/daw-cli',
+      // `--slots` is the part that matters: it mints one playable SLOT per slice, which is
+      // what the card lists. A chop with no slots changes the slice set and not the kit.
+      ['do', 'sampler-slice', '--track', '0', '--source', '1',
+       '--mode', 'equal', '--count', '4', '--slots'],
+      { env: { ...process.env, DAW_UI_SHM_NAME: stack.shm }, encoding: 'utf8' });
+  } catch (e) { cli = 'FAILED: ' + String(e.stdout || e.message).slice(0, 160); }
+  check(!/FAILED/.test(cli), 'daw-cli re-chops the sampler from outside the UI', cli.trim().slice(0, 120));
+
+  if (!/FAILED/.test(cli)) {
+    /*
+     * NOBODY ASKED. The card is not re-requested by the test — `requestSamplerKit` notices the
+     * version moved and re-fetches on its own, which is the difference between a subscription
+     * and a snapshot and the only thing worth asserting here.
+     */
+    const moved = await page.waitForFunction(
+      (was) => (window.__uni.engine().samplerKitVersion | 0) !== was, before,
+      { timeout: 6000 }).then(() => true).catch(() => false);
+    check(moved, 'the kit version moves when the kit changes', `was ${before}`);
+    const grew = await page.waitForFunction(
+      () => document.querySelectorAll('.dv-p:not([style*="display: none"])').length > 2,
+      null, { timeout: 6000 }).then(() => true).catch(() => false);
+    check(grew, 'and the card follows WITHOUT being asked — a slice per slot, drawn',
+          `${await slotCount()} rows`);
+  }
 }
 
 check(errors.length === 0, 'and nothing threw', errors.slice(0, 3).join(' | '));

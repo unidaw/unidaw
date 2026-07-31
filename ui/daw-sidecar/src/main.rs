@@ -70,7 +70,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 const WIRE_LANES: usize = 64;
 
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 24;
+const WIRE_VERSION: u16 = 25;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -84,7 +84,7 @@ const HEADER_BYTES: usize = 56;
 /// The full fixed header, matching HEADER_BYTES in ui-web/src/wire.js. Asserted
 /// after the last field is written — the 56-byte checkpoint below predates every
 /// field added since and stopped catching drift long ago.
-const FULL_HEADER_BYTES: usize = 228;
+const FULL_HEADER_BYTES: usize = 232;
 /// Bytes per note on the BROWSER wire — `NOTE_BYTES` in ui-web/src/wire.js.
 ///
 /// NOT the engine's `UiClipNote` stride, which is 48 at kShmVersion 32 and comes from the typed
@@ -406,6 +406,15 @@ struct Frame {
     /// The LIST, so a lane is discoverable; the curve is fetched per lane on request.
     automation: Vec<(u32, u32, u32, u32, String)>,
     automation_version: u32,
+    /// THE SAMPLER KIT'S VERSION, so a drawn kit can be a subscription rather than a snapshot.
+    ///
+    /// Bumped when a kit CHANGES, not when one is requested — the distinction is the whole
+    /// value, because "did anyone ask recently" is not the client's question and a counter that
+    /// ticked on request would make a polling loop re-fetch for ever while looking correct.
+    ///
+    /// ZERO means the engine does not publish one. The counter starts at 1, so an old engine is
+    /// distinguishable from an unchanged kit without a version to key on.
+    sampler_kit_version: u32,
     automation_truncated: u32,
     /// Real clip placements from the engine. placement_id, clip_id, track,
     /// flags, start/end tick, name. Loose session placements are excluded
@@ -522,6 +531,7 @@ impl Default for Frame {
       sample_rate_hz: Default::default(),
       automation: Default::default(),
       automation_version: Default::default(),
+      sampler_kit_version: Default::default(),
       automation_truncated: Default::default(),
       extents: Default::default(),
       notes_grid: Default::default(),
@@ -682,6 +692,10 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
     out.extend_from_slice(&(f.automation.len() as u16).to_le_bytes());   // 172
     out.extend_from_slice(&(f.automation_truncated.min(0xffff) as u16).to_le_bytes()); // 174
     out.extend_from_slice(&f.automation_version.to_le_bytes());       // 176, to 180
+    // 180..184. Same bargain as every field before it: both sides move together and
+    // WIRE_VERSION goes with them, so a page reading 180 where this writes 184 rejects the
+    // frame rather than decoding a harmony tick out of the middle of a counter.
+    out.extend_from_slice(&f.sampler_kit_version.to_le_bytes());      // 180, to 184
     // The WHOLE header, not just the first 56 bytes. The old assertion stopped
     // before every field added since, so a mislaid u16 shifted the entire
     // variable section and nothing here noticed.
@@ -1056,6 +1070,16 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
      * and holding the previous list for a frame is exactly right — automation does not change
      * between two frames unless somebody edited it.
      */
+    /*
+     * The kit's version, read every frame and forwarded raw.
+     *
+     * No caching and no comparison here: it is one word, the client is the one that decides
+     * whether it means anything, and a sidecar that decided for it would be a second opinion
+     * about staleness — which is the shape that lets two sides disagree about whether a drawn
+     * thing is still true.
+     */
+    out.sampler_kit_version = h.sampler_kit_version();
+
     {
         let lanes = h.read_automation_lanes();
         if lanes.version != 0 && lanes.version != out.automation_version {

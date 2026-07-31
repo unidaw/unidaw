@@ -7,13 +7,13 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 24;
+export const WIRE_VERSION = 25;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
 // start so those can be added additively instead of re-versioning both sides.
 
-const HEADER_BYTES = 228;  // ...+ lpb 64 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
+const HEADER_BYTES = 232;  // ...+ lpb 64 + mixer 8 + counts 16 + loop 16 + load 8 + tempo 8 + song meter 4 + meter count 4 + quantize 8
 const HARMONY_BYTES = 16;
 const NAME_BYTES = 24;
 const PATCHER_NODE_BYTES = 40;
@@ -227,6 +227,7 @@ export function createStore() {
      * says nothing reads as a complete one.
      */
     automation: [], automationCount: 0, automationTruncated: 0, automationVersion: 0,
+    samplerKitVersion: 0,
     /**
      * Moves when a lane's quantize changes and NEVER when a note does — backend
      * kept it off the clip version deliberately, since quantize moves no authored
@@ -801,6 +802,21 @@ export function decode(buf, store) {
     const at = store.markersEnd;
     const want = v.getUint16(220, true);
     const version = v.getUint32(224, true);
+    /*
+     * THE SAMPLER KIT'S VERSION — bumped when a kit CHANGES, not when one is requested.
+     *
+     * That distinction is what makes it usable: "did anyone ask recently" is not the question a
+     * drawn kit has, "is what I drew still right" is. A counter that ticked on request would
+     * make a polling reader re-fetch for ever and look correct while doing it.
+     *
+     * ZERO means the engine does not publish one — the counter starts at 1 — so an older engine
+     * is distinguishable from an unchanged kit without a second field to key on.
+     *
+     * It is GLOBAL, not per track: it says something changed, not which device. With one
+     * sampler that is exact; with several it costs a re-fetch of kits that did not move, which
+     * is the trade backend offered to revisit when it can be measured hurting.
+     */
+    store.samplerKitVersion = v.getUint32(228, true);
     const have = Math.max(0, Math.min(want, (buf.byteLength - at) / AUTOMATION_BYTES | 0));
     store.automationTruncated = v.getUint16(222, true);
     if (version !== store.automationVersion || have !== store.automationCount) {

@@ -1455,10 +1455,21 @@ function automationOf(track) {
  * the ack channel, a question already in flight is not asked twice, and `found: false` is an
  * ANSWER — "there is no sampler on that device" — rather than silence to spin on.
  *
- * NOT cached against a version, unlike a curve. The kit is published from the snapshot the
- * AUDIO PRODUCER reads, so it changes when a voice starts or a slot is re-cut, and there is no
- * counter that moves with it. So an answer is kept until it is asked for again, and asking is
- * the refresh — which is honest about what it is rather than pretending to be live.
+ * CACHED AGAINST THE KIT VERSION, which the engine bumps when a kit CHANGES rather than when
+ * one is requested. That distinction is what makes the cache safe: a counter that ticked on
+ * request would make this re-fetch for ever and look correct while doing it.
+ *
+ * So a drawn kit is a SUBSCRIPTION now, not a snapshot — drag a marker and the card follows,
+ * because `sampler_engine.h` derives a slice's extent at note-on and the version moves through
+ * the one funnel every sampler edit passes through.
+ *
+ * The version is GLOBAL, not per track: it says something changed, not which device. With one
+ * sampler that is exact; with several it costs re-fetching kits that did not move, which is a
+ * trade worth measuring before asking for finer granularity.
+ *
+ * Version 0 means the engine does not publish one — an older engine — and is treated as "never
+ * stale", because refusing to cache against a counter that does not exist would ask on every
+ * frame for ever.
  */
 const samplerKits = new Map();
 /*
@@ -1545,12 +1556,19 @@ function writeOpsAtCursor(text) {
  */
 function requestSamplerKit(track, device) {
   const key = `${track}:${device}`;
-  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return null; }
+  const now = engine ? (engine.samplerKitVersion | 0) : 0;
+  const hit = samplerKits.get(key);
+  // A held answer is good until the kit version moves past the one it was answered at. Version 0
+  // is an engine that publishes none, and a cache that refused to trust it would ask every frame.
+  if (hit && (now === 0 || hit.atVersion === now)) return hit;
+  if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return hit || null; }
   if (samplerKitAsked !== key) {
     samplerKitAsked = key;
     conn.send({ type: 'samplerkit', track: Number(track) || 0, device: Number(device) || 0 });
   }
-  return samplerKits.get(key) || null;
+  // The STALE answer while the fresh one is in flight, not null: a card that blanked on every
+  // marker drag would flicker, and what it holds is still what the engine said a moment ago.
+  return hit || null;
 }
 
 /** The last answer about (track, device), without asking again. */
@@ -2994,9 +3012,19 @@ const dockApi = {
                    */
                   reject: state.reject,
                   selectedMarker: state.selectedMarker }),
+  /*
+   * A CURATED SUMMARY, not the store — which is the right shape and cost me a debugging round
+   * to remember. A test asked for `engine().samplerKitVersion`, got undefined, and reported the
+   * engine as publishing no version when it was publishing one perfectly well.
+   *
+   * The versions belong here for the same reason `clipVersion` already does: they are what
+   * anything outside asks to decide whether what it drew is still true.
+   */
   engine: () => (engine ? { transport: engine.transport, tick: engine.playheadTick,
                             notes: engine.noteCount, tracks: engine.trackCount,
-                            clipVersion: engine.clipVersion, stale: engine.stale } : null),
+                            clipVersion: engine.clipVersion, stale: engine.stale,
+                            automationVersion: engine.automationVersion | 0,
+                            samplerKitVersion: engine.samplerKitVersion | 0 } : null),
   close: () => { state.focus = 'centre'; schedule(); },
   // Everything the keyboard can do, the console can do — otherwise "one grammar
   // that drives every surface" is only true of the parts I remembered.
@@ -4846,7 +4874,10 @@ function draw() {
     if (ch && ch.devices) {
       for (const d of ch.devices) {
         if (d.kind !== 5) continue;
-        const k = samplerKitOf(state.cursor.track, d.id) || requestSamplerKit(state.cursor.track, d.id);
+        // ALWAYS through `requestSamplerKit`, never the plain cache read: it is the thing that
+        // knows whether the held answer is still current, and asking the cache directly is how a
+        // surface ends up drawing something the engine stopped agreeing with.
+        const k = requestSamplerKit(state.cursor.track, d.id);
         if (k) samplerKitsForChain[paramKey(state.cursor.track, d.id)] = k;
       }
     }
@@ -6683,6 +6714,9 @@ conn = WANTS_ENGINE ? connectEngine({
           state.reject = `the engine did not answer about the sampler on t${k.track} dev${k.device}`;
           dock.log('err', state.reject);
         } else {
+          // Stamped with the version it describes, which is what makes the cache a cache
+          // rather than a guess about how long an answer stays true.
+          k.atVersion = engine ? (engine.samplerKitVersion | 0) : 0;
           samplerKits.set(key, k);
           dock.log('out', k.found
             ? `sampler t${k.track} dev${k.device}: ${k.slots.length} slot(s), `
