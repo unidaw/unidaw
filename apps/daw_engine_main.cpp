@@ -2630,6 +2630,20 @@ struct TrackRuntime {
 
   std::unique_ptr<daw::IRuntime> audioRuntime;
   std::unique_ptr<EngineAudioCallback> audioCallback;
+  // PUBLISHED SEPARATELY, because the producer and consumer threads are created LONG before this
+  // is assigned — the callback needs the device's sample rate and block size, and the device is
+  // opened later. Both threads tested `if (audioCallback)` while main was writing it, which
+  // ThreadSanitizer reported as a data race and which is not the harmless kind: a reader can see
+  // the pointer before the constructor's stores are visible and then dereference it.
+  //
+  // The unique_ptr keeps OWNERSHIP on the main thread and never leaves it. This is the
+  // PUBLICATION: stored with release once the callback is fully constructed AND configured, read
+  // with acquire by the threads, so seeing a non-null pointer means seeing a finished object.
+  // Null until then, which every reader already handles — that was never the bug.
+  std::atomic<EngineAudioCallback*> audioCallbackPublished{nullptr};
+  auto publishedCallback = [&]() -> EngineAudioCallback* {
+    return audioCallbackPublished.load(std::memory_order_acquire);
+  };
   // 4b: drives the master host one block behind the callback. Started once the callback
   // exists (below), joined at shutdown.
   std::thread masterRenderThread;
@@ -13555,8 +13569,8 @@ struct TrackRuntime {
       // Stamp where this block sits on the timeline so the callback can place audio
       // regions at the same instant as this block's MIDI. Absolute, so it is correct
       // across tempo changes.
-      if (audioCallback) {
-        audioCallback->setBlockStartSample(
+      if (auto* cb = publishedCallback()) {
+        cb->setBlockStartSample(
             blockId, static_cast<uint64_t>(
                          tickConverter.nanoticksToSamplesAbsolute(blockStartTicks)));
       }
@@ -16507,7 +16521,7 @@ struct TrackRuntime {
       }
 
       // Update audio callback with current track info
-      if (audioCallback) {
+      if (auto* cb = publishedCallback()) {
         std::vector<EngineAudioCallback::TrackInfo> trackInfos;
         for (auto* runtime : trackSnapshot) {
           const uint32_t trackId = runtime->trackId;
@@ -16612,7 +16626,7 @@ struct TrackRuntime {
               runtime->auxBusChannelCount.load(std::memory_order_relaxed);
           trackInfos.push_back(std::move(child));
         }
-        audioCallback->updateTracks(trackInfos);
+        cb->updateTracks(trackInfos);
 
         // Movement 4 multi-out: for a track whose plugin splits its outputs, read the aux
         // OUTPUT plane's per-channel peak from the latest completed block and log each
@@ -16710,9 +16724,9 @@ struct TrackRuntime {
           }
         }
         for (uint32_t s = 0; s < daw::kUiMaxTracks; ++s) {
-          audioCallback->setPdcCompensation(s, compForSlot[s]);
+          cb->setPdcCompensation(s, compForSlot[s]);
         }
-        audioCallback->setPdcMaxLatency(maxLatency);
+        cb->setPdcMaxLatency(maxLatency);
       }
       for (auto* runtime : trackSnapshot) {
         if (runtime->needsRestart.load(std::memory_order_acquire)) {
@@ -16811,9 +16825,13 @@ struct TrackRuntime {
               i < trackSnapshot.size() ? trackSnapshot[i]->trackId : i;
           // Per-track output peak the audio thread measured this block (0 for
           // absent/silent tracks). Slot i == track i, matching the mixer fields.
+          // Its own acquire load: this is the UI publish block, outside the scope of the `cb`
+          // above. Cheap enough at once per track per publish, and reading through the
+          // accessor is the point — no thread here touches the unique_ptr directly.
+          auto* peakCb = publishedCallback();
           uiShm.header->uiTrackPeakRms[i] =
-              (audioCallback && i < trackSnapshot.size())
-                  ? audioCallback->trackPeak(i)
+              (peakCb && i < trackSnapshot.size())
+                  ? peakCb->trackPeak(i)
                   : 0.0f;
         }
         uiShm.header->uiTransportState =
@@ -17136,6 +17154,11 @@ struct TrackRuntime {
         // output plane, hand it back for the callback to emit next block. This is the ONLY
         // thing that blocks on the master host; the RT callback never does. Idle (a short
         // sleep) whenever there is no master effect or the host isn't ready.
+        // PUBLISH. Everything above has finished touching the callback, so a thread that sees
+        // this pointer sees a callback that is ready to be used. Release pairs with the acquire
+        // in publishedCallback().
+        audioCallbackPublished.store(audioCallback.get(), std::memory_order_release);
+
         if (!masterRenderThread.joinable()) {
           masterRenderThread = std::thread([&] {
             const uint32_t chn = masterTrack->config.numChannelsOut;
