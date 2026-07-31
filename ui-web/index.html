@@ -80,7 +80,7 @@
 <script type="module">
 import { Tracker } from './src/tracker.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
-import { opsText, parseOps, OP_MASK, ROW_OPS } from './src/rowops.js';
+import { opsText, parseOps, OP_MASK, ROW_OPS, opsHint, opHelpFor } from './src/rowops.js';
 /*
  * `ticksPerBar` WAS NEVER IMPORTED, and `dockApi.ticksPerBar()` has been throwing
  * "ticksPerBar is not defined" since it shipped — a console method nobody had called. Found
@@ -4103,7 +4103,20 @@ function updateChrome() {
    * `#=fx` stays when the note has no ops, because "there is nothing here" and "you are in the
    * effect field" are both worth saying and the second is all there is to say.
    */
-  o.digitMode = fieldOfCol(state.cursor.col) === 0
+  /*
+   * WHILE THE OPS BUFFER IS OPEN, the readout becomes the GRAMMAR rather than the value.
+   *
+   * Someone typing into it needs to know what can go there, and the answer is already in
+   * OP_SCHEMA — whose own comment says one definition should feed "entry, autocomplete, docs and
+   * the linter". This side was using none of it, so the cell was a text field you had to already
+   * know the language of.
+   *
+   * It narrows to ONE op's help as soon as the token being typed identifies one: the full list
+   * while you are choosing, the meaning of the thing you chose once you have.
+   */
+  o.digitMode = entry.active && fieldOfCol(entry.col) === 2
+                  ? (opHelpFor(entry.text.split(/\s+/).pop()) || opsHint())
+              : fieldOfCol(state.cursor.col) === 0
                   ? (state.entryMode === 'degree' ? '#=deg' : '#=note')
               : fieldOfCol(state.cursor.col) === 1 ? '#=vel'
               : opsAtCursorText() || '#=fx';

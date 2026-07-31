@@ -303,3 +303,32 @@ function int(s) {
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
 }
+
+/**
+ * The grammar, as one line to put in front of somebody typing it.
+ *
+ * Built from ROW_OPS — the same list the parser and the renderer read — so an op added to the
+ * schema appears here without anyone remembering to mention it. That is the whole reason
+ * `OP_SCHEMA` carries `summary` and `example` in the first place: its own comment says one
+ * definition should feed "entry, autocomplete, docs and the linter", and until now this side
+ * used none of them.
+ *
+ * Examples rather than prose, because the example IS the syntax: `ret3` teaches the shape of
+ * `ret<n>` faster than `ret<n>` does, and it is a string you can type as-is.
+ */
+export function opsHint() {
+  return ROW_OPS.map((o) => o.example).join('  ');
+}
+
+/** What one op means, for the op a partly-typed token is reaching for. */
+export function opHelpFor(token) {
+  const t = String(token || '').trim();
+  if (!t) return '';
+  /*
+   * Longest prefix first, or `ret3` matches `r`-nothing and then the single-letter branches —
+   * the same ordering trap the parser documents, arriving in the help.
+   */
+  const byLength = [...ROW_OPS].sort((a, b) => b.prefix.length - a.prefix.length);
+  for (const o of byLength) if (t.startsWith(o.prefix)) return `${o.example} — ${o.summary}`;
+  return '';
+}

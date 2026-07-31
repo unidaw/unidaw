@@ -314,6 +314,19 @@ const cells = await opsCells();
         '@ opens the buffer SEEDED with what the note has', JSON.stringify(seeded));
 
   /*
+   * AND THE GRAMMAR IS IN FRONT OF YOU while you type it.
+   *
+   * `OP_SCHEMA`'s own comment says one definition should feed "entry, autocomplete, docs and the
+   * linter"; this side used none of it, so the ops cell was a text field you had to already know
+   * the language of. The readout narrows from the whole list to ONE op's meaning as soon as the
+   * token identifies one — the list while you are choosing, the meaning once you have.
+   */
+  const hint = await page.evaluate(() =>
+    document.querySelector('.ch-mode') ? document.querySelector('.ch-mode').textContent : '');
+  check(/retrigger N even strikes/.test(hint),
+        'and the readout explains the op being typed', JSON.stringify(hint));
+
+  /*
    * TYPE ONE MORE OP ONTO THE END, which is the whole gesture: change one op without retyping
    * the rest. If the seed were selected the space would wipe `ret3` and this would commit `p55`
    * alone. `begin` in entry.js guarantees it is not, for its own reason — this check is what
