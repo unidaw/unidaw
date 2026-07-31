@@ -11613,6 +11613,11 @@ struct TrackRuntime {
                 continue;
               }
               e.filterType = ms.filterType;
+              // VINTAGE, into the two reserved words — no version bump. Both are 0 today and 0
+              // means OFF, so a reader that ignores them is unaffected and one that reads them
+              // gets the truth for every project written before this existed.
+              e.vintageBits = ms.bitDepth;
+              e.vintageRateHz = ms.rateHz;
               for (const auto& m : ms.modulators) {
                 if (m.depthMilli == 0) {
                   continue;
@@ -12069,6 +12074,96 @@ struct TrackRuntime {
           .field("type", static_cast<uint32_t>(p.filterType))
           .field("cutoff_milli", static_cast<uint32_t>(p.cutoffMilli))
           .field("resonance_milli", static_cast<uint32_t>(p.resonanceMilli));
+      return;
+    }
+
+    // ---- SAMPLER SET VINTAGE (91): bit depth and rate reduction, the SP-1200 character. A mod
+    // set property for the same reason the filter is one — a chop's twenty slices are one
+    // instrument.
+    if (entry.size == sizeof(daw::UiSamplerVintagePayload) &&
+        commandType == daw::UiCommandType::SamplerSetVintage) {
+      daw::UiSamplerVintagePayload p{};
+      std::memcpy(&p, entry.payload, sizeof(p));
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (p.trackId < tracks.size()) {
+          runtime = tracks[p.trackId].get();
+        }
+      }
+      if (!runtime) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetVintage,
+                            daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
+        DAW_EVENT("sampler.vintage_rejected")
+            .field("track", p.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      // REFUSED, NOT CLAMPED. 24 bits is not "a bit past 16" — the field means 2^n levels and
+      // anything above 16 is a caller with the wrong idea of the unit, exactly as an unknown
+      // filter type is. Clamping would hand back a sound they did not ask for with no way to
+      // notice.
+      if ((p.flags & daw::kSamplerVintageSetBits) != 0 && p.bitDepth > 16) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetVintage,
+                            daw::UiSamplerRejectReason::BadValue, p.trackId, p.deviceId,
+                            static_cast<uint16_t>(p.bitDepth));
+        DAW_EVENT("sampler.vintage_rejected")
+            .field("track", p.trackId)
+            .field("bits", static_cast<uint32_t>(p.bitDepth))
+            .field("reason", "bit_depth_out_of_range");
+        return;
+      }
+      bool applied = false;
+      uint32_t touched = 0;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (p.deviceId != 0 && d.id != p.deviceId)) {
+            continue;
+          }
+          ensureDefaultModSet(d.sampler, p.modSetId);
+          for (auto& ms : d.sampler.modSets) {
+            if (p.modSetId != 0 && ms.id != p.modSetId) {
+              continue;
+            }
+            // The flags are what makes "set the bits, leave the rate" expressible. Zero is a
+            // legal value for both — it means OFF — so absence cannot be encoded as a zero.
+            if ((p.flags & daw::kSamplerVintageSetBits) != 0) {
+              ms.bitDepth = p.bitDepth;
+            }
+            if ((p.flags & daw::kSamplerVintageSetRate) != 0) {
+              ms.rateHz = p.rateHz;
+            }
+            applied = true;
+            ++touched;
+          }
+          if (applied) {
+            break;
+          }
+        }
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetVintage,
+                            daw::UiSamplerRejectReason::NoSuchModSet, p.trackId, p.deviceId,
+                            static_cast<uint16_t>(p.modSetId));
+        DAW_EVENT("sampler.vintage_rejected")
+            .field("track", p.trackId)
+            .field("device", p.deviceId)
+            .field("mod_set", p.modSetId)
+            .field("reason", "no_such_mod_set");
+        return;
+      }
+      DAW_EVENT("sampler.vintage_set")
+          .field("track", p.trackId)
+          .field("device", p.deviceId)
+          .field("mod_set", p.modSetId)
+          .field("mod_sets_touched", touched)
+          .field("bits", static_cast<uint32_t>(p.bitDepth))
+          .field("rate_hz", static_cast<uint32_t>(p.rateHz));
       return;
     }
 

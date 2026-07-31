@@ -43,6 +43,8 @@ daw-cli — control surface for a running engine
   daw-cli do sampler-slot-name --track N --device D --slot S --name 'kick 01'
                                    rename a pad. --name '' clears it; a name too long for the
                                    published field is REFUSED, never truncated
+  daw-cli do sampler-vintage --track N [--device D] [--mod-set M] [--bits 0-16] [--rate HZ]
+                                   bit/rate reduction before the filter; 0 turns one off
   daw-cli get sampler-kit --track N [--device D]
   daw-cli get patcher              the assembled patcher pool, with each node's OWNING DEVICE
                                    the device's slots, as the ENGINE has them
@@ -1248,7 +1250,7 @@ fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
                     let name = String::from_utf8_lossy(&raw)
                         .replace('\\', "\\\\").replace('"', "\\\"");
                     format!(
-                        "    {{ \"slot\": {}, \"name\": \"{}\", \"source\": {}, \"key_low\": {}, \"key_high\": {}, \"root\": {}, \"vel_low\": {}, \"vel_high\": {}, \"voice_group\": {}, \"nna\": {}, \"gate\": {}, \"reverse\": {}, \"source_missing\": {}, \"slice_missing\": {}, \"gain_mb\": {}, \"pan\": {}, \"mod_set\": {}, \"stem\": {}, \"quality\": {}, \"slice\": {}, \"length_frames\": {}, \"slice_begin\": {}, \"slice_end\": {}, \"mod_mask\": {}, \"filter_type\": {} }}",
+                        "    {{ \"slot\": {}, \"name\": \"{}\", \"source\": {}, \"key_low\": {}, \"key_high\": {}, \"root\": {}, \"vel_low\": {}, \"vel_high\": {}, \"voice_group\": {}, \"nna\": {}, \"gate\": {}, \"reverse\": {}, \"source_missing\": {}, \"slice_missing\": {}, \"gain_mb\": {}, \"pan\": {}, \"mod_set\": {}, \"stem\": {}, \"quality\": {}, \"slice\": {}, \"length_frames\": {}, \"slice_begin\": {}, \"slice_end\": {}, \"mod_mask\": {}, \"filter_type\": {}, \"vintage_bits\": {}, \"vintage_rate_hz\": {} }}",
                         e.slotId, name, e.sourceLocalId, e.keyLow, e.keyHigh, e.rootKey,
                         e.velLow, e.velHigh, e.voiceGroup, e.nna,
                         (e.flags & 1) != 0, (e.flags & 2) != 0,
@@ -1256,7 +1258,8 @@ fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
                         (e.flags & UI_SAMPLER_SLOT_SLICE_MISSING) != 0,
                         e.gainMillibels, e.panThousandths, e.modSetId, e.outputStem,
                         e.quality, e.sliceId, e.lengthFrames, e.sliceBeginFrame,
-                        e.sliceEndFrame, e.modMask, e.filterType)
+                        e.sliceEndFrame, e.modMask, e.filterType,
+                        e.vintageBits, e.vintageRateHz)
                 }).collect();
                 println!("  \"slots\": [\n{}\n  ]", body.join(",\n"));
                 println!("}}");
@@ -2667,6 +2670,62 @@ fn main() {
                                 1
                             }
                         }
+                    }
+                }
+                // VINTAGE: bit depth and rate reduction on a mod set, applied BEFORE the
+                // filter. Both off by default and independently settable — see the flags.
+                Some(&"sampler-vintage") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let mod_set = flag_u64(&args, "--mod-set", Some(0)).unwrap_or(0) as u32;
+                    // ABSENT IS NOT ZERO, the same rule sampler-filter follows: zero is a legal
+                    // value for both (it means OFF), so "leave it alone" needs a flag rather than
+                    // being inferred from the value. Otherwise setting the rate would silently
+                    // restore full bit depth.
+                    let mut flags = 0u16;
+                    let bits = match flag_u64(&args, "--bits", None).ok() {
+                        Some(v) => {
+                            if v > 16 {
+                                eprintln!("daw-cli: --bits is 0..16 (0 = off), got {v}");
+                                std::process::exit(2);
+                            }
+                            flags |= daw_bridge::layout::SAMPLER_VINTAGE_SET_BITS;
+                            v as u8
+                        }
+                        None => 0u8,
+                    };
+                    let rate = match flag_u64(&args, "--rate", None).ok() {
+                        Some(v) => {
+                            if v > 65535 {
+                                eprintln!("daw-cli: --rate is 0..65535 Hz (0 = off), got {v}");
+                                std::process::exit(2);
+                            }
+                            flags |= daw_bridge::layout::SAMPLER_VINTAGE_SET_RATE;
+                            v as u16
+                        }
+                        None => 0u16,
+                    };
+                    if flags == 0 {
+                        eprintln!("daw-cli: sampler-vintage needs --bits N and/or --rate HZ (0 turns one off)");
+                        std::process::exit(2);
+                    }
+                    let payload = daw_bridge::layout::UiSamplerVintagePayload {
+                        command_type: UiCommandType::SamplerSetVintage as u16,
+                        flags,
+                        track_id: track,
+                        device_id: device,
+                        mod_set_id: mod_set,
+                        bit_depth: bits,
+                        reserved0: 0,
+                        rate_hz: rate,
+                        reserved1: [0; 5],
+                    };
+                    match handle.send_sampler_vintage(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"sampler-vintage\", \"track\": {track}, \"device\": {device}, \"mod_set\": {mod_set}, \"bits\": {bits}, \"rate_hz\": {rate} }}");
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
                     }
                 }
                 Some(&"sampler-filter") => {

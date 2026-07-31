@@ -703,6 +703,15 @@ add_test(NAME sampler_filter
 )
 set_tests_properties(sampler_filter PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Bit depth and rate reduction are two DIFFERENT effects, identified by opposite fingerprints:
+# bits collapse the distinct-value count, rate collapses the transition count. Asserting only
+# that vintage "sounds different" would pass on an engine that applied one where the other was
+# asked for.
+add_test(NAME sampler_vintage
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_vintage_check.sh
+)
+set_tests_properties(sampler_vintage PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME sampler_determinism
   COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_determinism_check.sh
 )

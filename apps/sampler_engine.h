@@ -414,6 +414,16 @@ class SamplerRuntime {
       spec.cutoffHz = 20.0f * std::pow(1000.0f, std::clamp(norm, 0.0f, 1.0f));
       spec.resonance = 0.7f + static_cast<float>(mod->resonanceMilli) / 1000.0f * 9.3f;
       spec.sampleRate = snap_->sampleRate;
+      // VINTAGE. The target RATE becomes a hold LENGTH here, at this one boundary, so the
+      // per-sample path does no unit arithmetic — the same rule the envelope clock and the LFOs
+      // follow. A rate at or above the engine's own is not a reduction, so it holds for one
+      // frame, which is no reduction at all.
+      spec.bitDepth = mod->bitDepth;
+      spec.holdFrames = 0;
+      if (mod->rateHz > 0 && static_cast<double>(mod->rateHz) < snap_->sampleRate) {
+        const double hold = snap_->sampleRate / static_cast<double>(mod->rateHz);
+        spec.holdFrames = static_cast<uint32_t>(std::max(1.0, std::floor(hold)));
+      }
       // EVERY ENVELOPE GETS ITS OWN CLOCK, from its OWN modulator. Sharing the amp envelope's
       // was wrong twice over: a mod set with no amp envelope left the clock at zero, so a
       // cutoff sweep never moved at all; and where an amp envelope did exist, a modulator with

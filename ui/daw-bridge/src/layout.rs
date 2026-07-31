@@ -350,6 +350,26 @@ pub struct UiSamplerEnvPointsHeader {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+/// SamplerSetVintage (91). The flags say WHICH of the two this call is about, so setting the bit
+/// depth does not silently reset the rate — zero is a legal value for both (it means off), so
+/// absence cannot be encoded as a zero.
+pub struct UiSamplerVintagePayload {
+    pub command_type: u16,
+    pub flags: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub mod_set_id: u32,
+    pub bit_depth: u8,
+    pub reserved0: u8,
+    pub rate_hz: u16,
+    pub reserved1: [u32; 5],
+}
+
+pub const SAMPLER_VINTAGE_SET_BITS: u16 = 1 << 0;
+pub const SAMPLER_VINTAGE_SET_RATE: u16 = 1 << 1;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 /// Header of an assembled SamplerSetSlotName (90) payload; `name_bytes` raw bytes follow, NOT
 /// nul-terminated — the length is explicit. The engine REFUSES a name that does not fit
 /// `UiSamplerSlotEntry::name` rather than shortening it, so a successful send reads back byte for
@@ -1203,6 +1223,9 @@ pub enum UiCommandType {
     /// Rename a sampler slot, over the BulkChunk carrier. `name` was persisted by the project
     /// format and published by NOTHING, so no UI could read a pad's name let alone change it.
     SamplerSetSlotName = 90,
+    /// Bit depth and sample-rate reduction on a sampler MOD SET — the SP-1200 character.
+    /// Applied BEFORE the filter, which is the order the machines it imitates had.
+    SamplerSetVintage = 91,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -2187,6 +2210,7 @@ mod tests {
         same!(UiSamplerSetDevicePayload, sys::daw_UiSamplerSetDevicePayload);
         same!(UiSamplerSlicePayload, sys::daw_UiSamplerSlicePayload);
         same!(UiSamplerSlotNameHeader, sys::daw_UiSamplerSlotNameHeader);
+        same!(UiSamplerVintagePayload, sys::daw_UiSamplerVintagePayload);
         same!(UiSamplerFilterPayload, sys::daw_UiSamplerFilterPayload);
         same!(UiSamplerRejectPayload, sys::daw_UiSamplerRejectPayload);
         same!(UiSetParamPayload, sys::daw_UiSetParamPayload);
@@ -2477,6 +2501,7 @@ mod wire_layout {
         // Not a ring payload — the ASSEMBLED shapes, which the engine memcpys.
         assert_eq!(std::mem::size_of::<UiSamplerEnvPointsHeader>(), 32);
         assert_eq!(std::mem::size_of::<UiSamplerSlotNameHeader>(), 12);
+        assert_eq!(std::mem::size_of::<UiSamplerVintagePayload>(), 40);
         assert_eq!(std::mem::size_of::<UiEnvPointWire>(), 8);
         // v35: + sliceBeginFrame / sliceEndFrame. Only three bytes were spare and two frame
         // counts need eight, so the entry's STRIDE changed — which is why this needed a version

@@ -92,6 +92,18 @@ struct SamplerModSet {
   std::string name;
   uint8_t filterType = 0;  // 0 off, 1 LP12, 2 LP24, 3 HP, 4 BP
   uint16_t cutoffMilli = 1000, resonanceMilli = 0;
+  // VINTAGE: play the sample back at fewer bits and a lower rate than the engine runs at — the
+  // SP-1200 / MPC60 character. Both OFF by default, because a kit that asked for none should
+  // sound exactly as it did before this existed.
+  //
+  // ON THE MOD SET, not the slot, for the reason auto-slicing already shares one: a chopped
+  // break wants ONE vintage character, and sixteen copies of it is sixteen edits.
+  //
+  // 0 = off. bitDepth is 1..16 and quantises amplitude to 2^n levels; rateHz is a target sample
+  // rate reached by sample-and-hold. They are independent — 12 bits at full rate and 8 bits at
+  // 26 kHz are different sounds and both are wanted.
+  uint8_t bitDepth = 0;
+  uint16_t rateHz = 0;
   uint16_t nextModulatorId = 1;
   std::vector<SamplerModulator> modulators;
 

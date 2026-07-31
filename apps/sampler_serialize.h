@@ -125,6 +125,8 @@ void writeSamplerState(Writer& writer, const SamplerState& st) {
     writer.key("filter_type", static_cast<uint32_t>(m.filterType));
     writer.key("cutoff_milli", static_cast<uint32_t>(m.cutoffMilli));
     writer.key("resonance_milli", static_cast<uint32_t>(m.resonanceMilli));
+    writer.key("bit_depth", static_cast<uint32_t>(m.bitDepth));
+    writer.key("rate_hz", static_cast<uint32_t>(m.rateHz));
     writer.key("next_modulator_id", static_cast<uint32_t>(m.nextModulatorId));
     writer.beginArray("modulators");
     for (const auto& mod : m.modulators) {
@@ -256,6 +258,10 @@ SamplerState readSamplerState(const Node& node, SamplerLoadReport* report = null
           static_cast<uint16_t>(item.second.template get<uint32_t>("cutoff_milli", 1000));
       m.resonanceMilli =
           static_cast<uint16_t>(item.second.template get<uint32_t>("resonance_milli", 0));
+      // Both default to 0 = OFF, so every project written before vintage existed loads with it
+      // off and sounds exactly as it did.
+      m.bitDepth = static_cast<uint8_t>(item.second.template get<uint32_t>("bit_depth", 0));
+      m.rateHz = static_cast<uint16_t>(item.second.template get<uint32_t>("rate_hz", 0));
       m.nextModulatorId =
           static_cast<uint16_t>(item.second.template get<uint32_t>("next_modulator_id", 1));
       if (auto mods = item.second.get_child_optional("modulators")) {

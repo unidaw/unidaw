@@ -91,6 +91,11 @@ struct SamplerVoiceSpec {
   uint8_t filterType = 0;      // 0 off, 1 LP12, 2 LP24, 3 HP, 4 BP
   float cutoffHz = 20000.0f;
   float resonance = 0.7f;
+  // VINTAGE, applied BEFORE the filter — the order the machines this imitates actually had, and
+  // the reason 12-bit sounds like 12-bit rather than like noise added to a filtered signal.
+  // 0 disables each independently.
+  uint8_t bitDepth = 0;        // 1..16; amplitude quantised to 2^n levels
+  uint32_t holdFrames = 0;     // sample-and-hold length, derived from the target rate
   const EnvShape* cutoffEnv = nullptr;
   float cutoffDepth = 0.0f;    // in octaves at full envelope
   const EnvShape* pitchEnv = nullptr;
@@ -532,6 +537,27 @@ class SamplerVoice {
             s = s * a + other * b;
           }
         }
+        // ---- VINTAGE, BEFORE THE FILTER. Rate first, then bits: the converter's word length
+        // applies to whatever the sample-and-hold last latched, which is what the hardware did
+        // and what makes the two controls interact the way people expect.
+        //
+        // THE HOLD COUNTER IS PER VOICE AND STARTS AT ZERO ON NOTE-ON. Derived from a global
+        // sample counter it would make one note sound different depending on where the transport
+        // happened to be, and two bounces of one project would differ — the same rule the
+        // envelope clock follows, and the one property this whole subsystem must not break.
+        if (spec_.holdFrames > 1) {
+          if (holdCount_[ch] == 0) {
+            held_[ch] = s;
+          }
+          s = held_[ch];
+        }
+        if (spec_.bitDepth > 0 && spec_.bitDepth < 16) {
+          // 2^(n-1) steps either side of zero. Rounding rather than truncating, so silence stays
+          // silence: truncation biases every sample toward zero and turns a decaying tail into a
+          // DC step.
+          const float levels = static_cast<float>(1u << (spec_.bitDepth - 1));
+          s = std::round(std::clamp(s, -1.0f, 1.0f) * levels) / levels;
+        }
         // ---- THE FILTER, per sample so its envelope can actually move it. Off by default:
         // filtering a drum kit that asked for none is a sound nobody chose.
         if (spec_.filterType != 0) {
@@ -564,6 +590,9 @@ class SamplerVoice {
           }
         }
         out[ch][dst] += s * g * (ch == 0 ? glNow : grNow);
+        if (spec_.holdFrames > 1) {
+          holdCount_[ch] = (holdCount_[ch] + 1) % spec_.holdFrames;
+        }
       }
 
       // ---- ADVANCE, AND THE THREE LOOP MODES ARE HERE AND NOWHERE ELSE.
@@ -764,6 +793,10 @@ class SamplerVoice {
     return std::sin(turns * 2.0f * static_cast<float>(M_PI)) * l.amp + l.bias;
   }
   SvfFilter filtL_{}, filtR_{}, filtL2_{}, filtR2_{};
+  // Per channel, so a stereo sample's two sides hold together rather than drifting a frame
+  // apart — which would widen the image as a side effect of a mono tone control.
+  uint32_t holdCount_[2]{0, 0};
+  float held_[2]{0.0f, 0.0f};
   uint64_t pos_ = 0;  // 32.32 fixed point, in level-0 source frames
   uint64_t step_ = 0;
   uint64_t startFrame_ = 0, endFrame_ = 0;

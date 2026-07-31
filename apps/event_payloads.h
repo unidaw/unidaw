@@ -403,7 +403,17 @@ enum class UiCommandType : uint16_t {
   /// the slot is left alone. A truncated name is worse than a refused one because it looks like
   /// it worked, and refusing on BYTE length means no multi-byte character is ever cut in half.
   /// Empty is legal and means unnamed — the state every sliced slot starts in.
-  SamplerSetSlotName = 90,  // next free 91
+  SamplerSetSlotName = 90,
+
+  /// VINTAGE: bit depth and sample-rate reduction on a sampler MOD SET — the SP-1200 / MPC60
+  /// character. Both off by default, both independent.
+  ///
+  /// ON THE MOD SET rather than the slot, for the reason auto-slicing already shares one: a
+  /// chopped break wants ONE vintage character, and sixteen copies is sixteen edits.
+  ///
+  /// NOT FOLDED INTO SamplerSetFilter (86), which also addresses a mod set — adding fields to
+  /// that payload would change a struct clients already encode, and this is additive instead.
+  SamplerSetVintage = 91,  // next free 92
 };
 
 // SAMPLER SET FILTER (opcode 86). 40 bytes.
@@ -524,6 +534,29 @@ struct UiSamplerSlotNameHeader {
 };
 static_assert(sizeof(UiSamplerSlotNameHeader) == 12,
               "UiSamplerSlotNameHeader must be 12 bytes");
+
+// SAMPLER SET VINTAGE (opcode 91). 40 bytes, shaped like UiSamplerFilterPayload so the two
+// mod-set commands read the same way.
+//
+// The FLAGS say which of the two this call is about, so setting the bit depth does not silently
+// reset the rate. Without them a caller who wanted one would have to read the other back first,
+// and a caller who forgot would clear it — the silent-clobber shape that made SetRowOps masked.
+inline constexpr uint16_t kSamplerVintageSetBits = 1u << 0;
+inline constexpr uint16_t kSamplerVintageSetRate = 1u << 1;
+
+struct UiSamplerVintagePayload {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetVintage);
+  uint16_t flags = 0;   // kSamplerVintageSet*
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;  // 0 = the first sampler on the track
+  uint32_t modSetId = 0;  // 0 = every mod set on that sampler
+  uint8_t bitDepth = 0;   // 0 off, else 1..16
+  uint8_t reserved0 = 0;
+  uint16_t rateHz = 0;    // 0 off, else a target sample rate
+  uint32_t reserved1[5]{};
+};
+static_assert(sizeof(UiSamplerVintagePayload) == 40,
+              "UiSamplerVintagePayload must be 40 bytes");
 
 // One drawn point. `tension` is toward the NEXT point: 0 linear, positive ease-in, negative
 // ease-out. `flags` bit 0 = STEP — hold this value until the next point's time, then jump, which
@@ -966,6 +999,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SamplerSetDevice: return "sampler_set_device";
     case UiCommandType::SetTrackCollapsed: return "set_track_collapsed";
     case UiCommandType::SamplerSetSlotName: return "sampler_set_slot_name";
+    case UiCommandType::SamplerSetVintage: return "sampler_set_vintage";
     case UiCommandType::Redo: return "redo";
     case UiCommandType::SetLoopRange: return "set_loop_range";
     case UiCommandType::SetAutomationTarget: return "set_automation_target";

@@ -960,8 +960,12 @@ struct UiSamplerSlotEntry {          // 80 B (v33 32 -> v35 40 -> v36 80)
   // useful together — a UI drawing a filter envelope over a disabled filter is showing a control
   // that does nothing, which is the exact trap the engine's own check fell into.
   uint8_t filterType = 0;
-  uint8_t reserved0 = 0;
-  uint16_t reserved1 = 0;
+  // VINTAGE — the mod set's bit depth and target rate, 0 = off for both. Taken from the two
+  // RESERVED WORDS, so no offset moves and kShmVersion does not change: they have always been
+  // zero, and zero is exactly what "off" means, so a v36 reader that ignores them is unaffected
+  // and every project written before vintage existed reads correctly.
+  uint8_t vintageBits = 0;
+  uint16_t vintageRateHz = 0;
   // v35: WHERE THIS SLOT'S SLICE STARTS AND ENDS IN ITS SOURCE. The chop plays and could not be
   // SEEN: every slot reported lengthFrames as the SOURCE's length, so nothing could draw where a
   // slice begins or how long it is, and the extent was computed at note-on from the marker list

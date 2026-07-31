@@ -1476,6 +1476,17 @@ impl EngineHandle {
         )
     }
 
+    /// Set a sampler mod set's VINTAGE: bit depth and rate reduction (SamplerSetVintage).
+    pub fn send_sampler_vintage(
+        &self,
+        payload: crate::layout::UiSamplerVintagePayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const crate::layout::UiSamplerVintagePayload as *const u8,
+            std::mem::size_of::<crate::layout::UiSamplerVintagePayload>(),
+        )
+    }
+
     /// Set a sampler modulator's ADSR (SamplerSetEnvelope).
     pub fn send_sampler_envelope(
         &self,
