@@ -110,7 +110,11 @@ json.dump({"schema_version": 4, "meta": {"name": "v"}, "nanoticks_per_quarter": 
            "clips": [], "tracks": [tr]}, open(out, "w"))
 PY
 
-( cd "$BUILD" && ./daw_engine --project v --run-seconds 45 >"$TMP/projects/eng.log" 2>&1 ) &
+# `exec`, so $! is the ENGINE rather than the subshell around it — otherwise `kill "$ENG"` reaps
+# the subshell and leaves the engine holding the audio device until --run-seconds elapses, or
+# forever if it is blocked waiting for a device another engine already has.
+( cd "$BUILD" && exec ./daw_engine --project v --run-seconds 45 \
+    >"$TMP/projects/eng.log" 2>&1 ) &
 ENG=$!
 # WAITS FOR THE PROJECT, NOT FOR THE THREADS: "starting threads" is printed before the startup
 # project is loaded, and a command sent on that signal is refused into the engine's own log.

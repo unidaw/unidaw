@@ -69,7 +69,13 @@ json.dump({"schema_version": 4, "meta": {"name": "song"}, "nanoticks_per_quarter
 PY
 
 SHM="/modstate_$$"
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$HOME_DIR" \
+# `exec`, so $! is the ENGINE and not the subshell around it. Without it `kill "$ENG"` reaps the
+# subshell and leaves the engine running: normally it still exits on its own when --run-seconds
+# elapses, but an engine BLOCKED waiting for a contended audio device never starts that clock and
+# lingers forever — holding the device, which is what makes the NEXT check slow. One such pair
+# turned a 10-second run of this file into a 935-second one.
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM" \
+    DAW_PROJECT_DIR="$HOME_DIR" \
     ./daw_engine --run-seconds 40 >"$HOME_DIR/eng.log" 2>&1 ) &
 ENG=$!
 for _ in $(seq 1 120); do
@@ -167,7 +173,8 @@ fi
 cp "$HOME_DIR/song.uni" "$AWAY_DIR/song.uni"
 rm -rf "$HOME_DIR/song.uniproj.state" "$HOME_DIR"/*.uniproj.json
 SHM2="/modstate2_$$"
-( cd "$BUILD" && env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$AWAY_DIR" \
+( cd "$BUILD" && exec env DAW_USE_FAKE_IDENTITY=1 DAW_UI_SHM_NAME="$SHM2" \
+    DAW_PROJECT_DIR="$AWAY_DIR" \
     ./daw_engine --run-seconds 30 >"$AWAY_DIR/eng.log" 2>&1 ) &
 ENG=$!
 for _ in $(seq 1 120); do
