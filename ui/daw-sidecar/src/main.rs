@@ -34,7 +34,8 @@ use std::time::{Duration, Instant};
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlicePayload,
                          UiSamplerFilterPayload, UiSamplerEnvelopePayload,
-                         UiSamplerSetSlotPayload, UiSamplerSetDevicePayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
+                         UiSamplerSetSlotPayload, UiSamplerSetDevicePayload,
+                         UiSamplerEmitRowsPayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
                          UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
@@ -3433,6 +3434,31 @@ fn build_sampler_load(body: &str) -> Option<Result<UiSamplerLoadPayload, &'stati
 /// tempo-adaptive from the moment it is made rather than tied to the rate the file was recorded
 /// at — which is the difference between a break that follows the song and one the song has to
 /// follow.
+/// SamplerEmitRows: lay a chop out as NOTES, one row per slice.
+///
+/// The gesture the chop workflow was missing. Chopping a break produces slots on consecutive
+/// keys and nothing in the pattern, so playing it back meant writing a note per slice by hand —
+/// eight for an eight-way chop, sixty-four for a kit. This writes them.
+///
+/// `stepNanoticks` 0 means DERIVE FROM THE SLICES: each row lands where its slice falls in the
+/// source, so a chop of a groove keeps the groove instead of being flattened onto a grid. A
+/// caller who wants the grid asks for it by naming a step.
+fn build_sampler_emit(body: &str) -> Option<Result<UiSamplerEmitRowsPayload, &'static str>> {
+    if !is_type(body, "sampleremit") { return None; }
+    Some(Ok(UiSamplerEmitRowsPayload {
+        command_type: UiCommandType::SamplerEmitRows as u16,
+        flags: 0,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        device_id: parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32,
+        source_local_id: parse_num(body, "\"source\"").unwrap_or(1).max(0) as u32,
+        at_nanotick: parse_num(body, "\"at\"").unwrap_or(0).max(0) as u64,
+        step_nanoticks: parse_num(body, "\"step\"").unwrap_or(0).max(0) as u64,
+        column: parse_num(body, "\"column\"").unwrap_or(0).clamp(0, 255) as u8,
+        velocity: parse_num(body, "\"vel\"").unwrap_or(100).clamp(0, 127) as u8,
+        reserved: [0u8; 6],
+    }))
+}
+
 /// SamplerSetDevice (88). ONE device-level field of a sampler, by its wire id.
 ///
 /// Three fields that the engine has always read and saved and nothing could write: the default
@@ -4034,6 +4060,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"autopoint\":{},\"value\":{}}}",
                                         p.track_id, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // A CHOP, LAID OUT AS NOTES. Own 40-byte payload.
+                        if let Some(r) = build_sampler_emit(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_sampler_emit_rows(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"sampleremit\":{},\"at\":{}}}",
+                                        p.device_id, p.at_nanotick),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };

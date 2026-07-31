@@ -494,6 +494,27 @@ export function createCommands(api) {
         return `track ${a[0]} ${on ? 'is sound-addressed' : 'uses the keymap'}`;
       } },
     /*
+     * LAY THE CHOP OUT AS NOTES — the gesture the whole chop workflow was missing.
+     *
+     * `slice` makes the slots and puts NOTHING in the pattern, so hearing a chop back meant
+     * writing a note per slice by hand: eight for an eight-way chop, sixty-four for a kit. This
+     * writes them, one row per slice, from the sampler's own slice list.
+     *
+     * `step` 0 — the default — means each row lands where its slice actually falls in the
+     * source, so a chop of a groove keeps the groove. Naming a step lays it on a grid instead,
+     * which is a different musical decision and worth having to say out loud.
+     */
+    emit: { help: 'emit <track> <device> [at] [step] — write the chop into the pattern, one row '
+                + 'per slice; step 0 keeps the slices\' own timing',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             { name: 'at', type: 'int', min: 0, optional: true },
+             { name: 'step', type: 'int', min: 0, optional: true }],
+      run: (a) => {
+        if (!api.samplerEmit(num(a[0]), num(a[1]),
+                             { at: num(a[2], 0), step: num(a[3], 0) })) return refusal(api);
+        return num(a[3], 0) ? `emitting on a grid of ${a[3]}` : 'emitting with the slices\' timing';
+      } },
+    /*
      * THE BANK'S OWN SETTINGS — the per-kit defaults, not a slot's.
      *
      * `bank <track> <device> default-gate 1` is Jaakko's "ignore note-offs" as a per-bank

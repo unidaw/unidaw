@@ -2917,6 +2917,28 @@ const dockApi = {
    * never touches gate, so every slot inherited the struct's 0 and one-shot was right for drums
    * BY ACCIDENT rather than by anyone's decision.
    */
+  /**
+   * Lay a chop out as NOTES — one row per slice, from the sampler's own slice list.
+   *
+   * The gesture the chop workflow was missing. Chopping produces slots on consecutive keys and
+   * NOTHING in the pattern, so hearing it back meant writing a note per slice by hand: eight for
+   * an eight-way chop, sixty-four for a kit.
+   *
+   * `step` 0 means DERIVE FROM THE SLICES — each row lands where its slice falls in the source,
+   * so a chop of a groove keeps the groove. Naming a step asks for the grid instead, which is a
+   * different musical thing and worth having to say.
+   */
+  samplerEmit: (track, device, opts = {}) => {
+    if (!conn || !conn.send({ type: 'sampleremit', track: Number(track) || 0,
+                              device: Number(device) || 0,
+                              source: opts.source === undefined ? 1 : Number(opts.source),
+                              at: Number(opts.at) || 0, step: Number(opts.step) || 0,
+                              column: Number(opts.column) || 0,
+                              vel: opts.vel === undefined ? 100 : Number(opts.vel) })) {
+      state.reject = 'no engine'; schedule(); return false;
+    }
+    state.reject = null; schedule(); return true;
+  },
   samplerDevice: (track, device, field, value) => {
     if (!conn || !conn.send({ type: 'samplerdevice', track: Number(track) || 0,
                               device: Number(device) || 0,
@@ -7895,6 +7917,7 @@ window.__uni = {
   samplerEnvelope: (t, d, e) => dockApi.samplerEnvelope(t, d, e),
   samplerSlot: (t, d, sl, f, v) => dockApi.samplerSlot(t, d, sl, f, v),
   samplerDevice: (t, d, f, v) => dockApi.samplerDevice(t, d, f, v),
+  samplerEmit: (t, d, o) => dockApi.samplerEmit(t, d, o),
   soundAddressed: (t, on) => dockApi.soundAddressed(t, on),
   opsTextAtCursor: () => dockApi.opsTextAtCursor(),
   noteIdAtCursor: () => dockApi.noteIdAtCursor(),

@@ -808,7 +808,7 @@ test('a project row leaves its meta line to the renderer', () => {
  */
 const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'samplerKitCached',
                      'rowOps', 'opsAtCursor', 'opAtCursor', 'opsTextAtCursor', 'noteIdAtCursor',
-                     'loadSample', 'addDevice', 'sliceSample', 'samplerFilter', 'samplerEnvelope', 'samplerSlot', 'samplerDevice', 'soundAddressed',
+                     'loadSample', 'addDevice', 'sliceSample', 'samplerFilter', 'samplerEnvelope', 'samplerSlot', 'samplerDevice', 'samplerEmit', 'soundAddressed',
                      'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
@@ -2244,6 +2244,11 @@ const OP_REGISTRY = {
    * is real; the agent has no sampler tooling at all.
    */
   bank:      { cli: 'sampler-device', agent: null, why: 'gap' },
+  /*
+   * Lay a chop out as notes (SamplerEmitRows). daw-cli has `sampler-emit-rows`, so the CLI path
+   * is real; the agent has no sampler tooling at all.
+   */
+  emit:      { cli: 'sampler-emit-rows', agent: null, why: 'gap' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },
@@ -2345,7 +2350,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
                    'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
-                   'filter', 'env', 'slot', 'soundaddr', 'bank',
+                   'filter', 'env', 'slot', 'soundaddr', 'bank', 'emit',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
                    'sampler', 'load-sample', 'slice',
@@ -2596,7 +2601,12 @@ const ENGINE_UNUSED = {
    * Jaakko's ruling is that a note-off has to be able to cut it.
    */
   SamplerMarker: 'gap — with SamplerSlice',
-  SamplerEmitRows: 'gap — with SamplerSlice; emits a chop into the pattern',
+  /*
+   * SamplerEmitRows WAS recorded here as a gap "with SamplerSlice". It is wired now, and the
+   * reason it stopped being deferrable is that `slice` makes the slots and puts NOTHING in the
+   * pattern — so hearing a chop back meant writing a note per slice by hand, eight for an
+   * eight-way chop and sixty-four for a kit. That is the gesture, not a convenience.
+   */
 };
 
 test('the ops cell expands the SELECTED op and collapses the rest', () => {
