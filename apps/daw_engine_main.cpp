@@ -2171,6 +2171,12 @@ struct TrackRuntime {
     // clips they reference, both owned per-track (copy-on-write from the loaded
     // project). track.clip is DERIVED from these by flattenPlacements after every
     // edit; edits mutate the store, not track.clip. Both guarded by trackMutex.
+    // Set when another track routed audio INTO this one, so the input-plane write can tell
+    // whether it is about to discard something. Cleared as the inbound buffer is swapped in.
+    std::atomic<bool> inboundAudioArrived{false};
+    // One warning per track, not one per block: a routed sampler track would otherwise log at
+    // the block rate forever, and the log becomes the thing you have to fix.
+    std::atomic<bool> warnedSamplerAteInput{false};
     std::vector<daw::ProjectPlacement> sourcePlacements;
     std::vector<daw::ProjectClip> ownedClips;
     // Clip ids this track created or copy-on-write-forked (i.e. owns exclusively
@@ -15452,6 +15458,9 @@ struct TrackRuntime {
         auto trackStatePtr = std::atomic_load_explicit(&runtime->trackSnapshot,
                                                        std::memory_order_acquire);
         const auto& trackState = trackStatePtr ? *trackStatePtr : kEmptyTrackState;
+        // Did another track route audio into this one this block? Read where the inbound
+        // buffer is swapped in, used where the sampler decides whether to overwrite it.
+        bool routedAudioArrived = false;
         // TRY-LOCK IN REALTIME, BLOCKING WAIT OFFLINE.
         //
         // Skipping a track's whole block when this mutex is contended is the right realtime
@@ -15610,6 +15619,7 @@ struct TrackRuntime {
               static_cast<size_t>(engineConfig.blockSize) *
               static_cast<size_t>(engineConfig.numChannelsOut);
           std::lock_guard<std::mutex> lock(dst.inboundMutex);
+          dst.inboundAudioArrived.store(true, std::memory_order_relaxed);
           if (dst.inboundAudioBuffer.size() != expectedSamples) {
             dst.inboundAudioBuffer.assign(expectedSamples, 0.0f);
           }
@@ -15663,6 +15673,8 @@ struct TrackRuntime {
                   static_cast<size_t>(ch) * engineConfig.blockSize;
             }
           }
+          routedAudioArrived = runtime->inboundAudioArrived.exchange(
+              false, std::memory_order_relaxed);
           if (runtime->inboundAudioBuffer.size() == expectedSamples) {
             std::copy(runtime->inboundAudioBuffer.begin(),
                       runtime->inboundAudioBuffer.end(),
@@ -16082,6 +16094,20 @@ struct TrackRuntime {
               // way, adding a patcher audio node would silently mute the sampler.
               if (runtime->samplerAudioValid && ch < runtime->samplerAudioChannels.size() &&
                   runtime->samplerAudioChannels[ch]) {
+                // THE SAMPLER REPLACES THE INPUT, so a track that is both an instrument and a
+                // bus destination silently loses everything routed into it. Whether that should
+                // MIX instead is a real decision about what a track is (Live and Renoise mix),
+                // and it is not one to make silently — so until it is made, say so out loud
+                // rather than letting the audio disappear with nothing to look at. Task #92.
+                if (routedAudioArrived &&
+                    !runtime->warnedSamplerAteInput.exchange(true,
+                                                             std::memory_order_relaxed)) {
+                  DAW_EVENT("sampler.discarded_routed_input")
+                      .field("track", runtime->trackId)
+                      .field("note",
+                             "a sampler feeds the head of the chain and REPLACES the track's "
+                             "input, so audio routed into this track is not heard");
+                }
                 std::memcpy(input, runtime->samplerAudioChannels[ch],
                             static_cast<size_t>(engineConfig.blockSize) * sizeof(float));
               } else if (patcherAudioValid && ch < runtime->patcherAudioChannels.size() &&
