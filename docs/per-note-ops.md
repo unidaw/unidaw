@@ -434,31 +434,37 @@ cursor row is completely readable with no columns open at all.
 
 ---
 
-## 3. WHAT CHANGED UNDER US
+## 3. WHAT CHANGED UNDER US — and two things I got wrong about it
 
-Two facts that invalidate parts of the design as originally written, both found by the
-adversarial pass and both verified here:
+**CORRECTED.** This section listed two things as not-built. Both were built, and backend sent
+file:line so I could check rather than take their word. I checked; they are right.
 
-**The sampler is live.** `dc02430 sampler S1 COMPLETE: the engine makes a sound of its own`.
-`runtime.samplerEvents.push_back(se)` appears at six sites in `daw_engine_main.cpp`
-(13033, 13081, 13133, 13191, 13276, 13465), and the note-on lambda `emitNoteOnWithOff` carries
-no `NotePayload`. Threading `sound` and the offset through is a six-site hot-path migration
-plus a signature change, not the cheap edit the design assumed. *(A grep for the type
-`SamplerEvent` misses all six — the producers name the variable `samplerEvents`. That is how
-the design's own "correction to the record" came to be wrong, and how I repeated it before
-checking.)*
+**1. The slice-extent derive EXISTS.** I wrote that nothing derives a slot's extent from its
+`SliceSet`, so "move the marker, every row follows" — the entire argument for addressing by name
+— did not work yet. It does. The derive is in the RENDER path, not the serializer, which is why
+grepping `sampler_serialize.h` found only the stored `start_frame` and I concluded it was the
+only one:
 
-**The prerequisite is not built.** Nothing derives a slot's extent from its `SliceSet`:
-`sampler_serialize.h` loads `start_frame` off disk and `sampler_engine.h` plays it, and no path
-recomputes it from `SliceMarker::frame`. So "move the marker, every row follows" — the entire
-argument for addressing by name — **does not work today**. It has to land first, or the design
-is inert.
+    apps/sampler_engine.h:311-328   a slot with sliceId != 0 calls sliceExtentById() at NOTE-ON
+                                    and overwrites spec.startFrame/endFrame with the derived
+                                    extent. The stored value is never consulted for such a slot.
 
-Its round-trip check must be built by editing a project through the real commands
-(`tools/edited_roundtrip_check.sh`), not by hand-writing JSON: a hand-written fixture that sets
-both the marker and the extent will pass a test that never exercised the derive.
+Its comment makes the same argument this document does: *"A cached extent would be a second fact
+about one boundary, and the two would disagree the moment a marker moved."* A removed slice goes
+SILENT and counts as unmapped rather than falling back to the whole sample — a chop whose slice
+is gone must not suddenly play the entire break.
 
----
+**2. The six-site migration IS done.** I wrote that threading `sound` and the offset through was
+an unpaid six-site hot-path migration plus a signature change. The cost was right; the tense was
+not. `emitNoteOnWithOff` takes `sound` and `soundOffset`
+(`apps/daw_engine_main.cpp:14292-14295`), the note-off sites are migrated, and the values reach
+the sampler.
+
+**The lesson, which is the same one this document already records one level down:** I grepped
+the serializer, found one authority, and concluded it was the only one. The derive lived in the
+path that *plays* a note, not the path that *saves* it. Searching where a fact is STORED does
+not find where it is COMPUTED — and "nothing derives this" is a claim about the whole program,
+which a grep of one file cannot support.
 
 ## 4. OPEN QUESTIONS — JAAKKO'S CALL
 
