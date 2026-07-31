@@ -536,6 +536,7 @@ export function buildChainModel(opts, buf) {
     c.kind = d.kind;
     c.badge = KIND_BADGE[d.kind] || 'DEV';
 
+
     /**
      * The device's buses, and — the part that matters — whether we have them ALL.
      *
@@ -589,6 +590,23 @@ export function buildChainModel(opts, buf) {
      * arrives, so the same array is the same slots and nothing is rebuilt per frame.
      */
     const kit = (kits && d.kind === KIND_SAMPLER) ? kits[paramKey(track, d.id)] : null;
+    /*
+     * THE SAMPLER'S FILTER, at card level, so the rack can offer a control for it.
+     *
+     * Read from the first slot: the filter belongs to a MOD SET, and `samplerFilter` with modSet
+     * 0 sets every one of them — the gesture a kit wants, one filter for the whole instrument.
+     * A kit whose sets genuinely differ is still addressable from the console by naming a set.
+     *
+     * -1, not 0, when there is no kit: 0 is the OFF filter, a real state the control has to be
+     * able to show, so it cannot double as "there is no control here".
+     *
+     * SET HERE AND NOT INSIDE THE SLOT COPY BELOW. That copy is guarded to run only when the
+     * kit ANSWER changes, so a value written inside it is correct on one frame and stale on
+     * every other — and paired with a reset at the top of this loop it was -1 on every frame but
+     * one. The button appeared for a single frame and then hid itself, which reads as a control
+     * that does not work rather than as a value being cleared underneath it.
+     */
+    c.filterType = kit && kit.slots && kit.slots.length ? (kit.slots[0].filterType | 0) : -1;
     const src = kit && kit.found && kit.slots ? kit.slots
               : ((dp && dp.params) ? dp.params : null);
     const isKit = !!(kit && kit.found && kit.slots && src === kit.slots);

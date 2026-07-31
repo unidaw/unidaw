@@ -289,6 +289,34 @@
    and in decreasing order of how often you reach for one, which is the same
    order. A/B-ing an insert is a per-second gesture; deleting it is a per-week
    one. */
+/* THE SAMPLER'S FILTER, left of bypass — same row, same reasoning about order: it is a thing
+   you reach for while listening, so it sits with the other per-second controls rather than with
+   the ones that change what the card IS.
+
+   Wider than the icon buttons and text rather than an icon, because "lp24" is read faster than
+   any glyph anyone could draw for it and the states are a short closed list. It is only drawn on
+   sampler cards; nothing else has a filter to set. */
+.dv-flt {
+  position: absolute; top: 6px; right: 58px;
+  display: flex; align-items: center; justify-content: center;
+  min-width: 34px; height: 20px;
+  padding: 0 4px;
+  font: inherit; font-size: 10px; letter-spacing: .02em;
+  color: var(--uni-text-fx);
+  background: transparent;
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: .5;
+}
+.dv-flt:hover { opacity: 1; border-color: var(--base-accent); color: var(--base-accent); }
+/* OFF is not a neutral setting here: a cutoff envelope over a filter that is off is a control
+   with nothing under it, which is what the kit row marks with `!`. Dimmer, so the card says the
+   same thing twice rather than leaving the two surfaces to disagree. */
+.dv-flt.off { opacity: .32; font-style: italic; }
+/* Legible on a bypassed card, for the reason spelled out under .dv-byp below. */
+.dv-card.byp .dv-flt { opacity: .8; }
+
 .dv-byp {
   position: absolute; top: 6px; right: 32px;
   display: flex; align-items: center; justify-content: center;

@@ -2300,6 +2300,9 @@ const chain = new Chain(chainHost, {
   // No confirmation, unlike remove: it is the one thing you do to a device that
   // undoes itself by being done again.
   onBypass: ({ track, device, on }) => bypassDevice(track, device, on),
+  // The same function the `filter` console verb calls, not a copy — the console and the pointer
+  // must not come to mean different things by "set the filter".
+  onFilter: ({ track, device, type }) => dockApi.samplerFilter(track, device, type),
   /**
    * MAP — the badge on a parameter row, in both directions.
    *

@@ -26,7 +26,7 @@
 //    elements in total, created once.
 
 import { createParamEdits, findParamEdit, setParamEdit, dropParamEdit,
-         reapParamEdits } from './chainmodel.js';
+         reapParamEdits, FILTER_TYPES } from './chainmodel.js';
 
 function div(cls, parent) {
   const el = document.createElement('div');
@@ -64,7 +64,7 @@ export class Chain {
    * on the strip, rather than showing a value nobody has accepted.
    */
   constructor(host, { onSelect, onAdd, onParam, onOpenEditor, onDelete,
-                      onOpenPatcher, onBypass, onMap } = {}) {
+                      onOpenPatcher, onBypass, onFilter, onMap } = {}) {
     this.host = host;
     this.host.className = 'dv';
     this.onSelect = onSelect;
@@ -84,6 +84,9 @@ export class Chain {
     // Destructured, for the reason onDelete's comment gives — that failure looks
     // exactly like a working button and is only found by pressing it.
     this.onBypass = onBypass;
+    // The sampler's filter, cycled from the card. Same shape as bypass: the handler names the
+    // state it wants rather than asking for the next one.
+    this.onFilter = onFilter;
     /*
      * MAP. Destructured and assigned here for the same reason `onBypass` is, one line up:
      * a callback the constructor accepts and never stores gives a badge that looks live,
@@ -175,7 +178,7 @@ export class Chain {
      * button is two deletes, not a delete and an open.
      */
     this.cardsEl.addEventListener('dblclick', (e) => {
-      if (e.target.closest('.dv-add, .dv-open, .dv-del, .dv-byp, .dv-p-bar')) return;
+      if (e.target.closest('.dv-add, .dv-open, .dv-del, .dv-byp, .dv-flt, .dv-p-bar')) return;
       const card = e.target.closest('.dv-card');
       if (!card || !this.vm) return;
       const pos = Number(card.dataset.pos);
@@ -391,7 +394,27 @@ export class Chain {
       const bypIcon = document.createElement('i');
       bypIcon.className = 'ph ph-power';
       byp.appendChild(bypIcon);
-      el.append(open, byp, del);
+      /*
+       * THE SAMPLER'S FILTER, as a cycling button.
+       *
+       * Text rather than an icon because there is no icon for "LP24" that anyone reads faster
+       * than the letters, and the states are a short closed list. Built for every card and shown
+       * only on samplers — the pool is reused as the rack changes shape, so creating it
+       * conditionally would mean a card that becomes a sampler has no button until it is
+       * rebuilt.
+       *
+       * It exists because opcode 86 gave the filter a write path at last: until this morning no
+       * command in the product could turn it on, so every cutoff modulator was inert and the
+       * kit's `!` badge was the only state reachable. A console verb alone would leave the
+       * pointer unable to do something the keyboard can, which is the half-built shape this
+       * project keeps refusing.
+       */
+      const flt = document.createElement('button');
+      flt.className = 'dv-flt';
+      flt.appendChild(document.createTextNode(''));
+      el._fltEl = flt;
+      el._flt = -2;                      // not -1: -1 is "no filter here", a value it can hold
+      el.append(open, flt, byp, del);
       const bus = div('dv-bus', el);
       el._busEl = bus;
       el._badge = text(badge);
@@ -450,6 +473,24 @@ export class Chain {
       const c = opener.closest('.dv-card');
       if (c && this.onOpenEditor) {
         this.onOpenEditor({ track: this.vm ? this.vm.track : -1, device: c._devId });
+      }
+      return;
+    }
+    const filt = e.target.closest('.dv-flt');
+    if (filt) {
+      const c = filt.closest('.dv-card');
+      if (c && this.onFilter) {
+        const pos = Number(c.dataset.pos);
+        const card = this.vm && this.vm.cards && this.vm.cards[pos];
+        if (card && card.filterType >= 0) {
+          if (this.onSelect) this.onSelect(pos);
+          // The state we WANT, computed from the one being drawn — never "next from whatever it
+          // is now". Two presses racing on the command ring both mean "the one after that", and
+          // the pair lands somewhere neither press asked for; two presses that NAME a state
+          // settle on the second. Same reasoning as bypass, one line above.
+          const next = (card.filterType + 1) % FILTER_TYPES.length;
+          this.onFilter({ track: this.vm ? this.vm.track : -1, device: c._devId, type: next });
+        }
       }
       return;
     }
@@ -610,6 +651,26 @@ export class Chain {
       const c = vm.cards[i];
       el._devId = c.id;
       if (el._b !== c.badge) { el._b = c.badge; el._badge.nodeValue = c.badge; }
+      /*
+       * The filter button, guarded on the VALUE and not merely on being a sampler: this runs per
+       * card per frame, and an unguarded nodeValue write is a string assignment sixty times a
+       * second for every card in the rack.
+       */
+      if (el._flt !== c.filterType) {
+        el._flt = c.filterType;
+        const off = c.filterType < 0;
+        el._fltEl.style.display = off ? 'none' : '';
+        if (!off) {
+          el._fltEl.firstChild.nodeValue = FILTER_TYPES[c.filterType] || '?';
+          // The label says the state; the title says what pressing it does, because a button
+          // showing "lp24" reads equally as "it is lp24" and "press for lp24".
+          el._fltEl.title = `Filter: ${FILTER_TYPES[c.filterType]} — click for `
+                          + `${FILTER_TYPES[(c.filterType + 1) % FILTER_TYPES.length]}`;
+          // OFF is the state a cutoff modulator is inert in, so it is marked rather than left
+          // looking like any other setting.
+          el._fltEl.classList.toggle('off', c.filterType === 0);
+        }
+      }
       if (el._t !== c.title) { el._t = c.title; el._title.nodeValue = c.title; }
       const body = c.caps || 'no declared capabilities';
       if (el._y !== body) { el._y = body; el._body.nodeValue = body; }

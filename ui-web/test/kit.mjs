@@ -385,6 +385,61 @@ const ask = async (track, device) => {
   check(row2 && /~/.test(row2.v) && !/!/.test(row2.v),
         'and the row drops the inert mark — the cutoff envelope is live now',
         row2 && JSON.stringify(row2.v));
+
+  /*
+   * AND THE SAME THING WITH THE POINTER.
+   *
+   * "Console and UI should both have all the functionality" is a standing rule here, and a
+   * console verb alone leaves the pointer unable to do something the keyboard can. The button
+   * cycles, so pressing it from lp24 must land on the NEXT type and the read-back must agree —
+   * which also checks that it names the state it wants rather than toggling, because a cycle
+   * driven from stale state lands somewhere nobody asked for.
+   */
+  /*
+   * THE VISIBLE one. The card pool is reused as the rack changes shape and every card carries a
+   * filter button, hidden on anything that is not a sampler — so `querySelector` returns the
+   * first card's, which is a hidden button still holding whatever text it last had. It reported
+   * `{"text":"lp24","shown":false}`: the right label on the wrong element.
+   */
+  const btn = await page.evaluate(() => {
+    const b = [...document.querySelectorAll('.dv-card .dv-flt')]
+      .find((x) => x.style.display !== 'none');
+    return b ? { text: b.textContent, shown: true } : null;
+  });
+  check(btn && btn.text === 'lp24',
+        'the sampler card shows the filter it is set to', JSON.stringify(btn));
+
+  /*
+   * A REAL CLICK, not `element.click()`.
+   *
+   * The rack listens on POINTERDOWN — it has to, because the same handler starts a card drag —
+   * and a synthetic `.click()` dispatches no pointer events at all. The button was drawn right,
+   * wired right and did nothing, which is indistinguishable from a broken handler.
+   *
+   * Dispatched directly rather than through Playwright's click, which applies actionability
+   * checks — visibility, stability, hit-testing — and timed out on a button inside a scrolling
+   * rack. Those checks are worth having when the question is "can a person press this"; the
+   * question here is "does pressing it do the right thing", and the event is the whole of it.
+   */
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll('.dv-card .dv-flt')]
+      .find((x) => x.style.display !== 'none');
+    b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+  });
+  await page.waitForTimeout(1500);
+  const cycled = await page.evaluate(async (t) => {
+    for (let i = 0; i < 40; i++) {
+      window.__uni.send({ type: 'samplerkit', track: t, device: 0 });
+      await new Promise((r) => setTimeout(r, 200));
+      const k = window.__uni.samplerKitCached(t, 0);
+      if (k && k.slots && k.slots.length && k.slots[0].filterType === 3) return k.slots[0];
+    }
+    const k = window.__uni.samplerKitCached(t, 0);
+    return k && k.slots ? k.slots[0] : null;
+  }, mt);
+  check(cycled && cycled.filterType === 3,
+        'clicking it cycles to the next type, and the engine agrees',
+        `filterType ${cycled && cycled.filterType} (3 = hp, after lp24)`);
 }
 
 // ---------------------------------------------------------------------------
