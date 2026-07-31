@@ -178,10 +178,30 @@ const playUntilAudible = async (device = 0, ms = 12000) => {
   // One more frame, so the renderer has drawn what the store now holds.
   await page.waitForTimeout(400);
   if (ok) return { ok: true };
-  // It did not sound. Say what the machine looked like, in the four terms that tell the causes
-  // apart — a report a person can act on instead of one number that is always the same.
+  /*
+   * IT DID NOT SOUND. Say what the machine looked like, in the terms that tell the causes apart
+   * — a report a person can act on instead of one number that is always the same.
+   *
+   * THE FIFTH CAUSE IS THE MACHINE, and it was missing from this list. A starved producer hands
+   * the device nothing, the device outputs zeros, and every meter reads the silence sentinel —
+   * so "the instrument is silent" is what a real bug AND a loaded box look like, and they are
+   * indistinguishable from here. The engine says which, in plain text in its own log:
+   * `Engine: audio underrun — 184 dropout callback(s) in the last ~2s`.
+   *
+   * Three of these failed together at load average 91 while this file was being written, with
+   * no engine leaked and nothing wrong with the app. That is the run this exists to label.
+   */
+  let underruns = -1;
+  if (stack) {
+    try {
+      const log = readFileSync(`${stack.root}/engine.log`, 'utf8');
+      underruns = (log.match(/audio underrun/g) || []).length;
+    } catch { /* no log is its own answer: -1 */ }
+  }
   return {
     ok: false,
+    underruns,
+    starved: underruns > 0,
     transport: await page.evaluate(() => (window.__uni.engineState() || {}).transport),
     chain: await page.evaluate(() => {
       const c = window.__uni.chainProbe();
@@ -189,6 +209,24 @@ const playUntilAudible = async (device = 0, ms = 12000) => {
     }),
     meters: await page.evaluate(() => window.__uni.deviceMeters()),
   };
+};
+
+/**
+ * A silence that the producer's own starvation explains is INCONCLUSIVE, not a failure.
+ *
+ * Same rule chop-audible.mjs and sampler-device-id.mjs already follow, brought here because
+ * these three meter checks are the ones that keep catching a busy box. It reports rather than
+ * passing: a run that could not answer the question must not look like one that answered it yes.
+ */
+const audibleOr = (r, what, detail) => {
+  if (r.ok) return ok(true, what, detail);
+  if (r.starved) {
+    blocked(false, what, `the producer was starved — ${r.underruns} underrun report(s) in the `
+            + 'engine log, so the device was handed silence and every meter reads the sentinel. '
+            + 'Nothing here is a statement about the app.', JSON.stringify(r.meters));
+    return false;
+  }
+  return ok(false, what, detail);
 };
 
 const E = () => page.evaluate(() => window.__uni.engineState());
@@ -824,6 +862,40 @@ const shrunk = await graphUntil((g) => !g.nodes.some((n) => n.id === added.id));
 ok(!shrunk.nodes.some((n) => n.id === added.id),
    'and removed again, taking its edge with it',
    `#${added.id} gone, ${shrunk.nodes.length} nodes, ${shrunk.edges.length} edges`);
+
+/*
+ * THE SLICE NODE CAN BE CREATED AND WIRED.
+ *
+ * SliceSelect = 7 landed in the engine, the graph could hold it, a project could save it and the
+ * palette offered it — and the sidecar refused `nodeType > 6` with a comment naming EventOut as
+ * the last type. So the node was reachable only by hand-editing JSON. Past that, `link` still
+ * answered "those two node types have no compatible ports", because the port table had no arm
+ * for it either. A node you can create and cannot connect is a node you cannot use.
+ *
+ * Both halves are asserted, because fixing one and not the other looks like a fix: the count
+ * would go up and nothing would ever reach the node.
+ */
+{
+  const was = await page.evaluate(() => window.__uni.patcher());
+  const ids = new Set(was.nodes.map((n) => n.id));
+  const said = await page.evaluate(() => window.__uni.run('addnode slice'));
+  const grew = await graphUntil((g) => g.nodes.some((n) => !ids.has(n.id)));
+  const slice = grew.nodes.find((n) => !ids.has(n.id));
+  ok(!!slice, 'a slice node can be created — the sidecar bound was stale at EventOut',
+     `${was.nodes.length} -> ${grew.nodes.length}; ${JSON.stringify(said).slice(-70)}`);
+  if (slice) {
+    // Events in, events out — it rewrites what passes through rather than producing anything,
+    // so it wires like a passthrough and a euclidean can feed it.
+    await page.evaluate(([a, b]) => window.__uni.run(`link ${a} ${b}`), [euclid.id, slice.id]);
+    const wired = await graphUntil((g) => g.edges.some((e) => e.dst === slice.id));
+    ok(wired.edges.some((e) => e.src === euclid.id && e.dst === slice.id),
+       'and wired to an event source — the port table had no arm for it, so `link` used to '
+       + 'answer "no compatible ports"',
+       JSON.stringify(wired.edges.filter((e) => e.dst === slice.id)));
+    await page.evaluate((id) => window.__uni.run(`delnode ${id}`), slice.id);
+    await graphUntil((g) => !g.nodes.some((n) => n.id === slice.id));
+  }
+}
 
 section('piano roll selection');
 await page.evaluate(() => { window.__uni.view('piano'); window.__uni.pianoAll(true); });
@@ -3685,7 +3757,7 @@ section('every insert says what it is putting out');
   const heard = await playUntilAudible();
   const playing = await page.evaluate(() => window.__uni.deviceMeters());
   const live = playing.find((m) => m.device === 0);
-  ok(live && live.outPeak > -6000 && live.outPeak < 0,
+  audibleOr(live && live.outPeak > -6000 && live.outPeak < 0 ? { ok: true } : heard,
      'and a real dBFS level while playing',
      // The whole picture when it did not sound: which plugin loaded, whether the transport ran,
      // and every meter — because "-32768" alone has told me nothing three times.
@@ -3787,13 +3859,23 @@ section('every insert says what it is putting out');
    */
   ok(silent.width === '0%', 'and with every voice cut, its level bar is empty',
      JSON.stringify(silent));
-  ok(parseInt(silent.tick, 10) < parseInt(loudEnough, 10) / 3,
+  /*
+   * `loudEnough` IS WHAT IT WAS PLAYING, so if it was never playing this comparison is between
+   * two zeros and passes by accident — or, at load, fails for a reason that is not the app.
+   * Both halves go through the starvation guard for that reason.
+   */
+  audibleOr(parseInt(loudEnough, 10) > 0
+              && parseInt(silent.tick, 10) < parseInt(loudEnough, 10) / 3
+              // `heard` is this section's own play attempt, taken above; a starved run failed
+              // there too, and that is what makes this one inconclusive rather than false.
+              ? { ok: true } : heard,
      'and its peak is far below what it was playing',
      `${silent.tick} against ${loudEnough} playing`);
 
-  await playUntilAudible();
+  const heardAgain = await playUntilAudible();
   const loud = await drawnFill();
-  ok(parseInt(loud.width, 10) > 0, 'and playing, it draws something again',
+  audibleOr(parseInt(loud.width, 10) > 0 ? { ok: true } : heardAgain,
+     'and playing, it draws something again',
      JSON.stringify(loud));
 
   /*
