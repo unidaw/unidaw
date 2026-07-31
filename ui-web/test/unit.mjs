@@ -3380,3 +3380,53 @@ test('the optimistic velocity and the settled one are formatted the same way', a
   assert.equal(velocityText(127), '7f', '127 is 7f, not "27"');
   assert.equal(velocityText(100), '64', '100 is 64, not "00"');
 });
+
+test("the sidecar's patcher node-type bound matches the engine's ceiling", async () => {
+  /*
+   * THE THIRD TIME A STALE BOUND HAS KILLED A COMMAND, and the second one found by writing a
+   * manual rather than by anything failing.
+   *
+   * `build_patcher_graph` refused `nodeType > 6` with a comment naming EventOut as the last
+   * type. SliceSelect = 7 landed, so the node became one the graph could hold, the project could
+   * save and the palette offered — and the ADD COMMAND WOULD NOT CREATE IT. Reachable only by
+   * hand-editing JSON. The engine hit the identical bound and answered it by adding
+   * `kPatcherNodeTypeMax` with the lesson written above it: a bound that names a member goes
+   * stale the next time the enum grows.
+   *
+   * So the sidecar's copy is held to that constant. The sibling of the slot-field bound check
+   * above, and written the same way for the same reason.
+   */
+  const hdr = readFileSync(new URL('../../apps/patcher_graph.h', import.meta.url), 'utf8');
+  const block = hdr.slice(hdr.indexOf('enum class PatcherNodeType'));
+  const ids = [...block.slice(0, block.indexOf('};')).matchAll(/^\s*([A-Z][A-Za-z]*)\s*=\s*(\d+)/gm)]
+    .map((m) => [m[1], Number(m[2])]).sort((a, b) => a[1] - b[1]);
+  assert.ok(ids.length > 5, `parsed PatcherNodeType: ${ids.length} types`);
+  const max = ids[ids.length - 1];
+
+  // The engine's own constant must still name the LAST member, or its ceiling has gone stale in
+  // the way its comment warns about — and this check would then be holding us to a stale number.
+  const named = hdr.match(/kPatcherNodeTypeMax\s*=\s*PatcherNodeType::([A-Za-z]+)/);
+  assert.ok(named, 'the engine declares kPatcherNodeTypeMax');
+  assert.equal(named[1], max[0],
+    `kPatcherNodeTypeMax names ${named[1]} and the enum's last member is ${max[0]}`);
+
+  const rust = readFileSync(new URL('../../ui/daw-sidecar/src/main.rs', import.meta.url), 'utf8');
+  const mine = rust.match(/const PATCHER_NODE_TYPE_MAX: u32 = (\d+);/);
+  assert.ok(mine, 'the sidecar declares PATCHER_NODE_TYPE_MAX');
+  assert.equal(Number(mine[1]), max[1],
+    `the sidecar accepts node types 0..${mine[1]} and the engine's last is ${max[0]} = ${max[1]}`
+    + ' — anything above the bound is refused on the way out and cannot be created at all');
+
+  /*
+   * ...AND EVERY TYPE HAS PORTS, which is the second half of the same failure: past the bound,
+   * `link` still answered "those two node types have no compatible ports" because `ports_for`
+   * had no arm for 7. A node you can create and cannot connect is a node you cannot use.
+   */
+  const table = rust.slice(rust.indexOf('fn ports_for'));
+  const arms = new Set([...table.slice(0, table.indexOf('\n}')).matchAll(/^\s*(\d+) =>/gm)]
+    .map((m) => Number(m[1])));
+  const missing = ids.map(([, v]) => v).filter((v) => !arms.has(v));
+  assert.deepEqual(missing, [],
+    `node types with no entry in ports_for: ${JSON.stringify(missing)} — they can be created `
+    + 'and never wired');
+});

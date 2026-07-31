@@ -85,6 +85,14 @@ const WIRE_VERSION: u16 = 27;
 /// name into its LOG, which from a browser is a command that reports success and does nothing.
 const SAMPLER_SLOT_NAME_BYTES: usize = 40;
 
+/// `kPatcherNodeTypeMax` (apps/patcher_graph.h) — the highest valid PatcherNodeType.
+///
+/// A NUMBER, not a member name. The engine's own header explains why: a bound written against
+/// whichever member happens to be last goes stale the next time the enum grows, and when it did,
+/// `AddPatcherNode` silently stopped being able to create the new type. Held equal to the C++
+/// constant by a ratchet in unit.mjs.
+const PATCHER_NODE_TYPE_MAX: u32 = 7;
+
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
 /// are likely, and multiplexing them onto this one socket is two bytes of header
@@ -2306,6 +2314,16 @@ fn ports_for(node_type: u32) -> &'static [(u32, u32, bool)] {
         5 => &[(0, EVENT, false), (1, EVENT, true)],
         // EventOut: a sink.
         6 => &[(0, EVENT, false)],
+        /*
+         * SliceSelect: events in, events out. It REWRITES what passes through — which sound a
+         * note plays — rather than producing anything, so it wires like Passthrough.
+         *
+         * Missing entirely until now, which is the second half of why the node was unreachable:
+         * even past the bound above, `link` answered "those two node types have no compatible
+         * ports" because this table said it had none. A node you can create and cannot connect
+         * is still a node you cannot use.
+         */
+        7 => &[(0, EVENT, false), (1, EVENT, true)],
         _ => &[],
     }
 }
@@ -2370,10 +2388,21 @@ fn build_patcher_graph(body: &str) -> Option<Result<UiPatcherGraphCommandPayload
         edge_kind: 0,
     };
     if add {
-        // PatcherNodeType::EventOut is the last one; the engine refuses past it
-        // and so does this, so a typo is answered on the socket rather than in a
-        // log the UI cannot see.
-        if p.node_type > 6 { return Some(Err("no such node type")); }
+        /*
+         * THE ENGINE'S OWN CEILING, and it went stale here exactly as it did there.
+         *
+         * This said `> 6` with a comment naming EventOut as the last type. SliceSelect = 7
+         * landed, and the node became one the graph could hold, the project could save, the
+         * palette offered — and the ADD COMMAND WOULD NOT CREATE. Reachable only by hand-editing
+         * JSON. Backend hit the identical bound on their side and left the lesson in
+         * patcher_graph.h: "a bound that names a member is a bound that goes stale the next time
+         * the enum grows", which is why they added kPatcherNodeTypeMax.
+         *
+         * Written as a named constant and held equal to that C++ value by a ratchet in unit.mjs,
+         * because the sidecar cannot read the header. Third time this shape has cost a command:
+         * the slot-field bound, this, and the ops-column signature.
+         */
+        if p.node_type > PATCHER_NODE_TYPE_MAX { return Some(Err("no such node type")); }
         p.command_type = UiCommandType::AddPatcherNode as u16;
     } else if del {
         p.command_type = UiCommandType::RemovePatcherNode as u16;
