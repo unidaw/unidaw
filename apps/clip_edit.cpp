@@ -26,15 +26,27 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
                              uint64_t spanEndNanotick,
                              std::optional<EventId> noteIdOverride,
                              uint16_t sound,
-                             uint16_t soundOffset) {
+                             uint16_t soundOffset,
+                             bool allowNoteOverlap) {
   const uint8_t column = static_cast<uint8_t>(flags & 0xffu);
   clip.removeChordAt(nanotick, column);
   clip.removeNoteAt(nanotick, column);
 
   // Cut-on-next, at edit time: whatever was sounding here (note or chord) now
   // ends here.
-  if (MusicalEvent* sounding = clip.soundingEventInColumn(nanotick, column)) {
-    MusicalClip::truncateEventTo(*sounding, nanotick);
+  //
+  // UNLESS THE LANE SAYS OTHERWISE. This truncate was unconditional, and it is the one edit in
+  // the tracker that DESTROYS DATA: it shortens the sounding note in the DOCUMENT, so the length
+  // the player typed is gone and no later view can recover it. With allowNoteOverlap the note is
+  // left exactly as authored and both ring — an arpeggiated chord, or an 808 under the next hit.
+  //
+  // NOTHING IN PLAYBACK CHANGED to make that work; the scheduler already honours overlapping
+  // durations in one column. Measured: two notes authored overlapping render at the power sum of
+  // their individual levels (5098 against 3674 and 3521), not at one of them.
+  if (!allowNoteOverlap) {
+    if (MusicalEvent* sounding = clip.soundingEventInColumn(nanotick, column)) {
+      MusicalClip::truncateEventTo(*sounding, nanotick);
+    }
   }
 
   // Resolve an unspecified length to what a tracker would have played.

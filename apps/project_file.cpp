@@ -672,6 +672,9 @@ std::string serializeProject(const ProjectDocument& document) {
     writer.key("collapsed", track.collapsed);
     writer.key("harmony_quantize", track.harmonyQuantize);
     writer.key("sound_addressed_only", track.soundAddressedOnly);
+    // Written unconditionally beside its sibling: a bool that is absent and a bool that is false
+    // must not be different documents, or "did anyone turn this on" stops being answerable.
+    writer.key("allow_note_overlap", track.allowNoteOverlap);
     writer.key("lines_per_beat", track.linesPerBeat);
     // M1.13 lane quantize. Written unconditionally, including when it is off, so a
     // file always states what the lane does rather than leaving it to a default the
@@ -992,6 +995,9 @@ bool deserializeProject(const std::string& json,
       track.collapsed = tree.get<bool>("collapsed", false);
       track.harmonyQuantize = tree.get<bool>("harmony_quantize", false);
       track.soundAddressedOnly = tree.get<bool>("sound_addressed_only", false);
+      // Absent means FALSE, which is what every project written before this existed means: cut
+      // on next entry, exactly as it behaved.
+      track.allowNoteOverlap = tree.get<bool>("allow_note_overlap", false);
       track.linesPerBeat = tree.get<uint32_t>("lines_per_beat", 4);
       if (track.linesPerBeat == 0) {
         track.linesPerBeat = 4;

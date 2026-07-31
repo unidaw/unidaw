@@ -162,6 +162,27 @@ struct ProjectTrack {
   // what the sampler contains — the same kit dragged onto a second track can be played the other
   // way without copying anything.
   bool soundAddressedOnly = false;
+  // CUT-ON-NEXT, OR LET IT RING (docs/TRACKER_GAP_LIST.md item 1). Off by default, so a project
+  // written before this existed behaves exactly as it did: entering a note over a sounding one in
+  // the same column TRUNCATES the sounding note.
+  //
+  // ON, the truncate is skipped and both notes keep their authored durations — an arpeggiated
+  // chord or a ringing 808 down one column. The scheduler already plays that correctly; measured
+  // over the overlap of two notes authored by hand, one alone is 3674 RMS and both together are
+  // 5098, which is their power sum. Nothing in playback had to change.
+  //
+  // IT IS A DECISION NOT TO DESTROY DATA, which is why it belongs here rather than in the UI.
+  // The old behaviour shortened the note IN THE DOCUMENT at entry, so the length the player
+  // actually typed was gone and no later view could recover it.
+  //
+  // PER TRACK, not per note: a lane is either one where notes ring into each other or one where
+  // they do not, and a per-note field for it would be 99% zeros.
+  //
+  // NOTE FOR ANYONE TESTING THIS: the sampler slot's own `nna` cuts the previous voice one layer
+  // down and defaults to 0 = Cut. With a default kit, turning this on changes the DOCUMENT and
+  // you still hear one note. Both have to say continue. That silent false negative is the whole
+  // reason this comment exists.
+  bool allowNoteOverlap = false;
   // M3.27: this track's automation. Playback existed since Movement 3 phase 1 and this
   // did NOT, so automation could be heard and never saved — record a sweep, hear it,
   // reload, and it was gone. Written only when non-empty, so a project without automation

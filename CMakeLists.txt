@@ -675,6 +675,14 @@ add_test(NAME sampler_loop
 )
 set_tests_properties(sampler_loop PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Entering a note over a sounding one no longer has to destroy it. The last property renders the
+# default-NNA case on purpose: turning the lane flag on and testing with a Cut slot sounds like no
+# change at all, which is the false negative this check exists to pin down.
+add_test(NAME note_overlap
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/note_overlap_check.sh
+)
+set_tests_properties(note_overlap PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A lane's subdivision is settable at last, and it is the LANE's — a one-track fixture cannot
 # tell "set the track I asked for" from "set all of them".
 add_test(NAME lines_per_beat

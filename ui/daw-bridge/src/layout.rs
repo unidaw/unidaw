@@ -1232,6 +1232,11 @@ pub enum UiCommandType {
     /// 1..=31 — the clip-grid packer gives it five bits — and out of range is REFUSED, since a
     /// 32 packs as a 0 and 0 is the packer's "no grid here" sentinel.
     SetTrackLinesPerBeat = 92,
+    /// Cut-on-next, or let it ring — per lane. Rides UiCommandPayload (trackId + value0).
+    /// addNoteToClip truncates the sounding note in the same column IN THE DOCUMENT, so the
+    /// duration the player typed is destroyed at entry. value0 1 skips that truncate. Nothing
+    /// in playback changes — the scheduler already honours overlapping durations.
+    SetTrackAllowNoteOverlap = 93,
 }
 
 /// Where a route points. Mirrors daw::TrackRouteKind.
@@ -1286,6 +1291,9 @@ pub const MIX_FLAG_HARMONY_QUANTIZE: u8 = 1 << 2;
 /// Bit 3: this track addresses its sampler by SOUND, not by pitch (opcode 87, section 8 Q2).
 /// Read-back only, like bit 2, and added without a kShmVersion bump for the same reason.
 pub const MIX_FLAG_SOUND_ADDRESSED: u8 = 1 << 3;
+/// uiTrackMixFlags bit 4: does entering a note over a sounding one in this column LET IT RING?
+/// Off truncates the sounding note IN THE DOCUMENT, which is the one edit here that loses data.
+pub const MIX_FLAG_ALLOW_NOTE_OVERLAP: u8 = 1 << 4;
 /// PreviewNote flags: bit0 set = note-on, clear = note-off.
 pub const PREVIEW_NOTE_FLAG_ON: u16 = 1 << 0;
 

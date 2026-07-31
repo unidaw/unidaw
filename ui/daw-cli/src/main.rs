@@ -91,6 +91,9 @@ daw-cli — control surface for a running engine
   daw-cli do position --nanotick T move the playhead
   daw-cli do loop --start T --end T set the loop range
   daw-cli do harmony-quantize --track N [--on 0|1]
+  daw-cli do note-overlap --track N [--on 0|1]
+                                   cut-on-next OFF: a note entered over a sounding one no longer
+                                   TRUNCATES it in the document. Off by default
   daw-cli do lines-per-beat --track N --lines M
                                    a lane's SUBDIVISION: tracker rows per beat, 1..31. Out of
                                    range is refused — the clip grid packs it in five bits
@@ -483,13 +486,19 @@ fn get_tracks(handle: &EngineHandle) -> i32 {
             .get(index)
             .copied()
             .unwrap_or(0);
+        // Whether an edit in this lane destroys the note above it. A UI that had to guess this
+        // could not tell the player whether the row they are about to type will shorten another.
+        let allow_note_overlap = mixers
+            .get(index)
+            .map(|m| m.flags & daw_bridge::layout::MIX_FLAG_ALLOW_NOTE_OVERLAP != 0)
+            .unwrap_or(false);
         let comma = if index + 1 == count { "" } else { "," };
         // M2.17: this track's OWN clip version — the base an edit to this track must
         // present. The global `clip_version` in `get transport` moves whenever ANY
         // track changes and is no longer the right base for a track-scoped edit.
         let clip_version = handle.clip_version_for_track(id);
         println!(
-            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"sound_addressed\": {sound_addressed}, \"collapsed\": {collapsed}, \"lines_per_beat\": {lines_per_beat}, \"ops_width\": {ops_width}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
+            "    {{ \"track_id\": {id}, \"name\": {name:?}, \"device\": {device:?}, \"master\": {is_master}, \"absent\": {is_absent}, \"harmony_quantize\": {harmony_q}, \"sound_addressed\": {sound_addressed}, \"collapsed\": {collapsed}, \"lines_per_beat\": {lines_per_beat}, \"allow_note_overlap\": {allow_note_overlap}, \"ops_width\": {ops_width}, \"clip_version\": {clip_version}, \"peak_rms\": {rms} }}{comma}"
         );
     }
     println!("  ]");
@@ -3837,6 +3846,27 @@ removed is the whole command");
                     match handle.send_command(payload) {
                         Ok(()) => {
                             println!("{{ \"sent\": \"lines-per-beat\", \"track\": {track}, \"lines\": {lines} }}");
+                            0
+                        }
+                        Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                    }
+                }
+                Some(&"note-overlap") => {
+                    // CUT-ON-NEXT, OR LET IT RING. The one setting here that decides whether an
+                    // EDIT loses data: off, entering a note over a sounding one truncates the
+                    // sounding note in the DOCUMENT and the typed length is gone for good.
+                    //
+                    // If you turn this on and hear no difference, check the sampler slot's `nna`
+                    // — it defaults to 0 (Cut) and cuts the previous voice one layer down, which
+                    // looks exactly like this flag not working.
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let on = flag_u64(&args, "--on", Some(1)).unwrap_or(1);
+                    let mut payload = track_structure_command(
+                        UiCommandType::SetTrackAllowNoteOverlap, track);
+                    payload.value0 = if on != 0 { 1 } else { 0 };
+                    match handle.send_command(payload) {
+                        Ok(()) => {
+                            println!("{{ \"sent\": \"note-overlap\", \"track\": {track}, \"on\": {on} }}");
                             0
                         }
                         Err(err) => { eprintln!("daw-cli: {err}"); 1 }

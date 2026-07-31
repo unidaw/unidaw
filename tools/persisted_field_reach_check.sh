@@ -90,12 +90,23 @@ TRACK = {
     "harmony_quantize":     "SetTrackHarmonyQuantize",
     "sound_addressed_only": "SetTrackSoundAddressed",
     "collapsed":            "SetTrackCollapsed",
+    "allow_note_overlap":   "SetTrackAllowNoteOverlap",
     "swing_milli":          "SetLaneQuantize",
     "strength_milli":       "SetLaneQuantize",
     "grid_nanoticks":       "EXEMPT:settable elsewhere — the per-clip grid rides UiClipExtent's "
                             "flags, not a track command (task #43 phase 2)",
-    "lines_per_beat":       "EXEMPT:legacy — superseded by the per-extent grid and on its way "
-                            "out (task #43). A new writer would entrench it",
+    # ⚠ CONTRADICTION, RAISED 2026-07-31 AND NOT RESOLVED HERE. This entry said "legacy —
+    # superseded by the per-extent grid and on its way out (task #43); A NEW WRITER WOULD ENTRENCH
+    # IT". A new writer landed the same day: SetTrackLinesPerBeat (92), asked for by the web-UI
+    # agent and justified by docs/per-lane-grids.md, whose item 2 calls a set-lane-subdivision
+    # command "the one new command needed" for a feature it describes as otherwise complete.
+    #
+    # Both documents are in this repo and they disagree about whether this field has a future.
+    # The command is written and tested; pointing it at the per-extent grid instead is a
+    # different change, not a smaller one. Left as it is, and flagged, because deciding which
+    # document is right is an owner's call and quietly deleting either one's premise is how a
+    # tree ends up with two half-migrations. See the bus thread.
+    "lines_per_beat":       "SetTrackLinesPerBeat",
     "parent_id":            "EXEMPT:derived — reconcileChildTracks computes the tree from the "
                             "host's aux mask; a writer would be a second truth about parentage",
     "is_aux_child":         "EXEMPT:derived — same, from lastAuxOutMask",

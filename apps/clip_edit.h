@@ -77,7 +77,17 @@ ClipEditResult addNoteToClip(MusicalClip& clip,
                              // slot from pitch, which is every row on an ordinary kit track.
                              // Non-zero names a slot explicitly, and pitch still means varispeed.
                              uint16_t sound = 0,
-                             uint16_t soundOffset = 0);
+                             uint16_t soundOffset = 0,
+                             // CUT-ON-NEXT, OR LET IT RING (opcode 93, per lane). Defaults to
+                             // FALSE = truncate, which is what every existing caller and every
+                             // existing project means, so this parameter changes nothing until
+                             // something asks for it.
+                             //
+                             // The truncate is the one edit here that DESTROYS DATA — it shortens
+                             // the sounding note in the document, so the length that was typed is
+                             // unrecoverable. Passing true skips it and leaves both notes as
+                             // authored; playback already handles the overlap.
+                             bool allowNoteOverlap = false);
 
 // An OFF gesture. Stores nothing: it ends the note sounding in `column` at
 // `nanotick`. Returns nullopt when nothing was sounding there.

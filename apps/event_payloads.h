@@ -421,7 +421,18 @@ enum class UiCommandType : uint16_t {
   /// and honoured by the tracker's per-lane grid since v10, and NOTHING could set it. A project
   /// could carry a 3-rows-per-beat lane against a 4 elsewhere and the app drew both correctly —
   /// while no surface could make one. The last piece of per-lane grids, and it is one command.
-  SetTrackLinesPerBeat = 92,  // next free 93
+  SetTrackLinesPerBeat = 92,
+
+  /// CUT-ON-NEXT, OR LET IT RING — per lane (docs/TRACKER_GAP_LIST.md item 1).
+  ///
+  /// `addNoteToClip` truncates the sounding note in the same column UNCONDITIONALLY, in the
+  /// DOCUMENT, so the duration the player typed is destroyed at entry and no later view can
+  /// recover it. This is the only setting in the tracker that decides whether an edit loses data.
+  ///
+  /// Rides UiCommandPayload: `value0` 0 = truncate (today's behaviour and the default),
+  /// 1 = leave the sounding note alone. Nothing in playback changes — the scheduler already
+  /// honours overlapping durations.
+  SetTrackAllowNoteOverlap = 93,  // next free 94
 };
 
 // SET TRACK LINES PER BEAT (opcode 92) RIDES UiCommandPayload — `trackId`, and the subdivision in
@@ -1025,6 +1036,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SamplerSetSlotName: return "sampler_set_slot_name";
     case UiCommandType::SamplerSetVintage: return "sampler_set_vintage";
     case UiCommandType::SetTrackLinesPerBeat: return "set_track_lines_per_beat";
+    case UiCommandType::SetTrackAllowNoteOverlap: return "set_track_allow_note_overlap";
     case UiCommandType::Redo: return "redo";
     case UiCommandType::SetLoopRange: return "set_loop_range";
     case UiCommandType::SetAutomationTarget: return "set_automation_target";

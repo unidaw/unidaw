@@ -397,6 +397,20 @@ constexpr uint8_t kUiMixFlagHarmonyQuantize = 1u << 2;
 // (ea6b7e7), which also did not bump.
 constexpr uint8_t kUiMixFlagSoundAddressed = 1u << 3;
 
+// uiTrackMixFlags bit 4: does entering a note over a sounding one in this column LET IT RING?
+//
+// Off is the default and is what every project written before this existed means: the sounding
+// note is TRUNCATED IN THE DOCUMENT at entry, so the length that was typed is destroyed and no
+// later view can recover it. On skips that truncate, which is the whole feature — the scheduler
+// already plays overlapping durations correctly.
+//
+// Published for the same reason bits 2 and 3 are, and it matters more than either: this one is
+// about whether an edit DESTROYS DATA, so a UI that had to guess would be unable to tell the
+// player whether the note they are about to type will shorten the one above it.
+//
+// NO kShmVersion BUMP — a spare bit in a byte that already exists, the same call as bits 2 and 3.
+constexpr uint8_t kUiMixFlagAllowNoteOverlap = 1u << 4;
+
 struct alignas(64) RingHeader {
   uint32_t capacity = 0;
   uint32_t entrySize = 0;

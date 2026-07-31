@@ -13,7 +13,26 @@ Ordered by value-per-cost. Costs are what it costs *here*, in this tree.
 ### 1. Stop truncating the note above (NNA as a playback rule), + past-note ops
 **Gesture:** an arpeggiated chord or a ringing 808 down one column, where each new note lets the last one keep sounding — and a later row that says "now stop."
 **Cost here: trivial for the half that matters.** `addNoteToClip` calls `MusicalClip::truncateEventTo` unconditionally, four lines commented *"Cut-on-next, at edit time"* (`apps/clip_edit.cpp:33-36`). It shortens the stored note **in the document**, so the decision is destroyed at entry and cannot be revisited. Overlapping notes in one column already play correctly — the scheduler honours explicit durations and `runtime.activeNotes` is keyed on the voice id, not the column — so `NNA=Continue` is almost entirely *a decision not to destroy data*: a per-lane policy that skips the truncate. Past-note reach already exists as a lambda (`cutActiveNoteInColumn`, `apps/daw_engine_main.cpp:12618`); it is simply not reachable from a row. `NoteFade` and background-voice stealing priority need the voice pool and wait for S1.
-**Do this first.** It is the only item on the list that is currently *losing work*.
+~~**Do this first.** It is the only item on the list that is currently *losing work*.~~
+✅ **BUILT 2026-07-31 — the edit half. `SetTrackAllowNoteOverlap = 93`, per lane, OFF by default,
+so every existing project truncates exactly as it did.** On, `addNoteToClip` skips the truncate
+and both notes keep the durations they were given. Read-back is `uiTrackMixFlags` bit 4 (no
+`kShmVersion` bump — a spare bit in a byte that already exists), published as `allow_note_overlap`
+in `daw-cli get tracks`; CLI verb `do note-overlap --track N [--on 0|1]`.
+
+Nothing in playback changed, exactly as this item predicted. Verified by
+`tools/note_overlap_check.sh` (ctest `note_overlap`), whose payoff property is that the overlap
+renders as the **power sum** of the two notes played alone (3340 and 3201 → 4634, against a
+predicted 4626) — asserting merely "louder than either" would pass on a render where only the
+louder one survived. Three negative controls: always truncating, not storing the flag, and a load
+that drops it.
+
+**Still open, and it is the other half of the original title:** `NNA` as a *playback* rule. What
+shipped is the per-lane EDIT policy — the decision not to destroy the duration. The sampler's
+per-slot `nna` already decides whether the voice rings, and the two are independent. Whether the
+lane should also be able to say "continue" *at the voice level*, overriding or defaulting the
+slot, is a real question and was not answered here. `NoteFade` and background-voice stealing
+priority are still unbuilt.
 
 **[MEASURED 2026-07-31 — the claim above is CONFIRMED, and there is a trap in testing it.]** Two
 notes authored overlapping in one column (written straight into `project.json`, bypassing

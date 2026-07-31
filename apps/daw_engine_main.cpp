@@ -2334,6 +2334,12 @@ struct TrackRuntime {
     // Per-lane tracker subdivision (Mock B grids); published so the UI builds a
     // LaneGrid per track. The engine doesn't use it — timing is grid-independent.
     std::atomic<uint32_t> linesPerBeat{4};
+    // CUT-ON-NEXT, OR LET IT RING. An ATOMIC and the only live copy, for the same reason
+    // linesPerBeat is one: it is read by the EDIT path (command thread, which does not hold this
+    // track's mutex there) and by the publisher (UI thread, every frame). Putting it on Track
+    // beside soundAddressedOnly would need the mutex in both, and a second copy of one setting is
+    // how the mod links were silently lost. Track carries the field only as the SAVE's carrier.
+    std::atomic<bool> allowNoteOverlap{false};
     // M1.13 lane quantize, held as atomics for the same reason linesPerBeat is: the UI
     // publish runs every frame and must not take this track's mutex to read three
     // numbers. These are the ONLY copy — Track deliberately does not also hold one,
@@ -2704,6 +2710,7 @@ struct TrackRuntime {
     rt.quantizeStrength.store(0, std::memory_order_release);
     rt.quantizeSwing.store(0, std::memory_order_release);
     rt.linesPerBeat.store(4, std::memory_order_relaxed);
+    rt.allowNoteOverlap.store(false, std::memory_order_relaxed);
   };
 
   // What was AUTHORED ON A STEM, parked between the load and the derivation.
@@ -6591,6 +6598,7 @@ struct TrackRuntime {
       track.parentId = runtime->parentId.load(std::memory_order_relaxed);
       track.collapsed = runtime->collapsed.load(std::memory_order_relaxed);
       track.linesPerBeat = runtime->linesPerBeat.load(std::memory_order_relaxed);
+      track.allowNoteOverlap = runtime->allowNoteOverlap.load(std::memory_order_relaxed);
       daw::MusicalClip trackClip;
       std::vector<daw::ProjectPlacement> trackPlacements;
       std::vector<daw::ProjectClip> trackOwnedClips;
@@ -7653,6 +7661,7 @@ struct TrackRuntime {
         runtime->linesPerBeat.store(
             source.linesPerBeat == 0 ? 4u : source.linesPerBeat,
             std::memory_order_relaxed);
+        runtime->allowNoteOverlap.store(source.allowNoteOverlap, std::memory_order_relaxed);
         // snapshot already built by rebuildFlatAndPublish above.
       }
       std::atomic_store_explicit(&runtime->clipSnapshot,
@@ -8205,11 +8214,11 @@ struct TrackRuntime {
             noOp = true;
           }
         } else {
-          result = daw::addNoteToClip(clip, trackId, target.relTick, duration,
-                                      pitch, velocity, flags,
-                                      runtime->trackClipVersion,
-                                      recordUndo, relSpanEnd, noteIdOverride,
-                                      sound, soundOffset);
+          result = daw::addNoteToClip(
+              clip, trackId, target.relTick, duration, pitch, velocity, flags,
+              runtime->trackClipVersion, recordUndo, relSpanEnd, noteIdOverride,
+              sound, soundOffset,
+              runtime->allowNoteOverlap.load(std::memory_order_relaxed));
         }
         if (result) {
           // HOW MANY APPEARANCES THIS EDIT REACHED. A clip is CONTENT and a placement is an
@@ -14442,6 +14451,31 @@ struct TrackRuntime {
           .field("track", payload.trackId)
           .field("lines", payload.value0);
     } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::SetTrackAllowNoteOverlap)) {
+      // THE ONLY SETTING IN THE TRACKER THAT DECIDES WHETHER AN EDIT LOSES DATA. Off, entering a
+      // note over a sounding one truncates the sounding note IN THE DOCUMENT. On, it is left
+      // alone and both keep the durations they were given.
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId < tracks.size()) {
+          runtime = tracks[payload.trackId].get();
+        }
+      }
+      if (!runtime) {
+        DAW_EVENT("track.allow_note_overlap_rejected")
+            .field("track", payload.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      // No snapshot rebuild: this changes how notes are ENTERED, not how they are dispatched, so
+      // nothing the RT plays depends on it. The next edit reads the atomic directly.
+      const bool allow = payload.value0 != 0;
+      runtime->allowNoteOverlap.store(allow, std::memory_order_relaxed);
+      DAW_EVENT("track.allow_note_overlap")
+          .field("track", payload.trackId)
+          .field("allow", allow);
+    } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetLaneQuantize)) {
       TrackRuntime* runtime = nullptr;
       {
@@ -18584,6 +18618,12 @@ struct TrackRuntime {
               if (rt->track.soundAddressedOnly) {
                 flags |= daw::kUiMixFlagSoundAddressed;
               }
+            }
+            // OUTSIDE THE LOCK, deliberately: this one is an atomic and the atomic is the only
+            // live copy, so taking the track mutex to read it would be borrowing a lock for a
+            // load that does not need one — and would suggest, wrongly, that Track holds it.
+            if (rt->allowNoteOverlap.load(std::memory_order_relaxed)) {
+              flags |= daw::kUiMixFlagAllowNoteOverlap;
             }
           }
           if (gainMb != lastGainMillibels[i] || panTh != lastPanThousandths[i] ||
