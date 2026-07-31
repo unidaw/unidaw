@@ -8,43 +8,31 @@
 #                  Nothing in the sampler may depend on wall-clock, thread interleaving, or
 #                  anything else that is not the document — so a bounce equals a bounce.
 #
-#   BLOCK-SIZE     rendering at 64, 256 and 1024 frames must not DRIFT and must not DROP OUT.
-#   INDEPENDENT    Asserted here as an energy-envelope match rather than as bit-identity,
-#                  because bit-identity across block sizes is blocked by a PRE-EXISTING defect
-#                  in the shared note scheduler, not by the sampler. Measured divergence:
-#                  64 vs 256 and 64 vs 1024 at frame 7352, 256 vs 1024 at frame 25201.
+#   BLOCK-SIZE     rendering at 64, 256 and 1024 frames is BIT-IDENTICAL over the common
+#   INDEPENDENT    length. The block grid is a property of the audio device, not of the music,
+#                  so it must not be audible in the result.
 #
-#                  THIS PARAGRAPH USED TO NAME THE WRONG FIX, and the correction is worth more
-#                  than the original claim. It said the cure was tickConverter.
-#                  nanoticksToSamplesAbsolute() — the M3.22 lesson ("positions are ABSOLUTE,
-#                  integrated over the tempo map") applied to the note scheduler. That was tried.
-#                  Rewriting tickDeltaToSamples to return the difference of two absolute
-#                  positions changed every render's audio (170k-250k bytes) and moved the
-#                  divergence frames by exactly ZERO: still 7352, 7352, 25201. It was reverted.
+#                  THIS WAS A KNOWN LIMITATION UNTIL 2026-07-31, and how it ended is worth as
+#                  much as the fix. The header used to carry a careful paragraph explaining why
+#                  the renders differed — accurate, and completely inert, because nothing checks
+#                  a comment. It was rewritten as an ASSERTION that the renders DIFFER, with
+#                  instructions for the day it failed. It failed on the next commit, printed the
+#                  instructions, and this is them carried out.
 #
-#                  The real cause is a BASE mismatch, not a delta one. A note's frame is
-#                  blockSampleStart + offset. blockSampleStart is an exact counter, blockSize *
-#                  (blockId - 1). The offset is measured from blockStartTicks, which the producer
-#                  advances by adding samplesToNanoticks(blockSize) — a value ROUNDED to a whole
-#                  nanotick every block. At 120 bpm / 44.1 kHz a 256-frame block is 11145.9 ticks
-#                  and a 64-frame block is 2786.48, so the two grids accumulate rounding error at
-#                  different rates and the tick position slides against the sample counter by
-#                  about 1.3 samples per 7000 frames at 64 frames. Rewriting the delta cannot
-#                  help, because both formulations measure from the same drifting base.
+#                  THE CAUSE, for anyone who meets it again elsewhere: a note's frame is
+#                  blockSampleStart + an offset measured from blockStartTicks. blockSampleStart
+#                  was an exact counter and blockStartTicks was advanced by adding a value ROUNDED
+#                  to a whole nanotick every block. A block is not a whole number of ticks — at
+#                  120 bpm / 44.1 kHz a 256-frame block is 11145.898 and a 64-frame block is
+#                  2786.48 — so the two grids accumulated rounding error at DIFFERENT rates and
+#                  the tick slid against the sample counter by about 1.3 samples per 7000 frames
+#                  at 64 frames. The transport now carries the fraction, which bounds the error
+#                  below one nanotick forever instead of letting it grow.
 #
-#                  The fix is to stop keeping the position as two facts that disagree: either
-#                  carry the fractional remainder when advancing the transport, or derive
-#                  blockSampleStart from the tick rather than counting it. Both touch the
-#                  engine's master clock, so neither is a drive-by. Tracked as task #84.
-#
-#                  AND THE LIMITATION IS ASSERTED, not merely described. The paragraph above is
-#                  a comment, and a comment goes stale in silence — it would still be here,
-#                  confidently wrong, a year after someone fixed the clock. So the check below
-#                  asserts that the renders are NOT bit-identical: the day that stops being true
-#                  the check fails and says so, which is the only way a known limitation ever
-#                  gets its documentation updated. Borrowed from the web-UI agent, who wrote
-#                  their side of three gaps as failing-when-fixed checks and had all three fire
-#                  on the merge that fixed them.
+#                  An EARLIER attempt rewrote the note OFFSET to use absolute tempo-integrated
+#                  positions. It changed every render's audio and moved the divergence by exactly
+#                  zero, because both formulations measured from the same drifting base. Fixing
+#                  the delta cannot fix a broken base.
 #
 # THE SAMPLER'S OWN INVARIANCE IS ALREADY PROVEN BIT-EXACTLY, in sampler_voice_tests: one voice
 # rendered at 64/256/1024 is byte-for-byte equal. That test failed on its first run against a
@@ -193,78 +181,30 @@ if len(a) != len(b) or a != b:
 print("  reproducible: two renders at 256 frames are bit-identical (%d bytes)" % len(a))
 PYR
 
-# ---- THE LIMITATION ITSELF, asserted so it cannot go stale. See the header: block sizes do not
-# render bit-identically because the transport tick and the sample counter drift apart. If this
-# assertion ever FAILS, that is good news and the work is: delete this block, delete the
-# paragraph in the header, and restore the bit-identical comparison the energy curves below
-# stand in for.
-python3 - "$TMP/b256.wav" "$TMP/b1024.wav" <<'PYL'
+# ---- BLOCK-SIZE INDEPENDENT, BYTE FOR BYTE. The strongest form, and what §3.5 asked for all
+# along. Compared over the COMMON length because --run-seconds gives each block size a slightly
+# different total block count; the audio inside it must match exactly.
+#
+# Not an energy curve, not a tolerance. A one-sample shift is inaudible and is still a render
+# that depends on the device buffer, which is the thing being ruled out.
+identical() {  # identical <a> <b>
+  python3 - "$TMP/$1.wav" "$TMP/$2.wav" "$1" "$2" <<'PYI'
 import sys, wave
 def data(p):
     w = wave.open(p, 'rb'); d = w.readframes(w.getnframes()); w.close(); return d
 a, b = data(sys.argv[1]), data(sys.argv[2])
 n = min(len(a), len(b))
-raise SystemExit(0 if a[:n] != b[:n] else 1)
-PYL
-if [ $? -ne 0 ]; then
-  echo "  NOTE: renders at 256 and 1024 frames are now BIT-IDENTICAL over their common length."
-  echo "        Task #84 is fixed. Delete this block and the header paragraph about it, and"
-  echo "        replace the energy-curve comparison below with a byte-for-byte one."
-  exit 1
-fi
-echo "  known limitation still present: 256 and 1024 frames differ (task #84)"
-
-# ---- NO DRIFT, NO DROPOUTS across block sizes.
-#
-# Compared as a CUMULATIVE ENERGY CURVE rather than as a sample-by-sample or window-by-window
-# difference, because the statistic has to answer the question actually being asked and no other.
-#
-# A per-window comparison fails on things that do not matter: a note's ATTACK measured across a
-# 10 ms window moves a lot when the onset shifts by one sample, and a one-sample onset shift is
-# the known, tracked, musically irrelevant issue described in the header. Tuning a threshold
-# until that passes is how a check ends up verifying nothing.
-#
-# A cumulative curve answers the right question directly. If a note is DROPPED, the curve gains a
-# permanent gap. If timing DRIFTS, the curves separate and stay separated. If a voice is never
-# freed, the curve grows faster. If the onset merely moves by a sample, the curves touch again
-# immediately and the maximum separation stays tiny. So: maximum separation, as a fraction of the
-# render's total energy.
-curve_cmp() {  # curve_cmp <a> <b> <label>
-  python3 - "$TMP/$1.wav" "$TMP/$2.wav" "$3" <<'PYE'
-import sys, wave, struct
-def cum(p):
-    w = wave.open(p, 'rb')
-    ch, n = w.getnchannels(), w.getnframes()
-    s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
-    out, acc = [], 0.0
-    for i in range(n):
-        v = s[i * ch]
-        acc += float(v) * float(v)
-        out.append(acc)
-    return out
-a, b = cum(sys.argv[1]), cum(sys.argv[2])
-n = min(len(a), len(b))
-total = max(a[n - 1], b[n - 1], 1.0)
-worst, at = 0.0, 0
-for i in range(0, n, 16):
-    d = abs(a[i] - b[i])
-    if d > worst:
-        worst, at = d, i
-pct = 100.0 * worst / total
-if pct > 0.5:
-    print("  %s: energy curves separate by %.3f%% of total at frame %d" % (sys.argv[3], pct, at))
+if a[:n] != b[:n]:
+    first = next(i for i in range(n) if a[i] != b[i])
+    print("  DIFFER: %s vs %s at byte %d of %d" % (sys.argv[3], sys.argv[4], first, n))
     raise SystemExit(1)
-print("  %s: energy curves stay within %.4f%% of total" % (sys.argv[3], pct))
-PYE
+print("  %s vs %s: identical over %d bytes" % (sys.argv[3], sys.argv[4], n))
+PYI
 }
+identical b64 b256 || fail "renders at 64 and 256 frames differ. The block grid belongs to the
+        audio device, not to the music — if it is audible in the result, a bounce depends on the
+        buffer size that happened to be set when it was made"
+identical b64 b1024 || fail "renders at 64 and 1024 frames differ"
+identical b256 b1024 || fail "renders at 256 and 1024 frames differ"
 
-curve_cmp b64 b256 "64 vs 256 frames" || \
-  fail "renders at 64 and 256 frames DRIFT or DROP OUT. A cumulative energy curve only separates
-        permanently when a note is lost, a voice is never freed, or timing genuinely moves — a
-        one-sample onset shift closes again immediately. Something larger is wrong"
-curve_cmp b64 b1024 "64 vs 1024 frames" || \
-  fail "renders at 64 and 1024 frames drift or drop out — see the note above"
-curve_cmp b256 b1024 "256 vs 1024 frames" || \
-  fail "renders at 256 and 1024 frames drift or drop out — see the note above"
-
-echo "sampler_determinism_check: PASS — reproducible, and stable across buffer sizes"
+echo "sampler_determinism_check: PASS — reproducible, and BIT-IDENTICAL across buffer sizes"

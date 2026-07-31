@@ -257,6 +257,20 @@ class NanotickConverter {
     return samplesToNanoticks(samples, 0);
   }
 
+  // The same conversion WITHOUT the rounding, for a caller that carries the remainder itself.
+  //
+  // samplesToNanoticks rounds to a whole nanotick, which is right for a one-off question and
+  // wrong for a counter: adding a rounded value once per block accumulates error, and at
+  // 120 bpm / 44.1 kHz a 256-frame block is 11145.898 ticks while a 64-frame block is 2786.48,
+  // so two block sizes drift apart at DIFFERENT rates. That is what made a render depend on the
+  // block size it was rendered at.
+  long double samplesToNanoticksExact(int64_t samples, uint64_t atNanotick) const {
+    const long double bpm = tempoProvider_.bpmAtNanotick(atNanotick);
+    return (static_cast<long double>(samples) * bpm *
+            static_cast<long double>(kNanoticksPerQuarter)) /
+           (static_cast<long double>(sampleRate_) * 60.0L);
+  }
+
   uint64_t samplesToNanoticks(int64_t samples, uint64_t atNanotick) const {
     const long double bpm = tempoProvider_.bpmAtNanotick(atNanotick);
     const long double ticksPerQuarter =
