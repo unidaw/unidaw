@@ -164,25 +164,53 @@ export async function startStack({ base = 0, shm = '', keepDir = false,
    * occasionally deliberate (bisecting an old engine against new tests is a real thing to do),
    * and a suite that refuses to run is worse than one that tells you what it is running.
    */
-  const contract = ['apps/shared_memory.h', 'apps/event_payloads.h',
-                    'ui/daw-bridge/src/layout.rs', 'ui/daw-sidecar/src/main.rs'];
-  let newestSrc = 0, newestName = '';
-  for (const f of contract) {
-    const p2 = bin(f);
-    if (!existsSync(p2)) continue;
-    const t = statSync(p2).mtimeMs;
-    if (t > newestSrc) { newestSrc = t; newestName = f; }
-  }
-  for (const [p2, what] of [[engineBin, 'daw_engine'], [hostBin, 'juce_host_process'],
-                            [sidecarBin, 'daw-sidecar']]) {
-    if (!existsSync(p2)) continue;
-    const age = statSync(p2).mtimeMs;
-    if (newestSrc > age) {
-      const mins = Math.round((newestSrc - age) / 60000);
-      console.warn(`stack: ${what} is ${mins} min older than ${newestName} — `
-                   + 'it may not know about a field the other side is sending. '
-                   + 'Rebuild BOTH: cmake --build build --target daw_engine juce_host_process '
-                   + '&& cargo build --release --manifest-path ui/Cargo.toml');
+  /*
+   * PER-LANGUAGE PARTITIONS, each binary against the sources it is actually built from.
+   *
+   * The first version compared every binary against the newest of ALL the contract files, and
+   * backend caught the defect in their copy of it: that marks a binary stale for an edit its own
+   * build cannot clear. Mine had the mirror of the same bug — a Rust-only edit marked
+   * `daw_engine` stale, and cmake will never rebuild the engine for a change to main.rs, so it
+   * sat permanently red. A guard that cannot be made green gets ignored exactly like one that
+   * fires constantly, which is the failure mode both versions were reaching for.
+   *
+   * (Their specific case — cargo unable to clear a C++ edit — does not apply here: bindgen's
+   * build script watches the headers, so `cargo build` genuinely relinks. Verified rather than
+   * assumed, by touching a header and watching the binary's mtime move.)
+   *
+   * The cross-language case still lands, because a real contract change touches both mirrors:
+   * shared_memory.h and layout.rs move together or the wire is already broken.
+   */
+  const PARTITIONS = [
+    { srcs: ['apps/shared_memory.h', 'apps/event_payloads.h'],
+      bins: [[engineBin, 'daw_engine'], [hostBin, 'juce_host_process']],
+      fix: 'cmake --build build --target daw_engine juce_host_process -j 8' },
+    { srcs: ['ui/daw-bridge/src/layout.rs', 'ui/daw-sidecar/src/main.rs'],
+      bins: [[sidecarBin, 'daw-sidecar']],
+      fix: 'cargo build --release --manifest-path ui/Cargo.toml' },
+  ];
+  for (const part of PARTITIONS) {
+    let newest = 0, newestName = '';
+    for (const f of part.srcs) {
+      const p2 = bin(f);
+      if (!existsSync(p2)) continue;
+      const t = statSync(p2).mtimeMs;
+      if (t > newest) { newest = t; newestName = f; }
+    }
+    for (const [p2, what] of part.bins) {
+      if (!existsSync(p2) || !newest) continue;
+      const age = statSync(p2).mtimeMs;
+      if (newest <= age) continue;
+      const mins = Math.round((newest - age) / 60000);
+      /*
+       * A BROKEN BUILD LOOKS EXACTLY LIKE A SKIPPED ONE, which backend hit and which is the
+       * stronger case for this check than the one it was written for: a target that fails to
+       * compile leaves its previous binary in place, and that binary keeps passing every test.
+       * Four hours of green on a host that had not built since.
+       */
+      console.warn(`stack: ${what} is ${mins} min older than ${newestName} — it may not know `
+                   + 'about a field the other side is sending, and a target that FAILED to build '
+                   + `leaves its old binary in place and passing. Rebuild: ${part.fix}`);
     }
   }
 
