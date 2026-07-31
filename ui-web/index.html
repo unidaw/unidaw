@@ -730,6 +730,17 @@ function describeEngineEvent(e) {
    * and it should re-read it; "bad value" means retrying the same command will never work. A
    * single "rejected" would have told you only that you were wrong.
    */
+  /*
+   * A PATCHER PRESET WAS WRITTEN, OR WAS NOT (UiDiffType::PresetSaved).
+   *
+   * The whole reason this command is reachable at all: without a result there is no honest
+   * button, only one that reports the message left. It echoes the NAME the caller sent, so a
+   * reply can be matched to the request rather than assumed to be the latest one.
+   */
+  if (e.kind === 'preset-saved') {
+    return e.ok ? `patcher preset "${e.name}" written`
+                : `patcher preset "${e.name}" was NOT written — the engine refused it`;
+  }
   if (e.kind === 'sampler-rejected') {
     const at = `t${e.track} dev${e.device}`;
     switch (e.reason) {
@@ -3375,6 +3386,51 @@ const dockApi = {
    * this opcode, and toggling the bit in a mixer command would be a control that appears to work
    * and changes nothing.
    */
+  /**
+   * SAVE THE PATCHER GRAPH AS A PRESET (opcode 29).
+   *
+   * Recorded on this side as unreachable because "no way to know whether the file was written,
+   * so the button would lie". That was true when it was written — daw-cli reads the path off
+   * the engine's stderr and a browser cannot — and stopped being true when backend added
+   * `UiPresetSavedPayload`. The note was never re-checked, so a command that could have been
+   * wired for a while stayed out on the strength of a reason that had expired.
+   *
+   * The RESULT arrives on the diff channel and `describeEngineEvent` words it, so the console
+   * says whether the file was written rather than that the message was sent.
+   */
+  savePatch: (name) => {
+    const n = String(name || '').trim();
+    if (!n) { state.reject = 'save-patch needs a name'; schedule(); return false; }
+    if (n.length > 28) { state.reject = 'that preset name is longer than the 28 bytes the '
+                                      + 'command carries'; schedule(); return false; }
+    if (!conn || !conn.send({ type: 'savepatch', name: n })) {
+      state.reject = 'no engine'; schedule(); return false;
+    }
+    state.reject = null; schedule(); return true;
+  },
+  /**
+   * SET A LANE'S SUBDIVISION (opcode 92) — how many tracker rows one beat is divided into.
+   *
+   * The last piece of per-lane grids: the value has been published and honoured since v10 and
+   * nothing could write it, so a polyrhythmic project could be LOADED and never MADE.
+   *
+   * The range is checked here as well as in the engine, which is normally a second copy of
+   * someone else's rule and earns its place for the usual reason — the engine's refusal is a log
+   * event, so from a browser an out-of-range value would report success and do nothing. Both
+   * ends are refused rather than clamped, and for different reasons: 32 packs as 0 in the grid's
+   * five-bit field, and 0 is that packer's sentinel for "no grid at all".
+   */
+  linesPerBeat: (t, n) => {
+    const v = Number(n);
+    if (!(v >= 1 && v <= 31)) {
+      state.reject = 'lines per beat is 1..31'; schedule(); return false;
+    }
+    if (t < 0 || t >= state.tracks) { state.reject = 'no such track'; schedule(); return false; }
+    if (!conn || !conn.send({ type: 'linesperbeat', track: Number(t), lpb: v })) {
+      state.reject = 'no engine'; schedule(); return false;
+    }
+    state.reject = null; schedule(); return true;
+  },
   harmonyQuantize: (t, on) => {
     if (t < 0 || t >= state.tracks) { state.reject = 'no such track'; schedule(); return false; }
     const now = harmonyQuantizeOf(t);
@@ -3483,7 +3539,15 @@ const dockApi = {
                             notes: engine.noteCount, tracks: engine.trackCount,
                             clipVersion: engine.clipVersion, stale: engine.stale,
                             automationVersion: engine.automationVersion | 0,
-                            samplerKitVersion: engine.samplerKitVersion | 0 } : null),
+                            samplerKitVersion: engine.samplerKitVersion | 0,
+                            /*
+                             * PER-LANE SUBDIVISIONS. A property of what the tracker's ROWS MEAN
+                             * on each track, published since v10 and drawn in the header — and
+                             * absent from this projection, so a script could see the number on
+                             * screen and not ask for it. Sliced to the live track count so it
+                             * does not report 64 lanes for a six-track song.
+                             */
+                            lpb: Array.from(engine.lpb.slice(0, engine.trackCount)) } : null),
   close: () => { state.focus = 'centre'; schedule(); },
   // Everything the keyboard can do, the console can do — otherwise "one grammar
   // that drives every surface" is only true of the parts I remembered.
@@ -4258,6 +4322,32 @@ function buildHead() {
      * — and then open a confirm on top of it.
      */
     if (e.target.closest('.hadd')) { e.preventDefault(); addTrack(); return; }
+    /*
+     * THE LANE'S GRID READOUT IS THE CONTROL (opcode 92).
+     *
+     * The header has drawn `4/b` since per-lane grids landed and it was a label. Clicking it
+     * cycles the musically useful subdivisions rather than stepping 1..31: 4 is straight, 3 and
+     * 6 are triplet feels, 8 and 12 are the same one row finer, and nobody wants to press this
+     * eleven times to get from 4 to 16. The console's `lpb <track> <n>` reaches the rest.
+     *
+     * Shift goes backwards, like every other cycling control here.
+     */
+    const grid = e.target.closest('.hlpb');
+    if (grid) {
+      e.preventDefault();
+      const t = Number(grid.parentElement.dataset.track);
+      if (Number.isFinite(t)) {
+        const STEPS = [1, 2, 3, 4, 6, 8, 12, 16];
+        const now = engine && engine.lpb ? engine.lpb[t] : 4;
+        const at = STEPS.indexOf(now);
+        // An unlisted value (a project may carry any of 1..31) steps to the nearest listed one
+        // ABOVE it rather than jumping to the start of the cycle.
+        const next = at < 0 ? (STEPS.find((x) => x > now) || STEPS[0])
+          : STEPS[(at + (e.shiftKey ? STEPS.length - 1 : 1)) % STEPS.length];
+        dockApi.linesPerBeat(t, next);
+      }
+      return;
+    }
     const hq = e.target.closest('.hhq');
     if (hq) {
       e.preventDefault();
@@ -8464,6 +8554,8 @@ window.__uni = {
   /** Collapse/expand a parent's children, and what is folded right now. */
   fold: (t) => dockApi.fold(t),
   harmonyQuantize: (t, on) => dockApi.harmonyQuantize(t, on),
+  savePatch: (n) => dockApi.savePatch(n),
+  linesPerBeat: (t, n) => dockApi.linesPerBeat(t, n),
   /** Per track, whether it quantizes to the harmony timeline — so a control can show its state. */
   harmonyQuantized: () => {
     const out = [];

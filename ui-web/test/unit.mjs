@@ -816,7 +816,7 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      'cut', 'addTrack', 'removeTrack', 'noteColumns', 'delDevice', 'bypass',
                      'quantize', 'moveDevice', 'chord', 'delChord', 'deleteHarmony',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'opsColumn', 'opsShown',
-                     'harmonyQuantize', 'harmonyQuantized',
+                     'harmonyQuantize', 'harmonyQuantized', 'savePatch', 'linesPerBeat',
                      'samplerSlotName',
                      'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
@@ -2261,6 +2261,10 @@ const OP_REGISTRY = {
   fold:      { cli: null, agent: null, why: 'view' },
   // The engine has taken this since before the web UI existed; the CLI verb is `harmony-quantize`.
   'harmony-quantize': { cli: 'harmony-quantize', agent: null, why: 'gap' },
+  // Saving a patcher graph. With the other patcher verbs: no agent tool for the graph at all.
+  'save-patch': { cli: null, agent: null, why: 'gap' },
+  // A lane's subdivision (opcode 92). Landed engine-side today; no CLI verb yet.
+  lpb: { cli: null, agent: null, why: 'gap' },
   // Which columns this window draws. Genuinely a view decision — the engine already remembers
   // the only half that outlives the tab, which is whether the ops are THERE.
   'ops-column': { cli: null, agent: null, why: 'view' },
@@ -2312,6 +2316,9 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                  // The sampler filter (opcode 86). It landed engine-side this morning and the
                  // CLI has no verb for it yet — recorded as a gap rather than claimed as covered.
                  'filter', 'soundaddr',
+                 // Reached the engine from this app first, both of them: saving a patcher preset
+                 // and a lane's subdivision. The CLI owes them a verb rather than the reverse.
+                 'save-patch', 'lpb',
                  // The sampler read-back. Reached the engine from this app first; daw-cli has
                  // no verb for it, which is the usual direction reversed and worth recording.
                  'kit',
@@ -2367,7 +2374,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
                    'sampler', 'load-sample', 'slice', 'slot-name', 'vintage',
-                   'harmony-quantize',
+                   'harmony-quantize', 'save-patch', 'lpb',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 
@@ -2487,13 +2494,12 @@ const ENGINE_UNUSED = {
    */
   SetDeviceEuclideanConfig: 'gap — superseded by SetPatcherNodeConfig; nothing sends the per-device form',
   /*
-   * Same shape as SetTrackHarmonyQuantize: the command is trivial, the RESULT is
-   * unobservable. Nothing publishes whether the file was written — daw-cli learns the
-   * path from the engine's stderr, which a browser cannot read — so a "save this graph as
-   * a preset" button would report success it has no way to know about. Asked backend for
-   * a completion event in the ClipRejected shape.
+   * WAS: 'no way to know whether the file was written, so the button would lie'. True when it
+   * was written, and it stopped being true when backend added UiPresetSavedPayload (diff type
+   * 16, carrying `ok` and the echoed name) — which is exactly what I had asked them for and
+   * then never re-checked. Now wired: `save-patch <name>`, and the result is worded in the
+   * console rather than assumed. Off this list.
    */
-  SavePatcherPreset: 'gap — no way to know whether the file was written, so the button would lie',
   /*
    * NOT unreachable — UNREADABLE, which is why it is still a gap after a day of closing
    * these. The command works and I could send it in five minutes. What is missing is the

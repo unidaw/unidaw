@@ -472,6 +472,13 @@
 .hhq.on { opacity: 1; color: var(--base-accent); }
 .hhq:hover { color: var(--uni-text-fx); }
 .htrack.folded .hhq { display: none; }
+
+/* The lane's grid readout is also its CONTROL — click to cycle the musically useful
+   subdivisions. It has looked like a label since per-lane grids landed, so it gets a pointer
+   cursor and a hover colour to say otherwise; nothing else about it moves, because the number
+   is the thing worth reading and a button around it would cost width every lane pays for. */
+.hlpb { cursor: pointer; }
+.hlpb:hover { color: var(--base-accent); }
 .htrack.folded .hops { display: none; }
 
 /* ADD A TRACK, at the end of the row — the position the new lane will occupy. */

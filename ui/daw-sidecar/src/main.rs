@@ -1871,6 +1871,10 @@ fn build_named(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
         UiCommandType::SaveProject
     } else if is_type(body, "rename") {
         UiCommandType::SetTrackName
+    } else if is_type(body, "savepatch") {
+        // A PATCHER PRESET. Same 40-byte named slot; the result comes back as UiDiffType 16,
+        // which is what took this from "the button would lie" to something worth building.
+        UiCommandType::SavePatcherPreset
     } else {
         return None;                       // not a named command at all
     };
@@ -2010,6 +2014,41 @@ fn build_sound_addressed(body: &str) -> Option<Result<UiCommandPayload, &'static
 /// no control can show its state". That was wrong about the engine and it kept a working feature
 /// out of the UI for as long as the note stood. Backend checked it live rather than reading the
 /// code, which is why it was caught.
+/// A LANE'S SUBDIVISION (opcode 92) — how many tracker rows one beat is divided into.
+///
+/// `lines_per_beat` has been per track in the project format, published since SHM v10, and
+/// honoured by the tracker's per-lane grid — and nothing could set it. A project could carry a
+/// 3-rows-per-beat lane against a 4 elsewhere and this app drew both correctly while no surface
+/// could make one. Backend's opcode is the last piece of per-lane grids.
+///
+/// 1..31, REFUSED rather than clamped, and the two ends are refused for different reasons worth
+/// keeping apart: 32 would silently pack as 0 because `packClipGrid` gives the field five bits,
+/// and 0 is that packer's SENTINEL for "no grid on this extent". Clamping either would hand back
+/// a subdivision nobody asked for, with no way to notice.
+fn build_lines_per_beat(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
+    if !is_type(body, "linesperbeat") { return None; }
+    let Some(n) = parse_num(body, "\"lpb\"") else {
+        return Some(Err("linesperbeat needs a subdivision"));
+    };
+    if !(1..=31).contains(&n) {
+        return Some(Err("lines per beat is 1..31 — 0 is the grid packer's \"no grid\" sentinel \
+                         and 32 would pack as 0, so both are refused rather than clamped"));
+    }
+    Some(Ok(UiCommandPayload {
+        command_type: UiCommandType::SetTrackLinesPerBeat as u16,
+        flags: 0,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        plugin_index: 0,
+        note_pitch: 0,
+        value0: n as u32,
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    }))
+}
+
 fn build_harmony_quantize(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
     if !is_type(body, "harmonyquantize") { return None; }
     Some(Ok(UiCommandPayload {
@@ -3233,6 +3272,7 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_sound_addressed(body) { return r; }
     if let Some(r) = build_track_collapsed(body) { return r; }
     if let Some(r) = build_harmony_quantize(body) { return r; }
+    if let Some(r) = build_lines_per_beat(body) { return r; }
 
     let mut p = UiCommandPayload {
         command_type: UiCommandType::None as u16,
@@ -5620,6 +5660,33 @@ fn decode_engine_event(e: &EventEntry) -> Option<String> {
         return Some(format!(
             "{{\"kind\":\"sampler-rejected\",\"reason\":{reason},\"command\":{},              \"target\":{},\"track\":{},\"device\":{}}}",
             u16at(4), u16at(6), u32at(8), u32at(12)));
+    }
+    /*
+     * A PATCHER PRESET WAS WRITTEN, OR WAS NOT (UiDiffType::PresetSaved = 16).
+     *
+     * `SavePatcherPreset` was recorded on the browser side as unreachable, with the reason "no
+     * way to know whether the file was written, so the button would lie". That was true when it
+     * was written: daw-cli learns the path from the engine's stderr and a browser cannot read
+     * stderr. Backend added this payload afterwards and the note was never re-checked, so a
+     * command that could have been wired for a while stayed out of the UI on the strength of a
+     * reason that had stopped being true. Third such note found today.
+     *
+     * The NAME is echoed rather than the path — the path is the engine's business and a 28-byte
+     * field could truncate one, and a caller matching a truncated path could conclude the wrong
+     * save succeeded. The name is what the caller sent, so it matches exactly.
+     */
+    if diff == 16 {
+        let ok = u16at(2);
+        // `p` is the entry's payload, and the name is 28 bytes at offset 4. Bounded by the
+        // field width and stopped at the first nul: scanning for a terminator instead walks off
+        // the end into the next field, which on a full-width name is guaranteed rather than
+        // unlucky — the same rule decode_device_bus states.
+        if (e.size as usize) < 32 { return None; }
+        let end = p[4..32].iter().position(|&b| b == 0).unwrap_or(28);
+        let name = String::from_utf8_lossy(&p[4..4 + end]).into_owned();
+        return Some(format!(
+            "{{\"kind\":\"preset-saved\",\"ok\":{},\"name\":\"{}\"}}",
+            if ok != 0 { "true" } else { "false" }, json_escape(&name)));
     }
     // The error payloads DO share a prefix: diff_type:u16, error_code:u16,
     // track_id:u32.

@@ -4564,6 +4564,71 @@ section('harmony quantize is settable and shows its own state');
   }
 }
 
+section('a lane\'s subdivision is settable');
+{
+  /*
+   * PER-LANE GRIDS WERE COMPLETE EXCEPT FOR THE PATH THAT WRITES THEM.
+   *
+   * `lines_per_beat` has been per track in the project format, published since SHM v10, and
+   * honoured by the tracker's grid — a project could carry a 3-rows-per-beat lane against a 4
+   * elsewhere and this app drew both correctly, while no surface could MAKE one. Opcode 92
+   * landed today and this is both halves of the UI for it.
+   */
+  await page.evaluate(() => window.__uni.setView('tracker'));
+  await page.waitForTimeout(400);
+  const lpbOf = (t) => page.evaluate((k) => (window.__uni.engine().lpb || [])[k], t);
+  const was = await lpbOf(1);
+  ok(was > 0, 'the engine publishes a lane subdivision', String(was));
+
+  const want = was === 3 ? 6 : 3;
+  await page.evaluate(([t, n]) => window.__uni.run(`lpb ${t} ${n}`), [1, want]);
+  await page.waitForTimeout(1200);
+  ok(await lpbOf(1) === want, `the console sets track 1 to ${want}/beat`,
+     `${was} -> ${await lpbOf(1)}`);
+  // ...and only that track, because a command that set every lane would look identical here.
+  ok(await lpbOf(0) !== want || was === (await lpbOf(0)),
+     'and track 0 is untouched', String(await lpbOf(0)));
+
+  /*
+   * OUT OF RANGE IS REFUSED, NOT CLAMPED, and the two ends are refused for different reasons:
+   * 32 packs as 0 in the grid's five-bit field, and 0 is that packer's sentinel for "no grid".
+   * A clamp would hand back a subdivision nobody asked for with no way to notice.
+   */
+  for (const bad of [0, 32]) {
+    await page.evaluate(([t, n]) => window.__uni.run(`lpb ${t} ${n}`), [1, bad]);
+    await page.waitForTimeout(500);
+  }
+  ok(await lpbOf(1) === want, 'and 0 or 32 leaves the lane exactly as it was — refused, not '
+     + 'clamped', String(await lpbOf(1)));
+
+  // THE READOUT IS THE CONTROL. Clicking it cycles; it has looked like a label since the
+  // feature landed.
+  await page.evaluate(() => window.__uni.run('goto 0 1'));
+  await page.waitForTimeout(600);
+  const at = await page.evaluate(() => {
+    const b = document.querySelector('.htrack[data-track="1"] .hlpb');
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2,
+             onScreen: r.x > 0 && r.x < window.innerWidth, text: b.textContent };
+  });
+  ok(at && at.onScreen, 'the header draws the lane grid, on screen', JSON.stringify(at));
+  if (at && at.onScreen) {
+    const before = await lpbOf(1);
+    await page.mouse.click(at.x, at.y);
+    await page.waitForTimeout(1200);
+    const after = await lpbOf(1);
+    /*
+     * `after !== want` ALONE IS NOT THE CLAIM, and my first version stopped there — which passes
+     * when the click did nothing AND the console set before it did nothing, because the lane
+     * simply never left its starting value. The claim is that it moved from where it WAS when
+     * the click happened, so that is what is compared.
+     */
+    ok(after !== before && after >= 1 && after <= 31,
+       'and clicking it moves the lane to another subdivision', `${before} -> ${after}`);
+  }
+}
+
 section('the palette and the scale button reach something');
 {
   /*
