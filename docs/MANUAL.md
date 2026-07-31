@@ -49,9 +49,10 @@ refusal is always shown rather than swallowed.
 - **Rows are a zoom level, not a resolution.** Notes store absolute nanoticks (960,000 per
   quarter). Changing zoom re-projects them; it never moves them. At the two coarsest zooms a
   row is a *summary* and editing is refused by name rather than silently missing.
-- **Each track has its own subdivision.** `lines_per_beat` is per lane: hats at 4/beat next
-  to a triplet arp at 3/beat, with beats still aligned across the strip. Renoise cannot do
-  this because its rows *are* its storage.
+- **Each lane has its own subdivision, and so does each clip.** Hats at 4/beat next to a
+  triplet arp at 3/beat, with beats still aligned across the strip, and a verse in 4 followed
+  by a bridge in 3 on the same track. Renoise cannot do this because its rows *are* its
+  storage; here they are a projection over tick positions.
 - **One event per cell, always.** Two notes on the same row/track/column draw as a pill —
   `4× C-4` when the pitches agree, `3 evts` when they do not — rather than being silently
   resolved to one.
@@ -110,6 +111,17 @@ Harmony, pending and the agent cell each have a collapse chevron in their header
 The rails yield rather than squeeze the centre: below about 892px of window the right dock
 goes, below about 1158px the browser rail goes too, and focus moves back to the centre so
 the keyboard never belongs to something that is not on screen.
+
+Two more strips that only appear where they belong:
+
+- **The minimap** — a 30px column pinned to the right of the tracker, and only there. It is
+  the whole song as a density histogram (note *starts*, across every track), with the viewport
+  as a rectangle and the playhead as a full-width line. Press and drag anywhere on it to
+  **seek**. It does not scroll the view; it moves the playhead.
+- **The scope** — under the mixer's strips. A rolling per-track level history, about six
+  seconds, oldest at the left. It is built from the engine's publish rate rather than the draw
+  rate, and eagerly rather than on first look, so it is not a flat line for everything that
+  happened before you glanced at it.
 
 ### The five surfaces
 
@@ -233,14 +245,16 @@ A freshly loaded slot is a one-shot pinned to **one key: MIDI 36, which Uni writ
 
 ```
 goto 0 0                   cursor on row 0, track 0
-oct 2                      so the QWERTY piano's lower row starts at C-2... see below
-note 36                    or just write it by number
+note 36                    write MIDI 36 there
 play
 ```
 
-`note 36` writes MIDI 36 at the cursor and is the least ambiguous route. By keyboard, with
-edit mode on (it is on by default, and `EDIT` is lit in the breadcrumb), the note keys are
-the usual two-row QWERTY piano:
+`note 36` writes at the cursor and is the least ambiguous route. To type it instead, **click
+the grid first** — `goto` moves the cursor but does not hand the tracker the keyboard the way
+a click does, and a note key pressed after a bare `goto` can go nowhere with nothing said.
+
+With edit mode on (it is on by default, and `EDIT` is lit in the breadcrumb), the note keys
+are the usual two-row QWERTY piano:
 
 ```
 lower row   z s x d c v g b h n j m      z = C in (octave − 1)
@@ -270,20 +284,55 @@ The default surface. `F1`.
 
 ### Layout
 
-Left to right: a **TIME** gutter showing `bar:beat`, a **HARMONY** lane, then one block per
-track. Each track block is *N* note columns × 3 fields:
+Left to right: a **TIME** gutter, a **HARMONY** lane, then one block per track. Each track
+block is *N* note columns × 3 fields:
 
 | Field | Shows | Typing there |
 |---|---|---|
-| 0 — note | `C-4`, `OFF`, a chord numeral, or a collision pill | piano keys write pitches; `a` writes note-off; `@` opens the token buffer |
-| 1 — velocity | two hex digits | hex digits shift into the field and commit on every keystroke |
+| 0 — note | `C-4`, a chord numeral, or a collision pill | piano keys write pitches; `a` writes note-off; `@` opens the token buffer |
+| 1 — velocity | **two hex digits** — velocity is 00–7F | hex digits shift into the field and commit on every keystroke |
 | 2 — ops | the collapsed glyph run | `@` opens the op text buffer; **digits are refused here** |
 
-`fieldOfCol(col) = col % 3`. A digit typed into the ops field answers
-`effect column needs an engine param path` — the ops column is not a value field.
+A digit typed into the ops field answers `effect column needs an engine param path` — the
+ops column is not a value field. There is **no instrument column and no delay column**; if
+you have seen one it was the standalone fixture, which generates plausible-looking content
+for the golden screenshots.
 
-Track headers carry the track name and, when the lane's subdivision is published, an `N/b`
-badge — `3/b` is a triplet lane.
+The TIME gutter reads `12` at bar-or-coarser zooms, `12:3` on a beat, and `12:3:02` off it,
+where the third field is the row's index within the beat *on the current grid*.
+
+A note's cell also carries two marks:
+
+- A **contour ribbon** at the left edge, positioned by pitch over MIDI 24–96. On a collision
+  it draws the *spread* of the notes; at an aggregate zoom it draws the row's pitch range.
+- A **deviation hairline** showing where in the row the note actually sounds — the note's own
+  `d` op and the lane's quantize composed into one mark, because two marks would invent a
+  distinction the audio does not make. A collided cell draws none: a mark that names one
+  position when three notes have three is worse than no mark.
+
+Each track's clips are drawn as a coloured **rail** down its right edge, named, lit while the
+cursor's tick is inside it.
+
+### Track headers
+
+The header row is a control strip, not a label:
+
+- The **name** (`T01`, `T02`… until the engine names it).
+- The **lane grid badge**, `4/b` / `3/b` / `6/b`, shown because it is not derivable from
+  anything else on screen: a lane at 3 lines per beat looks like a lane at 4 with gaps in it.
+- The **quantize badge** — and it is a control. Click cycles the grid (shift-click cycles
+  backwards; `off` is in the cycle), and dragging scrubs the strength over 200px, shift for
+  finer. It reads `1/16 60% +33`: the strength is hidden at 100% and the swing only appears
+  when it is non-zero, always signed.
+- The **ops toggle** — `·` when the column is forced off, `ops` when you have forced it on,
+  and **absent** when the engine's own width is what is showing the column, because a control
+  claiming to be the reason a thing is visible when it is not is a control that lies.
+- **`×`** removes *that* track, by name, after a confirm. (The chrome's `−` removes the
+  *cursor's* track, which is the ambiguity this one avoids.)
+- **`+`** at the end of the row appends a track, in the position the new lane will occupy.
+
+There is **no mute or solo control in the tracker header** — `mute <track>` and
+`solo <track>` are console commands, or the mixer.
 
 ### Edit mode
 
@@ -317,14 +366,30 @@ row starts at" would match nothing and report success. It refuses instead:
 
 ### Per-lane grids
 
-A track's `lines_per_beat` decides what a row means on that track: how long a written note
-is, and which rows that lane has at all. A lane at 4/beat occupies every third row of a
-12/beat axis and has *no row* in between — writing there is refused with
-`lane has no row here`.
+`lines_per_beat` decides what a row means on a lane: how long a written note is, and which
+rows that lane has at all. It is **lines per quarter note**, not per meter beat — 4 is
+sixteenths, 3 is triplets, 6 is sextuplets.
 
-**There is no command to change a track's subdivision.** The engine stores and persists
-`lines_per_beat`, the UI reads it, draws the `N/b` badge and honours it — and nothing in the
-web UI can set it. Edit the project JSON, for now.
+**The grid belongs to the clip first, then the track.** Clips run in sequence and may each
+carry their own subdivision, so a lane's grid changes down the timeline: a verse in 4 and a
+bridge in 3 on one track is the case this exists for, and a per-track value cannot express
+it. The grid is anchored at the clip's start, not the song origin.
+
+A lane at 4/beat occupies every third row of a 12/beat axis and has *no row* in between.
+Those rows are drawn in a distinct off-grid shade — distinct from an empty cell, which you
+*can* type into — and writing there is refused with `lane has no row here`.
+
+The beats still line up across the whole strip. Only the rows *inside* a beat differ. That
+is what makes 4-against-3 readable rather than noise; it is also why zoom 0 exists.
+
+Where a clip's own meter or origin disagrees with the song's gutter, that track grows a
+narrow **lane bar readout** showing the clip-local `bar:beat`, and its clip's bar and beat
+lines are drawn as accents on the lane itself. It is a readout — there is nothing to type
+into it, and it never appears or disappears as you scroll.
+
+**There is no command to change a subdivision.** The engine stores and persists
+`lines_per_beat`, the UI reads it, draws the badge, honours it for note length and off-grid
+rows — and nothing in the web UI can set it. Edit the project JSON, for now.
 
 ### Moving and selecting
 
@@ -359,6 +424,13 @@ next operation silently acts on is worse than having to re-select.
 Piano keys commit on the keydown. There is no buffer to be half-in — the only thing that
 opens a buffer is `@`, and Enter is the only thing that closes one.
 
+> **Click the grid before you type.** `goto` moves the cursor but does not hand the tracker
+> the keyboard the way a click does — after a `goto`, a note key can go nowhere with nothing
+> said. Clicking a cell sets focus back to the centre from whichever pane had it.
+
+Writing a note **advances the cursor** by the edit step, so the note you just wrote is on the
+row you were on, not the row you are on now.
+
 - `a` writes **note off**. A tracker OFF at row R means "whatever is sounding here stops
   here", which in a model of (t_on, t_off) pairs is a *truncation* of the covering note —
   not a new event, and not a deletion unless the note starts on that very row.
@@ -377,6 +449,20 @@ because derived-only was a deadlock — you cannot write a note into a second co
 second column exists.
 
 Deleting in column 2 deletes column 2's note; the column travels with the command.
+
+A note claiming a column the track does not show lands in the *last* column it has, where it
+collides visibly, rather than being written past the end of the row.
+
+### Child tracks and folding
+
+Child tracks are ordinary tracks with a parent. `fold <track>` collapses a parent's children
+— by setting their width to zero, never by renumbering, so the cursor, the selection's field
+indices and every command keyed on a track index are untouched. A track with no children is
+refused with `not a parent`, which is a correct refusal and not a missing feature.
+
+A removed track leaves a **tombstoned slot** so later ids do not renumber. Its lane is zero
+pixels wide; writing there produces nothing and looks like broken note entry. Use the header
+`×` or `remove-track`, and expect the ids of the tracks after it to stay where they were.
 
 ### Chords and degree tokens
 
@@ -469,7 +555,10 @@ Notes:
   A and B are 1..8 and A ≤ B; `A > B` is refused rather than normalised, because it could
   never fire.
 - `cpre` fires when the previous conditional trig on the same track fired; `cnpre` when it
-  did not. Both resolve backwards, so a bounce is identical.
+  did not. Both resolve backwards, so a bounce is identical. **They parse, format and play,
+  and they cannot be SET from here today**: the engine caps a trig condition at 64 and PRE is
+  130, so `op cpre` is refused and the row keeps whatever it had. Author them in the project
+  file until the range widens.
 - `cfill` / `cnfill` are **reserved and not implemented**. The parser refuses them on both
   sides, deliberately: a fill trig makes the render depend on a live performance input, and a
   token that round-trips through the editor and then always sounds is worse than one that is
@@ -494,13 +583,20 @@ changing one op means changing one word rather than retyping the set. While the 
 open the field readout becomes the *grammar* — the whole op list, narrowing to one op's
 meaning as soon as the token you are typing identifies one.
 
-**Left/Right inside the ops cell step between the glyphs.** The selected op draws in full
-(`p60` where the run shows `p`), and `@` then edits **that op alone**. Without this a dense
-row is not editable at all: the edit buffer holds 48 characters and a row with forty ops
-spells to several hundred.
+**Left/Right inside the ops cell step between the glyphs.** The whole cell swaps to that
+op's token — `ret3` where the run showed `rpo` — which is the expansion the collapsed form
+implies and the only feedback saying which of forty glyphs `@` is about to open. There is no
+per-glyph caret. `@` then edits **that op alone**. Without this a dense row is not editable
+at all: the edit buffer holds 48 characters and a row with forty ops spells to several
+hundred.
 
-Any cursor move out of the cell drops the op selection, because the same index on the next
-row is a different op or none.
+Arriving in the ops field selects *no* op, deliberately: stepping into the field must still
+mean the field, and `@` there must still open the whole row. Any cursor move out of the cell
+drops the op selection, because the same index on the next row is a different op or none.
+
+The buffer opens **seeded and editable, not selected** — the point is to change one op out of
+several, and a selected seed would make the first keystroke wipe the rest. `Escape` abandons
+the edit; the note is untouched.
 
 ### `ops` vs `op`
 
@@ -520,12 +616,22 @@ never an omission.
 
 The ops column is per track, and its width is the widest op run anywhere in that track — a
 fact the engine publishes, because deriving it from the visible window would widen the column
-when you scroll past a dense row and narrow it when you scroll back.
+when you scroll past a dense row and narrow it when you scroll back. The glyph advance is
+measured from the live stylesheet, not assumed, and the floor is two glyphs so a one-op track
+does not produce a sliver you cannot click.
+
+A track no note of which carries an op **draws no ops column at all**, and the cursor steps
+over it — so a note is not always three keypresses wide, and the space really is recovered
+rather than blanked.
 
 `ops-column <track> [on|off]` shows the column on a track that has no ops yet — without it
 you could never type the first op into such a track, because the cell to type it into would
-not be on screen. Hiding a column on a track that *does* carry ops is refused:
-`track 2 carries ops (4 glyphs) — the column stays`.
+not be on screen. A forced-on column with nothing in it falls back to the default cell width,
+which is *wider* than a three-glyph one. Hiding a column on a track that *does* carry ops is
+refused: `track 2 carries ops (4 glyphs) — the column stays`.
+
+The same toggle is the `ops` / `·` control in the track header — and it disappears entirely
+when the engine's own width is what is showing the column, rather than claiming credit.
 
 ### Known limitation
 
@@ -547,16 +653,30 @@ file picker, no pad grid you can click, and no waveform editor.
 
 ### The model
 
-- A **slot** is a playable thing: a source (or a slice of one), a key range, a root key, a
-  velocity window, a gate mode, tuning, trim points, a mod set. **Slot ids start at 1**, and
-  `slot 0` matches nothing — it is not a wildcard, whatever you may expect from device 0 and
-  mod-set 0, both of which *are* wildcards. The sentinel is per field.
-- A **slice** is a marker into a source. A chop mints one slot per slice, and the slot's
-  extent is *derived from the marker at note-on*, never cached — so moving a marker moves
-  every row that names that slice. That is the whole argument for addressing a hit by slot id
-  rather than by a hard-coded frame position.
-- A **mod set** holds the envelopes, LFOs and the filter. Slots point at one. `modSet 0` in a
-  command means every mod set, which is the gesture a kit wants.
+- A **slot** is a playable thing — a pad: one source (or one slice of it), a key zone, a root
+  key, a velocity window, a gate mode, tuning, trim points, and a pointer to a mod set. A slot
+  does not own its envelopes or its filter.
+- A **slice** is a boundary marker in a source's slice set. Extents are *derived* — slice *i*
+  runs from marker *i* to marker *i+1*, resolved at note-on and never cached — so moving a
+  marker moves every row that names that slice. That is the whole argument for addressing a
+  hit by slot id rather than by a hard-coded frame position.
+- A **mod set** holds the envelopes, the LFOs and the filter, and is shared **by reference**.
+  That is the fix for "change the kit's decay" meaning sixteen edits.
+
+**Zero means a different thing in each field, and this matters.**
+
+| Field | 0 means |
+|---|---|
+| device id, in any sampler command | the first sampler on that track |
+| mod set id, on `filter` | **every** mod set on that sampler |
+| **slot id** | **nothing.** Slot ids start at 1 and `slot 0` matches no slot |
+| a slot's slice id | no slice — the whole source (legal) |
+| a slot's source id | refused |
+| a note's `sound` op | let the keymap pick from the pitch |
+| `emit`'s step | derive the timing from the slices themselves |
+
+> `slot <t> <d> 0 gate 1` prints `gate = 1 on every slot` and **does nothing** — the engine
+> refuses it as `no_such_slot`. The success line is wrong; there is no all-slots wildcard.
 
 ### Making one and loading it
 
@@ -571,9 +691,17 @@ kit <track> <device>                         read the whole kit back, slot by sl
 silent, and that must not look like a slot that happens to be zero frames long. The header
 line reports active/cap voices, unmapped notes and truncation.
 
-A loaded slot defaults to **fixed pitch**: `keyLow == keyHigh == root == 36`. That is right
-for a one-shot and is what anyone loads first. Clear it (`slot … keylow 0`, `slot … keyhigh
-127`) for a playable zone.
+A loaded slot defaults to **fixed pitch**: `keyLow == keyHigh == root == 36`, and
+one-shot (`gate 0`). That is right for a one-shot and is what anyone loads first. Clear it
+(`slot … keylow 0`, `slot … keyhigh 127`) for a playable zone.
+
+**Consequence worth stating plainly:** loading five samples through the console puts all five
+on MIDI 36. Move them apart before you expect five different sounds —
+`slot 0 0 2 keylow 38`, `keyhigh 38`, `root 38`, and so on.
+
+A slot with no name shows none, and `load-sample` seeds the file's stem. A slot whose name
+looks like a path is drawn as its basename only — the stored name is untouched, so
+`slot-name` still reports and edits the real string.
 
 ### Chopping a break
 
@@ -581,9 +709,17 @@ for a one-shot and is what anyone loads first. Clear it (`slot … keylow 0`, `s
 slice <track> <device> [count] [equal|transient]
 ```
 
-Default 16 slices, `equal`, and **slots by default** — a chop with no slots is a slice set
-nothing plays. The slices land on consecutive keys from **MIDI 36 upward**, so a break is
-under the fingers in order.
+Default **16 slices, `equal` mode**, count capped at 512, and **slots by default** — a chop
+with no slots is a slice set nothing plays. `transient` finds hits by detection (on the left
+channel only: a downmix can cancel a hard-panned transient, and losing a hit to phase is a
+worse failure than ignoring a channel). A third mode, `clear`, removes every marker without
+resetting the id counter — a row still naming a marker must go silent rather than acquire
+different audio.
+
+The slices land on **consecutive keys from MIDI 36 upward**, each slot pinned to its own key
+with pitch tracking off, so a slice played from its own key sounds as recorded rather than
+transposed by where it sits. Each is named from the source stem: `break 01`, `break 02`.
+N slices asked for is N made — frame 0 is a legal marker — and they tile the source exactly.
 
 > The `slice` help string says "from C1 up". The base key is MIDI 36, which Uni's own note
 > naming writes as `C-2`. The help string is off by an octave; trust MIDI 36.
@@ -594,14 +730,21 @@ Chopping writes nothing into the pattern. That is what `emit` is for:
 emit <track> <device> [at] [step]
 ```
 
-One row per slice, from the sampler's own slice list. `step 0` — the default — puts each row
-where its slice actually falls in the source, so a chop of a groove *keeps* the groove.
-Naming a step lays it on a grid instead, which is a different musical decision and worth
-saying out loud.
+One row per slice, from the sampler's own slice list, at the slot's own root key with its
+slot id in the `s` op and velocity 100. `step 0` — the default — puts each row where its
+slice actually falls in the source, so a chop of a groove *keeps* the groove. Naming a step
+lays it on a grid instead, which is a different musical decision and worth saying out loud.
+
+A slice with **no slot is skipped**, not emitted with a blank sound: `sound 0` would let the
+keymap pick, and a row that plays the wrong audio is worse than a row that is absent.
 
 A row can also address a slice directly with the `s` op: `s04` plays slot 4 whatever pitch
 the row carries. That is checked at the speakers, not just structurally — two notes on the
 same key, one with `s`, produce different audio.
+
+**A slot whose slice has been removed plays nothing** and is counted as unmapped. It does not
+fall back to the whole sample: a chop whose slice is gone must not suddenly play the entire
+break. The kit read-back publishes that state as its own flag, because it cannot be inferred.
 
 ### Chromatic vs kit
 
@@ -635,20 +778,43 @@ pads will do, for exactly that reason.
 
 ### Slot fields
 
-`slot <track> <device> <slot> <field> <value>`, where field is one of, in wire order:
+`slot <track> <device> <slot> <field> <value>`. Twenty-nine fields, all of which round-trip
+through save and load:
 
-```
-voicegroup  nna       gate       reverse    gain      pan        tune
-pitchtrack  root      keylow     keyhigh    vellow    velhigh    selectmode
-polyphony   chokefade modset     stem       quality   layergroup loopmode
-sustainloop loopstart loopend    loopxfade  startframe endframe  source
-slice
-```
+| Field | Default | Range | What |
+|---|---|---|---|
+| `voicegroup` | 0 | 0–255 | equal non-zero groups cut each other — open and closed hat |
+| `nna` | 0 | 0–2 | what happens to the previous voice: 0 cut, 1 note-off, 2 continue |
+| `gate` | 0 | 0/1 | 0 one-shot (ignores note-off), 1 gated |
+| `reverse` | 0 | 0/1 | play the region backwards |
+| `gain` | 0 | −9600…2400 millibels | −96 dB to +24 dB |
+| `pan` | 0 | ±1000 thousandths | |
+| `tune` | 0 | ±4800 cents | ±4 octaves |
+| `pitchtrack` | 1000 | ±2000 | 1000 = full varispeed, 0 = fixed pitch (a drum) |
+| `root` | 60 | 0–127 | the key at which the sample plays at unity |
+| `keylow` / `keyhigh` | 0 / 127 | 0–127 | the zone |
+| `vellow` / `velhigh` | 0 / 127 | 0–127 | the velocity window |
+| `selectmode` | 0 | 0–3 | 0 velocity, 1 round-robin, 2 random, 3 cycle-per-row |
+| `polyphony` | 0 | 0–255 | 0 = inherit the device's voice cap |
+| `chokefade` | 3000 | 0–1000000 µs | the choke ramp, so a choke is not a click |
+| `modset` | 1 | **refused** if unknown | which shared envelope/filter set this slot uses |
+| `stem` | 0 | 0–255 | 0 = main output; otherwise an aux stem *instead of* the main |
+| `quality` | 1 | 0–2 | 0 vintage, 1 fast (cubic), 2 studio (sinc). An offline render never upgrades it |
+| `layergroup` | 0 | 0–65535 | slots sharing (zone, layergroup) are alternates |
+| `loopmode` | 0 | 0–3 | off / forward / ping-pong / backward |
+| `sustainloop` | 0 | 0/1 | the loop releases at note-off and plays out |
+| `loopstart` / `loopend` | 0 | frames | |
+| `loopxfade` | 0 | frames | equal-power seam crossfade; a sustained loop usually wants ~256 |
+| `startframe` / `endframe` | 0 / 0 | frames | trim; `endframe 0` means "to the end" |
+| `source` | — | **refused** if 0 or unknown | repoint the pad at another loaded sample |
+| `slice` | 0 | **refused** if unknown; **0 is legal** | which slice this pad plays |
 
-`source` and `slice` are the repoint pair: `source` moves a slot onto a different loaded
-sample, `slice` moves it onto a different slice of one. Both are **refused, not clamped**,
-when the id does not exist — a slot pointing at a source that is not there is silent, and
-silence is not a near-miss. `slice 0` is legal and means the whole sample.
+**Range fields clamp; identity fields refuse.** `gain 99999` lands on +24 dB; `modset 999`,
+`source 999` and `slice 999` are refused and the slot is left exactly as it was. The rule the
+engine states for itself: a value out of range is almost always a caller's arithmetic, but a
+wrong id would be a *different sound* rather than a clipped one.
+
+Set `slice` before `source` — a slice id is validated against the slot's *current* source.
 
 Naming a pad is its own verb, because every other slot field is an integer:
 
@@ -656,11 +822,27 @@ Naming a pad is its own verb, because every other slot field is an integer:
 slot-name <track> <device> <slot> [name]     empty clears it
 ```
 
-The engine refuses a name that does not fit rather than storing a shortened one, so what
-comes back is byte-for-byte what you sent or the write did not happen.
+39 usable bytes. The engine **refuses** a name that does not fit rather than storing a
+shortened one, so what comes back is byte-for-byte what you sent or the write did not happen.
 
-> The UI does not document per-field units and ranges, and neither does this manual, because
-> the source does not state them. `kit` is the read-back; use it to check what a write did.
+### When a sampler command is refused
+
+Sampler refusals reach the reject line in words, keyed on the engine's own reason code:
+
+```
+no such track — that sampler command went nowhere
+no such device
+no slot 999 — re-read the kit, it has moved
+no mod set 4
+no modulator 0 — name a target instead of an id
+no source 3 — load a sample first
+no slice set 2 — chop it first
+that value is out of range — the same command will not work again
+that device is not a sampler
+the sample would not load
+```
+
+A command that worked says nothing.
 
 ### Selecting among slots on one key
 
@@ -679,10 +861,21 @@ env <track> <device> <attack> <decay> <sustain> <release> [target]
 
 Times are **microseconds**; sustain is 0–1000; target is `volume|pan|pitch|cutoff|resonance`.
 A default mod set already carries an amp envelope — instant attack, full sustain, 5 ms
-release — so a freshly loaded slot does make a sound. (It did not, once: the constructor
-emitted three points sharing a time and the runner held the first at zero, so a structurally
-perfect kit rendered silence. Fixed; mentioned because it is the failure to suspect if a slot
-is inexplicably mute.)
+release — so a freshly loaded slot does make a sound with no envelope command at all.
+
+> It did not, until 2026-07-31: the constructor emitted three points sharing a time, the
+> runner held the first at zero, and a structurally perfect kit rendered silence. That is why
+> some comments in the source still tell you to send an envelope first. Ignore them.
+
+An envelope is not four values in a box; it is points with a one-point sustain loop. ADSR is
+that shape, not a different kind. The envelope lives on the **mod set**, so `env` moves every
+slot pointing at that set. It is addressed by *target* — the modulator is created if the set
+has none.
+
+**Envelope points are not automatable**, deliberately: automating a 64-point shape is not a
+knob, it is a second envelope wearing a lane. What *is* automatable is a modulator's depth
+and rate, and the slot and mod-set scalars. Automation parameter ids must fit **15
+characters** — the obvious spelling `modset:1:resonance` is eighteen and will be refused.
 
 ```
 filter <track> <device> <off|lp12|lp24|hp|bp> [cutoff] [resonance]
@@ -690,10 +883,15 @@ filter <track> <device> <off|lp12|lp24|hp|bp> [cutoff] [resonance]
 
 Cutoff and resonance are 0–1000 and are **omitted rather than defaulted** when you do not
 name them: zero is a legal cutoff, so "change the type, leave the cutoff" is a distinct edit.
+Cutoff is logarithmic over 20 Hz–20 kHz, because a linear hertz control spends nine tenths of
+its travel above 2 kHz where almost nothing musical happens; resonance maps to Q 0.7–10.
+
+The filter is a **mod set** property, not a slot property, and `filter` with mod set 0 — what
+the command sends — sets every set on the sampler. A chop's twenty slices are one instrument,
+not twenty.
 
 The filter type is also a button on the rack card — it cycles, and it reads as the current
-state (`lp24`) with the next state in its tooltip. It writes mod set 0, i.e. every set, which
-is the gesture a kit wants; a kit whose sets genuinely differ is addressable from the console.
+state (`lp24`) with the next state in its tooltip.
 
 The rack marks a configured modulator that cannot move anything: `~` is movement, `!` is
 movement that cannot happen (a cutoff envelope over a filter that is off). It is shown rather
@@ -705,9 +903,12 @@ than hidden, because the reason it does nothing is fixable and invisible.
 bank <track> <device> <default-gate|voice-cap|default-view> <value>
 ```
 
+`voice-cap` is 64 by default, clamped 1–255, and **refused at zero or below** — a cap of 0 is
+a device that can never sound, which is not a near-miss of anything anyone meant.
+
 `default-view` is a remembered per-device view (0 kit, 1 sample) that the engine persists.
-**The web UI does not implement either view** — it draws a sampler's slots as rows in the
-rack card. Setting it changes a stored number and nothing you can see.
+**The web UI implements neither view** — it draws a sampler's slots as rows in the rack card.
+Setting it changes a stored number and nothing you can see.
 
 ---
 
@@ -775,9 +976,9 @@ confirm within 1.2 s snaps back and says
 `the engine did not take that parameter change — bar reset`. Dragging a sampler *slot* row's
 bar is refused: a slot is not a fader.
 
-**Removing a device cannot be undone.** So can adding one. The undo stack covers notes,
-chords, placements, markers, meter, tempo and harmony — not the device chain and not track
-structure.
+**Removing a device cannot be undone, and neither can adding one.** The undo stack covers
+notes, chords, placements, markers, meter, tempo and harmony — not the device chain and not
+track structure. That is why the rack asks before it deletes.
 
 ### The master
 
@@ -796,8 +997,10 @@ chain persists across save and reload. It has no mixer strip.
 
 ## 9. The arrangement
 
-`F2`. Time across, tracks down, one lane per track. The page caps the arrangement at 16
-lanes.
+`F2`. Time across, tracks down, one lane per track, up to the 64-track limit. Neither this
+surface nor the mixer virtualises — only the tracker does — so every track costs whether or
+not it is on screen. That cost is paid deliberately: the alternative was showing the first
+sixteen and saying nothing about the rest.
 
 ### What is drawn
 
@@ -886,7 +1089,13 @@ therefore *total*: they move nothing and can fail only on a bad id.
 - `+` on the spine adds a marker at the playhead, named `Marker`.
 - `−` removes the selected one (`select a marker first` if none is).
 - Click a span to select; click it again to deselect.
-- Double-click to rename (a `prompt`, deliberately, for now — the strip is 17px tall).
+- Double-click to rename (a browser `prompt`, deliberately, for now — the strip is 17px tall
+  and an in-place field there would be a second text-entry implementation for one row).
+- A marker with nothing after it has an empty span and is drawn at a 9px floor — still
+  clickable, nameable and removable, which is the point of having a floor at all.
+- Truncation is drawn: `+3 not shown` rather than a short list that reads as the whole song.
+- Material past the last marker is drawn as an unnamed tail with no handle. With no markers
+  at all, the tail is the whole song — which is what an unmarked project honestly looks like.
 - **Drag the grip at a span's right edge** and you are not resizing anything. You are
   inserting or removing arrangement time at the next marker's tick, which moves *everything*
   at or after it: every placement on every track, the tempo points, the key changes, the
@@ -1122,34 +1331,58 @@ kernel  euclidean  passthru  audio  lfo  random  out  slice
 It is `random` for the `sound` field rather than for `pitch`. `base 0` means "the keymap picks
 from the pitch", which is the sampler's own sentinel and a legitimate setting.
 
-`euclidean` and `random` are the generators. When a device's graph emits notes, the rack card
-footer reads `generates: …` and the chrome shows an orange `generates:` badge — because a
-patcher graph plays through whatever instrument the track has, *alongside* whatever is written
-in the clip, and nothing else on screen accounts for the extra notes.
+> **You cannot add or wire a `slice` node from this UI.** `t` will cycle to it and the notice
+> will say `a adds slice (t cycles)`, but the command path refuses any node type above `out`,
+> and a `link` touching one answers `those two node types have no compatible ports`. The node
+> type exists in the engine and the renderer; the create path has not caught up.
 
-Edge kinds: `event`, `audio`, `control`.
+`euclidean`, `random` and `slice` are the **generators** — they emit events nobody wrote, or
+in `slice`'s case change which sound a written note plays and promote a bare gate into a note.
+When a device's graph generates, the rack card footer reads `generates: …` and the chrome
+shows an orange `generates:` badge, because a patcher graph plays through whatever instrument
+the track has, *alongside* whatever is written in the clip, and nothing else on screen
+accounts for the extra notes. (An LFO is a modulation source, not an event generator.)
+
+Edge kinds: `event` (solid), `audio` (thick), `control` (dashed). A cable is the colour of the
+ports it joins.
 
 ### Editing
 
 | Key | What |
 |---|---|
-| `t` | cycle the armed node type — the notice says which |
+| `t` | cycle the armed node type — the notice says which. It starts on `euclidean` |
 | `a` | add a node of the armed type |
 | `c` | connect: once on the source, again on the destination |
 | click a node | select |
 | click a config row | select that field |
 | `←` `→` | choose a config field on the selected node |
 | `↑` `↓` | change it by one step |
-| drag a config row | change it |
-| `Backspace` | remove the selected node |
+| drag a config row | change it — up is positive, 6px per step, **Shift for 4× finer** |
+| `Backspace` | remove the selected node; its edges go with it |
 | `Escape` | cancel a pending connection / clear the selection |
 
-Ports are worked out from the node types; you connect nodes, not ports. An edge naming a port
-its node type does not have is drawn against the nearest port of the same kind, and the
-surface **counts them out loud** rather than letting a guess look like an exact read.
+Ports are worked out from the node types; you connect nodes, not ports. Where two types have
+exactly one compatible pairing that is the answer; kernel-to-kernel could be events or control
+and is **refused with a message rather than guessed**, unless you name the kind. An edge
+naming a port its node type does not have is drawn against the nearest port of the same kind,
+and the surface **counts them out loud** rather than letting a guess look like an exact read.
+
+Two focus caveats that will otherwise look like broken keys:
+
+- **The patcher's keys only reach it when it is the top pane.** Opened below with Shift+F3, or
+  by double-clicking a device card, `a`/`t`/`c`/arrows/Backspace do not arrive.
+- **While the rack has the keyboard** — which is what clicking a device card does — the arrows
+  and Backspace belong to the rack, not the patcher. `a`, `t` and `c` still work. Clicking a
+  patcher node does not take focus back; click the tracker grid or press Escape.
+
+There is no node dragging, no persisted layout, no multi-select and no copy/paste. Positions
+are computed from the graph's shape (longest-path columns, one barycentre pass), so the same
+graph always lays out the same way, and nudging a value moves no box.
 
 Refusals: `select a node first`, `a node cannot connect to itself`,
-`that node has no editable configuration`.
+`that node has no editable configuration`, `no such node type`,
+`those two node types have no compatible ports`, `more than one kind of connection fits — say
+which`, `that would make a cycle`, `that connection is not allowed`, `those ports do not fit`.
 
 Console: `nodes` (list with editable fields), `addnode <type>`, `delnode <node>`,
 `link <src> <dst> [kind]`, `patch <node> <field> <steps>`.
@@ -1181,7 +1414,14 @@ the screen and know whether the next click will move a region or write a point. 
 on, the lane is tinted and the cursor is a crosshair; while it is off the canvas does not take
 the pointer at all and the clips below behave normally.
 
-With draw on: click the curve to add a point; drag a point to change its value.
+With draw on: click the curve to add a point; drag a point to change its value. A click within
+6 *pixels* of an existing point grabs it — the tolerance a person feels is a distance on the
+glass, not a number of ticks — and anywhere else creates one. A single click writes
+immediately; the dot you see under the pointer is drawn from the gesture, including for a
+point that does not exist yet, so the feedback is not a round trip late.
+
+Clicking a track with no automation lane does nothing: there is no lane to edit, and inventing
+one would be this surface deciding which parameter a click meant.
 
 **What it deliberately cannot do:** there is no engine opcode to remove an automation point.
 So a point **cannot be deleted**, and **cannot be moved in time** — a move is a write at the
@@ -1421,6 +1661,17 @@ Everything below is stated in place in the relevant chapter too. This is the lis
 - **Adding a VST from the rack's `+`.** Use the browser rail.
 - **`cfill` / `cnfill` conditional trigs.** Reserved and refused on both sides, on purpose.
 - **Proposals from the engine.** The pending card is driven from `__uni` only.
+- **A pencil editor for envelopes.** `env` sets an ADSR; multi-point shapes exist in the file
+  format and the engine and have no editor.
+- **Per-slot device chains.** Refused permanently by design — use a stem and a child track.
+- **Time-stretch and warp markers.** Rejected outright. The rows are the timing.
+
+### Built underneath, unreachable from here
+
+- **`cpre` / `cnpre`.** They parse, format, resolve and round-trip through a project file, and
+  `op cpre` is refused: the engine caps a trig condition at 64 and PRE is 130.
+- **The `slice` patcher node.** Renders and executes; cannot be created or wired from the UI.
+- **Harmony quantize**, `lines_per_beat`, the sampler's kit/sample views. See above.
 
 ### Wired to nothing
 
@@ -1441,7 +1692,17 @@ disagree, the handler is right. Currently stale:
 - Arrange: "clip edits — not implemented, needs engine commands". Clip move, trim, cross-track
   drag and delete all work.
 - Patcher: "one global graph; the engine does not run per-device graphs yet". It is per-device.
-- Tracker: "`**` = notes a cell cannot show apart". The cell draws `4x C-4` or `3 evts` now.
+- Tracker: "`**` = notes a cell cannot show apart". The cell draws `4× C-4` or `3 evts` now.
+
+Elsewhere:
+
+- The browser rail's footer says `B closes`. Only `⌘B` does.
+- `slot <t> <d> 0 <field> <value>` answers `… on every slot`. The engine refuses it; there is
+  no all-slots wildcard.
+- `slice`'s help says the slices land "from C1 up". They land from MIDI 36, which this app
+  writes as `C-2`.
+- Several source comments still say a freshly loaded sampler slot renders silence and that you
+  must send an envelope first. Fixed on 2026-07-31; the default kit is audible.
 
 ### Silent-ish failures to know about
 
@@ -1454,6 +1715,12 @@ disagree, the handler is right. Currently stale:
   A stable id has been requested.
 - **The engine publishes no `has_editor` flag**, so the rack shows the open-editor button on
   every device.
+- **A velocity you have just typed reads in decimal for one round trip.** The settled cell is
+  hex; the optimistic overlay that stands in until the engine answers is not, so a velocity of
+  0x40 flashes as `64` before settling to `40`.
+- **The pending card never warns that a proposal has gone stale**, though the check exists.
+- **`op` on a note in a loaded project's source clip used to be refused.** Fixed engine-side;
+  if you see `no_such_note` in the log, that is the shape to suspect.
 
 ### Refusal strings, and what they mean
 
@@ -1470,7 +1737,8 @@ disagree, the handler is right. Currently stale:
 | `track 2 carries ops (4 glyphs) — the column stays` | hiding an ops column that has ops |
 | `no note at the cursor to put ops on` | `ops`/`op` with no note |
 | `that note has no id this command can address` | a note id past 2^53 |
-| `slot 0 matches nothing` (via `no_such_slot`) | slot ids start at 1 |
+| `no slot 999 — re-read the kit, it has moved` | a slot id that does not exist (including 0) |
+| `no source 3 — load a sample first` / `no slice set 2 — chop it first` | a repoint at an id that is not there |
 | `"…" is longer than the 24 characters the load command carries` | sample name too long |
 | `slice mode is equal, transient or clear` | bad `slice` mode |
 | `track 1 already has an instrument — remove it first…` | one instrument per chain |
