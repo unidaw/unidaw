@@ -39,6 +39,7 @@ ENG=""
 cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
+. "$ROOT/tools/lib/engine_wait.sh"
 
 # A QUARTER-SECOND TONE, and the notes below are two seconds long. The gap is the whole
 # measurement: without a loop there is nothing left to play after 0.25 s.
@@ -164,10 +165,7 @@ if [ -x "$CLI" ]; then
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/loopcmd_$$" \
       ./daw_engine --project noloop --run-seconds 20 >"$TMP/cmd.log" 2>&1 ) &
   ENG=$!
-  for _ in $(seq 1 160); do
-    grep -q '"event":"project.load"' "$TMP/cmd.log" 2>/dev/null && break
-    sleep 0.25
-  done
+  wait_for_boot "$TMP/cmd.log" "$ENG" 160
   grep -q '"event":"project.load"' "$TMP/cmd.log" 2>/dev/null || \
     fail "the engine never loaded — see $TMP/cmd.log"
   cli() { env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/loopcmd_$$" "$CLI" "$@"; }

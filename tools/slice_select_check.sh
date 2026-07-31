@@ -54,6 +54,7 @@ keep_evidence() {
 }
 trap keep_evidence EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
+. "$ROOT/tools/lib/engine_wait.sh"
 
 # EIGHT EIGHTHS, EIGHT FREQUENCIES, well separated so a zero-crossing count tells them apart
 # without a windowing argument. Each starts with a sharp attack and decays, so the bursts are
@@ -301,10 +302,7 @@ if [ -x "$CLI" ]; then
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/selcfg_$$" \
       ./daw_engine --project sel --run-seconds 20 >"$TMP/cfg.log" 2>&1 ) &
   CFGENG=$!
-  for _ in $(seq 1 160); do
-    grep -q '"event":"project.load"' "$TMP/cfg.log" 2>/dev/null && break
-    sleep 0.25
-  done
+  wait_for_boot "$TMP/cfg.log" "$CFGENG" 160
   # ONE slice, and not one in the project's own 3..6 range, so a config that failed to apply
   # cannot be mistaken for one that did.
   env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="/selcfg_$$" "$CLI" \

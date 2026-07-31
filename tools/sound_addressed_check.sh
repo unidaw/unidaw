@@ -48,6 +48,7 @@ ENG=""
 cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
+. "$ROOT/tools/lib/engine_wait.sh"
 
 # TWO TONES, both steady and both long enough to outlast the note, so what is measured is which
 # SLOT is sounding rather than which one ran out of sample first.
@@ -187,10 +188,7 @@ SHM="/sndaddr_cmd_$$"
     DAW_CAPTURE_WAV="$TMP/cmd.wav" DAW_CAPTURE_SECONDS=6 \
     ./daw_engine --project off --run-seconds 22 >"$TMP/cmd.log" 2>&1 ) &
 ENG=$!
-for _ in $(seq 1 40); do
-  grep -q '"event":"project.load"' "$TMP/cmd.log" 2>/dev/null && break
-  sleep 0.25
-done
+wait_for_boot "$TMP/cmd.log" "$ENG" 40
 grep -q '"event":"project.load"' "$TMP/cmd.log" 2>/dev/null || \
   fail "the engine never loaded — see $TMP/cmd.log"
 ccli() { env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" "$CLI" "$@"; }

@@ -21,6 +21,7 @@
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -82,10 +83,7 @@ for _ in $(seq 1 120); do
 done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$HOME_DIR" "$CLI" "$@"; }
 cli do load blank --force >/dev/null 2>&1 || true
-for _ in $(seq 1 80); do
-  grep -q '"event":"project.load"' "$HOME_DIR/eng.log" 2>/dev/null && break
-  sleep 0.25
-done
+wait_for_boot "$HOME_DIR/eng.log" "$ENG" 80
 sleep 1.0
 cli do add-device --track 0 --kind sampler --device-id 1 >/dev/null 2>&1 || true
 sleep 1.0

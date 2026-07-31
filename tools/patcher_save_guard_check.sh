@@ -25,6 +25,7 @@
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -90,10 +91,7 @@ for _ in $(seq 1 120); do
 done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load plain --force >/dev/null 2>&1 || true
-for _ in $(seq 1 80); do
-  if grep -q '"event":"project.load"' "$TMP/eng.log" 2>/dev/null; then break; fi
-  sleep 0.25
-done
+wait_for_boot "$TMP/eng.log" "$ENG" 80
 sleep 1
 
 # ---- CLEAN: no patcher edit, so the save must write no patcher data.
