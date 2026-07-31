@@ -141,7 +141,20 @@ const cells = await opsCells();
 // ---------------------------------------------------------------------------
 {
   const one = cells.length > 1 ? cells[1].text : null;
-  check(one === 'p40', 'one op with room shows its VALUE, not just its mark', JSON.stringify(one));
+  /*
+   * ONE GLYPH, EVEN WHEN THERE IS ROOM FOR THE VALUE.
+   *
+   * This asserted `p40` for a while — the cell drew the fullest form that fit. Two things ended
+   * that: it ALLOCATED a canonical string per cell per frame while scrolling (alloc.mjs measured
+   * +200 B/draw over a 1200 budget, and no per-cell cache helps when every cell holds a
+   * different note), and it made a column a MIXTURE — one op showed a value, three showed
+   * glyphs, so scanning meant reading two notations at once.
+   *
+   * The value is one keypress away in the readout, which is a better answer than squeezing it
+   * in where it happens to fit.
+   */
+  check(one === 'p', 'one op draws one glyph, like every other count of ops',
+        JSON.stringify(one));
   // The third note carries nothing, and `cells` only collects non-empty ones — so its absence
   // from the list IS the assertion that a note with no ops draws no ink.
   check(!cells.some((c) => c.text === '' || c.text === '···'),

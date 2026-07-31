@@ -2,7 +2,7 @@ import { pitchName } from './wire.js';
 import { nameChord } from './harmonymodel.js';
 import { DEFAULT_METER, createPosition, positionOf, sameMeter,
          ticksPerBar, ticksPerBeat, NANOTICKS_PER_QUARTER } from './meter.js';
-import { opsRun, opsCellText } from './rowops.js';
+import { opsRun } from './rowops.js';
 // The view-model: plain data describing exactly what is on screen right now.
 //
 // This is the boundary the whole frontend is built around. The renderer consumes
@@ -605,7 +605,6 @@ export function buildViewModel(opts, buf) {
      * that is the right default for a caller that has not measured, because the run
      * is the form that always fits.
      */
-    opsChars = 0,
     /**
      * The engine's harmony timeline, [{tick, root, scaleId}], for the column
      * between the time gutter and the first track.
@@ -1272,12 +1271,20 @@ export function buildViewModel(opts, buf) {
         const c2 = row.cells[base + 2];
         if (c2) {
           /*
-           * The fullest form that FITS: `p100` where there is room, `rpd` where there is not.
-           * `opsChars` is the cell's capacity in characters, measured by the caller — this file
-           * may not derive geometry (GUIDELINES 3.11), and a second copy of the box model here
-           * is how a paint and a hit test come to disagree.
+           * ONE GLYPH PER OP, always — never the values.
+           *
+           * This drew the fullest form that FIT for a while: `p100` where there was room, `rpd`
+           * where there was not. Two things killed it. It ALLOCATED — a canonical string per
+           * cell per frame, because during a scroll every cell genuinely holds a different note
+           * and no per-cell cache can help; alloc.mjs measured +200 B/draw and said so. And it
+           * was INCONSISTENT: a note with one op showed a value and a note with three showed
+           * glyphs, so scanning a column meant reading a mixture.
+           *
+           * The value is one keypress away — standing on the cell prints the canonical string —
+           * which is a better answer than squeezing it in where it happens to fit, and it is
+           * what "collapsed is one character for every op" meant in the first place.
            */
-          const run = opsCellText(c2, n, opsChars, ticksPerBeat(meter));
+          const run = opsRun(n);
           if (run) { c2.text = run; c2.kind = 'fx'; }
         }
       }

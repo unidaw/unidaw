@@ -171,53 +171,6 @@ function reduce(n, d) {
   return [n / g, d / g];
 }
 
-/**
- * THE FULLEST FORM THAT FITS, without allocating on the draw path.
- *
- * Collapsed-is-one-glyph is right when forty-three ops share a cell and wrong when one op has
- * the cell to itself: `p100` became `p` in the first version of this, losing a value from a
- * cell with room for it. So the rule is the obvious one — draw the canonical text when it fits
- * the cell, the glyph run when it does not — and the whole difficulty is doing that without
- * building a string per cell per frame.
- *
- * THE CACHE IS ON THE CELL, compared FIELD BY FIELD rather than by a packed key. Packing five
- * values into one number is not safe here (`sound` and `soundOffset` are u16, `delayTicks` is
- * u32, and 53 bits does not go round), and a string key would allocate to compare. Five integer
- * compares are cheaper than either and are exact.
- *
- * Cells are pooled and persist across frames, so after the first frame this rebuilds only when
- * a value actually changes or the cell is rebound by scrolling — which already rebinds
- * everything.
- *
- * @param cell   the view-model cell, used as the cache
- * @param note   the note
- * @param chars  how many characters the cell can show; 0 means "never fits", i.e. always the run
- * @param beatTicks so the delay can be spelled as the fraction it was authored as
- */
-export function opsCellText(cell, note, chars, beatTicks) {
-  const run = opsRun(note);
-  if (!run) return '';
-  // The run is interned and always fits by construction (one character per op is the shortest
-  // form there is), so a cell too small for the text falls back to something never rebuilt.
-  if (!chars) return run;
-
-  let changed = cell._opsBeat !== beatTicks || cell._opsChars !== chars;
-  for (let i = 0; i < ROW_OPS.length; i++) {
-    const v = note[ROW_OPS[i].field] || 0;
-    if (cell._opsVals === undefined) { changed = true; break; }
-    if (cell._opsVals[i] !== v) { changed = true; }
-  }
-  if (!changed) return cell._opsStr;
-
-  if (cell._opsVals === undefined) cell._opsVals = new Array(ROW_OPS.length).fill(-1);
-  for (let i = 0; i < ROW_OPS.length; i++) cell._opsVals[i] = note[ROW_OPS[i].field] || 0;
-  cell._opsBeat = beatTicks;
-  cell._opsChars = chars;
-  const full = opsText(note, beatTicks);
-  cell._opsStr = full.length <= chars ? full : run;
-  return cell._opsStr;
-}
-
 /*
  * The mask bits SetRowOps takes — `ROW_OP_MASK_*` in ui/daw-bridge/src/layout.rs.
  *

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
-import { ROW_OPS, opGlyph, opsRun, opsText, opsCellText } from '../src/rowops.js';
+import { ROW_OPS, opGlyph, opsRun, opsText } from '../src/rowops.js';
 import { DEVICE_KINDS } from '../src/chainmodel.js';
 import {
   parseToken, parseChord, pitchOf, pitchToToken, hexValue, shiftDigit, NOTE_KEYS,
@@ -2668,47 +2668,7 @@ test('the canonical text form round-trips what the engine published', () => {
   assert.equal(opsText({ delayTicks: 160000 }), 'd160000t');
 });
 
-test('the cell draws the fullest form that fits', () => {
-  /*
-   * Collapsed-is-one-glyph is right when forty-three ops share a cell and WRONG when one op has
-   * the cell to itself. The first version of this drew `p` for a note carrying `p100`, losing a
-   * value from a cell with room for it — a regression the golden caught.
-   */
-  const cell = {};
-  const one = { probability: 100 };
-  assert.equal(opsCellText(cell, one, 13, 960000), 'p100',
-    'one op with room shows its VALUE');
-  // ...and the same note in a cell too small falls back to the run rather than clipping.
-  assert.equal(opsCellText({}, one, 2, 960000), 'p',
-    'too narrow shows the glyph, which is the form that always fits');
-  // Several ops that fit still show values — the rule is about WIDTH, not about op count.
-  assert.equal(opsCellText({}, { retrigger: 3, probability: 60 }, 13, 960000), 'ret3 p60');
-  // ...and the same three ops in a cell one character short fall back whole, never half.
-  const three = { retrigger: 3, probability: 60, delayTicks: 160000 };
-  const full = opsText(three, 960000);
-  assert.equal(opsCellText({}, three, full.length, 960000), full);
-  assert.equal(opsCellText({}, three, full.length - 1, 960000), opsRun(three),
-    'one character short falls back to the run — never a truncated value, which would be a '
-    + 'number that is not the number');
-  // A caller that has not measured gets the run, not a clipped string.
-  assert.equal(opsCellText({}, one, 0, 960000), 'p');
-});
 
-test('the ops cell cache rebuilds when a value changes and not otherwise', () => {
-  // The cache is what makes the fullest-form rule affordable: a string per cell per frame is
-  // exactly the allocation the draw path may not do.
-  const cell = {};
-  const note = { probability: 60 };
-  const a = opsCellText(cell, note, 13, 960000);
-  const b = opsCellText(cell, note, 13, 960000);
-  assert.equal(a, b);
-  assert.ok(a === b, 'unchanged values reuse the SAME string, not an equal one');
-  note.probability = 61;
-  const c = opsCellText(cell, note, 13, 960000);
-  assert.equal(c, 'p61', 'a changed value rebuilds — a guard that never releases is the other bug');
-  // Width changing rebuilds too: the same note in a narrowed cell must fall back.
-  assert.equal(opsCellText(cell, note, 2, 960000), 'p');
-});
 
 test('the device-kind table matches the engine enum', async () => {
   /*
