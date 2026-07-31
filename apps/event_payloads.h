@@ -3,6 +3,12 @@
 #include <cstdint>
 #include <cstddef>
 
+// EventId, for the static_assert tying SetRowOps's two id halves to it. A header that USES a type
+// must include it: this file compiled fine in daw_engine, which happened to include event_id.h
+// first, and broke juce_host_process, which did not — and that break went unnoticed because only
+// daw_engine was being rebuilt. Found by tools/contract_freshness_check.sh on its first run.
+#include "apps/event_id.h"
+
 namespace daw {
 
 constexpr uint32_t kParamTargetAll = 0xFFFFFFFFu;

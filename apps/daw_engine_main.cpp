@@ -13543,9 +13543,28 @@ struct TrackRuntime {
                 << " playback=" << currentPlayback
                 << " extra=" << extra << std::endl;
     };
+    // THE TRANSPORT ADVANCES BY A CARRIED FRACTION, not by a rounded tick.
+    //
+    // This used to round to a whole nanotick per block. A block is not a whole number of ticks —
+    // at 120 bpm / 44.1 kHz a 256-frame block is 11145.898 and a 64-frame block is 2786.48 — so
+    // rounding once per block accumulated error, at a rate that DEPENDED ON THE BLOCK SIZE. The
+    // tick position slid against the sample counter by about 1.3 samples per 7000 frames at 64
+    // frames, and a note's frame is blockSampleStart + an offset measured from the tick. That is
+    // why the same project rendered at 64 and at 256 frames diverged (task #84), and why
+    // rewriting the note OFFSET could never fix it: both formulations measured from a drifting
+    // base.
+    //
+    // Carrying the remainder bounds the error below one nanotick forever instead of letting it
+    // grow. blockTicksFor is called EXACTLY ONCE per block — advanceTransport runs only on the
+    // no-host path, which then continues — so the carry advances once per block, which is the
+    // whole reason this can be stateful at all.
+    long double tickCarry = 0.0L;
     auto blockTicksFor = [&](uint64_t atNanotick) -> uint64_t {
-      return tickConverter.samplesToNanoticks(
+      tickCarry += tickConverter.samplesToNanoticksExact(
           static_cast<int64_t>(engineConfig.blockSize), atNanotick);
+      const long double whole = std::floor(tickCarry);
+      tickCarry -= whole;
+      return static_cast<uint64_t>(whole);
     };
     while (running.load()) {
       // Offline: produce nothing until the pump says the transport is at a known start. See
@@ -13607,6 +13626,10 @@ struct TrackRuntime {
         continue;
       }
       if (resetTimeline.exchange(false)) {
+        // The fractional tick goes back to zero with the position. Without this a second render
+        // would start with whatever fraction the first one happened to end on, and two bounces
+        // of the same project would differ — which is the property this whole file protects.
+        tickCarry = 0.0L;
         // Rewind to the loop start (Stop), resetting the audio playback position
         // with it so the next Play begins there rather than mid-block.
         transportNanotick.store(loopStartNanotick.load(std::memory_order_acquire),
