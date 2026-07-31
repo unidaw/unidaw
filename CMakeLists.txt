@@ -565,6 +565,12 @@ add_test(NAME sampler_kit
 )
 set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A gated note that fills its clip still sounds, and so does one shorter than a block.
+add_test(NAME full_length_note
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/full_length_note_check.sh
+)
+set_tests_properties(full_length_note PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # The sample loop is settable by command and audible when it is.
 add_test(NAME sampler_loop
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_loop_check.sh
