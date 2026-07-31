@@ -11898,6 +11898,23 @@ struct TrackRuntime {
         std::shared_ptr<const TrackStateSnapshot> snapshot;
         {
           std::lock_guard<std::mutex> lock(runtime->trackMutex);
+          // ADD, REMOVE AND MOVE ALL CHANGE WHETHER A TRACK HAS A SAMPLER, and none of them said
+          // so. refreshSamplerForTrack's own comment claims it is "called from EVERY site that
+          // changes a chain, so 'did you remember to rebuild the sampler' is not a question
+          // anyone has to answer twice" — and this, the site that adds and removes devices, was
+          // not one of them. The comment was the assertion, and comments do not run.
+          //
+          // A sampler added through AddDevice therefore had no snapshot: not installed on the
+          // audio thread, and its kit read-back answering found:false, which is the same answer
+          // as "there is no sampler on that device". That is exactly the interval — created but
+          // not yet loaded — when a UI most wants to say "here it is, put something in it", and
+          // it could say nothing. Reported by the web-UI agent from the outside, as the only
+          // symptom visible from there.
+          //
+          // Removing a sampler matters just as much in the other direction: without this the
+          // snapshot outlives the device and the track keeps playing an instrument that is no
+          // longer in its chain.
+          refreshSamplerForTrack(*runtime);
           snapshot = buildTrackSnapshot(runtime->track);
         }
         std::atomic_store_explicit(&runtime->trackSnapshot,

@@ -38,7 +38,7 @@ daw-cli — control surface for a running engine
                                    edit one slot field (--field with no match lists them all)
   daw-cli get sampler-kit --track N [--device D]
                                    the device's slots, as the ENGINE has them
-  daw-cli do sampler-slice --track N --source 1 [--mode transient|equal|clear]
+  daw-cli do sampler-slice --track N --source 1 [--mode transient|equal|clear] [--count 16] [--no-slots]
                           [--sensitivity 0-1000] [--count 16] [--snap TICKS] [--slots]
                                    chop a source; --slots makes one playable slot per slice
   daw-cli do sampler-marker --track N --source 1 --op add|move|remove [--marker ID] [--frame F]
@@ -2265,7 +2265,14 @@ fn main() {
                     let max = flag_u64(&args, "--max", Some(64)).unwrap_or(64) as u32;
                     let snap = flag_u64(&args, "--snap", Some(0)).unwrap_or(0) as u32;
                     let base = flag_u64(&args, "--base-key", Some(36)).unwrap_or(36) as u8;
-                    let make_slots = args.iter().any(|a| a == "--slots");
+                    // SLOTS ON BY DEFAULT. A slice set with no slots is a cut nothing plays,
+                    // which is a surprising thing to be handed when you asked for a break;
+                    // re-cutting the markers without disturbing the slots is the rarer intent
+                    // and now says so with --no-slots. --slots is still accepted so existing
+                    // scripts keep working. The web-UI's slice verb defaults the same way, and
+                    // two surfaces onto one command disagreeing about its default is its own
+                    // small bug.
+                    let make_slots = !args.iter().any(|a| a == "--no-slots");
                     let mode_arg = args
                         .iter()
                         .position(|a| a == "--mode")

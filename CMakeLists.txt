@@ -565,6 +565,12 @@ add_test(NAME sampler_kit
 )
 set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Every part of a chopped file is reachable, and a new sampler exists before it is loaded into.
+add_test(NAME sampler_chop_reach
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_chop_reach_check.sh
+)
+set_tests_properties(sampler_chop_reach PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A sampler edit must not free the snapshot its sounding voices are reading.
 add_test(NAME sampler_edit_while_playing
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/sampler_edit_while_playing_check.sh
