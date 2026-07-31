@@ -2025,6 +2025,32 @@ fn build_sound_addressed(body: &str) -> Option<Result<UiCommandPayload, &'static
 /// keeping apart: 32 would silently pack as 0 because `packClipGrid` gives the field five bits,
 /// and 0 is that packer's SENTINEL for "no grid on this extent". Clamping either would hand back
 /// a subdivision nobody asked for, with no way to notice.
+/// CUT ON THE NEXT NOTE, OR LET IT RING (opcode 93) — per track.
+///
+/// `addNoteToClip` truncates the sounding note in the same column UNCONDITIONALLY, in the
+/// DOCUMENT, so the duration the player typed is destroyed at entry and no later view can
+/// recover it. Backend's own note: this is the only setting in the tracker that decides whether
+/// an edit LOSES DATA, which is why it is worth a command rather than a preference.
+///
+/// `value0` 0 = truncate (today's behaviour, and the default), 1 = leave the sounding note
+/// alone. Nothing in playback changes — the scheduler already honours overlapping durations.
+fn build_allow_overlap(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
+    if !is_type(body, "allowoverlap") { return None; }
+    Some(Ok(UiCommandPayload {
+        command_type: UiCommandType::SetTrackAllowNoteOverlap as u16,
+        flags: 0,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        plugin_index: 0,
+        note_pitch: 0,
+        value0: if parse_num(body, "\"on\"").unwrap_or(1) != 0 { 1 } else { 0 },
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    }))
+}
+
 fn build_lines_per_beat(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
     if !is_type(body, "linesperbeat") { return None; }
     let Some(n) = parse_num(body, "\"lpb\"") else {
@@ -3273,6 +3299,7 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_track_collapsed(body) { return r; }
     if let Some(r) = build_harmony_quantize(body) { return r; }
     if let Some(r) = build_lines_per_beat(body) { return r; }
+    if let Some(r) = build_allow_overlap(body) { return r; }
 
     let mut p = UiCommandPayload {
         command_type: UiCommandType::None as u16,

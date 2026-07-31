@@ -45,6 +45,17 @@ const SNAPPED = 'the engine did not take that parameter change — bar reset';
 /** What a drag says when nothing is wired to carry it. */
 const NO_ROUTE = 'nothing is listening for parameter edits';
 
+/*
+ * THE WAVEFORM CONTRACT, copied from arrange.js because both sides of it must agree.
+ *
+ * Windows are keyed on (source, decimation, firstFrame) with the decimation a POWER OF TWO and
+ * the first frame anchored to a multiple of `dec * WAVE_TILE_COLS`. Asking for anything else
+ * produces a key nothing ever lands under — a request that succeeds and an answer that never
+ * arrives, which is indistinguishable from a source that failed to decode.
+ */
+const WAVE_TILE_COLS = 4096;
+const WAVE_MASK_BOTH = 3;
+
 export class Chain {
   /**
    * @param {HTMLElement} host
@@ -326,6 +337,22 @@ export class Chain {
       const space = div('dv-pspace', list);
       list._card = el;
       el._list = list; el._space = space;
+      /*
+       * THE SAMPLE VIEW — one sampler's audio, with its slice boundaries drawn on it.
+       *
+       * A CANVAS, and a sibling of the list rather than a row in it: the list is a pooled,
+       * absolutely-positioned row machine keyed by parameter index, and a waveform is one
+       * picture. It sits hidden until `defaultView` says otherwise, so an ordinary rack pays a
+       * single detached element per card and nothing else.
+       *
+       * The kit list is what a sampler shows by default and it stays the default: this answers
+       * "where in the file is slice 3", which is a different question from "what is on pad 3"
+       * and the reason the extents were published at all.
+       */
+      const wave = document.createElement('canvas');
+      wave.className = 'dv-wave';
+      el.insertBefore(wave, list);
+      el._wave = wave; el._waveCtx = null; el._waveKey = ''; el._waveOn = null;
       el._rows = [];
       el._fIn = null; el._fOut = null;
       el._scrollTop = 0; el._spaceH = -1;
@@ -839,6 +866,26 @@ export class Chain {
    * never removed, like everything else here.
    */
   _params(el, c) {
+    /*
+     * THE SAMPLE VIEW REPLACES THE LIST, and only when it has something to draw.
+     *
+     * `_paintWave` returns false while the window is still in flight, and the list stays up
+     * until it lands — a blank canvas where a waveform should be is indistinguishable from a
+     * file that decoded to silence, and the pad list is a better thing to be looking at while
+     * you wait than an empty box.
+     *
+     * The rows are hidden rather than skipped: `_params` below still owns them, and leaving
+     * them visible under a canvas would put a second thing in the same space.
+     */
+    const wantWave = c.defaultView === 1 && !!c.sample;
+    const painted = wantWave ? this._paintWave(el, c) : false;
+    if (el._waveOn !== painted) {
+      el._waveOn = painted;
+      el._wave.style.display = painted ? '' : 'none';
+      el._list.style.display = painted ? 'none' : '';
+    }
+    if (painted) return;
+
     const rows = el._rows;
     const n = c.paramCount;
     if (!n) {
@@ -926,6 +973,150 @@ export class Chain {
     if (rh > 0) this._rowH = rh;
     if (lh > 0) this._listH = lh;
     this._geom = this._rowH > 0 && this._listH > 0;
+  }
+
+  /**
+   * Hand the rack the waveform cache and the request function, after both exist.
+   *
+   * The same two handles `arrange.bindAudio` takes, wired the same way and for the same reason:
+   * they are declared below the `new Chain(...)` that wants them and a `const` does not
+   * initialise when it hoists, so passing them to the constructor reads them in the temporal
+   * dead zone. That is the failure mode index.html's comment calls the only kind that fails
+   * silently.
+   */
+  bindAudio(cache, request) { this.waveCache = cache; this.requestWave = request; }
+
+  /**
+   * PAINT ONE SAMPLER'S AUDIO, with its slices marked.
+   *
+   * min/max pairs, exactly as the arrangement reads them — one decimated bucket per column, two
+   * int16s each — so this and the arrangement cannot come to disagree about what a window means.
+   * The whole file is asked for at once at a decimation that fits the card, because a card is
+   * 232px and the question is "where in the file is slice 3", which needs the WHOLE file on
+   * screen. Scrolling into it is the arrangement's job, not this one's.
+   *
+   * Returns false when there is nothing yet, so the caller can leave the kit list up rather
+   * than swapping to an empty box — a blank canvas where a waveform should be is
+   * indistinguishable from a file that decoded to silence.
+   */
+  _paintWave(el, c) {
+    const cv = el._wave;
+    const s = c.sample;
+    if (!cv || !s || !s.frames || !this.waveCache) return false;
+    /*
+     * MEASURED FROM WHICHEVER OF THE TWO IS LAID OUT.
+     *
+     * The canvas starts `display: none`, so its own box is 0x0 — and the first version read that
+     * and returned false, which kept it hidden, which kept the box at zero. A deadlock that
+     * looked exactly like a waveform window that never arrived: the model was right, the source
+     * was resolved, nine slices were ready, and nothing was ever drawn.
+     *
+     * The list occupies the same space and is up until the swap happens, so it is the honest
+     * measure while the canvas is hidden — and the canvas is the honest one afterwards, when the
+     * list is the one with no box.
+     */
+    const own = cv.getBoundingClientRect();
+    const alt = el._list ? el._list.getBoundingClientRect() : null;
+    const w = Math.round(own.width > 8 ? own.width : (alt ? alt.width : 0));
+    const h = Math.round(own.height > 8 ? own.height : (alt ? alt.height : 0));
+    if (w < 8 || h < 8) return false;
+    const dpr = window.devicePixelRatio || 1;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+      cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+      el._waveCtx = null;
+    }
+    if (!el._waveCtx) {
+      el._waveCtx = cv.getContext('2d');
+      el._waveCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    /*
+     * THE DECIMATION IS A POWER OF TWO AND THE REQUEST IS TILED, because that is the contract —
+     * the engine builds a PYRAMID, and windows are keyed on (source, decimation, firstFrame)
+     * anchored to a multiple of `dec * WAVE_TILE_COLS`.
+     *
+     * My first version asked for `ceil(frames / width)` columns starting at 0, which is neither:
+     * a decimation of 1680 is not a level the pyramid has and 0 is only accidentally a tile
+     * boundary. Nothing ever landed under the key it then looked for, so the view stayed empty
+     * with the model perfectly correct — the failure of an invented contract, which looks
+     * exactly like the failure of a broken one.
+     */
+    const framesPerPx = s.frames / w;
+    let dec = 1;
+    while (dec * 2 <= framesPerPx) dec *= 2;
+    const tileFrames = dec * WAVE_TILE_COLS;
+
+    const ctx = el._waveCtx;
+    ctx.clearRect(0, 0, w, h);
+    const style = getComputedStyle(cv);
+    const waveFill = style.getPropertyValue('--wave') || '#7aa2f7';
+    let drewAny = false;
+    let missing = false;
+    for (let tileFirst = 0; tileFirst < s.frames; tileFirst += tileFrames) {
+      const key = `${s.source}:${dec}:${tileFirst}`;
+      const win = this.waveCache.get(key);
+      if (!win) {
+        missing = true;
+        if (this.requestWave) {
+          this.requestWave(s.source, dec, tileFirst, WAVE_TILE_COLS, WAVE_MASK_BOTH);
+        }
+        continue;
+      }
+      const ch = win.channels > 0 ? win.channels : 1;
+      const cols = win.columns;
+      const bandH = h / ch;
+      // The device pixels this tile covers, and no others: walking the whole card per tile would
+      // be O(width x tiles) to draw the same picture.
+      const x0 = Math.max(0, Math.floor((tileFirst / s.frames) * w));
+      const x1 = Math.min(w, Math.ceil(((tileFirst + cols * dec) / s.frames) * w));
+      ctx.fillStyle = waveFill;
+      for (let cIdx = 0; cIdx < ch; cIdx++) {
+        const base = cIdx * cols * 2;
+        const mid = cIdx * bandH + bandH / 2;
+        const half = bandH / 2;
+        for (let x = x0; x < x1; x++) {
+          const f0 = (x / w) * s.frames;
+          let i0 = Math.floor((f0 - tileFirst) / dec);
+          let i1 = Math.ceil((f0 + framesPerPx - tileFirst) / dec);
+          if (i0 < 0) i0 = 0;
+          if (i1 > cols) i1 = cols;
+          if (i1 <= i0) continue;
+          let lo = 32767, hi = -32768;
+          for (let i = i0; i < i1; i++) {
+            const mn = win.pairs[base + i * 2], mx = win.pairs[base + i * 2 + 1];
+            if (mn < lo) lo = mn;
+            if (mx > hi) hi = mx;
+          }
+          const yt = mid - (hi / 32768) * half;
+          const yb = mid - (lo / 32768) * half;
+          // A MINIMUM OF ONE PIXEL, the same rule the arrangement states: min === max wherever
+          // the material is constant, and a zero-height rectangle draws nothing, so silence and
+          // DC would leave the band empty rather than flat.
+          ctx.fillRect(x, Math.round(yt), 1, Math.max(1, Math.round(yb) - Math.round(yt)));
+          drewAny = true;
+        }
+      }
+    }
+    // NOTHING YET IS NOT A PICTURE. A partly-arrived file is worth showing — it fills in — but a
+    // canvas with no audio on it at all is what the caller must not swap the pad list for.
+    if (!drewAny) return false;
+    void missing;
+    /*
+     * THE SLICE BOUNDARIES, which are the reason this view exists.
+     *
+     * A line at every slice's START, and the LAST slice's end, so N slices draw N+1 boundaries
+     * and the picture reads as regions rather than as marks. Drawn after the waveform so a
+     * boundary is never hidden by a loud transient sitting on it.
+     */
+    if (s.cuts.length) {
+      ctx.fillStyle = style.getPropertyValue('--cut') || '#e0af68';
+      for (const [b0] of s.cuts) {
+        const x = Math.round((b0 / s.frames) * w);
+        ctx.fillRect(Math.min(w - 1, x), 0, 1, h);
+      }
+      const last = s.cuts[s.cuts.length - 1][1];
+      ctx.fillRect(Math.min(w - 1, Math.round((last / s.frames) * w)), 0, 1, h);
+    }
+    return true;
   }
 
   _bind(r, c, idx, device) {
@@ -1077,6 +1268,22 @@ export class Chain {
       scroll: this.pool.slice(0, vm.cardCount).map((el) => el._scrollTop),
       extent: this.pool.slice(0, vm.cardCount).map((el) => el._spaceH),
       rowHeight: this._rowH,
+      /*
+       * THE SAMPLE VIEW, per card: which view the device remembers, whether this renderer
+       * actually PAINTED one, and what it was asked to draw.
+       *
+       * Three separate facts because they fail separately — the setting can be 1 while the
+       * source has not resolved, and the source can be there while the waveform window is still
+       * in flight — and a probe that reported one number would send a reader to the wrong layer.
+       * That is exactly what happened writing the check for this: `samplerKitCached(t, 0)` came
+       * back null because the card keys the kit on the device's REAL id and 0 is only a wildcard
+       * for COMMANDS, so the state looked absent when it was merely somewhere else.
+       */
+      views: vm.cards.slice(0, vm.cardCount).map((c) => c.defaultView),
+      painted: this.pool.slice(0, vm.cardCount).map((el) => !!el._waveOn),
+      samples: vm.cards.slice(0, vm.cardCount).map(
+        (c) => (c.sample ? { source: c.sample.source, frames: c.sample.frames,
+                             cuts: c.sample.cuts.length } : null)),
       /*
        * WHAT THE METERS WERE DRAWN FROM, per card, as the fractions the renderer
        * actually wrote — not as the engine's current numbers.

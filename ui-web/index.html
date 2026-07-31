@@ -111,7 +111,7 @@ import { Mixer } from './src/mixer.js';
 import { Scope } from './src/scope.js';
 import { buildMixerModel, createMixerBuffer, createMixerState, reconcileMixer,
          gainAtPosition, FLAG_MUTE, FLAG_SOLO,
-         FLAG_HARMONY_QUANTIZE } from './src/mixermodel.js';
+         FLAG_HARMONY_QUANTIZE, FLAG_ALLOW_OVERLAP } from './src/mixermodel.js';
 import { Piano } from './src/piano.js';
 import { buildPianoModel, createPianoBuffer, PIANO_ZOOM, fitLowPitch,
          notesInRect, noteKey, transposedKey } from './src/pianomodel.js';
@@ -2619,6 +2619,14 @@ let waveRevision = 0;
  * declarations, where it can be seen to be after them.
  */
 arrange.bindAudio(waveCache, requestWaveform);
+/*
+ * ...AND THE RACK, which draws a sampler's audio in its sample view.
+ *
+ * Same two handles, same reason they are wired here rather than at construction: both are
+ * declared below the `new Chain(...)` that wants them, and a `const` does not initialise when
+ * it hoists.
+ */
+chain.bindAudio(waveCache, requestWaveform);
 
 // --- the waveform fixture --------------------------------------------------
 //
@@ -3431,6 +3439,23 @@ const dockApi = {
     }
     state.reject = null; schedule(); return true;
   },
+  /**
+   * CUT ON THE NEXT NOTE, OR LET IT RING (opcode 93).
+   *
+   * The only setting in the tracker that decides whether an edit LOSES DATA: note entry
+   * truncates the sounding note in the same column in the DOCUMENT, so with this off the
+   * duration you typed is destroyed at entry and no later view can recover it.
+   *
+   * Off is the default and today's behaviour, so nothing changes for anyone who does not ask.
+   */
+  allowOverlap: (t, on) => {
+    if (t < 0 || t >= state.tracks) { state.reject = 'no such track'; schedule(); return false; }
+    const want = on === undefined ? !allowOverlapOf(t) : !!on;
+    if (!conn || !conn.send({ type: 'allowoverlap', track: Number(t), on: want ? 1 : 0 })) {
+      state.reject = 'no engine'; schedule(); return false;
+    }
+    state.reject = null; schedule(); return true;
+  },
   harmonyQuantize: (t, on) => {
     if (t < 0 || t >= state.tracks) { state.reject = 'no such track'; schedule(); return false; }
     const now = harmonyQuantizeOf(t);
@@ -3897,6 +3922,17 @@ const opsForced = new Uint8Array(64);
  * Read rather than remembered: it is engine state, it survives a reload, and a local copy would
  * be one more thing to get out of step with a project someone else saved.
  */
+/**
+ * Whether note entry on track `t` leaves the sounding note alone instead of truncating it.
+ *
+ * The engine's own flag, bit 4 of the per-track mixer byte. Read rather than remembered for the
+ * same reason as the one below: it is engine state and it survives a reload.
+ */
+function allowOverlapOf(t) {
+  const f = engine && engine.mixFlags;
+  return !!(f && t < f.length && (f[t] & FLAG_ALLOW_OVERLAP) !== 0);
+}
+
 function harmonyQuantizeOf(t) {
   // `mixFlags`, the engine's own per-track byte — not `mixerState`, which is this window's
   // optimistic copy of gain/pan/mute/solo and knows nothing about this bit.
@@ -8554,6 +8590,13 @@ window.__uni = {
   /** Collapse/expand a parent's children, and what is folded right now. */
   fold: (t) => dockApi.fold(t),
   harmonyQuantize: (t, on) => dockApi.harmonyQuantize(t, on),
+  allowOverlap: (t, on) => dockApi.allowOverlap(t, on),
+  /** Per track, whether note entry leaves the sounding note alone. */
+  overlapping: () => {
+    const out = [];
+    for (let t = 0; t < state.tracks; t++) out.push(allowOverlapOf(t) ? 1 : 0);
+    return out;
+  },
   savePatch: (n) => dockApi.savePatch(n),
   linesPerBeat: (t, n) => dockApi.linesPerBeat(t, n),
   /** Per track, whether it quantizes to the harmony timeline — so a control can show its state. */

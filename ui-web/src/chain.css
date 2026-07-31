@@ -129,6 +129,20 @@
    absolutely positioned inside a spacer, nothing outside this box depends on
    what is in it, and eight of these on screen must not cost eight subtree
    invalidations per frame. */
+/* THE SAMPLE VIEW: one sampler's audio with its slice boundaries on it.
+   Takes the same space the parameter list does — the two are alternatives, never both — and is
+   `display: none` until the renderer has a window to paint, so a card never shows an empty box
+   where a waveform is coming. The two colours are custom properties so a theme owns them and
+   this file's painter only has to know which is which. */
+.dv-wave {
+  flex: 1 1 auto; min-height: 0; width: 100%;
+  display: none;
+  background: var(--uni-surface-tracker-bg);
+  border-radius: 2px;
+  --wave: var(--base-accent-ramp-400);
+  --cut: var(--uni-text-fx);
+}
+
 .dv-plist {
   flex: 1 1 auto; min-height: 0;
   position: relative;

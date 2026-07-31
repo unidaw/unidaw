@@ -817,6 +817,7 @@ const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'sampl
                      'quantize', 'moveDevice', 'chord', 'delChord', 'deleteHarmony',
                      'addDevice', 'openEditor', 'newSong', 'fold', 'opsColumn', 'opsShown',
                      'harmonyQuantize', 'harmonyQuantized', 'savePatch', 'linesPerBeat',
+                     'allowOverlap', 'overlapping',
                      'samplerSlotName',
                      'edit', 'harmony', 'ask', 'forget',
                      'clips', 'moveClip', 'trimClip', 'delClip', 'addClip',
@@ -2265,6 +2266,8 @@ const OP_REGISTRY = {
   'save-patch': { cli: null, agent: null, why: 'gap' },
   // A lane's subdivision (opcode 92). Landed engine-side today; no CLI verb yet.
   lpb: { cli: null, agent: null, why: 'gap' },
+  // Whether note entry cuts the sounding note (opcode 93). Landed engine-side today.
+  'note-overlap': { cli: null, agent: null, why: 'gap' },
   // Which columns this window draws. Genuinely a view decision — the engine already remembers
   // the only half that outlives the tab, which is whether the ops are THERE.
   'ops-column': { cli: null, agent: null, why: 'view' },
@@ -2318,7 +2321,7 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                  'filter', 'soundaddr',
                  // Reached the engine from this app first, both of them: saving a patcher preset
                  // and a lane's subdivision. The CLI owes them a verb rather than the reverse.
-                 'save-patch', 'lpb',
+                 'save-patch', 'lpb', 'note-overlap',
                  // The sampler read-back. Reached the engine from this app first; daw-cli has
                  // no verb for it, which is the usual direction reversed and worth recording.
                  'kit',
@@ -2374,7 +2377,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
                    'sampler', 'load-sample', 'slice', 'slot-name', 'vintage',
-                   'harmony-quantize', 'save-patch', 'lpb',
+                   'harmony-quantize', 'save-patch', 'lpb', 'note-overlap',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
 
