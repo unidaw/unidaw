@@ -137,8 +137,14 @@ json.dump({"schema_version": 4, "meta": {"name": "pool"}, "nanoticks_per_quarter
 PY
 }
 
-# render <project> <outName> <threads>   — threads "auto" leaves the variable unset, which is
-# what a user gets; any number forces exactly that many.
+# render <project> <outName> <threads>   — threads "auto" leaves the variable unset; any number
+# forces exactly that many AND forces the pool on.
+#
+# The pooled runs pass an explicit 8 rather than "auto" deliberately. The pool now engages on the
+# WORK — at eight sampler tracks one thread has room to spare and the adaptive rule correctly
+# leaves it serial — so "auto" here would compare a serial render against a serial render and
+# prove nothing at all. An explicit count means "I know what I want" and turns adaptation off,
+# which is exactly what a check needs.
 render() {
   local threadEnv=""
   [ "$3" = "auto" ] || threadEnv="DAW_ENGINE_RENDER_THREADS=$3"
@@ -166,7 +172,7 @@ compare() {  # compare <label> <wavA> <wavB> <logB>
 # ---- ISOLATED: no routing, so every track goes in the parallel group.
 project iso 8 0
 render iso iso1 1
-render iso isoN auto
+render iso isoN 8
 POOLN="$(grep -o 'Render pool: [0-9]* thread' "$TMP/isoN.log" | tail -1 | grep -o '[0-9]*')"
 [ "${POOLN:-1}" -gt 1 ] || fail "the pool ran with ${POOLN:-1} thread(s), so the parallel path
         was never exercised and this check proves nothing. It needs a machine with >3 cores, or
@@ -176,7 +182,7 @@ compare "isolated" "$TMP/iso1.wav" "$TMP/isoN.wav" "$TMP/isoN.log"
 # ---- ROUTED: track 0's audio feeds track 1, so both must fall back to the serial group.
 project rt 8 1
 render rt rt1 1
-render rt rtN auto
+render rt rtN 8
 compare "routed  " "$TMP/rt1.wav" "$TMP/rtN.wav" "$TMP/rtN.log"
 
 echo "render_pool_check: PASS — the thread count is not observable in the output"

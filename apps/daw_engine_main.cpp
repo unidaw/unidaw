@@ -2614,6 +2614,19 @@ struct TrackRuntime {
   // worse. DAW_ENGINE_RENDER_THREADS overrides; 0 or 1 keeps everything on the producer thread,
   // which is also the reference the parallel path is checked for bit-identical output against.
   daw::RenderPool renderPool;
+  // WHETHER TO USE IT THIS BLOCK, and it is not "always". Measured on a real device: at 8 sampler
+  // tracks one thread spends 0.18x of the block budget and has room to spare, and waking seven
+  // workers every block to help costs MORE than it saves — across four runs the pool dropped
+  // 4/0/2/7 callbacks where one thread dropped 0/3/0/0. Those workers compete for cores with the
+  // audio callback itself, which is the one thread that must never wait.
+  //
+  // So the pool engages on the WORK, not on the track count. The signal is summed sampler CPU per
+  // block, which is the serial-equivalent cost and therefore means the same thing whichever mode
+  // is currently running — a wall-clock signal would read low BECAUSE the pool was on and
+  // oscillate the moment it turned off.
+  bool poolAlwaysOn = false;
+  bool poolEngaged = false;
+  double poolWorkEwmaUs = 0.0;
   {
     const unsigned hw = std::thread::hardware_concurrency();
     unsigned want = hw > 3 ? hw - 2 : 1;
@@ -2624,8 +2637,12 @@ struct TrackRuntime {
     if (want > 1) {
       renderPool.start(want - 1);  // the producer thread is the other worker
     }
+    // AN EXPLICIT COUNT MEANS "I KNOW WHAT I WANT" and turns the adaptive rule off, which is
+    // also how a test forces the pool on regardless of how little work its fixture makes.
+    poolAlwaysOn = std::getenv("DAW_ENGINE_RENDER_THREADS") != nullptr && want > 1;
     std::cout << "Render pool: " << (renderPool.workerCount() + 1)
-              << " thread(s) for per-track production" << std::endl;
+              << " thread(s) for per-track production"
+              << (poolAlwaysOn ? " (forced)" : " (engaged when the work needs it)") << std::endl;
   }
 
   std::unique_ptr<daw::IRuntime> audioRuntime;
@@ -15252,6 +15269,29 @@ struct TrackRuntime {
             entry.flags = kEventFlagMusicalLogic;
             std::memcpy(entry.payload, &onPayload, sizeof(onPayload));
             scratchpad[outCount++] = entry;
+            // TEE TO THE BUILT-IN SAMPLER. Without this a patcher could not play the sampler at
+            // all: every one of the six existing tees is on the CLIP path, so a Euclidean or
+            // RandomDegree node produced MIDI that reached a hosted plugin and an in-engine
+            // instrument on the same track never heard a note. Verified by rendering exactly
+            // that project and getting a peak of zero.
+            //
+            // It is the same tee the clip path does, and it has to be: `sound` is 0 here because
+            // the patcher's MusicalLogicPayload carries no sound address, so the KEYMAP picks the
+            // slot from the resolved pitch — which is the right default and the one every drum
+            // kit already relies on. A node that chooses a slice (docs/SAMPLER_DESIGN.md's
+            // SliceSelect) is what would fill that field, and it needs this path to exist first.
+            if (runtime.samplerDeviceId != 0) {
+              daw::SamplerEvent se;
+              se.offsetInBlock = static_cast<uint32_t>(offsetSamples);
+              se.kind = daw::SamplerEventKind::NoteOn;
+              se.pitch = pitch;
+              se.velocity = velocity;
+              se.column = 0;
+              se.sound = 0;
+              se.offsetFrac = 0;
+              se.noteId = noteId;
+              runtime.samplerEvents.push_back(se);
+            }
 
             if (logic.duration_ticks > 0) {
               const uint64_t noteEndTick = eventTick + logic.duration_ticks;
@@ -15280,6 +15320,16 @@ struct TrackRuntime {
                   offPayload.noteId = noteId;
                   std::memcpy(noteOffEntry.payload, &offPayload, sizeof(offPayload));
                   appendScratchpad(noteOffEntry, noteEndTick);
+                  if (runtime.samplerDeviceId != 0) {
+                    daw::SamplerEvent se;
+                    se.offsetInBlock = static_cast<uint32_t>(offOffset);
+                    se.kind = daw::SamplerEventKind::NoteOff;
+                    se.pitch = pitch;
+                    se.velocity = 0;
+                    se.column = 0;
+                    se.noteId = noteId;
+                    runtime.samplerEvents.push_back(se);
+                  }
                 }
               } else {
                 std::lock_guard<std::mutex> lock(runtime.activeNotesMutex);
@@ -16432,9 +16482,15 @@ struct TrackRuntime {
       for (auto* runtime : serialTracks) {
         processTrack(runtime);
       }
-      renderPool.parallelFor(parallelTracks.size(), [&](std::size_t i) {
-        processTrack(parallelTracks[i]);
-      });
+      if (poolAlwaysOn || poolEngaged) {
+        renderPool.parallelFor(parallelTracks.size(), [&](std::size_t i) {
+          processTrack(parallelTracks[i]);
+        });
+      } else {
+        for (auto* runtime : parallelTracks) {
+          processTrack(runtime);
+        }
+      }
 
       if (isPlaying) {
         uint64_t nextTicks = blockStartTicks + blockTicks;
@@ -16461,6 +16517,26 @@ struct TrackRuntime {
         }
         if (samplerUs > producerSamplerUsMax.load(std::memory_order_relaxed)) {
           producerSamplerUsMax.store(samplerUs, std::memory_order_relaxed);
+        }
+        // ENGAGE OR DISENGAGE, with HYSTERESIS so a project sitting near the line does not
+        // change mode every block — switching costs a thread wake-up per block, which is the
+        // very cost being avoided. Thresholds are fractions of the block deadline: at 8 sampler
+        // tracks the work is ~0.20x and stays serial, at 32 it is ~0.75x and the pool takes it.
+        poolWorkEwmaUs = poolWorkEwmaUs * 0.9 + static_cast<double>(samplerUs) * 0.1;
+        if (producerBlockBudgetUs > 0) {
+          const double frac =
+              poolWorkEwmaUs / static_cast<double>(producerBlockBudgetUs);
+          if (!poolEngaged && frac > 0.35) {
+            poolEngaged = true;
+            DAW_EVENT("producer.pool_engaged")
+                .field("work_us", static_cast<uint64_t>(poolWorkEwmaUs))
+                .field("budget_us", producerBlockBudgetUs);
+          } else if (poolEngaged && frac < 0.25) {
+            poolEngaged = false;
+            DAW_EVENT("producer.pool_disengaged")
+                .field("work_us", static_cast<uint64_t>(poolWorkEwmaUs))
+                .field("budget_us", producerBlockBudgetUs);
+          }
         }
         if (blockUs > producerBlockBudgetUs) {
           producerBlocksOverBudget.fetch_add(1, std::memory_order_relaxed);

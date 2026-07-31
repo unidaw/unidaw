@@ -561,10 +561,19 @@ add_test(NAME producer_load
 )
 set_tests_properties(producer_load PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A patcher generator driving the built-in sampler — a path that did not exist at all until the
+# note tee was added to the patcher's event-resolution route.
+add_test(NAME patcher_plays_sampler
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_plays_sampler_check.sh
+)
+set_tests_properties(patcher_plays_sampler PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # The pool through a REAL DEVICE in real time — the one place a late thread actually costs
 # something. Skips cleanly (exit 0, with a reason) on a machine with no audio device.
+# 24 tracks, not 8: the pool engages on the WORK now, and at 8 one thread has room to spare so
+# the adaptive rule correctly declines — the check would be comparing serial against serial.
 add_test(NAME realtime_pool
-  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/realtime_pool_check.sh 8
+  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/tools/realtime_pool_check.sh 24
 )
 set_tests_properties(realtime_pool PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
