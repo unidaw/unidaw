@@ -3076,6 +3076,29 @@ struct TrackRuntime {
     const uint64_t barLen = meter->signatureAt(tick).barNanoticks();
     return tick + (barLen > 0 ? barLen : fallback);
   };
+  // WHERE THE BAR CONTAINING A TICK STARTS — barEndTick's other half, and the thing a new clip
+  // is anchored to. Same snapshot, same reason: songMeter is under arrangeMutex and the callers
+  // hold trackMutex.
+  auto barStartTick = [&](uint64_t tick) -> uint64_t {
+    const auto meter =
+        std::atomic_load_explicit(&meterSnapshot, std::memory_order_acquire);
+    const uint64_t fallback =
+        4 * daw::NanotickConverter::kNanoticksPerQuarter;
+    if (!meter) {
+      return (tick / fallback) * fallback;
+    }
+    const uint64_t start = meter->tickAtBar(meter->barBeatAt(tick).bar);
+    // A degenerate map must not hand back a start PAST the tick — that would put a new clip's
+    // anchor after the note it was created for and give it a negative offset inside its own clip.
+    return start <= tick ? start : (tick / fallback) * fallback;
+  };
+  // The song's bar grid, for note entry and for segmenting a flat track into clips. Both used to
+  // take a bar LENGTH and compute (tick / length) * length, which is right in one meter and wrong
+  // in every project with a signature change: the bar containing a tick is then at a multiple of
+  // nothing, so new clips anchored that way land off the ruler the user is reading.
+  auto songBarGrid = [&]() -> daw::BarGrid {
+    return daw::BarGrid{[&](uint64_t tick) { return barStartTick(tick); }};
+  };
   // v28: moves whenever ANY automation changes — a point written, a lane created, a ripple that
   // moved points, a load, a slot reused. Deliberately NOT the clip version: automation is not
   // notes, and a client caching lanes on the clip version would re-read them on every keystroke.
@@ -6144,17 +6167,10 @@ struct TrackRuntime {
   // is held.
   auto locateEditTarget = [&](TrackRuntime& rt, uint64_t absTick,
                               bool createIfMissing) -> EditTarget {
-    // STILL A HARDCODED 4/4 BAR, and deliberately, unlike the three sites that now read the
-    // meter. This one is not "where does this bar end" — it is the ANCHOR a new clip gets, and
-    // resolveNoteEntry computes it as (tick / barLength) * barLength, which is the naive form
-    // time_signature_map.h warns about and cannot be made meter-correct by passing a different
-    // length: under a meter change the bar containing a tick is not at a multiple of anything.
-    //
-    // Fixing it means giving resolveNoteEntry the bar START rather than a length, and
-    // segmentEventsIntoClips needs a different start per event, so the pure function would have
-    // to take the map or a callback. That is the coordinated refactor task #43 names, and it
-    // MOVES WHERE CLIPS LAND in existing projects — a behaviour change that wants its own
-    // decision and its own check, not a drive-by in a commit about bar ends.
+    // THE STRETCH THRESHOLD is still one 4/4 bar, and that one is a FEEL setting — how far past
+    // a clip's end you can keep typing before a new clip starts — rather than a statement about
+    // the ruler. The ANCHOR, which is a statement about the ruler, now comes from the song's
+    // meter via songBarGrid (task #43).
     const uint64_t bar = 4 * daw::NanotickConverter::kNanoticksPerQuarter;
     std::vector<daw::PlacementSpan> spans;
     for (size_t i = 0; i < rt.sourcePlacements.size(); ++i) {
@@ -6180,7 +6196,7 @@ struct TrackRuntime {
                                   : (clipLen > 0 ? clipLen : contentEnd);
       spans.push_back(daw::PlacementSpan{*pl.at, effLen, clipLen, i});
     }
-    const auto decision = daw::resolveNoteEntry(spans, absTick, bar, bar);
+    const auto decision = daw::resolveNoteEntry(spans, absTick, bar, songBarGrid());
 
     auto findOwned = [&](uint32_t clipId) -> size_t {
       for (size_t i = 0; i < rt.ownedClips.size(); ++i) {
@@ -6633,7 +6649,7 @@ struct TrackRuntime {
         // segment, ids allocated above every retained clip.
         const uint64_t bar = 4 * document.nanoticksPerQuarter;
         const auto segments =
-            daw::segmentEventsIntoClips(trackClip.events(), bar, bar);
+            daw::segmentEventsIntoClips(trackClip.events(), bar, songBarGrid());
         for (const auto& seg : segments) {
           const uint32_t clipId = nextClipId++;
           daw::ProjectClip projectClip;

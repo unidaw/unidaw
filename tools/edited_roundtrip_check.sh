@@ -32,6 +32,7 @@
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -80,19 +81,14 @@ start_engine() {  # $1=shm  $2=logfile
   ( cd "$BUILD" && env DAW_UI_SHM_NAME="$1" DAW_PROJECT_DIR="$TMP" \
       ./daw_engine --run-seconds 40 >"$2" 2>&1 ) &
   ENG=$!
-  for _ in $(seq 1 160); do
-    if grep -q 'starting threads' "$2" 2>/dev/null; then return 0; fi
-    sleep 0.25
-  done
-  fail "the engine never came up (see $2)"
+  wait_for_boot "$2" "$ENG" 160 "starting threads"
 }
-wait_load() {  # $1=logfile  $2=how many loads should have happened by now
-  for _ in $(seq 1 80); do
-    n=$(grep -c '"event":"project.load"' "$1" 2>/dev/null; true)
-    [ "${n:-0}" -ge "$2" ] && return 0
-    sleep 0.25
-  done
-  return 1
+# Counts loads because this check reloads the same engine twice. The callers below already say
+# `|| fail`, so the outcome was asserted — what it could not do was notice the engine DYING while
+# it waited, and then all three call sites reported "never loaded" for a process that had exited.
+# wait_for_loads fails immediately with the log tail instead. Task #106.
+wait_load() {  # $1=logfile  $2=count  $3=pid  $4=what we are waiting for
+  wait_for_loads "$1" "${3:-}" "$2" 80 "${4:-a project load}"
 }
 
 # ---- THE SESSION. Each command is a thing a person does, and each one exercises a different
@@ -102,7 +98,7 @@ SHM="/edrt1_$$"
 start_engine "$SHM" "$TMP/eng1.log"
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load start --force >/dev/null 2>&1 || true
-wait_load "$TMP/eng1.log" 1 || fail "the starting project never loaded"
+wait_load "$TMP/eng1.log" 1 "$ENG" "the starting project to load"
 sleep 1
 
 cli do rename --track 0 --name "Kick Redone"      >/dev/null 2>&1 || true; sleep 0.5
@@ -194,7 +190,7 @@ SHM2="/edrt2_$$"
 start_engine "$SHM2" "$TMP/eng2.log"
 cli() { DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load editedA --force >/dev/null 2>&1 || true
-wait_load "$TMP/eng2.log" 1 || fail "the edited project never reloaded"
+wait_load "$TMP/eng2.log" 1 "$ENG" "the edited project to reload"
 sleep 1.5
 cli do save editedB --force >/dev/null 2>&1 || true
 sleep 1.8
@@ -207,7 +203,7 @@ echo "  reload (fresh engine) -> save preserves every one of them"
 # ---- AND AGAIN, for the fixed point. A field that mutates on each round trip (a normalisation
 # that is not idempotent) shows up here and nowhere above.
 cli do load editedB --force >/dev/null 2>&1 || true
-wait_load "$TMP/eng2.log" 2 || fail "the second reload never happened"
+wait_load "$TMP/eng2.log" 2 "$ENG" "the second reload"
 sleep 1.5
 cli do save editedC --force >/dev/null 2>&1 || true
 sleep 1.8
