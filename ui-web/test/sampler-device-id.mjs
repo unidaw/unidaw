@@ -344,6 +344,22 @@ stack.stop();
 const engineLog = (() => { try { return readFileSync(join(stack.root, 'engine.log'), 'utf8'); }
                            catch { return ''; } })();
 const underruns = (engineLog.match(/audio underrun/g) || []).length;
+const conclusive = underruns === 0;
+/*
+ * A CHECK THAT CANNOT BE ANSWERED IS NOT A CHECK THAT FAILED.
+ *
+ * When the producer underran, the device output silence and the capture recorded it, so every
+ * question about what the app played is unanswerable on this run — not answered "no". Reporting a
+ * busy machine as "the app makes no sound" is the kind of flake that teaches people to ignore a
+ * suite, so those checks are BLOCKED instead, and the run still fails on the underrun itself.
+ */
+let blocked = 0;
+const soundCheck = (ok, what, detail) => {
+  if (conclusive) return check(ok, what, detail);
+  blocked++;
+  console.log('  BLOCK', what, '— the producer underran, so this run cannot answer it');
+};
+
 /*
  * THE ENGINE'S OWN VOICE COUNTS, taken from what it published while the notes were sounding.
  * `found` and `slots` are structure and were always right; `voices` is the one number that says
@@ -390,7 +406,7 @@ if (!existsSync(WAV)) {
               (gat >= 0 ? ` at t=${gat.toFixed(1)}s` : '') +
               (firstLoud >= 0 ? `, first sound at t=${(firstLoud * per).toFixed(2)}s` : ', SILENT'));
 
-  check(firstLoud >= 0, "this project's master carries audio at all (control track)",
+  soundCheck(firstLoud >= 0, "this project's master carries audio at all (control track)",
         `the whole ${(mono.length / rate).toFixed(1)}s capture is below ${FLOOR} — if this fails, ` +
         `nothing below says anything about the sampler`);
 
@@ -412,17 +428,18 @@ if (!existsSync(WAV)) {
                 `${first.toFixed(4)}   t1 sampler-only(dev ${dev1}) ${behind.toFixed(4)}   ` +
                 `t2 with a VST(dev ${dev2}) ${hosted.toFixed(4)}`);
 
-    check(hosted > FLOOR, 'a sampler on a track that ALSO has a VST sounds',
+    soundCheck(hosted > FLOOR, 'a sampler on a track that ALSO has a VST sounds',
           `peak ${hosted.toFixed(4)} against ${control.toFixed(4)} for the control`);
-    check(behind > FLOOR, 'a sampler alone on its track sounds (non-zero device id)',
+    soundCheck(behind > FLOOR, 'a sampler alone on its track sounds (non-zero device id)',
           `peak ${behind.toFixed(4)} against ${control.toFixed(4)} for the control — the sampler ` +
           `renders into the host input plane, which is only read inside the segment loop, and ` +
           `segments are built only from VST devices (daw_engine_main.cpp:16109)`);
-    check(first > FLOOR, 'a sampler alone on its track sounds (device id 0)',
+    soundCheck(first > FLOOR, 'a sampler alone on its track sounds (device id 0)',
           `peak ${first.toFixed(4)} against ${behind.toFixed(4)} one track over`);
   }
 }
 
 check(errors.length === 0, 'nothing threw', errors.join(' | '));
-console.log(fail ? `\n${fail} of ${pass + fail} FAILED` : `\nALL PASS (${pass})`);
+const note = blocked ? ` · ${blocked} BLOCKED (the producer underran, so those questions are unanswerable on this run)` : '';
+console.log(fail ? `\n${fail} of ${pass + fail} FAILED${note}` : `\nALL PASS (${pass})${note}`);
 process.exit(fail ? 1 : 0);

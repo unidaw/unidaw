@@ -317,6 +317,22 @@ stack.stop();
 const engineLog = (() => { try { return readFileSync(join(stack.root, 'engine.log'), 'utf8'); }
                            catch { return ''; } })();
 const underruns = (engineLog.match(/audio underrun/g) || []).length;
+const conclusive = underruns === 0;
+/*
+ * A CHECK THAT CANNOT BE ANSWERED IS NOT A CHECK THAT FAILED.
+ *
+ * When the producer underran, the device output silence and the capture recorded it, so every
+ * question about what the app played is unanswerable on this run — not answered "no". Reporting a
+ * busy machine as "the app makes no sound" is the kind of flake that teaches people to ignore a
+ * suite, so those checks are BLOCKED instead, and the run still fails on the underrun itself.
+ */
+let blocked = 0;
+const soundCheck = (ok, what, detail) => {
+  if (conclusive) return check(ok, what, detail);
+  blocked++;
+  console.log('  BLOCK', what, '— the producer underran, so this run cannot answer it');
+};
+
 check(underruns === 0, 'the producer kept up (no underruns)',
       `${underruns} underrun report(s) — a starved producer outputs silence, so the sound checks ` +
       `below are INCONCLUSIVE rather than failing`);
@@ -331,9 +347,9 @@ if (!existsSync(WAV)) {
    * healthily and emits nothing. Peak, not average: two short one-shots in a fourteen-second
    * capture barely move a mean.
    */
-  check(s.peak > 0.01, 'the chop MAKES A SOUND when the transport runs',
+  soundCheck(s.peak > 0.01, 'the chop MAKES A SOUND when the transport runs',
         `peak ${s.peak.toFixed(4)} over ${s.seconds.toFixed(1)}s`);
-  check(s.loud >= 1, 'and there is at least one loud stretch', `${s.loud} slices above the floor`);
+  soundCheck(s.loud >= 1, 'and there is at least one loud stretch', `${s.loud} slices above the floor`);
 
   /*
    * ...AND THE TWO SLICES ARE DIFFERENT AUDIO.
@@ -347,17 +363,17 @@ if (!existsSync(WAV)) {
   const env = envelope(w.mono, w.rate, 0.02);
   const loudAt = env.map((v, i) => [v, i]).filter(([v]) => v > 0.01).map(([, i]) => i);
   if (loudAt.length < 2) {
-    check(false, 'two separate hits are visible in the capture', `${loudAt.length} loud windows`);
+    soundCheck(false, 'two separate hits are visible in the capture', `${loudAt.length} loud windows`);
   } else {
     // The two hits, taken as the first and last loud windows with a gap between them.
     const first = loudAt[0], last = loudAt[loudAt.length - 1];
-    check(last - first > 5, 'the two hits are separated in time',
+    soundCheck(last - first > 5, 'the two hits are separated in time',
           `windows ${first} and ${last}`);
     const grab = (at) => env.slice(at, at + 8);
     const a = grab(first), b = grab(last);
     const diff = a.reduce((acc, v, i) => acc + Math.abs(v - (b[i] || 0)), 0) / a.length;
     const scale = Math.max(...a, ...b, 1e-9);
-    check(diff / scale > 0.05,
+    soundCheck(diff / scale > 0.05,
           'and slice 1 and slice 7 are DIFFERENT audio — a chop whose slots all played the '
           + 'whole file would be structurally perfect and musically useless',
           `mean envelope difference ${(diff / scale).toFixed(3)} of peak`);
@@ -365,5 +381,6 @@ if (!existsSync(WAV)) {
 }
 
 check(errors.length === 0, 'and nothing threw', errors.slice(0, 2).join(' | '));
-console.log(`\n${fail === 0 ? `ALL PASS (${pass} checks)` : `${fail} of ${pass + fail} FAILED`}`);
+const note = blocked ? ` · ${blocked} BLOCKED (the producer underran, so those questions are unanswerable on this run)` : '';
+console.log(`\n${fail === 0 ? `ALL PASS (${pass} checks)` : `${fail} of ${pass + fail} FAILED`}${note}`);
 process.exit(fail === 0 ? 0 : 1);
