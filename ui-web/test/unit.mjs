@@ -2734,6 +2734,54 @@ test('every engine command has a caller, or a recorded reason it has none', asyn
 // ROW OPS: the mirror, and the run that replaced the priority chain.
 // ---------------------------------------------------------------------------
 
+test("rowop.rs's own two orders agree — the schema's and the emitter's", async () => {
+  /*
+   * A MIRROR CANNOT BE RIGHT ABOUT BOTH IF THE SOURCE DISAGREES WITH ITSELF.
+   *
+   * `OP_SCHEMA` is the list this side mirrors — it fixes the DRAW order of the collapsed glyph
+   * run — and `format_row_ops` builds the canonical TEXT. They are two orders of the same ops in
+   * one file, and nothing held them equal: the schema listed `o` fifth while the emitter pushed
+   * it last, so a row carrying an offset AND a ramp spelled `ret4 o80 rv-60 c1:2` here and
+   * `ret4 rv-60 c1:2 o80` there.
+   *
+   * Nothing BREAKS, because the parser is order-free and both strings mean the same row. But
+   * "canonical" means one form, and a person reading the glyphs and then opening the cell would
+   * see two different orders for one note. This is the check that says so.
+   */
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../../ui/daw-bridge/src/rowop.rs', import.meta.url), 'utf8');
+
+  const schemaBlock = src.slice(src.indexOf('OP_SCHEMA'), src.indexOf('];', src.indexOf('OP_SCHEMA')));
+  const schema = [...schemaBlock.matchAll(/prefix:\s*"([^"]+)"/g)].map((m) => m[1]);
+
+  // The emitter's order is the order it PUSHES, and each push starts with the op's prefix.
+  const emitStart = src.indexOf('pub fn format_row_ops');
+  const emitBlock = src.slice(emitStart, src.indexOf('\n}', emitStart));
+  const emitted = [];
+  for (const m of emitBlock.matchAll(/out\.push\(format!\("([a-z]+)/g)) {
+    if (!emitted.includes(m[1])) emitted.push(m[1]);
+  }
+  assert.ok(schema.length > 4 && emitted.length > 4,
+            `parsed both orders: schema ${JSON.stringify(schema)}, emitter ${JSON.stringify(emitted)}`);
+  /*
+   * INVERTED, AND IT MOVES THE DAY IT IS FIXED.
+   *
+   * The orders DISAGREE today — schema `ret p d s o rv c`, emitter `ret p d s rv c o` — so a row
+   * carrying an offset and a ramp spells `ret4 o80 rv-60 c1:2` here and `ret4 rv-60 c1:2 o80`
+   * there. Reported to backend, who owns both.
+   *
+   * Asserted as the CURRENT state rather than the correct one, for the reason this repo records
+   * every cross-side gap that way: a permanently red suite is one nobody reads, and a comment is
+   * something nobody runs. This fails the moment the two orders agree, which is exactly when I
+   * want to hear about it — the mirror follows OP_SCHEMA, so aligning them is a one-line change
+   * here that must not be forgotten.
+   */
+  assert.notDeepEqual(emitted, schema,
+    'KNOWN: format_row_ops and OP_SCHEMA order their ops differently, so the canonical text and '
+    + 'the glyph run disagree for a row carrying both an offset and a ramp. Reported; this check '
+    + 'INVERTS the day they are aligned, and the mirror here follows OP_SCHEMA.');
+});
+
 test('the JS row-op mirror matches the Rust schema exactly', async () => {
   /*
    * `ROW_OPS` in rowops.js is a MIRROR of `OP_SCHEMA` in
