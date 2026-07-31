@@ -626,7 +626,17 @@ public:
       if (track.hostReady && !track.hostReady->load(std::memory_order_acquire)) {
         continue;
       }
-      if (track.active && !track.active->load(std::memory_order_acquire)) {
+      // OFFLINE, `active` IS NOT ASKED — see awaitNextBlock for why it lags the data by a
+      // producer pass. The pump has already waited for this block to be acknowledged, so the
+      // audio is there and skipping the track would put a hole in the file.
+      //
+      // LIVE, the skip stays. There the lag is harmless — a block arriving before the flag
+      // catches up is one callback of silence nobody can hear — and `active` carries more than
+      // "has produced": it is cleared in a dozen places for chain changes, host restarts and
+      // device removal, and mixing a track through one of those is a real hazard. A render is a
+      // batch job with no editing going on, so offline that hazard does not exist.
+      if (!m_offline && track.active &&
+          !track.active->load(std::memory_order_acquire)) {
         continue;
       }
       hasActiveTrack = true;
@@ -1164,9 +1174,21 @@ public:
         if (track.hostReady && !track.hostReady->load(std::memory_order_acquire)) {
           continue;
         }
-        if (track.active && !track.active->load(std::memory_order_acquire)) {
-          continue;
-        }
+        // `active` IS DELIBERATELY NOT CONSULTED HERE, and this is the fix for a render whose
+        // head came out silent.
+        //
+        // `active` is DERIVED from completedBlockId, one producer pass later — the producer reads
+        // the mailbox, sees completed > 0, and only then sets the flag. So between the host
+        // acknowledging block 1 and the producer noticing, a track has the data and says it is
+        // inactive. Skipping it here made the pump conclude the block was ready, process() applied
+        // the same skip, and the block went to the file as silence. Two blocks of it, reproducibly,
+        // whenever starting the render pool's workers made that window wide enough.
+        //
+        // hostReady and mute above are the real filters: a hostReady, unmuted track is dispatched
+        // every block and acknowledges every block, whether or not it has any material. So waiting
+        // on completedBlockId is exactly right and cannot hang past the caller's timeout — and a
+        // host that genuinely never acknowledges SHOULD stall the render with a diagnostic rather
+        // than quietly write silence.
         const uint32_t completed =
             track.completedBlockId->load(std::memory_order_acquire);
         if (completed < want && want - completed > worstGap) {
