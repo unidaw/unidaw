@@ -516,6 +516,65 @@ const cells = await opsCells();
 }
 
 /*
+ * NOTHING IS EVER HIDDEN — the design's own words, and now checkable.
+ *
+ * The collapsed cell draws one glyph per op, and `.tk-cell` is a FIXED WIDTH with
+ * `overflow: hidden`. So there is a number of ops past which the run is silently clipped, and
+ * the ops that fall off the end are exactly the ones nobody can see are missing — the same
+ * failure the priority chain had, arrived at from the other direction.
+ *
+ * v33 took the count from five to seven, which makes this worth measuring rather than assuming.
+ * The check compares the cell's scrollWidth against its clientWidth, which is the browser's own
+ * answer to "is any of this off the end".
+ */
+{
+  await page.evaluate(() => window.__uni.run('ops ret4 p60 d1/6 s7 o80 rv-60 c1:2'));
+  await page.waitForTimeout(1800);
+  // ...and park the cursor on ANOTHER ROW, so the cell under test is drawing its collapsed run
+  // rather than the selected op expanded. The expansion is the sub-cell cursor working; it is
+  // simply not what this measures.
+  await page.evaluate(() => window.__uni.run('goto 33 0'));
+  await page.waitForTimeout(600);
+
+  /*
+   * ADDRESSED BY ROW AND COLUMN, NOT BY THE CURSOR.
+   *
+   * `.tk-cell.cursor` is the wrong handle for this: the sub-cell cursor EXPANDS the selected op
+   * to its full token, so the cell under the cursor may be showing `d1/6` rather than the run —
+   * which is the feature working, and it read as the run being wrong. `goto` also preserves the
+   * column, so arrowing to reach field 2 can step INTO the ops instead of onto them.
+   *
+   * The question here is what the collapsed run looks like, so ask a cell that is not the
+   * cursor's.
+   */
+  const drawn = await page.evaluate(() => {
+    const row = document.querySelector('.tk-row[data-row="32"]');
+    const c = row && row.querySelector('.tk-cell[data-track="0"][data-col="2"]');
+    if (!c) return null;
+    return { text: c.textContent, scroll: c.scrollWidth, client: c.clientWidth };
+  });
+  check(drawn && drawn.text.length === 7,
+        'a note carrying all seven ops draws seven glyphs', JSON.stringify(drawn));
+  /*
+   * AND HOW MUCH ROOM IS LEFT, because the design contemplates far more than seven.
+   *
+   * "Say I used 43 ops in a row, they all show in a single cell" is the case this was drawn
+   * around, and a cell that holds ten is not that. Printed rather than asserted: the count that
+   * matters is not a constant this file should own, and the check that FAILS is the clipping one
+   * above — this line is so the number is visible before it does.
+   */
+  if (drawn) {
+    const perGlyph = drawn.scroll > 0 ? (drawn.scroll - 12) / drawn.text.length : 0;
+    const fits = perGlyph > 0 ? Math.floor((drawn.client - 12) / perGlyph) : 0;
+    console.log(`  the ops cell holds about ${fits} glyphs (${drawn.client}px, `
+                + `~${perGlyph.toFixed(2)}px each) — the design's own example is 43`);
+  }
+  check(drawn && drawn.scroll <= drawn.client,
+        'and the cell is wide enough to show them — nothing is clipped',
+        drawn && `${drawn.text.length} glyphs need ${drawn.scroll}px in a ${drawn.client}px cell`);
+}
+
+/*
  * NOTHING THREW. Load-bearing: the readout shipped throwing a missing-import ReferenceError on
  * every frame, and every other suite passed through it — the unit tests never run the draw
  * path, and journey never parks on the ops field of a note that has ops.

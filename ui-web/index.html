@@ -3239,6 +3239,20 @@ const dockApi = {
   goto: (row, track) => {
     state.cursor.row = Math.max(0, row);
     if (track !== undefined) state.cursor.track = Math.max(0, Math.min(state.tracks - 1, track));
+    /*
+     * A JUMP DROPS THE OP SELECTION, like every other move.
+     *
+     * `cursor.op` indexes into the ops of the note UNDER the cursor, so it means nothing once
+     * the cursor is somewhere else — and a stale index is worse than a wrong one: the cell
+     * expands the op at that position on whatever note it lands on, and `@` edits that.
+     *
+     * This is exactly the case moveCursor's comment claimed to have covered — "cleared here
+     * rather than in each caller so a move added later cannot forget" — and `goto` does not go
+     * through moveCursor. The comment was true about the function and false about the codebase,
+     * which is the more dangerous half. Caught by a test that read `d1/6` from a cell it had
+     * just asked to draw seven glyphs.
+     */
+    state.cursor.op = -1;
     follow(); schedule();
   },
   zoom: (z) => { state.zoom = Math.max(0, Math.min(ZOOM_LEVELS.length - 1, z)); schedule(); },
