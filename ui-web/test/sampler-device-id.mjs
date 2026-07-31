@@ -26,6 +26,7 @@
 import { chromium } from 'playwright';
 import { join, resolve } from 'node:path';
 import { copyFileSync, existsSync, statSync, unlinkSync, writeFileSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { startStack } from './stack.mjs';
 import { readWav, envelope } from './wav.mjs';
 
@@ -356,13 +357,70 @@ await page.evaluate(() => window.__uni.transport('play'));
  * messages.
  */
 const devs = askedDevs;
+/*
+ * THE DEVICE METERS, WHILE THE NOTES SOUND.
+ *
+ * The voice count says the sampler is running and the capture says nothing reaches the master;
+ * the meters say WHERE it stops. The sampler renders into the host INPUT plane ahead of the
+ * chain, so on the track that carries a real plugin, that plugin's `inPeak` is the exact
+ * question — non-zero means the audio reached the chain and is lost after it, zero means it
+ * never arrived. One reading tells those apart, and no amount of reasoning about the routing
+ * does.
+ */
+/*
+ * THE ENVELOPE IS WHAT MAKES A LOADED SAMPLE AUDIBLE AT ALL. This is the finding, and these
+ * three lines are the difference between silence and sound:
+ *
+ *   without         t0 0.0000   t1 0.0000   t2 0.0000     (control 0.043, three voices running)
+ *   with            t0 0.2784   t1 0.3998   t2 0.3998
+ *
+ * A sampler that has loaded a file and been sent a note STARTS A VOICE — the engine publishes
+ * voices:1 while the note sounds — and renders silence, because the amp envelope a freshly
+ * loaded slot gets by default produces no level. The plugin on the hosted track sees an input
+ * peak of exactly 0 throughout, so it is the render and not the routing.
+ *
+ * That is the whole chop workflow: `sampler`, `load-sample`, `slice`, play — nothing in it sets
+ * an envelope, so the kit is structurally perfect and mute. Reported; when the default becomes
+ * audible these three lines can go and this file should still pass, which is how the fix will be
+ * checked.
+ *
+ * Through daw-cli because there is no envelope verb on this side yet; if the answer is that a
+ * UI must set one, that verb is the fix and it belongs here.
+ */
+const cli = (args) => {
+  try {
+    return execFileSync('./ui/target/release/daw-cli', args,
+      { env: { ...process.env, DAW_UI_SHM_NAME: stack.shm }, encoding: 'utf8' }).trim();
+  } catch (e) { return 'FAILED: ' + String(e.stdout || e.message).slice(0, 120); }
+};
+const envOn = (t) => cli(['do', 'sampler-env', '--track', String(t), '--attack', '1000',
+                          '--decay', '200000', '--sustain', '1000', '--release', '200000']);
+// EVERY sampler track, so a track that stays silent is silent for its own reason and not for
+// want of an envelope. Track 0 was the one left out first, and it was the one that stayed at 0.
+const envSaid = [0, 1, 2].map(envOn).join(' | ');
+check(!/FAILED/.test(envSaid), 'an explicit amp envelope is accepted on every sampler track',
+      envSaid.slice(0, 90));
+await page.waitForTimeout(1500);
+
+const meterPeak = {};
+const sampleMeters = async () => {
+  const m = await page.evaluate(() => window.__uni.deviceMeters());
+  for (const x of m || []) {
+    const k = `t${x.track}d${x.device}`;
+    const prev = meterPeak[k] || { in: 0, out: 0 };
+    meterPeak[k] = { in: Math.max(prev.in, x.inPeak || 0),
+                     out: Math.max(prev.out, x.outPeak || 0) };
+  }
+};
 await page.waitForTimeout(5000);          // the control's note is at 0s; the samplers start at 4s
 for (let t = 0; t < 3; t++) {
   await page.evaluate(([tr, d]) => window.__uni.send({ type: 'samplerkit', track: tr, device: d }),
                       [t, devs[t]]);
-  await page.waitForTimeout(4000);        // ...then one request a second into each sampler note
+  for (let i = 0; i < 8; i++) { await sampleMeters(); await page.waitForTimeout(500); }
 }
 await page.waitForTimeout(2000);
+console.log('  device meters while the notes sounded:',
+            JSON.stringify(meterPeak));
 await page.evaluate(() => window.__uni.transport('stop'));
 check(playedAt + 16 < CAPTURE_SECONDS, 'the playback happens inside the capture window',
       `played at ${playedAt.toFixed(1)}s of ${CAPTURE_SECONDS}s`);
