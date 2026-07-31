@@ -386,14 +386,12 @@ const devs = askedDevs;
  * Through daw-cli because there is no envelope verb on this side yet; if the answer is that a
  * UI must set one, that verb is the fix and it belongs here.
  */
-// Through the app's OWN verb now. Establishing this took shelling out to daw-cli, because this
-// surface had no way to shape an envelope at all; that gap is closed, and a test that reaches
-// past the app to set up the app is a test that stops describing it.
-const envOn = (t) => page.evaluate((tr) => window.__uni.run(`env ${tr} 0 1000 200000 1000 200000`), t);
-const envSaid = (await Promise.all([0, 1, 2].map(envOn))).join(' | ');
-check(!/refus|no engine/i.test(envSaid), 'an explicit amp envelope is accepted on every sampler track',
-      envSaid.slice(-80));
-await page.waitForTimeout(1500);
+/*
+ * NO ENVELOPE IS SENT, deliberately. The three tracks are loaded and played as they come.
+ *
+ * A block here used to set one, because a freshly minted default put three of its four points at
+ * t=0 and every slot was silent. Fixed engine-side; its absence is what checks the fix.
+ */
 
 const meterPeak = {};
 const sampleMeters = async () => {

@@ -162,24 +162,17 @@ check(Array.isArray(chopped) && chopped.length === 8, 'the chop is built from th
       JSON.stringify(chopped));
 
 /*
- * AN AMP ENVELOPE, WITHOUT WHICH NONE OF THIS MAKES A SOUND.
+ * NO ENVELOPE IS SENT HERE, and that is the point.
  *
- * A freshly loaded slot's default envelope produces no level, so the whole chop — right slots,
- * right keys, right slice ids, every source resolved, voices running — is mute. Measured in
- * sampler-device-id.mjs: 0.0000 across three tracks without this, 0.28-0.40 with it.
+ * There was a block here that set one through the app's own verb, marked as a workaround: a
+ * freshly loaded slot's default envelope put THREE of its four points at t=0, the runner landed
+ * on the first of them and held level 0, and the whole chop was mute. Backend fixed the mint
+ * (f7f3c5b) so `makeAdsr` nudges its own points apart rather than leaving it to a later pass.
  *
- * Through the app's OWN verb — proving that shelling out to daw-cli to establish this, which is
- * how it was found, is no longer necessary. Marked clearly because the command still does not
- * belong here: loading a sample should produce something audible without one. Reported; when the
- * engine's default becomes audible this block goes and the test should still pass.
+ * Deleting the block is how the fix is checked. If this file goes quiet again, the default has
+ * regressed — and that is a better guard than any assertion about envelope internals, because it
+ * is the thing a person actually does: load a sample and press play.
  */
-{
-  const said = await run(`env ${T} 0 1000 200000 1000 200000`);
-  check(!/refus|not |error/i.test(String(said).split('out:').pop() || ''),
-        'the chop gets an amp envelope, which it needs to sound at all',
-        String(said).slice(-70));
-  await page.waitForTimeout(1500);
-}
 
 /*
  * TWO NOTES, FAR APART IN THE BREAK, and a silence between them.
