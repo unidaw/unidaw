@@ -305,6 +305,19 @@ export class Mixer {
     }
     return { strips: vm.stripCount, authoritative: vm.authoritative,
              renaming: this.renaming, renameText: this.field.text,
-             domNodes: this.pool.length * 12, detail: s };
+             /*
+              * COUNTED, NOT ESTIMATED.
+              *
+              * This was `pool.length * 12` — a per-strip constant written down once, back when a
+              * strip had twelve nodes in it. A strip has about seventy-seven now, so at 64 tracks
+              * the mixer reported 768 nodes while its host held 4931: a SIX-FOLD understatement,
+              * and understated in the direction that makes a scaling problem look solved. The
+              * number a perf check reaches for was the one number guaranteed to be wrong.
+              *
+              * The DOM query is O(subtree), which is fine here and nowhere else: `probe()` runs
+              * per gesture in a test, never on the draw path. chain.js and harmony.js already
+              * count theirs this way, so this is the house style rather than a new idea.
+              */
+             domNodes: this.host ? this.host.querySelectorAll('*').length : 0, detail: s };
   }
 }

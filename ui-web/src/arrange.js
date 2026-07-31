@@ -2114,7 +2114,19 @@ export class Arrange {
         ? Math.round((vm.ruler[1] - vm.ruler[0]) * vm.view.ticksPerPixel) : 0,
       rulerEvery: vm.rulerCount >= 2 ? vm.rulerBar[1] - vm.rulerBar[0] : 0,
       playheadX: Math.round(vm.playheadX),
-      domNodes: this.clipPool.length + this.lanePool.length + this.gridPool.length,
+      /*
+       * COUNTED, NOT SUMMED FROM POOLS.
+       *
+       * Three pool lengths added up is the count of POOLED things, not of nodes: at 64 tracks it
+       * came to 184 while the host held 541. The mixer had the same defect six times worse
+       * (`pool.length * 12`, a per-strip constant from when a strip had twelve nodes), and it
+       * understates in the direction that makes a scaling problem look solved.
+       *
+       * `pooled` keeps the old number, which is the one that answers a different and still
+       * useful question — whether the pools are growing rather than being reused.
+       */
+      domNodes: this.host ? this.host.querySelectorAll('*').length : 0,
+      pooled: this.clipPool.length + this.lanePool.length + this.gridPool.length,
       /**
        * The waveform layer, in numbers a test can assert on before it goes near a
        * pixel — and the geometry it needs to find one when it does.
