@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
 import { ROW_OPS, OP_MASK, opGlyph, opsRun, opsText, opsPresent, opTokenAt,
          makeTrigCondition, parseOps } from '../src/rowops.js';
-import { DEVICE_KINDS, modSummary } from '../src/chainmodel.js';
+import { DEVICE_KINDS, SLOT_FIELDS, modSummary } from '../src/chainmodel.js';
 import {
   parseToken, parseChord, pitchOf, pitchToToken, hexValue, shiftDigit, NOTE_KEYS,
 } from '../src/entry.js';
@@ -2933,6 +2933,36 @@ test('every node type this UI can edit has a config layout in the sidecar', asyn
     assert.ok(arms.has(t),
       `node type ${t} (${NODE_TYPES[t]}) has editable fields here and no layout in the sidecar`);
   }
+});
+
+test('the sampler slot-field table matches the engine enum', async () => {
+  /*
+   * WRITTEN BEFORE THE ENUM GROWS, which is the only time a mirror is worth writing.
+   *
+   * `SLOT_FIELDS` is indexed BY WIRE ID — the index IS the field id the command carries — and it
+   * is hand-written. Backend has announced `SourceLocalId = 27` and `SliceId = 28`, so when they
+   * land this list is two short and `slot <track> <device> <slot> <field> <value>` simply cannot
+   * name them. Silently: an absent name is one the `oneOf` never offers, which reads as the
+   * feature not existing rather than as a table being stale.
+   *
+   * The patcher node-type mirror was written the same way, the day SliceSelect was announced,
+   * and caught it on the first run after the merge. A mirror added afterwards has already missed
+   * the one event it exists for.
+   */
+  const { readFileSync } = await import('node:fs');
+  const hdr = readFileSync(new URL('../../apps/event_payloads.h', import.meta.url), 'utf8');
+  const block = hdr.slice(hdr.indexOf('enum class SamplerSlotField'));
+  const body = block.slice(0, block.indexOf('};'));
+  const ids = [...body.matchAll(/^\s*([A-Z][A-Za-z]*)\s*=\s*(\d+)/gm)]
+    .map((m) => [m[1], Number(m[2])])
+    .sort((a, b) => a[1] - b[1]);
+  assert.ok(ids.length > 20, `parsed the enum: ${ids.length} fields`);
+  // Dense from 0, which is what makes an index-keyed array the right mirror for it at all.
+  assert.deepEqual(ids.map((x) => x[1]), ids.map((_, i) => i),
+    'SamplerSlotField is dense from 0');
+  assert.equal(SLOT_FIELDS.length, ids.length,
+    `every slot field is nameable: the engine has ${ids.length} `
+    + `(${ids[ids.length - 1][0]} is the last), this side names ${SLOT_FIELDS.length}`);
 });
 
 test('the patcher node-type table matches the engine enum', async () => {
