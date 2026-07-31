@@ -341,6 +341,15 @@ void writeEvents(JsonWriter& writer, const std::vector<MusicalEvent>& events) {
     if (note.probability > 0) {
       writer.key("probability", static_cast<uint32_t>(note.probability));
     }
+    // v33. Own conditions, not nested — a ramp without a retrigger and a condition without
+    // either are both legal rows, and nesting them under a neighbour is how the sound address
+    // came to be dropped for notes that had no probability.
+    if (note.retrigRamp != 0) {
+      writer.key("retrig_ramp", static_cast<int64_t>(note.retrigRamp));
+    }
+    if (note.trigCondition != 0) {
+      writer.key("trig_condition", static_cast<uint32_t>(note.trigCondition));
+    }
     // v32: the sound address. Written only when SET, so a project without a sampler does not gain
     // a `"sound": 0` on every note — the file stays diffable and the default stays invisible,
     // which is what "0 means the keymap picks" should look like on disk too.
@@ -412,6 +421,10 @@ void readEvents(const boost::property_tree::ptree& tree,
       event.payload.note.soundOffset =
           static_cast<uint16_t>(noteTree.get<uint32_t>("sound_offset", 0));
       event.payload.note.delayNanoticks = noteTree.get<uint32_t>("delay", 0);
+      event.payload.note.retrigRamp =
+          static_cast<int8_t>(noteTree.get<int32_t>("retrig_ramp", 0));
+      event.payload.note.trigCondition =
+          static_cast<uint8_t>(noteTree.get<uint32_t>("trig_condition", 0));
       out.push_back(event);
     }
   }

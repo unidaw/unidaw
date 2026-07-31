@@ -29,6 +29,36 @@ pub struct RowOps {
     /// breaks on a re-chop too. Written in 1/256ths for tracker muscle memory (`o80` = half way)
     /// and stored at full resolution.
     pub sound_offset: u16,
+    /// THE RETRIGGER VOLUME RAMP: signed TOTAL percent change across the burst's strikes.
+    /// `rv-60` lands the last strike at 40% of the first; the first is always at the authored
+    /// velocity. 0 is flat. This is the difference between a roll and a stutter, and it is the
+    /// half of `ret` the Elektron gesture has and this repo did not.
+    pub retrig_ramp: i8,
+    /// THE CONDITIONAL TRIG, packed. 0 = no condition. Build it with `make_trig_condition`.
+    ///
+    /// NOT probability. `p` is a per-pass roll and deliberately unpredictable; this is
+    /// deterministic in WHICH PASS the transport is on, which is what lets a phrase resolve
+    /// every four bars instead of merely thinning out.
+    pub trig_condition: u8,
+}
+
+/// Packs an A:B conditional into its wire code, mirroring makeTrigCondition in
+/// apps/musical_structures.h. Returns 0 (no condition) for a pair that cannot fire —
+/// a > b would never sound, which nobody types on purpose.
+pub fn make_trig_condition(a: u8, b: u8) -> u8 {
+    if a < 1 || b < 1 || a > 8 || b > 8 || a > b {
+        return 0;
+    }
+    ((a - 1) << 3 | (b - 1)) + 1
+}
+
+/// Unpacks a condition code to (a, b), or (0, 0) if it is not an A:B form.
+pub fn split_trig_condition(code: u8) -> (u8, u8) {
+    if code == 0 || code > 64 {
+        return (0, 0);
+    }
+    let packed = code - 1;
+    ((packed >> 3) + 1, (packed & 7) + 1)
 }
 
 impl RowOps {
@@ -45,6 +75,8 @@ impl RowOps {
             && self.delay.is_none()
             && self.sound == 0
             && self.sound_offset == 0
+            && self.retrig_ramp == 0
+            && self.trig_condition == 0
     }
 
     /// The onset delay in absolute nanoticks for a given beat length.
@@ -72,6 +104,8 @@ pub const OP_SCHEMA: &[OpSpec] = &[
     OpSpec { prefix: "d", summary: "delay onset by a fraction of a beat", example: "d1/6" },
     OpSpec { prefix: "s", summary: "play sampler slot N, zero-padded (blank = pitch picks it)", example: "s07" },
     OpSpec { prefix: "o", summary: "start N/256 into the sample, or a fraction like o1/3 (the 9xx seek)", example: "o80" },
+    OpSpec { prefix: "rv", summary: "retrigger volume ramp, signed total percent across the strikes", example: "rv-60" },
+    OpSpec { prefix: "c", summary: "conditional trig: fire on pass A of every B", example: "c1:2" },
 ];
 
 /// The canonical text for a set of ops — the inverse of `parse_row_ops`.
@@ -107,6 +141,15 @@ pub fn format_row_ops(ops: &RowOps, sound_width: usize) -> String {
         let width = sound_width.max(digits);
         out.push(format!("s{:0width$}", ops.sound, width = width));
     }
+    if ops.retrig_ramp != 0 {
+        out.push(format!("rv{}", ops.retrig_ramp));
+    }
+    if ops.trig_condition != 0 {
+        let (a, b) = split_trig_condition(ops.trig_condition);
+        if a != 0 {
+            out.push(format!("c{a}:{b}"));
+        }
+    }
     if ops.sound_offset != 0 {
         // COARSE WHEN IT IS EXACTLY COARSE, a fraction otherwise. `o80` is the tracker muscle
         // memory and covers everything typed by hand; a value that did not come from a whole
@@ -135,12 +178,37 @@ pub fn parse_row_ops(input: &str) -> Result<RowOps, String> {
         // it is not mis-read as a probability token.
         // Order matters throughout: the multi-letter prefixes are checked before the
         // single-letter ones, or "ret3" would parse as a malformed probability.
-        if let Some(rest) = token.strip_prefix("ret") {
+        if let Some(rest) = token.strip_prefix("rv") {
+            // BEFORE "ret", or `rv-60` would fall through to the single-letter arms and be
+            // rejected as a malformed something-else. "rv" and "ret" share no prefix, but the
+            // ordering rule in this loop is "longest and most specific first" and keeping to it
+            // is what stops the next op from being a puzzle.
+            let n: i32 = rest.parse().map_err(|_| format!("bad retrigger ramp in {token:?}"))?;
+            if !(-100..=100).contains(&n) {
+                return Err(format!(
+                    "retrigger ramp must be -100..100 percent in {token:?}"));
+            }
+            ops.retrig_ramp = n as i8;
+        } else if let Some(rest) = token.strip_prefix("ret") {
             let n: u8 = rest.parse().map_err(|_| format!("bad retrigger count in {token:?}"))?;
             if n < 1 {
                 return Err(format!("retrigger count must be >= 1 in {token:?}"));
             }
             ops.retrigger = n;
+        } else if let Some(rest) = token.strip_prefix('c') {
+            let (a_text, b_text) = rest
+                .split_once(':')
+                .ok_or_else(|| format!("conditional trig needs A:B in {token:?}, e.g. c1:2"))?;
+            let a: u8 = a_text.parse().map_err(|_| format!("bad A in {token:?}"))?;
+            let b: u8 = b_text.parse().map_err(|_| format!("bad B in {token:?}"))?;
+            let code = make_trig_condition(a, b);
+            if code == 0 {
+                // REFUSED, not normalised. a > b can never fire, and a note that never sounds is
+                // not something anyone typed on purpose — a red cell beats a silent row.
+                return Err(format!(
+                    "conditional trig must be 1..8:1..8 with A <= B in {token:?}"));
+            }
+            ops.trig_condition = code;
         } else if let Some(rest) = token.strip_prefix('s') {
             let n: u32 = rest.parse().map_err(|_| format!("bad sound slot in {token:?}"))?;
             if n == 0 || n > 65535 {
@@ -241,6 +309,8 @@ mod tests {
             delay: None,
             sound: 0,
             sound_offset: 0,
+            retrig_ramp: 0,
+            trig_condition: 0,
         });
         assert!(parse_row_ops("").unwrap().is_empty());
     }
@@ -346,6 +416,46 @@ mod tests {
             assert_eq!(parsed, reparsed, "{text:?} printed as {printed:?}");
         }
         assert_eq!(format_row_ops(&RowOps::default(), 2), "");
+    }
+
+    #[test]
+    fn the_elektron_ops_parse_format_and_round_trip() {
+        // THE RAMP is a signed total, and the sign is the whole gesture: a decrescendo roll and
+        // a crescendo roll are the same op with the other sign.
+        assert_eq!(parse_row_ops("rv-60").unwrap().retrig_ramp, -60);
+        assert_eq!(parse_row_ops("rv50").unwrap().retrig_ramp, 50);
+        assert_eq!(format_row_ops(&parse_row_ops("rv-60").unwrap(), 2), "rv-60");
+
+        // `rv` MUST NOT BE MISTAKEN FOR `ret`. Both start with "r", and the loop's rule is
+        // longest-and-most-specific-first; this is the assertion that keeps it true.
+        let both = parse_row_ops("ret4 rv-60").unwrap();
+        assert_eq!((both.retrigger, both.retrig_ramp), (4, -60));
+
+        // THE CONDITION round-trips through its packing and prints as it was typed.
+        let c = parse_row_ops("c3:4").unwrap();
+        assert_eq!(split_trig_condition(c.trig_condition), (3, 4));
+        assert_eq!(format_row_ops(&c, 2), "c3:4");
+
+        // REFUSED, not normalised. A condition that can never fire is not something anyone
+        // typed on purpose, and a red cell beats a row that silently never sounds.
+        assert!(parse_row_ops("c3:2").is_err(), "A > B must be refused");
+        assert!(parse_row_ops("c0:4").is_err(), "A = 0 must be refused");
+        assert!(parse_row_ops("c1:9").is_err(), "B > 8 must be refused");
+        assert!(parse_row_ops("c2").is_err(), "a condition without a colon must be refused");
+        assert!(parse_row_ops("rv200").is_err(), "a ramp past +-100% must be refused");
+
+        // AND THE WHOLE SET SURVIVES A ROUND TRIP TOGETHER, which is the property that catches
+        // an emitter that prints two ops in an order the parser cannot read back.
+        let all = parse_row_ops("ret4 p60 d1/6 rv-60 c1:2 s07 o80").unwrap();
+        assert_eq!(parse_row_ops(&format_row_ops(&all, 2)).unwrap(), all);
+    }
+
+    #[test]
+    fn a_row_carrying_only_an_elektron_op_is_not_empty() {
+        // Same rule as the sound address: these change what you HEAR, so a row carrying one
+        // must show the marker R5 describes or the op is invisible in the editor.
+        assert!(!parse_row_ops("rv-60").unwrap().is_empty());
+        assert!(!parse_row_ops("c1:2").unwrap().is_empty());
     }
 
     #[test]

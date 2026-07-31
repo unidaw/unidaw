@@ -109,6 +109,19 @@ bool applyRowOpEdit(NotePayload& note, const RowOpEdit& edit) {
   if ((edit.mask & kRowOpMaskDelay) != 0) {
     note.delayNanoticks = edit.delayNanoticks;
   }
+  if ((edit.mask & kRowOpMaskRetrigRamp) != 0) {
+    note.retrigRamp = edit.retrigRamp;
+  }
+  // REFUSED, NOT CLAMPED, like probability above. A trig condition is an ENCODING, not a
+  // continuous control: 200 is not "a bit past 8:8", it is a caller with the wrong idea of the
+  // packing. Clamping would hand them a condition they did not ask for and no way to notice —
+  // and a note that fires on the wrong pass is a note nobody can find the reason for.
+  if ((edit.mask & kRowOpMaskTrigCondition) != 0) {
+    if (edit.trigCondition > kTrigConditionMaxAB) {
+      return false;
+    }
+    note.trigCondition = edit.trigCondition;
+  }
   return true;
 }
 

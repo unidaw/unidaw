@@ -761,6 +761,97 @@ bool runRowOpExpandTest() {
   {
     if (!expandNoteOps(0, 0, 4, 0).empty()) return fail("zero-duration must yield no strikes");
   }
+
+  // ---- THE RETRIGGER VOLUME RAMP. What makes a roll a roll rather than a stutter.
+  {
+    // NO RAMP IS FLAT, and every existing note takes this path. If this ever stops being 1000
+    // across the board, every project in the repo changed level without anyone asking.
+    for (const auto& strike : expandNoteOps(0, Q, 4, 0)) {
+      if (strike.velocityScaleMilli != 1000) {
+        return fail("a retrigger with no ramp must leave every strike at the authored velocity");
+      }
+    }
+    // THE RAMP IS A TOTAL, spread linearly, and the FIRST strike is always full. rv-60 over four
+    // strikes: 1000, 800, 600, 400. A ramp that started below full would be a volume edit
+    // wearing a ramp's name.
+    const auto down = expandNoteOps(0, Q, 4, 0, -60);
+    if (down.size() != 4) return fail("ramp must not change the strike count");
+    const uint16_t want[4] = {1000, 800, 600, 400};
+    for (size_t i = 0; i < 4; ++i) {
+      if (down[i].velocityScaleMilli != want[i]) {
+        std::cerr << "  strike " << i << " scale " << down[i].velocityScaleMilli
+                  << " want " << want[i] << std::endl;
+        return fail("a -60 ramp over four strikes must land 1000,800,600,400");
+      }
+    }
+    // UP RAMPS TOO. Signed, so a crescendo roll is the same op with the other sign.
+    const auto up = expandNoteOps(0, Q, 3, 0, 50);
+    if (up[0].velocityScaleMilli != 1000 || up[2].velocityScaleMilli != 1500) {
+      return fail("a +50 ramp over three strikes must end at 1500");
+    }
+    // A RAMP ON A SINGLE STRIKE IS A NO-OP, not a division by zero. `rv-60` typed on a row with
+    // no retrigger must not silence it — and (n-1) is the denominator.
+    const auto one = expandNoteOps(0, Q, 1, 0, -60);
+    if (one.size() != 1 || one[0].velocityScaleMilli != 1000) {
+      return fail("a ramp with one strike must leave it at full level");
+    }
+    // CLAMPED, not wrapped. -128 over two strikes would reach -280 milli; a negative scale
+    // cast to uint16 is a very loud strike, which is the worst possible failure for this field.
+    const auto floored = expandNoteOps(0, Q, 2, 0, -128);
+    if (floored[1].velocityScaleMilli != 0) {
+      return fail("a ramp past silence must clamp to 0, never wrap");
+    }
+  }
+
+  // ---- CONDITIONAL TRIGS. Deterministic in the pass index, which is the whole point.
+  {
+    using daw::makeTrigCondition;
+    using daw::trigConditionFires;
+    using daw::kTrigConditionNone;
+
+    // NO CONDITION ALWAYS SOUNDS, on every pass. This is the inert default an unset byte gives.
+    for (uint64_t pass = 0; pass < 8; ++pass) {
+      if (!trigConditionFires(kTrigConditionNone, pass)) {
+        return fail("a note with no condition must sound on every pass");
+      }
+    }
+    // 1:2 fires on passes 0, 2, 4...; 2:2 on 1, 3, 5. Between them every pass is covered exactly
+    // once, which is the property that makes them usable as a call and response.
+    const uint8_t first_of_two = makeTrigCondition(1, 2);
+    const uint8_t second_of_two = makeTrigCondition(2, 2);
+    if (first_of_two == kTrigConditionNone || second_of_two == kTrigConditionNone) {
+      return fail("1:2 and 2:2 must encode to real condition codes");
+    }
+    for (uint64_t pass = 0; pass < 16; ++pass) {
+      const bool a = trigConditionFires(first_of_two, pass);
+      const bool b = trigConditionFires(second_of_two, pass);
+      if (a == b) return fail("1:2 and 2:2 must never agree on a pass");
+      if (a != (pass % 2 == 0)) return fail("1:2 must fire on even passes");
+    }
+    // 3:4 fires once every four, on the third.
+    const uint8_t third_of_four = makeTrigCondition(3, 4);
+    for (uint64_t pass = 0; pass < 16; ++pass) {
+      if (trigConditionFires(third_of_four, pass) != (pass % 4 == 2)) {
+        return fail("3:4 must fire on the third pass of every four");
+      }
+    }
+    // ROUND TRIP through the packing, for every legal pair.
+    for (uint8_t a = 1; a <= 8; ++a) {
+      for (uint8_t b = a; b <= 8; ++b) {
+        uint8_t ga = 0, gb = 0;
+        daw::splitTrigCondition(makeTrigCondition(a, b), ga, gb);
+        if (ga != a || gb != b) return fail("A:B must survive the round trip through its code");
+      }
+    }
+    // NONSENSE IS REFUSED AT ENCODE TIME rather than silently normalised: a > b would fire never,
+    // and a note that can never sound is not a condition anyone typed on purpose.
+    if (makeTrigCondition(3, 2) != kTrigConditionNone) return fail("a > b must not encode");
+    if (makeTrigCondition(0, 4) != kTrigConditionNone) return fail("a = 0 must not encode");
+    if (makeTrigCondition(1, 9) != kTrigConditionNone) return fail("b > 8 must not encode");
+    // AN UNKNOWN CODE SOUNDS. A note silenced by a condition this build does not understand is a
+    // note that vanished with no way to find out why; sounding is the recoverable failure.
+    if (!trigConditionFires(200, 3)) return fail("an unknown condition code must still sound");
+  }
   return true;
 }
 

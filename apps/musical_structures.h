@@ -36,6 +36,14 @@ enum class MusicalEventType {
 struct NoteStrike {
   uint64_t onTick = 0;
   uint64_t offTick = 0;  // always > onTick
+  // THE RETRIGGER VOLUME RAMP, per strike, in thousandths of the note's authored velocity.
+  // 1000 = unchanged, which is what every strike gets when no ramp is asked for — so the
+  // op-free path and every existing note are bit-identical to before this field existed.
+  //
+  // On the strike rather than computed by the caller: the caller does not know how many strikes
+  // there are (retrigger is capped against the duration in here), and a ramp interpolated
+  // against the wrong count is a ramp that ends at the wrong level.
+  uint16_t velocityScaleMilli = 1000;
 };
 
 // Expands a note's time-spreading row ops (delay, retrigger) into the concrete
@@ -49,7 +57,8 @@ struct NoteStrike {
 inline std::vector<NoteStrike> expandNoteOps(uint64_t noteStartTick,
                                              uint64_t durationNanoticks,
                                              uint8_t retrigger,
-                                             uint32_t delayNanoticks) {
+                                             uint32_t delayNanoticks,
+                                             int8_t retrigRampPercent = 0) {
   std::vector<NoteStrike> strikes;
   if (durationNanoticks == 0) {
     return strikes;
@@ -67,9 +76,78 @@ inline std::vector<NoteStrike> expandNoteOps(uint64_t noteStartTick,
     strike.onTick = start + stride * k;
     strike.offTick = (k + 1 == n) ? (start + durationNanoticks)
                                   : (start + stride * (k + 1));
+    // THE RAMP IS THE TOTAL CHANGE ACROSS THE BURST, spread linearly — rv-60 means the LAST
+    // strike lands at 40% of the first, not that each strike drops 60%. Stated as a total
+    // because that is what the ear judges and what the hand wants to set; per-strike would make
+    // the same number mean something different at every retrigger count.
+    //
+    // The first strike is always at full level. A ramp that started below the authored velocity
+    // would make `ret4 rv-60` quieter than `ret4` from its very first hit, which is a volume
+    // edit wearing a ramp's name.
+    if (n > 1 && retrigRampPercent != 0) {
+      const int64_t total = static_cast<int64_t>(retrigRampPercent) * 10;  // percent -> milli
+      const int64_t scaled = 1000 + (total * static_cast<int64_t>(k)) /
+                                        static_cast<int64_t>(n - 1);
+      strike.velocityScaleMilli =
+          static_cast<uint16_t>(scaled < 0 ? 0 : (scaled > 2000 ? 2000 : scaled));
+    }
     strikes.push_back(strike);
   }
   return strikes;
+}
+
+// CONDITIONAL TRIGS (A:B) — does a note with this condition sound on this pass of the loop?
+//
+// The Elektron gesture: `1:2` fires on the first pass of every two, `2:4` on the second of every
+// four. It is NOT probability — it is deterministic and depends only on WHICH PASS the transport
+// is on, which is what makes it usable for building a phrase that resolves every four bars.
+//
+// THE ENCODING. 0 is "no condition, always sounds", so an unset byte is inert and every existing
+// note is unchanged. 1..64 packs A and B into three bits each; codes at and above 128 are left
+// for FILL and PRE, which need state this function deliberately does not have.
+//
+// DETERMINISM IS THE WHOLE POINT AND IT LIVES IN THE CALLER. `passIndex` must be derived from the
+// TRANSPORT POSITION (absolute tick / loop length), never from a counter incremented per pass: a
+// counter makes the result depend on when playback started and how many times it wrapped, so an
+// offline bounce would stop being byte-identical while passing every structural test in the
+// suite. This function is pure precisely so that the one place the pass index is computed can be
+// audited on its own.
+constexpr uint8_t kTrigConditionNone = 0;
+constexpr uint8_t kTrigConditionMaxAB = 64;
+
+inline uint8_t makeTrigCondition(uint8_t a, uint8_t b) {
+  if (a < 1 || b < 1 || a > 8 || b > 8 || a > b) {
+    return kTrigConditionNone;
+  }
+  return static_cast<uint8_t>(((a - 1) << 3 | (b - 1)) + 1);
+}
+
+// Unpacks to (a, b), or (0, 0) if the code is not an A:B form.
+inline void splitTrigCondition(uint8_t code, uint8_t& a, uint8_t& b) {
+  if (code == kTrigConditionNone || code > kTrigConditionMaxAB) {
+    a = 0;
+    b = 0;
+    return;
+  }
+  const uint8_t packed = static_cast<uint8_t>(code - 1);
+  a = static_cast<uint8_t>((packed >> 3) + 1);
+  b = static_cast<uint8_t>((packed & 7) + 1);
+}
+
+inline bool trigConditionFires(uint8_t code, uint64_t passIndex) {
+  if (code == kTrigConditionNone) {
+    return true;
+  }
+  uint8_t a = 0;
+  uint8_t b = 0;
+  splitTrigCondition(code, a, b);
+  // An unknown code SOUNDS. A note silenced by a condition the engine does not understand is a
+  // note that vanished with no way to find out why; sounding is the recoverable failure, and it
+  // is the same call kHostSlotIndexUnresolved's neighbours make.
+  if (b == 0) {
+    return true;
+  }
+  return (passIndex % b) == static_cast<uint64_t>(a - 1);
 }
 
 // Decides whether a note sounds under its probability row op (item 12).
@@ -131,10 +209,30 @@ struct NotePayload {
   // came to plan on taking it.
   uint16_t placementId = 0;
   uint32_t delayNanoticks = 0;  // onset delay, absolute ticks
+  // v33, AND THIS PAIR GREW THE STRUCT — deliberately, 32 bytes to 40.
+  //
+  // `sound` and `soundOffset` fit because there was a genuine four-byte alignment hole. There is
+  // no hole left: one byte (`reserved`) remains and these are two fields. The alternatives were
+  // to pack them into it — probability needs 7 bits, retrigger realistically 5 — which buys 8
+  // bytes by making four fields unreadable, or to ship one op and defer the other, which leaves
+  // the notation half-built and needs a second contract change to finish.
+  //
+  // The cost is honest and small: this struct is copied per note per block, and the copy is
+  // bounded by the notes in one dispatch window, so 8 more bytes on a handful of notes is not a
+  // measurable cost. The struct's own comment about pan says a growth here is "a real decision
+  // and not something to slip in" — so this is the decision, stated, rather than a silence.
+  //
+  // retrigRamp: signed TOTAL percent change in velocity across a retrigger's strikes; 0 is flat.
+  // trigCondition: an A:B conditional code; 0 always sounds. See musical_structures' own
+  // trigConditionFires, and note that the pass index it takes must come from the transport.
+  int8_t retrigRamp = 0;
+  uint8_t trigCondition = 0;
 };
-// The two fields above took existing padding, so the in-memory note did NOT grow. Pinned, because
-// this struct is copied per note per block and a silent growth is a real cost.
-static_assert(sizeof(NotePayload) == 32, "NotePayload must not grow");
+// PINNED, still. The point was never "32 forever" — it is that this struct is copied per note per
+// block, so a growth must be a decision somebody wrote down rather than a field that drifted in.
+// Moving this number is that decision; leaving the assert is what makes the next one deliberate
+// too.
+static_assert(sizeof(NotePayload) == 40, "NotePayload must not grow without a reason recorded");
 
 struct ChordPayload {
   uint32_t chordId = 0;

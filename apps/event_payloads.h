@@ -557,6 +557,8 @@ enum : uint16_t {
   kRowOpMaskSound = 1u << 2,
   kRowOpMaskSoundOffset = 1u << 3,
   kRowOpMaskDelay = 1u << 4,
+  kRowOpMaskRetrigRamp = 1u << 5,
+  kRowOpMaskTrigCondition = 1u << 6,
 };
 
 // SET ROW OPS (opcode 81). 40 bytes like every other command payload.
@@ -594,7 +596,10 @@ struct UiSetRowOpsPayload {
   uint16_t soundOffset = 0;
   uint8_t retrigger = 0;
   uint8_t probability = 0;
-  uint8_t pad0[2]{};
+  // v33. Took pad0, so the payload is the same 40 bytes and no field moved — the mask is what
+  // says whether they are being spoken about, exactly as for the four ops above.
+  int8_t retrigRamp = 0;
+  uint8_t trigCondition = 0;
   uint32_t noteIdHi = 0;
   uint8_t reserved[8]{};
 };

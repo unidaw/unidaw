@@ -67,6 +67,11 @@ ClipWindowResult buildUiClipWindowSnapshot(const MusicalClip& clip,
       // is every row, and that sparseness is why there is no permanent ops column (R5).
       note.sound = event.payload.note.sound;
       note.soundOffset = event.payload.note.soundOffset;
+      // v33: the retrigger ramp and the conditional trig. Published for the same reason as
+      // every op above — an editor that can draw a row op it cannot read is drawing a guess,
+      // and these two change what you HEAR without changing anything else on the row.
+      note.retrigRamp = event.payload.note.retrigRamp;
+      note.trigCondition = event.payload.note.trigCondition;
       // M1.13: how far this note MOVES when it sounds, in nanoticks, signed — notes are
       // pulled earlier as often as later. tOn stays the authored value, so the UI draws
       // the note where it was played and a mark to where it is heard.

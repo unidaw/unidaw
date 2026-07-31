@@ -123,7 +123,7 @@ constexpr uint32_t kShmMagic = 0x30415744;  // 'DAW0'
 //    agent forks the clip it was pointed at, writes into the copy, and the original becomes the
 //    alternate; swapping is the A/B. Published because an alternate nobody can see is the same as
 //    not having one.
-constexpr uint16_t kShmVersion = 32;
+constexpr uint16_t kShmVersion = 33;
 
 // Max bytes for a published track name (nul-padded, may be truncated).
 constexpr uint32_t kUiTrackNameBytes = 24;
@@ -1035,7 +1035,25 @@ struct UiClipNote {
   // v32: the 9xx seek, as a FRACTION of the slot's extent. Absolute frames would break when the
   // slot's sample is swapped or its slice re-cut; a fraction survives both.
   uint16_t soundOffset = 0;
-  uint8_t reserved32[4]{};
+  // v33: THE RETRIGGER VOLUME RAMP, as a SIGNED TOTAL percent change across the burst's strikes.
+  // rv-60 lands the last strike at 40% of the first; the first is always at the authored
+  // velocity. 0 is flat, which is what every note had before this field meant anything, so a
+  // project written by an older build is unchanged.
+  //
+  // This is the difference between a roll and a stutter, and it is the half of `retN` the
+  // Elektron gesture has and this repo did not.
+  int8_t retrigRamp = 0;
+  // v33: THE CONDITIONAL TRIG. 0 = no condition, always sounds. 1..64 packs an A:B pair three
+  // bits each — 1:2 fires on the first pass of every two, 3:4 on the third of every four. Codes
+  // at and above 128 are reserved for FILL and PRE, which need state a per-note code does not
+  // carry (a global performance toggle, and the previous conditional's outcome in track order).
+  //
+  // NOT PROBABILITY. `pN` is per-pass random and deliberately unpredictable; this is
+  // deterministic in WHICH PASS the transport is on, which is what lets a phrase resolve every
+  // four bars. The pass index is derived from the transport position, never from a counter — see
+  // trigConditionFires in musical_structures.h for why a counter would silently break bounces.
+  uint8_t trigCondition = 0;
+  uint8_t reserved32[2]{};
 };
 
 constexpr uint8_t kUiClipNoteMuted = 1u << 0;

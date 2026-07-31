@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 32;
+pub const K_SHM_VERSION: u16 = 33;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -403,7 +403,10 @@ pub struct UiSetRowOpsPayload {
     pub sound_offset: u16,
     pub retrigger: u8,
     pub probability: u8,
-    pub pad0: [u8; 2],
+    /// v33. Took pad0, so the payload is the same 40 bytes and no field moved — the mask says
+    /// whether they are being spoken about, exactly as for the ops above.
+    pub retrig_ramp: i8,
+    pub trig_condition: u8,
     pub note_id_hi: u32,
     pub reserved: [u8; 8],
 }
@@ -414,6 +417,8 @@ pub const ROW_OP_MASK_PROBABILITY: u16 = 1 << 1;
 pub const ROW_OP_MASK_SOUND: u16 = 1 << 2;
 pub const ROW_OP_MASK_SOUND_OFFSET: u16 = 1 << 3;
 pub const ROW_OP_MASK_DELAY: u16 = 1 << 4;
+pub const ROW_OP_MASK_RETRIG_RAMP: u16 = 1 << 5;
+pub const ROW_OP_MASK_TRIG_CONDITION: u16 = 1 << 6;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -653,7 +658,18 @@ pub struct UiClipNote {
     /// v32: the 9xx seek, as a FRACTION of the slot's extent (0..65535) rather than absolute
     /// frames. Absolute breaks when the slot's sample is swapped or its slice re-cut.
     pub sound_offset: u16,
-    pub reserved32: [u8; 4],
+    /// v33: THE RETRIGGER VOLUME RAMP, a SIGNED TOTAL percent change across the burst's strikes.
+    /// -60 lands the last strike at 40% of the first; the first is always at the authored
+    /// velocity. 0 is flat, which is what every note had before, so an older project is unchanged.
+    pub retrig_ramp: i8,
+    /// v33: THE CONDITIONAL TRIG. 0 = no condition, always sounds. 1..64 packs an A:B pair three
+    /// bits each — 1:2 fires on the first pass of every two. Codes >= 128 are reserved for FILL
+    /// and PRE, which need state a per-note code cannot carry.
+    ///
+    /// NOT probability: `p` is a per-pass roll, this is deterministic in WHICH PASS the transport
+    /// is on, which is what lets a phrase resolve every four bars rather than merely thin out.
+    pub trig_condition: u8,
+    pub reserved32: [u8; 2],
 }
 
 pub const UI_CLIP_NOTE_MUTED: u8 = 1 << 0;
