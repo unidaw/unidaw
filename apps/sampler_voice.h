@@ -83,6 +83,7 @@ struct SamplerVoiceSpec {
   double cutoffUnitsPerFrame = 0.0;
   double pitchUnitsPerFrame = 0.0;
   double panUnitsPerFrame = 0.0;
+  double resonanceUnitsPerFrame = 0.0;
 
   // FILTER, and the modulators that move it. All envelopes are borrowed from the snapshot, so a
   // voice never owns one and never frees one.
@@ -95,6 +96,8 @@ struct SamplerVoiceSpec {
   float pitchDepthCents = 0.0f;
   const EnvShape* panEnv = nullptr;
   float panDepth = 0.0f;
+  const EnvShape* resonanceEnv = nullptr;
+  float resonanceDepth = 0.0f;  // in Q units at full envelope; the filter's range is 0.7..10
   double sampleRate = 48000.0;
 };
 
@@ -280,6 +283,9 @@ class SamplerVoice {
     if (spec_.panEnv && !spec_.panEnv->empty()) {
       panEnv_.start(spec_.panEnv, spec_.panUnitsPerFrame);
     }
+    if (spec_.resonanceEnv && !spec_.resonanceEnv->empty()) {
+      resonanceEnv_.start(spec_.resonanceEnv, spec_.resonanceUnitsPerFrame);
+    }
     filtL_.reset();
     filtR_.reset();
     filtL2_.reset();
@@ -309,6 +315,7 @@ class SamplerVoice {
       cutoffEnv_.releaseAt(age_);
       pitchEnv_.releaseAt(age_);
       panEnv_.releaseAt(age_);
+      resonanceEnv_.releaseAt(age_);
     } else {
       // No envelope means no release stage to run, so a gated note ends at note-off. A one-shot
       // slot never calls this at all — that decision belongs to the caller, not here.
@@ -365,15 +372,26 @@ class SamplerVoice {
     // shape, everywhere in the program.
     const float p = std::clamp(panSmoothed_, -1.0f, 1.0f);
     const bool stereoSource = spec_.source.channels >= 2;
+    auto panGains = [stereoSource](float pan, float& l, float& r) {
+      if (stereoSource) {
+        l = std::min(1.0f, 1.0f - pan);  // BALANCE: attenuate a side, never reposition
+        r = std::min(1.0f, 1.0f + pan);
+      } else {
+        const float angle = (pan + 1.0f) * 0.25f * static_cast<float>(M_PI);
+        l = std::cos(angle);  // CONSTANT POWER: place a point source
+        r = std::sin(angle);
+      }
+    };
     float gl, gr;
-    if (stereoSource) {
-      gl = std::min(1.0f, 1.0f - p);  // BALANCE: attenuate a side, never reposition
-      gr = std::min(1.0f, 1.0f + p);
-    } else {
-      const float angle = (p + 1.0f) * 0.25f * static_cast<float>(M_PI);
-      gl = std::cos(angle);  // CONSTANT POWER: place a point source
-      gr = std::sin(angle);
-    }
+    panGains(p, gl, gr);
+    // A PAN ENVELOPE MOVES THE SOUND, so when one is running the gains are recomputed PER
+    // SAMPLE. They used to be computed once per block and the envelope was started, released
+    // and never evaluated at all — spec.panDepth was set and never read, so a Panning envelope
+    // was a modulator the document promised and the sound never had.
+    //
+    // Per block would also make the output depend on where the block boundaries fall, which is
+    // the determinism failure the pitch envelope's comment already argues against.
+    const bool panMoving = spec_.panEnv && !spec_.panEnv->empty() && spec_.panDepth != 0.0f;
 
     const uint64_t stopFrame = spec_.reverse ? startFrame_ : endFrame_;
     for (uint32_t i = 0; i < numFrames; ++i) {
@@ -424,6 +442,12 @@ class SamplerVoice {
         }
       }
 
+      float glNow = gl, grNow = gr;
+      if (panMoving) {
+        panGains(std::clamp(p + panEnv_.valueAt(age_) * spec_.panDepth, -1.0f, 1.0f),
+                 glNow, grNow);
+      }
+
       const uint32_t dst = offsetInBlock + i;
       for (uint32_t ch = 0; ch < outChannels && ch < 2; ++ch) {
         const uint32_t srcCh =
@@ -466,14 +490,21 @@ class SamplerVoice {
             // audible when open, a slam when closed.
             fc *= std::pow(2.0f, cutoffEnv_.valueAt(age_) * spec_.cutoffDepth);
           }
+          // RESONANCE MODULATION. ModTarget::Resonance was in the enum and fell through the
+          // engine's switch, so it was a target you could name and nothing would happen.
+          float q = spec_.resonance;
+          if (spec_.resonanceEnv && !spec_.resonanceEnv->empty() &&
+              spec_.resonanceDepth != 0.0f) {
+            q = std::clamp(q + resonanceEnv_.valueAt(age_) * spec_.resonanceDepth, 0.7f, 10.0f);
+          }
           SvfFilter& f1 = (ch == 0) ? filtL_ : filtR_;
-          s = f1.process(s, fc, spec_.resonance, spec_.filterType, spec_.sampleRate);
+          s = f1.process(s, fc, q, spec_.filterType, spec_.sampleRate);
           if (spec_.filterType == 2) {  // LP24 is two LP12s, so "steeper" means what it says
             SvfFilter& f2 = (ch == 0) ? filtL2_ : filtR2_;
-            s = f2.process(s, fc, spec_.resonance, 1, spec_.sampleRate);
+            s = f2.process(s, fc, q, 1, spec_.sampleRate);
           }
         }
-        out[ch][dst] += s * g * (ch == 0 ? gl : gr);
+        out[ch][dst] += s * g * (ch == 0 ? glNow : grNow);
       }
 
       // ---- ADVANCE, AND THE THREE LOOP MODES ARE HERE AND NOWHERE ELSE.
@@ -663,7 +694,7 @@ class SamplerVoice {
 
   SamplerVoiceSpec spec_{};
   EnvRunner env_{};
-  EnvRunner cutoffEnv_{}, pitchEnv_{}, panEnv_{};
+  EnvRunner cutoffEnv_{}, pitchEnv_{}, panEnv_{}, resonanceEnv_{};
   SvfFilter filtL_{}, filtR_{}, filtL2_{}, filtR2_{};
   uint64_t pos_ = 0;  // 32.32 fixed point, in level-0 source frames
   uint64_t step_ = 0;

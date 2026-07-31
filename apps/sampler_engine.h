@@ -401,6 +401,16 @@ class SamplerRuntime {
               spec.panUnitsPerFrame = unitsPerFrame(m);
             }
             break;
+          case ModTarget::Resonance:
+            if (!spec.resonanceEnv) {
+              spec.resonanceEnv = &m.env;
+              // The filter's Q runs 0.7..10, so full depth is the whole usable range. It was
+              // in the enum and fell through `default` — a target you could name, that did
+              // nothing.
+              spec.resonanceDepth = depth * 9.3f;
+              spec.resonanceUnitsPerFrame = unitsPerFrame(m);
+            }
+            break;
           default:
             break;
         }

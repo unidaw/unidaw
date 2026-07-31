@@ -11,11 +11,13 @@
 # the envelope never reaching a voice, which is the failure that matters. So this renders the
 # same note three ways and listens to the shape.
 #
-# FIVE PROPERTIES:
+# SIX PROPERTIES:
 #   ATTACK    a long attack makes the note START QUIET and arrive later. Measured as the ratio of
 #             early energy to late energy, which is the shape rather than the level
 #   SUSTAIN   a low sustain holds the note QUIETER after the decay than a full one does
 #   RELEASE   a long release makes the sound OUTLAST its note-off
+#   PANNING   a pan envelope MOVES the sound across the stereo field, which neither a
+#             volume nor a filter envelope can imitate
 #   TARGETS   an envelope can drive CUTOFF, not only volume. Asserted on BRIGHTNESS (the
 #             high-band share of the energy) rather than level, because a level change is
 #             what a volume envelope on the wrong target would look like
@@ -258,6 +260,40 @@ raise SystemExit(0 if $BRIGHT_LATE > $BRIGHT_EARLY * 1.3 else 1)" || \
         $BRIGHT_EARLY -> $BRIGHT_LATE. The engine renders cutoff envelopes; if this does not
         move, the command created an envelope on the wrong target — most likely Volume, which
         is what it did before --target existed"
+
+# ---- PANNING. The pan envelope was STARTED, RELEASED, and never evaluated: spec.panDepth was
+# set and never read, so a Panning envelope was a modulator the document promised and the sound
+# never had. A slow pan envelope moves the source across the stereo field, so the LEFT/RIGHT
+# BALANCE changes across the note — which is a thing neither a volume nor a filter envelope can
+# do, so the measurement cannot be satisfied by the wrong target.
+shape panning --track 0 --amp --target pan --depth 1000 \
+    --attack 400000 --decay 0 --sustain 1000 --release 0
+balance() {  # balance <wav> <startSec> <endSec>  -> right share of the energy, in thousandths
+  python3 - "$1" "$2" "$3" <<'PYP'
+import sys, wave, struct, math
+w = wave.open(sys.argv[1], 'rb')
+ch, n, sr = w.getnchannels(), w.getnframes(), w.getframerate()
+s = struct.unpack('<' + 'h' * (n * ch), w.readframes(n)); w.close()
+a, b = int(float(sys.argv[2]) * sr), min(n, int(float(sys.argv[3]) * sr))
+l = r = 0.0
+for i in range(a, b):
+    l += float(s[i * ch]) ** 2
+    r += float(s[i * ch + (1 if ch > 1 else 0)]) ** 2
+print(int(1000 * math.sqrt(r) / max(1e-9, math.sqrt(l) + math.sqrt(r))))
+PYP
+}
+PAN_EARLY="$(balance "$TMP/panning.wav" 0.52 0.60)"
+PAN_LATE="$(balance "$TMP/panning.wav" 0.86 0.96)"
+FLAT_EARLY="$(balance "$TMP/flat.wav" 0.52 0.60)"
+FLAT_LATE="$(balance "$TMP/flat.wav" 0.86 0.96)"
+echo "  pan env:      right share $PAN_EARLY -> $PAN_LATE (no envelope: $FLAT_EARLY -> $FLAT_LATE)"
+python3 -c "
+moved = abs($PAN_LATE - $PAN_EARLY)
+still = abs($FLAT_LATE - $FLAT_EARLY)
+raise SystemExit(0 if moved > 100 and moved > still * 4 else 1)" || \
+  fail "a PAN envelope did not move the sound across the stereo field: the right channel's share
+        went $PAN_EARLY -> $PAN_LATE, against $FLAT_EARLY -> $FLAT_LATE with no envelope at all.
+        The pan envelope used to be started, released, and never evaluated"
 
 echo "sampler_envelope_write_check: PASS — the ADSR is reachable, and it is audible in all three"
 echo "                              stages, on a mod set that started with no modulators at all"
