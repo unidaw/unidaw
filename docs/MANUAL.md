@@ -141,9 +141,10 @@ rather than a silent no-op. `Escape` closes the second pane. `Ctrl+Tab` cycles t
 Plain `Tab` belongs to the surface: in the tracker it is next track, which is what it has
 meant in every tracker since the eighties.
 
-> The `?` help overlay still lists `Tab` as "next surface" and `B` as "browser rail". Both
-> are stale — they are `Ctrl+Tab` and `⌘B`. The keydown handler is authoritative; the help
-> table is a hand-maintained mirror and says so in its own header comment.
+> The `?` overlay is a hand-maintained mirror of the keydown handler and says so in its own
+> header. Where the two disagree the handler is right — and they did disagree, on `Tab`, `B`
+> and the copy/paste pair, until 2026-07-31. A few of its per-surface notes are still behind
+> the code; the list is in [Known gaps](#17-known-gaps-and-things-that-refuse).
 
 ### The chrome, left to right
 
@@ -156,7 +157,8 @@ meant in every tracker since the eighties.
 - `LOOP a–b` when a loop is set. Absent otherwise; it is a readout, not a toggle, because
   the engine has no command that means "stop looping".
 - `CLICK` — **drawn unavailable; there is no metronome**.
-- A scale-browser button showing `⌘⇧S`. **It is not wired to anything, and ⌘⇧S is save-as.**
+- A scale button showing the current key and `⌘K`. Click it to open the palette seeded with
+  `harmony `, whose scale argument lists every scale the engine knows.
 - Add-track / remove-track buttons. The `−` removes *the cursor's* track.
 - The reject line and the connection state.
 - `lat` (blockSize/sampleRate) and `doc vN`. There is no DSP meter and no PDC readout
@@ -240,8 +242,14 @@ bytes and the name gets 24 of them. The engine resolves it against the project's
 directory, then against the project's sibling `audio/` directory. A name longer than 24
 characters is refused before the round trip.
 
+**Several files at once, comma-separated, land on consecutive keys** from the root:
+`load-sample 0 0 kick.wav,snare.wav,hat.wav 36` gives you three pads on 36, 37 and 38. Commas
+rather than spaces, because a file name may contain a space. If the spread would run past 127
+the *whole batch* is refused rather than piling the tail onto one key — a kit whose last three
+pads all answer the same note is worse than a refusal, and it looks like it worked.
+
 A freshly loaded slot is a one-shot pinned to **one key: MIDI 36, which Uni writes as
-`C-2`**. That is `load-sample`'s default (`fixed pitch`, root 36). So:
+`C-2`** — `fixed pitch`, root 36 by default. So:
 
 ```
 goto 0 0                   cursor on row 0, track 0
@@ -555,10 +563,15 @@ Notes:
   A and B are 1..8 and A ≤ B; `A > B` is refused rather than normalised, because it could
   never fire.
 - `cpre` fires when the previous conditional trig on the same track fired; `cnpre` when it
-  did not. Both resolve backwards, so a bounce is identical. **They parse, format and play,
-  and they cannot be SET from here today**: the engine caps a trig condition at 64 and PRE is
-  130, so `op cpre` is refused and the row keeps whatever it had. Author them in the project
-  file until the range widens.
+  did not. Both resolve BACKWARDS — the engine finds the previous conditional and evaluates it
+  at its own pass rather than carrying a flag across blocks — so a bounce is identical however
+  the block boundaries fall.
+- **The predecessor is per TRACK, and two conditionals on the same row resolve in COLUMN
+  ORDER**: column 0 before column 1. A chord of two conditional notes is one keypress, so the
+  tie is easy to write and the answer had to be stated rather than inherited.
+- A `cpre` with no conditional before it does not fire, because "the previous conditional
+  fired" is false when there was none. The engine names it once in its log at flatten time
+  rather than leaving the row silently dead.
 - `cfill` / `cnfill` are **reserved and not implemented**. The parser refuses them on both
   sides, deliberately: a fill trig makes the render depend on a live performance input, and a
   token that round-trips through the editor and then always sounds is worse than one that is
@@ -675,14 +688,17 @@ file picker, no pad grid you can click, and no waveform editor.
 | a note's `sound` op | let the keymap pick from the pitch |
 | `emit`'s step | derive the timing from the slices themselves |
 
-> `slot <t> <d> 0 gate 1` prints `gate = 1 on every slot` and **does nothing** — the engine
-> refuses it as `no_such_slot`. The success line is wrong; there is no all-slots wildcard.
+> `slot <t> <d> 0 gate 1` **does nothing** — the engine refuses it as `no_such_slot`. There is
+> no all-slots wildcard; set the field one slot at a time. Note that `filter`'s mod-set zero and
+> every command's device zero ARE wildcards, so the sentinel is per field rather than per wire.
 
 ### Making one and loading it
 
 ```
 sampler [track]                              add a sampler device
-load-sample <track> <device> <file>          load a sample, minting a source and a slot
+load-sample <track> <device> <file>[,<file>…] [root]
+                                             load samples, one slot each, on consecutive
+                                             keys from root (default 36)
 kit <track> <device>                         read the whole kit back, slot by slot
 ```
 
@@ -716,12 +732,20 @@ worse failure than ignoring a channel). A third mode, `clear`, removes every mar
 resetting the id counter — a row still naming a marker must go silent rather than acquire
 different audio.
 
+**A cleared chop leaves orphaned pads, and they are marked.** `clear` removes the markers and
+leaves the slots that named them; such a slot keeps its slice id and falls back to playing the
+WHOLE source — which is byte for byte what a legitimate one-slice chop reports, so the two
+cannot be told apart from the numbers. The kit read-back carries a `slice missing` flag for it
+and the rack draws `sl3?` with the reason in the row's title. The pad still plays: the whole
+file, loudly, where a slice used to be, which is why it is marked rather than hidden.
+
 The slices land on **consecutive keys from MIDI 36 upward**, each slot pinned to its own key
 with pitch tracking off, so a slice played from its own key sounds as recorded rather than
 transposed by where it sits. Each is named from the source stem: `break 01`, `break 02`.
 N slices asked for is N made — frame 0 is a legal marker — and they tile the source exactly.
 
-> The `slice` help string says "from C1 up". The base key is MIDI 36, which Uni's own note
+> Corrected 2026-07-31: the `slice` help string said "from C1 up". The base key is MIDI 36,
+> which Uni's own note
 > naming writes as `C-2`. The help string is off by an octave; trust MIDI 36.
 
 Chopping writes nothing into the pattern. That is what `emit` is for:
@@ -1668,41 +1692,33 @@ Everything below is stated in place in the relevant chapter too. This is the lis
 
 ### Built underneath, unreachable from here
 
-- **`cpre` / `cnpre`.** They parse, format, resolve and round-trip through a project file, and
-  `op cpre` is refused: the engine caps a trig condition at 64 and PRE is 130.
+- **`cfill` / `cnfill`** are reserved and refused on purpose, on both sides. A fill trig makes
+  the render depend on a live input, so a bounce would have to define what fill state it renders
+  under, and that is an owner decision. A token that round-trips through the editor and then
+  sounds on every pass is worse than one the editor rejects.
 - **The `slice` patcher node.** Renders and executes; cannot be created or wired from the UI.
 - **Harmony quantize**, `lines_per_beat`, the sampler's kit/sample views. See above.
 
 ### Wired to nothing
 
-- The chrome's **scale-browser button** does nothing. Its `⌘⇧S` label is misleading — that
-  chord is save-as.
 - The browser rail's header shows no close `✕` and its footer's `rescan` is blank, because no
   handler was passed. Deliberate: a control that does nothing is worse than no control.
-- Palette command output is not displayed anywhere.
 
 ### Stale in the app's own help
 
 The `?` overlay is a hand-maintained mirror of the keydown handler and says so. Where they
 disagree, the handler is right. Currently stale:
 
-- `Tab` is listed as "next surface". It is `Ctrl+Tab`; plain `Tab` is next track.
-- `B` is listed as "browser rail". It is `⌘B`.
-- The function keys, `⌘K`, `⌘E`, `⌘S` and Enter-auditions-a-row are not listed at all.
 - Arrange: "clip edits — not implemented, needs engine commands". Clip move, trim, cross-track
   drag and delete all work.
 - Patcher: "one global graph; the engine does not run per-device graphs yet". It is per-device.
 - Tracker: "`**` = notes a cell cannot show apart". The cell draws `4× C-4` or `3 evts` now.
 
-Elsewhere:
-
-- The browser rail's footer says `B closes`. Only `⌘B` does.
-- `slot <t> <d> 0 <field> <value>` answers `… on every slot`. The engine refuses it; there is
-  no all-slots wildcard.
-- `slice`'s help says the slices land "from C1 up". They land from MIDI 36, which this app
-  writes as `C-2`.
-- Several source comments still say a freshly loaded sampler slot renders silence and that you
-  must send an envelope first. Fixed on 2026-07-31; the default kit is audible.
+The global keys, the copy/paste pair and the function keys were stale here too and were
+corrected on 2026-07-31 — as was the `slice` help's "from C1 up", the browser rail's `B
+closes`, the `slot … 0` reply, the unwired scale button and the palette's discarded output.
+Several *source comments* still say a freshly loaded sampler slot renders silence and that you
+must send an envelope first; that was fixed the same day and the default kit is audible.
 
 ### Silent-ish failures to know about
 
