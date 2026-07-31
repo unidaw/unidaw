@@ -11360,6 +11360,26 @@ struct TrackRuntime {
             }
             const daw::SamplerSourceAudio* audio = snap->audioFor(sl.sourceLocalId);
             e.lengthFrames = audio ? static_cast<uint32_t>(audio->frames) : 0;
+            // THE SLICE'S EXTENT, from the same snapshot the voice reads — so what is drawn is
+            // what would sound, not what the model happens to hold. A slot with no slice gets the
+            // whole source rather than zeroes; see the field's comment for why that is not a
+            // sentinel worth having.
+            e.sliceBeginFrame = 0;
+            e.sliceEndFrame = e.lengthFrames;
+            if (sl.sliceId != 0 && audio != nullptr) {
+              for (const auto& ss : snap->state.sliceSets) {
+                if (ss.sourceLocalId != sl.sourceLocalId) {
+                  continue;
+                }
+                const daw::SliceExtent ext =
+                    daw::sliceExtentById(ss, sl.sliceId, audio->frames);
+                if (ext.valid) {
+                  e.sliceBeginFrame = static_cast<uint32_t>(ext.begin);
+                  e.sliceEndFrame = static_cast<uint32_t>(ext.end);
+                }
+                break;
+              }
+            }
             // "Silent because the file is missing" and "silent because the sample is empty" are
             // different problems, and a UI should be able to say which — so the reason is a FLAG
             // rather than something to infer from a zero length.

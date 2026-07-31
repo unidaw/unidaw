@@ -619,6 +619,12 @@ add_test(NAME ops_width
 )
 set_tests_properties(ops_width PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# The slices of a chop tile the source — no gap, no overlap, nothing off the end.
+add_test(NAME slice_extent
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slice_extent_check.sh
+)
+set_tests_properties(slice_extent PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A note's default length follows the SONG's meter, not a hardcoded 4/4 bar.
 add_test(NAME meter_bar
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/meter_bar_check.sh

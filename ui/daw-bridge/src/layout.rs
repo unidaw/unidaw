@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 /// together whenever `ShmHeader`'s layout changes, so a stale binary on either
 /// side of the mapping is rejected instead of silently misreading fields.
 pub const K_SHM_MAGIC: u32 = 0x3041_5744;
-pub const K_SHM_VERSION: u16 = 34;
+pub const K_SHM_VERSION: u16 = 35;
 
 /// SetLaneQuantize carries swing through an unsigned field; this is the bias.
 pub const LANE_QUANTIZE_SWING_BIAS: u32 = 500;
@@ -2331,6 +2331,9 @@ mod wire_layout {
         // Not a ring payload — the ASSEMBLED shapes, which the engine memcpys.
         assert_eq!(std::mem::size_of::<UiSamplerEnvPointsHeader>(), 32);
         assert_eq!(std::mem::size_of::<UiEnvPointWire>(), 8);
-        assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 32);
+        // v35: + sliceBeginFrame / sliceEndFrame. Only three bytes were spare and two frame
+        // counts need eight, so the entry's STRIDE changed — which is why this needed a version
+        // bump and a parallel array would not have.
+        assert_eq!(std::mem::size_of::<UiSamplerSlotEntry>(), 40);
     }
 }
