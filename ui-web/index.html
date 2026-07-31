@@ -152,6 +152,19 @@ const chrome = createChrome(document.getElementById('chrome'), {
   // does not have. That divergence is the bug this app keeps finding.
   onAddTrack: () => addTrack(),
   onRemoveTrack: () => removeTrack(),
+  /*
+   * THE SCALE BUTTON, WIRED TO SOMETHING.
+   *
+   * `createChrome` has taken an `onScales` click handler since it was written and nothing ever
+   * passed one, so the button drew the current key, said "Scale browser" in its tooltip, and did
+   * nothing when pressed. It also advertised ⌘⇧S, which is SAVE AS.
+   *
+   * It opens the palette seeded with `harmony `, which is the scale browser this app actually
+   * has: the command's `scale` argument is a `oneOf` over the engine's own registry, so the
+   * palette lists every scale the engine knows and completes it. Nothing new is invented, the
+   * pointer path and the console path are one function, and the button now does what it says.
+   */
+  onScales: () => { palette.open('harmony '); schedule(); },
   // The pointer's way into the automation mode. Same function the `draw` command calls, so the
   // button and the console cannot come to mean different things by "draw".
   onDraw: () => setAutomationEdit(),
@@ -3390,6 +3403,18 @@ const dockApi = {
     mixerState.strips[t].flags ^= which === 'mute' ? FLAG_MUTE : FLAG_SOLO;
     sendMixer(t);
   },
+  /**
+   * WRITE A LINE INTO THE CONSOLE'S TRANSCRIPT.
+   *
+   * The palette calls `api.log('out', result)` so that running `help` or `kit` from the launcher
+   * lands somewhere a person can read it — and `dockApi` had no `log`, so the call was guarded
+   * away by its own `typeof === 'function'` check and every palette command's output went
+   * nowhere. Silently: the palette closed, the command ran, and the answer was discarded.
+   *
+   * `dock` is declared after this object and that is fine — the body runs on call, not on
+   * definition, and nothing calls it before the console exists.
+   */
+  log: (kind, text) => { dock.log(kind, text); dock.render(); },
   state: () => ({ view: state.view, cursor: state.cursor, zoom: state.zoom,
                   octave: state.octave, project: state.currentProject,
                   /*
@@ -8241,6 +8266,19 @@ window.__uni = {
                              draw(); return pendingCard.probe(); },
   scales: () => scales,
   paletteProbe: () => palette.probe(),
+  /**
+   * TYPE INTO THE PALETTE, AND RUN WHAT IS HIGHLIGHTED.
+   *
+   * `paletteProbe` and `paletteMove` existed and these did not, so the launcher could be opened,
+   * inspected and scrolled by a script and never actually USED — hard requirement 4 is that an
+   * agent can drive the UI, and a surface you can look at and not operate fails it.
+   *
+   * The same two methods the keystrokes call, not copies: a launcher that behaved differently
+   * when scripted would be two launchers.
+   */
+  paletteQuery: (q) => { palette.setQuery(String(q === undefined ? '' : q)); draw();
+                         return palette.probe().query; },
+  paletteRun: () => { const r = palette.run(); draw(); return r; },
   /*
    * THE INDEX, NOT A WHOLE PROBE.
    *

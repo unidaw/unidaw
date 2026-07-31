@@ -468,7 +468,10 @@ export function createCommands(api) {
      * a break.
      */
     slice: { help: 'slice <track> <device> [count] [equal|transient] — chop the sample into '
-                 + 'playable slices from C1 up',
+                 // C-2 in this app's own note naming — `pitchName(36)` — and the engine's
+                 // `slotBaseKey` default is 36. It said C1, which is off by an octave and sends
+                 // someone hunting an octave below their chop.
+                 + 'playable slices from C-2 up',
       args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
              { name: 'count', type: 'int', min: 1, max: 512, optional: true },
              oneOf(['equal', 'transient'], true)],
@@ -596,7 +599,15 @@ export function createCommands(api) {
         if (!api.samplerSlot(num(a[0]), num(a[1]), num(a[2]), field, num(a[4]))) {
           return refusal(api);
         }
-        return `${a[3]} = ${a[4]}` + (Number(a[2]) === 0 ? ' on every slot' : ` on slot ${a[2]}`);
+        /*
+         * NO WILDCARD IN THE REPLY EITHER. This said "on every slot" for slot 0 — the same
+         * claim the help string made and the engine has never honoured (it matches
+         * `slot.id != slotId`, and no kit mints a slot 0). The help was corrected and this line
+         * was not, so the console still told you a wildcard had worked. A success message that
+         * describes an effect the command did not have is the defect this app keeps finding,
+         * wearing its smallest possible face.
+         */
+        return `${a[3]} = ${a[4]} on slot ${a[2]}`;
       } },
     /*
      * THE AMP ENVELOPE — and every other target's.

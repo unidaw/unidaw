@@ -313,7 +313,9 @@ export function createChrome(host, { onPlay, onStop, onScales, onView,
   const scaleIcon = document.createElement('i');
   scaleIcon.className = 'ph ph-circles-three';
   const scaleLabel = label('ch-scale', '—');
-  const scaleKey = label('ch-key', '⌘⇧S');
+  // ⌘K, not ⌘⇧S — which is SAVE AS and has never had anything to do with scales. The button
+  // opens the palette seeded with `harmony `, so the key it advertises is the palette's.
+  const scaleKey = label('ch-key', '⌘K');
   scales.append(scaleIcon, scaleLabel, scaleKey);
 
   // Why the last edit was refused. An edit that is silently dropped is

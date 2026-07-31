@@ -4360,6 +4360,74 @@ section('wheel scrolling');
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 }
 
+section('the palette and the scale button reach something');
+{
+  /*
+   * A COMMAND RUN FROM THE PALETTE PUTS ITS ANSWER SOMEWHERE.
+   *
+   * The palette calls `api.log('out', result)` and guards it with a `typeof === 'function'`
+   * check — and `dockApi` had no `log`, so the guard swallowed every palette command's output.
+   * The launcher closed, the command ran, and the answer was discarded. `help` from the palette
+   * produced nothing at all, which reads as a launcher that does not work.
+   *
+   * Driven through the palette's own run, and read out of the CONSOLE's transcript, because
+   * "somewhere a person can read it" is the claim and the transcript is that place.
+   */
+  await page.evaluate(() => window.__uni.setView('tracker'));
+  await page.waitForTimeout(400);
+  const before = await page.evaluate(
+    () => document.querySelectorAll('.dk-line').length);
+  const out = await page.evaluate(() => {
+    window.__uni.palette(true);
+    // A command that takes NO arguments. `oct` needs one, so the grammar refuses it, `run`
+    // returns null, and the check would have been measuring the refusal path instead of the
+    // output path.
+    window.__uni.paletteQuery('state');
+    return window.__uni.paletteRun();
+  });
+  await page.waitForTimeout(500);
+  const after = await page.evaluate(
+    () => [...document.querySelectorAll('.dk-line')].map((e) => e.textContent).slice(-3));
+  ok(out !== null && out !== undefined && String(out).length > 0,
+     'a palette command returns its answer', JSON.stringify(out));
+  ok(after.length > 0 && after.some((t) => t && t.includes(String(out).slice(0, 8))),
+     'and the answer lands in the console transcript rather than nowhere',
+     `${before} lines before; last lines now ${JSON.stringify(after)}`);
+
+  /*
+   * THE CHROME'S SCALE BUTTON DOES SOMETHING.
+   *
+   * `createChrome` has taken an `onScales` click handler since it was written and nothing
+   * passed one, so the button drew the current key, promised a scale browser in its tooltip
+   * and did nothing at all. It opens the palette seeded with `harmony `, whose `scale`
+   * argument is a oneOf over the engine's own scale registry — which is the scale browser this
+   * app actually has.
+   */
+  await page.evaluate(() => window.__uni.palette(false));
+  await page.waitForTimeout(300);
+  const clicked = await page.evaluate(() => {
+    const b = document.querySelector('.ch-btn.ch-scales');
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  ok(!!clicked, 'the chrome has a scale button');
+  if (clicked) {
+    await page.mouse.click(clicked.x, clicked.y);
+    await page.waitForTimeout(500);
+    const pal = await page.evaluate(() => {
+      const p = window.__uni.paletteProbe ? window.__uni.paletteProbe() : null;
+      return { open: !!(p && p.open), query: p ? p.query : null };
+    });
+    ok(pal.open, 'clicking it opens the palette — it was wired to nothing at all',
+       JSON.stringify(pal));
+    ok(pal.query && pal.query.startsWith('harmony'),
+       'seeded with `harmony `, so the scale list is what it offers', JSON.stringify(pal));
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+  }
+}
+
 section('page errors');
 ok(errors.length === 0, 'no uncaught errors', errors.slice(0, 3).join(' | '));
 
