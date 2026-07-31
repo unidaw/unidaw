@@ -181,7 +181,7 @@ PYP
 }
 
 render b256 256
-grep -q '"event":"project.patcher_loaded"' "$TMP/b256.log" || \
+grep -qE '"event":"project.patcher_(loaded|assembled)"' "$TMP/b256.log" || \
   fail "the patcher graph never loaded, so this is measuring a project without one"
 
 # ---- VARIES. Which slices were heard, recovered from the audio.

@@ -6998,7 +6998,25 @@ struct TrackRuntime {
         }
       }
     }
-    if (deviceGraphCount >= 2) {
+    // ONE CONTRIBUTING DEVICE IS ENOUGH TO ASSEMBLE. This was `>= 2`, and a single-graph project
+    // fell through to the legacy branch below, which copies the device's graph into the pool
+    // verbatim and stamps no ownerDeviceId — so every node published owner 0, meaning "no owning
+    // device". Two load paths for one kind of data, disagreeing about whether the owner is set.
+    //
+    // The two-device case was the one under test (tools/patcher_node_owner_check.sh, whose comment
+    // explains why it needs two: with one device "always 1" and "correctly 1" are the same run).
+    // But with one device "always 0" and "correctly 0" are ALSO the same run, so the fixture that
+    // covered the rare case stayed green while every project anyone actually has was broken. The
+    // web-UI agent measured the far end: with no owner a UI cannot set kUiPatcherFlagHasDeviceId,
+    // every patcher edit goes to the shared pool instead of the device graph the project renders,
+    // and a knob nudge is heard, drawn and lost on save.
+    //
+    // Assembly with one device is the same work with a base offset of 0 — authored ids equal
+    // pooled ids — so the pool is unchanged and the owner is stamped by construction. It also
+    // sets patcherAssembledFromDevices, which moves the save off the "park the live pool on the
+    // first instrument" branch onto "preserve each device's own graph": the same data for one
+    // device, and it retires the boot-demo-graph litter described at the top of this file.
+    if (deviceGraphCount >= 1) {
       struct DevOut {
         uint32_t trackId;
         uint32_t deviceId;
