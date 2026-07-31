@@ -189,6 +189,22 @@ await run(`load-sample 0 ${dev0} break.wav`);
 await run(`load-sample 1 ${dev1} break.wav`);
 await run(`load-sample 2 ${dev2} break.wav`);
 await page.waitForTimeout(2500);
+/*
+ * ONE KIT DELIBERATELY UNLIKE THE OTHERS.
+ *
+ * The kit read-back is a request/answer pair matched on an echoed sequence number, and backend
+ * found the CLI defaulting that sequence to a constant: every request matched the slot's existing
+ * contents immediately, so each read returned the PREVIOUS question's answer — ask for track 1,
+ * get track 0's kit. It survived because every fixture in both repos has ONE sampler track, and
+ * with one track the previous answer and the current one are the same kit.
+ *
+ * This file has three, so it is the right place to hold the line. Slicing one of them means a
+ * swapped answer is wrong in its CONTENT and not only in its label — a check that only reads the
+ * `track` field would pass against an engine that echoed the label correctly and sent the wrong
+ * slots.
+ */
+await run(`slice 2 ${dev2} 4`);
+await page.waitForTimeout(2000);
 
 // Both must be loaded and resolved, or a silence means "no sample" rather than "not played".
 const loaded = await page.evaluate(async ([a, b, c]) => {
@@ -209,6 +225,31 @@ const loaded = await page.evaluate(async ([a, b, c]) => {
 check(loaded.n0 > 0 && loaded.n1 > 0 && loaded.n2 > 0 &&
       loaded.bad0 === 0 && loaded.bad1 === 0 && loaded.bad2 === 0,
       'all three samplers hold a resolved slot', JSON.stringify(loaded));
+
+/*
+ * EACH ANSWER IS ABOUT THE TRACK IT WAS ASKED ABOUT. Structural, with no timing in it: ask all
+ * three in turn and require each answer to name its own track and device AND to carry that
+ * track's own slot count. Backend's bug returned the previous answer, so a suite that asks about
+ * one track can never see it; asking about three in a row is the whole test.
+ */
+const identity = await page.evaluate(async ([a, b, c]) => {
+  const out = [];
+  const devs = [a, b, c];
+  for (let t = 0; t < 3; t++) {
+    window.__uni.send({ type: 'samplerkit', track: t, device: devs[t] });
+    await new Promise((r) => setTimeout(r, 350));
+    const k = window.__uni.samplerKitCached(t, devs[t]);
+    out.push(k ? { track: k.track, device: k.device, slots: (k.slots || []).length } : null);
+  }
+  return out;
+}, [dev0, dev1, dev2]);
+const askedDevs = [dev0, dev1, dev2];
+check(identity.every((k, t) => k && k.track === t && k.device === askedDevs[t]),
+      "each kit answer names the track and device it was asked about",
+      JSON.stringify(identity));
+check(identity[2] && identity[2].slots > identity[0].slots,
+      'the sliced track reports MORE slots than the unsliced ones — the answers are not swapped',
+      JSON.stringify(identity.map((k) => k && k.slots)));
 
 /*
  * ONE NOTE EACH, FAR APART IN TIME, so the two answers occupy separate windows of one capture
@@ -297,7 +338,7 @@ await page.evaluate(() => window.__uni.transport('play'));
  * `sampler.kit_published` in engine.log afterwards. The engine's own number, costing three
  * messages.
  */
-const devs = [dev0, dev1, dev2];
+const devs = askedDevs;
 await page.waitForTimeout(5000);          // the control's note is at 0s; the samplers start at 4s
 for (let t = 0; t < 3; t++) {
   await page.evaluate(([tr, d]) => window.__uni.send({ type: 'samplerkit', track: tr, device: d }),

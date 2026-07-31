@@ -2794,6 +2794,35 @@ test('the canonical text form round-trips what the engine published', () => {
 
 
 
+test('the patcher node-type table matches the engine enum', async () => {
+  /*
+   * `NODE_TYPES` mirrors `enum class PatcherNodeType` in the engine, and nothing forced them to
+   * agree — the same gap the device-kind table had, where the sampler shipped as kind 5 against a
+   * list that stopped at 4 and every sampler card read "kind 5 #9".
+   *
+   * Written the day backend ANNOUNCED SliceSelect=7, deliberately before it lands: the point of a
+   * mirror is to fail when the other side moves, and a mirror added after the move has already
+   * missed the one event it exists for. When 7 arrives this test goes red and names it, instead
+   * of the patcher quietly drawing a node it has no word for.
+   *
+   * Parsed from the HEADER, so it is checked against the definition rather than against itself.
+   */
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../../apps/patcher_graph.h', import.meta.url), 'utf8');
+  const block = src.slice(src.indexOf('enum class PatcherNodeType'));
+  const body = block.slice(0, block.indexOf('};'));
+  const names = [...body.matchAll(/^\s*([A-Z][A-Za-z]*)\s*=\s*(\d+)/gm)]
+    .map((m) => [m[1], Number(m[2])])
+    .sort((a, b) => a[1] - b[1]);
+  assert.ok(names.length > 4, `parsed the enum: ${JSON.stringify(names)}`);
+  // Dense from 0, or an index-keyed array is the wrong mirror for it.
+  assert.deepEqual(names.map((n) => n[1]), names.map((_, i) => i),
+    'PatcherNodeType is dense from 0, which is what makes an array the right mirror');
+  assert.equal(NODE_TYPES.length, names.length,
+    `every node type is named: engine has ${JSON.stringify(names.map((n) => n[0]))}, `
+    + `this side has ${JSON.stringify(NODE_TYPES)}`);
+});
+
 test('the device-kind table matches the engine enum', async () => {
   /*
    * `DEVICE_KINDS` mirrors `enum class DeviceKind` in apps/device_chain.h, and nothing forced
