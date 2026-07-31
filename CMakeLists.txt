@@ -565,6 +565,12 @@ add_test(NAME sampler_kit
 )
 set_tests_properties(sampler_kit PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# Every published patcher node names the device it came from.
+add_test(NAME patcher_node_owner
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/patcher_node_owner_check.sh
+)
+set_tests_properties(patcher_node_owner PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # A gated note that fills its clip still sounds, and so does one shorter than a block.
 add_test(NAME full_length_note
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/full_length_note_check.sh

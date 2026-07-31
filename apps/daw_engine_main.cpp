@@ -2989,6 +2989,8 @@ struct TrackRuntime {
   // One-shot: a generated event whose converted sample fell outside the block its TICK window
   // owns. Should be impossible; see the clamp that sets it.
   std::atomic<bool> warnedEventOutsideBlock{false};
+  // One-shot: a device id too wide for the published half-word in UiPatcherNode.
+  std::atomic<bool> warnedPatcherOwnerTooWide{false};
   std::atomic<uint32_t> chainVersion{0};
   std::atomic<uint32_t> routingVersion{0};
   std::atomic<uint32_t> modVersion{0};
@@ -3869,6 +3871,18 @@ struct TrackRuntime {
         break;
       }
       daw::UiPatcherNode& out = region->nodes[nodeCount++];
+      // The node's owning device, so a UI can name the graph an edit should reach. Reported
+      // rather than truncated if it ever exceeds the published half-word — see UiPatcherNode.
+      if (n.ownerDeviceId > 0xFFFFu) {
+        if (!warnedPatcherOwnerTooWide.exchange(true, std::memory_order_relaxed)) {
+          DAW_EVENT("patcher.owner_device_id_too_wide")
+              .field("device", n.ownerDeviceId)
+              .field("published_max", 0xFFFFu);
+        }
+        out.ownerDeviceId = 0;
+      } else {
+        out.ownerDeviceId = static_cast<uint16_t>(n.ownerDeviceId);
+      }
       out.id = n.id;
       out.type = static_cast<uint8_t>(n.type);
       out.hasConfig = 0;

@@ -37,6 +37,7 @@ daw-cli — control surface for a running engine
   daw-cli do sampler-slot --track N --device D --slot S --field voice-group --value 1
                                    edit one slot field (--field with no match lists them all)
   daw-cli get sampler-kit --track N [--device D]
+  daw-cli get patcher              the assembled patcher pool, with each node's OWNING DEVICE
                                    the device's slots, as the ENGINE has them
   daw-cli do sampler-slice --track N --source 1 [--mode transient|equal|clear] [--count 16] [--no-slots]
                           [--sensitivity 0-1000] [--count 16] [--snap TICKS] [--slots]
@@ -1664,6 +1665,32 @@ fn main() {
             match rest.first() {
                 Some(&"transport") => get_transport(&handle),
                 Some(&"tracks") => get_tracks(&handle),
+                // THE PATCHER POOL AS THE ENGINE HAS IT, including each node's OWNING DEVICE.
+                //
+                // Added because the owner was the one fact a UI could not get: the region
+                // publishes the assembled pool, so its region-level deviceId has no answer to
+                // give, and without a per-node owner every patcher edit from a surface is
+                // pool-scoped — which since patcher-is-a-device is not the graph a project
+                // renders.
+                Some(&"patcher") => {
+                    let v = handle.read_patcher();
+                    println!("{{");
+                    println!("  \"version\": {},", v.version);
+                    println!("  \"region_device\": {},", v.device_id);
+                    let nodes: Vec<String> = v.nodes.iter().map(|n| {
+                        format!(
+                            "    {{ \"id\": {}, \"type\": {}, \"owner_device\": {}, \"has_config\": {} }}",
+                            n.id, n.node_type, n.owner_device_id, n.has_config)
+                    }).collect();
+                    println!("  \"nodes\": [\n{}\n  ],", nodes.join(",\n"));
+                    let edges: Vec<String> = v.edges.iter().map(|e| {
+                        format!("    {{ \"src\": {}, \"dst\": {}, \"kind\": {} }}",
+                                e.src_node, e.dst_node, e.kind)
+                    }).collect();
+                    println!("  \"edges\": [\n{}\n  ]", edges.join(",\n"));
+                    println!("}}");
+                    0
+                }
                 Some(&"notes") => get_notes(&handle, &args),
                 Some(&"meters") => {
                     // v24 per-insert meters, dBFS millibels. device_id matches the chain

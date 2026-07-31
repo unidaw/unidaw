@@ -577,7 +577,19 @@ struct UiPatcherNode {
   uint32_t id = 0;
   uint8_t type = 0;       // PatcherNodeType
   uint8_t hasConfig = 0;
-  uint16_t reserved = 0;
+  // WHICH DEVICE THIS NODE BELONGS TO, or 0 for a pool node with no owning device.
+  //
+  // Taken from the reserved half-word, so nothing already read moves and kShmVersion does not
+  // change. The region publishes the ASSEMBLED pool — a union of every device's graph with
+  // re-id'd nodes — so "which device is this region" has no answer and UiPatcherRegion::deviceId
+  // cannot have one; "which device is this NODE" always does. It is the fact a UI needs before it
+  // can set kUiPatcherFlagHasDeviceId on an edit, and without it EVERY patcher command from a UI
+  // is pool-scoped, which since patcher-is-a-device is not the graph a project renders.
+  //
+  // A u16 CAPS THIS AT 65535, where a device id is a u32 everywhere else. Device ids are minted
+  // per track from 1 upward, so reaching it needs 65k devices on one track; the publish site
+  // reports once if it ever does rather than truncating in silence.
+  uint16_t ownerDeviceId = 0;
   int32_t config[8]{};
 };
 
