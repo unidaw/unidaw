@@ -42,6 +42,7 @@ ENG=""
 cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
+. "$ROOT/tools/lib/engine_wait.sh"
 
 python3 - "$TMP/s.wav" <<'PY'
 import sys, wave, struct, math
@@ -158,10 +159,7 @@ PY
 ENG=$!
 # project.load, not "starting threads": that line is printed BEFORE the startup project is
 # loaded, and a command sent on it reaches an engine whose tracks do not exist yet.
-for _ in $(seq 1 160); do
-  grep -q '"event":"project.load"' "$TMP/add.log" 2>/dev/null && break
-  sleep 0.25
-done
+wait_for_boot "$TMP/add.log" "$ENG" 160
 grep -q '"event":"project.load"' "$TMP/add.log" 2>/dev/null || fail "the engine never loaded"
 
 "$CLI" do add-device --track 0 --kind sampler >/dev/null 2>&1

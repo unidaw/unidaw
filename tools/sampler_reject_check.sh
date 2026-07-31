@@ -43,6 +43,7 @@ ENG=""
 cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
+. "$ROOT/tools/lib/engine_wait.sh"
 
 python3 - "$TMP/s.wav" <<'PY'
 import sys, wave, struct, math
@@ -95,10 +96,7 @@ SHM="/samprej_$$"
 ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" \
     ./daw_engine --project r --run-seconds 25 >"$TMP/eng.log" 2>&1 ) &
 ENG=$!
-for _ in $(seq 1 40); do
-  grep -q '"event":"project.load"' "$TMP/eng.log" 2>/dev/null && break
-  sleep 0.25
-done
+wait_for_boot "$TMP/eng.log" "$ENG" 40
 grep -q '"event":"project.load"' "$TMP/eng.log" 2>/dev/null || \
   fail "the engine never loaded — see $TMP/eng.log"
 rcli() { env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM" "$CLI" "$@"; }

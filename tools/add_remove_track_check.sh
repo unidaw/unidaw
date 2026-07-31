@@ -17,6 +17,7 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 Q=960000
@@ -93,10 +94,7 @@ for _ in $(seq 1 120); do
   sleep 0.25
 done
 DAW_UI_SHM_NAME="$SHM2" "$CLI" do load result --force >/dev/null 2>&1 || true
-for _ in $(seq 1 80); do
-  if grep -q '"event":"project.load"' "$TMP/eng2.log" 2>/dev/null; then break; fi
-  sleep 0.25
-done
+wait_for_boot "$TMP/eng2.log" "$ENG2" 80
 sleep 1.5
 # The ids that came back LIVE (a tombstone publishes with absent:true and is not a track).
 # `|| true` on the whole pipeline: if the engine is not answering yet the first grep matches

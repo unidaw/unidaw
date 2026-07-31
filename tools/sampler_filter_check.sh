@@ -39,15 +39,10 @@ CLI="$ROOT/ui/target/debug/daw-cli"
 TMP="$(mktemp -d)"
 mkdir -p "$TMP/projects"
 ENG=""
-clean# WAITS FOR THE PROJECT, NOT FOR THE THREADS. "starting threads" is printed before the startup
-# project has been loaded, so a command sent on that signal can arrive at an engine whose tracks
-# do not exist yet — and it is REFUSED, with a reason, into the engine's log where nothing here
-# was looking. With two tracks the load takes longer and the race became reliable: every
-# sampler-load came back "no_sampler_device" and the check reported that the read-back returned
-# nothing, which was true and about the wrong thing.
-up() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
+cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
+. "$ROOT/tools/lib/engine_wait.sh"
 
 # A SAWTOOTH, because a low-pass has to have something to remove. A sine at the fundamental would
 # pass a low-pass unchanged and this whole check would compare two identical files — the trap that
@@ -125,11 +120,13 @@ export DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP/projects"
 up() {  # bring the engine up and wait for it
   ( cd "$BUILD" && ./daw_engine --project f --run-seconds 30 >"$TMP/projects/eng.log" 2>&1 ) &
   ENG=$!
-  for _ in $(seq 1 120); do
-    grep -q '"event":"project.load"' "$TMP/projects/eng.log" 2>/dev/null && return 0
-    sleep 0.25
-  done
-  fail "the engine never loaded its project — see $TMP/projects/eng.log"
+  # WAITS FOR THE PROJECT, NOT FOR THE THREADS. "starting threads" is printed before the startup
+  # project has been loaded, so a command sent on that signal can arrive at an engine whose tracks
+  # do not exist yet — and it is REFUSED, with a reason, into the engine's log where nothing here
+  # was looking. With two tracks the load takes longer and the race became reliable: every
+  # sampler-load came back "no_sampler_device" and the check reported that the read-back returned
+  # nothing, which was true and about the wrong thing.
+  wait_for_boot "$TMP/projects/eng.log" "$ENG" 120
 }
 up
 

@@ -52,6 +52,7 @@ ENG=""
 cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
+. "$ROOT/tools/lib/engine_wait.sh"
 
 # A BREAK WHOSE FIRST EIGHTH IS THE LOUD ONE and the rest are quiet. That asymmetry is the whole
 # fixture: if the first slice is unreachable, playing slice 1 gives you the quiet material and
@@ -99,10 +100,7 @@ ENG=$!
 # was looking. With two tracks the load takes longer and the race became reliable: every
 # sampler-load came back "no_sampler_device" and the check reported that the read-back returned
 # nothing, which was true and about the wrong thing.
-for _ in $(seq 1 160); do
-  grep -q '"event":"project.load"' "$TMP/projects/eng.log" 2>/dev/null && break
-  sleep 0.25
-done
+wait_for_boot "$TMP/projects/eng.log" "$ENG" 160
 grep -q '"event":"project.load"' "$TMP/projects/eng.log" 2>/dev/null || fail "the engine never loaded its project"
 
 kit() { "$CLI" get sampler-kit --track 0 2>/dev/null; }

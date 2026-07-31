@@ -59,6 +59,7 @@ ENG=""
 cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
+. "$ROOT/tools/lib/engine_wait.sh"
 
 # project <name> <numerator> <denominator>
 project() {
@@ -95,10 +96,7 @@ entered_duration() {
   ( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$shm" \
       ./daw_engine --project "$proj" --run-seconds 22 >"$TMP/$name.log" 2>&1 ) &
   ENG=$!
-  for _ in $(seq 1 40); do
-    grep -q '"event":"project.load"' "$TMP/$name.log" 2>/dev/null && break
-    sleep 0.25
-  done
+  wait_for_boot "$TMP/$name.log" "$ENG" 40
   grep -q '"event":"project.load"' "$TMP/$name.log" 2>/dev/null || \
     fail "the '$name' engine never loaded — see $TMP/$name.log"
   local c=(env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$shm" "$CLI")

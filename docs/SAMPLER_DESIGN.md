@@ -547,14 +547,24 @@ Answered by the owner. These are decisions, not proposals; the sections above ar
 
 The §7 "still open" list, answered by the owner. Decisions, not proposals.
 
-**Q1 — the sound address notates a zero-padded number: `s07`.** Not `s:snare`. The id is what
-`NotePayload.sound` stores and the id is what the cell shows, so a rename rewrites nothing and a
-row means the same thing after any amount of kit editing. Zero-padded because a tracker cell lives
-in a fixed-width grid and ragged `s7` / `s13` breaks the vertical rhythm that makes a tracker
-readable at a glance. Field width is per track, the same rule R5 already set for whether the ops
-column appears at all: two digits normally, three for a track that references an id >= 100. Ids
-come from `next_slot_id`, which never reuses, so a long-edited 64-pad kit can carry three-digit
-ids without having 100 pads.
+**Q1 — the sound address notates the plain id: `s7`.** Not `s:snare`, and — revised by the owner
+the same morning — **not zero-padded**: *"s9 and s09 should be the same thing. feel free to change
+it to not-zero-padded."* The id is what `NotePayload.sound` stores and the id is what the cell
+shows, so a rename rewrites nothing and a row means the same thing after any amount of kit editing.
+
+The equivalence was always true — `s7`, `s07` and `s007` have all parsed to slot 7 since the
+notation existed. Padding only ever decided which of them got written back out, so the revision
+changed the canonical form and nothing else: no parser change, no wire change, no migration, and
+old rows keep meaning what they meant. It is pinned as an EQUIVALENCE
+(`a_padded_sound_address_is_the_same_slot`) rather than left as a property of the parser nobody
+states, because a later formatting opinion is exactly the thing that would break it by accident.
+
+The argument padding lost to is worth recording, because it was a good one: a ragged `s7` / `s13`
+column does break the vertical rhythm a tracker is read by. It lost to "the two spellings mean the
+same slot, so the canonical form should be the one a person types". If the ragged column reads
+badly in practice the fix is alignment in the CELL — the frontend's job under R5 — rather than
+characters in a string somebody has to type back. `sound_width`, the per-track field width that
+existed only to serve the padding, is deleted rather than carried as a field nobody sets.
 
 **Q2 — a track is SETTABLE to sound-addressed-only.** Blank `sound` means "keymap" by default (R5
 stands), and a track can be switched so that pitch never selects a slot. Then a 64-slot kit stays
@@ -571,13 +581,22 @@ that R3 has landed (S7, the `.uni` module), so an embedded sample cannot change 
 only ever bites a project still living as a loose working directory — which is the normal form
 while you work, so it is not a dead path.
 
-**Q6 — default slice snap: TRANSIENT.** *(Explained on request: this is about where slice
-boundaries land when you chop a sample. TRANSIENT puts them on detected onsets, so a breakbeat is
-cut on its actual hits and the slices are musically real but unevenly spaced. ROW GRID divides by
-the tracker's rows — sixteen equal slices to the bar — so every slice is the same length, snaps to
-the pattern, and re-fits when the tempo changes, but a boundary can land in the middle of a snare.
-Transient is faithful to the source; row grid is faithful to the pattern.)* Awaiting the owner's
-pick between the two once the trade-off is stated; both are already built.
+**Q6 — default slice snap is TRANSIENT, and it is a user option.** Answered 2026-07-31: *"should
+also be a user option, but transient when not thinking."*
+
+Both snaps were already built; what was open was which one happens when you do not say. TRANSIENT
+puts boundaries on detected onsets, so a breakbeat is cut on its actual hits — musically real,
+unevenly spaced, faithful to the SOURCE. ROW GRID divides by the tracker's rows, so every slice is
+the same length, snaps to the pattern and re-fits when the tempo changes, but a boundary can land
+in the middle of a snare — faithful to the PATTERN.
+
+Transient wins the default because chopping is usually the first thing you do to a break you
+already like, and the un-thinking gesture is "cut it where it is cut". Row grid stays one gesture
+away, which is the right place for it: dividing to a grid is the deliberate choice you make when
+you are building something rather than taking something apart, and by then you have an opinion.
+
+*Engine note: the snap is per-chop, not per-device — a kit can hold slices cut both ways, and it
+should, because that is a property of the material rather than of the instrument.*
 
 **Q7 — the Elektron gap is QUEUED.** Retrigger volume ramp and conditional trigs (`1:2`, `FILL`,
 `PRE`) beyond the existing `retN` / `pN`. Row-op work, not sampler work; S4 is complete (task #88),
@@ -587,5 +606,18 @@ so nothing blocks it.
 
 ### Still open — owner only
 
-(Only Q6 remains: transient or row grid as the default chop. Both are built; this is which one
-is the un-thinking gesture.)
+Nothing. Q1 through Q7 are all answered; Q1 and Q6 were revised on 2026-07-31 and the sections
+above are written to the revisions rather than to the originals.
+
+Two decisions were raised BY the work rather than by this list and are still the owner's:
+
+  - **`gate 0` is the default for every slot `sampler-load` and `sampler-slice` create**, so a
+    fresh chop ignores note-off. Nobody chose it: neither path sets `gate` at all, so the slot
+    keeps `SamplerSlot`'s `uint8_t gate = 0` and zero happens to mean one-shot. Right for drums by
+    accident. The proposal is a per-device `defaultGate` that SEEDS a new slot and stops mattering
+    afterwards — the shape `defaultView` already uses ("seeded at load by drop arity, then
+    user-owned") — rather than a device flag that overrides slots live, which would be two facts
+    about one thing for the voice to arbitrate on every note. Worth deciding separately whether
+    `sampler-load` should seed gated regardless, since a whole loaded file is often minutes long
+    and one-shot makes a half-second row play all of it.
+  - **What fill state an offline bounce renders under**, once FILL exists (task #107).

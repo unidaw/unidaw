@@ -28,6 +28,7 @@
 #
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+. "$ROOT/tools/lib/engine_wait.sh"
 BUILD="$ROOT/build"
 CLI="$ROOT/ui/target/debug/daw-cli"
 [ -x "$CLI" ] || CLI="$ROOT/ui/target/release/daw-cli"
@@ -87,10 +88,7 @@ for _ in $(seq 1 120); do
 done
 cli() { DAW_UI_SHM_NAME="$SHM" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load ar --force >/dev/null 2>&1 || true
-for _ in $(seq 1 80); do
-  if grep -q '"event":"project.load"' "$TMP/eng.log" 2>/dev/null; then break; fi
-  sleep 0.25
-done
+wait_for_boot "$TMP/eng.log" "$ENG" 80
 sleep 1.5
 
 # Read the published arrangement through python rather than grepping it: a grep that matches the
@@ -209,10 +207,7 @@ for _ in $(seq 1 120); do
 done
 cli() { DAW_UI_SHM_NAME="$SHM2" DAW_PROJECT_DIR="$TMP" "$CLI" "$@"; }
 cli do load arout --force >/dev/null 2>&1 || true
-for _ in $(seq 1 80); do
-  if grep -q '"event":"project.load"' "$TMP/eng2.log" 2>/dev/null; then break; fi
-  sleep 0.25
-done
+wait_for_boot "$TMP/eng2.log" "$ENG" 80
 sleep 1.5
 RELOAD_M="$(arr | field '",".join("%s@%d" % (m["name"], m["nanotick"]) for m in d["markers"])')"
 RELOAD_S="$(arr | field '",".join("%d:%s" % (p["nanotick"], p["sig"]) for p in d["time_sig"])')"

@@ -54,6 +54,7 @@ ENG=""
 cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
+. "$ROOT/tools/lib/engine_wait.sh"
 
 # fixture <out> <devices>   — 1 device (three nodes) or 2 devices (three nodes + two).
 fixture() {
@@ -109,10 +110,7 @@ run_case() {
   export DAW_UI_SHM_NAME="/powner_${$}_$name" DAW_PROJECT_DIR="$TMP"
   ( cd "$BUILD" && ./daw_engine --project "$name" --run-seconds 20 >"$TMP/$name.log" 2>&1 ) &
   ENG=$!
-  for _ in $(seq 1 160); do
-    grep -q '"event":"project.load"' "$TMP/$name.log" 2>/dev/null && break
-    sleep 0.25
-  done
+  wait_for_boot "$TMP/$name.log" "$ENG" 160
   grep -q '"event":"project.load"' "$TMP/$name.log" 2>/dev/null || \
     fail "the engine never loaded its project — see $TMP/$name.log"
   sleep 1.0

@@ -52,6 +52,7 @@ ENG=""
 cleanup() { [ -n "$ENG" ] && kill "$ENG" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 fail() { echo "  FAIL: $*"; exit 1; }
+. "$ROOT/tools/lib/engine_wait.sh"
 
 python3 - "$TMP/s.wav" <<'PY'
 import sys, wave, struct, math
@@ -99,10 +100,7 @@ ENG=$!
 # was looking. With two tracks the load takes longer and the race became reliable: every
 # sampler-load came back "no_sampler_device" and the check reported that the read-back returned
 # nothing, which was true and about the wrong thing.
-for _ in $(seq 1 160); do
-  grep -q '"event":"project.load"' "$TMP/eng.log" 2>/dev/null && break
-  sleep 0.25
-done
+wait_for_boot "$TMP/eng.log" "$ENG" 160
 grep -q '"event":"project.load"' "$TMP/eng.log" 2>/dev/null || fail "the engine never loaded its project"
 
 "$CLI" do sampler-load --track 0 --file s.wav --root 60 >/dev/null 2>&1
