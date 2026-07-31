@@ -222,6 +222,50 @@ inline std::vector<uint64_t> detectTransients(const std::vector<float>& mono,
       }
     }
   }
+  // A FILE THAT STARTS ON A HIT KEEPS ITS FIRST HIT.
+  //
+  // The scan above begins at hop 2, so nothing in the first 256 frames is ever reported — and a
+  // hit at frame 0 has no rise before it to contrast against anyway. Both are deliberate and both
+  // are right for the case they were written for: insertSliceMarker's comment says that for a
+  // transient chop the region before the first hit is PRE-ROLL and losing it is correct.
+  //
+  // It is not pre-roll when the file starts ON the downbeat — a rendered loop, a hard-trimmed
+  // break, anything bounced to its own bar line. Then the "pre-roll" IS the first hit, and the
+  // chop silently drops it: no marker, no slice id, no slot, and the hit cannot be played.
+  //
+  // SO THE TEST IS WHETHER THE HEAD IS QUIET, not whether an onset was seen there — the scan
+  // structurally cannot see one, so "the detector will find it" is not available as an answer.
+  // The threshold is the detector's OWN floorLevel, deliberately: sensitivity already means "how
+  // loud must something be to count as a hit", and a second knob for "is the head worth keeping"
+  // would be a way for the two to disagree.
+  if (!out.empty() && out.front() > 0) {
+    const uint64_t firstHop = out.front() / kHop;
+    bool headHasSignal = false;
+    for (uint64_t i = 0; i < firstHop && i < n; ++i) {
+      if (env[i] > floorLevel) {
+        headHasSignal = true;
+        break;
+      }
+    }
+    if (headHasSignal) {
+      if (out.front() < opt.minGapFrames) {
+        // THE DETECTOR SAW THE HEAD HIT LATE, not a second hit. Its scan starts at hop 2, so a
+        // hit at frame 0 first becomes visible at frame 256 — and 256 is where this reports it.
+        // Adding a boundary at 0 as well would cut one hit into a 256-frame sliver and the rest,
+        // which is the same mistake as slicing a snare's ring. MOVED, not added: the slice starts
+        // where the hit starts.
+        out.front() = 0;
+      } else {
+        out.insert(out.begin(), 0);
+        if (out.size() > opt.maxSlices) {
+          // THE CAP IS A PROMISE and the head does not get to break it. Dropping from the END
+          // keeps the earliest boundaries, which is what "give me N slices" means — the first N,
+          // not N chosen from the middle.
+          out.resize(opt.maxSlices);
+        }
+      }
+    }
+  }
   return out;
 }
 

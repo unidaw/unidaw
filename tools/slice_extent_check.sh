@@ -171,6 +171,59 @@ for i in range(len(sliced) - 1):
 print("  the eight slices tile 0..%d exactly" % frames)
 PYC
 
+# ---- AND THE SAME ASSERTION AGAINST A TRANSIENT CHOP, which the equal-mode phase above cannot
+# make: dividing by count always starts at 0, so it is blind to a detector that does not.
+#
+# The fixture's first hit is AT frame 0, which is the case that was broken — the detector's scan
+# begins at hop 2 so nothing in the first 256 frames is ever reported, and a hit at 0 has no rise
+# before it to contrast against. The head was left in no slice at all: no marker, no id, no slot,
+# and the downbeat unplayable. Found because a mistyped flag ran this mode where equal was meant.
+# A SECOND, FRESH ENGINE rather than `--mode clear` on this one. Clear removes the MARKERS and
+# leaves the slots that named them, and a slot whose slice no longer resolves falls back to the
+# whole source — so the kit answer would mix eight stale 0..96000 slots with the new ones and the
+# tiling assertion would fail on the fixture rather than on the chop.
+kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
+SHM2="/slicext2_$$"
+( cd "$BUILD" && env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM2" \
+    ./daw_engine --project x --run-seconds 22 >"$TMP/eng2.log" 2>&1 ) &
+ENG=$!
+wait_for_boot "$TMP/eng2.log" "$ENG" 40
+xcli() { env DAW_PROJECT_DIR="$TMP" DAW_UI_SHM_NAME="$SHM2" "$CLI" "$@"; }
+sleep 1.0
+xcli do sampler-slice --track 0 --device 1 --source 1 --mode transient >/dev/null 2>&1
+sleep 1.2
+xcli do sampler-emit-rows --track 0 --device 1 --source 1 >/dev/null 2>&1
+sleep 1.2
+xcli get sampler-kit --track 0 --device 1 >"$TMP/trans.json" 2>/dev/null
+
+python3 - "$TMP/trans.json" "$FRAMES" <<'PYC' || exit 1
+import json, sys
+d = json.load(open(sys.argv[1])); frames = int(sys.argv[2])
+sliced = [s for s in d.get("slots", []) if s.get("slice", 0) != 0]
+sliced.sort(key=lambda s: s.get("slice_begin", 0))
+print("  transient chop: %d slices, %s" % (len(sliced),
+      ", ".join("%s..%s" % (s.get("slice_begin"), s.get("slice_end")) for s in sliced)))
+if not sliced:
+    print("  FAIL: a transient chop of eight clear hits produced no sliced slots at all")
+    raise SystemExit(1)
+if sliced[0].get("slice_begin") != 0:
+    print("  FAIL: the first transient slice starts at %s on a file whose first hit is AT frame 0."
+          " The head is in no slice, so the downbeat has no id and cannot be played — and the"
+          " detector cannot fix this itself, because its scan begins past that point."
+          % sliced[0].get("slice_begin"))
+    raise SystemExit(1)
+for i in range(len(sliced) - 1):
+    if sliced[i].get("slice_end") != sliced[i + 1].get("slice_begin"):
+        print("  FAIL: transient slices %d and %d do not meet — %s then %s"
+              % (i, i + 1, sliced[i].get("slice_end"), sliced[i + 1].get("slice_begin")))
+        raise SystemExit(1)
+if sliced[-1].get("slice_end") != frames:
+    print("  FAIL: the last transient slice ends at %s, not %d"
+          % (sliced[-1].get("slice_end"), frames))
+    raise SystemExit(1)
+print("  the transient slices tile 0..%d too" % frames)
+PYC
+
 kill "$ENG" 2>/dev/null; wait "$ENG" 2>/dev/null; ENG=""
 echo "slice_extent_check: PASS — the chop's slices tile the source, and an unsliced slot covers"
 echo "                    all of it"
