@@ -174,6 +174,20 @@ export const FILTER_TYPES = ['off', 'lp12', 'lp24', 'hp', 'bp'];
  */
 export const ENV_TARGETS = ['volume', 'pan', 'pitch', 'cutoff', 'resonance'];
 
+/**
+ * The slot fields `SamplerSetSlot` can set, INDEXED BY THEIR WIRE VALUE — `UiSamplerSlotField`
+ * in event_payloads.h, VoiceGroup 0 through EndFrame 26.
+ *
+ * Named because nobody remembers that a gate is field 2, and dense from 0 because the wire is:
+ * the index IS the field id, so this list cannot be reordered or have a name dropped from the
+ * middle without changing what every caller means. A ratchet holds it against the enum.
+ *
+ * `gate` is the one that matters most today: 0 is a one-shot that IGNORES note-off — right for a
+ * drum, wrong for anything a person expects to be able to cut — and 1 releases the voice when
+ * the note ends. The engine has had both since the sampler shipped and no UI could reach either.
+ */
+export const SLOT_FIELDS = ['voicegroup', 'nna', 'gate', 'reverse', 'gain', 'pan', 'tune', 'pitchtrack', 'root', 'keylow', 'keyhigh', 'vellow', 'velhigh', 'selectmode', 'polyphony', 'chokefade', 'modset', 'stem', 'quality', 'layergroup', 'loopmode', 'sustainloop', 'loopstart', 'loopend', 'loopxfade', 'startframe', 'endframe'];
+
 export function modSummary(modMask, filterType) {
   if (!modMask) return { mark: '', title: '' };
   let live = 0, inert = 0;

@@ -33,7 +33,8 @@ use std::time::{Duration, Instant};
 
 use daw_bridge::control::{default_shm_name, EngineHandle};
 use daw_bridge::layout::{UiSetRowOpsPayload, UiSamplerLoadPayload, UiSamplerSlicePayload,
-                         UiSamplerFilterPayload, UiSamplerEnvelopePayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
+                         UiSamplerFilterPayload, UiSamplerEnvelopePayload,
+                         UiSamplerSetSlotPayload, EventEntry, UiChainCommandPayload, UiChordCommandPayload,
                          UiMarkerCommandPayload, UiArrangeTimeCommandPayload,
                          UI_TIME_SIG_FLATTEN, UiModLinkCommandPayload,
                          UiModLinkUid16Payload, UiModSourceValuePayload,
@@ -3373,6 +3374,38 @@ fn build_sampler_load(body: &str) -> Option<Result<UiSamplerLoadPayload, &'stati
 /// tempo-adaptive from the moment it is made rather than tied to the rate the file was recorded
 /// at — which is the difference between a break that follows the song and one the song has to
 /// follow.
+/// SamplerSetSlot (opcode 84's neighbour). ONE field of one slot, by its wire id.
+///
+/// `value` is SIGNED and stays signed all the way down: gain, pan, tune and pitch-track are all
+/// legitimately negative, and backend's euclidean octave_offset bug was exactly a signed value
+/// pushed through an unsigned path.
+///
+/// The field id is not validated against a list here. The engine owns which ids exist and
+/// answers an unknown one; a second copy of that list in the sidecar would be a third place for
+/// it to drift, after the header and the UI's names.
+fn build_sampler_slot(body: &str) -> Option<Result<UiSamplerSetSlotPayload, &'static str>> {
+    if !is_type(body, "samplerslot") { return None; }
+    let Some(field) = parse_num(body, "\"field\"") else {
+        return Some(Err("samplerslot needs a field id"));
+    };
+    if !(0..=26).contains(&field) {
+        return Some(Err("slot field id is 0..26 — see UiSamplerSlotField"));
+    }
+    Some(Ok(UiSamplerSetSlotPayload {
+        command_type: UiCommandType::SamplerSetSlot as u16,
+        field: field as u16,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        device_id: parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32,
+        // A REAL SLOT ID. 0 is NOT a wildcard here, unlike deviceId and modSetId on the
+        // neighbouring commands: the engine answers `sampler.set_slot_rejected ... no_such_slot`.
+        // Left as the default anyway so the refusal comes from the engine that owns the rule
+        // rather than from a second copy of it here.
+        slot_id: parse_num(body, "\"slot\"").unwrap_or(0).max(0) as u32,
+        value: parse_num(body, "\"value\"").unwrap_or(0).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        reserved: [0u8; 20],
+    }))
+}
+
 /// SamplerSetEnvelope (82). One modulator's shape on one target.
 ///
 /// TIMES CARRY THEIR UNIT. `timeBase` names it in the same payload — 0 microseconds, 1 nanoticks
@@ -3397,8 +3430,9 @@ fn build_sampler_envelope(body: &str) -> Option<Result<UiSamplerEnvelopePayload,
     /*
      * ADDRESS BY TARGET, NOT BY MODULATOR ID.
      *
-     * `kSamplerEnvAmp` (bit 0) is misleadingly named — it means "find the modulator by its
-     * TARGET" rather than "this is the amp envelope". Without it the payload addresses
+     * `kSamplerEnvByTarget` (bit 0) selects HOW the modulator is found: by its target rather
+     * than by its id. It was called `kSamplerEnvAmp` when this was written, after the target it
+     * usually resolves to, and that name cost two rounds here — backend renamed it. Without it the payload addresses
      * `modulatorId`, and on a freshly loaded kit there is no modulator 0 to address: the command
      * is accepted, applies to nothing, and the slot stays silent. That is exactly how this
      * verb's first version reported success and changed nothing.
@@ -3409,7 +3443,7 @@ fn build_sampler_envelope(body: &str) -> Option<Result<UiSamplerEnvelopePayload,
     let by_id = parse_num(body, "\"modulator\"").is_some();
     Some(Ok(UiSamplerEnvelopePayload {
         command_type: UiCommandType::SamplerSetEnvelope as u16,
-        flags: if by_id { 0 } else { daw_bridge::layout::SAMPLER_ENV_AMP },
+        flags: if by_id { 0 } else { daw_bridge::layout::SAMPLER_ENV_BY_TARGET },
         track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
         device_id: parse_num(body, "\"device\"").unwrap_or(0).max(0) as u32,
         // 0 = every mod set on that sampler, the engine's own sentinel and the sane default for
@@ -3917,6 +3951,21 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                                     Ok(()) => format!(
                                         "{{\"ok\":true,\"autopoint\":{},\"value\":{}}}",
                                         p.track_id, p.value),
+                                    Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                },
+                            };
+                            if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
+                            continue;
+                        }
+
+                        // ONE FIELD OF ONE SLOT. Own 40-byte payload.
+                        if let Some(r) = build_sampler_slot(&t) {
+                            let reply = match r {
+                                Err(why) => format!("{{\"error\":\"{why}\"}}"),
+                                Ok(p) => match handle.send_sampler_set_slot(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"samplerslot\":{},\"field\":{},\"value\":{}}}",
+                                        p.slot_id, p.field, p.value),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
                                 },
                             };

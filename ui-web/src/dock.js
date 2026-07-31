@@ -13,7 +13,7 @@
 import { ZOOM_LEVELS } from './viewmodel.js';
 import { EDGE_KINDS } from './patchermodel.js';
 // The filter names, from the file that already decides whether a cutoff modulator is live.
-import { FILTER_TYPES, ENV_TARGETS } from './chainmodel.js';
+import { FILTER_TYPES, ENV_TARGETS, SLOT_FIELDS } from './chainmodel.js';
 
 const MAX_LINES = 300;
 
@@ -476,6 +476,38 @@ export function createCommands(api) {
         const mode = a[3] === undefined ? 'equal' : String(a[3]);
         return api.sliceSample(Number(a[0]), Number(a[1]), { count, mode })
           ? `chopping into ${count} ${mode} slices` : refusal(api);
+      } },
+    /*
+     * ONE FIELD OF ONE SLOT, by name.
+     *
+     * Twenty-seven settings the engine has always had and no surface could reach — gate, loop
+     * mode, reverse, tuning, key and velocity ranges, trim points. The one that prompted this is
+     * `gate`: 0 is a one-shot that IGNORES note-off, so a sampled note plays its whole extent
+     * however short it is written, and Jaakko's ruling is that a note-off has to be able to cut
+     * it. `slot <track> <device> 0 gate 1` makes every slot on the sampler respect note-off.
+     *
+     * Slot 0 means EVERY slot, which is what a kit-wide setting means and the only way to say it
+     * without knowing how many there are.
+     *
+     * Named rather than numbered: nobody remembers that a gate is field 2, and the name list is
+     * indexed by the wire id so the two cannot drift apart silently.
+     */
+    // The field list is spelled into the help from the same array the schema uses, because the
+    // prose ratchet holds the two equal by NAME — and a hand-typed copy of twenty-seven names is
+    // a copy that will disagree.
+    slot: { help: `slot <track> <device> <slot> <${SLOT_FIELDS.join('|')}> <value> — one `
+                + 'sampler slot field; slot 0 means all of them',
+      args: [A_TRACK, { name: 'device', type: 'int', min: 0 },
+             { name: 'slot', type: 'int', min: 0 },
+             oneOf(SLOT_FIELDS),
+             { name: 'value', type: 'int' }],
+      run: (a) => {
+        const field = SLOT_FIELDS.indexOf(String(a[3]));
+        if (field < 0) return `field is ${SLOT_FIELDS.join('|')}`;
+        if (!api.samplerSlot(num(a[0]), num(a[1]), num(a[2]), field, num(a[4]))) {
+          return refusal(api);
+        }
+        return `${a[3]} = ${a[4]}` + (Number(a[2]) === 0 ? ' on every slot' : ` on slot ${a[2]}`);
       } },
     /*
      * THE AMP ENVELOPE — and every other target's.

@@ -2840,6 +2840,23 @@ const dockApi = {
     if (!conn || !conn.send(msg)) { state.reject = 'no engine'; schedule(); return false; }
     state.reject = null; schedule(); return true;
   },
+  /**
+   * ONE FIELD OF ONE SLOT — `SamplerSetSlot`. Slot 0 means every slot on that sampler.
+   *
+   * The field the sampler most needed and no surface could reach is `gate`: 0 is a one-shot that
+   * IGNORES note-off, which is right for a drum and wrong for anything a person expects to be
+   * able to cut short. The engine has had both since the sampler shipped —
+   * `sampler_engine.h`'s noteOff() skips a voice whose slot has gate 0 — and until now the only
+   * way to change it was to hand-edit a project file.
+   */
+  samplerSlot: (track, device, slot, field, value) => {
+    if (!conn || !conn.send({ type: 'samplerslot', track: Number(track) || 0,
+                              device: Number(device) || 0, slot: Number(slot) || 0,
+                              field: Number(field), value: Number(value) || 0 })) {
+      state.reject = 'no engine'; schedule(); return false;
+    }
+    state.reject = null; schedule(); return true;
+  },
   samplerFilter: (track, device, type, cutoff, resonance, modSet) => {
     const msg = { type: 'samplerfilter', track: Number(track) || 0, device: Number(device) || 0,
                   modSet: Number(modSet) || 0, filterType: Number(type) || 0 };
@@ -7786,6 +7803,7 @@ window.__uni = {
   // On both surfaces, like every other pair here.
   samplerFilter: (t, d, ty, c, r, m) => dockApi.samplerFilter(t, d, ty, c, r, m),
   samplerEnvelope: (t, d, e) => dockApi.samplerEnvelope(t, d, e),
+  samplerSlot: (t, d, sl, f, v) => dockApi.samplerSlot(t, d, sl, f, v),
   opsTextAtCursor: () => dockApi.opsTextAtCursor(),
   noteIdAtCursor: () => dockApi.noteIdAtCursor(),
   samplerKit: (t, d) => dockApi.samplerKit(t, d),

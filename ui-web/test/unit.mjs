@@ -808,7 +808,7 @@ test('a project row leaves its meta line to the renderer', () => {
  */
 const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'samplerKitCached',
                      'rowOps', 'opsAtCursor', 'opAtCursor', 'opsTextAtCursor', 'noteIdAtCursor',
-                     'loadSample', 'addDevice', 'sliceSample', 'samplerFilter', 'samplerEnvelope',
+                     'loadSample', 'addDevice', 'sliceSample', 'samplerFilter', 'samplerEnvelope', 'samplerSlot',
                      'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
@@ -2229,6 +2229,11 @@ const OP_REGISTRY = {
    * silent without one — so the CLI path is real; the agent has no sampler tooling at all.
    */
   env:       { cli: 'sampler-env', agent: null, why: 'gap' },
+  /*
+   * One slot field (SamplerSetSlot). daw-cli has `sampler-slot`, so the CLI path is real; the
+   * agent has no sampler tooling at all.
+   */
+  slot:      { cli: 'sampler-slot', agent: null, why: 'gap' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },
@@ -2330,7 +2335,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
                    'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
-                   'filter', 'env',
+                   'filter', 'env', 'slot',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
                    'sampler', 'load-sample', 'slice',
@@ -2573,7 +2578,13 @@ const ENGINE_UNUSED = {
   SamplerSetLfo: 'gap — with SamplerSetEnvelope; a modulator wants to be seen moving',
   BulkChunk: 'gap — a carrier for payloads over 40 bytes; nothing here needs one yet',
   SamplerSetEnvelopePoints: 'gap — with SamplerSetEnvelope, and rides BulkChunk',
-  SamplerSetSlot: 'gap — with SamplerLoad',
+  /*
+   * SamplerSetSlot WAS recorded here as a gap "with SamplerLoad". It is wired now, and the
+   * reason it stopped being deferrable is `gate`: field 2, 0 = a one-shot that IGNORES note-off.
+   * The engine has had both settings since the sampler shipped and no surface could reach
+   * either, so a sampled note played its whole extent however short it was written — and
+   * Jaakko's ruling is that a note-off has to be able to cut it.
+   */
   SamplerMarker: 'gap — with SamplerSlice',
   SamplerEmitRows: 'gap — with SamplerSlice; emits a chop into the pattern',
 };
