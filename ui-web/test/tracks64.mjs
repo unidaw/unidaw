@@ -135,6 +135,8 @@ for (const [name, n] of [['tracksfew', FEW], ['tracks64', TRACKS]]) {
   for (const view of VIEWS) {
     const m = await measure(view);
     at[n][view] = m.own;
+    at[n]._docBy = at[n]._docBy || {};
+    at[n]._docBy[view] = m.doc;      // the page total WHILE this surface is the one on screen
     at[n]._doc = m.doc;              // the page total after the last surface, for context
   }
 }
@@ -149,6 +151,30 @@ console.log('');
 
 console.log(`    ${'(whole page)'.padEnd(9)} ${String(at[FEW]._doc).padStart(6)} -> ` +
             `${String(at[TRACKS]._doc).padStart(6)}   every surface that has been drawn\n`);
+
+/*
+ * DOES A SURFACE KEEP ITS DOM AFTER YOU LOOK AWAY?
+ *
+ * This decides whether the numbers above are a per-surface budget or one shared bill, and
+ * therefore whether the mixer's x10.56 needs virtualizing at all. If the page total only ever
+ * GROWS as views are visited, then a user who has opened all three is paying for all three at
+ * once and the sum is what matters. If it falls back when a view is left, each surface is
+ * charged alone and the mixer's 41% is 41% of its own budget.
+ *
+ * Printed rather than asserted: it is a design fact, not a limit, and the day it changes is a
+ * day somebody should read it rather than a day a suite goes red.
+ */
+{
+  const d = at[TRACKS]._docBy;
+  const seq = VIEWS.map((v) => `${v} ${d[v]}`).join('  ->  ');
+  const grows = VIEWS.every((v, i) => i === 0 || d[v] >= d[VIEWS[i - 1]]);
+  console.log(`    page total while each view is on screen: ${seq}`);
+  console.log(`    ${grows
+    ? 'monotonic — a surface KEEPS its nodes after you look away, so the bill is the SUM and '
+      + 'the biggest scaling term is the one to fix'
+    : 'it falls back — each surface is charged alone, so a per-surface budget is the right '
+      + 'reading and the sum above overstates the cost'}\n`);
+}
 
 for (const view of VIEWS) {
   check(at[TRACKS][view] < BUDGET, `${view} stays under the node budget at ${TRACKS} tracks`,
