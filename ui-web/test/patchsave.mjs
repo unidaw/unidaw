@@ -30,7 +30,7 @@ const check = (ok, what, detail) => {
   else { fail++; console.log('  FAIL ', what, detail === undefined ? '' : `— ${detail}`); }
 };
 
-const stack = await startStack({ numBlocks: 8 });
+const stack = await startStack({ numBlocks: 8, keepDir: true });
 const browser = await chromium.launch({ channel: 'chrome' });
 const page = await browser.newPage({ viewport: { width: 1600, height: 950 } });
 const errors = [];
@@ -101,6 +101,37 @@ const drawnHits = () => page.evaluate(() => {
 });
 const drawnBefore = await drawnHits();
 const said = await page.evaluate(() => window.__uni.run('patch 0 hits 1'));
+/*
+ * WHO OWNS THE NODE? The engine publishes it per node (`UiPatcherNode.ownerDeviceId`) because
+ * the region is the ASSEMBLED POOL and "which device is this region" has no answer — a union of
+ * every device's graph with re-id'd nodes belongs to no one device.
+ *
+ * That per-node owner is the fact a client needs before it can set kUiPatcherFlagHasDeviceId,
+ * and without it every patcher edit is pool-scoped: heard, drawn, and not written to disk.
+ *
+ * THIS PROJECT PUBLISHES ZERO. It carries ONE patcher device, so the engine takes its legacy
+ * single-graph path and assembles nothing, and an owner of 0 means "no owning device". So the
+ * one-device case — which is every project anyone has made so far — still cannot name its
+ * device, and the check that proves the fix works uses TWO. Same blind spot as everything else
+ * tonight: a fixture with one of something cannot tell "always 0" from "correctly 0".
+ */
+const owners = await page.evaluate(() => {
+  const p = window.__uni.patcher();
+  return p ? { device: p.device, version: p.version } : null;
+});
+{
+  const { execFileSync } = await import('node:child_process');
+  let pool = null;
+  try {
+    pool = JSON.parse(execFileSync('./ui/target/release/daw-cli', ['get', 'patcher'],
+      { env: { ...process.env, DAW_UI_SHM_NAME: stack.shm }, encoding: 'utf8' }));
+  } catch { /* reported by the check below */ }
+  const owned = pool && pool.nodes ? pool.nodes.filter((n) => n.owner_device) .length : -1;
+  check(owned > 0, 'the published nodes name the DEVICE that owns them',
+        `${owned} of ${pool && pool.nodes ? pool.nodes.length : '?'} nodes carry an owner ` +
+        `(${JSON.stringify(owners)}) — a one-device project takes the legacy single-graph path, ` +
+        `publishes owner 0, and so cannot be addressed by device at all`);
+}
 await page.waitForTimeout(1500);
 const drawnAfter = await drawnHits();
 check(drawnBefore !== null && drawnAfter !== null && drawnBefore !== drawnAfter,

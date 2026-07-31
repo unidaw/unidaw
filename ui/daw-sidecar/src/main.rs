@@ -4068,10 +4068,41 @@ fn serve_commands(listener: TcpListener, shm: String, viewport: SharedViewport, 
                         if let Some(r) = build_patcher_config(&t) {
                             let reply = match r {
                                 Err(why) => format!("{{\"error\":\"{why}\"}}"),
-                                Ok(p) => match handle.send_patcher_config(p) {
-                                    Ok(()) => format!("{{\"ok\":true,\"type\":{},\"node\":{}}}",
-                                                      p.command_type, p.node_id),
+                                Ok(mut p) => {
+                                /*
+                                 * NAME THE DEVICE THAT OWNS THE NODE, or the edit goes to the pool.
+                                 *
+                                 * Opcode 28 edits `patcherGraphState` unless it is told otherwise,
+                                 * and since patcher-is-a-device the graph a project SAVES lives on
+                                 * the device. Sent pool-scoped, a nudge is heard (the pool is what
+                                 * the producer reads), drawn, and lost on the next load — with the
+                                 * command reporting success throughout.
+                                 *
+                                 * The owner is resolved HERE rather than asked of the caller: the
+                                 * region publishes the assembled POOL, so "which device is this
+                                 * region" has no answer and only "which device owns this node"
+                                 * does. That fact is published per node (`ownerDeviceId`), so the
+                                 * UI names a node — which is what it has — and this names the
+                                 * device.
+                                 *
+                                 * Owner 0 means a pool node with no owning device, which is the
+                                 * legacy single-graph case: leave the flag clear and the edit goes
+                                 * where it always went.
+                                 */
+                                let owner = handle.read_patcher().nodes.iter()
+                                    .find(|n| n.id == p.node_id)
+                                    .map(|n| n.owner_device_id)
+                                    .unwrap_or(0);
+                                if owner != 0 {
+                                    p.flags = daw_bridge::layout::UI_PATCHER_FLAG_HAS_DEVICE_ID
+                                            | (owner & 0x7FFF);
+                                }
+                                match handle.send_patcher_config(p) {
+                                    Ok(()) => format!(
+                                        "{{\"ok\":true,\"type\":{},\"node\":{},\"device\":{}}}",
+                                        p.command_type, p.node_id, owner),
                                     Err(e) => format!("{{\"error\":\"{}\"}}", e.replace('"', "'")),
+                                }
                                 },
                             };
                             if ws.send(tungstenite::Message::Text(reply)).is_err() { break; }
