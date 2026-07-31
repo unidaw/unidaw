@@ -153,7 +153,12 @@ const chopped = await page.evaluate(async (t) => {
   }
   return null;
 }, T);
-check(Array.isArray(chopped) && chopped.length === 7, 'the chop is built from the UI',
+/*
+ * EIGHT SLICES FROM EIGHT PARTS. It was seven for a night: `divideEqually` returned only the
+ * INTERIOR boundaries, so the region from frame 0 to the first marker had no index, no id and no
+ * way to be played — the DOWNBEAT of every equal division. Frame 0 is a legal marker now.
+ */
+check(Array.isArray(chopped) && chopped.length === 8, 'the chop is built from the UI',
       JSON.stringify(chopped));
 
 /*
@@ -164,8 +169,8 @@ check(Array.isArray(chopped) && chopped.length === 7, 'the chop is built from th
  * being ignored. The silence between is what makes the two windows separable in one capture
  * without guessing at timing.
  */
-if (chopped && chopped.length === 7) {
-  const early = chopped[0], late = chopped[6];
+if (chopped && chopped.length === 8) {
+  const early = chopped[0], late = chopped[7];
   await run('zoom 1');
   await run(`goto 0 ${T}`);
   await page.waitForTimeout(300);
@@ -194,7 +199,7 @@ if (chopped && chopped.length === 7) {
     return { n: ns.length, keys: ns.map((x) => x.p).sort((a, b) => a - b) };
   }, T);
   check(placed.n === 2 && placed.keys[0] === early && placed.keys[1] === late,
-        `notes written for slice 1 (key ${early}) and slice 7 (key ${late})`,
+        `notes written for slice 1 (key ${early}) and slice 8 (key ${late})`,
         JSON.stringify(placed) + ' | ' + said.slice(-4).join(' ; '));
 
   /*
@@ -374,7 +379,7 @@ if (!existsSync(WAV)) {
     const diff = a.reduce((acc, v, i) => acc + Math.abs(v - (b[i] || 0)), 0) / a.length;
     const scale = Math.max(...a, ...b, 1e-9);
     soundCheck(diff / scale > 0.05,
-          'and slice 1 and slice 7 are DIFFERENT audio — a chop whose slots all played the '
+          'and slice 1 and slice 8 are DIFFERENT audio — a chop whose slots all played the '
           + 'whole file would be structurally perfect and musically useless',
           `mean envelope difference ${(diff / scale).toFixed(3)} of peak`);
   }
