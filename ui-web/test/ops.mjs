@@ -362,6 +362,51 @@ const cells = await opsCells();
 }
 
 /*
+ * ONE OP AT A TIME — the promise the collapsed cell makes.
+ *
+ * A cell holding forty ops is only editable if ONE of them can be changed without restating the
+ * other thirty-nine, and on this wire that is a real distinction rather than a convenience: the
+ * mask says which fields the command is speaking about, a bit left clear means "leave it alone",
+ * and a bit set with a zero value means "clear it". `ops` sets every bit — right for typing a row
+ * out, wrong for changing one thing in it, because it carries this client's copy of all five
+ * fields and would overwrite whatever else had changed.
+ *
+ * The check is therefore not "the op changed" but "the OTHERS did not", which is the half that
+ * fails when the mask is wrong. A full-mask implementation passes every assertion about the op
+ * being set and drops the rest of the row on the floor.
+ */
+{
+  // The cursor is still on the note the block above edited, which is the point: these verbs act
+  // on the note under it, and moving away first would only test the refusal.
+  // A full row first, through the verb that means "replace the row".
+  await page.evaluate(() => window.__uni.run('ops ret3 p55 s5 o80'));
+  await page.waitForTimeout(1500);
+  const before = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(before === 'ret3 p55 s5 o80', 'a full row of ops is set to start from', before);
+
+  await page.evaluate(() => window.__uni.run('op p20'));
+  await page.waitForTimeout(1500);
+  const after = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(after === 'ret3 p20 s5 o80',
+        'one op changes and the other three are left exactly as they were', after);
+
+  // A BARE PREFIX CLEARS THAT ONE. Distinct from `ops` with the token missing, which clears the
+  // row: the mask bit is set (so the field is written) with a zero value (so it is cleared).
+  await page.evaluate(() => window.__uni.run('op s'));
+  await page.waitForTimeout(1500);
+  const cleared = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(cleared === 'ret3 p20 o80',
+        'a bare prefix clears just that op and leaves the rest', cleared);
+
+  // AND A NON-OP IS REFUSED, rather than sending a command with an empty mask — which the engine
+  // would accept and do nothing about, reading exactly like an edit that did not land.
+  const refused = await page.evaluate(() => window.__uni.run('op zz9'));
+  const still = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(/not an op/.test(String(refused)) && still === 'ret3 p20 o80',
+        'a token that names no op is refused, and nothing changes', `${refused} / ${still}`);
+}
+
+/*
  * NOTHING THREW. Load-bearing: the readout shipped throwing a missing-import ReferenceError on
  * every frame, and every other suite passed through it — the unit tests never run the draw
  * path, and journey never parks on the ops field of a note that has ops.

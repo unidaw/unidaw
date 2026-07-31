@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
-import { ROW_OPS, opGlyph, opsRun, opsText, parseOps } from '../src/rowops.js';
+import { ROW_OPS, OP_MASK, opGlyph, opsRun, opsText, parseOps } from '../src/rowops.js';
 import { DEVICE_KINDS, modSummary } from '../src/chainmodel.js';
 import {
   parseToken, parseChord, pitchOf, pitchToToken, hexValue, shiftDigit, NOTE_KEYS,
@@ -806,7 +806,7 @@ test('a project row leaves its meta line to the renderer', () => {
  * notice, because it checks that a command is DECLARED, not that it can run.
  */
 const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'samplerKitCached',
-                     'rowOps', 'opsAtCursor', 'opsTextAtCursor', 'noteIdAtCursor',
+                     'rowOps', 'opsAtCursor', 'opAtCursor', 'opsTextAtCursor', 'noteIdAtCursor',
                      'loadSample', 'addDevice', 'sliceSample',
                      'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
@@ -2209,6 +2209,14 @@ const OP_REGISTRY = {
   // Row ops. daw-cli reached the engine FIRST here — `do set-row-ops` shipped with the opcode —
   // so the CLI path is real from day one and only the agent manifest owes it a tool.
   ops:       { cli: 'set-row-ops', agent: null, why: 'gap' },
+  /*
+   * `op` sets ONE row op and leaves the other four alone. It shares the CLI's set-row-ops path —
+   * the difference is the mask, not the command — so it is not a gap in coverage even though the
+   * CLI has no separate verb for it. Named here rather than folded into `ops` because the two
+   * mean different things to the engine: one is a replacement of the row, the other is a single
+   * bit, and two clients editing different ops on one row only survive the second.
+   */
+  op:        { cli: 'set-row-ops', agent: null, why: 'gap' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },
@@ -2306,6 +2314,8 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'del', 'delchord', 'delharmony', 'delnode', 'editor',
                    'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
                    'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',
+                   // With `ops`, and for the same reason: the agent has no row-op tool at all.
+                   'op',
                    'sampler', 'load-sample', 'slice',
                    // With `mods`: a read-back this app has and the agent manifest does not.
                    'kit'];
@@ -2542,6 +2552,41 @@ const ENGINE_UNUSED = {
   SamplerMarker: 'gap — with SamplerSlice',
   SamplerEmitRows: 'gap — with SamplerSlice; emits a chop into the pattern',
 };
+
+test("the row-op mask bits are the engine's, not this table's order", async () => {
+  const { readFileSync } = await import('node:fs');
+  const hdr = readFileSync(new URL('../../apps/event_payloads.h', import.meta.url), 'utf8');
+  /*
+   * WHY THIS EXISTS. ROW_OPS is written in the order a person reads a row — ret, p, d, s, o —
+   * and the wire numbers them Retrigger, Probability, Sound, SoundOffset, Delay. Deriving the
+   * bits from the table's index produced sound=4, soundOffset=16, delay=8: three ops addressing
+   * each other's fields. On the wire that is not an error, it is a different edit, and the note
+   * that comes back has a delay where a slot number was typed.
+   *
+   * So the values are written down twice — once in the header, once in rowops.js — and this is
+   * what makes that safe. It reads the enum rather than a copy of it.
+   */
+  const block = hdr.slice(hdr.indexOf('kRowOpMaskRetrigger'));
+  const bits = {};
+  for (const m of block.slice(0, block.indexOf('}')).matchAll(/kRowOpMask([A-Za-z]+) = 1u << (\d+)/g)) {
+    bits[m[1]] = 1 << Number(m[2]);
+  }
+  assert.ok(Object.keys(bits).length >= 5,
+            `the engine's row-op mask enum was parsed: ${JSON.stringify(bits)}`);
+
+  // Every op in the table must name a bit the engine defines, and agree about its value.
+  for (const op of ROW_OPS) {
+    assert.ok(op.bit in bits, `${op.prefix} names a wire bit the engine has: ${op.bit}`);
+    assert.equal(OP_MASK[op.field], bits[op.bit],
+                 `${op.prefix} (${op.field}) uses the engine's bit for ${op.bit}`);
+  }
+  // ...and every bit the engine defines must belong to an op, so a new one cannot be added
+  // engine-side and go unnoticed here.
+  const claimed = new Set(ROW_OPS.map((o) => o.bit));
+  for (const name of Object.keys(bits)) {
+    assert.ok(claimed.has(name), `the engine's ${name} bit is claimed by a row op`);
+  }
+});
 
 test('every engine command has a caller, or a recorded reason it has none', async () => {
   const { readFileSync } = await import('node:fs');

@@ -43,11 +43,14 @@
  * to `prefix[0]`.
  */
 export const ROW_OPS = [
-  { prefix: 'ret', field: 'retrigger', summary: 'retrigger N even strikes over the note',
+  { prefix: 'ret', field: 'retrigger', bit: 'Retrigger',
+    summary: 'retrigger N even strikes over the note',
     example: 'ret3', text: (v) => String(v) },
-  { prefix: 'p', field: 'probability', summary: 'probability percent to sound (1-100)',
+  { prefix: 'p', field: 'probability', bit: 'Probability',
+    summary: 'probability percent to sound (1-100)',
     example: 'p60', text: (v) => String(v) },
-  { prefix: 'd', field: 'delayTicks', summary: 'delay onset by a fraction of a beat',
+  { prefix: 'd', field: 'delayTicks', bit: 'Delay',
+    summary: 'delay onset by a fraction of a beat',
     example: 'd1/6',
     /*
      * Published as TICKS, authored as a fraction of a beat — so it cannot be spelled back
@@ -66,9 +69,11 @@ export const ROW_OPS = [
    * other op, and `opsMask` already treats it that way. Backend's own comment says a UI should
    * draw 0 as EMPTY rather than as "0"; drawing a mark would be the same claim.
    */
-  { prefix: 's', field: 'sound', summary: 'play sampler slot N (blank = pitch picks it)',
+  { prefix: 's', field: 'sound', bit: 'Sound',
+    summary: 'play sampler slot N (blank = pitch picks it)',
     example: 's5', text: (v) => String(v) },
-  { prefix: 'o', field: 'soundOffset', summary: 'start N/256 into the sample (the 9xx seek)',
+  { prefix: 'o', field: 'soundOffset', bit: 'SoundOffset',
+    summary: 'start N/256 into the sample (the 9xx seek)',
     example: 'o80',
     /*
      * SPELLED BACK EXACTLY, in whichever of the two forms is exact.
@@ -179,8 +184,55 @@ function reduce(n, d) {
  * easiest thing to get backwards here, and it fails by leaving the old value in place, which
  * looks like the edit not landing rather than like the mask being wrong.
  */
-export const OP_MASK = { retrigger: 1 << 0, probability: 1 << 1, sound: 1 << 2,
-                         soundOffset: 1 << 3, delay: 1 << 4 };
+/*
+ * THE WIRE BITS, ONE PER OP, DERIVED FROM THE TABLE ABOVE.
+ *
+ * `apps/event_payloads.h` is the authority — kRowOpMaskRetrigger = 1u << 0 and so on — and each
+ * entry names its bit there rather than repeating a number. Written as a hand-kept object, this
+ * had already drifted in shape from the table it describes: the mask said `delay` where the op
+ * says `delayTicks`, so a lookup by an op's own field name silently missed and the edit went out
+ * with that bit clear, which the engine reads as "leave it alone". An op that refuses to change
+ * looks like a broken engine, not like a typo in a key.
+ *
+ * Keyed by BOTH names for the same reason: callers hold an op and reach for `op.field`, and
+ * OP_MASK's older callers hold 'delay'. Neither should have to know about the other.
+ */
+/*
+ * THE WIRE'S BIT ORDER IS NOT THIS TABLE'S ORDER.
+ *
+ * `apps/event_payloads.h:490` numbers them Retrigger, Probability, Sound, SoundOffset, Delay.
+ * ROW_OPS is written in the order a person reads a row — ret, p, d, s, o — with the delay third
+ * because that is where a tracker hand expects it. Deriving the bits from the table's INDEX
+ * therefore produced sound=4, soundOffset=16, delay=8: three ops silently addressing each
+ * other's fields, which on the wire is not an error, it is a different edit.
+ *
+ * So each op names its bit and the values live here, mirroring the engine's enum. unit.mjs
+ * parses that enum and fails if these disagree, which is the only reason it is safe to write a
+ * number down twice.
+ */
+const WIRE_BIT = { Retrigger: 1 << 0, Probability: 1 << 1, Sound: 1 << 2,
+                   SoundOffset: 1 << 3, Delay: 1 << 4 };
+
+/*
+ * Keyed by BOTH names: callers hold an op and reach for `op.field`, and OP_MASK's older callers
+ * hold 'delay'. The hand-kept version had only the second, so a lookup by an op's own field name
+ * missed and the edit went out with that bit clear — which the engine reads as "leave it alone".
+ * An op that refuses to change looks like a broken engine, not like a mismatched key.
+ */
+export const OP_MASK = ROW_OPS.reduce((m, op) => {
+  const bit = WIRE_BIT[op.bit];
+  if (!bit) throw new Error(`row op ${op.prefix} names no wire bit`);
+  m[op.field] = bit;                                              // 'delayTicks'
+  m[op.bit.charAt(0).toLowerCase() + op.bit.slice(1)] = bit;      // 'delay'
+  return m;
+}, {});
+
+export function opMaskOf(nameOrOp) {
+  const key = typeof nameOrOp === 'string' ? nameOrOp : nameOrOp && nameOrOp.field;
+  const bit = OP_MASK[key];
+  if (!bit) throw new Error(`no row-op mask bit named ${key}`);
+  return bit;
+}
 
 /**
  * Parse a canonical op string, mirroring `parse_row_ops` in ui/daw-bridge/src/rowop.rs.
@@ -298,15 +350,41 @@ export function opsHint() {
   return ROW_OPS.map((o) => o.example).join('  ');
 }
 
+/**
+ * Which op a token is reaching for, by LONGEST PREFIX.
+ *
+ * Ordering is the whole content of this function: sorted the other way `ret3` matches nothing,
+ * because no single-letter prefix starts it and `r` is not an op — and `d1/6` would match `d`
+ * either way, which is what makes the trap quiet. The parser documents the same rule and this is
+ * the one place it is implemented, so a third caller cannot get a fourth answer.
+ */
+export function opForToken(token) {
+  const t = String(token || '').trim();
+  if (!t) return null;
+  const byLength = [...ROW_OPS].sort((a, b) => b.prefix.length - a.prefix.length);
+  return byLength.find((o) => t.startsWith(o.prefix)) || null;
+}
+
 /** What one op means, for the op a partly-typed token is reaching for. */
 export function opHelpFor(token) {
+  const o = opForToken(token);
+  return o ? `${o.example} — ${o.summary}` : '';
+}
+
+/**
+ * Split a single-op edit into the text to parse and the field to restrict the mask to.
+ *
+ * `p60` sets probability and touches nothing else; a BARE prefix — `p` — clears it, because the
+ * mask protocol says a bit set with a zero value is a CLEAR while a bit left clear means "leave
+ * this alone". That distinction is the whole reason a one-op edit is expressible at all: without
+ * it, changing a retrigger means resending the probability, the delay, the slot and the offset,
+ * and two people editing one row would overwrite each other's ops with their own stale copies.
+ *
+ * Returns null when the token names no op, so the caller can refuse rather than send a no-op.
+ */
+export function oneOpEdit(token) {
   const t = String(token || '').trim();
-  if (!t) return '';
-  /*
-   * Longest prefix first, or `ret3` matches `r`-nothing and then the single-letter branches —
-   * the same ordering trap the parser documents, arriving in the help.
-   */
-  const byLength = [...ROW_OPS].sort((a, b) => b.prefix.length - a.prefix.length);
-  for (const o of byLength) if (t.startsWith(o.prefix)) return `${o.example} — ${o.summary}`;
-  return '';
+  const op = opForToken(t);
+  if (!op) return null;
+  return { field: op.field, text: t === op.prefix ? '' : t, clears: t === op.prefix };
 }

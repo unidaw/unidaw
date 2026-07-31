@@ -413,6 +413,23 @@ export function createCommands(api) {
         return text ? `ops: ${text}` : 'ops cleared';
       } },
     /*
+     * ONE OP, not the row. `op p60` sets the probability and leaves the retrigger, the delay,
+     * the slot and the offset exactly as they were; a bare prefix — `op p` — clears just that
+     * one. The `ops` verb above replaces the whole row, which is the right verb for typing a
+     * row out and the wrong one for changing a single thing in a cell holding forty of them.
+     *
+     * The difference is real on the wire, not a convenience: a full-mask write carries this
+     * client's copy of all five fields, so two edits to different ops on one row clobber each
+     * other. This sends one bit.
+     */
+    op: { help: 'op <token> — set ONE row op on the note at the cursor; a bare prefix clears it',
+      args: [{ name: 'token', type: 'text' }],
+      run: (a) => {
+        const token = String(a[0] || '').trim();
+        if (!api.opAtCursor(token)) return refusal(api);
+        return /^[a-z]+$/.test(token) ? `${token} cleared` : `op: ${token}`;
+      } },
+    /*
      * MAKE A SAMPLER. The kit has been drawable, live and inspectable for a while and there was
      * no way to CREATE one — `add-device --kind sampler` existed in daw-cli and nowhere else,
      * so the surface could show a sampler nobody could make.

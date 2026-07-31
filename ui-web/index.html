@@ -80,7 +80,7 @@
 <script type="module">
 import { Tracker } from './src/tracker.js';
 import { buildViewModel, ZOOM_LEVELS, createBuffer } from './src/viewmodel.js';
-import { opsText, parseOps, OP_MASK, ROW_OPS, opsHint, opHelpFor } from './src/rowops.js';
+import { opsText, parseOps, OP_MASK, opMaskOf, oneOpEdit, ROW_OPS, opsHint, opHelpFor } from './src/rowops.js';
 /*
  * `ticksPerBar` WAS NEVER IMPORTED, and `dockApi.ticksPerBar()` has been throwing
  * "ticksPerBar is not defined" since it shipped — a console method nobody had called. Found
@@ -1558,7 +1558,7 @@ function loadSample(track, device, name, rootKey, fixedPitch) {
  * so emptying it empties the note — rather than an accumulate-only field you can add to and
  * never subtract from.
  */
-function writeRowOps(track, clipId, noteId, text) {
+function writeRowOps(track, clipId, noteId, text, only) {
   if (!conn || !conn.canSend()) { state.reject = 'no engine'; schedule(); return false; }
   /*
    * THE FULL 64-BIT ID GOES OUT.
@@ -1580,8 +1580,24 @@ function writeRowOps(track, clipId, noteId, text) {
   const r = parseOps(text);
   if (r.error) { state.reject = r.error; schedule(); return false; }
   const o = r.ops;
+  /*
+   * THE MASK IS THE EDIT'S SCOPE, and a full one is a replacement of the whole row.
+   *
+   * `only` restricts it to named fields, which is what makes changing one op possible without
+   * resending the other four. It matters beyond convenience: a full-mask write carries this
+   * client's idea of every op, so two edits to different ops on one row overwrite each other
+   * with stale copies — the second one wins on all five fields, not on the one it changed.
+   *
+   * An unknown name THROWS rather than contributing nothing. A zero bit is not a refusal on this
+   * wire, it is "leave that field alone", so a typo in a field name would send a well-formed
+   * command that quietly does nothing and reads as the engine ignoring the edit.
+   */
   let mask = 0;
-  for (const k of Object.keys(OP_MASK)) mask |= OP_MASK[k];
+  if (only && only.length) {
+    for (const k of only) mask |= opMaskOf(k);
+  } else {
+    for (const k of Object.keys(OP_MASK)) mask |= OP_MASK[k];
+  }
   conn.send({
     type: 'setrowops', track: Number(track) || 0, clip: Number(clipId) || 0, note: noteId,
     mask,
@@ -1610,6 +1626,25 @@ function writeOpsAtCursor(text) {
   const n = noteAtCursor();
   if (!n) { state.reject = 'no note at the cursor to put ops on'; schedule(); return false; }
   return writeRowOps(state.cursor.track, 0, n.id, text);
+}
+
+/**
+ * Set or clear ONE op on the note under the cursor, leaving the rest of the row alone.
+ *
+ * `p60` sets it, a bare `p` clears it. This is the collapsed cell's promise kept: 43 ops in one
+ * cell are only editable one at a time if one at a time is a thing the wire can say, and it is —
+ * a mask bit set with a zero value is a clear, a bit left clear is "do not touch".
+ */
+function writeOneOpAtCursor(token) {
+  const edit = oneOpEdit(token);
+  if (!edit) {
+    state.reject = `${String(token || '').trim() || 'that'} is not an op — ${opsHint()}`;
+    schedule();
+    return false;
+  }
+  const n = noteAtCursor();
+  if (!n) { state.reject = 'no note at the cursor to put ops on'; schedule(); return false; }
+  return writeRowOps(state.cursor.track, 0, n.id, edit.text, [edit.field]);
 }
 
 /**
@@ -2752,6 +2787,7 @@ const dockApi = {
   sliceSample: (t, d, opts) => sliceSample(t, d, opts),
   rowOps: (track, note, text) => writeRowOps(track, 0, note, text),
   opsAtCursor: (text) => writeOpsAtCursor(text),
+  opAtCursor: (token) => writeOneOpAtCursor(token),
   opsTextAtCursor: () => opsAtCursorText(),
   /** The engine's id for the note under the cursor, or 0. A test editing a note has to know
    *  WHICH note it is editing, and "the one at the cursor" is not an id. */
@@ -7596,6 +7632,9 @@ window.__uni = {
   sliceSample: (t, d, o) => dockApi.sliceSample(t, d, o),
   rowOps: (t, n, x) => dockApi.rowOps(t, n, x),
   opsAtCursor: (x) => dockApi.opsAtCursor(x),
+  // One op, leaving the rest of the row alone. On BOTH surfaces for the same reason
+  // every other pair is: the console reaches one and tests and agents reach the other.
+  opAtCursor: (x) => dockApi.opAtCursor(x),
   opsTextAtCursor: () => dockApi.opsTextAtCursor(),
   noteIdAtCursor: () => dockApi.noteIdAtCursor(),
   samplerKit: (t, d) => dockApi.samplerKit(t, d),
