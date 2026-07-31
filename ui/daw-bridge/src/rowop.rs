@@ -102,7 +102,7 @@ pub const OP_SCHEMA: &[OpSpec] = &[
     OpSpec { prefix: "ret", summary: "retrigger N even strikes over the note", example: "ret3" },
     OpSpec { prefix: "p", summary: "probability percent to sound (1-100)", example: "p60" },
     OpSpec { prefix: "d", summary: "delay onset by a fraction of a beat", example: "d1/6" },
-    OpSpec { prefix: "s", summary: "play sampler slot N, zero-padded (blank = pitch picks it)", example: "s07" },
+    OpSpec { prefix: "s", summary: "play sampler slot N (blank = pitch picks it)", example: "s7" },
     OpSpec { prefix: "o", summary: "start N/256 into the sample, or a fraction like o1/3 (the 9xx seek)", example: "o80" },
     OpSpec { prefix: "rv", summary: "retrigger volume ramp, signed total percent across the strikes", example: "rv-60" },
     OpSpec { prefix: "c", summary: "conditional trig: fire on pass A of every B", example: "c1:2" },
@@ -110,20 +110,23 @@ pub const OP_SCHEMA: &[OpSpec] = &[
 
 /// The canonical text for a set of ops — the inverse of `parse_row_ops`.
 ///
-/// THE SOUND ADDRESS IS ZERO-PADDED (`s07`), by owner ruling (docs/SAMPLER_DESIGN.md section 8
-/// Q1). It is the id, not a name, so a rename rewrites nothing and a row means the same thing
-/// after any amount of kit editing. Padded because a tracker cell lives in a fixed-width grid and
-/// ragged `s7` / `s13` breaks the vertical rhythm that makes a tracker readable at a glance.
+/// THE SOUND ADDRESS IS NOT PADDED — `s7`, not `s07` (owner, revising section 8 Q1: "s9 and s09
+/// should be the same thing"). It is the id rather than a name, so a rename rewrites nothing and
+/// a row means the same thing after any amount of kit editing.
 ///
-/// `sound_width` is the track's field width — two digits normally, three for a track that
-/// references an id >= 100, which a long-edited 64-pad kit can reach because `next_slot_id` never
-/// reuses. It is per track for the same reason R5 makes the ops column per track. A width smaller
-/// than the number needs is widened rather than truncated: a truncated id is a DIFFERENT slot,
-/// and silently playing the wrong sound to keep a column narrow is not a trade worth making.
+/// The equivalence was ALWAYS true: `s7`, `s07` and `s007` all parse to slot 7, and always did.
+/// Padding only ever decided which of them gets written back out, so this is a change to the
+/// canonical form and to nothing else — no parser change, no wire change, no migration, and old
+/// rows keep meaning what they meant. `a_padded_sound_address_is_the_same_slot` pins the
+/// equivalence so a later formatting opinion cannot quietly make the parser strict to match.
+///
+/// The argument it lost to is worth keeping: a ragged column does break the vertical rhythm a
+/// tracker is read by — but the fix for that is alignment in the CELL, which is the frontend's
+/// job (R5), not characters in a string a person has to type back.
 ///
 /// This lives beside the parser so there is exactly one definition of the spelling. Display is
-/// the frontend's call (R5), but "which characters mean slot 7" is not, or the two sides drift.
-pub fn format_row_ops(ops: &RowOps, sound_width: usize) -> String {
+/// the frontend's call, but "which characters mean slot 7" is not, or the two sides drift.
+pub fn format_row_ops(ops: &RowOps) -> String {
     let mut out: Vec<String> = Vec::new();
     if ops.retrigger > 1 {
         out.push(format!("ret{}", ops.retrigger));
@@ -137,9 +140,7 @@ pub fn format_row_ops(ops: &RowOps, sound_width: usize) -> String {
         }
     }
     if ops.sound != 0 {
-        let digits = ops.sound.to_string().len();
-        let width = sound_width.max(digits);
-        out.push(format!("s{:0width$}", ops.sound, width = width));
+        out.push(format!("s{}", ops.sound));
     }
     if ops.retrig_ramp != 0 {
         out.push(format!("rv{}", ops.retrig_ramp));
@@ -383,23 +384,28 @@ mod tests {
     }
 
     #[test]
-    fn the_sound_address_formats_zero_padded_and_round_trips() {
-        // THE RULED SPELLING (section 8 Q1): the id, zero-padded, so a tracker column stays
-        // aligned and a rename rewrites nothing.
-        let ops = parse_row_ops("s7").unwrap();
-        assert_eq!(format_row_ops(&ops, 2), "s07");
-        assert_eq!(format_row_ops(&ops, 3), "s007");
+    fn the_sound_address_is_written_unpadded() {
+        // THE RULED SPELLING (owner, revising section 8 Q1): the id, UNPADDED. "s9 and s09 should
+        // be the same thing" — so the canonical form is the one a person types.
+        assert_eq!(format_row_ops(&parse_row_ops("s7").unwrap()), "s7");
+        assert_eq!(format_row_ops(&parse_row_ops("s137").unwrap()), "s137");
+        assert_eq!(parse_row_ops(&format_row_ops(&parse_row_ops("s7").unwrap())).unwrap(),
+                   parse_row_ops("s7").unwrap());
+    }
 
-        // WIDENED, NEVER TRUNCATED. A truncated id is a different slot, and playing the wrong
-        // sound to keep a column narrow is not a trade worth making.
-        let big = parse_row_ops("s137").unwrap();
-        assert_eq!(format_row_ops(&big, 2), "s137");
-
-        // And the padding must not change what it parses back to, which is the whole point of
-        // choosing the id over the name.
-        assert_eq!(parse_row_ops("s07").unwrap().sound, 7);
-        assert_eq!(parse_row_ops("s007").unwrap().sound, 7);
-        assert_eq!(parse_row_ops(&format_row_ops(&ops, 2)).unwrap(), ops);
+    #[test]
+    fn a_padded_sound_address_is_the_same_slot() {
+        // AN EQUIVALENCE, NOT A FORMAT, and pinned as one deliberately.
+        //
+        // `s7`, `s07` and `s007` have always parsed to the same slot; padding only ever decided
+        // which of them got written back out. That makes this the assertion a FORMATTING opinion
+        // could break by accident — someone deciding padding is better after all and making the
+        // parser strict to match would pass every test about the formatter and silently change
+        // what old rows mean.
+        let bare = parse_row_ops("s9").unwrap();
+        assert_eq!(parse_row_ops("s09").unwrap(), bare);
+        assert_eq!(parse_row_ops("s009").unwrap(), bare);
+        assert_eq!(bare.sound, 9);
     }
 
     #[test]
@@ -410,12 +416,12 @@ mod tests {
         for text in ["ret3", "p60", "d1/6", "s07", "o80", "o1/3",
                      "ret4 p25 d1/8 s12 o128", "ret2 s99 o1/7"] {
             let parsed = parse_row_ops(text).unwrap();
-            let printed = format_row_ops(&parsed, 2);
+            let printed = format_row_ops(&parsed);
             let reparsed = parse_row_ops(&printed)
                 .unwrap_or_else(|e| panic!("{text:?} printed as {printed:?} which will not parse: {e}"));
             assert_eq!(parsed, reparsed, "{text:?} printed as {printed:?}");
         }
-        assert_eq!(format_row_ops(&RowOps::default(), 2), "");
+        assert_eq!(format_row_ops(&RowOps::default()), "");
     }
 
     #[test]
@@ -424,7 +430,7 @@ mod tests {
         // a crescendo roll are the same op with the other sign.
         assert_eq!(parse_row_ops("rv-60").unwrap().retrig_ramp, -60);
         assert_eq!(parse_row_ops("rv50").unwrap().retrig_ramp, 50);
-        assert_eq!(format_row_ops(&parse_row_ops("rv-60").unwrap(), 2), "rv-60");
+        assert_eq!(format_row_ops(&parse_row_ops("rv-60").unwrap()), "rv-60");
 
         // `rv` MUST NOT BE MISTAKEN FOR `ret`. Both start with "r", and the loop's rule is
         // longest-and-most-specific-first; this is the assertion that keeps it true.
@@ -434,7 +440,7 @@ mod tests {
         // THE CONDITION round-trips through its packing and prints as it was typed.
         let c = parse_row_ops("c3:4").unwrap();
         assert_eq!(split_trig_condition(c.trig_condition), (3, 4));
-        assert_eq!(format_row_ops(&c, 2), "c3:4");
+        assert_eq!(format_row_ops(&c), "c3:4");
 
         // REFUSED, not normalised. A condition that can never fire is not something anyone
         // typed on purpose, and a red cell beats a row that silently never sounds.
@@ -447,7 +453,7 @@ mod tests {
         // AND THE WHOLE SET SURVIVES A ROUND TRIP TOGETHER, which is the property that catches
         // an emitter that prints two ops in an order the parser cannot read back.
         let all = parse_row_ops("ret4 p60 d1/6 rv-60 c1:2 s07 o80").unwrap();
-        assert_eq!(parse_row_ops(&format_row_ops(&all, 2)).unwrap(), all);
+        assert_eq!(parse_row_ops(&format_row_ops(&all)).unwrap(), all);
     }
 
     #[test]
