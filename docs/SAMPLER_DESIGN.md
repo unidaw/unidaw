@@ -699,9 +699,19 @@ Two decisions were raised BY the work rather than by this list and are still the
     Redirecting it is not a smaller change: the per-extent grid lives in `UiClipExtent`'s flags
     with `linesPerBeat` packed into five bits, so a per-EXTENT command is a different addressing
     model, a different payload and a different UI gesture — not the same command with a different
-    target. The command as built is tested and green; nothing is lost by answering this late,
-    but a header control should not be wired on it until the answer exists, or the UI work gets
-    done twice.
+    target. The command as built is tested and green; nothing is lost by answering this late.
+
+    **NARROWED 2026-08-01, and it may not need you at all.** The engine does not use
+    `lines_per_beat` for anything — `TrackRuntime`'s own comment says it is *"published so the UI
+    builds a LaneGrid per track. The engine doesn't use it — timing is grid-independent."* So
+    whether the field has a future is a question about the RENDERER, not about the engine, which
+    makes it the web-UI agent's to answer rather than yours. Three sources currently disagree:
+    `docs/MANUAL.md` says *"the grid belongs to the clip first, then the track"* (which makes the
+    per-track value the fallback layer, so not legacy at all and opcode 92 correct);
+    `persisted_field_reach_check.sh` says legacy; and `shared_memory.h` rule (a) says an extent
+    with no grid falls back to *the song meter* and does not mention the track. Asked on the bus:
+    if their tracker uses the track's value when a clip carries no grid, the check's exemption
+    text is simply stale and this closes without reaching you.
 
   - **Should a sampler track MIX audio routed into it, or keep replacing it?** The engine
     currently REPLACES: a sampler feeds the head of the chain, so a track that is both an
