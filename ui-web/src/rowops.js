@@ -108,7 +108,57 @@ export const ROW_OPS = [
       const [n, d] = reduce(v, 65535);
       return `${n}/${d}`;
     } },
+  /*
+   * v33. RETRIGGER VOLUME RAMP — signed TOTAL percent across a retrigger's strikes.
+   *
+   * `rv-60` over four strikes gives 100%, 80%, 60%, 40% of the authored velocity: the first is
+   * always at full level and the last lands at 40%. Stated as a TOTAL rather than a per-strike
+   * drop because that is what the ear judges and what the hand wants to set — per-strike would
+   * make the same number mean something different at every retrigger count.
+   *
+   * Signed, so a crescendo is the same op with the other sign. It means nothing without `ret`,
+   * and a ramp on a row with no retrigger is a no-op rather than a silence.
+   *
+   * GLYPH 'v', not 'r': `ret` already owns 'r', and two ops sharing a glyph makes a collapsed
+   * run ambiguous to read — the glyph is the only thing saying which op it is, since position
+   * cannot.
+   */
+  { prefix: 'rv', field: 'retrigRamp', bit: 'RetrigRamp', glyph: 'v',
+    summary: 'retrigger volume ramp, signed total percent across the strikes',
+    example: 'rv-60', text: (v) => String(v) },
+  /*
+   * v33. CONDITIONAL TRIG — fire on pass A of every B.
+   *
+   * NOT probability, and the distinction is the whole point: `p60` is a per-pass roll and
+   * deliberately unpredictable, `c1:2` is DETERMINISTIC in which pass of the loop the transport
+   * is on. That is what lets a phrase resolve every four bars rather than merely thin out, and
+   * `c1:2` with `c2:2` covers every pass exactly once — the call-and-response gesture.
+   *
+   * Packed as ((a-1) << 3 | (b-1)) + 1 so 0 stays "no condition"; A and B are 1..8 and A <= B.
+   * A > B is refused rather than normalised: it could never fire, and a note that never sounds
+   * is not something anyone types on purpose.
+   */
+  { prefix: 'c', field: 'trigCondition', bit: 'TrigCondition',
+    summary: 'conditional trig: fire on pass A of every B',
+    example: 'c1:2',
+    text: (v) => { const [a, b] = splitTrigCondition(v); return a ? `${a}:${b}` : ''; } },
 ];
+
+/**
+ * Pack and unpack an A:B conditional, mirroring `make_trig_condition` / `split_trig_condition`.
+ *
+ * Mirrored rather than invented: the code is a single byte on the wire and the two sides have to
+ * agree about which byte means 2:4. Backend exports both halves for exactly this reason.
+ */
+export function makeTrigCondition(a, b) {
+  if (!(a >= 1 && b >= 1 && a <= 8 && b <= 8 && a <= b)) return 0;
+  return (((a - 1) << 3) | (b - 1)) + 1;
+}
+export function splitTrigCondition(code) {
+  if (!code || code > 64) return [0, 0];
+  const packed = code - 1;
+  return [(packed >> 3) + 1, (packed & 7) + 1];
+}
 
 /** The mark for one op. Explicit `glyph` wins; otherwise the token's first character. */
 export function opGlyph(op) {
@@ -253,7 +303,9 @@ function reduce(n, d) {
  * number down twice.
  */
 const WIRE_BIT = { Retrigger: 1 << 0, Probability: 1 << 1, Sound: 1 << 2,
-                   SoundOffset: 1 << 3, Delay: 1 << 4 };
+                   SoundOffset: 1 << 3, Delay: 1 << 4,
+                   // v33, from ROW_OP_MASK_RETRIG_RAMP / ROW_OP_MASK_TRIG_CONDITION.
+                   RetrigRamp: 1 << 5, TrigCondition: 1 << 6 };
 
 /*
  * Keyed by BOTH names: callers hold an op and reach for `op.field`, and OP_MASK's older callers
@@ -298,6 +350,40 @@ export function parseOps(text) {
       if (n === null) return { error: `bad retrigger count in "${token}"` };
       if (n < 1) return { error: `retrigger count must be >= 1 in "${token}"` };
       ops.retrigger = n; field = 'retrigger';
+    } else if (token.startsWith('rv')) {
+      /*
+       * BEFORE the single-letter branches, and its own branch rather than an 'r' one: `ret` and
+       * `rv` share a first letter, so whichever is tested by one character swallows the other.
+       * Longest-prefix-first is the rule the whole file runs on and this is where it bites.
+       *
+       * Signed, because a crescendo is the same op with the other sign, and REFUSED outside
+       * -100..100 rather than clamped: a ramp of -150 is not a quieter roll, it is a number the
+       * author did not mean, and clamping would accept it as if they had.
+       */
+      const n = int(token.slice(2), true);
+      if (n === null) return { error: `bad retrigger ramp in "${token}"` };
+      if (n < -100 || n > 100) {
+        return { error: `retrigger ramp must be -100..100 percent in "${token}"` };
+      }
+      ops.retrigRamp = n; field = 'retrigRamp';
+    } else if (token[0] === 'c') {
+      /*
+       * A:B, both 1..8, A <= B. A > B is REFUSED rather than normalised — it could never fire,
+       * and a note that never sounds is not something anyone types on purpose.
+       */
+      const parts = token.slice(1).split(':');
+      if (parts.length !== 2) {
+        return { error: `a conditional is A:B, like c1:2, in "${token}"` };
+      }
+      const a = int(parts[0]), b = int(parts[1]);
+      if (a === null || b === null) return { error: `bad conditional in "${token}"` };
+      if (a < 1 || b < 1 || a > 8 || b > 8) {
+        return { error: `conditional A and B must be 1..8 in "${token}"` };
+      }
+      if (a > b) {
+        return { error: `conditional A must not exceed B in "${token}" — it could never fire` };
+      }
+      ops.trigCondition = makeTrigCondition(a, b); field = 'trigCondition';
     } else if (token[0] === 's') {
       const n = int(token.slice(1));
       if (n === null) return { error: `bad sound slot in "${token}"` };
@@ -370,8 +456,14 @@ export function parseOps(text) {
 }
 
 /** A non-negative decimal integer, or null. Rust's `parse::<u32>()` rejects everything else. */
-function int(s) {
-  if (!/^\d+$/.test(s)) return null;
+/**
+ * A non-negative integer, or a SIGNED one when asked.
+ *
+ * Unsigned by default and deliberately strict: every op but the ramp counts something that
+ * cannot be negative, and accepting `-` there would turn a typo into a value.
+ */
+function int(s, signed = false) {
+  if (!(signed ? /^-?\d+$/ : /^\d+$/).test(s)) return null;
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
 }

@@ -1633,6 +1633,9 @@ function writeRowOps(track, clipId, noteId, text, only) {
     type: 'setrowops', track: Number(track) || 0, clip: Number(clipId) || 0, note: noteId,
     mask,
     ret: o.retrigger, prob: o.probability, sound: o.sound, offset: o.soundOffset,
+    // v33. The MASK is what says whether this command speaks about them at all, so a caller who
+    // never mentions a ramp leaves the note's alone rather than flattening it to zero.
+    ramp: o.retrigRamp, cond: o.trigCondition,
     // The engine stores the delay in NANOTICKS; the notation is a fraction of a beat, so it is
     // resolved here against the song's beat rather than sent as a fraction the payload has no
     // room for. `d1/6` at a 960000 beat is 160000.

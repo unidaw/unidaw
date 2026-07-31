@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 
 import { lcmGrid, ZOOM_LEVELS, buildViewModel, createBuffer } from '../src/viewmodel.js';
 import { ROW_OPS, OP_MASK, opGlyph, opsRun, opsText, opsPresent, opTokenAt,
-         parseOps } from '../src/rowops.js';
+         makeTrigCondition, parseOps } from '../src/rowops.js';
 import { DEVICE_KINDS, modSummary } from '../src/chainmodel.js';
 import {
   parseToken, parseChord, pitchOf, pitchToToken, hexValue, shiftDigit, NOTE_KEYS,
@@ -2783,8 +2783,11 @@ test('a note carrying several ops shows ALL of them', () => {
    * whitespace-separated LIST, so the notation was never single-op; the display
    * was.
    */
+  // EVERY field in ROW_OPS, built from the table rather than listed — a note that names five of
+  // seven would assert "all of them" about five, which is the shape this test exists to catch.
   const all = opsRun({ retrigger: 3, probability: 60, delayTicks: 160000,
-                       sound: 5, soundOffset: 32768 });
+                       sound: 5, soundOffset: 32768,
+                       retrigRamp: -60, trigCondition: makeTrigCondition(1, 2) });
   assert.equal(all.length, ROW_OPS.length,
     `three ops draw three characters, got ${JSON.stringify(all)}`);
   for (const op of ROW_OPS) {

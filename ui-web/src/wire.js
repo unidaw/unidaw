@@ -7,7 +7,7 @@
 // churn the renderer was built to avoid. See GUIDELINES.md section 3.
 
 export const WIRE_MAGIC = 0x31494e55; // "UNI1"
-export const WIRE_VERSION = 25;
+export const WIRE_VERSION = 26;
 
 export const KIND_STATE = 0;
 // Reserved for per-track DSP scope feeds. The kind/feed bytes exist from the
@@ -28,7 +28,7 @@ const MIXER_BYTES = 12;
  * and WIRE_VERSION goes with them, so a mismatched page rejects the frame rather
  * than rendering nonsense.
  */
-const NOTE_BYTES = 48;
+const NOTE_BYTES = 50;
 /** Mirrors daw_bridge::layout::UiClipExtent. */
 const EXTENT_BYTES = 64;
 /** UI_CLIP_EXTENT_AUDIO — the placement is an audio region (schema v3). */
@@ -261,7 +261,7 @@ function note(store, i) {
   if (!n) {
     n = { tOn: 0, tOff: 0, id: 0, pitch: 0, velocity: 0, column: 0, track: 0,
           retrigger: 0, probability: 0, delayTicks: 0, devTicks: 0, row: 0,
-          sound: 0, soundOffset: 0,
+          sound: 0, soundOffset: 0, retrigRamp: 0, trigCondition: 0,
           muted: false, isAdd: false, placementId: 0 };
     store.notes[i] = n;
   }
@@ -490,6 +490,11 @@ export function decode(buf, store) {
        */
       n.sound = v.getUint16(o + 44, true);
       n.soundOffset = v.getUint16(o + 46, true);
+      // v33. SIGNED for the ramp — a crescendo is the same op with the other sign, and reading
+      // it unsigned would turn -60 into 196 and draw a roll that gets louder as one that
+      // vanishes. `getInt8` rather than a mask, so the sign is the decoder's business once.
+      n.retrigRamp = v.getInt8(o + 48);
+      n.trigCondition = v.getUint8(o + 49);
       // Offsets 30/31 are the note's two spare bytes; the stride is load-bearing
       // for every section after the notes.
       const pf = v.getUint8(o + 30);

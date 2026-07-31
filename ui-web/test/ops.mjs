@@ -466,6 +466,56 @@ const cells = await opsCells();
 }
 
 /*
+ * THE v33 OPS, END TO END: a retrigger ramp and a conditional trig.
+ *
+ * `rv` only means anything beside `ret` — it is the difference between a roll and a stutter —
+ * and `c` is the first op whose EFFECT changes from pass to pass while the row does not. Both
+ * are written through the app's own verbs and read back off the note, because a mirror that
+ * parses and formats correctly can still be sending the wrong bytes.
+ */
+{
+  /*
+   * ON THE OPS FIELD to read them back. `goto` lands on the track's first column and
+   * `opsTextAtCursor` answers '' anywhere but field 2 — correctly, it is that cell's contents —
+   * so a read taken straight after a goto reports an empty row that is carrying its ops fine.
+   * Writing does not care which column the cursor is in; reading does.
+   */
+  // Row 32 is where this suite wrote its note; row 0 has none, and `ops` on an empty row is a
+  // refusal rather than a write — which reads back as '' and looks like the ops being dropped.
+  await page.evaluate(() => window.__uni.run('goto 32 0'));
+  await page.keyboard.press('ArrowRight');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForTimeout(300);
+  const wrote = await page.evaluate(() => window.__uni.run('ops ret4 rv-60 c1:2'));
+  void wrote;
+  await page.waitForTimeout(1800);
+  const spelt = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(spelt === 'ret4 rv-60 c1:2', 'a ramp and a conditional round-trip through the engine',
+        JSON.stringify(spelt));
+
+  // ONE OP AT A TIME still works on them: the mask has two more bits and `op` sets exactly one.
+  await page.evaluate(() => window.__uni.run('op c2:4'));
+  await page.waitForTimeout(1500);
+  const after = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(after === 'ret4 rv-60 c2:4',
+        'and `op` changes the conditional alone, leaving the ramp and the retrigger',
+        JSON.stringify(after));
+
+  /*
+   * A CONDITIONAL THAT COULD NEVER FIRE IS REFUSED, not normalised. A > B names a pass that
+   * does not exist in the cycle, so a note carrying it would simply never sound — which is not
+   * something anyone types on purpose, and silently turning it into c1:2 would be inventing an
+   * intention.
+   */
+  const bad = await page.evaluate(() => window.__uni.run('op c3:2'));
+  await page.waitForTimeout(800);
+  const kept = await page.evaluate(() => window.__uni.opsTextAtCursor());
+  check(/never fire/.test(String(bad)) && kept === 'ret4 rv-60 c2:4',
+        'a conditional whose A exceeds B is refused, and the row is untouched',
+        `${String(bad).slice(-60)} / ${kept}`);
+}
+
+/*
  * NOTHING THREW. Load-bearing: the readout shipped throwing a missing-import ReferenceError on
  * every frame, and every other suite passed through it — the unit tests never run the draw
  * path, and journey never parks on the ops field of a note that has ops.

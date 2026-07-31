@@ -72,7 +72,7 @@ use daw_bridge::grid::{aggregate_rows, LaneGrid};
 const WIRE_LANES: usize = 64;
 
 const WIRE_MAGIC: u32 = 0x31_49_4e_55; // "UNI1"
-const WIRE_VERSION: u16 = 25;
+const WIRE_VERSION: u16 = 26;
 
 /// Frame kinds. The channel byte exists from the start so DSP scope feeds can be
 /// added additively rather than as a version bump on both sides: per-track scopes
@@ -93,7 +93,7 @@ const FULL_HEADER_BYTES: usize = 232;
 /// struct rather than a constant. This one said 40 while wire.js said 44, was `allow(dead_code)`
 /// and therefore checked by nothing, and documented a layout that had moved on without it — a
 /// comment that lies is worse than no comment. It is asserted against the packer below now.
-const NOTE_BYTES: usize = 48;
+const NOTE_BYTES: usize = 50;
 
 /// The client's current viewport. It owns zoom and scroll; we own the
 /// projection, because LaneGrid is the authority on tick<->row and reimplementing
@@ -269,6 +269,13 @@ struct WireNote {
     /// v32 the 9xx seek, as a FRACTION of the slot's extent. Absolute frames break when the
     /// slot's sample is swapped or its slice re-cut; a fraction survives both.
     sound_offset: u16,
+    /// v33 RETRIGGER VOLUME RAMP: signed TOTAL percent across a retrigger's strikes. Means
+    /// nothing without `retrigger`, and 0 is flat — which is what every note written before this
+    /// carries, so nothing changes shape.
+    retrig_ramp: i8,
+    /// v33 CONDITIONAL TRIG, packed A:B. 0 = unconditional. Deterministic in the transport's
+    /// pass rather than random, which is what separates it from `probability`.
+    trig_condition: u8,
     /// Row index under the client's current grid, computed by LaneGrid here so
     /// the frontend never re-derives the projection.
     row: u32,
@@ -765,6 +772,10 @@ fn encode(f: &Frame, out: &mut Vec<u8>) {
         // frame rather than decoding every extent after the notes as garbage.
         out.extend_from_slice(&n.sound.to_le_bytes());              // 44
         out.extend_from_slice(&n.sound_offset.to_le_bytes());       // 46, to 48
+        // 48..50, v33. Same bargain again: a page reading 48 where this writes 50 REJECTS the
+        // frame on WIRE_VERSION rather than decoding every extent after the notes as garbage.
+        out.push(n.retrig_ramp as u8);                              // 48
+        out.push(n.trig_condition);                                 // 49, to 50
         debug_assert_eq!(out.len() - note_start, NOTE_BYTES,
                          "note stride drifted from NOTE_BYTES / wire.js");
     }
@@ -1215,6 +1226,8 @@ fn read_frame(h: &EngineHandle, seq: u64, out: &mut Frame, prev_clip_version: u3
                     dev_nanoticks: note.dev_nanoticks,
                     sound: note.sound,
                     sound_offset: note.sound_offset,
+                    retrig_ramp: note.retrig_ramp,
+                    trig_condition: note.trig_condition,
                     row: vp_grid.row_of_tick(note.t_on) as u32,
                 });
             }
@@ -3352,7 +3365,14 @@ fn build_set_row_ops(body: &str) -> Option<Result<UiSetRowOpsPayload, &'static s
         sound_offset: parse_num(body, "\"offset\"").unwrap_or(0).clamp(0, 65535) as u16,
         retrigger: parse_num(body, "\"ret\"").unwrap_or(0).clamp(0, 255) as u8,
         probability: parse_num(body, "\"prob\"").unwrap_or(0).clamp(0, 255) as u8,
-        pad0: [0u8; 2],
+        /*
+         * v33: pad0 became these two, so the payload is the same 40 bytes and nothing moved.
+         * They are read from the message like every other op — the MASK is what says whether
+         * this command is speaking about them, so a caller that never mentions them leaves them
+         * alone rather than clearing them.
+         */
+        retrig_ramp: parse_num(body, "\"ramp\"").unwrap_or(0).clamp(-100, 100) as i8,
+        trig_condition: parse_num(body, "\"cond\"").unwrap_or(0).clamp(0, 255) as u8,
         reserved: [0u8; 8],
     }))
 }
