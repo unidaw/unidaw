@@ -1,0 +1,27 @@
+{
+  "name": "uni-ui-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tokens": "node design/build-tokens.mjs",
+    "shots": "node test/shot.mjs",
+    "bless": "node test/shot.mjs --bless",
+    "alloc": "node test/alloc.mjs",
+    "test": "node --test test/unit.mjs && node test/shot.mjs && node test/alloc.mjs",
+    "perf": "node test/frametime.mjs",
+    "e2e": "node test/e2e.mjs",
+    "journey": "node test/journey.mjs",
+    "audible": "node test/audible.mjs",
+    "soak": "node test/soak.mjs",
+    "unit": "node --test test/unit.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/inter": "^5.3.0",
+    "@phosphor-icons/web": "^2.1.2",
+    "ws": "^8.21.1"
+  }
+}

@@ -1,0 +1,61 @@
+/* Agent dock. A console strip along the bottom, over whatever is showing. */
+
+.dk {
+  position: absolute; left: 0; right: 0; bottom: 16px;
+  height: 240px;
+  display: flex; flex-direction: column;
+  background: var(--uni-surface-header-bg);
+  border-top: 1px solid var(--uni-rule-track);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  z-index: 7;
+}
+
+/* The pane's name bar. It survives a collapse — it is what you click to get the
+   pane back — so it is the one part of the dock that is never hidden. */
+.dk-head {
+  display: flex; align-items: baseline; gap: 8px;
+  height: var(--rdock-head-h);
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  flex: 0 0 auto;
+}
+.dk-name {
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--uni-text-dim);
+}
+.dk-hint {
+  font-size: 10px; color: var(--uni-text-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.dk-log {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 6px 10px;
+}
+
+.dk-line { white-space: pre-wrap; word-break: break-word; color: var(--base-text); }
+/* What was typed, what came back, what went wrong — three different things. */
+.dk-line.in  { color: var(--uni-text-instrument); }
+.dk-line.out { color: var(--uni-text-gutter); }
+.dk-line.err { color: var(--uni-text-fx); }
+
+.dk-row {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--uni-rule-gutter);
+}
+.dk-prompt { color: var(--base-accent); }
+
+.dk-input {
+  flex: 1 1 auto;
+  background: transparent; border: 0; outline: 0;
+  color: var(--base-text);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+}
+.dk-input::placeholder { color: var(--uni-text-gutter); }

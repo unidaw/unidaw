@@ -1,3 +1,5 @@
 [workspace]
-members = ["daw-bridge", "daw-cli", "daw-agent"]
+# daw-app is gone (backend deleted the GPUI app, superseded by ui-web);
+# daw-sidecar is this branch's bridge from SHM to the browser.
+members = ["daw-bridge", "daw-cli", "daw-agent", "daw-sidecar"]
 resolver = "2"

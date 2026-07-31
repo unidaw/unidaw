@@ -1,0 +1,40 @@
+/* Help overlay and the surface indicator. */
+
+.hp {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(10, 10, 16, .82);
+  z-index: 10;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+}
+.hp-inner {
+  max-width: 720px; width: 100%;
+  padding: 20px 26px;
+  background: var(--uni-surface-header-bg);
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 4px;
+  max-height: 80%; overflow-y: auto;
+}
+.hp-sec { margin-bottom: 18px; }
+.hp-h {
+  color: var(--base-accent);
+  margin-bottom: 8px;
+  font-size: var(--font-size-inst);
+}
+.hp-row { display: flex; gap: 14px; padding: 2px 0; }
+.hp-k {
+  flex: 0 0 140px; text-align: right;
+  color: var(--uni-text-instrument);
+}
+.hp-v { flex: 1 1 auto; color: var(--base-text); }
+.hp-note { color: var(--uni-text-gutter); padding-top: 4px; }
+
+/* Which surface is showing. Tab cycles four of them and nothing said which. */
+.ch-view {
+  color: var(--base-accent);
+  padding: 2px 7px;
+  border: 1px solid var(--base-accent);
+  border-radius: 2px;
+}

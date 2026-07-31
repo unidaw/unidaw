@@ -1,0 +1,698 @@
+/* Tracker styling. Every value comes from tokens.css — no hex, no font name, no
+   px literal that design/tokens.json already carries. Rule 3 of three. */
+
+.tk-host {
+  position: relative;
+  overflow: hidden;
+  /* Rule 2: this is why PrePaint stays flat and Layout reads 0.000 on scroll. */
+  contain: strict;
+  background: var(--uni-surface-tracker-bg);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums; /* or monospace columns drift */
+}
+
+.tk-band, .tk-rails {
+  position: absolute;
+  inset: 0;
+  will-change: transform; /* the band IS the scrolled thing; promotion is correct here */
+}
+.tk-rails { pointer-events: none; }
+
+/* The harmony lane: one block per field, spanning the rows it covers.
+   Fixed beside the time gutter — it never scrolls horizontally, because "what
+   key is this" does not stop applying when you look at track 12. */
+.tk-harm-lane {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: var(--metrics-gutter-width);
+  width: var(--metrics-harmony-width);
+  overflow: hidden;
+  z-index: 2;
+  border-right: 1px solid var(--base-neutral-900);
+  will-change: transform;
+}
+/* The row's placeholder, so tracks line up with their headers. The lane paints
+   over it. */
+.tk-harm-spacer {
+  flex: 0 0 var(--metrics-harmony-width);
+  width: var(--metrics-harmony-width);
+}
+.tk-hb {
+  position: absolute; left: 0; right: 0;
+  box-sizing: border-box;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  padding: 1px 8px;
+  background: linear-gradient(90deg,
+              var(--uni-harmony-field-strong), var(--uni-harmony-field-soft));
+  border-top: 1px solid var(--base-accent);
+  box-shadow: inset 3px 0 0 var(--base-accent);
+  font-family: var(--font-mono);
+}
+.tk-hb-label { display: flex; align-items: baseline; gap: 6px; }
+.tk-hb-key { color: var(--base-accent-ramp-300); font-size: var(--font-size-inst); }
+.tk-hb-sub { color: var(--base-accent-ramp-700); font-size: var(--font-size-fx); }
+/* Pinned to the bottom of the span, so a field states its root where it ends as
+   well as where it begins. */
+.tk-hb-foot {
+  margin-top: auto;
+  color: var(--base-accent-ramp-700);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+}
+
+/* An aggregation pill: several events in one cell. Bordered rather than plain,
+   because "3x C-4" in the same style as "C-4" reads as a stranger note name.
+   Slightly smaller so the border does not push the cell wider than its column. */
+.tk-cell[data-kind="collide"] {
+  font-size: var(--font-size-fx);
+}
+.tk-cell[data-kind="collide"]::before {
+  content: '';
+  position: absolute; inset: 1px 2px;
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.tk-row {
+  position: absolute;
+  left: 0;
+  display: flex;
+  height: var(--metrics-row-height);
+  box-sizing: border-box;
+}
+.tk-row.beat { background: var(--uni-surface-row-alt); }
+.tk-row.bar  { background: var(--uni-surface-row-alt); box-shadow: inset 0 1px 0 var(--uni-rule-gutter); }
+.tk-row.playhead { background: var(--uni-surface-playhead-row); }
+
+.tk-gutter {
+  /* Sticky so the timeline ruler survives horizontal scrolling. It sits inside
+     the transformed band, so it needs its own ground to hide tracks passing
+     beneath it. */
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--uni-surface-tracker-bg);
+  width: var(--metrics-gutter-width);
+  flex: 0 0 var(--metrics-gutter-width);
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  box-sizing: border-box;
+  font-size: var(--font-size-gutter);
+  letter-spacing: var(--font-tracking-gutter);
+  color: var(--uni-text-gutter);
+  border-right: var(--uni-rule-column-width) solid var(--uni-rule-gutter);
+}
+
+/* Track borders are deliberately heavier than the rules between columns inside
+   a track — without that, N single-column tracks read as one undifferentiated
+   grid of thin lines. */
+/* The two spacers standing in for tracks that are not rendered. Zero by default, so a row
+   with every track present behaves exactly as it did. `flex: 0 0 auto` because a spacer that
+   could grow or shrink would silently absorb the rounding the width model is asserted against. */
+.tk-spacer {
+  flex: 0 0 auto;
+  width: 0;
+  height: 100%;
+}
+
+.tk-track {
+  display: flex;
+  background: var(--tint);
+  border-right: var(--uni-rule-track-width) solid var(--uni-rule-track);
+}
+
+/* The lane's clip-local bar:beat.
+   FIXED width, and the box is always there — blank means an empty Text node, never
+   `display: none` and never a width that follows its text. measure() derives
+   trackStride from offsetLeft and resize() early-returns unless the viewport,
+   column count or track count changed, so a readout that changed size would leave
+   the stride stale forever and desynchronise the header, the hit test and the
+   scroll clamp from the thing they measure. */
+.tk-lane-bar {
+  width: var(--metrics-lane-bar-width);
+  flex: 0 0 var(--metrics-lane-bar-width);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 4px;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-gutter);
+  letter-spacing: var(--font-tracking-gutter);
+  color: var(--uni-text-gutter);
+  opacity: .55;
+  border-right: var(--uni-rule-column-width) solid var(--uni-rule-column);
+  pointer-events: none;
+}
+/* This lane's OWN bar and beat, which in a polyrhythm are not the row's.
+   Drawn as an inset top rule so it reads as a horizontal division of the lane,
+   the same language `.tk-row.bar` uses for the song — and NOT as a background,
+   because `.tk-track`'s background is spent on the per-track tint. */
+.tk-track.lbar { box-shadow: inset 0 1px 0 var(--uni-rule-track); }
+.tk-track.lbeat { box-shadow: inset 0 1px 0 var(--uni-rule-gutter); }
+.tk-track.lbar > .tk-lane-bar { opacity: 1; }
+
+/* A lane whose bars ARE the song's bars carries no readout: the gutter already
+   says it, and one redundant column per track is most of the tracker's width.
+   display:none rather than a zero width, so the track's box genuinely shrinks and
+   measure() sees the new geometry. */
+.tk-track.no-lane > .tk-lane-bar { display: none; }
+
+/* A track no note of which carries a per-note op. The engine publishes the widest run per
+   track (kShmVersion 34) and 0 means the column has never held anything — so a drum track
+   stops spending a third of its width on three empty cells it will never fill.
+   `display: none` for the same reason `.no-lane` uses it: the track's box has to genuinely
+   shrink, or measure() would size the strip for a column that is not drawn. It is reachable
+   again with `ops <track> on`, which is what stops this from being a column you can never
+   type the first op into. */
+.tk-track.no-ops > .tk-cell.ops { display: none; }
+
+/* AND HOW WIDE IT IS WHEN IT IS DRAWN.
+   The collapsed run is one glyph per op and nothing is ever hidden — 43 ops draw 43 glyphs —
+   so the cell is sized from the track's own published run rather than from a constant. The
+   renderer writes `--ops-w` per lane in pixels (it owns the measurement, including the glyph
+   advance, which per-note-ops.md treats as a free variable); the box model stays here.
+   The fallback is the ordinary cell width, so a lane the renderer has not sized yet — a cold
+   start, or a build with no engine — draws exactly what it always drew. */
+.tk-track > .tk-cell.ops {
+  width: var(--ops-w, var(--metrics-cell-width));
+  flex: 0 0 var(--ops-w, var(--metrics-cell-width));
+}
+
+/* A lane whose parent is collapsed. Zero width rather than `display: none` on the
+   track itself, so the element stays in the flow and measure() reads a real box for
+   it — a removed track would make offsetLeft skip an index and every lane after it
+   would be measured as the wrong track. */
+.tk-track.folded {
+  width: 0; flex: 0 0 0; overflow: hidden; border-right-width: 0;
+}
+
+/* WHERE IN THE ROW the note actually sounds — a hairline at its true position
+   inside the cell, from the note's own delay.
+   A pseudo-element, so it costs no DOM node in a pool of 768 cells. Absent unless
+   `.dev` is set, which is the common case: a note exactly on its row has nothing
+   to say. */
+.tk-cell.dev::after {
+  content: '';
+  position: absolute;
+  left: var(--dev, 0%);
+  top: 1px; bottom: 1px;
+  width: 1px;
+  background: var(--uni-text-fx);
+  opacity: .55;
+  pointer-events: none;
+}
+
+.tk-cell {
+  width: var(--metrics-cell-width);
+  flex: 0 0 var(--metrics-cell-width);
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  box-sizing: border-box;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--font-size-cell);
+  color: var(--uni-text-note);
+  border-right: var(--uni-rule-column-width) solid var(--uni-rule-column);
+  cursor: text;
+}
+.tk-cell:last-child { border-right: none; }
+
+.tk-cell[data-kind="inst"]      { font-size: var(--font-size-inst); color: var(--uni-text-instrument); }
+.tk-cell[data-kind="fx"]        { font-size: var(--font-size-inst); color: var(--uni-text-fx); }
+.tk-cell[data-kind="empty"]     { color: var(--uni-text-empty); }
+/* Outside any clip. Not the same as an empty cell inside one: there is no clip
+   here to write into, so the track tint drops away and the cell reads as void. */
+/* Between this lane's rows: the lane's grid does not land here, so there is
+   nothing to write into. Distinct from an empty cell, which you can type in. */
+.ch-reject { color: var(--uni-text-fx); opacity: 0; transition: opacity .12s; }
+.ch-reject.on { opacity: 1; }
+.hlpb { color: var(--uni-text-gutter); font-size: var(--font-size-fx);
+         letter-spacing: var(--font-tracking-fx); margin-left: 6px; }
+.tk-cell[data-kind="offgrid"]   { background: var(--uni-surface-off-grid); }
+.tk-cell[data-kind="outside"]   { background: var(--uni-surface-tracker-bg); }
+.tk-cell[data-kind="off"]       { color: var(--uni-text-off); }
+/* Pitch-range mark for an aggregated row. Absolute inside the cell so it costs
+   no layout, and inset from the column rules so adjacent marks stay readable. */
+/* The pitch mark: where this cell sits in the register, as a thin ribbon down
+ * the left edge of the column.
+ *
+ * At the LEFT EDGE and 2px wide so it never competes with the note name beside
+ * it — the point is that a column of these reads as a melodic line at a glance,
+ * and two columns read as two lines you can compare for register collisions
+ * (ARCHITECTURE_REVIEW Movement 1 item 14). A mark across the middle of the cell
+ * would be a decoration on a note you were already reading.
+ *
+ * The coarse-zoom variant keeps its wider bar: there the cell has no text to
+ * compete with and the mark IS the content, so a hairline would be throwing away
+ * the only thing on the row. Selected by data-kind, which the renderer already
+ * writes, so distinguishing them costs no extra per-cell work. */
+.tk-bar {
+  position: absolute; left: 0; width: 2px;
+  display: none;
+  background: var(--uni-clip-rail-active);
+  border-radius: 1px;
+  pointer-events: none;
+}
+.tk-cell { position: relative; }
+.tk-cell[data-kind="contour"] .tk-bar { left: 20%; right: 20%; width: auto; }
+/* A muted base note: silenced in THIS placement, still part of the clip. */
+.tk-cell[data-kind="muted"]     { color: var(--uni-text-off); text-decoration: line-through; opacity: .7; }
+/* An override add: local to one placement, not in the shared clip. */
+.tk-cell[data-kind="add"]       { color: var(--base-accent-ramp-400); font-style: italic; }
+/* The cell you are typing into. Distinct from a committed note so a half-typed
+   token never reads as data. */
+/* Sent, not yet confirmed. Deliberately distinct from a committed note: if the
+   engine rejects it, this is the state you were briefly shown. */
+.tk-cell[data-kind="pending"] { color: var(--uni-text-pending); opacity: .75; }
+.tk-cell[data-kind="editing"] {
+  color: var(--base-text); background: var(--uni-surface-cursor-cell);
+  outline: 1px solid var(--base-accent); outline-offset: -1px;
+}
+.tk-cell[data-kind="collide"]   { color: var(--uni-clip-rail-active); font-weight: 500; }
+.tk-cell[data-kind="aggregate"] { color: var(--uni-text-aggregate); letter-spacing: var(--font-tracking-fx); }
+
+.tk-cell.sel { background: var(--uni-surface-selection); }
+.tk-cell.cursor {
+  background: var(--uni-surface-cursor-cell);
+  outline: var(--uni-cursor-border-width) solid var(--uni-cursor-border);
+  outline-offset: -1px;
+}
+
+.tk-rail {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 3px;
+  z-index: 3;
+  cursor: grab;
+  /* Solid end caps in the track's colour with a translucent body between: the
+     caps read as grips, which is what they are — the rail is the clip's handle.
+     One gradient rather than three elements, because this is drawn per clip per
+     frame. */
+  background: linear-gradient(180deg,
+      var(--clip) 0 5px,
+      color-mix(in srgb, var(--clip) 30%, transparent) 5px calc(100% - 5px),
+      var(--clip) calc(100% - 5px));
+}
+/* The clip the cursor is in. Solid plus a glow, so "which clip am I editing" is
+   answerable from the corner of the eye. */
+.tk-rail.active {
+  background: var(--clip);
+  box-shadow: 0 0 9px color-mix(in srgb, var(--clip) 55%, transparent);
+}
+/* The clip's name, beside its rail. Rotated because a rail is 5px wide and a
+   name is not — and a clip you cannot name is one you cannot talk about. */
+.tk-rail-name {
+  position: absolute;
+  /* To the LEFT of the rail, not on it. Reading bottom-to-top so the name starts
+     at the clip's start, which is where the eye goes. */
+  right: 9px; bottom: 0;
+  transform-origin: 100% 100%;
+  transform: rotate(-90deg);
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--clip);
+  opacity: .9;
+  pointer-events: none;
+}
+.tk-rail.active { border-color: var(--uni-clip-rail-active); }
+/* The grab handles: a thicker bar at each end, inset from the track borders. */
+.tk-rail::before, .tk-rail::after {
+  content: ''; position: absolute; left: 12%; right: 12%; height: 3px;
+  background: var(--uni-clip-rail); border-radius: 2px;
+}
+.tk-rail::before { top: -2px; }
+.tk-rail::after { bottom: -2px; }
+.tk-rail.active::before, .tk-rail.active::after { background: var(--uni-clip-rail-active); }
+
+/* ---- Transport chrome, from the redesign's top strip ------------------- */
+.chrome {
+  /* Laid out BY THE SHELL, not by itself. It used to be absolutely positioned at
+     the top of the document, which was right when a surface filled the window and
+     wrong the moment anything else wanted the row below it — it covered the
+     breadcrumb, and an absolutely positioned element covering a flex sibling
+     shows no sign of doing so. Height stays here because it is this bar's own. */
+  /* 12, not 18. MEASURED: the bar's cells came to 1455px and eleven 18px gaps plus the
+     padding made 1681 in a 1680px window, so the tempo readout wrapped to "BPM" on its own
+     line and the entry cluster to two. A tighter rhythm is also what the design has — it
+     groups by separator rules rather than by air. */
+  height: 38px; display: flex; align-items: center; gap: 12px;
+  padding: 0 14px; box-sizing: border-box;
+  /* NOWRAP, so running out of room truncates the flexible cell instead of growing the bar's
+     height. A wrapped chrome does not merely look wrong: `height: 38px` clips it, so the
+     second line is half visible and the first is pushed off centre. */
+  flex-wrap: nowrap;
+  background: var(--uni-surface-header-bg);
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  font-family: var(--font-chrome); z-index: 4; user-select: none;
+}
+.ch-brand { display: flex; align-items: baseline; gap: 7px; }
+.ch-name { font-weight: 600; font-size: 13px; letter-spacing: .16em; color: var(--base-text); }
+.ch-ver  { font-size: 9px; letter-spacing: .14em; color: var(--base-neutral-600); }
+.ch-group {
+  display: flex; align-items: center; gap: 8px;
+  padding-left: 12px; border-left: 1px solid var(--uni-rule-gutter);
+  /* Every cell keeps its own content on one line. The BAR yields, not the words in it. */
+  white-space: nowrap;
+}
+.ch-btn {
+  display: grid; place-items: center; gap: 6px; grid-auto-flow: column;
+  min-width: 26px; height: 22px; padding: 0 7px; box-sizing: border-box;
+  border: 1px solid var(--base-neutral-800); border-radius: 4px;
+  background: transparent; color: var(--base-text);
+  font-size: 11px; font-family: inherit; cursor: pointer;
+}
+.ch-btn:hover { border-color: var(--base-accent); color: var(--base-accent-ramp-400); }
+.ch-btn:focus-visible { outline: 2px solid var(--base-accent); outline-offset: 2px; }
+.ch-btn.on { border-color: var(--base-accent); color: var(--base-accent-ramp-400); }
+.ch-pos {
+  font-family: var(--font-mono); font-size: 12px; letter-spacing: .04em;
+  color: var(--base-text); min-width: 78px;
+}
+.ch-meta { font-size: 10px; letter-spacing: .06em; color: var(--base-neutral-600);
+            white-space: nowrap; }
+
+/* The tempo above the meter, as the design has it. Two lines in one cell, which is
+   what buys the horizontal room the telemetry needs — the bar is 1680px wide and
+   every readout in it competes for the same row. */
+.ch-stack { display: flex; flex-direction: column; gap: 1px; line-height: 1.15;
+             white-space: nowrap; }
+.ch-stack-row { display: flex; align-items: baseline; }
+.ch-groove { color: var(--base-accent-ramp-700); }
+
+/* LOOP and CLICK: state you can read at a glance rather than a control you have to
+   open something to check. `.on` is the accent-bordered lit form the design uses for
+   an active loop; `.unavailable` is the third state — drawn, in place, and NOT a
+   thing you can press, because the capability does not exist in the engine yet.
+   Distinct from disabled-because-of-context: this says "this belongs here and is not
+   built", and saying it is better than a bar that looks complete. */
+/* The entry cluster in the row below. `margin-left: auto` puts it at the right end, before
+   the key readout the breadcrumb already pins there; the group's left rule goes, because it
+   separates top-bar cells and on its own reads as a stray vertical line. */
+/* The entry cluster in the row below.
+ *
+ * `order: 2` and not DOM order. The breadcrumb's own cells are created LAZILY, on the first
+ * draw, so appending the cluster at construction put it BEFORE them — and `margin-left: auto`
+ * then pushed the breadcrumb to the right instead of the cluster. Flex `order` states the
+ * intention directly and cannot be undone by whatever gets appended next.
+ *
+ * The group's left rule goes: it separates top-bar cells, and on its own in a quieter row it
+ * reads as a stray vertical line. */
+.ch-entry-row {
+  order: 2;
+  margin-left: auto;
+  padding-left: 0; border-left: none;
+  gap: 10px;
+}
+
+/* REMOVE THIS TRACK, on the track's own header. Hidden until the header is hovered:
+   sixteen visible ✕ marks along the top of a tracker is an invitation, and the action
+   cannot be undone. Absolutely positioned so it takes no width — a header is sized
+   from the MEASURED track stride and a control in its flow would push the name off
+   centre by exactly the amount that is supposed to be invisible. */
+.hdel {
+  /* The LEFT edge. The quantize badge already owns `right: 3px` and is vertically centred, so
+     anything on that side either overlaps it or has to know its height — and the track name is
+     centred, which leaves the left free. */
+  position: absolute; left: 2px; top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px; line-height: 10px;
+  color: var(--uni-text-empty);
+  cursor: pointer;
+  opacity: 0;
+  padding: 0 2px;
+}
+.htrack:hover .hdel { opacity: 1; }
+.hdel:hover { color: var(--uni-text-fx); }
+/* A folded lane has no room for anything, and its header has no border either. */
+.htrack.folded .hdel { display: none; }
+
+/* THE OPS COLUMN TOGGLE, beside the remove control on the left, absolutely positioned for the
+   same reason: a header is sized from the measured track box and a control in its flow would
+   push the name off centre by exactly the amount that is supposed to be invisible.
+   Persistently visible when `on`, because it is then the ONLY reason the column is there —
+   unlike ✕, whose action is available from the chrome as well. `.hidden` is the case where the
+   engine's own op width is showing the column and this control has nothing to say. */
+.hops {
+  position: absolute; left: 14px; top: 50%;
+  transform: translateY(-50%);
+  font-size: 9px; line-height: 10px;
+  color: var(--uni-text-empty);
+  cursor: pointer;
+  opacity: 0;
+  padding: 0 2px;
+}
+.htrack:hover .hops { opacity: 1; }
+.hops.on { opacity: 1; color: var(--uni-text-fx); }
+.hops:hover { color: var(--uni-text-fx); }
+.hops.hidden { display: none; }
+.htrack.folded .hops { display: none; }
+
+/* ADD A TRACK, at the end of the row — the position the new lane will occupy. */
+.hadd {
+  flex: 0 0 22px; width: 22px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 12px;
+  color: var(--uni-text-gutter);
+  border-left: 1px solid var(--uni-rule-column);
+  cursor: pointer;
+}
+.hadd:hover { color: var(--base-accent); }
+
+.ch-chip {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em;
+  padding: 2px 6px; border-radius: 3px; box-sizing: border-box;
+  border: 1px solid var(--uni-rule-gutter);
+  color: var(--base-neutral-600);
+  white-space: nowrap;
+}
+/* The cursor is inside a shared clip. The WARM colour, not the accent: this is the one chip
+   in the bar that is a warning rather than a state, and it must not read as another mode
+   badge. `.forked` is the third state — this appearance has its own copy. */
+.ch-shared { border-color: var(--uni-text-fx); color: var(--uni-text-fx); }
+.ch-shared.forked { border-style: dashed; }
+
+/* DRAW — off, it is an ordinary chip that happens to be pressable; on, it is filled, because a
+   mode that changes what a click does to the music should not be a subtle border change. The
+   font and metrics come from .ch-chip; only the button reset is needed here. */
+.ch-draw {
+  font: inherit;
+  background: none;
+  cursor: pointer;
+}
+.ch-draw:hover { border-color: var(--base-accent); color: var(--base-accent-ramp-300); }
+.ch-draw.on {
+  background: var(--base-accent);
+  border-color: var(--base-accent);
+  color: var(--base-neutral-100);
+}
+
+.ch-loop { border-color: var(--base-accent); color: var(--base-accent-ramp-300); }
+.ch-chip.unavailable {
+  border-style: dashed;
+  border-color: var(--base-neutral-900);
+  color: var(--base-neutral-800);
+  cursor: not-allowed;
+}
+/* The same for a BUTTON that is drawn and not built — the record button. Dashed, dim,
+   and it must not respond to hover: a hover highlight on something that cannot be
+   pressed is an invitation. */
+.ch-btn.unavailable, .ch-btn:disabled {
+  border-style: dashed; border-color: var(--base-neutral-900);
+  color: var(--base-neutral-800); cursor: not-allowed;
+}
+.ch-btn.unavailable:hover, .ch-btn:disabled:hover {
+  border-color: var(--base-neutral-900); color: var(--base-neutral-800);
+}
+
+/* The machine's own numbers, pushed to the right so they sit before the tabs. `auto`
+   here and NOT on `.ch-right`: whichever element takes the free space defines where
+   the right-hand group begins, and having two of them means the second never moves. */
+.ch-telemetry { margin-left: auto; gap: 12px; }
+
+/* WHAT GIVES WAY WHEN THERE IS NOT ENOUGH ROOM, in order of how little it is needed.
+ *
+ * MEASURED: at 1024px the bar's content came to 1239px, so it was cut off at the right — and
+ * the tabs are the last thing in it, which made switching surfaces the first thing to
+ * disappear. Something has to yield, and choosing WHAT is the whole decision: position,
+ * transport and the tabs are how you operate the thing, so the diagnostics go first.
+ *
+ * Hidden, not shrunk. A readout squeezed to three characters is a readout that lies. */
+@media (max-width: 1200px) {
+  /* dsp/latency/doc version: useful when tuning a buffer, never when playing. */
+  .ch-telemetry { display: none; }
+}
+@media (max-width: 1120px) {
+  /* The groove, which the lane badge in the tracker also shows. */
+  .ch-groove { display: none; }
+  /* CLICK is not built, so at this width it is the cheapest thing in the bar to drop. */
+  .ch-click { display: none; }
+}
+@media (max-width: 1040px) {
+  /* `saved` goes last of the readouts, because "is my work safe" outranks the rest — and it is
+     still reachable: the breadcrumb names the project and the console can ask. */
+  .ch-saved { display: none; }
+  /* The brand's version suffix, which is decoration at any width. */
+  .ch-ver { display: none; }
+}
+.ch-saved { border-color: var(--base-neutral-800); }
+
+.ch-right { display: flex; align-items: center; gap: 12px; }
+.ch-scale { font-family: var(--font-mono); font-size: 11px; color: var(--base-accent-ramp-300); }
+.ch-key   { font-size: 9px; letter-spacing: .08em; color: var(--base-accent-ramp-700); }
+.ch-link  { font-family: var(--font-mono); font-size: 9px; letter-spacing: .06em;
+            color: var(--base-neutral-700); }
+.ch-link.live { color: var(--uni-text-fx); }
+
+/* The mode row: one button per surface, with the key that reaches it. The keys
+   are printed because a shortcut nobody can discover is not a shortcut. */
+/* ONE container round all of them, as the design draws it: the tabs are a set you
+   choose from, and a row of unbounded buttons reads as five separate controls that
+   happen to be adjacent. */
+.ch-tabs {
+  display: flex; align-items: center; gap: 2px;
+  padding: 2px; border: 1px solid var(--uni-rule-gutter); border-radius: 5px;
+}
+.ch-tab {
+  display: flex; align-items: baseline; gap: 5px;
+  padding: 3px 8px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-family: var(--font-chrome);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--base-neutral-600);
+  cursor: pointer;
+}
+.ch-tab:hover { color: var(--uni-text-instrument); }
+.ch-tab.on { color: var(--base-accent); border-color: var(--base-accent); }
+.ch-tab-key { font-size: 8px; color: var(--base-neutral-800); }
+.ch-tab.on .ch-tab-key { color: var(--base-accent-ramp-700); }
+
+/* A token that was typed and meant nothing.
+ *
+ * Louder than a rejection in the chrome, and in the place it happened. It used to
+ * be a sentence in a status line at the top of the window while the cell showed
+ * whatever was there before — which is indistinguishable from the write having
+ * succeeded and changed nothing. ARCHITECTURE_REVIEW Movement 1 item 12: an
+ * unrecognised token is a red cell, never a silent no-op.
+ *
+ * The text is what was typed, not what is in the music, so it is marked as not
+ * belonging: the same red the dock uses for an error, over a wash of it, so the
+ * cell reads as wrong at a glance from across the grid rather than only when
+ * you are looking straight at it. */
+.tk-cell[data-kind="bad"] {
+  color: var(--uni-text-fx);
+  background: color-mix(in srgb, var(--uni-text-fx) 18%, transparent);
+  text-decoration: underline wavy;
+  text-decoration-skip-ink: none;
+}
+
+/* What a bare digit will write, in the column the cursor is in.
+ *
+ * Dimmer than the octave and step beside it: those are values you SET, this is a
+ * consequence of where you are. Reading as a setting would invite people to try
+ * to change it. */
+/* Its width is RESERVED, not fitted.
+ *
+ * The text changes as the cursor moves between columns, and this label sits to
+ * the left of the surface tabs — so a label that grew and shrank would slide
+ * TRACKER/ARRANGE/PATCHER back and forth under the pointer every time you moved
+ * sideways in the grid. A navigation control that moves while you are aiming at
+ * it is worse than one placed slightly further right. */
+.ch-mode {
+  font-size: 10px; letter-spacing: .06em; color: var(--uni-text-gutter);
+  min-width: 40px;
+}
+
+/* A CHORD, not a note: a scale DEGREE with a quality and an inversion, resolved
+   against the harmony timeline. Coloured with the harmony's accent rather than a
+   note's, because that is what it belongs to — a chord drawn like a note makes
+   "why can I not edit its pitch" an obvious question with a confusing answer. */
+.tk-cell[data-kind="chord"] {
+  color: var(--base-accent-ramp-200, var(--base-accent));
+  font-style: italic;
+}
+
+/* THE LANE'S QUANTIZE, beside its lines-per-beat in the column header.
+   The same kind of fact as the grid — a lane attribute that changes what the rows
+   mean and cannot be seen anywhere else. It has to be here or the feature is
+   invisible in the way that matters: quantize is NON-DESTRUCTIVE, so a lane being
+   pulled hard toward a grid looks exactly like one that is not, because every note
+   is still drawn at the tick it was written to.
+
+   No padding and no border until there is something to say — `.on` is set only for
+   a lane with a grid, which is nearly none of them. */
+/* THE BADGE IS THE CONTROL, and it costs no layout.
+   ABSOLUTE, at the right edge. Inline it reserved a hit target's worth of width on
+   every lane and pushed all sixteen centred track names off-centre — a layout change
+   across fifteen goldens to make one control clickable. The header text is centred, so
+   the right edge is free space on any lane wide enough to read. */
+.hquant {
+  position: absolute;
+  right: 3px; top: 50%;
+  transform: translateY(-50%);
+  min-width: 12px;
+  padding: 0 3px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  color: var(--base-accent-ramp-300, var(--base-accent));
+  /* It has to LOOK pressable. A label that turns out to be a control is worse than a
+     control that turns out to be a label — you find the second by trying. */
+  cursor: ew-resize;
+  touch-action: none;
+}
+/* A LANE WITH NO QUANTIZE SHOWS NOTHING UNTIL YOU GO LOOKING. Sixteen dots across the
+   header row would compete with the track names for a setting almost no lane has — but
+   an element with no size cannot be clicked, so it keeps its box and loses its ink, and
+   hovering the header reveals it. That is the compromise: discoverable by moving the
+   pointer where the control is, invisible until then. */
+.hquant:not(.on) { opacity: 0; }
+.hquant:not(.on)::after { content: '·'; color: var(--base-neutral-600); }
+#head .htrack:hover .hquant:not(.on) { opacity: 1; border-color: var(--uni-rule-column); }
+/* SET, it is always visible, because a lane being quantized is a fact about the song
+   and not a hover state. */
+.hquant.on { opacity: 1; border-color: var(--uni-rule-column); }
+.hquant.on::after { content: none; }
+.hquant.on:hover, .hquant:not(.on):hover { border-color: var(--base-accent); }
+
+/* THE NOTE SOUNDS OUTSIDE THIS ROW — quantize made this reachable.
+   A grid coarser than the row pulls a note to a line that can be well before its
+   own row, so it is heard where this cell is not looking. `--dev` pins to the
+   edge in that case, and a hairline pinned at 0% is indistinguishable from a note
+   exactly on time — which is the one thing a deviation mark must never claim.
+
+   So the pinned mark becomes a solid 2px cap against the edge it left through: it
+   reads as "at least this far, and off the end", which is what is true. Same
+   colour, because it is the same fact measured past the edge of the ruler. */
+.tk-cell.dev.dev-early::after,
+.tk-cell.dev.dev-late::after {
+  width: 2px;
+  opacity: .85;
+}
+.tk-cell.dev.dev-early::after { left: 0; }
+.tk-cell.dev.dev-late::after  { left: auto; right: 0; }
+
+/* THE RULER: one exemplar of each track width class, measured instead of every track.
+
+   `visibility: hidden` and NOT `display: none` — a display-none box measures 0, and a zero
+   width here would make every track sit at x=0. That failure has already happened once in this
+   file, from a different cause, and it made all 612 cells unclickable.
+
+   Out of flow and pinned to the top so it occupies no space and cannot scroll into view. It
+   still lays out, which is the entire point: it is what CSS is asked for a width. */
+.tk-ruler {
+  position: absolute;
+  top: 0; left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}

@@ -1,0 +1,20 @@
+[package]
+name = "daw-sidecar"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+daw-bridge = { path = "../daw-bridge" }
+# The agent's tool surface. The sidecar hosts the model loop; it never reaches
+# past tool_manifest/execute to the ring, so swapping the loop later (for the
+# Agent SDK, over MCP) is a component change rather than a rewrite.
+daw-agent = { path = "../daw-agent" }
+tungstenite = "0.24"
+# ureq, not reqwest: this crate had two dependencies on purpose and ureq is
+# blocking with rustls, which is ~30 transitive crates against reqwest's ~100.
+# The chat loop runs on its own thread, so blocking is the simpler shape anyway.
+ureq = { version = "2", features = ["json", "tls"], default-features = false }
+# Requests are still built by formatting strings, as everything here is. Parsing
+# a Messages response is not: it is nested content blocks, and hand-rolling a
+# JSON parser to read them would be the wrong kind of thrift.
+serde_json = "1"

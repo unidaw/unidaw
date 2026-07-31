@@ -1739,17 +1739,29 @@ int main(int argc, char** argv) {
   uint32_t forcedBlockSize = 0;  // non-empty => offline render (see --render)
   std::string startupProject;  // non-empty => load it before running (see --project)
   bool testMode = false;
-  for (int i = 1; i + 1 < argc; ++i) {
+  bool noAudio = false;
+  // `i < argc`, not `i + 1 < argc`: the old bound meant a flag with NO value was
+  // invisible when it came last, so `daw_engine --no-spawn` silently spawned.
+  // Flags that take a value check for one themselves.
+  for (int i = 1; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--socket") {
+    const bool hasValue = (i + 1) < argc;
+    if (arg == "--socket" && hasValue) {
       socketPath = argv[i + 1];
       ++i;
-    } else if (arg == "--plugin") {
+    } else if (arg == "--plugin" && hasValue) {
       pluginPath = std::filesystem::absolute(argv[i + 1]).string();
       ++i;
     } else if (arg == "--no-spawn") {
       spawnHost = false;
-    } else if (arg == "--run-seconds") {
+    } else if (arg == "--no-audio") {
+      // Run the whole engine with no audio DEVICE: the transport still advances,
+      // the UI still publishes, plugins still load — there is simply no output.
+      // Added because every measurement of the transport used to require putting
+      // sound through somebody's speakers, which makes a test suite something you
+      // cannot run while a person is in the room.
+      noAudio = true;
+    } else if (arg == "--run-seconds" && hasValue) {
       runSeconds = std::max(0, std::atoi(argv[i + 1]));
       ++i;
     } else if (arg == "--project" && i + 1 < argc) {
@@ -1897,14 +1909,29 @@ int main(int argc, char** argv) {
   if (testMode) {
     pluginPath.clear();
   } else if (pluginPath.empty()) {
-    const std::filesystem::path candidates[] = {
-        "identity_plugin_artefacts/VST3/Identity.vst3",
-        "build/identity_plugin_artefacts/VST3/Identity.vst3",
-        "../build/identity_plugin_artefacts/VST3/Identity.vst3"};
-    for (const auto& candidate : candidates) {
-      if (std::filesystem::exists(candidate)) {
-        pluginPath = std::filesystem::absolute(candidate).string();
-        std::cout << "No plugin specified; using " << pluginPath << std::endl;
+    // JUCE writes plugin artefacts to <target>_artefacts/<CONFIG>/VST3. Only
+    // the unsuffixed layout was probed here, which no build produces any more —
+    // so this found the plugin solely in build directories old enough to still
+    // hold a leftover identity_plugin_artefacts/VST3 from a much earlier build,
+    // and found nothing in a freshly created one. That is why two checkouts of
+    // the same source behaved differently: one engine came up with Identity
+    // loaded, the other silently came up with no plugin at all. Probe both.
+    const std::filesystem::path roots[] = {"identity_plugin_artefacts",
+                                           "build/identity_plugin_artefacts",
+                                           "../build/identity_plugin_artefacts"};
+    const std::string configs[] = {"", "RelWithDebInfo", "Release", "Debug",
+                                   "MinSizeRel"};
+    for (const auto& root : roots) {
+      for (const auto& config : configs) {
+        std::filesystem::path candidate = config.empty() ? root : root / config;
+        candidate /= "VST3/Identity.vst3";
+        if (std::filesystem::exists(candidate)) {
+          pluginPath = std::filesystem::absolute(candidate).string();
+          std::cout << "No plugin specified; using " << pluginPath << std::endl;
+          break;
+        }
+      }
+      if (!pluginPath.empty()) {
         break;
       }
     }
@@ -1964,7 +1991,12 @@ int main(int argc, char** argv) {
   // plays everything off-speed on any other device — 48k content on a 96k
   // device runs 2x fast, on 192k 4x fast. Opened here to read the rate; started
   // later. If there is no device, the 48 kHz fallback stands for offline timing.
-  std::unique_ptr<daw::IAudioBackend> audioBackend = daw::createAudioBackend();
+  std::unique_ptr<daw::IAudioBackend> audioBackend =
+      noAudio ? nullptr : daw::createAudioBackend();
+  if (noAudio) {
+    std::cout << "--no-audio: no output device; " << baseConfig.sampleRate
+              << " Hz assumed for timing" << std::endl;
+  }
   if (audioBackend && audioBackend->openDefaultDevice(2)) {
     baseConfig.sampleRate = audioBackend->sampleRate();
     // Adopt the device's ACTUAL buffer size too (not just its sample rate). The whole
@@ -13627,6 +13659,39 @@ struct TrackRuntime {
       // history" property that makes a bounce irreproducible.
       transportElapsedNanotick.store(0, std::memory_order_release);
       std::cout << "UI: Transport SetPosition " << clamped << std::endl;
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::RequestChainSnapshot)) {
+      // A UI that attached after the engine started has never seen a chain
+      // diff, so let it ask. 0xFFFFFFFFu means every track; an unknown track is
+      // simply nothing to publish, not an error.
+      std::vector<TrackRuntime*> targets;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (payload.trackId == 0xFFFFFFFFu) {
+          for (auto& runtime : tracks) {
+            if (runtime) {
+              targets.push_back(runtime.get());
+            }
+          }
+        } else if (payload.trackId < tracks.size() && tracks[payload.trackId]) {
+          targets.push_back(tracks[payload.trackId].get());
+        }
+      }
+      // Outside tracksMutex: emitChainSnapshot takes the per-track lock itself.
+      for (auto* runtime : targets) {
+        emitChainSnapshot(*runtime);
+      }
+    } else if (payload.commandType ==
+               static_cast<uint16_t>(daw::UiCommandType::Quit)) {
+      // The last UI went away. Silence first, then exit: `running` unwinds through
+      // the join/stop path at the bottom of main(), which takes a moment, and a
+      // moment of audio after the window closed is exactly what this exists to
+      // stop. The sidecar only sends this after a grace period, so a page reload
+      // does not end the session.
+      playing.store(false, std::memory_order_release);
+      std::cout << "UI: last client gone — engine shutting down" << std::endl;
+      running.store(false, std::memory_order_release);
+      restartCv.notify_all();
     } else if (payload.commandType ==
                static_cast<uint16_t>(daw::UiCommandType::SetTempo)) {
       // value0 = milli-BPM. flags: 1 = flatten the map to this single tempo (a

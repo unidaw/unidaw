@@ -44,6 +44,17 @@ pub const K_UI_WAVEFORM_MAX_PAIRS: usize = 24576;
 pub const K_UI_EDIT_BATCH_MAX_OPS: usize = 32;
 pub const K_UI_EDIT_BATCH_CAPACITY: usize = 64;
 pub const K_CHAIN_DEVICE_ID_AUTO: u32 = 0xFFFF_FFFF;
+/// `trackId` on a chain command meaning EVERY track. The same bit pattern as
+/// `K_CHAIN_DEVICE_ID_AUTO` and deliberately not the same constant: one names a
+/// device the engine should number itself, the other names a whole-project
+/// request, and folding them together would make a rename of either one silently
+/// change the other.
+pub const K_CHAIN_TRACK_ALL: u32 = 0xFFFF_FFFF;
+/// `hostSlotIndex` meaning "this device is not hosted out of process at all"
+/// (`kHostSlotIndexDirect`). Distinct from `K_CHAIN_DEVICE_ID_AUTO`, which in the
+/// same field would mean an unassigned slot — a patcher device HAS no slot, and
+/// the two must not read the same on a card.
+pub const K_HOST_SLOT_DIRECT: u32 = 0xFFFF_FFFE;
 pub const UI_CLIP_WINDOW_FLAG_COMPLETE: u32 = 1 << 0;
 pub const UI_CLIP_WINDOW_FLAG_RESYNC: u32 = 1 << 1;
 
@@ -931,6 +942,39 @@ pub struct UiPatcherPresetCommandPayload {
     pub name: [u8; 28],
 }
 
+impl UiPatcherPresetCommandPayload {
+    /// Build a named command (load/save a project or patcher preset).
+    ///
+    /// The name is a fixed 28-byte field, not a pointer: a command ring entry is
+    /// a fixed-size POD slot shared with another process, so a longer name is
+    /// truncated here rather than silently reinterpreted there.
+    pub fn named(command: UiCommandType, name: &str) -> Self {
+        let mut bytes = [0u8; 28];
+        let source = name.as_bytes();
+        let len = source.len().min(bytes.len());
+        bytes[..len].copy_from_slice(&source[..len]);
+        Self { command_type: command as u16, flags: 0, track_id: 0, base_version: 0, name: bytes }
+    }
+
+    /// Reinterpret as the generic command payload for the ring.
+    ///
+    /// Sound only because both are 40-byte `#[repr(C)]` PODs — the engine
+    /// dispatches on `entry.size == sizeof(UiPatcherPresetCommandPayload)`, so if
+    /// the two ever diverge in size the engine stops recognising named commands
+    /// and simply ignores them. `SIZES_MATCH` below turns that into a build
+    /// error instead of a project that silently refuses to open.
+    pub fn as_command(self) -> UiCommandPayload {
+        const _: () = assert!(
+            core::mem::size_of::<UiPatcherPresetCommandPayload>()
+                == core::mem::size_of::<UiCommandPayload>(),
+            "named commands ride in a UiCommandPayload slot; the sizes must match",
+        );
+        // SAFETY: same size, both #[repr(C)], both plain data with no padding
+        // invariants or niches. The assert above is the guard.
+        unsafe { core::mem::transmute(self) }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub enum UiCommandType {
@@ -978,13 +1022,27 @@ pub enum UiCommandType {
     SetPosition = 35,
     /// Rename a track (trackId + name in UiPatcherPresetCommandPayload).
     SetTrackName = 36,
-    // 37-39 reserved for the frontend's read-back request commands (web-ui branch).
+    /// Ask the engine to re-emit a track's device chain on `ringUiOut`.
+    ///
+    /// The chain is published as diffs, not as a region under the seqlock, so a
+    /// consumer that attaches after the last edit has no way to learn the current
+    /// chain by reading — it can only wait for the next one, which may never
+    /// come. `track_id` = `K_CHAIN_TRACK_ALL` asks for every track, which is what
+    /// a freshly connected UI wants.
+    RequestChainSnapshot = 37,
+    // 38-39 remain reserved for the rest of this family (routing, mod).
+    /// Ask the engine to query a device's host for its parameters and publish
+    /// them into UiDeviceParamsRegion. trackId in track_id, deviceId in value0.
     RequestDeviceParams = 40,
     /// Set the project tempo. value0 = milli-BPM. flags: 0 = insert-or-replace a point
     /// at note_nanotick_lo/hi; 1 = flatten the map to this single tempo.
     SetTempo = 41,
-    // 42 = Quit, taken by the frontend on its web-ui branch. Reserved; do not reuse.
-    /// Set one plugin parameter from the rack (UiSetParamPayload).
+    /// Shut the engine down cleanly. Sent when the last UI has been gone long
+    /// enough that it is not coming back. 42 rather than 41 — see the same note
+    /// in apps/event_payloads.h; the two were allocated 41 on separate branches.
+    Quit = 42,
+    /// Set one plugin parameter from the rack (UiSetParamPayload). 43 because 42
+    /// is Quit above — see the note in apps/event_payloads.h. Next free is 44.
     SetDeviceParam = 43,
     /// Windowed waveform query (UiWaveformRequestPayload); answered into a
     /// UiWaveformRegion seqlock slot from the per-source min/max pyramid.
@@ -999,11 +1057,35 @@ pub enum UiCommandType {
     /// Remove the track whose stable id is in trackId, tombstoning its slot
     /// (UI_TRACK_FLAG_ABSENT). Takes its aux children with it; rejects a child id.
     RemoveTrack = 47,
-    /// Arrangement placement ops, keyed on the stable placement id (value0), published in
-    /// the clip extent's placementId. See the C++ UiCommandType doc for the field mapping.
+    /*
+     * PLACEMENT OPS (48-51). Where a clip sits on the timeline, rather than what
+     * is inside it — the arrangement, as opposed to the notes.
+     *
+     * All four reuse UiCommandPayload and key on `value0` = the placement's
+     * STABLE id. That id used to be the list index, which is why a drag could
+     * not be keyed on it: any concurrent edit — the agent, another pane, an
+     * undo — renumbered the thing under the mouse mid-gesture. It is a real
+     * monotonic id on the placement now, so it survives edits and the undo
+     * store-swap. Same lesson as ui_track_id, learned the same way.
+     *
+     * Overlaps CLAMP rather than refuse. That is right for a mouse and wrong for
+     * an agent, so the caller is expected to compare what it asked for against
+     * what comes back published and report the difference. See placement_move in
+     * the sidecar.
+     */
+    /// Move a placement in time, and optionally to another track. trackId =
+    /// source track, value0 = placement id, nanotick = the new `at`, note_pitch
+    /// = the destination track id or PLACEMENT_SAME_TRACK to stay put.
     MovePlacement = 48,
+    /// Delete a placement. trackId, value0 = placement id.
     RemovePlacement = 49,
+    /// Retime a placement: nanotick = new start, duration = new length, either
+    /// or both PLACEMENT_UNCHANGED. Both in ONE op deliberately — a left-edge
+    /// trim is a start and a length together, and sending Move then Resize makes
+    /// the clip visibly jump through an intermediate position.
     ResizePlacement = 50,
+    /// Place a clip on a track. trackId, value0 = clip id, nanotick = at,
+    /// duration = length.
     AddPlacement = 51,
     /// PANIC: all sound off — CC120 (all-sound-off) AND CC123 (all-notes-off) on every MIDI
     /// channel to every hosted plugin, plus all pending/active note state dropped. CC120 is
@@ -1122,6 +1204,22 @@ pub enum UiCommandType {
     /// format and published by NOTHING, so no UI could read a pad's name let alone change it.
     SamplerSetSlotName = 90,
 }
+
+/// Where a route points. Mirrors daw::TrackRouteKind.
+pub const ROUTE_KIND_NONE: u8 = 0;
+pub const ROUTE_KIND_MASTER: u8 = 1;
+pub const ROUTE_KIND_TRACK: u8 = 2;
+pub const ROUTE_KIND_EXTERNAL: u8 = 3;
+
+/// "Leave this field alone" in ResizePlacement.
+///
+/// All-ones, which a real nanotick can never be: the engine's tick space is
+/// bounded well under 2^63, so no legitimate start or length can collide with
+/// it. Chosen that way on purpose — a sentinel inside the value range is how
+/// `parent_id` bit us, where 0 meant both "track 0" and "no parent".
+pub const PLACEMENT_UNCHANGED: u64 = u64::MAX;
+/// "Do not change lane" in MovePlacement, in the note_pitch field.
+pub const PLACEMENT_SAME_TRACK: u32 = u32::MAX;
 
 pub const MIXER_FLAG_MUTE: u16 = 1 << 0;
 pub const MIXER_FLAG_SOLO: u16 = 1 << 1;
@@ -2100,6 +2198,10 @@ mod tests {
     #[test]
     fn clip_window_command_payload_size() {
         assert_eq!(size_of::<UiClipWindowCommandPayload>(), 40);
+        // The engine matches this payload on SIZE before it looks at
+        // commandType, so a mirror that drifts is not rejected — it is read as
+        // some other command's fields.
+        assert_eq!(size_of::<UiTrackRoutingPayload>(), 40);
     }
 
     #[test]
@@ -2107,7 +2209,14 @@ mod tests {
         // Widened for the authored EventId; the C++ side static_asserts the
         // same size, so a mismatch fails at compile time on one end and here
         // on the other.
+        // v32: 40 -> 48 for the sampler's sound address (`sound` + `sound_offset`).
+        // Append-only, so no existing offset moved — the assertions below are the
+        // proof of that and must keep passing rather than being renumbered.
         const_assert_eq!(size_of::<UiClipNote>(), 48);
+        // Named commands are transmuted into a UiCommandPayload slot; see
+        // UiPatcherPresetCommandPayload::as_command.
+        const_assert_eq!(size_of::<UiCommandPayload>(), 40);
+        const_assert_eq!(size_of::<UiPatcherPresetCommandPayload>(), 40);
         assert_eq!(offset_of!(UiClipNote, t_on), 0);
         assert_eq!(offset_of!(UiClipNote, t_off), 8);
         assert_eq!(offset_of!(UiClipNote, note_id), 16);
@@ -2122,6 +2231,18 @@ mod tests {
         const_assert_eq!(size_of::<UiClipExtent>(), 64);
         assert_eq!(offset_of!(UiClipExtent, start_tick), 16);
         assert_eq!(offset_of!(UiClipExtent, name), 32);
+    }
+
+    /// The engine dispatches a chain command on the entry SIZE before it looks
+    /// at commandType, so a payload that is not exactly 40 bytes is not refused
+    /// — it is dropped while the ack still says ok. GUIDELINES 2.3.
+    #[test]
+    fn ui_chain_command_payload_layout_matches_cpp() {
+        const_assert_eq!(size_of::<UiChainCommandPayload>(), 40);
+        assert_eq!(offset_of!(UiChainCommandPayload, device_id), 12);
+        assert_eq!(offset_of!(UiChainCommandPayload, device_kind), 16);
+        assert_eq!(offset_of!(UiChainCommandPayload, insert_index), 20);
+        assert_eq!(offset_of!(UiChainCommandPayload, host_slot_index), 28);
     }
 
     #[test]

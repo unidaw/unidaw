@@ -1,0 +1,102 @@
+{
+  "schema_version": 4,
+  "meta": { "name": "meter", "created_utc": 0, "modified_utc": 0 },
+  "timebase": {
+    "nanoticks_per_quarter": 960000,
+    "time_sig_numerator": 7,
+    "time_sig_denominator": 8
+  },
+  "tempo_map": [ { "nanotick": 0, "bpm": 120.0 } ],
+  "harmony_timeline": [],
+  "clips": [
+    {
+      "id": 1,
+      "name": "seven",
+      "length": 13440000,
+      "kind": "symbolic",
+      "lines_per_beat": 4,
+      "time_sig_numerator": 7,
+      "time_sig_denominator": 8,
+      "notes": [
+        { "nanotick": 0,       "duration": 480000, "pitch": 60, "velocity": 100, "column": 0, "note_id": 2001 },
+        { "nanotick": 480000,  "duration": 480000, "pitch": 62, "velocity": 100, "column": 0, "note_id": 2002 },
+        { "nanotick": 960000,  "duration": 480000, "pitch": 64, "velocity": 100, "column": 0, "note_id": 2003 },
+        { "nanotick": 1440000, "duration": 480000, "pitch": 65, "velocity": 100, "column": 0, "note_id": 2004 },
+        { "nanotick": 1920000, "duration": 480000, "pitch": 67, "velocity": 100, "column": 0, "note_id": 2005 },
+        { "nanotick": 2400000, "duration": 480000, "pitch": 69, "velocity": 100, "column": 0, "note_id": 2006 },
+        { "nanotick": 2880000, "duration": 480000, "pitch": 71, "velocity": 100, "column": 0, "note_id": 2007 },
+        { "nanotick": 3360000, "duration": 480000, "pitch": 72, "velocity": 110, "column": 0, "note_id": 2008 }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "five",
+      "length": 13440000,
+      "kind": "symbolic",
+      "lines_per_beat": 6,
+      "time_sig_numerator": 5,
+      "time_sig_denominator": 4,
+      "notes": [
+        { "nanotick": 0,       "duration": 320000, "pitch": 48, "velocity": 90, "column": 0, "note_id": 2101 },
+        { "nanotick": 320000,  "duration": 320000, "pitch": 50, "velocity": 90, "column": 0, "note_id": 2102 },
+        { "nanotick": 640000,  "duration": 320000, "pitch": 52, "velocity": 90, "column": 0, "note_id": 2103 },
+        { "nanotick": 960000,  "duration": 320000, "pitch": 53, "velocity": 90, "column": 0, "note_id": 2104 },
+        { "nanotick": 1280000, "duration": 320000, "pitch": 55, "velocity": 90, "column": 0, "note_id": 2105 },
+        { "nanotick": 4800000, "duration": 320000, "pitch": 57, "velocity": 90, "column": 0, "note_id": 2106 }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "four",
+      "length": 13440000,
+      "kind": "symbolic",
+      "lines_per_beat": 4,
+      "time_sig_numerator": 4,
+      "time_sig_denominator": 4,
+      "notes": [
+        { "nanotick": 0,       "duration": 960000, "pitch": 36, "velocity": 120, "column": 0, "note_id": 2201 },
+        { "nanotick": 1920000, "duration": 960000, "pitch": 36, "velocity": 100, "column": 0, "note_id": 2202 },
+        { "nanotick": 3840000, "duration": 960000, "pitch": 36, "velocity": 120, "column": 0, "note_id": 2203 },
+        { "nanotick": 5760000, "duration": 960000, "pitch": 36, "velocity": 100, "column": 0, "note_id": 2204 }
+      ]
+    }
+  ],
+  "tracks": [
+    {
+      "track_id": 0,
+      "name": "seven",
+      "harmony_quantize": 0,
+      "lines_per_beat": 4,
+      "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+      "device_chain": [],
+      "mod_links": [],
+      "placements": [
+        { "clip_id": 1, "at": 0, "length": 13440000, "notes": [], "chords": [], "mutes": [] }
+      ]
+    },
+    {
+      "track_id": 1,
+      "name": "five",
+      "harmony_quantize": 0,
+      "lines_per_beat": 6,
+      "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+      "device_chain": [],
+      "mod_links": [],
+      "placements": [
+        { "clip_id": 2, "at": 0, "length": 13440000, "notes": [], "chords": [], "mutes": [] }
+      ]
+    },
+    {
+      "track_id": 2,
+      "name": "four",
+      "harmony_quantize": 0,
+      "lines_per_beat": 4,
+      "mixer": { "gain_db": 0.0, "pan": 0.0, "mute": false, "solo": false },
+      "device_chain": [],
+      "mod_links": [],
+      "placements": [
+        { "clip_id": 3, "at": 0, "length": 13440000, "notes": [], "chords": [], "mutes": [] }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+/* The song-overview column, pinned to the right of the tracker pane.
+ *
+ * Boxes measured off design/redesign/Uni.dc.html at 1680x1000, not guessed: the
+ * column is 30px including one rule, leaving a 29px content box, and every inset
+ * the renderer draws with is measured against that 29. The width lives in the
+ * tokens (metrics.minimapWidth), which said 16 until this landed — a number from
+ * before the redesign that nothing had ever drawn against.
+ *
+ * The column declares its OWN width rather than taking it from a shell rule,
+ * because 30px is a property of the design of this thing and not of wherever it
+ * is mounted. As a flex child it sizes itself; inside an absolutely positioned
+ * host the width still applies.
+ */
+
+.mm {
+  flex: 0 0 var(--metrics-minimap-width);
+  width: var(--metrics-minimap-width);
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  position: relative;
+  overflow: hidden;
+  background: var(--uni-minimap-bg);
+  /* The rule is on the LEFT, where the design puts it on the right, and the box
+     is the same 30 either way. The design's column is the last element in its
+     row, so its right edge is the centre/dock boundary; in the shell that
+     boundary is already drawn by #rdock's border-left, and a second rule there
+     is how one line becomes two pixels of two slightly different colours. The
+     edge nothing else draws is the one against the scrolled strip. */
+  border-left: var(--uni-rule-column-width) solid var(--uni-rule-gutter);
+  /* Layout, paint and style but NOT size: the tracker grid can afford `strict`
+     because its rows are absolutely positioned inside a box with a height, and
+     size containment here would collapse the column to nothing the first time
+     somebody mounts it somewhere its height comes from its content. */
+  contain: layout paint style;
+  /* A drag scrubs the song, so the column must not select or pan under the
+     pointer. Only meaningful when the host wired `onSeek`; harmless when not. */
+  touch-action: none;
+  user-select: none;
+}
+
+/* Fills the content box, so the canvas is 29px wide and the renderer's insets
+   are the design's. Sized in device pixels by the renderer; `inset: 0` is what
+   keeps the two in step when the display or the pane changes. */
+.mm-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+}

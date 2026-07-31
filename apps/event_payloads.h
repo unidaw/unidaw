@@ -89,8 +89,12 @@ enum class UiCommandType : uint16_t {
   SetPosition = 35,
   // Rename a track. Carries trackId + name in UiPatcherPresetCommandPayload.
   SetTrackName = 36,
-  // 37-39 reserved for the frontend's read-back request commands
-  // (RequestChainSnapshot etc., on the web-ui branch).
+  // Re-publish a track's device chain on demand. Chain diffs are otherwise
+  // publish-on-change only, so a UI that attaches to an already-running engine
+  // is blind to the rack until someone edits it. trackId == 0xFFFFFFFFu asks
+  // for every track.
+  RequestChainSnapshot = 37,
+  // 38-39 remain reserved for the rest of that family (routing, mod).
   // Publish one device's parameters into UiDeviceParamsRegion: trackId + value0 =
   // deviceId. Lets the device-chain rack pull a device's real name + param list.
   RequestDeviceParams = 40,
@@ -98,11 +102,26 @@ enum class UiCommandType : uint16_t {
   // insert-or-replace a tempo point at the nanotick in noteNanotickLo/Hi; 1 = flatten
   // the whole map to this single tempo (a transport-bar BPM edit), ignoring position.
   SetTempo = 41,
-  // 42 = Quit, taken by the frontend on its web-ui branch (last-client-disconnect
-  // shutdown). Reserved here so the next allocation skips it; do not reuse.
+  // Shut the engine down cleanly. The UI is the application as far as a user is
+  // concerned, so when the last one goes away the engine should go with it —
+  // otherwise closing the window leaves audio playing with nothing on screen to
+  // stop it, which is what happened. The sidecar sends this after a grace period,
+  // so a page reload (disconnect then reconnect) does not kill the session.
+  //
+  // 42, not 41: this and SetTempo were allocated 41 independently, on two
+  // branches, and collided at the merge. SetTempo had already shipped to
+  // origin/main with an engine handler, a bridge binding and a daw-cli verb, so
+  // it keeps the number and this one moved. Nothing had shipped against Quit=41
+  // outside this branch.
+  Quit = 42,
   // Set one plugin parameter from the rack: UiSetParamPayload{trackId, deviceId,
   // valueMilli (0..1000), uid16}. The engine resolves deviceId -> pluginIndex and
   // forwards it to the host over the control socket.
+  //
+  // 43 because 42 is Quit above. That gap is not an accident and not a mistake:
+  // this and Quit were allocated on two branches that could not see each other,
+  // and the reservation held because whoever takes a number now announces it on
+  // the same turn they take it. Next free is 44.
   SetDeviceParam = 43,
   // Windowed waveform query (UiWaveformRequestPayload). The engine answers into a
   // UiWaveformRegion seqlock slot from the per-source min/max pyramid — no host

@@ -1,0 +1,361 @@
+/* Arrange view. Values come from tokens.css; nothing is hardcoded here that the
+   design system already names. */
+
+/* How much of the band the TIME AXIS occupies — the bar numbers plus the spine.
+   A calc rather than a token because the generator emits scalars and this is a sum;
+   it lives HERE, once, so the heads, the lanes, the grid and the clips all read one
+   value. Computing it separately in each of them is how a lane strip ends up a
+   strip-height out of step with the heads that name it, which the comment above
+   `.ar-heads` records happening once already. */
+.ar {
+  --metrics-axis-height:
+    calc(var(--metrics-header-height) + var(--metrics-spine-height));
+  position: absolute; inset: 0;
+  display: flex;
+  background: var(--uni-surface-tracker-bg);
+  overflow: hidden;
+  contain: strict;
+}
+
+.ar-gutter {
+  flex: 0 0 var(--metrics-gutter-width);
+  width: var(--metrics-gutter-width);
+  background: var(--uni-surface-header-bg);
+  border-right: 1px solid var(--uni-rule-gutter);
+  z-index: 2;
+  position: relative;
+  box-sizing: border-box;
+}
+
+/* The track heads, as a strip that scrolls with the lanes.
+   Offset by the ruler's height, which lives in the band: without it every lane
+   head sits one ruler-height above the lane it names — and it still looks
+   plausible. That offset used to be the gutter's own padding-top; padding does
+   not clip, so a head scrolled off the top would have drawn over the ruler's
+   row. The offset moved onto a box that clips instead. */
+.ar-heads {
+  position: absolute; left: 0; right: 0;
+  top: var(--metrics-axis-height); bottom: 0;
+  overflow: hidden;
+}
+/* The moving part. Separate from the clipper above because a transform on the
+   clipper takes its clip rectangle along with it and clips nothing. */
+.ar-heads-in { position: absolute; left: 0; right: 0; top: 0; }
+
+.ar-head {
+  display: flex; align-items: center; justify-content: space-between;
+  box-sizing: border-box; padding: 0 8px;
+  border-bottom: 1px solid var(--uni-rule-column);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-inst);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-instrument);
+}
+.ar-head-lpb { color: var(--uni-text-gutter); font-size: var(--font-size-fx); }
+
+.ar-band { position: relative; flex: 1 1 auto; overflow: hidden; }
+
+/* The ruler owns the top strip; lanes start below it. */
+.ar-ruler {
+  position: absolute; top: 0; left: 0; right: 0;
+  height: var(--metrics-header-height);
+  background: var(--uni-surface-header-bg);
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  overflow: hidden; z-index: 2;
+  /* Interactive: this is where the loop is dragged. It was pointer-events:none
+     while it was decorative, and leaving it that way made the drag handlers fire
+     never — with no error, because a listener nobody reaches is not a fault. */
+  cursor: ew-resize;
+  user-select: none; -webkit-user-select: none;
+}
+/* The loop, in the ruler where a loop belongs — over the bar numbers it spans,
+   not over the material. */
+.ar-loop {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  background: var(--uni-surface-selection);
+  border-left: 2px solid var(--base-accent);
+  border-right: 2px solid var(--base-accent);
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.ar-tick {
+  position: absolute; top: 0; left: 0; height: 100%;
+  /* The bar numbers are not the target; the ruler is. */
+  pointer-events: none;
+  padding-left: 4px; box-sizing: border-box;
+  border-left: 1px solid var(--uni-rule-track);
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx); color: var(--uni-text-gutter);
+  line-height: var(--metrics-header-height);
+}
+
+.ar-lanes, .ar-grid, .ar-clips {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  top: var(--metrics-axis-height);
+}
+
+/* THE SPINE: the named spans the song is built out of, on the time axis directly
+   under the bar numbers. Its own strip rather than a row inside the ruler, because
+   the ruler owns the loop drag across its whole height — see the comment where it is
+   created for why two gestures must not share one box. */
+.ar-spine {
+  position: absolute; left: 0; right: 0;
+  top: var(--metrics-header-height);
+  height: var(--metrics-spine-height);
+  background: var(--uni-surface-header-bg);
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  overflow: hidden; z-index: 2;
+  user-select: none; -webkit-user-select: none;
+}
+
+/* The spine's gutter cell — the row's name and the two buttons that make a section.
+   At the spine's own y in the gutter, so it lines up with the strip it controls. */
+.ar-spine-head {
+  position: absolute; left: 0; right: 0;
+  top: var(--metrics-header-height);
+  height: var(--metrics-spine-height);
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  display: flex; align-items: center; gap: 2px;
+  padding: 0 4px 0 8px;
+  z-index: 3;
+}
+.ar-spine-label {
+  flex: 1 1 auto;
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx); color: var(--uni-text-gutter);
+  white-space: nowrap; overflow: hidden;
+}
+.ar-spine-btn {
+  flex: 0 0 auto;
+  min-width: 13px; text-align: center;
+  font-family: var(--font-mono); font-size: var(--font-size-gutter);
+  line-height: calc(var(--metrics-spine-height) - 4px);
+  color: var(--uni-text-instrument);
+  border: 1px solid var(--uni-rule-gutter);
+  border-radius: 2px;
+  cursor: pointer;
+  user-select: none; -webkit-user-select: none;
+}
+.ar-spine-btn:hover { color: var(--base-text); border-color: var(--base-accent); }
+
+/* `--sec` is the engine's own colour for this section, written inline by the
+   renderer. It is ABSENT when the engine gave none — not black — so every use goes
+   through a fallback rather than through a zero. */
+.ar-span {
+  position: absolute; top: 0; left: 0; height: 100%;
+  box-sizing: border-box;
+  /* The accent when the engine gave no colour, not the dim rule colour: this border
+     IS the boundary between two sections, and a boundary you cannot see is a spine
+     that reads as one undivided span. */
+  border-left: 2px solid var(--sec, var(--base-accent));
+  border-right: 1px solid var(--uni-rule-gutter);
+  background: var(--uni-surface-row-alt);
+  overflow: hidden;
+  cursor: pointer;
+  display: flex; align-items: center;
+}
+.ar-span.sel {
+  background: var(--uni-surface-selection);
+  border-left-color: var(--base-accent);
+}
+.ar-span-name {
+  padding-left: 5px;
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--sec, var(--uni-text-instrument));
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+/* The boundary. A CHILD and not a pseudo-element, because it is a drag target and a
+   pseudo-element cannot be hit — and wide enough to grab: the boundary is a 1px line
+   and nobody can hit a 1px line. */
+.ar-span-grip {
+  position: absolute; top: 0; bottom: 0; right: 0;
+  width: 7px;
+  cursor: ew-resize;
+}
+.ar-span-grip:hover { background: var(--base-accent); opacity: 0.45; }
+
+/* Material the spine does not reach: outlined and hatched rather than filled, because
+   it is a span that EXISTS and is not named — a solid block would read as a section
+   whose label failed to draw. No cursor and no pointer events: there is nothing here to
+   grab, since the thing it describes is the absence of a section. */
+.ar-span-tail {
+  position: absolute; top: 0; left: 0; height: 100%;
+  box-sizing: border-box;
+  border-left: 1px dashed var(--uni-rule-track);
+  background: repeating-linear-gradient(
+    135deg, transparent 0 5px, var(--uni-surface-row-alt) 5px 10px);
+  pointer-events: none;
+}
+
+/* "There are more sections than the engine could publish." Outside the scrolled
+   wrapper, because it is a statement about the LIST and not about a position on the
+   timeline — it must not pan away from the thing it is qualifying. */
+.ar-spine-more {
+  position: absolute; top: 0; right: 4px; z-index: 3;
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-fx);   /* the warm one — this is a warning */
+  line-height: var(--metrics-spine-height);
+  pointer-events: none;
+}
+.ar-grid, .ar-lanes { pointer-events: none; }
+
+/* The scrolled part of the time axis. Its contents sit at their absolute x and
+   never move; THIS is what a pan translates — one string a frame instead of one
+   per clip, gridline and ruler tick (GUIDELINES 3.3).
+
+   `inset: 0` so children keep resolving `bottom`/`height: 100%` against the same
+   box they did before the wrapper existed, and no `overflow` of its own: the
+   strips above already clip, and clipping here would cut the axis off at the
+   window's width. `will-change` for the same reason `.tk-band` has it — the band
+   IS the scrolled thing, so promoting it is correct rather than speculative. */
+.ar-scroll { position: absolute; inset: 0; will-change: transform; }
+
+.ar-lane {
+  position: absolute; left: 0; right: 0; top: 0;
+  border-bottom: 1px solid var(--uni-rule-column);
+  box-sizing: border-box;
+}
+.ar-lane:nth-child(even) { background: var(--uni-surface-row-alt); }
+
+.ar-gridline {
+  position: absolute; top: 0; bottom: 0; left: 0;
+  width: 1px;
+  background: var(--uni-rule-column);
+}
+.ar-gridline.bar { background: var(--uni-rule-track); }
+
+/* The automation layer: curves over the clips, under the playhead. Its own canvas,
+   because a curve repaints when somebody edits a point and a waveform repaints when
+   the view or the decoded audio moves — sharing one would make every automation edit
+   repaint every waveform on screen. */
+.ar-auto {
+  position: absolute; top: 0; left: 0;
+  /* The lane belongs to the CLIPS by default. A curve layer that swallowed clicks would make
+     every region in an automated track undraggable, which reads as broken dragging and points
+     nowhere near automation. */
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* ...until the mode is on, when the curve takes the pointer and the clips below do not. The
+   crosshair is the only thing on screen that says which of the two a click will hit, so it is
+   not decoration: it is the mode being legible at the pointer rather than only in the chrome. */
+.ar-auto.edit {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+/* A placement whose clip is played by more than one of them.
+   The hatch is on the LEFT EDGE rather than across the block: a wash over the whole rail
+   would fight the waveform and the note material, which are what the rail is for. */
+.ar-clip.shared { border-left: 3px solid var(--uni-clip-rail); }
+.ar-clip.shared::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: repeating-linear-gradient(
+    135deg, transparent 0 2px, var(--base-accent) 2px 4px);
+  pointer-events: none;
+}
+/* FORKED: this appearance has its own copy and another version behind it. The warm colour,
+   not the accent — it is the state you act on, and it must not read as a stronger kind of
+   shared. A forked placement is by definition NOT shared: it has its own clip. */
+.ar-clip.forked { border-left: 3px solid var(--uni-text-fx); }
+.ar-clip.forked::before { display: none; }
+/* The count IS the control: press it to fork a shared placement, or to swap a forked one.
+   `pointer-events: auto` and a cursor, because a readout that turns out to be a control is
+   better than a control that turns out to be a label — you find the second by trying. */
+.ar-clip-share {
+  position: absolute; top: 1px; right: 3px;
+  font-family: var(--font-mono); font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--base-accent-ramp-400);
+  padding: 0 3px;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.ar-clip-share:hover { background: var(--uni-surface-cursor-cell); color: var(--base-text); }
+/* Nothing to press when nothing is shared: the span is empty then, and an empty box with a
+   pointer cursor is a control that does nothing. */
+.ar-clip-share:empty { pointer-events: none; }
+.ar-clip.forked .ar-clip-share { color: var(--uni-text-fx); }
+
+/* The waveform band. First child of the clip wrapper, so the clip blocks paint
+   over it — a region's wash, border and name belong on top of its material.
+   Its width, height and x are all written from JS, because all three are
+   projections of the zoom rather than facts of the layout. */
+.ar-wave {
+  position: absolute; top: 0; left: 0;
+  pointer-events: none;
+}
+
+.ar-clip {
+  position: absolute; top: 0; left: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 2px;
+  background: var(--uni-surface-cursor-cell);
+  overflow: hidden;
+  cursor: pointer;
+}
+/* Audio regions hold no note events, so they must not read as note material.
+   Backend ships them from schema v3 with UI_CLIP_EXTENT_AUDIO. */
+.ar-clip.audio {
+  background: var(--uni-surface-playhead-row);
+  border-style: dashed;
+}
+/* A source that would not decode. The canvas draws a stripe where the waveform
+   would be; this says the same thing on the block, so the state survives a clip
+   too narrow to hold a stripe. */
+.ar-clip.audio.failed { border-color: var(--uni-text-fx); border-style: solid; }
+.ar-clip.sel { border-color: var(--base-accent); }
+/* The trim handles, shown as a cursor rather than as furniture.
+   Drawing two grab-bars on every clip would put ornament on the one surface that
+   is mostly ornament already; the cursor says the same thing and says it only
+   while you are close enough to use it. Kept in sync with `clipZoneAt`'s 6px by
+   the test that measures both. */
+.ar-clip::before, .ar-clip::after {
+  content: ''; position: absolute; top: 0; bottom: 0; width: 6px;
+  cursor: col-resize;
+}
+.ar-clip::before { left: 0; }
+.ar-clip::after { right: 0; }
+/* Under three handles' worth there is no body left, so the whole block moves and
+   the handles must not claim the pointer. Matches `clipZoneAt`'s narrow case —
+   a clip that could only be trimmed and never moved would be worse than one that
+   cannot be trimmed. */
+.ar-clip.narrow::before, .ar-clip.narrow::after { display: none; }
+.ar-clip.dragging { opacity: 0.45; }
+
+/* Where a dragged clip will land. See `_clipGhost`: the real block does not move
+   until the engine says it did, so this is the only thing that follows the
+   pointer — and when the engine clamps, the gap between the two is on screen. */
+.ar-ghost {
+  position: absolute; top: 0; left: 0;
+  box-sizing: border-box;
+  border: 1px dashed var(--base-accent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--base-accent) 12%, transparent);
+  pointer-events: none;
+}
+
+.ar-clip-name {
+  padding: 2px 5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-instrument);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.ar-playhead {
+  position: absolute; top: var(--metrics-header-height); bottom: 0; left: 0;
+  width: 1px;
+  background: var(--base-accent);
+  pointer-events: none;
+  z-index: 3;
+}

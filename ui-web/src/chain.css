@@ -1,0 +1,495 @@
+/* The device chain strip. Values come from tokens.css; nothing is hardcoded here
+   that the design system already names. */
+
+.dv {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  contain: strict;
+}
+
+.dv-head {
+  flex: 0 0 26px; height: 26px;
+  display: flex; align-items: center; gap: 10px;
+  overflow: hidden;
+  padding: 0 10px; box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-gutter);
+  border-bottom: 1px solid var(--uni-rule-column);
+}
+.dv-label { color: var(--base-neutral-600); }
+.dv-track { color: var(--uni-text-instrument); }
+.dv-version { color: var(--base-neutral-600); }
+/* Pushed right and dimmed: it is a caveat, not a heading. It has to be readable
+   without competing with the track it is about. */
+.dv-notice { margin-left: auto; min-width: 0; color: var(--base-neutral-600);
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* What the RACK said, as opposed to what the model says about the chain — a
+   refusal it made itself, or one it inferred from the engine never answering.
+   Louder than the notice because it is an answer to something you just did, and
+   empty most of the time, so it takes no room until it has something to say. */
+.dv-said { flex: 0 0 auto; white-space: nowrap; color: var(--uni-text-fx); }
+.dv-said:not(.on) { display: none; }
+
+.dv-cards {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; align-items: stretch; gap: 8px;
+  padding: 8px 10px; box-sizing: border-box;
+  /* Cards keep their width and the strip scrolls. Squeezing eight devices into
+     the window would make every one of them unreadable, which is the opposite
+     of what a chain view is for. */
+  overflow-x: auto; overflow-y: hidden;
+}
+
+.dv-card {
+  flex: 0 0 232px; width: 232px;
+  display: flex; flex-direction: column; gap: 6px;
+  /* The card is exactly as tall as the strip leaves it and never grows: the one
+     part of it with an unbounded number of things in it is the parameter list,
+     and that is the part that scrolls. `min-height: 0` is what lets the list
+     shrink below its content instead of pushing the footer off the bottom. */
+  min-height: 0; overflow: hidden;
+  /* A positioning context for the open button, which is absolute. Without this it
+     anchors to whatever ancestor happens to be positioned and `overflow: hidden`
+     above then clips it out of existence — the button rendered, reported a real
+     width to a probe, and could not be seen. */
+  position: relative;
+  padding: 8px 10px; box-sizing: border-box;
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 3px;
+  background: var(--uni-surface-tracker-bg);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  cursor: pointer;
+}
+.dv-card.sel { border-color: var(--base-accent); }
+/* A bypassed device is still THERE — dimmed, not hidden, or the chain's shape
+   changes depending on what is switched on. */
+.dv-card.byp { opacity: .45; }
+
+/* The trailing "add a device" card. 52px and dashed, measured off the design's
+   strip; the radius follows the cards beside it rather than the design's 8px,
+   because this panel's cards are already at 3px and one rounder corner in the
+   row reads as a different kind of thing rather than as the same rack.
+
+   `order` rather than DOM position: the card pool appends, so anything the
+   constructor placed at the end stops being last the moment a fifth device
+   arrives. Ordering in CSS keeps it last on screen with no node ever moving. */
+.dv-add {
+  order: 1;
+  flex: 0 0 52px; width: 52px; box-sizing: border-box;
+  display: grid; place-items: center;
+  border: 1px dashed var(--base-neutral-800);
+  border-radius: 3px;
+  color: var(--base-neutral-700);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+/* It has to announce that it is pressable before it is pressed — a dashed box
+   that never reacts is decoration. */
+.dv-add:hover { border-color: var(--base-accent); color: var(--base-accent-ramp-400); }
+
+ /* The three buttons are absolutely positioned, so they reserve no space and the
+    title happily ran underneath them — "patcher event #1" ending behind the
+    bypass switch. The gutter is 6 + 3 x (20 + 6), which is what makes the
+    title's ellipsis fire before it reaches them rather than after. */
+.dv-card-top { display: flex; align-items: center; gap: 8px; padding-right: 78px; }
+.dv-badge {
+  padding: 1px 5px; border-radius: 2px;
+  border: 1px solid var(--base-accent);
+  color: var(--base-accent);
+  font-size: var(--font-size-fx);
+}
+.dv-title {
+  color: var(--uni-text-instrument);
+  font-size: var(--font-size-inst);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Both are ONE line and neither grows. The leftover height belongs to the
+   parameter list; a capability phrase that stretched to fill the card was fine
+   when a card held five rows and is a waste of the only scarce dimension here
+   now that it can hold 256. */
+.dv-body { flex: 0 0 auto; color: var(--uni-text-gutter);
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dv-foot { flex: 0 0 auto; color: var(--base-neutral-600);
+           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* The parameter list: the card's only scrollable region, and the only one whose
+   length the plugin decides. 196px of strip leaves 154 for a card, of which the
+   title, the capability line, the footer and the padding take a fixed ~71 — so
+   this is ~83px, six rows of a possible 256, with the rest a scroll away.
+
+   `contain: strict` for the same reason the tracker grid has it: the rows are
+   absolutely positioned inside a spacer, nothing outside this box depends on
+   what is in it, and eight of these on screen must not cost eight subtree
+   invalidations per frame. */
+.dv-plist {
+  flex: 1 1 auto; min-height: 0;
+  position: relative;
+  overflow-y: auto; overflow-x: hidden;
+  /* The strip itself scrolls horizontally; a list that handed its overscroll to
+     the parent would slide the whole rack sideways at the end of every flick. */
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--base-neutral-800) transparent;
+  contain: strict;
+}
+/* Holds the full extent so the scrollbar tells the truth about how much there
+   is. Height is written by the renderer, from the measured row height. */
+.dv-pspace { position: relative; width: 100%; }
+
+/* Parameter rows, once the device's host has answered. The value is the host's
+   own display string — it knows whether a number is dB, Hz or a note name.
+
+   Absolutely positioned and placed by the row they hold, which is what makes
+   the pool legal as a ring: which slot an element occupies is irrelevant when
+   its position comes from its content. */
+.dv-p { position: absolute; left: 0; right: 0;
+        display: flex; align-items: center; gap: 6px; height: 13px; }
+.dv-p-n { flex: 0 0 62px; color: var(--uni-text-gutter);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 3px of bar in a 13px row is a 3px target. The pseudo-element widens what the
+   pointer can hit to the whole row height without adding a node per row —
+   a pseudo is hit-tested as its originating element. */
+.dv-p-bar { position: relative; flex: 1 1 auto; height: 3px;
+            background: var(--uni-rule-column); border-radius: 2px;
+            cursor: ew-resize; touch-action: none; }
+.dv-p-bar::before { content: ''; position: absolute; inset: -5px 0; }
+.dv-p-bar:hover { background: var(--base-neutral-800); }
+.dv-p-fill { height: 100%; background: var(--base-accent); border-radius: 2px;
+             pointer-events: none; }
+.dv-p-v { flex: 0 0 58px; text-align: right; color: var(--base-accent-ramp-300);
+          overflow: hidden; white-space: nowrap; }
+
+/* A SWITCH, not a fader. `--steps` is the number of positions, written by the renderer from
+   what the plugin published — the notches are drawn here so a theme can change them, and the
+   bar still drags because a switch you can only set from the console is one nobody sets.
+
+   `repeating-linear-gradient` over the TRACK rather than the fill: the notches mark where the
+   value can land, which is a property of the parameter and not of where it currently is. */
+.dv-p.stepped .dv-p-bar {
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--uni-rule-track) 0 1px,
+    transparent 1px calc(100% / var(--steps, 2)));
+}
+
+/* MAP — the modulation badge, at the right end of a parameter row.
+   Dim and outlined when nothing moves this parameter, LIT in the accent when
+   something does. Both states are clickable and it never changes size between them:
+   a badge that grew when it lit would reflow the value beside it on every link. */
+.dv-p-map {
+  flex: 0 0 auto;
+  margin-left: 5px;
+  padding: 0 3px;
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  line-height: 11px;
+  color: var(--uni-text-empty);
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 2px;
+  cursor: pointer;
+  user-select: none; -webkit-user-select: none;
+}
+.dv-p-map:hover { color: var(--uni-text-instrument); border-color: var(--uni-rule-track); }
+/* Linked and NOT WORKING: the link names no parameter, so the engine moves nothing. The
+   warm colour rather than the accent, because this is the same class of statement as a
+   failed audio source — something is here and it is not doing what it looks like. */
+.dv-p-map.inert {
+  color: var(--uni-text-fx);
+  border-color: var(--uni-text-fx);
+  border-style: dashed;
+}
+.dv-p-map.on {
+  color: var(--base-accent-ramp-300);
+  border-color: var(--base-accent);
+  background: var(--uni-surface-cursor-cell);
+}
+
+/* An edit that has been sent and not yet confirmed. The number under a pending
+   row is what this side ASKED for, and until the plugin's host says otherwise
+   the only honest thing to call it is a request — so it is marked, in the same
+   --uni-text-pending the mixer uses for a fader the engine has not confirmed.
+
+   The NAME changes colour too, and that is the cue that actually works: the fill
+   at 3px is a hair's difference from the accent next to it, and a person needs
+   to be able to tell a request from a fact without comparing two purples. The
+   name goes from the dimmest colour on the row to the brightest. */
+.dv-p.pend .dv-p-n { color: var(--uni-text-pending); }
+/* A PAD'S BAR IS A REGION, NOT A LEVEL.
+   Same box, different meaning: `margin-left` places it and `width` sizes it, so a chop reads
+   as a row of staggered spans. Squared off rather than rounded — a rounded 1% span is a dot,
+   and the point is being able to compare lengths. */
+.dv-p.slot .dv-p-fill { border-radius: 0; background: var(--base-accent-ramp-400); }
+.dv-p.slot .dv-p-bar { cursor: default; }
+
+.dv-p.pend .dv-p-fill { background: var(--uni-text-pending); }
+.dv-p.pend .dv-p-v { color: var(--uni-text-pending); }
+
+/* The device's audio buses. Quieter than the title and louder than the footer:
+   "8 out · 1 in" is a fact about what the device can route, which matters when you
+   are wiring stems and is noise the rest of the time. */
+.dv-bus {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-fx);
+  opacity: .8;
+  margin-top: 2px;
+}
+/* Still arriving. Dimmed, because the number in it is a progress report and not a
+   description of the device — reading it as one is the mistake busCount exists to
+   prevent. */
+.dv-bus.partial { opacity: .45; }
+/* More buses than the wire's cap of 32. This one never resolves, so it is marked
+   rather than dimmed: the list on screen is genuinely incomplete. */
+.dv-bus.trunc { color: var(--uni-text-warn, var(--uni-text-fx)); opacity: 1; }
+
+/* Open the plugin's own window. Quiet until you want it: the rack is for reading
+   a chain at a glance, and a loud button on every card would compete with the
+   device names for the eye. */
+.dv-open {
+  position: absolute; top: 6px; right: 6px;
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  font-size: 13px;
+  color: var(--uni-text-fx);
+  background: transparent;
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 3px;
+  padding: 0;
+  cursor: pointer;
+  opacity: .5;
+}
+.dv-open:hover { opacity: 1; border-color: var(--base-accent); color: var(--base-accent); }
+
+/* FURTHEST from the corner, at 6 + 26 + 26. Same size and treatment as its
+   neighbours — there is no reason for the three things you can do to a card to
+   look unrelated — but the one that cannot be undone should not sit next to the
+   one you flick to without looking. It was at 32px, beside the open button,
+   which put "throw this away" one button's width from "show me this". */
+.dv-del {
+  position: absolute; top: 6px; right: 58px;
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  font-size: 13px;
+  color: var(--uni-text-fx);
+  background: transparent;
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 3px;
+  padding: 0;
+  cursor: pointer;
+  opacity: .5;
+}
+/* Destructive, so it goes red on hover rather than accent — the one button in
+   the rack that cannot be undone should not look like the one next to it. */
+.dv-del:hover { opacity: 1; border-color: var(--uni-warn, #c04a4a); color: var(--uni-warn, #c04a4a); }
+
+/* Between the two, at 6 + 26. The three controls read right to left in
+   increasing order of consequence: look at it, switch it off, throw it away —
+   and in decreasing order of how often you reach for one, which is the same
+   order. A/B-ing an insert is a per-second gesture; deleting it is a per-week
+   one. */
+/* THE BANK'S NOTE-OFF DEFAULT, left of the filter — the two per-second sampler controls sit
+   together, in increasing order of how often you reach for one.
+
+   Text, and two states rather than a cycle: it says what a NEW pad will do, because that is what
+   the setting actually controls. It seeds a slot at mint and leaves the ones already there
+   alone, so describing the kit as a whole would be a lie the moment one pad differs. */
+.dv-gat {
+  position: absolute; top: 6px; right: 100px;
+  display: flex; align-items: center; justify-content: center;
+  min-width: 38px; height: 20px;
+  padding: 0 4px;
+  font: inherit; font-size: 10px; letter-spacing: .02em;
+  color: var(--uni-text-fx);
+  background: transparent;
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: .5;
+}
+.dv-gat:hover { opacity: 1; border-color: var(--base-accent); color: var(--base-accent); }
+/* ONE-SHOT IS THE ACCIDENTAL DEFAULT, not a neutral setting: nobody chose it — `sampler-load`
+   never touched the field, so every slot inherited the struct's zero. Dimmed like the filter's
+   off state, because both mean "a control above this is doing nothing". */
+.dv-gat.off { opacity: .32; font-style: italic; }
+.dv-card.byp .dv-gat { opacity: .8; }
+
+/* THE SAMPLER'S FILTER, left of bypass — same row, same reasoning about order: it is a thing
+   you reach for while listening, so it sits with the other per-second controls rather than with
+   the ones that change what the card IS.
+
+   Wider than the icon buttons and text rather than an icon, because "lp24" is read faster than
+   any glyph anyone could draw for it and the states are a short closed list. It is only drawn on
+   sampler cards; nothing else has a filter to set. */
+.dv-flt {
+  position: absolute; top: 6px; right: 58px;
+  display: flex; align-items: center; justify-content: center;
+  min-width: 34px; height: 20px;
+  padding: 0 4px;
+  font: inherit; font-size: 10px; letter-spacing: .02em;
+  color: var(--uni-text-fx);
+  background: transparent;
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 3px;
+  cursor: pointer;
+  opacity: .5;
+}
+.dv-flt:hover { opacity: 1; border-color: var(--base-accent); color: var(--base-accent); }
+/* OFF is not a neutral setting here: a cutoff envelope over a filter that is off is a control
+   with nothing under it, which is what the kit row marks with `!`. Dimmer, so the card says the
+   same thing twice rather than leaving the two surfaces to disagree. */
+.dv-flt.off { opacity: .32; font-style: italic; }
+/* Legible on a bypassed card, for the reason spelled out under .dv-byp below. */
+.dv-card.byp .dv-flt { opacity: .8; }
+
+.dv-byp {
+  position: absolute; top: 6px; right: 32px;
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px;
+  font-size: 13px;
+  color: var(--uni-text-fx);
+  background: transparent;
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 3px;
+  padding: 0;
+  cursor: pointer;
+  opacity: .5;
+}
+.dv-byp:hover { opacity: 1; border-color: var(--base-accent); color: var(--base-accent); }
+/* ON A BYPASSED CARD IT MUST STAY LEGIBLE. The card carries `opacity: .45` when
+   bypassed, which multiplies with the button's own .5 and leaves the one control
+   that can undo the state at a quarter opacity — the switch fades out with the
+   thing it switched off, and the way back is the hardest thing on the card to
+   see. It reads as ON instead: full strength and in the accent, so the card says
+   both "I am doing nothing" and "this is why". */
+.dv-card.byp .dv-byp {
+  opacity: 1;
+  border-color: var(--base-accent);
+  color: var(--base-accent);
+  background: color-mix(in srgb, var(--base-accent) 18%, transparent);
+}
+
+/* WHICH PANE OWNS THE KEYBOARD.
+   Backspace deleted a note in the tracker while a device was selected, because
+   selecting a card changed nothing about where keys went and nothing on screen
+   claimed otherwise. A selection that looks like focus and is not is worse than
+   no selection at all. */
+.chain.pane-focus { box-shadow: inset 0 0 0 1px var(--base-accent); }
+
+/* ── WHAT IS FLOWING BETWEEN THE DEVICES ────────────────────────────────────
+   Ableton draws this and it is what makes a chain readable at a glance: you can
+   see where MIDI becomes audio, and you can see a device receiving nothing.
+
+   A FULL-HEIGHT STRIP at the card's own edge, not a stub in the flex gap. Two
+   failed placements taught the shape: out in the gap (`left: -11px`) it is
+   clipped away entirely, because the card must be `overflow: hidden` for its
+   parameter list to scroll; and a short mark at `top: 50%` lands in the middle
+   of that list, drawing a line through the values. Down the edge it reads as the
+   wire arriving at the device, and there is nothing there to collide with.
+
+   Drawn as pseudo-elements ON THE CARDS rather than as gutter elements between
+   them. A pooled gutter would be a second pool to keep in step with the card
+   pool — a class of bug this file has paid for once — where `::before` on every
+   card plus `::after` on the last is exactly n+1 marks with nothing to
+   synchronise.
+
+   NOT COLOUR ALONE. MIDI is dashed, audio is solid: told apart by shape at any
+   size and in any theme, with colour only reinforcing. A difference carried by
+   hue is a difference some people cannot see. */
+.dv-card::before,
+.dv-card[data-flow-out]:not([data-flow-out=""])::after {
+  content: '';
+  position: absolute; top: 10px; bottom: 10px; width: 0;
+  pointer-events: none;
+}
+.dv-card::before { left: 2px; }
+.dv-card[data-flow-out]:not([data-flow-out=""])::after { right: 2px; }
+
+/* MIDI: dashed. */
+.dv-card[data-flow-in="midi"]::before,
+.dv-card[data-flow-out="midi"]::after {
+  border-left: 1px dashed var(--base-accent);
+}
+/* Audio: solid. */
+.dv-card[data-flow-in="audio"]::before,
+.dv-card[data-flow-out="audio"]::after {
+  border-left: 1px solid var(--base-accent-ramp-400);
+}
+/* Both at once. Two strips side by side, so "both" is visibly the sum of the two
+   rather than a third thing to learn. */
+.dv-card[data-flow-in="both"]::before,
+.dv-card[data-flow-out="both"]::after {
+  border-left: 1px dashed var(--base-accent);
+  border-right: 1px solid var(--base-accent-ramp-400);
+  width: 3px;
+}
+/* DEAD: nothing arrives, so nothing downstream can do anything. Dotted and
+   dimmed — it must read as "broken", not as "quiet". */
+.dv-card[data-flow-in="dead"]::before,
+.dv-card[data-flow-out="dead"]::after {
+  border-left: 1px dotted var(--uni-text-fx);
+  opacity: 0.7;
+}
+
+/* ── PER-INSERT METERS (v24) ────────────────────────────────────────────────
+   What this insert is receiving and what it is putting out, on ONE numeric
+   scale with the track meters, so gain staging is comparable card to card. The
+   whole point of the feature: an insert that merely makes things louder should
+   be visibly doing that rather than sounding better.
+
+   Between the capability line and the parameter list — under the facts about
+   what the device IS, above the list of what it is set to. It is a live value,
+   not a property, and putting it with the properties would make the card's top
+   half twitch. */
+.dv-meter {
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; gap: 2px;
+  position: relative;
+  padding-right: 34px;   /* the dB readout sits in this gutter */
+}
+/* 4px, matching the parameter bars' 3px closely enough to read as the same kit
+   without being mistaken for one — a parameter bar is draggable and this is not. */
+.dv-m-row {
+  position: relative;
+  height: 4px;
+  background: var(--uni-rule-column);
+  border-radius: 2px;
+  overflow: hidden;
+}
+/* The INPUT row is dimmer than the output. They are the same measurement in the
+   same units and you are comparing them, so they must not be different colours —
+   but the output is the one you read at a glance. */
+.dv-m-row.in { opacity: .55; }
+.dv-m-fill {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  background: var(--base-accent);
+  border-radius: 2px;
+}
+/* PEAK, riding on the RMS fill. A limiter's entire job is to make these two
+   disagree, and either number alone hides the thing you put the limiter there
+   to see. `translateX(-100%)` so a peak at full scale sits INSIDE the bar rather
+   than one pixel past its end, where it would be clipped away exactly when it
+   matters most. */
+.dv-m-tick {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--base-accent-ramp-300, var(--base-accent));
+  transform: translateX(-100%);
+}
+/* The output peak in dB, right-aligned in the gutter. Numbers, because "is this
+   -3 or -12" is not a question a 64px bar can answer and it is the question you
+   are asking. */
+.dv-m-db {
+  position: absolute; right: 0; top: 0;
+  font-size: var(--font-size-fx);
+  color: var(--base-neutral-600);
+  text-align: right;
+  line-height: 10px;
+}

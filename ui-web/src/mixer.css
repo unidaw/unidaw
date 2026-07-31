@@ -1,0 +1,126 @@
+/* Mixer. Tokens only. */
+
+.mx {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  background: var(--uni-surface-tracker-bg);
+  overflow: hidden; contain: strict;
+}
+
+.mx-strips {
+  flex: 1 1 auto;
+  display: flex; align-items: flex-start;
+  gap: 1px; padding: 10px;
+  overflow-x: auto; overflow-y: hidden;
+  box-sizing: border-box;
+}
+
+.mx-strip {
+  flex: 0 0 76px; width: 76px;
+  /* Fixed, not stretched. Stretching pushed the gain readout, pan and the
+     mute/solo buttons off the bottom of a tall window — the fader was the only
+     control you could see, on a surface whose whole job is the other four. */
+  height: 340px;
+  display: flex; flex-direction: column; align-items: center;
+  gap: 6px; padding: 8px 4px;
+  box-sizing: border-box;
+  background: var(--uni-surface-header-bg);
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+}
+/* Soloed elsewhere: still audible in the UI sense, just not in the mix. */
+.mx-strip.dim { opacity: .45; }
+/* An edit in flight: drawn locally until the engine's next mixer version, which
+   settles it whether it was applied or rejected. */
+.mx-strip.pending .mx-gain { color: var(--uni-text-pending, var(--uni-text-fx)); }
+
+.mx-name { color: var(--uni-text-instrument); font-size: var(--font-size-inst);
+            cursor: text; max-width: 100%; overflow: hidden; white-space: nowrap; }
+.mx-strip.renaming .mx-name { color: var(--base-accent); }
+
+.mx-meterwrap { flex: 1 1 auto; display: flex; gap: 5px; align-items: stretch; }
+
+.mx-fader {
+  position: relative;
+  width: 22px;
+  background: var(--uni-surface-tracker-bg);
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 2px;
+  cursor: ns-resize;
+}
+.mx-fader-fill {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  background: var(--uni-surface-cursor-cell);
+  border-top: 1px solid var(--base-accent);
+}
+
+.mx-meter {
+  position: relative;
+  width: 8px;
+  background: var(--uni-surface-tracker-bg);
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.mx-meter-fill {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  background: var(--base-accent);
+}
+
+.mx-gain { color: var(--base-text); }
+.mx-pan { color: var(--uni-text-gutter); cursor: ew-resize; }
+
+.mx-btns { display: flex; gap: 4px; }
+.mx-btn {
+  width: 20px; height: 18px; line-height: 18px; text-align: center;
+  border: 1px solid var(--uni-rule-column);
+  border-radius: 2px;
+  color: var(--uni-text-gutter);
+  cursor: pointer;
+  user-select: none;
+}
+.mx-mute.on { background: var(--uni-text-fx); color: var(--uni-surface-tracker-bg); border-color: var(--uni-text-fx); }
+.mx-solo.on { background: var(--base-accent); color: var(--uni-surface-tracker-bg); border-color: var(--base-accent); }
+
+/* Says out loud that the faders are a local guess. Removing this when the
+   engine publishes mixer state is the point — until then it must not be
+   possible to mistake this surface for the truth. */
+/* The level history sits under the strips: same data as the meters, in time. */
+.mx-scope {
+  flex: 0 0 auto;
+  height: 132px;
+  display: block;
+  border-top: 1px solid var(--uni-rule-gutter);
+}
+
+.mx-notice {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-fx);
+  border-top: 1px solid var(--uni-rule-gutter);
+  opacity: 0;
+}
+.mx-notice.on { opacity: 1; }
+
+/* Where a track's audio goes. A real <select>, styled to sit in the strip — the
+   one place this app does not build its own control, because "pick one of N" is
+   what a select IS and a custom menu here would be a popup layer, a focus trap
+   and a keymap to maintain for something touched twice a session. */
+.mx-out {
+  width: 100%;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  color: var(--uni-text-instrument);
+  background: var(--uni-surface-cursor-cell);
+  border: 1px solid var(--uni-rule-track);
+  border-radius: 2px;
+  padding: 1px 2px;
+}
+.mx-out:focus { outline: 1px solid var(--base-accent); }

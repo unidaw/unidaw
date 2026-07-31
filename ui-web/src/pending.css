@@ -1,0 +1,100 @@
+/* The pending-diff card at the foot of the agent dock.
+ *
+ * Boxes measured off design/redesign/Uni.dc.html at 1680x1000, not guessed: the
+ * card is 309px inside the 331px dock (so 11px side padding), a 1px dashed edge
+ * at 7px radius over a 6% accent wash, 8px/9px inside, 6px between its rows, and
+ * a 20px button — 10px text on a 12px line, 3px above and below, 1px of border.
+ * Colours come from tokens.css; nothing here names a hex. */
+
+.pd {
+  flex: 0 0 auto;
+  padding: 9px 11px;
+  box-sizing: border-box;
+  font-family: var(--font-chrome);
+  /* The dock tracks its mono text out; this card is chrome, and the design sets
+     it normal. Inheriting the dock's tracking would widen every label in it. */
+  letter-spacing: normal;
+}
+
+.pd-card {
+  display: flex; flex-direction: column; gap: 6px;
+  padding: 8px 9px;
+  box-sizing: border-box;
+  border: 1px dashed var(--base-accent-ramp-700);
+  border-radius: 7px;
+  /* 6% of the accent over whatever the dock's ground is. Mixed from the token
+     rather than written as an rgba literal, so a change to the accent moves the
+     wash with it. */
+  background: color-mix(in srgb, var(--base-accent) 6%, transparent);
+}
+
+/* Dashed and washed means PROVISIONAL. Every other state is a record of a
+   decision already taken, so it steps back to a quiet solid edge — otherwise
+   "applied" keeps asking for attention it no longer needs, and an empty card
+   looks like it is holding something. */
+.pd-card.idle,
+.pd-card.applied,
+.pd-card.discarded {
+  border-style: solid;
+  border-color: var(--uni-rule-track);
+  background: transparent;
+}
+
+/* Baseline rather than centre: the title and the summary are two type sizes on
+   one line in the design, and the summary is allowed to run to a second line
+   here — see below — which would drag a centred title down with it. */
+.pd-head { display: flex; align-items: baseline; gap: 6px; }
+
+.pd-title {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-gutter);
+  color: var(--base-accent-ramp-300);
+}
+.pd-card.idle .pd-title,
+.pd-card.applied .pd-title,
+.pd-card.discarded .pd-title { color: var(--base-neutral-600); }
+
+/* Wraps rather than ellipsises, unlike the design's single clipped line. The
+   tail of this string is the part DERIVED from the ops — "3 notes · track 3" —
+   and the head is the proposer's own claim about them. Clipping would keep the
+   claim and drop the evidence, which is backwards for a card whose whole job is
+   to say what is actually about to be sent. */
+.pd-meta {
+  flex: 1 1 auto; min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-inst);
+  line-height: 1.55;
+  color: var(--base-neutral-600);
+}
+
+.pd-reason {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-inst);
+  line-height: 1.55;
+  color: var(--base-neutral-600);
+}
+
+.pd-acts { display: flex; gap: 5px; }
+
+.pd-btn {
+  flex: 0 0 auto;
+  padding: 3px 9px;
+  border: 1px solid var(--base-neutral-800);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--base-accent);
+  font-family: var(--font-chrome);
+  font-size: var(--font-size-gutter);
+  font-weight: 500;
+  line-height: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+/* The one that writes gets the accent edge; the one that throws away gets the
+   same neutral edge as everything else in the dock. */
+.pd-apply { border-color: var(--base-accent); }
+.pd-discard { padding: 3px 8px; }
+
+.pd-btn:hover { color: var(--base-accent-ramp-300); border-color: var(--base-accent-ramp-400); }
+.pd-btn:focus-visible { outline: 1px solid var(--base-accent); outline-offset: 1px; }

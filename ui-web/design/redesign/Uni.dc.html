@@ -1,0 +1,2283 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="_ds/nocturne-d7b7ac26-075f-4ab3-bee8-c77daf980fa6/styles.css">
+<script src="_ds/nocturne-d7b7ac26-075f-4ab3-bee8-c77daf980fa6/_ds_bundle.js"></script>
+<script src="_ds/nocturne-d7b7ac26-075f-4ab3-bee8-c77daf980fa6/_ds_bundle.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  body { margin:0; background:#161826; color:#e9e9ed; overflow:auto;
+         --font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace;
+         scrollbar-width:thin; scrollbar-color:#3f424d transparent; }
+  body *::-webkit-scrollbar { width:8px; height:8px; }
+  body *::-webkit-scrollbar-thumb { background:#3f424d; border-radius:4px; border:2px solid #161826; }
+  body *::-webkit-scrollbar-track { background:transparent; }
+  a { color:#9184d9; text-decoration:none; }
+  a:hover { color:#b5abfc; }
+  @keyframes uniPulse { 0%,100% { opacity:.35 } 50% { opacity:1 } }
+</style>
+</helmet>
+
+<div style="width:100vw;height:100vh;min-width:1680px;min-height:980px;display:flex;flex-direction:column;background:#161826;color:#e9e9ed;font-family:'Inter',system-ui,sans-serif;font-size:12px;position:relative;overflow:hidden;user-select:none">
+
+  <div style="height:38px;flex:0 0 38px;display:flex;align-items:center;gap:18px;padding:0 14px;border-bottom:1px solid #292b31;background:linear-gradient(180deg,#1d1f2d,#191b28)">
+    <div style="display:flex;align-items:baseline;gap:7px">
+      <span style="font-family:'Inter',sans-serif;font-weight:600;font-size:13px;letter-spacing:.16em">UNI</span>
+      <span style="font-size:9px;letter-spacing:.14em;color:#75798c">0.4·DEV</span>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;padding-left:14px;border-left:1px solid #292b31">
+      <button onClick="{{ togglePlay }}" style="width:26px;height:22px;display:grid;place-items:center;border:1px solid #3f424d;border-radius:4px;background:transparent;color:#e9e9ed;cursor:pointer;font-size:11px" style-hover="border-color:#9184d9;color:#b5abfc"><i class="{{ playIcon }}"></i></button>
+      <button onClick="{{ stop }}" style="width:26px;height:22px;display:grid;place-items:center;border:1px solid #3f424d;border-radius:4px;background:transparent;color:#9397ab;cursor:pointer;font-size:11px" style-hover="border-color:#9184d9;color:#b5abfc"><i class="ph ph-stop"></i></button>
+      <button onClick="{{ toggleRec }}" style="{{ recStyle }}"><i class="ph ph-record"></i></button>
+      <div style="font-family:var(--font-mono);font-size:15px;font-weight:500;letter-spacing:.02em;min-width:104px;color:#e9e9ed">{{ posLabel }}</div>
+      <div style="display:flex;flex-direction:column;gap:1px;font-family:var(--font-mono);font-size:9px;color:#75798c;line-height:1.25">
+        <span>132.00 BPM</span><span>4/4 · groove 18%</span>
+      </div>
+      <div style="display:flex;gap:3px">
+        <button onClick="{{ toggleLoop }}" style="{{ loopStyle }}">LOOP {{ loopRange }}</button>
+        <button onClick="{{ toggleMetro }}" style="{{ metroStyle }}">CLICK</button>
+      </div>
+    </div>
+
+    <div onClick="{{ openScales }}" style="display:flex;align-items:center;gap:9px;padding:3px 10px;border:1px solid #423a6a;border-radius:6px;background:rgba(145,132,217,0.07);cursor:pointer" style-hover="border-color:#9184d9;background:rgba(145,132,217,0.13)">
+      <i class="ph ph-circles-three" style="font-size:13px;color:#9184d9"></i>
+      <div style="display:flex;flex-direction:column;line-height:1.25">
+        <span style="font-family:var(--font-mono);font-size:11px;color:#d2cefd">{{ scaleLabel }}</span>
+        <span style="font-family:var(--font-mono);font-size:9px;color:#7972a9">{{ tuningLabel }}</span>
+      </div>
+      <span style="font-size:9px;color:#5d5294;letter-spacing:.08em">⌘⇧S</span>
+    </div>
+
+    <div style="flex:1"></div>
+
+    <div style="display:flex;align-items:center;gap:14px;font-family:var(--font-mono);font-size:9px;color:#75798c">
+      <span>dsp 11.4%</span><span>pdc 128 smp</span><span>lat 4.7ms</span><span>{{ shmLabel }}</span>
+      <span style="{{ saveStyle }}">{{ saveLabel }}</span>
+    </div>
+
+    <div style="display:flex;gap:2px;padding:2px;border:1px solid #292b31;border-radius:6px;background:#1a1c28">
+      <sc-for list="{{ modes }}" as="m" hint-placeholder-count="4">
+        <button onClick="{{ m.go }}" style="{{ m.style }}"><span>{{ m.name }}</span><span style="{{ m.keyStyle }}">{{ m.key }}</span></button>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="height:26px;flex:0 0 26px;display:flex;align-items:center;gap:0;padding:0 8px 0 8px;border-bottom:1px solid #292b31;background:#191b27;font-family:var(--font-mono);font-size:10px;color:#9397ab">
+    <button onClick="{{ toggleBrowser }}" title="browser ⌘B" style="{{ browserBtnStyle }}"><i class="ph ph-sidebar-simple"></i></button>
+    <span style="width:8px"></span>
+    <span style="color:#75798c">unititled.uni</span>
+    <span style="color:#3f424d;padding:0 7px">›</span>
+    <span style="color:#d2cefd">{{ crumbTrack }}</span>
+    <span style="color:#3f424d;padding:0 7px">›</span>
+    <span style="color:#e9e9ed">{{ crumbView }}</span>
+    <span style="color:#3f424d;padding:0 7px">›</span>
+    <span style="color:#75798c">{{ crumbTail }}</span>
+    <div style="flex:1"></div>
+    <span style="color:#595d6c">{{ hintLabel }}</span>
+  </div>
+
+  <div style="flex:1;min-height:0;display:flex;overflow:hidden">
+
+    <sc-if value="{{ browserOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ browserPaneStyle }}">
+        <div onPointerDown="{{ dragBrowser }}" title="drag to resize" style="{{ gripBrowser }}"></div>
+        <div style="height:46px;flex:0 0 46px;display:flex;align-items:center;justify-content:space-between;padding:0 11px;border-bottom:1px solid #3f424d">
+          <span style="font-size:9px;letter-spacing:.14em;color:#9184d9">BROWSER</span>
+          <span onClick="{{ toggleBrowser }}" style="font-family:var(--font-mono);font-size:9px;color:#595d6c;cursor:pointer" style-hover="color:#d2cefd">⌘B ✕</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;padding:8px 11px;border-bottom:1px solid #292b31">
+          <i class="ph ph-magnifying-glass" style="font-size:12px;color:#75798c"></i>
+          <input value="{{ bq }}" onInput="{{ onBQuery }}" placeholder="search everything…" style="flex:1;min-width:0;background:transparent;border:0;outline:none;color:#e9e9ed;font-family:var(--font-mono);font-size:11px" />
+        </div>
+        <div style="display:flex;gap:3px;padding:7px 9px;flex-wrap:wrap;border-bottom:1px solid #292b31">
+          <sc-for list="{{ bTabs }}" as="t" hint-placeholder-count="6">
+            <button onClick="{{ t.go }}" style="{{ t.style }}">{{ t.name }}</button>
+          </sc-for>
+        </div>
+        <div style="flex:1;overflow-y:auto;overflow-x:hidden;padding:4px 6px;display:flex;flex-direction:column;gap:1px">
+          <sc-for list="{{ bItems }}" as="it" hint-placeholder-count="18">
+            <div onClick="{{ it.go }}" style="{{ it.style }}">
+              <span style="{{ it.kindStyle }}">{{ it.kind }}</span>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px">
+                <span style="{{ it.nameStyle }}">{{ it.name }}</span>
+                <span style="font-family:var(--font-mono);font-size:8px;color:#595d6c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ it.meta }}</span>
+              </div>
+              <sc-if value="{{ it.hasWave }}" hint-placeholder-val="{{ false }}">
+                <div style="{{ it.waveStyle }}"></div>
+              </sc-if>
+              <span onClick="{{ it.fav }}" style="{{ it.starStyle }}">{{ it.star }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="padding:8px 11px;border-top:1px solid #292b31;display:flex;flex-direction:column;gap:4px">
+          <div style="display:flex;align-items:center;justify-content:space-between;font-family:var(--font-mono);font-size:9px;color:#595d6c">
+            <span>{{ scanLabel }}</span>
+            <span style="color:#7972a9;cursor:pointer" style-hover="color:#d2cefd">rescan</span>
+          </div>
+          <span style="font-family:var(--font-mono);font-size:8px;color:#3f424d">drag → tracker cell, chain slot, or patcher canvas</span>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isTrackerA }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;display:flex;overflow:hidden">
+        <div style="{{ trackerPaneStyle }}">
+
+          <div style="height:46px;flex:0 0 46px;min-width:1352px;display:flex;border-bottom:1px solid #3f424d;background:#1c1e2a">
+            <div style="width:104px;flex:0 0 104px;display:flex;flex-direction:column;justify-content:center;padding:0 8px;border-right:1px solid #292b31">
+              <span style="font-size:9px;letter-spacing:.13em;color:#75798c">BAR:BT:TK</span>
+              <span style="font-family:var(--font-mono);font-size:9px;color:#595d6c">{{ zoomLabel }}</span>
+            </div>
+            <div style="width:148px;flex:0 0 148px;display:flex;flex-direction:column;justify-content:center;padding:0 8px;border-right:1px solid #292b31;background:rgba(145,132,217,0.05)">
+              <span style="font-size:9px;letter-spacing:.13em;color:#9184d9">HARMONY</span>
+              <span style="font-family:var(--font-mono);font-size:9px;color:#5d5294">global field</span>
+            </div>
+            <div style="flex:1;display:flex">
+              <sc-for list="{{ trackHeads }}" as="t" hint-placeholder-count="8">
+                <div onClick="{{ t.go }}" style="{{ t.style }}">
+                  <div style="display:flex;align-items:center;gap:5px">
+                    <span style="{{ t.dotStyle }}"></span>
+                    <span style="{{ t.nameStyle }}">{{ t.name }}</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:9px;color:#75798c">
+                    <span style="{{ t.harmStyle }}">{{ t.harm }}</span>
+                    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.dev }}</span>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="flex:1;min-width:1352px;position:relative;overflow:hidden;background:#161826" onWheel="{{ onWheel }}">
+            <div style="{{ harmLaneStyle }}">
+              <sc-for list="{{ harmBlocks }}" as="h" hint-placeholder-count="4">
+                <div onClick="{{ h.go }}" style="{{ h.style }}">
+                  <span style="font-family:var(--font-mono);font-size:11px;color:#d2cefd;letter-spacing:.01em">{{ h.name }}</span>
+                  <span style="font-family:var(--font-mono);font-size:9px;color:#7972a9">{{ h.sub }}</span>
+                  <span style="font-family:var(--font-mono);font-size:9px;color:#5d5294;margin-top:auto">{{ h.deg }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <sc-for list="{{ rows }}" as="row" hint-placeholder-count="30">
+              <div style="{{ row.style }}">
+                <div style="{{ row.timeStyle }}">{{ row.label }}</div>
+                <div style="width:148px;flex:0 0 148px;height:100%"></div>
+                <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="12">
+                  <div onClick="{{ cell.go }}" style="{{ cell.style }}">
+                    <span style="{{ cell.textStyle }}">{{ cell.text }}</span>
+                    <span style="{{ cell.subStyle }}">{{ cell.sub }}</span>
+                    <span style="{{ cell.clipStyle }}">{{ cell.clip }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-for>
+            <sc-for list="{{ clipHandles }}" as="h" hint-placeholder-count="6">
+              <div onClick="{{ h.go }}" title="{{ h.tip }}" style="{{ h.style }}" style-hover="{{ h.hov }}"></div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="width:30px;flex:0 0 30px;position:relative;border-right:1px solid #292b31;background:#14161f">
+          <sc-for list="{{ miniMarks }}" as="mk" hint-placeholder-count="30">
+            <div style="{{ mk.style }}"></div>
+          </sc-for>
+          <div style="{{ miniViewStyle }}"></div>
+          <div style="{{ miniHeadStyle }}"></div>
+        </div>
+
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isTrackerB }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+        <div style="height:46px;flex:0 0 46px;display:flex;border-bottom:1px solid #3f424d;background:#1c1e2a">
+          <div style="width:118px;flex:0 0 118px;display:flex;flex-direction:column;justify-content:center;padding:0 10px;border-right:1px solid #292b31">
+            <span style="font-size:9px;letter-spacing:.13em;color:#75798c">BAR:BT:TK</span>
+            <span style="font-family:var(--font-mono);font-size:9px;color:#595d6c">{{ zoomLabel }}</span>
+          </div>
+          <div style="flex:1;display:flex">
+            <sc-for list="{{ trackHeadsB }}" as="t" hint-placeholder-count="8">
+              <div onClick="{{ t.go }}" style="{{ t.style }}">
+                <div style="display:flex;align-items:center;gap:5px">
+                  <span style="{{ t.dotStyle }}"></span>
+                  <span style="{{ t.nameStyle }}">{{ t.name }}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:9px;color:#75798c">
+                  <span style="{{ t.harmStyle }}">{{ t.harm }}</span>
+                  <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ t.dev }}</span>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="flex:1;position:relative;overflow:hidden;background:#161826" onWheel="{{ onWheel }}">
+          <sc-for list="{{ rowsB }}" as="row" hint-placeholder-count="30">
+            <div style="{{ row.wrapStyle }}">
+              <sc-if value="{{ row.banner }}" hint-placeholder-val="{{ false }}">
+                <div style="{{ row.bannerStyle }}">
+                  <span style="font-family:var(--font-mono);font-size:11px;color:#d2cefd;letter-spacing:.02em">{{ row.bName }}</span>
+                  <span style="font-family:var(--font-mono);font-size:9px;color:#7972a9">{{ row.bSub }}</span>
+                  <div style="flex:1;height:1px;background:linear-gradient(to right,rgba(145,132,217,0.45),rgba(145,132,217,0))"></div>
+                  <span style="font-family:var(--font-mono);font-size:9px;color:#5d5294">{{ row.bDeg }}</span>
+                </div>
+              </sc-if>
+              <div style="{{ row.style }}">
+                <div style="{{ row.timeStyle }}">{{ row.label }}</div>
+                <sc-for list="{{ row.cells }}" as="cell" hint-placeholder-count="12">
+                  <div onClick="{{ cell.go }}" style="{{ cell.style }}">
+                    <div style="{{ cell.gravStyle }}"></div>
+                    <span style="{{ cell.textStyle }}">{{ cell.text }}</span>
+                    <span style="{{ cell.subStyle }}">{{ cell.sub }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isTrackerC }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+        <div style="height:34px;flex:0 0 34px;display:flex;border-bottom:1px solid #3f424d;background:#1c1e2a">
+          <div style="width:176px;flex:0 0 176px;border-right:1px solid #292b31;display:flex;align-items:center;padding:0 10px">
+            <span style="font-size:9px;letter-spacing:.13em;color:#75798c">LANES</span>
+          </div>
+          <div style="flex:1;position:relative">
+            <sc-for list="{{ barTicks }}" as="b" hint-placeholder-count="8">
+              <div style="{{ b.style }}"><span style="font-family:var(--font-mono);font-size:9px;color:#75798c;padding-left:5px">{{ b.label }}</span></div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="height:44px;flex:0 0 44px;display:flex;border-bottom:1px solid #292b31;background:rgba(145,132,217,0.05)">
+          <div style="width:176px;flex:0 0 176px;border-right:1px solid #292b31;display:flex;flex-direction:column;justify-content:center;padding:0 10px">
+            <span style="font-size:9px;letter-spacing:.13em;color:#9184d9">HARMONY FIELD</span>
+            <span style="font-family:var(--font-mono);font-size:9px;color:#5d5294">global · always on</span>
+          </div>
+          <div style="flex:1;position:relative">
+            <sc-for list="{{ harmSpans }}" as="h" hint-placeholder-count="5">
+              <div onClick="{{ h.go }}" style="{{ h.style }}">
+                <span style="font-family:var(--font-mono);font-size:11px;color:#d2cefd">{{ h.name }}</span>
+                <span style="font-family:var(--font-mono);font-size:9px;color:#7972a9">{{ h.sub }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="flex:1;overflow:hidden;position:relative">
+          <sc-for list="{{ lanes }}" as="ln" hint-placeholder-count="8">
+            <div style="{{ ln.style }}">
+              <div onClick="{{ ln.go }}" style="{{ ln.headStyle }}">
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span style="{{ ln.dotStyle }}"></span>
+                  <span style="{{ ln.nameStyle }}">{{ ln.name }}</span>
+                </div>
+                <span style="font-family:var(--font-mono);font-size:9px;color:#75798c">{{ ln.dev }}</span>
+                <div style="display:flex;gap:4px;align-items:center">
+                  <span style="{{ ln.harmStyle }}">{{ ln.harm }}</span>
+                  <span style="font-family:var(--font-mono);font-size:9px;color:#595d6c">{{ ln.count }}</span>
+                </div>
+              </div>
+              <div style="flex:1;position:relative;overflow:hidden">
+                <sc-for list="{{ ln.evs }}" as="e" hint-placeholder-count="16">
+                  <div style="{{ e.style }}">{{ e.text }}</div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+          <div style="{{ ribbonHeadStyle }}"></div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isArrange }}" hint-placeholder-val="{{ false }}">
+      <div onWheel="{{ onArrWheel }}" style="flex:1;display:flex;flex-direction:column;overflow:hidden;position:relative">
+        <div style="height:34px;flex:0 0 34px;display:flex;border-bottom:1px solid #3f424d;background:#1c1e2a">
+          <div style="width:200px;flex:0 0 200px;border-right:1px solid #292b31;display:flex;align-items:center;gap:8px;padding:0 12px">
+            <span style="font-size:9px;letter-spacing:.13em;color:#75798c">ARRANGEMENT</span>
+            <span style="font-family:var(--font-mono);font-size:8px;color:#595d6c">{{ arrZoomLabel }}</span>
+          </div>
+          <div style="flex:1;position:relative">
+            <sc-for list="{{ arrBars }}" as="b" hint-placeholder-count="16">
+              <div style="{{ b.style }}"><span style="font-family:var(--font-mono);font-size:9px;color:#75798c;padding-left:5px">{{ b.label }}</span></div>
+            </sc-for>
+            <div style="{{ arrLoopStyle }}"></div>
+          </div>
+        </div>
+        <div style="height:52px;flex:0 0 52px;display:flex;border-bottom:1px solid #292b31;background:rgba(145,132,217,0.05)">
+          <div style="width:200px;flex:0 0 200px;border-right:1px solid #292b31;display:flex;flex-direction:column;justify-content:center;padding:0 12px">
+            <span style="font-size:9px;letter-spacing:.13em;color:#9184d9">HARMONY LANE</span>
+            <span style="font-family:var(--font-mono);font-size:9px;color:#5d5294">one field · all lenses</span>
+          </div>
+          <div style="flex:1;position:relative">
+            <sc-for list="{{ arrHarm }}" as="h" hint-placeholder-count="6">
+              <div onClick="{{ h.go }}" style="{{ h.style }}">
+                <span style="font-family:var(--font-mono);font-size:11px;color:#d2cefd">{{ h.name }}</span>
+                <span style="font-family:var(--font-mono);font-size:9px;color:#7972a9">{{ h.sub }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="{{ arrLanesStyle }}">
+          <sc-for list="{{ arrTracks }}" as="t" hint-placeholder-count="8">
+            <div style="{{ t.style }}">
+              <div onClick="{{ t.go }}" style="{{ t.headStyle }}">
+                <div style="display:flex;align-items:center;gap:6px">
+                  <span style="{{ t.dotStyle }}"></span>
+                  <span style="{{ t.nameStyle }}">{{ t.name }}</span>
+                </div>
+                <span style="font-family:var(--font-mono);font-size:9px;color:#75798c">{{ t.dev }}</span>
+              </div>
+              <div style="flex:1;position:relative">
+                <sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="4">
+                  <div onClick="{{ c.go }}" onDoubleClick="{{ c.open }}" style="{{ c.style }}">
+                    <span style="{{ c.labelStyle }}">{{ c.name }}</span>
+                    <div style="position:absolute;inset:15px 0 0;overflow:hidden">
+                      <sc-for list="{{ c.notes }}" as="n" hint-placeholder-count="10">
+                        <div style="{{ n.style }}"></div>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="{{ arrHeadStyle }}"></div>
+
+        <sc-if value="{{ rollOpen }}" hint-placeholder-val="{{ false }}">
+          <div style="{{ rollWrapStyle }}">
+            <div onPointerDown="{{ dragRoll }}" title="drag to resize" style="{{ gripH }}"></div>
+            <div style="height:30px;flex:0 0 30px;display:flex;align-items:center;gap:11px;padding:0 12px;border-bottom:1px solid #292b31;white-space:nowrap">
+              <span style="font-size:9px;letter-spacing:.14em;color:#9184d9;flex:0 0 auto">SCALE ROLL</span>
+              <span style="{{ rollTitleStyle }}">{{ rollTitle }}</span>
+              <span style="font-family:var(--font-mono);font-size:9px;color:#75798c;flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis">{{ rollMeta }}</span>
+              <div style="flex:1;min-width:8px"></div>
+              <span style="{{ reRollStyle }}">{{ reRollLabel }}</span>
+              <span onClick="{{ openInTracker }}" style="font-family:var(--font-mono);font-size:9px;color:#7972a9;cursor:pointer;flex:0 0 auto" style-hover="color:#d2cefd">⏎ open in tracker</span>
+              <span style="font-family:var(--font-mono);font-size:9px;color:#595d6c;flex:0 0 auto">{{ rollZoomLabel }}</span>
+              <span onClick="{{ closeRoll }}" style="font-family:var(--font-mono);font-size:9px;color:#75798c;cursor:pointer;padding:0 3px;flex:0 0 auto" style-hover="color:#d2cefd">esc ✕</span>
+            </div>
+            <div onWheel="{{ onRollWheel }}" style="{{ rollBodyStyle }}">
+              <div style="{{ rollColStyle }}">
+                <sc-for list="{{ degRows }}" as="d" hint-placeholder-count="12">
+                  <div style="{{ d.gutterStyle }}">
+                    <span style="{{ d.numStyle }}">{{ d.num }}</span>
+                    <span style="{{ d.nameStyle }}">{{ d.name }}</span>
+                    <span style="{{ d.centStyle }}">{{ d.cents }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="{{ rollLaneWrapStyle }}">
+                <sc-for list="{{ degRows }}" as="d" hint-placeholder-count="12">
+                  <div style="{{ d.laneStyle }}"></div>
+                </sc-for>
+                <div style="{{ rollScrollStyle }}">
+                <sc-for list="{{ rollBars }}" as="b" hint-placeholder-count="8">
+                  <div style="{{ b.style }}"><span style="font-family:var(--font-mono);font-size:8px;color:#595d6c;padding-left:4px">{{ b.label }}</span></div>
+                </sc-for>
+                <sc-for list="{{ rollNotes }}" as="n" hint-placeholder-count="16">
+                  <div style="{{ n.style }}"><span style="{{ n.centStyle }}"></span></div>
+                </sc-for>
+                <sc-for list="{{ rollGroups }}" as="g" hint-placeholder-count="4">
+                  <div onClick="{{ g.go }}" style="{{ g.style }}"></div>
+                </sc-for>
+                <sc-for list="{{ rollGroups }}" as="g" hint-placeholder-count="4">
+                  <span onClick="{{ g.go }}" style="{{ g.labelStyle }}">{{ g.label }}<span style="{{ g.hintStyle }}">{{ g.hint }}</span></span>
+                </sc-for>
+                </div>
+              </div>
+            </div>
+            <div style="height:46px;flex:0 0 46px;display:flex;border-top:1px solid #292b31;background:rgba(0,0,0,0.18)">
+              <div style="width:96px;flex:0 0 96px;border-right:1px solid #292b31;display:flex;flex-direction:column;justify-content:center;padding:0 9px">
+                <span style="font-family:var(--font-mono);font-size:9px;color:#9397ab">velocity</span>
+                <span style="font-family:var(--font-mono);font-size:8px;color:#595d6c">⌥drag = ramp</span>
+              </div>
+              <div style="flex:1;position:relative">
+                <sc-for list="{{ rollVels }}" as="v" hint-placeholder-count="16">
+                  <div style="{{ v.style }}"></div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isPatch }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;overflow:hidden">
+        <div onClick="{{ pcanvasBg }}" style="flex:1;position:relative;overflow:auto;background:#151723">
+          <div style="position:absolute;inset:0;min-width:1360px;min-height:900px;background-image:radial-gradient(circle at 1px 1px,rgba(233,233,237,0.055) 1px,transparent 0);background-size:28px 28px"></div>
+          <div style="position:absolute;inset:0;background:radial-gradient(900px 620px at 40% 34%,rgba(145,132,217,0.07),transparent 70%)"></div>
+
+          <div style="position:absolute;left:16px;top:14px;display:flex;flex-direction:column;gap:3px;padding:4px;border:1px solid #292b31;border-radius:8px;background:rgba(22,24,38,0.88);z-index:5">
+            <sc-for list="{{ ptools }}" as="t" hint-placeholder-count="4">
+              <button onClick="{{ t.go }}" title="{{ t.tip }}" style="{{ t.style }}"><i class="{{ t.icon }}"></i></button>
+            </sc-for>
+          </div>
+
+          <svg width="1515" height="914" style="position:absolute;left:0;top:0;pointer-events:none;overflow:visible">
+            <sc-for list="{{ wires }}" as="w" hint-placeholder-count="9">
+              <path d="{{ w.d }}" fill="none" stroke="transparent" stroke-width="11" style="pointer-events:stroke;cursor:pointer" onClick="{{ w.go }}"></path>
+            </sc-for>
+            <sc-for list="{{ wires }}" as="w" hint-placeholder-count="9">
+              <path d="{{ w.d }}" fill="none" stroke="{{ w.stroke }}" stroke-width="{{ w.width }}" stroke-dasharray="{{ w.dash }}" stroke-linecap="round" opacity="{{ w.op }}" style="pointer-events:none"></path>
+            </sc-for>
+          </svg>
+
+          <sc-for list="{{ nodes }}" as="n" hint-placeholder-count="10">
+            <div onClick="{{ n.go }}" style="{{ n.style }}">
+              <div style="{{ n.headStyle }}">
+                <span style="{{ n.kindStyle }}">{{ n.kind }}</span>
+                <span style="font-family:var(--font-mono);font-size:11px;color:#e9e9ed;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ n.name }}</span>
+                <span style="{{ n.linkStyle }}">{{ n.links }}</span>
+              </div>
+              <div style="padding:6px 9px 8px;display:flex;flex-direction:column;gap:5px">
+                <sc-for list="{{ n.params }}" as="p" hint-placeholder-count="3">
+                  <div style="display:flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:9px">
+                    <span style="color:#75798c;width:52px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ p.name }}</span>
+                    <div style="flex:1;height:3px;background:#232532;border-radius:2px;overflow:hidden"><div style="{{ p.barStyle }}"></div></div>
+                    <span style="color:#b2b6ca;width:34px;text-align:right">{{ p.val }}</span>
+                    <span style="{{ p.mapStyle }}">M</span>
+                  </div>
+                </sc-for>
+              </div>
+              <sc-for list="{{ n.ports }}" as="p" hint-placeholder-count="3">
+                <div onClick="{{ p.go }}" style="{{ p.style }}"><span style="{{ p.labelStyle }}">{{ p.label }}</span></div>
+              </sc-for>
+            </div>
+          </sc-for>
+
+          <div style="position:absolute;left:16px;bottom:14px;display:flex;align-items:center;gap:12px;padding:7px 11px;border:1px solid #292b31;border-radius:8px;background:rgba(22,24,38,0.82);font-family:var(--font-mono);font-size:9px;color:#75798c">
+            <span style="display:flex;align-items:center;gap:5px"><span style="width:14px;height:2px;background:#5d5294"></span>EVENT</span>
+            <span style="display:flex;align-items:center;gap:5px"><span style="width:14px;height:2px;background:#9184d9"></span>AUDIO</span>
+            <span style="display:flex;align-items:center;gap:5px"><span style="width:14px;height:2px;background:repeating-linear-gradient(to right,#595d6c 0 4px,transparent 4px 8px)"></span>CONTROL</span>
+            <span style="display:flex;align-items:center;gap:5px"><span style="width:14px;height:2px;background:repeating-linear-gradient(to right,#7972a9 0 2px,transparent 2px 7px)"></span>MOD LINK</span>
+            <span style="color:#3f424d">|</span>
+            <span>A palette</span><span>V select · W wire</span><span>L auto-layout</span><span>⌘D dup · ⌫ delete</span>
+          </div>
+        </div>
+
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isMix }}" hint-placeholder-val="{{ false }}">
+      <div style="flex:1;display:flex;overflow:hidden;padding:10px 12px;gap:7px;background:#161826">
+        <sc-for list="{{ strips }}" as="s" hint-placeholder-count="10">
+          <div onClick="{{ s.go }}" style="{{ s.style }}">
+            <div style="{{ s.capStyle }}"></div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <span style="{{ s.nameStyle }}">{{ s.name }}</span>
+              <div style="flex:1"></div>
+              <span style="{{ s.harmStyle }}">{{ s.harm }}</span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:3px">
+              <sc-for list="{{ s.devs }}" as="d" hint-placeholder-count="3">
+                <div style="{{ d.style }}">{{ d.name }}</div>
+              </sc-for>
+            </div>
+            <div style="flex:1;display:flex;gap:6px;min-height:0">
+              <div style="width:20px;flex:0 0 20px;position:relative">
+                <sc-for list="{{ s.ticks }}" as="t" hint-placeholder-count="6">
+                  <div style="{{ t.style }}">{{ t.label }}</div>
+                </sc-for>
+              </div>
+              <div style="width:24px;flex:0 0 24px;position:relative">
+                <div style="{{ s.grooveStyle }}"></div>
+                <div style="{{ s.fillStyle }}"></div>
+                <div style="{{ s.thumbStyle }}"></div>
+              </div>
+              <div style="flex:1;display:flex;gap:2px">
+                <div style="flex:1;position:relative;background:#12141d;border-radius:2px;overflow:hidden">
+                  <div style="{{ s.mLStyle }}"></div><div style="{{ s.pLStyle }}"></div>
+                </div>
+                <div style="flex:1;position:relative;background:#12141d;border-radius:2px;overflow:hidden">
+                  <div style="{{ s.mRStyle }}"></div><div style="{{ s.pRStyle }}"></div>
+                </div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:5px">
+              <span style="font-family:var(--font-mono);font-size:8px;color:#595d6c">PAN</span>
+              <div style="flex:1;height:3px;background:#232532;border-radius:2px;position:relative">
+                <div style="position:absolute;left:50%;top:-1px;width:1px;height:5px;background:#3f424d"></div>
+                <div style="{{ s.panStyle }}"></div>
+              </div>
+              <span style="font-family:var(--font-mono);font-size:9px;color:#75798c">{{ s.pan }}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px">
+              <div style="display:flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:8px;color:#595d6c">
+                <span>A</span>
+                <div style="flex:1;height:3px;background:#232532;border-radius:2px;overflow:hidden;position:relative"><div style="{{ s.sAStyle }}"></div></div>
+                <span>{{ s.sA }}</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:8px;color:#595d6c">
+                <span>B</span>
+                <div style="flex:1;height:3px;background:#232532;border-radius:2px;overflow:hidden;position:relative"><div style="{{ s.sBStyle }}"></div></div>
+                <span>{{ s.sB }}</span>
+              </div>
+            </div>
+            <div style="display:flex;gap:4px;align-items:center">
+              <button onClick="{{ s.toggleSolo }}" style="{{ s.soloStyle }}">S</button>
+              <button onClick="{{ s.toggleMute }}" style="{{ s.muteStyle }}">M</button>
+              <span style="{{ s.routeStyle }}">{{ s.route }}</span>
+            </div>
+            <div style="display:flex;align-items:baseline;justify-content:space-between">
+              <span style="font-family:var(--font-mono);font-size:13px;color:#e9e9ed">{{ s.db }}</span>
+              <span style="font-family:var(--font-mono);font-size:8px;color:#595d6c">{{ s.foot }}</span>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <div style="{{ dockStyle }}">
+      <div onPointerDown="{{ dragDock }}" title="drag to resize" style="{{ gripDock }}"></div>
+
+      <sc-if value="{{ isHarmMode }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:0 0 auto;display:flex;flex-direction:column;border-bottom:1px solid #3f424d">
+          <div style="height:34px;flex:0 0 34px;display:flex;align-items:center;justify-content:space-between;padding:0 11px">
+            <div onClick="{{ togHarm }}" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+              <i class="{{ harmCaret }}" style="font-size:10px;color:#595d6c"></i>
+              <span style="font-size:9px;letter-spacing:.14em;color:#9184d9">HARMONY · TUNING</span>
+            </div>
+            <div style="display:flex;gap:2px;padding:1px;border:1px solid #292b31;border-radius:5px">
+              <sc-for list="{{ tets }}" as="t" hint-placeholder-count="3">
+                <button onClick="{{ t.go }}" style="{{ t.style }}">{{ t.name }}</button>
+              </sc-for>
+            </div>
+          </div>
+          <sc-if value="{{ harmOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:2px 11px 8px;display:flex;align-items:baseline;gap:7px">
+            <span style="font-family:var(--font-mono);font-size:16px;color:#e9e9ed">{{ scaleLabel }}</span>
+            <span style="font-family:var(--font-mono);font-size:9px;color:#7972a9">{{ tuningLabel }}</span>
+            <div style="flex:1"></div>
+            <span onClick="{{ openScales }}" style="font-family:var(--font-mono);font-size:9px;color:#9184d9;cursor:pointer;white-space:nowrap" style-hover="color:#d2cefd">browse ⌘⇧S</span>
+          </div>
+          <div style="margin:0 11px 8px;padding:6px 8px;border:1px solid #292b31;border-radius:6px;display:flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:11px;background:rgba(0,0,0,0.18)">
+            <span style="color:#b5abfc">{{ selToken }}</span>
+            <span style="color:#5d5294">→</span>
+            <span style="color:#e9e9ed">{{ selMidi }}</span>
+            <span style="color:#9690c9">{{ selCents }}</span>
+            <span style="color:#5d5294">→</span>
+            <span style="color:#cfd3e5">{{ selHz }}</span>
+          </div>
+          <div style="padding:0 11px 9px;display:flex;flex-direction:column;gap:1px">
+            <sc-for list="{{ ladder }}" as="d" hint-placeholder-count="7">
+              <div style="{{ d.style }}">
+                <span style="{{ d.numStyle }}">{{ d.num }}</span>
+                <span style="{{ d.nameStyle }}">{{ d.name }}</span>
+                <div style="flex:1;height:3px;background:#232532;border-radius:2px;overflow:hidden;position:relative"><div style="{{ d.barStyle }}"></div></div>
+                <span style="{{ d.centStyle }}">{{ d.cents }}</span>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isPatch }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:0 0 auto;display:flex;flex-direction:column;border-bottom:1px solid #3f424d">
+          <div style="height:34px;flex:0 0 34px;display:flex;align-items:center;justify-content:space-between;padding:0 11px">
+            <div onClick="{{ togNode }}" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+              <i class="{{ nodeCaret }}" style="font-size:10px;color:#595d6c"></i>
+              <span style="font-size:9px;letter-spacing:.14em;color:#9184d9">NODE</span>
+            </div>
+            <span style="font-family:var(--font-mono);font-size:9px;color:#595d6c">graph v214</span>
+          </div>
+          <sc-if value="{{ nodeOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:0 11px 7px;display:flex;flex-direction:column;gap:2px">
+            <span style="font-family:var(--font-mono);font-size:15px;color:#e9e9ed">{{ nodeName }}</span>
+            <span style="font-family:var(--font-mono);font-size:9px;color:#7972a9">{{ nodeMeta }}</span>
+          </div>
+          <div style="padding:0 11px 8px;display:flex;flex-direction:column;gap:4px">
+            <sc-for list="{{ nodePorts }}" as="p" hint-placeholder-count="4">
+              <div style="display:flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:10px">
+                <span style="{{ p.chipStyle }}">{{ p.dir }}</span>
+                <span style="color:#e9e9ed;flex:1">{{ p.name }}</span>
+                <span style="{{ p.typeStyle }}">{{ p.type }}</span>
+                <span style="color:#595d6c">{{ p.rate }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <div style="padding:0 11px 9px;display:flex;flex-direction:column;gap:4px">
+            <sc-for list="{{ modLinks }}" as="l" hint-placeholder-count="3">
+              <div style="display:flex;align-items:center;gap:7px;padding:4px 7px;border:1px solid #292b31;border-radius:5px;font-family:var(--font-mono);font-size:10px" style-hover="border-color:#5d5294">
+                <i class="ph ph-lightning" style="font-size:10px;color:#9184d9"></i>
+                <span style="color:#d2cefd;flex:1">{{ l.target }}</span>
+                <span style="color:#b2b6ca">{{ l.depth }}</span>
+                <span style="{{ l.modeStyle }}">{{ l.mode }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <div style="padding:0 11px 10px;display:flex;gap:5px">
+            <button class="btn btn-primary" onClick="{{ dupNodeBtn }}" style="flex:0 0 auto;white-space:nowrap;font-size:10px;padding:3px 9px">⌘D duplicate</button>
+            <button class="btn btn-ghost" onClick="{{ delNodeBtn }}" style="flex:0 0 auto;white-space:nowrap;font-size:10px;padding:3px 9px;border:1px solid #3f424d">⌫ delete</button>
+          </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isMix }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:0 0 auto;display:flex;flex-direction:column;border-bottom:1px solid #3f424d">
+          <div style="height:34px;flex:0 0 34px;display:flex;align-items:center;justify-content:space-between;padding:0 11px">
+            <div onClick="{{ togStrip }}" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+              <i class="{{ stripCaret }}" style="font-size:10px;color:#595d6c"></i>
+              <span style="font-size:9px;letter-spacing:.14em;color:#9184d9">STRIP</span>
+            </div>
+            <span style="{{ stripDotStyle }}"></span>
+          </div>
+          <sc-if value="{{ stripOpen }}" hint-placeholder-val="{{ true }}">
+            <div style="padding:0 11px 7px;display:flex;flex-direction:column;gap:2px">
+              <span style="font-family:var(--font-mono);font-size:15px;color:#e9e9ed">{{ stripName }}</span>
+              <span style="font-family:var(--font-mono);font-size:9px;color:#7972a9">{{ stripMeta }}</span>
+            </div>
+            <div style="padding:0 11px 9px;display:flex;flex-wrap:wrap;gap:3px">
+              <sc-for list="{{ stripDevs }}" as="d" hint-placeholder-count="3">
+                <span style="{{ d.style }}">{{ d.name }}</span>
+              </sc-for>
+            </div>
+          </sc-if>
+        </div>
+      </sc-if>
+
+      <div style="height:34px;flex:0 0 34px;display:flex;align-items:center;gap:8px;padding:0 11px;border-bottom:1px solid #292b31">
+        <div onClick="{{ togAgent }}" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+          <i class="{{ agentCaret }}" style="font-size:10px;color:#595d6c"></i>
+          <i class="ph ph-sparkle" style="font-size:12px;color:#9184d9"></i>
+          <span style="font-size:9px;letter-spacing:.14em;color:#9184d9">AGENT</span>
+        </div>
+        <span style="font-family:var(--font-mono);font-size:9px;color:#595d6c">{{ agentSub }}</span>
+        <div style="flex:1"></div>
+        <span onClick="{{ toggleAuto }}" style="{{ autoStyle }}">auto-apply</span>
+      </div>
+      <sc-if value="{{ agentOpen }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex;flex-wrap:wrap;gap:4px;padding:7px 11px;border-bottom:1px solid #292b31">
+        <sc-for list="{{ agentCtx }}" as="c" hint-placeholder-count="4">
+          <span style="font-family:var(--font-mono);font-size:8px;padding:2px 6px;border-radius:3px;background:#1f2130;color:#9397ab;border:1px solid #292b31">{{ c.t }}</span>
+        </sc-for>
+      </div>
+      <div style="flex:1;overflow-y:auto;overflow-x:hidden;padding:9px 11px;display:flex;flex-direction:column;gap:7px">
+        <sc-for list="{{ agentLog }}" as="m" hint-placeholder-count="7">
+          <div style="{{ m.style }}">
+            <sc-if value="{{ m.isCmd }}" hint-placeholder-val="{{ false }}">
+              <span style="{{ m.chipStyle }}">{{ m.chip }}</span>
+            </sc-if>
+            <span style="{{ m.textStyle }}">{{ m.text }}</span>
+            <span style="{{ m.metaStyle }}">{{ m.meta }}</span>
+          </div>
+        </sc-for>
+        <sc-if value="{{ pendingOpen }}" hint-placeholder-val="{{ true }}">
+          <div style="border:1px dashed #5d5294;border-radius:7px;padding:8px 9px;display:flex;flex-direction:column;gap:6px;background:rgba(145,132,217,0.06)">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-family:var(--font-mono);font-size:10px;color:#d2cefd">pending diff</span>
+              <span style="font-family:var(--font-mono);font-size:9px;color:#75798c">+8 cents edits · 04 LEAD · strong beats</span>
+            </div>
+            <span style="font-family:var(--font-mono);font-size:9px;color:#75798c">ghost cells previewing in the tracker — nothing committed</span>
+            <div style="display:flex;gap:5px">
+              <button class="btn btn-primary" onClick="{{ applyDiff }}" style="flex:0 0 auto;white-space:nowrap;font-size:10px;padding:3px 9px">Apply · v2141</button>
+              <button class="btn btn-ghost" onClick="{{ discardDiff }}" style="flex:0 0 auto;white-space:nowrap;font-size:10px;padding:3px 8px;border:1px solid #3f424d">Discard</button>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+      <div style="flex:0 0 auto;border-top:1px solid #292b31;padding:8px 11px;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;gap:4px">
+          <span style="font-family:var(--font-mono);font-size:8px;padding:2px 5px;border-radius:3px;background:#1f2130;color:#7972a9;cursor:pointer" style-hover="color:#d2cefd">@track04</span>
+          <span style="font-family:var(--font-mono);font-size:8px;padding:2px 5px;border-radius:3px;background:#1f2130;color:#7972a9;cursor:pointer" style-hover="color:#d2cefd">@lead.31tet</span>
+          <span style="font-family:var(--font-mono);font-size:8px;padding:2px 5px;border-radius:3px;background:#1f2130;color:#7972a9;cursor:pointer" style-hover="color:#d2cefd">@field</span>
+          <span style="font-family:var(--font-mono);font-size:8px;padding:2px 5px;border-radius:3px;background:#1f2130;color:#7972a9;cursor:pointer" style-hover="color:#d2cefd">@selection</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;border:1px solid #3f424d;border-radius:7px;padding:6px 9px" style-focus="border-color:#9184d9">
+          <input value="{{ aq }}" onInput="{{ onAQuery }}" onKeyDown="{{ onASubmit }}" placeholder="ask — it runs the same commands you do" style="flex:1;min-width:0;background:transparent;border:0;outline:none;color:#e9e9ed;font-family:var(--font-mono);font-size:11px" />
+          <i class="ph ph-arrow-elbow-down-left" style="font-size:11px;color:#595d6c"></i>
+        </div>
+      </div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="height:196px;flex:0 0 196px;display:flex;flex-direction:column;border-top:1px solid #3f424d;background:#191b27;position:relative">
+    <sc-if value="{{ outsOpen }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ outsPanelStyle }}">
+        <div onPointerDown="{{ dragOuts }}" style="{{ outsGrabStyle }}">
+          <i class="ph ph-dots-six-vertical" style="font-size:13px;color:#5d5294"></i>
+          <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px">
+            <span style="font-family:var(--font-mono);font-size:11px;color:#e9e9ed">{{ outsTitle }}</span>
+            <span style="font-family:var(--font-mono);font-size:8px;color:#75798c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ outsMeta }}</span>
+          </div>
+          <span onClick="{{ closeOuts }}" style="font-family:var(--font-mono);font-size:9px;color:#75798c;cursor:pointer;padding:0 3px" style-hover="color:#d2cefd">✕</span>
+        </div>
+        <sc-for list="{{ outsRows }}" as="o" hint-placeholder-count="4">
+          <div style="{{ o.style }}">
+            <span style="{{ o.busStyle }}">{{ o.bus }}</span>
+            <span style="{{ o.roleStyle }}">{{ o.role }}</span>
+            <span style="{{ o.arrowStyle }}">→</span>
+            <span onClick="{{ o.cycle }}" style="{{ o.targetStyle }}">{{ o.target }}</span>
+          </div>
+        </sc-for>
+        <div style="padding:7px 11px;border-top:1px solid #292b31;font-family:var(--font-mono);font-size:8px;color:#595d6c">click a target to cycle · this track → BUS A → BUS B → new track → unassigned</div>
+      </div>
+    </sc-if>
+    <div style="height:28px;flex:0 0 28px;display:flex;align-items:center;gap:12px;padding:0 12px;border-bottom:1px solid #292b31">
+      <span style="font-size:9px;letter-spacing:.14em;color:#9184d9">DEVICE CHAIN</span>
+      <span style="font-family:var(--font-mono);font-size:10px;color:#d2cefd">{{ crumbTrack }}</span>
+      <span style="font-family:var(--font-mono);font-size:9px;color:#595d6c">chainVersion 87</span>
+      <div style="flex:1"></div>
+      <div style="display:flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:9px;color:#75798c">
+        <span>audio out</span><span style="color:#d2cefd">MASTER</span>
+        <span style="color:#3f424d">·</span>
+        <span>midi out</span><span style="color:#d2cefd">06 FM</span>
+        <span style="color:#3f424d">·</span>
+        <button style="font-family:var(--font-mono);font-size:9px;padding:2px 7px;border:1px solid #423a6a;border-radius:4px;background:rgba(145,132,217,0.08);color:#b5abfc;cursor:pointer" style-hover="background:rgba(145,132,217,0.16)">POST</button>
+      </div>
+    </div>
+    <div style="flex:1;display:flex;gap:7px;padding:8px 12px;overflow:hidden">
+      <sc-for list="{{ devices }}" as="d" hint-placeholder-count="5">
+        <div onClick="{{ d.go }}" style="{{ d.style }}">
+          <div style="display:flex;align-items:center;gap:6px;padding-bottom:5px;border-bottom:1px solid #292b31">
+            <span style="{{ d.kindStyle }}">{{ d.kind }}</span>
+            <span style="font-family:var(--font-mono);font-size:11px;color:#e9e9ed;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ d.name }}</span>
+            <span style="{{ d.bcStyle }}">{{ d.bc }}</span>
+            <sc-if value="{{ d.hasOuts }}" hint-placeholder-val="{{ false }}">
+              <span onClick="{{ d.openOuts }}" title="audio output routing" style="{{ d.outsStyle }}">{{ d.outsLabel }}</span>
+            </sc-if>
+            <i class="ph ph-power" style="{{ d.powerStyle }}"></i>
+          </div>
+          <sc-if value="{{ d.isMacro }}" hint-placeholder-val="{{ false }}">
+            <div style="flex:1;display:grid;grid-template-columns:repeat(4,1fr);gap:5px;align-content:center;padding:3px 0">
+              <sc-for list="{{ d.macros }}" as="m" hint-placeholder-count="8">
+                <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+                  <div style="{{ m.style }}"><div style="{{ m.innerStyle }}"></div></div>
+                  <span style="font-family:var(--font-mono);font-size:8px;color:#75798c;max-width:44px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ m.name }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ d.isParams }}" hint-placeholder-val="{{ true }}">
+            <div style="flex:1;display:flex;flex-direction:column;gap:3px;overflow:hidden;padding-top:3px">
+              <sc-for list="{{ d.params }}" as="p" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:9px">
+                  <span style="{{ p.pinStyle }}">{{ p.pin }}</span>
+                  <span style="color:#9397ab;width:56px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ p.name }}</span>
+                  <div style="flex:1;height:4px;background:#1a1c28;border-radius:2px;position:relative;overflow:hidden">
+                    <div style="{{ p.barStyle }}"></div>
+                    <div style="{{ p.modStyle }}"></div>
+                  </div>
+                  <span style="color:#cfd3e5;width:34px;text-align:right">{{ p.val }}</span>
+                  <span style="{{ p.mapStyle }}">MAP</span>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <div style="display:flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:9px;color:#595d6c">
+            <span>{{ d.foot }}</span>
+            <div style="flex:1"></div>
+            <span style="{{ d.actStyle }}">{{ d.act }}</span>
+          </div>
+        </div>
+      </sc-for>
+      <div style="width:52px;flex:0 0 52px;display:grid;place-items:center;border:1px dashed #3f424d;border-radius:8px;color:#595d6c;cursor:pointer" style-hover="border-color:#9184d9;color:#b5abfc">
+        <i class="ph ph-plus" style="font-size:15px"></i>
+      </div>
+    </div>
+  </div>
+
+  <div style="height:26px;flex:0 0 26px;display:flex;align-items:center;gap:14px;padding:0 12px;border-top:1px solid #292b31;background:#161826;font-family:var(--font-mono);font-size:9px;color:#595d6c">
+    <span style="color:#9184d9">{{ layoutName }}</span>
+    <span>[ ] layout</span>
+    <span>⌘± zoom</span>
+    <span>⌘G goto</span>
+    <span>⌘K palette</span>
+    <span>⌘B browser</span>
+    <span>⌘J agent</span>
+    <span>⌘L loop</span>
+    <span>dbl-click clip → scale roll</span>
+    <span>⇧F3/4/5 page cut·copy·paste</span>
+    <span>⏎ write · ⌫ clear</span>
+    <span>⇧⏎ clip · ⌘E split</span>
+    <span>! chromatic override</span>
+    <div style="flex:1"></div>
+    <span>{{ selPath }}</span>
+    <span style="color:#3f424d">|</span>
+    <span>{{ undoLabel }}</span>
+  </div>
+
+  <sc-if value="{{ ovPalette }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeOv }}" style="position:absolute;inset:0;background:rgba(11,12,20,0.62);display:flex;align-items:flex-start;justify-content:center;padding-top:130px;backdrop-filter:blur(2px)">
+      <div onClick="{{ stopProp }}" style="width:720px;border:1px solid #595d6c;border-radius:10px;background:#1c1e2a;box-shadow:0 24px 60px rgba(0,0,0,0.7);overflow:hidden">
+        <div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid #292b31">
+          <i class="ph ph-terminal-window" style="font-size:14px;color:#9184d9"></i>
+          <input value="{{ q }}" onInput="{{ onQuery }}" placeholder="transpose · quantize · generate · retune…" style="flex:1;background:transparent;border:0;outline:none;color:#e9e9ed;font-family:var(--font-mono);font-size:15px" />
+          <span style="font-family:var(--font-mono);font-size:9px;color:#595d6c">{{ cmdCount }}</span>
+        </div>
+        <div style="max-height:390px;overflow:hidden;padding:5px">
+          <sc-for list="{{ cmds }}" as="c" hint-placeholder-count="7">
+            <div onClick="{{ c.go }}" style="{{ c.style }}">
+              <span style="{{ c.groupStyle }}">{{ c.group }}</span>
+              <span style="font-family:var(--font-mono);font-size:12px;color:#e9e9ed;flex:1">{{ c.name }}</span>
+              <span style="font-family:var(--font-mono);font-size:9px;color:#595d6c">{{ c.hint }}</span>
+              <span style="font-family:var(--font-mono);font-size:9px;color:#75798c">{{ c.key }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="padding:7px 13px;border-top:1px solid #292b31;font-family:var(--font-mono);font-size:9px;color:#595d6c;display:flex;gap:14px">
+          <span>↑↓ move</span><span>⏎ run on selection</span><span>esc close</span><span style="color:#7972a9">{{ selPath }}</span>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ ovNodes }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeOv }}" style="position:absolute;inset:0;background:rgba(11,12,20,0.62);display:flex;align-items:flex-start;justify-content:center;padding-top:150px;backdrop-filter:blur(2px)">
+      <div onClick="{{ stopProp }}" style="width:600px;border:1px solid #595d6c;border-radius:10px;background:#1c1e2a;box-shadow:0 24px 60px rgba(0,0,0,0.7);overflow:hidden">
+        <div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid #292b31">
+          <i class="ph ph-plus-circle" style="font-size:14px;color:#9184d9"></i>
+          <input value="{{ q }}" onInput="{{ onQuery }}" placeholder="add node — filter by name or kind…" style="flex:1;background:transparent;border:0;outline:none;color:#e9e9ed;font-family:var(--font-mono);font-size:14px" />
+          <span style="font-family:var(--font-mono);font-size:9px;color:#595d6c">{{ nodeTypeCount }}</span>
+        </div>
+        <div style="max-height:380px;overflow-y:auto;padding:5px">
+          <sc-for list="{{ nodeTypes }}" as="n" hint-placeholder-count="8">
+            <div onClick="{{ n.go }}" style="display:flex;align-items:center;gap:10px;padding:6px 9px;border-radius:5px;cursor:pointer" style-hover="background:rgba(145,132,217,0.1)">
+              <span style="{{ n.kindStyle }}">{{ n.kind }}</span>
+              <span style="font-family:var(--font-mono);font-size:12px;color:#e9e9ed;width:130px;flex:0 0 130px">{{ n.name }}</span>
+              <span style="font-family:Inter,sans-serif;font-size:10px;color:#9397ab;flex:1">{{ n.desc }}</span>
+              <span style="font-family:var(--font-mono);font-size:9px;color:#7972a9">{{ n.sig }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="padding:7px 13px;border-top:1px solid #292b31;font-family:var(--font-mono);font-size:9px;color:#595d6c;display:flex;gap:14px">
+          <span>click adds at canvas center</span><span>esc close</span><span style="color:#7972a9">new node lands selected — W wires it</span>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ ovScales }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeOv }}" style="position:absolute;inset:0;background:rgba(11,12,20,0.62);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px)">
+      <div onClick="{{ stopProp }}" style="width:1000px;height:660px;display:flex;border:1px solid #595d6c;border-radius:10px;background:#1c1e2a;box-shadow:0 24px 60px rgba(0,0,0,0.7);overflow:hidden">
+        <div style="width:340px;flex:0 0 340px;border-right:1px solid #292b31;display:flex;flex-direction:column">
+          <div style="padding:11px 13px;border-bottom:1px solid #292b31;display:flex;align-items:center;gap:8px">
+            <i class="ph ph-magnifying-glass" style="font-size:13px;color:#75798c"></i>
+            <input value="{{ q }}" onInput="{{ onQuery }}" placeholder="search 431 scales…" style="flex:1;background:transparent;border:0;outline:none;color:#e9e9ed;font-family:var(--font-mono);font-size:13px" />
+          </div>
+          <div style="flex:1;overflow:hidden;padding:5px">
+            <sc-for list="{{ scaleList }}" as="s" hint-placeholder-count="16">
+              <div onClick="{{ s.go }}" style="{{ s.style }}">
+                <span style="{{ s.nameStyle }}">{{ s.name }}</span>
+                <span style="font-family:var(--font-mono);font-size:9px;color:#595d6c">{{ s.meta }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+          <div style="padding:14px 16px;border-bottom:1px solid #292b31;display:flex;flex-direction:column;gap:5px">
+            <div style="display:flex;align-items:baseline;gap:10px">
+              <span style="font-family:var(--font-mono);font-size:22px;color:#e9e9ed">{{ scaleLabel }}</span>
+              <span style="font-family:var(--font-mono);font-size:10px;color:#7972a9">{{ tuningLabel }}</span>
+            </div>
+            <span style="font-family:var(--font-mono);font-size:10px;color:#75798c">{{ scaleDesc }}</span>
+          </div>
+          <div style="padding:14px 16px;display:flex;flex-direction:column;gap:9px;border-bottom:1px solid #292b31">
+            <span style="font-size:9px;letter-spacing:.13em;color:#75798c">INTERVALS · CENTS</span>
+            <div style="display:flex;flex-wrap:wrap;gap:5px">
+              <sc-for list="{{ centChips }}" as="c" hint-placeholder-count="8">
+                <span style="{{ c.style }}">{{ c.v }}</span>
+              </sc-for>
+              <span style="display:grid;place-items:center;width:26px;height:24px;border:1px dashed #3f424d;border-radius:4px;color:#75798c;cursor:pointer;font-size:11px">+</span>
+            </div>
+          </div>
+          <div style="flex:1;padding:14px 16px;display:flex;flex-direction:column;gap:8px;overflow:hidden">
+            <span style="font-size:9px;letter-spacing:.13em;color:#75798c">PITCH MAP · DEVIATION FROM 12-TET</span>
+            <div style="flex:1;position:relative;border:1px solid #292b31;border-radius:6px;background:#181a26;overflow:hidden">
+              <div style="position:absolute;left:0;right:0;top:50%;height:1px;background:linear-gradient(to right,transparent,rgba(233,233,237,0.16) 48px,rgba(233,233,237,0.16) calc(100% - 48px),transparent)"></div>
+              <sc-for list="{{ devMarks }}" as="m" hint-placeholder-count="12">
+                <div style="{{ m.style }}"><span style="{{ m.labelStyle }}">{{ m.label }}</span></div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="padding:12px 16px;border-top:1px solid #292b31;display:flex;gap:7px;align-items:center">
+            <span style="font-family:var(--font-mono);font-size:10px;color:#75798c">root</span>
+            <div style="display:flex;gap:2px">
+              <sc-for list="{{ roots }}" as="r" hint-placeholder-count="7">
+                <button onClick="{{ r.go }}" style="{{ r.style }}">{{ r.name }}</button>
+              </sc-for>
+            </div>
+            <div style="flex:1"></div>
+            <button class="btn btn-ghost" style="flex:0 0 auto;white-space:nowrap;font-size:11px;padding:5px 9px;border:1px solid #3f424d">Import Scala</button>
+            <button class="btn btn-primary" onClick="{{ closeOv }}" style="flex:0 0 auto;white-space:nowrap;font-size:11px;padding:5px 11px">Apply to field</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;left:50%;bottom:246px;transform:translateX(-50%);padding:7px 14px;border:1px solid #5d5294;border-radius:6px;background:rgba(28,30,42,0.95);font-family:var(--font-mono);font-size:11px;color:#d2cefd;box-shadow:0 10px 30px rgba(0,0,0,0.6)">{{ toastText }}</div>
+  </sc-if>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1200},&quot;layout&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;A&quot;,&quot;B&quot;,&quot;C&quot;],&quot;default&quot;:&quot;A&quot;,&quot;tsType&quot;:&quot;'A'|'B'|'C'&quot;,&quot;section&quot;:&quot;Tracker&quot;},&quot;rowHeight&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;min&quot;:13,&quot;max&quot;:26,&quot;step&quot;:1,&quot;default&quot;:17,&quot;unit&quot;:&quot;px&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Tracker&quot;},&quot;showCents&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Tracker&quot;}}">
+const TONE = { nat:'#cfd3e5', gho:'#75798c', deg:'#b5abfc', chd:'#a7a1db', off:'#595d6c', chr:'#f5f4ff', aut:'#9690c9' };
+const SPANS = [64, 16, 4, 1];
+const ZLAB = ['1 bar / row', '1/4 / row', '1/16 / row', '1/64 / row'];
+const TOTAL = 512;
+
+const TRACKS = [
+  { id:'t1', n:'01 KICK',   dev:'TR-909 kit',      harm:false, cols:['k1','k2'] },
+  { id:'t2', n:'02 BASS',   dev:'Diva · monoish',  harm:true,  cols:['b1','b2'] },
+  { id:'t3', n:'03 CHORDS', dev:'Patcher: voicer', harm:true,  cols:['c1'] },
+  { id:'t4', n:'04 LEAD',   dev:'31-TET Pad',      harm:true,  cols:['l1','l2','m1'] },
+  { id:'t5', n:'05 PERC',   dev:'Sampler',         harm:false, cols:['p1'] },
+  { id:'t6', n:'06 FM',     dev:'Dexed',           harm:true,  cols:['f1'] },
+  { id:'t7', n:'07 ATMOS',  dev:'Grain · 31-TET',  harm:true,  cols:['a1','m2'] }
+];
+const COLS = [
+  { id:'k1', t:'t1', w:76,  lbl:'note' }, { id:'k2', t:'t1', w:76,  lbl:'gho' },
+  { id:'b1', t:'t2', w:88,  lbl:'deg' }, { id:'b2', t:'t2', w:88,  lbl:'ovr' },
+  { id:'c1', t:'t3', w:152, lbl:'chord' },
+  { id:'l1', t:'t4', w:100, lbl:'deg¢' }, { id:'l2', t:'t4', w:88,  lbl:'off' }, { id:'m1', t:'t4', w:84, lbl:'cut' },
+  { id:'p1', t:'t5', w:76,  lbl:'hit' },
+  { id:'f1', t:'t6', w:88,  lbl:'deg' },
+  { id:'a1', t:'t7', w:100, lbl:'deg¢' }, { id:'m2', t:'t7', w:84, lbl:'den' }
+];
+const CLIPS = {
+  t1:[[0,8,'intro.kick'],[8,8,'main.kick']],
+  t2:[[0,8,'bass.a'],[8,4,'bass.b'],[12,4,'bass.a′']],
+  t3:[[0,8,'chords.voiced'],[8,8,'chords.wide']],
+  t4:[[1,2,'lead.seed'],[4,4,'lead.31tet'],[8,8,'lead.wide']],
+  t5:[[0,16,'perc.loop']],
+  t6:[[2,1,'fm.stab'],[6,1,'fm.stab′'],[10,4,'fm.wide']],
+  t7:[[0,2,'atmos.long'],[4,2,'atmos.ret'],[10,6,'atmos.tail']]
+};
+const CH = ['@1^7~80h20','@1^7~80h20','@4^9~60h14','@2^11~70h16','@6^9~66h18','@6^9~66h18','@5^13~84h22','@1^7~80h20'];
+const LEAD = [['17-4','+38'],['21-4','-19'],['24-4','+12'],['17-4','+38'],['28-4','-06'],['24-4','+12'],['21-4','-19'],['13-5','+25']];
+const HARM = [
+  { bar:0, len:2, name:'D dorian',    sub:'31-TET',      deg:'root 0 · quant 100%' },
+  { bar:2, len:1, name:'G lydian ♯11',sub:'31-TET',      deg:'root 17 · quant 100%' },
+  { bar:3, len:1, name:'D dorian',    sub:'ret.',        deg:'root 0' },
+  { bar:4, len:2, name:'B♭ lydian',   sub:'31-TET',      deg:'root 8 · drift +2¢' },
+  { bar:6, len:1, name:'A phryg dom', sub:'maqam hijaz', deg:'root 18 · quant 72%' },
+  { bar:7, len:1, name:'D dorian',    sub:'cadence',     deg:'root 0' }
+];
+const LADDER = [
+  ['00','1',   '0.0'],   ['05','♭3-', '-193.5'], ['08','2',  '193.5'], ['10','♭3',  '310.0'],
+  ['13','3-',  '387.1'], ['17','4',   '496.8'],  ['18','4+', '533.5'], ['21','5',  '696.8'],
+  ['24','♭6+', '813.3'], ['26','6',   '890.3'],  ['28','♭7', '968.2'], ['31','8',  '1200.0']
+];
+const BROWSE = [
+  ['PLUG','Diva','u-he · VST3 · 412 params','t2',1],
+  ['PLUG','31-TET Pad','uni · internal · tuning-aware','t4',1],
+  ['PLUG','Dexed','FM · VST3 · 155 params','t6',0],
+  ['PLUG','Valhalla Delay','effect · VST3','t4',1],
+  ['PLUG','Uni EQ-8','uni · internal','t8',0],
+  ['PLUG','Grain','uni · granular · 31-TET','t7',0],
+  ['PSET','Diva › hollow saw','bass · 3 macros mapped','t2',1],
+  ['PSET','31-TET Pad › glass field','pad · cents drift +2','t4',1],
+  ['PSET','Dexed › bell 31','fm · microtonal','t6',0],
+  ['PSET','EQ-8 › bus glue','master','t8',0],
+  ['SMPL','909 kick · dry.wav','44.1k · 0.42s · C-1','t1',1],
+  ['SMPL','909 clap.wav','44.1k · 0.31s','t5',0],
+  ['SMPL','hat closed 03.wav','48k · 0.09s','t5',1],
+  ['SMPL','field · tape hiss.wav','48k · 12.4s','t7',0],
+  ['SMPL','vinyl crackle.wav','44.1k · 8.0s','t7',0],
+  ['CLIP','bass.a','8 bars · 72 events · D dorian','t2',0],
+  ['CLIP','lead.31tet','4 bars · 64 events · 31-TET','t4',1],
+  ['CLIP','chords.voiced','8 bars · 8 chords','t3',0],
+  ['PTCH','voicer.31','patch · 9 nodes · 3 mod links','t4',1],
+  ['PTCH','euclid drums','patch · 5 nodes','t1',0],
+  ['SCAL','31-TET meantone','tuning · 31 steps · scala','t4',1],
+  ['SCAL','Maqam Hijaz','tuning · 24-TET · 7','t3',0],
+  ['SCAL','Bohlen-Pierce','tuning · 13-eq · 9','t7',0]
+];
+const PENDT = { 64:'+27', 80:'-4', 96:'+27', 112:'-4', 256:'+27', 272:'-4', 288:'+27', 304:'-4' };
+const AGLOG = [
+  ['user', 'make the lead breathe with the harmony — pull cents toward the field on strong beats', ''],
+  ['note', 'Reading the field and the clip. Strong beats resolve against D dorian; I\'ll pull cents 30% toward the field centers and leave weak beats free.', ''],
+  ['step', 'read HarmonyLane · 8 bars · D dorian 31-TET', '✓'],
+  ['step', 'read clip lead.31tet · 64 events · col l1', '✓'],
+  ['step', 'computed 8 retunes · max Δ 11¢', '✓'],
+  ['cmd', 'RetuneNotes track:04 col:l1 n:8 strength:0.3', 'base v2140']
+];
+const FIELD7 = [0, 8, 10, 17, 21, 26, 28];
+const DEFT = { k1:['C-1','ff','nat'], k2:['C-1','4a','gho'], b1:['1-2','c0','deg'], b2:['!F#1','d0','chr'],
+  c1:['@1^7~80h20','','chd'], l1:['17-4','+38','deg'], l2:['===','','off'], p1:['H-3','a0','nat'],
+  f1:['24-5','+12','deg'], a1:['12-6','-06','deg'], m1:['cut','60','aut'], m2:['den','58','aut'] };
+const CMDS = [
+  { g:'EDIT',    n:'transpose selection up 5 scale degrees', h:'8 cells', k:'⌥↑' },
+  { g:'HARMONY', n:'quantize selection to harmony field',    h:'strength 100%', k:'⌘Q' },
+  { g:'HARMONY', n:'set scale · Dorian 31-TET',              h:'global lane', k:'' },
+  { g:'TUNING',  n:'retune selection to 31-TET nearest degree', h:'±38¢ max', k:'' },
+  { g:'GENERATE',n:'generate bassline from harmony lane',    h:'track 02', k:'' },
+  { g:'CLIP',    n:'select clip at cursor',                  h:'clip scope', k:'⇧⏎' },
+  { g:'CLIP',    n:'duplicate clip after itself',            h:'clip scope', k:'⌘D' },
+  { g:'CLIP',    n:'fit clip to its content',                h:'bar-snapped', k:'F' },
+  { g:'HARMONY', n:'re-roll detached voices into chord tokens', h:'scale roll', k:'⌘R' },
+  { g:'CLIP',    n:'split clip at cursor',                   h:'beat-snapped', k:'⌘E' },
+  { g:'FRACTAL', n:'reverse · at selection scale',           h:'phrase', k:'⌘R' },
+  { g:'FRACTAL', n:'vary · rhythm 24%, pitch 12%',           h:'clip', k:'' },
+  { g:'CHAIN',   n:'add device · Uni EQ-8 after 31-TET Pad', h:'track 04', k:'' },
+  { g:'MAP',     n:'add tracker column for Pad · cutoff',    h:'track 04', k:'' },
+  { g:'PATCH',   n:'open patcher · voicer.31',               h:'F3', k:'' },
+  { g:'VIEW',    n:'zoom to 1/64 · no quantization',         h:'60000 nt/row', k:'⌘+' },
+  { g:'FILE',    n:'export stems · 32-bit, harmony frozen',  h:'8 tracks', k:'' }
+];
+const SCALES = [
+  ['— COMMON —',''],['Major (Ionian)','12-TET · 7'],['Natural Minor','12-TET · 7'],['Harmonic Minor','12-TET · 7'],['Blues','12-TET · 6'],
+  ['— MODES —',''],['D dorian','31-TET · 7'],['Phrygian','12-TET · 7'],['Lydian ♯11','31-TET · 7'],['Mixolydian','12-TET · 7'],
+  ['— JAZZ —',''],['Altered','12-TET · 7'],['Bebop Major','12-TET · 8'],['Octatonic','12-TET · 8'],
+  ['— WORLD —',''],['Maqam Hijaz','24-TET · 7'],['Hirajoshi','12-TET · 5'],['Raga Bhairavi','22-śruti · 7'],
+  ['— MICROTONAL —',''],['19-TET chain','19-TET · 19'],['31-TET meantone','31-TET · 31'],['Bohlen-Pierce','13-eq · 9'],['Partch 43','ratio · 43'],['Custom…','scala']
+];
+const TC = {
+  t1:'oklch(0.75 0.145 35)',  t2:'oklch(0.81 0.150 88)',  t3:'oklch(0.78 0.135 155)',
+  t4:'oklch(0.74 0.150 289)', t5:'oklch(0.79 0.115 205)', t6:'oklch(0.74 0.150 340)',
+  t7:'oklch(0.74 0.130 250)', t8:'oklch(0.72 0.060 289)',
+  b1:'oklch(0.74 0.095 289)', b2:'oklch(0.74 0.095 250)', mn:'oklch(0.82 0.070 289)'
+};
+const PT = { ev:'oklch(0.74 0.125 289)', evl:'oklch(0.74 0.110 336)', aud:'oklch(0.76 0.105 152)',
+             fld:'oklch(0.76 0.100 202)', ctl:'oklch(0.70 0.030 289)' };
+const KT = { CLOCK:'oklch(0.78 0.105 82)', GEN:'oklch(0.76 0.105 42)', FIELD:'oklch(0.76 0.100 202)',
+             HARM:'oklch(0.74 0.125 289)', PROC:'oklch(0.74 0.110 336)', CTRL:'oklch(0.70 0.030 289)',
+             DSP:'oklch(0.76 0.105 152)', SINK:'oklch(0.80 0.060 289)' };
+let NID = 20;
+const NODETYPES = [
+  ['CLOCK','clock÷N','divide the transport clock',[['div','04',0.25]],[['clk','ev']],[['clk','ev']]],
+  ['GEN','euclid.N','euclidean pulse generator',[['steps','16',0.9],['pulses','07',0.44]],[['clk','ev']],[['ev','ev']]],
+  ['GEN','step.seq','pattern from a tracker column',[['col','l1',1]],[['clk','ev']],[['ev','ev']]],
+  ['FIELD','harmony.read','read the global harmony field',[['lane','glob',1]],[],[['field','fld']]],
+  ['HARM','degree→pitch','resolve degrees against the field',[['strength','100',1]],[['ev','ev'],['field','fld']],[['ev','ev']]],
+  ['HARM','chord.voice','voice chord tokens',[['spread','60',0.6]],[['ev','ev']],[['voices','evl']]],
+  ['PROC','quantize.field','pull cents toward the field',[['grid','1/16',0.5]],[['ev','ev'],['swing','ctl']],[['ev','ev']]],
+  ['PROC','humanize','timing + velocity spray',[['amount','18',0.18]],[['ev','ev']],[['ev','ev']]],
+  ['CTRL','lfo.sine','control-rate oscillator',[['rate','0.25',0.25],['depth','62',0.62]],[],[['value','ctl']]],
+  ['CTRL','env.follow','follow audio amplitude',[['attack','12ms',0.2]],[['audio','aud']],[['value','ctl']]],
+  ['DSP','pad.31','tuning-aware oscillator bank',[['voices','08',0.5]],[['ev','ev']],[['audio','aud']]],
+  ['DSP','fold.sat','wavefolder saturator',[['drive','0.4',0.4]],[['audio','aud']],[['audio','aud']]],
+  ['SINK','track.out','events + audio to a track',[['gain','0 dB',0.75]],[['ev','ev'],['audio','aud']],[]]
+];
+const NODES = [
+  { id:'n2', x:70,  y:96,  w:158, kind:'CLOCK', name:'clock÷4', links:'', prm:[['div','04',0.25]], ins:[['clk','ev']], outs:[['clk','ev']] },
+  { id:'n1', x:70,  y:236, w:158, kind:'GEN', name:'euclid.16', links:'', prm:[['steps','16',0.9],['pulses','07',0.44]], ins:[['clk','ev']], outs:[['ev','ev']] },
+  { id:'nf', x:70,  y:400, w:158, kind:'FIELD', name:'harmony.read', links:'', prm:[['lane','glob',1]], ins:[], outs:[['field','fld']] },
+  { id:'n6', x:70,  y:548, w:158, kind:'CTRL', name:'lfo.sine', links:'⚡3', prm:[['rate','0.25',0.25],['depth','62',0.62]], ins:[], outs:[['value','ctl']] },
+  { id:'n3', x:352, y:210, w:222, kind:'HARM', name:'degree→pitch', links:'', prm:[['field','glob',1],['strength','100',1]], ins:[['ev','ev'],['field','fld']], outs:[['ev','ev']] },
+  { id:'n7', x:352, y:530, w:222, kind:'CTRL', name:'cents-drift', links:'⚡1', prm:[['amount','+2¢',0.14],['smooth','340',0.4]], ins:[['amount','ctl']], outs:[['value','ctl']] },
+  { id:'n4', x:686, y:170, w:234, kind:'PROC', name:'voicer.31 · spread', links:'', prm:[['spread','80',0.8],['humanize','20',0.2],['cents','+38',0.62]], ins:[['ev','ev'],['cents','ctl']], outs:[['ev','ev'],['voices','evl']] },
+  { id:'n8', x:686, y:420, w:234, kind:'PROC', name:'quantize.field', links:'', prm:[['grid','1/16',0.5],['swing','18',0.18]], ins:[['ev','ev'],['swing','ctl']], outs:[['ev','ev']] },
+  { id:'n10',x:686, y:646, w:234, kind:'DSP', name:'pad.31 · osc bank', links:'', prm:[['voices','08',0.5],['tune','31-TET',1]], ins:[['ev','ev']], outs:[['audio','aud']] },
+  { id:'n5', x:1046,y:346, w:258, kind:'SINK', name:'track 04 · out', links:'', prm:[['gain','0 dB',0.75],['latency','0 smp',0]], ins:[['ev','ev'],['audio','aud'],['gain','ctl']], outs:[] }
+];
+const EDGES = [
+  ['n2','clk','n1','clk'], ['n1','ev','n3','ev'], ['nf','field','n3','field'], ['n3','ev','n4','ev'],
+  ['n4','ev','n8','ev'], ['n8','ev','n5','ev'], ['n4','voices','n10','ev'], ['n10','audio','n5','audio'],
+  ['n6','value','n7','amount'], ['n7','value','n4','cents'], ['n7','value','n8','swing'], ['n6','value','n5','gain']
+];
+const NODE_PORTS = {
+  n4: [['in','events','EVENT','block'],['in','spread','CONTROL','sample'],['out','events','EVENT','block'],['out','voices','EVENT LIST','block']],
+  n3: [['in','events','EVENT','block'],['in','field','HARMONY','block'],['out','events','EVENT','block']],
+  n6: [['out','value','CONTROL','sample']],
+  n5: [['in','events','EVENT','block'],['in','audio','AUDIO ×2','sample'],['in','mod','CONTROL','sample']]
+};
+const STRIPS = [
+  { id:'t1', n:'01 KICK',   devs:['909 kit','Uni Comp','Sat'], db:'-3.2', pan:'C',   ml:0.72, mr:0.70, f:0.78, harm:false, route:'MASTER', sends:'2 snd' },
+  { id:'t2', n:'02 BASS',   devs:['Diva','EQ-8','Glue'],       db:'-5.8', pan:'C',   ml:0.62, mr:0.61, f:0.68, harm:true,  route:'MASTER', sends:'1 snd' },
+  { id:'t3', n:'03 CHORDS', devs:['voicer.31','Reverb'],       db:'-8.4', pan:'12L', ml:0.44, mr:0.48, f:0.58, harm:true,  route:'BUS A',  sends:'2 snd' },
+  { id:'t4', n:'04 LEAD',   devs:['voicer.31','31-TET Pad','cents-drift','Delay'], db:'-6.1', pan:'8R', ml:0.55, mr:0.58, f:0.64, harm:true, route:'BUS A', sends:'3 snd' },
+  { id:'t5', n:'05 PERC',   devs:['Sampler','Transient'],      db:'-11.0',pan:'20R', ml:0.34, mr:0.40, f:0.48, harm:false, route:'MASTER', sends:'1 snd' },
+  { id:'t6', n:'06 FM',     devs:['Dexed','EQ-8'],             db:'-9.6', pan:'6L',  ml:0.40, mr:0.36, f:0.52, harm:true,  route:'BUS A',  sends:'0 snd' },
+  { id:'t7', n:'07 ATMOS',  devs:['Grain','Shimmer'],          db:'-14.2',pan:'C',   ml:0.24, mr:0.28, f:0.40, harm:true,  route:'BUS B',  sends:'2 snd' },
+  { id:'b1', n:'BUS A',     devs:['Glue','Tape'],              db:'-2.0', pan:'C',   ml:0.66, mr:0.65, f:0.82, harm:false, route:'MASTER', sends:'—' },
+  { id:'b2', n:'BUS B',     devs:['Reverb'],                   db:'-4.0', pan:'C',   ml:0.30, mr:0.33, f:0.74, harm:false, route:'MASTER', sends:'—' },
+  { id:'mn', n:'MASTER',    devs:['EQ-8','Limiter'],           db:'-0.4', pan:'C',   ml:0.84, mr:0.82, f:0.90, harm:false, route:'out 1/2', sends:'—' }
+];
+const DEVICES = [
+  { id:'d1', kind:'PATCHER', name:'voicer.31', foot:'node n4 · presentation', act:'Focus in patcher', bc:'', macro:true,
+    macros:[['spread',0.8],['humanize',0.2],['cents',0.62],['voices',0.5],['spray',0.3],['glide',0.14],['field',1.0],['drift',0.44]] },
+  { id:'d2', kind:'VST3', name:'31-TET Pad', foot:'slot 1 · 412 params', act:'Editor', bc:'',
+    outs:[['out 1/2','main'],['out 3/4','sub osc'],['out 5/6','noise'],['out 7/8','aux tail']],
+    params:[['cutoff','0.62',0.62,0.22,'★'],['reso','0.31',0.31,0,'★'],['detune','+38¢',0.55,0.1,'★'],['env dcy','0.48',0.48,0,''],['tune map','31-TET',1,0,'★']] },
+  { id:'d3', kind:'PATCHER', name:'cents-drift', foot:'sample-accurate', act:'Focus in patcher', bc:'⚡1', macro:true,
+    macros:[['amount',0.14],['smooth',0.4],['bias',0.5],['clamp',0.8]] },
+  { id:'d4', kind:'UNI', name:'EQ-8', foot:'slot 2', act:'Editor', bc:'',
+    params:[['lo shelf','-2.4dB',0.42,0,''],['200 Hz','+1.1dB',0.58,0,''],['1k2','-0.8dB',0.46,0,''],['hi shelf','+2.0dB',0.66,0,'★']] },
+  { id:'d5', kind:'VST3', name:'Valhalla Delay', foot:'slot 3 · 88 params', act:'Editor', bc:'',
+    outs:[['out 1/2','wet'],['out 3/4','dry']],
+    params:[['time','3/16',0.37,0,'★'],['feedback','0.54',0.54,0.16,'★'],['mix','0.28',0.28,0,''],['diffuse','0.44',0.44,0,'']] }
+];
+
+class Component extends DCLogic {
+  state = { mode:'tracker', layout:null, zoom:2, first:0, playing:false, tick:0,
+            cur:{ r:19, c:5 }, sel:null, track:'t4', dev:'d2', node:'n4', tool:'select', selWire:null,
+            ov:null, q:'', scale:'D dorian', root:'D', tet:31, toast:'',
+            browser:true, bq:'', bTab:'all', bSel:'31-TET Pad', favs:{}, roll:null,
+            rec:false, loop:true, metro:false, clipSel:null, dock:{ harm:true, node:true, strip:true, agent:true },
+            aq:'', auto:false, pending:true, agentDone:false, winH:1200, detach:{},
+            arrZoom:16, arrFirst:0, rollZoom:1, rollPan:0, rollTop:0,
+            wDock:332, wBrowser:266, hRoll:344, drag:null, outsFor:null, rollVZ:1, outsMap:{}, outsPos:null, solo:{}, mute:{} };
+
+  componentDidMount() {
+    this._key = (e) => this.onKey(e);
+    window.addEventListener('keydown', this._key);
+    this._rs = () => this.setState({ winH:window.innerHeight });
+    window.addEventListener('resize', this._rs);
+    this._rs();
+  }
+  componentWillUnmount() {
+    window.removeEventListener('keydown', this._key);
+    window.removeEventListener('resize', this._rs);
+    if (this._t) clearInterval(this._t);
+  }
+  mainH() { return Math.max(660, (this.state.winH || 1200) - 286); }
+
+  say(t) { this.setState({ toast:t }); clearTimeout(this._tt); this._tt = setTimeout(() => this.setState({ toast:'' }), 1800); }
+
+  startDrag(kind, e) {
+    e.preventDefault(); e.stopPropagation();
+    const base = { dock:this.state.wDock, browser:this.state.wBrowser, roll:this.state.hRoll }[kind];
+    const x0 = e.clientX, y0 = e.clientY;
+    const move = (ev) => {
+      if (kind === 'dock') this.setState({ wDock:Math.max(248, Math.min(560, base - (ev.clientX - x0))) });
+      else if (kind === 'browser') this.setState({ wBrowser:Math.max(196, Math.min(460, base + (ev.clientX - x0))) });
+      else this.setState({ hRoll:Math.max(190, Math.min(640, base - (ev.clientY - y0))) });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      this.setState({ drag:null });
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    this.setState({ drag:kind });
+  }
+  barLabel(cl) { return (Math.floor(cl[0]) + 1) + ':' + (Math.round((cl[0] % 1) * 4) + 1) + ' · ' + cl[1] + ' bars'; }
+  selClip() {
+    const t = COLS[this.state.cur.c].t;
+    const tick = this.state.first + this.state.cur.r * SPANS[this.state.zoom];
+    const cl = (CLIPS[t] || []).find(c => tick >= c[0] * 64 && tick < (c[0] + c[1]) * 64);
+    if (cl) { this.setState({ clipSel:{ t, cl }, track:t }); this.say('clip ' + cl[2] + ' — ⌘X⌘C⌘V · ⌘D dup · ⌥↑↓ beat · ⌘⌥↑↓ bar · ⇧←→ trim · ⌥←→ track'); }
+    else this.say('No clip under cursor — ⌘V pastes the clipboard here');
+  }
+
+  ensureClip(tId, tick) {
+    const arr = CLIPS[tId] = CLIPS[tId] || [];
+    const bar = tick / 64;
+    if (arr.find(c => bar >= c[0] && bar < c[0] + c[1])) return null;
+    let prev = null;
+    arr.forEach(c => { if (c[0] + c[1] <= bar + 0.001 && (!prev || c[0] > prev[0])) prev = c; });
+    if (prev && bar - (prev[0] + prev[1]) < 1) {
+      prev[1] = Math.floor(bar) + 1 - prev[0];
+      return ['extended', prev];
+    }
+    const nm = ((TRACKS.find(x => x.id === tId) || { n:'xx clip' }).n.split(' ')[1] || 'clip').toLowerCase();
+    const nu = [Math.floor(bar), 1, nm + '.take'];
+    arr.push(nu); arr.sort((a, b) => a[0] - b[0]);
+    return ['created', nu];
+  }
+  writeNote() {
+    const s = this.state, span = SPANS[s.zoom];
+    const col = COLS[s.cur.c], tick = s.first + s.cur.r * span;
+    const arr = this.ev()[col.id], d = DEFT[col.id];
+    const ex = arr.find(v => v.t === tick);
+    if (ex) { ex.x = d[0]; ex.s = d[1]; ex.o = d[2]; }
+    else arr.push({ t:tick, x:d[0], s:d[1], o:d[2] });
+    const r = this.ensureClip(col.t, tick);
+    const vis = this.vis();
+    let nr = s.cur.r + 1, first = s.first;
+    if (nr > vis - 1) { nr = vis - 1; first = Math.min(TOTAL - vis * span, first + span); }
+    this.setState({ cur:{ r:nr, c:s.cur.c }, first:Math.max(0, first), track:col.t });
+    this.say(r ? (r[0] === 'created' ? 'note + clip auto-created · ' + r[1][2] + ' @ ' + this.barLabel(r[1]) : 'note · clip grew → ' + this.barLabel(r[1]))
+               : 'note ' + d[0] + ' @ ' + this.label(tick));
+  }
+  portClick(id, port, side, ty) {
+    if (this.state.tool !== 'wire') { this.setState({ node:id }); return; }
+    const pend = this._pendPort;
+    if (!pend || pend.side === side) { this._pendPort = { id, port, side, ty }; this.say('wire: ' + id + '.' + port + ' — now click a' + (side === 'out' ? 'n input' : 'n output') + ' port'); this.forceUpdate(); return; }
+    if (pend.ty !== ty) { this._pendPort = null; this.say('✕ ' + pend.ty + ' → ' + ty + ' — incompatible port types'); this.forceUpdate(); return; }
+    const from = side === 'in' ? pend : { id, port }, to = side === 'in' ? { id, port } : pend;
+    EDGES.push([from.id, from.port, to.id, to.port]);
+    this._pendPort = null;
+    this.setState({ tool:'select' });
+    this.say('connected ' + from.id + '.' + from.port + ' → ' + to.id + '.' + to.port + ' · graph v215');
+  }
+  dupNode() {
+    const n = NODES.find(x => x.id === this.state.node); if (!n) return;
+    const nu = { ...n, id:'n' + (NID++), x:n.x + 34, y:n.y + 34, prm:n.prm.map(p => p.slice()), ins:n.ins.map(p => p.slice()), outs:n.outs.map(p => p.slice()) };
+    NODES.push(nu); this.setState({ node:nu.id }); this.say('duplicated ' + n.name + ' → ' + nu.id);
+  }
+  delNode() {
+    const i = NODES.findIndex(x => x.id === this.state.node); if (i < 0) return;
+    const id = NODES[i].id;
+    for (let j = EDGES.length - 1; j >= 0; j--) if (EDGES[j][0] === id || EDGES[j][2] === id) EDGES.splice(j, 1);
+    NODES.splice(i, 1);
+    const nx = NODES[Math.max(0, i - 1)];
+    this.setState({ node:nx ? nx.id : null, selWire:null });
+    this.say('deleted ' + id + ' and its wires');
+  }
+  autoLayout() {
+    const rank = {};
+    const calc = id => {
+      if (rank[id] !== undefined) return rank[id];
+      rank[id] = 0;
+      const ins = EDGES.filter(e => e[2] === id);
+      if (ins.length) rank[id] = 1 + Math.max(...ins.map(e => calc(e[0])));
+      return rank[id];
+    };
+    NODES.forEach(n => calc(n.id));
+    const byRank = {};
+    NODES.forEach(n => { (byRank[rank[n.id]] = byRank[rank[n.id]] || []).push(n); });
+    Object.keys(byRank).forEach(r => byRank[r].forEach((n, i) => { n.x = 70 + r * 320; n.y = 80 + i * 168; }));
+    this.forceUpdate(); this.say('auto-layout · ' + Object.keys(byRank).length + ' ranks · deterministic');
+  }
+  addNode(td) {
+    const nu = { id:'n' + (NID++), x:400 + (NODES.length % 3) * 44, y:240 + (NODES.length % 5) * 48, w:206,
+      kind:td[0], name:td[1], links:'', prm:td[3].map(p => p.slice()), ins:td[4].map(p => p.slice()), outs:td[5].map(p => p.slice()) };
+    NODES.push(nu);
+    this.setState({ ov:null, q:'', node:nu.id, mode:'patch' });
+    this.say('added ' + td[1] + ' — press W to wire it');
+  }
+
+  onKey(e) {
+    const k = e.key, meta = e.metaKey || e.ctrlKey;
+    if (k === 'Escape') { this.setState({ ov:null, q:'', roll:null, clipSel:null }); return; }
+    if (k === 'Enter' && this.state.roll && !this.state.ov) { e.preventDefault(); this.setState({ mode:'tracker', roll:null }); this.say('Same data, tracker lens'); return; }
+    if (meta && k.toLowerCase() === 'k') { e.preventDefault(); this.setState({ ov:'palette', q:'' }); return; }
+    if (meta && e.shiftKey && k.toLowerCase() === 's') { e.preventDefault(); this.setState({ ov:'scales', q:'' }); return; }
+    if (meta && e.shiftKey && k.toLowerCase() === 'p') { e.preventDefault(); this.setState({ ov:'nodes', q:'', mode:'patch' }); return; }
+    if (meta && k.toLowerCase() === 'b') { e.preventDefault(); this.setState({ browser:!this.state.browser }); return; }
+    if (meta && k.toLowerCase() === 'j') { e.preventDefault(); this.setState({ dock:{ ...this.state.dock, agent:!this.state.dock.agent } }); return; }
+    if (this.state.ov) return;
+    if (k === 'F1') { e.preventDefault(); this.setState({ mode:'tracker' }); return; }
+    if (k === 'F2') { e.preventDefault(); this.setState({ mode:'arrange' }); return; }
+    if (k === 'F3') { e.preventDefault(); this.setState({ mode:'patch' }); return; }
+    if (k === 'F8') { e.preventDefault(); this.setState({ mode:'mix' }); return; }
+    if (this.state.mode === 'patch') {
+      const tag = e.target && e.target.tagName;
+      if (tag !== 'INPUT') {
+        if (k === 'v' || k === 'V') { this.setState({ tool:'select' }); return; }
+        if (k === 'w' || k === 'W') { this.setState({ tool:'wire' }); this.say('wire tool — click an output port, then an input port'); return; }
+        if (k === 'l' || k === 'L') { this.autoLayout(); return; }
+        if (k === 'a' || k === 'A') { e.preventDefault(); this.setState({ ov:'nodes', q:'' }); return; }
+        if (k === 'Backspace' || k === 'Delete') {
+          e.preventDefault();
+          if (this.state.selWire != null) { EDGES.splice(this.state.selWire, 1); this.setState({ selWire:null }); this.say('wire removed · graph v215'); }
+          else this.delNode();
+          return;
+        }
+      }
+      if (meta && k.toLowerCase() === 'd') { e.preventDefault(); this.dupNode(); return; }
+    }
+    if (k === ' ') { e.preventDefault(); this.togglePlay(); return; }
+    if (k === '[' || k === ']') { e.preventDefault(); this.cycleLayout(k === ']' ? 1 : -1); return; }
+    if (meta && (k === '=' || k === '+')) { e.preventDefault(); this.zoomBy(1); return; }
+    if (meta && k === '-') { e.preventDefault(); this.zoomBy(-1); return; }
+    if (this.state.mode === 'tracker' && k === 'Enter' && e.shiftKey) { e.preventDefault(); this.selClip(); return; }
+    const tag2 = e.target && e.target.tagName;
+    const cs = this.state.clipSel;
+    if (this.state.mode === 'tracker' && tag2 !== 'INPUT' && !cs) {
+      if (k === 'Enter') { e.preventDefault(); this.writeNote(); return; }
+      if (k === 'Backspace' || k === 'Delete') {
+        e.preventDefault();
+        const col = COLS[this.state.cur.c], span = SPANS[this.state.zoom], tick = this.state.first + this.state.cur.r * span;
+        const arr = this.ev()[col.id];
+        let n = 0;
+        for (let j = arr.length - 1; j >= 0; j--) if (arr[j].t >= tick && arr[j].t < tick + span) { arr.splice(j, 1); n++; }
+        this.forceUpdate();
+        this.say(n ? 'cleared ' + n + ' event' + (n > 1 ? 's' : '') + ' · ' + col.lbl + ' @ ' + this.label(tick) : 'nothing to clear');
+        return;
+      }
+      if (meta && k.toLowerCase() === 'e') {
+        e.preventDefault();
+        const col = COLS[this.state.cur.c], span = SPANS[this.state.zoom], tick = this.state.first + this.state.cur.r * span;
+        const arr = CLIPS[col.t] || [], pos = Math.round(tick / 16) * 0.25;
+        const cl = arr.find(c => pos > c[0] && pos < c[0] + c[1]);
+        if (!cl) { this.say('⌘E — cursor is not inside a clip'); return; }
+        const nu = [pos, cl[0] + cl[1] - pos, cl[2] + '.b'];
+        cl[1] = pos - cl[0];
+        arr.push(nu); arr.sort((a, b) => a[0] - b[0]);
+        this.setState({ clipSel:{ t:col.t, cl:nu } });
+        this.say('split ' + cl[2] + ' at ' + this.barLabel(nu));
+        return;
+      }
+    }
+    if (cs && tag2 !== 'INPUT' && (k === 'Backspace' || k === 'Delete')) {
+      e.preventDefault();
+      const arr = CLIPS[cs.t], cl = cs.cl;
+      TRACKS.find(x => x.id === cs.t).cols.forEach(cid => {
+        const evs = this.ev()[cid];
+        for (let j = evs.length - 1; j >= 0; j--) if (evs[j].t >= cl[0] * 64 && evs[j].t < (cl[0] + cl[1]) * 64) evs.splice(j, 1);
+      });
+      arr.splice(arr.indexOf(cl), 1);
+      this.setState({ clipSel:null });
+      this.say('deleted clip ' + cl[2] + ' + its events');
+      return;
+    }
+    if (cs && tag2 !== 'INPUT' && (k === 'f' || k === 'F') && !meta) {
+      e.preventDefault();
+      const cl = cs.cl, evs = [];
+      TRACKS.find(x => x.id === cs.t).cols.forEach(cid => this.ev()[cid].forEach(v => {
+        if (v.t >= cl[0] * 64 && v.t < (cl[0] + cl[1]) * 64) evs.push(v.t);
+      }));
+      if (!evs.length) { this.say('fit — clip is empty'); return; }
+      const s0 = Math.floor(Math.min(...evs) / 64), s1 = Math.ceil((Math.max(...evs) + 1) / 64);
+      cl[0] = s0; cl[1] = Math.max(0.25, s1 - s0);
+      this.forceUpdate(); this.say('fit to content → ' + this.barLabel(cl));
+      return;
+    }
+    if (cs && (this.state.mode === 'tracker' || this.state.mode === 'arrange')) {
+      const arr = CLIPS[cs.t], cl = cs.cl, idx = arr.indexOf(cl);
+      if (meta && k.toLowerCase() === 'x') { e.preventDefault(); this._clipbd = [cl[1], cl[2]]; arr.splice(idx, 1); this.setState({ clipSel:null }); this.say('Cut clip ' + cl[2]); return; }
+      if (meta && k.toLowerCase() === 'c') { e.preventDefault(); this._clipbd = [cl[1], cl[2]]; this.say('Copied clip ' + cl[2]); return; }
+      if (meta && k.toLowerCase() === 'd') { e.preventDefault(); const nu = [cl[0] + cl[1], cl[1], cl[2] + '′']; arr.push(nu); arr.sort((a, b) => a[0] - b[0]); this.setState({ clipSel:{ t:cs.t, cl:nu } }); this.say('Duplicated → ' + this.barLabel(nu)); return; }
+      if (e.altKey && (k === 'ArrowUp' || k === 'ArrowDown')) {
+        e.preventDefault(); const d = (k === 'ArrowDown' ? 1 : -1) * (meta ? 1 : 0.25);
+        cl[0] = Math.max(0, cl[0] + d); this.forceUpdate(); this.say('clip ' + cl[2] + ' → ' + this.barLabel(cl) + (meta ? ' (bar)' : ' (beat)')); return;
+      }
+      if (e.shiftKey && e.altKey && (k === 'ArrowRight' || k === 'ArrowLeft')) {
+        e.preventDefault(); const d = k === 'ArrowRight' ? 0.25 : -0.25;
+        cl[0] = Math.max(0, cl[0] + d); cl[1] = Math.max(0.25, cl[1] - d);
+        this.forceUpdate(); this.say('clip ' + cl[2] + ' · trim start → ' + this.barLabel(cl)); return;
+      }
+      if (e.shiftKey && (k === 'ArrowRight' || k === 'ArrowLeft')) {
+        e.preventDefault(); cl[1] = Math.max(0.25, cl[1] + (k === 'ArrowRight' ? 0.25 : -0.25)); this.forceUpdate(); this.say('clip ' + cl[2] + ' · trim end → ' + cl[1] + ' bars'); return;
+      }
+      if (e.altKey && (k === 'ArrowLeft' || k === 'ArrowRight')) {
+        e.preventDefault(); const ti = TRACKS.findIndex(x => x.id === cs.t), nt = TRACKS[ti + (k === 'ArrowRight' ? 1 : -1)];
+        if (nt) { arr.splice(idx, 1); (CLIPS[nt.id] = CLIPS[nt.id] || []).push(cl); CLIPS[nt.id].sort((a, b) => a[0] - b[0]); this.setState({ clipSel:{ t:nt.id, cl }, track:nt.id }); this.say('clip ' + cl[2] + ' → ' + nt.n); }
+        return;
+      }
+    }
+    if (meta && k.toLowerCase() === 'v' && this._clipbd && (this.state.mode === 'tracker' || this.state.mode === 'arrange')) {
+      e.preventDefault();
+      const tId = this.state.mode === 'arrange' ? this.state.track : COLS[this.state.cur.c].t;
+      if (!TRACKS.find(x => x.id === tId)) { this.say('Select a track lane to paste into'); return; }
+      const tick = this.state.mode === 'arrange' ? this.state.tick : this.state.first + this.state.cur.r * SPANS[this.state.zoom];
+      const nu = [Math.round(tick / 16) * 0.25, this._clipbd[0], this._clipbd[1] + '′'];
+      (CLIPS[tId] = CLIPS[tId] || []).push(nu); CLIPS[tId].sort((a, b) => a[0] - b[0]);
+      this.setState({ clipSel:{ t:tId, cl:nu }, track:tId });
+      this.say('Pasted ' + nu[2] + ' @ ' + this.barLabel(nu)); return;
+    }
+    if (meta && k.toLowerCase() === 'r' && this.state.roll) {
+      e.preventDefault();
+      const d = { ...this.state.detach }, had = Object.keys(d).filter(x => d[x]).length;
+      Object.keys(d).forEach(x => { d[x] = false; });
+      this.setState({ detach:d });
+      this.say(had ? 're-rolled ' + had + ' group' + (had > 1 ? 's' : '') + ' → chord tokens · voices become derived again'
+                   : 'nothing detached — all chords are already tokens');
+      return;
+    }
+    if (meta && k.toLowerCase() === 'l') { e.preventDefault(); this.say('Loop set · selection 1:1:000 → 2:1:000'); return; }
+    if (meta && k.toLowerCase() === 'g') { e.preventDefault(); this.say('Go to bar — type 24 → 24:1:000'); return; }
+    if (meta && k.toLowerCase() === 'c') { e.preventDefault(); this.say(this.state.sel ? 'Copied selection · 3 columns' : 'No selection — ⇧F4 copies the page'); return; }
+    const vis = this.vis();
+    if (k === 'ArrowDown' || k === 'ArrowUp') {
+      e.preventDefault();
+      const d = k === 'ArrowDown' ? 1 : -1;
+      let r = this.state.cur.r + d, first = this.state.first;
+      if (r < 0) { r = 0; first = Math.max(0, first - SPANS[this.state.zoom]); }
+      if (r > vis - 1) { r = vis - 1; first = Math.min(TOTAL - vis * SPANS[this.state.zoom], first + SPANS[this.state.zoom]); }
+      const sel = e.shiftKey ? { a:(this.state.sel ? this.state.sel.a : this.state.cur.r), b:r, c:this.state.cur.c } : null;
+      this.setState({ cur:{ r, c:this.state.cur.c }, first:Math.max(0, first), sel });
+      return;
+    }
+    if (k === 'ArrowLeft' || k === 'ArrowRight') {
+      e.preventDefault();
+      const c = Math.max(0, Math.min(COLS.length - 1, this.state.cur.c + (k === 'ArrowRight' ? 1 : -1)));
+      this.setState({ cur:{ r:this.state.cur.r, c }, track:COLS[c].t, dev:'d2' });
+      return;
+    }
+    if (k === '!') { this.say('Chromatic override armed — next entry bypasses the field'); }
+  }
+
+  lay() { return this.state.layout || this.props.layout || 'A'; }
+  rowH() { return this.props.rowHeight ?? 17; }
+  bodyH() { return this.mainH() - 46; }
+  vis() { return Math.max(8, Math.floor(this.bodyH() / this.rowH())); }
+  cents() { return this.props.showCents ?? true; }
+
+  cycleLayout(d) {
+    const o = ['A','B','C'], i = o.indexOf(this.lay());
+    const nx = o[(i + d + 3) % 3];
+    this.setState({ layout:nx });
+    this.say('Tracker layout · ' + ({ A:'A · LEDGER', B:'B · FIELD', C:'C · RIBBON' })[nx]);
+  }
+  zoomBy(d) {
+    const z = Math.max(0, Math.min(3, this.state.zoom + d));
+    this.setState({ zoom:z, first:0, cur:{ r:Math.min(this.state.cur.r, 10), c:this.state.cur.c } });
+    this.say('Zoom · ' + ZLAB[z] + ' · ' + (SPANS[z] * 60000).toLocaleString() + ' nanoticks per row');
+  }
+  togglePlay() {
+    const p = !this.state.playing;
+    this.setState({ playing:p });
+    if (this._t) clearInterval(this._t);
+    if (p) this._t = setInterval(() => this.setState(s => {
+      const tick = (s.tick + 2) % TOTAL, span = SPANS[s.zoom], vis = this.vis();
+      const win = vis * span, edge = s.first + win * 0.75;
+      let first = s.first;
+      if (tick < s.first || tick > edge) first = Math.max(0, Math.min(TOTAL - win, tick - win * 0.25));
+      return { tick, first:Math.round(first / span) * span };
+    }), 70);
+  }
+
+  ev() {
+    if (this._ev) return this._ev;
+    const e = { k1:[], k2:[], b1:[], b2:[], c1:[], l1:[], l2:[], p1:[], f1:[], a1:[], m1:[], m2:[] };
+    for (let bar = 0; bar < 8; bar++) {
+      const B = bar * 64;
+      [0,16,32,48].forEach(t => e.k1.push({ t:B+t, x:'C-1', s:'ff', o:'nat' }));
+      if (bar === 3 || bar === 7) e.k1.push({ t:B+56, x:'C-1', s:'c0', o:'nat' });
+      if (bar % 2 === 1) [24,56].forEach(t => e.k2.push({ t:B+t, x:'C-1', s:'4a', o:'gho' }));
+      [[0,'1-2','ff'],[8,'1-2','a0'],[12,'8-1','8c'],[16,'5-2','d4'],[24,'1-2','ff'],[32,'3-2','b8'],[40,'1-2','c4'],[48,'7-1','9a'],[56,'5-2','aa']]
+        .forEach(p => e.b1.push({ t:B+p[0], x:p[1], s:p[2], o:'deg' }));
+      if (bar === 2 || bar === 6) e.b2.push({ t:B+28, x:'!F#1', s:'d0', o:'chr' });
+      if (bar === 1 || bar === 5) e.b2.push({ t:B+60, x:'===', s:'', o:'off' });
+      e.c1.push({ t:B, x:CH[bar], s:'', o:'chd' });
+      if (bar !== 0 && bar !== 3) for (let i = 0; i < 16; i++) { const d = LEAD[i % 8]; e.l1.push({ t:B+i*4, x:d[0], s:d[1], o:'deg' }); }
+      if (bar === 1 || bar === 4) e.l2.push({ t:B+60, x:'===', s:'', o:'off' });
+      for (let i = 0; i < 16; i++) e.p1.push({ t:B+i*4, x:(i % 8 === 6 ? 'O-3' : 'H-3'), s:(i % 4 === 0 ? 'e0' : '62'), o:'nat' });
+      if (bar === 2 || bar === 6) [0,40].forEach(t => e.f1.push({ t:B+t, x:'24-5', s:'+12', o:'deg' }));
+      if (bar === 0 || bar === 4) e.a1.push({ t:B, x:'12-6', s:'-06', o:'deg' });
+      for (let i = 0; i < 8; i++) e.m1.push({ t:B+i*8, x:'cut', s:(0x30 + ((bar*8+i) * 7) % 0x9f).toString(16), o:'aut' });
+      if (bar % 2 === 0) e.m2.push({ t:B+32, x:'den', s:(0x40 + bar * 11).toString(16), o:'aut' });
+    }
+    this._ev = e; return e;
+  }
+
+  bucket(id, t0, span) {
+    const hits = this.ev()[id].filter(v => v.t >= t0 && v.t < t0 + span);
+    if (!hits.length) return { text:'', sub:'', o:'off', agg:false, dens:0 };
+    if (hits.length === 1) return { text:hits[0].x, sub:hits[0].s, o:hits[0].o, agg:false, dens:1 };
+    const same = hits.every(h => h.x === hits[0].x);
+    return { text:same ? hits.length + '× ' + hits[0].x : hits.length + ' evts', sub:same ? hits[0].s : 'mix', o:hits[0].o, agg:true, dens:hits.length };
+  }
+
+  label(t) {
+    const bar = Math.floor(t / 64) + 1, beat = Math.floor((t % 64) / 16) + 1, tk = (t % 16) * 60;
+    if (this.state.zoom === 0) return bar + ':1:000';
+    if (this.state.zoom === 1) return bar + ':' + beat + ':000';
+    return bar + ':' + beat + ':' + String(tk).padStart(3, '0');
+  }
+
+  cellStyle(w, opts) {
+    const rh = this.rowH();
+    let s = 'display:flex;align-items:center;gap:5px;padding:0 6px;box-sizing:border-box;width:' + w + 'px;flex:0 0 ' + w + 'px;height:' + rh + 'px;'
+      + 'border-right:1px solid rgba(233,233,237,0.05);cursor:text;position:relative;overflow:hidden;';
+    if (opts.dens) s += 'background:rgba(145,132,217,' + Math.min(0.13, 0.03 + opts.dens * 0.012) + ');';
+    if (opts.col) s += 'background:rgba(233,233,237,0.025);';
+    if (opts.selected) s += 'background:rgba(145,132,217,0.12);';
+    if (opts.cursor) s += 'background:rgba(145,132,217,0.2);box-shadow:inset 0 0 0 1px #9184d9;';
+    return s;
+  }
+
+  buildRows(mode) {
+    const z = this.state.zoom, span = SPANS[z], rh = this.rowH(), vis = this.vis(), first = this.state.first;
+    const sel = this.state.sel, cur = this.state.cur;
+    const rows = [];
+    for (let i = 0; i < vis; i++) {
+      const t0 = first + i * span;
+      if (t0 >= TOTAL) break;
+      const isBar = t0 % 64 === 0, isBeat = t0 % 16 === 0;
+      const playing = this.state.playing && this.state.tick >= t0 && this.state.tick < t0 + span;
+      let rs = 'display:flex;height:' + rh + 'px;box-sizing:border-box;';
+      rs += isBar ? 'border-top:1px solid rgba(233,233,237,0.15);' : (isBeat ? 'border-top:1px solid rgba(233,233,237,0.07);' : '');
+      if (isBeat && !isBar) rs += 'background:rgba(233,233,237,0.012);';
+      if (isBar) rs += 'background:rgba(233,233,237,0.028);';
+      if (playing) rs += 'background:rgba(145,132,217,0.14);box-shadow:inset 2px 0 0 #9184d9;';
+      const inSel = sel && i >= Math.min(sel.a, sel.b) && i <= Math.max(sel.a, sel.b);
+      const tw = mode === 'B' ? 118 : 104;
+      const ts = 'width:' + tw + 'px;flex:0 0 ' + tw + 'px;display:flex;align-items:center;padding:0 8px;box-sizing:border-box;'
+        + 'font-family:var(--font-mono);font-size:' + (isBar ? 11 : 10) + 'px;letter-spacing:.02em;'
+        + 'color:' + (playing ? '#e9e9ed' : isBar ? '#cfd3e5' : isBeat ? '#9397ab' : '#595d6c') + ';'
+        + 'border-right:1px solid rgba(233,233,237,0.07);' + (isBar ? 'font-weight:500;' : '');
+      const cells = COLS.map((c, ci) => {
+        const b = this.bucket(c.id, t0, span);
+        const isCur = cur.r === i && cur.c === ci;
+        const selected = inSel && sel.c === ci;
+        const w = mode === 'B' ? Math.round(c.w * 1.24) : c.w;
+        const tc = TC[c.t], tk = TRACKS.find(t => t.id === c.t);
+        const lastOfTrack = tk.cols[tk.cols.length - 1] === c.id, firstOfTrack = tk.cols[0] === c.id;
+        const cl = (CLIPS[c.t] || []).find(k => t0 < (k[0] + k[1]) * 64 && t0 + span > k[0] * 64);
+        const clStart = !!cl && t0 <= cl[0] * 64 && cl[0] * 64 < t0 + span;
+        const clEnd = !!cl && t0 < (cl[0] + cl[1]) * 64 && t0 + span >= (cl[0] + cl[1]) * 64;
+        let st = this.cellStyle(w, { dens:b.agg ? b.dens : 0, cursor:isCur, selected, col:cur.c === ci && !isCur });
+        if (!cl) st += 'background:rgba(9,10,17,0.5);';
+        else if (!b.agg && !isCur && !selected) st += 'background:color-mix(in srgb,' + tc + ' 4%,transparent);';
+        if (clStart) st += 'border-top:1px solid ' + tc + ';';
+        if (clEnd) st += 'border-bottom:1px solid color-mix(in srgb,' + tc + ' 50%,transparent);';
+        const csel = this.state.clipSel && cl && this.state.clipSel.cl === cl;
+        if (csel && !isCur) {
+          st += 'background:color-mix(in srgb,' + tc + ' 12%,transparent);';
+          const ring = [];
+          if (clStart) ring.push('inset 0 1px 0 ' + tc);
+          if (clEnd) ring.push('inset 0 -1px 0 ' + tc);
+          if (firstOfTrack) ring.push('inset 1px 0 0 ' + tc);
+          if (lastOfTrack) ring.push('inset -1px 0 0 ' + tc);
+          if (ring.length) st += 'box-shadow:' + ring.join(',') + ';';
+        }
+        if (b.o === 'chr' && b.text) st += 'box-shadow:inset 2px 0 0 ' + tc + ';';
+        if (mode === 'B') st += 'padding-left:12px;';
+        let pend = '';
+        if (this.state.pending && c.id === 'l1' && span <= 16) {
+          for (const pt in PENDT) if (+pt >= t0 && +pt < t0 + span) pend = PENDT[pt];
+          if (pend) st += 'outline:1px dashed #b5abfc;outline-offset:-2px;background:rgba(145,132,217,0.15);';
+        }
+        const cval = b.sub && (b.sub[0] === '+' || b.sub[0] === '-') ? parseInt(b.sub, 10) : 0;
+        const col = b.o === 'off' || b.o === 'gho' ? TONE[b.o] : b.o === 'chr' ? '#f5f4ff' : tc;
+        return {
+          text:b.text, sub:pend ? '⇢' + pend : (this.cents() || !b.sub ? b.sub : ''),
+          clip:clStart && lastOfTrack ? (b.text ? '▸' : cl[2] + ' ▸') : '',
+          clipStyle:'position:absolute;right:5px;top:1px;font-family:var(--font-mono);font-size:8px;letter-spacing:.05em;color:' + tc + ';opacity:.9;pointer-events:none;',
+          style:st,
+          textStyle:'font-family:var(--font-mono);font-size:' + (b.agg ? 10 : 11) + 'px;color:' + col + ';' + (b.agg ? 'padding:0 4px;border:1px solid color-mix(in srgb,' + tc + ' 45%,transparent);border-radius:3px;background:color-mix(in srgb,' + tc + ' 11%,transparent);' : '') + (b.o === 'chd' ? 'letter-spacing:.01em;' : ''),
+          subStyle:'font-family:var(--font-mono);font-size:9px;color:' + (b.o === 'chr' ? col : '#75798c') + ';margin-left:auto;',
+          gravStyle:'position:absolute;left:4px;top:50%;width:3px;height:' + (b.text ? Math.max(2, Math.min(9, Math.abs(cval) / 5 + 2)) : 0) + 'px;'
+            + 'transform:translateY(' + (cval >= 0 ? '-100%' : '0') + ');background:' + (cval ? tc : 'color-mix(in srgb,' + tc + ' 30%,transparent)') + ';border-radius:1px;',
+          go:() => this.setState({ cur:{ r:i, c:ci }, sel:null, track:c.t })
+        };
+      });
+      const hb = HARM.find(h => h.bar === Math.floor(t0 / 64) && t0 % 64 === 0);
+      rows.push({
+        key:t0, label:this.label(t0), style:rs, timeStyle:ts, cells,
+        wrapStyle:'display:flex;flex-direction:column;',
+        banner:!!hb && mode === 'B',
+        bannerStyle:'display:flex;align-items:center;gap:9px;height:22px;padding:0 12px;box-sizing:border-box;background:linear-gradient(90deg,rgba(145,132,217,0.16),rgba(145,132,217,0.02));border-top:1px solid rgba(145,132,217,0.45);',
+        bName:hb ? hb.name : '', bSub:hb ? hb.sub : '', bDeg:hb ? hb.deg : ''
+      });
+    }
+    return rows;
+  }
+
+  hz(deg, oct) {
+    const c = parseFloat((LADDER.find(l => parseInt(l[0], 10) === deg) || ['','','0'])[2]);
+    return (146.83 * Math.pow(2, oct - 3 + c / 1200)).toFixed(2);
+  }
+
+  renderVals() {
+    const s = this.state, lay = this.lay(), z = s.zoom, span = SPANS[z], rh = this.rowH(), vis = this.vis();
+    const mode = s.mode;
+    const curCol = COLS[s.cur.c], curTrack = TRACKS.find(t => t.id === curCol.t);
+    const b = this.bucket(curCol.id, s.first + s.cur.r * span, span);
+    const trk = TRACKS.find(t => t.id === s.track) || curTrack;
+    const modes = [['tracker','TRACKER','F1'],['arrange','ARRANGE','F2'],['patch','PATCHER','F3'],['mix','MIXER','F8']].map(m => ({
+      name:m[1], key:m[2],
+      style:'display:flex;align-items:center;gap:6px;padding:3px 10px;border:0;border-radius:4px;cursor:pointer;font-family:Inter,sans-serif;font-size:10px;letter-spacing:.1em;'
+        + (mode === m[0] ? 'background:rgba(145,132,217,0.18);color:#d2cefd;box-shadow:inset 0 0 0 1px #5d5294;' : 'background:transparent;color:#75798c;'),
+      keyStyle:'font-family:var(--font-mono);font-size:8px;color:' + (mode === m[0] ? '#7972a9' : '#3f424d'),
+      go:() => this.setState({ mode:m[0] })
+    }));
+
+    const headBase = (t, w) => ({
+      name:t.n, dev:t.dev, harm:t.harm ? 'H' : 'h',
+      style:'width:' + w + 'px;flex:0 0 ' + w + 'px;display:flex;flex-direction:column;justify-content:center;gap:2px;padding:0 7px;box-sizing:border-box;'
+        + 'border-right:1px solid #292b31;cursor:pointer;overflow:hidden;'
+        + (s.track === t.id ? 'background:color-mix(in srgb,' + TC[t.id] + ' 9%,transparent);box-shadow:inset 0 -2px 0 ' + TC[t.id] + ';' : 'box-shadow:inset 0 -2px 0 color-mix(in srgb,' + TC[t.id] + ' 28%,transparent);'),
+      dotStyle:'width:5px;height:5px;border-radius:50%;flex:0 0 5px;background:' + TC[t.id],
+      nameStyle:'font-family:var(--font-mono);font-size:10px;letter-spacing:.04em;color:' + (s.track === t.id ? TC[t.id] : '#b2b6ca'),
+      harmStyle:'font-family:var(--font-mono);font-size:8px;padding:0 3px;border-radius:2px;border:1px solid ' + (t.harm ? 'color-mix(in srgb,' + TC[t.id] + ' 55%,transparent)' : '#3f424d') + ';color:' + (t.harm ? TC[t.id] : '#595d6c'),
+      go:() => this.setState({ track:t.id })
+    });
+    const trackHeads = TRACKS.map(t => headBase(t, t.cols.reduce((a, c) => a + COLS.find(x => x.id === c).w, 0)));
+    const trackHeadsB = TRACKS.map(t => headBase(t, Math.round(t.cols.reduce((a, c) => a + COLS.find(x => x.id === c).w, 0) * 1.24)));
+
+    const harmBlocks = HARM.map(h => {
+      const t0 = h.bar * 64, len = h.len * 64;
+      const top = ((t0 - s.first) / span) * rh, hgt = (len / span) * rh;
+      const vh = vis * rh;
+      const clipTop = Math.max(0, top), clipBot = Math.min(vh, top + hgt);
+      return {
+        name:h.name, sub:h.sub, deg:h.deg,
+        style:'position:absolute;left:0;right:0;top:' + clipTop + 'px;height:' + Math.max(0, clipBot - clipTop) + 'px;'
+          + 'display:' + (clipBot <= 0 || clipTop >= vh ? 'none' : 'flex') + ';flex-direction:column;gap:1px;padding:5px 8px;box-sizing:border-box;'
+          + 'background:linear-gradient(90deg,rgba(145,132,217,0.20),rgba(145,132,217,0.05));border-top:1px solid #9184d9;'
+          + 'box-shadow:inset 3px 0 0 #9184d9;cursor:pointer;overflow:hidden;',
+        go:() => this.setState({ ov:'scales', q:'' })
+      };
+    });
+
+    const miniMarks = [];
+    for (let bar = 0; bar < 8; bar++) for (let q = 0; q < 4; q++) {
+      const t0 = bar * 64 + q * 16;
+      const d = Object.keys(this.ev()).reduce((a, k) => a + this.ev()[k].filter(v => v.t >= t0 && v.t < t0 + 16).length, 0);
+      miniMarks.push({ style:'position:absolute;left:4px;right:4px;top:' + ((t0 / TOTAL) * 100) + '%;height:' + (100 / 32) + '%;'
+        + 'background:rgba(145,132,217,' + Math.min(0.6, d / 34) + ');border-radius:1px;' });
+    }
+
+    const zoomLabel = ZLAB[z] + ' · ' + (span * 60000).toLocaleString() + ' nt';
+    const scaleLabel = s.root + ' ' + (s.scale.split(' ').slice(1).join(' ') || s.scale);
+    const tuningLabel = s.tet + '-TET · ' + s.tet + ' steps · scala';
+
+    const ladder = LADDER.filter(l => ['00','08','10','17','21','26','28'].indexOf(l[0]) > -1).map(l => {
+      const c = parseFloat(l[2]), et = Math.round(c / 100) * 100, dev = c - et;
+      const active = s.cur.c === 5 && b.text && b.text.indexOf(l[0].replace(/^0/, '')) === 0;
+      return {
+        num:l[0], name:l[1], cents:c.toFixed(1),
+        style:'display:flex;align-items:center;gap:8px;height:16px;padding:0 6px;border-radius:3px;'
+          + (active ? 'background:rgba(145,132,217,0.16);' : ''),
+        numStyle:'font-family:var(--font-mono);font-size:10px;width:20px;color:' + (active ? '#d2cefd' : '#595d6c'),
+        nameStyle:'font-family:var(--font-mono);font-size:10px;width:26px;color:' + (active ? '#e9e9ed' : '#9397ab'),
+        centStyle:'font-family:var(--font-mono);font-size:9px;width:46px;text-align:right;color:' + (Math.abs(dev) > 15 ? '#b5abfc' : '#75798c'),
+        barStyle:'position:absolute;left:50%;top:0;bottom:0;width:' + Math.max(1, Math.abs(dev) / 50 * 46) + 'px;'
+          + (dev < 0 ? 'transform:translateX(-100%);' : '') + 'background:' + (Math.abs(dev) > 15 ? '#9184d9' : '#3f424d') + ';'
+      };
+    });
+
+    const tets = [12, 19, 31].map(t => ({
+      name:t + '-TET',
+      style:'font-family:var(--font-mono);font-size:9px;padding:3px 7px;border:0;border-radius:4px;cursor:pointer;'
+        + (s.tet === t ? 'background:rgba(145,132,217,0.2);color:#d2cefd;box-shadow:inset 0 0 0 1px #5d5294;' : 'background:transparent;color:#75798c;'),
+      go:() => this.setState({ tet:t })
+    }));
+
+    // ---- ribbon (layout C)
+    const laneH = Math.floor((this.mainH() - 78) / TRACKS.length);
+    const lanes = TRACKS.map(t => {
+      const raw = [];
+      t.cols.forEach(cid => this.ev()[cid].forEach(v => raw.push(v)));
+      raw.sort((a, c) => a.t - c.t);
+      const evs = raw.map((v, i) => {
+        const pitch = (v.x.match(/\d+/) ? parseInt(v.x.match(/\d+/)[0], 10) : 12) % 32;
+        const nxt = raw[i + 1], gap = nxt ? nxt.t - v.t : TOTAL;
+        const wide = gap >= 12;
+        return { text:wide ? v.x : '',
+          style:'position:absolute;left:' + ((v.t / TOTAL) * 100) + '%;top:' + (8 + (1 - pitch / 32) * (laneH - 34)) + 'px;'
+            + 'height:11px;display:flex;align-items:center;box-sizing:border-box;font-family:var(--font-mono);font-size:9px;'
+            + (wide ? 'padding:0 4px;' : 'width:' + Math.max(4, (gap / TOTAL) * 1560) + 'px;')
+            + 'color:' + (v.o === 'off' || v.o === 'gho' ? TONE[v.o] : TC[t.id]) + ';background:color-mix(in srgb,' + TC[t.id] + ' ' + (v.o === 'chd' ? 20 : 12) + '%,transparent);'
+            + 'border-radius:2px;border-left:2px solid ' + TC[t.id] + ';white-space:nowrap;overflow:hidden;' };
+      });
+      return {
+        name:t.n, dev:t.dev, harm:t.harm ? 'H' : 'h', count:evs.length + ' ev', evs,
+        style:'display:flex;height:' + laneH + 'px;box-sizing:border-box;border-bottom:1px solid rgba(233,233,237,0.06);'
+          + (s.track === t.id ? 'background:rgba(145,132,217,0.05);' : ''),
+        headStyle:'width:176px;flex:0 0 176px;display:flex;flex-direction:column;justify-content:center;gap:3px;padding:0 10px;box-sizing:border-box;'
+          + 'border-right:1px solid #292b31;cursor:pointer;' + (s.track === t.id ? 'box-shadow:inset 2px 0 0 ' + TC[t.id] + ';' : ''),
+        dotStyle:'width:5px;height:5px;border-radius:50%;background:' + TC[t.id],
+        nameStyle:'font-family:var(--font-mono);font-size:11px;color:' + (s.track === t.id ? TC[t.id] : '#b2b6ca'),
+        harmStyle:'font-family:var(--font-mono);font-size:8px;padding:0 3px;border-radius:2px;border:1px solid ' + (t.harm ? 'color-mix(in srgb,' + TC[t.id] + ' 55%,transparent)' : '#3f424d') + ';color:' + (t.harm ? TC[t.id] : '#595d6c'),
+        go:() => this.setState({ track:t.id })
+      };
+    });
+    const barTicks = [1,2,3,4,5,6,7,8].map((n, i) => ({ label:n + ':1:000',
+      style:'position:absolute;left:' + (i * 12.5) + '%;top:0;bottom:0;width:12.5%;border-left:1px solid rgba(233,233,237,' + (i ? '0.09' : '0') + ');display:flex;align-items:center;' }));
+    const harmSpans = HARM.map(h => ({ name:h.name, sub:h.sub,
+      style:'position:absolute;left:' + (h.bar * 12.5) + '%;width:' + (h.len * 12.5) + '%;top:4px;bottom:4px;display:flex;flex-direction:column;justify-content:center;gap:1px;padding:0 9px;box-sizing:border-box;'
+        + 'background:linear-gradient(90deg,rgba(145,132,217,0.18),rgba(145,132,217,0.04));border-left:1px solid #9184d9;border-radius:0 4px 4px 0;cursor:pointer;overflow:hidden;',
+      go:() => this.setState({ ov:'scales', q:'' }) }));
+
+    // ---- arrangement
+    const aZ = s.arrZoom, aF = s.arrFirst, aW = 100 / aZ;
+    const arrBars = Array.from({ length:aZ }, (_, i) => ({ label:(aF + i + 1) + '', style:'position:absolute;left:' + (i * aW) + '%;top:0;bottom:0;width:' + aW + '%;border-left:1px solid rgba(233,233,237,' + ((aF + i) % 4 === 0 ? '0.13' : '0.05') + ');display:flex;align-items:center;' }));
+    const arrHarm = [[0,4,'D dorian','31-TET'],[4,2,'G lydian ♯11','31-TET'],[6,2,'B♭ lydian','drift +2¢'],[8,3,'A phryg dom','maqam hijaz'],[11,5,'D dorian','cadence']]
+      .map(h => ({ name:h[2], sub:h[3], style:'position:absolute;left:' + ((h[0] - aF) * aW) + '%;width:' + (h[1] * aW) + '%;top:5px;bottom:5px;display:flex;flex-direction:column;justify-content:center;gap:1px;padding:0 10px;box-sizing:border-box;background:linear-gradient(90deg,rgba(145,132,217,0.18),rgba(145,132,217,0.04));border-left:1px solid #9184d9;border-radius:0 5px 5px 0;cursor:pointer;overflow:hidden;', go:() => this.setState({ ov:'scales' }) }));
+    const arrLanesH = this.mainH() - 86 - (s.roll ? s.hRoll : 0);
+    const arrH = Math.floor(arrLanesH / TRACKS.length);
+    const chordVoices = (tok) => {
+      const m = tok.match(/@(\d+)\^(\d+)/);
+      if (!m) return [];
+      const root = parseInt(m[1], 10) - 1, ext = parseInt(m[2], 10);
+      const n = ({ 7:4, 9:5, 11:6, 13:7 })[ext] || 4;
+      const out = [];
+      for (let v = 0; v < n; v++) {
+        const idx = root + v * 2;
+        out.push(FIELD7[idx % 7] + 31 * Math.floor(idx / 7));
+      }
+      return out;
+    };
+    const clipNotes = (t, start, len) => {
+      const out = [];
+      for (let i = 0; i < len; i++) {
+        const src = (start + i) % 8;
+        t.cols.forEach(cid => this.ev()[cid].forEach(v => {
+          if (v.t < src * 64 || v.t >= (src + 1) * 64) return;
+          const nx = (i + (v.t % 64) / 64) / len * 100;
+          if (v.o === 'chd') {
+            const voices = chordVoices(v.x);
+            const nxt = this.ev()[cid].find(w => w.t > v.t && w.t < (src + 1) * 64);
+            const endT = nxt ? nxt.t : (src + 1) * 64;
+            const w = ((endT - v.t) / 64) / len * 100;
+            voices.forEach((pv, vi) => out.push({
+              style:'position:absolute;left:' + nx + '%;width:' + Math.max(1.2, w - 0.4) + '%;'
+                + 'bottom:' + (8 + (Math.min(56, pv) / 56) * 70) + '%;height:3px;border-radius:1px;background:' + TC[t.id] + ';'
+                + 'opacity:' + (0.9 - vi * 0.13) + ';'
+            }));
+            return;
+          }
+          const m = v.x.match(/\d+/), p = m ? parseInt(m[0], 10) % 24 : 12;
+          const vel = v.s && /^[0-9a-f]{2}$/.test(v.s) ? parseInt(v.s, 16) / 255 : 0.7;
+          out.push({ style:'position:absolute;left:' + nx + '%;width:' + Math.max(0.9, 100 / len / 22) + '%;'
+            + 'bottom:' + (8 + (p / 24) * 70) + '%;height:4px;border-radius:1px;background:' + TC[t.id] + ';'
+            + 'opacity:' + (v.o === 'gho' || v.o === 'off' ? 0.3 : 0.45 + vel * 0.55) + ';' });
+        }));
+      }
+      return out;
+    };
+    const arrTracks = TRACKS.map(t => ({
+      name:t.n, dev:t.dev,
+      style:'display:flex;height:' + arrH + 'px;box-sizing:border-box;border-bottom:1px solid rgba(233,233,237,0.06);' + (s.track === t.id ? 'background:color-mix(in srgb,' + TC[t.id] + ' 5%,transparent);' : ''),
+      headStyle:'width:200px;flex:0 0 200px;display:flex;flex-direction:column;justify-content:center;gap:3px;padding:0 12px;box-sizing:border-box;border-right:1px solid #292b31;cursor:pointer;' + (s.track === t.id ? 'box-shadow:inset 2px 0 0 ' + TC[t.id] + ';' : ''),
+      dotStyle:'width:5px;height:5px;border-radius:50%;background:' + TC[t.id],
+      nameStyle:'font-family:var(--font-mono);font-size:11px;color:' + (s.track === t.id ? TC[t.id] : '#b2b6ca'),
+      go:() => this.setState({ track:t.id }),
+      clips:(CLIPS[t.id] || []).map((c, ci) => {
+        const open = s.roll && s.roll.t === t.id && s.roll.i === ci;
+        const kSel = s.clipSel && s.clipSel.cl === c, hot = open || kSel;
+        return {
+          name:c[2], notes:clipNotes(t, c[0], c[1]),
+          labelStyle:'position:relative;z-index:2;font-family:var(--font-mono);font-size:10px;color:' + (hot ? '#e9e9ed' : '#cfd3e5') + ';padding:2px 5px;display:inline-block;',
+          style:'position:absolute;left:' + ((c[0] - aF) * aW) + '%;width:' + (c[1] * aW - 0.3) + '%;top:4px;bottom:4px;border-radius:4px;overflow:hidden;cursor:pointer;'
+            + 'background:linear-gradient(180deg,color-mix(in srgb,' + TC[t.id] + ' ' + (hot ? 22 : 14) + '%,transparent),color-mix(in srgb,' + TC[t.id] + ' 4%,transparent));'
+            + 'box-shadow:inset 0 0 0 ' + (hot ? 2 : 1) + 'px color-mix(in srgb,' + TC[t.id] + ' ' + (hot ? 85 : 45) + '%,transparent);',
+          go:() => this.setState({ track:t.id, clipSel:{ t:t.id, cl:c } }),
+          open:() => this.setState({ track:t.id, roll:{ t:t.id, i:ci } })
+        };
+      })
+    }));
+
+    // ---- scale roll (piano-roll projection inside arrangement)
+    const rollT = s.roll ? TRACKS.find(t => t.id === s.roll.t) : null;
+    const rollClip = rollT ? CLIPS[rollT.id][s.roll.i] : null;
+    const RL = LADDER.slice().reverse();
+    const rlH = (244 / RL.length) * s.rollVZ;
+    const inField = ['00','08','10','17','21','26','28'];
+    const degRows = RL.map((l, ri) => {
+      const on = inField.indexOf(l[0]) > -1, tc = rollT ? TC[rollT.id] : '#9184d9';
+      return {
+        num:l[0], name:l[1], cents:parseFloat(l[2]).toFixed(0),
+        gutterStyle:'position:absolute;left:0;right:0;top:' + (ri * rlH) + 'px;height:' + rlH + 'px;display:flex;align-items:center;gap:5px;padding:0 8px;box-sizing:border-box;'
+          + 'border-bottom:1px solid rgba(233,233,237,0.05);' + (on ? 'background:color-mix(in srgb,' + tc + ' 9%,transparent);' : ''),
+        numStyle:'font-family:var(--font-mono);font-size:9px;width:16px;color:' + (on ? tc : '#4a4d5c'),
+        nameStyle:'font-family:var(--font-mono);font-size:9px;flex:1;color:' + (on ? '#cfd3e5' : '#4a4d5c'),
+        centStyle:'font-family:var(--font-mono);font-size:8px;color:' + (on ? '#75798c' : '#3a3d49'),
+        laneStyle:'position:absolute;left:0;right:0;top:' + (ri * rlH) + 'px;height:' + rlH + 'px;border-bottom:1px solid rgba(233,233,237,0.04);'
+          + (on ? 'background:color-mix(in srgb,' + tc + ' 4%,transparent);' : 'background:rgba(0,0,0,0.22);')
+      };
+    });
+    const rollBars = [], rollNotes = [], rollVels = [], rollGroups = [];
+    if (rollT) {
+      const len = rollClip[1], tc = TC[rollT.id];
+      for (let i = 0; i < len; i++) rollBars.push({ label:(rollClip[0] + i + 1) + '',
+        style:'position:absolute;left:' + (i / len * 100) + '%;top:0;bottom:0;width:' + (100 / len) + '%;border-left:1px solid rgba(233,233,237,' + (i ? '0.08' : '0') + ');' });
+      for (let i = 0; i < len; i++) {
+        const src = (rollClip[0] + i) % 8;
+        rollT.cols.forEach(cid => this.ev()[cid].forEach(v => {
+          if (v.t < src * 64 || v.t >= (src + 1) * 64 || v.o === 'off') return;
+          if (v.o === 'chd') {
+            const key = rollT.id + ':' + v.t, det = !!s.detach[key];
+            const steps = chordVoices(v.x).map(p => p % 31);
+            const nxt = this.ev()[cid].find(w => w.t > v.t && w.t < (src + 1) * 64);
+            const endT = nxt ? nxt.t : (src + 1) * 64;
+            const x = (i + (v.t % 64) / 64) / len * 100, w = ((endT - v.t) / 64) / len * 100;
+            const rows = steps.map(st => { const ri = RL.findIndex(l => parseInt(l[0], 10) === st); return ri < 0 ? RL.length - 1 : ri; });
+            rows.forEach((ri, vi) => {
+              rollNotes.push({
+                style:'position:absolute;left:' + x + '%;width:' + Math.max(1, w - 0.3) + '%;top:' + (ri * rlH + 2) + 'px;height:' + (rlH - 4) + 'px;border-radius:2px;'
+                  + 'background:' + (det ? 'color-mix(in srgb,' + tc + ' 55%,transparent)' : tc) + ';opacity:' + (0.92 - vi * 0.1) + ';'
+                  + 'box-shadow:inset 0 0 0 1px color-mix(in srgb,#e9e9ed ' + (det ? 34 : 18) + '%,transparent);' + (det ? 'outline:1px dashed #e9e9ed;outline-offset:-2px;' : ''),
+                centStyle:'display:none;'
+              });
+              rollVels.push({ style:'position:absolute;left:' + x + '%;width:' + Math.max(1, w - 0.3) + '%;bottom:0;height:' + (74 - vi * 9) + '%;background:' + tc + ';opacity:.45;border-radius:1px 1px 0 0;' });
+            });
+            const top = Math.min(...rows) * rlH, bot = Math.max(...rows) * rlH + rlH;
+            rollGroups.push({
+              label:det ? steps.length + ' voices · detached' : v.x,
+              hint:det ? '⌘R re-roll' : 'unrolled',
+              go:() => { this.setState({ detach:{ ...s.detach, [key]:!det } });
+                this.say(det ? 're-rolled → ' + v.x + ' · token restored, voices derived' : 'detached ' + v.x + ' → ' + steps.length + ' explicit voices · ⌘R re-rolls'); },
+              style:'position:absolute;left:calc(' + x + '% - 5px);top:' + (top - 1) + 'px;width:4px;height:' + (bot - top + 2) + 'px;border-radius:2px;cursor:pointer;'
+                + 'background:' + (det ? 'repeating-linear-gradient(180deg,#e9e9ed 0 3px,transparent 3px 6px)' : tc) + ';',
+              labelStyle:'position:absolute;left:' + x + '%;top:' + (top - 13) + 'px;font-family:var(--font-mono);font-size:8px;letter-spacing:.04em;white-space:nowrap;cursor:pointer;'
+                + 'color:' + (det ? '#e9e9ed' : tc) + ';background:#171926;padding:0 4px;border-radius:2px;',
+              hintStyle:'font-family:var(--font-mono);font-size:8px;color:#75798c;padding-left:5px;'
+            });
+            return;
+          }
+          const m = v.x.match(/\d+/), deg = m ? parseInt(m[0], 10) : 0;
+          let ri = RL.findIndex(l => parseInt(l[0], 10) === deg);
+          if (ri < 0) ri = RL.length - 1 - (deg % RL.length);
+          const vel = v.s && /^[0-9a-f]{2}$/.test(v.s) ? parseInt(v.s, 16) / 255 : 0.7;
+          const cval = v.s && (v.s[0] === '+' || v.s[0] === '-') ? parseInt(v.s, 10) : 0;
+          const x = (i + (v.t % 64) / 64) / len * 100, w = Math.max(0.5, 100 / len / 64 * 3.4);
+          rollNotes.push({
+            style:'position:absolute;left:' + x + '%;width:' + w + '%;top:' + (ri * rlH + 2) + 'px;height:' + (rlH - 4) + 'px;border-radius:2px;'
+              + 'background:' + tc + ';opacity:' + (0.42 + vel * 0.58) + ';box-shadow:inset 0 0 0 1px color-mix(in srgb,#e9e9ed 22%,transparent);',
+            centStyle:'position:absolute;left:0;right:0;' + (cval >= 0 ? 'top:-2px;' : 'bottom:-2px;') + 'height:2px;background:#f5f4ff;opacity:' + (cval ? Math.min(0.9, Math.abs(cval) / 40 + 0.25) : 0) + ';'
+          });
+          rollVels.push({ style:'position:absolute;left:' + x + '%;width:' + w + '%;bottom:0;height:' + (vel * 100) + '%;background:' + tc + ';opacity:.6;border-radius:1px 1px 0 0;' });
+        }));
+      }
+    }
+
+    // ---- patcher
+    const HDR = 27, PY = 18, PSTEP = 20;
+    const nodeH = n => HDR + Math.max(8 + n.prm.length * 13 + (n.prm.length - 1) * 5 + 10,
+                                      PY + Math.max(n.ins.length, n.outs.length, 1) * PSTEP + 6);
+    const portY = (n, i) => n.y + HDR + PY + i * PSTEP;
+    const byId = id => NODES.find(n => n.id === id);
+    const wires = EDGES.map((e, i) => {
+      const a = byId(e[0]), z = byId(e[2]);
+      if (!a || !z) return null;
+      const oi = a.outs.findIndex(p => p[0] === e[1]), ii = z.ins.findIndex(p => p[0] === e[3]);
+      if (oi < 0 || ii < 0) return null;
+      const x1 = a.x + a.w, y1 = portY(a, oi), x2 = z.x, y2 = portY(z, ii);
+      const ty = a.outs[oi][1], dx = Math.max(56, Math.abs(x2 - x1) * 0.48);
+      const live = s.node === a.id || s.node === z.id, selw = s.selWire === i;
+      return { d:'M ' + x1 + ' ' + y1 + ' C ' + (x1 + dx) + ' ' + y1 + ', ' + (x2 - dx) + ' ' + y2 + ', ' + x2 + ' ' + y2,
+        stroke:selw ? '#e9e9ed' : PT[ty], width:selw ? 2.6 : ty === 'aud' ? 2.2 : 1.5, dash:ty === 'ctl' ? '3 6' : '0', op:selw || live ? 1 : 0.5,
+        go:(ev) => { ev.stopPropagation(); this.setState({ selWire:i }); this.say('wire ' + e[0] + '.' + e[1] + ' → ' + e[2] + '.' + e[3] + ' · ⌫ disconnects'); } };
+    }).filter(Boolean);
+    const nodes = NODES.map(n => {
+      const sel = s.node === n.id, kc = KT[n.kind];
+      const port = (p, i, side) => {
+        const pending = this._pendPort && this._pendPort.id === n.id && this._pendPort.port === p[0] && this._pendPort.side === side;
+        return { label:p[0],
+          style:'position:absolute;' + (side === 'in' ? 'left:-5px;' : 'right:-5px;') + 'top:' + (HDR + PY + i * PSTEP - 5) + 'px;'
+            + 'width:10px;height:10px;border-radius:50%;background:#151723;cursor:' + (s.tool === 'wire' ? 'crosshair' : 'pointer') + ';'
+            + (pending ? 'box-shadow:0 0 0 2px #e9e9ed,0 0 10px ' + PT[p[1]] + ';' : 'box-shadow:0 0 0 2px ' + PT[p[1]] + ';'),
+          labelStyle:'position:absolute;top:-3px;' + (side === 'in' ? 'right:16px;' : 'left:16px;')
+            + 'font-family:var(--font-mono);font-size:8px;letter-spacing:.07em;color:' + PT[p[1]] + ';white-space:nowrap;opacity:.85;'
+            + 'background:#151723;padding:0 3px;border-radius:2px;',
+          go:(ev) => { ev.stopPropagation(); this.portClick(n.id, p[0], side, p[1]); } };
+      };
+      return {
+        kind:n.kind, name:n.name, links:n.links,
+        style:'position:absolute;left:' + n.x + 'px;top:' + n.y + 'px;width:' + n.w + 'px;height:' + nodeH(n) + 'px;border-radius:8px;cursor:pointer;'
+          + 'background:linear-gradient(180deg,#1f2130,#1a1c28);box-sizing:border-box;'
+          + 'box-shadow:' + (sel ? '0 0 0 1px ' + kc + ',0 0 0 5px color-mix(in srgb,' + kc + ' 16%,transparent),0 14px 30px rgba(0,0,0,0.5)'
+                                : '0 0 0 1px #3f424d,0 6px 18px rgba(0,0,0,0.4)') + ';',
+        headStyle:'display:flex;align-items:center;gap:6px;height:' + HDR + 'px;padding:0 9px;box-sizing:border-box;'
+          + 'border-bottom:1px solid #292b31;border-radius:8px 8px 0 0;background:color-mix(in srgb,' + kc + ' ' + (sel ? 14 : 7) + '%,transparent);',
+        kindStyle:'font-family:var(--font-mono);font-size:8px;letter-spacing:.09em;padding:1px 4px;border-radius:2px;border:1px solid color-mix(in srgb,' + kc + ' 45%,transparent);color:' + kc,
+        linkStyle:'font-family:var(--font-mono);font-size:9px;color:' + kc + ';' + (n.links ? 'animation:uniPulse 2.4s ease-in-out infinite;' : ''),
+        params:n.prm.map(p => ({ name:p[0], val:p[1],
+          barStyle:'height:100%;width:' + (p[2] * 100) + '%;background:' + kc + ';opacity:.8;',
+          mapStyle:'width:11px;height:11px;display:grid;place-items:center;font-size:7px;border:1px solid #3f424d;border-radius:2px;color:#75798c;cursor:pointer;' })),
+        ports:n.ins.map((p, i) => port(p, i, 'in')).concat(n.outs.map((p, i) => port(p, i, 'out'))),
+        go:(ev) => { ev.stopPropagation(); this.setState({ node:n.id }); }
+      };
+    });
+    const activeNode = byId(s.node) || NODES[NODES.length - 1] || { name:'—', kind:'', id:'—', ins:[], outs:[] };
+    const ptools = [
+      { icon:'ph ph-cursor', tip:'select · V', on:s.tool === 'select', act:() => this.setState({ tool:'select' }) },
+      { icon:'ph ph-flow-arrow', tip:'wire · W', on:s.tool === 'wire', act:() => { this.setState({ tool:'wire' }); this.say('wire tool — click an output port, then an input port'); } },
+      { icon:'ph ph-plus', tip:'add node · A', on:false, act:() => this.setState({ ov:'nodes', q:'' }) },
+      { icon:'ph ph-tree-structure', tip:'auto-layout · L', on:false, act:() => this.autoLayout() }
+    ].map(t => ({ icon:t.icon, tip:t.tip, go:t.act,
+      style:'width:26px;height:26px;display:grid;place-items:center;border:0;border-radius:5px;cursor:pointer;font-size:13px;'
+        + (t.on ? 'background:rgba(145,132,217,0.2);color:#d2cefd;box-shadow:inset 0 0 0 1px #5d5294;' : 'background:transparent;color:#9397ab;') }));
+    const ntq = s.ov === 'nodes' ? s.q.toLowerCase() : '';
+    const nodeTypes = NODETYPES.filter(t => !ntq || (t[0] + t[1] + t[2]).toLowerCase().indexOf(ntq) > -1).map(t => ({
+      kind:t[0], name:t[1], desc:t[2],
+      sig:(t[4].map(p => p[0]).join(' ') || '—') + ' → ' + (t[5].map(p => p[0]).join(' ') || '—'),
+      kindStyle:'font-family:var(--font-mono);font-size:8px;letter-spacing:.08em;padding:1px 5px;border-radius:2px;border:1px solid color-mix(in srgb,' + KT[t[0]] + ' 45%,transparent);color:' + KT[t[0]] + ';width:44px;text-align:center;flex:0 0 auto;',
+      go:() => this.addNode(t)
+    }));
+    const TYPEN = { ev:'EVENT', evl:'EVENT LIST', aud:'AUDIO ×2', fld:'HARMONY', ctl:'CONTROL' };
+    const nodePorts = activeNode.ins.map(p => ['in', p]).concat(activeNode.outs.map(p => ['out', p])).map(x => ({
+      dir:x[0], name:x[1][0], type:TYPEN[x[1][1]], rate:x[1][1] === 'ctl' ? 'sample' : 'block',
+      chipStyle:'font-family:var(--font-mono);font-size:8px;padding:1px 4px;border-radius:2px;background:#232532;color:' + (x[0] === 'in' ? '#9397ab' : '#d2cefd'),
+      typeStyle:'font-family:var(--font-mono);font-size:9px;color:' + PT[x[1][1]]
+    }));
+    const modLinks = [
+      { target:'31-TET Pad · cutoff', depth:'62%', mode:'BIPOLAR' },
+      { target:'voicer.31 · cents', depth:'18%', mode:'UNIPOLAR' },
+      { target:'Delay · feedback', depth:'34%', mode:'BIPOLAR' }
+    ].map(l => ({ ...l, modeStyle:'font-family:var(--font-mono);font-size:8px;padding:1px 4px;border-radius:2px;border:1px solid #423a6a;color:#7972a9' }));
+
+    // ---- mixer
+    const ticks = [['+6',4],['0',15],['-6',30],['-12',45],['-24',63],['-48',84]].map(t => ({
+      label:t[0], style:'position:absolute;right:1px;top:' + t[1] + '%;font-family:var(--font-mono);font-size:7px;color:#4a4d5c;' }));
+    const strips = STRIPS.map(st => {
+      const tc = TC[st.id], sel = s.track === st.id, act = s.playing ? 1 : 0.6;
+      const pkL = Math.min(1, st.ml * (s.playing ? 1.14 : 0.78) + 0.05), pkR = Math.min(1, st.mr * (s.playing ? 1.1 : 0.75) + 0.05);
+      const thumbTop = (1 - st.f) * 100;
+      const meter = h => 'position:absolute;left:0;right:0;bottom:0;height:' + (h * 100) + '%;'
+        + 'background:linear-gradient(180deg,#cfd3e5,' + tc + ' 22%,color-mix(in srgb,' + tc + ' 40%,#12141d) 90%);';
+      const peak = p => 'position:absolute;left:0;right:0;top:' + ((1 - p) * 100) + '%;height:2px;background:#e9e9ed;opacity:.55;';
+      const send = v => 'position:absolute;left:0;top:0;bottom:0;width:' + (v * 100) + '%;background:color-mix(in srgb,' + tc + ' 65%,transparent);border-radius:2px;';
+      const sA = 0.22 + st.f * 0.3, sB = st.ml * 0.5, isM = st.id === 'mn';
+      return {
+        name:st.n, db:st.db, pan:st.pan, route:st.route, harm:st.harm ? 'H' : '', ticks,
+        foot:isM ? 'LUFS -9.8' : 'dB', sA:Math.round(sA * 100) + '', sB:Math.round(sB * 100) + '',
+        style:'flex:' + (isM ? 1.15 : 1) + ';min-width:0;display:flex;flex-direction:column;gap:6px;padding:8px 9px 9px;border-radius:8px;box-sizing:border-box;cursor:pointer;'
+          + 'background:linear-gradient(180deg,color-mix(in srgb,' + tc + ' ' + (isM ? 9 : 6) + '%,#1b1d29),#191b26);'
+          + 'box-shadow:' + (sel ? '0 0 0 1px ' + tc + ',0 0 0 4px color-mix(in srgb,' + tc + ' 14%,transparent)' : '0 0 0 1px #292b31') + ';',
+        capStyle:'height:3px;flex:0 0 3px;border-radius:2px;background:linear-gradient(90deg,' + tc + ',color-mix(in srgb,' + tc + ' 25%,transparent));',
+        nameStyle:'font-family:var(--font-mono);font-size:10.5px;letter-spacing:.04em;color:' + (sel ? tc : '#cfd3e5') + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;',
+        harmStyle:'font-family:var(--font-mono);font-size:8px;padding:0 4px;border-radius:2px;border:1px solid ' + (st.harm ? 'color-mix(in srgb,' + tc + ' 55%,transparent)' : 'transparent') + ';color:' + (st.harm ? tc : 'transparent') + ';',
+        devs:st.devs.slice(0, 3).map(d => ({ name:d, style:'font-family:var(--font-mono);font-size:8px;padding:2px 5px;border-radius:3px;background:#232532;color:#9397ab;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;box-shadow:inset 2px 0 0 color-mix(in srgb,' + tc + ' 55%,transparent);' }))
+          .concat(st.devs.length > 3 ? [{ name:'+' + (st.devs.length - 3), style:'font-family:var(--font-mono);font-size:8px;padding:2px 4px;border-radius:3px;color:#595d6c;border:1px dashed #292b31;' }] : []),
+        grooveStyle:'position:absolute;left:50%;top:2px;bottom:2px;width:3px;transform:translateX(-50%);background:#10121a;border-radius:2px;box-shadow:inset 0 0 0 1px #292b31;',
+        fillStyle:'position:absolute;left:50%;bottom:2px;width:3px;transform:translateX(-50%);height:' + Math.max(0, st.f * 100 - 3) + '%;background:color-mix(in srgb,' + tc + ' 45%,transparent);border-radius:2px;',
+        thumbStyle:'position:absolute;left:1px;right:1px;height:11px;top:calc(' + thumbTop + '% - ' + (thumbTop * 0.11).toFixed(1) + 'px);border-radius:2px;cursor:grab;'
+          + 'background:linear-gradient(180deg,#2b2e3f 44%,' + tc + ' 44% 56%,#1d1f2c 56%);box-shadow:0 0 0 1px #3f424d,0 2px 5px rgba(0,0,0,0.45);',
+        mLStyle:meter(s.mute[st.id] ? 0 : st.ml * act), mRStyle:meter(s.mute[st.id] ? 0 : st.mr * act), pLStyle:peak(pkL), pRStyle:peak(pkR),
+        sAStyle:send(sA), sBStyle:send(sB),
+        panStyle:'position:absolute;top:-2px;left:' + (st.pan === 'C' ? 50 : st.pan.indexOf('L') > -1 ? 50 - parseInt(st.pan, 10) : 50 + parseInt(st.pan, 10)) + '%;width:2px;height:7px;background:' + tc + ';border-radius:1px;',
+        routeStyle:'flex:1;text-align:right;font-family:var(--font-mono);font-size:8px;color:#75798c;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
+        soloStyle:'flex:0 0 22px;font-family:var(--font-mono);font-size:9px;padding:2px 0;border-radius:4px;cursor:pointer;'
+          + (s.solo[st.id] ? 'border:1px solid oklch(0.81 0.15 88);background:color-mix(in srgb,oklch(0.81 0.15 88) 22%,transparent);color:oklch(0.86 0.13 88);' : 'border:1px solid #292b31;background:transparent;color:#75798c;'),
+        muteStyle:'flex:0 0 22px;font-family:var(--font-mono);font-size:9px;padding:2px 0;border-radius:4px;cursor:pointer;'
+          + (s.mute[st.id] ? 'border:1px solid oklch(0.68 0.2 25);background:color-mix(in srgb,oklch(0.68 0.2 25) 22%,transparent);color:oklch(0.8 0.18 25);' : 'border:1px solid #292b31;background:transparent;color:#75798c;'),
+        toggleSolo:(e) => { e.stopPropagation(); this.setState({ solo:{ ...s.solo, [st.id]:!s.solo[st.id] } }); },
+        toggleMute:(e) => { e.stopPropagation(); this.setState({ mute:{ ...s.mute, [st.id]:!s.mute[st.id] } }); },
+        go:() => this.setState({ track:st.id })
+      };
+    });
+    const stripSel = STRIPS.find(x => x.id === s.track) || STRIPS[3];
+
+    // ---- device chain
+    const DK = { PATCHER:'oklch(0.74 0.125 289)', VST3:'oklch(0.76 0.100 202)', UNI:'oklch(0.76 0.105 152)' };
+    const devices = DEVICES.map(d => ({
+      kind:d.kind, name:d.name, foot:d.foot, act:d.act, bc:d.bc,
+      isMacro:!!d.macro, isParams:!d.macro,
+      style:'width:' + (d.macro ? 250 : 306) + 'px;flex:0 0 ' + (d.macro ? 250 : 306) + 'px;display:flex;flex-direction:column;gap:5px;padding:7px 9px;border-radius:8px;box-sizing:border-box;cursor:pointer;'
+        + 'background:linear-gradient(180deg,color-mix(in srgb,' + DK[d.kind] + ' 6%,#1c1e2a),#1a1c27);'
+        + 'box-shadow:' + (s.dev === d.id ? '0 0 0 1px ' + DK[d.kind] + ',0 0 0 4px color-mix(in srgb,' + DK[d.kind] + ' 14%,transparent)' : '0 0 0 1px #3f424d') + ';',
+      hasOuts:!!d.outs,
+      outsLabel:d.outs ? '⇢ ' + d.outs.length + ' outs' : '',
+      outsStyle:'font-family:var(--font-mono);font-size:8px;padding:1px 5px;border-radius:3px;cursor:pointer;white-space:nowrap;'
+        + (s.outsFor === d.id ? 'border:1px solid ' + DK[d.kind] + ';background:color-mix(in srgb,' + DK[d.kind] + ' 18%,transparent);color:#e9e9ed;'
+                              : 'border:1px solid #3f424d;color:#75798c;'),
+      openOuts:(e) => {
+        e.stopPropagation();
+        if (s.outsFor === d.id) { this.setState({ outsFor:null }); return; }
+        const r = e.currentTarget.getBoundingClientRect();
+        this.setState({ dev:d.id, outsFor:d.id, outsPos:{ x:Math.max(8, Math.min(window.innerWidth - 408, r.left - 60)), y:r.top - 12 } });
+      },
+      kindStyle:'font-family:var(--font-mono);font-size:8px;letter-spacing:.09em;padding:1px 4px;border-radius:2px;border:1px solid color-mix(in srgb,' + DK[d.kind] + ' 45%,transparent);color:' + DK[d.kind],
+      bcStyle:'font-family:var(--font-mono);font-size:9px;color:' + DK[d.kind] + ';' + (d.bc ? 'animation:uniPulse 2.4s ease-in-out infinite;' : ''),
+      powerStyle:'font-size:12px;color:#595d6c;cursor:pointer;',
+      actStyle:'font-family:var(--font-mono);font-size:9px;color:#7972a9;cursor:pointer;',
+      macros:(d.macros || []).map(m => ({ name:m[0],
+        style:'width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(from 220deg,#9184d9 0turn ' + (m[1] * 0.72) + 'turn,#2b2d3b ' + (m[1] * 0.72) + 'turn 0.75turn,transparent 0.75turn);',
+        innerStyle:'width:19px;height:19px;border-radius:50%;background:#1c1e2a;box-shadow:inset 0 0 0 1px #3f424d;' })),
+      params:(d.params || []).map(p => ({
+        name:p[0], val:p[1], pin:p[4],
+        pinStyle:'width:8px;font-size:8px;color:' + (p[4] ? '#9184d9' : 'transparent'),
+        barStyle:'position:absolute;left:0;top:0;bottom:0;width:' + (p[2] * 100) + '%;background:#5d5294;',
+        modStyle:'position:absolute;top:0;bottom:0;left:' + (p[2] * 100) + '%;width:' + (p[3] * 100) + '%;background:repeating-linear-gradient(90deg,#b5abfc 0 2px,transparent 2px 4px);',
+        mapStyle:'font-family:var(--font-mono);font-size:8px;padding:0 3px;border:1px solid ' + (p[3] ? '#5d5294' : '#3f424d') + ';border-radius:2px;color:' + (p[3] ? '#b5abfc' : '#595d6c') + ';cursor:pointer;'
+      })),
+      go:() => this.setState({ dev:d.id })
+    }));
+
+    // ---- browser
+    const BK = { PLUG:'oklch(0.76 0.100 202)', PSET:'oklch(0.74 0.125 289)', SMPL:'oklch(0.76 0.105 42)',
+                 CLIP:'oklch(0.76 0.105 152)', PTCH:'oklch(0.74 0.110 336)', SCAL:'oklch(0.78 0.105 82)' };
+    const bq = s.bq.toLowerCase();
+    const bTabs = [['all','ALL'],['PLUG','PLUGINS'],['PSET','PRESETS'],['SMPL','SAMPLES'],['CLIP','CLIPS'],['PTCH','PATCHES'],['SCAL','TUNINGS'],['fav','★ FAVES']].map(t => ({
+      name:t[1],
+      style:'font-family:var(--font-mono);font-size:8px;letter-spacing:.07em;padding:3px 6px;border:0;border-radius:3px;cursor:pointer;'
+        + (s.bTab === t[0] ? 'background:rgba(145,132,217,0.2);color:#d2cefd;box-shadow:inset 0 0 0 1px #5d5294;' : 'background:#1f2130;color:#75798c;'),
+      go:() => this.setState({ bTab:t[0] })
+    }));
+    const favs = s.favs;
+    const bItems = BROWSE.filter(x => (s.bTab === 'all' || (s.bTab === 'fav' ? (favs[x[1]] ?? x[4]) : x[0] === s.bTab))
+        && (!bq || (x[1] + x[2]).toLowerCase().indexOf(bq) > -1))
+      .map(x => {
+        const on = favs[x[1]] ?? !!x[4], tc = BK[x[0]], sel = s.bSel === x[1];
+        return {
+          kind:x[0], name:x[1], meta:x[2], hasWave:x[0] === 'SMPL', star:on ? '★' : '☆',
+          style:'display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:5px;cursor:pointer;'
+            + (sel ? 'background:color-mix(in srgb,' + tc + ' 14%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,' + tc + ' 45%,transparent);' : ''),
+          kindStyle:'font-family:var(--font-mono);font-size:7px;letter-spacing:.08em;padding:2px 3px;border-radius:2px;flex:0 0 auto;'
+            + 'border:1px solid color-mix(in srgb,' + tc + ' 40%,transparent);color:' + tc + ';',
+          nameStyle:'font-family:var(--font-mono);font-size:10px;color:' + (sel ? '#e9e9ed' : '#cfd3e5') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
+          waveStyle:'width:26px;height:12px;flex:0 0 26px;border-radius:2px;background:repeating-linear-gradient(90deg,' + tc + ' 0 1px,transparent 1px 3px);opacity:.5;',
+          starStyle:'font-size:10px;cursor:pointer;color:' + (on ? tc : '#3f424d') + ';',
+          fav:(e) => { e.stopPropagation(); this.setState({ favs:{ ...favs, [x[1]]:!on } }); },
+          go:() => { this.setState({ bSel:x[1] }); this.say(({ PLUG:'Load device → ', PSET:'Apply preset → ', SMPL:'Place sample → ', CLIP:'Insert clip → ', PTCH:'Open patch → ', SCAL:'Set harmony field → ' })[x[0]] + x[1]); }
+        };
+      });
+
+    // ---- overlays
+    const q = s.q.toLowerCase();
+    const cmds = CMDS.filter(c => !q || (c.n + c.g).toLowerCase().indexOf(q) > -1).map((c, i) => ({
+      name:c.n, hint:c.h, key:c.k, group:c.g,
+      style:'display:flex;align-items:center;gap:10px;padding:6px 9px;border-radius:5px;cursor:pointer;' + (i === 0 ? 'background:rgba(145,132,217,0.13);' : ''),
+      groupStyle:'font-family:var(--font-mono);font-size:8px;letter-spacing:.09em;width:58px;color:#7972a9',
+      go:() => { this.setState({ ov:null, q:'' }); this.say('Ran · ' + c.n); }
+    }));
+    const scaleList = SCALES.filter(x => !q || x[0].toLowerCase().indexOf(q) > -1 || x[1] === '').map(x => ({
+      name:x[0], meta:x[1],
+      style:x[1] === '' ? 'display:flex;padding:9px 9px 3px;font-size:9px;letter-spacing:.13em;color:#5d5294;'
+        : 'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 9px;border-radius:4px;cursor:pointer;' + (s.scale === x[0] ? 'background:rgba(145,132,217,0.16);' : ''),
+      nameStyle:'font-family:var(--font-mono);font-size:11px;color:' + (x[1] === '' ? '#5d5294' : s.scale === x[0] ? '#e9e9ed' : '#b2b6ca'),
+      go:() => { if (x[1]) this.setState({ scale:x[0], tet:x[1].indexOf('31') === 0 ? 31 : x[1].indexOf('19') === 0 ? 19 : s.tet }); }
+    }));
+    const centChips = LADDER.map(l => ({ v:l[2], style:'font-family:var(--font-mono);font-size:10px;padding:4px 7px;border:1px solid #3f424d;border-radius:4px;color:#cfd3e5;background:#1f2130;' }));
+    const devMarks = LADDER.map(l => {
+      const c = parseFloat(l[2]), et = Math.round(c / 100) * 100, dev = c - et;
+      return { label:l[1],
+        style:'position:absolute;left:' + (4 + (c / 1200) * 92) + '%;top:50%;width:2px;height:' + Math.max(6, Math.abs(dev) / 50 * 62) + 'px;'
+          + 'transform:translate(-50%,' + (dev >= 0 ? '-100%' : '0') + ');background:' + (Math.abs(dev) > 15 ? '#9184d9' : '#5d5294') + ';border-radius:1px;',
+        labelStyle:'position:absolute;left:50%;transform:translateX(-50%);' + (dev >= 0 ? 'top:-14px;' : 'bottom:-14px;') + 'font-family:var(--font-mono);font-size:8px;color:#75798c;white-space:nowrap;' };
+    });
+    const roots = ['C','C♯','D','E♭','E','F','G'].map(r => ({ name:r,
+      style:'font-family:var(--font-mono);font-size:10px;padding:3px 7px;border:0;border-radius:4px;cursor:pointer;'
+        + (s.root === r ? 'background:rgba(145,132,217,0.2);color:#d2cefd;box-shadow:inset 0 0 0 1px #5d5294;' : 'background:transparent;color:#75798c;'),
+      go:() => this.setState({ root:r }) }));
+
+    const rows = lay === 'B' ? [] : this.buildRows('A');
+    const clipHandles = [];
+    if (mode === 'tracker' && lay === 'A') {
+      const visH = vis * rh;
+      let hx = 104 + 148;
+      for (const t of TRACKS) {
+        const wsum = t.cols.reduce((a, c) => a + COLS.find(k => k.id === c).w, 0);
+        (CLIPS[t.id] || []).forEach(cl => {
+          const start = cl[0] * 64, end = Math.min((cl[0] + cl[1]) * 64, TOTAL);
+          if (start >= TOTAL) return;
+          const top = ((start - s.first) / span) * rh, bot = ((end - s.first) / span) * rh;
+          if (bot <= 4 || top >= visH) return;
+          const y0 = Math.max(0, top), y1 = Math.min(visH, bot), tc = TC[t.id];
+          const on = s.clipSel && s.clipSel.cl === cl;
+          clipHandles.push({
+            tip:cl[2] + ' — click selects · ⌘X⌘C⌘V · ⌘D · ⌥↑↓ move · ⇧←→ trim',
+            style:'position:absolute;left:' + (hx + wsum - 7) + 'px;top:' + (y0 + 2) + 'px;width:5px;height:' + Math.max(10, y1 - y0 - 4) + 'px;border-radius:3px;cursor:grab;z-index:3;'
+              + 'background:' + (on ? tc : 'linear-gradient(180deg,' + tc + ' 0 5px,color-mix(in srgb,' + tc + ' 30%,transparent) 5px calc(100% - 5px),' + tc + ' calc(100% - 5px))') + ';'
+              + (on ? 'box-shadow:0 0 9px color-mix(in srgb,' + tc + ' 55%,transparent);' : ''),
+            hov:'background:' + tc + ';box-shadow:0 0 9px color-mix(in srgb,' + tc + ' 55%,transparent);',
+            go:() => { this.setState({ track:t.id, clipSel:{ t:t.id, cl } }); this.say('clip ' + cl[2] + ' — ⌘X⌘C⌘V · ⌘D dup · ⌥↑↓ move · ⇧←→ trim'); }
+          });
+        });
+        hx += wsum;
+      }
+    }
+    const rowsB = lay === 'B' ? this.buildRows('B') : [];
+    const degNum = b.text && !b.agg ? parseInt(b.text, 10) : NaN;
+
+    return {
+      modes, trackHeads, trackHeadsB, harmBlocks, rows, rowsB, miniMarks, ladder, tets,
+      lanes, barTicks, harmSpans, arrBars, arrHarm, arrTracks, degRows, rollBars, rollNotes, rollVels,
+      rollOpen:!!s.roll, rollGroups,
+      rollWrapStyle:'height:' + s.hRoll + 'px;flex:0 0 ' + s.hRoll + 'px;display:flex;flex-direction:column;border-top:1px solid #3f424d;background:#171926;overflow:hidden;position:relative;',
+      rollBodyStyle:'flex:1;display:flex;overflow:auto;',
+      rollColStyle:'width:96px;flex:0 0 96px;border-right:1px solid #292b31;position:relative;background:#14161f;height:' + (RL.length * rlH) + 'px;',
+      rollLaneWrapStyle:'flex:1;position:relative;overflow:hidden;height:' + (RL.length * rlH) + 'px;min-width:0;',
+      rollScrollStyle:'position:absolute;top:0;bottom:0;left:' + (-s.rollPan * s.rollZoom * 100) + '%;width:' + (s.rollZoom * 100) + '%;',
+      rollZoomLabel:'×' + s.rollZoom.toFixed(1) + (s.rollVZ !== 1 ? ' · rows ×' + s.rollVZ.toFixed(1) : ''),
+      onRollWheel:(e) => {
+        e.preventDefault();
+        if (e.metaKey || e.ctrlKey) {
+          const z = Math.max(1, Math.min(12, s.rollZoom * (e.deltaY > 0 ? 1 / 1.25 : 1.25)));
+          this.setState({ rollZoom:z, rollPan:Math.max(0, Math.min(1 - 1 / z, s.rollPan)) });
+        } else if (e.shiftKey) {
+          this.setState({ rollVZ:Math.max(0.7, Math.min(3.2, s.rollVZ * (e.deltaY > 0 ? 1 / 1.2 : 1.2))) });
+        } else {
+          const step = 0.06 / s.rollZoom;
+          this.setState({ rollPan:Math.max(0, Math.min(1 - 1 / s.rollZoom, s.rollPan + (e.deltaY > 0 ? step : -step))) });
+        }
+      },
+      dockStyle:'width:' + s.wDock + 'px;flex:0 0 ' + s.wDock + 'px;display:flex;flex-direction:column;border-left:1px solid #292b31;background:#181a26;overflow:hidden;position:relative;',
+      browserPaneStyle:'width:' + s.wBrowser + 'px;flex:0 0 ' + s.wBrowser + 'px;display:flex;flex-direction:column;border-right:1px solid #292b31;background:#181a26;overflow:hidden;position:relative;',
+      gripDock:'position:absolute;top:0;bottom:0;left:-3px;width:6px;cursor:col-resize;z-index:9;' + (s.drag === 'dock' ? 'background:rgba(145,132,217,0.5);' : ''),
+      gripBrowser:'position:absolute;top:0;bottom:0;right:-3px;width:6px;cursor:col-resize;z-index:9;' + (s.drag === 'browser' ? 'background:rgba(145,132,217,0.5);' : ''),
+      gripH:'position:absolute;top:-3px;left:0;right:0;height:6px;cursor:row-resize;z-index:9;' + (s.drag === 'roll' ? 'background:rgba(145,132,217,0.5);' : ''),
+      dragDock:(e) => this.startDrag('dock', e),
+      dragBrowser:(e) => this.startDrag('browser', e),
+      dragRoll:(e) => this.startDrag('roll', e),
+      reRollLabel:rollGroups.length
+        ? (Object.keys(s.detach).filter(x => s.detach[x]).length
+            ? Object.keys(s.detach).filter(x => s.detach[x]).length + ' detached · ⌘R re-roll'
+            : rollGroups.length + ' unrolled · click bracket to detach')
+        : '',
+      reRollStyle:'font-family:var(--font-mono);font-size:9px;padding:1px 6px;border-radius:3px;flex:0 0 auto;'
+        + (Object.keys(s.detach).filter(x => s.detach[x]).length
+            ? 'border:1px dashed #e9e9ed;color:#e9e9ed;'
+            : 'border:1px solid #3f424d;color:#7972a9;')
+        + (rollGroups.length ? '' : 'display:none;'),
+      arrLanesStyle:'flex:1;min-height:0;overflow:hidden;',
+      rollTitle:rollT ? rollClip[2] : '',
+      rollTitleStyle:'font-family:var(--font-mono);font-size:13px;flex:0 0 auto;color:' + (rollT ? TC[rollT.id] : '#e9e9ed'),
+      rollMeta:rollT ? rollT.n + ' · bars ' + (rollClip[0] + 1) + '–' + (rollClip[0] + rollClip[1]) + ' · ' + rollNotes.length + ' events · ' + s.tet + '-TET' : '',
+      closeRoll:() => this.setState({ roll:null }),
+      openInTracker:() => { this.setState({ mode:'tracker', roll:null }); this.say('Same data, tracker lens · ' + (rollClip ? rollClip[2] : '')); },
+      nodes, wires, nodePorts, modLinks, bTabs, bItems, bq:s.bq,
+      ptools, nodeTypes, nodeTypeCount:nodeTypes.length + ' types', ovNodes:s.ov === 'nodes',
+      pcanvasBg:() => { this._pendPort = null; this.setState({ selWire:null }); },
+      dupNodeBtn:() => this.dupNode(), delNodeBtn:() => this.delNode(),
+      browserOpen:s.browser, scanLabel:'412 plugins · scanned 2d ago',
+      isTrackerMode:mode === 'tracker',
+      isHarmMode:mode === 'tracker' || mode === 'arrange',
+      harmOpen:s.dock.harm, nodeOpen:s.dock.node, stripOpen:s.dock.strip, agentOpen:s.dock.agent,
+      harmCaret:'ph ph-caret-' + (s.dock.harm ? 'down' : 'right'),
+      nodeCaret:'ph ph-caret-' + (s.dock.node ? 'down' : 'right'),
+      stripCaret:'ph ph-caret-' + (s.dock.strip ? 'down' : 'right'),
+      agentCaret:'ph ph-caret-' + (s.dock.agent ? 'down' : 'right'),
+      togHarm:() => this.setState({ dock:{ ...s.dock, harm:!s.dock.harm } }),
+      togNode:() => this.setState({ dock:{ ...s.dock, node:!s.dock.node } }),
+      togStrip:() => this.setState({ dock:{ ...s.dock, strip:!s.dock.strip } }),
+      togAgent:() => this.setState({ dock:{ ...s.dock, agent:!s.dock.agent } }),
+      agentSub:s.dock.agent ? 'sees + operates everything' : (s.pending ? '1 pending diff' : 'idle') + ' · ⌘J',
+      stripName:stripSel.n,
+      stripMeta:'→ ' + stripSel.route + ' · ' + stripSel.db + ' dB · pan ' + stripSel.pan + ' · ' + (stripSel.harm ? 'field on' : 'field off'),
+      stripDotStyle:'width:6px;height:6px;border-radius:50%;background:' + TC[stripSel.id] + ';',
+      stripDevs:stripSel.devs.map(d => ({ name:d, style:'font-family:var(--font-mono);font-size:9px;padding:2px 6px;border-radius:3px;background:#232532;color:#b2b6ca;box-shadow:inset 2px 0 0 color-mix(in srgb,' + TC[stripSel.id] + ' 55%,transparent);' })),
+      clipHandles,
+      outsOpen:!!s.outsFor,
+      outsTitle:(() => { const d = DEVICES.find(x => x.id === s.outsFor); return d ? d.name + ' · audio outputs' : ''; })(),
+      outsMeta:(() => { const d = DEVICES.find(x => x.id === s.outsFor); return d ? d.kind + ' reports ' + d.outs.length + ' stereo buses · unassigned buses are silent' : ''; })(),
+      outsPanelStyle:'position:fixed;left:' + (s.outsPos ? s.outsPos.x : 900) + 'px;top:' + (s.outsPos ? s.outsPos.y : 700) + 'px;transform:translateY(-100%);width:400px;'
+        + 'border:1px solid #595d6c;border-radius:9px;background:#1c1e2a;box-shadow:0 18px 44px rgba(0,0,0,0.66);overflow:hidden;z-index:40;'
+        + (s.drag === 'outs' ? 'box-shadow:0 0 0 1px #9184d9,0 18px 44px rgba(0,0,0,0.7);' : ''),
+      outsGrabStyle:'display:flex;align-items:center;gap:9px;padding:9px 11px;border-bottom:1px solid #292b31;cursor:grab;'
+        + (s.drag === 'outs' ? 'background:rgba(145,132,217,0.1);' : ''),
+      dragOuts:(e) => {
+        e.preventDefault(); e.stopPropagation();
+        const p = s.outsPos || { x:900, y:700 }, x0 = e.clientX, y0 = e.clientY;
+        const move = (ev) => this.setState({ outsPos:{ x:p.x + (ev.clientX - x0), y:p.y + (ev.clientY - y0) } });
+        const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); this.setState({ drag:null }); };
+        window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+        this.setState({ drag:'outs' });
+      },
+      closeOuts:() => this.setState({ outsFor:null }),
+      outsRows:(() => {
+        const d = DEVICES.find(x => x.id === s.outsFor);
+        if (!d) return [];
+        const TARGETS = ['this track', 'BUS A', 'BUS B', 'new track', '— unassigned'];
+        return d.outs.map((o, i) => {
+          const key = d.id + ':' + i;
+          const cur = s.outsMap[key] !== undefined ? s.outsMap[key] : (i === 0 ? 0 : 4);
+          const on = cur !== 4, tcol = cur === 1 ? TC.b1 : cur === 2 ? TC.b2 : cur === 3 ? 'oklch(0.78 0.135 155)' : TC[s.track] || TC.t4;
+          return {
+            bus:o[0], role:o[1], target:TARGETS[cur],
+            busStyle:'font-family:var(--font-mono);font-size:10px;width:52px;flex:0 0 52px;color:' + (on ? '#e9e9ed' : '#595d6c') + ';',
+            roleStyle:'font-family:var(--font-mono);font-size:9px;flex:1;color:#75798c;',
+            arrowStyle:'font-family:var(--font-mono);font-size:9px;color:' + (on ? '#5d5294' : '#2f313c') + ';',
+            targetStyle:'font-family:var(--font-mono);font-size:10px;width:96px;flex:0 0 96px;text-align:right;padding:2px 6px;border-radius:4px;cursor:pointer;'
+              + (on ? 'border:1px solid color-mix(in srgb,' + tcol + ' 55%,transparent);background:color-mix(in srgb,' + tcol + ' 13%,transparent);color:' + tcol + ';'
+                    : 'border:1px dashed #3f424d;color:#595d6c;'),
+            style:'display:flex;align-items:center;gap:9px;padding:6px 11px;border-top:1px solid #232532;',
+            cycle:() => {
+              const nx = (cur + 1) % 5;
+              this.setState({ outsMap:{ ...s.outsMap, [key]:nx } });
+              this.say(d.name + ' ' + o[0] + ' → ' + TARGETS[nx]);
+            }
+          };
+        });
+      })(),
+      arrZoomLabel:aZ + ' bars · ' + (aF + 1) + '–' + (aF + aZ),
+      arrLoopStyle:'position:absolute;left:' + ((0 - aF) * aW) + '%;width:' + (3 * aW) + '%;top:0;bottom:0;pointer-events:none;'
+        + (s.loop ? 'border-left:1px solid #9184d9;border-right:1px solid #9184d9;background:rgba(145,132,217,0.09);box-shadow:inset 0 2px 0 #9184d9;' : 'display:none;'),
+      onArrWheel:(e) => {
+        e.preventDefault();
+        if (e.metaKey || e.ctrlKey) {
+          const z = Math.max(2, Math.min(32, Math.round(aZ * (e.deltaY > 0 ? 1.5 : 1 / 1.5))));
+          this.setState({ arrZoom:z, arrFirst:Math.max(0, Math.min(32 - z, aF + Math.round((aZ - z) / 2))) });
+          this.say('arrange · ' + z + ' bars visible');
+        } else {
+          const d = (e.deltaX || e.deltaY) > 0 ? 1 : -1;
+          this.setState({ arrFirst:Math.max(0, Math.min(32 - aZ, aF + d * Math.max(1, Math.round(aZ / 8)))) });
+        }
+      },
+      arrHeadStyle:'position:absolute;left:calc(200px + (100% - 200px)*' + Math.max(0, Math.min(1, ((s.tick / 64) - aF) / aZ)).toFixed(4) + ');top:0;bottom:0;width:1px;background:#9184d9;opacity:' + (s.playing ? 1 : 0.4) + ';pointer-events:none;z-index:4;',
+      agentCtx:[{ t:'mode ' + mode }, { t:(trk ? trk.n : '') }, { t:scaleLabel }, { t:'cursor ' + this.label(s.first + s.cur.r * span) }, { t:s.playing ? 'playing' : 'stopped' }],
+      agentLog:AGLOG.concat(s.agentDone ? [['cmd', 'Commit ok · 8 events retuned', 'v2140 → v2141']] : []).map(m => ({
+        isCmd:m[0] === 'cmd', chip:'CMD', text:m[1], meta:m[2],
+        style:m[0] === 'user' ? 'display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-radius:7px;background:#1f2130;border:1px solid #292b31;'
+          : m[0] === 'cmd' ? 'display:flex;align-items:center;gap:6px;padding:4px 7px;border-radius:5px;background:rgba(0,0,0,0.25);border:1px solid #292b31;'
+          : m[0] === 'step' ? 'display:flex;align-items:center;gap:6px;padding:0 2px;'
+          : 'display:flex;padding:0 2px;',
+        chipStyle:'font-family:var(--font-mono);font-size:7px;letter-spacing:.08em;padding:1px 4px;border-radius:2px;border:1px solid #5d5294;color:#b5abfc;flex:0 0 auto;',
+        textStyle:'font-family:' + (m[0] === 'note' || m[0] === 'user' ? 'Inter,sans-serif' : 'var(--font-mono)') + ';font-size:' + (m[0] === 'user' ? 11 : 10) + 'px;line-height:1.45;flex:1;color:'
+          + (m[0] === 'user' ? '#e9e9ed' : m[0] === 'note' ? '#9397ab' : m[0] === 'cmd' ? '#d2cefd' : '#9397ab') + ';',
+        metaStyle:'font-family:var(--font-mono);font-size:9px;color:' + (m[2] === '✓' ? '#78d0a0' : '#595d6c') + ';flex:0 0 auto;'
+      })),
+      pendingOpen:s.pending, aq:s.aq,
+      autoStyle:'font-family:var(--font-mono);font-size:8px;padding:2px 6px;border-radius:3px;cursor:pointer;'
+        + (s.auto ? 'border:1px solid #5d5294;background:rgba(145,132,217,0.16);color:#d2cefd;' : 'border:1px solid #292b31;color:#595d6c;'),
+      toggleAuto:() => this.setState({ auto:!s.auto }),
+      onAQuery:(e) => this.setState({ aq:e.target.value }),
+      onASubmit:(e) => { if (e.key === 'Enter' && s.aq.trim()) { this.setState({ aq:'' }); this.say('Agent · reading ' + (trk ? trk.n : 'project') + ' — planning…'); } },
+      applyDiff:() => {
+        for (const pt in PENDT) { const ev = this._ev.l1.find(x => x.t === +pt); if (ev) ev.s = PENDT[pt]; }
+        this.setState({ pending:false, agentDone:true });
+        this.say('Applied · 8 retunes · shm v2141 · ⌘Z to undo');
+      },
+      discardDiff:() => { this.setState({ pending:false }); this.say('Diff discarded — nothing written'); },
+      trackerPaneStyle:'flex:1 1 ' + (s.browser ? 900 : 1376) + 'px;min-width:0;display:flex;flex-direction:column;border-right:1px solid #292b31;overflow-x:auto;overflow-y:hidden;',
+      toggleBrowser:() => this.setState({ browser:!s.browser }),
+      browserBtnStyle:'width:20px;height:18px;display:grid;place-items:center;border-radius:3px;cursor:pointer;font-size:12px;'
+        + (s.browser ? 'border:1px solid #5d5294;background:rgba(145,132,217,0.16);color:#b5abfc;' : 'border:1px solid #3f424d;background:transparent;color:#75798c;'),
+      onBQuery:(e) => this.setState({ bq:e.target.value }), strips, devices, cmds, scaleList, centChips, devMarks, roots,
+      isTrackerA:mode === 'tracker' && lay === 'A',
+      isTrackerB:mode === 'tracker' && lay === 'B',
+      isTrackerC:mode === 'tracker' && lay === 'C',
+      isArrange:mode === 'arrange', isPatch:mode === 'patch', isMix:mode === 'mix',
+      ovPalette:s.ov === 'palette', ovScales:s.ov === 'scales',
+      toast:!!s.toast, toastText:s.toast,
+      playIcon:s.playing ? 'ph ph-pause' : 'ph ph-play',
+      posLabel:this.label(s.tick),
+      zoomLabel, scaleLabel, tuningLabel,
+      chordLabel:'chord ' + CH[Math.floor(s.tick / 64)],
+      shmLabel:'shm v' + (2140 + (s.tick % 60)),
+      saveLabel:'saved 40s ago',
+      saveStyle:'font-family:var(--font-mono);font-size:9px;padding:1px 6px;border-radius:3px;border:1px solid #3f424d;color:#9397ab;',
+      crumbTrack:(trk ? trk.n.replace(/^0/, 'Track ') : 'Track 04'),
+      crumbView:mode === 'tracker' ? 'Tracker' : mode === 'arrange' ? 'Arrangement' : mode === 'patch' ? 'Patcher: voicer.31' : 'Mixer',
+      crumbTail:mode === 'tracker' ? ({ A:'layout A · ledger', B:'layout B · field', C:'layout C · ribbon' })[lay] : scaleLabel + ' · ' + s.tet + '-TET',
+      hintLabel:s.clipSel ? 'CLIP SCOPE · ⌘X⌘C⌘V · ⌘D dup · ⌥↑↓ move · ⇧←→ end · ⌥⇧←→ start · F fit · ⌫ del · esc'
+        : mode === 'tracker' ? '⏎ write · ⌫ clear · ↑↓←→ cursor · ⇧⏎ clip · ⌘E split' : 'F1 back to tracker',
+      layoutName:'TRACKER ' + ({ A:'A · LEDGER', B:'B · FIELD', C:'C · RIBBON' })[lay],
+      undoLabel:'undo: note add @ 4:2:120',
+      selToken:b.text || '—',
+      selMidi:isNaN(degNum) ? '—' : (() => {
+        const l = LADDER.find(x => parseInt(x[0], 10) === degNum);
+        const c = l ? parseFloat(l[2]) : 0, semi = Math.round(c / 100);
+        const names = ['C','C♯','D','E♭','E','F','F♯','G','A♭','A','B♭','B'];
+        const ri = Math.max(0, names.indexOf(s.root));
+        return names[(ri + semi) % 12] + (4 + Math.floor((ri + semi) / 12));
+      })(),
+      selCents:b.agg ? '—' : (b.sub && (b.sub[0] === '+' || b.sub[0] === '-') ? b.sub + '¢' : '±0¢'),
+      selHz:isNaN(degNum) ? '—' : this.hz(degNum, 4) + ' Hz',
+      selPath:s.clipSel ? 'clip ' + s.clipSel.cl[2] + ' · ' + ((TRACKS.find(x => x.id === s.clipSel.t) || {}).n || '') + ' · ' + this.barLabel(s.clipSel.cl)
+        : (trk ? trk.n : 'track') + ' · ' + curCol.lbl + ' · ' + this.label(s.first + s.cur.r * span),
+      cmdCount:cmds.length + ' of ' + CMDS.length,
+      nodeName:activeNode.name, nodeMeta:activeNode.kind + ' · node ' + activeNode.id + ' · deterministic DAG · buffers local',
+      scaleDesc:'Meantone-adjacent 7 of 31. Field applies before dispatch; VST3 receives per-note tuning in cents.',
+      q:s.q,
+      harmLaneStyle:'position:absolute;left:104px;width:148px;top:0;bottom:0;overflow:hidden;border-right:1px solid #292b31;pointer-events:auto;',
+      miniViewStyle:'position:absolute;left:1px;right:1px;top:' + ((s.first / TOTAL) * 100) + '%;height:' + ((vis * span / TOTAL) * 100) + '%;box-shadow:inset 0 0 0 1px #5d5294;border-radius:2px;background:rgba(145,132,217,0.06);',
+      miniHeadStyle:'position:absolute;left:0;right:0;top:' + ((s.tick / TOTAL) * 100) + '%;height:2px;background:#9184d9;',
+      ribbonHeadStyle:'position:absolute;left:calc(176px + (100% - 176px)*' + (s.tick / TOTAL).toFixed(4) + ');top:0;bottom:0;width:1px;background:#9184d9;opacity:' + (s.playing ? 1 : 0.4) + ';',
+      recStyle:'width:26px;height:22px;display:grid;place-items:center;border-radius:4px;cursor:pointer;font-size:11px;'
+        + (s.rec ? 'border:1px solid oklch(0.68 0.2 25);background:color-mix(in srgb,oklch(0.68 0.2 25) 20%,transparent);color:oklch(0.78 0.19 25);'
+                 : 'border:1px solid #3f424d;background:transparent;color:#75798c;'),
+      loopStyle:'font-family:var(--font-mono);font-size:9px;padding:3px 7px;border-radius:4px;cursor:pointer;'
+        + (s.loop ? 'border:1px solid #5d5294;background:rgba(145,132,217,0.16);color:#d2cefd;' : 'border:1px solid #292b31;background:transparent;color:#595d6c;'),
+      metroStyle:'font-family:var(--font-mono);font-size:9px;padding:3px 7px;border-radius:4px;cursor:pointer;'
+        + (s.metro ? 'border:1px solid #5d5294;background:rgba(145,132,217,0.16);color:#d2cefd;' : 'border:1px solid #292b31;background:transparent;color:#595d6c;'),
+      loopRange:'1–3',
+      toggleRec:() => { this.setState({ rec:!s.rec }); this.say(s.rec ? 'Record disarmed' : 'Record armed · track 04 · overdub'); },
+      toggleLoop:() => this.setState({ loop:!s.loop }),
+      toggleMetro:() => this.setState({ metro:!s.metro }),
+      togglePlay:() => this.togglePlay(),
+      stop:() => { if (this._t) clearInterval(this._t); this.setState({ playing:false, tick:0 }); },
+      openScales:() => this.setState({ ov:'scales', q:'' }),
+      closeOv:() => this.setState({ ov:null, q:'' }),
+      stopProp:(e) => e.stopPropagation(),
+      onQuery:(e) => this.setState({ q:e.target.value }),
+      onWheel:(e) => {
+        e.preventDefault();
+        if (e.metaKey || e.ctrlKey) { this.zoomBy(e.deltaY > 0 ? -1 : 1); return; }
+        const step = SPANS[s.zoom] * (e.shiftKey ? 1 : 4);
+        this.setState({ first:Math.max(0, Math.min(TOTAL - vis * SPANS[s.zoom], s.first + (e.deltaY > 0 ? step : -step))) });
+      }
+    };
+  }
+}
+
+</script>
+</body>
+</html>

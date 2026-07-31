@@ -17,11 +17,12 @@ use std::sync::atomic::fence;
 use std::sync::atomic::AtomicU32;
 
 use crate::layout::{
-    EventEntry, EventType, RingHeader, ShmHeader, UiChordCommandPayload,
+    EventEntry, EventType, RingHeader, ShmHeader, UiChainCommandPayload, UiChordCommandPayload,
     UiClipExtent, UiClipExtentRegion, UiClipWindowCommandPayload, UiClipWindowSnapshot,
     UiCommandPayload, UiHarmonyEvent, UiHarmonySnapshot, UiPatcherEdge, UiPatcherNode,
-    UiDeviceParamsRegion, UiPatcherRegion, UiScaleRegion, K_SHM_MAGIC, K_SHM_VERSION,
-    K_UI_MAX_CLIP_EXTENTS, K_UI_MAX_DEVICE_PARAMS, K_UI_MAX_HARMONY_EVENTS,
+    UiDeviceParamsRegion, UiPatcherGraphCommandPayload, UiPatcherNodeConfigPayload,
+    UiPatcherRegion, UiScaleRegion, K_SHM_MAGIC, K_SHM_VERSION, K_UI_MAX_CLIP_EXTENTS,
+    K_UI_MAX_DEVICE_PARAMS, K_UI_MAX_HARMONY_EVENTS,
     K_UI_MAX_PATCHER_EDGES, K_UI_MAX_PATCHER_NODES, K_UI_MAX_SCALES, K_UI_MAX_SCALE_STEPS,
     K_UI_MAX_TRACKS, UiAudioSourceRegion, UiWaveformRegion, UiWaveformRequestPayload,
     K_UI_MAX_AUDIO_CLIPS, K_UI_MAX_AUDIO_SOURCES, K_UI_WAVEFORM_MAX_PAIRS, K_UI_WAVEFORM_SLOTS,
@@ -423,6 +424,23 @@ impl EngineHandle {
 
     /// The published loop span in nanoticks (start, end) — mirrors the engine's
     /// SetLoopRange, so the UI can draw the loop region.
+    /// The audio device's block size in frames and its rate in Hz.
+    ///
+    /// Both zero until the engine has opened a device, which is a state worth forwarding
+    /// rather than defaulting: a latency readout of "0.0ms" says the machine is perfect,
+    /// and what it means is that nothing has started yet.
+    ///
+    /// The rate is rounded to an integer here. It is a double in the header and 44100 or
+    /// 48000 in practice, and a readout that says 47999.9 would be worse than one that
+    /// cannot say a fractional rate at all.
+    pub fn device_block(&self) -> (u32, u32) {
+        unsafe {
+            let block = std::ptr::read_volatile(&(*self.header).block_size);
+            let rate = std::ptr::read_volatile(&(*self.header).sample_rate);
+            (block, if rate.is_finite() && rate > 0.0 { rate.round() as u32 } else { 0 })
+        }
+    }
+
     pub fn loop_range(&self) -> (u64, u64) {
         unsafe {
             (
@@ -1041,6 +1059,34 @@ impl EngineHandle {
         }
     }
 
+    /// A patcher node's configuration.
+    ///
+    /// Its own payload rather than a UiCommandPayload: every command payload is
+    /// 40 bytes, so the engine checks the size and then dispatches on
+    /// commandType — the shape has to match the one that command reads, field
+    /// for field, or the engine reads a config out of the wrong offsets.
+    pub fn send_patcher_config(
+        &self,
+        payload: UiPatcherNodeConfigPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const UiPatcherNodeConfigPayload as *const u8,
+            std::mem::size_of::<UiPatcherNodeConfigPayload>(),
+        )
+    }
+
+    /// Add, remove or connect patcher nodes. Same story as the config above:
+    /// a distinct 40-byte shape the engine reads for these three command types.
+    pub fn send_patcher_graph(
+        &self,
+        payload: UiPatcherGraphCommandPayload,
+    ) -> Result<(), String> {
+        self.write_entry(
+            &payload as *const UiPatcherGraphCommandPayload as *const u8,
+            std::mem::size_of::<UiPatcherGraphCommandPayload>(),
+        )
+    }
+
     /// v23: the first instrument's name per track (empty when the track has none).
     pub fn read_track_device_names(&self) -> Vec<String> {
         loop {
@@ -1068,6 +1114,46 @@ impl EngineHandle {
     /// Per-track stable ids (uiTrackId) + flags (UI_TRACK_FLAG_*), read together under
     /// the seqlock so a caller can key on the id (never the moving slot) and tell the
     /// master / absent / child entries apart. Returns (ids, flags), both `track_count` long.
+    /// v26 per-lane quantize, as (grid nanoticks, strength thousandths, swing
+    /// thousandths) per published slot, plus `ui_quantize_version`.
+    ///
+    /// SWING IS PLAIN SIGNED HERE. The SetLaneQuantize *command* carries it biased
+    /// by +500 because the payload field is unsigned; the read-back is written from
+    /// the runtime's already-debiased value and is not. Applying the bias on both
+    /// legs is an off-by-500 that would read as a groove nobody asked for.
+    ///
+    /// Its own reader rather than a UiSnapshot field: the snapshot is copied inside
+    /// the seqlock on every frame, and these are three more 64-entry arrays — 1 KB
+    /// of copying at 120 Hz for values that change when a person turns a knob.
+    pub fn read_track_quantize(&self) -> (Vec<(u64, u32, i32)>, u32) {
+        loop {
+            let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 % 2 == 1 {
+                continue;
+            }
+            let count =
+                unsafe { std::ptr::read_volatile(&(*self.header).ui_track_count) } as usize;
+            let count = count.min(K_UI_MAX_TRACKS);
+            let mut out = Vec::with_capacity(count);
+            for i in 0..count {
+                out.push((
+                    unsafe { std::ptr::read_volatile(&(*self.header).ui_track_quantize_grid[i]) },
+                    unsafe {
+                        std::ptr::read_volatile(&(*self.header).ui_track_quantize_strength[i])
+                    },
+                    unsafe { std::ptr::read_volatile(&(*self.header).ui_track_quantize_swing[i]) },
+                ));
+            }
+            let version =
+                unsafe { std::ptr::read_volatile(&(*self.header).ui_quantize_version) };
+            fence(Ordering::Acquire);
+            let v1 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
+            if v0 == v1 && v0 % 2 == 0 {
+                return (out, version);
+            }
+        }
+    }
+
     pub fn read_track_ids_and_flags(&self) -> (Vec<u32>, Vec<u8>) {
         loop {
             let v0 = unsafe { (*self.header).ui_version.load(Ordering::Acquire) };
@@ -1135,6 +1221,32 @@ impl EngineHandle {
         )
     }
 
+    /// Drain the engine's outbound diff ring into `out`, up to `max` entries.
+    ///
+    /// SINGLE CONSUMER. This advances the ring's read_index, so exactly one
+    /// thread in one process may call it for a given segment — whatever drains
+    /// it takes the messages away from everyone else. Nothing else consumes this
+    /// ring on the UI segment today (the engine only writes; the C++ device-chain
+    /// tests read their own segments), which is why it is safe to start.
+    ///
+    /// Returns the number drained. An empty ring is the normal case and costs
+    /// two atomic loads.
+    pub fn drain_ui_out(&self, out: &mut Vec<EventEntry>, max: usize) -> usize {
+        let Some(ring) = self.ring_ui_out.as_ref() else { return 0 };
+        let mut read = unsafe { (*ring.header).read_index.load(Ordering::Relaxed) };
+        let write = unsafe { (*ring.header).write_index.load(Ordering::Acquire) };
+        let mut n = 0;
+        while read != write && n < max {
+            out.push(unsafe { *ring.entries.add(read as usize) });
+            read = (read + 1) & ring.mask;
+            n += 1;
+        }
+        if n > 0 {
+            unsafe { (*ring.header).read_index.store(read, Ordering::Release) };
+        }
+        n
+    }
+
     /// Writes one command into the UI ring. Returns false when the ring is
     /// full, which means the engine is not draining and the caller should
     /// retry rather than treat the command as sent.
@@ -1148,6 +1260,11 @@ impl EngineHandle {
     /// Send a device-chain edit (AddDevice/RemoveDevice/MoveDevice/UpdateDevice). Same
     /// ring as send_command; a distinct payload (UiChainCommandPayload). track_id may be
     /// MASTER_TRACK_ID to edit the master chain.
+    ///
+    /// The distinct payload is load-bearing, not tidiness: the engine matches on
+    /// the entry's SIZE first and only then looks at commandType, so a chain edit
+    /// sent in a UiCommandPayload is not refused — it is read as some other
+    /// command's fields, or ignored entirely.
     pub fn send_chain_command(
         &self,
         payload: crate::layout::UiChainCommandPayload,
@@ -1392,8 +1509,12 @@ impl EngineHandle {
         )
     }
 
-    /// Send a track-routing replace (SetTrackRouting). Same ring as send_command; a
-    /// distinct payload shape.
+    /// Send a track-routing replace (SetTrackRouting). Its own 40-byte payload,
+    /// matched on SIZE by the engine before commandType is looked at — see
+    /// send_chain_command for why that matters.
+    ///
+    /// Named `send_routing_command` after a merge in which both sides had added the
+    /// same wrapper under different names. One function, one name.
     pub fn send_routing_command(
         &self,
         payload: crate::layout::UiTrackRoutingPayload,

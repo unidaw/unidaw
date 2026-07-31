@@ -355,7 +355,15 @@ fn write_past_pattern_end_creates_material() {
     assert!(a.ok, "write past end failed: {a:?}");
 
     // Visible in the derived (flat) clip the UI reads, with a positive length.
-    let obs = session.execute(&ToolCall { tool: "observe".into(), args: json!({}) });
+    //
+    // `observe` with no window returns the song's SHAPE and no notes — the whole
+    // song's notes ran to megabytes and could not be handed to a model at all.
+    // A test that wants notes asks for the window they are in; this one covers
+    // well past `far` (beat 5).
+    let obs = session.execute(&ToolCall {
+        tool: "observe".into(),
+        args: json!({ "from_beat": 0, "beats": 64 }),
+    });
     assert!(obs.ok, "observe failed: {obs:?}");
     let note = obs.output["tracks"][0]["notes"]
         .as_array()
@@ -1124,4 +1132,252 @@ fn audio_clip_persists_and_flags_rail() {
     assert_eq!(clip["kind"].as_str(), Some("audio"), "kind lost: {clip:?}");
     assert_eq!(clip["audio"]["source_path"].as_str(), Some("/takes/vox.wav"));
     assert_eq!(clip["audio"]["source_start_frame"].as_u64(), Some(44100));
+}
+
+// ---------------------------------------------------------------------------
+// THE TOOLS ADDED FOR THE SPINE, THE RACK, MODULATION AND LANE QUANTIZE.
+//
+// A tool that compiles is not a tool that works. Every one of these was written by reading the
+// engine's payloads, and reading them is exactly how four modulation facts came out wrong in a
+// row — a remove that needs the link's devices, an add that refuses an existing id, a uid that
+// cannot ride along with the add, and sixteen zero bytes that hex to a truthy string. So each
+// tool is CALLED and its effect checked against what the engine published, never against the
+// tool's own reply.
+// ---------------------------------------------------------------------------
+
+/// Every ToolSpec in the manifest has an arm in `execute`.
+///
+/// THE FORCING FUNCTION. A tool the model can see and cannot call answers "unknown tool", which
+/// reads to the model as the feature being absent and to us as the manifest being complete —
+/// the same shape as a console command whose api method does not exist, which this repo has
+/// shipped four times.
+///
+/// Called with NO arguments on purpose: a dispatched tool refuses by naming what it needs, and
+/// only an undispatched one says "unknown tool".
+#[test]
+fn every_tool_in_the_manifest_is_dispatched() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("dispatch");
+    let mut undispatched: Vec<String> = Vec::new();
+    for spec in daw_agent::tools::tool_manifest() {
+        let out = session.execute(&ToolCall { tool: spec.name.into(), args: json!({}) });
+        let text = format!("{:?}{:?}", out.error, out.output);
+        if text.contains("unknown tool") {
+            undispatched.push(spec.name.to_string());
+        }
+    }
+    assert!(undispatched.is_empty(), "tools in the manifest with no dispatch arm: {undispatched:?}");
+}
+
+/// THE SPINE, v29: markers are added, renamed, moved and removed, and TIME is a separate op.
+///
+/// The distinction is the whole point of the contract change. The four marker ops are TOTAL —
+/// they move no music and can fail only on a bad id — and `insert_time` is the one that ripples.
+/// A span is two adjacent markers, so a "length" is derived, and the test derives it the same
+/// way the renderer does.
+#[test]
+fn marker_tools_drive_the_spine() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("mark");
+
+    let markers = |s: &AgentSession| -> Vec<Value> {
+        let out = s.execute(&ToolCall { tool: "markers".into(), args: json!({}) });
+        assert!(out.ok, "markers failed: {out:?}");
+        out.output["markers"].as_array().cloned().unwrap_or_default()
+    };
+    let settle = || std::thread::sleep(Duration::from_millis(400));
+    let bar = 4 * Q;
+
+    assert!(markers(&session).is_empty(), "a new project has no markers");
+
+    for (tick, name) in [(0u64, "intro"), (4 * bar, "verse"), (12 * bar, "chorus")] {
+        let out = session.execute(&ToolCall {
+            tool: "edit_marker".into(),
+            args: json!({"op":"add","tick":tick,"name":name}),
+        });
+        assert!(out.ok, "add {name} failed: {out:?}");
+        settle();
+    }
+    let list = markers(&session);
+    assert_eq!(list.len(), 3, "three markers: {list:?}");
+    // IN TICK ORDER, whatever order they were added in — the engine keeps the spine sorted, and
+    // a strip that derived a span from an unsorted list would draw negative widths.
+    let ticks: Vec<u64> = list.iter().map(|m| m["nanotick"].as_u64().unwrap()).collect();
+    assert_eq!(ticks, vec![0, 4 * bar, 12 * bar], "{list:?}");
+    // BARS ARE RESOLVED BY THE ENGINE. 4/4 here, so bar 1, 5 and 13 — but the point is that this
+    // reads them rather than dividing ticks, because across a meter change division is wrong.
+    let bars: Vec<u64> = list.iter().map(|m| m["bar"].as_u64().unwrap()).collect();
+    assert_eq!(bars, vec![1, 5, 13], "{list:?}");
+    // The span each marker BEGINS, derived from the next one. The last runs to the song's end.
+    assert_eq!(list[0]["span_end"].as_u64(), Some(4 * bar), "{list:?}");
+    assert_eq!(list[1]["span_end"].as_u64(), Some(12 * bar), "{list:?}");
+
+    let id = list[1]["id"].as_u64().unwrap();
+    let out = session.execute(&ToolCall {
+        tool: "edit_marker".into(), args: json!({"op":"rename","id":id,"name":"VERSE ONE"}),
+    });
+    assert!(out.ok, "rename failed: {out:?}");
+    settle();
+    assert_eq!(markers(&session)[1]["name"].as_str(), Some("VERSE ONE"));
+
+    /*
+     * MOVING A MARKER MOVES THE MARKER, AND NOTHING ELSE.
+     *
+     * This is the difference from the sections it replaces, where changing a "length" rippled
+     * the song. The later marker must NOT move.
+     */
+    let before = markers(&session);
+    let out = session.execute(&ToolCall {
+        tool: "edit_marker".into(), args: json!({"op":"move","id":id,"tick":6 * bar}),
+    });
+    assert!(out.ok, "move failed: {out:?}");
+    settle();
+    let after = markers(&session);
+    assert_eq!(after[1]["nanotick"].as_u64(), Some(6 * bar), "the marker moved: {after:?}");
+    assert_eq!(after[2]["nanotick"].as_u64(), before[2]["nanotick"].as_u64(),
+               "and NOTHING else did: {after:?}");
+
+    /*
+     * INSERTING TIME MOVES EVERYTHING AT OR AFTER IT — which is the capability the drag needed
+     * and the reason sections were worth replacing rather than deleting.
+     */
+    let before = markers(&session);
+    let out = session.execute(&ToolCall {
+        tool: "insert_time".into(), args: json!({"tick": 6 * bar, "bars": 2}),
+    });
+    assert!(out.ok, "insert_time failed: {out:?}");
+    settle();
+    let after = markers(&session);
+    assert_eq!(after[0]["nanotick"].as_u64(), before[0]["nanotick"].as_u64(),
+               "a marker BEFORE the point stays: {after:?}");
+    assert_eq!(after[1]["nanotick"].as_u64(), Some(8 * bar),
+               "the marker AT the point moves with the music: {after:?}");
+    assert_eq!(after[2]["nanotick"].as_u64(),
+               Some(before[2]["nanotick"].as_u64().unwrap() + 2 * bar),
+               "and so does every later one: {after:?}");
+
+    // ...AND IT IS UNDOABLE, which SetSectionLength never was: it moved every placement on every
+    // track plus three song timelines and pushed no undo entry big enough to hold it.
+    let out = session.execute(&ToolCall { tool: "undo".into(), args: json!({}) });
+    assert!(out.ok, "undo failed: {out:?}");
+    settle();
+    let undone = markers(&session);
+    assert_eq!(undone[1]["nanotick"].as_u64(), before[1]["nanotick"].as_u64(),
+               "undo puts the time back: {undone:?}");
+
+    let out = session.execute(&ToolCall {
+        tool: "edit_marker".into(), args: json!({"op":"remove","id":id}),
+    });
+    assert!(out.ok, "remove failed: {out:?}");
+    settle();
+    let left = markers(&session);
+    assert_eq!(left.len(), 2, "{left:?}");
+    assert!(left.iter().all(|m| m["id"].as_u64() != Some(id)), "the right one went: {left:?}");
+}
+
+/// Every marker and time refusal NAMES the argument it is about.
+///
+/// The model reads these. An `ok: false` with an empty body teaches it nothing and it will make
+/// the same call again — a loop that costs money and never converges.
+#[test]
+fn marker_refusals_say_what_is_missing() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("markref");
+    for (tool, args, want) in [
+        ("edit_marker", json!({"op":"wat"}), "add, remove, rename"),
+        ("edit_marker", json!({"op":"remove"}), "id"),
+        ("edit_marker", json!({"op":"rename","id":1}), "name"),
+        ("edit_marker", json!({"op":"move","id":1}), "tick"),
+        ("edit_marker", json!({}), "op"),
+        // Zero bars is not a small edit, it is no edit — and it would spend a whole-song
+        // transaction and an undo entry on nothing.
+        ("insert_time", json!({"tick":0,"bars":0}), "bars"),
+        ("insert_time", json!({"bars":4}), "tick"),
+        ("set_time_signature", json!({"signature":"7/0"}), "beats/note-value"),
+        ("set_time_signature", json!({}), "signature"),
+    ] {
+        let out = session.execute(&ToolCall { tool: tool.into(), args: args.clone() });
+        assert!(!out.ok, "{tool} {args} should be refused: {out:?}");
+        let why = out.error.clone().unwrap_or_default();
+        assert!(why.contains(want), "{tool} {args} refused without naming {want:?}: {why:?}");
+    }
+}
+
+/// MODULATION's refusals, which are the interesting half.
+///
+/// Three of the four ways to make an inert link are caught here rather than sent, because the
+/// engine accepts all three and then moves nothing: a same-device source (the applier requires
+/// STRICTLY earlier, the validator only refuses later), a malformed uid, and a missing uid. The
+/// fourth — an AUTO link id, which cannot be named in the same call — is not refused because it
+/// is a legitimate thing to do; it is REPORTED, and that is asserted too.
+#[test]
+fn modulate_refuses_the_links_that_could_not_work() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (_engine, session) = start_engine("modref");
+    let uid = "0".repeat(31) + "1";
+
+    let same = session.execute(&ToolCall {
+        tool: "modulate".into(),
+        args: json!({"track":0,"source_device":6,"target_device":6,"param_uid":uid}),
+    });
+    assert!(!same.ok, "a same-device link must be refused: {same:?}");
+    assert!(same.error.clone().unwrap_or_default().contains("EARLIER"),
+            "and the reason must be the forward rule: {same:?}");
+
+    let bad = session.execute(&ToolCall {
+        tool: "modulate".into(),
+        args: json!({"track":0,"source_device":5,"target_device":6,"param_uid":"nope"}),
+    });
+    assert!(!bad.ok && bad.error.clone().unwrap_or_default().contains("32 hex"),
+            "a malformed uid must be refused by shape: {bad:?}");
+
+    let none = session.execute(&ToolCall {
+        tool: "modulate".into(),
+        args: json!({"track":0,"source_device":5,"target_device":6}),
+    });
+    assert!(!none.ok && none.error.clone().unwrap_or_default().contains("param_uid"),
+            "a missing uid must be refused, since the engine ignores the index: {none:?}");
+
+    let rm = session.execute(&ToolCall {
+        tool: "unmodulate".into(), args: json!({"track":0,"link":1}),
+    });
+    assert!(!rm.ok, "a removal without the link's devices must be refused: {rm:?}");
+    assert!(rm.error.clone().unwrap_or_default().contains("source_device"),
+            "and say which: {rm:?}");
+}
+
+/// LANE QUANTIZE, where the UNITS are the whole risk.
+///
+/// Percent in and thousandths on the wire, and swing BIASED BY +500 so a negative value
+/// survives an unsigned field. A tool that forwarded the numbers unchanged would quantize at a
+/// tenth of the strength asked for, with a swing near the extreme — and both would look like
+/// settings that had been applied. Read back from the SAVED PROJECT, which is the engine's own
+/// account of what it holds.
+#[test]
+fn lane_quantize_tool_converts_its_units() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (engine, session) = start_engine("quant");
+
+    let out = session.execute(&ToolCall {
+        tool: "set_lane_quantize".into(),
+        args: json!({"track":0,"grid":"1/16","strength":80,"swing":-20}),
+    });
+    assert!(out.ok, "set_lane_quantize failed: {out:?}");
+    std::thread::sleep(Duration::from_millis(500));
+    let save = session.execute(&ToolCall { tool: "save".into(), args: json!({"name":"quantout"}) });
+    assert!(save.ok, "save failed: {save:?}");
+    let doc = read_project(&engine.proj, "quantout");
+    let q = &track(&doc, 0)["quantize"];
+    assert_eq!(q["grid_nanoticks"].as_u64(), Some(240_000),
+               "1/16 is 240000 nanoticks, not a subdivision index: {q:?}");
+    assert_eq!(q["strength_milli"].as_u64(), Some(800),
+               "80 percent is 800 thousandths: {q:?}");
+    assert_eq!(q["swing_milli"].as_i64(), Some(-200),
+               "-20 percent is -200 thousandths, unbiased again on the way out: {q:?}");
+
+    let bad = session.execute(&ToolCall {
+        tool: "set_lane_quantize".into(), args: json!({"track":0,"grid":"sixteenth"}),
+    });
+    assert!(!bad.ok && bad.error.clone().unwrap_or_default().contains("unknown grid"),
+            "an unknown grid must be refused by name: {bad:?}");
 }

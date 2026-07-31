@@ -1,0 +1,428 @@
+/* The application shell: the frame every surface lives inside.
+ *
+ * Until now each surface filled the window and the browser, agent dock and help
+ * were overlays on top of it. The design (design/redesign/Uni.dc.html) is a
+ * PERSISTENT frame — browser rail, centre, right dock and device chain are all
+ * on screen at once, and only the centre swaps between tracker, arrangement,
+ * patcher and mixer. That is a different thing from a restyle: what the user is
+ * looking at while they edit is most of the point of a DAW layout.
+ *
+ * The measurements come from the design component, read off its rendered boxes
+ * rather than guessed: at 1600px wide it lays out
+ *   chrome 38 · breadcrumb 26 · main 714 · device chain 196 · status 26
+ * and within main, rail 266 · centre 1082 (of which 30 is the minimap) · dock 332.
+ * They are named here so the numbers exist in one place; nothing else may
+ * hardcode them.
+ */
+
+:root {
+  --shell-chrome-h: 38px;
+  --shell-crumb-h: 26px;
+  --shell-status-h: 26px;
+  --shell-rail-w: 266px;
+  --shell-dock-w: 332px;
+  --shell-chain-h: 196px;
+  /* The right dock's cells. Defaults are what they measured at when they were
+     content-sized, EXCEPT pending, which measured 83px and could not show its
+     own text — it gets room to be read. */
+  --rdock-harmony-h: 345px;
+  --rdock-pending-h: 150px;
+  --rdock-head-h: 26px;
+  /* How tall the roll is when it shares the stage with the arrangement. */
+  --stage-roll-h: 300px;
+  --shell-minimap-w: 30px;
+}
+
+/* Text selection is off across the application. Dragging in a tracker selects
+   rows, dragging on a clip rail moves a clip — a blue text highlight following
+   the pointer is never what was meant, and it makes every drag look broken. The
+   places that DO want selection ask for it back below. */
+#app, #app * { user-select: none; -webkit-user-select: none; }
+#app input, #app textarea, .dk-log, .hm-body {
+  user-select: text; -webkit-user-select: text;
+}
+
+#app {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  /* The shell must not scroll. Every region that can overflow says so itself —
+     a shell that scrolls turns a dropped frame into a moving target. */
+  overflow: hidden;
+}
+
+#chrome {
+  flex: 0 0 var(--shell-chrome-h);
+  height: var(--shell-chrome-h);
+}
+
+/* Where you are: project, track, surface, layout. Its own row because the design
+   separates "what the transport is doing" from "what you are looking at", and
+   putting both in one bar is how the second becomes unreadable. */
+#crumb {
+  flex: 0 0 var(--shell-crumb-h);
+  height: var(--shell-crumb-h);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  background: var(--uni-surface-header-bg);
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-gutter);
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* The breadcrumb's own cells sort BEFORE anything mounted into this row from elsewhere — the
+   chrome's entry cluster is `order: 2`. Stated on both sides so neither has to know the
+   other's DOM position. */
+#crumb > span { order: 1; }
+#crumb .cr-sep { color: var(--uni-rule-track); }
+#crumb .cr-strong { color: var(--uni-text-instrument); }
+#crumb .cr-right { margin-left: auto; color: var(--base-neutral-600); }
+
+#main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;      /* or a tall child stretches the shell instead of scrolling */
+}
+
+/* The browser is a RAIL now, not an overlay. It reflows the centre when it opens,
+   which is the point: the design gives it permanent residence, and a surface
+   that is narrower because the browser is open is honest about the space it has.
+   The cost is a relayout on toggle, which happens on a keystroke, not a frame. */
+#browser {
+  flex: 0 0 var(--shell-rail-w);
+  width: var(--shell-rail-w);
+  min-width: 0;
+  border-right: 1px solid var(--uni-rule-gutter);
+  background: var(--uni-surface-header-bg);
+  overflow: hidden;
+  position: relative;
+}
+
+#centre {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* The tracker's column header. Sized by the tokens, not by this file, because the
+   view-model maps nanoticks onto that height. */
+#head {
+  flex: 0 0 var(--metrics-header-height);
+  height: var(--metrics-header-height);
+  overflow: hidden;
+  background: var(--uni-surface-header-bg);
+  border-bottom: 1px solid var(--uni-rule-gutter);
+  position: relative;
+  z-index: 3;
+}
+#head .hrow { position: absolute; display: flex; height: 100%; }
+#head .hgut {
+  position: sticky; left: 0; z-index: 2;
+  flex: 0 0 var(--metrics-gutter-width);
+  width: var(--metrics-gutter-width);
+  background: var(--uni-surface-header-bg);
+  display: flex; align-items: center; padding: 0 8px; box-sizing: border-box;
+  font-size: var(--font-size-fx); letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-gutter);
+}
+#head .hharm {
+  flex: 0 0 var(--metrics-harmony-width);
+  width: var(--metrics-harmony-width);
+  box-sizing: border-box;
+  display: flex; align-items: center; padding: 0 8px;
+  font-size: var(--font-size-fx); letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-gutter);
+  border-right: var(--uni-rule-track-width) solid var(--uni-rule-track);
+}
+#head .htrack {
+  /* A positioning context for the quantize badge, which is absolute — see
+     tracker.css. Inline it reserved width on all sixteen lanes and shifted every
+     centred track name, which is fifteen golden screenshots' worth of layout change
+     to make one control hittable. */
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  box-sizing: border-box; font-family: var(--font-mono);
+  font-size: var(--font-size-inst); letter-spacing: var(--font-tracking-fx);
+  color: var(--uni-text-instrument);
+  border-right: var(--uni-rule-track-width) solid var(--uni-rule-track);
+}
+
+/* A header whose lane is folded away under a collapsed parent.
+   Written as `#head .htrack.folded` and kept HERE rather than in tracker.css: the
+   base rule above is `#head .htrack`, and an id beats two classes, so the same
+   declaration written next to the fold logic simply lost. Zero really means zero —
+   a border on a zero-width box is still 2px of visible stripe, and three folded
+   children leave a 6px comb where the fold is supposed to have removed
+   everything. */
+#head .htrack.folded { border-width: 0; padding: 0; overflow: hidden; }
+
+/* Where a surface actually draws. Position:relative so the surfaces can stay
+   absolutely positioned inside it — they were written against `inset: 0` and
+   there is no reason to rewrite five renderers to move the frame around them. */
+#stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* A COLUMN of panes, not a positioning context for the surfaces. Each pane is
+     the positioning context for whatever surface it currently holds. */
+  display: flex;
+  flex-direction: column;
+}
+/* A pane. One today, two when the split is open. `min-height: 0` is what lets a
+   pane shrink below its content instead of pushing its neighbour off. */
+.pane { position: relative; flex: 1 1 auto; min-height: 0; }
+#trackerPane, #arrange, #mixer, #piano, #patcher { position: absolute; inset: 0; }
+/* And the tracker itself, inside its wrapper's body. It was in the rule above
+   until the wrapper existed; leaving it out made it a static block with no
+   height, which draws the header and nothing under it. */
+#tracker { position: absolute; inset: 0; }
+/* The tracker is a column: its header, then everything else. The header is the
+   one part of it that is not `inset: 0`, which is why the whole thing is wrapped
+   — see the comment in the markup. */
+#trackerPane { display: flex; flex-direction: column; }
+/* `display: flex` BEATS the user agent's `[hidden] { display: none }`, so
+   without this the tracker's column header went on drawing over whichever
+   surface had replaced it — "TIME | HARMONY | Bass" across the top of the
+   arrangement. Every other surface is `display: block` by default and so was
+   hidden correctly, which is why this was the only one. */
+#trackerPane[hidden] { display: none; }
+#trackerBody { position: relative; flex: 1 1 auto; min-height: 0; }
+/* The minimap is pinned to the right of the STAGE, outside the horizontally
+   scrolled strip — it spans the song, so it must not move when you scroll
+   across tracks. The surfaces stop short of it. */
+/* Only the tracker has a minimap. It lived in #stage, which every surface shares,
+   so it painted a column of the song's density over the patcher, the mixer and
+   the arrangement — visible in every screenshot and belonging to none of them. */
+#minimap {
+  position: absolute; top: 0; bottom: 0; right: 0;
+  width: var(--metrics-minimap-width);
+  z-index: 4;
+}
+#minimap[hidden] { display: none; }
+#tracker { right: var(--metrics-minimap-width); }
+/* Only the tracker has a minimap; the other surfaces own their full width. */
+#arrange, #mixer, #piano, #patcher { right: 0; }
+#rdock {
+  flex: 0 0 var(--shell-dock-w);
+  width: var(--shell-dock-w);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--uni-rule-gutter);
+  background: var(--uni-surface-header-bg);
+  /* `overflow-y: auto` and not `hidden`, as the BACKSTOP behind the cells' shrink above.
+     Shrinking covers the ordinary case; when even the minimums do not fit, a scrollbar is the
+     honest answer — the content is reachable and the person can see there is more. `hidden`
+     truncates instead, and a card cut off mid-sentence reads as a rendering fault. */
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+/* The harmony card and the pending card are DRAGGABLE now; the agent still takes
+   the rest, because its log is the thing that grows without bound and it is the
+   one that should scroll rather than push.
+
+   `0 0 var(--...)` rather than `0 0 auto`: a content-sized cell cannot be
+   resized, and the pending card being content-sized is why it sat at 83px with
+   its text clipped while 300px of empty log went spare underneath it. */
+/* `0 1 var(--...)`, and the SHRINK is load-bearing.
+ *
+ * With `0 0` these two were 495px of unyielding cell in a dock that is only as tall as the
+ * window leaves it, and `#dock` below them is the only thing that could give. MEASURED: at
+ * 1280x800 the dock's content came to 561px in a 513px box, and at 1024x640 to 561 in 353 —
+ * so the agent log went to zero and the harmony card was then cut off with nothing to say so.
+ * On any laptop.
+ *
+ * Shrink keeps the basis, so a drag still sets `--rdock-harmony-h` and the cell still holds
+ * that height whenever there is room for it. It differs only when there is not — which is the
+ * case that was broken. */
+#harmony { flex: 0 1 var(--rdock-harmony-h); height: var(--rdock-harmony-h); overflow: hidden; position: relative; }
+#pending { flex: 0 1 var(--rdock-pending-h); height: var(--rdock-pending-h); overflow: hidden; position: relative; }
+/* `inset: auto` and `height: auto` are NOT tidying — they are the fix for a real
+   overlap. dock.css still describes the dock as the overlay it used to be:
+   `position: absolute; left: 0; right: 0; bottom: 16px; height: 240px`. The id
+   here beats the class for `position`, so the dock became `relative` — but
+   `bottom: 16px` on a relatively positioned box does not mean "sit 16px from the
+   bottom", it means "shift 16px UP from where you would have been". So the dock
+   has been drawing 16px over the cell above it since the shell was built, and
+   `height: 240px` was fighting the flex basis at the same time.
+   It only became visible when a collapsed pending cell was thin enough for the
+   overlap to swallow it whole, and it read as a dead button. */
+#dock {
+  flex: 1 1 auto; min-height: 0;
+  position: relative;
+  inset: auto; height: auto;
+}
+
+/* Collapsed: the header stays, the body goes. A collapsed cell you cannot see
+   the name of is a cell you cannot get back. --rdock-head-h is the header, and
+   every one of these three draws one. */
+#harmony.cell-collapsed, #pending.cell-collapsed {
+  flex: 0 0 var(--rdock-head-h) !important;
+  height: var(--rdock-head-h) !important;
+}
+#dock.cell-collapsed { flex: 0 0 var(--rdock-head-h) !important; min-height: 0; }
+/* The BODIES go, never the headers — and pending's header lives inside its card,
+   so the card must stay and lose its contents instead. Hiding .pd-card outright
+   took the fold button with it and left a collapsed cell with nothing to click. */
+.cell-collapsed .hm-body,
+.cell-collapsed .pd-reason, .cell-collapsed .pd-acts,
+.cell-collapsed .dk-log, .cell-collapsed .dk-row {
+  display: none;
+}
+
+/* ...and the surviving header has to be REACHABLE, not merely present.
+   .pd-card is inset 8px inside #pending, so a cell collapsed to the header
+   height clipped its own header away: the button still reported an 18px rect
+   (getBoundingClientRect does not know about a clipping ancestor) while
+   elementFromPoint at those coordinates returned the agent header underneath.
+   It looked exactly like a dead button, and a probe that only measured the rect
+   agreed it was fine. Flush to the top when collapsed, so what is measured is
+   what can be clicked. */
+#pending.cell-collapsed .pd-card {
+  padding: 0 9px;
+  border-color: transparent;
+  background: transparent;
+  height: var(--rdock-head-h);
+  justify-content: center;
+}
+/* The splitter between two cells is meaningless when one of them is collapsed:
+   dragging it would set a height the collapse rule overrides, so the handle
+   would move and nothing would happen. */
+.cell-collapsed > .sp-bottom { display: none; }
+
+#chain {
+  flex: 0 0 var(--shell-chain-h);
+  height: var(--shell-chain-h);
+  border-top: 1px solid var(--uni-rule-gutter);
+  background: var(--uni-surface-header-bg);
+  overflow: hidden;
+  position: relative;
+}
+
+#hud {
+  flex: 0 0 var(--shell-status-h);
+  height: var(--shell-status-h);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-fx);
+  letter-spacing: var(--font-tracking-fx);
+  color: var(--base-neutral-600);
+  background: var(--uni-surface-header-bg);
+  border-top: 1px solid var(--uni-rule-gutter);
+  z-index: 3;
+}
+
+/* Regions the user can put away. `hidden` on a flex child still occupies its
+   basis unless display is cleared, which is a five-minute bug the first time. */
+#browser[hidden], #rdock[hidden], #chain[hidden], #head[hidden],
+#arrange[hidden], #mixer[hidden], #piano[hidden], #patcher[hidden],
+#help[hidden], #palette[hidden], #stale[hidden] { display: none; }
+
+/* Overlays stay overlays: help and the command palette are modal by nature —
+   they are about the application rather than about the music, and they should
+   not reflow the thing you are asking about. */
+#help, #palette {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+}
+
+/* The engine can stop responding while staying alive with its shared memory
+   mapped, so every value on screen stays valid-looking and nothing errors. That
+   is the worst failure shape available and a line of small text is not enough to
+   distinguish it from a stopped transport. */
+#stale {
+  position: absolute; left: 0; right: 0; top: var(--shell-chrome-h); z-index: 30;
+  padding: 6px 12px; box-sizing: border-box;
+  background: var(--uni-text-fx); color: var(--uni-surface-tracker-bg);
+  font-family: var(--font-mono); font-size: var(--font-size-inst);
+  letter-spacing: var(--font-tracking-fx);
+}
+
+/* The fold control every dock cell carries.
+   Pushed to the right of whatever else the header holds, so the three headers
+   agree about where the control is even though their contents do not. */
+.cell-fold {
+  margin-left: auto;
+  display: flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--uni-text-fx);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: .55;
+}
+.cell-fold:hover { opacity: 1; color: var(--base-accent); }
+.cell-fold:focus-visible { outline: 1px solid var(--base-accent); opacity: 1; }
+
+/* THE ARRANGEMENT AND THE ROLL, AT THE SAME TIME.
+ *
+ * The design puts the scale roll UNDER the arrangement — you pick a clip up
+ * there and edit its notes down here, both on screen, because deciding which
+ * clip to work on and working on it are the same activity. The build had them as
+ * two full-window surfaces you swapped between, which makes the arrangement a
+ * menu you visit rather than the thing you are arranging in.
+ *
+ * Both surfaces are already `position: absolute; inset: 0` inside #stage, so
+ * splitting is a matter of giving each an edge to stop at. --stage-roll-h is
+ * dragged by a Splitter, like every other region.
+ */
+/* The old roll split lived here: `#stage.stage-split #arrange { bottom:
+   var(--stage-roll-h) }` and a matching rule pinning #piano to the bottom. Both
+   are gone. A surface no longer has to know it is sharing the stage — it fills
+   the PANE it is in, and the panes divide the stage. That is the whole
+   difference between one hard-coded pairing and any two views at once, and
+   leaving the old rules in place squeezed the arrangement to 63px inside a
+   363px pane while the roll drew where it always had. */
+
+/* The patcher-is-generating warning. Louder than the modes beside it on purpose:
+   it explains a sound with no visible source, which is the one thing in this app
+   people have repeatedly failed to work out on their own. */
+.ch-gen {
+  color: var(--uni-text-fx);
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  padding: 0 4px;
+}
+.ch-gen:empty { display: none; border: 0; padding: 0; }
+
+/* ── THE SPLIT CENTRE ───────────────────────────────────────────────────────
+   Two panes, stacked, with a draggable divider. Stacked rather than side by
+   side because every centre surface but the tracker has time on its x axis:
+   arrange, the piano roll and the scale roll all read left-to-right, and
+   stacking keeps the same bar under the same pixel in both. That alignment is
+   the whole reason arrange-over-piano-roll is useful, and a vertical split
+   would throw it away.
+
+   The bottom pane's height is a CSS variable so the splitter can write one
+   number, exactly as the rack and the rails do. */
+#paneBot {
+  flex: 0 0 var(--stage-split-h, 40%);
+  min-height: 0;
+}
+#paneEdge {
+  flex: 0 0 5px;
+  cursor: row-resize;
+  background: var(--uni-rule-gutter);
+}
+#paneEdge:hover { background: var(--base-accent); }
+/* The focused pane, so it is possible to tell which one the keys go to. A
+   1px inset line rather than a border: a border would change the pane's box and
+   move every surface inside it by a pixel when focus changed. */
+.pane.focused { box-shadow: inset 0 0 0 1px var(--base-accent-ramp-400); }
