@@ -1841,6 +1841,38 @@ fn build_routing(body: &str) -> Option<Result<UiTrackRoutingPayload, &'static st
 /// NOT VERSIONED. `base_version` stays 0 deliberately: quantize moves no authored
 /// note, so gating it on a clip version would let an unrelated edit refuse a
 /// setting that cannot conflict with anything.
+/// SetTrackSoundAddressed (87). A track where PITCH NEVER SELECTS A SLOT.
+///
+/// Opt-in per track. With it off — the default — a blank `sound` means "let the keymap pick from
+/// the pitch", which is right for a drum kit laid across the keys. With it on, the keymap is out
+/// of the way and a 64-slot kit stays fully chromatic: every key plays the SAME slot at a
+/// different speed, and a row says which slot with `s`.
+///
+/// A blank sound under the flag resolves to the track's LOWEST SLOT ID rather than to silence.
+/// That was worth arguing about and the argument is that it stays a pure function of published
+/// data: this side can answer "what will this note play" from the kit read-back alone, with no
+/// hidden per-track selection living in the engine and no bounce that depends on where a cursor
+/// was.
+///
+/// NOT VERSIONED, for the same reason quantize is not: it moves no authored note, so gating it
+/// on a clip version would let an unrelated edit refuse a setting that cannot conflict.
+fn build_sound_addressed(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
+    if !is_type(body, "soundaddressed") { return None; }
+    Some(Ok(UiCommandPayload {
+        command_type: UiCommandType::SetTrackSoundAddressed as u16,
+        flags: 0,
+        track_id: parse_num(body, "\"track\"").unwrap_or(0).max(0) as u32,
+        plugin_index: 0,
+        note_pitch: 0,
+        value0: if parse_num(body, "\"on\"").unwrap_or(1) != 0 { 1 } else { 0 },
+        note_nanotick_lo: 0,
+        note_nanotick_hi: 0,
+        note_duration_lo: 0,
+        note_duration_hi: 0,
+        base_version: 0,
+    }))
+}
+
 fn build_quantize(body: &str) -> Option<Result<UiCommandPayload, &'static str>> {
     if !is_type(body, "quantize") { return None; }
     let Some(grid) = parse_num(body, "\"grid\"") else {
@@ -3006,6 +3038,7 @@ fn build_command(body: &str) -> Result<UiCommandPayload, &'static str> {
     if let Some(r) = build_named(body) { return r; }
     if let Some(r) = build_placement(body) { return r; }
     if let Some(r) = build_quantize(body) { return r; }
+    if let Some(r) = build_sound_addressed(body) { return r; }
 
     let mut p = UiCommandPayload {
         command_type: UiCommandType::None as u16,
@@ -5159,6 +5192,32 @@ fn decode_engine_event(e: &EventEntry) -> Option<String> {
             "{{\"kind\":\"clip-rejected\",\"reason\":{reason},\"track\":{track},\
               \"sentBase\":{},\"currentBase\":{},\"command\":{}}}",
             u32at(8), u32at(12), u16at(16)));
+    }
+    /*
+     * A REFUSED SAMPLER COMMAND SAYS SO (UiDiffType::SamplerRejected = 17).
+     *
+     * Twenty sites across seven verbs refused into the engine's LOG and nowhere else — envelope
+     * 4, emit 4, slice 3, filter 3, set_slot 2, load 2, lfo 2. daw-cli can read the engine's
+     * stderr and a browser cannot, so from here every one of them was a command that reported
+     * success and did nothing. I found one of the twenty by accident, because the sound kept
+     * playing: `slot 0` is not a wildcard, the engine answered `no_such_slot`, and the note ran
+     * the full eight seconds while the console said it had worked.
+     *
+     * `commandType` is what was sent, so a caller can match a refusal to the command that caused
+     * it. `targetId` is the ONE id that could not be found, chosen by `reason` — a slot, a mod
+     * set, a modulator, a source or a slice set. One field rather than five because exactly one
+     * of them is ever the answer, and five parallel ids would be four chances to disagree.
+     *
+     * The reason travels as a NUMBER rather than as a sentence: what to do differs per reason —
+     * `no_such_slot` means stop and re-read the kit, `bad_value` means the caller clamped wrong
+     * and retrying identically will never help — and the surface that shows it is better placed
+     * to word that than this layer is.
+     */
+    if diff == 17 {
+        let reason = u16at(2);
+        return Some(format!(
+            "{{\"kind\":\"sampler-rejected\",\"reason\":{reason},\"command\":{},              \"target\":{},\"track\":{},\"device\":{}}}",
+            u16at(4), u16at(6), u32at(8), u32at(12)));
     }
     // The error payloads DO share a prefix: diff_type:u16, error_code:u16,
     // track_id:u32.

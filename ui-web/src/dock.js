@@ -478,6 +478,21 @@ export function createCommands(api) {
           ? `chopping into ${count} ${mode} slices` : refusal(api);
       } },
     /*
+     * CHROMATIC MODE for a sampler track.
+     *
+     * Off, a blank `sound` lets the keymap pick a slot from the pitch — a kit across the keys.
+     * On, pitch never selects: every key plays the same slot at a different speed, so a 64-slot
+     * kit stays fully playable and a row names its slot with `s`. Opt-in per track because both
+     * are things people want and neither is a mode the other can emulate.
+     */
+    soundaddr: { help: 'soundaddr <track> [on|off] — pitch never picks the slot on this track',
+      args: [A_TRACK, ON_OFF],
+      run: (a) => {
+        const on = a[1] === undefined ? true : String(a[1]) === 'on';
+        if (!api.soundAddressed(num(a[0]), on)) return refusal(api);
+        return `track ${a[0]} ${on ? 'is sound-addressed' : 'uses the keymap'}`;
+      } },
+    /*
      * ONE FIELD OF ONE SLOT, by name.
      *
      * Twenty-seven settings the engine has always had and no surface could reach — gate, loop

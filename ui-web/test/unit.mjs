@@ -808,7 +808,7 @@ test('a project row leaves its meta line to the renderer', () => {
  */
 const API_METHODS = ['automationEdit', 'automationEditing', 'samplerKit', 'samplerKitCached',
                      'rowOps', 'opsAtCursor', 'opAtCursor', 'opsTextAtCursor', 'noteIdAtCursor',
-                     'loadSample', 'addDevice', 'sliceSample', 'samplerFilter', 'samplerEnvelope', 'samplerSlot',
+                     'loadSample', 'addDevice', 'sliceSample', 'samplerFilter', 'samplerEnvelope', 'samplerSlot', 'soundAddressed',
                      'setView', 'load', 'save', 'listProjects', 'transport', 'seek', 'tempo',
                      'note', 'del', 'goto', 'zoom', 'octave', 'gain', 'strip', 'state',
                      'engine', 'close', 'follow', 'rename', 'select', 'transpose', 'setLoop',
@@ -2234,6 +2234,11 @@ const OP_REGISTRY = {
    * agent has no sampler tooling at all.
    */
   slot:      { cli: 'sampler-slot', agent: null, why: 'gap' },
+  /*
+   * Chromatic mode (SetTrackSoundAddressed, 87). Landed engine-side this morning; daw-cli has
+   * not caught up, and the agent has no sampler tooling at all.
+   */
+  soundaddr: { cli: null, agent: null, why: 'gap' },
   edit:      { cli: null, agent: null, why: 'view' },
   fold:      { cli: null, agent: null, why: 'view' },
   follow:    { cli: null, agent: null, why: 'view' },
@@ -2283,7 +2288,7 @@ const CLI_GAP = ['add-clip', 'addnode', 'clear', 'clips', 'columns', 'copy', 'cu
                  'undo',
                  // The sampler filter (opcode 86). It landed engine-side this morning and the
                  // CLI has no verb for it yet — recorded as a gap rather than claimed as covered.
-                 'filter',
+                 'filter', 'soundaddr',
                  // The sampler read-back. Reached the engine from this app first; daw-cli has
                  // no verb for it, which is the usual direction reversed and worth recording.
                  'kit',
@@ -2335,7 +2340,7 @@ const AGENT_GAP = ['addnode', 'chord', 'clear', 'columns', 'copy', 'cut',
                    'gain', 'link', 'loop', 'mute', 'new', 'paste', 'patch',
                    'seek', 'solo', 'tempo', 'transpose', 'mods', 'ops',
                    // With the other sampler verbs: the agent has no sampler tooling at all.
-                   'filter', 'env', 'slot',
+                   'filter', 'env', 'slot', 'soundaddr',
                    // With `ops`, and for the same reason: the agent has no row-op tool at all.
                    'op',
                    'sampler', 'load-sample', 'slice',

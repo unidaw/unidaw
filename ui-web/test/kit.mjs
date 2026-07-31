@@ -539,6 +539,38 @@ const ask = async (track, device) => {
           + 'Reported. This check moves the day it is.',
           JSON.stringify(cut.map((x) => x.frames)));
   }
+
+  /*
+   * A REFUSED SAMPLER COMMAND SAYS SO — UiDiffType::SamplerRejected (17).
+   *
+   * Twenty sites across seven sampler verbs used to refuse into the engine's log and nowhere
+   * else: from a browser they were commands that reported success and did nothing. I found one
+   * of the twenty by accident, because the sound kept playing — `slot 0` is not a wildcard, the
+   * engine answered `no_such_slot`, and a half-second note ran the sample's full eight seconds
+   * while the console said the command had worked.
+   *
+   * A slot id that cannot exist is the cheapest way to provoke one, and the check is on the
+   * WORDING as well as the fact: "no slot 999" tells a caller its idea of the kit is stale,
+   * where a bare "rejected" would only tell it that it was wrong about something.
+   */
+  await page.evaluate((t) => { window.__uni.state().reject = null;
+                               window.__uni.run(`slot ${t} 0 999 gate 1`); }, ct);
+  await page.waitForTimeout(1500);
+  const refusal = await page.evaluate(() => (window.__uni.state() || {}).reject);
+  check(refusal && /no slot 999/.test(refusal),
+        'a sampler command refused by the engine is REPORTED, and says which slot',
+        JSON.stringify(refusal));
+
+  /*
+   * AND A VALID ONE IS QUIET. Without this the check above passes on a channel that fires for
+   * every command, which reports nothing while looking like it reports everything — the same
+   * shape as a metric that cannot fail.
+   */
+  await page.evaluate((t) => { window.__uni.state().reject = null;
+                               window.__uni.run(`slot ${t} 0 1 gate 1`); }, ct);
+  await page.waitForTimeout(1500);
+  const quiet = await page.evaluate(() => (window.__uni.state() || {}).reject);
+  check(!quiet || !/no slot/.test(quiet), 'and a VALID one says nothing', JSON.stringify(quiet));
 }
 
 check(errors.length === 0, 'and nothing threw', errors.slice(0, 3).join(' | '));

@@ -681,6 +681,36 @@ function describeEngineEvent(e) {
     return `${where} refused an edit composed against version ${e.sentBase}` +
            ` (it is at ${e.currentBase} now)`;
   }
+  /*
+   * A REFUSED SAMPLER COMMAND, WHICH WAS ALSO SILENCE — twenty sites of it.
+   *
+   * Every sampler verb refused into the engine's log and nowhere else, so from a browser they
+   * were commands that reported success and did nothing. I found one of the twenty by accident,
+   * because the sound kept playing: `slot 0` is not a wildcard for SamplerSetSlot, the engine
+   * answered `no_such_slot`, and a half-second note ran the sample's full eight seconds while
+   * the console said the command had worked.
+   *
+   * The reason is worded rather than numbered because WHAT TO DO differs, and that is the whole
+   * reason the codes are distinct: "no such slot" means the caller's idea of the kit is stale
+   * and it should re-read it; "bad value" means retrying the same command will never work. A
+   * single "rejected" would have told you only that you were wrong.
+   */
+  if (e.kind === 'sampler-rejected') {
+    const at = `t${e.track} dev${e.device}`;
+    switch (e.reason) {
+      case 1: return `${at}: no such track — that sampler command went nowhere`;
+      case 2: return `${at}: no such device`;
+      case 3: return `${at}: no slot ${e.target} — re-read the kit, it has moved`;
+      case 4: return `${at}: no mod set ${e.target}`;
+      case 5: return `${at}: no modulator ${e.target} — name a target instead of an id`;
+      case 6: return `${at}: no source ${e.target} — load a sample first`;
+      case 7: return `${at}: no slice set ${e.target} — chop it first`;
+      case 8: return `${at}: that value is out of range — the same command will not work again`;
+      case 9: return `${at}: that device is not a sampler`;
+      case 10: return `${at}: the sample would not load`;
+      default: return `${at}: the sampler refused that (reason ${e.reason}, target ${e.target})`;
+    }
+  }
   return `${e.kind.replace('-', ' ')} on track ${e.track} (code ${e.code})`;
 }
 
@@ -2849,6 +2879,26 @@ const dockApi = {
    * `sampler_engine.h`'s noteOff() skips a voice whose slot has gate 0 — and until now the only
    * way to change it was to hand-edit a project file.
    */
+  /**
+   * A track where PITCH NEVER SELECTS A SLOT — `SetTrackSoundAddressed` (87).
+   *
+   * Off by default, which keeps a blank `sound` meaning "the keymap picks from the pitch" —
+   * right for a kit laid across the keys. On, the keymap steps out of the way: every key plays
+   * the same slot at a different speed, so a 64-slot kit stays fully chromatic and a row says
+   * which slot it wants with `s`.
+   *
+   * A blank sound under the flag plays the track's LOWEST SLOT ID. That is a pure function of
+   * the kit read-back this surface already has, so it can always answer "what will this note
+   * play" without asking — which is why it is that and not "the selected pad", where the same
+   * note would render differently depending on where a cursor happened to be.
+   */
+  soundAddressed: (track, on) => {
+    if (!conn || !conn.send({ type: 'soundaddressed', track: Number(track) || 0,
+                              on: on === false ? 0 : 1 })) {
+      state.reject = 'no engine'; schedule(); return false;
+    }
+    state.reject = null; schedule(); return true;
+  },
   samplerSlot: (track, device, slot, field, value) => {
     if (!conn || !conn.send({ type: 'samplerslot', track: Number(track) || 0,
                               device: Number(device) || 0, slot: Number(slot) || 0,
@@ -7804,6 +7854,7 @@ window.__uni = {
   samplerFilter: (t, d, ty, c, r, m) => dockApi.samplerFilter(t, d, ty, c, r, m),
   samplerEnvelope: (t, d, e) => dockApi.samplerEnvelope(t, d, e),
   samplerSlot: (t, d, sl, f, v) => dockApi.samplerSlot(t, d, sl, f, v),
+  soundAddressed: (t, on) => dockApi.soundAddressed(t, on),
   opsTextAtCursor: () => dockApi.opsTextAtCursor(),
   noteIdAtCursor: () => dockApi.noteIdAtCursor(),
   samplerKit: (t, d) => dockApi.samplerKit(t, d),
