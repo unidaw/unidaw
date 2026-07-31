@@ -10,6 +10,51 @@ the places where the refutation won are marked as such.
 
 ---
 
+## STATUS — what of this is built
+
+Written after the fact, so the document stops reading as a plan for work that is done.
+
+**SHIPPED, end to end, against a real engine:**
+
+- **Every op is drawn.** The cell resolved them by priority and dropped the losers silently; it
+  now shows one glyph per op, or the full canonical text when it fits. `ui-web/src/rowops.js`
+  mirrors `OP_SCHEMA` with a ratchet that parses `rowop.rs` — it caught backend's `s` and `o` on
+  its first ever run.
+- **The cell is readable.** Standing on it prints the canonical string, so the collapsed form is
+  not a dead end.
+- **The cell is writable.** `SetRowOps` (81), full mask, so what the cell shows is what the note
+  has and emptying it empties the note. `ops [tokens]` at the console, `@` to type into the cell
+  with the buffer seeded from the note.
+- **It explains itself.** The readout becomes the grammar while the buffer is open, narrowing to
+  one op's meaning as the token identifies it. Built from `ROW_OPS`, so a new op needs no
+  mention.
+- **`s` and `o` decode off the v32 wire**, and the sampler kit read-back (`kit <track> <device>`)
+  answers what is actually in a sampler, from the snapshot the audio producer reads.
+
+**DESIGNED, NOT BUILT** — the parts of this document that are still argument:
+
+- The per-track derived slot set, the N op columns as groups, and the per-family widths. What
+  ships today is one ops cell that shows the fullest form that fits and falls back to one glyph
+  per op. The design above is where it goes when a track needs more than that; nothing has yet.
+- The purpose-built op-glyph font. The glyphs are still ASCII — the token's first character —
+  which needs no font at all and no learning. The font matters at the vocabulary sizes discussed
+  above, not at five ops.
+
+**KNOWN GAPS, reported to backend, asserted in `ui-web/test/ops.mjs` so they fail the day they
+are fixed:**
+
+- `SetRowOps::noteId` is u32 over a u64 authored EventId whose top 16 bits are the AUTHOR. An
+  agent-authored note truncates to a counter that can match a different human note — a silent
+  edit of the wrong note. The write path refuses ids that do not fit rather than sending one.
+- It reaches only notes created in the same session. `applySetRowOps` searches `ownedClips`; a
+  loaded project's notes are in SOURCE clips, so they answer `no_such_note`. Editing a project
+  you opened is the ordinary case and this is backwards from it.
+- That rejection is INVISIBLE: `rowops.rejected` is a log event, so the sidecar acks, the engine
+  refuses, the cell does not change, and nobody is told. Asked for it on the event ring, where
+  `clip-rejected` already is.
+
+---
+
 ## 1. THE FIX FOR OFFSET: STOP PUTTING THE POSITION IN THE OP
 
 `9xx` is not short of bits by accident and it is not short of bits because 1987 was stingy.
