@@ -59,6 +59,48 @@ that turned out wrong are marked rather than quietly deleted.
   showed glyphs, so scanning a column meant reading a mixture. The value is one keypress away,
   which is what "collapsed is one character for every op" meant in the first place.
 
+**SETTLED SINCE, and worth recording because the reasoning moved:**
+
+- **Seven ops now, and the order is `ret rv p d s o c` on both sides.** v33 added `rv` (retrigger
+  volume ramp, a signed TOTAL percent across the strikes — the difference between a roll and a
+  stutter) and `c` (conditional trig, `c1:2` firing on pass A of every B). The order is neither
+  of the two that existed: ops that modify each other are adjacent — a ramp is meaningless
+  without a retrigger, an offset addresses the same sample as the slot — and `c` is last because
+  it is the only op about WHEN the row fires rather than what it plays. `rowop.rs` had disagreed
+  with ITSELF about this (the schema listed `o` fifth, the emitter pushed it last), which is
+  invisible until a row carries both; a check now parses both orders out of that file and
+  compares them to each other.
+- **`rv` draws as `v`, not `r`.** `ret` owns 'r', and in a collapsed run the glyph is the only
+  thing saying which op a character is — position cannot, since an op appears wherever it
+  appears. The distinct-glyph ratchet caught it.
+- **The sound address is NOT zero-padded.** It was, briefly, mirroring `format_row_ops`. Jaakko
+  revised it: "s9 and s09 should be the same thing." The EQUIVALENCE is what is pinned now —
+  `s9`, `s09` and `s009` all address slot 9 — because that is what a formatting opinion breaks
+  by accident, and the general rule that came out of it is worth more than the case: pad with
+  spaces in a renderer, not with zeros in a canonical form, because only one of those is
+  something a person has to type back.
+
+**THE CELL IS FULL, AND THIS IS THE OPEN PROBLEM:**
+
+    the ops cell holds about 7 glyphs (76px, ~9.14px each) — the design's own example is 43
+
+`.tk-cell` is a fixed width with `overflow: hidden`, and seven ops fill it exactly. The eighth
+will be clipped SILENTLY, and the ops that fall off the end are precisely the ones nobody can
+see are missing — the failure the priority chain had, reached from the other side. There are two
+reserved condition codes (FILL and PRE) already sketched, so the eighth op is a question of when.
+
+The answer is the per-track width this document already specifies, and it needs a fact the engine
+has and this side does not: **does this track use ops, and what is the widest run on it**. That is
+a property of every note in the track; the UI sees a scrolling window, so anything computed here
+widens the column when you scroll past a dense row and narrows it when you scroll back — the grid
+reflowing under the cursor while you type into it, which is worse than clipping and not
+reproducible between two people scrolling differently.
+
+Backend is adding `uiTrackOpsWidth[kUiMaxTracks]` (kShmVersion 34): 0 = the track uses no ops, so
+R5 says draw no column; N = the widest run, so the column is N glyphs wide. One byte answers both
+halves of R5 at once. It is counted as GLYPHS rather than ops deliberately — a width that does not
+mean "how many glyphs" is wrong by one at the worst moment.
+
 **DESIGNED, NOT BUILT** — the parts of this document that are still argument:
 
 - The per-track derived slot set, the N op columns as groups, and the per-family widths. What
