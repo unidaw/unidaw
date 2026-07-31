@@ -289,20 +289,34 @@ class SamplerVoice {
     } else {
       envValue_ = 1.0f;
     }
-    // The other modulators share the amp envelope's clock. They are separate RUNNERS rather than
-    // one runner read at three depths, because they are separate SHAPES — a filter that opens
-    // while the amp decays is the ordinary case, not the exotic one.
+    // The other modulators each run their OWN clock. They are separate RUNNERS rather than one
+    // runner read at three depths, because they are separate SHAPES — a filter that opens while
+    // the amp decays is the ordinary case, not the exotic one.
+    //
+    // A CLOCK OF ZERO MEANS UNSET, NOT FROZEN, and that distinction is the whole reason this
+    // helper exists. Splitting one shared clock into five fixed the original bug — a cutoff
+    // envelope on a mod set with no amp envelope ran at zero and modulated nothing — and
+    // reintroduced exactly the same failure one layer out: every caller written against the old
+    // single-field API sets envUnitsPerFrame and nothing else, so its cutoff envelope went
+    // silently dead. sampler_dsp_tests is such a caller and it caught this, four hours late,
+    // because the test binary itself had not been rebuilt.
+    //
+    // Zero is safe to overload because an envelope that never advances is not a configuration
+    // anyone wants: it sits at its value at time 0 forever, which is indistinguishable from
+    // having no envelope at all. So zero can only ever mean "nobody filled this in", and the
+    // honest response is to fall back to the voice's master clock rather than to run dead.
+    const auto clockFor = [&](double own) { return own > 0.0 ? own : spec_.envUnitsPerFrame; };
     if (spec_.cutoffEnv && !spec_.cutoffEnv->empty()) {
-      cutoffEnv_.start(spec_.cutoffEnv, spec_.cutoffUnitsPerFrame);
+      cutoffEnv_.start(spec_.cutoffEnv, clockFor(spec_.cutoffUnitsPerFrame));
     }
     if (spec_.pitchEnv && !spec_.pitchEnv->empty()) {
-      pitchEnv_.start(spec_.pitchEnv, spec_.pitchUnitsPerFrame);
+      pitchEnv_.start(spec_.pitchEnv, clockFor(spec_.pitchUnitsPerFrame));
     }
     if (spec_.panEnv && !spec_.panEnv->empty()) {
-      panEnv_.start(spec_.panEnv, spec_.panUnitsPerFrame);
+      panEnv_.start(spec_.panEnv, clockFor(spec_.panUnitsPerFrame));
     }
     if (spec_.resonanceEnv && !spec_.resonanceEnv->empty()) {
-      resonanceEnv_.start(spec_.resonanceEnv, spec_.resonanceUnitsPerFrame);
+      resonanceEnv_.start(spec_.resonanceEnv, clockFor(spec_.resonanceUnitsPerFrame));
     }
     filtL_.reset();
     filtR_.reset();

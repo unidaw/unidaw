@@ -454,6 +454,13 @@ target_link_libraries(device_chain_ui_live_tests PRIVATE platform_juce)
 
 enable_testing()
 
+# FIRST, deliberately. If a binary is stale against the contract it is built from, every failure
+# below it is a lie about a different subsystem — so this one should be the first thing you read.
+add_test(NAME contract_freshness
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/contract_freshness_check.sh
+)
+set_tests_properties(contract_freshness PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 add_test(NAME patcher_resolution
   COMMAND patcher_tests
 )

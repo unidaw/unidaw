@@ -409,6 +409,29 @@ int main() {
     check(l > e * 10.0,
           "the filter envelope OPENS the filter over time — closed at the start, passing the "
           "tone by the end. If these are equal the envelope is wired but never read");
+
+    // ---- AND IT RUNS ON ITS OWN CLOCK, not the amp envelope's.
+    //
+    // The spec above sets envUnitsPerFrame and leaves cutoffUnitsPerFrame at zero, which the
+    // voice reads as "unset" and fills in from the master clock. That fallback is deliberate and
+    // it is also a blind spot: with only the check above, an engine that ignored the per-envelope
+    // clocks entirely and always used envUnitsPerFrame would pass. Every modulator carries its
+    // own timeBase and rate multiplier — a tempo-synced sweep under a millisecond amp envelope is
+    // an ordinary request — so the clock has to be READ, not just defaulted.
+    //
+    // Four times the rate reaches the same breakpoint in a quarter of the time, so the window
+    // that was still closed above is open here. Compared against the run above rather than
+    // against an absolute, because what is being asserted is that the number CHANGED something.
+    spec.cutoffUnitsPerFrame = 4.0 * spec.envUnitsPerFrame;
+    const std::vector<float> fast = renderVoice(spec, 24000);
+    std::vector<float> fastEarly(fast.begin(), fast.begin() + 4000);
+    const double fe = energyAt(fastEarly, 4000.0);
+    std::printf("  cutoff clock: 4x opens the filter %.1f dB sooner\n",
+                10.0 * std::log10((fe + 1e-30) / (e + 1e-30)));
+    check(fe > e * 10.0,
+          "a cutoff envelope with its OWN clock four times faster opens the filter sooner. If "
+          "this equals the run above, the per-envelope clock is being ignored and every "
+          "modulator is silently running at the amp envelope's rate");
   }
 
   if (g_fail == 0) {
