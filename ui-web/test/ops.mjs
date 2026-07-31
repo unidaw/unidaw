@@ -382,12 +382,12 @@ const cells = await opsCells();
   await page.evaluate(() => window.__uni.run('ops ret3 p55 s5 o80'));
   await page.waitForTimeout(1500);
   const before = await page.evaluate(() => window.__uni.opsTextAtCursor());
-  check(before === 'ret3 p55 s05 o80', 'a full row of ops is set to start from', before);
+  check(before === 'ret3 p55 s5 o80', 'a full row of ops is set to start from', before);
 
   await page.evaluate(() => window.__uni.run('op p20'));
   await page.waitForTimeout(1500);
   const after = await page.evaluate(() => window.__uni.opsTextAtCursor());
-  check(after === 'ret3 p20 s05 o80',
+  check(after === 'ret3 p20 s5 o80',
         'one op changes and the other three are left exactly as they were', after);
 
   // A BARE PREFIX CLEARS THAT ONE. Distinct from `ops` with the token missing, which clears the

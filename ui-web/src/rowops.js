@@ -70,26 +70,21 @@ export const ROW_OPS = [
    * draw 0 as EMPTY rather than as "0"; drawing a mark would be the same claim.
    */
   { prefix: 's', field: 'sound', bit: 'Sound',
-    summary: 'play sampler slot N, zero-padded (blank = pitch picks it)',
-    example: 's07',
+    summary: 'play sampler slot N (blank = pitch picks it)',
+    example: 's7',
     /*
-     * ZERO-PADDED TO TWO, widened by the number itself.
+     * NOT ZERO-PADDED — Jaakko, 2026-07-31: "s9 and s09 should be the same thing. feel free to
+     * change it to not-zero-padded."
      *
-     * `format_row_ops` in rowop.rs pads to the track's `sound_width` — two digits normally,
-     * three for a track referencing an id >= 100, which a long-edited 64-pad kit reaches because
-     * `next_slot_id` never reuses — and widens rather than truncates when the number needs more,
-     * because a truncated id is a DIFFERENT slot and playing the wrong sound to keep a column
-     * narrow is not a trade worth making.
+     * This revises SAMPLER_DESIGN section 8 Q1, which had ruled for `s07` so a fixed-width grid
+     * keeps its vertical rhythm. The rhythm argument is real and it lost to a simpler one: the
+     * two spellings mean the same slot, so the canonical form should be the one a person types.
      *
-     * Padded at all because a tracker cell lives in a fixed-width grid and ragged `s7` / `s13`
-     * breaks the vertical rhythm that makes a column readable at a glance. Display is this
-     * side's call, but WHICH CHARACTERS MEAN SLOT 7 is not, or the two sides drift — so this
-     * mirrors the engine's spelling rather than inventing one.
-     *
-     * The per-track width is not plumbed here yet: two is the default and the number widens
-     * itself, which is right for every kit that has not passed 100 ids.
+     * BOTH ARE ACCEPTED ON INPUT and always were — `s9`, `s09` and `s009` all parse to 9 — which
+     * is the part that actually had to be true. Padding was only ever about which of them is
+     * written back out.
      */
-    text: (v) => String(v).padStart(2, '0') },
+    text: (v) => String(v) },
   { prefix: 'o', field: 'soundOffset', bit: 'SoundOffset',
     summary: 'start N/256 into the sample (the 9xx seek)',
     example: 'o80',

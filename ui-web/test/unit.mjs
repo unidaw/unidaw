@@ -2828,10 +2828,20 @@ test('the canonical text form round-trips what the engine published', () => {
    * the hex form round-tripped to a DIFFERENT offset. A text form whose only contract is that
    * it parses back had exactly one job.
    */
-  // `s05`, not `s5`: the sound address is zero-padded to two by owner ruling, mirroring
-  // `format_row_ops`. A tracker cell lives in a fixed-width grid and ragged s7/s13 breaks the
-  // vertical rhythm — and which characters mean slot 5 is the engine's call, not this side's.
-  assert.equal(opsText({ soundOffset: 32768, retrigger: 3, sound: 5 }), 'ret3 s05 o128');
+  assert.equal(opsText({ soundOffset: 32768, retrigger: 3, sound: 5 }), 'ret3 s5 o128');
+  /*
+   * `s9` AND `s09` ARE THE SAME THING — Jaakko's ruling, and the half that matters.
+   *
+   * The written form went padded and then back again (SAMPLER_DESIGN section 8 Q1 argued for
+   * `s07` to keep a fixed-width column's vertical rhythm; that lost to "the canonical form should
+   * be the one a person types"). What must never change is that both spellings, and any number
+   * of leading zeros, address the same slot — so a row typed by hand and a row written by the
+   * engine are the same row. Pinned here because it is an equivalence rather than a format, and
+   * an equivalence is the kind of thing a formatting change breaks by accident.
+   */
+  for (const [a2, b2] of [['s9', 's09'], ['s09', 's009'], ['s7', 's07']]) {
+    assert.deepEqual(parseOps(a2).ops, parseOps(b2).ops, `${a2} and ${b2} address the same slot`);
+  }
   // The delay is published in TICKS and authored as a fraction of a beat, so it
   // needs the beat length to be spelled back. 160000 of 960000 is a sixth.
   assert.equal(opsText({ delayTicks: 160000 }, 960000), 'd1/6');
