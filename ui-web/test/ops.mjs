@@ -89,6 +89,25 @@ writeFileSync(`${stack.dir}/opsfix.uniproj.json`, JSON.stringify({
         { note_id: 12, pitch: 50, velocity: 100, nanotick: Q * 4, duration: Q },
       ],
     }],
+  }, {
+    /*
+     * A THIRD TRACK CARRYING EXACTLY TWO OPS, which is what makes the ops column's WIDTH
+     * testable rather than only its presence.
+     *
+     * Two tracks can only show hidden-vs-shown. The cell is sized from the track's published
+     * glyph count, so telling "sized to the run" from "one fixed width for every track that has
+     * any" needs a third track whose run is a DIFFERENT length — and 2 against 3 is the smallest
+     * pair that cannot be confused with a floor or a default.
+     */
+    track_id: 2, name: 'TwoOps', harmony_quantize: false, lines_per_beat: 4,
+    mixer: { gain_db: 0, pan: 0, mute: false, solo: false }, device_chain: [], mod_links: [],
+    placements: [{
+      clip_id: 3, at: 0, length: Q * 16, chords: [], mutes: [],
+      notes: [
+        { note_id: 21, pitch: 55, velocity: 100, nanotick: 0, duration: Q,
+          retrigger: 2, probability: 50 },
+      ],
+    }],
   }],
 }));
 
@@ -693,8 +712,10 @@ const cells = await opsCells();
         `engine says ${widths && widths[0]}, the cells draw ${JSON.stringify(drawnRuns)}`);
 
   const shown = await page.evaluate(() => window.__uni.opsShown());
-  check(shown && shown[0] === 1 && shown[1] === 0,
-        'so track 0 draws the column and track 1 does not', JSON.stringify(shown));
+  check(shown && shown[0] === 1 && shown[1] === 0 && shown[2] === 1,
+        'so tracks 0 and 2 draw the column and track 1 does not', JSON.stringify(shown));
+  check(widths && widths[2] === 2, 'and the two-op track publishes a width of 2',
+        JSON.stringify(widths));
 
   // ...and the DOM agrees, which is the half a state accessor cannot answer. A zero-width box
   // is the thing that actually recovers the space.
@@ -715,11 +736,23 @@ const cells = await opsCells();
       const e = document.querySelector(`.tk-band .tk-track[data-track="${t}"]`);
       return e ? Math.round(e.getBoundingClientRect().width) : -1;
     };
-    return { ops0: w(0), ops1: w(1), t0: track(0), t1: track(1) };
+    return { ops0: w(0), ops1: w(1), ops2: w(2), t0: track(0), t1: track(1), t2: track(2) };
   });
   const b = await boxes();
   check(b.ops0 > 0 && b.ops1 === 0,
         'the ops cell has width on track 0 and none on track 1', JSON.stringify(b));
+  /*
+   * AND THE CELL IS SIZED TO THE RUN, which is the requirement per-note-ops.md states: one glyph
+   * per op, all of them in this one cell, nothing ever hidden. A fixed cell cannot do that — the
+   * measured one holds about seven and seven ops exist, so the eighth would clip in silence.
+   *
+   * Track 0 carries three glyphs and track 2 carries two, so track 0's cell must be WIDER. That
+   * is the claim a single fixed width cannot satisfy and a floor cannot fake, which is why the
+   * fixture has a track with two rather than a second track with three.
+   */
+  check(b.ops2 > 0 && b.ops0 > b.ops2,
+        'and a three-op track gets a WIDER cell than a two-op track — the column is sized to '
+        + 'the run, not to a constant', JSON.stringify(b));
   check(b.t1 > 0 && b.t1 < b.t0,
         'so track 1 is genuinely narrower — the space is recovered, not just blanked',
         JSON.stringify(b));
@@ -736,7 +769,20 @@ const cells = await opsCells();
   await page.waitForTimeout(400);
   const back = await boxes();
   check(back.ops1 > 0, '`ops-column 1 on` brings the column back', `${said} -> ${JSON.stringify(back)}`);
-  check(back.t1 === b.t0, 'and track 1 is then exactly as wide as track 0',
+  /*
+   * ...AND TRACK 1 GETS WIDER FOR IT — but NOT the same width as track 0, which is what this
+   * check used to assert.
+   *
+   * It was right while every drawn ops cell was one fixed size. Now the cell is sized to the
+   * track's own run, and track 1 has no ops at all: there is no run to size it from, so it falls
+   * back to the default cell, which is WIDER than track 0's three-glyph cell. Equal widths would
+   * now mean the sizing had stopped working.
+   */
+  check(back.t1 > b.t1, 'and track 1 is wider than it was with the column hidden',
+        `${b.t1} -> ${back.t1}`);
+  check(back.t1 !== back.t0,
+        'but not the same width as a track that HAS ops — an empty column falls back to the '
+        + 'default cell while a three-glyph one is sized to its three glyphs',
         JSON.stringify(back));
 
   /*

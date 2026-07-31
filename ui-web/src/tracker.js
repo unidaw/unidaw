@@ -131,7 +131,9 @@ export class Tracker {
     this._wPlain = 0; this._wBar = 0; this._wLaneBar = 0; this._wOps = 0;
     // -2, not -1 and not 0: 0 is a legal signature (no track shows ops) and a guard seeded to
     // a state it can be in never fires on that state's first arrival.
-    this._opsSig = -2; this._opsShow = null;
+    this._opsSig = -2; this._opsShow = null; this._opsWidth = null;
+    // Per-glyph advance for the ops run, MEASURED (see measureClasses). 0 until then.
+    this._glyphAdv = 0; this._opsPad = 0;
     host.append(this.rails, this.harmLane, this.band);
   }
 
@@ -283,7 +285,7 @@ export class Tracker {
    * scroll. Re-measuring is not optional — every cell position, the hit test, the
    * header and the scroll clamp are derived from widths that just changed.
    */
-  applyLaneShow(laneShow, sig, laneHidden, hiddenSig, opsShow, opsSig) {
+  applyLaneShow(laneShow, sig, laneHidden, hiddenSig, opsShow, opsSig, opsWidth) {
     if (this._laneSig === sig && this._hiddenSig === hiddenSig && this._opsSig === opsSig) {
       return false;
     }
@@ -291,6 +293,7 @@ export class Tracker {
     this._hiddenSig = hiddenSig;
     this._opsSig = opsSig;
     this._opsShow = opsShow;
+    this._opsWidth = opsWidth;
     // KEPT, not just applied: the width model asks these for every track, including ones with
     // no DOM. Held by reference — the caller rebuilds them per frame into the same arrays.
     this._laneShow = laneShow;
@@ -321,6 +324,19 @@ export class Tracker {
         // takes no width. Applied here rather than at bind time for the same reason `no-lane`
         // is: a slot repointed at another track is still wearing the previous track's answer.
         lanes[sIdx].classList.toggle('no-ops', !!(ops && !ops[t]));
+        /*
+         * ...AND HOW WIDE ITS OPS CELL IS, as a custom property the stylesheet reads.
+         *
+         * A px value written per LANE rather than per cell: one write instead of one per note
+         * column, and the box model stays in tracker.css — this file says how many pixels, the
+         * stylesheet says which box gets them. Guarded, because this walks every row and every
+         * slot and the answer changes on a project load, not inside a scroll.
+         */
+        const ow = this.opsCellW(t);
+        if (lanes[sIdx]._owV !== ow) {
+          lanes[sIdx]._owV = ow;
+          lanes[sIdx].style.setProperty('--ops-w', ow + 'px');
+        }
         // A lane whose parent is collapsed takes no width. NOT removed and not renumbered: the
         // track keeps its published index, so the cursor, the selection's field indices and
         // every track-keyed command are untouched. Collapse is what is drawn, never what exists.
@@ -335,19 +351,10 @@ export class Tracker {
     const left = this.trackLeft && track < this.trackCountMeasured
       ? this.trackLeft[track] : track * this.trackStride;
     const lb = this.laneBarW && track < this.trackCountMeasured ? this.laneBarW[track] : 0;
-    /*
-     * The ops columns BEFORE `col` are gone on a track that hides them, so every field to their
-     * right moves left by one. `floor(col / FIELDS_PER_NOTE)` counts them: col 2 is itself the
-     * first ops column and has none before it, col 3 has one, col 5 still one, col 6 two.
-     *
-     * A hidden ops column asked for its own left therefore answers with the position of the
-     * cell after it, which is what a zero-width box's left edge IS. The cursor never sits there
-     * — you cannot click a `display: none` box and the ops cell is only reachable by clicking —
-     * but a caret drawn at a stale index lands somewhere honest rather than a cell too far.
-     */
-    const hidden = this._opsShow && !this._opsShow[track] && this._wOps
-      ? this._wOps * ((col / FIELDS_PER_NOTE) | 0) : 0;
-    return this.stripLeft + left + lb + col * this.m.cellWidth - hidden;
+    // A hidden ops column asked for its own left answers with the position of the cell after it,
+    // which is what a zero-width box's left edge IS. The cursor never sits there — you cannot
+    // click a `display: none` box — but a caret drawn at a stale index lands somewhere honest.
+    return this.stripLeft + left + lb + this.fieldOffset(track, col);
   }
 
   /** Which track a band-relative x falls in, or -1. Linear because tracks are no
@@ -408,11 +415,78 @@ export class Tracker {
      */
     const opsEl = plain.querySelector('.tk-cell.ops');
     const wo = opsEl ? opsEl.offsetWidth : 0;
+    /*
+     * ONE GLYPH'S ADVANCE, measured by DIFFERENCE so the padding cancels.
+     *
+     * The design says a run of 43 ops draws 43 glyphs in one cell and nothing is ever hidden, so
+     * the cell has to be sized from the run rather than from a constant. That needs the advance,
+     * and the advance is a property of the FONT — `per-note-ops.md` calls it a free variable and
+     * expects it to change when the PUA subset lands, so a number here would be wrong on the day
+     * that happens and wrong silently.
+     *
+     * Two writes and two reads: `scrollWidth` is padding plus content, so measuring N and 2N and
+     * subtracting cancels the padding exactly without this file having any opinion about what
+     * the padding is. The cell has a fixed width, so both overflow and both report real content.
+     *
+     * Restored to '' afterwards — the ruler is `visibility: hidden` and would draw nothing, but
+     * a stray run in it is a box that measures wider than the class it exemplifies.
+     */
+    let adv = this._glyphAdv;
+    if (opsEl && opsEl.firstChild) {
+      const t = opsEl.firstChild;
+      const was = t.nodeValue;
+      t.nodeValue = 'rrrrrrrrrr';           // 10
+      const s1 = opsEl.scrollWidth;
+      t.nodeValue = 'rrrrrrrrrrrrrrrrrrrr'; // 20
+      const s2 = opsEl.scrollWidth;
+      t.nodeValue = was;
+      if (s2 > s1) {
+        adv = (s2 - s1) / 10;
+        // ...and the cell's NON-TEXT width falls out of the same two reads: `scrollWidth` is
+        // padding plus content, so subtracting the ten glyphs' worth of content leaves exactly
+        // the padding. Derived rather than declared — it lives in tracker.css and may move, and
+        // an earlier version of this reconstructed it by rounding, which produced a plausible
+        // number that was wrong by a glyph.
+        this._opsPad = Math.max(0, s1 - 10 * adv);
+      }
+    }
     if (!wp || !wb) return false;
     if (wp === this._wPlain && wb === this._wBar && wl === this._wLaneBar
-        && wo === this._wOps) return false;
+        && wo === this._wOps && adv === this._glyphAdv) return false;
     this._wPlain = wp; this._wBar = wb; this._wLaneBar = wl; this._wOps = wo;
+    this._glyphAdv = adv;
     return true;
+  }
+
+  /**
+   * HOW WIDE TRACK `t`'S OPS CELL IS, in pixels — 0 when the column is hidden.
+   *
+   * The design's requirement is that a collapsed run is never truncated: one glyph per op, all
+   * of them in this one cell, so 43 ops draw 43 glyphs. A fixed cell cannot do that — the
+   * measured one holds about seven, and seven ops exist today, so the eighth would clip in
+   * silence. Sized from the ENGINE'S published width per track (kShmVersion 34) it always fits,
+   * and a track carrying two ops stops paying for five it does not use.
+   *
+   * IT SHRINKS AS WELL AS GROWS, which is most of the value on a real song. A track using two
+   * ops gets a two-glyph cell and gives the rest of its width back; only a track that needs more
+   * than the default takes more. My first version floored it at the default cell on the grounds
+   * that a narrow cell reads as a rendering fault — it does not, it reads as a column sized to
+   * its content, which is what every tracker does and what the column disappearing entirely at
+   * zero already establishes.
+   *
+   * The floor is TWO glyphs, so the narrowest cell is still legibly a cell and a one-op track
+   * does not produce a sliver you cannot click.
+   *
+   * Falls back to the default when the advance has not been measured, so a cold start draws what
+   * it always drew.
+   */
+  opsCellW(t) {
+    if (this._opsShow && !this._opsShow[t]) return 0;
+    const base = this._wOps || this.m.cellWidth;
+    const glyphs = this._opsWidth && t < this._opsWidth.length ? this._opsWidth[t] : 0;
+    if (!glyphs || !this._glyphAdv) return base;
+    const floor = this._opsPad + 2 * this._glyphAdv;
+    return Math.ceil(Math.max(floor, this._opsPad + glyphs * this._glyphAdv));
   }
 
   /**
@@ -539,9 +613,31 @@ export class Tracker {
    * however many of these there are.
    */
   opsSavingOf(t) {
-    if (!this._opsShow || this._opsShow[t]) return 0;
-    if (!this._wOps) return 0;
-    return this._wOps * Math.max(1, (this.cols / FIELDS_PER_NOTE) | 0);
+    const base = this._wOps || this.m.cellWidth;
+    return (base - this.opsCellW(t)) * this.noteCols();
+  }
+
+  /** How many note columns a track shows. `cols` is the total cell stride; this divides it. */
+  noteCols() {
+    return Math.max(1, (this.cols / FIELDS_PER_NOTE) | 0);
+  }
+
+  /**
+   * The left edge of field `col` INSIDE a track, past its lane readout.
+   *
+   * A note group is two ordinary cells and one ops cell, and the ops cell is the only one whose
+   * width varies — so a group is a fixed width for a given track, and a field's position is that
+   * width times the group plus the offset within it.
+   *
+   * One function because `cellLeft` and `hitTest` are inverses and had drifted into two
+   * different arithmetics: one subtracted hidden columns, the other divided by a uniform stride.
+   * Both were right while the ops cell was either 0 or exactly one cell wide, and only one of
+   * them would have noticed when that stopped.
+   */
+  fieldOffset(track, col) {
+    const cw = this.m.cellWidth, ow = this.opsCellW(track);
+    const g = (col / FIELDS_PER_NOTE) | 0, within = col % FIELDS_PER_NOTE;
+    return g * (cw * (FIELDS_PER_NOTE - 1) + ow) + Math.min(within, FIELDS_PER_NOTE - 1) * cw;
   }
 
   /** The width of track `t`, from its class. Defined for every track, drawn or not. */
@@ -854,7 +950,8 @@ export class Tracker {
     // derived from those. Guarded on a bitmask, so a scroll costs one compare.
     const laneChanged = this.applyLaneShow(vm.laneShow, vm.laneShowSig | 0,
                                            vm.laneHidden, vm.laneHiddenSig | 0,
-                                           vm.opsShow, vm.opsShow ? vm.opsShowSig | 0 : -1);
+                                           vm.opsShow, vm.opsShow ? vm.opsShowSig | 0 : -1,
+                                           vm.opsWidth);
 
     // A ring, not a list. Pool slot is `row mod poolSize`, so a row keeps the
     // same element until it leaves the window entirely — scrolling one row
@@ -1203,12 +1300,15 @@ export class Tracker {
      * the left for every note group past the first. `cellLeft` already subtracts the same
      * columns going the other way; this is its inverse and the two have to be read together.
      */
-    const vis = Math.floor((inTrack - this.laneBarW[track]) / this.m.cellWidth);
-    let col = vis;
-    if (this._opsShow && !this._opsShow[track]) {
-      const per = FIELDS_PER_NOTE - 1;                  // drawn cells per note group
-      col = ((vis / per) | 0) * FIELDS_PER_NOTE + (vis % per);
-    }
+    // `inCells`, not `x` — `x` is already the band-relative pointer position at the top of this
+    // function, and shadowing it here was a redeclaration that broke the whole module at import.
+    const cw = this.m.cellWidth, ow = this.opsCellW(track);
+    const inCells = inTrack - this.laneBarW[track];
+    const groupW = cw * (FIELDS_PER_NOTE - 1) + ow;
+    const g = groupW > 0 ? Math.floor(inCells / groupW) : 0;
+    const rem = inCells - g * groupW;
+    const within = rem < cw ? 0 : (rem < cw * (FIELDS_PER_NOTE - 1) ? 1 : FIELDS_PER_NOTE - 1);
+    const col = g * FIELDS_PER_NOTE + within;
     return { row, track, col: Math.max(0, Math.min(this.cols - 1, col)) };
   }
 

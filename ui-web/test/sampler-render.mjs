@@ -144,37 +144,14 @@ check(kit && kit.slots && kit.slots.length === SAMPLES.length,
       `all ${SAMPLES.length} samples load, one slot each`,
       JSON.stringify(kit && kit.slots && kit.slots.map((s) => s.slot)));
 /*
- * SPREAD THEM ACROSS FIVE KEYS, THROUGH THE UI.
+ * THE SLOT IDS, kept for the mapping below.
  *
- * `load-sample` mints every slot at the SAME key — C1 (36), fixed pitch, which is what a drum
- * pad wants and useless for five sounds that have to be told apart. So each slot is moved to its
- * own key with `slot <track> <device> <slot> keylow|keyhigh|root`, which is the surface
- * sampler-state.mjs pins field by field and this file now uses for real work.
- *
- * All three fields, not just `keylow`: a zone whose low is above its high never matches, and a
- * root left at 36 would transpose every sample by the distance it was moved — which would still
- * render five audible notes and a completely different golden.
+ * The slots are NOT spread across keys here, which is where an earlier version did it. They are
+ * spread AFTER the keyboard has written its notes, onto the pitches the keys actually produced —
+ * so this file never has to know the key map, and a change to it would not turn into a golden
+ * mismatch reported as an audio regression.
  */
 const slotIds = kit && kit.slots ? kit.slots.map((s) => s.slot).sort((a, b) => a - b) : [];
-const keys = slotIds.map((_, i) => 36 + i * 2);
-for (let i = 0; i < slotIds.length; i++) {
-  await run(`slot ${T} 0 ${slotIds[i]} keylow ${keys[i]}`);
-  await run(`slot ${T} 0 ${slotIds[i]} keyhigh ${keys[i]}`);
-  await run(`slot ${T} 0 ${slotIds[i]} root ${keys[i]}`);
-}
-await page.waitForTimeout(800);
-const spread = await page.evaluate(async (t) => {
-  window.__uni.samplerKit(t, 0);
-  await new Promise((r) => setTimeout(r, 600));
-  const k = window.__uni.samplerKitCached(t, 0);
-  return k && k.slots ? k.slots.map((s) => [s.slot, s.keyLow, s.keyHigh, s.root]) : null;
-}, T);
-const spreadKeys = spread ? spread.map((x) => x[1]).sort((a, b) => a - b) : [];
-check(spread && new Set(spreadKeys).size === SAMPLES.length
-      && spread.every((x) => x[1] === x[2] && x[2] === x[3]),
-      'and each is moved to its own key through the UI — load-sample mints them all on C1, so '
-      + 'five samples on one key is five voices one note would trigger together',
-      JSON.stringify(spread));
 // The lengths must differ, or the audibility check below cannot tell the slots apart either.
 const frames = kit && kit.slots ? kit.slots.map((s) => s.frames) : [];
 check(frames.length === SAMPLES.length && new Set(frames).size === SAMPLES.length
@@ -183,27 +160,111 @@ check(frames.length === SAMPLES.length && new Set(frames).size === SAMPLES.lengt
       + 'times could not tell a dropped voice from a played one', JSON.stringify(frames));
 
 /*
- * ONE NOTE PER SAMPLE, EIGHT ROWS APART, THROUGH THE TRACKER'S OWN NOTE ENTRY.
+ * ONE NOTE PER SAMPLE, EIGHT ROWS APART, TYPED ON THE TRACKER'S OWN KEYBOARD.
+ *
+ * KEYSTROKES, NOT `note <pitch>`. The first version used the console verb, which is A UI surface
+ * but not THE one: the ask was that the samples are tracked INTO THE TRACKER, and a `note`
+ * command bypasses edit mode, the grid focus, the key map, the octave and the cursor's column —
+ * every part of the path a person actually uses. A suite that drives the console proves the
+ * console works.
+ *
+ * z x c v b at octave 4 are the white keys C D E F G. THE PITCHES ARE READ BACK RATHER THAN
+ * ASSUMED: this file has no business knowing NOTE_KEYS, and a hardcoded 48 would turn a change
+ * to the key map into a golden mismatch reported as an audio regression.
  *
  * Eight rows at zoom 1 is 8 x 240000 = 1,920,000 nanoticks — TWO BEATS, one second at 120 bpm.
  * I first wrote "half a beat" here and measured five contiguous 250 ms windows against it; three
- * of them landed in the silence between notes and the suite reported the render as dropping
- * voices it had played perfectly. The spacing and the window stride are the same number, which
- * is why they are one constant below rather than two.
+ * landed in the silence between notes and the suite reported the render as dropping voices it
+ * had played perfectly. The spacing and the window stride are the same number, which is why they
+ * are one constant below rather than two.
  *
  * Every sample is shorter than the gap (400 ms at the longest), so each note owns its window
  * outright and energy in all five is a per-voice claim rather than a claim about the mix.
  */
 await run('zoom 1');
-if (spreadKeys.length === SAMPLES.length) {
-  for (let i = 0; i < keys.length; i++) {
+await run('oct 4');
+const NOTE_KEYS_USED = ['z', 'x', 'c', 'v', 'b'];
+{
+  /*
+   * THE GRID HAS TO HAVE THE KEYBOARD, and edit mode has to be on, or the keys audition instead
+   * of writing. Both are the state a person is in and neither is implied by the cursor being
+   * somewhere — `state.focus` follows clicks, so the click is part of the gesture.
+   */
+  const cell = await page.evaluate(() => {
+    const host = document.getElementById('tracker').getBoundingClientRect();
+    for (const e of document.querySelectorAll('.tk-track .tk-cell')) {
+      const r = e.getBoundingClientRect();
+      if (r.width < 5 || r.y < host.y + 60 || r.y > host.y + host.height - 60) continue;
+      const x = r.x + r.width / 2, y = r.y + r.height / 2;
+      const top = document.elementFromPoint(x, y);
+      if (top && (top === e || e.contains(top))) return { x, y };
+    }
+    return null;
+  });
+  check(!!cell, 'there is a reachable tracker cell to click into');
+  if (cell) await page.mouse.click(cell.x, cell.y);
+  await page.waitForTimeout(300);
+  if (!(await page.evaluate(() => window.__uni.state().editMode))) {
+    await page.keyboard.press('Meta+e');
+    await page.waitForTimeout(300);
+  }
+  check(await page.evaluate(() => window.__uni.state().editMode),
+        'and edit mode is on, so a note key WRITES rather than auditions');
+
+  for (let i = 0; i < NOTE_KEYS_USED.length; i++) {
     await run(`goto ${i * 8} ${T}`);
     await page.waitForTimeout(200);
-    await run(`note ${keys[i]}`);
-    await page.waitForTimeout(500);
+    await page.keyboard.press(NOTE_KEYS_USED[i]);
+    await page.waitForTimeout(600);
   }
 }
 await page.waitForTimeout(1200);
+
+/*
+ * WHAT THE KEYBOARD ACTUALLY WROTE, and the slots follow IT rather than the other way round.
+ *
+ * `load-sample` mints every slot on C1 fixed-pitch, so five samples answer one note until they
+ * are moved. Moving them to the pitches the keys produced — read back, not assumed — is what
+ * makes each note reach its own sample, and it keeps this file ignorant of the key map.
+ *
+ * All three of keylow/keyhigh/root, because a zone whose low is above its high never matches and
+ * a root left at 36 would transpose every sample by the distance it moved. Root == the played
+ * key means no transposition, which is what makes the five windows comparable.
+ */
+const typed = await page.evaluate((t) => {
+  const all = window.__uni.notes() || [];
+  return all.filter((n) => n.tr === t).map((n) => n.p).sort((a, b) => a - b);
+}, T);
+check(typed.length === SAMPLES.length && new Set(typed).size === SAMPLES.length,
+      'five keystrokes wrote five notes on five distinct pitches',
+      JSON.stringify(typed));
+const keys = typed;
+if (slotIds.length === SAMPLES.length && keys.length === SAMPLES.length) {
+  for (let i = 0; i < slotIds.length; i++) {
+    await run(`slot ${T} 0 ${slotIds[i]} keylow ${keys[i]}`);
+    await run(`slot ${T} 0 ${slotIds[i]} keyhigh ${keys[i]}`);
+    await run(`slot ${T} 0 ${slotIds[i]} root ${keys[i]}`);
+  }
+}
+await page.waitForTimeout(900);
+const spread = await page.evaluate(async (t) => {
+  window.__uni.samplerKit(t, 0);
+  await new Promise((r) => setTimeout(r, 600));
+  const k = window.__uni.samplerKitCached(t, 0);
+  return k && k.slots ? k.slots.map((s) => [s.slot, s.keyLow, s.keyHigh, s.root]) : null;
+}, T);
+check(spread && spread.every((x) => x[1] === x[2] && x[2] === x[3])
+      && new Set(spread.map((x) => x[1])).size === SAMPLES.length,
+      'and every slot moved onto one of them, so a note reaches its own sample and not four '
+      + 'others', JSON.stringify(spread));
+/*
+ * AND THE NOTES ARE STILL THERE AFTER ALL THAT SLOT WORK.
+ *
+ * Fifteen `slot` commands went past between the keystrokes and here, each one a track edit the
+ * engine versions. This re-reads rather than trusting the earlier read: a note store that
+ * dropped a note under a concurrent edit would leave four windows sounding and one silent, which
+ * the per-window check below would report as a dropped VOICE rather than a dropped note.
+ */
 const written = await page.evaluate((t) => {
   // `tr`/`p`, not `track`/`pitch` — the read-back's own names. Filtering on the fixture's names
   // matches nothing and reports an empty tracker that is in fact full.
@@ -212,8 +273,8 @@ const written = await page.evaluate((t) => {
 }, T);
 check(written.length === SAMPLES.length
       && written.every((p, i) => p === keys[i]),
-      'the tracker holds one note per sample, on the five keys, read back from the engine '
-      + 'rather than assumed', `${JSON.stringify(written)} vs ${JSON.stringify(keys)}`);
+      'the five typed notes are still on the five pitches after the slots were mapped',
+      `${JSON.stringify(written)} vs ${JSON.stringify(keys)}`);
 
 await run('save rendersong');
 await page.waitForTimeout(3000);
@@ -370,6 +431,17 @@ if (a) {
     console.log(`  ${BLESS ? 'blessed' : 'created'} ${GOLDEN} (${a.length} bytes)`);
   } else {
     const want = readFileSync(GOLDEN);
+    /*
+     * THE GOLDEN DID NOT MOVE WHEN THE NOTE ENTRY CHANGED, and that is correct rather than
+     * suspicious — worth writing down, because "I changed every pitch and the bytes are
+     * identical" is exactly what a golden disconnected from its input looks like.
+     *
+     * The pitches went from 36,38,40,42,44 (the console verb) to 48,50,52,53,55 (z x c v b at
+     * octave 4). Each slot's ROOT follows its key, so every sample still plays at its own root:
+     * zero semitones of transposition either way, same audio. What the render responds to is
+     * WHICH SLOT sounds and WHEN, and the "four notes removed renders different bytes" check
+     * above is what proves it responds at all.
+     */
     if (a.equals(want)) check(true, 'wav === golden, byte for byte');
     else {
       // WHERE it differs, because "the bytes differ" is not a finding. A length change is a

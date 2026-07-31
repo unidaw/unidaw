@@ -172,6 +172,18 @@
    type the first op into. */
 .tk-track.no-ops > .tk-cell.ops { display: none; }
 
+/* AND HOW WIDE IT IS WHEN IT IS DRAWN.
+   The collapsed run is one glyph per op and nothing is ever hidden — 43 ops draw 43 glyphs —
+   so the cell is sized from the track's own published run rather than from a constant. The
+   renderer writes `--ops-w` per lane in pixels (it owns the measurement, including the glyph
+   advance, which per-note-ops.md treats as a free variable); the box model stays here.
+   The fallback is the ordinary cell width, so a lane the renderer has not sized yet — a cold
+   start, or a build with no engine — draws exactly what it always drew. */
+.tk-track > .tk-cell.ops {
+  width: var(--ops-w, var(--metrics-cell-width));
+  flex: 0 0 var(--ops-w, var(--metrics-cell-width));
+}
+
 /* A lane whose parent is collapsed. Zero width rather than `display: none` on the
    track itself, so the element stays in the flow and measure() reads a real box for
    it — a removed track would make offsetLeft skip an index and every lane after it

@@ -215,13 +215,31 @@ function computeLaneShow(engine, buf, meter, trackCount) {
  * through it is worse than one column too many.
  */
 function computeOpsShow(engine, buf, trackCount, override) {
-  if (buf._opsShow.length < trackCount) buf._opsShow = new Uint8Array(trackCount * 2);
+  if (buf._opsShow.length < trackCount) {
+    buf._opsShow = new Uint8Array(trackCount * 2);
+    buf._opsWidth = new Uint8Array(trackCount * 2);
+  }
   const w = engine.opsWidth;
+  /*
+   * THE SIGNATURE HAS TO NAME THE WIDTHS, not just which tracks are on.
+   *
+   * The renderer sizes the ops cell from the glyph count, so a track whose run grows from three
+   * ops to five changes the LAYOUT without changing the on/off set — and a signature built from
+   * the set alone would early-return and leave the cell at its old width, clipping the two new
+   * glyphs. GUIDELINES 2.1: the key names everything the value is computed from, which is the
+   * mistake this file has now made three times in a row on this exact feature.
+   *
+   * A cheap running hash rather than a bitmask, because the value is a byte per track and not a
+   * bit. Collisions are possible in principle and cost a frame of stale width in practice, which
+   * is the same bargain every other signature here makes.
+   */
   let sig = 0;
   for (let t = 0; t < trackCount; t++) {
-    const on = (w && t < w.length && w[t] > 0) || !!(override && override[t]) ? 1 : 0;
+    const glyphs = w && t < w.length ? w[t] : 0;
+    const on = glyphs > 0 || !!(override && override[t]) ? 1 : 0;
     buf._opsShow[t] = on;
-    if (t < 32) sig |= on << t;
+    buf._opsWidth[t] = glyphs;
+    sig = (Math.imul(sig, 31) + (on ? glyphs + 1 : 0)) | 0;
   }
   return sig;
 }
@@ -589,6 +607,8 @@ export function createBuffer(rowCount, trackCount, columns) {
     _laneHidden: new Uint8Array(0),
     /** Per track, whether the ops column is drawn at all. See computeOpsShow. */
     _opsShow: new Uint8Array(0),
+    /** ...and how many glyphs it has to hold, which is what sizes it. */
+    _opsWidth: new Uint8Array(0),
   };
 }
 
@@ -1537,6 +1557,7 @@ export function buildViewModel(opts, buf) {
   buf.laneHidden = engine ? buf._laneHidden : null;
   buf.laneHiddenSig = laneHiddenSig;
   buf.opsShow = engine ? buf._opsShow : null;
+  buf.opsWidth = engine ? buf._opsWidth : null;
   buf.opsShowSig = opsShowSig;
   buf.window.startRow = startRow; buf.window.rowCount = rowCount;
   buf.zoom = zoom;

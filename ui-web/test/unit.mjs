@@ -3259,7 +3259,29 @@ test('the ops column is hidden exactly when no note in the track carries one', a
   const vm = buildViewModel({ startRow: 0, rowCount: 4, tracks: 4, columns: 3, engine }, null);
   assert.deepEqual([...vm.opsShow].slice(0, 4), [0, 1, 0, 1],
     'tracks 1 and 3 carry ops and draw the column; 0 and 2 do not');
-  assert.equal(vm.opsShowSig, 0b1010, 'the signature names the same set as a bitmask');
+  assert.deepEqual([...vm.opsWidth].slice(0, 4), [0, 3, 0, 7],
+    'and the widths come through, which is what sizes the cell');
+
+  /*
+   * THE SIGNATURE MOVES WHEN A WIDTH MOVES, not only when the on/off set does.
+   *
+   * The renderer early-returns on an unchanged signature and sizes the ops cell from the glyph
+   * count — so a track whose run grows from three ops to five changes the LAYOUT without
+   * changing the set, and a signature built from the set alone would leave the cell at its old
+   * width and clip the two new glyphs. Silently: the note carries them, the engine plays them,
+   * and the cell shows seven of nine.
+   *
+   * This is GUIDELINES 2.1 for the third time on this one feature (the renderer's SIG, the
+   * header's rebuild key, and now this), which is why it is asserted rather than reasoned about.
+   */
+  const wider = { ...engine, opsWidth: new Uint8Array([0, 5, 0, 7]) };
+  const vmWider = buildViewModel(
+    { startRow: 0, rowCount: 4, tracks: 4, columns: 3, engine: wider }, null);
+  assert.deepEqual([...vmWider.opsShow].slice(0, 4), [0, 1, 0, 1],
+    'the same set of tracks still draws the column');
+  assert.notEqual(vmWider.opsShowSig, vm.opsShowSig,
+    'but the signature moved, because the WIDTH did — a set-only signature would leave the '
+    + 'cell at its old size and clip the glyphs the run just gained');
 
   // The override is ADDITIVE and cannot subtract: forcing track 0 on shows it, and "forcing"
   // track 1 off does not hide a column whose glyphs would then have nowhere to go.
@@ -3268,7 +3290,8 @@ test('the ops column is hidden exactly when no note in the track carries one', a
     { startRow: 0, rowCount: 4, tracks: 4, columns: 3, engine, opsOverride: forced }, null);
   assert.deepEqual([...vm2.opsShow].slice(0, 4), [1, 1, 0, 1],
     'the override reveals a column the width would hide, and never hides one it shows');
-  assert.equal(vm2.opsShowSig, 0b1011);
+  assert.notEqual(vm2.opsShowSig, vm.opsShowSig,
+    'and the signature moved with it, so the renderer rebuilds rather than early-returning');
 
   // A NEGATIVE CONTROL, because "the array came back all ones" is what a broken read looks
   // like: an engine that publishes no width at all draws no ops column anywhere.
