@@ -29,6 +29,7 @@ daw-cli — control surface for a running engine
   daw-cli watch                    stream transport state (default)
   daw-cli get transport            transport + versions as JSON
   daw-cli get tracks               per-track state as JSON
+  daw-cli get diffs                what the engine has reported on its outbound ring (peek, not drain)
   daw-cli do add-device --track N --kind sampler
   daw-cli do sampler-load --track N --device D --file NAME [--root 60] [--fixed-pitch]
                                    load a sample (project-relative name) and mint a slot
@@ -1673,6 +1674,39 @@ fn main() {
             match rest.first() {
                 Some(&"transport") => get_transport(&handle),
                 Some(&"tracks") => get_tracks(&handle),
+                // WHAT THE ENGINE HAS REPORTED ON ITS OUTBOUND DIFF RING, sampled.
+                //
+                // Added because sampler refusals became reportable (UiDiffType::SamplerRejected)
+                // and nothing on this side could see one — a channel with no reader is a claim,
+                // not a feature, and the check for it would have had to read the engine's log,
+                // which is the very thing the channel exists to replace.
+                //
+                // PEEK, NOT DRAIN: the ring is single-consumer and the real UI advances it, so a
+                // tool that consumed here would steal diffs from the app it is observing.
+                Some(&"diffs") => {
+                    let diffs = handle.peek_ui_diffs();
+                    println!("{{");
+                    println!("  \"count\": {},", diffs.len());
+                    println!("  \"diffs\": [");
+                    for (i, (diff_type, payload)) in diffs.iter().enumerate() {
+                        let comma = if i + 1 == diffs.len() { "" } else { "," };
+                        let u16at = |o: usize| u16::from_le_bytes([payload[o], payload[o + 1]]);
+                        let u32at = |o: usize| u32::from_le_bytes([
+                            payload[o], payload[o + 1], payload[o + 2], payload[o + 3]]);
+                        if *diff_type == daw_bridge::layout::UiDiffType::SamplerRejected as u16 {
+                            println!(
+                                "    {{ \"type\": \"sampler_rejected\", \"reason\": {}, \
+                                 \"command\": {}, \"target\": {}, \"track\": {}, \
+                                 \"device\": {} }}{comma}",
+                                u16at(2), u16at(4), u16at(6), u32at(8), u32at(12));
+                        } else {
+                            println!("    {{ \"type\": {diff_type} }}{comma}");
+                        }
+                    }
+                    println!("  ]");
+                    println!("}}");
+                    0
+                }
                 // THE PATCHER POOL AS THE ENGINE HAS IT, including each node's OWNING DEVICE.
                 //
                 // Added because the owner was the one fact a UI could not get: the region

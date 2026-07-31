@@ -1053,7 +1053,55 @@ enum class UiDiffType : uint16_t {
   // half the time. Additive like ClipRejected: a reader that switches on diffType and ignores
   // unknown values is unaffected, so no kShmVersion bump.
   PresetSaved = 16,
+  // A SAMPLER COMMAND WAS REFUSED, and why. Every sampler verb refused into the engine's log and
+  // nowhere else — 20 sites across seven commands — and daw-cli can read stderr while a browser
+  // cannot. So from a UI every one of them was a silent no-op that reported success: the web-UI
+  // agent sent SamplerSetSlot with slot 0, got `no_such_slot` in a log they never see, and watched
+  // the command succeed while the sound ran the full eight seconds.
+  //
+  // The rule is the one PresetSaved was built on: every exit reports, including the early
+  // refusals, because a caller that gets nothing back cannot tell "refused" from "still working"
+  // from "done", and the one thing it must not do is tell the user it worked.
+  //
+  // Additive like ClipRejected and PresetSaved: a reader that switches on diffType and ignores
+  // unknown values is unaffected, so no kShmVersion bump.
+  SamplerRejected = 17,
 };
+
+// Why a sampler command was refused. DISTINCT CODES rather than one "rejected", for the reason
+// UiClipRejectReason gives: the fix differs. "No such slot" means stop and re-read the kit; "bad
+// value" means the caller clamped wrong and retrying identically will never help; "not a sampler"
+// means the device id names something else entirely and no retry helps either.
+enum class UiSamplerRejectReason : uint16_t {
+  None = 0,
+  NoSuchTrack = 1,
+  NoSuchDevice = 2,
+  NoSuchSlot = 3,
+  NoSuchModSet = 4,
+  NoSuchModulator = 5,
+  NoSuchSource = 6,
+  NoSuchSliceSet = 7,
+  BadValue = 8,
+  NotASampler = 9,
+  LoadFailed = 10,
+};
+
+struct UiSamplerRejectPayload {
+  uint16_t diffType = 0;     // UiDiffType::SamplerRejected
+  uint16_t reason = 0;       // UiSamplerRejectReason
+  uint16_t commandType = 0;  // the UiCommandType refused, so a caller can match it to what it sent
+  // The id that could not be found — slot, mod set, modulator, source or slice set, according to
+  // `reason`. One field rather than five, because exactly one of them is ever the answer and five
+  // parallel ids would be four opportunities to disagree.
+  uint16_t targetId = 0;
+  uint32_t trackId = 0;
+  uint32_t deviceId = 0;
+  uint32_t reserved[6]{};
+};
+static_assert(sizeof(UiSamplerRejectPayload) <= 40,
+              "UiSamplerRejectPayload must fit an EventEntry payload");
+static_assert(offsetof(UiSamplerRejectPayload, diffType) == 0,
+              "diffType must be first: readers dispatch on it");
 
 // Why a clip edit was refused. Distinct codes rather than one "rejected", because the
 // fix differs: a stale base means re-read and retry, an unknown track means the caller

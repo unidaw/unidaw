@@ -4699,6 +4699,50 @@ struct TrackRuntime {
     }
   };
 
+  // EVERY SAMPLER REFUSAL REACHES THE CALLER, not just the engine's log.
+  //
+  // Twenty sites across seven sampler commands reported refusal with DAW_EVENT and nothing else.
+  // daw-cli can read stderr; a browser cannot. So from a UI every one of them was a silent no-op
+  // that reported success — the web-UI agent sent SamplerSetSlot with slot 0, got `no_such_slot`
+  // in a log they never see, and watched the command succeed while the sound ran to its end.
+  //
+  // The rule is PresetSaved's: every exit reports, including the early refusals, because a caller
+  // that gets nothing back cannot tell "refused" from "still working" from "done".
+  //
+  // The DAW_EVENT lines stay. They are how a human and daw-cli read it, and the two carry the
+  // same facts because this is called beside them rather than instead of them.
+  auto reportSamplerReject = [&](daw::UiCommandType command,
+                                 daw::UiSamplerRejectReason reason,
+                                 uint32_t trackId,
+                                 uint32_t deviceId,
+                                 uint16_t targetId) {
+    daw::UiSamplerRejectPayload rejected{};
+    rejected.diffType = static_cast<uint16_t>(daw::UiDiffType::SamplerRejected);
+    rejected.reason = static_cast<uint16_t>(reason);
+    rejected.commandType = static_cast<uint16_t>(command);
+    rejected.targetId = targetId;
+    rejected.trackId = trackId;
+    rejected.deviceId = deviceId;
+    daw::UiDiffPayload asDiff{};
+    static_assert(sizeof(rejected) <= sizeof(asDiff),
+                  "the sampler rejection must fit the diff slot it rides");
+    std::memcpy(&asDiff, &rejected, sizeof(rejected));
+    emitUiDiff(asDiff);
+  };
+
+  // DERIVED FROM THE STRING THE LOG ALREADY CARRIES, rather than a second variable set beside it.
+  // Two handlers pick their reason at runtime into a `why` string; adding a parallel code would
+  // be two facts about one thing, and the first edit that touched only one of them would make the
+  // log and the wire disagree about why the same command was refused.
+  auto samplerReasonFor = [](const char* why) {
+    using R = daw::UiSamplerRejectReason;
+    if (why == nullptr) return R::BadValue;
+    if (std::strcmp(why, "no_such_slot") == 0) return R::NoSuchSlot;
+    if (std::strcmp(why, "no_such_mod_set") == 0) return R::NoSuchModSet;
+    if (std::strcmp(why, "no_such_modulator") == 0) return R::NoSuchModulator;
+    return R::BadValue;  // unknown_field, and anything added later that nobody mapped
+  };
+
   // A refusal, on the outbound ring, with the numbers that settle it. Everything the
   // caller needs to recover is here: which track the version was compared against, what
   // it sent, and what to retry with.
@@ -8988,6 +9032,8 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetEnvelopePoints, daw::UiSamplerRejectReason::NoSuchTrack,
+                            h.trackId, 0, 0);
         DAW_EVENT("sampler.envelope_rejected")
             .field("track", h.trackId)
             .field("reason", "no_such_track");
@@ -9071,6 +9117,8 @@ struct TrackRuntime {
         }
       }
       if (!applied) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetEnvelopePoints, daw::UiSamplerRejectReason::NoSuchModSet,
+                            h.trackId, 0, static_cast<uint16_t>(h.modSetId));
         DAW_EVENT("sampler.envelope_rejected")
             .field("track", h.trackId)
             .field("mod_set", h.modSetId)
@@ -10731,6 +10779,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
+        reportSamplerReject(daw::UiCommandType::SamplerEmitRows, daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
         DAW_EVENT("sampler.emit_rejected").field("track", p.trackId).field("reason", "no_such_track");
         return;
       }
@@ -10753,12 +10802,15 @@ struct TrackRuntime {
           snap = runtime->samplerSnapshot;
         }
         if (!snap) {
+          reportSamplerReject(daw::UiCommandType::SamplerEmitRows, daw::UiSamplerRejectReason::NotASampler, p.trackId, 0, 0);
           DAW_EVENT("sampler.emit_rejected").field("track", p.trackId).field("reason", "no_sampler");
           return;
         }
         const daw::SamplerSourceAudio* audio =
             snap->audioFor(static_cast<uint16_t>(p.sourceLocalId));
         if (!audio) {
+          reportSamplerReject(daw::UiCommandType::SamplerEmitRows, daw::UiSamplerRejectReason::NoSuchSource, p.trackId, 0,
+                              static_cast<uint16_t>(p.sourceLocalId));
           DAW_EVENT("sampler.emit_rejected")
               .field("track", p.trackId)
               .field("source", p.sourceLocalId)
@@ -10791,6 +10843,8 @@ struct TrackRuntime {
         }
       }
       if (rows.empty()) {
+        reportSamplerReject(daw::UiCommandType::SamplerEmitRows, daw::UiSamplerRejectReason::NoSuchSliceSet, p.trackId, 0,
+                            static_cast<uint16_t>(p.sourceLocalId));
         DAW_EVENT("sampler.emit_rejected")
             .field("track", p.trackId)
             .field("source", p.sourceLocalId)
@@ -10906,6 +10960,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
+        reportSamplerReject(daw::UiCommandType::SamplerSlice, daw::UiSamplerRejectReason::NoSuchTrack, trackId, 0, 0);
         DAW_EVENT("sampler.slice_rejected").field("track", trackId).field("reason", "no_such_track");
         return;
       }
@@ -10921,6 +10976,8 @@ struct TrackRuntime {
       const daw::SamplerSourceAudio* audio = snap ? snap->audioFor(static_cast<uint16_t>(sourceId))
                                                   : nullptr;
       if (!audio || audio->frames == 0) {
+        reportSamplerReject(daw::UiCommandType::SamplerSlice, daw::UiSamplerRejectReason::NoSuchSource, trackId, 0,
+                            static_cast<uint16_t>(sourceId));
         DAW_EVENT("sampler.slice_rejected")
             .field("track", trackId)
             .field("source", sourceId)
@@ -11043,6 +11100,9 @@ struct TrackRuntime {
         }
       }
       if (!ok) {
+        reportSamplerReject(daw::UiCommandType::SamplerSlice,
+                            isSlice ? daw::UiSamplerRejectReason::NotASampler : daw::UiSamplerRejectReason::BadValue,
+                            trackId, deviceId, static_cast<uint16_t>(sourceId));
         DAW_EVENT("sampler.slice_rejected")
             .field("track", trackId)
             .field("device", deviceId)
@@ -11218,6 +11278,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetSlot, daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
         DAW_EVENT("sampler.set_slot_rejected")
             .field("track", p.trackId)
             .field("reason", "no_such_track");
@@ -11334,6 +11395,8 @@ struct TrackRuntime {
         }
       }
       if (!applied) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetSlot, samplerReasonFor(why),
+                            p.trackId, p.deviceId, static_cast<uint16_t>(p.slotId));
         DAW_EVENT("sampler.set_slot_rejected")
             .field("track", p.trackId)
             .field("device", p.deviceId)
@@ -11373,6 +11436,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetFilter, daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
         DAW_EVENT("sampler.filter_rejected")
             .field("track", p.trackId)
             .field("reason", "no_such_track");
@@ -11383,6 +11447,8 @@ struct TrackRuntime {
       // the encoding, and clamping it to BP would hand them a filter they did not ask for and no
       // way to discover the mistake.
       if (p.filterType > 4) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetFilter, daw::UiSamplerRejectReason::BadValue, p.trackId, 0,
+                            static_cast<uint16_t>(p.filterType));
         DAW_EVENT("sampler.filter_rejected")
             .field("track", p.trackId)
             .field("type", static_cast<uint32_t>(p.filterType))
@@ -11425,6 +11491,8 @@ struct TrackRuntime {
         }
       }
       if (!applied) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetFilter, daw::UiSamplerRejectReason::NoSuchModSet, p.trackId, p.deviceId,
+                            static_cast<uint16_t>(p.modSetId));
         DAW_EVENT("sampler.filter_rejected")
             .field("track", p.trackId)
             .field("device", p.deviceId)
@@ -11456,6 +11524,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetLfo, daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
         DAW_EVENT("sampler.lfo_rejected")
             .field("track", p.trackId)
             .field("reason", "no_such_track");
@@ -11529,6 +11598,8 @@ struct TrackRuntime {
         }
       }
       if (!applied) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetLfo, daw::UiSamplerRejectReason::NoSuchModSet, p.trackId, 0,
+                            static_cast<uint16_t>(p.modSetId));
         DAW_EVENT("sampler.lfo_rejected")
             .field("track", p.trackId)
             .field("mod_set", p.modSetId)
@@ -11557,6 +11628,7 @@ struct TrackRuntime {
         }
       }
       if (!runtime) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetEnvelope, daw::UiSamplerRejectReason::NoSuchTrack, p.trackId, 0, 0);
         DAW_EVENT("sampler.envelope_rejected")
             .field("track", p.trackId)
             .field("reason", "no_such_track");
@@ -11628,6 +11700,8 @@ struct TrackRuntime {
         }
       }
       if (!applied) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetEnvelope, samplerReasonFor(why),
+                            p.trackId, p.deviceId, static_cast<uint16_t>(p.modSetId));
         DAW_EVENT("sampler.envelope_rejected")
             .field("track", p.trackId)
             .field("device", p.deviceId)
@@ -11673,6 +11747,9 @@ struct TrackRuntime {
         }
       }
       if (!runtime || name.empty()) {
+        reportSamplerReject(daw::UiCommandType::SamplerLoad,
+                            name.empty() ? daw::UiSamplerRejectReason::BadValue : daw::UiSamplerRejectReason::NoSuchTrack,
+                            p.trackId, p.deviceId, 0);
         DAW_EVENT("sampler.load_rejected")
             .field("track", p.trackId)
             .field("device", p.deviceId)
@@ -11732,6 +11809,7 @@ struct TrackRuntime {
         }
       }
       if (!found) {
+        reportSamplerReject(daw::UiCommandType::SamplerLoad, daw::UiSamplerRejectReason::NotASampler, p.trackId, p.deviceId, 0);
         DAW_EVENT("sampler.load_rejected")
             .field("track", p.trackId)
             .field("device", p.deviceId)

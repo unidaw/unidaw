@@ -1135,6 +1135,51 @@ pub enum UiDiffType {
     /// only lie about half the time — daw-cli read the path off the engine's stderr, which a
     /// browser cannot.
     PresetSaved = 16,
+    /// A SAMPLER COMMAND WAS REFUSED, and why. Payload: `UiSamplerRejectPayload`.
+    ///
+    /// Every sampler verb refused into the engine's log and nowhere else — 20 sites across seven
+    /// commands. daw-cli can read stderr; a browser cannot, so from a UI each one was a silent
+    /// no-op that reported success. Additive like 15 and 16: a reader that switches on diff_type
+    /// and ignores unknown values is unaffected, so no kShmVersion bump.
+    SamplerRejected = 17,
+}
+
+/// Why a sampler command was refused. Distinct codes rather than one "rejected", because the
+/// fix differs: `NoSuchSlot` means stop and re-read the kit, `BadValue` means the caller clamped
+/// wrong and retrying identically will never help, `NotASampler` means the device id names
+/// something else entirely.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UiSamplerRejectReason {
+    None = 0,
+    NoSuchTrack = 1,
+    NoSuchDevice = 2,
+    NoSuchSlot = 3,
+    NoSuchModSet = 4,
+    NoSuchModulator = 5,
+    NoSuchSource = 6,
+    NoSuchSliceSet = 7,
+    BadValue = 8,
+    NotASampler = 9,
+    LoadFailed = 10,
+}
+
+/// Rides the same 40-byte diff slot. `diff_type` is FIRST — dispatch on it, never on size.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct UiSamplerRejectPayload {
+    pub diff_type: u16,
+    /// `UiSamplerRejectReason`.
+    pub reason: u16,
+    /// The `UiCommandType` refused, so a caller can match it to what it sent.
+    pub command_type: u16,
+    /// The id that could not be found — slot, mod set, modulator, source or slice set, according
+    /// to `reason`. One field rather than five: exactly one of them is ever the answer, and five
+    /// parallel ids would be four opportunities to disagree.
+    pub target_id: u16,
+    pub track_id: u32,
+    pub device_id: u32,
+    pub reserved: [u32; 6],
 }
 
 /// Why a clip edit was refused. The distinction matters because the fix differs: a
@@ -1956,6 +2001,7 @@ mod tests {
         same!(UiSamplerSetSlotPayload, sys::daw_UiSamplerSetSlotPayload);
         same!(UiSamplerSlicePayload, sys::daw_UiSamplerSlicePayload);
         same!(UiSamplerFilterPayload, sys::daw_UiSamplerFilterPayload);
+        same!(UiSamplerRejectPayload, sys::daw_UiSamplerRejectPayload);
         same!(UiSetParamPayload, sys::daw_UiSetParamPayload);
         same!(UiTimeSigPoint, sys::daw_UiTimeSigPoint);
         same!(UiTrackRoutingPayload, sys::daw_UiTrackRoutingPayload);
@@ -2214,6 +2260,7 @@ mod wire_layout {
         assert_eq!(std::mem::size_of::<UiBulkChunkPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerLfoPayload>(), 40);
         assert_eq!(std::mem::size_of::<UiSamplerFilterPayload>(), 40);
+        assert_eq!(std::mem::size_of::<UiSamplerRejectPayload>(), 40);
         // Not a ring payload — the ASSEMBLED shapes, which the engine memcpys.
         assert_eq!(std::mem::size_of::<UiSamplerEnvPointsHeader>(), 32);
         assert_eq!(std::mem::size_of::<UiEnvPointWire>(), 8);
