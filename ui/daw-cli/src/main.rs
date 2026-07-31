@@ -39,6 +39,9 @@ daw-cli — control surface for a running engine
                                    lay a KIT: N samples on N consecutive keys, fixed pitch
   daw-cli do sampler-slot --track N --device D --slot S --field voice-group --value 1
                                    edit one slot field (--field with no match lists them all)
+  daw-cli do sampler-slot-name --track N --device D --slot S --name 'kick 01'
+                                   rename a pad. --name '' clears it; a name too long for the
+                                   published field is REFUSED, never truncated
   daw-cli get sampler-kit --track N [--device D]
   daw-cli get patcher              the assembled patcher pool, with each node's OWNING DEVICE
                                    the device's slots, as the ENGINE has them
@@ -1251,9 +1254,16 @@ fn get_sampler_kit(handle: &EngineHandle, args: &[String]) -> i32 {
                 println!("  \"unmapped\": {},", v.unmapped);
                 println!("  \"slots_truncated\": {},", v.slots_truncated);
                 let body: Vec<String> = v.slots.iter().map(|e| {
+                    // v36. Stops at the first NUL rather than trusting the whole array: the
+                    // engine nul-terminates inside the field, and a name that filled it would
+                    // otherwise drag the padding into the JSON.
+                    let raw: Vec<u8> = e.name.iter().map(|&c| c as u8)
+                        .take_while(|&c| c != 0).collect();
+                    let name = String::from_utf8_lossy(&raw)
+                        .replace('\\', "\\\\").replace('"', "\\\"");
                     format!(
-                        "    {{ \"slot\": {}, \"source\": {}, \"key_low\": {}, \"key_high\": {}, \"root\": {}, \"vel_low\": {}, \"vel_high\": {}, \"voice_group\": {}, \"nna\": {}, \"gate\": {}, \"reverse\": {}, \"source_missing\": {}, \"gain_mb\": {}, \"pan\": {}, \"mod_set\": {}, \"stem\": {}, \"quality\": {}, \"slice\": {}, \"length_frames\": {}, \"slice_begin\": {}, \"slice_end\": {}, \"mod_mask\": {}, \"filter_type\": {} }}",
-                        e.slotId, e.sourceLocalId, e.keyLow, e.keyHigh, e.rootKey,
+                        "    {{ \"slot\": {}, \"name\": \"{}\", \"source\": {}, \"key_low\": {}, \"key_high\": {}, \"root\": {}, \"vel_low\": {}, \"vel_high\": {}, \"voice_group\": {}, \"nna\": {}, \"gate\": {}, \"reverse\": {}, \"source_missing\": {}, \"gain_mb\": {}, \"pan\": {}, \"mod_set\": {}, \"stem\": {}, \"quality\": {}, \"slice\": {}, \"length_frames\": {}, \"slice_begin\": {}, \"slice_end\": {}, \"mod_mask\": {}, \"filter_type\": {} }}",
+                        e.slotId, name, e.sourceLocalId, e.keyLow, e.keyHigh, e.rootKey,
                         e.velLow, e.velHigh, e.voiceGroup, e.nna,
                         (e.flags & 1) != 0, (e.flags & 2) != 0,
                         (e.flags & UI_SAMPLER_SLOT_SOURCE_MISSING) != 0,
@@ -2351,6 +2361,75 @@ fn main() {
                             match handle.send_sampler_set_device(payload) {
                                 Ok(()) => {
                                     println!("{{ \"sent\": \"sampler-device\", \"track\": {track}, \"device\": {device}, \"field\": {field_arg:?}, \"value\": {v} }}");
+                                    0
+                                }
+                                Err(err) => { eprintln!("daw-cli: {err}"); 1 }
+                            }
+                        }
+                    }
+                }
+                // RENAME A PAD (opcode 90), over the bulk carrier. `name` is not an int, so it
+                // cannot ride `sampler-slot --field`: that payload's `value` is an i32.
+                Some(&"sampler-slot-name") => {
+                    let track = flag_u64(&args, "--track", Some(0)).unwrap_or(0) as u32;
+                    let device = flag_u64(&args, "--device", Some(0)).unwrap_or(0) as u32;
+                    let slot = flag_u64(&args, "--slot", Some(0)).unwrap_or(0) as u32;
+                    // An ABSENT --name is an error; an EMPTY one is a legal rename to unnamed.
+                    // Defaulting the missing case to "" would make a typo'd flag silently erase
+                    // the name instead of saying so.
+                    let name = args
+                        .iter()
+                        .position(|a| a == "--name")
+                        .and_then(|i| args.get(i + 1))
+                        .map(String::as_str);
+                    match name {
+                        None => {
+                            eprintln!("daw-cli: sampler-slot-name needs --name <text> (--name '' clears it)");
+                            2
+                        }
+                        // Refused HERE too, with the same limit and the same reason, so a name
+                        // that cannot land fails at the keyboard rather than becoming a log line
+                        // the caller never reads.
+                        //
+                        // `--oversize-anyway` skips THIS guard and sends it regardless, so the
+                        // ENGINE's refusal can be tested through the ordinary client. Without it
+                        // the only oversize name the engine ever sees comes from a hand-rolled
+                        // ring writer, and "the engine refuses it" would be an untested claim
+                        // resting on a check in the wrong process — every other client, the web
+                        // UI included, goes straight to the ring.
+                        Some(n)
+                            if n.len() >= daw_bridge::layout::UI_SAMPLER_SLOT_NAME_BYTES
+                                && !args.iter().any(|a| a == "--oversize-anyway") =>
+                        {
+                            eprintln!(
+                                "daw-cli: name is {} bytes; the published field holds {} (the engine refuses rather than truncating)",
+                                n.len(),
+                                daw_bridge::layout::UI_SAMPLER_SLOT_NAME_BYTES - 1);
+                            2
+                        }
+                        Some(n) => {
+                            let bytes = n.as_bytes();
+                            let header = daw_bridge::layout::UiSamplerSlotNameHeader {
+                                command_type: UiCommandType::SamplerSetSlotName as u16,
+                                device_id: device as u16,
+                                track_id: track,
+                                slot_id: slot as u16,
+                                name_bytes: bytes.len() as u16,
+                            };
+                            let mut buf = Vec::with_capacity(12 + bytes.len());
+                            buf.extend_from_slice(unsafe {
+                                std::slice::from_raw_parts(
+                                    &header as *const daw_bridge::layout::UiSamplerSlotNameHeader
+                                        as *const u8,
+                                    std::mem::size_of::<
+                                        daw_bridge::layout::UiSamplerSlotNameHeader,
+                                    >(),
+                                )
+                            });
+                            buf.extend_from_slice(bytes);
+                            match handle.send_bulk(&buf) {
+                                Ok(()) => {
+                                    println!("{{ \"sent\": \"sampler-slot-name\", \"track\": {track}, \"device\": {device}, \"slot\": {slot}, \"name\": {n:?} }}");
                                     0
                                 }
                                 Err(err) => { eprintln!("daw-cli: {err}"); 1 }

@@ -365,7 +365,26 @@ enum class UiCommandType : uint16_t {
   // Its own opcode rather than a field-addressed track one, matching SetTrackHarmonyQuantize (10)
   // and SetTrackSoundAddressed (87): the track-level pattern here is one opcode per boolean, and
   // consistency with the neighbours beats importing 88's shape for a set of one.
-  SetTrackCollapsed = 89,  // next free 90
+  SetTrackCollapsed = 89,
+
+  /// Renames a sampler SLOT. Arrives over BulkChunk (83), not as a 40-byte ring entry.
+  ///
+  /// `SamplerSlot::name` was persisted by the project format from the day the sampler shipped,
+  /// published by nothing, and written by nothing but the loader stamping the file's path onto
+  /// it. So a pad's name round-tripped through save and reload flawlessly and could be neither
+  /// read nor changed (task #110). v36 publishes it; this writes it.
+  ///
+  /// WHY THE CARRIER RATHER THAN A NAME-CARRYING 40-BYTE PAYLOAD. Requested by the web-UI agent
+  /// and the reason is good: a second inline string path is a second place to get truncation
+  /// wrong, and the carrier already exists for exactly this. It also puts the length limit where
+  /// it belongs — on the PUBLISHED field, not on the ring entry — so widening the published name
+  /// later needs no new opcode.
+  ///
+  /// REFUSED, NEVER TRUNCATED. A name that does not fit UiSamplerSlotEntry::name is rejected and
+  /// the slot is left alone. A truncated name is worse than a refused one because it looks like
+  /// it worked, and refusing on BYTE length means no multi-byte character is ever cut in half.
+  /// Empty is legal and means unnamed — the state every sliced slot starts in.
+  SamplerSetSlotName = 90,  // next free 91
 };
 
 // SAMPLER SET FILTER (opcode 86). 40 bytes.
@@ -468,6 +487,24 @@ struct UiSamplerEnvPointsHeader {
 };
 static_assert(sizeof(UiSamplerEnvPointsHeader) == 32,
               "UiSamplerEnvPointsHeader must be 32 bytes");
+
+// SAMPLER SET SLOT NAME (opcode 90). A BulkChunk-assembled buffer: this header, then `nameBytes`
+// raw bytes of the name. NOT nul-terminated on the wire — the length is explicit, because a
+// terminator is a second statement of the same fact and they disagree the first time one is
+// wrong.
+//
+// The name is REFUSED if it does not fit UiSamplerSlotEntry::name (see there). Deliberately the
+// only length rule: the engine never shortens, so the read-back is byte-for-byte the write or
+// there was no write.
+struct UiSamplerSlotNameHeader {
+  uint16_t commandType = static_cast<uint16_t>(UiCommandType::SamplerSetSlotName);
+  uint16_t deviceId = 0;  // 0 = the track's first sampler, as everywhere else in this family
+  uint32_t trackId = 0;
+  uint16_t slotId = 0;
+  uint16_t nameBytes = 0;
+};
+static_assert(sizeof(UiSamplerSlotNameHeader) == 12,
+              "UiSamplerSlotNameHeader must be 12 bytes");
 
 // One drawn point. `tension` is toward the NEXT point: 0 linear, positive ease-in, negative
 // ease-out. `flags` bit 0 = STEP — hold this value until the next point's time, then jump, which
@@ -909,6 +946,7 @@ inline const char* uiCommandTypeName(UiCommandType t) {
     case UiCommandType::SetTrackSoundAddressed: return "set_track_sound_addressed";
     case UiCommandType::SamplerSetDevice: return "sampler_set_device";
     case UiCommandType::SetTrackCollapsed: return "set_track_collapsed";
+    case UiCommandType::SamplerSetSlotName: return "sampler_set_slot_name";
     case UiCommandType::Redo: return "redo";
     case UiCommandType::SetLoopRange: return "set_loop_range";
     case UiCommandType::SetAutomationTarget: return "set_automation_target";

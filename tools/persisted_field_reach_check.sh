@@ -14,7 +14,9 @@
 #   ownerDeviceId          published as 0 for every one-device project
 #   voiceCap, defaultView  persisted and rendered since S1/S2, reachable by nothing
 #   sourceLocalId, sliceId a pad could not be repointed at another sample or slice
-#   slot name              persisted, published, settable by nothing (#110, still open)
+#   slot name              persisted and published by NOTHING — the same defect inverted: not a
+#                          field that could not be written, one that could not be READ. Closed by
+#                          v36 + SamplerSetSlotName (#110)
 #   track collapsed        persisted, published, restored on load, settable by nothing
 #
 # THE SWEEP THAT FINDS THEM is mechanical: take a struct the format persists, list its fields,
@@ -45,9 +47,7 @@ root = sys.argv[1]
 SLOT = {
     "id":                "EXEMPT:identity — a slot is ADDRESSED by its id; a writer would let a "
                          "command move a slot out from under another command's reference",
-    "name":              "EXEMPT:open — task #110. It does not fit an int32 `value`, so it needs "
-                         "a name-carrying payload or the bulk carrier rather than a bodge; a "
-                         "truncated name looks like it worked",
+    "name":              "SamplerSetSlotName",
     "source_local_id":   "SamplerSlotField::SourceLocalId",
     "slice_id":          "SamplerSlotField::SliceId",
     "start_frame":       "SamplerSlotField::StartFrame",

@@ -99,6 +99,24 @@ using daw::trackShmName;
 using daw::trackSocketPath;
 using daw::uiShmName;
 
+// THE DISPLAY NAME A SAMPLE FILE SEEDS A SLOT WITH: the basename with its extension dropped.
+//
+// `sampler-load` used to stamp the WHOLE PATH onto slot.name — the same string it matches against
+// SamplerSource::path — which was invisible until v36 published the name and would have drawn
+// /Users/jak/samples/kicks/BD_808.wav on a pad. The path still lives on the SOURCE, which is what
+// actually needs to find the file again; the slot gets something a person can read.
+//
+// Clamped to the published width so a long filename seeds a name that survives the trip out. This
+// is the ONE place a name is shortened rather than refused, and it is the right place: nobody
+// typed it, so there is no write to reject and nothing to look like it worked.
+std::string sampleDisplayName(const std::string& path) {
+  std::string stem = std::filesystem::path(path).stem().string();
+  if (stem.size() >= daw::kUiSamplerSlotNameBytes) {
+    stem.resize(daw::kUiSamplerSlotNameBytes - 1);
+  }
+  return stem;
+}
+
 bool uiDebugEnabled() {
   static const bool enabled = []() {
     const char* env = std::getenv("DAW_UI_DEBUG");
@@ -9255,6 +9273,124 @@ struct TrackRuntime {
       return;
     }
 
+    // ---- SAMPLER SET SLOT NAME (90). Task #110: the name was persisted by the project format,
+    // published by nothing and written by nothing but the loader stamping a path onto it.
+    if (innerType == daw::UiCommandType::SamplerSetSlotName) {
+      if (buf.size() < sizeof(daw::UiSamplerSlotNameHeader)) {
+        DAW_EVENT("bulk.rejected")
+            .field("op", static_cast<uint32_t>(inner))
+            .field("bytes", static_cast<uint64_t>(buf.size()))
+            .field("reason", "short_header");
+        return;
+      }
+      daw::UiSamplerSlotNameHeader h{};
+      std::memcpy(&h, buf.data(), sizeof(h));
+      const size_t need = sizeof(h) + static_cast<size_t>(h.nameBytes);
+      if (buf.size() < need) {
+        DAW_EVENT("bulk.rejected")
+            .field("op", static_cast<uint32_t>(inner))
+            .field("bytes", static_cast<uint64_t>(buf.size()))
+            .field("need", static_cast<uint64_t>(need))
+            .field("reason", "short_payload");
+        return;
+      }
+      // REFUSED, NEVER TRUNCATED — the one rule this command has. A name that does not fit the
+      // published field would round-trip through save and reload intact and read back short, so
+      // the file and the screen would disagree forever and nothing would report it. Refusing on
+      // BYTE length also means no multi-byte character is ever cut in half, because nothing is
+      // ever cut.
+      if (h.nameBytes >= daw::kUiSamplerSlotNameBytes) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetSlotName,
+                            daw::UiSamplerRejectReason::BadValue, h.trackId, h.deviceId,
+                            h.slotId);
+        DAW_EVENT("sampler.slot_name_rejected")
+            .field("track", h.trackId)
+            .field("slot", static_cast<uint32_t>(h.slotId))
+            .field("bytes", static_cast<uint32_t>(h.nameBytes))
+            .field("max", daw::kUiSamplerSlotNameBytes - 1)
+            .field("reason", "name_not_representable");
+        return;
+      }
+      const char* nameStart = reinterpret_cast<const char*>(buf.data()) + sizeof(h);
+      const std::string newName(nameStart, h.nameBytes);
+      // An embedded NUL is the same disagreement by another route: the project format would keep
+      // the whole string and the published field would stop at the NUL.
+      if (newName.find('\0') != std::string::npos) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetSlotName,
+                            daw::UiSamplerRejectReason::BadValue, h.trackId, h.deviceId,
+                            h.slotId);
+        DAW_EVENT("sampler.slot_name_rejected")
+            .field("track", h.trackId)
+            .field("slot", static_cast<uint32_t>(h.slotId))
+            .field("reason", "embedded_nul");
+        return;
+      }
+      TrackRuntime* runtime = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(tracksMutex);
+        if (h.trackId < tracks.size()) {
+          runtime = tracks[h.trackId].get();
+        }
+      }
+      if (!runtime) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetSlotName,
+                            daw::UiSamplerRejectReason::NoSuchTrack, h.trackId, h.deviceId,
+                            h.slotId);
+        DAW_EVENT("sampler.slot_name_rejected")
+            .field("track", h.trackId)
+            .field("reason", "no_such_track");
+        return;
+      }
+      bool applied = false;
+      bool sawSampler = false;
+      {
+        std::lock_guard<std::mutex> lock(runtime->trackMutex);
+        for (auto& d : runtime->track.chain.devices) {
+          if (d.kind != daw::DeviceKind::Sampler ||
+              (h.deviceId != 0 && d.id != h.deviceId)) {
+            continue;
+          }
+          sawSampler = true;
+          for (auto& sl : d.sampler.slots) {
+            if (sl.id != h.slotId) {
+              continue;
+            }
+            sl.name = newName;
+            applied = true;
+            break;
+          }
+          if (applied) {
+            break;
+          }
+        }
+        // THE PUBLISH READS THE RT SNAPSHOT, NOT THE MODEL. Without this the name would be
+        // saved and the read-back would keep answering the old one — the exact trap opcode 88
+        // fell into, one field along.
+        if (applied) {
+          refreshSamplerForTrack(*runtime);
+        }
+      }
+      if (!applied) {
+        reportSamplerReject(daw::UiCommandType::SamplerSetSlotName,
+                            sawSampler ? daw::UiSamplerRejectReason::NoSuchSlot
+                                       : daw::UiSamplerRejectReason::NoSuchDevice,
+                            h.trackId, h.deviceId, h.slotId);
+        DAW_EVENT("sampler.slot_name_rejected")
+            .field("track", h.trackId)
+            .field("device", static_cast<uint32_t>(h.deviceId))
+            .field("slot", static_cast<uint32_t>(h.slotId))
+            .field("reason", sawSampler ? "no_such_slot" : "no_such_sampler_device");
+        return;
+      }
+      DAW_EVENT("sampler.slot_renamed")
+          .field("track", h.trackId)
+          .field("device", static_cast<uint32_t>(h.deviceId))
+          .field("slot", static_cast<uint32_t>(h.slotId))
+          .field("name", newName)
+          .field("bytes", static_cast<uint32_t>(h.nameBytes));
+      return;
+    }
+
     DAW_EVENT("bulk.rejected")
         .field("op", static_cast<uint32_t>(inner))
         .field("bytes", static_cast<uint64_t>(buf.size()))
@@ -11164,7 +11300,25 @@ struct TrackRuntime {
               // into something playable in one command rather than N — and every slot names its
               // slice by ID, so a later re-cut moves what they play without moving any row.
               uint8_t key = sp.slotBaseKey;
+              // THE SOURCE'S STEM, resolved once, so every slice this chop mints is named
+              // "<stem> NN". Slices were minted with NO name at all, so a chopped kit published
+              // sixteen empty strings and nothing could tell slice 3 from slice 11 without
+              // reading the extents. The stem rather than a bare "slice NN" because two breaks
+              // chopped into one kit have to stay apart, and that is the normal case.
+              std::string sliceStem;
+              for (const auto& src : d.sampler.sources) {
+                if (src.localId == sourceId) {
+                  sliceStem = sampleDisplayName(src.path);
+                  break;
+                }
+              }
+              // The ordinal counts MARKERS, not slots made, so a re-cut that skips slices which
+              // already have slots still numbers the new ones by where they sit in the file.
+              // Numbering by slots-made would name the same slice differently depending on what
+              // was chopped before it.
+              uint32_t sliceOrdinal = 0;
               for (const auto& m : set->markers) {
+                ++sliceOrdinal;
                 bool exists = false;
                 for (const auto& sl : d.sampler.slots) {
                   if (sl.sliceId == m.id) {
@@ -11183,6 +11337,14 @@ struct TrackRuntime {
                 sl.gate = d.sampler.defaultGate;
                 sl.sourceLocalId = static_cast<uint16_t>(sourceId);
                 sl.sliceId = m.id;
+                {
+                  char buf[8];
+                  std::snprintf(buf, sizeof(buf), " %02u", sliceOrdinal);
+                  sl.name = sliceStem + buf;
+                  if (sl.name.size() >= daw::kUiSamplerSlotNameBytes) {
+                    sl.name = sl.name.substr(0, daw::kUiSamplerSlotNameBytes - 1);
+                  }
+                }
                 sl.keyLow = sl.keyHigh = sl.rootKey = key++;
                 // FIXED PITCH: a slice played from its own key should sound as recorded, not
                 // transposed by where it happens to sit on the keyboard.
@@ -11328,6 +11490,15 @@ struct TrackRuntime {
             e.outputStem = sl.outputStem;
             e.quality = sl.quality;
             e.sliceId = sl.sliceId;
+            // v36: THE NAME. Copied with a hard stop one byte short of the field so the result is
+            // always nul-terminated inside its own bytes — a reader that trusts the terminator
+            // must never run off the end of the entry and into the next slot's id.
+            //
+            // A name too long to fit CANNOT arrive here: SamplerSetSlotName refuses it. This
+            // clamp is for names that predate the command — a project saved when the loader
+            // stamped the full path on, which is every project made before v36.
+            std::memcpy(e.name, sl.name.data(),
+                        std::min(sl.name.size(), sizeof(e.name) - 1));
             // WHAT THE SLOT'S MOD SET DOES, resolved here so a UI does not have to hold the mod
             // sets to interpret a modSetId. A bit is set only when the modulator would actually
             // MOVE something: an envelope needs points, an LFO needs a non-zero swing, and both
@@ -12067,7 +12238,9 @@ struct TrackRuntime {
           daw::SamplerSlot slot;
           slot.id = d.sampler.nextSlotId++;
           slot.gate = d.sampler.defaultGate;  // the bank's default, stamped at mint
-          slot.name = name;
+          // The file's STEM, not `name` — which is the full path, and is what the SOURCE keeps.
+          // A seed, not an override: SamplerSetSlotName is the authority from here.
+          slot.name = sampleDisplayName(name);
           slot.sourceLocalId = newSource;
           slot.rootKey = p.rootKey;
           // The mapping is DERIVED from the keys, so this writes keys rather than a mode.

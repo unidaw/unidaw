@@ -619,6 +619,12 @@ add_test(NAME ops_width
 )
 set_tests_properties(ops_width PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# A pad has a name, you can read it, and you can change it.
+add_test(NAME slot_rename
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slot_rename_check.sh
+)
+set_tests_properties(slot_rename PROPERTIES WORKING_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # The slices of a chop tile the source — no gap, no overlap, nothing off the end.
 add_test(NAME slice_extent
   COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tools/slice_extent_check.sh
